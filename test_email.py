@@ -1,54 +1,34 @@
+import smtplib, ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
-import yagmail
-from dotenv import load_dotenv
 
-load_dotenv()
-
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # 465 = SSL, 587 = STARTTLS (ma qui usiamo SSL)
+SMTP_HOST = os.getenv("SMTP_HOST", "mail.stima360.it")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))  # STARTTLS
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
-def _client():
-    # smtp_ssl=True → connessione sicura (porta 465)
-    return yagmail.SMTP(user=SMTP_USER, password=SMTP_PASS, host=SMTP_HOST, port=SMTP_PORT, smtp_ssl=True)
+DEST = os.getenv("TEST_TO", SMTP_USER)
 
-def invia_email_test(destinatario: str):
-    print(f"📧 Test invio tramite {SMTP_HOST}:{SMTP_PORT} come {SMTP_USER}…")
-    html = "<h2>Test OK ✅</h2><p>Se vedi questa mail, SMTP funziona.</p>"
-    with _client() as yag:
-        yag.send(
-            to=destinatario,
-            subject="Test Stima360 ✅",
-            contents=[yagmail.raw(html)]
-        )
-    print("✅ Email di test inviata!")
+print("🔍 Test invio email")
+print("SMTP_HOST:", SMTP_HOST)
+print("SMTP_PORT:", SMTP_PORT)
+print("SMTP_USER:", SMTP_USER)
+print("DEST:", DEST)
 
-def invia_email_con_pdf(destinatario: str, subject: str, html_body: str, pdf_fs_path: str):
-    """
-    Invia una mail HTML con il PDF in ALLEGATO (non solo link).
-    pdf_fs_path: percorso su disco, es. backend/reports/stima_48.pdf
-    """
-    assert os.path.isfile(pdf_fs_path), f"File non trovato: {pdf_fs_path}"
-    filename = os.path.basename(pdf_fs_path)
+msg = MIMEMultipart()
+msg["From"] = SMTP_USER
+msg["To"] = DEST
+msg["Subject"] = "TEST SMTP da Render"
+msg.attach(MIMEText("<b>Email di test da Render</b>", "html"))
 
-    with _client() as yag:
-        yag.send(
-            to=destinatario,
-            subject=subject,
-            contents=[yagmail.raw(html_body)],
-            attachments=[pdf_fs_path]  # 👈 allegato vero
-        )
-    print(f"✅ Inviata a {destinatario} con allegato {filename}")
-
-if __name__ == "__main__":
-    # 👉 prova veloce:
-    invia_email_test("Giorgiocens@hotmail.it")
-    # Esempio invio con PDF:
-    # invia_email_con_pdf(
-    #     "Giorgiocens@hotmail.it",
-    #     "🏡 Stima360 – La tua valutazione",
-    #     "<h2 style='color:#0077cc;margin:0;'>La tua stima è pronta</h2><p>In allegato trovi il PDF.</p>",
-    #     "backend/reports/stima_48.pdf"
-    # )
+try:
+    server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10)
+    server.ehlo()
+    server.starttls()
+    server.login(SMTP_USER, SMTP_PASS)
+    server.sendmail(SMTP_USER, DEST, msg.as_string())
+    server.quit()
+    print("✅ EMAIL INVIATA CON SUCCESSO")
+except Exception as e:
+    print("❌ ERRORE SMTP:", e)
