@@ -1,0 +1,182 @@
+
+
+
+import os
+
+import psycopg2
+
+from psycopg2.extras import RealDictCursor
+
+from dotenv import load_dotenv
+
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+
+
+
+db_url = os.getenv("DATABASE_URL")
+
+conn = None
+
+
+
+
+DDL = """
+
+CREATE TABLE IF NOT EXISTS stima (
+
+  id BIGSERIAL PRIMARY KEY,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+
+
+
+  -- DATI UTENTE (base)
+
+  nome TEXT,
+
+  cognome TEXT,
+
+  email TEXT,
+
+  telefono TEXT,
+
+
+
+
+  -- DATI IMMOBILE (base)
+
+  comune TEXT,
+
+  via TEXT,
+
+  civico TEXT,
+
+  tipologia TEXT,       -- es. appartamento, casa, ecc.
+
+  mq NUMERIC,           -- metri quadri
+
+  piano TEXT,
+
+  locali TEXT,
+
+  bagni TEXT,
+
+  ascensore BOOLEAN,
+
+  balcone BOOLEAN,
+
+  giardino BOOLEAN,
+
+  box_auto BOOLEAN,
+
+
+
+
+  -- CAMPi TECNICI (li aggiungeremo dopo)
+
+  token UUID,
+
+  token_expires TIMESTAMPTZ
+
+);
+
+
+
+
+-- trigger updated_at (facoltativo)
+
+DO $$
+
+BEGIN
+
+IF NOT EXISTS (
+
+  SELECT 1 FROM pg_trigger WHERE tgname = 'stima_set_updated_at'
+
+) THEN
+
+  CREATE OR REPLACE FUNCTION set_updated_at()
+
+  RETURNS TRIGGER AS $f$
+
+  BEGIN
+
+    NEW.updated_at = NOW();
+
+    RETURN NEW;
+
+  END;
+
+  $f$ LANGUAGE plpgsql;
+
+
+
+
+  CREATE TRIGGER stima_set_updated_at
+
+  BEFORE UPDATE ON stima
+
+  FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
+
+END IF;
+
+END$$;
+
+"""
+
+
+
+
+try:
+
+    if db_url:
+
+        conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+
+    else:
+
+        conn = psycopg2.connect(
+
+            host=os.getenv("PGHOST","127.0.0.1"),
+
+            user=os.getenv("PGUSER","postgres"),
+
+            password=os.getenv("PGPASSWORD",""),
+
+            dbname=os.getenv("PGDATABASE","stima360"),
+
+            port=os.getenv("PGPORT","5432"),
+
+            cursor_factory=RealDictCursor,
+
+        )
+
+    cur = conn.cursor()
+
+    cur.execute(DDL)
+
+    conn.commit()
+
+    print("✅ Tabella 'stima' pronta (o già esistente).")
+
+except Exception as e:
+
+    if conn: conn.rollback()
+
+    print("❌ Errore creazione tabella:", e)
+
+finally:
+
+    if conn: conn.close()
+
+ChatGPT può commettere errori. Assicurati di verificare le informazioni importanti. Vedi Preferenze sui cookie.
+
