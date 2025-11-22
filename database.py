@@ -165,9 +165,10 @@ def crea_tabella_stime_dettagliate():
 
 # ------------------- NUOVA FUNZIONE INVIA MAIL -------------------
 def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "465"))
-    smtp_user = os.getenv("SMTP_USER")
+    # Config SMTP Netsons
+    smtp_host = os.getenv("SMTP_HOST", "mail.stima360.it")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))   # 🔥 Netsons vuole 587 STARTTLS
+    smtp_user = os.getenv("SMTP_USER")               # es. info@stima360.it
     smtp_pass = os.getenv("SMTP_PASS")
     email_from = smtp_user
 
@@ -177,31 +178,34 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
 
     print(f"📧 Invio email tramite {smtp_host}:{smtp_port} a {destinatario}")
 
-    # --- costruzione email ---
+    # --- Costruzione email ---
     msg = MIMEMultipart()
     msg["From"] = email_from
     msg["To"] = destinatario
     msg["Subject"] = oggetto
     msg.attach(MIMEText(corpo_html, "html"))
 
-    # --- allegato ---
+    # --- Allegato PDF eventuale ---
     if allegato:
         try:
             with open(allegato, "rb") as f:
                 part = MIMEApplication(f.read(), Name=os.path.basename(allegato))
-                part['Content-Disposition'] = f'attachment; filename="{os.path.basename(allegato)}"'
+                part['Content-Disposition'] = f'attachment; filename="%s"' % os.path.basename(allegato)
                 msg.attach(part)
-        except:
-            print("⚠️ Errore allegato")
+        except Exception as e:
+            print("⚠️ Errore allegato:", e)
 
-    # --- invio ---
+    # --- INVIO STARTTLS (Netsons richiede questo, NON SSL diretto!) ---
     try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(email_from, destinatario, msg.as_string())
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.ehlo()
+        server.starttls()   # 🔥 fondamentale per Netsons
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(email_from, destinatario, msg.as_string())
+        server.quit()
         print("✅ Email inviata correttamente!")
         return True
+
     except Exception as e:
         print("❌ Errore invio email:", e)
         return False
