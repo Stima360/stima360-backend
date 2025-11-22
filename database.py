@@ -6,11 +6,15 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 import psycopg2
 from dotenv import load_dotenv
-import yagmail
+
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from pathlib import Path
-
+import smtplib
+import ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 # Carica variabili ambiente
 load_dotenv()
@@ -29,8 +33,8 @@ def get_connection():
         user=DB_USER,
         password=DB_PASSWORD
     )
-# 👇 DA AGGIUNGERE in database.py (sotto get_connection)
 
+# ------------------- TABELLE VALORI -------------------
 def crea_tabella_zone_valori():
     conn = get_connection()
     cur = conn.cursor()
@@ -44,22 +48,37 @@ def crea_tabella_zone_valori():
         );
         CREATE INDEX IF NOT EXISTS idx_zone_valori_cm ON zone_valori(comune, microzona);
     """)
-    # seed ufficiale €/mq (upsert)
     cur.executemany("""
         INSERT INTO zone_valori (comune, microzona, prezzo_mq_base)
         VALUES (%s,%s,%s)
         ON CONFLICT (comune, microzona) DO UPDATE
         SET prezzo_mq_base = EXCLUDED.prezzo_mq_base
     """, [
-        ("Alba Adriatica","Nord",1500), ("Alba Adriatica","Villa Fiore",1900), ("Alba Adriatica","Zona Basciani",1400),
-        ("Tortoreto","Lido Sud",1900), ("Tortoreto","Lido Centro",2200), ("Tortoreto","Lido Nord",2000), ("Tortoreto","Alto",1300),
-        ("Martinsicuro","Centro",1600), ("Martinsicuro","Villarosa",1500), ("Martinsicuro","Alta",1300),
-    ])
+    # 🌊 ALBA ADRIATICA
+    ("Alba Adriatica", "Nord", 1250),
+    ("Alba Adriatica", "Villa Fiore", 1350),
+    ("Alba Adriatica", "Zona Basciani", 1200),
+
+    # 🌴 TORTORETO
+    # B5 Via Indipendenza ≈ min 1450
+    ("Tortoreto", "Lido Sud", 1450),
+    # B4 Lungomare Sirena ≈ min 1650
+    ("Tortoreto", "Lido Centro", 1650),
+    # fascia intermedia tra B4 e B5
+    ("Tortoreto", "Lido Nord", 1500),
+    # Alto ≈ 1097 → arrotondato 1100
+    ("Tortoreto", "Alto", 1100),
+
+    # 🏖️ MARTINSICURO
+    ("Martinsicuro", "Centro", 1000),
+    ("Martinsicuro", "Villarosa", 900),
+    ("Martinsicuro", "Alta", 850),
+]
+)
     conn.commit()
     cur.close(); conn.close()
 
 def migrazione_allinea_stime():
-    """Aggiunge le colonne nuove se mancanti (safe)."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -73,8 +92,8 @@ def migrazione_allinea_stime():
     """)
     conn.commit()
     cur.close(); conn.close()
+
 def migrazione_gestionale_stime():
-    """Aggiunge campi per gestione interna lead (safe)."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -144,57 +163,51 @@ def crea_tabella_stime_dettagliate():
     cur.close()
     conn.close()
 
-# ------------------- INVIO EMAIL (HTML, NIENTE CTA AUTO) -------------------
+# ------------------- NUOVA FUNZIONE INVIA MAIL -------------------
 def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
-    """
-    Invia una mail HTML. NON aggiunge link automaticamente.
-    Se vuoi il pulsante/CTA '📄 Scarica il tuo PDF', inseriscilo tu nel corpo_html.
-    """
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "465"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    email_from = smtp_user
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        print("❌ SMTP non configurato!")
+        return False
+
+    print(f"📧 Invio email tramite {smtp_host}:{smtp_port} a {destinatario}")
+
+    # --- costruzione email ---
+    msg = MIMEMultipart()
+    msg["From"] = email_from
+    msg["To"] = destinatario
+    msg["Subject"] = oggetto
+    msg.attach(MIMEText(corpo_html, "html"))
+
+    # --- allegato ---
+    if allegato:
+        try:
+            with open(allegato, "rb") as f:
+                part = MIMEApplication(f.read(), Name=os.path.basename(allegato))
+                part['Content-Disposition'] = f'attachment; filename="{os.path.basename(allegato)}"'
+                msg.attach(part)
+        except:
+            print("⚠️ Errore allegato")
+
+    # --- invio ---
     try:
-        smtp_host = os.getenv("SMTP_HOST")
-        smtp_port = int(os.getenv("SMTP_PORT", "465"))  # default 465 se non presente
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_pass = os.getenv("SMTP_PASS")
-
-        print(f"📧 Invio email HTML tramite {smtp_host}:{smtp_port} a {destinatario}...")
-
-        # ✅ Connessione server SMTP (SSL)
-        yag = yagmail.SMTP(user=smtp_user, password=smtp_pass,
-                           host=smtp_host, port=smtp_port, smtp_ssl=True)
-
-        # 📎 Allegato fisico (accetta: 'stima_59.pdf' | 'reports/stima_59.pdf' | path assoluto)
-        attachments = None
-        if allegato:
-            p = Path(str(allegato))
-            if not p.is_absolute():
-                if p.parts and p.parts[0] == "reports":
-                    p = Path(BASE_DIR) / p
-                else:
-                    p = Path(REPORTS_DIR) / p.name
-            if p.exists() and p.stat().st_size > 0:
-                attachments = [str(p)]
-            else:
-                print(f"⚠️ Allegato non trovato o vuoto: {p}")
-
-        # ✅ Invio come HTML + eventuale allegato
-        yag.send(
-            to=destinatario,
-            subject=oggetto,
-            contents=[yagmail.raw(corpo_html)],
-            attachments=attachments
-        )
-
-        print("✅ Email inviata con successo (HTML + allegato se presente)")
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(email_from, destinatario, msg.as_string())
+        print("✅ Email inviata correttamente!")
+        return True
     except Exception as e:
-        print("❌ Errore invio mail:", e)
+        print("❌ Errore invio email:", e)
+        return False
 
-
-# ------------------- OTTIENI STIMA (JOIN) -------------------
+# ------------------- JOIN COMPLETO -------------------
 def ottieni_stima_completa(stima_id):
-    """
-    Recupera tutti i dati di una stima (base + dettagli) tramite ID.
-    Ritorna un dizionario o None se non trovato.
-    """
     conn = get_connection()
     cur = conn.cursor()
 
@@ -217,31 +230,14 @@ def ottieni_stima_completa(stima_id):
     if not row:
         return None
 
-    # 🔹 Converte in dizionario
     colonne = [desc[0] for desc in cur.description]
     return dict(zip(colonne, row))
 
+# ------------------- MAIN -------------------
 if __name__ == "__main__":
     crea_tabella_stime()
     crea_tabella_stime_dettagliate()
     crea_tabella_zone_valori()
     migrazione_allinea_stime()
-    migrazione_gestionale_stime()   # 👈 NUOVO
-def migrazione_gestionale_stime():
-    """Aggiunge campi per gestione lead se mancano."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        ALTER TABLE stime
-          ADD COLUMN IF NOT EXISTS lead_status   VARCHAR(32) DEFAULT 'nuovo',
-          ADD COLUMN IF NOT EXISTS note_internal TEXT
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-if __name__ == "__main__":
-    crea_tabella_stime()
-    crea_tabella_stime_dettagliate()
-    # altre funzioni che hai già...
-    migrazione_allinea_stime()
-    migrazione_gestionale_stime()  # 👈 QUESTA
+    migrazione_gestionale_stime()
+
