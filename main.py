@@ -56,7 +56,11 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     s = s.lstrip("0")
     return "39" + s if s else None
 
-def invia_whatsapp(numero: str | None, messaggio: str) -> tuple[int, str] | None:
+send_template_stima(
+    data.get("telefono"),
+    indirizzo,
+    pdf_link
+)
     """
     Invia un messaggio WhatsApp testuale usando WhatsApp Cloud API.
     Non solleva eccezioni verso l'esterno: in caso di errore ritorna (status, body).
