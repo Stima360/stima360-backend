@@ -17,11 +17,12 @@ def normalize_number(number: str) -> str:
     return "39" + digits.lstrip("0")
 
 
-def send_whatsapp_template(to_number: str, pdf_link: str):
+def send_template_stima(to_number: str, indirizzo: str, pdf_link: str):
     """
-    Invia il template ufficiale META: stima_ok
+    Invia il template WhatsApp stima_pronta2
     con 2 variabili:
-    {{1}} → link PDF
+    {{1}} → indirizzo
+    {{2}} → link PDF
     """
 
     if not ACCESS_TOKEN or not PHONE_NUMBER_ID:
@@ -40,12 +41,13 @@ def send_whatsapp_template(to_number: str, pdf_link: str):
         "to": dest,
         "type": "template",
         "template": {
-            "name": "stima_ok",
+            "name": "stima_pronta2",
             "language": {"code": "it"},
             "components": [
                 {
                     "type": "body",
                     "parameters": [
+                        {"type": "text", "text": indirizzo},
                         {"type": "text", "text": pdf_link}
                     ]
                 }
