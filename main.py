@@ -26,7 +26,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from valuation import compute_from_payload
 from pydantic import BaseModel
-
+from whatsapp import send_template_stima
 # ---------------- PATH & CONFIG ----------------
 BASE_DIR = Path(__file__).parent
 REPORTS_DIR = BASE_DIR / "reports"
@@ -553,7 +553,9 @@ async def salva_stima(request: Request):
                     + (f"🧩 Stima dettagliata: {det_link}\n" if det_link else "")
                     + "\nSe hai domande puoi rispondere direttamente a questo numero."
                 )
-                invia_whatsapp(data.get("telefono"), msg_wp)
+                numero_wp = data.get("telefono")
+                invia_whatsapp(f"39{numero_wp.lstrip('+').lstrip('39')}", msg_wp)
+
             except Exception as e_wp:
                 # non blocca il flusso se WhatsApp fallisce
                 print("⚠️ Errore invio WhatsApp:", e_wp)
