@@ -37,64 +37,21 @@ WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")    # phone_number_id di Whats
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v18.0")
 
 def normalizza_numero_whatsapp(raw: str | None) -> str | None:
-    """
-    Pulizia veloce:
-    - tiene solo le cifre
-    - se manca il prefisso internazionale aggiunge +39 (Italia)
-    """
     if not raw:
         return None
     s = "".join(ch for ch in str(raw) if ch.isdigit())
     if not s:
         return None
 
-    # se già inizia con 39 la teniamo così
     if s.startswith("39") and len(s) > 2:
         return s
+
+    s = s.lstrip("0")
+    return "39" + s if s else None
 
     # togli eventuale 0 iniziale e aggiungi prefisso Italia
     s = s.lstrip("0")
     return "39" + s if s else None
-
-send_template_stima(
-    data.get("telefono"),
-    indirizzo,
-    pdf_link
-)
-    """
-    Invia un messaggio WhatsApp testuale usando WhatsApp Cloud API.
-    Non solleva eccezioni verso l'esterno: in caso di errore ritorna (status, body).
-    """
-    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_ID):
-        print("ℹ️ WhatsApp disabilitato: manca WHATSAPP_TOKEN o WHATSAPP_PHONE_ID")
-        return None
-
-    dest = normalizza_numero_whatsapp(numero)
-    if not dest:
-        print(f"ℹ️ Numero WhatsApp non valido: {numero!r}")
-        return None
-
-    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": dest,
-        "type": "text",
-        "text": {"body": messaggio}
-    }
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        print("📲 WhatsApp status:", r.status_code, r.text[:300])
-        return r.status_code, r.text
-    except Exception as e:
-        print("❌ Errore invio WhatsApp:", e)
-        return None
 
 def web_to_fs(web_path: str) -> str:
     """
@@ -540,15 +497,17 @@ async def salva_stima(request: Request):
             <p>📄 <a href="{pdf_link}">Apri il PDF della tua stima</a></p>
             {f'<p>📋 <a href="{det_link}">Richiedi la stima dettagliata</a></p>' if det_link else ''}
             <p>Grazie,<br><b>Team Stima360</b></p>
-            """
-
-            invia_mail(
-                data.get('email'),
-                f"La tua stima Stima360 – {indirizzo}",
-                corpo_html,
-                allegato=None
+                    """
+        
+            try:
+            send_template_stima(
+                data.get("telefono"),
+                indirizzo,
+                pdf_link
             )
-                        # --- WhatsApp di cortesia allo stesso tempo della mail ---
+        except Exception as e_wp:
+            print("⚠️ Errore invio WhatsApp template:", e_wp)
+                                # --- WhatsApp di cortesia allo stesso tempo della mail ---
             try:
                 msg_wp = (
                     f"Ciao {data.get('nome','')}! 🏡\n"
