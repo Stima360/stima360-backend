@@ -485,29 +485,55 @@ async def salva_stima(request: Request):
             print("❌ ERRORE REPORT:", e); print(format_exc())
             raise HTTPException(status_code=500, detail=f"Errore generazione REPORT: {e}")
 
-        # --- 6) EMAIL: solo link, niente allegato ---
-        try:
-            pdf_link = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
-            det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}" if token else None
-
-            corpo_html = f"""
-            <h2 style="color:#0077cc;">🏡 La tua stima Stima360 è pronta!</h2>
-            <p>Ciao <b>{data.get('nome','')}</b>,</p>
-            <p>Ecco la stima per <b>{indirizzo}</b>.</p>
-            <p>📄 <a href="{pdf_link}">Apri il PDF della tua stima</a></p>
-            {f'<p>📋 <a href="{det_link}">Richiedi la stima dettagliata</a></p>' if det_link else ''}
-            <p>Grazie,<br><b>Team Stima360</b></p>
-                    """
         
-            try:
-            send_template_stima(
-                data.get("telefono"),
-                indirizzo,
-                pdf_link
-            )
-        except Exception as e_wp:
-            print("⚠️ Errore invio WhatsApp template:", e_wp)
-                                # --- WhatsApp di cortesia allo stesso tempo della mail ---
+           # --- 6) EMAIL + WHATSAPP TEMPLATE META ---
+try:
+    pdf_link = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
+    det_link = (
+        f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+        if token else None
+    )
+
+    corpo_html = f"""
+    <h2 style="color:#0077cc;">🏡 La tua stima Stima360 è pronta!</h2>
+    <p>Ciao <b>{data.get('nome','')}</b>,</p>
+    <p>Ecco la stima per <b>{indirizzo}</b>.</p>
+    <p>📄 <a href="{pdf_link}">Apri il PDF della tua stima</a></p>
+    {f'<p>📋 <a href="{det_link}">Richiedi la stima dettagliata</a></p>' if det_link else ''}
+    <p>Grazie,<br><b>Team Stima360</b></p>
+    """
+
+    # Invia email (solo link)
+    invia_mail(
+        data.get("email"),
+        "🏡 La tua stima è pronta!",
+        corpo_html
+    )
+
+    # --- INVIO WHATSAPP TEMPLATE UFFICIALE META ---
+    try:
+        send_template_stima(
+            data.get("telefono"),
+            indirizzo,
+            pdf_link
+        )
+    except Exception as e_wp:
+        print("⚠️ Errore invio WhatsApp template:", e_wp)
+
+except Exception as e:
+    print("❌ ERRORE EMAIL:", e)
+    print(format_exc())
+    return {
+        "success": True, "status": "ok", "id": new_id,
+        "pdf_url": f"/{pdf_web_path}", "cover_url": f"/{cover_web_path}",
+        "price_exact": price_exact,
+        "eur_mq_finale": eur_mq_finale,
+        "valore_pertinenze": valore_pertinenze,
+        "base_mq": base_mq,
+        "warning": f"Invio email fallito: {e}"
+    }
+
+                    # --- WhatsApp di cortesia allo stesso tempo della mail ---
             try:
                 msg_wp = (
                     f"Ciao {data.get('nome','')}! 🏡\n"
