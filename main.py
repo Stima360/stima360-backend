@@ -26,7 +26,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from valuation import compute_from_payload
 from pydantic import BaseModel
-from whatsapp import send_template_stima
+
 # ---------------- PATH & CONFIG ----------------
 BASE_DIR = Path(__file__).parent
 REPORTS_DIR = BASE_DIR / "reports"
@@ -37,21 +37,60 @@ WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")    # phone_number_id di Whats
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v18.0")
 
 def normalizza_numero_whatsapp(raw: str | None) -> str | None:
+    """
+    Pulizia veloce:
+    - tiene solo le cifre
+    - se manca il prefisso internazionale aggiunge +39 (Italia)
+    """
     if not raw:
         return None
     s = "".join(ch for ch in str(raw) if ch.isdigit())
     if not s:
         return None
 
+    # se già inizia con 39 la teniamo così
     if s.startswith("39") and len(s) > 2:
         return s
-
-    s = s.lstrip("0")
-    return "39" + s if s else None
 
     # togli eventuale 0 iniziale e aggiungi prefisso Italia
     s = s.lstrip("0")
     return "39" + s if s else None
+
+def invia_whatsapp(numero: str | None, messaggio: str) -> tuple[int, str] | None:
+    """
+    Invia un messaggio WhatsApp testuale usando WhatsApp Cloud API.
+    Non solleva eccezioni verso l'esterno: in caso di errore ritorna (status, body).
+    """
+    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_ID):
+        print("ℹ️ WhatsApp disabilitato: manca WHATSAPP_TOKEN o WHATSAPP_PHONE_ID")
+        return None
+
+    dest = normalizza_numero_whatsapp(numero)
+    if not dest:
+        print(f"ℹ️ Numero WhatsApp non valido: {numero!r}")
+        return None
+
+    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": dest,
+        "type": "text",
+        "text": {"body": messaggio}
+    }
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        print("📲 WhatsApp status:", r.status_code, r.text[:300])
+        return r.status_code, r.text
+    except Exception as e:
+        print("❌ Errore invio WhatsApp:", e)
+        return None
 
 def web_to_fs(web_path: str) -> str:
     """
@@ -485,55 +524,27 @@ async def salva_stima(request: Request):
             print("❌ ERRORE REPORT:", e); print(format_exc())
             raise HTTPException(status_code=500, detail=f"Errore generazione REPORT: {e}")
 
-        
-           # --- 6) EMAIL + WHATSAPP TEMPLATE META ---
-try:
-    pdf_link = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
-    det_link = (
-        f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
-        if token else None
-    )
+        # --- 6) EMAIL: solo link, niente allegato ---
+        try:
+            pdf_link = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
+            det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}" if token else None
 
-    corpo_html = f"""
-    <h2 style="color:#0077cc;">🏡 La tua stima Stima360 è pronta!</h2>
-    <p>Ciao <b>{data.get('nome','')}</b>,</p>
-    <p>Ecco la stima per <b>{indirizzo}</b>.</p>
-    <p>📄 <a href="{pdf_link}">Apri il PDF della tua stima</a></p>
-    {f'<p>📋 <a href="{det_link}">Richiedi la stima dettagliata</a></p>' if det_link else ''}
-    <p>Grazie,<br><b>Team Stima360</b></p>
-    """
+            corpo_html = f"""
+            <h2 style="color:#0077cc;">🏡 La tua stima Stima360 è pronta!</h2>
+            <p>Ciao <b>{data.get('nome','')}</b>,</p>
+            <p>Ecco la stima per <b>{indirizzo}</b>.</p>
+            <p>📄 <a href="{pdf_link}">Apri il PDF della tua stima</a></p>
+            {f'<p>📋 <a href="{det_link}">Richiedi la stima dettagliata</a></p>' if det_link else ''}
+            <p>Grazie,<br><b>Team Stima360</b></p>
+            """
 
-    # Invia email (solo link)
-    invia_mail(
-        data.get("email"),
-        "🏡 La tua stima è pronta!",
-        corpo_html
-    )
-
-    # --- INVIO WHATSAPP TEMPLATE UFFICIALE META ---
-    try:
-        send_template_stima(
-            data.get("telefono"),
-            indirizzo,
-            pdf_link
-        )
-    except Exception as e_wp:
-        print("⚠️ Errore invio WhatsApp template:", e_wp)
-
-except Exception as e:
-    print("❌ ERRORE EMAIL:", e)
-    print(format_exc())
-    return {
-        "success": True, "status": "ok", "id": new_id,
-        "pdf_url": f"/{pdf_web_path}", "cover_url": f"/{cover_web_path}",
-        "price_exact": price_exact,
-        "eur_mq_finale": eur_mq_finale,
-        "valore_pertinenze": valore_pertinenze,
-        "base_mq": base_mq,
-        "warning": f"Invio email fallito: {e}"
-    }
-
-                    # --- WhatsApp di cortesia allo stesso tempo della mail ---
+            invia_mail(
+                data.get('email'),
+                f"La tua stima Stima360 – {indirizzo}",
+                corpo_html,
+                allegato=None
+            )
+                        # --- WhatsApp di cortesia allo stesso tempo della mail ---
             try:
                 msg_wp = (
                     f"Ciao {data.get('nome','')}! 🏡\n"
@@ -542,9 +553,7 @@ except Exception as e:
                     + (f"🧩 Stima dettagliata: {det_link}\n" if det_link else "")
                     + "\nSe hai domande puoi rispondere direttamente a questo numero."
                 )
-                numero_wp = data.get("telefono")
-                invia_whatsapp(f"39{numero_wp.lstrip('+').lstrip('39')}", msg_wp)
-
+                invia_whatsapp(data.get("telefono"), msg_wp)
             except Exception as e_wp:
                 # non blocca il flusso se WhatsApp fallisce
                 print("⚠️ Errore invio WhatsApp:", e_wp)
