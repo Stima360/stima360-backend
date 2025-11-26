@@ -19,8 +19,8 @@ def normalize_number(number: str) -> str:
 
 def send_template_stima(to_number: str, indirizzo: str, pdf_link: str):
     """
-    Invia il template WhatsApp stima_pronta2
-    con 2 variabili:
+    Usa il template ufficiale META: stima_ok
+    Variabili:
     {{1}} → indirizzo
     {{2}} → link PDF
     """
@@ -41,7 +41,7 @@ def send_template_stima(to_number: str, indirizzo: str, pdf_link: str):
         "to": dest,
         "type": "template",
         "template": {
-            "name": "stima_pronta2",
+            "name": "stima_ok",
             "language": {"code": "it"},
             "components": [
                 {
@@ -56,6 +56,5 @@ def send_template_stima(to_number: str, indirizzo: str, pdf_link: str):
     }
 
     r = requests.post(WHATSAPP_URL, headers=headers, json=payload)
-
-    print("📲 WHATSAPP STATUS:", r.status_code, r.text)
+    print("📲 WHATSAPP STATUS TEMPLATE:", r.status_code, r.text)
     return r.json()
