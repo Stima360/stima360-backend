@@ -40,15 +40,24 @@ def send_whatsapp_template(to_number: str, template_name: str, language: str = "
         "Content-Type": "application/json"
     }
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": dest,
-        "type": "template",
-        "template": {
-            "name": template_name,     # 👈 NOME DEL TEMPLATE APPROVATO SU META
-            "language": {"code": language}
-        }
+       payload = {
+    "messaging_product": "whatsapp",
+    "to": dest,
+    "type": "template",
+    "template": {
+        "name": "stima_pronta",
+        "language": { "code": "it" },
+        "components": [
+            {
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": nome},
+                    {"type": "text", "text": pdf_link}
+                ]
+            }
+        ]
     }
+}
 
     try:
         r = requests.post(WHATSAPP_URL, headers=headers, json=payload)
