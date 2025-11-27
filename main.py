@@ -119,7 +119,7 @@ app.add_middleware(
 # ---------------- STATIC & REPORTS (serve frontend + PDF) ----------------
 # /reports = OBBLIGATORIO (per aprire PDF dal browser)
 os.makedirs(REPORTS_DIR, exist_ok=True)
-aapp.mount(
+app.mount(
     "/reports",
     StaticFiles(directory="/var/tmp/reports"),
     name="reports"
