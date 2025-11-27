@@ -20,7 +20,7 @@ import requests
 from fastapi import Form
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
-from cover_pdf import genera_cover_pdf
+
 # --- regole di stima esatte ---
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -119,7 +119,11 @@ app.add_middleware(
 # ---------------- STATIC & REPORTS (serve frontend + PDF) ----------------
 # /reports = OBBLIGATORIO (per aprire PDF dal browser)
 os.makedirs(REPORTS_DIR, exist_ok=True)
-app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+aapp.mount(
+    "/reports",
+    StaticFiles(directory="/var/tmp/reports"),
+    name="reports"
+)
 
 # /static = OPZIONALE (serve la cartella frontend se esiste)
 frontend_dir = (BASE_DIR / "../frontend").resolve()
@@ -518,12 +522,7 @@ async def salva_stima(request: Request):
 }
 
 
-        try:
-            cover_web_path = genera_cover_pdf(f"cover_stima360_{new_id}.pdf")
-        except Exception as e:
-            print("❌ ERRORE COVER:", e); print(format_exc())
-            raise HTTPException(status_code=500, detail=f"Errore generazione COVER: {e}")
-
+       
         try:
             pdf_web_path = genera_pdf_stima(dati_pdf, nome_file=f"stima_{new_id}.pdf")
         except Exception as e:
@@ -568,7 +567,7 @@ async def salva_stima(request: Request):
             print("❌ ERRORE EMAIL:", e); print(format_exc())
             return {
                 "success": True, "status": "ok", "id": new_id,
-                "pdf_url": f"/{pdf_web_path}", "cover_url": f"/{cover_web_path}",
+                "pdf_url": f"/{pdf_web_path}", 
                 "price_exact":       price_exact,
             "eur_mq_finale":     eur_mq_finale,
             "valore_pertinenze": valore_pertinenze,
@@ -579,7 +578,7 @@ async def salva_stima(request: Request):
         # --- 7) OK ---
         return {
     "success": True, "status": "ok", "id": new_id,
-    "pdf_url": f"/{pdf_web_path}", "cover_url": f"/{cover_web_path}",
+    "pdf_url": f"/{pdf_web_path}", 
 
     # 👇 aggiunti: mandiamo alla pagina gli stessi numeri del PDF
     "price_exact":       price_exact,
