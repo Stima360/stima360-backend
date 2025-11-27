@@ -28,9 +28,15 @@ from valuation import compute_from_payload
 from pydantic import BaseModel
 
 # ---------------- PATH & CONFIG ----------------
+# ---------------- PATH & CONFIG ----------------
 BASE_DIR = Path(__file__).parent
-REPORTS_DIR = BASE_DIR / "reports"
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+# SALVATAGGIO SEMPLICE E COMPATIBILE CON RENDER
+REPORTS_DIR = Path("/var/tmp/reports")
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
+
 # ---------------- WHATSAPP CLOUD API ----------------
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")          # token di accesso Meta
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")    # phone_number_id di WhatsApp Business
