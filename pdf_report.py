@@ -180,8 +180,15 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     Report professionale e compatto.
     Ritorna: path web 'reports/...'
     """
-    logo_path = _logo_path(os.path.dirname(__file__))
+    base_dir = os.path.dirname(__file__)
+    logo_path = _logo_path(base_dir)
 
+    # 🔹 CARTELLA REPORT (compatibile Render)
+    REPORTS_DIR = "/var/tmp/reports"
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+
+    pdf_fs_path  = os.path.join(REPORTS_DIR, nome_file)
+    pdf_web_path = f"reports/{nome_file}"   # questo viene rimandato al frontend
 
     # stili
     ss = getSampleStyleSheet()
