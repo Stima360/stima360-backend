@@ -182,14 +182,13 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     """
     print("USO FUNZIONE:", genera_pdf_stima.__module__)
 
-    # cartelle
-    BASE_DIR = os.path.dirname(__file__)
-    REPORTS_DIR = os.path.join(BASE_DIR, "reports")
-    logo_path = dati.get("logo_path") or _logo_path(BASE_DIR)
-    print("LOGO USATO:", logo_path)  # debug: vedi in terminale quale file sta usando
+    # cartelle (SALVATAGGIO COMPATIBILE RENDER)
+    REPORTS_DIR = "/var/tmp/reports"
     os.makedirs(REPORTS_DIR, exist_ok=True)
+
     pdf_fs_path  = os.path.join(REPORTS_DIR, nome_file)
-    pdf_web_path = f"reports/{nome_file}"
+    pdf_web_path = f"reports/{nome_file}"  # questo resta così (URL per il browser)
+
 
     # stili
     ss = getSampleStyleSheet()
