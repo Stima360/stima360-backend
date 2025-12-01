@@ -119,6 +119,33 @@ def verifica_login(credentials: HTTPBasicCredentials):
     return True
 
 # ---------------------------------------------------------
+# CANCELLA STIME (singole o multiple)
+# ---------------------------------------------------------
+class DeleteRequest(BaseModel):
+    ids: list[int]
+
+@app.post("/api/admin/stime/delete")
+def admin_delete_stime(
+    payload: DeleteRequest,
+    credentials: HTTPBasicCredentials = Depends(security)
+):
+    verifica_login(credentials)
+
+    ids = payload.ids
+    if not ids:
+        raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
+
+    conn = get_connection(); cur = conn.cursor()
+
+    cur.execute("DELETE FROM stime_dettagliate WHERE stima_id = ANY(%s)", (ids,))
+    cur.execute("DELETE FROM stime WHERE id = ANY(%s)", (ids,))
+    conn.commit()
+
+    cur.close(); conn.close()
+    return {"ok": True, "deleted": len(ids)}
+
+
+# ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
 # ---------------------------------------------------------
 @app.post("/api/salva_stima")
