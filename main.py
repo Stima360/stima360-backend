@@ -455,5 +455,29 @@ def admin_update_stima(
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
+@app.get("/fix-db")
+def fix_db():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            ALTER TABLE stime ADD COLUMN IF NOT EXISTS lead_status TEXT DEFAULT 'nuovo';
+        """)
+
+        cur.execute("""
+            ALTER TABLE stime ADD COLUMN IF NOT EXISTS note_internal TEXT;
+        """)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "ok", "message": "Colonne aggiunte correttamente!"}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
