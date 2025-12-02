@@ -8,16 +8,16 @@ from decimal import Decimal
 # ---------------------------
 BASE_MQ = {
     "Alba Adriatica": {
-        "Nord": 1450,
-        "Villa Fiore": 1600,
-        "Zona Basciani": 1200,
+        "Nord": 1650,
+        "Villa Fiore": 1850,
+        "Zona Basciani": 1400,
     },
 
     "Tortoreto": {
         # B5 – via Indipendenza ecc: min ~1450
         "Lido Sud":   1750,
         # B4 – Lungomare Sirena: min ~1650
-        "Lido Centro": 1850,
+        "Lido Centro": 1950,
         # fascia intermedia tra B4 e B5
         "Lido Nord":  1600,
         # Tortoreto Alto: min ~1097 → 1100 arrotondato
@@ -26,9 +26,9 @@ BASE_MQ = {
 
     "Martinsicuro": {
         # min ~874 → stiamo bassi
-        "Centro":    1400,
-        "Villarosa": 1300,
-        "Alto":      950,
+        "Centro":    1500,
+        "Villarosa": 1400,
+        "Alto":      1150,
     },
 }
 
