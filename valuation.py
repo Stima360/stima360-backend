@@ -8,27 +8,27 @@ from decimal import Decimal
 # ---------------------------
 BASE_MQ = {
     "Alba Adriatica": {
-        "Nord": 1250,
-        "Villa Fiore": 1350,
+        "Nord": 1450,
+        "Villa Fiore": 1600,
         "Zona Basciani": 1200,
     },
 
     "Tortoreto": {
         # B5 – via Indipendenza ecc: min ~1450
-        "Lido Sud":   1450,
+        "Lido Sud":   1750,
         # B4 – Lungomare Sirena: min ~1650
-        "Lido Centro": 1650,
+        "Lido Centro": 1850,
         # fascia intermedia tra B4 e B5
-        "Lido Nord":  1500,
+        "Lido Nord":  1600,
         # Tortoreto Alto: min ~1097 → 1100 arrotondato
         "Alto":       1100,
     },
 
     "Martinsicuro": {
         # min ~874 → stiamo bassi
-        "Centro":    1000,
-        "Villarosa": 900,
-        "Alta":      850,
+        "Centro":    1400,
+        "Villarosa": 1300,
+        "Alto":      950,
     },
 }
 
@@ -195,7 +195,7 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
             mq_gar = 0.0
 
         if mq_gar > 0:
-            garage_base = max(9000.0, 500.0 * mq_gar)
+            garage_base = max(18000.0, 500.0 * mq_gar)
         else:
             garage_base = 10000.0
 
@@ -212,9 +212,9 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
             mq_pa = 0.0
 
         if mq_pa > 0:
-            euro += mq_pa * 250.0
+            euro += mq_pa * 850.0
         else:
-            euro += 4000.0
+            euro += 10000.0
 
     # Cantina — con mq
     if flags.get("Cantina"):
@@ -224,9 +224,9 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
             mq_ca = 0.0
 
         if mq_ca > 0:
-            euro += mq_ca * 150.0
+            euro += mq_ca * 550.0
         else:
-            euro += 3000.0
+            euro += 10000.0
 
     # Soffitta — con mq
     if flags.get("Soffitta"):
@@ -238,7 +238,7 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
         if mq_sf > 0:
             euro += mq_sf * 200.0
         else:
-            euro += 6000.0
+            euro += 20000.0
 
     # Taverna — con mq
     if flags.get("Taverna"):
@@ -248,9 +248,9 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
             mq_tav = 0.0
 
         if mq_tav > 0:
-            euro += mq_tav * 250.0
+            euro += mq_tav * 1150.0
         else:
-            euro += 5000.0
+            euro += 12000.0
 
     # Balconi — numerati
     if flags.get("Balconi"):
