@@ -1,5 +1,8 @@
 # backend/pdf_report.py
+from github_upload import upload_pdf_to_github
+
 import os, datetime
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
@@ -178,7 +181,9 @@ def _parse_comparabili(raw):
 def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     """
     Report professionale e compatto.
-    Ritorna: path web 'reports/...'
+    Ritorna: URL finale del PDF
+    - Se upload GitHub va a buon fine: URL GitHub Releases
+    - Altrimenti: path relativo 'reports/...'
     """
     base_dir = os.path.dirname(__file__)
     logo_path = _logo_path(base_dir)
@@ -188,7 +193,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
     pdf_fs_path  = os.path.join(REPORTS_DIR, nome_file)
-    pdf_web_path = f"reports/{nome_file}"   # questo viene rimandato al frontend
+    pdf_web_path = f"reports/{nome_file}"   # fallback: serve dal backend
 
     # stili
     ss = getSampleStyleSheet()
@@ -203,7 +208,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
                         fontSize=22, leading=28, alignment=TA_CENTER,
                         textColor=colors.HexColor("#0077cc"))
 
-       # documento
+    # documento
     doc = SimpleDocTemplate(
         pdf_fs_path, pagesize=A4,
         rightMargin=2*cm, leftMargin=2*cm, topMargin=1.8*cm, bottomMargin=1.8*cm
@@ -224,7 +229,6 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         valore_pertinenze = calc["valore_pertinenze"]
         base_mq           = calc["base_mq"]
 
-
     print(f"[STIMA] base_mq={base_mq} eur_mq_finale={eur_mq_finale} tot={price_exact} pertinenze={valore_pertinenze}")
 
     # --- LOGO GRANDE CENTRALE (nuovo, non tocca l'header) ---
@@ -240,28 +244,26 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     ]))
     flow += [logo_center, Spacer(1, 12)]
 
-
     # hero prezzo (valore esatto)
     _val_tot = f"€ {price_exact:,.0f}".replace(",", ".")
     _val_mq  = f"€ {eur_mq_finale:,.2f}".replace(",", ".")
     flow += [Paragraph(f"Valore totale: <b>{_val_tot}</b><br/>€/mq finale: {_val_mq}", BIG), Spacer(1, 8)]
+
     # KPI chips
     flow += _kpi_row(dati)
 
-
-
-        # --- RIEPILOGO IMMOBILE (mostra Comune+Microzona+€/mq) ---
+    # --- RIEPILOGO IMMOBILE (mostra Comune+Microzona+€/mq) ---
     def _fmt_eur_mq(v):
-        try: return f"{float(v):,.0f} €/mq".replace(",", ".")
-        except: return "—"
+        try:
+            return f"{float(v):,.0f} €/mq".replace(",", ".")
+        except:
+            return "—"
 
     indirizzo = dati.get("indirizzo") or f"{dati.get('via','')} {dati.get('civico','')}, {dati.get('comune','')}".strip()
     comune     = dati.get("comune") or "—"
     microzona  = dati.get("microzona") or "—"
-    # usa i valori calcolati
     prezzo_base = base_mq
 
-    # ricava il "correttivo" come rapporto tra finale e base (solo per mostra percentuale)
     coeff_txt = "—"
     try:
         if prezzo_base:
@@ -272,7 +274,6 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         pass
 
     prezzo_finale = eur_mq_finale
-
 
     riepilogo = [
         ["Indirizzo", indirizzo or "—"],
@@ -300,6 +301,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("BOTTOMPADDING",(0,0),(-1,-1), 5),
     ]))
     flow += [Paragraph("Riepilogo immobile", H2), Spacer(1,4), tbl, Spacer(1, 12)]
+
     # --- Valori calcolati precisi ---
     flow.append(Paragraph(f"Base €/mq microzona: € {base_mq:,.2f}", P))
     flow.append(Paragraph(f"€/mq finale: € {eur_mq_finale:,.2f}", P))
@@ -307,7 +309,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     flow.append(Paragraph(f"Valore totale immobile: € {price_exact:,.0f}", P))
     flow.append(Spacer(1, 12))
 
-        # micro grafico comparabili (robusto)
+    # micro grafico comparabili (robusto)
     safe = _parse_comparabili(dati.get("comparabili"))
     d = Drawing(400, 130)
     bc = VerticalBarChart()
@@ -348,11 +350,22 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         canvas.drawRightString(w-2*cm, 1.2*cm, f"Pagina {doc.page}")
         canvas.restoreState()
 
-    # build
+    # build PDF
     try:
         doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
     except Exception as e:
-        # Log minimale, ma non blocca il flusso dell'app
         print({"detail": f"Errore generazione REPORT: {e}"})
 
-    return pdf_web_path
+    # 🔗 Upload su GitHub Releases
+    github_url = None
+    try:
+        github_url = upload_pdf_to_github(pdf_fs_path, nome_file)
+        if github_url:
+            print(f"[STIMA] PDF caricato su GitHub: {github_url}")
+        else:
+            print("[STIMA] Upload GitHub non ha restituito URL, uso fallback locale.")
+    except Exception as e:
+        print({"detail": f"Errore upload GitHub: {e}"})
+
+    # Se upload ok → ritorno URL GitHub, altrimenti il vecchio path relativo
+    return github_url or pdf_web_path
