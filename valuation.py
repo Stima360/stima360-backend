@@ -75,12 +75,31 @@ def coeff_anno(anno: int) -> float:
     except Exception:
         return 1.00
 
-    if a >= 2020:        # recentissimo
-        return 1.15      # prima eri 1.25–1.40
-    if 2005 <= a <= 2019:
-        return 1.10
+    # Nuovi valori più realistici per immobili recenti
+    if a >= 2025:
+        return 1.28
+    if a == 2024:
+        return 1.26
+    if a == 2023:
+        return 1.24
+    if a == 2022:
+        return 1.22
+    if a == 2021:
+        return 1.20
+
+    # Recenti (2010–2020)
+    if 2010 <= a <= 2020:
+        return 1.15
+
+    # Buona modernità (2005–2009)
+    if 2005 <= a <= 2009:
+        return 1.12
+
+    # Ottime condizioni (1995–2004)
     if 1995 <= a <= 2004:
-        return 1.05
+        return 1.06
+
+    # Standard
     if 1980 <= a <= 1994:
         return 1.00
     if 1970 <= a <= 1979:
@@ -89,7 +108,10 @@ def coeff_anno(anno: int) -> float:
         return 0.88
     if 1950 <= a <= 1959:
         return 0.82
+
+    # Molto vecchio o sconosciuto
     return 1.00
+
 
 
 # ---------------------------
@@ -97,7 +119,7 @@ def coeff_anno(anno: int) -> float:
 # ---------------------------
 def coeff_stato(stato: str) -> float:
     s = (stato or "").strip().lower()
-    if s == "nuovo":         return 1.08   # prima 1.15
+    if s == "nuovo":         return 1.05   # prima 1.15
     if s == "ristrutturato": return 1.05   # prima 1.10
     if s == "buono":         return 1.00
     if s == "scarso":        return 0.85   # prima 0.80
@@ -115,7 +137,7 @@ def _posizione_coeff(pos: str) -> float:
     return 1.00
 def _distanza_coeff(dist: str) -> float:
     d = (dist or "").strip().lower()
-    if d == "0-100":     return 1.06    # prima 1.15
+    if d == "0-100":     return 1.15    # prima 1.15
     if d == "100-300":   return 1.03
     if d == "300-500":   return 1.01
     if d == "500-1000":  return 1.00
