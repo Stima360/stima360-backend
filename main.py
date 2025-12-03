@@ -297,41 +297,48 @@ async def salva_stima(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
 
-    pdf_link = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
-    det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+    # --- 8. URL PDF finale (GitHub o backend) ---
+    if pdf_web_path.startswith("http"):
+        pdf_url_finale = pdf_web_path
+    else:
+        pdf_url_finale = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
 
-    # --- 8. Email ---
+    det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+    
+     # --- 9. Email ---
     try:
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
-        <p>📄 <a href="{pdf_link}">Apri il PDF</a></p>
+        <p>📄 <a href="{pdf_url_finale}">Apri il PDF</a></p>
         <p>🧩 <a href="{det_link}">Richiedi stima dettagliata</a></p>
         """
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
     except:
         pass
 
-    # --- 9. WhatsApp ---
+    # --- 10. WhatsApp ---
     try:
         msg = (
             f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {pdf_link}\nStima dettagliata: {det_link}"
+            f"PDF: {pdf_url_finale}\nStima dettagliata: {det_link}"
         )
         invia_whatsapp(data["telefono"], msg)
     except:
         pass
 
-    # --- 10. Risposta frontend ---
+    # --- 11. Risposta JSON al frontend ---
     return {
         "success": True,
         "id": new_id,
-        "pdf_url": f"/{pdf_web_path}",
+        "pdf_url": pdf_url_finale,
         "price_exact": price_exact,
         "eur_mq_finale": eur_mq_finale,
         "valore_pertinenze": valore_pertinenze,
         "base_mq": base_mq,
     }
+
+
 
 # ---------------------------------------------------------
 # PREFILL TOKEN
