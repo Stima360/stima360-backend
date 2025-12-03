@@ -164,7 +164,7 @@ async def salva_stima(request: Request):
         raw = {}
 
     # --- 2. Normalizza ---
-        data = {
+    data = {
         "comune": raw.get("comune"),
         "microzona": raw.get("microzona"),
         "fascia_mare": (raw.get("fascia_mare") or "").lower().strip(),
@@ -185,7 +185,7 @@ async def salva_stima(request: Request):
         "anno": to_int(raw.get("anno")),
         "stato": raw.get("stato"),
 
-        # 🔽 AGGIUNTE: stessi campi che usa il frontend nelle query string
+        # Campi extra dal frontend
         "posizioneMare": raw.get("posizioneMare"),
         "distanzaMare": raw.get("distanzaMare"),
         "barrieraMare": raw.get("barrieraMare"),
@@ -201,7 +201,6 @@ async def salva_stima(request: Request):
         "numBalconi": raw.get("numBalconi"),
         "altroDescrizione": raw.get("altroDescrizione"),
     }
-
 
     # --- 3. Se €mq base non presente → leggi DB ---
     if not data["prezzo_mq_base"]:
@@ -314,39 +313,34 @@ async def salva_stima(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
 
-    # --- 8. URL PDF finale (GitHub o backend) ---
+    # --- 8. URL PDF finale ---
     if pdf_web_path.startswith("http"):
         pdf_url_finale = pdf_web_path
     else:
         pdf_url_finale = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
 
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
-    
-     # --- 9. Email ---
 
-        # --- 9. Email ---
-    
+    # --- 9. Email ---
     try:
-        # Link completo con tutti i parametri inviati dal frontend
         clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
-        
+
         url_stima_completa = (
             "https://www.stima360.it/stima_dettagliata.html?" +
             urlencode(clean)
         )
-    
+
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
         <p>📄 <a href="{pdf_url_finale}">Apri il PDF</a></p>
         <p>🧩 <a href="{url_stima_completa}">Richiedi stima dettagliata</a></p>
         """
-    
+
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
-    
+
     except:
         pass
-
 
     # --- 10. WhatsApp ---
     try:
@@ -368,7 +362,6 @@ async def salva_stima(request: Request):
         "valore_pertinenze": valore_pertinenze,
         "base_mq": base_mq,
     }
-
 
 
 # ---------------------------------------------------------
