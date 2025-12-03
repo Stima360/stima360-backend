@@ -34,6 +34,7 @@ def get_connection():
         password=DB_PASSWORD
     )
 
+
 # ------------------- TABELLE VALORI -------------------
 def crea_tabella_zone_valori():
     conn = get_connection()
@@ -54,30 +55,24 @@ def crea_tabella_zone_valori():
         ON CONFLICT (comune, microzona) DO UPDATE
         SET prezzo_mq_base = EXCLUDED.prezzo_mq_base
     """, [
-    # 🌊 ALBA ADRIATICA
-    ("Alba Adriatica", "Nord", 1250),
-    ("Alba Adriatica", "Villa Fiore", 1350),
-    ("Alba Adriatica", "Zona Basciani", 1200),
+        ("Alba Adriatica", "Nord", 1250),
+        ("Alba Adriatica", "Villa Fiore", 1350),
+        ("Alba Adriatica", "Zona Basciani", 1200),
 
-    # 🌴 TORTORETO
-    # B5 Via Indipendenza ≈ min 1450
-    ("Tortoreto", "Lido Sud", 1450),
-    # B4 Lungomare Sirena ≈ min 1650
-    ("Tortoreto", "Lido Centro", 1650),
-    # fascia intermedia tra B4 e B5
-    ("Tortoreto", "Lido Nord", 1500),
-    # Alto ≈ 1097 → arrotondato 1100
-    ("Tortoreto", "Alto", 1100),
+        ("Tortoreto", "Lido Sud", 1450),
+        ("Tortoreto", "Lido Centro", 1650),
+        ("Tortoreto", "Lido Nord", 1500),
+        ("Tortoreto", "Alto", 1100),
 
-    # 🏖️ MARTINSICURO
-    ("Martinsicuro", "Centro", 1000),
-    ("Martinsicuro", "Villarosa", 900),
-    ("Martinsicuro", "Alta", 850),
-]
-)
+        ("Martinsicuro", "Centro", 1000),
+        ("Martinsicuro", "Villarosa", 900),
+        ("Martinsicuro", "Alta", 850),
+    ])
     conn.commit()
     cur.close(); conn.close()
 
+
+# ------------------- MIGRAZIONI -------------------
 def migrazione_allinea_stime():
     conn = get_connection()
     cur = conn.cursor()
@@ -93,6 +88,7 @@ def migrazione_allinea_stime():
     conn.commit()
     cur.close(); conn.close()
 
+
 def migrazione_gestionale_stime():
     conn = get_connection()
     cur = conn.cursor()
@@ -100,12 +96,44 @@ def migrazione_gestionale_stime():
         ALTER TABLE stime
           ADD COLUMN IF NOT EXISTS lead_status   VARCHAR(32) DEFAULT 'nuovo',
           ADD COLUMN IF NOT EXISTS note_internal TEXT;
-        
+
         CREATE INDEX IF NOT EXISTS idx_stime_data ON stime(data);
     """)
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
+
+
+def migrazione_stime_completa():
+    """Aggiunge TUTTI i parametri della stima base nel DB."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE stime
+          ADD COLUMN IF NOT EXISTS microzona       VARCHAR(100),
+
+          ADD COLUMN IF NOT EXISTS posizioneMare   VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS distanzaMare    VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS barrieraMare    VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS vistaMareYN     VARCHAR(10),
+          ADD COLUMN IF NOT EXISTS vistaMare       VARCHAR(50),
+
+          ADD COLUMN IF NOT EXISTS stato           VARCHAR(40),
+          ADD COLUMN IF NOT EXISTS anno            INTEGER,
+
+          ADD COLUMN IF NOT EXISTS mqGiardino      INTEGER,
+          ADD COLUMN IF NOT EXISTS mqGarage        INTEGER,
+          ADD COLUMN IF NOT EXISTS mqCantina       INTEGER,
+          ADD COLUMN IF NOT EXISTS mqPostoAuto     INTEGER,
+          ADD COLUMN IF NOT EXISTS mqTaverna       INTEGER,
+          ADD COLUMN IF NOT EXISTS mqSoffitta      INTEGER,
+          ADD COLUMN IF NOT EXISTS mqTerrazzo      INTEGER,
+          ADD COLUMN IF NOT EXISTS numBalconi      INTEGER,
+
+          ADD COLUMN IF NOT EXISTS altroDescrizione TEXT;
+    """)
+    conn.commit()
+    cur.close(); conn.close()
+
 
 # ------------------- CREAZIONE TABELLE -------------------
 def crea_tabella_stime():
@@ -122,18 +150,43 @@ def crea_tabella_stime():
             piano VARCHAR(30),
             locali INTEGER,
             bagni INTEGER,
-            pertinenze VARCHAR(100),
+            pertinenze VARCHAR(200),
             ascensore VARCHAR(10),
             nome VARCHAR(50),
             cognome VARCHAR(50),
             email VARCHAR(100),
             telefono VARCHAR(30),
+
+            -- nuovi campi aggiunti con migrazione_stime_completa
+            microzona VARCHAR(100),
+
+            posizioneMare VARCHAR(50),
+            distanzaMare VARCHAR(50),
+            barrieraMare VARCHAR(50),
+            vistaMareYN VARCHAR(10),
+            vistaMare VARCHAR(50),
+
+            stato VARCHAR(40),
+            anno INTEGER,
+
+            mqGiardino INTEGER,
+            mqGarage INTEGER,
+            mqCantina INTEGER,
+            mqPostoAuto INTEGER,
+            mqTaverna INTEGER,
+            mqSoffitta INTEGER,
+            mqTerrazzo INTEGER,
+            numBalconi INTEGER,
+
+            altroDescrizione TEXT,
+
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
     conn.commit()
     cur.close()
     conn.close()
+
 
 def crea_tabella_stime_dettagliate():
     conn = get_connection()
@@ -142,20 +195,19 @@ def crea_tabella_stime_dettagliate():
         CREATE TABLE IF NOT EXISTS stime_dettagliate (
             id SERIAL PRIMARY KEY,
             stima_id INTEGER REFERENCES stime(id),
-            stato VARCHAR(40),
-            anno INTEGER,
+
+   
             classe VARCHAR(8),
             riscaldamento VARCHAR(32),
             condizionatore VARCHAR(8),
             spese_cond INTEGER,
-            balcone VARCHAR(24),
-            giardino VARCHAR(24),
-            posto_auto VARCHAR(24),
+            condiz_tipo VARCHAR(50),
             esposizione VARCHAR(16),
             arredo VARCHAR(32),
             note TEXT,
             contatto VARCHAR(8),
             sopralluogo TIMESTAMP,
+
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
@@ -163,12 +215,12 @@ def crea_tabella_stime_dettagliate():
     cur.close()
     conn.close()
 
-# ------------------- NUOVA FUNZIONE INVIA MAIL -------------------
+
+# ------------------- EMAIL -------------------
 def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
-    # Config SMTP Netsons
     smtp_host = os.getenv("SMTP_HOST", "mail.stima360.it")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))   # 🔥 Netsons vuole 587 STARTTLS
-    smtp_user = os.getenv("SMTP_USER")               # es. info@stima360.it
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
     smtp_pass = os.getenv("SMTP_PASS")
     email_from = smtp_user
 
@@ -178,14 +230,12 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
 
     print(f"📧 Invio email tramite {smtp_host}:{smtp_port} a {destinatario}")
 
-    # --- Costruzione email ---
     msg = MIMEMultipart()
     msg["From"] = email_from
     msg["To"] = destinatario
     msg["Subject"] = oggetto
     msg.attach(MIMEText(corpo_html, "html"))
 
-    # --- Allegato PDF eventuale ---
     if allegato:
         try:
             with open(allegato, "rb") as f:
@@ -195,20 +245,19 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
         except Exception as e:
             print("⚠️ Errore allegato:", e)
 
-    # --- INVIO STARTTLS (Netsons richiede questo, NON SSL diretto!) ---
     try:
         server = smtplib.SMTP(smtp_host, smtp_port)
         server.ehlo()
-        server.starttls()   # 🔥 fondamentale per Netsons
+        server.starttls()
         server.login(smtp_user, smtp_pass)
         server.sendmail(email_from, destinatario, msg.as_string())
         server.quit()
         print("✅ Email inviata correttamente!")
         return True
-
     except Exception as e:
         print("❌ Errore invio email:", e)
         return False
+
 
 # ------------------- JOIN COMPLETO -------------------
 def ottieni_stima_completa(stima_id):
@@ -216,26 +265,35 @@ def ottieni_stima_completa(stima_id):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT s.id, s.comune, s.via, s.civico, s.tipologia, s.mq, s.piano, 
-               s.locali, s.bagni, s.pertinenze, s.ascensore,
-               s.nome, s.cognome, s.email, s.telefono, s.data,
-               d.stato, d.anno, d.classe, d.riscaldamento, d.condizionatore,
-               d.spese_cond, d.balcone, d.giardino, d.posto_auto, d.esposizione,
-               d.arredo, d.note, d.contatto, d.sopralluogo
-        FROM stime s
-        LEFT JOIN stime_dettagliate d ON s.id = d.stima_id
-        WHERE s.id = %s
+        SELECT * FROM stime
+        WHERE id = %s
     """, (stima_id,))
 
     row = cur.fetchone()
+    colonne = [d[0] for d in cur.description]
+
     cur.close()
     conn.close()
 
     if not row:
         return None
 
-    colonne = [desc[0] for desc in cur.description]
     return dict(zip(colonne, row))
+
+
+# ------------------- MAIN -------------------
+def migrazione_condiz_tipo():
+    """Aggiunge il campo condiz_tipo nella tabella stime_dettagliate se manca."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE stime_dettagliate
+        ADD COLUMN IF NOT EXISTS condiz_tipo VARCHAR(50);
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
 
 # ------------------- MAIN -------------------
 if __name__ == "__main__":
@@ -244,4 +302,5 @@ if __name__ == "__main__":
     crea_tabella_zone_valori()
     migrazione_allinea_stime()
     migrazione_gestionale_stime()
-
+    migrazione_stime_completa()
+    migrazione_condiz_tipo()   # <-- CORRETTO
