@@ -164,7 +164,7 @@ async def salva_stima(request: Request):
         raw = {}
 
     # --- 2. Normalizza ---
-    data = {
+        data = {
         "comune": raw.get("comune"),
         "microzona": raw.get("microzona"),
         "fascia_mare": (raw.get("fascia_mare") or "").lower().strip(),
@@ -184,7 +184,24 @@ async def salva_stima(request: Request):
         "prezzo_mq_base": to_float(raw.get("prezzo_mq_base")),
         "anno": to_int(raw.get("anno")),
         "stato": raw.get("stato"),
+
+        # 🔽 AGGIUNTE: stessi campi che usa il frontend nelle query string
+        "posizioneMare": raw.get("posizioneMare"),
+        "distanzaMare": raw.get("distanzaMare"),
+        "barrieraMare": raw.get("barrieraMare"),
+        "vistaMareYN": raw.get("vistaMareYN"),
+        "vistaMare": raw.get("vistaMare"),
+        "mqGiardino": raw.get("mqGiardino"),
+        "mqGarage": raw.get("mqGarage"),
+        "mqCantina": raw.get("mqCantina"),
+        "mqPostoAuto": raw.get("mqPostoAuto"),
+        "mqTaverna": raw.get("mqTaverna"),
+        "mqSoffitta": raw.get("mqSoffitta"),
+        "mqTerrazzo": raw.get("mqTerrazzo"),
+        "numBalconi": raw.get("numBalconi"),
+        "altroDescrizione": raw.get("altroDescrizione"),
     }
+
 
     # --- 3. Se €mq base non presente → leggi DB ---
     if not data["prezzo_mq_base"]:
