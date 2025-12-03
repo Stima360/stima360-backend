@@ -373,40 +373,55 @@ async def prefill(t: str):
 async def salva_stima_dettagliata(request: Request):
     data = await request.json()
 
+    conn = get_connection(); cur = conn.cursor()
     try:
-        conn = get_connection(); cur = conn.cursor()
         cur.execute("""
-            INSERT INTO stime_dettagliate(
-                stima_id, comune, via, civico, tipologia, mq, piano, locali, bagni, ascensore,
-                pertinenze, stato, anno, classe, riscaldamento, condizionatore, spese_cond,
-                balcone, giardino, posto_auto, esposizione, arredo, note, contatto, sopralluogo
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                      %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO stime_dettagliate (
+                stima_id,
+                classe,
+                riscaldamento,
+                condizionatore,
+                condiz_tipo,
+                spese_cond,
+                esposizione,
+                arredo,
+                note,
+                contatto,
+                sopralluogo
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
-            data.get("stima_id"), data.get("comune"), data.get("via"), data.get("civico"),
-            data.get("tipologia"), data.get("mq"), data.get("piano"), data.get("locali"),
-            to_int(data.get("bagni")), to_bool(data.get("ascensore")), data.get("pertinenze"),
-            data.get("stato"), data.get("anno"), data.get("classe"),
-            data.get("riscaldamento"), data.get("condizionatore"),
-            data.get("spese_cond"), data.get("balcone"), data.get("giardino"),
-            data.get("posto_auto"), data.get("esposizione"), data.get("arredo"),
-            data.get("note"), data.get("contatto"), data.get("sopralluogo")
+            data.get("stima_id"),
+            data.get("classe"),
+            data.get("riscaldamento"),
+            data.get("condizionatore"),
+            data.get("condiz_tipo"),
+            data.get("spese_cond"),
+            data.get("esposizione"),
+            data.get("arredo"),
+            data.get("note"),
+            data.get("contatto"),
+            data.get("sopralluogo")
         ))
         conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore salvataggio dettagliata: {e}")
+    finally:
         cur.close(); conn.close()
-    except:
-        raise HTTPException(status_code=500, detail="Errore salvataggio dettagliata")
 
-    # PDF dettagliata
+    # genera nuovo PDF dettagliato
     try:
-        pdf_path = genera_pdf_stima(data, nome_file=f"stima_dettagliata_{data.get('stima_id')}.pdf")
+        pdf_path = genera_pdf_stima(
+            data,
+            nome_file=f"stima_dettagliata_{data.get('stima_id')}.pdf"
+        )
     except:
         raise HTTPException(status_code=500, detail="Errore PDF dettagliata")
 
-    # email
+    # invia email
     try:
         invia_mail(
-            data.get("email"), "Stima360 – Stima dettagliata pronta!",
+            data.get("email"),
+            "Stima360 – Stima dettagliata pronta!",
             "<p>In allegato trovi la valutazione completa.</p>",
             allegato=web_to_fs(pdf_path)
         )
@@ -414,6 +429,7 @@ async def salva_stima_dettagliata(request: Request):
         pass
 
     return {"status": "ok", "pdf": f"/{pdf_path}"}
+
 
 # ---------------------------------------------------------
 # ADMIN
@@ -445,7 +461,7 @@ def admin_lista_stime(
         SELECT s.id, s.data, s.comune, s.microzona, s.via, s.civico, s.tipologia,
                s.mq, s.piano, s.locali, s.bagni, s.pertinenze, s.ascensore,
                s.nome, s.cognome, s.email, s.telefono, s.lead_status, s.note_internal,
-               sd.stato AS stato_dettaglio, sd.data AS data_dettaglio
+            sd.data AS data_dettaglio
         FROM stime s
         LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
         WHERE s.data >= %s AND s.data < %s
