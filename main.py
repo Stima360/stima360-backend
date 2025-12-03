@@ -13,7 +13,7 @@ import os, uvicorn, secrets, uuid, requests
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
-
+from urllib.parse import urlencode
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -306,14 +306,26 @@ async def salva_stima(request: Request):
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
     
      # --- 9. Email ---
+
+        # --- 9. Email ---
+    
+    
     try:
+        # Link completo con tutti i parametri
+        url_stima_completa = (
+            "https://www.stima360.it/stima_dettagliata.html?" +
+            urlencode(data)
+        )
+    
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
         <p>📄 <a href="{pdf_url_finale}">Apri il PDF</a></p>
-        <p>🧩 <a href="{det_link}">Richiedi stima dettagliata</a></p>
+        <p>🧩 <a href="{url_stima_completa}">Richiedi stima dettagliata</a></p>
         """
+    
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
+    
     except:
         pass
 
