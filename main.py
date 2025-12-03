@@ -309,12 +309,13 @@ async def salva_stima(request: Request):
 
         # --- 9. Email ---
     
-    
     try:
-        # Link completo con tutti i parametri
+        # Link completo con tutti i parametri inviati dal frontend
+        clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
+        
         url_stima_completa = (
             "https://www.stima360.it/stima_dettagliata.html?" +
-            urlencode(data)
+            urlencode(clean)
         )
     
         corpo = f"""
@@ -328,6 +329,7 @@ async def salva_stima(request: Request):
     
     except:
         pass
+
 
     # --- 10. WhatsApp ---
     try:
