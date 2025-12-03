@@ -149,9 +149,20 @@ def _barriera_coeff(bar: str) -> float:
 
 def _vista_coeff(vista: str) -> float:
     v = (vista or "").strip().lower()
-    if v == "vista":     return 1.10    # prima 1.15
-    if v == "parziale":  return 1.04
+
+    # Normalizza i nomi
+    if v == "vista":
+        v = "panoramica"
+
+    if v == "panoramica":
+        return 1.10
+    if v == "parziale":
+        return 1.04
+    if v == "scarsa":
+        return 1.02
+
     return 1.00
+
 
 def coeff_mare(posizione: str, distanza: str, barriera: str, vista: str) -> float:
     return _posizione_coeff(posizione) * _distanza_coeff(distanza) * _barriera_coeff(barriera) * _vista_coeff(vista)
