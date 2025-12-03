@@ -274,12 +274,41 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         pass
 
     prezzo_finale = eur_mq_finale
+        # --- Fattori mare (posizione, distanza, barriera, vista) ---
+    posizione_mare = dati.get("posizioneMare") or "—"
+    distanza_mare  = dati.get("distanzaMare") or "—"
+    barriera_mare  = dati.get("barrieraMare") or "—"
 
-    riepilogo = [
+    vista_mare_yn  = (dati.get("vistaMareYN") or "").lower().strip()
+    vista_mare_raw = (dati.get("vistaMare") or "").lower().strip()
+
+    # Normalizzazione del dettaglio vista (gestisce anche valori strani)
+    if vista_mare_yn == "no":
+        vista_mare_txt = "No"
+    elif vista_mare_yn == "si":
+        if vista_mare_raw in ("vista", "panoramica"):
+            vista_mare_txt = "Panoramica"
+        elif vista_mare_raw == "parziale":
+            vista_mare_txt = "Parziale"
+        elif vista_mare_raw == "scarsa":
+            vista_mare_txt = "Scarsa"
+        else:
+            vista_mare_txt = "Sì (dettaglio non specificato)"
+    else:
+        vista_mare_txt = "—"
+
+        riepilogo = [
         ["Indirizzo", indirizzo or "—"],
         ["Comune", comune],
         ["Microzona", microzona],
         ["Fascia mare", (dati.get("fascia_mare") or "—").replace("_", " ")],
+
+        # 🔹 Dettaglio mare dal front-end
+        ["Posizione rispetto al mare", posizione_mare],
+        ["Distanza dalla spiaggia", distanza_mare],
+        ["Ferrovia / strada principale", barriera_mare],
+        ["Vista mare", vista_mare_txt],
+
         ["Tipologia", dati.get("tipologia","") or "—"],
         ["Pertinenze", dati.get("pertinenze","") or "—"],
         ["Prezzo base (€/mq)", _fmt_eur_mq(prezzo_base)],
