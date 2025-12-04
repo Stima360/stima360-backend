@@ -286,7 +286,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     os.makedirs(REPORTS_DIR, exist_ok=True)
     pdf_fs_path = os.path.join(REPORTS_DIR, nome_file)
 
-    ss = getSampleStyleSheet()
+        ss = getSampleStyleSheet()
     H2 = ParagraphStyle(
         'H2',
         parent=ss['Heading2'],
@@ -300,7 +300,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         fontSize=10.5,
         textColor=colors.HexColor("#374151")
     )
-        BIG = ParagraphStyle(
+    BIG = ParagraphStyle(
         'BIG',
         parent=ss['BodyText'],
         fontName='Helvetica-Bold',
@@ -308,14 +308,15 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         alignment=TA_CENTER,
         textColor=colors.HexColor("#0077cc")
     )
-        BIG_SUB = ParagraphStyle(
-            'BIG_SUB',
-            parent=ss['BodyText'],
-            fontName='Helvetica-Bold',
-            fontSize=14,
-            alignment=TA_CENTER,
-            textColor=colors.HexColor("#111827")
+    BIG_SUB = ParagraphStyle(
+        'BIG_SUB',
+        parent=ss['BodyText'],
+        fontName='Helvetica-Bold',
+        fontSize=14,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#111827")
     )
+
 
     doc = SimpleDocTemplate(
         pdf_fs_path, pagesize=A4,
