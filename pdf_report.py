@@ -23,9 +23,10 @@ from valuation import compute_from_payload
 # Da impostare su Render come variabile GITHUB_PDF_BASE_URL
 
 GITHUB_PDF_BASE_URL = os.getenv(
-"GITHUB_PDF_BASE_URL",
-"[https://raw.githubusercontent.com/TUO_USER/TUO_REPO/main](https://raw.githubusercontent.com/TUO_USER/TUO_REPO/main)"  # ← cambialo con il tuo repo PDF
+    "GITHUB_PDF_BASE_URL",
+    "https://raw.githubusercontent.com/Stima360/stima360-pdf/main/reports"
 )
+
 
 # ---------------------- UTIL ----------------------
 
