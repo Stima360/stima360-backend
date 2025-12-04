@@ -436,10 +436,17 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
     except Exception as e:
         print({"detail": f"Errore generazione REPORT: {e}"})
-
+    
+    # -------------------------------------------------------------
+    # Upload su GitHub (obbligatorio)
+    # -------------------------------------------------------------
     github_url = _upload_pdf_to_github(pdf_fs_path, nome_file)
-
-    if github_url:
-        return github_url
-
-    return f"reports/{nome_file}"
+    
+    if not github_url:
+        # niente PDF su Render, niente fallback
+        raise RuntimeError(
+            f"ERRORE: Upload su GitHub fallito. "
+            f"Il PDF {nome_file} non può essere servito dal backend."
+        )
+    
+    return github_url
