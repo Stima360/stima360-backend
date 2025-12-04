@@ -300,13 +300,21 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         fontSize=10.5,
         textColor=colors.HexColor("#374151")
     )
-    BIG = ParagraphStyle(
+        BIG = ParagraphStyle(
         'BIG',
         parent=ss['BodyText'],
         fontName='Helvetica-Bold',
         fontSize=22,
         alignment=TA_CENTER,
         textColor=colors.HexColor("#0077cc")
+    )
+        BIG_SUB = ParagraphStyle(
+            'BIG_SUB',
+            parent=ss['BodyText'],
+            fontName='Helvetica-Bold',
+            fontSize=14,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#111827")
     )
 
     doc = SimpleDocTemplate(
@@ -354,9 +362,12 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         _val_mq = "—"
 
     flow += [
-        Paragraph(f"Valore totale: <b>{_val_tot}</b><br/>€/mq finale: {_val_mq}", BIG),
-        Spacer(1, 8)
+        Paragraph(f"Valore totale: <b>{_val_tot}</b>", BIG),
+        Spacer(1, 4),
+        Paragraph(f"€/mq finale: {_val_mq}", BIG_SUB),
+        Spacer(1, 12),
     ]
+
 
     flow += _kpi_row(dati)
 
