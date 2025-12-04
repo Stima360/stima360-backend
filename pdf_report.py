@@ -8,15 +8,19 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
-SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Flowable
+    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Flowable
 )
 from reportlab.graphics.shapes import Drawing
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.barcode import qr
 from reportlab.pdfbase.pdfmetrics import stringWidth
-import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(**file**)))
+import sys
+
+# ⬇️ QUESTA È LA VERSIONE CORRETTA, NON QUELLA CON **file**
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from valuation import compute_from_payload
+
 
 # 🔹 BASE URL GITHUB dove sono (o saranno) i PDF
 
