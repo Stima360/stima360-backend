@@ -22,7 +22,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 
 # per importare valuation.py
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(**file**)))
+
 from valuation import compute_from_payload
 
 # 🔹 CONFIG GITHUB – devono essere già settate su Render
