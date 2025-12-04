@@ -328,7 +328,14 @@ async def salva_stima(request: Request):
 
 
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+    # Link stima completa sul sito (usato sia in email che in WhatsApp)
+    clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
 
+    url_stima_completa = (
+        "https://www.stima360.it/stima_dettagliata.html?" +
+        urlencode(clean)
+    )
+   
     # --- 9. Email ---
     try:
         clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
@@ -354,7 +361,7 @@ async def salva_stima(request: Request):
     try:
         msg = (
             f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {loader_url}\nStima dettagliata: {det_link}"
+            f"PDF: {loader_url}\nStima dettagliata: {url_stima_completa}"
         )
         invia_whatsapp(data["telefono"], msg)
     except:
