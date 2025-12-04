@@ -286,7 +286,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     os.makedirs(REPORTS_DIR, exist_ok=True)
     pdf_fs_path = os.path.join(REPORTS_DIR, nome_file)
 
-        ss = getSampleStyleSheet()
+    ss = getSampleStyleSheet()
     H2 = ParagraphStyle(
         'H2',
         parent=ss['Heading2'],
