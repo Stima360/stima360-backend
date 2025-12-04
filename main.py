@@ -319,6 +319,14 @@ async def salva_stima(request: Request):
     else:
         pdf_url_finale = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
 
+    # URL intermedio con pagina "La tua stima è in arrivo..."
+    loader_url = (
+        "https://www.stima360.it/pdf_redirect.html?"
+        + urlencode({"pdf": pdf_url_finale})
+    )
+
+
+
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
     # --- 9. Email ---
@@ -333,7 +341,7 @@ async def salva_stima(request: Request):
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
-        <p>📄 <a href="{pdf_url_finale}">Apri il PDF</a></p>
+        <p>📄 <a href="{loader_url}">Apri il PDF</a></p>
         <p>🧩 <a href="{url_stima_completa}">Richiedi stima dettagliata</a></p>
         """
 
@@ -346,7 +354,7 @@ async def salva_stima(request: Request):
     try:
         msg = (
             f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {pdf_url_finale}\nStima dettagliata: {det_link}"
+            f"PDF: {loader_url}\nStima dettagliata: {det_link}"
         )
         invia_whatsapp(data["telefono"], msg)
     except:
