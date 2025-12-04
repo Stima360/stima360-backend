@@ -35,23 +35,24 @@ GITHUB_PDF_BASE_URL = os.getenv(
 # ---------------------- UTIL ----------------------
 
 def _logo_path(base_dir: str):
-"""
-Cerca il logo in più cartelle e con nomi/estensioni comuni.
-"""
-nomi = ["stimacentrato", "Stima360Definitiva", "stima360_logo"]
-est  = [".jpg", ".jpeg", ".png", ".webp"]
-cartelle = [
-os.path.join(base_dir, "..", "frontend"),
-os.path.join(base_dir, "frontend"),
-base_dir,
-]
-for cart in cartelle:
-for n in nomi:
-for e in est:
-p = os.path.join(cart, f"{n}{e}")
-if os.path.exists(p):
-return p
-return None
+    """
+    Cerca il logo in più cartelle e con nomi/estensioni comuni.
+    """
+    nomi = ["stimacentrato", "Stima360Definitiva", "stima360_logo"]
+    est  = [".jpg", ".jpeg", ".png", ".webp"]
+    cartelle = [
+        os.path.join(base_dir, "..", "frontend"),
+        os.path.join(base_dir, "frontend"),
+        base_dir,
+    ]
+    for cart in cartelle:
+        for n in nomi:
+            for e in est:
+                p = os.path.join(cart, f"{n}{e}")
+                if os.path.exists(p):
+                    return p
+    return None
+
 
 def _logo_flowable(logo_path: str, target_h_cm: float = 2.0):
 """
