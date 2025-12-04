@@ -191,6 +191,7 @@ async def salva_stima(request: Request):
         "barrieraMare": raw.get("barrieraMare"),
         "vistaMareYN": raw.get("vistaMareYN"),
         "vistaMare": raw.get("vistaMare"),
+        "vistaMareDettaglio": raw.get("vistaMareDettaglio"),
         "mqGiardino": raw.get("mqGiardino"),
         "mqGarage": raw.get("mqGarage"),
         "mqCantina": raw.get("mqCantina"),
@@ -275,7 +276,7 @@ async def salva_stima(request: Request):
         "posizioneMare": raw.get("posizioneMare"),
         "distanzaMare": raw.get("distanzaMare"),
         "barrieraMare": raw.get("barrieraMare"),
-        "vistaMare": raw.get("vistaMare"),
+        "vistaMare": raw.get("vistaMareDettaglio") or raw.get("vistaMare"),
         "pertinenze": data["pertinenze"] or "",
         "mqGiardino": raw.get("mqGiardino"),
         "mqGarage": raw.get("mqGarage"),
@@ -328,23 +329,26 @@ async def salva_stima(request: Request):
 
 
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+
     # Link stima completa sul sito (usato sia in email che in WhatsApp)
     clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
+
+    # 👉 Forza "locali" testuale se arriva dal form (es. "Trilocale")
+    if raw.get("locali"):
+        clean["locali"] = raw.get("locali")
+
+    # 👉 Assicura che passi anche "vistaMareDettaglio" al link
+    if raw.get("vistaMareDettaglio"):
+        clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
 
     url_stima_completa = (
         "https://www.stima360.it/stima_dettagliata.html?" +
         urlencode(clean)
     )
+
    
     # --- 9. Email ---
     try:
-        clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
-
-        url_stima_completa = (
-            "https://www.stima360.it/stima_dettagliata.html?" +
-            urlencode(clean)
-        )
-
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
@@ -356,6 +360,7 @@ async def salva_stima(request: Request):
 
     except:
         pass
+
 
     # --- 10. WhatsApp ---
     try:
