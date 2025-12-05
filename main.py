@@ -422,57 +422,65 @@ async def salva_stima_dettagliata(request: Request):
         cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
-                classe,
-                riscaldamento,
-                condizionatore,
-                condiz_tipo,
-                spese_cond,
-                esposizione,
-                arredo,
-                note,
-                contatto,
-                sopralluogo
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                nome, cognome, email, telefono,
+                indirizzo, tipologia, mq, piano, locali, bagni,
+                ascensore, stato, anno,
+                microzona, posizioneMare, distanzaMare, barrieraMare, vistaMare,
+                mqGiardino, mqGarage, mqCantina, mqPostoAuto,
+                mqTaverna, mqSoffitta, mqTerrazzo, numBalconi,
+                altroDescrizione, pertinenze,
+                classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
+                esposizione, arredo, note, contatto, sopralluogo
+            )
+            VALUES (
+                %s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s,%s,
+                %s,%s,%s,
+                %s,%s,%s,%s,%s,
+                %s,%s,%s,%s,
+                %s,%s,%s,%s,
+                %s,%s,
+                %s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s
+            )
         """, (
             data.get("stima_id"),
-            data.get("classe"),
-            data.get("riscaldamento"),
-            data.get("condizionatore"),
-            data.get("condiz_tipo"),
+            data.get("nome"), data.get("cognome"),
+            data.get("email"), data.get("telefono"),
+
+            data.get("indirizzo"), data.get("tipologia"),
+            data.get("mq"), data.get("piano"),
+            data.get("locali"), data.get("bagni"),
+
+            data.get("ascensore"), data.get("stato"),
+            data.get("anno"),
+
+            data.get("microzona"),
+            data.get("posizioneMare"), data.get("distanzaMare"),
+            data.get("barrieraMare"), data.get("vistaMare"),
+
+            data.get("mqGiardino"), data.get("mqGarage"),
+            data.get("mqCantina"), data.get("mqPostoAuto"),
+            data.get("mqTaverna"), data.get("mqSoffitta"),
+            data.get("mqTerrazzo"), data.get("numBalconi"),
+            data.get("altroDescrizione"), data.get("pertinenze"),
+
+            data.get("classe"), data.get("riscaldamento"),
+            data.get("condizionatore"), data.get("condiz_tipo"),
             data.get("spese_cond"),
-            data.get("esposizione"),
-            data.get("arredo"),
-            data.get("note"),
-            data.get("contatto"),
-            data.get("sopralluogo")
+
+            data.get("esposizione"), data.get("arredo"),
+            data.get("note"), data.get("contatto"),
+            data.get("sopralluogo"),
         ))
         conn.commit()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore salvataggio dettagliata: {e}")
     finally:
-        cur.close(); conn.close()
+        try:
+            cur.close(); conn.close()
+        except:
+            pass
 
-    # genera nuovo PDF dettagliato
-    try:
-        pdf_path = genera_pdf_stima(
-            data,
-            nome_file=f"stima_dettagliata_{data.get('stima_id')}.pdf"
-        )
-    except:
-        raise HTTPException(status_code=500, detail="Errore PDF dettagliata")
-
-    # invia email
-    try:
-        invia_mail(
-            data.get("email"),
-            "Stima360 – Stima dettagliata pronta!",
-            "<p>In allegato trovi la valutazione completa.</p>",
-            allegato=web_to_fs(pdf_path)
-        )
-    except:
-        pass
-
-    return {"status": "ok", "pdf": f"/{pdf_path}"}
+    return {"ok": True}
 
 
 # ---------------------------------------------------------
