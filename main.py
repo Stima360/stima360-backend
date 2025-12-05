@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
 
-from database import get_connection, invia_mail, migrazione_stime_dettagliate_completa
+from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from urllib.parse import urlencode
@@ -32,8 +32,7 @@ WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v18.0")
 # APP & CORS
 # ---------------------------------------------------------
 app = FastAPI()
-# --- MIGRAZIONI ALL'AVVIO (idempotenti, sicure) ---
-migrazione_stime_dettagliate_completa()
+
 
 
 app.add_middleware(
