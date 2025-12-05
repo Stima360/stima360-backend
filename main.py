@@ -413,53 +413,66 @@ async def prefill(t: str):
 # ---------------------------------------------------------
 # SALVA STIMA DETTAGLIATA
 # ---------------------------------------------------------
-@app.post("/api/update_stima_dettagliata")
-async def update_stima_dettagliata(request: Request):
+@app.post("/api/salva_stima_dettagliata")
+async def salva_stima_dettagliata(request: Request):
     data = await request.json()
-    id_stima = data.get("id_stima")
 
-    if not id_stima:
-        raise HTTPException(status_code=400, detail="id_stima mancante")
-
+    conn = get_connection(); cur = conn.cursor()
     try:
-        conn = get_connection()
-        cur = conn.cursor()
-
         cur.execute("""
-            UPDATE stime
-            SET
-                classe_energetica = %s,
-                riscaldamento = %s,
-                condizionatore = %s,
-                spese_condominiali = %s,
-                esposizione = %s,
-                stato_arredamento = %s,
-                note_aggiuntive = %s,
-                contatto_precedente = %s,
-                disponibilita_sopralluogo = %s
-            WHERE id = %s
+            INSERT INTO stime_dettagliate (
+                stima_id,
+                classe,
+                riscaldamento,
+                condizionatore,
+                condiz_tipo,
+                spese_cond,
+                esposizione,
+                arredo,
+                note,
+                contatto,
+                sopralluogo
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
-            data.get("classe_energetica"),
+            data.get("stima_id"),
+            data.get("classe"),
             data.get("riscaldamento"),
             data.get("condizionatore"),
-            data.get("spese_condominiali"),
+            data.get("condiz_tipo"),
+            data.get("spese_cond"),
             data.get("esposizione"),
-            data.get("stato_arredamento"),
-            data.get("note_aggiuntive"),
-            data.get("contatto_precedente"),
-            data.get("disponibilita_sopralluogo"),
-            id_stima
+            data.get("arredo"),
+            data.get("note"),
+            data.get("contatto"),
+            data.get("sopralluogo")
         ))
-
         conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore salvataggio dettagliata: {e}")
+    finally:
         cur.close(); conn.close()
 
-        return {"status": "ok", "id_stima": id_stima}
+    # genera nuovo PDF dettagliato
+    try:
+        pdf_path = genera_pdf_stima(
+            data,
+            nome_file=f"stima_dettagliata_{data.get('stima_id')}.pdf"
+        )
+    except:
+        raise HTTPException(status_code=500, detail="Errore PDF dettagliata")
 
-    except Exception as e:
-        print("Errore update stima:", e)
-        raise HTTPException(status_code=500, detail="Errore aggiornamento stima")
+    # invia email
+    try:
+        invia_mail(
+            data.get("email"),
+            "Stima360 – Stima dettagliata pronta!",
+            "<p>In allegato trovi la valutazione completa.</p>",
+            allegato=web_to_fs(pdf_path)
+        )
+    except:
+        pass
 
+    return {"status": "ok", "pdf": f"/{pdf_path}"}
 
 
 # ---------------------------------------------------------
@@ -540,7 +553,8 @@ def admin_update_stima(
 # RUN
 # ---------------------------------------------------------
 
+
+
+
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))   # 🔥 Render usa la porta assegnata
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
