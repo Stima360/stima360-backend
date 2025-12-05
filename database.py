@@ -215,7 +215,44 @@ def crea_tabella_stime_dettagliate():
     cur.close()
     conn.close()
 
+def migrazione_stime_dettagliate_completa():
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""
+        ALTER TABLE stime_dettagliate
+          ADD COLUMN IF NOT EXISTS nome VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS cognome VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS email VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS telefono VARCHAR(30),
 
+          ADD COLUMN IF NOT EXISTS indirizzo TEXT,
+          ADD COLUMN IF NOT EXISTS tipologia VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS mq INTEGER,
+          ADD COLUMN IF NOT EXISTS piano VARCHAR(30),
+          ADD COLUMN IF NOT EXISTS locali VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS bagni INTEGER,
+          ADD COLUMN IF NOT EXISTS ascensore VARCHAR(10),
+
+          ADD COLUMN IF NOT EXISTS stato VARCHAR(40),
+          ADD COLUMN IF NOT EXISTS anno INTEGER,
+
+          ADD COLUMN IF NOT EXISTS microzona VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS posizioneMare VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS distanzaMare VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS barrieraMare VARCHAR(50),
+          ADD COLUMN IF NOT EXISTS vistaMare VARCHAR(80),
+          ADD COLUMN IF NOT EXISTS mqGiardino INTEGER,
+          ADD COLUMN IF NOT EXISTS mqGarage INTEGER,
+          ADD COLUMN IF NOT EXISTS mqCantina INTEGER,
+          ADD COLUMN IF NOT EXISTS mqPostoAuto INTEGER,
+          ADD COLUMN IF NOT EXISTS mqTaverna INTEGER,
+          ADD COLUMN IF NOT EXISTS mqSoffitta INTEGER,
+          ADD COLUMN IF NOT EXISTS mqTerrazzo INTEGER,
+          ADD COLUMN IF NOT EXISTS numBalconi INTEGER,
+          ADD COLUMN IF NOT EXISTS altroDescrizione TEXT,
+          ADD COLUMN IF NOT EXISTS pertinenze VARCHAR(200);
+    """)
+    conn.commit()
+    cur.close(); conn.close()
 # ------------------- EMAIL -------------------
 def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
     smtp_host = os.getenv("SMTP_HOST", "mail.stima360.it")
@@ -304,3 +341,4 @@ if __name__ == "__main__":
     migrazione_gestionale_stime()
     migrazione_stime_completa()
     migrazione_condiz_tipo()   # <-- CORRETTO
+    migrazione_stime_dettagliate_completa()
