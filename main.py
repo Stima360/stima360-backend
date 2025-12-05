@@ -540,8 +540,7 @@ def admin_update_stima(
 # RUN
 # ---------------------------------------------------------
 
-
-
-
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    port = int(os.environ.get("PORT", 10000))   # 🔥 Render usa la porta assegnata
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
