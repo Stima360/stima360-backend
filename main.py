@@ -415,6 +415,16 @@ async def prefill(t: str):
 # ---------------------------------------------------------
 # SALVA STIMA DETTAGLIATA
 # ---------------------------------------------------------
+def to_int_safe(v):
+    """Converte stringhe vuote in NULL, altrimenti int, senza tirare errori."""
+    if v in (None, "", " "):
+        return None
+    try:
+        return int(v)
+    except:
+        return None
+
+
 @app.post("/api/salva_stima_dettagliata")
 async def salva_stima_dettagliata(request: Request):
     data = await request.json()
@@ -446,34 +456,53 @@ async def salva_stima_dettagliata(request: Request):
                 %s,%s,%s,%s,%s
             )
         """, (
-            data.get("stima_id"),
-            data.get("nome"), data.get("cognome"),
-            data.get("email"), data.get("telefono"),
+            to_int_safe(data.get("stima_id")),
 
-            data.get("indirizzo"), data.get("tipologia"),
-            data.get("mq"), data.get("piano"),
-            data.get("locali"), data.get("bagni"),
+            data.get("nome") or None,
+            data.get("cognome") or None,
+            data.get("email") or None,
+            data.get("telefono") or None,
 
-            data.get("ascensore"), data.get("stato"),
-            data.get("anno"),
+            data.get("indirizzo") or None,
+            data.get("tipologia") or None,
+            to_int_safe(data.get("mq")),
+            data.get("piano") or None,
+            data.get("locali") or None,
+            to_int_safe(data.get("bagni")),
 
-            data.get("microzona"),
-            data.get("posizioneMare"), data.get("distanzaMare"),
-            data.get("barrieraMare"), data.get("vistaMare"),
+            data.get("ascensore") or None,
+            data.get("stato") or None,
+            to_int_safe(data.get("anno")),
 
-            data.get("mqGiardino"), data.get("mqGarage"),
-            data.get("mqCantina"), data.get("mqPostoAuto"),
-            data.get("mqTaverna"), data.get("mqSoffitta"),
-            data.get("mqTerrazzo"), data.get("numBalconi"),
-            data.get("altroDescrizione"), data.get("pertinenze"),
+            data.get("microzona") or None,
+            data.get("posizioneMare") or None,
+            data.get("distanzaMare") or None,
+            data.get("barrieraMare") or None,
+            data.get("vistaMare") or None,
 
-            data.get("classe"), data.get("riscaldamento"),
-            data.get("condizionatore"), data.get("condiz_tipo"),
-            data.get("spese_cond"),
+            to_int_safe(data.get("mqGiardino")),
+            to_int_safe(data.get("mqGarage")),
+            to_int_safe(data.get("mqCantina")),
+            to_int_safe(data.get("mqPostoAuto")),
+            to_int_safe(data.get("mqTaverna")),
+            to_int_safe(data.get("mqSoffitta")),
+            to_int_safe(data.get("mqTerrazzo")),
+            to_int_safe(data.get("numBalconi")),
 
-            data.get("esposizione"), data.get("arredo"),
-            data.get("note"), data.get("contatto"),
-            data.get("sopralluogo"),
+            data.get("altroDescrizione") or None,
+            data.get("pertinenze") or None,
+
+            data.get("classe") or None,
+            data.get("riscaldamento") or None,
+            data.get("condizionatore") or None,
+            data.get("condiz_tipo") or None,
+            to_int_safe(data.get("spese_cond")),
+
+            data.get("esposizione") or None,
+            data.get("arredo") or None,
+            data.get("note") or None,
+            data.get("contatto") or None,
+            data.get("sopralluogo") or None,
         ))
         conn.commit()
     finally:
@@ -483,6 +512,7 @@ async def salva_stima_dettagliata(request: Request):
             pass
 
     return {"ok": True}
+
 
 
 # ---------------------------------------------------------
