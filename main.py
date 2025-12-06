@@ -437,6 +437,16 @@ async def salva_stima(request: Request):
         print("Errore invio WhatsApp:", e)
         # non faccio pass silenzioso, ma almeno non blocco l'app
 
+    # --- 11. Risposta JSON al frontend ---
+    return {
+        "success": True,
+        "id": new_id,
+        "pdf_url": pdf_url_finale,
+        "price_exact": price_exact,
+        "eur_mq_finale": eur_mq_finale,
+        "valore_pertinenze": valore_pertinenze,
+        "base_mq": base_mq,
+    }
 
 
 
