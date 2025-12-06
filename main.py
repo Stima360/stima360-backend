@@ -82,22 +82,6 @@ def invia_whatsapp(numero: str | None, messaggio: str):
         requests.post(url, json=payload, headers=headers, timeout=10)
     except:
         pass
-def shorten_url(long_url: str) -> str:
-    """
-    Usa tinyurl come shortener gratuito e veloce.
-    Se fallisce, restituisce l’URL originale.
-    """
-    try:
-        res = requests.get(
-            "https://tinyurl.com/api-create.php",
-            params={"url": long_url},
-            timeout=5
-        )
-        if res.status_code == 200:
-            return res.text.strip()
-    except:
-        pass
-    return long_url
 
 
 def to_int(v): 
@@ -409,19 +393,11 @@ async def salva_stima(request: Request):
 
     # --- 10. WhatsApp ---
     try:
-        # Accorcio gli URL prima di inviare
-        loader_short = shorten_url(loader_url)
-        stima_short  = shorten_url(url_stima_completa)
-        
         msg = (
-            f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n"
-            f"PDF: {loader_short}\n"
-            f"Stima dettagliata: {stima_short}"
+            f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
+            f"PDF: {loader_url}\nStima dettagliata: {url_stima_completa}"
         )
-
         invia_whatsapp(data["telefono"], msg)
-
-        
     except:
         pass
 
