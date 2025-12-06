@@ -391,32 +391,52 @@ async def salva_stima(request: Request):
         pass
 
 
-# --- 10. WhatsApp ---
-try:
+    # --- 10. WhatsApp ---
+    # Qui NON metto un try globale, così se c'è un bug lo vedi nei log,
+    # ma gestisco gli errori di shortening singolarmente e faccio fallback.
+
     # Shorten PDF URL
-    short_pdf = requests.post(
-        f"{PUBLIC_BASE_URL}/api/shorten",
-        json={"url": loader_url},
-        timeout=10
-    ).json().get("short", loader_url)
+    try:
+        resp_pdf = requests.post(
+            f"{PUBLIC_BASE_URL}/api/shorten",
+            json={"url": loader_url},
+            timeout=5
+        )
+        if resp_pdf.ok:
+            short_pdf = resp_pdf.json().get("short", loader_url)
+        else:
+            short_pdf = loader_url
+    except Exception as e:
+        print("Errore shortener PDF:", e)
+        short_pdf = loader_url  # fallback alla URL lunga
 
-    # Shorten Stima URL
-    short_stima = requests.post(
-        f"{PUBLIC_BASE_URL}/api/shorten",
-        json={"url": url_stima_completa},
-        timeout=10
-    ).json().get("short", url_stima_completa)
+    # Shorten Stima dettagliata URL
+    try:
+        resp_stima = requests.post(
+            f"{PUBLIC_BASE_URL}/api/shorten",
+            json={"url": url_stima_completa},
+            timeout=5
+        )
+        if resp_stima.ok:
+            short_stima = resp_stima.json().get("short", url_stima_completa)
+        else:
+            short_stima = url_stima_completa
+    except Exception as e:
+        print("Errore shortener STIMA:", e)
+        short_stima = url_stima_completa  # fallback alla URL lunga
 
-    msg = (
-        f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-        f"PDF: {short_pdf}\n"
-        f"Stima dettagliata: {short_stima}"
-    )
-    invia_whatsapp(data["telefono"], msg)
+    # A QUESTO PUNTO, COMUNQUE VADA, MANDO SEMPRE IL WHATSAPP
+    try:
+        msg = (
+            f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
+            f"PDF: {short_pdf}\n"
+            f"Stima dettagliata: {short_stima}"
+        )
+        invia_whatsapp(data["telefono"], msg)
+    except Exception as e:
+        print("Errore invio WhatsApp:", e)
+        # non faccio pass silenzioso, ma almeno non blocco l'app
 
-except Exception as e:
-    print("Errore WhatsApp:", e)
-    pass
 
 
 
