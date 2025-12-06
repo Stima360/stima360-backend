@@ -263,25 +263,52 @@ async def salva_stima(request: Request):
         try: cur.close(); conn.close()
         except: pass
 
-    # --- 6. Stima completa (engine ufficiale) ---
+      # --- 6. Stima completa (engine ufficiale) ---
+    # Usa i valori "grezzi" del form dove serve (es. locali in testo)
+    locali_raw = raw.get("locali")  # es. "Trilocale" oppure "3"
+
     payload_rules = {
         "comune": data["comune"],
         "microzona": data["microzona"],
+
         "tipologia": data["tipologia"],
         "mq": data["mq"],
         "piano": data["piano"],
-        "locali": data["locali"],
+
+        # 👇 per il motore usiamo la versione raw (può essere "Trilocale")
+        "locali": locali_raw if locali_raw is not None else data["locali"],
         "bagni": data["bagni"],
+
+        # ascensore come stringa "Sì"/"No" per i coefficienti
         "ascensore": "Sì" if data["ascensore"] else "No",
+
         "anno": data["anno"],
         "stato": data["stato"],
-        "posizioneMare": raw.get("posizioneMare"),
-        "distanzaMare": raw.get("distanzaMare"),
-        "barrieraMare": raw.get("barrieraMare"),
-        "vistaMare": raw.get("vistaMareDettaglio") or raw.get("vistaMare"),
-        "pertinenze": data["pertinenze"] or "",
-        "mqGiardino": raw.get("mqGiardino"),
-        "mqGarage": raw.get("mqGarage"),
+
+        # Mare
+        "posizioneMare": data["posizioneMare"],
+        "distanzaMare":  data["distanzaMare"],
+        "barrieraMare":  data["barrieraMare"],
+
+        # 👇 passa TUTTI i campi vista che valuation.py sa usare
+        "vistaMareYN":        data["vistaMareYN"],
+        "vistaMareDettaglio": data["vistaMareDettaglio"],
+        "vistaMare":          data["vistaMare"],
+
+        # Pertinenze + mq
+        "pertinenze":  data["pertinenze"] or "",
+        "mqGiardino":  data["mqGiardino"],
+        "mqGarage":    data["mqGarage"],
+        "mqCantina":   data["mqCantina"],
+        "mqPostoAuto": data["mqPostoAuto"],
+        "mqTaverna":   data["mqTaverna"],
+        "mqSoffitta":  data["mqSoffitta"],
+        "mqTerrazzo":  data["mqTerrazzo"],
+        "numBalconi":  data["numBalconi"],
+
+        # 👇 nuovi coefficienti che abbiamo aggiunto nel motore
+        "via":              data["via"],
+        "altroDescrizione": data["altroDescrizione"],
     }
 
     calc = compute_from_payload(payload_rules)
