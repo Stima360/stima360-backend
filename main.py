@@ -389,18 +389,18 @@ async def salva_stima(request: Request):
 
     except:
         pass
+        
 
-
-      # --- 10. WhatsApp (short links) ---
+    # --- 10. WhatsApp short links (TOKEN-BASED) ---
     try:
-        link_html = f"https://stima360.it/s.index.html?id={new_id}"
-        link_pdf  = f"https://stima360.it/p.index.html?id={new_id}"
+        link_html = f"https://stima360.it/s.index.html?t={token}"
+        link_pdf  = f"https://stima360.it/p.index.html?pdf={pdf_url_finale}"
 
         msg = (
             f"Ciao {data['nome']}! 🏡\n"
             "La tua valutazione è pronta.\n\n"
-            f"📄 *Clicca qui per il PDF*: {link_pdf}\n"
-            f"📊 *Stima dettagliata online*: {link_html}\n\n"
+            f"📄 *PDF*: {link_pdf}\n"
+            f"📊 *Stima dettagliata*: {link_html}\n\n"
             "🎯 Vuoi una valutazione professionale e accurata?\n"
             "*Richiedi gratis Stima360 Pro*."
         )
@@ -410,16 +410,6 @@ async def salva_stima(request: Request):
     except:
         pass
 
-    # --- 11. Risposta JSON al frontend ---
-    return {
-        "success": True,
-        "id": new_id,
-        "pdf_url": pdf_url_finale,
-        "price_exact": price_exact,
-        "eur_mq_finale": eur_mq_finale,
-        "valore_pertinenze": valore_pertinenze,
-        "base_mq": base_mq,
-    }
 
 
 # ---------------------------------------------------------
