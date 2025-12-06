@@ -61,9 +61,59 @@ def coeff_bagni(n_bagni: int) -> float:
     return 1.10 if n >= 2 else 1.00
 
 # ---------------------------
-# Ascensore (per chiarezza API, neutro)
+# Locali
+# ---------------------------
+def coeff_locali(locali: str) -> float:
+    """
+    Leggero coeff in base al numero di locali.
+    Accetta sia "3", sia "Trilocale", ecc.
+    """
+    txt = (locali or "").strip().lower()
+    n = 0
+
+    # numero diretto
+    if txt.isdigit():
+        n = int(txt)
+    else:
+        if "mono" in txt:
+            n = 1
+        elif "bi" in txt:
+            n = 2
+        elif "tri" in txt:
+            n = 3
+        elif "quadri" in txt:
+            n = 4
+        elif "penta" in txt or "5" in txt:
+            n = 5
+
+    if n <= 1:
+        return 0.96
+    if n in (2, 3):
+        return 1.00
+    if n == 4:
+        return 1.03
+    if n >= 5:
+        return 1.05
+    return 1.00
+
+# ---------------------------
+# Ascensore (micro bonus separato)
 # ---------------------------
 def coeff_ascensore(ascensore: str, piano: str) -> float:
+    """
+    Micro bonus se c'è ascensore da 2° piano in su.
+    Il grosso dell'effetto rimane dentro coeff_piano.
+    """
+    val = (ascensore or "").strip().lower()
+    has_lift = val in ("si", "sì", "true", "1", "yes", "y")
+
+    kind, num = _parse_piano(piano)
+    if kind != "numero" or num is None:
+        return 1.00
+
+    if num >= 2 and has_lift:
+        return 1.02
+
     return 1.00
 
 # ---------------------------
@@ -135,6 +185,7 @@ def _posizione_coeff(pos: str) -> float:
     if p == "frontemare": return 1.15   # prima 1.30
     if p == "seconda":    return 1.08   # prima 1.20
     return 1.00
+
 def _distanza_coeff(dist: str) -> float:
     d = (dist or "").strip().lower()
     if d == "0-100":     return 1.15    # prima 1.15
@@ -167,13 +218,50 @@ def _vista_coeff(vista: str) -> float:
 def coeff_mare(posizione: str, distanza: str, barriera: str, vista: str) -> float:
     return _posizione_coeff(posizione) * _distanza_coeff(distanza) * _barriera_coeff(barriera) * _vista_coeff(vista)
 
+
+def normalize_vista_mare(vista_yn: str, vista_det: str, vista_raw: str = "") -> str:
+    """
+    Converte (vistaMareYN, vistaMareDettaglio, vistaMare) in una delle categorie:
+    - 'panoramica'
+    - 'parziale'
+    - 'scarsa'
+    - '' (nessuna vista)
+    Priorità:
+      1. se vista_raw è valorizzato lo usa così com'è (retrocompatibilità)
+      2. altrimenti deriva da YN + dettaglio
+    """
+    # Se già arriva vistaMare 'puro', usiamo quello (per non rompere nulla)
+    v0 = (vista_raw or "").strip().lower()
+    if v0 in ("panoramica", "parziale", "scarsa"):
+        return v0
+
+    yn = (vista_yn or "").strip().lower()
+    det = (vista_det or "").strip().lower()
+
+    # Se non c'è vista
+    if yn in ("no", "non", "", "0", "false"):
+        return ""
+
+    # C'è vista: decidiamo dal dettaglio
+    if any(k in det for k in ("piena", "fronte", "totale", "panoram")):
+        return "panoramica"
+    if any(k in det for k in ("laterale", "angolare")):
+        return "parziale"
+    if any(k in det for k in ("scorcio", "parziale", "limitata", "scarsa")):
+        return "scarsa"
+
+    # fallback: vista sì ma non chiaro → parziale
+    return "parziale"
+
 # ---------------------------
-# Piano (include bonus/penalità + extra combinazione)
+# Piano (include bonus/penalità)
 # ---------------------------
 def _parse_piano(piano: str):
     p = (piano or "").strip().lower()
-    if p in ("terra", "piano terra"): return "terra", 0
-    if p in ("ultimo", "ult", "attico"): return "ultimo", None
+    if p in ("terra", "piano terra"):
+        return "terra", 0
+    if p in ("ultimo", "ult", "attico"):
+        return "ultimo", None
     # numerico?
     try:
         n = int(p)
@@ -212,6 +300,49 @@ def coeff_piano(piano: str, ascensore: str, posizioneMare: str, vistaMare: str) 
 
     # ❌ NIENTE più extra frontemare+ultimo+vista
     return coeff
+
+# ---------------------------
+# Indirizzo
+# ---------------------------
+def coeff_indirizzo(via: str) -> float:
+    """
+    Piccola correzione in base alla via.
+    """
+    v = (via or "").strip().lower()
+    if not v:
+        return 1.00
+
+    if "lungomare" in v:
+        return 1.05
+    if "sirena" in v:
+        return 1.03
+    if "nazionale" in v or "statale" in v:
+        return 0.97
+
+    return 1.00
+
+# ---------------------------
+# Altro descrizione
+# ---------------------------
+def coeff_altro_descrizione(altro: str) -> float:
+    """
+    Leggero aggiustamento sulla descrizione libera.
+    """
+    t = (altro or "").strip().lower()
+    if not t:
+        return 1.00
+
+    if any(k in t for k in ("lusso", "signorile", "finemente", "di pregio")):
+        return 1.03
+
+    if any(k in t for k in ("da ristrutturare", "da completare", "grezzo", "allo stato originale")):
+        return 0.95
+
+    if "vista mare totale" in t or "vista mare panoramica" in t:
+        # vista già entra nei coeff mare, ma diamo un +1% extra
+        return 1.01
+
+    return 1.00
 
 # ---------------------------
 # Pertinenze (somma in €)
@@ -318,6 +449,16 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
 
         euro += mq_g * (base_mq / 5.0)
 
+    # Extra da testo generico pertinenze (es. Piscina, posto moto, bici)
+    text = (flags.get("pertinenze_text") or "").strip().lower()
+    if text:
+        if "piscina" in text:
+            euro += 15000.0
+        if "posto moto" in text:
+            euro += 3000.0
+        if "posto bici" in text or "posto bicicle" in text:
+            euro += 1000.0
+
     return euro
 
 
@@ -325,9 +466,22 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
 # ---------------------------
 # Prezzi e totale
 # ---------------------------
-def prezzo_mq_finale(base_mq: float, tipologia: str, piano: str, ascensore: str,
-                     locali: str, bagni: str, anno: str, stato: str,
-                     posizioneMare: str, distanzaMare: str, barrieraMare: str, vistaMare: str) -> float:
+def prezzo_mq_finale(
+    base_mq: float,
+    tipologia: str,
+    piano: str,
+    ascensore: str,
+    locali: str,
+    bagni: str,
+    anno: str,
+    stato: str,
+    posizioneMare: str,
+    distanzaMare: str,
+    barrieraMare: str,
+    vistaMare: str,
+    via: str = "",
+    altro_descrizione: str = "",
+) -> float:
     if base_mq <= 0:
         return 0.0
 
@@ -337,8 +491,23 @@ def prezzo_mq_finale(base_mq: float, tipologia: str, piano: str, ascensore: str,
     c_anno  = coeff_anno(int(anno) if f"{anno}".strip().isdigit() else 0)
     c_stato = coeff_stato(stato)
     c_mare  = coeff_mare(posizioneMare, distanzaMare, barrieraMare, vistaMare)
+    c_loc   = coeff_locali(locali)
+    c_asc   = coeff_ascensore(ascensore, piano)
+    c_via   = coeff_indirizzo(via)
+    c_altro = coeff_altro_descrizione(altro_descrizione)
 
-    coeff_tot = c_tip * c_piano * c_bagni * c_anno * c_stato * c_mare
+    coeff_tot = (
+        c_tip *
+        c_piano *
+        c_bagni *
+        c_anno *
+        c_stato *
+        c_mare *
+        c_loc *
+        c_asc *
+        c_via *
+        c_altro
+    )
 
     # 🔒 CAP GLOBALE: non meno di 0.65x, non più di 1.80x
     coeff_tot = max(0.50, min(coeff_tot, 1.80))
@@ -361,6 +530,13 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
     microzona = payload.get("microzona", "")
     base = get_base_mq(comune, microzona)
 
+    # 🔹 Normalizziamo la vista mare qui
+    vista_norm = normalize_vista_mare(
+        vista_yn   = payload.get("vistaMareYN", ""),
+        vista_det  = payload.get("vistaMareDettaglio", ""),
+        vista_raw  = payload.get("vistaMare", ""),   # retrocompatibilità
+    )
+
     prezzo_mq = prezzo_mq_finale(
         base_mq=base,
         tipologia=payload.get("tipologia", ""),
@@ -373,7 +549,9 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         posizioneMare=payload.get("posizioneMare", ""),
         distanzaMare=payload.get("distanzaMare", ""),
         barrieraMare=payload.get("barrieraMare", ""),
-        vistaMare=payload.get("vistaMare", ""),
+        vistaMare=vista_norm,
+        via=payload.get("via", ""),
+        altro_descrizione=payload.get("altroDescrizione", ""),
     )
     
     flags = {
@@ -387,15 +565,17 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         "Terrazzo": "Terrazzo" in (payload.get("pertinenze", "") or ""),
         "Giardino": "Giardino" in (payload.get("pertinenze", "") or ""),
         "mqGiardino": payload.get("mqGiardino"),
+        # testo completo pertinenze (per piscina/posto moto/bici)
+        "pertinenze_text": payload.get("pertinenze", ""),
     }
     flags.update({
-    "mqCantina": payload.get("mqCantina"),
-    "mqPostoAuto": payload.get("mqPostoAuto"),
-    "mqTaverna": payload.get("mqTaverna"),
-    "mqSoffitta": payload.get("mqSoffitta"),
-    "mqTerrazzo": payload.get("mqTerrazzo"),
-    "numBalconi": payload.get("numBalconi"),
-})
+        "mqCantina": payload.get("mqCantina"),
+        "mqPostoAuto": payload.get("mqPostoAuto"),
+        "mqTaverna": payload.get("mqTaverna"),
+        "mqSoffitta": payload.get("mqSoffitta"),
+        "mqTerrazzo": payload.get("mqTerrazzo"),
+        "numBalconi": payload.get("numBalconi"),
+    })
 
     pert_eur = valore_pertinenze(flags, base_mq=base, posizioneMare=payload.get("posizioneMare", ""))
 
@@ -411,8 +591,9 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         "eur_mq_finale": round(prezzo_mq, 2),
         "valore_pertinenze": round(pert_eur, 2),
         "price_exact": round(totale, 0),
-        "mq_calcolati": round(mq_val, 0),   # 👈 aggiunto
+        "mq_calcolati": round(mq_val, 0),
     }
+
 
 # ---------------------------
 # Utility semplici per la risposta finale
