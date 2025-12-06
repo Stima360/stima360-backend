@@ -391,26 +391,33 @@ async def salva_stima(request: Request):
         pass
 
 
-    # --- 10. WhatsApp ---
-    try:
-        msg = (
-            f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {loader_url}\nStima dettagliata: {url_stima_completa}"
-        )
-        invia_whatsapp(data["telefono"], msg)
-    except:
-        pass
+# --- 10. WhatsApp ---
+try:
+    # Shorten PDF URL
+    short_pdf = requests.post(
+        f"{PUBLIC_BASE_URL}/api/shorten",
+        json={"url": loader_url},
+        timeout=10
+    ).json().get("short", loader_url)
 
-    # --- 11. Risposta JSON al frontend ---
-    return {
-        "success": True,
-        "id": new_id,
-        "pdf_url": pdf_url_finale,
-        "price_exact": price_exact,
-        "eur_mq_finale": eur_mq_finale,
-        "valore_pertinenze": valore_pertinenze,
-        "base_mq": base_mq,
-    }
+    # Shorten Stima URL
+    short_stima = requests.post(
+        f"{PUBLIC_BASE_URL}/api/shorten",
+        json={"url": url_stima_completa},
+        timeout=10
+    ).json().get("short", url_stima_completa)
+
+    msg = (
+        f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
+        f"PDF: {short_pdf}\n"
+        f"Stima dettagliata: {short_stima}"
+    )
+    invia_whatsapp(data["telefono"], msg)
+
+except Exception as e:
+    print("Errore WhatsApp:", e)
+    pass
+
 
 
 # ---------------------------------------------------------
@@ -615,6 +622,51 @@ def admin_update_stima(
     cur.close(); conn.close()
 
     return {"ok": True}
+# ---------------------------------------------------------
+# SHORT URL SYSTEM
+# ---------------------------------------------------------
+import string
+import secrets
+from fastapi.responses import RedirectResponse
+
+def genera_codice_short(n=6):
+    chars = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(n))
+
+
+@app.post("/api/shorten")
+def shorten_url(payload: dict):
+    long_url = payload.get("url")
+    if not long_url:
+        raise HTTPException(status_code=400, detail="URL mancante")
+
+    code = genera_codice_short()
+
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO short_links (code, long_url) VALUES (%s, %s)",
+        (code, long_url)
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+    return {"short": f"https://stima360-backend.onrender.com/u/{code}"}
+
+
+@app.get("/u/{code}")
+def open_short(code: str):
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute(
+        "SELECT long_url FROM short_links WHERE code=%s LIMIT 1",
+        (code,)
+    )
+    row = cur.fetchone()
+    cur.close(); conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Short link non trovato")
+
+    return RedirectResponse(row[0])
 
 # ---------------------------------------------------------
 # RUN
