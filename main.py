@@ -391,25 +391,24 @@ async def salva_stima(request: Request):
         pass
 
 
-    # --- 10. WhatsApp ---
- try:
-    link_html = f"https://stima360.it/s?id={new_id}"
-    link_pdf  = f"https://stima360.it/p?id={new_id}"
+      # --- 10. WhatsApp (short links) ---
+    try:
+        link_html = f"https://stima360.it/s.index.html?id={new_id}"
+        link_pdf  = f"https://stima360.it/p.index.html?id={new_id}"
 
-    msg = (
-        f"Ciao {data['nome']}! 🏡\n"
-        "La tua valutazione è pronta.\n\n"
-        f"📄 *Clicca qui per il PDF*: {link_pdf}\n"
-        f"📊 *Stima dettagliata online*: {link_html}\n\n"
-        "🎯 Vuoi una valutazione professionale e accurata?\n"
-        "*Richiedi gratis Stima360 Pro*."
-    )
+        msg = (
+            f"Ciao {data['nome']}! 🏡\n"
+            "La tua valutazione è pronta.\n\n"
+            f"📄 *Clicca qui per il PDF*: {link_pdf}\n"
+            f"📊 *Stima dettagliata online*: {link_html}\n\n"
+            "🎯 Vuoi una valutazione professionale e accurata?\n"
+            "*Richiedi gratis Stima360 Pro*."
+        )
 
-    invia_whatsapp(data['telefono'], msg)
-except:
-    pass
+        invia_whatsapp(data['telefono'], msg)
 
-
+    except:
+        pass
 
     # --- 11. Risposta JSON al frontend ---
     return {
