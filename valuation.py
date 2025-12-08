@@ -481,6 +481,7 @@ def prezzo_mq_finale(
     vistaMare: str,
     via: str = "",
     altro_descrizione: str = "",
+    has_giardino: bool = False,   # ➕ aggiunto per regola extra
 ) -> float:
     if base_mq <= 0:
         return 0.0
@@ -509,10 +510,37 @@ def prezzo_mq_finale(
         c_altro
     )
 
-    # 🔒 CAP GLOBALE: non meno di 0.65x, non più di 1.80x
+    # -----------------------------------------
+    # 📌 REGOLE EXTRA PERSONALIZZATE STIMA360
+    # -----------------------------------------
+
+    # 1️⃣ Fronte mare + nuovo → +20%
+    if (str(posizioneMare).strip().lower() == "frontemare" and
+        str(stato).strip().lower() == "nuovo"):
+        coeff_tot *= 1.20
+
+    # 2️⃣ Rustico → perde 40% (coeff totale = 0.60)
+    if str(tipologia).strip().lower() == "rustico":
+        coeff_tot *= 0.60 / c_tip
+
+    # 3️⃣ Piano terra + giardino + anno > 2000 → +10%
+    try:
+        anno_int = int(anno)
+    except:
+        anno_int = 0
+
+    if str(piano).strip().lower() in ("terra", "piano terra") and has_giardino and anno_int >= 2000:
+        coeff_tot *= 1.10
+
+    # 4️⃣ Sotto il 1980 + stato scarso → -20%
+    if anno_int < 1980 and str(stato).strip().lower() == "scarso":
+        coeff_tot *= 0.80
+
+    # 🔒 CAP GLOBALE
     coeff_tot = max(0.50, min(coeff_tot, 1.80))
 
     return base_mq * coeff_tot
+
 
 
 def valore_totale(prezzo_mq_finale_: float, mq: float, pertinenze_euro: float) -> float:
@@ -536,7 +564,7 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         vista_det  = payload.get("vistaMareDettaglio", ""),
         vista_raw  = payload.get("vistaMare", ""),   # retrocompatibilità
     )
-
+    
     prezzo_mq = prezzo_mq_finale(
         base_mq=base,
         tipologia=payload.get("tipologia", ""),
@@ -552,6 +580,8 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         vistaMare=vista_norm,
         via=payload.get("via", ""),
         altro_descrizione=payload.get("altroDescrizione", ""),
+        has_giardino = ("Giardino" in (payload.get("pertinenze","") or ""))
+
     )
     
     flags = {
