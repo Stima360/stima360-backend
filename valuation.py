@@ -8,16 +8,16 @@ from decimal import Decimal
 # ---------------------------
 BASE_MQ = {
     "Alba Adriatica": {
-        "Nord": 1650,
-        "Villa Fiore": 1850,
+        "Nord": 1600,
+        "Villa Fiore": 1700,
         "Zona Basciani": 1400,
     },
 
     "Tortoreto": {
         # B5 – via Indipendenza ecc: min ~1450
-        "Lido Sud":   1750,
+        "Lido Sud":   1650,
         # B4 – Lungomare Sirena: min ~1650
-        "Lido Centro": 1950,
+        "Lido Centro": 1800,
         # fascia intermedia tra B4 e B5
         "Lido Nord":  1600,
         # Tortoreto Alto: min ~1097 → 1100 arrotondato
