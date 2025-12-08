@@ -462,6 +462,11 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
     return euro
 
 
+def to_int(x):
+    try:
+        return int(x)
+    except:
+        return 0
 
 # ---------------------------
 # Prezzi e totale
@@ -481,15 +486,18 @@ def prezzo_mq_finale(
     vistaMare: str,
     via: str = "",
     altro_descrizione: str = "",
-    has_giardino: bool = False,   # ➕ aggiunto per regola extra
+    has_giardino: bool = False,
 ) -> float:
     if base_mq <= 0:
         return 0.0
 
     c_tip   = coeff_tipologia(tipologia)
     c_piano = coeff_piano(piano, ascensore, posizioneMare, vistaMare)
-    c_bagni = coeff_bagni(int(bagni) if f"{bagni}".strip().isdigit() else 0)
-    c_anno  = coeff_anno(int(anno) if f"{anno}".strip().isdigit() else 0)
+
+    # --- FIX 2: cast robusti ---
+    c_bagni = coeff_bagni(to_int(bagni))
+    c_anno  = coeff_anno(to_int(anno))
+
     c_stato = coeff_stato(stato)
     c_mare  = coeff_mare(posizioneMare, distanzaMare, barrieraMare, vistaMare)
     c_loc   = coeff_locali(locali)
@@ -510,36 +518,31 @@ def prezzo_mq_finale(
         c_altro
     )
 
-    # -----------------------------------------
-    # 📌 REGOLE EXTRA PERSONALIZZATE STIMA360
-    # -----------------------------------------
-
-    # 1️⃣ Fronte mare + nuovo → +20%
+    # --- REGOLE EXTRA ---
     if (str(posizioneMare).strip().lower() == "frontemare" and
         str(stato).strip().lower() == "nuovo"):
         coeff_tot *= 1.20
 
-    # 2️⃣ Rustico → perde 40% (coeff totale = 0.60)
     if str(tipologia).strip().lower() == "rustico":
         coeff_tot *= 0.60 / c_tip
 
-    # 3️⃣ Piano terra + giardino + anno > 2000 → +10%
     try:
-        anno_int = int(anno)
+        anno_int = to_int(anno)
     except:
         anno_int = 0
 
     if str(piano).strip().lower() in ("terra", "piano terra") and has_giardino and anno_int >= 2000:
         coeff_tot *= 1.10
 
-    # 4️⃣ Sotto il 1980 + stato scarso → -20%
     if anno_int < 1980 and str(stato).strip().lower() == "scarso":
         coeff_tot *= 0.80
 
-    # 🔒 CAP GLOBALE
-    coeff_tot = max(0.50, min(coeff_tot, 1.80))
+    
+    # --- FIX 4: CAP realistico per immobili premium ---
+    coeff_tot = max(0.50, min(coeff_tot, 2.20))
 
     return base_mq * coeff_tot
+
 
 
 
@@ -564,14 +567,61 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         vista_det  = payload.get("vistaMareDettaglio", ""),
         vista_raw  = payload.get("vistaMare", ""),   # retrocompatibilità
     )
-    
+    # --- FIX 3: parsing pertinenze robusto e tokenizzato ---
+    p_raw = (payload.get("pertinenze", "") or "").lower()
+
+    # Sostituiamo vari separatori con la virgola così è più robusto
+    for sep in [";", "|", "/", "\\"]:
+        p_raw = p_raw.replace(sep, ",")
+
+    # Lista pulita delle pertinenze
+    pert_list = [p.strip() for p in p_raw.split(",") if p.strip()]
+
+    flags = {
+        "Garage": "garage" in pert_list,
+        "mqGarage": payload.get("mqGarage"),
+
+        "Posto Auto": "posto auto" in pert_list,
+        "mqPostoAuto": payload.get("mqPostoAuto"),
+
+        "Cantina": "cantina" in pert_list,
+        "mqCantina": payload.get("mqCantina"),
+
+        "Soffitta": "soffitta" in pert_list,
+        "mqSoffitta": payload.get("mqSoffitta"),
+
+        "Taverna": "taverna" in pert_list,
+        "mqTaverna": payload.get("mqTaverna"),
+
+        "Balconi": "balconi" in pert_list,
+        "numBalconi": payload.get("numBalconi"),
+
+        "Terrazzo": "terrazzo" in pert_list,
+        "mqTerrazzo": payload.get("mqTerrazzo"),
+
+        "Giardino": "giardino" in pert_list,
+        "mqGiardino": payload.get("mqGiardino"),
+
+        # testo completo pertinenze → usato per piscina, moto, bici
+        "pertinenze_text": p_raw,
+    }
+    pert_eur = valore_pertinenze(
+        flags, base_mq=base,
+        posizioneMare=payload.get("posizioneMare", "")
+    )
+
+    try:
+        mq_val = float(payload.get("mq") or 0)
+    except Exception:
+        mq_val = 0.0
+
     prezzo_mq = prezzo_mq_finale(
         base_mq=base,
         tipologia=payload.get("tipologia", ""),
         piano=payload.get("piano", ""),
         ascensore=payload.get("ascensore", ""),
         locali=payload.get("locali", ""),
-        bagni=payload.get("bagni", "1"),
+        bagni=payload.get("bagni", ""),
         anno=payload.get("anno", ""),
         stato=payload.get("stato", ""),
         posizioneMare=payload.get("posizioneMare", ""),
@@ -580,39 +630,10 @@ def compute_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
         vistaMare=vista_norm,
         via=payload.get("via", ""),
         altro_descrizione=payload.get("altroDescrizione", ""),
-        has_giardino = ("Giardino" in (payload.get("pertinenze","") or ""))
-
+        has_giardino=("giardino" in (payload.get("pertinenze","") or "").lower())
     )
-    
-    flags = {
-        "Garage": "Garage" in (payload.get("pertinenze", "") or ""),
-        "mqGarage": payload.get("mqGarage"),
-        "Posto Auto": "Posto Auto" in (payload.get("pertinenze", "") or ""),
-        "Cantina": "Cantina" in (payload.get("pertinenze", "") or ""),
-        "Soffitta": "Soffitta" in (payload.get("pertinenze", "") or ""),
-        "Taverna": "Taverna" in (payload.get("pertinenze", "") or ""),
-        "Balconi": "Balconi" in (payload.get("pertinenze", "") or ""),
-        "Terrazzo": "Terrazzo" in (payload.get("pertinenze", "") or ""),
-        "Giardino": "Giardino" in (payload.get("pertinenze", "") or ""),
-        "mqGiardino": payload.get("mqGiardino"),
-        # testo completo pertinenze (per piscina/posto moto/bici)
-        "pertinenze_text": payload.get("pertinenze", ""),
-    }
-    flags.update({
-        "mqCantina": payload.get("mqCantina"),
-        "mqPostoAuto": payload.get("mqPostoAuto"),
-        "mqTaverna": payload.get("mqTaverna"),
-        "mqSoffitta": payload.get("mqSoffitta"),
-        "mqTerrazzo": payload.get("mqTerrazzo"),
-        "numBalconi": payload.get("numBalconi"),
-    })
 
-    pert_eur = valore_pertinenze(flags, base_mq=base, posizioneMare=payload.get("posizioneMare", ""))
 
-    try:
-        mq_val = float(payload.get("mq") or 0)
-    except Exception:
-        mq_val = 0.0
 
     totale = valore_totale(prezzo_mq, mq_val, pert_eur)
 
