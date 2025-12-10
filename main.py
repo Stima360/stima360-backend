@@ -1,21 +1,26 @@
-from zoneinfo import ZoneInfo
+# backend/main.py — versione ripulita Stima360
+
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import os, secrets, uuid, requests
+import os, uvicorn, secrets, uuid, requests
 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from urllib.parse import urlencode
-
-# ---------------------------
+# ---------------------------------------------------------
 # CONFIG
-# ---------------------------
-TZ = ZoneInfo("Europe/Rome")
+# ---------------------------------------------------------
+BASE_DIR = Path(__file__).parent
+REPORTS_DIR = Path("/var/tmp/reports")
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 
 # WhatsApp Cloud API
@@ -23,11 +28,12 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v18.0")
 
-# ---------------------------
+# ---------------------------------------------------------
 # APP & CORS
-# ---------------------------
-
+# ---------------------------------------------------------
 app = FastAPI()
+
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,27 +43,48 @@ app.add_middleware(
     allow_credentials=True
 )
 
-# ---------------------------
-# UTILS
-# ---------------------------
 
+# Static (PDF)
+app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+
+# ---------------------------------------------------------
+# UTILS
+# ---------------------------------------------------------
 def normalizza_numero_whatsapp(raw: str | None) -> str | None:
-    if not raw: return None
+    if not raw:
+        return None
     s = "".join(ch for ch in raw if ch.isdigit())
-    if not s: return None
-    return s if s.startswith("39") else "39" + s.lstrip("0")
+    if not s:
+        return None
+    if s.startswith("39"):
+        return s
+    return "39" + s.lstrip("0")
+
 
 def invia_whatsapp(numero: str | None, messaggio: str):
-    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_ID): return
-    dest = normalizza_numero_whatsapp(numero)
-    if not dest: return
-    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
-    payload = {"messaging_product": "whatsapp","to": dest,"type": "text","text": {"body": messaggio}}
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    try: requests.post(url, json=payload, headers=headers, timeout=10)
-    except: pass
+    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_ID):
+        return
 
-def to_int(v):
+    dest = normalizza_numero_whatsapp(numero)
+    if not dest:
+        return
+
+    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": dest,
+        "type": "text",
+        "text": {"body": messaggio}
+    }
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+    try:
+        requests.post(url, json=payload, headers=headers, timeout=10)
+    except:
+        pass
+
+
+def to_int(v): 
     try: return int(v)
     except: return None
 
@@ -68,42 +95,68 @@ def to_float(v):
 def to_bool(v):
     if isinstance(v, bool): return v
     if v is None: return None
-    return str(v).lower() in {"si","sì","true","1","y"}
+    s = str(v).lower()
+    return True if s in {"si","sì","true","1","y"} else False if s in {"no","false","0"} else None
 
 def format_indirizzo(via, civico, comune):
     via_civ = " ".join(p for p in [via or "", civico or ""] if p).strip()
     return ", ".join([via_civ, comune]) if comune else via_civ
 
+def web_to_fs(path: str) -> str:
+    name = path.split("/")[-1]
+    return str((REPORTS_DIR / name).resolve())
+
 def normalizza_comune(v: str | None) -> str | None:
-    if not v: return None
-    v = " ".join(w.capitalize() for w in v.replace("_"," ").split())
-    return v if v in {"Alba Adriatica","Martinsicuro","Tortoreto"} else None
+    if not v:
+        return None
+    v = " ".join(w.capitalize() for w in v.replace("_", " ").split())
+    return v if v in {"Alba Adriatica", "Martinsicuro", "Tortoreto"} else None
 
-# ---------------------------
+# ---------------------------------------------------------
 # LOGIN ADMIN
-# ---------------------------
-
+# ---------------------------------------------------------
 security = HTTPBasic()
 def verifica_login(credentials: HTTPBasicCredentials):
-    u = os.getenv("ADMIN_USER","admin")
-    p = os.getenv("ADMIN_PASS","password")
+    u = os.getenv("ADMIN_USER", "admin")
+    p = os.getenv("ADMIN_PASS", "password")
     if not (secrets.compare_digest(credentials.username, u) and secrets.compare_digest(credentials.password, p)):
         raise HTTPException(status_code=401, detail="Credenziali non valide")
     return True
-# ---------------------------
-# MODELLI SHARED
-# ---------------------------
 
+# ---------------------------------------------------------
+# CANCELLA STIME (singole o multiple)
+# ---------------------------------------------------------
 class DeleteRequest(BaseModel):
     ids: list[int]
-# ---------------------------------------------------------
-# ENDPOINT: SALVA STIMA (BASE)
-# ---------------------------------------------------------
 
+@app.post("/api/admin/stime/delete")
+def admin_delete_stime(
+    payload: DeleteRequest,
+    credentials: HTTPBasicCredentials = Depends(security)
+):
+    verifica_login(credentials)
+
+    ids = payload.ids
+    if not ids:
+        raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
+
+    conn = get_connection(); cur = conn.cursor()
+
+    cur.execute("DELETE FROM stime_dettagliate WHERE stima_id = ANY(%s)", (ids,))
+    cur.execute("DELETE FROM stime WHERE id = ANY(%s)", (ids,))
+    conn.commit()
+
+    cur.close(); conn.close()
+    return {"ok": True, "deleted": len(ids)}
+
+
+# ---------------------------------------------------------
+# ENDPOINT: SALVA STIMA
+# ---------------------------------------------------------
 @app.post("/api/salva_stima")
 async def salva_stima(request: Request):
 
-    # 1) Lettura body
+    # --- 1. Leggi body ---
     try:
         if "application/json" in (request.headers.get("content-type") or ""):
             raw = await request.json()
@@ -112,7 +165,7 @@ async def salva_stima(request: Request):
     except:
         raw = {}
 
-    # 2) Normalizzazione campi
+    # --- 2. Normalizza ---
     data = {
         "comune": raw.get("comune"),
         "microzona": raw.get("microzona"),
@@ -134,14 +187,13 @@ async def salva_stima(request: Request):
         "anno": to_int(raw.get("anno")),
         "stato": raw.get("stato"),
 
-        # Extra mare + pertinenze
+        # Campi extra dal frontend
         "posizioneMare": raw.get("posizioneMare"),
         "distanzaMare": raw.get("distanzaMare"),
         "barrieraMare": raw.get("barrieraMare"),
         "vistaMareYN": raw.get("vistaMareYN"),
         "vistaMare": raw.get("vistaMare"),
         "vistaMareDettaglio": raw.get("vistaMareDettaglio"),
-
         "mqGiardino": raw.get("mqGiardino"),
         "mqGarage": raw.get("mqGarage"),
         "mqCantina": raw.get("mqCantina"),
@@ -153,14 +205,13 @@ async def salva_stima(request: Request):
         "altroDescrizione": raw.get("altroDescrizione"),
     }
 
-    # 3) Base €/mq
+    # --- 3. Se €mq base non presente → leggi DB ---
     if not data["prezzo_mq_base"]:
         try:
             conn = get_connection(); cur = conn.cursor()
             cur.execute("""
                 SELECT prezzo_mq_base FROM zone_valori
-                WHERE comune=%s AND microzona=%s
-                LIMIT 1
+                WHERE comune=%s AND microzona=%s LIMIT 1
             """, (data["comune"], data["microzona"]))
             row = cur.fetchone()
             data["prezzo_mq_base"] = float(row[0]) if row else 0.0
@@ -170,19 +221,18 @@ async def salva_stima(request: Request):
             try: cur.close(); conn.close()
             except: pass
 
-    # 4) INSERT in STIME
+    # --- 4. Salva stima base ---
     conn = get_connection(); cur = conn.cursor()
     try:
-        comune_norm = normalizza_comune(data["comune"])
+        comune_db = normalizza_comune(data["comune"])
         cur.execute("""
-            INSERT INTO stime
-            (comune, microzona, fascia_mare, via, civico, tipologia,
-             mq, piano, locali, bagni, pertinenze, ascensore,
-             nome, cognome, email, telefono)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING id
+             INSERT INTO stime
+              (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
+               bagni, pertinenze, ascensore, nome, cognome, email, telefono)
+              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+              RETURNING id
         """, (
-            comune_norm, data["microzona"], data["fascia_mare"],
+            comune_db, data["microzona"], data["fascia_mare"],
             data["via"], data["civico"], data["tipologia"],
             data["mq"], data["piano"], data["locali"], data["bagni"],
             data["pertinenze"], data["ascensore"],
@@ -190,57 +240,74 @@ async def salva_stima(request: Request):
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore INSERT DB: {e}")
     finally:
-        cur.close(); conn.close()
+        try: cur.close(); conn.close()
+        except: pass
 
-    # 5) Token
+    # --- 5. TOKEN e prezzo base ---
     token = str(uuid.uuid4())
     expires = datetime.now(timezone.utc) + timedelta(days=7)
 
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute("""
-            UPDATE stime
-            SET token=%s, token_expires=%s, prezzo_mq_base=%s
+            UPDATE stime SET token=%s, token_expires=%s, prezzo_mq_base=%s
             WHERE id=%s
         """, (token, expires, data["prezzo_mq_base"], new_id))
         conn.commit()
+    except:
+        pass
     finally:
-        cur.close(); conn.close()
+        try: cur.close(); conn.close()
+        except: pass
 
-    # 6) Motore di stima completa
-    locali_raw = raw.get("locali")
+      # --- 6. Stima completa (engine ufficiale) ---
+    # Usa i valori "grezzi" del form dove serve (es. locali in testo)
+    locali_raw = raw.get("locali")  # es. "Trilocale" oppure "3"
 
     payload_rules = {
         "comune": data["comune"],
         "microzona": data["microzona"],
+
         "tipologia": data["tipologia"],
         "mq": data["mq"],
         "piano": data["piano"],
+
+        # 👇 per il motore usiamo la versione raw (può essere "Trilocale")
         "locali": locali_raw if locali_raw is not None else data["locali"],
         "bagni": data["bagni"],
+
+        # ascensore come stringa "Sì"/"No" per i coefficienti
         "ascensore": "Sì" if data["ascensore"] else "No",
+
         "anno": data["anno"],
         "stato": data["stato"],
 
+        # Mare
         "posizioneMare": data["posizioneMare"],
-        "distanzaMare": data["distanzaMare"],
-        "barrieraMare": data["barrieraMare"],
-        "vistaMareYN": data["vistaMareYN"],
+        "distanzaMare":  data["distanzaMare"],
+        "barrieraMare":  data["barrieraMare"],
+
+        # 👇 passa TUTTI i campi vista che valuation.py sa usare
+        "vistaMareYN":        data["vistaMareYN"],
         "vistaMareDettaglio": data["vistaMareDettaglio"],
-        "vistaMare": data["vistaMare"],
+        "vistaMare":          data["vistaMare"],
 
-        "pertinenze": data["pertinenze"] or "",
-        "mqGiardino": data["mqGiardino"],
-        "mqGarage": data["mqGarage"],
-        "mqCantina": data["mqCantina"],
+        # Pertinenze + mq
+        "pertinenze":  data["pertinenze"] or "",
+        "mqGiardino":  data["mqGiardino"],
+        "mqGarage":    data["mqGarage"],
+        "mqCantina":   data["mqCantina"],
         "mqPostoAuto": data["mqPostoAuto"],
-        "mqTaverna": data["mqTaverna"],
-        "mqSoffitta": data["mqSoffitta"],
-        "mqTerrazzo": data["mqTerrazzo"],
-        "numBalconi": data["numBalconi"],
+        "mqTaverna":   data["mqTaverna"],
+        "mqSoffitta":  data["mqSoffitta"],
+        "mqTerrazzo":  data["mqTerrazzo"],
+        "numBalconi":  data["numBalconi"],
 
-        "via": data["via"],
+        # 👇 nuovi coefficienti che abbiamo aggiunto nel motore
+        "via":              data["via"],
         "altroDescrizione": data["altroDescrizione"],
     }
 
@@ -253,54 +320,63 @@ async def salva_stima(request: Request):
 
     indirizzo = format_indirizzo(data["via"], data["civico"], data["comune"])
 
-    # 7) PDF → SOLO SU GITHUB
-    pdf_filename = f"stima_{new_id}.pdf"
-
+    # --- 7. PDF ---
     try:
-        genera_pdf_stima(
-            {
-                "id_stima": new_id,
-                "indirizzo": indirizzo,
-                "comune": data["comune"],
-                "microzona": data["microzona"],
-                "tipologia": data["tipologia"],
-                "mq": data["mq"],
-                "piano": data["piano"],
-                "locali": data["locali"],
-                "bagni": data["bagni"],
-                "ascensore": "Sì" if data["ascensore"] else "No",
-                "pertinenze": data["pertinenze"],
-                "stima": f"{price_exact:,.0f} €".replace(",", "."),
-                "price_exact": price_exact,
-                "eur_mq_finale": eur_mq_finale,
-                "valore_pertinenze": valore_pertinenze,
-                "base_mq": base_mq,
-            },
-            nome_file=pdf_filename
-        )
+        pdf_web_path = genera_pdf_stima({
+            "id_stima": new_id,
+            "indirizzo": indirizzo,
+            "comune": data["comune"],
+            "microzona": data["microzona"],
+            "tipologia": data["tipologia"],
+            "mq": data["mq"],
+            "piano": data["piano"],
+            "locali": data["locali"],
+            "bagni": data["bagni"],
+            "ascensore": "Sì" if data["ascensore"] else "No",
+            "pertinenze": data["pertinenze"],
+            "stima": f"{price_exact:,.0f} €".replace(",", "."),
+            "price_exact": price_exact,
+            "eur_mq_finale": eur_mq_finale,
+            "valore_pertinenze": valore_pertinenze,
+            "base_mq": base_mq,
+        }, nome_file=f"stima_{new_id}.pdf")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore PDF: " + str(e))
+        raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
 
-    # --- URL PDF su GitHub ---
-    pdf_url_finale = f"https://raw.githubusercontent.com/Stima360/stima360-pdf/main/{pdf_filename}"
+    # --- 8. URL PDF finale ---
+    if pdf_web_path.startswith("http"):
+        pdf_url_finale = pdf_web_path
+    else:
+        pdf_url_finale = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
 
+    # URL intermedio con pagina "La tua stima è in arrivo..."
     loader_url = (
-        "https://www.stima360.it/pdf_redirect.html?" +
-        urlencode({"pdf": pdf_url_finale})
+        "https://www.stima360.it/pdf_redirect.html?"
+        + urlencode({"pdf": pdf_url_finale})
     )
 
-    # Link stima PRO
+
+
+    det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
+
+    # Link stima completa sul sito (usato sia in email che in WhatsApp)
     clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
-    clean["id"] = new_id
-    if raw.get("locali"): clean["locali"] = raw.get("locali")
-    if raw.get("vistaMareDettaglio"): clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
+
+    # 👉 Forza "locali" testuale se arriva dal form (es. "Trilocale")
+    if raw.get("locali"):
+        clean["locali"] = raw.get("locali")
+
+    # 👉 Assicura che passi anche "vistaMareDettaglio" al link
+    if raw.get("vistaMareDettaglio"):
+        clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
 
     url_stima_completa = (
         "https://www.stima360.it/stima_dettagliata.html?" +
         urlencode(clean)
     )
 
-    # 9) Email
+   
+    # --- 9. Email ---
     try:
         corpo = f"""
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
@@ -308,22 +384,24 @@ async def salva_stima(request: Request):
         <p>📄 <a href="{loader_url}">Apri il PDF</a></p>
         <p>🧩 <a href="{url_stima_completa}">Richiedi stima dettagliata</a></p>
         """
+
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
+
     except:
         pass
 
-    # 10) WhatsApp
+
+    # --- 10. WhatsApp ---
     try:
         msg = (
             f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {loader_url}\n"
-            f"Stima dettagliata: {url_stima_completa}"
+            f"PDF: {loader_url}\nStima dettagliata: {url_stima_completa}"
         )
         invia_whatsapp(data["telefono"], msg)
     except:
         pass
 
-    # 11) Return al frontend
+    # --- 11. Risposta JSON al frontend ---
     return {
         "success": True,
         "id": new_id,
@@ -331,47 +409,41 @@ async def salva_stima(request: Request):
         "price_exact": price_exact,
         "eur_mq_finale": eur_mq_finale,
         "valore_pertinenze": valore_pertinenze,
-        "base_mq": base_mq
+        "base_mq": base_mq,
     }
+
+
 # ---------------------------------------------------------
 # PREFILL TOKEN
 # ---------------------------------------------------------
-
 @app.get("/api/prefill")
 async def prefill(t: str):
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
-            SELECT
-                id, nome, cognome, email, telefono,
-                comune, microzona, via, civico, tipologia,
-                mq, piano, locali, bagni, pertinenze, ascensore
+            SELECT id,nome,cognome,email,telefono,comune,microzona,via,civico,tipologia,
+                   mq,piano,locali,bagni,pertinenze,ascensore
             FROM stime
-            WHERE token=%s
-              AND (token_expires IS NULL OR token_expires > NOW())
+            WHERE token=%s AND (token_expires IS NULL OR token_expires > NOW())
             LIMIT 1
         """, (t,))
         row = cur.fetchone()
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
+        cur.close(); conn.close()
+    except:
+        raise HTTPException(status_code=500, detail="Errore prefill")
 
     if not row:
         raise HTTPException(status_code=404, detail="Token non valido")
 
-    keys = [
-        "id","nome","cognome","email","telefono",
-        "comune","microzona","via","civico","tipologia",
-        "mq","piano","locali","bagni","pertinenze","ascensore"
-    ]
+    keys = ["id","nome","cognome","email","telefono","comune","microzona","via","civico","tipologia",
+            "mq","piano","locali","bagni","pertinenze","ascensore"]
     return dict(zip(keys, row))
 
-
 # ---------------------------------------------------------
-# SALVA STIMA DETTAGLIATA (PRO)
+# SALVA STIMA DETTAGLIATA
 # ---------------------------------------------------------
-
 def to_int_safe(v):
+    """Converte stringhe vuote in NULL, altrimenti int, senza tirare errori."""
     if v in (None, "", " "):
         return None
     try:
@@ -379,18 +451,16 @@ def to_int_safe(v):
     except:
         return None
 
+
 @app.post("/api/salva_stima_dettagliata")
 async def salva_stima_dettagliata(request: Request):
-
     data = await request.json()
-    conn = get_connection()
-    cur = conn.cursor()
 
+    conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
-                stima_uuid,
                 nome, cognome, email, telefono,
                 indirizzo, tipologia, mq, piano, locali, bagni,
                 ascensore, stato, anno,
@@ -402,7 +472,7 @@ async def salva_stima_dettagliata(request: Request):
                 esposizione, arredo, note, contatto, sopralluogo
             )
             VALUES (
-                %s,%s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s,
                 %s,%s,%s,%s,%s,%s,
                 %s,%s,%s,
                 %s,%s,%s,%s,%s,
@@ -413,17 +483,13 @@ async def salva_stima_dettagliata(request: Request):
                 %s,%s,%s,%s,%s
             )
         """, (
-            # 1–2
             to_int_safe(data.get("stima_id")),
-            data.get("stima_uuid") or None,
 
-            # 3–6
             data.get("nome") or None,
             data.get("cognome") or None,
             data.get("email") or None,
             data.get("telefono") or None,
 
-            # 7–12
             data.get("indirizzo") or None,
             data.get("tipologia") or None,
             to_int_safe(data.get("mq")),
@@ -431,19 +497,16 @@ async def salva_stima_dettagliata(request: Request):
             data.get("locali") or None,
             to_int_safe(data.get("bagni")),
 
-            # 13–15
             data.get("ascensore") or None,
             data.get("stato") or None,
             to_int_safe(data.get("anno")),
 
-            # 16–20
             data.get("microzona") or None,
             data.get("posizioneMare") or None,
             data.get("distanzaMare") or None,
             data.get("barrieraMare") or None,
             data.get("vistaMare") or None,
 
-            # 21–28
             to_int_safe(data.get("mqGiardino")),
             to_int_safe(data.get("mqGarage")),
             to_int_safe(data.get("mqCantina")),
@@ -453,38 +516,34 @@ async def salva_stima_dettagliata(request: Request):
             to_int_safe(data.get("mqTerrazzo")),
             to_int_safe(data.get("numBalconi")),
 
-            # 29–30
             data.get("altroDescrizione") or None,
             data.get("pertinenze") or None,
 
-            # 31–35
             data.get("classe") or None,
             data.get("riscaldamento") or None,
             data.get("condizionatore") or None,
             data.get("condiz_tipo") or None,
             to_int_safe(data.get("spese_cond")),
 
-            # 36–40
             data.get("esposizione") or None,
             data.get("arredo") or None,
             data.get("note") or None,
             data.get("contatto") or None,
-            data.get("sopralluogo") or None
+            data.get("sopralluogo") or None,
         ))
-
         conn.commit()
-
     finally:
         try:
-            cur.close()
-            conn.close()
+            cur.close(); conn.close()
         except:
             pass
 
     return {"ok": True}
 
+
+
 # ---------------------------------------------------------
-# ADMIN – LISTA STIME BASE (giorno, oggi, ieri, periodo)
+# ADMIN
 # ---------------------------------------------------------
 
 class LeadUpdate(BaseModel):
@@ -500,153 +559,30 @@ def admin_lista_stime(
 ):
     verifica_login(credentials)
 
-    # ---- Determina intervallo con timezone italiana ----
-    oggi = datetime.now(TZ).date()
-    ieri = oggi - timedelta(days=1)
-
     if dal and al:
-        start = datetime.combine(dal, datetime.min.time()).replace(tzinfo=TZ)
-        end = datetime.combine(al + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
+        start = datetime.combine(dal, datetime.min.time())
+        end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
     else:
-        base = ieri if day == "ieri" else oggi
-        start = datetime.combine(base, datetime.min.time()).replace(tzinfo=TZ)
-        end = datetime.combine(base + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
-
-    # -----------------------------------------------------
+        base = date.today() - timedelta(days=1) if day == "ieri" else date.today()
+        start = datetime.combine(base, datetime.min.time())
+        end   = datetime.combine(base + timedelta(days=1), datetime.min.time())
 
     conn = get_connection(); cur = conn.cursor()
-
     cur.execute("""
-        SELECT
-            s.id,
-            s.data,
-            s.comune,
-            s.microzona,
-            s.via,
-            s.civico,
-            s.tipologia,
-            s.mq,
-            s.piano,
-            s.locali,
-            s.bagni,
-            s.pertinenze,
-            s.ascensore,
-            s.nome,
-            s.cognome,
-            s.email,
-            s.telefono,
-            s.lead_status,
-            s.note_internal,
+        SELECT s.id, s.data, s.comune, s.microzona, s.via, s.civico, s.tipologia,
+               s.mq, s.piano, s.locali, s.bagni, s.pertinenze, s.ascensore,
+               s.nome, s.cognome, s.email, s.telefono, s.lead_status, s.note_internal,
             sd.data AS data_dettaglio
         FROM stime s
         LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
         WHERE s.data >= %s AND s.data < %s
         ORDER BY s.data DESC
     """, (start, end))
-
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
-
     cur.close(); conn.close()
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
-
-# ---------------------------------------------------------
-# ADMIN – LISTA STIME DETTAGLIATE (PRO)
-# ---------------------------------------------------------
-
-@app.get("/api/admin/stime_dettagliate")
-def admin_stime_dettagliate(
-    day: str = "oggi",
-    dal: date | None = None,
-    al: date | None = None,
-    credentials: HTTPBasicCredentials = Depends(security)
-):
-    # protezione admin (stessa di /api/admin/stime)
-    verifica_login(credentials)
-
-    oggi = datetime.now(TZ).date()
-    ieri = oggi - timedelta(days=1)
-
-    if dal and al:
-        start = datetime.combine(dal, datetime.min.time()).replace(tzinfo=TZ)
-        end = datetime.combine(al + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
-    else:
-        base = ieri if day == "ieri" else oggi
-        start = datetime.combine(base, datetime.min.time()).replace(tzinfo=TZ)
-        end = datetime.combine(base + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
-
-    conn = get_connection(); cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT
-                id,
-                stima_id,
-                stima_uuid,
-
-                nome,
-                cognome,
-                email,
-                telefono,
-
-                indirizzo,
-                tipologia,
-                mq,
-                piano,
-                locali,
-                bagni,
-
-                ascensore,
-                stato,
-                anno,
-
-                microzona,
-                posizionemare,
-                distanzamare,
-                barrieramare,
-                vistamare,
-
-                mqgiardino,
-                mqgarage,
-                mqcantina,
-                mqpostoauto,
-                mqtaverna,
-                mqsoffitta,
-                mqterrazzo,
-                numbalconi,
-
-                altrodescrizione,
-                pertinenze,
-
-                classe,
-                riscaldamento,
-                condizionatore,
-                condiz_tipo,
-                spese_cond,
-
-                esposizione,
-                arredo,
-                note,
-                contatto,
-                sopralluogo,
-
-                data,
-                created_at
-            FROM stime_dettagliate
-            WHERE data >= %s AND data < %s
-            ORDER BY data DESC
-        """, (start, end))
-
-        cols = [c[0] for c in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    finally:
-        cur.close(); conn.close()
-
-    return {"items": rows}
-
-# ---------------------------------------------------------
-# ADMIN – UPDATE STATO LEAD
-# ---------------------------------------------------------
 
 @app.post("/api/admin/stime/{stima_id}/update")
 def admin_update_stima(
@@ -662,12 +598,10 @@ def admin_update_stima(
     if payload.lead_status is not None:
         updates.append("lead_status=%s")
         values.append(payload.lead_status)
-
     if payload.note_internal is not None:
         updates.append("note_internal=%s")
         values.append(payload.note_internal)
 
-    # Se non ci sono modifiche, uscita pulita
     if not updates:
         return {"ok": True}
 
@@ -675,107 +609,19 @@ def admin_update_stima(
 
     conn = get_connection(); cur = conn.cursor()
     cur.execute(f"""
-        UPDATE stime
-        SET {", ".join(updates)}
-        WHERE id=%s
+        UPDATE stime SET {",".join(updates)} WHERE id=%s
     """, tuple(values))
     conn.commit()
-
     cur.close(); conn.close()
 
     return {"ok": True}
-# ---------------------------------------------------------
-# STIMA ACQUISIZIONE PRO – GESTIONALE
-# ---------------------------------------------------------
-
-@app.get("/api/admin/acquisizioni_pro")
-def admin_acquisizioni_pro(credentials: HTTPBasicCredentials = Depends(security)):
-    verifica_login(credentials)
-
-    conn = get_connection(); cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT
-                s.id AS stima_id,       -- ID stima base
-                sd.id AS sd_id,         -- ID riga PRO
-                s.data AS data_stima,
-                sd.data AS data_dettaglio,
-
-                s.comune,
-                s.microzona,
-                s.via,
-                s.civico,
-                s.tipologia,
-                s.mq,
-                s.piano,
-                s.locali,
-                s.bagni,
-                s.pertinenze,
-                s.ascensore,
-
-                s.nome,
-                s.cognome,
-                s.email,
-                s.telefono,
-
-                s.lead_status,
-                s.note_internal,
-
-                sd.classe,
-                sd.riscaldamento,
-                sd.condizionatore,
-                sd.condiz_tipo,
-                sd.spese_cond,
-                sd.esposizione,
-                sd.arredo,
-                sd.note AS note_pro,
-                sd.contatto,
-                sd.sopralluogo
-
-            FROM stime s
-            JOIN stime_dettagliate sd ON sd.stima_id = s.id
-            ORDER BY sd.data DESC
-        """)
-        rows = cur.fetchall()
-        cols = [c[0] for c in cur.description]
-    finally:
-        cur.close(); conn.close()
-
-    items = [dict(zip(cols, r)) for r in rows]
-
-    # PDF corretto
-    for it in items:
-        it["pdf_url"] = f"https://raw.githubusercontent.com/Stima360/stima360-pdf/main/stima_{it['stima_id']}.pdf"
-
-    return {"items": items}
-
 
 # ---------------------------------------------------------
-# ELIMINA UNA O PIÙ STIME PRO (non elimina la base)
+# RUN
 # ---------------------------------------------------------
 
-@app.post("/api/admin/acquisizioni_pro/delete")
-def admin_delete_acquisizioni_pro(
-    payload: DeleteRequest,
-    credentials: HTTPBasicCredentials = Depends(security)
-):
-    # Verifica credenziali admin
-    verifica_login(credentials)
 
-    ids = payload.ids or []
-    if not ids:
-        raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
 
-    conn = get_connection(); cur = conn.cursor()
-    try:
-        # Elimina SOLO le righe PRO
-        cur.execute(
-            "DELETE FROM stime_dettagliate WHERE id = ANY(%s)",
-            (ids,)
-        )
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
 
-    return {"ok": True, "deleted": len(ids)}
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
