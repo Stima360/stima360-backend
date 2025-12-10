@@ -1,4 +1,4 @@
-import pytz
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -18,7 +18,7 @@ from typing import Optional
 # ---------------------------
 # CONFIG
 # ---------------------------
-TZ = pytz.timezone("Europe/Rome")
+TZ = ZoneInfo("Europe/Rome")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 
 # WhatsApp Cloud API
@@ -476,6 +476,9 @@ class LeadUpdate(BaseModel):
     note_internal: str | None = None
 
 
+from zoneinfo import ZoneInfo
+TZ = ZoneInfo("Europe/Rome")
+
 @app.get("/api/admin/stime")
 def admin_lista_stime(
     day: str = "oggi",
@@ -490,12 +493,12 @@ def admin_lista_stime(
     ieri = oggi - timedelta(days=1)
 
     if dal and al:
-        start = TZ.localize(datetime.combine(dal, datetime.min.time()))
-        end = TZ.localize(datetime.combine(al + timedelta(days=1), datetime.min.time()))
+        start = datetime.combine(dal, datetime.min.time()).replace(tzinfo=TZ)
+        end = datetime.combine(al + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
     else:
         base = ieri if day == "ieri" else oggi
-        start = TZ.localize(datetime.combine(base, datetime.min.time()))
-        end = TZ.localize(datetime.combine(base + timedelta(days=1), datetime.min.time()))
+        start = datetime.combine(base, datetime.min.time()).replace(tzinfo=TZ)
+        end = datetime.combine(base + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
 
     # -----------------------------------------------------
 
@@ -535,6 +538,7 @@ def admin_lista_stime(
     cur.close(); conn.close()
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
+
 
 # ---------------------------------------------------------
 # ADMIN – UPDATE STATO LEAD
