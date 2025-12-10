@@ -375,18 +375,22 @@ async def prefill(t: str):
 # ---------------------------------------------------------
 
 def to_int_safe(v):
-    if v in (None, "", " "): return None
-    try: return int(v)
-    except: return None
+    if v in (None, "", " "):
+        return None
+    try:
+        return int(v)
+    except:
+        return None
 
 @app.post("/api/salva_stima_dettagliata")
 async def salva_stima_dettagliata(request: Request):
 
     data = await request.json()
-    conn = get_connection(); cur = conn.cursor()
+    conn = get_connection()
+    cur = conn.cursor()
 
     try:
-                cur.execute("""
+        cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
                 stima_uuid,
@@ -474,10 +478,14 @@ async def salva_stima_dettagliata(request: Request):
         conn.commit()
 
     finally:
-        try: cur.close(); conn.close()
-        except: pass
+        try:
+            cur.close()
+            conn.close()
+        except:
+            pass
 
     return {"ok": True}
+
 # ---------------------------------------------------------
 # ADMIN – LISTA STIME BASE (giorno, oggi, ieri, periodo)
 # ---------------------------------------------------------
