@@ -14,6 +14,8 @@ from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from urllib.parse import urlencode
+
+from typing import Optional 
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -615,6 +617,85 @@ def admin_update_stima(
     cur.close(); conn.close()
 
     return {"ok": True}
+ 
+
+# ---------------------------------------------------------
+# STIMA ACQUISIZIONE PRO
+# --------------------------------------------------------- 
+
+@app.get("/api/admin/acquisizioni_pro")
+def admin_acquisizioni_pro(
+    credentials: HTTPBasicCredentials = Depends(security)
+):
+    """
+    Ritorna SOLO le stime che hanno una riga in stime_dettagliate
+    (= utente arrivato fino al form PRO).
+    """
+    verifica_login(credentials)
+
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+                s.id,
+                s.data           AS data_stima,
+                sd.data          AS data_dettaglio,
+
+                -- Dati immobile base
+                s.comune,
+                s.microzona,
+                s.via,
+                s.civico,
+                s.tipologia,
+                s.mq,
+                s.piano,
+                s.locali,
+                s.bagni,
+                s.pertinenze,
+                s.ascensore,
+
+                -- Dati anagrafici
+                s.nome,
+                s.cognome,
+                s.email,
+                s.telefono,
+
+                -- Stato funnel
+                s.lead_status,
+                s.note_internal,
+
+                -- Dati PRO (stime_dettagliate)
+                sd.classe,
+                sd.riscaldamento,
+                sd.condizionatore,
+                sd.condiz_tipo,
+                sd.spese_cond,
+                sd.esposizione,
+                sd.arredo,
+                sd.note        AS note_pro,
+                sd.contatto,
+                sd.sopralluogo
+
+            FROM stime s
+            JOIN stime_dettagliate sd
+              ON sd.stima_id = s.id
+            ORDER BY sd.data DESC
+        """)
+        rows = cur.fetchall()
+        cols = [c[0] for c in cur.description]
+    finally:
+        try:
+            cur.close(); conn.close()
+        except:
+            pass
+
+    items = [dict(zip(cols, r)) for r in rows]
+
+    # aggiungo direttamente il pdf_url (stesso naming di salva_stima)
+    for it in items:
+        it["pdf_url"] = f"{PUBLIC_BASE_URL}/reports/stima_{it['id']}.pdf"
+
+    return {"items": items}
 
 # ---------------------------------------------------------
 # RUN
