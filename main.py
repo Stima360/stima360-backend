@@ -458,7 +458,7 @@ async def salva_stima_dettagliata(request: Request):
 
     conn = get_connection(); cur = conn.cursor()
     try:
-       cur.execute("""
+        cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
                 nome, cognome, email, telefono,
@@ -535,11 +535,13 @@ async def salva_stima_dettagliata(request: Request):
         conn.commit()
     finally:
         try:
-            cur.close(); conn.close()
+            cur.close()
+            conn.close()
         except:
             pass
 
     return {"ok": True}
+
 
 
 
