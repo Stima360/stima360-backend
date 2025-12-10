@@ -92,6 +92,12 @@ def verifica_login(credentials: HTTPBasicCredentials):
     if not (secrets.compare_digest(credentials.username, u) and secrets.compare_digest(credentials.password, p)):
         raise HTTPException(status_code=401, detail="Credenziali non valide")
     return True
+# ---------------------------
+# MODELLI SHARED
+# ---------------------------
+
+class DeleteRequest(BaseModel):
+    ids: list[int]
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA (BASE)
 # ---------------------------------------------------------
