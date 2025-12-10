@@ -558,6 +558,98 @@ def admin_lista_stime(
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
 
+# ---------------------------------------------------------
+# ADMIN – LISTA STIME DETTAGLIATE (PRO)
+# ---------------------------------------------------------
+
+@app.get("/api/admin/stime_dettagliate")
+def admin_stime_dettagliate(
+    day: str = "oggi",
+    dal: date | None = None,
+    al: date | None = None,
+    credentials: HTTPBasicCredentials = Depends(security)
+):
+    # protezione admin (stessa di /api/admin/stime)
+    verifica_login(credentials)
+
+    oggi = datetime.now(TZ).date()
+    ieri = oggi - timedelta(days=1)
+
+    if dal and al:
+        start = datetime.combine(dal, datetime.min.time()).replace(tzinfo=TZ)
+        end = datetime.combine(al + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
+    else:
+        base = ieri if day == "ieri" else oggi
+        start = datetime.combine(base, datetime.min.time()).replace(tzinfo=TZ)
+        end = datetime.combine(base + timedelta(days=1), datetime.min.time()).replace(tzinfo=TZ)
+
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+                id,
+                stima_id,
+                stima_uuid,
+
+                nome,
+                cognome,
+                email,
+                telefono,
+
+                indirizzo,
+                tipologia,
+                mq,
+                piano,
+                locali,
+                bagni,
+
+                ascensore,
+                stato,
+                anno,
+
+                microzona,
+                posizionemare,
+                distanzamare,
+                barrieramare,
+                vistamare,
+
+                mqgiardino,
+                mqgarage,
+                mqcantina,
+                mqpostoauto,
+                mqtaverna,
+                mqsoffitta,
+                mqterrazzo,
+                numbalconi,
+
+                altrodescrizione,
+                pertinenze,
+
+                classe,
+                riscaldamento,
+                condizionatore,
+                condiz_tipo,
+                spese_cond,
+
+                esposizione,
+                arredo,
+                note,
+                contatto,
+                sopralluogo,
+
+                data,
+                created_at
+            FROM stime_dettagliate
+            WHERE data >= %s AND data < %s
+            ORDER BY data DESC
+        """, (start, end))
+
+        cols = [c[0] for c in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        cur.close(); conn.close()
+
+    return {"items": rows}
 
 # ---------------------------------------------------------
 # ADMIN – UPDATE STATO LEAD
