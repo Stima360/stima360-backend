@@ -386,7 +386,7 @@ async def salva_stima_dettagliata(request: Request):
     conn = get_connection(); cur = conn.cursor()
 
     try:
-        cur.execute("""
+                cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
                 stima_uuid,
@@ -401,7 +401,7 @@ async def salva_stima_dettagliata(request: Request):
                 esposizione, arredo, note, contatto, sopralluogo
             )
             VALUES (
-                %s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s,%s,
                 %s,%s,%s,%s,%s,%s,
                 %s,%s,%s,
                 %s,%s,%s,%s,%s,
@@ -412,13 +412,17 @@ async def salva_stima_dettagliata(request: Request):
                 %s,%s,%s,%s,%s
             )
         """, (
+            # 1–2
             to_int_safe(data.get("stima_id")),
-            data.get("stima_uuid") or None,   
+            data.get("stima_uuid") or None,
+
+            # 3–6
             data.get("nome") or None,
             data.get("cognome") or None,
             data.get("email") or None,
             data.get("telefono") or None,
 
+            # 7–12
             data.get("indirizzo") or None,
             data.get("tipologia") or None,
             to_int_safe(data.get("mq")),
@@ -426,16 +430,19 @@ async def salva_stima_dettagliata(request: Request):
             data.get("locali") or None,
             to_int_safe(data.get("bagni")),
 
+            # 13–15
             data.get("ascensore") or None,
             data.get("stato") or None,
             to_int_safe(data.get("anno")),
 
+            # 16–20
             data.get("microzona") or None,
             data.get("posizioneMare") or None,
             data.get("distanzaMare") or None,
             data.get("barrieraMare") or None,
             data.get("vistaMare") or None,
 
+            # 21–28
             to_int_safe(data.get("mqGiardino")),
             to_int_safe(data.get("mqGarage")),
             to_int_safe(data.get("mqCantina")),
@@ -445,15 +452,18 @@ async def salva_stima_dettagliata(request: Request):
             to_int_safe(data.get("mqTerrazzo")),
             to_int_safe(data.get("numBalconi")),
 
+            # 29–30
             data.get("altroDescrizione") or None,
             data.get("pertinenze") or None,
 
+            # 31–35
             data.get("classe") or None,
             data.get("riscaldamento") or None,
             data.get("condizionatore") or None,
             data.get("condiz_tipo") or None,
             to_int_safe(data.get("spese_cond")),
 
+            # 36–40
             data.get("esposizione") or None,
             data.get("arredo") or None,
             data.get("note") or None,
