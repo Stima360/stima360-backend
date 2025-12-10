@@ -2,18 +2,15 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import os, uvicorn, secrets, uuid, requests
+import os, secrets, uuid, requests
 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from urllib.parse import urlencode
-from typing import Optional
 
 # ---------------------------
 # CONFIG
@@ -493,10 +490,6 @@ async def salva_stima_dettagliata(request: Request):
 class LeadUpdate(BaseModel):
     lead_status: str | None = None
     note_internal: str | None = None
-
-
-from zoneinfo import ZoneInfo
-TZ = ZoneInfo("Europe/Rome")
 
 @app.get("/api/admin/stime")
 def admin_lista_stime(
