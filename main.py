@@ -558,10 +558,7 @@ def admin_lista_stime(
     day: str = "oggi",
     dal: date | None = None,
     al: date | None = None,
-    credentials: HTTPBasicCredentials = Depends(security)
 ):
-    verifica_login(credentials)
-
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
         end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
