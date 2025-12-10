@@ -485,18 +485,19 @@ def admin_lista_stime(
 ):
     verifica_login(credentials)
 
-# Determina intervallo
-oggi = datetime.now(TZ).date()
-ieri = oggi - timedelta(days=1)
+    # ---- Determina intervallo con timezone italiana ----
+    oggi = datetime.now(TZ).date()
+    ieri = oggi - timedelta(days=1)
 
-if dal and al:
-    start = TZ.localize(datetime.combine(dal, datetime.min.time()))
-    end = TZ.localize(datetime.combine(al + timedelta(days=1), datetime.min.time()))
-else:
-    base = ieri if day == "ieri" else oggi
-    start = TZ.localize(datetime.combine(base, datetime.min.time()))
-    end = TZ.localize(datetime.combine(base + timedelta(days=1), datetime.min.time()))
+    if dal and al:
+        start = TZ.localize(datetime.combine(dal, datetime.min.time()))
+        end = TZ.localize(datetime.combine(al + timedelta(days=1), datetime.min.time()))
+    else:
+        base = ieri if day == "ieri" else oggi
+        start = TZ.localize(datetime.combine(base, datetime.min.time()))
+        end = TZ.localize(datetime.combine(base + timedelta(days=1), datetime.min.time()))
 
+    # -----------------------------------------------------
 
     conn = get_connection(); cur = conn.cursor()
 
@@ -534,7 +535,6 @@ else:
     cur.close(); conn.close()
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
-
 
 # ---------------------------------------------------------
 # ADMIN – UPDATE STATO LEAD
