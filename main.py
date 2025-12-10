@@ -1,3 +1,4 @@
+import pytz
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -17,7 +18,7 @@ from typing import Optional
 # ---------------------------
 # CONFIG
 # ---------------------------
-
+TZ = pytz.timezone("Europe/Rome")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 
 # WhatsApp Cloud API
@@ -484,14 +485,18 @@ def admin_lista_stime(
 ):
     verifica_login(credentials)
 
-    # Determina intervallo
-    if dal and al:
-        start = datetime.combine(dal, datetime.min.time())
-        end = datetime.combine(al + timedelta(days=1), datetime.min.time())
-    else:
-        base = date.today() - timedelta(days=1) if day == "ieri" else date.today()
-        start = datetime.combine(base, datetime.min.time())
-        end = datetime.combine(base + timedelta(days=1), datetime.min.time())
+# Determina intervallo
+oggi = datetime.now(TZ).date()
+ieri = oggi - timedelta(days=1)
+
+if dal and al:
+    start = TZ.localize(datetime.combine(dal, datetime.min.time()))
+    end = TZ.localize(datetime.combine(al + timedelta(days=1), datetime.min.time()))
+else:
+    base = ieri if day == "ieri" else oggi
+    start = TZ.localize(datetime.combine(base, datetime.min.time()))
+    end = TZ.localize(datetime.combine(base + timedelta(days=1), datetime.min.time()))
+
 
     conn = get_connection(); cur = conn.cursor()
 
