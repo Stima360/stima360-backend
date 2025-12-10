@@ -646,22 +646,23 @@ def admin_delete_acquisizioni_pro(
     payload: DeleteRequest,
     credentials: HTTPBasicCredentials = Depends(security)
 ):
-    # Autenticazione admin
+    # Verifica credenziali admin
     verifica_login(credentials)
 
     ids = payload.ids or []
     if not ids:
         raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
 
-    # Eliminazione SOLO delle righe PRO
     conn = get_connection(); cur = conn.cursor()
     try:
+        # Elimina SOLO le righe PRO
         cur.execute(
             "DELETE FROM stime_dettagliate WHERE id = ANY(%s)",
             (ids,)
         )
         conn.commit()
     finally:
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
 
     return {"ok": True, "deleted": len(ids)}
