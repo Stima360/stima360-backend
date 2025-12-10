@@ -576,24 +576,18 @@ def admin_update_stima(
 # ---------------------------------------------------------
 
 @app.get("/api/admin/acquisizioni_pro")
-def admin_acquisizioni_pro(
-    credentials: HTTPBasicCredentials = Depends(security)
-):
-    """
-    Ritorna SOLO gli utenti che hanno completato il form PRO (stime_dettagliate).
-    """
+def admin_acquisizioni_pro(credentials: HTTPBasicCredentials = Depends(security)):
     verifica_login(credentials)
 
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute("""
             SELECT
-                s.id,                -- ID stima base
-                sd.id AS sd_id,      -- ID riga PRO
+                s.id AS stima_id,       -- ID stima base
+                sd.id AS sd_id,         -- ID riga PRO
                 s.data AS data_stima,
                 sd.data AS data_dettaglio,
 
-                -- Dati immobile base
                 s.comune,
                 s.microzona,
                 s.via,
@@ -606,17 +600,14 @@ def admin_acquisizioni_pro(
                 s.pertinenze,
                 s.ascensore,
 
-                -- Contatti
                 s.nome,
                 s.cognome,
                 s.email,
                 s.telefono,
 
-                -- Stato funnel (base)
                 s.lead_status,
                 s.note_internal,
 
-                -- Dati PRO dettagliati
                 sd.classe,
                 sd.riscaldamento,
                 sd.condizionatore,
@@ -637,13 +628,11 @@ def admin_acquisizioni_pro(
     finally:
         cur.close(); conn.close()
 
-    # Converti in lista di dict
     items = [dict(zip(cols, r)) for r in rows]
 
-    # Aggiungi pdf_url
+    # PDF corretto
     for it in items:
-        # ⚠️ Usa GitHub RAW per compatibilità
-        it["pdf_url"] = f"https://raw.githubusercontent.com/Stima360/stima360-pdf/main/stima_{it['id']}.pdf"
+        it["pdf_url"] = f"https://raw.githubusercontent.com/Stima360/stima360-pdf/main/stima_{it['stima_id']}.pdf"
 
     return {"items": items}
 
@@ -657,16 +646,20 @@ def admin_delete_acquisizioni_pro(
     payload: DeleteRequest,
     credentials: HTTPBasicCredentials = Depends(security)
 ):
+    # Autenticazione admin
     verifica_login(credentials)
 
-    ids = payload.ids
+    ids = payload.ids or []
     if not ids:
         raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
 
+    # Eliminazione SOLO delle righe PRO
     conn = get_connection(); cur = conn.cursor()
     try:
-        # Elimina SOLO le righe PRO (sd_id)
-        cur.execute("DELETE FROM stime_dettagliate WHERE id = ANY(%s)", (ids,))
+        cur.execute(
+            "DELETE FROM stime_dettagliate WHERE id = ANY(%s)",
+            (ids,)
+        )
         conn.commit()
     finally:
         cur.close(); conn.close()
