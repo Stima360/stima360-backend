@@ -39,7 +39,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://stima360.it", "https://www.stima360.it"],
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["*"],
     allow_credentials=True
 )
 
