@@ -389,6 +389,7 @@ async def salva_stima_dettagliata(request: Request):
         cur.execute("""
             INSERT INTO stime_dettagliate (
                 stima_id,
+                stima_uuid,
                 nome, cognome, email, telefono,
                 indirizzo, tipologia, mq, piano, locali, bagni,
                 ascensore, stato, anno,
@@ -412,7 +413,7 @@ async def salva_stima_dettagliata(request: Request):
             )
         """, (
             to_int_safe(data.get("stima_id")),
-
+            data.get("stima_uuid") or None,   
             data.get("nome") or None,
             data.get("cognome") or None,
             data.get("email") or None,
