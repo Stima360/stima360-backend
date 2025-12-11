@@ -151,6 +151,25 @@ def admin_delete_stime(payload: DeleteRequest):
 
     cur.close(); conn.close()
     return {"ok": True, "deleted": len(ids)}
+# ---------------------------------------------------------
+# CANCELLA STIME DETTAGLIATE 
+# ---------------------------------------------------------
+@app.post("/api/admin/stime_dettagliate/delete")
+def admin_delete_stime_dettagliate(payload: DeleteRequest):
+
+    ids = payload.ids
+    if not ids:
+        raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
+
+    conn = get_connection(); cur = conn.cursor()
+
+    # Cancella ESCLUSIVAMENTE le righe della tabella stime_dettagliate
+    cur.execute("DELETE FROM stime_dettagliate WHERE id = ANY(%s)", (ids,))
+
+    conn.commit()
+    cur.close(); conn.close()
+
+    return {"ok": True, "deleted": len(ids)}
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
