@@ -137,11 +137,7 @@ class DeleteRequest(BaseModel):
     ids: list[int]
 
 @app.post("/api/admin/stime/delete")
-def admin_delete_stime(
-    payload: DeleteRequest,
-    credentials: HTTPBasicCredentials = Depends(security)
-):
-    verifica_login(credentials)
+def admin_delete_stime(payload: DeleteRequest):
 
     ids = payload.ids
     if not ids:
@@ -155,7 +151,6 @@ def admin_delete_stime(
 
     cur.close(); conn.close()
     return {"ok": True, "deleted": len(ids)}
-
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
@@ -556,12 +551,9 @@ async def salva_stima_dettagliata(request: Request):
 def admin_lista_stime_pro(
     day: str = "oggi",
     dal: date | None = None,
-    al: date | None = None,
-    credentials: HTTPBasicCredentials = Depends(security)
+    al: date | None = None
 ):
-    verifica_login(credentials)
 
-    # gestione date
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
         end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
@@ -625,14 +617,12 @@ def admin_lista_stime(
     cur.close(); conn.close()
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
+# ---------------------------------------------------------
+# UPDATE
+# ---------------------------------------------------------
 
 @app.post("/api/admin/stime/{stima_id}/update")
-def admin_update_stima(
-    stima_id: int,
-    payload: LeadUpdate,
-    credentials: HTTPBasicCredentials = Depends(security)
-):
-    verifica_login(credentials)
+def admin_update_stima(stima_id: int, payload: LeadUpdate):
 
     updates = []
     values = []
@@ -657,6 +647,7 @@ def admin_update_stima(
     cur.close(); conn.close()
 
     return {"ok": True}
+
 
 # ---------------------------------------------------------
 # RUN
