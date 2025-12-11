@@ -470,63 +470,44 @@ async def salva_stima_dettagliata(request: Request):
             INSERT INTO stime_dettagliate (
                 stima_id,
                 nome, cognome, email, telefono,
-                indirizzo, tipologia, mq, piano, locali, bagni,
-                ascensore, stato, anno,
-                microzona, posizionemare, distanzamare, barrieramare, vistamare,
-                mqgiardino, mqgarage, mqcantina, mqpostoauto,
-                mqtaverna, mqsoffitta, mqterrazzo, numbalconi,
-                altrodescrizione, pertinenze,
+                indirizzo, stato, anno,
                 classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
-                esposizione, arredo, note, contatto, sopralluogo
+                esposizione, arredo, note, contatto, sopralluogo,
+                ascensore, pertinenze,
+                tipologia, mq, piano, locali, bagni,
+                microzona, posizionemare, distanzamare, barrieramare,
+                mqgiardino, mqgarage, vistamare, altrodescrizione,
+                mqcantina, mqpostoauto, mqtaverna, mqsoffitta, mqterrazzo,
+                numbalconi
             )
             VALUES (
                 %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s,%s,
                 %s,%s,%s,
                 %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,
-                %s,%s,%s,%s,
+                %s,%s,%s,%s,%s,
                 %s,%s,
                 %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s
+                %s,%s,%s,%s,
+                %s,%s,%s,%s,
+                %s,%s,%s,%s,%s,
+                %s
             )
         """, (
+            # stima_id
             to_int_safe(data.get("stima_id")),
 
+            # anagrafica
             data.get("nome") or None,
             data.get("cognome") or None,
             data.get("email") or None,
             data.get("telefono") or None,
 
+            # immobile base
             data.get("indirizzo") or None,
-            data.get("tipologia") or None,
-            to_int_safe(data.get("mq")),
-            data.get("piano") or None,
-            data.get("locali") or None,
-            to_int_safe(data.get("bagni")),
-
-            data.get("ascensore") or None,
             data.get("stato") or None,
-            to_int_safe(data.get("anno")),
+            data.get("anno") or None,  # anno è TEXT nel DB
 
-            data.get("microzona") or None,
-            data.get("posizioneMare") or None,
-            data.get("distanzaMare") or None,
-            data.get("barrieraMare") or None,
-            data.get("vistaMare") or None,
-
-            to_int_safe(data.get("mqGiardino")),
-            to_int_safe(data.get("mqGarage")),
-            to_int_safe(data.get("mqCantina")),
-            to_int_safe(data.get("mqPostoAuto")),
-            to_int_safe(data.get("mqTaverna")),
-            to_int_safe(data.get("mqSoffitta")),
-            to_int_safe(data.get("mqTerrazzo")),
-            to_int_safe(data.get("numBalconi")),
-
-            data.get("altroDescrizione") or None,
-            data.get("pertinenze") or None,
-
+            # impianti / classe
             data.get("classe") or None,
             data.get("riscaldamento") or None,
             data.get("condizionatore") or None,
@@ -537,12 +518,43 @@ async def salva_stima_dettagliata(request: Request):
             data.get("arredo") or None,
             data.get("note") or None,
             data.get("contatto") or None,
-            data.get("sopralluogo") or None,
+            data.get("sopralluogo") or None,  # stringa ISO o None
+
+            # ascensore e pertinenze (testuali)
+            data.get("ascensore") or None,
+            data.get("pertinenze") or None,
+
+            # dati tecnici
+            data.get("tipologia") or None,
+            to_int_safe(data.get("mq")),
+            data.get("piano") or None,
+            to_int_safe(data.get("locali")),
+            to_int_safe(data.get("bagni")),
+
+            data.get("microzona") or None,
+            data.get("posizioneMare") or data.get("posizionemare") or None,
+            data.get("distanzaMare") or data.get("distanzamare") or None,
+            data.get("barrieraMare") or data.get("barrieramare") or None,
+
+            # QUI gestisco sia mqGiardino che mqgiardino
+            to_int_safe(data.get("mqGiardino") or data.get("mqgiardino")),
+            to_int_safe(data.get("mqGarage") or data.get("mqgarage")),
+            data.get("vistaMare") or data.get("vistamare") or None,
+            data.get("altroDescrizione") or data.get("altrodescrizione") or None,
+
+            to_int_safe(data.get("mqCantina") or data.get("mqcantina")),
+            to_int_safe(data.get("mqPostoAuto") or data.get("mqpostoauto")),
+            to_int_safe(data.get("mqTaverna") or data.get("mqtaverna")),
+            to_int_safe(data.get("mqSoffitta") or data.get("mqsoffitta")),
+            to_int_safe(data.get("mqTerrazzo") or data.get("mqterrazzo")),
+            to_int_safe(data.get("numBalconi") or data.get("numbalconi")),
         ))
 
         conn.commit()
 
     except Exception as e:
+        # QUI, SE VUOI DEBUG SERIO:
+        print("ERRORE /api/salva_stima_dettagliata:", e)
         raise HTTPException(status_code=500, detail=f"Errore INSERT: {e}")
 
     finally:
@@ -553,7 +565,6 @@ async def salva_stima_dettagliata(request: Request):
             pass
 
     return {"ok": True}
-
 
 # ---------------------------------------------------------
 # ADMIN STIME PRO
