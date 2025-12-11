@@ -541,7 +541,42 @@ async def salva_stima_dettagliata(request: Request):
             pass
 
     return {"ok": True}
+# ---------------------------------------------------------
+# ADMIN STIME PRO
+# ---------------------------------------------------------
 
+@app.get("/api/admin/stime_pro")
+def admin_lista_stime_pro(
+    day: str = "oggi",
+    dal: date | None = None,
+    al: date | None = None,
+    credentials: HTTPBasicCredentials = Depends(security)
+):
+    verifica_login(credentials)
+
+    # gestione date
+    if dal and al:
+        start = datetime.combine(dal, datetime.min.time())
+        end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
+    else:
+        base = date.today() if day == "oggi" else date.today() - timedelta(days=1)
+        start = datetime.combine(base, datetime.min.time())
+        end   = datetime.combine(base + timedelta(days=1), datetime.min.time())
+
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""
+        SELECT *
+        FROM stime_dettagliate
+        WHERE data >= %s AND data < %s
+        ORDER BY data DESC
+    """, (start, end))
+
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description]
+
+    cur.close(); conn.close()
+
+    return {"items": [dict(zip(cols, r)) for r in rows]}
 
 
 
