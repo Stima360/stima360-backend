@@ -454,95 +454,90 @@ def to_int_safe(v):
         return None
 
 
-@app.post("/api/salva_stima_dettagliata")
-async def salva_stima_dettagliata(request: Request):
-    data = await request.json()
+cur.execute("""
+    INSERT INTO stime_dettagliate (
+        stima_id,
+        nome, cognome, email, telefono,
+        indirizzo, tipologia, mq, piano, locali, bagni,
+        ascensore, stato, anno,
+        microzona, posizionemare, distanzamare, barrieramare, vistamare,
+        mqgiardino, mqgarage, mqcantina, mqpostoauto,
+        mqtaverna, mqsoffitta, mqterrazzo, numbalconi,
+        altrodescrizione, pertinenze,
+        classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
+        esposizione, arredo, note, contatto, sopralluogo
+    )
+    VALUES (
+        %s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s,%s,
+        %s,%s,%s,
+        %s,%s,%s,%s,%s,
+        %s,%s,%s,%s,
+        %s,%s,%s,%s,
+        %s,%s,
+        %s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s
+    )
+""", (
+    to_int_safe(data.get("stima_id")),
 
-    conn = get_connection(); cur = conn.cursor()
+    data.get("nome") or None,
+    data.get("cognome") or None,
+    data.get("email") or None,
+    data.get("telefono") or None,
+
+    data.get("indirizzo") or None,
+    data.get("tipologia") or None,
+    to_int_safe(data.get("mq")),
+    data.get("piano") or None,
+    data.get("locali") or None,
+    to_int_safe(data.get("bagni")),
+
+    data.get("ascensore") or None,
+    data.get("stato") or None,
+    to_int_safe(data.get("anno")),
+
+    data.get("microzona") or None,
+    data.get("posizioneMare") or None,     # → posizionemare
+    data.get("distanzaMare") or None,      # → distanzamare
+    data.get("barrieraMare") or None,      # → barrieramare
+    data.get("vistaMare") or None,         # → vistamare
+
+    to_int_safe(data.get("mqGiardino")),   # → mqgiardino
+    to_int_safe(data.get("mqGarage")),     # → mqgarage
+    to_int_safe(data.get("mqCantina")),    # → mqcantina
+    to_int_safe(data.get("mqPostoAuto")),  # → mqpostoauto
+    to_int_safe(data.get("mqTaverna")),    # → mqtaverna
+    to_int_safe(data.get("mqSoffitta")),   # → mqsoffitta
+    to_int_safe(data.get("mqTerrazzo")),   # → mqterrazzo
+    to_int_safe(data.get("numBalconi")),   # → numbalconi
+
+    data.get("altroDescrizione") or None,
+    data.get("pertinenze") or None,
+
+    data.get("classe") or None,
+    data.get("riscaldamento") or None,
+    data.get("condizionatore") or None,
+    data.get("condiz_tipo") or None,
+    to_int_safe(data.get("spese_cond")),
+
+    data.get("esposizione") or None,
+    data.get("arredo") or None,
+    data.get("note") or None,
+    data.get("contatto") or None,
+    data.get("sopralluogo") or None,
+))
+
+conn.commit()
+finally:
     try:
-        cur.execute("""
-            INSERT INTO stime_dettagliate (
-                stima_id,
-                nome, cognome, email, telefono,
-                indirizzo, tipologia, mq, piano, locali, bagni,
-                ascensore, stato, anno,
-                microzona, posizione_mare, distanza_mare, barriera_mare, vista_mare,
-                mqgiardino, mqgarage, mqcantina, mqpostoauto,
-                mqtaverna, mqsoffitta, mqterrazzo, numbalconi,
-                altrodescrizione, pertinenze,
-                classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
-                esposizione, arredo, note, contatto, sopralluogo
-            )
-            VALUES (
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s,%s,
-                %s,%s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,
-                %s,%s,%s,%s,
-                %s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s
-            )
-        """, (
-            to_int_safe(data.get("stima_id")),
-        
-            data.get("nome") or None,
-            data.get("cognome") or None,
-            data.get("email") or None,
-            data.get("telefono") or None,
-        
-            data.get("indirizzo") or None,
-            data.get("tipologia") or None,
-            to_int_safe(data.get("mq")),
-            data.get("piano") or None,
-            data.get("locali") or None,
-            to_int_safe(data.get("bagni")),
-        
-            data.get("ascensore") or None,
-            data.get("stato") or None,
-            to_int_safe(data.get("anno")),
-        
-            data.get("microzona") or None,
-            data.get("posizioneMare") or None,
-            data.get("distanzaMare") or None,
-            data.get("barrieraMare") or None,
-            data.get("vistaMare") or None,
-        
-            to_int_safe(data.get("mqGiardino")),
-            to_int_safe(data.get("mqGarage")),
-            to_int_safe(data.get("mqCantina")),
-            to_int_safe(data.get("mqPostoAuto")),
-            to_int_safe(data.get("mqTaverna")),
-            to_int_safe(data.get("mqSoffitta")),
-            to_int_safe(data.get("mqTerrazzo")),
-            to_int_safe(data.get("numBalconi")),
-        
-            data.get("altroDescrizione") or None,
-            data.get("pertinenze") or None,
-        
-            data.get("classe") or None,
-            data.get("riscaldamento") or None,
-            data.get("condizionatore") or None,
-            data.get("condiz_tipo") or None,
-            to_int_safe(data.get("spese_cond")),
-        
-            data.get("esposizione") or None,
-            data.get("arredo") or None,
-            data.get("note") or None,
-            data.get("contatto") or None,
-            data.get("sopralluogo") or None,
-        ))
+        cur.close()
+        conn.close()
+    except:
+        pass
 
-        conn.commit()
-    finally:
-        try:
-            cur.close()
-            conn.close()
-        except:
-            pass
+return {"ok": True}
 
-    return {"ok": True}
 # ---------------------------------------------------------
 # ADMIN STIME PRO
 # ---------------------------------------------------------
