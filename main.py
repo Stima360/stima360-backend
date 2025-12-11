@@ -37,10 +37,17 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://stima360.it", "https://www.stima360.it"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=True
+    allow_origins=[
+        "https://stima360.it",
+        "https://www.stima360.it"
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With"
+    ]
 )
 
 
