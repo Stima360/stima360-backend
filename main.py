@@ -340,6 +340,11 @@ async def salva_stima(request: Request):
     base_mq = calc["base_mq"]
 
     indirizzo = format_indirizzo(data["via"], data["civico"], data["comune"])
+    
+    # --- Vista mare finale per PDF ---
+    vista_mare_finale = None
+    if data.get("vistaMareYN") and str(data["vistaMareYN"]).lower() in {"si","sì","yes","true","1"}:
+        vista_mare_finale = data.get("vistaMareDettaglio") or "Sì"
 
     # --- 7. PDF ---
     try:
@@ -371,7 +376,7 @@ async def salva_stima(request: Request):
             "posizioneMare": data["posizioneMare"],
             "distanzaMare": data["distanzaMare"],
             "barrieraMare": data["barrieraMare"],
-            "vistaMare": data["vistaMare"] or data["vistaMareDettaglio"],
+            "vistaMare": vista_mare_finale,
         
             # PERTINENZE
             "pertinenze": data["pertinenze"],
