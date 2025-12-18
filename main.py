@@ -345,22 +345,46 @@ async def salva_stima(request: Request):
     try:
         pdf_web_path = genera_pdf_stima({
             "id_stima": new_id,
+        
+            # CLIENTE
+            "nome": data["nome"],
+            "cognome": data["cognome"],
+            "telefono": data["telefono"],
+            "email": data["email"],
+        
+            # INDIRIZZO
             "indirizzo": indirizzo,
             "comune": data["comune"],
             "microzona": data["microzona"],
+        
+            # IMMOBILE
             "tipologia": data["tipologia"],
             "mq": data["mq"],
             "piano": data["piano"],
-            "locali": data["locali"],
+            "locali": raw.get("locali"),   # <-- TESTUALE (Trilocale)
             "bagni": data["bagni"],
             "ascensore": "Sì" if data["ascensore"] else "No",
+            "anno": data["anno"],
+            "stato": data["stato"],
+        
+            # MARE
+            "posizioneMare": data["posizioneMare"],
+            "distanzaMare": data["distanzaMare"],
+            "barrieraMare": data["barrieraMare"],
+            "vistaMare": data["vistaMare"] or data["vistaMareDettaglio"],
+        
+            # PERTINENZE
             "pertinenze": data["pertinenze"],
+        
+            # VALORI
             "stima": f"{price_exact:,.0f} €".replace(",", "."),
             "price_exact": price_exact,
             "eur_mq_finale": eur_mq_finale,
             "valore_pertinenze": valore_pertinenze,
             "base_mq": base_mq,
+        
         }, nome_file=f"stima_{new_id}.pdf")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
 
