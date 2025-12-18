@@ -324,6 +324,51 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         topMargin=1.8*cm, bottomMargin=1.8*cm
     )
     flow = []
+    # ------------------------------------------------------------------
+    # NORMALIZZAZIONE CAMPI (camelCase → snake_case)
+    # ------------------------------------------------------------------
+    
+    def _get(*keys):
+        for k in keys:
+            if dati.get(k) not in (None, "", "—"):
+                return dati.get(k)
+        return None
+    
+    # Cliente
+    dati["nome"] = _get("nome")
+    dati["cognome"] = _get("cognome")
+    dati["email"] = _get("email")
+    dati["telefono"] = _get("telefono")
+    
+    # Immobile base
+    dati["locali"] = _get("locali")
+    dati["anno"] = _get("anno")
+    dati["stato"] = _get("stato")
+    
+    # Mare
+    dati["posizione_mare"] = _get("posizione_mare", "posizioneMare")
+    dati["distanza_mare"] = _get("distanza_mare", "distanzaMare")
+    dati["barriera_mare"] = _get("barriera_mare", "barrieraMare", "barrieraTipo")
+    
+    # Vista mare (priorità al dettaglio)
+    vista_si_no = _get("vistaMareYN")
+    vista_det = _get("vistaMareDettaglio")
+    
+    if vista_si_no:
+        dati["vista_mare"] = f"Sì ({vista_det})" if vista_det else "Sì"
+    else:
+        dati["vista_mare"] = None
+
+    
+    # Pertinenze (mq dettagli)
+    dati["mq_giardino"] = _get("mq_giardino", "mqGiardino")
+    dati["mq_garage"] = _get("mq_garage", "mqGarage")
+    dati["mq_cantina"] = _get("mq_cantina", "mqCantina")
+    dati["mq_posto_auto"] = _get("mq_posto_auto", "mqPostoAuto")
+    dati["mq_taverna"] = _get("mq_taverna", "mqTaverna")
+    dati["mq_soffitta"] = _get("mq_soffitta", "mqSoffitta")
+    dati["mq_terrazzo"] = _get("mq_terrazzo", "mqTerrazzo")
+    dati["num_balconi"] = _get("num_balconi", "numBalconi")
 
     eur_mq_finale = dati.get("eur_mq_finale")
     price_exact = dati.get("price_exact")
@@ -376,10 +421,11 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     cognome = dati.get("cognome") or ""
     full_name = f"{nome} {cognome}".strip()
     
-    via = dati.get("via") or "—"
+    via = dati.get("via") or dati.get("indirizzo") or "—"
     civico = dati.get("civico") or ""
     comune = dati.get("comune") or "—"
     indirizzo = f"Via {via} {civico}, {comune}".strip()
+
     
     telefono = dati.get("telefono") or "—"
     email = dati.get("email") or "—"
