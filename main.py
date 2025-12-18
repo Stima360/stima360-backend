@@ -196,7 +196,7 @@ async def salva_stima(request: Request):
         "tipologia": raw.get("tipologia"),
         "mq": to_float(raw.get("mq")),
         "piano": raw.get("piano"),
-        "locali": to_int(raw.get("locali")),
+        "locali": raw.get("locali"),
         "bagni": to_int(raw.get("bagni")),
         "pertinenze": raw.get("pertinenze"),
         "ascensore": to_bool(raw.get("ascensore")),
@@ -284,7 +284,7 @@ async def salva_stima(request: Request):
         try: cur.close(); conn.close()
         except: pass
 
-      # --- 6. Stima completa (engine ufficiale) ---
+    # --- 6. Stima completa (engine ufficiale) ---
     # Usa i valori "grezzi" del form dove serve (es. locali in testo)
     locali_raw = raw.get("locali")  # es. "Trilocale" oppure "3"
 
@@ -301,7 +301,12 @@ async def salva_stima(request: Request):
         "bagni": data["bagni"],
 
         # ascensore come stringa "Sì"/"No" per i coefficienti
-        "ascensore": "Sì" if data["ascensore"] else "No",
+        "ascensore": (
+        "Sì" if data["ascensore"] is True
+        else "No" if data["ascensore"] is False
+        else None
+        ),
+
 
         "anno": data["anno"],
         "stato": data["stato"],
@@ -343,26 +348,31 @@ async def salva_stima(request: Request):
 
     # --- 7. PDF ---
     try:
-        pdf_web_path = genera_pdf_stima({
+        pdf_payload = data.copy()
+    
+        pdf_payload.update({
+            "locali": raw.get("locali"),
+            "via": data.get("via"),
+            "civico": data.get("civico"),
+            "nome": data.get("nome"),
+            "cognome": data.get("cognome"),
+            "email": data.get("email"),
+            "telefono": data.get("telefono"),
             "id_stima": new_id,
-            "indirizzo": indirizzo,
-            "comune": data["comune"],
-            "microzona": data["microzona"],
-            "tipologia": data["tipologia"],
-            "mq": data["mq"],
-            "piano": data["piano"],
-            "locali": data["locali"],
-            "bagni": data["bagni"],
-            "ascensore": "Sì" if data["ascensore"] else "No",
-            "pertinenze": data["pertinenze"],
-            "stima": f"{price_exact:,.0f} €".replace(",", "."),
             "price_exact": price_exact,
             "eur_mq_finale": eur_mq_finale,
             "valore_pertinenze": valore_pertinenze,
             "base_mq": base_mq,
-        }, nome_file=f"stima_{new_id}.pdf")
+        })
+    
+        pdf_web_path = genera_pdf_stima(
+            pdf_payload,
+            nome_file=f"stima_{new_id}.pdf"
+        )
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
+
 
     # --- 8. URL PDF finale ---
     if pdf_web_path.startswith("http"):
@@ -381,7 +391,7 @@ async def salva_stima(request: Request):
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
     # Link stima completa sul sito (usato sia in email che in WhatsApp)
-    clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
+    clean = {k: v for k, v in data.items() if v is not None and v != ""}
 
     # 👉 Forza "locali" testuale se arriva dal form (es. "Trilocale")
     if raw.get("locali"):
@@ -547,7 +557,7 @@ async def salva_stima_dettagliata(request: Request):
             data.get("tipologia") or None,
             to_int_safe(data.get("mq")),
             data.get("piano") or None,
-            to_int_safe(data.get("locali")),
+            data.get("locali") or None,
             to_int_safe(data.get("bagni")),
 
             data.get("microzona") or None,
