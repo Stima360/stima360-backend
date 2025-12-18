@@ -370,12 +370,51 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     ]
 
 
-    flow += _kpi_row(dati)
+    # --- DATI CLIENTE IN ALTO (AL POSTO DI MQ / PIANO)
+    
+    nome = dati.get("nome") or "—"
+    cognome = dati.get("cognome") or ""
+    full_name = f"{nome} {cognome}".strip()
+    
+    via = dati.get("via") or "—"
+    civico = dati.get("civico") or ""
+    comune = dati.get("comune") or "—"
+    indirizzo = f"Via {via} {civico}, {comune}".strip()
+    
+    telefono = dati.get("telefono") or "—"
+    email = dati.get("email") or "—"
+    
+    cliente_table = Table(
+        [
+            [Paragraph(f"<b>{full_name}</b>", P)],
+            [Paragraph(indirizzo, P)],
+            [Paragraph(f"Tel: {telefono} • Email: {email}", P)],
+        ],
+        colWidths=[None]
+    )
+
+    cliente_table.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    
+    flow += [cliente_table, Spacer(1, 10)]
+
 
     # RIEPILOGO
-    indirizzo = dati.get("indirizzo") or f"{dati.get('via','')} {dati.get('civico','')}, {dati.get('comune','')}"
+    nome = dati.get("nome") or "—"
+    cognome = dati.get("cognome") or ""
+    full_name = f"{nome} {cognome}".strip()
+    
+    via = dati.get("via") or dati.get("indirizzo") or "—"
+    civico = dati.get("civico") or ""
     comune = dati.get("comune") or "—"
+    indirizzo_completo = f"{via} {civico}, {comune}".strip()
+    
     microzona = dati.get("microzona") or "—"
+
     prezzo_base = base_mq
 
     coeff_txt = "—"
@@ -387,11 +426,26 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         pass
 
     riepilogo = [
-        ["Indirizzo", indirizzo],
-        ["Comune", comune],
+        ["Cliente", full_name],
+        ["Indirizzo", indirizzo_completo],
         ["Microzona", microzona],
+    
         ["Tipologia", dati.get("tipologia") or "—"],
+        ["Superficie", f"{dati.get('mq')} mq" if dati.get("mq") else "—"],
+        ["Piano", dati.get("piano") or "—"],
+        ["Locali", dati.get("locali") or "—"],
+        ["Bagni", dati.get("bagni") or "—"],
+        ["Ascensore", dati.get("ascensore") or "—"],
+        ["Anno costruzione", dati.get("anno") or "—"],
+        ["Stato immobile", dati.get("stato") or "—"],
+    
+        ["Posizione mare", dati.get("posizione_mare") or "—"],
+        ["Distanza mare", dati.get("distanza_mare") or "—"],
+        ["Barriera mare", dati.get("barriera_mare") or "—"],
+        ["Vista mare", dati.get("vista_mare") or "—"],
+    
         ["Pertinenze", dati.get("pertinenze") or "—"],
+    
         ["Prezzo base (€/mq)", f"{prezzo_base:.0f} €/mq" if prezzo_base else "—"],
         ["Correttivo", coeff_txt],
         ["Prezzo finale (€/mq)", f"{eur_mq_finale:.0f} €/mq" if eur_mq_finale else "—"],
@@ -405,37 +459,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     ]))
     flow += [Paragraph("Riepilogo immobile", H2), Spacer(1, 4), tbl, Spacer(1, 12)]
 
-   # --- COMPARABILI (DISATTIVATO PER PDF 1 PAGINA)
-# safe = _parse_comparabili(dati.get("comparabili"))
-# d = Drawing(400, 130)
-# bc = VerticalBarChart()
-# bc.x = 30
-# bc.y = 20
-# bc.height = 90
-# bc.width = 340
-# bc.data = [safe]
-# bc.strokeColor = colors.HexColor("#e5e7eb")
-# bc.bars[0].fillColor = colors.HexColor("#e5e7eb")
-# d.add(bc)
-#
-# flow += [Paragraph("Confronto comparabili (demo)", H2), Spacer(1, 4), d, Spacer(1, 12)]
-
-# --- QR (DISATTIVATO PER PDF 1 PAGINA)
-# flow += _qr_block(
-#     url=dati.get("qr_url", "https://stima360.it/contatti"),
-#     title_style=H2,
-#     size_cm=2.8,
-#     title_text="Parla con noi"
-# )
-
-
-
-    # --- NOTA FINALE (DISATTIVATA PER PDF 1 PAGINA)
-# nota = (
-#     "Questa stima è indicativa e non costituisce perizia. "
-#     "Valori e range dipendono dai dati inseriti."
-# )
-# flow += [Paragraph(nota, P)]
+    
 
     def _footer(canvas, doc_obj):
         canvas.saveState()
