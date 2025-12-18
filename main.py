@@ -301,11 +301,7 @@ async def salva_stima(request: Request):
         "bagni": data["bagni"],
 
         # ascensore come stringa "Sì"/"No" per i coefficienti
-        "ascensore": (
-        "Sì" if data["ascensore"] is True
-        else "No" if data["ascensore"] is False
-        else None
-        ),
+        "ascensore": "Sì" if data["ascensore"] else "No",
 
 
         "anno": data["anno"],
@@ -391,11 +387,7 @@ async def salva_stima(request: Request):
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
     # Link stima completa sul sito (usato sia in email che in WhatsApp)
-    clean = {
-    k: str(v)
-    for k, v in data.items()
-    if v is not None and v != ""
-}
+    clean = {k: v for k, v in data.items() if v not in (None, "", "None")}
 
     # 👉 Forza "locali" testuale se arriva dal form (es. "Trilocale")
     if raw.get("locali"):
