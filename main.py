@@ -391,7 +391,11 @@ async def salva_stima(request: Request):
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
     # Link stima completa sul sito (usato sia in email che in WhatsApp)
-    clean = {k: v for k, v in data.items() if v is not None and v != ""}
+    clean = {
+    k: str(v)
+    for k, v in data.items()
+    if v is not None and v != ""
+}
 
     # 👉 Forza "locali" testuale se arriva dal form (es. "Trilocale")
     if raw.get("locali"):
