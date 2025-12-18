@@ -405,34 +405,37 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     ]))
     flow += [Paragraph("Riepilogo immobile", H2), Spacer(1, 4), tbl, Spacer(1, 12)]
 
-    # COMPARABILI
-    safe = _parse_comparabili(dati.get("comparabili"))
-    d = Drawing(400, 130)
-    bc = VerticalBarChart()
-    bc.x = 30
-    bc.y = 20
-    bc.height = 90
-    bc.width = 340
-    bc.data = [safe]
-    bc.strokeColor = colors.HexColor("#e5e7eb")
-    bc.bars[0].fillColor = colors.HexColor("#e5e7eb")
-    d.add(bc)
+   # --- COMPARABILI (DISATTIVATO PER PDF 1 PAGINA)
+# safe = _parse_comparabili(dati.get("comparabili"))
+# d = Drawing(400, 130)
+# bc = VerticalBarChart()
+# bc.x = 30
+# bc.y = 20
+# bc.height = 90
+# bc.width = 340
+# bc.data = [safe]
+# bc.strokeColor = colors.HexColor("#e5e7eb")
+# bc.bars[0].fillColor = colors.HexColor("#e5e7eb")
+# d.add(bc)
+#
+# flow += [Paragraph("Confronto comparabili (demo)", H2), Spacer(1, 4), d, Spacer(1, 12)]
 
-    flow += [Paragraph("Confronto comparabili (demo)", H2), Spacer(1, 4), d, Spacer(1, 12)]
+# --- QR (DISATTIVATO PER PDF 1 PAGINA)
+# flow += _qr_block(
+#     url=dati.get("qr_url", "https://stima360.it/contatti"),
+#     title_style=H2,
+#     size_cm=2.8,
+#     title_text="Parla con noi"
+# )
 
-    # QR
-    flow += _qr_block(
-        url=dati.get("qr_url", "https://stima360.it/contatti"),
-        title_style=H2,
-        size_cm=2.8,
-        title_text="Parla con noi"
-    )
 
-    nota = (
-        "Questa stima è indicativa e non costituisce perizia. "
-        "Valori e range dipendono dai dati inseriti."
-    )
-    flow += [Paragraph(nota, P)]
+
+    # --- NOTA FINALE (DISATTIVATA PER PDF 1 PAGINA)
+# nota = (
+#     "Questa stima è indicativa e non costituisce perizia. "
+#     "Valori e range dipendono dai dati inseriti."
+# )
+# flow += [Paragraph(nota, P)]
 
     def _footer(canvas, doc_obj):
         canvas.saveState()
