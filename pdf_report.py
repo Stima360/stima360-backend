@@ -430,7 +430,9 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     via = dati.get("via") or dati.get("indirizzo") or "—"
     civico = dati.get("civico") or ""
     comune = dati.get("comune") or "—"
-    indirizzo = f"Via {via} {civico}, {comune}".strip()
+    indirizzo_base = f"{via} {civico}".strip()
+    indirizzo = indirizzo_base if comune.lower() in indirizzo_base.lower() else f"{indirizzo_base}, {comune}"
+    
 
     
     telefono = dati.get("telefono") or "—"
@@ -478,8 +480,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         pass
 
     riepilogo = [
-        ["Cliente", full_name],
-        ["Indirizzo", indirizzo_completo],
+      
         ["Microzona", microzona],
     
         ["Tipologia", dati.get("tipologia") or "—"],
