@@ -350,14 +350,20 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     dati["distanza_mare"] = _get("distanza_mare", "distanzaMare")
     dati["barriera_mare"] = _get("barriera_mare", "barrieraMare", "barrieraTipo")
     
-    # Vista mare (priorità al dettaglio)
-    vista_si_no = _get("vistaMareYN")
-    vista_det = _get("vistaMareDettaglio")
+    # Vista mare – PRIORITÀ AL VALORE GIÀ CALCOLATO DAL BACKEND
+    vista_backend = _get("vistaMare")
     
-    if vista_si_no:
-        dati["vista_mare"] = f"Sì ({vista_det})" if vista_det else "Sì"
+    if vista_backend:
+        dati["vista_mare"] = vista_backend
     else:
-        dati["vista_mare"] = None
+        vista_si_no = _get("vistaMareYN")
+        vista_det = _get("vistaMareDettaglio")
+    
+        if vista_si_no:
+            dati["vista_mare"] = f"Sì ({vista_det})" if vista_det else "Sì"
+        else:
+            dati["vista_mare"] = None
+
 
     
     # Pertinenze (mq dettagli)
