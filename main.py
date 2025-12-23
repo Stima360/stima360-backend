@@ -13,6 +13,7 @@ import os, uvicorn, secrets, uuid, requests
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
+from valuation import BASE_MQ
 from urllib.parse import urlencode
 # ---------------------------------------------------------
 # CONFIG
@@ -170,6 +171,48 @@ def admin_delete_stime_dettagliate(payload: DeleteRequest):
     cur.close(); conn.close()
 
     return {"ok": True, "deleted": len(ids)}
+# ---------------------------------------------------------
+# STIMA BASE
+# ---------------------------------------------------------    
+@app.post("/api/stima_base")
+async def stima_base(request: Request):
+    try:
+        if "application/json" in (request.headers.get("content-type") or ""):
+            raw = await request.json()
+        else:
+            raw = dict(await request.form())
+    except:
+        raise HTTPException(status_code=400, detail="Payload non valido")
+
+    comune = raw.get("comune")
+    microzona = raw.get("microzona")
+    mq = raw.get("mq")
+
+    # Validazioni minime
+    if not comune or not microzona or not mq:
+        raise HTTPException(status_code=400, detail="Dati mancanti")
+
+    try:
+        mq = float(mq)
+    except:
+        raise HTTPException(status_code=400, detail="MQ non valido")
+
+    # Legge il valore €/mq dalla mappa ufficiale
+    base_mq = BASE_MQ.get(comune, {}).get(microzona)
+
+    if not base_mq:
+        raise HTTPException(status_code=404, detail="Microzona non trovata")
+
+    valore = round(mq * base_mq, 0)
+
+    return {
+        "success": True,
+        "comune": comune,
+        "microzona": microzona,
+        "mq": mq,
+        "base_mq": base_mq,
+        "valore_riferimento": valore
+    }
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
