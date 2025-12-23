@@ -211,7 +211,7 @@ async def stima_base(request: Request):
         "microzona": microzona,
         "mq": mq,
         "base_mq": base_mq,
-        "valore_riferimento": valore
+        "valore_riferimento": valore,
         "anno": anno
 
     }
