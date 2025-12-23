@@ -181,10 +181,10 @@ async def stima_base(request: Request):
     except:
         raise HTTPException(status_code=400, detail="Payload non valido")
 
-    comune     = raw.get("comune")
-    microzona  = raw.get("microzona")
-    mq         = raw.get("mq")
-    anno       = raw.get("anno")
+    comune    = raw.get("comune")
+    microzona = raw.get("microzona")
+    mq        = raw.get("mq")
+    anno      = raw.get("anno")
 
     if not comune or not microzona or not mq or not anno:
         raise HTTPException(status_code=400, detail="Dati mancanti")
@@ -193,14 +193,14 @@ async def stima_base(request: Request):
         mq   = float(mq)
         anno = int(anno)
     except:
-        raise HTTPException(status_code=400, detail="Dati numerici non validi")
+        raise HTTPException(status_code=400, detail="MQ o anno non validi")
 
     # 🔥 UNICA FONTE DI VERITÀ
     result = compute_from_payload({
         "comune": comune,
         "microzona": microzona,
         "mq": mq,
-        "anno": anno
+        "anno": anno,
     })
 
     return {
@@ -209,10 +209,12 @@ async def stima_base(request: Request):
         "microzona": microzona,
         "mq": mq,
         "anno": anno,
-        "prezzo_mq_finale": result["prezzo_mq_finale"],
-        "valore_riferimento": result["valore_stimato_finale"]
-    }
 
+        # 🔹 DATI REALI DA valuation.py
+        "base_mq": result["base_mq"],
+        "eur_mq_finale": result["eur_mq_finale"],
+        "valore_riferimento": result["price_exact"],
+    }
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
