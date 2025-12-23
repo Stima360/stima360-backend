@@ -37,18 +37,47 @@ def coeff_anno(anno: int) -> float:
     except Exception:
         return 1.00
 
-    # 1950 → -60%
+    # ---- PERDITE INIZIALI ----
     if a <= 1950:
         return 0.40
+    if a <= 1960:
+        return 0.45
+    if a <= 1965:
+        return 0.50
+    if a <= 1970:
+        return 0.60
+    if a <= 1975:
+        return 0.80
 
-    # 1985 in poi → valore pieno
-    if a >= 1985:
-        return 1.00
+    # ---- 1975 → 1980 : da 0.80 a 1.00 (+5%/anno circa) ----
+    if a <= 1980:
+        return round(0.80 + (a - 1975) * (0.20 / 5), 3)
 
-    # Crescita graduale tra 1950 e 1985
-    coeff = 0.40 + ((a - 1950) / (1985 - 1950)) * (1.00 - 0.40)
+    # ---- 1980 → 1990 : +10% totale (1%/anno) ----
+    if a <= 1990:
+        return round(1.00 + (a - 1980) * (0.10 / 10), 3)
 
-    return round(coeff, 3)
+    # ---- 1990 → 2000 : +20% totale (2%/anno) ----
+    if a <= 2000:
+        return round(1.10 + (a - 1990) * (0.20 / 10), 3)
+
+    # ---- 2000 → 2010 : +20% totale ----
+    if a <= 2010:
+        return round(1.30 + (a - 2000) * (0.20 / 10), 3)
+
+    # ---- 2010 → 2015 : +40% totale ----
+    if a <= 2015:
+        return round(1.50 + (a - 2010) * (0.40 / 5), 3)
+
+    # ---- 2015 → 2020 : +20% totale ----
+    if a <= 2020:
+        return round(1.90 + (a - 2015) * (0.20 / 5), 3)
+
+    # ---- 2020 → 2025 : verso 2.00 (100%) ----
+    if a <= 2025:
+        return round(2.10 - (2025 - a) * (0.10 / 5), 3)
+
+    return 2.20
 
 # --------------------------------------------------
 # STIMA BASE €/mq
