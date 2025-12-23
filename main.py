@@ -187,7 +187,7 @@ async def stima_base(request: Request):
     comune = raw.get("comune")
     microzona = raw.get("microzona")
     mq = raw.get("mq")
-
+    anno = raw.get("anno")
     # Validazioni minime
     if not comune or not microzona or not mq:
         raise HTTPException(status_code=400, detail="Dati mancanti")
@@ -212,6 +212,8 @@ async def stima_base(request: Request):
         "mq": mq,
         "base_mq": base_mq,
         "valore_riferimento": valore
+        "anno": anno
+
     }
 
 # ---------------------------------------------------------
