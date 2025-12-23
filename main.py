@@ -177,44 +177,42 @@ def admin_delete_stime_dettagliate(payload: DeleteRequest):
 @app.post("/api/stima_base")
 async def stima_base(request: Request):
     try:
-        if "application/json" in (request.headers.get("content-type") or ""):
-            raw = await request.json()
-        else:
-            raw = dict(await request.form())
+        raw = await request.json()
     except:
         raise HTTPException(status_code=400, detail="Payload non valido")
 
-    comune = raw.get("comune")
-    microzona = raw.get("microzona")
-    mq = raw.get("mq")
-    anno = raw.get("anno")
-    # Validazioni minime
-    if not comune or not microzona or not mq:
+    comune     = raw.get("comune")
+    microzona  = raw.get("microzona")
+    mq         = raw.get("mq")
+    anno       = raw.get("anno")
+
+    if not comune or not microzona or not mq or not anno:
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
     try:
-        mq = float(mq)
+        mq   = float(mq)
+        anno = int(anno)
     except:
-        raise HTTPException(status_code=400, detail="MQ non valido")
+        raise HTTPException(status_code=400, detail="Dati numerici non validi")
 
-    # Legge il valore €/mq dalla mappa ufficiale
-    base_mq = BASE_MQ.get(comune, {}).get(microzona)
-
-    if not base_mq:
-        raise HTTPException(status_code=404, detail="Microzona non trovata")
-
-    valore = round(mq * base_mq, 0)
+    # 🔥 UNICA FONTE DI VERITÀ
+    result = compute_from_payload({
+        "comune": comune,
+        "microzona": microzona,
+        "mq": mq,
+        "anno": anno
+    })
 
     return {
         "success": True,
         "comune": comune,
         "microzona": microzona,
         "mq": mq,
-        "base_mq": base_mq,
-        "valore_riferimento": valore,
-        "anno": anno
-
+        "anno": anno,
+        "prezzo_mq_finale": result["prezzo_mq_finale"],
+        "valore_riferimento": result["valore_stimato_finale"]
     }
+
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
