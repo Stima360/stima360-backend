@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
-
+from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
@@ -195,8 +195,8 @@ async def stima_base(request: Request):
     except:
         raise HTTPException(status_code=400, detail="MQ o anno non validi")
 
-    # 🔥 UNICA FONTE DI VERITÀ
-    result = compute_from_payload({
+    # 🔥 STIMA BASE → valuation_base.py
+    result = compute_base_from_payload({
         "comune": comune,
         "microzona": microzona,
         "mq": mq,
@@ -207,13 +207,12 @@ async def stima_base(request: Request):
         "success": True,
         "comune": comune,
         "microzona": microzona,
-        "mq": mq,
+        "mq": result["mq"],
         "anno": anno,
 
-        # 🔹 DATI REALI DA valuation.py
         "base_mq": result["base_mq"],
-        "eur_mq_finale": result["eur_mq_finale"],
-        "valore_riferimento": result["price_exact"],
+        "eur_mq_base": result["eur_mq_base"],
+        "valore_riferimento": result["price_base"],
     }
 
 # ---------------------------------------------------------
