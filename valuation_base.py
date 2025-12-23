@@ -33,51 +33,45 @@ def get_base_mq(comune: str, microzona: str) -> float:
 # --------------------------------------------------
 def coeff_anno(anno: int) -> float:
     try:
-        a = int(anno)
+        a = float(anno)
     except Exception:
         return 1.00
 
-    # ---- PERDITE INIZIALI ----
+    # Ancora minima
     if a <= 1950:
         return 0.40
-    if a <= 1960:
-        return 0.45
-    if a <= 1965:
-        return 0.50
-    if a <= 1970:
-        return 0.60
-    if a <= 1975:
-        return 0.80
 
-    # ---- 1975 → 1980 : da 0.80 a 1.00 (+5%/anno circa) ----
-    if a <= 1980:
-        return round(0.80 + (a - 1975) * (0.20 / 5), 3)
+    # Coppie (anno, coeff) — SOLO PUNTI CHIAVE
+    points = [
+        (1950, 0.40),
+        (1965, 0.45),
+        (1970, 0.60),
+        (1975, 0.80),
+        (1980, 1.00),
+        (1990, 1.10),
+        (2000, 1.30),
+        (2010, 1.50),
+        (2015, 1.90),
+        (2020, 2.10),
+        (2025, 2.20),
+    ]
 
-    # ---- 1980 → 1990 : +10% totale (1%/anno) ----
-    if a <= 1990:
-        return round(1.00 + (a - 1980) * (0.10 / 10), 3)
+    # Oltre il massimo
+    if a >= 2025:
+        return 2.20
 
-    # ---- 1990 → 2000 : +20% totale (2%/anno) ----
-    if a <= 2000:
-        return round(1.10 + (a - 1990) * (0.20 / 10), 3)
+    # Interpolazione lineare CONTINUA
+    for i in range(len(points) - 1):
+        y0, c0 = points[i]
+        y1, c1 = points[i + 1]
 
-    # ---- 2000 → 2010 : +20% totale ----
-    if a <= 2010:
-        return round(1.30 + (a - 2000) * (0.20 / 10), 3)
+        if y0 <= a <= y1:
+            t = (a - y0) / (y1 - y0)
+            coeff = c0 + t * (c1 - c0)
+            return round(coeff, 4)
 
-    # ---- 2010 → 2015 : +40% totale ----
-    if a <= 2015:
-        return round(1.50 + (a - 2010) * (0.40 / 5), 3)
+    return 1.00
 
-    # ---- 2015 → 2020 : +20% totale ----
-    if a <= 2020:
-        return round(1.90 + (a - 2015) * (0.20 / 5), 3)
-
-    # ---- 2020 → 2025 : verso 2.00 (100%) ----
-    if a <= 2025:
-        return round(2.10 - (2025 - a) * (0.10 / 5), 3)
-
-    return 2.20
 
 # --------------------------------------------------
 # STIMA BASE €/mq
