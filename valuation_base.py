@@ -64,10 +64,8 @@ def prezzo_mq_base(
 
     c_anno = coeff_anno(anno)
 
-    # cap più stretto: stima prudente
-    coeff_tot = max(0.80, min(c_anno, 1.35))
+    return base * c_anno
 
-    return base * coeff_tot
 
 
 # --------------------------------------------------
