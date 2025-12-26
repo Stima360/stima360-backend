@@ -112,7 +112,7 @@ def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
     comune = payload.get("comune", "")
     microzona = payload.get("microzona", "")
     anno = payload.get("anno", "")
-    tipologia = (payload.get("tipologia") or "").lower()
+    tipologia = (payload.get("tipologia") or "").lower().strip()
 
     try:
         mq = float(payload.get("mq") or 0)
@@ -130,10 +130,10 @@ def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
     # ----------------------------------
     # CORREZIONE PER TIPOLOGIA
     # ----------------------------------
-    if tipologia == "Villa":
-        totale *= 1.20        # +20%
-    elif tipologia == "Rustico":
-        totale *= 0.40        # -60%
+    if "villa" in tipologia:
+        totale *= 1.20
+    elif "rustico" in tipologia:
+        totale *= 0.40
 
     return {
         "base_mq": round(get_base_mq(comune, microzona), 2),
