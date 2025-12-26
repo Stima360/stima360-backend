@@ -212,7 +212,9 @@ async def stima_base(request: Request):
         "anno": anno,
         "base_mq": result["base_mq"],
         "eur_mq_base": result["eur_mq_base"],
+        "eur_mq_visuale": result["eur_mq_visuale"],
         "valore_riferimento": result["price_base"],
+        
     }
 
 
