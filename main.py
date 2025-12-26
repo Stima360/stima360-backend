@@ -185,6 +185,7 @@ async def stima_base(request: Request):
     microzona = raw.get("microzona")
     mq        = raw.get("mq")
     anno      = raw.get("anno")
+    tipologia = raw.get("tipologia")   # ✅
 
     if not comune or not microzona or not mq or not anno:
         raise HTTPException(status_code=400, detail="Dati mancanti")
@@ -195,10 +196,10 @@ async def stima_base(request: Request):
     except:
         raise HTTPException(status_code=400, detail="MQ o anno non validi")
 
-    # 🔥 STIMA BASE → valuation_base.py
     result = compute_base_from_payload({
         "comune": comune,
         "microzona": microzona,
+        "tipologia": tipologia,   # ✅
         "mq": mq,
         "anno": anno,
     })
@@ -209,11 +210,11 @@ async def stima_base(request: Request):
         "microzona": microzona,
         "mq": result["mq"],
         "anno": anno,
-
         "base_mq": result["base_mq"],
         "eur_mq_base": result["eur_mq_base"],
         "valore_riferimento": result["price_base"],
     }
+
 
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
