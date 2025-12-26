@@ -1,8 +1,7 @@
-# valuation_base.py
 from typing import Dict, Any
 
 # --------------------------------------------------
-# BASE €/mq (copiati da valuation.py, solo questi)
+# BASE €/mq
 # --------------------------------------------------
 BASE_MQ = {
     "Alba Adriatica": {
@@ -23,31 +22,28 @@ BASE_MQ = {
     },
 }
 
-
 def get_base_mq(comune: str, microzona: str) -> float:
     return float(BASE_MQ.get(comune, {}).get(microzona, 0.0))
 
 
 # --------------------------------------------------
-# Coefficiente ANNO (copiato identico)
+# COEFFICIENTE ANNO
 # --------------------------------------------------
 def coeff_anno(anno: int) -> float:
     try:
         a = float(anno)
-    except Exception:
+    except:
         return 1.00
 
-    # Ancora minima
     if a <= 1950:
         return 0.40
 
-    # Coppie (anno, coeff) — SOLO PUNTI CHIAVE
     points = [
         (1950, 0.40),
         (1965, 0.45),
         (1970, 0.60),
         (1975, 0.80),
-        (1990, 1.00),  # zero spostato qui
+        (1990, 1.00),
         (2000, 1.30),
         (2010, 1.50),
         (2015, 1.90),
@@ -55,100 +51,77 @@ def coeff_anno(anno: int) -> float:
         (2025, 2.20),
     ]
 
-
-    # Oltre il massimo
     if a >= 2025:
         return 2.20
 
-    # Interpolazione lineare CONTINUA
     for i in range(len(points) - 1):
         y0, c0 = points[i]
         y1, c1 = points[i + 1]
-
         if y0 <= a <= y1:
             t = (a - y0) / (y1 - y0)
-            coeff = c0 + t * (c1 - c0)
-            return round(coeff, 4)
+            return round(c0 + t * (c1 - c0), 4)
 
     return 1.00
 
 
 # --------------------------------------------------
-# STIMA BASE €/mq
+# COEFFICIENTE RUSTICO PROGRESSIVO PER MQ
 # --------------------------------------------------
-def prezzo_mq_base(
-    comune: str,
-    microzona: str,
-    anno: str
-) -> float:
+def coeff_rustico_superficie(mq: float) -> float:
+    if mq <= 100:
+        return 0.60
+    elif mq <= 200:
+        return 0.55
+    elif mq <= 400:
+        return 0.45
+    elif mq <= 600:
+        return 0.40
+    else:
+        return 0.35
+
+
+# --------------------------------------------------
+# PREZZO €/mq BASE
+# --------------------------------------------------
+def prezzo_mq_base(comune: str, microzona: str, anno: int) -> float:
     base = get_base_mq(comune, microzona)
     if base <= 0:
         return 0.0
-
-    c_anno = coeff_anno(anno)
-
-    return base * c_anno
-
+    return base * coeff_anno(anno)
 
 
 # --------------------------------------------------
-# VALORE TOTALE BASE
-# --------------------------------------------------
-def valore_base(
-    prezzo_mq: float,
-    mq: float
-) -> float:
-    try:
-        m = float(mq)
-    except Exception:
-        m = 0.0
-    return prezzo_mq * m
-
-
-# --------------------------------------------------
-# FUNZIONE COMODA DAL PAYLOAD
+# FUNZIONE PRINCIPALE
 # --------------------------------------------------
 def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
-    comune = payload.get("comune", "")
-    microzona = payload.get("microzona", "")
-    anno = payload.get("anno", "")
-    tipologia = (payload.get("tipologia") or "").lower().strip()
+    comune     = payload.get("comune", "")
+    microzona  = payload.get("microzona", "")
+    anno       = int(payload.get("anno", 0))
+    tipologia  = (payload.get("tipologia") or "").lower().strip()
 
     try:
         mq = float(payload.get("mq") or 0)
-    except Exception:
+    except:
         mq = 0.0
 
-    prezzo_mq = prezzo_mq_base(
-        comune=comune,
-        microzona=microzona,
-        anno=anno,
-    )
+    # €/mq con solo coeff anno
+    eur_mq = prezzo_mq_base(comune, microzona, anno)
 
-    totale = valore_base(prezzo_mq, mq)
-    
+    # coeff tipologia (UNA SOLA VOLTA)
     coeff_tipologia = 1.0
-    
+
     if "villa" in tipologia:
         coeff_tipologia = 1.20
     elif "rustico" in tipologia:
-        coeff_tipologia = 0.40
-    
-    eur_mq_visuale = prezzo_mq * coeff_tipologia
+        coeff_tipologia = coeff_rustico_superficie(mq)
 
-
-    # ----------------------------------
-    # CORREZIONE PER TIPOLOGIA
-    # ----------------------------------
-    if "villa" in tipologia:
-        totale *= 1.20
-    elif "rustico" in tipologia:
-        totale *= 0.40
+    eur_mq_finale = eur_mq * coeff_tipologia
+    valore_finale = eur_mq_finale * mq
 
     return {
         "base_mq": round(get_base_mq(comune, microzona), 2),
-        "eur_mq_base": round(prezzo_mq, 2),          # tecnico (non usarlo in UI)
-        "eur_mq_visuale": round(eur_mq_visuale, 0),  # 🔥 QUELLO CHE MOSTRI
+        "eur_mq_base": round(eur_mq, 2),            # tecnico
+        "eur_mq_visuale": round(eur_mq_finale, 0),  # MOSTRA QUESTO
         "mq": round(mq, 0),
-        "price_base": round(totale, 0),
+        "price_base": round(valore_finale, 0),
     }
