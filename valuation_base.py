@@ -27,7 +27,7 @@ def get_base_mq(comune: str, microzona: str) -> float:
 
 
 # --------------------------------------------------
-# COEFFICIENTE ANNO
+# COEFFICIENTE ANNO (curva continua)
 # --------------------------------------------------
 def coeff_anno(anno: int) -> float:
     try:
@@ -65,7 +65,7 @@ def coeff_anno(anno: int) -> float:
 
 
 # --------------------------------------------------
-# COEFFICIENTE RUSTICO PROGRESSIVO PER MQ
+# COEFF RUSTICO PROGRESSIVO PER SUPERFICIE
 # --------------------------------------------------
 def coeff_rustico_superficie(mq: float) -> float:
     if mq <= 100:
@@ -81,7 +81,28 @@ def coeff_rustico_superficie(mq: float) -> float:
 
 
 # --------------------------------------------------
-# PREZZO €/mq BASE
+# CAP €/mq PER RUSTICI (anti-follia)
+# --------------------------------------------------
+def cap_rustico_eur_mq(anno: int, mq: float) -> float:
+    # grandi superfici
+    if mq >= 800:
+        return 300
+    if mq >= 400:
+        return 450
+    if mq >= 200:
+        return 600
+
+    # piccoli rustici: crescono con l'anno
+    if anno >= 2020:
+        return 900
+    elif anno >= 2010:
+        return 750
+    else:
+        return 600
+
+
+# --------------------------------------------------
+# PREZZO €/mq BASE (solo zona + anno)
 # --------------------------------------------------
 def prezzo_mq_base(comune: str, microzona: str, anno: int) -> float:
     base = get_base_mq(comune, microzona)
@@ -94,28 +115,37 @@ def prezzo_mq_base(comune: str, microzona: str, anno: int) -> float:
 # FUNZIONE PRINCIPALE
 # --------------------------------------------------
 def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
-    comune     = payload.get("comune", "")
-    microzona  = payload.get("microzona", "")
-    anno       = int(payload.get("anno", 0))
-    tipologia  = (payload.get("tipologia") or "").lower().strip()
+    comune    = payload.get("comune", "")
+    microzona = payload.get("microzona", "")
+    tipologia = (payload.get("tipologia") or "").lower().strip()
+
+    try:
+        anno = int(payload.get("anno", 0))
+    except:
+        anno = 0
 
     try:
         mq = float(payload.get("mq") or 0)
     except:
         mq = 0.0
 
-    # €/mq con solo coeff anno
+    # €/mq base (zona + anno)
     eur_mq = prezzo_mq_base(comune, microzona, anno)
 
     # coeff tipologia (UNA SOLA VOLTA)
     coeff_tipologia = 1.0
-
     if "villa" in tipologia:
         coeff_tipologia = 1.20
     elif "rustico" in tipologia:
         coeff_tipologia = coeff_rustico_superficie(mq)
 
     eur_mq_finale = eur_mq * coeff_tipologia
+
+    # CAP rustico €/mq
+    if "rustico" in tipologia:
+        cap = cap_rustico_eur_mq(anno, mq)
+        eur_mq_finale = min(eur_mq_finale, cap)
+
     valore_finale = eur_mq_finale * mq
 
     return {
