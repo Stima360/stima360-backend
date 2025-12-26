@@ -126,6 +126,16 @@ def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
     )
 
     totale = valore_base(prezzo_mq, mq)
+    
+    coeff_tipologia = 1.0
+    
+    if "villa" in tipologia:
+        coeff_tipologia = 1.20
+    elif "rustico" in tipologia:
+        coeff_tipologia = 0.40
+    
+    eur_mq_visuale = prezzo_mq * coeff_tipologia
+
 
     # ----------------------------------
     # CORREZIONE PER TIPOLOGIA
@@ -137,7 +147,8 @@ def compute_base_from_payload(payload: Dict[str, Any]) -> Dict[str, float]:
 
     return {
         "base_mq": round(get_base_mq(comune, microzona), 2),
-        "eur_mq_base": round(prezzo_mq, 2),
+        "eur_mq_base": round(prezzo_mq, 2),          # tecnico (non usarlo in UI)
+        "eur_mq_visuale": round(eur_mq_visuale, 0),  # 🔥 QUELLO CHE MOSTRI
         "mq": round(mq, 0),
         "price_base": round(totale, 0),
     }
