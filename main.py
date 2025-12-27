@@ -327,7 +327,7 @@ async def salva_stima(request: Request):
     finally:
         try: cur.close(); conn.close()
         except: pass
-
+    link_token = f"https://www.stima360.it/stima_dettagliata.html?token={token}"
       # --- 6. Stima completa (engine ufficiale) ---
     # Usa i valori "grezzi" del form dove serve (es. locali in testo)
     locali_raw = raw.get("locali")  # es. "Trilocale" oppure "3"
@@ -477,7 +477,7 @@ async def salva_stima(request: Request):
         <h2>🏡 La tua stima Stima360 è pronta!</h2>
         <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
         <p>📄 <a href="{loader_url}">Apri il PDF</a></p>
-        <p>🧩 <a href="{url_stima_completa}">Richiedi stima dettagliata</a></p>
+        <p>🧩 <a href="{link_token}">Richiedi stima dettagliata</a></p>
         """
 
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
@@ -486,6 +486,7 @@ async def salva_stima(request: Request):
         pass
 
     
+
     # --- 10. WhatsApp ---
     try:
         invia_whatsapp(
@@ -493,7 +494,7 @@ async def salva_stima(request: Request):
             data["nome"],          # p1
             indirizzo,             # p2
             loader_url,            # p3
-            url_stima_completa     # p4
+            link_token     # p4
         )
     except Exception as e:
         print("WA EXC:", e)
@@ -518,25 +519,73 @@ async def salva_stima(request: Request):
 @app.get("/api/prefill")
 async def prefill(t: str):
     try:
-        conn = get_connection(); cur = conn.cursor()
+        conn = get_connection()
+        cur = conn.cursor()
+
         cur.execute("""
-            SELECT id,nome,cognome,email,telefono,comune,microzona,via,civico,tipologia,
-                   mq,piano,locali,bagni,pertinenze,ascensore
-            FROM stime
-            WHERE token=%s AND (token_expires IS NULL OR token_expires > NOW())
+            SELECT
+                s.id,
+                s.nome, s.cognome, s.email, s.telefono,
+                s.comune, s.microzona, s.via, s.civico,
+                s.tipologia, s.mq, s.piano, s.locali, s.bagni,
+                s.pertinenze, s.ascensore, s.anno, s.stato,
+
+                sd.posizionemare,
+                sd.distanzamare,
+                sd.barrieramare,
+                sd.vistamare,
+                sd.mqgiardino,
+                sd.mqgarage,
+                sd.mqcantina,
+                sd.mqpostoauto,
+                sd.mqtaverna,
+                sd.mqsoffitta,
+                sd.mqterrazzo,
+                sd.numbalconi,
+                sd.altrodescrizione
+
+            FROM stime s
+            LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
+            WHERE s.token = %s
+              AND (s.token_expires IS NULL OR s.token_expires > NOW())
             LIMIT 1
         """, (t,))
+
         row = cur.fetchone()
-        cur.close(); conn.close()
-    except:
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        print("PREFILL ERROR:", e)
         raise HTTPException(status_code=500, detail="Errore prefill")
 
     if not row:
         raise HTTPException(status_code=404, detail="Token non valido")
 
-    keys = ["id","nome","cognome","email","telefono","comune","microzona","via","civico","tipologia",
-            "mq","piano","locali","bagni","pertinenze","ascensore"]
+    keys = [
+        "id",
+        "nome","cognome","email","telefono",
+        "comune","microzona","via","civico",
+        "tipologia","mq","piano","locali","bagni",
+        "pertinenze","ascensore","anno","stato",
+
+        "posizioneMare",
+        "distanzaMare",
+        "barrieraMare",
+        "vistaMare",
+        "mqGiardino",
+        "mqGarage",
+        "mqCantina",
+        "mqPostoAuto",
+        "mqTaverna",
+        "mqSoffitta",
+        "mqTerrazzo",
+        "numBalconi",
+        "altroDescrizione"
+    ]
+
     return dict(zip(keys, row))
+
 
 # ---------------------------------------------------------
 # SALVA STIMA DETTAGLIATA
