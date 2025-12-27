@@ -465,9 +465,10 @@ async def salva_stima(request: Request):
         clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
 
     url_stima_completa = (
-        "https://www.stima360.it/stima_dettagliata.html?" +
-        urlencode(clean)
+      "https://www.stima360.it/stima_dettagliata.html?"
+      + urlencode({"token": token})
     )
+
 
    
     # --- 9. Email ---
