@@ -23,6 +23,7 @@ REPORTS_DIR = Path("/var/tmp/reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
+WHATSAPP_SERVICE_URL = "https://stima360-whatsapp-webhook-test.onrender.com/send"
 
 # WhatsApp Cloud API
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
@@ -67,29 +68,23 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     if s.startswith("39"):
         return s
     return "39" + s.lstrip("0")
-
-
+    
 def invia_whatsapp(numero: str | None, messaggio: str):
-    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_ID):
-        return
-
     dest = normalizza_numero_whatsapp(numero)
     if not dest:
         return
-
-    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": dest,
-        "type": "text",
-        "text": {"body": messaggio}
-    }
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-
     try:
-        requests.post(url, json=payload, headers=headers, timeout=10)
-    except:
-        pass
+        r = requests.post(
+            WHATSAPP_SERVICE_URL,
+            json={"to": dest, "text": messaggio},
+            timeout=10
+        )
+        if r.status_code >= 300:
+            print("WA ERROR:", r.status_code, r.text)
+    except Exception as e:
+        print("WA EXC:", e)
+
+
 
 
 def to_int(v): 
