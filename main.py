@@ -64,20 +64,27 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
         return s
     return "39" + s.lstrip("0")
     
-def invia_whatsapp(numero: str | None, messaggio: str):
+def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
     dest = normalizza_numero_whatsapp(numero)
     if not dest:
         return
     try:
         r = requests.post(
             WHATSAPP_SERVICE_URL,
-            json={"to": dest, "text": messaggio},
+            json={
+                "to": dest,
+                "p1": p1,
+                "p2": p2,
+                "p3": p3,
+                "p4": p4
+            },
             timeout=10
         )
         if r.status_code >= 300:
             print("WA ERROR:", r.status_code, r.text)
     except Exception as e:
         print("WA EXC:", e)
+
 
 
 
@@ -477,16 +484,20 @@ async def salva_stima(request: Request):
     except:
         pass
 
-
+    
     # --- 10. WhatsApp ---
     try:
-        msg = (
-            f"Ciao {data['nome']}! 🏡 La tua stima per {indirizzo} è pronta.\n\n"
-            f"PDF: {loader_url}\nStima dettagliata: {url_stima_completa}"
+        invia_whatsapp(
+            data["telefono"],
+            data["nome"],          # p1
+            indirizzo,             # p2
+            loader_url,            # p3
+            url_stima_completa     # p4
         )
-        invia_whatsapp(data["telefono"], msg)
-    except:
-        pass
+    except Exception as e:
+        print("WA EXC:", e)
+
+
 
     # --- 11. Risposta JSON al frontend ---
     return {
