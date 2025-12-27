@@ -23,7 +23,7 @@ REPORTS_DIR = Path("/var/tmp/reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
-WHATSAPP_SERVICE_URL = "https://stima360-whatsapp-webhook-test.onrender.com/send"
+WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
 
 # ---------------------------------------------------------
 # APP & CORS
