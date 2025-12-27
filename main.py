@@ -530,14 +530,9 @@ async def prefill(t: str):
               s.mq, s.piano, s.locali, s.bagni,
               s.pertinenze, s.ascensore,
             
-              sd.stato,
               sd.anno,
-            
-              sd.posizionemare,
-              sd.distanzamare,
               sd.barrieramare,
-              sd.vistamare,
-              sd.vistamaredettaglio,
+              sd.distanzamare,
             
               sd.mqgiardino,
               sd.mqgarage,
@@ -553,10 +548,10 @@ async def prefill(t: str):
             FROM stime s
             LEFT JOIN stime_dettagliate sd
               ON sd.stima_id = s.id
-            
             WHERE s.token = %s
             AND (s.token_expires IS NULL OR s.token_expires > NOW())
             LIMIT 1;
+
 
         """, (t,))
 
@@ -578,16 +573,15 @@ async def prefill(t: str):
       "mq","piano","locali","bagni",
       "pertinenze","ascensore",
     
-      "stato","anno",
-    
-      "posizioneMare","distanzaMare","barrieraMare",
-      "vistaMare","vistaMareDettaglio",
+      "anno",
+      "barrieraMare","distanzaMare",
     
       "mqGiardino","mqGarage","mqCantina","mqPostoAuto",
       "mqTaverna","mqSoffitta","mqTerrazzo","numBalconi",
     
       "altroDescrizione"
     ]
+
 
 
     return dict(zip(keys, row))
