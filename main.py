@@ -312,6 +312,58 @@ async def salva_stima(request: Request):
         except: pass
 
     # --- 5. TOKEN e prezzo base ---
+    conn = get_connection(); cur = conn.cursor()
+    cur.execute("""
+    UPDATE stime SET
+      anno=%s,
+      stato=%s,
+    
+      posizionemare=%s,
+      distanzamare=%s,
+      barrieramare=%s,
+    
+      vistamareyn=%s,
+      vistamaredettaglio=%s,
+      vistamare=%s,
+    
+      mqgiardino=%s,
+      mqgarage=%s,
+      mqcantina=%s,
+      mqpostoauto=%s,
+      mqtaverna=%s,
+      mqsoffitta=%s,
+      mqterrazzo=%s,
+      numbalconi=%s,
+    
+      altrodescrizione=%s
+    WHERE id=%s
+    """, (
+      data["anno"],
+      data["stato"],
+    
+      data["posizioneMare"],
+      data["distanzaMare"],
+      data["barrieraMare"],
+    
+      data["vistaMareYN"],
+      data["vistaMareDettaglio"],
+      data["vistaMare"],
+    
+      to_int(data["mqGiardino"]),
+      to_int(data["mqGarage"]),
+      to_int(data["mqCantina"]),
+      to_int(data["mqPostoAuto"]),
+      to_int(data["mqTaverna"]),
+      to_int(data["mqSoffitta"]),
+      to_int(data["mqTerrazzo"]),
+      to_int(data["numBalconi"]),
+    
+      data["altroDescrizione"],
+      new_id
+    ))
+    conn.commit()
+    cur.close(); conn.close()
+    
     token = str(uuid.uuid4())
     expires = datetime.now(timezone.utc) + timedelta(days=7)
 
@@ -530,29 +582,31 @@ async def prefill(t: str):
               s.mq, s.piano, s.locali, s.bagni,
               s.pertinenze, s.ascensore,
             
-              sd.anno,
-              sd.barrieramare,
-              sd.distanzamare,
+              s.anno,
+              s.stato,
             
-              sd.mqgiardino,
-              sd.mqgarage,
-              sd.mqcantina,
-              sd.mqpostoauto,
-              sd.mqtaverna,
-              sd.mqsoffitta,
-              sd.mqterrazzo,
-              sd.numbalconi,
+              s.posizionemare,
+              s.distanzamare,
+              s.barrieramare,
             
-              sd.altrodescrizione
+              s.vistamareyn,
+              s.vistamaredettaglio,
+              s.vistamare,
             
+              s.mqgiardino,
+              s.mqgarage,
+              s.mqcantina,
+              s.mqpostoauto,
+              s.mqtaverna,
+              s.mqsoffitta,
+              s.mqterrazzo,
+              s.numbalconi,
+            
+              s.altrodescrizione
             FROM stime s
-            LEFT JOIN stime_dettagliate sd
-              ON sd.stima_id = s.id
             WHERE s.token = %s
             AND (s.token_expires IS NULL OR s.token_expires > NOW())
             LIMIT 1;
-
-
         """, (t,))
 
         row = cur.fetchone()
@@ -567,20 +621,21 @@ async def prefill(t: str):
         raise HTTPException(status_code=404, detail="Token non valido")
 
     keys = [
-      "id",
-      "nome","cognome","email","telefono",
+      "id","nome","cognome","email","telefono",
       "comune","microzona","via","civico","tipologia",
       "mq","piano","locali","bagni",
       "pertinenze","ascensore",
     
-      "anno",
-      "barrieraMare","distanzaMare",
+      "anno","stato",
+      "posizioneMare","distanzaMare","barrieraMare",
+      "vistaMareYN","vistaMareDettaglio","vistaMare",
     
       "mqGiardino","mqGarage","mqCantina","mqPostoAuto",
       "mqTaverna","mqSoffitta","mqTerrazzo","numBalconi",
     
       "altroDescrizione"
     ]
+
 
 
 
@@ -777,7 +832,7 @@ def admin_lista_stime(
                s.nome, s.cognome, s.email, s.telefono, s.lead_status, s.note_internal,
             sd.data AS data_dettaglio
         FROM stime s
-        LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
+        ON sd.stima_id = s.id
         WHERE s.data >= %s AND s.data < %s
         ORDER BY s.data DESC
     """, (start, end))
