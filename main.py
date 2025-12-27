@@ -25,11 +25,6 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = "https://stima360-whatsapp-webhook-test.onrender.com/send"
 
-# WhatsApp Cloud API
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v18.0")
-
 # ---------------------------------------------------------
 # APP & CORS
 # ---------------------------------------------------------
