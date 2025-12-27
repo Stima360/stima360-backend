@@ -524,31 +524,40 @@ async def prefill(t: str):
 
         cur.execute("""
             SELECT
-                s.id,
-                s.nome, s.cognome, s.email, s.telefono,
-                s.comune, s.microzona, s.via, s.civico,
-                s.tipologia, s.mq, s.piano, s.locali, s.bagni,
-                s.pertinenze, s.ascensore, s.anno, s.stato,
-
-                sd.posizionemare,
-                sd.distanzamare,
-                sd.barrieramare,
-                sd.vistamare,
-                sd.mqgiardino,
-                sd.mqgarage,
-                sd.mqcantina,
-                sd.mqpostoauto,
-                sd.mqtaverna,
-                sd.mqsoffitta,
-                sd.mqterrazzo,
-                sd.numbalconi,
-                sd.altrodescrizione
-
+              s.id,
+              s.nome, s.cognome, s.email, s.telefono,
+              s.comune, s.microzona, s.via, s.civico, s.tipologia,
+              s.mq, s.piano, s.locali, s.bagni,
+              s.pertinenze, s.ascensore,
+            
+              sd.stato,
+              sd.anno,
+            
+              sd.posizionemare,
+              sd.distanzamare,
+              sd.barrieramare,
+              sd.vistamare,
+              sd.vistamaredettaglio,
+            
+              sd.mqgiardino,
+              sd.mqgarage,
+              sd.mqcantina,
+              sd.mqpostoauto,
+              sd.mqtaverna,
+              sd.mqsoffitta,
+              sd.mqterrazzo,
+              sd.numbalconi,
+            
+              sd.altrodescrizione
+            
             FROM stime s
-            LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
+            LEFT JOIN stime_dettagliate sd
+              ON sd.stima_id = s.id
+            
             WHERE s.token = %s
-              AND (s.token_expires IS NULL OR s.token_expires > NOW())
-            LIMIT 1
+            AND (s.token_expires IS NULL OR s.token_expires > NOW())
+            LIMIT 1;
+
         """, (t,))
 
         row = cur.fetchone()
@@ -563,26 +572,23 @@ async def prefill(t: str):
         raise HTTPException(status_code=404, detail="Token non valido")
 
     keys = [
-        "id",
-        "nome","cognome","email","telefono",
-        "comune","microzona","via","civico",
-        "tipologia","mq","piano","locali","bagni",
-        "pertinenze","ascensore","anno","stato",
-
-        "posizioneMare",
-        "distanzaMare",
-        "barrieraMare",
-        "vistaMare",
-        "mqGiardino",
-        "mqGarage",
-        "mqCantina",
-        "mqPostoAuto",
-        "mqTaverna",
-        "mqSoffitta",
-        "mqTerrazzo",
-        "numBalconi",
-        "altroDescrizione"
+      "id",
+      "nome","cognome","email","telefono",
+      "comune","microzona","via","civico","tipologia",
+      "mq","piano","locali","bagni",
+      "pertinenze","ascensore",
+    
+      "stato","anno",
+    
+      "posizioneMare","distanzaMare","barrieraMare",
+      "vistaMare","vistaMareDettaglio",
+    
+      "mqGiardino","mqGarage","mqCantina","mqPostoAuto",
+      "mqTaverna","mqSoffitta","mqTerrazzo","numBalconi",
+    
+      "altroDescrizione"
     ]
+
 
     return dict(zip(keys, row))
 
