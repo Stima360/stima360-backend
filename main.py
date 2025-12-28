@@ -826,8 +826,9 @@ def admin_lista_stime(
                s.mq, s.piano, s.locali, s.bagni, s.pertinenze, s.ascensore,
                s.nome, s.cognome, s.email, s.telefono, s.lead_status, s.note_internal,
             sd.data AS data_dettaglio
-        FROM stime s
-        ON sd.stima_id = s.id
+            FROM stime s
+            LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
+
         WHERE s.data >= %s AND s.data < %s
         ORDER BY s.data DESC
     """, (start, end))
