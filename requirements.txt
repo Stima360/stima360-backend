@@ -6,3 +6,4 @@ reportlab
 requests
 yagmail
 pytz
+python-multipart
