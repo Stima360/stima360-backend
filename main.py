@@ -30,8 +30,6 @@ WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whats
 # ---------------------------------------------------------
 app = FastAPI()
 
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -39,13 +37,10 @@ app.add_middleware(
         "https://www.stima360.it"
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-Requested-With"
-    ]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 
 # Static (PDF)
