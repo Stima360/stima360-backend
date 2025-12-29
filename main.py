@@ -289,6 +289,8 @@ async def salva_stima(request: Request):
     # --- 4. Salva stima base ---
     conn = get_connection(); cur = conn.cursor()
     try:
+        comune_db = normalizza_comune(data["comune"]) or data["comune"]
+    
         cur.execute("""
              INSERT INTO stime
              (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
@@ -302,8 +304,7 @@ async def salva_stima(request: Request):
             data["mq"], data["piano"], data["locali"], data["bagni"],
             data["pertinenze"], data["ascensore"],
             data["nome"], data["cognome"], data["email"], data["telefono"],
-            consenso_marketing,
-            consenso_marketing_at
+            consenso_marketing, consenso_marketing_at
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
@@ -312,6 +313,7 @@ async def salva_stima(request: Request):
     finally:
         try: cur.close(); conn.close()
         except: pass
+
 
     # --- 5. TOKEN e prezzo base ---
     conn = get_connection(); cur = conn.cursor()
