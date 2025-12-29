@@ -502,7 +502,7 @@ async def salva_stima(request: Request):
     # URL intermedio con pagina "La tua stima è in arrivo..."
     loader_url = (
         "https://www.stima360.it/pdf_redirect.html?"
-        + urlencode({"pdf": pdf_url_finale})
+        + urlencode({"pdf": pdf_url_finale, "token": token})
     )
 
 
