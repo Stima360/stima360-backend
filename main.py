@@ -529,18 +529,54 @@ async def salva_stima(request: Request):
     # --- 9. Email ---
     try:
         corpo = f"""
-        <h2>🏡 La tua stima Stima360 è pronta!</h2>
-        <p>Ciao <b>{data['nome']}</b>, ecco la valutazione del tuo immobile.</p>
-        <p>📄 <a href="{loader_url}">Apri il PDF</a></p>
-        <p>🧩 <a href="{link_token}">Richiedi stima dettagliata</a></p>
-        """
-
-        invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
-
-    except:
-        pass
-
+        <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6;">
+          <h2>🏡 La tua stima Stima360 è pronta</h2>
     
+          <p>Ciao <b>{data['nome']}</b>,</p>
+    
+          <p>
+            ricevi questa email perché hai richiesto una valutazione immobiliare tramite Stima360.
+          </p>
+    
+          <p>
+            📄 <b>PDF della stima</b><br>
+            <a href="{loader_url}">Apri il PDF</a>
+          </p>
+    
+          <p>
+            🔍 <b>Vuoi una valutazione professionale più approfondita?</b><br>
+            Con <b>Stima Pro</b> puoi richiedere un’analisi completa e personalizzata.
+            <br>
+            🧩 <a href="{link_token}"><b>Richiedi Stima Pro</b></a>
+          </p>
+    
+          <hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+    
+          <p style="font-size:12px; color:#666; margin:0;">
+            <b>Stima360 di Giorgio Censori</b><br>
+            Contatto: <a href="mailto:info@stima360.it">info@stima360.it</a>
+          </p>
+    
+          <p style="font-size:12px; color:#666; margin:10px 0 0 0;">
+            Informative:
+            <a href="https://stima360.it/privacy.html">Privacy</a> ·
+            <a href="https://stima360.it/termini.html">Termini e Condizioni</a> ·
+            <a href="https://stima360.it/eliminazionedati.html">Eliminazione dei dati</a>
+          </p>
+    
+          <p style="font-size:12px; color:#777; margin:10px 0 0 0;">
+            Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta.
+          </p>
+        </div>
+        """
+    
+        invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
+    
+    except Exception as e:
+        print("MAIL EXC:", e)
+    
+    
+        
 
     # --- 10. WhatsApp ---
     try:
