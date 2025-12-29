@@ -289,13 +289,12 @@ async def salva_stima(request: Request):
     # --- 4. Salva stima base ---
     conn = get_connection(); cur = conn.cursor()
     try:
-        comune_db = normalizza_comune(data["comune"])
         cur.execute("""
              INSERT INTO stime
              (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
               bagni, pertinenze, ascensore, nome, cognome, email, telefono,
               consenso_marketing, consenso_marketing_at)
-              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
               RETURNING id
         """, (
             comune_db, data["microzona"], data["fascia_mare"],
