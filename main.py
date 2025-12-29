@@ -224,7 +224,12 @@ async def salva_stima(request: Request):
             raw = dict(await request.form())
     except:
         raw = {}
-
+    # --------------------------
+    # CONSENSO MARKETING (GDPR)
+    # --------------------------
+    consenso_marketing = bool(raw.get("consenso_marketing", False))
+    consenso_marketing_at = datetime.now(timezone.utc) if consenso_marketing else None
+        
     # --- 2. Normalizza ---
     data = {
         "comune": raw.get("comune"),
@@ -287,8 +292,9 @@ async def salva_stima(request: Request):
         comune_db = normalizza_comune(data["comune"])
         cur.execute("""
              INSERT INTO stime
-              (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
-               bagni, pertinenze, ascensore, nome, cognome, email, telefono)
+             (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
+              bagni, pertinenze, ascensore, nome, cognome, email, telefono,
+              consenso_marketing, consenso_marketing_at)
               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
               RETURNING id
         """, (
@@ -296,7 +302,9 @@ async def salva_stima(request: Request):
             data["via"], data["civico"], data["tipologia"],
             data["mq"], data["piano"], data["locali"], data["bagni"],
             data["pertinenze"], data["ascensore"],
-            data["nome"], data["cognome"], data["email"], data["telefono"]
+            data["nome"], data["cognome"], data["email"], data["telefono"],
+            consenso_marketing,
+            consenso_marketing_at
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
@@ -824,7 +832,7 @@ def admin_lista_stime(
     cur.execute("""
         SELECT s.id, s.data, s.comune, s.microzona, s.via, s.civico, s.tipologia,
                s.mq, s.piano, s.locali, s.bagni, s.pertinenze, s.ascensore,
-               s.nome, s.cognome, s.email, s.telefono, s.lead_status, s.note_internal,
+               s.nome, s.cognome, s.email, s.telefono,s.consenso_marketing, s.lead_status, s.note_internal,
             sd.data AS data_dettaglio
             FROM stime s
             LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
