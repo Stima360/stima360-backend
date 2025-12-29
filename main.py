@@ -60,28 +60,28 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     return "39" + s.lstrip("0")
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
+    print("WA URL:", WHATSAPP_SERVICE_URL)
+    print("WA raw telefono:", repr(numero))
+
     dest = normalizza_numero_whatsapp(numero)
+    print("WA dest:", repr(dest))
+
     if not dest:
+        print("WA SKIP: numero non valido")
         return
+
     try:
         r = requests.post(
             WHATSAPP_SERVICE_URL,
-            json={
-                "to": dest,
-                "p1": p1,
-                "p2": p2,
-                "p3": p3,
-                "p4": p4
-            },
+            json={"to": dest, "p1": p1, "p2": p2, "p3": p3, "p4": p4},
             timeout=10
         )
+        print("WA HTTP:", r.status_code, r.text[:200])
+
         if r.status_code >= 300:
             print("WA ERROR:", r.status_code, r.text)
     except Exception as e:
         print("WA EXC:", e)
-
-
-
 
 
 def to_int(v): 
