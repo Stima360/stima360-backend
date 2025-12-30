@@ -186,7 +186,7 @@ def _qr_block(url: str, title_style, size_cm: float = 2.8, title_text: str = "Pa
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     return [tbl, Spacer(1, 10)]
-
+ 
 # ---------------------------------------------------------------------
 # COMPARABILI
 # ---------------------------------------------------------------------
@@ -552,6 +552,12 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
+    flow += [
+        Paragraph("Riepilogo immobile", H2),
+        Spacer(1, 6),
+        tbl,
+        Spacer(1, 16),
+    ]
 
     
 
