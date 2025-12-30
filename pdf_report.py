@@ -294,6 +294,17 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         fontSize=13,
         textColor=colors.HexColor("#1f2937")
     )
+    
+    H2_RIEPILOGO = ParagraphStyle(
+    'H2_RIEPILOGO',
+    parent=ss['Heading2'],
+    fontName='Helvetica-Bold',
+    fontSize=18,                 # 🔥 più grande
+    alignment=TA_CENTER,         # 🔥 centrale
+    textColor=colors.HexColor("#16a34a"),  # 🔥 verde elegante
+    spaceAfter=10
+    )
+
     P = ParagraphStyle(
         'P',
         parent=ss['BodyText'],
@@ -553,7 +564,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
     flow += [
-        Paragraph("Riepilogo immobile", H2),
+        Paragraph("Riepilogo immobile", H2_RIEPILOGO),
         Spacer(1, 6),
         tbl,
         Spacer(1, 16),
