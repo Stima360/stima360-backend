@@ -529,45 +529,79 @@ async def salva_stima(request: Request):
    
     # --- 9. Email ---
     try:
+        fondatore_img = "https://www.stima360.it/IMGVendere/Fondatore.png"
+    
         corpo = f"""
-        <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6;">
-          <h2>🏡 La tua stima Stima360 è pronta</h2>
+        <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
     
-          <p>Ciao <b>{data['nome']}</b>,</p>
+          <h2 style="margin:0 0 14px 0; color:#0b6bff;">
+            🏡 La tua Stima360 è pronta
+          </h2>
     
-          <p>
-            ricevi questa email perché hai richiesto una valutazione immobiliare tramite Stima360.
+          <p style="margin:0 0 12px 0;">
+            Ciao <b>{data['nome']}</b>,
           </p>
     
-          <p>
-            📄 <b>PDF della stima</b><br>
-            <a href="{loader_url}">Apri il PDF</a>
+          <p style="margin:0 0 14px 0;">
+            ricevi questa email perché hai richiesto una valutazione immobiliare tramite <b>Stima360</b>.
           </p>
     
-          <p>
-            🔍 <b>Vuoi una valutazione professionale più approfondita?</b><br>
-            Con <b>Stima Pro</b> puoi richiedere un’analisi completa e personalizzata.
+          <!-- IMMAGINE FONDATORE -->
+          <div style="margin:18px 0 18px 0; text-align:center;">
+            <img src="{fondatore_img}" alt="Fondatore Stima360"
+                 style="max-width:100%; width:560px; height:auto; border-radius:14px; display:block; margin:0 auto; box-shadow:0 8px 22px rgba(0,0,0,0.10);">
+            <div style="font-size:12px; color:#666; margin-top:8px;">
+              Il fondatore di Stima360
+            </div>
+          </div>
+    
+          <p style="margin:0 0 14px 0;">
+            📄 <b style="color:#1f9d55;">PDF della stima</b><br>
+            <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
+              Apri il PDF
+            </a>
+          </p>
+    
+          <p style="margin:0 0 6px 0;">
+            🔍 <b style="color:#ff7a00;">
+              Vuoi una valutazione professionale più approfondita?
+            </b>
+          </p>
+    
+          <p style="margin:0 0 16px 0;">
+            Con <b>Stima Pro</b> puoi richiedere un’analisi completa e personalizzata,
+            <b>completamente gratuita e senza alcun impegno</b>.
             <br>
-            🧩 <a href="{link_token}"><b>Richiedi Stima Pro</b></a>
+            🧩 <a href="{link_token}" style="color:#ff7a00; text-decoration:underline;">
+              <b>Richiedi Stima Pro</b>
+            </a>
           </p>
     
-          <hr style="border:none; border-top:1px solid #e6e6e6; margin:18px 0;">
+          <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
     
-          <p style="font-size:12px; color:#666; margin:0;">
+          <!-- FIRMA PROFESSIONALE -->
+          <p style="font-size:13px; color:#333; margin:0;">
             <b>Stima360 di Giorgio Censori</b><br>
-            Contatto: <a href="mailto:info@stima360.it">info@stima360.it</a>
+            Agente Immobiliare
           </p>
     
-          <p style="font-size:12px; color:#666; margin:10px 0 0 0;">
+          <p style="font-size:13px; color:#555; margin:8px 0 0 0;">
+            📞 <b>Cellulare:</b> <a href="tel:+393925172478" style="color:#0b6bff; text-decoration:none;">392 517 2478</a><br>
+            ✉️ <b>Email:</b> <a href="mailto:info@stima360.it" style="color:#0b6bff; text-decoration:none;">info@stima360.it</a><br>
+            📷 <b>Instagram:</b> <a href="https://www.instagram.com/stima360" target="_blank" style="color:#0b6bff; text-decoration:none;">@stima360</a>
+          </p>
+    
+          <p style="font-size:12px; color:#666; margin:14px 0 0 0;">
             Informative:
-            <a href="https://stima360.it/privacy.html">Privacy</a> ·
-            <a href="https://stima360.it/termini.html">Termini e Condizioni</a> ·
-            <a href="https://stima360.it/eliminazionedati.html">Eliminazione dei dati</a>
+            <a href="https://stima360.it/privacy.html" style="color:#0b6bff; text-decoration:underline;">Privacy</a> ·
+            <a href="https://stima360.it/termini.html" style="color:#0b6bff; text-decoration:underline;">Termini e Condizioni</a> ·
+            <a href="https://stima360.it/eliminazionedati.html" style="color:#0b6bff; text-decoration:underline;">Eliminazione dei dati</a>
           </p>
     
           <p style="font-size:12px; color:#777; margin:10px 0 0 0;">
             Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta.
           </p>
+    
         </div>
         """
     
@@ -575,9 +609,7 @@ async def salva_stima(request: Request):
     
     except Exception as e:
         print("MAIL EXC:", e)
-    
-    
-        
+
 
     # --- 10. WhatsApp ---
     try:
