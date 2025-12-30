@@ -538,13 +538,20 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ["Prezzo finale (€/mq)", f"{eur_mq_finale:.0f} €/mq" if eur_mq_finale else "—"],
     ]
 
-    tbl = Table(riepilogo, colWidths=[5*cm, None])
+    tbl = Table(
+        riepilogo,
+        colWidths=[5*cm, doc.width - 5*cm]  # larghezza totale controllata
+    )
+    
     tbl.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),   # 🔥 chiave
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
-    flow += [Paragraph("Riepilogo immobile", H2), Spacer(1, 4), tbl, Spacer(1, 12)]
 
     
 
