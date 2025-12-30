@@ -438,7 +438,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     print(f"[STIMA] base_mq={base_mq} eur_mq_finale={eur_mq_finale} tot={price_exact}")
 
     # LOGO
-    img_big = _logo_flowable(logo_path, target_h_cm=9)
+    img_big = _logo_flowable(logo_path, target_h_cm=8)
     logo_center = Table([[img_big]])
     logo_center.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
