@@ -359,7 +359,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         fontSize=13,
         alignment=TA_CENTER,
         textColor=colors.HexColor("#0077cc"),
-        spaceAfter=12
+        spaceAfter=6
     )
 
     doc = SimpleDocTemplate(
@@ -438,7 +438,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     print(f"[STIMA] base_mq={base_mq} eur_mq_finale={eur_mq_finale} tot={price_exact}")
 
     # LOGO
-    img_big = _logo_flowable(logo_path, target_h_cm=10)
+    img_big = _logo_flowable(logo_path, target_h_cm=8)
     logo_center = Table([[img_big]])
     logo_center.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
@@ -464,9 +464,9 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     
     flow += [
         Paragraph(f"Valore totale: <b>{val_num}</b> €", BIG),
-        Spacer(1, 14),                     # 🔥 stacco forte
+        Spacer(1, 6),# 🔥 stacco forte
         Paragraph(f"€/mq finale: {mq_num} €", BIG_SUB),
-        Spacer(1, 20),                     # 🔥 respiro sotto
+        Spacer(1, 10),             # 🔥 respiro sotto
     ]
 
 
@@ -503,14 +503,15 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
     
     flow += [
-        Spacer(1, 6),
+        Spacer(1, 2),
         cliente_table,
-        Spacer(1, 14),
+        Spacer(1, 8),
+
     ]
 
 
@@ -577,14 +578,14 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
     ]))
     flow += [
         Paragraph("Riepilogo immobile", H2_RIEPILOGO),
         Spacer(1, 6),
         tbl,
-        Spacer(1, 16),
+        Spacer(1, 10),
     ]
 
     
