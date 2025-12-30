@@ -445,7 +445,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
     ]))
-    flow += [logo_center, Spacer(1, 12)]
+    flow += [logo_center, Spacer(1, 2)]
 
     # HERO — VERSIONE CORRETTA (SINTASSI OK + EURO OK)
 
@@ -464,7 +464,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     
     flow += [
         Paragraph(f"Valore totale: <b>{val_num}</b> €", BIG),
-        Spacer(1, 6),# 🔥 stacco forte
+        Spacer(1, 2),# 🔥 stacco forte
         Paragraph(f"€/mq finale: {mq_num} €", BIG_SUB),
         Spacer(1, 10),             # 🔥 respiro sotto
     ]
