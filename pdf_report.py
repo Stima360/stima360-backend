@@ -365,7 +365,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     doc = SimpleDocTemplate(
         pdf_fs_path, pagesize=A4,
         rightMargin=2*cm, leftMargin=2*cm,
-        topMargin=1.8*cm, bottomMargin=1.8*cm
+        topMargin=0.1*cm, bottomMargin=1.8*cm
     )
     flow = []
     # ------------------------------------------------------------------
