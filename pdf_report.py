@@ -316,6 +316,33 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         alignment=TA_CENTER,
         textColor=colors.HexColor("#111827")
     )
+    CLIENTE_NAME = ParagraphStyle(
+    'CLIENTE_NAME',
+    parent=ss['BodyText'],
+    fontName='Helvetica-Bold',
+    fontSize=15.5,
+    alignment=TA_LEFT,
+    textColor=colors.HexColor("#111827"),
+    spaceAfter=4
+    )
+    
+    CLIENTE_ADDR = ParagraphStyle(
+        'CLIENTE_ADDR',
+        parent=ss['BodyText'],
+        fontSize=11.5,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor("#374151"),
+        spaceAfter=2
+    )
+    
+    CLIENTE_CONT = ParagraphStyle(
+        'CLIENTE_CONT',
+        parent=ss['BodyText'],
+        fontSize=11,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor("#0077cc"),
+        spaceAfter=6
+    )
 
 
     doc = SimpleDocTemplate(
@@ -440,12 +467,13 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     
     cliente_table = Table(
         [
-            [Paragraph(f"<b>{full_name}</b>", P)],
-            [Paragraph(indirizzo, P)],
-            [Paragraph(f"Tel: {telefono} • Email: {email}", P)],
+            [Paragraph(full_name, CLIENTE_NAME)],
+            [Paragraph(indirizzo, CLIENTE_ADDR)],
+            [Paragraph(f"Tel: {telefono} • Email: {email}", CLIENTE_CONT)],
         ],
         colWidths=[None]
     )
+
 
     cliente_table.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
