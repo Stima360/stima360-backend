@@ -311,22 +311,29 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         fontSize=10.5,
         textColor=colors.HexColor("#374151")
     )
+    
     BIG = ParagraphStyle(
         'BIG',
         parent=ss['BodyText'],
         fontName='Helvetica-Bold',
-        fontSize=22,
+        fontSize=32,          # 🔥 molto più grande
+        leading=36,           # 🔥 aria verticale
         alignment=TA_CENTER,
-        textColor=colors.HexColor("#0077cc")
+        textColor=colors.HexColor("#0077cc"),
+        spaceAfter=6
     )
+
     BIG_SUB = ParagraphStyle(
         'BIG_SUB',
         parent=ss['BodyText'],
         fontName='Helvetica-Bold',
-        fontSize=14,
+        fontSize=20,          # 🔥 più leggibile
+        leading=24,
         alignment=TA_CENTER,
-        textColor=colors.HexColor("#111827")
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=4
     )
+
     CLIENTE_NAME = ParagraphStyle(
         'CLIENTE_NAME',
         parent=ss['BodyText'],
@@ -340,7 +347,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     CLIENTE_ADDR = ParagraphStyle(
         'CLIENTE_ADDR',
         parent=ss['BodyText'],
-        fontSize=13,
+        fontSize=16,
         alignment=TA_CENTER,
         textColor=colors.HexColor("#374151"),
         spaceAfter=3
@@ -443,20 +450,23 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     # HERO — VERSIONE CORRETTA (SINTASSI OK + EURO OK)
 
     try:
-        val_num = f"{float(price_exact):,.0f}".replace(",", ".")
+        val_num = f"{float(price_exact):,.2f}"
+        val_num = val_num.replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         val_num = "—"
     
     try:
-        mq_num = f"{float(eur_mq_finale):,.2f}".replace(",", ".")
+        mq_num = f"{float(eur_mq_finale):,.2f}"
+        mq_num = mq_num.replace(",", "X").replace(".", ",").replace("X", ".")
+
     except:
         mq_num = "—"
     
     flow += [
         Paragraph(f"Valore totale: <b>{val_num}</b> €", BIG),
-        Spacer(1, 4),
+        Spacer(1, 14),                     # 🔥 stacco forte
         Paragraph(f"€/mq finale: {mq_num} €", BIG_SUB),
-        Spacer(1, 12),
+        Spacer(1, 20),                     # 🔥 respiro sotto
     ]
 
 
@@ -467,6 +477,8 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     full_name = f"{nome} {cognome}".strip()
     
     via = dati.get("via") or dati.get("indirizzo") or "—"
+    if via != "—" and not via.lower().startswith(("via ", "viale ", "corso ", "piazza ", "largo ")):
+        via = f"Via {via}"
     civico = dati.get("civico") or ""
     comune = dati.get("comune") or "—"
     indirizzo_base = f"{via} {civico}".strip()
@@ -480,7 +492,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     cliente_table = Table(
         [
             [Paragraph(full_name, CLIENTE_NAME)],
-            [Paragraph(indirizzo, CLIENTE_ADDR)],
+            [Paragraph(f"<b>{indirizzo}</b>", CLIENTE_ADDR)],
             [Paragraph(f"Tel: {telefono} • Email: {email}", CLIENTE_CONT)],
         ],
         colWidths=[doc.width]  # ← QUESTA È LA CHIAVE
@@ -508,6 +520,11 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     full_name = f"{nome} {cognome}".strip()
     
     via = dati.get("via") or dati.get("indirizzo") or "—"
+
+    # forza "Via" davanti se manca
+    if via != "—" and not via.lower().startswith(("via ", "viale ", "corso ", "piazza ", "largo ")):
+        via = f"Via {via}"
+
     civico = dati.get("civico") or ""
     comune = dati.get("comune") or "—"
     indirizzo_completo = f"{via} {civico}, {comune}".strip()
