@@ -429,21 +429,21 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     ]))
     flow += [logo_center, Spacer(1, 12)]
 
-    # HERO
-    try:
-        _val_tot = f"€ {float(price_exact):,.0f}".replace(",", ".")
-    except:
-        _val_tot = "—"
-    try:
-        _val_mq = f"€ {float(eur_mq_finale):,.2f}".replace(",", ".")
-    except:
-        _val_mq = "—"
+    # HERO — VERSIONE CORRETTA (SINTASSI OK + EURO OK)
 
-    flow += [
+    try:
         val_num = f"{float(price_exact):,.0f}".replace(",", ".")
+    except:
+        val_num = "—"
+    
+    try:
+        mq_num = f"{float(eur_mq_finale):,.2f}".replace(",", ".")
+    except:
+        mq_num = "—"
+    
+    flow += [
         Paragraph(f"Valore totale: <b>{val_num}</b> €", BIG),
         Spacer(1, 4),
-        mq_num = f"{float(eur_mq_finale):,.2f}".replace(",", ".")
         Paragraph(f"€/mq finale: {mq_num} €", BIG_SUB),
         Spacer(1, 12),
     ]
