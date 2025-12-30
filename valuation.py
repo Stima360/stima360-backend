@@ -521,7 +521,7 @@ def prezzo_mq_finale(
     # --- REGOLE EXTRA ---
     if (str(posizioneMare).strip().lower() == "frontemare" and
         str(stato).strip().lower() == "nuovo"):
-        coeff_tot *= 1.20
+        coeff_tot *= 1.10
 
     if str(tipologia).strip().lower() == "rustico":
         coeff_tot *= 0.60 / c_tip
