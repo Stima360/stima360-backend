@@ -317,33 +317,32 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         textColor=colors.HexColor("#111827")
     )
     CLIENTE_NAME = ParagraphStyle(
-    'CLIENTE_NAME',
-    parent=ss['BodyText'],
-    fontName='Helvetica-Bold',
-    fontSize=15.5,
-    alignment=TA_LEFT,
-    textColor=colors.HexColor("#111827"),
-    spaceAfter=4
+        'CLIENTE_NAME',
+        parent=ss['BodyText'],
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=6
     )
     
     CLIENTE_ADDR = ParagraphStyle(
         'CLIENTE_ADDR',
         parent=ss['BodyText'],
-        fontSize=11.5,
-        alignment=TA_LEFT,
+        fontSize=13,
+        alignment=TA_CENTER,
         textColor=colors.HexColor("#374151"),
-        spaceAfter=2
+        spaceAfter=3
     )
     
     CLIENTE_CONT = ParagraphStyle(
         'CLIENTE_CONT',
         parent=ss['BodyText'],
-        fontSize=11,
-        alignment=TA_LEFT,
+        fontSize=13,
+        alignment=TA_CENTER,
         textColor=colors.HexColor("#0077cc"),
-        spaceAfter=6
+        spaceAfter=12
     )
-
 
     doc = SimpleDocTemplate(
         pdf_fs_path, pagesize=A4,
@@ -441,9 +440,11 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         _val_mq = "—"
 
     flow += [
-        Paragraph(f"Valore totale: <b>{_val_tot}</b>", BIG),
+        val_num = f"{float(price_exact):,.0f}".replace(",", ".")
+        Paragraph(f"Valore totale: <b>{val_num}</b> €", BIG),
         Spacer(1, 4),
-        Paragraph(f"€/mq finale: {_val_mq}", BIG_SUB),
+        mq_num = f"{float(eur_mq_finale):,.2f}".replace(",", ".")
+        Paragraph(f"€/mq finale: {mq_num} €", BIG_SUB),
         Spacer(1, 12),
     ]
 
@@ -471,18 +472,23 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
             [Paragraph(indirizzo, CLIENTE_ADDR)],
             [Paragraph(f"Tel: {telefono} • Email: {email}", CLIENTE_CONT)],
         ],
-        colWidths=[None]
+        colWidths=[doc.width]  # ← QUESTA È LA CHIAVE
     )
-
-
+    
     cliente_table.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     
-    flow += [cliente_table, Spacer(1, 10)]
+    flow += [
+        Spacer(1, 6),
+        cliente_table,
+        Spacer(1, 14),
+    ]
 
 
     # RIEPILOGO
