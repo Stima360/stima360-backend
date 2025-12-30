@@ -578,8 +578,8 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")),
-        ("LEFTPADDING", (0,0), (-1,-1), 4),
-        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("LEFTPADDING", (0,0), (-1,-1), 2),
+        ("RIGHTPADDING", (0,0), (-1,-1), 2),
     ]))
     flow += [
         Paragraph("Riepilogo immobile", H2_RIEPILOGO),
