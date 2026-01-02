@@ -111,17 +111,28 @@ def normalizza_comune(v: str | None) -> str | None:
         return None
     v = " ".join(w.capitalize() for w in v.replace("_", " ").split())
     return v if v in {"Alba Adriatica", "Martinsicuro", "Tortoreto"} else None
+# ---------------------------------------------------------
+# ADMIN GATE — ACCESSO RISERVATO (HTML)
+# ---------------------------------------------------------    
+@app.post("/api/admin/check")
+def admin_check(data: dict):
+    admin_user = os.getenv("ADMIN_USER")
+    admin_pass = os.getenv("ADMIN_PASS")
 
-# ---------------------------------------------------------
-# LOGIN ADMIN
-# ---------------------------------------------------------
-security = HTTPBasic()
-def verifica_login(credentials: HTTPBasicCredentials):
-    u = os.getenv("ADMIN_USER", "admin")
-    p = os.getenv("ADMIN_PASS", "password")
-    if not (secrets.compare_digest(credentials.username, u) and secrets.compare_digest(credentials.password, p)):
-        raise HTTPException(status_code=401, detail="Credenziali non valide")
-    return True
+    if not admin_user or not admin_pass:
+        raise HTTPException(
+            status_code=500,
+            detail="ADMIN credentials not set on server"
+        )
+
+    if (
+        data.get("user") == admin_user and
+        data.get("password") == admin_pass
+    ):
+        return {"ok": True}
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)
