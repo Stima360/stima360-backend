@@ -1052,46 +1052,6 @@ def admin_update_stima(stima_id: int, payload: LeadUpdate):
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
-@app.post("/")
-async def whatsapp_root(request: Request):
-    body = await request.json()
-    print("📥 ROOT WEBHOOK:", body)
-
-    try:
-        value = body["entry"][0]["changes"][0]["value"]
-        messages = value.get("messages", [])
-        contacts = value.get("contacts", [])
-
-        if not messages or not contacts:
-            return {"ok": True}
-
-        msg = messages[0]
-        contact = contacts[0]
-
-        from_number = contact.get("wa_id")
-        text = msg.get("text", {}).get("body")
-
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO whatsapp_incoming
-            (from_number, message_type, text, received_at)
-            VALUES (%s,%s,%s,NOW())
-        """, (from_number, msg.get("type"), text))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print("✅ SALVATO DA ROOT:", from_number, text)
-
-    except Exception as e:
-        print("❌ ROOT ERROR:", e)
-
-    return {"ok": True}
-
-
 
 
 if __name__ == "__main__":
