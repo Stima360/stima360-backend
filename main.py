@@ -24,6 +24,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "verify_stima360")
 
 # ---------------------------------------------------------
 # APP & CORS
@@ -133,7 +134,101 @@ def admin_check(data: dict):
 
     raise HTTPException(status_code=401, detail="Unauthorized")
 
+# ---------------------------------------------------------
+# WHATSAPP WEBHOOK - VERIFY (META)
+# ---------------------------------------------------------
+@app.get("/webhook/whatsapp")
+async def whatsapp_verify(
+    hub_mode: str | None = None,
+    hub_verify_token: str | None = None,
+    hub_challenge: str | None = None,
+):
+    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
+        return int(hub_challenge)
+    raise HTTPException(status_code=403, detail="Webhook verify failed")
 
+
+# ---------------------------------------------------------
+# WHATSAPP WEBHOOK - INCOMING MESSAGES
+# ---------------------------------------------------------
+@app.post("/webhook/whatsapp")
+async def whatsapp_incoming(request: Request):
+    body = await request.json()
+
+    if body.get("object") != "whatsapp_business_account":
+        return {"ok": True}
+
+    try:
+        value = body["entry"][0]["changes"][0]["value"]
+        messages = value.get("messages", [])
+        contacts = value.get("contacts", [])
+
+        if not messages or not contacts:
+            return {"ok": True}
+
+        msg = messages[0]
+        contact = contacts[0]
+
+        from_number = contact.get("wa_id")
+        msg_type = msg.get("type")
+        text = msg.get("text", {}).get("body")
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO whatsapp_incoming
+            (from_number, message_type, text, received_at)
+            VALUES (%s,%s,%s,NOW())
+        """, (
+            from_number,
+            msg_type,
+            text
+        ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print("📩 WHATSAPP:", from_number, text)
+
+    except Exception as e:
+        print("WHATSAPP ERROR:", e)
+
+    return {"ok": True}
+
+
+# ---------------------------------------------------------
+# ADMIN - LEGGI MESSAGGI WHATSAPP (INBOX)
+# ---------------------------------------------------------
+@app.get("/api/admin/whatsapp/messages")
+def admin_whatsapp_messages():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            from_number,
+            message_type,
+            text,
+            received_at
+        FROM whatsapp_incoming
+        ORDER BY received_at DESC
+        LIMIT 200
+    """)
+
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description]
+
+    cur.close()
+    conn.close()
+
+    return [dict(zip(cols, r)) for r in rows]
+
+# =========================================================
+# FINE BLOCCO WHATSAPP
+# =========================================================
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)
 # ---------------------------------------------------------
