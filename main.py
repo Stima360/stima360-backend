@@ -1,11 +1,11 @@
 # backend/main.py — versione ripulita Stima360
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-
+from fastapi.responses import PlainTextResponse
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
@@ -137,16 +137,15 @@ def admin_check(data: dict):
 # ---------------------------------------------------------
 # WHATSAPP WEBHOOK - VERIFY (META)
 # ---------------------------------------------------------
-@app.get("/webhook/whatsapp")
+@app.get("/webhook/whatsapp", response_class=PlainTextResponse)
 async def whatsapp_verify(
-    hub_mode: str | None = None,
-    hub_verify_token: str | None = None,
-    hub_challenge: str | None = None,
+    hub_mode: str | None = Query(None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(None, alias="hub.challenge"),
 ):
     if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
-        return int(hub_challenge)
+        return hub_challenge  # STRINGA, non int
     raise HTTPException(status_code=403, detail="Webhook verify failed")
-
 
 # ---------------------------------------------------------
 # WHATSAPP WEBHOOK - INCOMING MESSAGES
