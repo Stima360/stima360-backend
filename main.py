@@ -91,8 +91,8 @@ def invia_whatsapp_template_primo_messaggio(
         "to": dest,
         "type": "template",
         "template": {
-            "name": "stima360_primo_messaggio",
-            "language": {"code": "it_IT"},
+            "name": "stima_pronta",
+            "language": {"code": "it"},   # ✅ QUESTO È IL FIX CHIAVE
             "components": [
                 {
                     "type": "body",
@@ -106,14 +106,12 @@ def invia_whatsapp_template_primo_messaggio(
         }
     }
 
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=10)
-        print("WA TEMPLATE HTTP:", r.status_code)
-        print("WA TEMPLATE RESP:", r.text)
-        return r.status_code < 300
-    except Exception as e:
-        print("WA TEMPLATE EXC:", e)
-        return False
+    r = requests.post(url, headers=headers, json=payload, timeout=10)
+    print("WA TEMPLATE HTTP:", r.status_code)
+    print("WA TEMPLATE RESP:", r.text)
+
+    return r.status_code < 300
+
 
 
 def invia_whatsapp_service(numero: str | None, p1, p2, p3, p4):
