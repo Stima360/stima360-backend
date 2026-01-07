@@ -208,10 +208,11 @@ def admin_whatsapp_messages():
             from_number,
             message_type,
             text,
-            received_at
+            received_at,
+            direction
         FROM whatsapp_incoming
-        ORDER BY received_at DESC
-        LIMIT 200
+        ORDER BY received_at ASC
+        LIMIT 500
     """)
 
     rows = cur.fetchall()
@@ -221,6 +222,7 @@ def admin_whatsapp_messages():
     conn.close()
 
     return [dict(zip(cols, r)) for r in rows]
+
 # ---------------------------------------------------------
 # ADMIN - RISPONDI A WHATSAPP (MANUALE)
 # ---------------------------------------------------------
@@ -232,29 +234,27 @@ def reply_whatsapp(data: dict):
     if not to or not text:
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
-    url = f"https://graph.facebook.com/v18.0/{os.getenv('WHATSAPP_PHONE_ID')}/messages"
+    r = requests.post(
+        WHATSAPP_SERVICE_URL,
+        json={"to": to, "text": text},
+        timeout=10
+    )
 
-    headers = {
-        "Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}",
-        "Content-Type": "application/json"
-    }
+    # ⬇️ AGGIUNGI QUESTO BLOCCO
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO whatsapp_incoming
+        (from_number, message_type, text, received_at, direction)
+        VALUES (%s, %s, %s, NOW(), 'out')
+    """, (to, "text", text))
+    conn.commit()
+    cur.close()
+    conn.close()
+    # ⬆️ FINE
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,              # es: 393xxxxxxxxx
-        "type": "text",
-        "text": {
-            "body": text       # ✅ TESTO LIBERO
-        }
-    }
+    return {"ok": True, "status": r.status_code}
 
-    r = requests.post(url, headers=headers, json=payload, timeout=10)
-
-    if r.status_code >= 300:
-        print("WA ERROR:", r.status_code, r.text)
-        raise HTTPException(status_code=500, detail=r.text)
-
-    return {"ok": True}
 
 
 # =========================================================
