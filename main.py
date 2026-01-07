@@ -1,11 +1,11 @@
 # backend/main.py — versione ripulita Stima360
 
-from fastapi import FastAPI, Request, HTTPException, Depends, Query
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from fastapi.responses import PlainTextResponse
+
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
@@ -24,8 +24,6 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
-
-WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "verify_stima360")
 
 # ---------------------------------------------------------
 # APP & CORS
@@ -60,84 +58,9 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     if s.startswith("39"):
         return s
     return "39" + s.lstrip("0")
-
-def invia_whatsapp_template_primo_messaggio(
-    numero: str | None,
-    nome: str,
-    indirizzo: str,
-    link_pdf: str
-) -> bool:
-    dest = normalizza_numero_whatsapp(numero)
-    if not dest:
-        print("WA TEMPLATE SKIP: numero non valido")
-        return False
-
-    phone_id = os.getenv("WHATSAPP_PHONE_ID")
-    token = os.getenv("WHATSAPP_TOKEN")
-
-    if not phone_id or not token:
-        print("WA TEMPLATE SKIP: credenziali mancanti")
-        return False
-
-    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": dest,
-        "type": "template",
-        "template": {
-            "name": "stima_pronta",
-            "language": {"code": "it"},   # ✅ QUESTO È IL FIX CHIAVE
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": nome},
-                        {"type": "text", "text": indirizzo},
-                        {"type": "text", "text": link_pdf}
-                    ]
-                }
-            ]
-        }
-    }
-
-    r = requests.post(url, headers=headers, json=payload, timeout=10)
-    print("WA TEMPLATE HTTP:", r.status_code)
-    print("WA TEMPLATE RESP:", r.text)
-
-    return r.status_code < 300
-
-
-
-def invia_whatsapp_service(numero: str | None, p1, p2, p3, p4):
-    dest = normalizza_numero_whatsapp(numero)
-    if not dest:
-        return False
-
-    try:
-        r = requests.post(
-            WHATSAPP_SERVICE_URL,
-            json={
-                "to": dest,
-                "p1": p1,
-                "p2": p2,
-                "p3": p3,
-                "p4": p4
-            },
-            timeout=10
-        )
-        print("WA SERVICE:", r.status_code, r.text)
-        return r.status_code < 300
-    except Exception as e:
-        print("WA SERVICE EXC:", e)
-        return False
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
+    print("WA URL:", WHATSAPP_SERVICE_URL)
     print("WA raw telefono:", repr(numero))
 
     dest = normalizza_numero_whatsapp(numero)
@@ -147,40 +70,19 @@ def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
         print("WA SKIP: numero non valido")
         return
 
-    phone_id = os.getenv("WHATSAPP_PHONE_ID")
-    token = os.getenv("WHATSAPP_TOKEN")
-
-    if not phone_id or not token:
-        print("WA SKIP: credenziali mancanti")
-        return
-
-    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": dest,
-        "type": "text",
-        "text": {
-            "body": f"{p1}\n{p2}\n{p3}\n{p4}"
-        }
-    }
-
     try:
-        r = requests.post(url, headers=headers, json=payload, timeout=10)
+        r = requests.post(
+            WHATSAPP_SERVICE_URL,
+            json={"to": dest, "p1": p1, "p2": p2, "p3": p3, "p4": p4},
+            timeout=10
+        )
+        print("WA HTTP:", r.status_code, r.text[:200])
 
         if r.status_code >= 300:
             print("WA ERROR:", r.status_code, r.text)
-            raise HTTPException(status_code=500, detail=r.text)
-
-        print("WA OK:", r.status_code)
-
     except Exception as e:
         print("WA EXC:", e)
+
 
 def to_int(v): 
     try: return int(v)
@@ -231,154 +133,7 @@ def admin_check(data: dict):
 
     raise HTTPException(status_code=401, detail="Unauthorized")
 
-# ---------------------------------------------------------
-# WHATSAPP WEBHOOK - VERIFY (META)
-# ---------------------------------------------------------
-@app.get("/webhook/whatsapp", response_class=PlainTextResponse)
-async def whatsapp_verify(
-    hub_mode: str | None = Query(None, alias="hub.mode"),
-    hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
-    hub_challenge: str | None = Query(None, alias="hub.challenge"),
-):
-    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
-        return hub_challenge  # STRINGA, non int
-    raise HTTPException(status_code=403, detail="Webhook verify failed")
 
-# ---------------------------------------------------------
-# WHATSAPP WEBHOOK - INCOMING MESSAGES
-# ---------------------------------------------------------
-@app.post("/webhook/whatsapp")
-async def whatsapp_incoming(request: Request):
-    body = await request.json()
-
-    if body.get("object") != "whatsapp_business_account":
-        return {"ok": True}
-
-    try:
-        value = body["entry"][0]["changes"][0]["value"]
-        messages = value.get("messages", [])
-        contacts = value.get("contacts", [])
-
-        if not messages or not contacts:
-            return {"ok": True}
-
-        msg = messages[0]
-        contact = contacts[0]
-
-        from_number = contact.get("wa_id")
-        msg_type = msg.get("type")
-        text = msg.get("text", {}).get("body")
-
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO whatsapp_incoming
-            (from_number, message_type, text, received_at)
-            VALUES (%s,%s,%s,NOW())
-        """, (from_number, msg_type, text))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print("📩 WHATSAPP:", from_number, text)
-
-    except Exception as e:
-        print("WHATSAPP ERROR:", e)
-
-    return {"ok": True}
-
-
-
-# ---------------------------------------------------------
-# ADMIN - LEGGI MESSAGGI WHATSAPP (INBOX)
-# ---------------------------------------------------------
-@app.get("/api/admin/whatsapp/messages")
-def admin_whatsapp_messages():
-    print("DEBUG: NEW WHATSAPP QUERY ACTIVE")
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT
-            w.id,
-            w.from_number,
-            w.message_type,
-            w.text,
-            w.received_at,
-            w.direction,
-
-            s.nome,
-            s.cognome,
-            s.id AS stima_id
-
-        FROM whatsapp_incoming w
-
-        LEFT JOIN LATERAL (
-            SELECT id, nome, cognome
-            FROM stime
-            WHERE
-                regexp_replace(telefono, '\\D', '', 'g') IN (
-                    regexp_replace(w.from_number, '\\D', '', 'g'),
-                    substring(regexp_replace(w.from_number, '\\D', '', 'g') FROM 3),
-                    '39' || regexp_replace(telefono, '\\D', '', 'g')
-                )
-            ORDER BY data DESC
-            LIMIT 1
-        ) s ON true
-
-        ORDER BY w.received_at ASC
-        LIMIT 500
-    """)
-
-    print("DEBUG: QUERY EXECUTED WITH JOIN")
-
-    rows = cur.fetchall()
-    cols = [c[0] for c in cur.description]
-
-    cur.close()
-    conn.close()
-
-    return [dict(zip(cols, r)) for r in rows]
-
-
-
-# ---------------------------------------------------------
-# ADMIN - RISPONDI A WHATSAPP (MANUALE)
-# ---------------------------------------------------------
-@app.post("/api/admin/whatsapp/reply")
-def reply_whatsapp(data: dict):
-    to = data.get("to")
-    text = data.get("text")
-
-    if not to or not text:
-        raise HTTPException(status_code=400, detail="Dati mancanti")
-
-    # INVIO REALE VIA META GRAPH API
-    invia_whatsapp(to, "", "", text, "")
-
-    # SALVA IN DB COME MESSAGGIO USCENTE
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO whatsapp_incoming
-        (from_number, message_type, text, received_at, direction)
-        VALUES (%s, %s, %s, NOW(), 'out')
-    """, (to, "text", text))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"ok": True}
-
-
-
-
-# =========================================================
-# FINE BLOCCO WHATSAPP
-# =========================================================
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)
 # ---------------------------------------------------------
@@ -860,34 +615,24 @@ async def salva_stima(request: Request):
     
         </div>
         """
-        # Email al cliente
+    
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
-        
-        # 📩 COPIA IDENTICA A GIORGIO
-        invia_mail("giorgiocensori@stima360.it", f"Stima360 – {indirizzo}", corpo)
-
     
     except Exception as e:
         print("MAIL EXC:", e)
 
 
-    # --- 10. WhatsApp (PRIMO MESSAGGIO TEMPLATE) ---
-    ok = invia_whatsapp_template_primo_messaggio(
-        data["telefono"],
-        data["nome"],
-        indirizzo,
-        loader_url
-    )
-    
-    if not ok:
+    # --- 10. WhatsApp ---
+    try:
         invia_whatsapp(
             data["telefono"],
-            data["nome"],
-            indirizzo,
-            loader_url,
-            link_token
+            data["nome"],          # p1
+            indirizzo,             # p2
+            loader_url,            # p3
+            link_token     # p4
         )
-
+    except Exception as e:
+        print("WA EXC:", e)
 
 
 
@@ -1215,6 +960,8 @@ def admin_update_stima(stima_id: int, payload: LeadUpdate):
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
+
+
 
 
 if __name__ == "__main__":
