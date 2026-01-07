@@ -232,16 +232,30 @@ def reply_whatsapp(data: dict):
     if not to or not text:
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
-    r = requests.post(
-        WHATSAPP_SERVICE_URL,
-        json={
-            "to": to,
-            "text": text
-        },
-        timeout=10
-    )
+    url = f"https://graph.facebook.com/v18.0/{os.getenv('WHATSAPP_PHONE_ID')}/messages"
 
-    return {"ok": True, "status": r.status_code}
+    headers = {
+        "Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,              # es: 393xxxxxxxxx
+        "type": "text",
+        "text": {
+            "body": text       # ✅ TESTO LIBERO
+        }
+    }
+
+    r = requests.post(url, headers=headers, json=payload, timeout=10)
+
+    if r.status_code >= 300:
+        print("WA ERROR:", r.status_code, r.text)
+        raise HTTPException(status_code=500, detail=r.text)
+
+    return {"ok": True}
+
 
 # =========================================================
 # FINE BLOCCO WHATSAPP
