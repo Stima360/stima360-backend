@@ -24,6 +24,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "verify_stima360")
 
 # ---------------------------------------------------------
@@ -65,15 +66,18 @@ def invia_whatsapp_template_primo_messaggio(
     nome: str,
     indirizzo: str,
     link_pdf: str
-):
+) -> bool:
     dest = normalizza_numero_whatsapp(numero)
     if not dest:
-        return
+        print("WA TEMPLATE SKIP: numero non valido")
+        return False
 
     phone_id = os.getenv("WHATSAPP_PHONE_ID")
     token = os.getenv("WHATSAPP_TOKEN")
+
     if not phone_id or not token:
-        return
+        print("WA TEMPLATE SKIP: credenziali mancanti")
+        return False
 
     url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
 
@@ -87,8 +91,8 @@ def invia_whatsapp_template_primo_messaggio(
         "to": dest,
         "type": "template",
         "template": {
-            "name": "stima360_primo_messaggio",  # 👈 TEMPLATE GIÀ SU META
-            "language": {"code": "it"},
+            "name": "stima360_primo_messaggio",   # NOME IDENTICO A META
+            "language": {"code": "it_IT"},        # ⚠️ IMPORTANTE
             "components": [
                 {
                     "type": "body",
@@ -102,7 +106,42 @@ def invia_whatsapp_template_primo_messaggio(
         }
     }
 
-    requests.post(url, headers=headers, json=payload, timeout=10)
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=10)
+        print("WA TEMPLATE HTTP:", r.status_code)
+        print("WA TEMPLATE RESP:", r.text)
+
+        if r.status_code >= 300:
+            return False
+
+        return True
+
+    except Exception as e:
+        print("WA TEMPLATE EXC:", e)
+        return False
+
+def invia_whatsapp_service(numero: str | None, p1, p2, p3, p4):
+    dest = normalizza_numero_whatsapp(numero)
+    if not dest:
+        return False
+
+    try:
+        r = requests.post(
+            WHATSAPP_SERVICE_URL,
+            json={
+                "to": dest,
+                "p1": p1,
+                "p2": p2,
+                "p3": p3,
+                "p4": p4
+            },
+            timeout=10
+        )
+        print("WA SERVICE:", r.status_code, r.text)
+        return r.status_code < 300
+    except Exception as e:
+        print("WA SERVICE EXC:", e)
+        return False
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
     print("WA raw telefono:", repr(numero))
@@ -839,13 +878,22 @@ async def salva_stima(request: Request):
 
 
     # --- 10. WhatsApp (PRIMO MESSAGGIO TEMPLATE) ---
-    invia_whatsapp_template_primo_messaggio(
+    ok = invia_whatsapp_template_primo_messaggio(
         data["telefono"],
         data["nome"],
         indirizzo,
         loader_url
     )
-
+    
+    if not ok:
+        print("WA TEMPLATE FALLITO → fallback service")
+        invia_whatsapp_service(
+            data["telefono"],
+            data["nome"],
+            indirizzo,
+            loader_url,
+            ""
+        )
 
 
 
