@@ -221,6 +221,27 @@ def admin_whatsapp_messages():
     conn.close()
 
     return [dict(zip(cols, r)) for r in rows]
+# ---------------------------------------------------------
+# ADMIN - RISPONDI A WHATSAPP (MANUALE)
+# ---------------------------------------------------------
+@app.post("/api/admin/whatsapp/reply")
+def reply_whatsapp(data: dict):
+    to = data.get("to")
+    text = data.get("text")
+
+    if not to or not text:
+        raise HTTPException(status_code=400, detail="Dati mancanti")
+
+    r = requests.post(
+        WHATSAPP_SERVICE_URL,
+        json={
+            "to": to,
+            "text": text
+        },
+        timeout=10
+    )
+
+    return {"ok": True, "status": r.status_code}
 
 # =========================================================
 # FINE BLOCCO WHATSAPP
