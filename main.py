@@ -60,6 +60,50 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
         return s
     return "39" + s.lstrip("0")
     
+def invia_whatsapp_template_primo_messaggio(
+    numero: str | None,
+    nome: str,
+    indirizzo: str,
+    link_pdf: str
+):
+    dest = normalizza_numero_whatsapp(numero)
+    if not dest:
+        return
+
+    phone_id = os.getenv("WHATSAPP_PHONE_ID")
+    token = os.getenv("WHATSAPP_TOKEN")
+    if not phone_id or not token:
+        return
+
+    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": dest,
+        "type": "template",
+        "template": {
+            "name": "stima360_primo_messaggio",  # 👈 TEMPLATE GIÀ SU META
+            "language": {"code": "it"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": nome},
+                        {"type": "text", "text": indirizzo},
+                        {"type": "text", "text": link_pdf}
+                    ]
+                }
+            ]
+        }
+    }
+
+    requests.post(url, headers=headers, json=payload, timeout=10)
+    
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
     print("WA raw telefono:", repr(numero))
 
@@ -794,17 +838,14 @@ async def salva_stima(request: Request):
         print("MAIL EXC:", e)
 
 
-    # --- 10. WhatsApp ---
-    try:
-        invia_whatsapp(
-            data["telefono"],
-            data["nome"],          # p1
-            indirizzo,             # p2
-            loader_url,            # p3
-            link_token     # p4
-        )
-    except Exception as e:
-        print("WA EXC:", e)
+    # --- 10. WhatsApp (PRIMO MESSAGGIO TEMPLATE) ---
+    invia_whatsapp_template_primo_messaggio(
+        data["telefono"],
+        data["nome"],
+        indirizzo,
+        loader_url
+    )
+
 
 
 
