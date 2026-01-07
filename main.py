@@ -1085,8 +1085,8 @@ async def whatsapp_webhook(request: Request):
 # ---------------------------------------------------------
 
 def invia_whatsapp_text(numero: str, testo: str):
-    PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-    ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+    PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_ID")
+    ACCESS_TOKEN    = os.getenv("WHATSAPP_TOKEN")
 
     if not PHONE_NUMBER_ID or not ACCESS_TOKEN:
         raise Exception("WhatsApp Meta credentials missing")
@@ -1108,6 +1108,7 @@ def invia_whatsapp_text(numero: str, testo: str):
     }
 
     return requests.post(url, headers=headers, json=payload)
+
 
 # ---------------------------------------------------------
 # RUN
