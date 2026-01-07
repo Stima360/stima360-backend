@@ -224,14 +224,28 @@ def admin_whatsapp_messages():
 
     cur.execute("""
         SELECT
-            id,
-            from_number,
-            message_type,
-            text,
-            received_at,
-            direction
-        FROM whatsapp_incoming
-        ORDER BY received_at ASC
+            w.id,
+            w.from_number,
+            w.message_type,
+            w.text,
+            w.received_at,
+            w.direction,
+
+            s.nome,
+            s.cognome,
+            s.id AS stima_id
+
+        FROM whatsapp_incoming w
+
+        LEFT JOIN LATERAL (
+            SELECT id, nome, cognome
+            FROM stime
+            WHERE telefono = w.from_number
+            ORDER BY data DESC
+            LIMIT 1
+        ) s ON true
+
+        ORDER BY w.received_at ASC
         LIMIT 500
     """)
 
