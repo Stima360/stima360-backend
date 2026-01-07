@@ -61,7 +61,6 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     return "39" + s.lstrip("0")
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
-    print("WA URL:", WHATSAPP_SERVICE_URL)
     print("WA raw telefono:", repr(numero))
 
     dest = normalizza_numero_whatsapp(numero)
@@ -71,19 +70,40 @@ def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
         print("WA SKIP: numero non valido")
         return
 
+    phone_id = os.getenv("WHATSAPP_PHONE_ID")
+    token = os.getenv("WHATSAPP_TOKEN")
+
+    if not phone_id or not token:
+        print("WA SKIP: credenziali mancanti")
+        return
+
+    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": dest,
+        "type": "text",
+        "text": {
+            "body": f"{p1}\n{p2}\n{p3}\n{p4}"
+        }
+    }
+
     try:
-        r = requests.post(
-            WHATSAPP_SERVICE_URL,
-            json={"to": dest, "p1": p1, "p2": p2, "p3": p3, "p4": p4},
-            timeout=10
-        )
-        print("WA HTTP:", r.status_code, r.text[:200])
+        r = requests.post(url, headers=headers, json=payload, timeout=10)
 
         if r.status_code >= 300:
             print("WA ERROR:", r.status_code, r.text)
+            raise HTTPException(status_code=500, detail=r.text)
+
+        print("WA OK:", r.status_code)
+
     except Exception as e:
         print("WA EXC:", e)
-
 
 def to_int(v): 
     try: return int(v)
