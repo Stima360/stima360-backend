@@ -152,7 +152,7 @@ def admin_whatsapp_messages():
           s.id AS stima_id
         FROM whatsapp_incoming wi
         LEFT JOIN stime s
-          ON s.telefono = wi.from_number
+          ON regexp_replace(s.telefono, '\D', '', 'g') = wi.from_number
         ORDER BY wi.received_at ASC
     """)
 
