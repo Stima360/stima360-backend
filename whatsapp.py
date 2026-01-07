@@ -514,6 +514,13 @@ async def salva_stima(request: Request):
                 corpo_html,
                 allegato=None
             )
+            # 📩 COPIA INTERNA A STIMA360 (ADMIN)
+            invia_mail(
+                "info@stima360.it",
+                f"📩 Nuova stima ricevuta – {indirizzo}",
+                corpo_html,
+                allegato=None
+            )
 
             # Invia WHATSAPP TEMPLATE META
             try:
