@@ -60,7 +60,7 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     if s.startswith("39"):
         return s
     return "39" + s.lstrip("0")
-    
+
 def invia_whatsapp_template_primo_messaggio(
     numero: str | None,
     nome: str,
@@ -91,8 +91,8 @@ def invia_whatsapp_template_primo_messaggio(
         "to": dest,
         "type": "template",
         "template": {
-            "name": "stima360_primo_messaggio",   # NOME IDENTICO A META
-            "language": {"code": "it_IT"},        # ⚠️ IMPORTANTE
+            "name": "stima360_primo_messaggio",
+            "language": {"code": "it_IT"},
             "components": [
                 {
                     "type": "body",
@@ -110,15 +110,11 @@ def invia_whatsapp_template_primo_messaggio(
         r = requests.post(url, headers=headers, json=payload, timeout=10)
         print("WA TEMPLATE HTTP:", r.status_code)
         print("WA TEMPLATE RESP:", r.text)
-
-        if r.status_code >= 300:
-            return False
-
-        return True
-
+        return r.status_code < 300
     except Exception as e:
         print("WA TEMPLATE EXC:", e)
         return False
+
 
 def invia_whatsapp_service(numero: str | None, p1, p2, p3, p4):
     dest = normalizza_numero_whatsapp(numero)
@@ -886,14 +882,14 @@ async def salva_stima(request: Request):
     )
     
     if not ok:
-        print("WA TEMPLATE FALLITO → fallback service")
-        invia_whatsapp_service(
+        invia_whatsapp(
             data["telefono"],
             data["nome"],
             indirizzo,
             loader_url,
-            ""
+            link_token
         )
+
 
 
 
