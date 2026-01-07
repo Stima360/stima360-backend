@@ -783,8 +783,12 @@ async def salva_stima(request: Request):
     
         </div>
         """
-    
+        # Email al cliente
         invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
+        
+        # 📩 COPIA IDENTICA A GIORGIO
+        invia_mail("giorgiocensori@stima360.it", f"Stima360 – {indirizzo}", corpo)
+
     
     except Exception as e:
         print("MAIL EXC:", e)
