@@ -254,13 +254,16 @@ def reply_whatsapp(data: dict):
     if not to or not text:
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
-    r = requests.post(
-        WHATSAPP_SERVICE_URL,
-        json={"to": to, "text": text},
-        timeout=10
+    # INVIO REALE VIA META GRAPH API
+    invia_whatsapp(
+        to,
+        "Risposta Stima360",
+        text,
+        "",
+        ""
     )
 
-    # ⬇️ AGGIUNGI QUESTO BLOCCO
+    # SALVA IN DB COME MESSAGGIO USCENTE
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -271,9 +274,9 @@ def reply_whatsapp(data: dict):
     conn.commit()
     cur.close()
     conn.close()
-    # ⬆️ FINE
 
-    return {"ok": True, "status": r.status_code}
+    return {"ok": True}
+
 
 
 
