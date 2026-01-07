@@ -219,6 +219,8 @@ async def whatsapp_incoming(request: Request):
 # ---------------------------------------------------------
 @app.get("/api/admin/whatsapp/messages")
 def admin_whatsapp_messages():
+    print("DEBUG: NEW WHATSAPP QUERY ACTIVE")
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -240,8 +242,12 @@ def admin_whatsapp_messages():
         LEFT JOIN LATERAL (
             SELECT id, nome, cognome
             FROM stime
-            WHERE regexp_replace(telefono, '\\D', '', 'g') =
-                  regexp_replace(w.from_number, '\\D', '', 'g')
+            WHERE
+                regexp_replace(telefono, '\\D', '', 'g') IN (
+                    regexp_replace(w.from_number, '\\D', '', 'g'),
+                    substring(regexp_replace(w.from_number, '\\D', '', 'g') FROM 3),
+                    '39' || regexp_replace(telefono, '\\D', '', 'g')
+                )
             ORDER BY data DESC
             LIMIT 1
         ) s ON true
@@ -250,6 +256,8 @@ def admin_whatsapp_messages():
         LIMIT 500
     """)
 
+    print("DEBUG: QUERY EXECUTED WITH JOIN")
+
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
 
@@ -257,6 +265,7 @@ def admin_whatsapp_messages():
     conn.close()
 
     return [dict(zip(cols, r)) for r in rows]
+
 
 
 # ---------------------------------------------------------
