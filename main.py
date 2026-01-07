@@ -240,7 +240,8 @@ def admin_whatsapp_messages():
         LEFT JOIN LATERAL (
             SELECT id, nome, cognome
             FROM stime
-            WHERE telefono = w.from_number
+            WHERE regexp_replace(telefono, '\\D', '', 'g') =
+                  regexp_replace(w.from_number, '\\D', '', 'g')
             ORDER BY data DESC
             LIMIT 1
         ) s ON true
@@ -256,6 +257,7 @@ def admin_whatsapp_messages():
     conn.close()
 
     return [dict(zip(cols, r)) for r in rows]
+
 
 # ---------------------------------------------------------
 # ADMIN - RISPONDI A WHATSAPP (MANUALE)
