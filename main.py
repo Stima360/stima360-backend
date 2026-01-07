@@ -175,17 +175,14 @@ def admin_whatsapp_reply(data: dict):
 
     dest = normalizza_numero_whatsapp(to)
 
-    # 1️⃣ invio reale
+    # 1️⃣ INVIO REALE WHATSAPP
     try:
-        requests.post(
-            WHATSAPP_SERVICE_URL,
-            json={"to": dest, "text": text},
-            timeout=10
-        )
+        r = invia_whatsapp_text(dest, text)
+        print("META SEND:", r.status_code, r.text)
     except Exception as e:
-        print("WA SEND ERROR:", e)
+        print("WHATSAPP SEND ERROR:", e)
 
-    # 2️⃣ salva NELLA STESSA TABELLA
+    # 2️⃣ SALVA NEL DB (STESSA TABELLA)
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -195,9 +192,11 @@ def admin_whatsapp_reply(data: dict):
     """, (dest, "text", text))
 
     conn.commit()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
 
     return {"ok": True}
+
 
 
 # ---------------------------------------------------------
@@ -1022,6 +1021,93 @@ def admin_update_stima(stima_id: int, payload: LeadUpdate):
 
     return {"ok": True}
 
+# ---------------------------------------------------------
+# WHATSAPP WEBHOOK (RICEZIONE MESSAGGI REALI)
+# ---------------------------------------------------------
+
+@app.get("/webhook/whatsapp")
+def whatsapp_verify(
+    hub_mode: str = None,
+    hub_challenge: str = None,
+    hub_verify_token: str = None,
+):
+    VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        return int(hub_challenge)
+
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+
+@app.post("/webhook/whatsapp")
+async def whatsapp_webhook(request: Request):
+    payload = await request.json()
+
+    try:
+        entry = payload.get("entry", [])[0]
+        changes = entry.get("changes", [])[0].get("value", {})
+
+        if "messages" not in changes:
+            return {"ok": True}
+
+        msg = changes["messages"][0]
+        from_number = msg.get("from")
+        msg_type = msg.get("type")
+
+        text = None
+        if msg_type == "text":
+            text = msg.get("text", {}).get("body")
+        else:
+            # 👇 SALVA TUTTO
+            text = f"[{msg_type.upper()}]"
+
+        if not from_number:
+            return {"ok": True}
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO whatsapp_incoming
+            (from_number, message_type, text, received_at, direction)
+            VALUES (%s, %s, %s, NOW(), 'in')
+        """, (from_number, msg_type, text))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        print("WHATSAPP WEBHOOK ERROR:", e)
+
+    return {"ok": True}
+
+# ---------------------------------------------------------
+# WHATSAPP SEND (META GRAPH API)
+# ---------------------------------------------------------
+
+def invia_whatsapp_text(numero: str, testo: str):
+    PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+    ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+
+    if not PHONE_NUMBER_ID or not ACCESS_TOKEN:
+        raise Exception("WhatsApp Meta credentials missing")
+
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "text",
+        "text": {
+            "body": testo
+        }
+    }
+
+    return requests.post(url, headers=headers, json=payload)
 
 # ---------------------------------------------------------
 # RUN
