@@ -138,7 +138,6 @@ def admin_check(data: dict):
 # ---------------------------------------------------------
 @app.get("/api/admin/whatsapp/messages")
 def admin_whatsapp_messages():
-
     conn = get_connection()
     cur = conn.cursor()
 
@@ -146,37 +145,22 @@ def admin_whatsapp_messages():
         SELECT
           wi.from_number,
           wi.text,
-          'in' AS direction,
+          wi.direction,
           wi.received_at,
           s.nome,
           s.cognome,
           s.id AS stima_id
         FROM whatsapp_incoming wi
-        LEFT JOIN stime s ON s.telefono = wi.from_number
-
-        UNION ALL
-
-        SELECT
-          wo.to_number AS from_number,
-          wo.text,
-          'out' AS direction,
-          wo.sent_at AS received_at,
-          s.nome,
-          s.cognome,
-          s.id AS stima_id
-        FROM whatsapp_outgoing wo
-        LEFT JOIN stime s ON s.telefono = wo.to_number
-
-        ORDER BY received_at ASC
+        LEFT JOIN stime s
+          ON s.telefono = wi.from_number
+        ORDER BY wi.received_at ASC
     """)
 
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
-
-    cur.close()
-    conn.close()
-
+    cur.close(); conn.close()
     return [dict(zip(cols, r)) for r in rows]
+
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — INVIO RISPOSTA
 # ---------------------------------------------------------
@@ -189,33 +173,32 @@ def admin_whatsapp_reply(data: dict):
     if not to or not text:
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
-    # 1️⃣ INVIO REALE (testo semplice)
+    dest = normalizza_numero_whatsapp(to)
+
+    # 1️⃣ invio reale
     try:
         requests.post(
             WHATSAPP_SERVICE_URL,
-            json={
-                "to": normalizza_numero_whatsapp(to),
-                "text": text
-            },
+            json={"to": dest, "text": text},
             timeout=10
         )
     except Exception as e:
         print("WA SEND ERROR:", e)
 
-    # 2️⃣ SALVA SU DB (fondamentale per la inbox)
+    # 2️⃣ salva NELLA STESSA TABELLA
     conn = get_connection()
     cur = conn.cursor()
-
     cur.execute("""
-        INSERT INTO whatsapp_outgoing (to_number, text, sent_at)
-        VALUES (%s, %s, NOW())
-    """, (normalizza_numero_whatsapp(to), text))
+        INSERT INTO whatsapp_incoming
+        (from_number, message_type, text, received_at, direction)
+        VALUES (%s, %s, %s, NOW(), 'out')
+    """, (dest, "text", text))
 
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
     return {"ok": True}
+
 
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)
