@@ -255,8 +255,7 @@ def reply_whatsapp(data: dict):
         raise HTTPException(status_code=400, detail="Dati mancanti")
 
     # INVIO REALE VIA META GRAPH API
-    invia_whatsapp_text(to, text)
-
+    invia_whatsapp(to, "", "", text, "")
 
     # SALVA IN DB COME MESSAGGIO USCENTE
     conn = get_connection()
