@@ -147,33 +147,10 @@ def admin_whatsapp_messages():
       wi.text,
       wi.direction,
       wi.received_at,
-      s.nome,
-      s.cognome,
-      s.id AS stima_id
+      NULL AS nome,
+      NULL AS cognome,
+      NULL AS stima_id
     FROM whatsapp_incoming wi
-    LEFT JOIN (
-        SELECT DISTINCT ON (telefono_norm)
-            telefono_norm,
-            nome,
-            cognome,
-            id
-        FROM (
-            SELECT
-                id,
-                nome,
-                cognome,
-                telefono,
-                CASE
-                  WHEN regexp_replace(telefono, '\D', '', 'g') LIKE '39%'
-                    THEN regexp_replace(telefono, '\D', '', 'g')
-                  ELSE '39' || regexp_replace(telefono, '\D', '', 'g')
-                END AS telefono_norm
-            FROM stime
-            WHERE telefono IS NOT NULL
-        ) t
-        ORDER BY telefono_norm, id DESC
-    ) s
-    ON s.telefono_norm = wi.from_number
     ORDER BY wi.received_at ASC;
     """)
 
