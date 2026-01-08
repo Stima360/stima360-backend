@@ -142,18 +142,24 @@ def admin_whatsapp_messages():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-          wi.from_number,
-          wi.text,
-          wi.direction,
-          wi.received_at,
-          s.nome,
-          s.cognome,
-          s.id AS stima_id
-        FROM whatsapp_incoming wi
-        LEFT JOIN stime s
-          ON regexp_replace(s.telefono, '\D', '', 'g') = wi.from_number
-        ORDER BY wi.received_at ASC
+    SELECT
+      wi.from_number,
+      wi.text,
+      wi.direction,
+      wi.received_at,
+      s.nome,
+      s.cognome,
+      s.id AS stima_id
+    FROM whatsapp_incoming wi
+    LEFT JOIN stime s
+      ON (
+        CASE
+          WHEN regexp_replace(s.telefono, '\D', '', 'g') LIKE '39%'
+            THEN regexp_replace(s.telefono, '\D', '', 'g')
+          ELSE '39' || regexp_replace(s.telefono, '\D', '', 'g')
+        END
+      ) = wi.from_number
+    ORDER BY wi.received_at ASC;
     """)
 
     rows = cur.fetchall()
