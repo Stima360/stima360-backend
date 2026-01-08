@@ -143,13 +143,13 @@ def admin_whatsapp_messages():
 
     cur.execute("""
     SELECT
-      wi.from_number,
-      wi.text,
-      wi.direction,
-      wi.received_at,
-      s.nome,
-      s.cognome,
-      s.id AS stima_id
+        wi.from_number,
+        wi.text,
+        wi.direction,
+        wi.received_at,
+        s.nome,
+        s.cognome,
+        s.id AS stima_id
     FROM whatsapp_incoming wi
     LEFT JOIN (
         SELECT DISTINCT ON (telefono_norm)
@@ -163,19 +163,25 @@ def admin_whatsapp_messages():
                 nome,
                 cognome,
                 CASE
-                  WHEN regexp_replace(telefono, '\D', '', 'g') LIKE '39%'
-                    THEN regexp_replace(telefono, '\D', '', 'g')
-                  ELSE '39' || regexp_replace(telefono, '\D', '', 'g')
+                    WHEN regexp_replace(telefono, '\D', '', 'g') LIKE '39%'
+                        THEN regexp_replace(telefono, '\D', '', 'g')
+                    ELSE '39' || regexp_replace(telefono, '\D', '', 'g')
                 END AS telefono_norm
             FROM stime
             WHERE telefono IS NOT NULL
         ) t
         ORDER BY telefono_norm, id DESC
     ) s
-    ON s.telefono_norm = regexp_replace(wi.from_number, '\D', '', 'g')
+    ON s.telefono_norm = (
+        CASE
+            WHEN regexp_replace(wi.from_number, '\D', '', 'g') LIKE '39%'
+                THEN regexp_replace(wi.from_number, '\D', '', 'g')
+            ELSE '39' || regexp_replace(wi.from_number, '\D', '', 'g')
+        END
+    )
     ORDER BY wi.received_at ASC;
-    """)
 
+    """)
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
     cur.close(); conn.close()
