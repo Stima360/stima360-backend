@@ -143,7 +143,10 @@ def admin_whatsapp_messages():
 
     cur.execute("""
     SELECT
-      wi.from_number,
+      CASE
+        WHEN wi.direction = 'in' THEN wi.from_number
+        ELSE wi.from_number
+      END AS chat_number,
       wi.text,
       wi.direction,
       wi.received_at,
@@ -160,6 +163,7 @@ def admin_whatsapp_messages():
         END
       ) = wi.from_number
     ORDER BY wi.received_at ASC;
+
     """)
 
     rows = cur.fetchall()
