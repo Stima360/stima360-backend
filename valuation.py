@@ -8,7 +8,7 @@ from decimal import Decimal
 # ---------------------------
 BASE_MQ = {
     "Alba Adriatica": {
-        "Nord": 1600,
+        "Nord": 1400,
         "Villa Fiore": 1700,
         "Zona Basciani": 1400,
     },
