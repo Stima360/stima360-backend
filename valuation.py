@@ -14,23 +14,40 @@ BASE_MQ = {
     },
 
     "Tortoreto": {
-        # B5 – via Indipendenza ecc: min ~1450
-        "Lido Sud":   1650,
-        # B4 – Lungomare Sirena: min ~1650
+        "Lido Sud":    1650,
         "Lido Centro": 1800,
-        # fascia intermedia tra B4 e B5
-        "Lido Nord":  1600,
-        # Tortoreto Alto: min ~1097 → 1100 arrotondato
-        "Alto":       1100,
+        "Lido Nord":   1600,
+        "Alto":        1100,
     },
 
     "Martinsicuro": {
-        # min ~874 → stiamo bassi
         "Centro":    1500,
         "Villarosa": 1400,
         "Alto":      1150,
     },
+
+    # =========================
+    # 🔥 NUOVI COMUNI
+    # =========================
+
+    "Colonnella": {
+        "Centro storico": 1050,   # media 1000–1100
+        "Contrade":       1000,   # leggermente più basso
+        "Bivio":          1200,   # zona più richiesta
+    },
+
+    "Controguerra": {
+        "Centro storico": 825,    # media 800–850
+        "Contrade":       800,
+    },
+
+    "Nereto": {
+        "Centro storico": 1050,
+        "Contrade":       1000,
+        "Bivio":          1250,   # zona migliore (forbice alta)
+    },
 }
+
 
 
 def get_base_mq(comune: str, microzona: str) -> float:
