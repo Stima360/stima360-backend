@@ -50,6 +50,31 @@ BASE_MQ = {
     },
 }
 
+    "Ancarano": {
+        "Centro storico": 900,
+        "Contrade": 850,
+    },
+
+    "Civitella del Tronto": {
+        "Centro storico": 800,
+        "Contrade": 750,
+    },
+
+    "Sant’Egidio alla Vibrata": {
+        "Centro": 1100,
+        "Bivio": 1250,
+        "Contrade": 950,
+    },
+
+    "Sant’Omero": {
+        "Centro storico": 1000,
+        "Contrade": 900,
+    },
+
+    "Torano Nuovo": {
+        "Centro storico": 850,
+        "Contrade": 800,
+    },
 
 def get_base_mq(comune: str, microzona: str) -> float:
     return float(BASE_MQ.get(comune, {}).get(microzona, 0.0))
