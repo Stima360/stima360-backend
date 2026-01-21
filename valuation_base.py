@@ -9,18 +9,42 @@ BASE_MQ = {
         "Villa Fiore": 1700,
         "Zona Basciani": 1400,
     },
+
     "Tortoreto": {
         "Lido Sud": 1650,
         "Lido Centro": 1800,
         "Lido Nord": 1600,
         "Alto": 1100,
     },
+
     "Martinsicuro": {
         "Centro": 1500,
         "Villarosa": 1400,
         "Alto": 1150,
     },
+
+    # =========================
+    # 🔥 COMUNI ENTROTERRA
+    # =========================
+
+    "Colonnella": {
+        "Centro storico": 1050,
+        "Contrade": 1000,
+        "Bivio": 1200,
+    },
+
+    "Controguerra": {
+        "Centro storico": 825,
+        "Contrade": 800,
+    },
+
+    "Nereto": {
+        "Centro storico": 1050,
+        "Contrade": 1000,
+        "Bivio": 1250,
+    },
 }
+
 
 def get_base_mq(comune: str, microzona: str) -> float:
     return float(BASE_MQ.get(comune, {}).get(microzona, 0.0))
