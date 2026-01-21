@@ -79,8 +79,6 @@ BASE_MQ = {
 
 }
 
-
-
 def get_base_mq(comune: str, microzona: str) -> float:
     return float(BASE_MQ.get(comune, {}).get(microzona, 0.0))
 
