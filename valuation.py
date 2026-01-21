@@ -46,6 +46,11 @@ BASE_MQ = {
         "Contrade":       1000,
         "Bivio":          1250,   # zona migliore (forbice alta)
     },
+        "Corropoli": {
+        "Centro storico": 950,
+        "Bivio": 1150,
+        "Contrade": 900,
+    },
 }
 
 
