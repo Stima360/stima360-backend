@@ -76,6 +76,71 @@ BASE_MQ = {
         "Centro storico": 850,
         "Contrade": 800,
     },
+    # =========================
+    # 🌊 MARCHE COSTA
+    # =========================
+
+    "San Benedetto del Tronto": {
+        "Sentina": 3150,
+        "Centro": 2850,
+        "Porto d’Ascoli": 2900,
+        "Agraria": 1950,
+        "Paese Alto": 1800,
+        "Ponterotto": 1650,
+    },
+
+    "Grottammare": {
+        "Centro / Lungomare": 2300,
+        "Ascolani": 2050,
+        "Valtesino": 1650,
+        "Vecchio Incasato": 1300,
+    },
+
+    "Cupra Marittima": {
+        "Marina": 2150,
+        "Piani": 1800,
+        "Castello": 1400,
+    },
+
+    "Pedaso": {
+        "Centro-Mare": 2000,
+        "Collina": 1650,
+    },
+
+    "Altidona": {
+        "Marina": 2050,
+        "Borgo": 1300,
+    },
+
+    "Lapedona": {
+        "Borgo": 750,
+        "Val d’Ete / Campagna": 500,
+    },
+
+    "Fermo (Costa)": {
+        "Lido / Casabianca": 1850,
+        "Marina Palmense": 1550,
+    },
+
+    "Porto San Giorgio": {
+        "Centro": 2400,
+        "Nord": 2000,
+        "Ovest": 1550,
+    },
+
+    "Porto Sant’Elpidio": {
+        "Centro": 1600,
+        "Faleriense": 1400,
+        "Corva": 1150,
+    },
+
+    "Civitanova Marche": {
+        "Sud": 3150,
+        "Centro": 2850,
+        "Nord / Fontespina": 2350,
+        "San Marone": 2050,
+        "Civitanova Alta": 1350,
+    },
 
 }
 
