@@ -46,12 +46,12 @@ BASE_MQ = {
         "Contrade":       1000,
         "Bivio":          1250,   # zona migliore (forbice alta)
     },
-        "Corropoli": {
+     "Corropoli": {
         "Centro storico": 950,
         "Bivio": 1150,
         "Contrade": 900,
     },
-        "Ancarano": {
+     "Ancarano": {
         "Centro storico": 900,
         "Contrade": 850,
     },
@@ -169,8 +169,20 @@ BASE_MQ = {
 
 }
 
+def normalize_text(s: str) -> str:
+    return (s or "").replace("’", "'").strip()
+
 def get_base_mq(comune: str, microzona: str) -> float:
-    return float(BASE_MQ.get(comune, {}).get(microzona, 0.0))
+    comune = normalize_text(comune)
+    microzona = normalize_text(microzona)
+
+    for c, zones in BASE_MQ.items():
+        if normalize_text(c) == comune:
+            for z, value in zones.items():
+                if normalize_text(z) == microzona:
+                    return float(value)
+
+    return 0.0
 
 # ---------------------------
 # Coefficienti tipologia
