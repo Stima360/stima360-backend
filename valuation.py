@@ -336,11 +336,14 @@ def _posizione_coeff(pos: str) -> float:
 
 def _distanza_coeff(dist: str) -> float:
     d = (dist or "").strip().lower()
-    if d == "0-100":     return 1.15    # prima 1.15
+    d = d.replace("–", "-")
+    d = d.replace("m", "").replace(" ", "")  # toglie m e spazi ovunque
+
+    if d == "0-100":     return 1.15
     if d == "100-300":   return 1.03
     if d == "300-500":   return 1.01
     if d == "500-1000":  return 1.00
-    return 0.97          # >1000
+    return 0.97
 
 def _barriera_coeff(bar: str) -> float:
     b = (bar or "").strip().lower()
