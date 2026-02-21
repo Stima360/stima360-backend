@@ -79,61 +79,86 @@ BASE_MQ = {
     # =========================
     # 🌊 MARCHE COSTA
     # =========================
-
+    
     "San Benedetto del Tronto": {
         "Sentina": 3150,
-        "Centro": 2850,
         "Porto d’Ascoli": 2900,
-        "Agraria": 1950,
+        "Centro / Lungomare": 2850,
         "Paese Alto": 1800,
+        "Agraria": 1950,
         "Ponterotto": 1650,
     },
-
+    
     "Grottammare": {
         "Centro / Lungomare": 2300,
         "Ascolani": 2050,
         "Valtesino": 1650,
         "Vecchio Incasato": 1300,
     },
-
+    
     "Cupra Marittima": {
-        "Marina": 2150,
-        "Piani": 1800,
+        "Marina / Lungomare": 2150,
+        "Centro": 1800,
         "Castello": 1400,
     },
-
+    
+    "Massignano": {
+        "Marina di Massignano": 1700,
+        "Centro / Collina": 1200,
+    },
+    
     "Pedaso": {
-        "Centro-Mare": 2000,
+        "Centro-Mare / Lungomare": 2000,
         "Collina": 1650,
     },
-
+    
+    "Campofilone": {
+        "Marina di Campofilone": 1800,
+        "Borgo": 1200,
+    },
+    
     "Altidona": {
         "Marina": 2050,
         "Borgo": 1300,
     },
-
-    "Lapedona": {
-        "Borgo": 750,
-        "Val d’Ete / Campagna": 500,
-    },
-
-    "Fermo (Costa)": {
-        "Lido / Casabianca": 1850,
+    
+    "Fermo": {
         "Marina Palmense": 1550,
+        "Lido di Fermo": 1850,
+        "Casabianca": 1850,
+        "Lido Tre Archi": 1600,
+        "San Tommaso": 1500,
+        "Torre di Palme": 2100,
+        "Ponte Nina": 1650,
+        "Tre Camini": 1500,
+        "Santa Maria a Mare": 1750,
     },
-
+    
     "Porto San Giorgio": {
         "Centro": 2400,
-        "Nord": 2000,
+        "Lungomare Nord": 2200,
+        "Lungomare Sud": 2100,
         "Ovest": 1550,
     },
-
+    
     "Porto Sant’Elpidio": {
         "Centro": 1600,
         "Faleriense": 1400,
         "Corva": 1150,
+        "Lungomare": 1800,
     },
-
+    
+    "Potenza Picena": {
+        "Porto Potenza Picena (zona mare)": 1900,
+        "Centro": 1300,
+    },
+    
+    "Porto Recanati": {
+        "Centro / Lungomare": 2600,
+        "Scossicci": 2100,
+        "Montarice": 1600,
+    },
+    
     "Civitanova Marche": {
         "Sud": 3150,
         "Centro": 2850,
