@@ -77,96 +77,95 @@ BASE_MQ = {
         "Contrade": 800,
     },
     # =========================
-    # 🌊 MARCHE COSTA
+    # 🌊 MARCHE COSTA – PREZZI -10%
     # =========================
     
     "San Benedetto del Tronto": {
-        "Sentina": 3150,
-        "Porto d’Ascoli": 2900,
-        "Centro / Lungomare": 2850,
-        "Paese Alto": 1800,
-        "Agraria": 1950,
-        "Ponterotto": 1650,
+        "Sentina": 2835,
+        "Porto d’Ascoli": 2610,
+        "Centro / Lungomare": 2565,
+        "Paese Alto": 1620,
+        "Agraria": 1755,
+        "Ponterotto": 1485,
     },
     
     "Grottammare": {
-        "Centro / Lungomare": 2300,
-        "Ascolani": 2050,
-        "Valtesino": 1650,
-        "Vecchio Incasato": 1300,
+        "Centro / Lungomare": 2070,
+        "Ascolani": 1845,
+        "Valtesino": 1485,
+        "Vecchio Incasato": 1170,
     },
     
     "Cupra Marittima": {
-        "Marina / Lungomare": 2150,
-        "Centro": 1800,
-        "Castello": 1400,
+        "Marina / Lungomare": 1935,
+        "Centro": 1620,
+        "Castello": 1260,
     },
     
     "Massignano": {
-        "Marina di Massignano": 1700,
-        "Centro / Collina": 1200,
+        "Marina di Massignano": 1530,
+        "Centro / Collina": 1080,
     },
     
     "Pedaso": {
-        "Centro-Mare / Lungomare": 2000,
-        "Collina": 1650,
+        "Centro-Mare / Lungomare": 1800,
+        "Collina": 1485,
     },
     
     "Campofilone": {
-        "Marina di Campofilone": 1800,
-        "Borgo": 1200,
+        "Marina di Campofilone": 1620,
+        "Borgo": 1080,
     },
     
     "Altidona": {
-        "Marina": 2050,
-        "Borgo": 1300,
+        "Marina": 1845,
+        "Borgo": 1170,
     },
     
     "Fermo": {
-        "Marina Palmense": 1550,
-        "Lido di Fermo": 1850,
-        "Casabianca": 1850,
-        "Lido Tre Archi": 1600,
-        "San Tommaso": 1500,
-        "Torre di Palme": 2100,
-        "Ponte Nina": 1650,
-        "Tre Camini": 1500,
-        "Santa Maria a Mare": 1750,
+        "Marina Palmense": 1395,
+        "Lido di Fermo": 1665,
+        "Casabianca": 1665,
+        "Lido Tre Archi": 1440,
+        "San Tommaso": 1350,
+        "Torre di Palme": 1890,
+        "Ponte Nina": 1485,
+        "Tre Camini": 1350,
+        "Santa Maria a Mare": 1575,
     },
     
     "Porto San Giorgio": {
-        "Centro": 2400,
-        "Lungomare Nord": 2200,
-        "Lungomare Sud": 2100,
-        "Ovest": 1550,
+        "Centro": 2160,
+        "Lungomare Nord": 1980,
+        "Lungomare Sud": 1890,
+        "Ovest": 1395,
     },
     
     "Porto Sant’Elpidio": {
-        "Centro": 1600,
-        "Faleriense": 1400,
-        "Corva": 1150,
-        "Lungomare": 1800,
+        "Centro": 1440,
+        "Faleriense": 1260,
+        "Corva": 1035,
+        "Lungomare": 1620,
     },
     
     "Potenza Picena": {
-        "Porto Potenza Picena (zona mare)": 1900,
-        "Centro": 1300,
+        "Porto Potenza Picena (zona mare)": 1710,
+        "Centro": 1170,
     },
     
     "Porto Recanati": {
-        "Centro / Lungomare": 2600,
-        "Scossicci": 2100,
-        "Montarice": 1600,
+        "Centro / Lungomare": 2340,
+        "Scossicci": 1890,
+        "Montarice": 1440,
     },
     
     "Civitanova Marche": {
-        "Sud": 3150,
-        "Centro": 2850,
-        "Nord / Fontespina": 2350,
-        "San Marone": 2050,
-        "Civitanova Alta": 1350,
+        "Sud": 2835,
+        "Centro": 2565,
+        "Nord / Fontespina": 2115,
+        "San Marone": 1845,
+        "Civitanova Alta": 1215,
     },
-
 }
 
 def normalize_text(s: str) -> str:
