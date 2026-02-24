@@ -75,7 +75,96 @@ BASE_MQ = {
         "Centro storico": 850,
         "Contrade": 800,
     },
-
+    # =========================
+    # 🌊 MARCHE COSTA – PREZZI -10%
+    # =========================
+    
+    "San Benedetto del Tronto": {
+        "Sentina": 2835,
+        "Porto d’Ascoli": 2610,
+        "Centro / Lungomare": 2565,
+        "Paese Alto": 1620,
+        "Agraria": 1755,
+        "Ponterotto": 1485,
+    },
+    
+    "Grottammare": {
+        "Centro / Lungomare": 2070,
+        "Ascolani": 1845,
+        "Valtesino": 1485,
+        "Vecchio Incasato": 1170,
+    },
+    
+    "Cupra Marittima": {
+        "Marina / Lungomare": 1935,
+        "Centro": 1620,
+        "Castello": 1260,
+    },
+    
+    "Massignano": {
+        "Marina di Massignano": 1530,
+        "Centro / Collina": 1080,
+    },
+    
+    "Pedaso": {
+        "Centro-Mare / Lungomare": 1800,
+        "Collina": 1485,
+    },
+    
+    "Campofilone": {
+        "Marina di Campofilone": 1620,
+        "Borgo": 1080,
+    },
+    
+    "Altidona": {
+        "Marina": 1845,
+        "Borgo": 1170,
+    },
+    
+    "Fermo": {
+        "Marina Palmense": 1395,
+        "Lido di Fermo": 1665,
+        "Casabianca": 1665,
+        "Lido Tre Archi": 1440,
+        "San Tommaso": 1350,
+        "Torre di Palme": 1890,
+        "Ponte Nina": 1485,
+        "Tre Camini": 1350,
+        "Santa Maria a Mare": 1575,
+    },
+    
+    "Porto San Giorgio": {
+        "Centro": 2160,
+        "Lungomare Nord": 1980,
+        "Lungomare Sud": 1890,
+        "Ovest": 1395,
+    },
+    
+    "Porto Sant’Elpidio": {
+        "Centro": 1440,
+        "Faleriense": 1260,
+        "Corva": 1035,
+        "Lungomare": 1620,
+    },
+    
+    "Potenza Picena": {
+        "Porto Potenza Picena (zona mare)": 1710,
+        "Centro": 1170,
+    },
+    
+    "Porto Recanati": {
+        "Centro / Lungomare": 2340,
+        "Scossicci": 1890,
+        "Montarice": 1440,
+    },
+    
+    "Civitanova Marche": {
+        "Sud": 2835,
+        "Centro": 2565,
+        "Nord / Fontespina": 2115,
+        "San Marone": 1845,
+        "Civitanova Alta": 1215,
+    },
 }
 
 def get_base_mq(comune: str, microzona: str) -> float:
@@ -92,23 +181,22 @@ def coeff_anno(anno: int) -> float:
         return 1.00
 
     if a <= 1950:
-        return 0.40
+        return 0.75
 
     points = [
-        (1950, 0.40),
-        (1965, 0.45),
-        (1970, 0.60),
-        (1975, 0.80),
+        (1950, 0.75),
+        (1965, 0.85),
+        (1975, 0.92),
         (1990, 1.00),
-        (2000, 1.30),
-        (2010, 1.50),
-        (2015, 1.90),
-        (2020, 2.10),
-        (2025, 2.20),
+        (2000, 1.05),
+        (2010, 1.08),
+        (2015, 1.10),
+        (2020, 1.12),
+        (2025, 1.15),
     ]
 
     if a >= 2025:
-        return 2.20
+        return 1.15
 
     for i in range(len(points) - 1):
         y0, c0 = points[i]
