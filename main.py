@@ -59,7 +59,7 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
         return s
     return "39" + s.lstrip("0")
     
-def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
+def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
     print("WA URL:", WHATSAPP_SERVICE_URL)
     print("WA raw telefono:", repr(numero))
 
@@ -73,7 +73,7 @@ def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str, p4: str):
     try:
         r = requests.post(
             WHATSAPP_SERVICE_URL,
-            json={"to": dest, "p1": p1, "p2": p2, "p3": p3, "p4": p4},
+            json={"to": dest, "p1": p1, "p2": p2, "p3": p3},
             timeout=10
         )
         print("WA HTTP:", r.status_code, r.text[:200])
@@ -720,7 +720,6 @@ async def salva_stima(request: Request):
             data["nome"],          # p1
             indirizzo,             # p2
             loader_url,            # p3
-            link_token     # p4
         )
     except Exception as e:
         print("WA EXC:", e)
