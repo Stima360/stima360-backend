@@ -719,7 +719,7 @@ async def salva_stima(request: Request):
             data["telefono"],
             data["nome"],          # p1
             indirizzo,             # p2
-            loader_url,            # p3
+            link_token,            # p3
         )
     except Exception as e:
         print("WA EXC:", e)
