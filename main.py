@@ -628,114 +628,120 @@ async def salva_stima(request: Request):
     )
 
 
-   
-    # --- 9. Email ---
+  # --- 9. Email ---
     try:
         fondatore_img = "https://www.stima360.it/IMGVendere/Fondatore.png"
-    
-        corpo = f"""
-        <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
-    
-          <h2 style="margin:0 0 14px 0; color:#0b6bff;">
-            🏡 La tua Stima360 è pronta
-          </h2>
-    
-          <p style="margin:0 0 12px 0;">
-            Ciao <b>{data['nome']}</b>,
-          </p>
-    
-          <p style="margin:0 0 14px 0;">
-            ricevi questa email perché hai richiesto una valutazione immobiliare tramite <b>Stima360</b>.
-          </p>
-    
-          <!-- IMMAGINE FONDATORE -->
-          <div style="margin:18px 0 18px 0; text-align:center;">
-            <img src="{fondatore_img}" alt="Fondatore Stima360"
-                 style="max-width:100%; width:560px; height:auto; border-radius:14px; display:block; margin:0 auto; box-shadow:0 8px 22px rgba(0,0,0,0.10);">
-            <div style="font-size:12px; color:#666; margin-top:8px;">
-              Il fondatore di Stima360
+        numero_whatsapp = "393925172478"
+        
+        # Capiamo da dove arriva il cliente (lo passeremo dal frontend)
+        origine = raw.get("origine", "index")
+
+        if origine == "microzona":
+            # =========================================================
+            # 1. EMAIL IPER-SPECIFICA PER LE LANDING MICROZONA
+            # =========================================================
+            oggetto_mail = f"📍 Il tuo Piano Vendita specifico per {data['microzona']} è pronto!"
+            corpo = f"""
+            <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
+              <h2 style="margin:0 0 14px 0; color:#0b6bff;">
+                📍 Analisi completata per la zona di {data['microzona']}
+              </h2>
+              <p style="margin:0 0 12px 0;">
+                Ciao <b>{data['nome']}</b>,
+              </p>
+              <p style="margin:0 0 14px 0;">
+                hai fatto benissimo a richiedere un'analisi dedicata per la zona di <b>{data['microzona']}</b> a {data['comune']}. Il mercato immobiliare non è uguale ovunque: ogni quartiere ha dinamiche, richieste e prezzi completamente diversi dai comuni limitrofi.
+              </p>
+              <p style="margin:0 0 14px 0;">
+                📎 <b style="color:#1f9d55;">PDF della stima</b><br>
+                <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
+                  Clicca qui per scaricare e aprire il PDF
+                </a>
+              </p>
+              <p style="margin:0 0 14px 0;">
+                I dati OMI che trovi nel report sono un ottimo punto di partenza matematico. Tuttavia, in una microzona richiesta come questa, i dettagli fanno sbalzare il prezzo di decine di migliaia di euro. La vista, l'esposizione, lo stato del condominio o un terrazzo abitabile non possono essere calcolati da un algoritmo.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                Prima di fare mosse affrettate o pubblicare l'immobile al prezzo sbagliato, confrontiamoci. Opero su {data['comune']} da anni e conosco il vero polso degli acquirenti in questo momento.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                📲 <a href="https://wa.me/{numero_whatsapp}?text=Ciao%20Giorgio,%20ho%20ricevuto%20il%20report%20per%20la%20mia%20casa%20in%20zona%20{data['microzona']}%20e%20vorrei%20farti%20una%20domanda" style="display:inline-block; padding:10px 18px; background-color:#25D366; color:#ffffff; text-decoration:none; border-radius:6px; font-weight:bold;">Scrivimi su WhatsApp senza impegno</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                  <img src="{fondatore_img}" alt="Giorgio Censori" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                  <div>
+                      <p style="font-size:14px; color:#333; margin:0;">
+                        <b>Giorgio Censori</b><br>
+                        Specialista del mercato di {data['comune']}
+                      </p>
+                      <p style="font-size:13px; color:#555; margin:4px 0 0 0;">
+                        📞 <a href="tel:+{numero_whatsapp}" style="color:#0b6bff; text-decoration:none;">392 517 2478</a>
+                      </p>
+                  </div>
+              </div>
             </div>
-          </div>
-    
-          <p style="margin:0 0 14px 0;">
-            📄 <b style="color:#1f9d55;">PDF della stima</b><br>
-            <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
-              Apri il PDF
-            </a>
-          </p>
-    
-          <p style="margin:0 0 6px 0;">
-            🔍 <b style="color:#ff7a00;">
-              Vuoi una valutazione professionale più approfondita?
-            </b>
-          </p>
-    
-          <p style="margin:0 0 16px 0;">
-            Con <b>Stima Pro</b> puoi richiedere un’analisi completa e personalizzata,
-            <b>completamente gratuita e senza alcun impegno</b>.
-            <br>
-            🧩 <a href="{link_token}" style="color:#ff7a00; text-decoration:underline;">
-              <b>Richiedi Stima Pro</b>
-            </a>
-          </p>
-    
-          <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
-    
-          <!-- FIRMA PROFESSIONALE -->
-          <p style="font-size:13px; color:#333; margin:0;">
-            <b>Stima360 di Giorgio Censori</b><br>
-            Agente Immobiliare
-          </p>
-    
-          <p style="font-size:13px; color:#555; margin:8px 0 0 0;">
-            📞 <b>Cellulare:</b> <a href="tel:+393925172478" style="color:#0b6bff; text-decoration:none;">392 517 2478</a><br>
-            ✉️ <b>Email:</b> <a href="mailto:info@stima360.it" style="color:#0b6bff; text-decoration:none;">info@stima360.it</a><br>
-            📷 <b>Instagram:</b> <a href="https://www.instagram.com/stima360" target="_blank" style="color:#0b6bff; text-decoration:none;">@stima360</a>
-          </p>
-    
-          <p style="font-size:12px; color:#666; margin:14px 0 0 0;">
-            Informative:
-            <a href="https://stima360.it/privacy.html" style="color:#0b6bff; text-decoration:underline;">Privacy</a> ·
-            <a href="https://stima360.it/termini.html" style="color:#0b6bff; text-decoration:underline;">Termini e Condizioni</a> ·
-            <a href="https://stima360.it/eliminazionedati.html" style="color:#0b6bff; text-decoration:underline;">Eliminazione dei dati</a>
-          </p>
-    
-          <p style="font-size:12px; color:#777; margin:10px 0 0 0;">
-            Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta.
-          </p>
-    
-        </div>
-        """
-    
-        invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
+            """
+        else:
+            # =========================================================
+            # 2. EMAIL STANDARD PER LA HOME PAGE (INDEX.HTML)
+            # =========================================================
+            oggetto_mail = f"📄 Il tuo Piano Vendita per l'immobile a {data['comune']} è pronto!"
+            corpo = f"""
+            <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
+              <h2 style="margin:0 0 14px 0; color:#0b6bff;">
+                📄 Il tuo Piano Vendita è pronto!
+              </h2>
+              <p style="margin:0 0 12px 0;">
+                Ciao <b>{data['nome']}</b>,
+              </p>
+              <p style="margin:0 0 14px 0;">
+                ti ringrazio per aver utilizzato il sistema di valutazione avanzato di <b>Stima360</b>.
+              </p>
+              <p style="margin:0 0 14px 0;">
+                📎 <b style="color:#1f9d55;">PDF della stima</b><br>
+                <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
+                  Clicca qui per scaricare e aprire il PDF
+                </a>
+              </p>
+              <p style="margin:0 0 14px 0;">
+                Il nostro algoritmo incrocia centinaia di dati OMI e trend di mercato per darti una forbice di prezzo altamente realistica. Tuttavia, essendo un calcolo matematico, non può "vedere" i dettagli unici di casa tua: la luminosità, lo stato degli infissi o la distribuzione degli spazi.
+              </p>
+              <p style="margin:0 0 14px 0; padding: 12px; border-left: 4px solid #ff7a00; background-color: #fff9f2;">
+                <i>Nel mercato attuale, sbagliare il prezzo di uscita anche solo del 5% significa bruciare l'immobile o perdere decine di migliaia di euro.</i>
+              </p>
+              <p style="margin:0 0 16px 0;">
+                Se stai pensando di vendere e vuoi trasformare questa stima in un <b>prezzo di realizzo garantito al 100%</b>, il prossimo passo è un rapido confronto dal vivo.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                📲 <b>Rispondi semplicemente a questa email</b>, oppure scrivimi direttamente su WhatsApp:
+                <br><br>
+                <a href="https://wa.me/{numero_whatsapp}?text=Ciao%20Giorgio,%20ho%20ricevuto%20la%20stima%20PDF%20e%20vorrei%20farti%20una%20domanda" style="display:inline-block; padding:10px 18px; background-color:#25D366; color:#ffffff; text-decoration:none; border-radius:6px; font-weight:bold;">Parliamone su WhatsApp</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                  <img src="{fondatore_img}" alt="Giorgio Censori" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                  <div>
+                      <p style="font-size:14px; color:#333; margin:0;">
+                        <b>Giorgio Censori</b><br>
+                        Fondatore Stima360 - Agente Immobiliare
+                      </p>
+                      <p style="font-size:13px; color:#555; margin:4px 0 0 0;">
+                        📞 <a href="tel:+{numero_whatsapp}" style="color:#0b6bff; text-decoration:none;">392 517 2478</a><br>
+                        ✉️ <a href="mailto:info@stima360.it" style="color:#0b6bff; text-decoration:none;">info@stima360.it</a>
+                      </p>
+                  </div>
+              </div>
+              <p style="font-size:11px; color:#999; margin:20px 0 0 0; text-align: center;">
+                Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta su www.stima360.it.
+              </p>
+            </div>
+            """
+
+        invia_mail(data["email"], oggetto_mail, corpo)
     
     except Exception as e:
         print("MAIL EXC:", e)
-
-
-    # --- 10. WhatsApp ---
-    try:
-        invia_whatsapp(
-            data["telefono"],
-            data["nome"],          # p1
-            indirizzo,             # p2
-            link_token,            # p3
-        )
-    except Exception as e:
-        print("WA EXC:", e)
-
-
-
-    # --- 11. Risposta JSON al frontend ---
-    return {
-        "success": True,
-        "id": new_id,
-        "pdf_url": pdf_url_finale,
-        "price_exact": price_exact,
-        "eur_mq_finale": eur_mq_finale,
-        "valore_pertinenze": valore_pertinenze,
-        "base_mq": base_mq,
-    }
 
 
 # ---------------------------------------------------------
