@@ -732,13 +732,13 @@ async def salva_stima(request: Request):
                       </p>
                   </div>
               </div>
-              <p style="font-size:11px; color:#999; margin:20px 0 0 0; text-align: center;">
+             <p style="font-size:11px; color:#999; margin:20px 0 0 0; text-align: center;">
                 Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta su www.stima360.it.
               </p>
             </div>
             """
 
-invia_mail(data["email"], oggetto_mail, corpo)
+        invia_mail(data["email"], oggetto_mail, corpo)
         
     except Exception as e:
         print("MAIL EXC:", e)
