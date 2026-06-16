@@ -738,11 +738,32 @@ async def salva_stima(request: Request):
             </div>
             """
 
-        invia_mail(data["email"], oggetto_mail, corpo)
-    
+invia_mail(data["email"], oggetto_mail, corpo)
+        
     except Exception as e:
         print("MAIL EXC:", e)
 
+    # --- 10. WhatsApp ---
+    try:
+        invia_whatsapp(
+            data["telefono"],
+            data["nome"],          # p1
+            indirizzo,             # p2
+            link_token             # p3
+        )
+    except Exception as e:
+        print("WA EXC:", e)
+
+    # --- 11. Risposta JSON al frontend ---
+    return {
+        "success": True,
+        "id": new_id,
+        "pdf_url": pdf_url_finale,
+        "price_exact": price_exact,
+        "eur_mq_finale": eur_mq_finale,
+        "valore_pertinenze": valore_pertinenze,
+        "base_mq": base_mq,
+    }
 
 # ---------------------------------------------------------
 # PREFILL TOKEN
@@ -1139,7 +1160,24 @@ def invia_whatsapp_text(numero: str, testo: str):
     }
 
     return requests.post(url, headers=headers, json=payload)
-
+# ---------------------------------------------------------
+# CONTATORE PUBBLICO (Home Page)
+# ---------------------------------------------------------
+@app.get("/api/public/contatore_oggi")
+def api_contatore_oggi():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) FROM stime WHERE DATE(data) = CURRENT_DATE")
+        count_oggi = cur.fetchone()[0]
+        
+        cur.close()
+        conn.close()
+        return {"success": True, "count": count_oggi}
+    except Exception as e:
+        print("Errore contatore:", e)
+        return {"success": False, "count": 0}
 
 # ---------------------------------------------------------
 # RUN
