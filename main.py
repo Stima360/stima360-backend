@@ -1179,6 +1179,30 @@ def api_contatore_oggi():
         print("Errore contatore:", e)
         return {"success": False, "count": 0}
 # ---------------------------------------------------------
+# NUOVA API SEO - RECUPERA METADATI PER LA PAGINA
+# ---------------------------------------------------------
+@app.get("/api/seo/data")
+def get_seo_data(comune: str, microzona: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT h1_title, descrizione_locale 
+            FROM seo_microzone 
+            WHERE comune = %s AND microzona = %s
+        """, (comune, microzona))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if row:
+            return {"success": True, "h1": row[0], "descrizione": row[1]}
+            
+        return {"success": False, "h1": f"Valutazione Immobiliare a {comune} - {microzona}", "descrizione": f"Scopri il valore del tuo immobile a {microzona} di {comune}."}
+    except Exception as e:
+        print("SEO API ERROR:", e)
+        return {"success": False, "h1": f"Valutazione Immobiliare a {comune} - {microzona}", "descrizione": f"Scopri il valore del tuo immobile a {microzona} di {comune}."}
+# ---------------------------------------------------------
 # SITEMAP.XML (Versione Automatica, non tocca zone_valori)
 # ---------------------------------------------------------
 @app.get("/sitemap.xml")
