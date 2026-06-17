@@ -1186,30 +1186,31 @@ def sitemap():
     try:
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT url_slug FROM zone_valori WHERE url_slug IS NOT NULL")
-        zone = cur.fetchall()
+        # Legge le coppie univoche comune/microzona dalla tabella stime
+        cur.execute("SELECT DISTINCT comune, microzona FROM stime WHERE comune IS NOT NULL AND microzona IS NOT NULL")
+        rows = cur.fetchall()
     except Exception as e:
         print("SITEMAP ERROR:", e)
-        raise HTTPException(status_code=500, detail="Errore generazione sitemap")
+        raise HTTPException(status_code=500, detail="Errore")
     finally:
-        cur.close()
-        conn.close()
+        try: cur.close(); conn.close()
+        except: pass
     
-    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml_content += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
     
-    for z in zone:
-        slug = z[0]
-        xml_content += f'''
+    for r in rows:
+        # Trasforma i nomi in slug (es: Alba Adriatica -> alba-adriatica)
+        c = r[0].strip().lower().replace(" ", "-")
+        m = r[1].strip().lower().replace(" ", "-")
+        xml += f'''
         <url>
-            <loc>https://stima360.it/valutazione/{slug}</loc>
+            <loc>https://stima360.it/valutazione/{c}/{m}</loc>
             <changefreq>weekly</changefreq>
             <priority>0.8</priority>
         </url>'''
         
-    xml_content += '\n</urlset>'
-    
-    return Response(content=xml_content, media_type="application/xml")
+    xml += '\n</urlset>'
+    return Response(content=xml, media_type="application/xml")
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
