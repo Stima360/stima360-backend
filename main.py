@@ -1,6 +1,6 @@
 # backend/main.py — versione ripulita Stima360
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -1179,29 +1179,26 @@ def api_contatore_oggi():
         print("Errore contatore:", e)
         return {"success": False, "count": 0}
 # ---------------------------------------------------------
-# SITEMAP.XML
+# SITEMAP.XML (Versione Automatica, non tocca zone_valori)
 # ---------------------------------------------------------
 @app.get("/sitemap.xml")
 def sitemap():
     try:
         conn = get_connection()
         cur = conn.cursor()
-        # Legge le coppie univoche comune/microzona dalla tabella stime
+        # Estrae le zone uniche dallo storico stime
         cur.execute("SELECT DISTINCT comune, microzona FROM stime WHERE comune IS NOT NULL AND microzona IS NOT NULL")
         rows = cur.fetchall()
+        cur.close(); conn.close()
     except Exception as e:
         print("SITEMAP ERROR:", e)
-        raise HTTPException(status_code=500, detail="Errore")
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
+        raise HTTPException(status_code=500, detail="Errore database sitemap")
     
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
     
     for r in rows:
-        # Trasforma i nomi in slug (es: Alba Adriatica -> alba-adriatica)
-        c = r[0].strip().lower().replace(" ", "-")
-        m = r[1].strip().lower().replace(" ", "-")
+        c = str(r[0] or "").strip().lower().replace(" ", "-")
+        m = str(r[1] or "").strip().lower().replace(" ", "-")
         xml += f'''
         <url>
             <loc>https://stima360.it/valutazione/{c}/{m}</loc>
