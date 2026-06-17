@@ -1187,7 +1187,7 @@ def sitemap():
         conn = get_connection()
         cur = conn.cursor()
         # Estrae le zone uniche dallo storico stime
-        ccur.execute("SELECT comune, microzona FROM seo_microzone WHERE comune IS NOT NULL AND microzona IS NOT NULL")
+        cur.execute("SELECT comune, microzona FROM seo_microzone WHERE comune IS NOT NULL AND microzona IS NOT NULL")
         rows = cur.fetchall()
         cur.close(); conn.close()
     except Exception as e:
