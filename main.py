@@ -1178,7 +1178,38 @@ def api_contatore_oggi():
     except Exception as e:
         print("Errore contatore:", e)
         return {"success": False, "count": 0}
-
+# ---------------------------------------------------------
+# SITEMAP.XML
+# ---------------------------------------------------------
+@app.get("/sitemap.xml")
+def sitemap():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT url_slug FROM zone_valori WHERE url_slug IS NOT NULL")
+        zone = cur.fetchall()
+    except Exception as e:
+        print("SITEMAP ERROR:", e)
+        raise HTTPException(status_code=500, detail="Errore generazione sitemap")
+    finally:
+        cur.close()
+        conn.close()
+    
+    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml_content += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    
+    for z in zone:
+        slug = z[0]
+        xml_content += f'''
+        <url>
+            <loc>https://stima360.it/valutazione/{slug}</loc>
+            <changefreq>weekly</changefreq>
+            <priority>0.8</priority>
+        </url>'''
+        
+    xml_content += '\n</urlset>'
+    
+    return Response(content=xml_content, media_type="application/xml")
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
