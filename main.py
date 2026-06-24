@@ -1235,7 +1235,23 @@ def sitemap():
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
-
+# ---------------------------------------------------------
+# CARD INSERIMENTO
+# ---------------------------------------------------------
+# Aggiungi questo blocco nel file main.py su Render
+@app.get("/api/successi")
+def api_successi():
+    conn = get_connection()
+    cur = conn.cursor()
+    # Recupera le case dal tuo database PostgreSQL
+    cur.execute("SELECT comune, tipologia, giorni_vendita, foto_url, video_url, piantina_url FROM case_vendute ORDER BY data_vendita DESC LIMIT 6")
+    rows = cur.fetchall()
+    # Trasforma le righe del DB in una lista di dizionari (formato JSON)
+    cols = [c[0] for c in cur.description]
+    data = [dict(zip(cols, r)) for r in rows]
+    cur.close(); conn.close()
+    
+    return {"success": True, "data": data}
 # ---------------------------------------------------------
 # API VETRINA SUCCESSI (Per index.html su Netsons)
 # ---------------------------------------------------------
