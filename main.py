@@ -1235,67 +1235,28 @@ def sitemap():
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
-# ---------------------------------------------------------
-# CARD INSERIMENTO
-# ---------------------------------------------------------
-# Aggiungi questo blocco nel file main.py su Render
-@app.get("/api/successi")
-def api_successi():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        # Recupera le case
-        cur.execute("SELECT comune, tipologia, giorni_vendita, foto_url, video_url, piantina_url FROM case_vendute ORDER BY data_vendita DESC LIMIT 6")
-        rows = cur.fetchall()
-        cols = [c[0] for c in cur.description]
-        data = [dict(zip(cols, r)) for r in rows]
-        cur.close(); conn.close()
-        
-        # Pulizia percorsi foto (se necessario): assicura che usino lo slash /
-        for item in data:
-            if item.get("foto_url"):
-                item["foto_url"] = item["foto_url"].replace("\\", "/")
-        
-        return {"success": True, "data": data}
-    except Exception as e:
-        print("ERRORE API SUCCESSI:", e)
-        return {"success": False, "data": []}
-# ---------------------------------------------------------
-# API VETRINA SUCCESSI (Per index.html su Netsons)
-# ---------------------------------------------------------
-@app.get("/api/successi")
-def api_successi():
-    # Dati statici temporanei per far funzionare subito la grafica.
-    # In futuro potrai sostituire questa lista con una query al DB.
-    case_successo = [
-        {
-            "comune": "Alba Adriatica",
-            "tipologia": "Attico vista mare",
-            "giorni": 28,
-            "foto_url": "https://www.stima360.it/FamilyIndex.png",
-            "video_url": None,
-            "piantina_url": None
-        },
-        {
-            "comune": "Tortoreto Lido",
-            "tipologia": "Trilocale ristrutturato",
-            "giorni": 15,
-            "foto_url": "https://www.stima360.it/FamilyIndex.png",
-            "video_url": None,
-            "piantina_url": None
-        },
-        {
-            "comune": "San Benedetto",
-            "tipologia": "Villa Indipendente",
-            "giorni": 42,
-            "foto_url": "https://www.stima360.it/FamilyIndex.png",
-            "video_url": "https://www.w3schools.com/html/mov_bbb.mp4", # Esempio video
-            "piantina_url": None
-        }
-    ]
-    
-    return {"success": True, "data": case_successo}
 
+# ---------------------------------------------------------
+# API VETRINA SUCCESSI (Unificata e corretta)
+# ---------------------------------------------------------
+@app.get("/api/successi")
+def api_successi():
+    conn = get_connection()
+    cur = conn.cursor()
+    # Query corretta per estrarre tutte le colonne che abbiamo aggiunto
+    cur.execute("""
+        SELECT comune, tipologia, giorni_vendita, 
+               foto1_url, foto2_url, foto3_url, piantina_url, video_url 
+        FROM case_vendute 
+        ORDER BY data_vendita DESC 
+        LIMIT 6
+    """)
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description]
+    data = [dict(zip(cols, r)) for r in rows]
+    cur.close(); conn.close()
+    
+    return {"success": True, "data": data}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
