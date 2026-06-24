@@ -1241,17 +1241,25 @@ def sitemap():
 # Aggiungi questo blocco nel file main.py su Render
 @app.get("/api/successi")
 def api_successi():
-    conn = get_connection()
-    cur = conn.cursor()
-    # Recupera le case dal tuo database PostgreSQL
-    cur.execute("SELECT comune, tipologia, giorni_vendita, foto_url, video_url, piantina_url FROM case_vendute ORDER BY data_vendita DESC LIMIT 6")
-    rows = cur.fetchall()
-    # Trasforma le righe del DB in una lista di dizionari (formato JSON)
-    cols = [c[0] for c in cur.description]
-    data = [dict(zip(cols, r)) for r in rows]
-    cur.close(); conn.close()
-    
-    return {"success": True, "data": data}
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        # Recupera le case
+        cur.execute("SELECT comune, tipologia, giorni_vendita, foto_url, video_url, piantina_url FROM case_vendute ORDER BY data_vendita DESC LIMIT 6")
+        rows = cur.fetchall()
+        cols = [c[0] for c in cur.description]
+        data = [dict(zip(cols, r)) for r in rows]
+        cur.close(); conn.close()
+        
+        # Pulizia percorsi foto (se necessario): assicura che usino lo slash /
+        for item in data:
+            if item.get("foto_url"):
+                item["foto_url"] = item["foto_url"].replace("\\", "/")
+        
+        return {"success": True, "data": data}
+    except Exception as e:
+        print("ERRORE API SUCCESSI:", e)
+        return {"success": False, "data": []}
 # ---------------------------------------------------------
 # API VETRINA SUCCESSI (Per index.html su Netsons)
 # ---------------------------------------------------------
