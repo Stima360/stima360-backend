@@ -1236,7 +1236,41 @@ def sitemap():
 # RUN
 # ---------------------------------------------------------
 
-
+# ---------------------------------------------------------
+# API VETRINA SUCCESSI (Per index.html su Netsons)
+# ---------------------------------------------------------
+@app.get("/api/successi")
+def api_successi():
+    # Dati statici temporanei per far funzionare subito la grafica.
+    # In futuro potrai sostituire questa lista con una query al DB.
+    case_successo = [
+        {
+            "comune": "Alba Adriatica",
+            "tipologia": "Attico vista mare",
+            "giorni": 28,
+            "foto_url": "https://www.stima360.it/FamilyIndex.png",
+            "video_url": None,
+            "piantina_url": None
+        },
+        {
+            "comune": "Tortoreto Lido",
+            "tipologia": "Trilocale ristrutturato",
+            "giorni": 15,
+            "foto_url": "https://www.stima360.it/FamilyIndex.png",
+            "video_url": None,
+            "piantina_url": None
+        },
+        {
+            "comune": "San Benedetto",
+            "tipologia": "Villa Indipendente",
+            "giorni": 42,
+            "foto_url": "https://www.stima360.it/FamilyIndex.png",
+            "video_url": "https://www.w3schools.com/html/mov_bbb.mp4", # Esempio video
+            "piantina_url": None
+        }
+    ]
+    
+    return {"success": True, "data": case_successo}
 
 
 if __name__ == "__main__":
