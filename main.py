@@ -15,6 +15,7 @@ from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from valuation import BASE_MQ
 from urllib.parse import urlencode
+from core.router import router as core_router
 
 # ---------------------------------------------------------
 # CONFIG
@@ -30,6 +31,9 @@ WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whats
 # APP & CORS
 # ---------------------------------------------------------
 app = FastAPI()
+
+# Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
+app.include_router(core_router)
 
 app.add_middleware(
     CORSMiddleware,
