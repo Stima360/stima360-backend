@@ -1,0 +1,21 @@
+from . import repository
+
+def dump(model,exclude_unset=False):
+    return model.model_dump(exclude_unset=exclude_unset) if hasattr(model,'model_dump') else model.dict(exclude_unset=exclude_unset)
+def create_property(p):return repository.create_property(dump(p))
+def list_properties(*a):return repository.list_properties(*a)
+def get_property(i):return repository.get_property(i)
+def update_property(i,p):return repository.update_property(i,dump(p,True))
+def archive_property(i):return repository.archive_property(i)
+def add_contact(i,p):return repository.add_contact(i,dump(p))
+def delete_contact(i,c,r):return repository.delete_contact(i,c,r)
+def add_lead(i,p):return repository.add_lead(i,dump(p))
+def delete_lead(i,l):return repository.delete_lead(i,l)
+def add_document(i,p):return repository.create_child('property_documents',i,dump(p))
+def delete_document(i):return repository.delete_child('property_documents',i,'document')
+def add_photo(i,p):return repository.create_child('property_photos',i,dump(p))
+def delete_photo(i):return repository.delete_child('property_photos',i,'photo')
+def list_visits(*a):return repository.list_visits(*a)
+def add_visit(i,p):return repository.create_child('property_visits',i,dump(p))
+def update_visit(i,p):return repository.update_visit(i,dump(p,True))
+def delete_visit(i):return repository.delete_child('property_visits',i,'visit')
