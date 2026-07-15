@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>STIMA360 OS — CORE Admin</title>
+  <link rel="stylesheet" href="/core-admin/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">S360</span><div><strong>STIMA360 OS</strong><small>CORE Admin 0.1</small></div></div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="dashboard">Panoramica</button>
+        <button class="nav-item" data-view="contacts">Contatti</button>
+        <button class="nav-item" data-view="leads">Lead</button>
+        <button class="nav-item" data-view="activities">Attività</button>
+        <button class="nav-item" data-view="tasks">Task</button>
+      </nav>
+      <div class="env-badge">AMBIENTE TEST</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><h1 id="page-title">Panoramica</h1><p id="page-subtitle">Gestione operativa del CORE CRM</p></div>
+        <div class="top-actions"><button class="btn ghost" id="refresh-btn">Aggiorna</button><button class="btn primary" id="quick-add">+ Nuovo contatto</button></div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script src="/core-admin/assets/app.js" defer></script>
+</body>
+</html>
