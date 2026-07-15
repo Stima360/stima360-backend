@@ -3,7 +3,11 @@ const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],select
 const qs=(s,p=document)=>p.querySelector(s),qsa=(s,p=document)=>[...p.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const dt=v=>v?new Date(v).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'}):'—';
-const localInput=v=>v?new Date(v).toISOString().slice(0,16):'';
+const localInput=v=>{if(!v)return'';const d=new Date(v);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)};
+const sameDay=(a,b=new Date())=>{if(!a)return false;const d=new Date(a);return d.getFullYear()===b.getFullYear()&&d.getMonth()===b.getMonth()&&d.getDate()===b.getDate()};
+const endOfToday=()=>{const d=new Date();d.setHours(23,59,59,999);return d};
+const money=v=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(v)||0);
+const priorityRank=v=>({urgent:0,high:1,normal:2,low:3}[v]??4);
 const val=id=>qs('#'+id)?.value.trim()||'';
 const opt=v=>v||null;
 async function api(path,opts={}){const r=await fetch(API+path,{headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts});if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);throw new Error(d||`Errore ${r.status}`)}return data}
@@ -16,7 +20,41 @@ function contactName(id){const c=state.contacts.find(x=>x.id===id);return c?.dis
 function setView(view){state.view=view;state.selected=null;qsa('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));render()}
 async function refresh(){qs('#content').innerHTML='<div class="card loading">Caricamento…</div>';try{await loadAll();render()}catch(e){qs('#content').innerHTML=`<div class="card empty">Errore: ${esc(e.message)}</div>`}}
 function render(){const titles={dashboard:['Panoramica','Gestione operativa del CORE CRM'],contacts:['Contatti','Anagrafiche, ruoli e stato'],leads:['Lead','Pipeline commerciale e prossime azioni'],activities:['Attività','Cronologia delle interazioni'],tasks:['Task','Azioni operative e scadenze'],contactDetail:['Scheda contatto','Dettaglio, ruoli e relazioni'],leadDetail:['Scheda lead','Pipeline, attività, task e stime collegate']};const [t,s]=titles[state.view]||titles.dashboard;qs('#page-title').textContent=t;qs('#page-subtitle').textContent=s;qs('#quick-add').style.display=['contactDetail','leadDetail'].includes(state.view)?'none':'';({dashboard:renderDashboard,contacts:renderContacts,leads:renderLeads,activities:renderActivities,tasks:renderTasks,contactDetail:renderContactDetail,leadDetail:renderLeadDetail}[state.view]||renderDashboard)()}
-function renderDashboard(){const openTasks=state.tasks.filter(x=>!['completed','cancelled'].includes(x.status)),overdue=openTasks.filter(t=>t.due_at&&new Date(t.due_at)<new Date()).length;qs('#content').innerHTML=`<div class="grid stats"><div class="card stat kpi-link" data-go="contacts"><div class="label">Contatti</div><div class="value">${state.contacts.length}</div><div class="hint">Anagrafiche CORE</div></div><div class="card stat kpi-link" data-go="leads"><div class="label">Lead aperti</div><div class="value">${state.leads.filter(x=>x.status==='open').length}</div><div class="hint">Pipeline attiva</div></div><div class="card stat kpi-link" data-go="activities"><div class="label">Attività</div><div class="value">${state.activities.length}</div><div class="hint">Eventi registrati</div></div><div class="card stat kpi-link" data-go="tasks"><div class="label">Task aperti</div><div class="value">${openTasks.length}</div><div class="hint">${overdue} scaduti</div></div></div><div class="grid two-panels"><div class="card panel"><div class="panel-head"><h2>Lead recenti</h2><button class="btn small" onclick="setView('leads')">Vedi tutti</button></div>${leadTable(state.leads.slice(0,6))}</div><div class="card panel"><div class="panel-head"><h2>Task prioritari</h2><button class="btn small" onclick="setView('tasks')">Vedi tutti</button></div>${taskList(openTasks.slice(0,6))}</div></div>`;qsa('[data-go]').forEach(x=>x.onclick=()=>setView(x.dataset.go));bindLeadRows();bindTaskEvents()}
+function renderDashboard(){
+ const now=new Date(),todayEnd=endOfToday();
+ const openTasks=state.tasks.filter(x=>!['completed','cancelled'].includes(x.status));
+ const overdue=openTasks.filter(t=>t.due_at&&new Date(t.due_at)<now).sort((a,b)=>new Date(a.due_at)-new Date(b.due_at));
+ const dueToday=openTasks.filter(t=>t.due_at&&sameDay(t.due_at)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority)||new Date(a.due_at)-new Date(b.due_at));
+ const callbacks=state.leads.filter(l=>l.status==='open'&&l.next_action_at&&new Date(l.next_action_at)<=todayEnd).sort((a,b)=>new Date(a.next_action_at)-new Date(b.next_action_at));
+ const highPriority=openTasks.filter(t=>['urgent','high'].includes(t.priority)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority));
+ const activitiesToday=state.activities.filter(a=>sameDay(a.occurred_at)).length;
+ const completedToday=state.tasks.filter(t=>t.status==='completed'&&sameDay(t.completed_at)).length;
+ const openLeads=state.leads.filter(l=>l.status==='open');
+ const pipelineValue=openLeads.reduce((sum,l)=>sum+(Number(l.estimated_value)||0),0);
+ const operational=[...dueToday,...overdue.filter(x=>!dueToday.some(y=>y.id===x.id)),...highPriority.filter(x=>!dueToday.some(y=>y.id===x.id)&&!overdue.some(y=>y.id===x.id))].slice(0,8);
+ qs('#content').innerHTML=`
+ <div class="grid stats daily-stats">
+   <div class="card stat kpi-link" data-go="tasks"><div class="label">Da fare oggi</div><div class="value">${dueToday.length}</div><div class="hint">${completedToday} completati oggi</div></div>
+   <div class="card stat kpi-link ${overdue.length?'attention':''}" data-go="tasks"><div class="label">Task scaduti</div><div class="value">${overdue.length}</div><div class="hint">Da recuperare subito</div></div>
+   <div class="card stat kpi-link ${callbacks.length?'attention':''}" data-go="leads"><div class="label">Lead da ricontattare</div><div class="value">${callbacks.length}</div><div class="hint">Entro oggi o già scaduti</div></div>
+   <div class="card stat kpi-link" data-go="activities"><div class="label">Attività oggi</div><div class="value">${activitiesToday}</div><div class="hint">Interazioni registrate</div></div>
+ </div>
+ <div class="grid stats secondary-stats">
+   <div class="card stat"><div class="label">Lead aperti</div><div class="value">${openLeads.length}</div><div class="hint">Pipeline attiva</div></div>
+   <div class="card stat"><div class="label">Valore pipeline</div><div class="value money-value">${money(pipelineValue)}</div><div class="hint">Somma valori stimati aperti</div></div>
+   <div class="card stat"><div class="label">Contatti CORE</div><div class="value">${state.contacts.length}</div><div class="hint">Anagrafiche operative</div></div>
+   <div class="card stat"><div class="label">Priorità alte</div><div class="value">${highPriority.length}</div><div class="hint">Task high o urgent</div></div>
+ </div>
+ <div class="grid dashboard-grid">
+  <div class="card panel focus-panel"><div class="panel-head"><div><h2>Agenda operativa</h2><div class="muted">Task di oggi, scaduti e prioritari</div></div><button class="btn small" onclick="setView('tasks')">Apri task</button></div>${taskList(operational)}</div>
+  <div class="card panel"><div class="panel-head"><div><h2>Lead da ricontattare</h2><div class="muted">Prossima azione entro oggi</div></div><button class="btn small" onclick="setView('leads')">Apri lead</button></div>${leadTable(callbacks.slice(0,8))}</div>
+ </div>
+ <div class="grid two-panels dashboard-bottom">
+  <div class="card panel"><div class="panel-head"><h2>Lead recenti</h2><button class="btn small" onclick="setView('leads')">Vedi tutti</button></div>${leadTable(state.leads.slice(0,6))}</div>
+  <div class="card panel"><div class="panel-head"><h2>Ultime attività</h2><button class="btn small" onclick="setView('activities')">Vedi tutte</button></div>${activityList(state.activities.slice(0,6))}</div>
+ </div>`;
+ qsa('[data-go]').forEach(x=>x.onclick=()=>setView(x.dataset.go));bindLeadRows();bindTaskEvents();bindActivityEvents()
+}
 function contactTable(items){if(!items.length)return '<div class="empty">Nessun contatto</div>';return `<div class="table-wrap"><table class="table"><thead><tr><th>Nome</th><th>Contatti</th><th>Fonte</th><th>Stato</th><th>Azioni</th></tr></thead><tbody>${items.map(c=>`<tr><td class="clickable" data-contact="${c.id}"><strong>${esc(c.display_name||c.company_name||[c.first_name,c.last_name].filter(Boolean).join(' ')||`Contatto #${c.id}`)}</strong><div class="muted">${esc(c.contact_type)} · #${c.id}</div></td><td>${esc(c.email||'—')}<div class="muted">${esc(c.phone||'')}</div></td><td>${esc(c.source||'—')}</td><td>${badge(c.status)}</td><td><button class="btn small" data-edit-contact="${c.id}">Modifica</button></td></tr>`).join('')}</tbody></table></div>`}
 function renderContacts(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="contact-search" placeholder="Cerca nome, email, telefono"><select class="select" id="contact-status"><option value="">Tutti gli stati</option><option>active</option><option>inactive</option><option>archived</option></select></div><button class="btn primary" id="new-contact">+ Nuovo contatto</button></div><div id="contacts-table">${contactTable(state.contacts)}</div></div>`;qs('#new-contact').onclick=()=>openContactForm();qs('#contact-search').oninput=filterContacts;qs('#contact-status').onchange=filterContacts;bindContactRows()}
 function filterContacts(){const q=val('contact-search').toLowerCase(),st=val('contact-status');const arr=state.contacts.filter(c=>(!st||c.status===st)&&(!q||JSON.stringify(c).toLowerCase().includes(q)));qs('#contacts-table').innerHTML=contactTable(arr);bindContactRows()}

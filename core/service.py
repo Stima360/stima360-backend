@@ -43,6 +43,18 @@ def update_contact(contact_id, payload):
         data["email_normalized"] = normalize_email(data.get("email"))
     if "phone" in data:
         data["phone_normalized"] = normalize_phone(data.get("phone"))
+
+    # Keep display_name coherent when person/company identity fields change.
+    identity_fields = {"contact_type", "first_name", "last_name", "company_name"}
+    if identity_fields.intersection(data) and "display_name" not in data:
+        current = repository.get_contact(contact_id)
+        merged = {**current, **data}
+        if merged.get("contact_type") == "company":
+            data["display_name"] = merged.get("company_name")
+        else:
+            data["display_name"] = " ".join(
+                part for part in (merged.get("first_name"), merged.get("last_name")) if part
+            ) or merged.get("display_name")
     return repository.update_contact(contact_id, data)
 
 
@@ -70,6 +82,8 @@ def update_lead(lead_id, payload):
     data = _dump(payload, exclude_unset=True)
     if data.get("status") == "closed" and "closed_at" not in data:
         data["closed_at"] = datetime.now(timezone.utc)
+    elif data.get("status") in {"open", "paused"} and "closed_at" not in data:
+        data["closed_at"] = None
     return repository.update_lead(lead_id, data)
 
 
@@ -104,6 +118,8 @@ def update_task(task_id, payload):
     data = _dump(payload, exclude_unset=True)
     if data.get("status") == "completed" and "completed_at" not in data:
         data["completed_at"] = datetime.now(timezone.utc)
+    elif data.get("status") in {"open", "in_progress", "cancelled"} and "completed_at" not in data:
+        data["completed_at"] = None
     return repository.update_task(task_id, data)
 
 
