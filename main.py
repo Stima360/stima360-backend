@@ -35,6 +35,10 @@ app = FastAPI()
 # Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
 app.include_router(core_router)
 
+# Additive CORE admin UI, isolated from legacy frontend flows.
+CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
+app.mount("/core-admin", StaticFiles(directory=str(CORE_ADMIN_DIR), html=True), name="core-admin")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
