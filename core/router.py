@@ -115,6 +115,12 @@ def create_activity(payload: ActivityCreate):
     return _translate(service.create_activity, payload)
 
 
+@router.delete("/activities/{activity_id}", status_code=204)
+def delete_activity(activity_id: int):
+    _translate(service.delete_activity, activity_id)
+    return Response(status_code=204)
+
+
 @router.get("/activities")
 def list_activities(
     limit: int = Query(default=50, ge=1, le=200),
@@ -133,6 +139,12 @@ def list_activities(
 @router.post("/tasks", status_code=201)
 def create_task(payload: TaskCreate):
     return _translate(service.create_task, payload)
+
+
+@router.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: int):
+    _translate(service.delete_task, task_id)
+    return Response(status_code=204)
 
 
 @router.get("/tasks")

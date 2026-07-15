@@ -289,3 +289,17 @@ def update_task(task_id: int, data: dict[str, Any]) -> dict[str, Any]:
         if not row:
             raise NotFoundError(f"task {task_id} not found")
         return _row(row)
+
+
+def delete_activity(activity_id: int) -> None:
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute("DELETE FROM activities WHERE id = %s", (activity_id,))
+        if cur.rowcount == 0:
+            raise NotFoundError(f"activity {activity_id} not found")
+
+
+def delete_task(task_id: int) -> None:
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+        if cur.rowcount == 0:
+            raise NotFoundError(f"task {task_id} not found")

@@ -105,3 +105,11 @@ def update_task(task_id, payload):
     if data.get("status") == "completed" and "completed_at" not in data:
         data["completed_at"] = datetime.now(timezone.utc)
     return repository.update_task(task_id, data)
+
+
+def delete_activity(activity_id):
+    repository.delete_activity(activity_id)
+
+
+def delete_task(task_id):
+    repository.delete_task(task_id)
