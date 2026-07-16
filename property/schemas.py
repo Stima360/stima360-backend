@@ -88,6 +88,9 @@ class PropertyUpdate(PropertyModel):
     internal_notes: str | None = None
     metadata: dict[str,Any] | None = None
     archived_at: datetime | None = None
+    change_reason: str | None = Field(None,max_length=200)
+    changed_by: str | None = Field(None,max_length=200)
+    history_note: str | None = None
     @root_validator(skip_on_failure=True)
     def validate_update(cls,v):
         if v.get('property_type') is not None and v['property_type'] not in PROPERTY_TYPES: raise ValueError('invalid property_type')
@@ -130,12 +133,33 @@ class DocumentCreate(PropertyModel):
         if not v.get('url') and not v.get('storage_key') and v.get('status') not in {'missing','requested'}: raise ValueError('url or storage_key required')
         return v
 
+class DocumentUpdate(PropertyModel):
+    document_type: str | None = Field(None,min_length=1,max_length=80)
+    title: str | None = Field(None,min_length=1,max_length=200)
+    url: str | None = None
+    storage_key: str | None = None
+    status: str | None = None
+    expires_at: date | None = None
+    notes: str | None = None
+    metadata: dict[str,Any] | None = None
+    @root_validator(skip_on_failure=True)
+    def validate_doc(cls,v):
+        if v.get('status') is not None and v['status'] not in DOCUMENT_STATUSES: raise ValueError('invalid document status')
+        return v
+
 class PhotoCreate(PropertyModel):
     url: str = Field(...,min_length=1)
     title: str | None = Field(None,max_length=200)
     sort_order: int = Field(0,ge=0)
     is_cover: bool = False
     metadata: dict[str,Any] = Field(default_factory=dict)
+
+class PhotoUpdate(PropertyModel):
+    url: str | None = Field(None,min_length=1)
+    title: str | None = Field(None,max_length=200)
+    sort_order: int | None = Field(None,ge=0)
+    is_cover: bool | None = None
+    metadata: dict[str,Any] | None = None
 
 class VisitCreate(PropertyModel):
     contact_id: int | None = None
@@ -162,3 +186,7 @@ class VisitUpdate(PropertyModel):
     rating: int | None = Field(None,ge=1,le=5)
     assigned_to: str | None = Field(None,max_length=200)
     created_by: str | None = Field(None,max_length=200)
+    @root_validator(skip_on_failure=True)
+    def validate_status(cls,v):
+        if v.get('status') is not None and v['status'] not in VISIT_STATUSES: raise ValueError('invalid visit status')
+        return v
