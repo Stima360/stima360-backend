@@ -1,0 +1,16 @@
+from . import repository
+
+def dump(model,exclude_unset=False): return model.dict(exclude_unset=exclude_unset)
+def create_request(p): return repository.create_request(dump(p))
+def list_requests(*args): return repository.list_requests(*args)
+def get_request(i): return repository.get_request(i)
+def update_request(i,p): return repository.update_request(i,dump(p,True))
+def archive_request(i): return repository.archive_request(i)
+def add_location(i,p): return repository.add_child('buy_request_locations',i,dump(p))
+def delete_location(i): return repository.delete_child('buy_request_locations',i,'location')
+def add_typology(i,p): return repository.add_child('buy_request_typologies',i,dump(p))
+def delete_typology(i): return repository.delete_child('buy_request_typologies',i,'typology')
+def add_feature(i,p): return repository.add_child('buy_request_features',i,dump(p))
+def delete_feature(i): return repository.delete_child('buy_request_features',i,'feature')
+def normalized(i): return repository.normalized(i)
+def dashboard(): return repository.dashboard()
