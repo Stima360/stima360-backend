@@ -2,7 +2,7 @@ from __future__ import annotations
 from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
-from core.exceptions import ConflictError, NotFoundError
+from core.exceptions import ConflictError, NotFoundError, ValidationError
 
 def row(x): return dict(x) if x else None
 
@@ -35,15 +35,25 @@ def list_properties(limit,offset,search,status,classification,city,contact_id,le
     if assigned_to: filters.append('p.assigned_to ILIKE %s'); params.append(f'%{assigned_to}%')
     if contact_id: joins.append('JOIN property_contacts pc_filter ON pc_filter.property_id=p.id'); filters.append('pc_filter.contact_id=%s'); params.append(contact_id)
     if lead_id: joins.append('JOIN property_leads pl_filter ON pl_filter.property_id=p.id'); filters.append('pl_filter.lead_id=%s'); params.append(lead_id)
-    if mandate_expiring: filters.append("p.mandate_end IS NOT NULL AND p.mandate_end BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'")
-    if missing_documents: filters.append("EXISTS (SELECT 1 FROM property_documents pd WHERE pd.property_id=p.id AND pd.status IN ('missing','requested','expired','rejected'))")
+    if mandate_expiring: filters.append("p.archived_at IS NULL AND p.mandate_end IS NOT NULL AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND p.commercial_status NOT IN ('sold','withdrawn','archived')")
+    if missing_documents: filters.append("EXISTS (SELECT 1 FROM property_documents pd WHERE pd.property_id=p.id AND (pd.status IN ('missing','requested','expired','rejected') OR (pd.expires_at IS NOT NULL AND pd.expires_at < CURRENT_DATE)))")
     where=' WHERE '+' AND '.join(filters) if filters else ''
     params += [limit,offset]
     with core_cursor() as (_,cur):
         cur.execute(f"""
             SELECT DISTINCT p.*,
-              (SELECT COUNT(*) FROM property_documents pd WHERE pd.property_id=p.id AND pd.status IN ('missing','requested','expired','rejected')) AS document_issues,
-              (SELECT COUNT(*) FROM property_visits pv WHERE pv.property_id=p.id AND pv.status IN ('scheduled','confirmed') AND pv.scheduled_at >= NOW()) AS upcoming_visits
+              (SELECT COUNT(*) FROM property_documents pd WHERE pd.property_id=p.id AND (pd.status IN ('missing','requested','expired','rejected') OR (pd.expires_at IS NOT NULL AND pd.expires_at < CURRENT_DATE))) AS document_issues,
+              (SELECT COUNT(*) FROM property_visits pv WHERE pv.property_id=p.id AND pv.status IN ('scheduled','confirmed') AND pv.scheduled_at >= NOW()) AS upcoming_visits,
+              ROUND(((CASE WHEN NULLIF(BTRIM(p.title),'') IS NOT NULL THEN 1 ELSE 0 END) +
+                     (CASE WHEN NULLIF(BTRIM(p.city),'') IS NOT NULL THEN 1 ELSE 0 END) +
+                     (CASE WHEN p.surface_sqm IS NOT NULL AND p.surface_sqm > 0 THEN 1 ELSE 0 END) +
+                     (CASE WHEN p.asking_price IS NOT NULL AND p.asking_price > 0 THEN 1 ELSE 0 END) +
+                     (CASE WHEN EXISTS (SELECT 1 FROM property_contacts pc WHERE pc.property_id=p.id) THEN 1 ELSE 0 END) +
+                     (CASE WHEN EXISTS (SELECT 1 FROM property_photos ph WHERE ph.property_id=p.id) THEN 1 ELSE 0 END) +
+                     (CASE WHEN EXISTS (SELECT 1 FROM property_documents pd0 WHERE pd0.property_id=p.id)
+                                AND NOT EXISTS (SELECT 1 FROM property_documents pd1 WHERE pd1.property_id=p.id AND (pd1.status IN ('missing','requested','expired','rejected') OR (pd1.expires_at IS NOT NULL AND pd1.expires_at < CURRENT_DATE)))
+                           THEN 1 ELSE 0 END) +
+                     (CASE WHEN p.classification IS NOT NULL THEN 1 ELSE 0 END)) * 100.0 / 8) AS readiness_score
             FROM properties p {' '.join(joins)}{where}
             ORDER BY p.updated_at DESC,p.id DESC LIMIT %s OFFSET %s
         """,params)
@@ -60,14 +70,16 @@ def get_property(property_id):
             cur.execute(f'SELECT * FROM {table} WHERE property_id=%s ORDER BY {order}',(property_id,)); p[key]=[dict(x) for x in cur.fetchall()]
         cur.execute('SELECT * FROM property_price_history WHERE property_id=%s ORDER BY created_at DESC,id DESC',(property_id,)); p['price_history']=[dict(x) for x in cur.fetchall()]
         cur.execute('SELECT * FROM property_status_history WHERE property_id=%s ORDER BY created_at DESC,id DESC',(property_id,)); p['status_history']=[dict(x) for x in cur.fetchall()]
-        p['document_issues']=sum(1 for x in p['documents'] if x['status'] in {'missing','requested','expired','rejected'})
+        today=__import__('datetime').date.today()
+        p['document_issues']=sum(1 for x in p['documents'] if x['status'] in {'missing','requested','expired','rejected'} or (x.get('expires_at') is not None and x['expires_at'] < today))
         p['readiness_score']=readiness_score(p)
         return p
 
 def readiness_score(p):
     checks=[bool(p.get('title')),bool(p.get('city')),bool(p.get('surface_sqm')),bool(p.get('asking_price')),bool(p.get('contacts')),bool(p.get('photos'))]
     docs=p.get('documents') or []
-    checks.append(bool(docs) and not any(x['status'] in {'missing','requested','expired','rejected'} for x in docs))
+    today=__import__('datetime').date.today()
+    checks.append(bool(docs) and not any(x['status'] in {'missing','requested','expired','rejected'} or (x.get('expires_at') is not None and x['expires_at'] < today) for x in docs))
     checks.append(bool(p.get('classification')))
     return round(sum(checks)/len(checks)*100)
 
@@ -75,11 +87,16 @@ def update_property(property_id,data):
     if not data:return get_property(property_id)
     change_reason=data.pop('change_reason',None); changed_by=data.pop('changed_by',None); history_note=data.pop('history_note',None)
     if 'metadata' in data:data['metadata']=Json(data.get('metadata') or {})
+    if not data:return get_property(property_id)
     with core_cursor(commit=True) as (_,cur):
         cur.execute('SELECT asking_price,commercial_status,classification FROM properties WHERE id=%s FOR UPDATE',(property_id,)); old=cur.fetchone()
         if not old: raise NotFoundError(f'property {property_id} not found')
         old=dict(old)
-        cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *",list(data.values())+[property_id]); r=row(cur.fetchone())
+        try:
+            cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *",list(data.values())+[property_id])
+        except errors.UniqueViolation as exc:
+            raise ConflictError('property code already exists') from exc
+        r=row(cur.fetchone())
         if 'asking_price' in data and data['asking_price'] != old.get('asking_price'):
             cur.execute("INSERT INTO property_price_history(property_id,old_price,new_price,change_reason,changed_by) VALUES(%s,%s,%s,%s,%s)",(property_id,old.get('asking_price'),data['asking_price'],change_reason,changed_by))
         for field in ('commercial_status','classification'):
@@ -119,6 +136,9 @@ def delete_lead(property_id,lead_id):
 def create_child(table,property_id,data):
     with core_cursor(commit=True) as (_,cur):
         ensure(cur,'properties',property_id,'property')
+        if table=='property_visits':
+            if data.get('contact_id') is not None: ensure(cur,'contacts',data['contact_id'],'contact')
+            if data.get('lead_id') is not None: ensure(cur,'leads',data['lead_id'],'lead')
         if table in {'property_documents','property_photos'} and 'metadata' in data:data['metadata']=Json(data.get('metadata') or {})
         if table=='property_photos' and data.get('is_cover'):cur.execute('UPDATE property_photos SET is_cover=FALSE WHERE property_id=%s',(property_id,))
         data={**data,'property_id':property_id}; cols=list(data)
@@ -131,6 +151,13 @@ def update_child(table,item_id,data,label):
         if not r:raise NotFoundError(f'{label} {item_id} not found')
         return row(r)
     with core_cursor(commit=True) as (_,cur):
+        if table=='property_documents':
+            cur.execute('SELECT url,storage_key,status FROM property_documents WHERE id=%s',(item_id,))
+            current=cur.fetchone()
+            if not current: raise NotFoundError(f'{label} {item_id} not found')
+            merged={**dict(current),**data}
+            if not merged.get('url') and not merged.get('storage_key') and merged.get('status') not in {'missing','requested'}:
+                raise ValidationError('url or storage_key required for this document status')
         if table in {'property_documents','property_photos'} and 'metadata' in data:data['metadata']=Json(data.get('metadata') or {})
         if table=='property_photos' and data.get('is_cover'):
             cur.execute('SELECT property_id FROM property_photos WHERE id=%s',(item_id,)); pr=cur.fetchone()
@@ -158,6 +185,8 @@ def update_visit(visit_id,data):
         if not r:raise NotFoundError(f'visit {visit_id} not found')
         return row(r)
     with core_cursor(commit=True) as (_,cur):
+        if data.get('contact_id') is not None: ensure(cur,'contacts',data['contact_id'],'contact')
+        if data.get('lead_id') is not None: ensure(cur,'leads',data['lead_id'],'lead')
         cur.execute(f"UPDATE property_visits SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *",list(data.values())+[visit_id]);r=cur.fetchone()
         if not r:raise NotFoundError(f'visit {visit_id} not found')
         return row(r)
@@ -173,21 +202,21 @@ def dashboard():
         SELECT
           COUNT(*) FILTER (WHERE archived_at IS NULL) AS total,
           COUNT(*) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
-          COUNT(*) FILTER (WHERE classification='A') AS class_a,
-          COUNT(*) FILTER (WHERE classification='B') AS class_b,
-          COUNT(*) FILTER (WHERE classification='C') AS class_c,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='A') AS class_a,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='B') AS class_b,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
           COALESCE(SUM(asking_price) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
-          COUNT(*) FILTER (WHERE mandate_end BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days') AS expiring_mandates
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
         FROM properties
         """); kpi=dict(cur.fetchone())
-        cur.execute("SELECT COUNT(*) AS count FROM property_documents WHERE status IN ('missing','requested','expired','rejected')"); kpi['document_issues']=cur.fetchone()['count']
-        cur.execute("SELECT COUNT(*) AS count FROM property_visits WHERE status IN ('scheduled','confirmed') AND scheduled_at::date=CURRENT_DATE"); kpi['visits_today']=cur.fetchone()['count']
-        cur.execute("SELECT COUNT(*) AS count FROM property_visits WHERE status IN ('scheduled','confirmed') AND scheduled_at > NOW()"); kpi['upcoming_visits']=cur.fetchone()['count']
+        cur.execute("SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id WHERE p.archived_at IS NULL AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))"); kpi['document_issues']=cur.fetchone()['count']
+        cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date"); kpi['visits_today']=cur.fetchone()['count']
+        cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at > NOW()"); kpi['upcoming_visits']=cur.fetchone()['count']
         cur.execute("""SELECT p.id,p.code,p.title,p.commercial_status,p.classification,p.mandate_end,p.asking_price,
-          (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND d.status IN ('missing','requested','expired','rejected')) AS document_issues
+          (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))) AS document_issues
           FROM properties p WHERE p.archived_at IS NULL ORDER BY p.updated_at DESC LIMIT 8"""); kpi['recent_properties']=[dict(x) for x in cur.fetchall()]
         cur.execute("""SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id
-          WHERE v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8"""); kpi['next_visits']=[dict(x) for x in cur.fetchall()]
+          WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8"""); kpi['next_visits']=[dict(x) for x in cur.fetchall()]
         return kpi
 
 def alerts():
@@ -196,18 +225,23 @@ def alerts():
         SELECT 'mandate' AS alert_type,p.id AS property_id,p.title,p.code,p.mandate_end AS due_date,
                'Incarico in scadenza' AS message
         FROM properties p
-        WHERE p.mandate_end BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        WHERE p.archived_at IS NULL
+          AND p.commercial_status NOT IN ('sold','withdrawn','archived')
+          AND p.mandate_end IS NOT NULL
+          AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days'
         UNION ALL
         SELECT 'document',p.id,p.title,p.code,d.expires_at,
                'Documento: '||d.title||' ('||d.status||')'
         FROM property_documents d JOIN properties p ON p.id=d.property_id
-        WHERE d.status IN ('missing','requested','expired','rejected')
-           OR (d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + INTERVAL '30 days')
+        WHERE p.archived_at IS NULL AND (
+             d.status IN ('missing','requested','expired','rejected')
+             OR (d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + INTERVAL '30 days')
+        )
         UNION ALL
         SELECT 'visit',p.id,p.title,p.code,v.scheduled_at::date,
                'Visita '||v.status||' alle '||to_char(v.scheduled_at,'DD/MM/YYYY HH24:MI')
         FROM property_visits v JOIN properties p ON p.id=v.property_id
-        WHERE v.status IN ('scheduled','confirmed') AND v.scheduled_at BETWEEN NOW() AND NOW()+INTERVAL '7 days'
+        WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at BETWEEN NOW() AND NOW()+INTERVAL '7 days'
         ORDER BY due_date NULLS LAST
         """)
         return {'items':[dict(x) for x in cur.fetchall()]}
