@@ -139,6 +139,9 @@ class InteractionCreate(BuyModel):
     def validate_interaction(cls,v):
         if v.get('interaction_type') not in INTERACTION_TYPES: raise ValueError('invalid interaction_type')
         if not v.get('match_id') and not v.get('property_id'): raise ValueError('match_id or property_id is required')
+        reason=v.get('reason_code')
+        if reason is not None and reason not in REJECTION_REASONS: raise ValueError('invalid reason_code')
+        if v.get('interaction_type') == 'discarded' and not reason: raise ValueError('reason_code is required for discarded interactions')
         return v
 
 class InteractionUpdate(BuyModel):
@@ -146,6 +149,9 @@ class InteractionUpdate(BuyModel):
     @root_validator(skip_on_failure=True)
     def validate_interaction(cls,v):
         if v.get('interaction_type') is not None and v['interaction_type'] not in INTERACTION_TYPES: raise ValueError('invalid interaction_type')
+        reason=v.get('reason_code')
+        if reason is not None and reason not in REJECTION_REASONS: raise ValueError('invalid reason_code')
+        if v.get('interaction_type') == 'discarded' and not reason: raise ValueError('reason_code is required for discarded interactions')
         return v
 
 class MatchDecision(BuyModel):
@@ -157,6 +163,9 @@ class MatchDecision(BuyModel):
     @root_validator(skip_on_failure=True)
     def validate_action(cls,v):
         if v.get('action') not in INTERACTION_TYPES - {'other'}: raise ValueError('invalid action')
+        reason=v.get('reason_code')
+        if reason is not None and reason not in REJECTION_REASONS: raise ValueError('invalid reason_code')
+        if v.get('action') == 'discarded' and not reason: raise ValueError('reason_code is required when discarding a match')
         return v
 
 class BuyTaskCreate(BuyModel):
