@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 from core.router import router as core_router
 from property.router import router as property_router
 from buy.router import router as buy_router
+from match.router import router as match_router
 
 # ---------------------------------------------------------
 # CONFIG
@@ -40,6 +41,7 @@ app.include_router(core_router)
 # Additive PROPERTY 0.1 routes. CORE and legacy routes remain unchanged.
 app.include_router(property_router)
 app.include_router(buy_router)
+app.include_router(match_router)
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
@@ -51,6 +53,9 @@ app.mount("/property-admin", StaticFiles(directory=str(PROPERTY_ADMIN_DIR), html
 
 BUY_ADMIN_DIR = BASE_DIR / "static" / "buy_admin"
 app.mount("/buy-admin", StaticFiles(directory=str(BUY_ADMIN_DIR), html=True), name="buy-admin")
+
+MATCH_ADMIN_DIR = BASE_DIR / "static" / "match_admin"
+app.mount("/match-admin", StaticFiles(directory=str(MATCH_ADMIN_DIR), html=True), name="match-admin")
 
 app.add_middleware(
     CORSMiddleware,
