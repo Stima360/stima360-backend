@@ -1,1 +1,41 @@
-<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>STIMA360 MATCH</title><link rel="stylesheet" href="/match-admin/assets/app.css"></head><body><header><div><strong>STIMA360 OS</strong><span>MATCH 0.1</span></div><nav><button data-view="dashboard">Dashboard</button><button data-view="matches">Graduatoria</button><button data-view="calculate">Calcola</button><button data-view="exclusions">Esclusioni</button></nav></header><main><section id="dashboard" class="view"></section><section id="matches" class="view hidden"></section><section id="calculate" class="view hidden"></section><section id="exclusions" class="view hidden"></section></main><div id="toast"></div><script src="/match-admin/assets/app.js"></script></body></html>
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>STIMA360 MATCH 0.2</title>
+  <link rel="stylesheet" href="/match-admin/assets/app.css">
+</head>
+<body>
+<header>
+  <div><strong>STIMA360 OS</strong><span>MATCH 0.2</span></div>
+  <nav>
+    <button data-view="dashboard">Dashboard</button>
+    <button data-view="matches">Graduatoria</button>
+    <button data-view="freshness">Freschezza</button>
+    <button data-view="calculate">Calcola</button>
+    <button data-view="exclusions">Esclusioni</button>
+  </nav>
+</header>
+<main>
+  <section id="dashboard" class="view"></section>
+  <section id="matches" class="view hidden"></section>
+  <section id="freshness" class="view hidden"></section>
+  <section id="calculate" class="view hidden"></section>
+  <section id="exclusions" class="view hidden"></section>
+</main>
+<dialog id="feedbackModal">
+  <form id="feedbackForm">
+    <h2>Nuovo feedback</h2>
+    <input type="hidden" name="match_id">
+    <label>Fonte<select name="source"><option value="agent">Agente</option><option value="buyer">Acquirente</option></select></label>
+    <label>Esito<select name="feedback_type"><option value="positive">Positivo</option><option value="neutral">Neutro</option><option value="negative">Negativo</option></select></label>
+    <label>Motivo<select name="reason_code"><option value="">—</option><option>price</option><option>location</option><option>size</option><option>condition</option><option>floor</option><option>elevator</option><option>parking</option><option>outdoor_space</option><option>not_available</option><option>other</option></select></label>
+    <label>Note<textarea name="notes"></textarea></label>
+    <menu><button type="button" class="secondary" id="feedbackCancel">Annulla</button><button type="submit">Salva</button></menu>
+  </form>
+</dialog>
+<div id="toast"></div>
+<script src="/match-admin/assets/app.js"></script>
+</body>
+</html>

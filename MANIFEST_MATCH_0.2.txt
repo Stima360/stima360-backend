@@ -1,0 +1,34 @@
+MATCH 0.2 — FILE MODIFICATI/AGGIUNTI
+
+MODIFICATI
+match/enums.py
+match/repository.py
+match/router.py
+match/schemas.py
+match/service.py
+static/match_admin/index.html
+static/match_admin/assets/app.css
+static/match_admin/assets/app.js
+
+AGGIUNTI
+match/refresh.py
+migrations/007_match_02.sql
+migrations/007_match_02_down.sql
+tests/test_match_02_schemas.py
+tests/test_match_02_helpers.py
+tests/test_match_02_isolation.py
+README_MATCH_0.2.txt
+MANIFEST_MATCH_0.2.txt
+
+INCLUSO INVARIATO DAL MOTORE MATCH 0.1
+match/engine.py
+match/__init__.py
+tests/test_match_engine.py
+
+NON INCLUSI / NON MODIFICATI
+main.py
+core/
+property/
+buy/
+legacy
+produzione

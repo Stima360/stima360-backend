@@ -1,5 +1,13 @@
 ALGORITHM_VERSION = "match-0.1"
+MODULE_VERSION = "match-0.2"
 MATCH_CLASSES = ("excellent", "strong", "good", "possible", "weak", "poor", "incompatible")
-COMMERCIAL_STATUSES = ("new", "to_review", "approved", "rejected", "suggested", "interested", "visit_requested", "visited", "archived")
+COMMERCIAL_STATUSES = ("new", "to_review", "approved", "rejected", "suggested", "interested", "visit_requested", "visit_scheduled", "visited", "offer_candidate", "archived")
 PRIORITIES = ("low", "normal", "high", "urgent")
 ACTIVE_PROPERTY_STATUSES = ("mandate", "active", "reserved", "under_offer")
+FRESHNESS_STATUSES = ("fresh", "stale", "recalculating", "failed", "excluded")
+FEEDBACK_SOURCES = ("agent", "buyer")
+FEEDBACK_TYPES = ("positive", "neutral", "negative")
+FEEDBACK_REASONS = ("price", "location", "size", "condition", "floor", "elevator", "parking", "outdoor_space", "not_available", "other")
+REFRESH_TRIGGER_SOURCES = ("manual", "buy", "property", "system")
+REFRESH_STALE_DEFAULT_LIMIT = 50
+REFRESH_STALE_MAX_LIMIT = 200
