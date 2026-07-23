@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-
+from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
@@ -42,7 +42,7 @@ app.include_router(core_router)
 app.include_router(property_router)
 app.include_router(buy_router)
 app.include_router(match_router)
-
+app.include_router(flow_router)
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
 app.mount("/core-admin", StaticFiles(directory=str(CORE_ADMIN_DIR), html=True), name="core-admin")
@@ -56,7 +56,12 @@ app.mount("/buy-admin", StaticFiles(directory=str(BUY_ADMIN_DIR), html=True), na
 
 MATCH_ADMIN_DIR = BASE_DIR / "static" / "match_admin"
 app.mount("/match-admin", StaticFiles(directory=str(MATCH_ADMIN_DIR), html=True), name="match-admin")
-
+FLOW_ADMIN_DIR = BASE_DIR / "static" / "flow_admin"
+app.mount(
+    "/flow-admin",
+    StaticFiles(directory=str(FLOW_ADMIN_DIR), html=True),
+    name="flow-admin",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
