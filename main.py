@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
-from datetime import datetime, date, timedelta, timezonef
+from datetime import datetime, date, timedelta, timezone
 import os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
