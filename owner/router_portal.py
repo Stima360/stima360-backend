@@ -9,10 +9,9 @@ def nf(f,*a):
  try:return f(*a)
  except Exception:raise HTTPException(404,'Risorsa non trovata')
 @router.post('/auth/token',status_code=204)
-def login(p:TokenConsume,response:Response):s,raw=nf(r.consume_token,p.token);set_cookie(response,raw);return response
+def login(p:TokenConsume,response:Response):_session,raw_token=nf(r.consume_token,p.token);set_cookie(response,raw_token);return None
 @router.post('/auth/logout',status_code=204)
-def logout(request:Request,response:Response):r.revoke_session(request.cookies.get(COOKIE_NAME));clear_cookie(response);return response
-@router.get('/auth/session')
+def logout(request:Request,response:Response):r.revoke_session(request.cookies.get(COOKIE_NAME));clear_cookie(response);return None
 def session(s=Depends(current_owner)):return{'authenticated':True,'owner_account_id':s['owner_account_id'],'expires_at':s['expires_at']}
 @router.get('/dashboard')
 def dashboard(s=Depends(current_owner)):
