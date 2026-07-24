@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezonef
 import os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
@@ -19,7 +19,8 @@ from core.router import router as core_router
 from property.router import router as property_router
 from buy.router import router as buy_router
 from match.router import router as match_router
-
+from owner.router_admin import router as owner_admin_router
+from owner.router_portal import router as owner_portal_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -43,6 +44,8 @@ app.include_router(property_router)
 app.include_router(buy_router)
 app.include_router(match_router)
 app.include_router(flow_router)
+app.include_router(owner_admin_router)
+app.include_router(owner_portal_router)
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
 app.mount("/core-admin", StaticFiles(directory=str(CORE_ADMIN_DIR), html=True), name="core-admin")
@@ -61,6 +64,21 @@ app.mount(
     "/flow-admin",
     StaticFiles(directory=str(FLOW_ADMIN_DIR), html=True),
     name="flow-admin",
+)
+OWNER_ADMIN_DIR = BASE_DIR / "static" / "owner_admin"
+
+app.mount(
+    "/owner-admin",
+    StaticFiles(directory=str(OWNER_ADMIN_DIR), html=True),
+    name="owner-admin",
+)
+
+OWNER_PORTAL_DIR = BASE_DIR / "static" / "owner_portal"
+
+app.mount(
+    "/owner",
+    StaticFiles(directory=str(OWNER_PORTAL_DIR), html=True),
+    name="owner-portal",
 )
 app.add_middleware(
     CORSMiddleware,
