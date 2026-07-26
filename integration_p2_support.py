@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import importlib
+import sys
+import traceback
 import datetime as dt
 import hashlib
 import json
@@ -73,6 +77,92 @@ def db_connect(*, readonly: bool = False):
     )
     conn.set_session(readonly=readonly, autocommit=False)
     return conn
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent
+
+def _is_within(path: str | Path | None, root: Path = REPOSITORY_ROOT) -> bool:
+    if not path:
+        return False
+    try:
+        Path(path).resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+def import_diagnostics(exc: BaseException | None = None) -> str:
+    lines = [
+        "=== INTEGRATION IMPORT DIAGNOSTICS ===",
+        f"cwd={Path.cwd()}",
+        f"repository_root={REPOSITORY_ROOT}",
+        "sys.path:",
+        *[f"  [{i}] {value}" for i, value in enumerate(sys.path)],
+        "core* modules in sys.modules:",
+    ]
+    names = sorted(name for name in sys.modules if name == "core" or name.startswith("core."))
+    if not names:
+        lines.append("  <none>")
+    for name in names:
+        module = sys.modules.get(name)
+        lines.append(f"  {name}: file={getattr(module, '__file__', None)!r} path={getattr(module, '__path__', None)!r}")
+    if exc is not None:
+        lines.extend([f"exception={exc!r}", traceback.format_exc()])
+    return "\n".join(lines)
+
+@contextlib.contextmanager
+def deterministic_project_imports():
+    """Importa i package del progetto senza contaminazioni pytest e ripristina lo stato globale.
+
+    Il conftest storico di OWNER inserisce stub ``core*`` in ``sys.modules``.
+    Questo contesto li rimuove temporaneamente, mette la root del repository in
+    testa a ``sys.path``, verifica la provenienza dei moduli e ripristina tutto
+    all'uscita. La diagnostica viene emessa soltanto in caso di errore.
+    """
+    old_path = list(sys.path)
+    saved_modules = {
+        name: module for name, module in list(sys.modules.items())
+        if name == "core" or name.startswith("core.") or name == "main"
+    }
+    for name in list(saved_modules):
+        sys.modules.pop(name, None)
+    root = str(REPOSITORY_ROOT)
+    sys.path[:] = [root] + [item for item in old_path if Path(item or '.').resolve() != REPOSITORY_ROOT.resolve()]
+    importlib.invalidate_caches()
+    try:
+        yield
+    except Exception as exc:
+        print(import_diagnostics(exc), file=sys.stderr)
+        raise
+    finally:
+        for name in list(sys.modules):
+            if name == "core" or name.startswith("core.") or name == "main":
+                sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
+        sys.path[:] = old_path
+        importlib.invalidate_caches()
+
+def import_project_module(name: str):
+    with deterministic_project_imports():
+        module = importlib.import_module(name)
+        module_file = getattr(module, "__file__", None)
+        if not _is_within(module_file):
+            exc = ImportError(f"Modulo {name!r} caricato fuori dal progetto: {module_file!r}")
+            print(import_diagnostics(exc), file=sys.stderr)
+            raise exc
+        # Verifica esplicita dei moduli CORE critici quando presenti.
+        for critical in ("core", "core.router", "core.exceptions"):
+            loaded = sys.modules.get(critical)
+            if loaded is not None and not _is_within(getattr(loaded, "__file__", None)):
+                exc = ImportError(
+                    f"Modulo {critical!r} non proviene dal progetto: "
+                    f"{getattr(loaded, '__file__', None)!r}"
+                )
+                print(import_diagnostics(exc), file=sys.stderr)
+                raise exc
+        return module
+
+def import_main_app():
+    return import_project_module("main").app
 
 
 @dataclass

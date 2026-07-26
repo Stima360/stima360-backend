@@ -13,5 +13,5 @@ def main():
  envctx=require_test_environment(require_http=True,require_branch=True); validate_openapi_routes(envctx.backend)
  env=os.environ.copy(); env["RUN_INTEGRATION_P2_E2E"]="0"
  print(f"PRECHECK OK: branch={envctx.branch} db={envctx.database} backend={envctx.backend} commit={envctx.commit}")
- raise SystemExit(subprocess.call([sys.executable,"-m","pytest","-q",*READONLY_TESTS],env=env))
+ raise SystemExit(subprocess.call([sys.executable,"-m","pytest","--noconftest","-q",*READONLY_TESTS],env=env))
 if __name__=="__main__":main()
