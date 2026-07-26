@@ -1,25 +1,17 @@
-# INTEGRATION 0.1 — Risultati Pacchetto 1
+# INTEGRATION 0.1 — Pacchetto 2 operativo, non eseguito
 
-## Eseguito durante la preparazione
+Stato: **correzioni preparatorie completate; E2E non autorizzati e non eseguiti**.
 
-- Analisi statica dei pacchetti validati CORE, PROPERTY, BUY, MATCH, FLOW e OWNER.
-- Inventario file migrazione 001–009 e rollback presenti.
-- Parsing statico dello schema atteso e dei riferimenti FK dichiarati.
-- Parsing AST delle route dei router modulari.
-- Classificazione preliminare delle dipendenze e dei rischi.
-- Verifica statica che gli script consegnati non contengano `INSERT`, `UPDATE`, `DELETE`, `ALTER`, `CREATE`, `DROP`, `TRUNCATE` eseguiti sul DB.
+Correzioni incluse:
 
-## Non eseguito
+1. confronto OpenAPI normalizzato che ignora esclusivamente il nome dei parametri path;
+2. teardown transazionale con aggiornamento `removed=true` soltanto dopo commit riuscito;
+3. test E2E basati sul manifest reale, senza variabili `INTEGRATION_SCENARIO_*_DONE`;
+4. matrice HTTP stateful implementata nell’orchestratore;
+5. verifica reale degli orfani per ciascuna foreign key;
+6. privacy OWNER estesa a chiavi e valori;
+7. verifica DB del token OWNER grezzo/hash;
+8. ricerca residui `run_id` con escape esplicito di `_`, `%` e `\\`.
 
-- Query sul database TEST reale: questa sessione non possiede accesso al database Render.
-- Import runtime del `main.py` effettivamente deployato.
-- Inventario live dei dati residui.
-
-Questi tre controlli sono predisposti negli script read-only e devono essere eseguiti dalla Shell di `stima360-backend-test`. I report omonimi verranno aggiornati con i risultati reali.
-
-## Modifiche
-
-- Nessuna modifica a codice applicativo, schema, router, repository o configurazioni.
-- Nessuna migrazione applicata.
-- Nessuna scrittura o pulizia dati.
-- Produzione e branch `main` non toccati.
+Nessuna richiesta HTTP, scrittura DB, migrazione, pulizia o esecuzione E2E è stata effettuata durante la preparazione.
+Produzione, `main.py` e moduli congelati restano invariati.
