@@ -1,8 +1,173 @@
 #!/usr/bin/env python3
-import os, subprocess, sys
+"""INTEGRATION 0.1 - preliminary regression runner.
+
+Discovers existing test files with Python and always passes explicit paths to pytest.
+No wildcard is delegated to pytest. The runner is read-only by contract and never
+sets or authorizes the E2E flag.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
 from integration_p2_support import require_test_environment
-RUNTIME_PATTERNS=["tests/test_core*.py","tests/test_property*.py","tests/test_buy*.py","tests/test_match*.py","tests/test_flow*.py","tests/test_owner*.py"]
-def main():
- require_test_environment(require_http=True,require_branch=True)
- raise SystemExit(subprocess.call([sys.executable,"-m","pytest","-q","--continue-on-collection-errors",*RUNTIME_PATTERNS],env={**os.environ,"RUN_INTEGRATION_P2_E2E":"0"}))
-if __name__=="__main__":main()
+
+ROOT = Path(__file__).resolve().parent
+TESTS_DIR = ROOT / "tests"
+
+
+@dataclass(frozen=True)
+class GroupSpec:
+    name: str
+    patterns: tuple[str, ...] = ()
+    required_files: tuple[str, ...] = ()
+    description: str = ""
+
+
+GROUPS: tuple[GroupSpec, ...] = (
+    GroupSpec("CORE", ("test_core*.py",), description="Test applicativi CORE esistenti"),
+    GroupSpec("PROPERTY", ("test_property*.py",), description="Test applicativi PROPERTY esistenti"),
+    GroupSpec("BUY", ("test_buy*.py",), description="Test applicativi BUY esistenti"),
+    GroupSpec("MATCH", ("test_match*.py",), description="Test applicativi MATCH esistenti"),
+    GroupSpec("FLOW", ("test_flow*.py",), description="Test applicativi FLOW esistenti"),
+    GroupSpec("OWNER", ("test_owner*.py",), description="Test applicativi OWNER esistenti"),
+    GroupSpec(
+        "LEGACY",
+        required_files=("test_integration_regression.py",),
+        description="Import moduli congelati e presenza route legacy",
+    ),
+    GroupSpec(
+        "SMOKE_UI",
+        required_files=("test_integration_routes.py",),
+        description="Route runtime, mount amministrativi e OpenAPI",
+    ),
+    GroupSpec(
+        "PACKAGING_DOCUMENTALI",
+        patterns=("test_*packag*.py", "test_*document*.py", "test_*manifest*.py"),
+        description="Test packaging/documentali separati quando presenti",
+    ),
+)
+
+
+def _relative(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
+def _deduplicate(paths: Iterable[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in sorted(paths):
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            result.append(path)
+    return result
+
+
+def discover_group(spec: GroupSpec) -> list[Path]:
+    found: list[Path] = []
+
+    for pattern in spec.patterns:
+        found.extend(path for path in TESTS_DIR.glob(pattern) if path.is_file())
+
+    missing_required: list[str] = []
+    for relative_name in spec.required_files:
+        candidate = TESTS_DIR / relative_name
+        if candidate.is_file():
+            found.append(candidate)
+        else:
+            missing_required.append(relative_name)
+
+    found = _deduplicate(found)
+
+    if missing_required:
+        actual = sorted(path.name for path in TESTS_DIR.glob("test_*.py") if path.is_file())
+        raise SystemExit(
+            "PRELIGHT REGRESSIONE FALLITO\n"
+            f"Gruppo: {spec.name}\n"
+            f"Percorsi attesi mancanti: {', '.join('tests/' + name for name in missing_required)}\n"
+            f"File test realmente trovati: {actual or ['NESSUNO']}"
+        )
+
+    return found
+
+
+def print_plan(discovered: dict[str, list[Path]]) -> None:
+    print("=" * 78)
+    print("INTEGRATION 0.1 - REGRESSIONE PRELIMINARE")
+    print("=" * 78)
+    print(f"Repository root: {ROOT}")
+    print(f"Tests directory: {TESTS_DIR}")
+
+    for spec in GROUPS:
+        files = discovered[spec.name]
+        print(f"\n[{spec.name}] {spec.description}")
+        if not files:
+            print("  STATO: gruppo senza test")
+            continue
+        print(f"  STATO: {len(files)} file trovati")
+        for path in files:
+            print(f"  - {_relative(path)}")
+
+
+def run_group(spec: GroupSpec, files: list[Path]) -> int:
+    if not files:
+        print(f"\nSKIP GRUPPO {spec.name}: gruppo senza test")
+        return 0
+
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "--continue-on-collection-errors",
+        *[_relative(path) for path in files],
+    ]
+
+    env = {
+        **os.environ,
+        "RUN_INTEGRATION_P2_E2E": "0",
+        "INTEGRATION_P2_E2E_AUTHORIZED": "",
+    }
+
+    print(f"\nESECUZIONE GRUPPO {spec.name}")
+    print("Comando pytest:")
+    print("  " + " ".join(command))
+
+    completed = subprocess.run(command, cwd=ROOT, env=env, check=False)
+    if completed.returncode != 0:
+        print(f"ARRESTO BLOCCANTE: gruppo {spec.name}, exit code {completed.returncode}")
+    else:
+        print(f"GRUPPO {spec.name}: SUPERATO")
+    return completed.returncode
+
+
+def main() -> int:
+    require_test_environment(require_http=True, require_branch=True)
+
+    if not TESTS_DIR.is_dir():
+        raise SystemExit(f"PRELIGHT REGRESSIONE FALLITO: directory assente: {TESTS_DIR}")
+
+    discovered: dict[str, list[Path]] = {}
+    for spec in GROUPS:
+        discovered[spec.name] = discover_group(spec)
+
+    print_plan(discovered)
+    print("\nPREFLIGHT FILE REGRESSIONE: OK")
+
+    for spec in GROUPS:
+        result = run_group(spec, discovered[spec.name])
+        if result != 0:
+            return result
+
+    print("\nREGRESSIONE PRELIMINARE: TUTTI I GRUPPI DISPONIBILI SUPERATI")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
