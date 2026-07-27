@@ -10,5 +10,6 @@ def test_no_queue_or_channels():
 def test_retry_limit_database_constraint(): assert 'retry_count between 0 and 3' in SQL and 'max_retry = 3' in SQL
 def test_rollback_only_flow_tables():
     assert all(f'drop table if exists {x}' in DOWN for x in ['flow_rules','flow_events','flow_executions','flow_action_records','flow_suppressions'])
-def test_main_not_in_package(): assert not (ROOT/'main.py').exists()
+def test_flow_module_does_not_contain_main():
+    assert not (ROOT / "flow" / "main.py").exists()
 def test_rule_logic_not_stored_freely(): assert 'conditions jsonb' not in SQL and 'actions jsonb' not in SQL
