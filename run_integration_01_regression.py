@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """INTEGRATION 0.1 - preliminary regression runner.
 
-Discovers existing test files with Python and always passes explicit paths to pytest.
-No wildcard is delegated to pytest. The runner is read-only by contract and never
-sets or authorizes the E2E flag.
+Discovers existing test files with Python and always passes explicit paths to
+pytest. No wildcard is delegated to pytest. Before collection, a clean Python
+subprocess verifies that the real project package ``core`` and its critical
+submodules resolve from the repository root. The regression never authorizes
+E2E execution.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from integration_p2_support import require_test_environment
+from integration_p2_support import REPOSITORY_ROOT, require_test_environment
 
 ROOT = Path(__file__).resolve().parent
 TESTS_DIR = ROOT / "tests"
@@ -53,6 +55,14 @@ GROUPS: tuple[GroupSpec, ...] = (
     ),
 )
 
+CRITICAL_IMPORTS: tuple[str, ...] = (
+    "core",
+    "core.normalization",
+    "core.service",
+    "core.router",
+    "core.exceptions",
+)
+
 
 def _relative(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
@@ -67,6 +77,86 @@ def _deduplicate(paths: Iterable[Path]) -> list[Path]:
             seen.add(resolved)
             result.append(path)
     return result
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    root = str(REPOSITORY_ROOT.resolve())
+    current = env.get("PYTHONPATH", "")
+    existing = [entry for entry in current.split(os.pathsep) if entry]
+    env["PYTHONPATH"] = os.pathsep.join([root, *[x for x in existing if Path(x).resolve() != REPOSITORY_ROOT.resolve()]])
+    env["RUN_INTEGRATION_P2_E2E"] = "0"
+    env["INTEGRATION_P2_E2E_AUTHORIZED"] = ""
+    return env
+
+
+def verify_project_imports() -> None:
+    """Verify critical CORE imports in a clean subprocess before pytest.
+
+    The subprocess starts without pytest collection and therefore without
+    ``tests/conftest.py``. PYTHONPATH explicitly places the repository root
+    first. Every imported module must resolve inside that root.
+    """
+
+    root = str(REPOSITORY_ROOT.resolve())
+    module_names = repr(CRITICAL_IMPORTS)
+    probe = f"""
+import importlib
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path({root!r}).resolve()
+modules = {module_names}
+result = {{
+    'cwd': os.getcwd(),
+    'repository_root': str(root),
+    'sys_path': list(sys.path),
+    'modules': {{}},
+}}
+
+def within_project(value):
+    if not value:
+        return False
+    try:
+        Path(value).resolve().relative_to(root)
+        return True
+    except Exception:
+        return False
+
+for name in modules:
+    module = importlib.import_module(name)
+    module_file = getattr(module, '__file__', None)
+    module_path = [str(x) for x in getattr(module, '__path__', [])]
+    result['modules'][name] = {{'file': module_file, 'path': module_path}}
+    if not within_project(module_file):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        raise SystemExit(f'IMPORT BLOCCATO: {{name}} proviene da {{module_file!r}}')
+
+print(json.dumps(result, indent=2, ensure_ascii=False))
+"""
+
+    command = [sys.executable, "-c", probe]
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_subprocess_env(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    if completed.returncode != 0:
+        print("PRELIGHT IMPORT CORE: FALLITO")
+        if completed.stdout:
+            print(completed.stdout.rstrip())
+        if completed.stderr:
+            print(completed.stderr.rstrip(), file=sys.stderr)
+        raise SystemExit(completed.returncode)
+
+    print("PRELIGHT IMPORT CORE: OK")
+    print(completed.stdout.rstrip())
 
 
 def discover_group(spec: GroupSpec) -> list[Path]:
@@ -88,7 +178,7 @@ def discover_group(spec: GroupSpec) -> list[Path]:
     if missing_required:
         actual = sorted(path.name for path in TESTS_DIR.glob("test_*.py") if path.is_file())
         raise SystemExit(
-            "PRELIGHT REGRESSIONE FALLITO\n"
+            "PREFLIGHT REGRESSIONE FALLITO\n"
             f"Gruppo: {spec.name}\n"
             f"Percorsi attesi mancanti: {', '.join('tests/' + name for name in missing_required)}\n"
             f"File test realmente trovati: {actual or ['NESSUNO']}"
@@ -124,22 +214,17 @@ def run_group(spec: GroupSpec, files: list[Path]) -> int:
         sys.executable,
         "-m",
         "pytest",
+        "--noconftest",
         "-q",
         "--continue-on-collection-errors",
         *[_relative(path) for path in files],
     ]
 
-    env = {
-        **os.environ,
-        "RUN_INTEGRATION_P2_E2E": "0",
-        "INTEGRATION_P2_E2E_AUTHORIZED": "",
-    }
-
     print(f"\nESECUZIONE GRUPPO {spec.name}")
     print("Comando pytest:")
     print("  " + " ".join(command))
 
-    completed = subprocess.run(command, cwd=ROOT, env=env, check=False)
+    completed = subprocess.run(command, cwd=ROOT, env=_subprocess_env(), check=False)
     if completed.returncode != 0:
         print(f"ARRESTO BLOCCANTE: gruppo {spec.name}, exit code {completed.returncode}")
     else:
@@ -150,8 +235,16 @@ def run_group(spec: GroupSpec, files: list[Path]) -> int:
 def main() -> int:
     require_test_environment(require_http=True, require_branch=True)
 
+    if ROOT.resolve() != REPOSITORY_ROOT.resolve():
+        raise SystemExit(
+            "PREFLIGHT REGRESSIONE FALLITO: root runner e repository root divergenti: "
+            f"{ROOT.resolve()} != {REPOSITORY_ROOT.resolve()}"
+        )
+
     if not TESTS_DIR.is_dir():
-        raise SystemExit(f"PRELIGHT REGRESSIONE FALLITO: directory assente: {TESTS_DIR}")
+        raise SystemExit(f"PREFLIGHT REGRESSIONE FALLITO: directory assente: {TESTS_DIR}")
+
+    verify_project_imports()
 
     discovered: dict[str, list[Path]] = {}
     for spec in GROUPS:
