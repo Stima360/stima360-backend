@@ -40,8 +40,15 @@ def test_uniform_404():assert "HTTPException(404,'Risorsa non trovata')" in (R/'
 def test_no_document_api():
  s=(R/'owner/router_admin.py').read_text()+(R/'owner/router_portal.py').read_text();assert '/documents' not in s
 def test_ui_present():assert (R/'static/owner_admin/index.html').exists() and (R/'static/owner_portal/index.html').exists()
-def test_main_excluded():assert not (R/'main.py').exists()
+def test_owner_module_does_not_contain_main():
+    assert not (R / "owner" / "main.py").exists()
 def test_rollback_isolated():
  s=(R/'migrations/009_owner_01_down.sql').read_text().lower();assert 'drop table if exists contacts' not in s and 'drop table if exists properties' not in s
-def test_cumulative_instruction():assert 'Non sostituire main.py' in (R/'INTEGRAZIONE_MAIN_CUMULATIVA.txt').read_text()
-def test_production_unchanged_doc():assert 'produzione invariata' in (R/'README_OWNER_0.1.txt').read_text().lower()
+def test_owner_is_integrated_in_cumulative_main():
+    text = (R / "main.py").read_text(encoding="utf-8")
+
+    assert "owner_admin_router" in text
+    assert "owner_portal_router" in text
+    assert '"/owner-admin"' in text
+    assert '"/owner"' in text
+
