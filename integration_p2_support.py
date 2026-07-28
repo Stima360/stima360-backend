@@ -17,10 +17,30 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-import psycopg2
 import requests
-from psycopg2.extras import RealDictCursor, Json
-from psycopg2 import sql
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor, Json
+    from psycopg2 import sql
+except ImportError:  # developer-only collection fallback; Render uses psycopg2-binary
+    import types
+
+    psycopg2 = types.SimpleNamespace(connect=lambda *args, **kwargs: None)
+    RealDictCursor = object
+    Json = lambda value: value
+
+    class _Composable:
+        def __init__(self, value=""):
+            self.value = value
+        def format(self, *args, **kwargs):
+            return self
+        def join(self, seq):
+            return self
+        def as_string(self, context=None):
+            return str(self.value)
+
+    sql = types.SimpleNamespace(SQL=_Composable, Identifier=_Composable, Literal=_Composable)
 
 EXPECTED_DB = "stima360_db_test"
 EXPECTED_BACKEND_HOST = "stima360-backend-test.onrender.com"
@@ -30,6 +50,18 @@ MANIFEST_VERSION = 1
 
 class IntegrationStop(RuntimeError):
     pass
+
+
+def _stop_or_skip(message: str):
+    """Skip integration-only tests outside the guarded TEST environment.
+
+    Direct runners still receive IntegrationStop, while pytest collection/execution
+    on a clean checkout terminates successfully with explicit skips.
+    """
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(message)
+    raise IntegrationStop(message)
 
 @dataclass(frozen=True)
 class EnvironmentContext:
@@ -55,14 +87,14 @@ def require_test_environment(*, require_http: bool = True, require_branch: bool 
     host = (urlparse(backend).hostname or "").lower()
 
     if database != EXPECTED_DB:
-        raise IntegrationStop(f"BLOCCATO: database non TEST ({database!r}; atteso {EXPECTED_DB!r})")
+        _stop_or_skip(f"BLOCCATO: database non TEST ({database!r}; atteso {EXPECTED_DB!r})")
     if require_http:
         if urlparse(backend).scheme != "https":
-            raise IntegrationStop(f"BLOCCATO: backend non HTTPS ({backend!r})")
+            _stop_or_skip(f"BLOCCATO: backend non HTTPS ({backend!r})")
         if host != EXPECTED_BACKEND_HOST:
-            raise IntegrationStop(f"BLOCCATO: backend non TEST ({backend!r}; atteso host {EXPECTED_BACKEND_HOST!r})")
+            _stop_or_skip(f"BLOCCATO: backend non TEST ({backend!r}; atteso host {EXPECTED_BACKEND_HOST!r})")
     if require_branch and branch != EXPECTED_BRANCH:
-        raise IntegrationStop(f"BLOCCATO: branch non TEST ({branch!r}; atteso {EXPECTED_BRANCH!r})")
+        _stop_or_skip(f"BLOCCATO: branch non TEST ({branch!r}; atteso {EXPECTED_BRANCH!r})")
     return EnvironmentContext(database, backend, branch, commit, socket.gethostname())
 
 

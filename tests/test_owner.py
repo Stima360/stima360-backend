@@ -37,8 +37,8 @@ def test_version_links():
 def test_reads_version_specific():assert 'UNIQUE(publication_id,owner_account_id)' in (R/'migrations/009_owner_01.sql').read_text()
 def test_timeline_published_only():assert "status='published'" in (R/'owner/repository.py').read_text()
 def test_uniform_404():assert "HTTPException(404,'Risorsa non trovata')" in (R/'owner/router_portal.py').read_text()
-def test_no_document_api():
- s=(R/'owner/router_admin.py').read_text()+(R/'owner/router_portal.py').read_text();assert '/documents' not in s
+def test_p2_document_api_present():
+ s=(R/'owner/router_admin.py').read_text()+(R/'owner/router_portal.py').read_text();assert '/documents' in s and '/acknowledge' in s
 def test_ui_present():assert (R/'static/owner_admin/index.html').exists() and (R/'static/owner_portal/index.html').exists()
 def test_owner_module_does_not_contain_main():
     assert not (R / "owner" / "main.py").exists()

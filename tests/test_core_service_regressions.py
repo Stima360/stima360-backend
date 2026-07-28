@@ -2,18 +2,38 @@ import sys
 import types
 from types import SimpleNamespace
 
-# Lightweight psycopg2 stubs for service-level tests in environments where
-# the PostgreSQL driver is not installed. Production keeps using the real driver.
-if "psycopg2" not in sys.modules:
+# Lightweight psycopg2 fallback for developer environments where the
+# PostgreSQL driver is unavailable.  Prefer the real package whenever it can
+# be imported; checking only ``sys.modules`` used to shadow an installed
+# psycopg2 during full-suite collection.
+try:
+    import psycopg2  # noqa: F401
+except ImportError:
     psycopg2 = types.ModuleType("psycopg2")
     psycopg2.connect = lambda *args, **kwargs: None
     psycopg2.errors = types.SimpleNamespace(UniqueViolation=type("UniqueViolation", (Exception,), {}))
+
     extras = types.ModuleType("psycopg2.extras")
     extras.Json = lambda value: value
     extras.RealDictCursor = object
+
+    sql = types.ModuleType("psycopg2.sql")
+    class _Composable:
+        def __init__(self, value=""):
+            self.value = value
+        def format(self, *args, **kwargs):
+            return self
+        def join(self, seq):
+            return self
+    sql.SQL = _Composable
+    sql.Identifier = _Composable
+    sql.Literal = _Composable
+
     psycopg2.extras = extras
+    psycopg2.sql = sql
     sys.modules["psycopg2"] = psycopg2
     sys.modules["psycopg2.extras"] = extras
+    sys.modules["psycopg2.sql"] = sql
 
 from core import service
 
