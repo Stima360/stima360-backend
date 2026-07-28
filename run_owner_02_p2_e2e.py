@@ -2,5 +2,5 @@
 import subprocess
 import sys
 
-cmd = [sys.executable, "-m", "pytest", "--noconftest", "-q", "tests/test_owner_02_p2.py"]
+cmd = [sys.executable, "-m", "pytest", "-q", "tests/test_owner_02_p2.py"]
 raise SystemExit(subprocess.call(cmd))
