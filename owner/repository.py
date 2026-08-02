@@ -1,8 +1,9 @@
 from datetime import timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
-from core.exceptions import NotFoundError,ConflictError
+from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .security import generate_secret,hash_secret,utcnow,valid_session
+from .schemas import validate_visit_feedback_summary, visit_feedback_privacy_issues
 NF='Risorsa non trovata'
 def one(cur):
  r=cur.fetchone()
@@ -220,63 +221,372 @@ def read_shared_document(a,i,ack=False):
                acknowledged_at=CASE WHEN %s THEN COALESCE(owner_document_reads.acknowledged_at,NOW()) ELSE owner_document_reads.acknowledged_at END RETURNING *""",(i,a,ack,ack));r=one(c)
  audit('shared_document_acknowledged' if ack else 'shared_document_viewed',a,d['property_id'],'owner_shared_document',i);return r
 
-def create_visit_feedback_publication(d):
- with core_cursor(commit=True) as(_,c):
-  src=_property_for_visit(c,d['property_visit_id'])
-  _validate_target_account(c,d.get('owner_account_id'),src['property_id'])
-  c.execute("""INSERT INTO owner_visit_feedback_publications(property_visit_id,owner_account_id,category,public_summary,sentiment,created_by)
-               VALUES(%s,%s,%s,%s,%s,%s) RETURNING *""",(d['property_visit_id'],d.get('owner_account_id'),d['category'],d['public_summary'],d.get('sentiment'),d.get('created_by')));r=one(c)
- audit('visit_feedback_created',d.get('owner_account_id'),src['property_id'],'owner_visit_feedback',r['id']);return r
+CATEGORY_LABELS = {
+    "price": "Posizionamento economico",
+    "state": "Stato e presentazione",
+    "layout": "Distribuzione degli spazi",
+    "location": "Posizione",
+    "accessories": "Accessori e pertinenze",
+    "general": "Osservazione generale",
+}
+SENTIMENT_LABELS = {
+    "positive": "Positivo",
+    "neutral": "Neutro",
+    "negative": "Critico",
+    "mixed": "Misto",
+}
 
-def list_visit_feedback_publications():
- with core_cursor() as(_,c):
-  c.execute("""SELECT vf.*,pv.property_id,pv.scheduled_at FROM owner_visit_feedback_publications vf
-               JOIN property_visits pv ON pv.id=vf.property_visit_id ORDER BY vf.created_at DESC""");return[dict(x) for x in c.fetchall()]
+
+def _audit_with_cursor(c, action, account=None, prop=None, etype=None, eid=None, result="success", meta=None):
+    c.execute(
+        """INSERT INTO owner_audit_log(
+               owner_account_id,property_id,action,entity_type,entity_id,result,metadata
+           ) VALUES(%s,%s,%s,%s,%s,%s,%s)""",
+        (account, prop, action, etype, str(eid) if eid is not None else None, result, Json(meta or {})),
+    )
+
+
+def _validated_public_summary(value):
+    try:
+        return validate_visit_feedback_summary(value)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
+def validate_visit_feedback_privacy(public_summary):
+    issues = visit_feedback_privacy_issues(public_summary)
+    return {"valid": not issues, "issues": issues}
+
+
+def _visit_feedback_for_update(c, i):
+    c.execute(
+        """SELECT vf.*,pv.property_id
+           FROM owner_visit_feedback_publications vf
+           JOIN property_visits pv ON pv.id=vf.property_visit_id
+           WHERE vf.id=%s
+           FOR UPDATE OF vf""",
+        (i,),
+    )
+    return one(c)
+
+
+def _public_visit_feedback(row):
+    sentiment = row.get("sentiment")
+    result = {
+        "visit_feedback_publication_id": row["id"],
+        "category_code": row["category"],
+        "category_label": CATEGORY_LABELS[row["category"]],
+        "public_summary": row["public_summary"],
+        "version_number": row["version_number"],
+        "published_at": row["published_at"],
+        "is_current_version": True,
+    }
+    if sentiment is not None:
+        result["sentiment"] = sentiment
+        result["sentiment_label"] = SENTIMENT_LABELS[sentiment]
+    return result
+
+
+def create_visit_feedback_publication(d):
+    summary = _validated_public_summary(d["public_summary"])
+    with core_cursor(commit=True) as (_, c):
+        src = _property_for_visit(c, d["property_visit_id"])
+        _validate_target_account(c, d.get("owner_account_id"), src["property_id"])
+        c.execute(
+            """INSERT INTO owner_visit_feedback_publications(
+                   property_visit_id,owner_account_id,category,public_summary,sentiment,created_by
+               ) VALUES(%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (
+                d["property_visit_id"],
+                d.get("owner_account_id"),
+                d["category"],
+                summary,
+                d.get("sentiment"),
+                d.get("created_by"),
+            ),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "visit_feedback_created",
+            d.get("owner_account_id"),
+            src["property_id"],
+            "owner_visit_feedback",
+            result["id"],
+        )
+    result["property_id"] = src["property_id"]
+    return result
+
+
+def list_visit_feedback_publications(
+    property_visit_id=None,
+    property_id=None,
+    status=None,
+    owner_account_id=None,
+    category=None,
+    limit=50,
+    offset=0,
+):
+    clauses = []
+    values = []
+    for expression, value in (
+        ("vf.property_visit_id=%s", property_visit_id),
+        ("pv.property_id=%s", property_id),
+        ("vf.status=%s", status),
+        ("vf.owner_account_id=%s", owner_account_id),
+        ("vf.category=%s", category),
+    ):
+        if value is not None:
+            clauses.append(expression)
+            values.append(value)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    values.extend((limit, offset))
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT vf.*,pv.property_id
+               FROM owner_visit_feedback_publications vf
+               JOIN property_visits pv ON pv.id=vf.property_visit_id"""
+            + where
+            + " ORDER BY vf.created_at DESC LIMIT %s OFFSET %s",
+            values,
+        )
+        return [dict(row) for row in c.fetchall()]
+
 
 def get_visit_feedback_publication(i):
- with core_cursor() as(_,c):
-  c.execute("""SELECT vf.*,pv.property_id,pv.scheduled_at FROM owner_visit_feedback_publications vf
-               JOIN property_visits pv ON pv.id=vf.property_visit_id WHERE vf.id=%s""",(i,));return one(c)
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT vf.*,pv.property_id
+               FROM owner_visit_feedback_publications vf
+               JOIN property_visits pv ON pv.id=vf.property_visit_id
+               WHERE vf.id=%s""",
+            (i,),
+        )
+        return one(c)
 
-def update_visit_feedback_publication(i,d):
- old=get_visit_feedback_publication(i)
- if old['status']!='draft':raise ConflictError('Un feedback pubblicato o archiviato è immutabile')
- fields=[];vals=[]
- for k in ('category','public_summary','sentiment'):
-  if k in d:fields.append(k+'=%s');vals.append(d[k])
- if not fields:return old
- vals.append(i)
- with core_cursor(commit=True) as(_,c):c.execute('UPDATE owner_visit_feedback_publications SET '+','.join(fields)+',updated_at=NOW() WHERE id=%s RETURNING *',vals);r=one(c)
- audit('visit_feedback_updated',old.get('owner_account_id'),old['property_id'],'owner_visit_feedback',i);return r
+
+def update_visit_feedback_publication(i, d):
+    fields = []
+    values = []
+    if "public_summary" in d:
+        d = dict(d)
+        d["public_summary"] = _validated_public_summary(d["public_summary"])
+    for key in ("category", "public_summary", "sentiment"):
+        if key in d:
+            fields.append(key + "=%s")
+            values.append(d[key])
+    with core_cursor(commit=True) as (_, c):
+        old = _visit_feedback_for_update(c, i)
+        if old["status"] != "draft":
+            raise ConflictError("Un feedback pubblicato o archiviato è immutabile")
+        if not fields:
+            return old
+        values.append(i)
+        c.execute(
+            "UPDATE owner_visit_feedback_publications SET "
+            + ",".join(fields)
+            + ",updated_at=NOW() WHERE id=%s RETURNING *",
+            values,
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "visit_feedback_updated",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_visit_feedback",
+            i,
+        )
+    result["property_id"] = old["property_id"]
+    return result
+
 
 def publish_visit_feedback(i):
- old=get_visit_feedback_publication(i)
- if old['status']!='draft':raise ConflictError('Solo draft pubblicabile')
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_visit_feedback_publications SET status='published',published_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
- audit('visit_feedback_published',old.get('owner_account_id'),old['property_id'],'owner_visit_feedback',i);return r
+    with core_cursor(commit=True) as (_, c):
+        current = _visit_feedback_for_update(c, i)
+        if current["status"] != "draft":
+            raise ConflictError("Solo draft pubblicabile")
+        _validated_public_summary(current["public_summary"])
+        _validate_target_account(c, current.get("owner_account_id"), current["property_id"])
+
+        previous_id = current.get("supersedes_feedback_publication_id")
+        if previous_id is not None:
+            c.execute(
+                "SELECT * FROM owner_visit_feedback_publications WHERE id=%s FOR UPDATE",
+                (previous_id,),
+            )
+            previous = one(c)
+            if previous["status"] != "published":
+                raise ConflictError("La versione precedente non è pubblicata")
+            if previous.get("superseded_by_feedback_publication_id") not in (None, i):
+                raise ConflictError("La versione precedente è già stata sostituita")
+            if (
+                previous["property_visit_id"] != current["property_visit_id"]
+                or previous.get("owner_account_id") != current.get("owner_account_id")
+            ):
+                raise ConflictError("Catena versioni non coerente")
+
+        c.execute(
+            """UPDATE owner_visit_feedback_publications
+               SET status='published',published_at=NOW(),updated_at=NOW()
+               WHERE id=%s RETURNING *""",
+            (i,),
+        )
+        result = one(c)
+        if previous_id is not None:
+            c.execute(
+                """UPDATE owner_visit_feedback_publications
+                   SET superseded_by_feedback_publication_id=%s,updated_at=NOW()
+                   WHERE id=%s""",
+                (i, previous_id),
+            )
+        _audit_with_cursor(
+            c,
+            "visit_feedback_published",
+            current.get("owner_account_id"),
+            current["property_id"],
+            "owner_visit_feedback",
+            i,
+            meta={"supersedes": previous_id} if previous_id is not None else None,
+        )
+    result["property_id"] = current["property_id"]
+    return result
+
 
 def archive_visit_feedback(i):
- old=get_visit_feedback_publication(i)
- if old['status']!='published':raise ConflictError('Solo published archiviabile')
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_visit_feedback_publications SET status='archived',archived_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
- audit('visit_feedback_archived',old.get('owner_account_id'),old['property_id'],'owner_visit_feedback',i);return r
+    with core_cursor(commit=True) as (_, c):
+        old = _visit_feedback_for_update(c, i)
+        if old["status"] != "published":
+            raise ConflictError("Solo published archiviabile")
+        c.execute(
+            """UPDATE owner_visit_feedback_publications
+               SET status='archived',archived_at=NOW(),updated_at=NOW()
+               WHERE id=%s RETURNING *""",
+            (i,),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "visit_feedback_archived",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_visit_feedback",
+            i,
+        )
+    result["property_id"] = old["property_id"]
+    return result
 
-def supersede_visit_feedback(i,d):
- old=get_visit_feedback_publication(i)
- if old['status']!='published':raise ConflictError('Solo published sostituibile')
- with core_cursor(commit=True) as(_,c):
-  c.execute("""INSERT INTO owner_visit_feedback_publications(property_visit_id,owner_account_id,category,public_summary,sentiment,version_number,supersedes_feedback_publication_id,created_by)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",(old['property_visit_id'],old.get('owner_account_id'),d['category'],d['public_summary'],d.get('sentiment'),old['version_number']+1,i,d.get('created_by')));new=one(c)
-  c.execute('UPDATE owner_visit_feedback_publications SET superseded_by_feedback_publication_id=%s,updated_at=NOW() WHERE id=%s',(new['id'],i))
- audit('visit_feedback_version_created',old.get('owner_account_id'),old['property_id'],'owner_visit_feedback',new['id'],meta={'previous':i});return new
 
-def portal_visit_feedback(a,p):
- require_property(a,p)
- with core_cursor() as(_,c):
-  c.execute("""SELECT vf.id,vf.category,vf.public_summary,vf.sentiment,vf.version_number,vf.published_at,pv.scheduled_at
-               FROM owner_visit_feedback_publications vf JOIN property_visits pv ON pv.id=vf.property_visit_id
-               WHERE pv.property_id=%s AND vf.status='published' AND (vf.owner_account_id IS NULL OR vf.owner_account_id=%s)
-               ORDER BY vf.published_at DESC""",(p,a));return[dict(x) for x in c.fetchall()]
+def supersede_visit_feedback(i, d):
+    summary = _validated_public_summary(d["public_summary"])
+    with core_cursor(commit=True) as (_, c):
+        old = _visit_feedback_for_update(c, i)
+        if old["status"] != "published":
+            raise ConflictError("Solo published sostituibile")
+        if old.get("superseded_by_feedback_publication_id") is not None:
+            raise ConflictError("Solo la versione corrente può essere sostituita")
+        _validate_target_account(c, old.get("owner_account_id"), old["property_id"])
+        c.execute(
+            """SELECT 1 FROM owner_visit_feedback_publications
+               WHERE supersedes_feedback_publication_id=%s AND status IN ('draft','published')
+               LIMIT 1""",
+            (i,),
+        )
+        if c.fetchone():
+            raise ConflictError("Esiste già una versione successiva attiva")
+        c.execute(
+            """SELECT COALESCE(MAX(version_number),0)+1 AS next_version
+               FROM owner_visit_feedback_publications
+               WHERE property_visit_id=%s
+                 AND owner_account_id IS NOT DISTINCT FROM %s""",
+            (old["property_visit_id"], old.get("owner_account_id")),
+        )
+        next_version = int(c.fetchone()["next_version"])
+        c.execute(
+            """INSERT INTO owner_visit_feedback_publications(
+                   property_visit_id,owner_account_id,category,public_summary,sentiment,
+                   version_number,supersedes_feedback_publication_id,created_by
+               ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (
+                old["property_visit_id"],
+                old.get("owner_account_id"),
+                d["category"],
+                summary,
+                d.get("sentiment"),
+                next_version,
+                i,
+                d.get("created_by"),
+            ),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "visit_feedback_version_created",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_visit_feedback",
+            result["id"],
+            meta={"previous": i, "version_number": next_version},
+        )
+    result["property_id"] = old["property_id"]
+    return result
+
+
+def portal_visit_feedback(a, p, limit=50, offset=0):
+    require_property(a, p)
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT vf.id,vf.category,vf.public_summary,vf.sentiment,
+                      vf.version_number,vf.published_at
+               FROM owner_visit_feedback_publications vf
+               JOIN property_visits pv ON pv.id=vf.property_visit_id
+               WHERE pv.property_id=%s
+                 AND vf.status='published'
+                 AND vf.superseded_by_feedback_publication_id IS NULL
+                 AND (vf.owner_account_id IS NULL OR vf.owner_account_id=%s)
+               ORDER BY vf.published_at DESC
+               LIMIT %s OFFSET %s""",
+            (p, a, limit, offset),
+        )
+        return [_public_visit_feedback(dict(row)) for row in c.fetchall()]
+
+
+def portal_visit_feedback_detail(a, i):
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT vf.id,vf.category,vf.public_summary,vf.sentiment,
+                      vf.version_number,vf.published_at
+               FROM owner_visit_feedback_publications vf
+               JOIN property_visits pv ON pv.id=vf.property_visit_id
+               JOIN owner_property_access x ON x.property_id=pv.property_id
+               WHERE vf.id=%s
+                 AND vf.status='published'
+                 AND vf.superseded_by_feedback_publication_id IS NULL
+                 AND (vf.owner_account_id IS NULL OR vf.owner_account_id=%s)
+                 AND x.owner_account_id=%s
+                 AND x.access_status='active'
+                 AND x.revoked_at IS NULL
+                 AND (x.valid_until IS NULL OR x.valid_until>NOW())""",
+            (i, a, a),
+        )
+        return _public_visit_feedback(one(c))
+
+
+def audit_visit_feedback_access_denied(account, property_id=None, publication_id=None, scope="portal"):
+    try:
+        audit(
+            "visit_feedback_access_denied",
+            account=account,
+            prop=property_id,
+            etype="owner_visit_feedback",
+            eid=publication_id,
+            result="denied",
+            meta={"scope": scope},
+        )
+    except Exception:
+        # The neutral 404 must never be replaced by an audit infrastructure error.
+        pass
+
 
 def update_feedback_status(i,d):
  with core_cursor(commit=True) as(_,c):
