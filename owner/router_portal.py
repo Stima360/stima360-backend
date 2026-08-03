@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from .schemas import FeedbackCreate, TokenConsume
 from .dependencies import current_owner
 from .security import clear_cookie, set_cookie
 from .enums import COOKIE_NAME
 from . import repository as r
+from .document_storage import iter_stream, safe_content_disposition
 
 router = APIRouter(prefix="/api/owner/portal", tags=["owner-portal"])
 
@@ -35,6 +37,28 @@ def visit_feedback_nf(
         )
         raise HTTPException(404,'Risorsa non trovata')
 
+
+
+
+def shared_document_nf(
+    f,
+    *a,
+    account: int,
+    property_id: int | None = None,
+    document_id: int | None = None,
+    scope: str,
+):
+    try:
+        return f(*a)
+    except Exception as exc:
+        r.audit_shared_document_access_denied(
+            account,
+            property_id=property_id,
+            document_id=document_id,
+            scope=scope,
+            reason_code=getattr(exc, "error_code", "not_found"),
+        )
+        raise HTTPException(404, 'Risorsa non trovata')
 
 @router.post("/auth/token", status_code=204)
 def login(p: TokenConsume, response: Response):
@@ -105,14 +129,67 @@ def documents(p: int, s=Depends(current_owner)):
 
 @router.get("/documents/{i}")
 def document(i: int, s=Depends(current_owner)):
-    item = nf(r.portal_shared_document, s["owner_account_id"], i)
-    receipt = nf(r.read_shared_document, s["owner_account_id"], i, False)
+    account = s["owner_account_id"]
+    item = shared_document_nf(
+        r.portal_shared_document,
+        account,
+        i,
+        account=account,
+        document_id=i,
+        scope="detail",
+    )
+    receipt = shared_document_nf(
+        r.read_shared_document,
+        account,
+        i,
+        False,
+        account=account,
+        document_id=i,
+        scope="view",
+    )
     return {"document": item, "read": receipt}
+
+
+@router.get("/documents/{i}/download")
+def document_download(i: int, s=Depends(current_owner)):
+    account = s["owner_account_id"]
+    item = shared_document_nf(
+        r.prepare_shared_document_download,
+        account,
+        i,
+        account=account,
+        document_id=i,
+        scope="download",
+    )
+    headers = {
+        "Content-Disposition": safe_content_disposition(item["filename"]),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox",
+        "Content-Length": str(item["size_bytes"]),
+    }
+    stream = iter_stream(
+        item["opened"],
+        on_complete=lambda: r.audit_shared_document_download(item, scope="portal"),
+        on_error=lambda exc: r.audit_shared_document_download(
+            item, result="error", reason_code="stream_failed", scope="portal"
+        ),
+    )
+    return StreamingResponse(stream, media_type=item["mime_type"], headers=headers)
 
 
 @router.post("/documents/{i}/acknowledge")
 def document_ack(i: int, s=Depends(current_owner)):
-    return nf(r.read_shared_document, s["owner_account_id"], i, True)
+    account = s["owner_account_id"]
+    return shared_document_nf(
+        r.read_shared_document,
+        account,
+        i,
+        True,
+        account=account,
+        document_id=i,
+        scope="acknowledge",
+    )
 
 
 @router.get("/properties/{p}/visit-feedback")

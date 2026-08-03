@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
@@ -113,113 +113,844 @@ def dashboard():
 def audits():
  with core_cursor() as(_,c):c.execute('SELECT * FROM owner_audit_log ORDER BY created_at DESC LIMIT 200');return[dict(x) for x in c.fetchall()]
 
-# OWNER 0.2 P2 ---------------------------------------------------------------
-def _property_for_document(c, document_id):
- c.execute("SELECT id,property_id,title,url,status,expires_at FROM property_documents WHERE id=%s",(document_id,))
- return one(c)
+# OWNER 0.2 P2/P4 ------------------------------------------------------------
+SHARED_DOCUMENT_TYPE_LABELS = {
+    "mandate": "Incarico",
+    "floor_plan": "Planimetria",
+    "ape": "Attestato energetico",
+    "cadastral_extract": "Documento catastale",
+    "photo_report": "Report fotografico",
+    "activity_report": "Report attività",
+    "information": "Documento informativo",
+}
+
+
+def _property_for_document(c, document_id, *, for_update=False):
+    suffix = " FOR UPDATE" if for_update else ""
+    c.execute(
+        """SELECT id,property_id,document_type,title,url,storage_key,status,
+                  expires_at,metadata,created_at,updated_at
+           FROM property_documents WHERE id=%s""" + suffix,
+        (document_id,),
+    )
+    return one(c)
+
 
 def _property_for_visit(c, visit_id):
- c.execute("SELECT id,property_id,scheduled_at,status FROM property_visits WHERE id=%s",(visit_id,))
- return one(c)
+    c.execute(
+        "SELECT id,property_id,scheduled_at,status FROM property_visits WHERE id=%s",
+        (visit_id,),
+    )
+    return one(c)
+
 
 def _validate_target_account(c, account_id, property_id):
- if account_id is None:return
- c.execute("SELECT 1 FROM owner_property_access WHERE owner_account_id=%s AND property_id=%s AND access_status='active' AND revoked_at IS NULL AND (valid_until IS NULL OR valid_until>NOW())",(account_id,property_id))
- if not c.fetchone():raise NotFoundError(NF)
+    if account_id is None:
+        return
+    c.execute(
+        """SELECT 1 FROM owner_property_access
+           WHERE owner_account_id=%s AND property_id=%s
+             AND access_status='active' AND revoked_at IS NULL
+             AND (valid_until IS NULL OR valid_until>NOW())""",
+        (account_id, property_id),
+    )
+    if not c.fetchone():
+        raise NotFoundError(NF)
+
+
+def _shared_document_with_source(c, item_id, *, for_update=False):
+    suffix = " FOR UPDATE OF sd" if for_update else ""
+    c.execute(
+        """SELECT sd.*,pd.property_id,pd.title AS source_title,
+                  pd.document_type AS source_document_type,pd.status AS source_status,
+                  pd.expires_at AS source_expires_at,pd.storage_key,pd.url,
+                  pd.metadata AS source_metadata
+           FROM owner_shared_documents sd
+           JOIN property_documents pd ON pd.id=sd.property_document_id
+           WHERE sd.id=%s""" + suffix,
+        (item_id,),
+    )
+    return one(c)
+
+
+def _admin_shared_document(row):
+    """Explicit admin DTO; storage locators and raw metadata are intentionally absent."""
+    result = {
+        "id": row["id"],
+        "property_document_id": row["property_document_id"],
+        "property_id": row["property_id"],
+        "owner_account_id": row.get("owner_account_id"),
+        "public_title": row["public_title"],
+        "public_document_type": row["public_document_type"],
+        "version_number": row["version_number"],
+        "status": row["status"],
+        "published_at": row.get("published_at"),
+        "expires_at": row.get("expires_at"),
+        "acknowledgement_required": row["acknowledgement_required"],
+        "supersedes_shared_document_id": row.get("supersedes_shared_document_id"),
+        "superseded_by_shared_document_id": row.get("superseded_by_shared_document_id"),
+        "revoked_at": row.get("revoked_at"),
+        "archived_at": row.get("archived_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "created_by": row.get("created_by"),
+        "revoked_by": row.get("revoked_by"),
+        "source_title": row.get("source_title"),
+        "source_document_type": row.get("source_document_type"),
+        "source_status": row.get("source_status"),
+        "source_expires_at": row.get("source_expires_at"),
+        "file_present": bool(row.get("storage_key")),
+    }
+    return result
+
+
+def _source_file_contract(row):
+    data = row.get("source_metadata") or row.get("metadata") or {}
+    if not isinstance(data, dict):
+        data = {}
+    return {
+        "storage_key": row.get("storage_key"),
+        "mime_type": str(data.get("mime_detected") or "").lower(),
+        "size_bytes": int(data.get("size_bytes") or 0),
+        "sha256": str(data.get("sha256") or ""),
+        "download_filename": str(data.get("sanitized_filename") or row.get("source_title") or "documento"),
+        "storage_provider": str(data.get("storage_provider") or ""),
+    }
+
+
+def _validate_source_contract(row, storage, *, verify_provider=True):
+    from .document_storage import ALLOWED_MIME_TYPES, DEFAULT_MAX_BYTES, StorageMetadataMismatch
+
+    if row.get("source_status") != "available" and row.get("status") != "available":
+        raise ValidationError("Documento PROPERTY non disponibile")
+    contract = _source_file_contract(row)
+    if not contract["storage_key"]:
+        raise ValidationError("Documento privo di storage privato")
+    if contract["mime_type"] not in ALLOWED_MIME_TYPES:
+        raise ValidationError("MIME del documento sorgente non ammesso")
+    if contract["size_bytes"] < 1 or contract["size_bytes"] > DEFAULT_MAX_BYTES:
+        raise ValidationError("Dimensione documento sorgente non valida")
+    if len(contract["sha256"]) != 64:
+        raise ValidationError("Checksum documento sorgente non valido")
+    source_expiry = (
+        row.get("source_expires_at")
+        if row.get("source_status") == "available"
+        else row.get("expires_at")
+    )
+    if source_expiry is not None and source_expiry < date.today():
+        raise ValidationError("Documento PROPERTY scaduto")
+    if not storage.is_configured():
+        from .document_storage import StorageNotConfigured
+
+        raise StorageNotConfigured("Storage documentale non configurato")
+    if verify_provider:
+        remote = storage.head_object(contract["storage_key"])
+        if remote.size_bytes != contract["size_bytes"]:
+            raise StorageMetadataMismatch("Dimensione storage non coerente")
+        if remote.content_type != contract["mime_type"]:
+            raise StorageMetadataMismatch("MIME storage non coerente")
+        if remote.sha256 and remote.sha256 != contract["sha256"]:
+            raise StorageMetadataMismatch("Checksum storage non coerente")
+    return contract
+
 
 def create_shared_document(d):
- with core_cursor(commit=True) as(_,c):
-  src=_property_for_document(c,d['property_document_id'])
-  _validate_target_account(c,d.get('owner_account_id'),src['property_id'])
-  c.execute("""INSERT INTO owner_shared_documents(property_document_id,owner_account_id,public_title,public_document_type,expires_at,acknowledgement_required,created_by)
-               VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING *""",(d['property_document_id'],d.get('owner_account_id'),d['public_title'],d['public_document_type'],d.get('expires_at'),d.get('acknowledgement_required',False),d.get('created_by')));r=one(c)
- audit('shared_document_created',d.get('owner_account_id'),src['property_id'],'owner_shared_document',r['id']);return r
+    with core_cursor(commit=True) as (_, c):
+        src = _property_for_document(c, d["property_document_id"])
+        if src["status"] != "available" or not src.get("storage_key"):
+            raise ValidationError("Il documento deve essere disponibile in storage privato")
+        _validate_target_account(c, d.get("owner_account_id"), src["property_id"])
+        c.execute(
+            """INSERT INTO owner_shared_documents(
+                   property_document_id,owner_account_id,public_title,public_document_type,
+                   expires_at,acknowledgement_required,created_by
+               ) VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (
+                d["property_document_id"],
+                d.get("owner_account_id"),
+                d["public_title"],
+                d["public_document_type"],
+                d.get("expires_at"),
+                d.get("acknowledgement_required", False),
+                d.get("created_by"),
+            ),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_created",
+            d.get("owner_account_id"),
+            src["property_id"],
+            "owner_shared_document",
+            result["id"],
+            meta={"source": "linked_existing"},
+        )
+    result.update(property_id=src["property_id"], source_title=src["title"], source_status=src["status"])
+    return _admin_shared_document(result)
 
-def list_shared_documents():
- with core_cursor() as(_,c):
-  c.execute("""SELECT sd.*,pd.property_id,pd.title source_title,pd.status source_status
-               FROM owner_shared_documents sd JOIN property_documents pd ON pd.id=sd.property_document_id
-               ORDER BY sd.created_at DESC""");return[dict(x) for x in c.fetchall()]
+
+def create_uploaded_shared_document(d, staged, storage=None):
+    """Upload a private file, then atomically create PROPERTY and OWNER records."""
+    from .document_storage import (
+        DocumentStorageError,
+        get_document_storage,
+        storage_metadata_for_database,
+    )
+
+    storage = storage or get_document_storage()
+    if not storage.is_configured():
+        from .document_storage import StorageNotConfigured
+
+        raise StorageNotConfigured("Storage documentale non configurato")
+    key = storage.generate_key()
+    uploaded = True  # the provider may create a partial object before raising
+    try:
+        storage.put_object(
+            staged.fileobj,
+            key=key,
+            content_type=staged.mime_detected,
+            size_bytes=staged.size_bytes,
+            sha256=staged.sha256,
+        )
+        metadata = storage_metadata_for_database(staged, provider=storage.provider_name)
+        with core_cursor(commit=True) as (_, c):
+            c.execute("SELECT id FROM properties WHERE id=%s", (d["property_id"],))
+            if not c.fetchone():
+                raise NotFoundError(NF)
+
+            previous_id = d.get("supersedes_shared_document_id")
+            target_account = d.get("owner_account_id")
+            version_number = 1
+            if previous_id is not None:
+                previous = _shared_document_with_source(c, previous_id, for_update=True)
+                if previous["status"] != "published":
+                    raise ConflictError("Solo un documento published può essere sostituito")
+                if previous.get("superseded_by_shared_document_id") is not None:
+                    raise ConflictError("Solo la versione corrente può essere sostituita")
+                if previous["property_id"] != d["property_id"]:
+                    raise ConflictError("La versione precedente appartiene a un altro immobile")
+                if target_account is not None and target_account != previous.get("owner_account_id"):
+                    raise ConflictError("Il destinatario non può cambiare nella catena versioni")
+                target_account = previous.get("owner_account_id")
+                version_number = int(previous["version_number"]) + 1
+                c.execute(
+                    """SELECT 1 FROM owner_shared_documents
+                       WHERE supersedes_shared_document_id=%s
+                         AND status IN ('draft','published') LIMIT 1""",
+                    (previous_id,),
+                )
+                if c.fetchone():
+                    raise ConflictError("Esiste già una versione successiva attiva")
+
+            _validate_target_account(c, target_account, d["property_id"])
+            c.execute(
+                """INSERT INTO property_documents(
+                       property_id,document_type,title,storage_key,status,metadata
+                   ) VALUES(%s,%s,%s,%s,'available',%s) RETURNING *""",
+                (
+                    d["property_id"],
+                    d["document_type"],
+                    d["source_title"],
+                    key,
+                    Json(metadata),
+                ),
+            )
+            source = one(c)
+            c.execute(
+                """INSERT INTO owner_shared_documents(
+                       property_document_id,owner_account_id,public_title,public_document_type,
+                       version_number,expires_at,acknowledgement_required,
+                       supersedes_shared_document_id,created_by
+                   ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                (
+                    source["id"],
+                    target_account,
+                    d["public_title"],
+                    d["public_document_type"],
+                    version_number,
+                    d.get("expires_at"),
+                    d.get("acknowledgement_required", False),
+                    previous_id,
+                    d.get("created_by"),
+                ),
+            )
+            result = one(c)
+            _audit_with_cursor(
+                c,
+                "shared_document_uploaded",
+                target_account,
+                d["property_id"],
+                "owner_shared_document",
+                result["id"],
+                meta={
+                    "size_bytes": staged.size_bytes,
+                    "mime_type": staged.mime_detected,
+                    "source": "upload_admin",
+                    "supersedes": previous_id,
+                },
+            )
+            _audit_with_cursor(
+                c,
+                "shared_document_version_created" if previous_id is not None else "shared_document_created",
+                target_account,
+                d["property_id"],
+                "owner_shared_document",
+                result["id"],
+                meta={
+                    "source": "upload_admin",
+                    "previous": previous_id,
+                    "version_number": version_number,
+                },
+            )
+        result.update(
+            property_id=d["property_id"],
+            source_title=d["source_title"],
+            source_document_type=d["document_type"],
+            source_status="available",
+            storage_key=key,
+        )
+        return _admin_shared_document(result)
+    except Exception as exc:
+        if uploaded:
+            try:
+                storage.delete_object(key)
+            except Exception as cleanup_exc:
+                try:
+                    audit(
+                        "shared_document_cleanup_failed",
+                        account=d.get("owner_account_id"),
+                        prop=d.get("property_id"),
+                        etype="owner_shared_document",
+                        result="error",
+                        meta={
+                            "error_code": getattr(cleanup_exc, "error_code", "storage_error"),
+                            "stage": "db_compensation",
+                        },
+                    )
+                except Exception:
+                    pass
+        if isinstance(exc, DocumentStorageError):
+            raise
+        raise
+
+
+def list_shared_documents(
+    property_id=None,
+    status=None,
+    owner_account_id=None,
+    document_type=None,
+    limit=100,
+    offset=0,
+):
+    filters = []
+    values = []
+    if property_id is not None:
+        filters.append("pd.property_id=%s")
+        values.append(property_id)
+    if status is not None:
+        filters.append("sd.status=%s")
+        values.append(status)
+    if owner_account_id is not None:
+        filters.append("sd.owner_account_id=%s")
+        values.append(owner_account_id)
+    if document_type is not None:
+        filters.append("sd.public_document_type=%s")
+        values.append(document_type)
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    values.extend((limit, offset))
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT sd.*,pd.property_id,pd.title AS source_title,
+                      pd.document_type AS source_document_type,pd.status AS source_status,
+                      pd.expires_at AS source_expires_at,pd.storage_key
+               FROM owner_shared_documents sd
+               JOIN property_documents pd ON pd.id=sd.property_document_id"""
+            + where
+            + " ORDER BY sd.created_at DESC LIMIT %s OFFSET %s",
+            values,
+        )
+        return [_admin_shared_document(dict(row)) for row in c.fetchall()]
+
 
 def get_shared_document(i):
- with core_cursor() as(_,c):
-  c.execute("""SELECT sd.*,pd.property_id,pd.title source_title,pd.status source_status
-               FROM owner_shared_documents sd JOIN property_documents pd ON pd.id=sd.property_document_id WHERE sd.id=%s""",(i,));return one(c)
+    with core_cursor() as (_, c):
+        return _admin_shared_document(_shared_document_with_source(c, i))
 
-def update_shared_document(i,d):
- old=get_shared_document(i)
- if old['status']!='draft':raise ConflictError('Un documento pubblicato, revocato o archiviato è immutabile')
- fields=[];vals=[]
- for k in ('public_title','public_document_type','expires_at','acknowledgement_required'):
-  if k in d:fields.append(k+'=%s');vals.append(d[k])
- if not fields:return old
- vals.append(i)
- with core_cursor(commit=True) as(_,c):c.execute('UPDATE owner_shared_documents SET '+','.join(fields)+',updated_at=NOW() WHERE id=%s RETURNING *',vals);r=one(c)
- audit('shared_document_updated',old.get('owner_account_id'),old['property_id'],'owner_shared_document',i);return r
 
-def publish_shared_document(i):
- old=get_shared_document(i)
- if old['status']!='draft':raise ConflictError('Solo draft pubblicabile')
- with core_cursor(commit=True) as(_,c):
-  c.execute("UPDATE owner_shared_documents SET status='published',published_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
- audit('shared_document_published',old.get('owner_account_id'),old['property_id'],'owner_shared_document',i);return r
+def update_shared_document(i, d):
+    old = get_shared_document(i)
+    if old["status"] != "draft":
+        raise ConflictError("Un documento pubblicato, revocato o archiviato è immutabile")
+    fields = []
+    values = []
+    for key in ("public_title", "public_document_type", "expires_at", "acknowledgement_required"):
+        if key in d:
+            fields.append(key + "=%s")
+            values.append(d[key])
+    if not fields:
+        return old
+    values.append(i)
+    with core_cursor(commit=True) as (_, c):
+        c.execute(
+            "UPDATE owner_shared_documents SET "
+            + ",".join(fields)
+            + ",updated_at=NOW() WHERE id=%s AND status='draft' RETURNING *",
+            values,
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_updated",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_shared_document",
+            i,
+        )
+    result.update(old)
+    result.update({key: value for key, value in d.items() if key in result})
+    return result
 
-def revoke_shared_document(i,actor=None):
- old=get_shared_document(i)
- if old['status']!='published':raise ConflictError('Solo published revocabile')
- with core_cursor(commit=True) as(_,c):
-  c.execute("UPDATE owner_shared_documents SET status='revoked',revoked_at=NOW(),revoked_by=%s,updated_at=NOW() WHERE id=%s RETURNING *",(actor,i));r=one(c)
- audit('shared_document_revoked',old.get('owner_account_id'),old['property_id'],'owner_shared_document',i);return r
+
+def publish_shared_document(i, storage=None):
+    from .document_storage import get_document_storage
+
+    storage = storage or get_document_storage()
+    with core_cursor() as (_, c):
+        preflight = _shared_document_with_source(c, i)
+    if preflight["status"] != "draft":
+        raise ConflictError("Solo draft pubblicabile")
+    _validate_source_contract(preflight, storage, verify_provider=True)
+
+    with core_cursor(commit=True) as (_, c):
+        current = _shared_document_with_source(c, i, for_update=True)
+        if current["status"] != "draft":
+            raise ConflictError("Solo draft pubblicabile")
+        _validate_target_account(c, current.get("owner_account_id"), current["property_id"])
+        if current.get("expires_at") is not None:
+            c.execute("SELECT (%s > NOW()) AS valid", (current["expires_at"],))
+            if not c.fetchone()["valid"]:
+                raise ValidationError("Scadenza condivisione non valida")
+        previous_id = current.get("supersedes_shared_document_id")
+        if previous_id is not None:
+            c.execute("SELECT * FROM owner_shared_documents WHERE id=%s FOR UPDATE", (previous_id,))
+            previous = one(c)
+            if previous["status"] != "published":
+                raise ConflictError("La versione precedente non è pubblicata")
+            if previous.get("superseded_by_shared_document_id") not in (None, i):
+                raise ConflictError("La versione precedente è già stata sostituita")
+            if previous.get("owner_account_id") != current.get("owner_account_id"):
+                raise ConflictError("Catena versioni non coerente")
+            previous_source = _property_for_document(c, previous["property_document_id"])
+            if previous_source["property_id"] != current["property_id"]:
+                raise ConflictError("Catena versioni non coerente")
+        c.execute(
+            """UPDATE owner_shared_documents
+               SET status='published',published_at=NOW(),updated_at=NOW()
+               WHERE id=%s RETURNING *""",
+            (i,),
+        )
+        result = one(c)
+        if previous_id is not None:
+            c.execute(
+                """UPDATE owner_shared_documents
+                   SET superseded_by_shared_document_id=%s,updated_at=NOW()
+                   WHERE id=%s""",
+                (i, previous_id),
+            )
+        _audit_with_cursor(
+            c,
+            "shared_document_published",
+            current.get("owner_account_id"),
+            current["property_id"],
+            "owner_shared_document",
+            i,
+            meta={
+                "version_number": current["version_number"],
+                "supersedes": previous_id,
+            },
+        )
+    result.update(current)
+    result["status"] = "published"
+    return _admin_shared_document(result)
+
+
+def revoke_shared_document(i, actor=None, reason=None):
+    old = get_shared_document(i)
+    if old["status"] != "published":
+        raise ConflictError("Solo published revocabile")
+    with core_cursor(commit=True) as (_, c):
+        c.execute(
+            """UPDATE owner_shared_documents
+               SET status='revoked',revoked_at=NOW(),revoked_by=%s,updated_at=NOW()
+               WHERE id=%s AND status='published' RETURNING *""",
+            (actor, i),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_revoked",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_shared_document",
+            i,
+            meta={"reason": reason} if reason else None,
+        )
+    result.update(old)
+    result["status"] = "revoked"
+    return result
+
 
 def archive_shared_document(i):
- old=get_shared_document(i)
- if old['status'] not in ('published','revoked'):raise ConflictError('Solo published o revoked archiviabile')
- with core_cursor(commit=True) as(_,c):
-  c.execute("UPDATE owner_shared_documents SET status='archived',archived_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
- audit('shared_document_archived',old.get('owner_account_id'),old['property_id'],'owner_shared_document',i);return r
+    old = get_shared_document(i)
+    if old["status"] not in ("published", "revoked"):
+        raise ConflictError("Solo published o revoked archiviabile")
+    with core_cursor(commit=True) as (_, c):
+        c.execute(
+            """UPDATE owner_shared_documents
+               SET status='archived',archived_at=NOW(),updated_at=NOW()
+               WHERE id=%s AND status IN ('published','revoked') RETURNING *""",
+            (i,),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_archived",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_shared_document",
+            i,
+            meta={"version_number": old["version_number"]},
+        )
+    result.update(old)
+    result["status"] = "archived"
+    return result
 
-def supersede_shared_document(i,d):
- old=get_shared_document(i)
- if old['status']!='published':raise ConflictError('Solo published sostituibile')
- with core_cursor(commit=True) as(_,c):
-  c.execute("""INSERT INTO owner_shared_documents(property_document_id,owner_account_id,public_title,public_document_type,version_number,status,expires_at,acknowledgement_required,supersedes_shared_document_id,created_by)
-               VALUES(%s,%s,%s,%s,%s,'draft',%s,%s,%s,%s) RETURNING *""",(old['property_document_id'],old.get('owner_account_id'),d['public_title'],d['public_document_type'],old['version_number']+1,d.get('expires_at'),d.get('acknowledgement_required',False),i,d.get('created_by')));new=one(c)
-  c.execute('UPDATE owner_shared_documents SET superseded_by_shared_document_id=%s,updated_at=NOW() WHERE id=%s',(new['id'],i))
- audit('shared_document_version_created',old.get('owner_account_id'),old['property_id'],'owner_shared_document',new['id'],meta={'previous':i});return new
 
-def portal_shared_documents(a,p):
- require_property(a,p)
- with core_cursor() as(_,c):
-  c.execute("""SELECT sd.id,sd.public_title,sd.public_document_type,sd.version_number,sd.published_at,sd.expires_at,sd.acknowledgement_required,
-                      dr.first_viewed_at,dr.last_viewed_at,dr.view_count,dr.acknowledged_at
-               FROM owner_shared_documents sd
-               JOIN property_documents pd ON pd.id=sd.property_document_id
-               LEFT JOIN owner_document_reads dr ON dr.shared_document_id=sd.id AND dr.owner_account_id=%s
-               WHERE pd.property_id=%s AND sd.status='published'
-                 AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
-                 AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
-               ORDER BY sd.published_at DESC""",(a,p,a));return[dict(x) for x in c.fetchall()]
+def supersede_shared_document(i, d):
+    with core_cursor(commit=True) as (_, c):
+        old = _shared_document_with_source(c, i, for_update=True)
+        if old["status"] != "published":
+            raise ConflictError("Solo published sostituibile")
+        if old.get("superseded_by_shared_document_id") is not None:
+            raise ConflictError("Solo la versione corrente può essere sostituita")
+        c.execute(
+            """SELECT 1 FROM owner_shared_documents
+               WHERE supersedes_shared_document_id=%s AND status IN ('draft','published')
+               LIMIT 1""",
+            (i,),
+        )
+        if c.fetchone():
+            raise ConflictError("Esiste già una versione successiva attiva")
+        new_document_id = d.get("property_document_id") or old["property_document_id"]
+        source = _property_for_document(c, new_document_id)
+        if source["property_id"] != old["property_id"]:
+            raise ConflictError("Il nuovo documento appartiene a un altro immobile")
+        if source["status"] != "available" or not source.get("storage_key"):
+            raise ValidationError("Il nuovo documento non è disponibile in storage privato")
+        _validate_target_account(c, old.get("owner_account_id"), old["property_id"])
+        c.execute(
+            """SELECT COALESCE(MAX(version_number),0)+1 AS next_version
+               FROM owner_shared_documents
+               WHERE property_document_id=%s
+                 AND owner_account_id IS NOT DISTINCT FROM %s""",
+            (new_document_id, old.get("owner_account_id")),
+        )
+        next_version = max(old["version_number"] + 1, int(c.fetchone()["next_version"]))
+        c.execute(
+            """INSERT INTO owner_shared_documents(
+                   property_document_id,owner_account_id,public_title,public_document_type,
+                   version_number,status,expires_at,acknowledgement_required,
+                   supersedes_shared_document_id,created_by
+               ) VALUES(%s,%s,%s,%s,%s,'draft',%s,%s,%s,%s) RETURNING *""",
+            (
+                new_document_id,
+                old.get("owner_account_id"),
+                d["public_title"],
+                d["public_document_type"],
+                next_version,
+                d.get("expires_at"),
+                d.get("acknowledgement_required", False),
+                i,
+                d.get("created_by"),
+            ),
+        )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_version_created",
+            old.get("owner_account_id"),
+            old["property_id"],
+            "owner_shared_document",
+            result["id"],
+            meta={"previous": i, "version_number": next_version},
+        )
+    result.update(
+        property_id=old["property_id"],
+        source_title=source["title"],
+        source_document_type=source["document_type"],
+        source_status=source["status"],
+        storage_key=source["storage_key"],
+    )
+    return _admin_shared_document(result)
 
-def portal_shared_document(a,i):
- with core_cursor() as(_,c):
-  c.execute("""SELECT sd.id,sd.public_title,sd.public_document_type,sd.version_number,sd.published_at,sd.expires_at,sd.acknowledgement_required,
-                      pd.property_id,pd.url
+
+_PORTAL_SHARED_DOCUMENT_SELECT = """SELECT sd.id,sd.public_title,sd.public_document_type,
+       sd.version_number,sd.published_at,sd.expires_at,sd.acknowledgement_required,
+       pd.property_id,pd.status AS source_status,
+       pd.metadata->>'mime_detected' AS mime_type,
+       NULLIF(pd.metadata->>'size_bytes','')::BIGINT AS size_bytes,
+       pd.metadata->>'sanitized_filename' AS download_filename,
+       dr.first_viewed_at,dr.last_viewed_at,dr.view_count,dr.acknowledged_at
+"""
+
+
+def _public_shared_document(row):
+    return {
+        "id": row["id"],
+        "public_title": row["public_title"],
+        "public_document_type": row["public_document_type"],
+        "public_document_type_label": SHARED_DOCUMENT_TYPE_LABELS.get(
+            row["public_document_type"], row["public_document_type"]
+        ),
+        "version_number": row["version_number"],
+        "published_at": row.get("published_at"),
+        "expires_at": row.get("expires_at"),
+        "acknowledgement_required": row["acknowledgement_required"],
+        "first_viewed_at": row.get("first_viewed_at"),
+        "last_viewed_at": row.get("last_viewed_at"),
+        "view_count": row.get("view_count") or 0,
+        "acknowledged_at": row.get("acknowledged_at"),
+        "mime_type": row.get("mime_type"),
+        "size_bytes": row.get("size_bytes"),
+        "download_filename": row.get("download_filename"),
+        "download_available": row.get("source_status") == "available",
+    }
+
+
+def _authorized_shared_document_source(account_id, item_id):
+    """Internal locator lookup used only after complete portal authorization."""
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT sd.*,pd.property_id,pd.status AS source_status,
+                      pd.storage_key,pd.metadata AS source_metadata,pd.title AS source_title
                FROM owner_shared_documents sd
                JOIN property_documents pd ON pd.id=sd.property_document_id
                JOIN owner_property_access x ON x.property_id=pd.property_id
-               WHERE sd.id=%s AND sd.status='published' AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
+               WHERE sd.id=%s AND sd.status='published'
+                 AND sd.superseded_by_shared_document_id IS NULL
+                 AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
                  AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
-                 AND x.owner_account_id=%s AND x.access_status='active' AND x.revoked_at IS NULL
-                 AND (x.valid_until IS NULL OR x.valid_until>NOW())""",(i,a,a));return one(c)
+                 AND x.owner_account_id=%s AND x.access_status='active'
+                 AND x.revoked_at IS NULL
+                 AND (x.valid_until IS NULL OR x.valid_until>NOW())""",
+            (item_id, account_id, account_id),
+        )
+        return one(c)
 
-def read_shared_document(a,i,ack=False):
- d=portal_shared_document(a,i)
- with core_cursor(commit=True) as(_,c):
-  c.execute("""INSERT INTO owner_document_reads(shared_document_id,owner_account_id,view_count,acknowledged_at)
-               VALUES(%s,%s,1,CASE WHEN %s THEN NOW() END)
-               ON CONFLICT(shared_document_id,owner_account_id) DO UPDATE SET last_viewed_at=NOW(),view_count=owner_document_reads.view_count+1,
-               acknowledged_at=CASE WHEN %s THEN COALESCE(owner_document_reads.acknowledged_at,NOW()) ELSE owner_document_reads.acknowledged_at END RETURNING *""",(i,a,ack,ack));r=one(c)
- audit('shared_document_acknowledged' if ack else 'shared_document_viewed',a,d['property_id'],'owner_shared_document',i);return r
+
+def portal_shared_documents(a, p):
+    with core_cursor() as (_, c):
+        c.execute(
+            _PORTAL_SHARED_DOCUMENT_SELECT
+            + """FROM owner_shared_documents sd
+               JOIN property_documents pd ON pd.id=sd.property_document_id
+               JOIN owner_property_access x
+                 ON x.property_id=pd.property_id AND x.owner_account_id=%s
+               LEFT JOIN owner_document_reads dr
+                 ON dr.shared_document_id=sd.id AND dr.owner_account_id=%s
+               WHERE pd.property_id=%s AND sd.status='published'
+                 AND sd.superseded_by_shared_document_id IS NULL
+                 AND pd.status='available'
+                 AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
+                 AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
+                 AND x.access_status='active' AND x.revoked_at IS NULL
+                 AND (x.valid_until IS NULL OR x.valid_until>NOW())
+               ORDER BY sd.published_at DESC""",
+            (a, a, p, a),
+        )
+        return [_public_shared_document(dict(row)) for row in c.fetchall()]
+
+
+def portal_shared_document(a, i):
+    with core_cursor() as (_, c):
+        c.execute(
+            _PORTAL_SHARED_DOCUMENT_SELECT
+            + """FROM owner_shared_documents sd
+               JOIN property_documents pd ON pd.id=sd.property_document_id
+               JOIN owner_property_access x ON x.property_id=pd.property_id
+               LEFT JOIN owner_document_reads dr
+                 ON dr.shared_document_id=sd.id AND dr.owner_account_id=%s
+               WHERE sd.id=%s AND sd.status='published'
+                 AND sd.superseded_by_shared_document_id IS NULL
+                 AND pd.status='available'
+                 AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
+                 AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
+                 AND x.owner_account_id=%s AND x.access_status='active'
+                 AND x.revoked_at IS NULL
+                 AND (x.valid_until IS NULL OR x.valid_until>NOW())""",
+            (a, i, a, a),
+        )
+        return _public_shared_document(one(c))
+
+
+def read_shared_document(a, i, ack=False):
+    portal_shared_document(a, i)
+    source = _authorized_shared_document_source(a, i)
+    with core_cursor(commit=True) as (_, c):
+        if ack:
+            c.execute(
+                """INSERT INTO owner_document_reads(
+                       shared_document_id,owner_account_id,view_count,acknowledged_at
+                   ) VALUES(%s,%s,1,NOW())
+                   ON CONFLICT(shared_document_id,owner_account_id) DO UPDATE
+                   SET acknowledged_at=COALESCE(owner_document_reads.acknowledged_at,NOW())
+                   RETURNING *""",
+                (i, a),
+            )
+        else:
+            c.execute(
+                """INSERT INTO owner_document_reads(shared_document_id,owner_account_id,view_count)
+                   VALUES(%s,%s,1)
+                   ON CONFLICT(shared_document_id,owner_account_id) DO UPDATE
+                   SET last_viewed_at=NOW(),view_count=owner_document_reads.view_count+1
+                   RETURNING *""",
+                (i, a),
+            )
+        result = one(c)
+        _audit_with_cursor(
+            c,
+            "shared_document_acknowledged" if ack else "shared_document_viewed",
+            a,
+            source["property_id"],
+            "owner_shared_document",
+            i,
+            meta={"source": "acknowledge" if ack else "detail"},
+        )
+    return result
+
+
+def prepare_shared_document_download(a, i, storage=None):
+    from .document_storage import get_document_storage
+
+    storage = storage or get_document_storage()
+    source = _authorized_shared_document_source(a, i)
+    contract = _validate_source_contract(source, storage, verify_provider=True)
+    opened = storage.open_stream(contract["storage_key"])
+    if (
+        opened.metadata.size_bytes != contract["size_bytes"]
+        or opened.metadata.content_type != contract["mime_type"]
+        or (opened.metadata.sha256 and opened.metadata.sha256 != contract["sha256"])
+    ):
+        opened.close()
+        from .document_storage import StorageMetadataMismatch
+
+        raise StorageMetadataMismatch("Oggetto storage non coerente")
+    try:
+        read_shared_document(a, i, False)
+    except Exception:
+        opened.close()
+        raise
+    return {
+        "shared_document_id": i,
+        "property_id": source["property_id"],
+        "owner_account_id": a,
+        "filename": contract["download_filename"],
+        "mime_type": contract["mime_type"],
+        "size_bytes": contract["size_bytes"],
+        "opened": opened,
+    }
+
+
+def prepare_admin_shared_document_download(i, storage=None):
+    from .document_storage import get_document_storage
+
+    storage = storage or get_document_storage()
+    with core_cursor() as (_, c):
+        source = _shared_document_with_source(c, i)
+    contract = _validate_source_contract(source, storage, verify_provider=True)
+    opened = storage.open_stream(contract["storage_key"])
+    if (
+        opened.metadata.size_bytes != contract["size_bytes"]
+        or opened.metadata.content_type != contract["mime_type"]
+        or (opened.metadata.sha256 and opened.metadata.sha256 != contract["sha256"])
+    ):
+        opened.close()
+        from .document_storage import StorageMetadataMismatch
+
+        raise StorageMetadataMismatch("Oggetto storage non coerente")
+    audit(
+        "shared_document_admin_download_started",
+        account=source.get("owner_account_id"),
+        prop=source["property_id"],
+        etype="owner_shared_document",
+        eid=i,
+    )
+    return {
+        "shared_document_id": i,
+        "property_id": source["property_id"],
+        "owner_account_id": source.get("owner_account_id"),
+        "filename": contract["download_filename"],
+        "mime_type": contract["mime_type"],
+        "size_bytes": contract["size_bytes"],
+        "opened": opened,
+    }
+
+
+def audit_shared_document_download(item, *, result="success", reason_code=None, scope="portal"):
+    meta = {"scope": scope, "size_bytes": item.get("size_bytes")}
+    if reason_code:
+        meta["reason_code"] = reason_code
+    try:
+        audit(
+            "shared_document_downloaded" if result == "success" else "shared_document_download_failed",
+            account=item.get("owner_account_id"),
+            prop=item.get("property_id"),
+            etype="owner_shared_document",
+            eid=item.get("shared_document_id"),
+            result=result,
+            meta=meta,
+        )
+    except Exception:
+        pass
+
+
+def audit_shared_document_access_denied(account, property_id=None, document_id=None, scope="portal", reason_code="not_found"):
+    try:
+        audit(
+            "shared_document_access_denied",
+            account=account,
+            prop=property_id,
+            etype="owner_shared_document",
+            eid=document_id,
+            result="denied",
+            meta={"scope": scope, "reason_code": reason_code},
+        )
+    except Exception:
+        pass
+
+
+def shared_document_reads(i):
+    doc = get_shared_document(i)
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT dr.owner_account_id,dr.first_viewed_at,dr.last_viewed_at,
+                      dr.view_count,dr.acknowledged_at
+               FROM owner_document_reads dr
+               JOIN owner_property_access x
+                 ON x.owner_account_id=dr.owner_account_id AND x.property_id=%s
+               WHERE dr.shared_document_id=%s
+               ORDER BY dr.first_viewed_at""",
+            (doc["property_id"], i),
+        )
+        return [dict(row) for row in c.fetchall()]
+
+
+def document_storage_health(storage=None):
+    from .document_storage import get_document_storage
+
+    storage = storage or get_document_storage()
+    return storage.healthcheck()
+
 
 CATEGORY_LABELS = {
     "price": "Posizionamento economico",

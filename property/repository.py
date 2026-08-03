@@ -133,6 +133,42 @@ def delete_lead(property_id,lead_id):
         cur.execute('DELETE FROM property_leads WHERE property_id=%s AND lead_id=%s',(property_id,lead_id))
         if not cur.rowcount: raise NotFoundError('property lead link not found')
 
+
+
+_OWNER_BINARY_METADATA_KEYS = {
+    "sha256",
+    "size_bytes",
+    "mime_detected",
+    "sanitized_filename",
+    "storage_provider",
+}
+
+
+def _document_has_published_owner_share(cur, document_id):
+    cur.execute(
+        """SELECT 1 FROM owner_shared_documents
+           WHERE property_document_id=%s
+             AND (published_at IS NOT NULL OR status IN ('published','revoked','archived'))
+           LIMIT 1""",
+        (document_id,),
+    )
+    return bool(cur.fetchone())
+
+
+def _binary_document_change(current, updates):
+    for field in ("url", "storage_key"):
+        if field in updates and updates[field] != current.get(field):
+            return True
+    if "metadata" in updates:
+        previous = current.get("metadata") or {}
+        incoming = updates.get("metadata") or {}
+        if not isinstance(previous, dict) or not isinstance(incoming, dict):
+            return True
+        for key in _OWNER_BINARY_METADATA_KEYS:
+            if incoming.get(key) != previous.get(key):
+                return True
+    return False
+
 def create_child(table,property_id,data):
     with core_cursor(commit=True) as (_,cur):
         ensure(cur,'properties',property_id,'property')
@@ -152,10 +188,13 @@ def update_child(table,item_id,data,label):
         return row(r)
     with core_cursor(commit=True) as (_,cur):
         if table=='property_documents':
-            cur.execute('SELECT url,storage_key,status FROM property_documents WHERE id=%s',(item_id,))
+            cur.execute('SELECT url,storage_key,status,metadata FROM property_documents WHERE id=%s FOR UPDATE',(item_id,))
             current=cur.fetchone()
             if not current: raise NotFoundError(f'{label} {item_id} not found')
-            merged={**dict(current),**data}
+            current=dict(current)
+            if _document_has_published_owner_share(cur,item_id) and _binary_document_change(current,data):
+                raise ConflictError('Il file di un documento già pubblicato in OWNER è immutabile; creare una nuova versione')
+            merged={**current,**data}
             if not merged.get('url') and not merged.get('storage_key') and merged.get('status') not in {'missing','requested'}:
                 raise ValidationError('url or storage_key required for this document status')
         if table in {'property_documents','property_photos'} and 'metadata' in data:data['metadata']=Json(data.get('metadata') or {})
@@ -193,6 +232,8 @@ def update_visit(visit_id,data):
 
 def delete_child(table,item_id,label):
     with core_cursor(commit=True) as (_,cur):
+        if table=='property_documents' and _document_has_published_owner_share(cur,item_id):
+            raise ConflictError('Un documento già pubblicato in OWNER non può essere eliminato')
         cur.execute(f'DELETE FROM {table} WHERE id=%s',(item_id,))
         if not cur.rowcount:raise NotFoundError(f'{label} {item_id} not found')
 

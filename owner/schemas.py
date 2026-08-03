@@ -101,11 +101,23 @@ class FeedbackStatus(M):
     public_response: str | None = Field(None, max_length=5000)
 
 
+SharedDocumentType = Literal[
+    "mandate",
+    "floor_plan",
+    "ape",
+    "cadastral_extract",
+    "photo_report",
+    "activity_report",
+    "information",
+]
+SharedDocumentStatus = Literal["draft", "published", "revoked", "archived"]
+
+
 class SharedDocumentCreate(M):
     property_document_id: int
     owner_account_id: int | None = None
     public_title: str = Field(min_length=1, max_length=200)
-    public_document_type: str = Field(min_length=1, max_length=50)
+    public_document_type: SharedDocumentType
     expires_at: datetime | None = None
     acknowledgement_required: bool = False
     created_by: str | None = Field(None, max_length=200)
@@ -113,14 +125,15 @@ class SharedDocumentCreate(M):
 
 class SharedDocumentUpdate(M):
     public_title: str | None = Field(None, min_length=1, max_length=200)
-    public_document_type: str | None = Field(None, min_length=1, max_length=50)
+    public_document_type: SharedDocumentType | None = None
     expires_at: datetime | None = None
     acknowledgement_required: bool | None = None
 
 
 class SharedDocumentSupersede(M):
+    property_document_id: int | None = None
     public_title: str = Field(min_length=1, max_length=200)
-    public_document_type: str = Field(min_length=1, max_length=50)
+    public_document_type: SharedDocumentType
     expires_at: datetime | None = None
     acknowledgement_required: bool = False
     created_by: str | None = Field(None, max_length=200)
@@ -128,6 +141,7 @@ class SharedDocumentSupersede(M):
 
 class RevokeRequest(M):
     actor: str | None = Field(None, max_length=200)
+    reason: str | None = Field(None, max_length=500)
 
 
 VisitFeedbackCategory = Literal[
