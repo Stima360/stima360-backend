@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
+import importlib
 import inspect
 import io
 import os
@@ -345,26 +345,33 @@ def test_iter_stream_audits_completion_and_failure():
 
 
 def test_p4_routes_declared_without_method_path_collisions():
-    def load_fresh_router(module_name: str, alias: str):
-        source = __import__(module_name, fromlist=["__file__"])
-        spec = importlib.util.spec_from_file_location(alias, source.__file__)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[alias] = module
-        try:
-            spec.loader.exec_module(module)
-            return module.router
-        finally:
-            sys.modules.pop(alias, None)
+    def load_fresh_canonical_router(module_name: str):
+        package_name, attribute_name = module_name.rsplit(".", 1)
+        package = importlib.import_module(package_name)
+        missing = object()
+        original_module = sys.modules.pop(module_name, missing)
+        original_attribute = getattr(package, attribute_name, missing)
+        if original_attribute is not missing:
+            delattr(package, attribute_name)
 
-    # Use fresh module instances so this assertion is independent from router
-    # objects imported or mutated by tests collected/executed earlier.
-    fresh_admin_router = load_fresh_router(
-        "owner.router_admin", "owner._p4_test_router_admin"
-    )
-    fresh_portal_router = load_fresh_router(
-        "owner.router_portal", "owner._p4_test_router_portal"
-    )
+        try:
+            fresh_module = importlib.import_module(module_name)
+            return fresh_module.router
+        finally:
+            sys.modules.pop(module_name, None)
+            if original_module is not missing:
+                sys.modules[module_name] = original_module
+            if original_attribute is not missing:
+                setattr(package, attribute_name, original_attribute)
+            elif hasattr(package, attribute_name):
+                delattr(package, attribute_name)
+
+    # Import the router modules under their canonical names, but with their
+    # existing module objects temporarily isolated. This produces fresh router
+    # instances without depending on route mutations made earlier in the suite,
+    # then restores the original import state immediately.
+    fresh_admin_router = load_fresh_canonical_router("owner.router_admin")
+    fresh_portal_router = load_fresh_canonical_router("owner.router_portal")
 
     app = FastAPI()
     app.include_router(fresh_admin_router)
