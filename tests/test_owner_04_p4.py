@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import ast
 import hashlib
-import importlib
 import inspect
 import io
 import os
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -345,53 +344,76 @@ def test_iter_stream_audits_completion_and_failure():
 
 
 def test_p4_routes_declared_without_method_path_collisions():
-    def load_fresh_canonical_router(module_name: str):
-        package_name, attribute_name = module_name.rsplit(".", 1)
-        package = importlib.import_module(package_name)
-        missing = object()
-        original_module = sys.modules.pop(module_name, missing)
-        original_attribute = getattr(package, attribute_name, missing)
-        if original_attribute is not missing:
-            delattr(package, attribute_name)
+    def declared_route_pairs(relative_path: str):
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=relative_path)
+        pairs = []
+        prefix = None
+        supported_methods = {"get", "post", "patch", "put", "delete"}
 
-        try:
-            fresh_module = importlib.import_module(module_name)
-            return fresh_module.router
-        finally:
-            sys.modules.pop(module_name, None)
-            if original_module is not missing:
-                sys.modules[module_name] = original_module
-            if original_attribute is not missing:
-                setattr(package, attribute_name, original_attribute)
-            elif hasattr(package, attribute_name):
-                delattr(package, attribute_name)
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == "router" for target in node.targets):
+                continue
+            if not isinstance(node.value, ast.Call):
+                continue
+            if not isinstance(node.value.func, ast.Name) or node.value.func.id != "APIRouter":
+                continue
+            for keyword in node.value.keywords:
+                if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant):
+                    prefix = keyword.value.value
+                    break
 
-    # Import the router modules under their canonical names, but with their
-    # existing module objects temporarily isolated. This produces fresh router
-    # instances without depending on route mutations made earlier in the suite,
-    # then restores the original import state immediately.
-    fresh_admin_router = load_fresh_canonical_router("owner.router_admin")
-    fresh_portal_router = load_fresh_canonical_router("owner.router_portal")
+        assert isinstance(prefix, str), f"Prefix APIRouter non determinabile in {relative_path}"
 
-    app = FastAPI()
-    app.include_router(fresh_admin_router)
-    app.include_router(fresh_portal_router)
+        for node in ast.walk(tree):
+            decorators = getattr(node, "decorator_list", ())
+            for decorator in decorators:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                func = decorator.func
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "router"
+                    and func.attr in supported_methods
+                    and decorator.args
+                    and isinstance(decorator.args[0], ast.Constant)
+                    and isinstance(decorator.args[0].value, str)
+                ):
+                    continue
+                pairs.append((func.attr.upper(), prefix + decorator.args[0].value))
+        return pairs
+
+    # Inspect the route declarations directly from source instead of the shared
+    # APIRouter instances imported by the test suite. This makes the check
+    # independent from any prior test that mutates those router objects.
+    pairs = declared_route_pairs("owner/router_admin.py")
+    pairs += declared_route_pairs("owner/router_portal.py")
+
     expected = {
+        ("GET", "/api/owner/admin/documents"),
+        ("POST", "/api/owner/admin/documents"),
         ("POST", "/api/owner/admin/documents/upload"),
         ("GET", "/api/owner/admin/document-storage/health"),
+        ("GET", "/api/owner/admin/documents/{i}"),
+        ("PATCH", "/api/owner/admin/documents/{i}"),
+        ("POST", "/api/owner/admin/documents/{i}/publish"),
+        ("POST", "/api/owner/admin/documents/{i}/revoke"),
+        ("POST", "/api/owner/admin/documents/{i}/archive"),
+        ("POST", "/api/owner/admin/documents/{i}/supersede"),
         ("GET", "/api/owner/admin/documents/{i}/reads"),
         ("GET", "/api/owner/admin/documents/{i}/download"),
+        ("GET", "/api/owner/portal/properties/{p}/documents"),
+        ("GET", "/api/owner/portal/documents/{i}"),
         ("GET", "/api/owner/portal/documents/{i}/download"),
         ("POST", "/api/owner/portal/documents/{i}/acknowledge"),
     }
-    pairs = [
-        (method, route.path)
-        for route in app.routes
-        for method in getattr(route, "methods", set())
-        if method not in {"HEAD", "OPTIONS"}
-    ]
-    assert len(pairs) == len(set(pairs))
-    assert expected <= set(pairs)
+
+    assert pairs, "Nessuna route OWNER dichiarata nei router"
+    assert len(pairs) == len(set(pairs)), "Collisione method+path nelle route OWNER"
+    assert expected <= set(pairs), "Mancano una o più route P4 attese"
 
 
 def test_admin_upload_route_stages_and_passes_safe_metadata(monkeypatch):
