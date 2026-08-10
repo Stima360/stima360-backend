@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import inspect
 import io
 import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -343,9 +345,30 @@ def test_iter_stream_audits_completion_and_failure():
 
 
 def test_p4_routes_declared_without_method_path_collisions():
+    def load_fresh_router(module_name: str, alias: str):
+        source = __import__(module_name, fromlist=["__file__"])
+        spec = importlib.util.spec_from_file_location(alias, source.__file__)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[alias] = module
+        try:
+            spec.loader.exec_module(module)
+            return module.router
+        finally:
+            sys.modules.pop(alias, None)
+
+    # Use fresh module instances so this assertion is independent from router
+    # objects imported or mutated by tests collected/executed earlier.
+    fresh_admin_router = load_fresh_router(
+        "owner.router_admin", "owner._p4_test_router_admin"
+    )
+    fresh_portal_router = load_fresh_router(
+        "owner.router_portal", "owner._p4_test_router_portal"
+    )
+
     app = FastAPI()
-    app.include_router(admin_router)
-    app.include_router(portal_router)
+    app.include_router(fresh_admin_router)
+    app.include_router(fresh_portal_router)
     expected = {
         ("POST", "/api/owner/admin/documents/upload"),
         ("GET", "/api/owner/admin/document-storage/health"),
@@ -354,14 +377,14 @@ def test_p4_routes_declared_without_method_path_collisions():
         ("GET", "/api/owner/portal/documents/{i}/download"),
         ("POST", "/api/owner/portal/documents/{i}/acknowledge"),
     }
-    actual = set()
-    for route in app.routes:
-        for method in getattr(route, "methods", set()):
-            if method not in {"HEAD", "OPTIONS"}:
-                key = (method, route.path)
-                assert key not in actual
-                actual.add(key)
-    assert expected <= actual
+    pairs = [
+        (method, route.path)
+        for route in app.routes
+        for method in getattr(route, "methods", set())
+        if method not in {"HEAD", "OPTIONS"}
+    ]
+    assert len(pairs) == len(set(pairs))
+    assert expected <= set(pairs)
 
 
 def test_admin_upload_route_stages_and_passes_safe_metadata(monkeypatch):
