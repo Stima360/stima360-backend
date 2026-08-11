@@ -75,10 +75,22 @@ def update_publication(i,d):
  v.append(i)
  with core_cursor(commit=True) as(_,c):c.execute('UPDATE owner_publications SET '+','.join(f)+',updated_at=NOW() WHERE id=%s RETURNING *',v);return one(c)
 def publish(i):
- r=get_publication(i)
- if r['status']!='draft':raise ConflictError('Solo draft pubblicabile')
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_publications SET status='published',published_at=NOW() WHERE id=%s RETURNING *",(i,));z=one(c)
- audit('publication_published',prop=z['property_id'],etype='owner_publication',eid=i);return z
+ with core_cursor(commit=True) as(_,c):
+  c.execute('SELECT * FROM owner_publications WHERE id=%s FOR UPDATE',(i,));r=one(c)
+  if r['status']!='draft':raise ConflictError('Solo draft pubblicabile')
+  c.execute("UPDATE owner_publications SET status='published',published_at=NOW() WHERE id=%s RETURNING *",(i,));z=one(c)
+  _emit_notification_event(
+      c,
+      property_id=z['property_id'],
+      notification_type='publication_published',
+      preference_column='publication_enabled',
+      title=z['title'],
+      body='È disponibile un nuovo aggiornamento sul tuo immobile.',
+      target_type='owner_publication',
+      target_id=z['id'],
+  )
+  _audit_with_cursor(c,'publication_published',prop=z['property_id'],etype='owner_publication',eid=i)
+ return z
 def archive(i):
  r=get_publication(i)
  if r['status']!='published':raise ConflictError('Solo published archiviabile')
@@ -557,6 +569,17 @@ def publish_shared_document(i, storage=None):
                    WHERE id=%s""",
                 (i, previous_id),
             )
+        _emit_notification_event(
+            c,
+            property_id=current["property_id"],
+            notification_type="shared_document_published",
+            preference_column="document_enabled",
+            title=current["public_title"],
+            body="È disponibile un nuovo documento condiviso.",
+            target_type="owner_shared_document",
+            target_id=i,
+            owner_account_id=current.get("owner_account_id"),
+        )
         _audit_with_cursor(
             c,
             "shared_document_published",
@@ -1171,6 +1194,17 @@ def publish_visit_feedback(i):
                    WHERE id=%s""",
                 (i, previous_id),
             )
+        _emit_notification_event(
+            c,
+            property_id=current["property_id"],
+            notification_type="visit_feedback_published",
+            preference_column="visit_feedback_enabled",
+            title="Nuovo feedback visita",
+            body=current["public_summary"],
+            target_type="owner_visit_feedback",
+            target_id=i,
+            owner_account_id=current.get("owner_account_id"),
+        )
         _audit_with_cursor(
             c,
             "visit_feedback_published",
@@ -1321,8 +1355,284 @@ def audit_visit_feedback_access_denied(account, property_id=None, publication_id
 
 def update_feedback_status(i,d):
  with core_cursor(commit=True) as(_,c):
-  c.execute('SELECT * FROM owner_feedback WHERE id=%s',(i,));old=one(c)
+  c.execute('SELECT * FROM owner_feedback WHERE id=%s FOR UPDATE',(i,));old=one(c)
   handled=d['status'] in ('handled','closed')
+  first_handling=handled and old.get('handled_at') is None
   c.execute("""UPDATE owner_feedback SET status=%s,handled_at=CASE WHEN %s THEN COALESCE(handled_at,NOW()) ELSE handled_at END,
                handled_by=COALESCE(%s,handled_by),public_response=COALESCE(%s,public_response),updated_at=NOW() WHERE id=%s RETURNING *""",(d['status'],handled,d.get('handled_by'),d.get('public_response'),i));r=one(c)
- audit('feedback_status_updated',old['owner_account_id'],old['property_id'],'owner_feedback',i,meta={'status':d['status']});return r
+  if first_handling:
+   _emit_notification_event(
+       c,
+       property_id=old['property_id'],
+       notification_type='request_handled',
+       preference_column='request_update_enabled',
+       title='Aggiornamento sulla tua richiesta',
+       body=r.get('public_response') or 'La tua richiesta è stata gestita.',
+       target_type='owner_feedback',
+       target_id=i,
+       owner_account_id=old['owner_account_id'],
+   )
+  _audit_with_cursor(c,'feedback_status_updated',old['owner_account_id'],old['property_id'],'owner_feedback',i,meta={'status':d['status']})
+ return r
+
+# OWNER 0.2 P5 - in-app notifications ---------------------------------------
+_NOTIFICATION_TYPES = {
+    "publication_published",
+    "visit_feedback_published",
+    "shared_document_published",
+    "request_handled",
+}
+_NOTIFICATION_TARGET_TYPES = {
+    "owner_publication",
+    "owner_visit_feedback",
+    "owner_shared_document",
+    "owner_feedback",
+}
+_NOTIFICATION_PREFERENCE_COLUMNS = {
+    "publication_enabled",
+    "visit_feedback_enabled",
+    "document_enabled",
+    "request_update_enabled",
+}
+_NOTIFICATION_RETENTION_DAYS = 365
+
+
+def _emit_notification_event(
+    c,
+    *,
+    property_id,
+    notification_type,
+    preference_column,
+    title,
+    body,
+    target_type,
+    target_id,
+    owner_account_id=None,
+):
+    """Materialize one in-app notification per eligible owner, race-safe.
+
+    This helper intentionally uses only SQL statements that do not require a
+    result fetch. It is designed to run inside the same transaction as the
+    source P2/P3/P4 event. The UNIQUE idempotency key is the final race guard.
+    """
+    if notification_type not in _NOTIFICATION_TYPES:
+        raise ValidationError("Tipo notifica non ammesso")
+    if target_type not in _NOTIFICATION_TARGET_TYPES:
+        raise ValidationError("Target notifica non ammesso")
+    if preference_column not in _NOTIFICATION_PREFERENCE_COLUMNS:
+        raise ValidationError("Preferenza notifica non ammessa")
+    title = str(title or "").strip()
+    body = str(body or "").strip()
+    if not title or len(title) > 200 or not body or len(body) > 5000:
+        raise ValidationError("Snapshot notifica non valido")
+
+    eligible_sql = f"""
+        SELECT x.owner_account_id,
+               COALESCE(np.in_app_enabled, TRUE) AS in_app_enabled,
+               COALESCE(np.{preference_column}, TRUE) AS category_enabled
+        FROM owner_property_access x
+        JOIN owner_accounts oa ON oa.id=x.owner_account_id
+        LEFT JOIN owner_notification_preferences np
+          ON np.owner_account_id=x.owner_account_id
+        WHERE x.property_id=%s
+          AND (%s::bigint IS NULL OR x.owner_account_id=%s)
+          AND x.access_status='active'
+          AND x.revoked_at IS NULL
+          AND (x.valid_until IS NULL OR x.valid_until>NOW())
+          AND oa.status<>'disabled'
+    """
+
+    c.execute(
+        f"""WITH eligible AS ({eligible_sql}),
+        inserted AS (
+            INSERT INTO owner_notifications(
+                owner_account_id,property_id,notification_type,title,body,
+                target_type,target_id,idempotency_key,expires_at
+            )
+            SELECT e.owner_account_id,%s,%s,%s,%s,%s,%s,
+                   CONCAT('owner-p5:v1:',%s,':',%s,':',%s,':',e.owner_account_id),
+                   NOW() + (%s * INTERVAL '1 day')
+            FROM eligible e
+            WHERE e.in_app_enabled AND e.category_enabled
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id,owner_account_id,property_id
+        )
+        INSERT INTO owner_audit_log(
+            owner_account_id,property_id,action,entity_type,entity_id,result,metadata
+        )
+        SELECT i.owner_account_id,i.property_id,'notification_created',
+               'owner_notification',i.id::text,'success',
+               jsonb_build_object('notification_type',%s,'target_type',%s,'target_id',%s)
+        FROM inserted i""",
+        (
+            property_id, owner_account_id, owner_account_id,
+            property_id, notification_type, title, body, target_type, target_id,
+            notification_type, target_type, target_id, _NOTIFICATION_RETENTION_DAYS,
+            notification_type, target_type, target_id,
+        ),
+    )
+
+    c.execute(
+        f"""WITH eligible AS ({eligible_sql})
+        INSERT INTO owner_audit_log(
+            owner_account_id,property_id,action,entity_type,entity_id,result,metadata
+        )
+        SELECT e.owner_account_id,%s,'notification_suppressed',%s,%s::text,'success',
+               jsonb_build_object('notification_type',%s,'reason_code','preference_disabled')
+        FROM eligible e
+        WHERE NOT (e.in_app_enabled AND e.category_enabled)""",
+        (
+            property_id, owner_account_id, owner_account_id,
+            property_id, target_type, target_id, notification_type,
+        ),
+    )
+
+
+def _public_notification(row):
+    """Explicit P0/P5 whitelist. Never expose account/property/idempotency fields."""
+    return {
+        "id": row["id"],
+        "type": row["notification_type"],
+        "title": row["title"],
+        "body": row["body"],
+        "created_at": row["created_at"],
+        "read_at": row.get("read_at"),
+        "target_type": row["target_type"],
+        "target_id": row["target_id"],
+    }
+
+
+def portal_notifications(a, limit=50, offset=0, unread_only=False):
+    filters = [
+        "n.owner_account_id=%s",
+        "n.expires_at>NOW()",
+        "x.access_status='active'",
+        "x.revoked_at IS NULL",
+        "(x.valid_until IS NULL OR x.valid_until>NOW())",
+    ]
+    values = [a]
+    if unread_only:
+        filters.append("n.read_at IS NULL")
+    values.extend((limit, offset))
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT n.id,n.notification_type,n.title,n.body,n.created_at,n.read_at,
+                      n.target_type,n.target_id
+               FROM owner_notifications n
+               JOIN owner_property_access x
+                 ON x.owner_account_id=n.owner_account_id AND x.property_id=n.property_id
+               WHERE """
+            + " AND ".join(filters)
+            + " ORDER BY n.created_at DESC,n.id DESC LIMIT %s OFFSET %s",
+            values,
+        )
+        return [_public_notification(dict(row)) for row in c.fetchall()]
+
+
+def mark_notification_read(a, i):
+    with core_cursor(commit=True) as (_, c):
+        c.execute(
+            """UPDATE owner_notifications n
+               SET read_at=COALESCE(n.read_at,NOW())
+               FROM owner_property_access x
+               WHERE n.id=%s AND n.owner_account_id=%s
+                 AND x.owner_account_id=n.owner_account_id
+                 AND x.property_id=n.property_id
+                 AND n.expires_at>NOW()
+                 AND x.access_status='active'
+                 AND x.revoked_at IS NULL
+                 AND (x.valid_until IS NULL OR x.valid_until>NOW())
+               RETURNING n.id,n.notification_type,n.title,n.body,n.created_at,n.read_at,
+                         n.target_type,n.target_id,n.property_id""",
+            (i, a),
+        )
+        row = one(c)
+        _audit_with_cursor(
+            c,
+            "notification_read",
+            a,
+            row["property_id"],
+            "owner_notification",
+            row["id"],
+            meta={"notification_type": row["notification_type"]},
+        )
+        return _public_notification(row)
+
+
+def get_notification_preferences(a):
+    with core_cursor() as (_, c):
+        c.execute(
+            """SELECT in_app_enabled,publication_enabled,visit_feedback_enabled,
+                      document_enabled,request_update_enabled
+               FROM owner_notification_preferences WHERE owner_account_id=%s""",
+            (a,),
+        )
+        row = c.fetchone()
+    if row is None:
+        return {
+            "in_app_enabled": True,
+            "publication_enabled": True,
+            "visit_feedback_enabled": True,
+            "document_enabled": True,
+            "request_update_enabled": True,
+        }
+    return dict(row)
+
+
+def update_notification_preferences(a, d):
+    fields = (
+        "in_app_enabled",
+        "publication_enabled",
+        "visit_feedback_enabled",
+        "document_enabled",
+        "request_update_enabled",
+    )
+    values = [bool(d[name]) for name in fields]
+    with core_cursor(commit=True) as (_, c):
+        c.execute("SELECT 1 FROM owner_accounts WHERE id=%s AND status<>'disabled'", (a,))
+        if not c.fetchone():
+            raise NotFoundError(NF)
+        c.execute(
+            """INSERT INTO owner_notification_preferences(
+                   owner_account_id,in_app_enabled,publication_enabled,visit_feedback_enabled,
+                   document_enabled,request_update_enabled
+               ) VALUES(%s,%s,%s,%s,%s,%s)
+               ON CONFLICT(owner_account_id) DO UPDATE SET
+                   in_app_enabled=EXCLUDED.in_app_enabled,
+                   publication_enabled=EXCLUDED.publication_enabled,
+                   visit_feedback_enabled=EXCLUDED.visit_feedback_enabled,
+                   document_enabled=EXCLUDED.document_enabled,
+                   request_update_enabled=EXCLUDED.request_update_enabled,
+                   updated_at=NOW()
+               RETURNING in_app_enabled,publication_enabled,visit_feedback_enabled,
+                         document_enabled,request_update_enabled""",
+            (a, *values),
+        )
+        row = one(c)
+        _audit_with_cursor(
+            c,
+            "notification_preferences_updated",
+            a,
+            etype="owner_notification_preferences",
+            eid=a,
+            meta={"scope": "in_app"},
+        )
+        return row
+
+
+def audit_notification_access_denied(a, notification_id, scope="read"):
+    try:
+        with core_cursor() as (_, c):
+            c.execute("SELECT property_id FROM owner_notifications WHERE id=%s", (notification_id,))
+            row = c.fetchone()
+        audit(
+            "notification_access_denied",
+            account=a,
+            prop=row["property_id"] if row else None,
+            etype="owner_notification",
+            eid=notification_id,
+            result="denied",
+            meta={"scope": scope, "reason_code": "not_found_or_not_authorized"},
+        )
+    except Exception:
+        pass

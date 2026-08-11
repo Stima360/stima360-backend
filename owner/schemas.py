@@ -284,3 +284,40 @@ class VisitFeedbackSupersede(M):
     created_by: str | None = Field(None, max_length=200)
 
     _validate_summary = field_validator("public_summary")(validate_visit_feedback_summary)
+
+# OWNER 0.2 P5 - in-app notifications ---------------------------------------
+NotificationType = Literal[
+    "publication_published",
+    "visit_feedback_published",
+    "shared_document_published",
+    "request_handled",
+]
+NotificationTargetType = Literal[
+    "owner_publication",
+    "owner_visit_feedback",
+    "owner_shared_document",
+    "owner_feedback",
+]
+
+
+class OwnerNotificationDTO(M):
+    id: int
+    type: NotificationType
+    title: str
+    body: str
+    created_at: datetime
+    read_at: datetime | None = None
+    target_type: NotificationTargetType
+    target_id: int
+
+
+class NotificationPreferencesDTO(M):
+    in_app_enabled: bool
+    publication_enabled: bool
+    visit_feedback_enabled: bool
+    document_enabled: bool
+    request_update_enabled: bool
+
+
+class NotificationPreferencesUpdate(NotificationPreferencesDTO):
+    pass

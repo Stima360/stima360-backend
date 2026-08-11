@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .schemas import FeedbackCreate, TokenConsume
+from .schemas import FeedbackCreate, NotificationPreferencesUpdate, TokenConsume
 from .dependencies import current_owner
 from .security import clear_cookie, set_cookie
 from .enums import COOKIE_NAME
@@ -236,3 +236,58 @@ def feedback(p: int, d: FeedbackCreate, s=Depends(current_owner)):
 def feedback_list(p: int, s=Depends(current_owner)):
     nf(r.require_property, s["owner_account_id"], p)
     return {"items": nf(r.list_feedback, s["owner_account_id"], p)}
+
+# OWNER 0.2 P5 - in-app notifications ---------------------------------------
+def notification_nf(f, *args, account: int, notification_id: int, scope: str):
+    try:
+        return f(*args)
+    except Exception:
+        r.audit_notification_access_denied(account, notification_id, scope=scope)
+        raise HTTPException(404, 'Risorsa non trovata')
+
+
+@router.get("/notifications")
+def notifications(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    unread_only: bool = False,
+    s=Depends(current_owner),
+):
+    account = s["owner_account_id"]
+    rows = nf(r.portal_notifications, account, limit + 1, offset, unread_only)
+    return {
+        "items": rows[:limit],
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(rows) > limit,
+    }
+
+
+@router.post("/notifications/{i}/read")
+def notification_read(i: int, s=Depends(current_owner)):
+    account = s["owner_account_id"]
+    return notification_nf(
+        r.mark_notification_read,
+        account,
+        i,
+        account=account,
+        notification_id=i,
+        scope="read",
+    )
+
+
+@router.get("/notification-preferences")
+def notification_preferences(s=Depends(current_owner)):
+    return nf(r.get_notification_preferences, s["owner_account_id"])
+
+
+@router.put("/notification-preferences")
+def notification_preferences_update(
+    payload: NotificationPreferencesUpdate,
+    s=Depends(current_owner),
+):
+    return nf(
+        r.update_notification_preferences,
+        s["owner_account_id"],
+        payload.model_dump(),
+    )
