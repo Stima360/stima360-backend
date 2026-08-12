@@ -1,1 +1,76 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Area proprietario</title><link rel="stylesheet" href="/owner/assets/app.css"></head><body><main><section id="login"><h1>Area proprietario</h1><input id="token" placeholder="Codice monouso"><button id="go">Accedi</button><p id="err"></p></section><section id="app" hidden><h1>I tuoi immobili</h1><div id="out"></div><button id="logout">Esci</button></section></main><script src="/owner/assets/app.js"></script></body></html>
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>Area proprietario | STIMA360</title>
+  <link rel="stylesheet" href="/owner/assets/app.css">
+</head>
+<body>
+  <main class="portal-shell" aria-labelledby="page-title">
+    <header class="brand-header">
+      <div class="brand-mark" aria-hidden="true">S360</div>
+      <div>
+        <p class="eyebrow">STIMA360</p>
+        <h1 id="page-title">Area proprietario</h1>
+      </div>
+    </header>
+
+    <section id="loading-view" class="panel state-panel" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-message">Verifica della sessione in corso…</p>
+    </section>
+
+    <section id="login-view" class="panel" hidden>
+      <div class="section-heading">
+        <p class="eyebrow">Accesso riservato</p>
+        <h2>Entra nel tuo portale</h2>
+        <p>Inserisci il codice monouso ricevuto da STIMA360.</p>
+      </div>
+
+      <form id="login-form" novalidate>
+        <label for="token-input">Codice monouso</label>
+        <input
+          id="token-input"
+          name="token"
+          type="text"
+          inputmode="text"
+          autocomplete="one-time-code"
+          autocapitalize="none"
+          spellcheck="false"
+          required
+          aria-describedby="auth-message"
+        >
+        <button id="login-button" class="primary-button" type="submit">Accedi</button>
+      </form>
+
+      <p id="auth-message" class="status-message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="app-view" class="panel" hidden>
+      <div class="app-topbar">
+        <div>
+          <p class="eyebrow">Sessione attiva</p>
+          <h2>Benvenuto nel portale</h2>
+        </div>
+        <button id="logout-button" class="secondary-button" type="button">Esci</button>
+      </div>
+
+      <div id="app-message" class="status-message" role="status" aria-live="polite"></div>
+
+      <div id="shell-empty" class="empty-state">
+        <h3>Area proprietario pronta</h3>
+        <p>La sessione è attiva. Le sezioni operative del portale verranno abilitate nei prossimi step di P6.</p>
+      </div>
+    </section>
+  </main>
+
+  <noscript>
+    <p class="noscript-message">Per usare l’Area proprietario è necessario abilitare JavaScript.</p>
+  </noscript>
+
+  <script src="/owner/assets/app.js"></script>
+</body>
+</html>

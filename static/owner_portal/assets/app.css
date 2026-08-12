@@ -1,1 +1,255 @@
-body{font-family:Arial;background:#f7f5ef;margin:0}main{max-width:760px;margin:auto;padding:24px}section{background:#fff;padding:24px;border-radius:16px}input,button{width:100%;padding:12px;margin:6px 0;box-sizing:border-box}.p{border:1px solid #ddd;padding:14px;margin:10px 0;border-radius:12px}
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #19211c;
+  background: #f2f5f1;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #f2f5f1;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: linear-gradient(180deg, #eef4ef 0%, #f8f9f6 100%);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #285f46;
+  outline-offset: 2px;
+}
+
+.portal-shell {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+}
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 14px;
+  background: #173c2b;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.35rem, 7vw, 2rem);
+  line-height: 1.1;
+}
+
+h2 {
+  margin-bottom: 8px;
+  font-size: clamp(1.25rem, 6vw, 1.7rem);
+}
+
+h3 {
+  margin-bottom: 6px;
+  font-size: 1.05rem;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: #5f6d65;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.panel {
+  width: 100%;
+  padding: 22px;
+  border: 1px solid #dfe6df;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgba(26, 48, 37, 0.08);
+}
+
+.state-panel {
+  display: flex;
+  min-height: 180px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.section-heading > p:last-child {
+  margin-bottom: 20px;
+  color: #59645e;
+  line-height: 1.5;
+}
+
+label {
+  display: block;
+  margin-bottom: 7px;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 13px;
+  border: 1px solid #aebbb3;
+  border-radius: 12px;
+  background: #fff;
+  color: #19211c;
+}
+
+input:focus {
+  border-color: #285f46;
+}
+
+button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.primary-button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #173c2b;
+  color: #fff;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #22583e;
+}
+
+.secondary-button {
+  padding: 10px 15px;
+  border: 1px solid #b9c6bd;
+  background: #fff;
+  color: #173c2b;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: #f1f5f2;
+}
+
+.status-message {
+  min-height: 1.4em;
+  margin: 14px 0 0;
+  color: #285f46;
+  line-height: 1.45;
+}
+
+.status-message.is-error {
+  color: #9a2d2d;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  border: 3px solid #d7e0d9;
+  border-top-color: #285f46;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.app-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.app-topbar h2 {
+  margin-bottom: 0;
+}
+
+.empty-state {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px dashed #bdc8c0;
+  border-radius: 16px;
+  background: #f8faf8;
+}
+
+.empty-state p {
+  margin-bottom: 0;
+  color: #5b6860;
+  line-height: 1.5;
+}
+
+.noscript-message {
+  margin: 16px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #fff3cd;
+  color: #684f00;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+@media (min-width: 640px) {
+  .portal-shell {
+    padding-top: 48px;
+  }
+
+  .panel {
+    padding: 30px;
+    border-radius: 24px;
+  }
+
+  .brand-header {
+    margin-bottom: 24px;
+  }
+}
