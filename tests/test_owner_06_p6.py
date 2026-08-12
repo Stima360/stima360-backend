@@ -128,7 +128,13 @@ const requiredIds = [
   'timeline-content','timeline-list','publication-detail-loading','publication-detail-empty',
   'publication-detail-error','publication-detail-error-message','publication-detail-retry',
   'publication-detail-content','publication-detail-title','publication-detail-meta',
-  'publication-detail-summary','publication-detail-body','acknowledge-status','acknowledge-button'
+  'publication-detail-summary','publication-detail-body','acknowledge-status','acknowledge-button',
+  'visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-error-message',
+  'visit-feedback-retry','visit-feedback-content','visit-feedback-list','visit-feedback-pagination',
+  'visit-feedback-load-more','visit-feedback-pagination-status','visit-feedback-detail-loading',
+  'visit-feedback-detail-empty','visit-feedback-detail-error','visit-feedback-detail-error-message',
+  'visit-feedback-detail-retry','visit-feedback-detail-content','visit-feedback-detail-title',
+  'visit-feedback-detail-meta','visit-feedback-detail-summary'
 ];
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
 ids['login-form'].tagName = 'FORM';
@@ -155,9 +161,21 @@ ids['publication-detail-empty'].hidden = false;
 ids['publication-detail-error'].hidden = true;
 ids['publication-detail-content'].hidden = true;
 ids['acknowledge-button'].hidden = true;
+ids['visit-feedback-loading'].hidden = true;
+ids['visit-feedback-empty'].hidden = true;
+ids['visit-feedback-error'].hidden = true;
+ids['visit-feedback-content'].hidden = true;
+ids['visit-feedback-pagination'].hidden = true;
+ids['visit-feedback-detail-loading'].hidden = true;
+ids['visit-feedback-detail-empty'].hidden = false;
+ids['visit-feedback-detail-error'].hidden = true;
+ids['visit-feedback-detail-content'].hidden = true;
 ids['timeline-retry'].tagName = 'BUTTON';
 ids['publication-detail-retry'].tagName = 'BUTTON';
 ids['acknowledge-button'].tagName = 'BUTTON';
+ids['visit-feedback-retry'].tagName = 'BUTTON';
+ids['visit-feedback-load-more'].tagName = 'BUTTON';
+ids['visit-feedback-detail-retry'].tagName = 'BUTTON';
 
 global.document = {{
   activeElement: null,
@@ -399,7 +417,6 @@ def test_p6_3_dashboard_and_property_detail_data_apis_remain_present():
 
     for forbidden in (
         "/documents",
-        "/visit-feedback",
         "/feedback",
         "/notifications",
         "/notification-preferences",
@@ -512,9 +529,12 @@ def test_p6_3_single_property_runtime_loads_detail_and_whitelists_summary():
             "/api/owner/portal/properties/11/timeline": [
                 {"status": 200, "body": {"items": []}}
             ],
+            "/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
+            ],
         },
         """
-assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline'), 'single: wrong request order');
+assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline|/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0'), 'single: wrong request order');
 assert(ids['property-count'].textContent === '1 immobile', 'single: count mismatch');
 assert(ids['dashboard-content'].hidden === false, 'single: dashboard content hidden');
 assert(ids['property-list'].children.length === 1, 'single: card missing');
@@ -574,8 +594,8 @@ await flush();
 assert(firstButton.getAttribute('aria-pressed') === 'true', 'multi: switched card not selected');
 assert(secondButton.getAttribute('aria-pressed') === 'false', 'multi: old card still selected');
 assert(ids['property-detail-title'].textContent === 'Casa Uno', 'multi: switched detail missing');
-assert(calls[calls.length - 2].url.endsWith('/properties/1'), 'multi: selected detail API missing');
-assert(calls[calls.length - 1].url.endsWith('/properties/1/timeline'), 'multi: selected timeline API missing');
+assert(calls.some((call) => call.url.endsWith('/properties/1')), 'multi: selected detail API missing');
+assert(calls.some((call) => call.url.endsWith('/properties/1/timeline')), 'multi: selected timeline API missing');
 """,
     )
 
@@ -721,7 +741,7 @@ def test_p6_4_timeline_markup_has_accessible_loading_empty_error_list_detail_and
     assert "white-space: pre-wrap" in css
 
 
-def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_5_plus():
+def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_6_plus():
     source = APP_JS.read_text(encoding="utf-8")
     assert "`/properties/${encodeURIComponent(String(propertyAtStart))}/timeline`" in source
     assert "`/publications/${encodeURIComponent(String(id))}`" in source
@@ -729,7 +749,6 @@ def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_5_plus():
 
     for forbidden in (
         "/documents",
-        "/visit-feedback",
         "/feedback",
         "/notifications",
         "/notification-preferences",
@@ -982,12 +1001,17 @@ def test_p6_4_timeline_404_with_valid_session_is_neutral_content_error():
             ],
             "/api/owner/portal/properties/16": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
             "/api/owner/portal/properties/16/timeline": [{"status": 404, "body": {"detail": "Risorsa non trovata"}}],
+            "/api/owner/portal/properties/16/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
+            ],
         },
         """
 assert(ids['app-view'].hidden === false, 'timeline 404: app should remain visible');
 assert(ids['timeline-error'].hidden === false, 'timeline 404: error state missing');
 assert(ids['timeline-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'timeline 404: wrong neutral message');
-assert(calls[calls.length - 1].url.endsWith('/session'), 'timeline 404: session probe missing');
+const timelineCallIndex = calls.findIndex((call) => call.url.endsWith('/properties/16/timeline'));
+assert(timelineCallIndex >= 0, 'timeline 404: timeline request missing');
+assert(calls.slice(timelineCallIndex + 1).some((call) => call.url.endsWith('/session')), 'timeline 404: session probe missing');
 """,
     )
 
@@ -1129,3 +1153,533 @@ def test_p6_4_security_and_accessibility_contract_remains_memory_only():
         "new Function",
     ):
         assert forbidden not in source
+
+
+def _feedback_item(i: int, *, summary: str | None = None) -> dict:
+    return {
+        "visit_feedback_publication_id": i,
+        "category_code": "general",
+        "category_label": f"Feedback {i}",
+        "public_summary": summary or f"Sintesi pubblica {i}",
+        "sentiment": "neutral",
+        "sentiment_label": "Neutro",
+        "version_number": 1,
+        "published_at": "2026-08-12T12:00:00Z",
+        "is_current_version": True,
+    }
+
+
+def test_p6_5_markup_has_accessible_loading_empty_error_pagination_list_and_detail_states():
+    parser = _html_parser()
+    required = {
+        "visit-feedback-section",
+        "visit-feedback-title",
+        "visit-feedback-loading",
+        "visit-feedback-empty",
+        "visit-feedback-error",
+        "visit-feedback-error-message",
+        "visit-feedback-retry",
+        "visit-feedback-content",
+        "visit-feedback-list",
+        "visit-feedback-pagination",
+        "visit-feedback-load-more",
+        "visit-feedback-pagination-status",
+        "visit-feedback-detail-section",
+        "visit-feedback-detail-loading",
+        "visit-feedback-detail-empty",
+        "visit-feedback-detail-error",
+        "visit-feedback-detail-error-message",
+        "visit-feedback-detail-retry",
+        "visit-feedback-detail-content",
+        "visit-feedback-detail-title",
+        "visit-feedback-detail-meta",
+        "visit-feedback-detail-summary",
+    }
+    assert required <= parser.ids
+    assert "Feedback visite pubblicati" in parser.aria_labels
+    assert "Informazioni feedback visita" in parser.aria_labels
+    assert "polite" in parser.live_regions
+    assert "alert" in parser.roles
+
+    html = INDEX.read_text(encoding="utf-8")
+    assert "Feedback anonimizzati" in html
+    assert "senza dati identificativi dei visitatori" in html
+
+    css = APP_CSS.read_text(encoding="utf-8")
+    assert ".visit-feedback-layout" in css
+    assert ".visit-feedback-card" in css
+    assert ".visit-feedback-detail" in css
+    assert "@media (min-width: 760px)" in css
+    assert "overflow-wrap: anywhere" in css
+    assert "white-space: pre-wrap" in css
+
+
+def test_p6_5_uses_only_authorized_visit_feedback_apis_and_no_p6_6_plus():
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "`/properties/${encodeURIComponent(String(propertyAtStart))}/visit-feedback?limit=${limit}&offset=${offset}`" in source
+    assert "`/visit-feedback/${encodeURIComponent(String(id))}`" in source
+    assert "const limit = 50;" in source
+
+    for forbidden in (
+        "/documents",
+        "/properties/${propertyAtStart}/feedback",
+        "/notifications",
+        "/notification-preferences",
+    ):
+        assert forbidden not in source
+
+
+def test_p6_5_safe_dom_and_privacy_whitelist_has_no_generic_json_or_private_crm_fields():
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "JSON.stringify(payload" not in source
+    assert "Object.entries(payload" not in source
+    assert "Object.keys(payload" not in source
+    assert "visit_feedback_publication_id" in source
+    assert "category_label" in source
+    assert "public_summary" in source
+    assert "sentiment_label" in source
+    assert "published_at" in source
+    assert "version_number" in source
+
+    for forbidden in (
+        "visitor_id",
+        "contact_id",
+        "lead_id",
+        "activity_id",
+        "visitor_name",
+        "visitor_surname",
+        "internal_notes",
+        "flow_payload",
+        "match_id",
+        "buy_id",
+    ):
+        assert forbidden not in source.lower()
+
+    for forbidden_api in (
+        ".innerHTML",
+        ".outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+    ):
+        assert forbidden_api not in source
+
+
+def test_p6_5_feedback_is_requested_only_after_authenticated_property_selection():
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [
+                {"status": 200, "body": {"property_count": 1, "properties": [{"id": 31, "title": "Casa"}]}}
+            ],
+            "/api/owner/portal/properties/31": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/31/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/31/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
+            ],
+        },
+        """
+const feedbackIndex = calls.findIndex((call) => call.url.includes('/visit-feedback?limit=50&offset=0'));
+const propertyIndex = calls.findIndex((call) => call.url.endsWith('/properties/31'));
+const timelineIndex = calls.findIndex((call) => call.url.endsWith('/properties/31/timeline'));
+assert(feedbackIndex > propertyIndex, 'feedback order: list requested before property selection/detail');
+assert(feedbackIndex > timelineIndex, 'feedback order: P6.4 flow unexpectedly reordered');
+assert(calls[0].url.endsWith('/session'), 'feedback order: auth session must be first');
+""",
+    )
+
+
+def test_p6_5_zero_feedback_runtime_shows_empty_state():
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 32, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/32": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/32/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/32/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
+            ],
+        },
+        """
+assert(ids['visit-feedback-empty'].hidden === false, 'feedback zero: empty state missing');
+assert(ids['visit-feedback-content'].hidden === true, 'feedback zero: content should remain hidden');
+assert(ids['visit-feedback-list'].children.length === 0, 'feedback zero: unexpected cards');
+assert(ids['visit-feedback-pagination'].hidden === true, 'feedback zero: pagination should be hidden');
+""",
+    )
+
+
+def test_p6_5_one_and_multiple_feedback_preserve_backend_order_without_auto_open():
+    items = [_feedback_item(72), _feedback_item(71), _feedback_item(70)]
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 33, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/33": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/33/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/33/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": items, "limit": 50, "offset": 0}}
+            ],
+        },
+        """
+assert(ids['visit-feedback-content'].hidden === false, 'feedback multiple: content missing');
+assert(ids['visit-feedback-list'].children.length === 3, 'feedback multiple: card count mismatch');
+const first = ids['visit-feedback-list'].children[0].children[0];
+const second = ids['visit-feedback-list'].children[1].children[0];
+const third = ids['visit-feedback-list'].children[2].children[0];
+assert(first.dataset.visitFeedbackId === '72', 'feedback multiple: backend order changed at first item');
+assert(second.dataset.visitFeedbackId === '71', 'feedback multiple: backend order changed at second item');
+assert(third.dataset.visitFeedbackId === '70', 'feedback multiple: backend order changed at third item');
+assert(ids['visit-feedback-detail-content'].hidden === true, 'feedback multiple: detail auto-opened unexpectedly');
+assert(ids['visit-feedback-detail-empty'].hidden === false, 'feedback multiple: empty detail prompt missing');
+""",
+    )
+
+
+def test_p6_5_detail_uses_public_whitelist_and_renders_xss_payload_as_text():
+    malicious = "<script>alert(1)</script><img src=x onerror=alert(2)>"
+    item = _feedback_item(80, summary=malicious)
+    detail = dict(item)
+    detail.update(
+        {
+            "visitor": "NON MOSTRARE",
+            "visitor_id": 999,
+            "contact_id": 888,
+            "lead_id": 777,
+            "activity_id": 666,
+            "internal_notes": "SEGRETO",
+            "BUY": {"secret": True},
+            "MATCH": {"secret": True},
+            "FLOW": {"secret": True},
+        }
+    )
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 34, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/34": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/34/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/34/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [item], "limit": 50, "offset": 0}}
+            ],
+            "/api/owner/portal/visit-feedback/80": [
+                {"status": 200, "body": {"visit_feedback": detail}}
+            ],
+        },
+        f"""
+await ids['visit-feedback-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['visit-feedback-detail-content'].hidden === false, 'feedback detail: content missing');
+assert(ids['visit-feedback-detail-summary'].textContent === {json.dumps(malicious)}, 'feedback detail: XSS text changed or executed');
+const rendered = [
+  ids['visit-feedback-detail-title'].textContent,
+  allText(ids['visit-feedback-detail-meta']),
+  ids['visit-feedback-detail-summary'].textContent,
+].join(' ');
+assert(rendered.includes('<script>alert(1)</script>'), 'feedback detail: malicious text should remain literal text');
+for (const secret of ['NON MOSTRARE','SEGRETO','999','888','777','666']) {{
+  assert(!rendered.includes(secret), `feedback detail privacy: leaked ${{secret}}`);
+}}
+assert(!rendered.includes('BUY') && !rendered.includes('MATCH') && !rendered.includes('FLOW'), 'feedback detail privacy: internal module leaked');
+""",
+    )
+
+
+def test_p6_5_pagination_load_more_keeps_existing_items_avoids_duplicate_requests_and_detects_end():
+    first_page = [_feedback_item(i) for i in range(1, 51)]
+    second_page = [_feedback_item(51), _feedback_item(52)]
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 35, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/35": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/35/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/35/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": first_page, "limit": 50, "offset": 0}}
+            ],
+            "/api/owner/portal/properties/35/visit-feedback?limit=50&offset=50": [
+                {"status": 200, "delay_ms": 20, "body": {"items": second_page, "limit": 50, "offset": 50}}
+            ],
+        },
+        """
+assert(ids['visit-feedback-list'].children.length === 50, 'feedback pagination: first page missing');
+assert(ids['visit-feedback-pagination'].hidden === false, 'feedback pagination: load more should be visible');
+void ids['visit-feedback-load-more'].trigger('click');
+void ids['visit-feedback-load-more'].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 40));
+await flush();
+assert(ids['visit-feedback-list'].children.length === 52, 'feedback pagination: old items lost or second page missing');
+const page2Calls = calls.filter((call) => call.url.includes('visit-feedback?limit=50&offset=50'));
+assert(page2Calls.length === 1, 'feedback pagination: duplicate page request');
+assert(ids['visit-feedback-pagination'].hidden === true, 'feedback pagination: end of list not detected');
+""",
+    )
+
+
+def test_p6_5_pagination_filters_duplicate_ids_without_losing_offset_progress():
+    first_page = [_feedback_item(i) for i in range(1, 51)]
+    second_page = [_feedback_item(50), _feedback_item(51)]
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 36, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/36": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/36/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/36/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": first_page}}],
+            "/api/owner/portal/properties/36/visit-feedback?limit=50&offset=50": [{"status": 200, "body": {"items": second_page}}],
+        },
+        """
+await ids['visit-feedback-load-more'].trigger('click');
+await flush();
+assert(ids['visit-feedback-list'].children.length === 51, 'feedback dedupe: duplicate id rendered');
+const idsRendered = ids['visit-feedback-list'].children.map((node) => node.children[0].dataset.visitFeedbackId);
+assert(new Set(idsRendered).size === 51, 'feedback dedupe: rendered IDs are not unique');
+""",
+    )
+
+
+def test_p6_5_property_switch_resets_feedback_pagination_detail_and_ignores_stale_response():
+    first_page = [_feedback_item(i) for i in range(1, 51)]
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [
+                {"status": 200, "body": {"property_count": 2, "properties": [{"id": 40, "title": "Casa Uno", "is_primary": True}, {"id": 41, "title": "Casa Due"}]}}
+            ],
+            "/api/owner/portal/properties/40": [{"status": 200, "body": {"property": {"title": "Casa Uno"}}}],
+            "/api/owner/portal/properties/40/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/40/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "delay_ms": 60, "body": {"items": first_page}}
+            ],
+            "/api/owner/portal/properties/41": [{"status": 200, "body": {"property": {"title": "Casa Due"}}}],
+            "/api/owner/portal/properties/41/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/41/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [{"visit_feedback_publication_id": 900, "category_label": "NUOVO FEEDBACK", "public_summary": "Nuova property"}]}}
+            ],
+        },
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+const secondButton = ids['property-list'].children[1].children[0];
+await secondButton.trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+const feedbackText = allText(ids['visit-feedback-list']);
+assert(feedbackText.includes('NUOVO FEEDBACK'), 'feedback stale: new property feedback missing');
+assert(!feedbackText.includes('Feedback 1'), 'feedback stale: old property response leaked');
+assert(ids['visit-feedback-list'].children.length === 1, 'feedback stale: list was not reset');
+assert(ids['visit-feedback-pagination'].hidden === true, 'feedback stale: pagination was not reset');
+assert(ids['visit-feedback-detail-content'].hidden === true, 'feedback stale: old detail not cleared');
+assert(ids['visit-feedback-detail-empty'].hidden === false, 'feedback stale: empty detail state missing');
+""",
+    )
+
+
+def test_p6_5_list_404_with_valid_session_is_neutral_content_error():
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [
+                {"status": 200, "body": {"authenticated": True}},
+                {"status": 200, "body": {"authenticated": True}},
+            ],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 42, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/42": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/42/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/42/visit-feedback?limit=50&offset=0": [{"status": 404, "body": {"detail": "Risorsa non trovata"}}],
+        },
+        """
+assert(ids['app-view'].hidden === false, 'feedback list 404: app should remain visible');
+assert(ids['visit-feedback-error'].hidden === false, 'feedback list 404: error state missing');
+assert(ids['visit-feedback-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'feedback list 404: wrong neutral message');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'feedback list 404: session probe missing');
+""",
+    )
+
+
+def test_p6_5_session_loss_during_list_returns_to_login_and_stops():
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [
+                {"status": 200, "body": {"authenticated": True}},
+                {"status": 404, "body": {"detail": "Risorsa non trovata"}},
+            ],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 43, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/43": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/43/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/43/visit-feedback?limit=50&offset=0": [{"status": 404, "body": {"detail": "Risorsa non trovata"}}],
+        },
+        """
+assert(ids['login-view'].hidden === false, 'feedback list auth loss: login not shown');
+assert(ids['app-view'].hidden === true, 'feedback list auth loss: app still visible');
+assert(ids['auth-message'].textContent === 'Sessione non disponibile o scaduta.', 'feedback list auth loss: neutral message missing');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'feedback list auth loss: expected final session probe');
+""",
+    )
+
+
+def test_p6_5_detail_404_with_valid_session_is_neutral_content_error():
+    item = _feedback_item(91)
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [
+                {"status": 200, "body": {"authenticated": True}},
+                {"status": 200, "body": {"authenticated": True}},
+            ],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 44, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/44": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/44/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/44/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": [item]}}],
+            "/api/owner/portal/visit-feedback/91": [{"status": 404, "body": {"detail": "Risorsa non trovata"}}],
+        },
+        """
+await ids['visit-feedback-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['app-view'].hidden === false, 'feedback detail 404: app should remain');
+assert(ids['visit-feedback-detail-error'].hidden === false, 'feedback detail 404: error missing');
+assert(ids['visit-feedback-detail-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'feedback detail 404: wrong message');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'feedback detail 404: session probe missing');
+""",
+    )
+
+
+def test_p6_5_session_loss_during_detail_returns_to_login():
+    item = _feedback_item(92)
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [
+                {"status": 200, "body": {"authenticated": True}},
+                {"status": 404, "body": {"detail": "Risorsa non trovata"}},
+            ],
+            "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 45, "title": "Casa"}]}}],
+            "/api/owner/portal/properties/45": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+            "/api/owner/portal/properties/45/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/45/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": [item]}}],
+            "/api/owner/portal/visit-feedback/92": [{"status": 404, "body": {"detail": "Risorsa non trovata"}}],
+        },
+        """
+await ids['visit-feedback-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['login-view'].hidden === false, 'feedback detail auth loss: login not shown');
+assert(ids['app-view'].hidden === true, 'feedback detail auth loss: app still visible');
+assert(ids['auth-message'].textContent === 'Sessione non disponibile o scaduta.', 'feedback detail auth loss: neutral message missing');
+""",
+    )
+
+
+def test_p6_5_list_handles_422_429_5xx_and_network_without_raw_payloads():
+    cases = [
+        ({"status": 422, "body": {"secret": "raw-422"}}, "Impossibile caricare i feedback con i dati disponibili."),
+        ({"status": 429, "body": {"secret": "raw-429"}}, "Troppe richieste. Riprova tra poco."),
+        ({"status": 500, "body": {"secret": "raw-500"}}, "Servizio temporaneamente non disponibile."),
+        ({"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for response, expected in cases:
+        _run_node_scenario(
+            {
+                "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+                "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 46, "title": "Casa"}]}}],
+                "/api/owner/portal/properties/46": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+                "/api/owner/portal/properties/46/timeline": [{"status": 200, "body": {"items": []}}],
+                "/api/owner/portal/properties/46/visit-feedback?limit=50&offset=0": [response],
+            },
+            f"""
+assert(ids['visit-feedback-error'].hidden === false, 'feedback list error: state missing');
+assert(ids['visit-feedback-error-message'].textContent === {json.dumps(expected)}, 'feedback list error: wrong safe message');
+assert(!ids['visit-feedback-error-message'].textContent.includes('raw-'), 'feedback list error: raw payload leaked');
+""",
+        )
+
+
+def test_p6_5_detail_handles_422_429_5xx_and_network_without_raw_payloads():
+    cases = [
+        ({"status": 422, "body": {"secret": "raw-422"}}, "Impossibile caricare il contenuto del feedback."),
+        ({"status": 429, "body": {"secret": "raw-429"}}, "Troppe richieste. Riprova tra poco."),
+        ({"status": 500, "body": {"secret": "raw-500"}}, "Servizio temporaneamente non disponibile."),
+        ({"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for response, expected in cases:
+        item = _feedback_item(93)
+        _run_node_scenario(
+            {
+                "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+                "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 1, "properties": [{"id": 47, "title": "Casa"}]}}],
+                "/api/owner/portal/properties/47": [{"status": 200, "body": {"property": {"title": "Casa"}}}],
+                "/api/owner/portal/properties/47/timeline": [{"status": 200, "body": {"items": []}}],
+                "/api/owner/portal/properties/47/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": [item]}}],
+                "/api/owner/portal/visit-feedback/93": [response],
+            },
+            f"""
+await ids['visit-feedback-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['visit-feedback-detail-error'].hidden === false, 'feedback detail error: state missing');
+assert(ids['visit-feedback-detail-error-message'].textContent === {json.dumps(expected)}, 'feedback detail error: wrong safe message');
+assert(!ids['visit-feedback-detail-error-message'].textContent.includes('raw-'), 'feedback detail error: raw payload leaked');
+""",
+        )
+
+
+def test_p6_5_security_accessibility_and_memory_only_contract():
+    source = APP_JS.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    assert "visitFeedbackGeneration" in source
+    assert "visitFeedbackDetailGeneration" in source
+    assert "visitFeedbackLoadInFlight" in source
+    assert "aria-pressed" in source
+    assert "aria-controls" in source
+    assert 'aria-label="Feedback visite pubblicati"' in html
+    assert 'aria-label="Informazioni feedback visita"' in html
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "document.cookie" not in source
+    for forbidden in (
+        ".innerHTML",
+        ".outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+    ):
+        assert forbidden not in source
+
+
+def test_p6_5_property_switch_resets_existing_pagination_offset_and_cards():
+    first_page = [_feedback_item(i) for i in range(1, 51)]
+    _run_node_scenario(
+        {
+            "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+            "/api/owner/portal/dashboard": [
+                {"status": 200, "body": {"property_count": 2, "properties": [{"id": 48, "title": "Casa Uno", "is_primary": True}, {"id": 49, "title": "Casa Due"}]}}
+            ],
+            "/api/owner/portal/properties/48": [{"status": 200, "body": {"property": {"title": "Casa Uno"}}}],
+            "/api/owner/portal/properties/48/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/48/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": first_page}}],
+            "/api/owner/portal/properties/49": [{"status": 200, "body": {"property": {"title": "Casa Due"}}}],
+            "/api/owner/portal/properties/49/timeline": [{"status": 200, "body": {"items": []}}],
+            "/api/owner/portal/properties/49/visit-feedback?limit=50&offset=0": [
+                {"status": 200, "body": {"items": [{"visit_feedback_publication_id": 990, "category_label": "Seconda casa", "public_summary": "Solo seconda casa"}]}}
+            ],
+        },
+        """
+assert(ids['visit-feedback-list'].children.length === 50, 'feedback reset: first property page not loaded');
+assert(ids['visit-feedback-pagination'].hidden === false, 'feedback reset: first property pagination should be visible');
+await ids['property-list'].children[1].children[0].trigger('click');
+await flush();
+assert(ids['visit-feedback-list'].children.length === 1, 'feedback reset: old cards survived property switch');
+assert(ids['visit-feedback-list'].children[0].children[0].dataset.visitFeedbackId === '990', 'feedback reset: wrong second-property item');
+assert(ids['visit-feedback-pagination'].hidden === true, 'feedback reset: pagination did not reset');
+const secondPropertyFeedbackCalls = calls.filter((call) => call.url.includes('/properties/49/visit-feedback?limit=50&offset=0'));
+assert(secondPropertyFeedbackCalls.length === 1, 'feedback reset: new property did not restart at offset zero exactly once');
+assert(!calls.some((call) => call.url.includes('/properties/49/visit-feedback?limit=50&offset=50')), 'feedback reset: offset leaked across properties');
+""",
+    )
+
+
+def test_p6_5_feedback_transport_is_read_only():
+    source = APP_JS.read_text(encoding="utf-8")
+    start = source.index("async function loadVisitFeedback")
+    end = source.index("async function selectProperty", start)
+    feedback_block = source[start:end]
+    assert "method: 'POST'" not in feedback_block
+    assert "method: 'PUT'" not in feedback_block
+    assert "method: 'PATCH'" not in feedback_block
+    assert "method: 'DELETE'" not in feedback_block

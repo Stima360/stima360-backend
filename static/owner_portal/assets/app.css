@@ -667,3 +667,164 @@ button:disabled {
     top: 18px;
   }
 }
+
+.visit-feedback-section {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #dfe6df;
+}
+
+.visit-feedback-heading {
+  margin-bottom: 14px;
+}
+
+.visit-feedback-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.visit-feedback-list-column {
+  min-width: 0;
+}
+
+.visit-feedback-list {
+  display: grid;
+  gap: 10px;
+}
+
+.visit-feedback-list-item {
+  min-width: 0;
+}
+
+.visit-feedback-card {
+  width: 100%;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid #cbd6ce;
+  border-radius: 14px;
+  background: #fff;
+  color: #19211c;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.visit-feedback-card:hover,
+.visit-feedback-card.is-selected {
+  border-color: #285f46;
+  background: #f6faf7;
+}
+
+.visit-feedback-card.is-selected {
+  box-shadow: inset 0 0 0 1px #285f46;
+}
+
+.visit-feedback-card-title,
+.visit-feedback-card-meta,
+.visit-feedback-card-summary {
+  display: block;
+}
+
+.visit-feedback-card-title {
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.visit-feedback-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 7px;
+  color: #5b6860;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.visit-feedback-card-summary {
+  margin-top: 9px;
+  color: #445049;
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.visit-feedback-pagination {
+  margin-top: 12px;
+}
+
+.visit-feedback-pagination .secondary-button {
+  width: 100%;
+}
+
+.visit-feedback-pagination .status-message {
+  margin-top: 8px;
+  text-align: center;
+}
+
+.visit-feedback-detail {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dfe6df;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.visit-feedback-detail-heading {
+  margin-bottom: 14px;
+}
+
+.visit-feedback-meta {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.visit-feedback-meta-row {
+  display: grid;
+  gap: 3px;
+}
+
+.visit-feedback-meta-row dt {
+  color: #66736b;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.visit-feedback-meta-row dd {
+  margin-bottom: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.visit-feedback-summary {
+  margin-bottom: 0;
+  padding: 12px 14px;
+  border-left: 3px solid #8fa99a;
+  background: #f7faf8;
+  color: #33443a;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visit-feedback-card {
+    transition: none;
+  }
+}
+
+@media (min-width: 760px) {
+  .visit-feedback-layout {
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+    align-items: start;
+  }
+
+  .visit-feedback-detail {
+    position: sticky;
+    top: 18px;
+  }
+}

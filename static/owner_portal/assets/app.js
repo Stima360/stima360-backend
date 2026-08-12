@@ -57,6 +57,26 @@
   const acknowledgeStatus = document.getElementById('acknowledge-status');
   const acknowledgeButton = document.getElementById('acknowledge-button');
 
+  const visitFeedbackLoading = document.getElementById('visit-feedback-loading');
+  const visitFeedbackEmpty = document.getElementById('visit-feedback-empty');
+  const visitFeedbackError = document.getElementById('visit-feedback-error');
+  const visitFeedbackErrorMessage = document.getElementById('visit-feedback-error-message');
+  const visitFeedbackRetry = document.getElementById('visit-feedback-retry');
+  const visitFeedbackContent = document.getElementById('visit-feedback-content');
+  const visitFeedbackList = document.getElementById('visit-feedback-list');
+  const visitFeedbackPagination = document.getElementById('visit-feedback-pagination');
+  const visitFeedbackLoadMore = document.getElementById('visit-feedback-load-more');
+  const visitFeedbackPaginationStatus = document.getElementById('visit-feedback-pagination-status');
+  const visitFeedbackDetailLoading = document.getElementById('visit-feedback-detail-loading');
+  const visitFeedbackDetailEmpty = document.getElementById('visit-feedback-detail-empty');
+  const visitFeedbackDetailError = document.getElementById('visit-feedback-detail-error');
+  const visitFeedbackDetailErrorMessage = document.getElementById('visit-feedback-detail-error-message');
+  const visitFeedbackDetailRetry = document.getElementById('visit-feedback-detail-retry');
+  const visitFeedbackDetailContent = document.getElementById('visit-feedback-detail-content');
+  const visitFeedbackDetailTitle = document.getElementById('visit-feedback-detail-title');
+  const visitFeedbackDetailMeta = document.getElementById('visit-feedback-detail-meta');
+  const visitFeedbackDetailSummary = document.getElementById('visit-feedback-detail-summary');
+
   const state = {
     session: null,
     busy: false,
@@ -71,6 +91,13 @@
     selectedPublicationRequiresAck: false,
     acknowledgedPublicationIds: new Set(),
     acknowledgeInFlight: new Set(),
+    visitFeedbackItems: [],
+    visitFeedbackGeneration: 0,
+    visitFeedbackOffset: 0,
+    visitFeedbackHasMore: false,
+    visitFeedbackLoadInFlight: false,
+    selectedVisitFeedbackId: null,
+    visitFeedbackDetailGeneration: 0,
   };
 
   class PortalRequestError extends Error {
@@ -203,6 +230,43 @@
     resetPublicationDetail();
   }
 
+  function clearVisitFeedbackDetailContent() {
+    visitFeedbackDetailTitle.textContent = 'Feedback anonimizzato';
+    visitFeedbackDetailMeta.replaceChildren();
+    visitFeedbackDetailSummary.textContent = '';
+  }
+
+  function resetVisitFeedbackDetail() {
+    state.visitFeedbackDetailGeneration += 1;
+    state.selectedVisitFeedbackId = null;
+    visitFeedbackDetailLoading.hidden = true;
+    visitFeedbackDetailEmpty.hidden = false;
+    visitFeedbackDetailError.hidden = true;
+    visitFeedbackDetailContent.hidden = true;
+    visitFeedbackDetailErrorMessage.textContent = '';
+    clearVisitFeedbackDetailContent();
+    setSelectedVisitFeedbackCardState();
+  }
+
+  function resetVisitFeedbackState() {
+    state.visitFeedbackGeneration += 1;
+    state.visitFeedbackItems = [];
+    state.visitFeedbackOffset = 0;
+    state.visitFeedbackHasMore = false;
+    state.visitFeedbackLoadInFlight = false;
+    visitFeedbackList.replaceChildren();
+    visitFeedbackLoading.hidden = true;
+    visitFeedbackEmpty.hidden = true;
+    visitFeedbackError.hidden = true;
+    visitFeedbackContent.hidden = true;
+    visitFeedbackErrorMessage.textContent = '';
+    visitFeedbackPagination.hidden = true;
+    visitFeedbackLoadMore.disabled = false;
+    visitFeedbackLoadMore.textContent = 'Carica altri';
+    visitFeedbackPaginationStatus.textContent = '';
+    resetVisitFeedbackDetail();
+  }
+
   function resetPropertyDetail() {
     state.propertyGeneration += 1;
     propertyDetailLoading.hidden = true;
@@ -213,6 +277,7 @@
     propertyDetailTitle.textContent = 'Immobile';
     propertySummary.replaceChildren();
     resetTimelineState();
+    resetVisitFeedbackState();
   }
 
   function resetDashboardState() {
@@ -325,6 +390,32 @@
     return error.message;
   }
 
+  function visitFeedbackErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare i feedback. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare i feedback con i dati disponibili.';
+    }
+    return error.message;
+  }
+
+  function visitFeedbackDetailErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare il feedback. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare il contenuto del feedback.';
+    }
+    return error.message;
+  }
+
   function showDashboardState(name, message = '') {
     dashboardLoading.hidden = name !== 'loading';
     dashboardEmpty.hidden = name !== 'empty';
@@ -365,6 +456,26 @@
     }
   }
 
+  function showVisitFeedbackState(name, message = '') {
+    visitFeedbackLoading.hidden = name !== 'loading';
+    visitFeedbackEmpty.hidden = name !== 'empty';
+    visitFeedbackError.hidden = name !== 'error';
+    visitFeedbackContent.hidden = name !== 'content';
+    if (name === 'error') {
+      visitFeedbackErrorMessage.textContent = message;
+    }
+  }
+
+  function showVisitFeedbackDetailState(name, message = '') {
+    visitFeedbackDetailLoading.hidden = name !== 'loading';
+    visitFeedbackDetailEmpty.hidden = name !== 'empty';
+    visitFeedbackDetailError.hidden = name !== 'error';
+    visitFeedbackDetailContent.hidden = name !== 'content';
+    if (name === 'error') {
+      visitFeedbackDetailErrorMessage.textContent = message;
+    }
+  }
+
   function textOrEmpty(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
@@ -385,6 +496,10 @@
 
   function publicationId(item) {
     return positiveId(item && item.id);
+  }
+
+  function visitFeedbackId(item) {
+    return positiveId(item && item.visit_feedback_publication_id);
   }
 
   function roleLabel(role) {
@@ -461,6 +576,18 @@
         return;
       }
       const selected = Number(button.dataset.publicationId) === state.selectedPublicationId;
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.classList.toggle('is-selected', selected);
+    });
+  }
+
+  function setSelectedVisitFeedbackCardState() {
+    Array.from(visitFeedbackList.children).forEach((listItem) => {
+      const button = listItem.children[0];
+      if (!button) {
+        return;
+      }
+      const selected = Number(button.dataset.visitFeedbackId) === state.selectedVisitFeedbackId;
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
       button.classList.toggle('is-selected', selected);
     });
@@ -612,6 +739,108 @@
     setSelectedPublicationCardState();
   }
 
+  function createVisitFeedbackCard(item) {
+    const id = visitFeedbackId(item);
+    const listItem = document.createElement('div');
+    listItem.className = 'visit-feedback-list-item';
+    listItem.setAttribute('role', 'listitem');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'visit-feedback-card';
+    button.dataset.visitFeedbackId = String(id);
+    button.setAttribute('aria-pressed', 'false');
+    button.setAttribute('aria-controls', 'visit-feedback-detail-section');
+
+    const category = textOrEmpty(item.category_label) || textOrEmpty(item.category_code) || 'Feedback visita';
+    button.append(createTextElement('span', 'visit-feedback-card-title', category));
+
+    const meta = document.createElement('span');
+    meta.className = 'visit-feedback-card-meta';
+    const sentiment = textOrEmpty(item.sentiment_label);
+    if (sentiment) {
+      meta.append(createTextElement('span', '', sentiment));
+    }
+    const publishedAt = formatPublishedAt(item.published_at);
+    if (publishedAt) {
+      meta.append(createTextElement('span', '', publishedAt));
+    }
+    if (meta.children.length > 0) {
+      button.append(meta);
+    }
+
+    const summary = textOrEmpty(item.public_summary);
+    if (summary) {
+      button.append(createTextElement('span', 'visit-feedback-card-summary', summary));
+    }
+
+    button.addEventListener('click', () => {
+      if (state.session && state.selectedPropertyId !== null && id !== null) {
+        void openVisitFeedback(id);
+      }
+    });
+
+    listItem.append(button);
+    return listItem;
+  }
+
+  function renderVisitFeedbackList(items, append = false) {
+    const nodes = items.map((item) => createVisitFeedbackCard(item));
+    if (append) {
+      visitFeedbackList.append(...nodes);
+    } else {
+      visitFeedbackList.replaceChildren(...nodes);
+    }
+    setSelectedVisitFeedbackCardState();
+  }
+
+  function renderVisitFeedbackPagination() {
+    visitFeedbackPagination.hidden = !state.visitFeedbackHasMore;
+    visitFeedbackLoadMore.disabled = state.visitFeedbackLoadInFlight;
+    visitFeedbackLoadMore.textContent = state.visitFeedbackLoadInFlight ? 'Caricamento…' : 'Carica altri';
+    visitFeedbackPaginationStatus.textContent = state.visitFeedbackLoadInFlight
+      ? 'Caricamento di altri feedback…'
+      : '';
+  }
+
+  function addVisitFeedbackMeta(label, value) {
+    const cleanValue = textOrEmpty(value);
+    if (!cleanValue) {
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'visit-feedback-meta-row';
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const description = document.createElement('dd');
+    description.textContent = cleanValue;
+    wrapper.append(term, description);
+    visitFeedbackDetailMeta.append(wrapper);
+  }
+
+  function renderVisitFeedbackDetail(payload, id) {
+    const item = payload && payload.visit_feedback && typeof payload.visit_feedback === 'object'
+      ? payload.visit_feedback
+      : {};
+    const category = textOrEmpty(item.category_label) || textOrEmpty(item.category_code) || 'Feedback visita';
+    const sentiment = textOrEmpty(item.sentiment_label);
+    const publishedAt = formatPublishedAt(item.published_at);
+    const version = Number.isInteger(item.version_number) && item.version_number > 0
+      ? String(item.version_number)
+      : '';
+    const summary = textOrEmpty(item.public_summary);
+
+    state.selectedVisitFeedbackId = id;
+    visitFeedbackDetailTitle.textContent = category;
+    visitFeedbackDetailMeta.replaceChildren();
+    addVisitFeedbackMeta('Sentiment', sentiment);
+    addVisitFeedbackMeta('Pubblicato', publishedAt);
+    addVisitFeedbackMeta('Versione', version);
+    visitFeedbackDetailSummary.textContent = summary;
+    setSelectedVisitFeedbackCardState();
+    showVisitFeedbackDetailState('content');
+  }
+
   function addPublicationMeta(label, value) {
     const cleanValue = textOrEmpty(value);
     if (!cleanValue) {
@@ -760,6 +989,65 @@
       }
       clearPublicationContent();
       showPublicationState('error', publicationErrorText(error));
+      return false;
+    }
+  }
+
+  async function confirmSessionAfterVisitFeedbackNotFound(generation, propertyAtStart) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.visitFeedbackGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.visitFeedbackGeneration
+        || state.selectedPropertyId !== propertyAtStart
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      showVisitFeedbackState('error', visitFeedbackErrorText(error));
+      return false;
+    }
+  }
+
+  async function confirmSessionAfterVisitFeedbackDetailNotFound(generation, propertyAtStart, id) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.visitFeedbackDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedVisitFeedbackId !== id
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.visitFeedbackDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedVisitFeedbackId !== id
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      clearVisitFeedbackDetailContent();
+      showVisitFeedbackDetailState('error', visitFeedbackDetailErrorText(error));
       return false;
     }
   }
@@ -971,6 +1259,185 @@
     renderAcknowledgeState(id, true);
   }
 
+  async function loadVisitFeedback(propertyAtStart, append = false) {
+    if (
+      !state.session
+      || state.selectedPropertyId !== propertyAtStart
+      || state.visitFeedbackLoadInFlight
+    ) {
+      return;
+    }
+
+    const limit = 50;
+    const offset = append ? state.visitFeedbackOffset : 0;
+    const generation = ++state.visitFeedbackGeneration;
+    state.visitFeedbackLoadInFlight = true;
+
+    if (!append) {
+      state.visitFeedbackItems = [];
+      state.visitFeedbackOffset = 0;
+      state.visitFeedbackHasMore = false;
+      visitFeedbackList.replaceChildren();
+      resetVisitFeedbackDetail();
+      showVisitFeedbackState('loading');
+    } else {
+      renderVisitFeedbackPagination();
+    }
+
+    let payload;
+    try {
+      payload = await apiRequest(
+        `/properties/${encodeURIComponent(String(propertyAtStart))}/visit-feedback?limit=${limit}&offset=${offset}`,
+      );
+    } catch (error) {
+      if (
+        generation !== state.visitFeedbackGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return;
+      }
+
+      state.visitFeedbackLoadInFlight = false;
+      renderVisitFeedbackPagination();
+
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterVisitFeedbackNotFound(generation, propertyAtStart);
+        if (
+          sessionValid
+          && generation === state.visitFeedbackGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.session
+        ) {
+          showVisitFeedbackState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+
+      if (append && state.visitFeedbackItems.length > 0) {
+        showVisitFeedbackState('content');
+        visitFeedbackPagination.hidden = false;
+        visitFeedbackPaginationStatus.textContent = visitFeedbackErrorText(error);
+        return;
+      }
+
+      showVisitFeedbackState('error', visitFeedbackErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.visitFeedbackGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || !state.session
+    ) {
+      return;
+    }
+
+    state.visitFeedbackLoadInFlight = false;
+    const rawItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    const validItems = rawItems.filter((item) => visitFeedbackId(item) !== null);
+
+    if (append) {
+      const existingIds = new Set(state.visitFeedbackItems.map((item) => visitFeedbackId(item)));
+      const newItems = validItems.filter((item) => !existingIds.has(visitFeedbackId(item)));
+      state.visitFeedbackItems = state.visitFeedbackItems.concat(newItems);
+      renderVisitFeedbackList(newItems, true);
+    } else {
+      state.visitFeedbackItems = validItems;
+      renderVisitFeedbackList(validItems);
+    }
+
+    state.visitFeedbackOffset = offset + rawItems.length;
+    state.visitFeedbackHasMore = rawItems.length === limit;
+
+    if (state.visitFeedbackItems.length === 0) {
+      showVisitFeedbackState('empty');
+      return;
+    }
+
+    showVisitFeedbackState('content');
+    renderVisitFeedbackPagination();
+    if (!append) {
+      showVisitFeedbackDetailState('empty');
+    }
+  }
+
+  async function openVisitFeedback(id) {
+    if (!state.session || state.selectedPropertyId === null) {
+      return;
+    }
+
+    const available = state.visitFeedbackItems.some((item) => visitFeedbackId(item) === id);
+    if (!available) {
+      return;
+    }
+
+    const propertyAtStart = state.selectedPropertyId;
+    state.selectedVisitFeedbackId = id;
+    setSelectedVisitFeedbackCardState();
+    const generation = ++state.visitFeedbackDetailGeneration;
+    clearVisitFeedbackDetailContent();
+    showVisitFeedbackDetailState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/visit-feedback/${encodeURIComponent(String(id))}`);
+    } catch (error) {
+      if (
+        generation !== state.visitFeedbackDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedVisitFeedbackId !== id
+        || !state.session
+      ) {
+        return;
+      }
+
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterVisitFeedbackDetailNotFound(
+          generation,
+          propertyAtStart,
+          id,
+        );
+        if (
+          sessionValid
+          && generation === state.visitFeedbackDetailGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.selectedVisitFeedbackId === id
+          && state.session
+        ) {
+          clearVisitFeedbackDetailContent();
+          showVisitFeedbackDetailState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+
+      clearVisitFeedbackDetailContent();
+      showVisitFeedbackDetailState('error', visitFeedbackDetailErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.visitFeedbackDetailGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || state.selectedVisitFeedbackId !== id
+      || !state.session
+    ) {
+      return;
+    }
+
+    renderVisitFeedbackDetail(payload, id);
+  }
+
   async function selectProperty(id) {
     if (!state.session) {
       return;
@@ -986,6 +1453,7 @@
     const generation = ++state.propertyGeneration;
     propertySummary.replaceChildren();
     resetTimelineState();
+    resetVisitFeedbackState();
     showPropertyState('loading');
 
     try {
@@ -995,6 +1463,7 @@
       }
       renderPropertyDetail(payload);
       await loadTimeline(id);
+      await loadVisitFeedback(id);
     } catch (error) {
       if (generation !== state.propertyGeneration || !state.session) {
         return;
@@ -1170,6 +1639,29 @@
 
   acknowledgeButton.addEventListener('click', () => {
     void acknowledgeCurrentPublication();
+  });
+
+  visitFeedbackRetry.addEventListener('click', () => {
+    if (state.session && state.selectedPropertyId !== null) {
+      void loadVisitFeedback(state.selectedPropertyId);
+    }
+  });
+
+  visitFeedbackLoadMore.addEventListener('click', () => {
+    if (
+      state.session
+      && state.selectedPropertyId !== null
+      && state.visitFeedbackHasMore
+      && !state.visitFeedbackLoadInFlight
+    ) {
+      void loadVisitFeedback(state.selectedPropertyId, true);
+    }
+  });
+
+  visitFeedbackDetailRetry.addEventListener('click', () => {
+    if (state.session && state.selectedVisitFeedbackId !== null) {
+      void openVisitFeedback(state.selectedVisitFeedbackId);
+    }
   });
 
   logoutButton.addEventListener('click', async () => {

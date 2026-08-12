@@ -190,6 +190,72 @@
                   </section>
                 </div>
               </section>
+
+              <section id="visit-feedback-section" class="visit-feedback-section" aria-labelledby="visit-feedback-title">
+                <div class="subsection-heading visit-feedback-heading">
+                  <p class="eyebrow">Feedback anonimizzati</p>
+                  <h3 id="visit-feedback-title">Feedback visite</h3>
+                  <p>Commenti pubblicati dopo le visite, senza dati identificativi dei visitatori.</p>
+                </div>
+
+                <div id="visit-feedback-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento dei feedback…</p>
+                </div>
+
+                <div id="visit-feedback-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun feedback pubblicato</h3>
+                  <p>Quando saranno disponibili feedback pubblici sulle visite, li troverai qui.</p>
+                </div>
+
+                <div id="visit-feedback-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Feedback non disponibili</h3>
+                  <p id="visit-feedback-error-message">Riprova tra poco.</p>
+                  <button id="visit-feedback-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="visit-feedback-content" class="visit-feedback-layout" hidden>
+                  <div class="visit-feedback-list-column">
+                    <div
+                      id="visit-feedback-list"
+                      class="visit-feedback-list"
+                      role="list"
+                      aria-label="Feedback visite pubblicati"
+                    ></div>
+                    <div id="visit-feedback-pagination" class="visit-feedback-pagination" hidden>
+                      <button id="visit-feedback-load-more" class="secondary-button" type="button">Carica altri</button>
+                      <p id="visit-feedback-pagination-status" class="status-message" role="status" aria-live="polite"></p>
+                    </div>
+                  </div>
+
+                  <section id="visit-feedback-detail-section" class="visit-feedback-detail" aria-labelledby="visit-feedback-detail-title">
+                    <div id="visit-feedback-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento del feedback…</p>
+                    </div>
+
+                    <div id="visit-feedback-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un feedback</h3>
+                      <p>Il dettaglio del feedback anonimizzato apparirà qui.</p>
+                    </div>
+
+                    <div id="visit-feedback-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Contenuto non disponibile</h3>
+                      <p id="visit-feedback-detail-error-message">Contenuto non disponibile o accesso non più valido.</p>
+                      <button id="visit-feedback-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="visit-feedback-detail-content" class="visit-feedback-article" hidden>
+                      <div class="subsection-heading visit-feedback-detail-heading">
+                        <p class="eyebrow">Feedback visita</p>
+                        <h3 id="visit-feedback-detail-title">Feedback anonimizzato</h3>
+                      </div>
+                      <dl id="visit-feedback-detail-meta" class="visit-feedback-meta" aria-label="Informazioni feedback visita"></dl>
+                      <p id="visit-feedback-detail-summary" class="visit-feedback-summary"></p>
+                    </article>
+                  </section>
+                </div>
+              </section>
             </div>
           </section>
         </div>
