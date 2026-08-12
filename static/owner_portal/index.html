@@ -122,6 +122,74 @@
                 <h3 id="property-detail-title">Immobile</h3>
               </div>
               <dl id="property-summary" class="property-summary" aria-label="Riepilogo immobile"></dl>
+
+              <section id="timeline-section" class="timeline-section" aria-labelledby="timeline-title">
+                <div class="subsection-heading timeline-heading">
+                  <p class="eyebrow">Pubblicazioni OWNER</p>
+                  <h3 id="timeline-title">Aggiornamenti</h3>
+                  <p>Gli aggiornamenti pubblicati per questo immobile.</p>
+                </div>
+
+                <div id="timeline-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento degli aggiornamenti…</p>
+                </div>
+
+                <div id="timeline-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun aggiornamento pubblicato</h3>
+                  <p>Quando saranno disponibili nuovi aggiornamenti, li troverai qui.</p>
+                </div>
+
+                <div id="timeline-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Aggiornamenti non disponibili</h3>
+                  <p id="timeline-error-message">Riprova tra poco.</p>
+                  <button id="timeline-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="timeline-content" class="timeline-layout" hidden>
+                  <div
+                    id="timeline-list"
+                    class="timeline-list"
+                    role="list"
+                    aria-label="Aggiornamenti pubblicati"
+                  ></div>
+
+                  <section id="publication-detail-section" class="publication-detail" aria-labelledby="publication-detail-title">
+                    <div id="publication-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento dell'aggiornamento…</p>
+                    </div>
+
+                    <div id="publication-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un aggiornamento</h3>
+                      <p>Il dettaglio della pubblicazione apparirà qui.</p>
+                    </div>
+
+                    <div id="publication-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Contenuto non disponibile</h3>
+                      <p id="publication-detail-error-message">Contenuto non disponibile o accesso non più valido.</p>
+                      <button id="publication-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="publication-detail-content" class="publication-article" hidden>
+                      <div class="subsection-heading publication-heading">
+                        <p class="eyebrow">Dettaglio pubblicazione</p>
+                        <h3 id="publication-detail-title">Aggiornamento</h3>
+                      </div>
+                      <dl id="publication-detail-meta" class="publication-meta" aria-label="Informazioni pubblicazione"></dl>
+                      <p id="publication-detail-summary" class="publication-summary" hidden></p>
+                      <p id="publication-detail-body" class="publication-body"></p>
+                      <div class="acknowledge-area" aria-labelledby="acknowledge-title">
+                        <h4 id="acknowledge-title">Presa visione</h4>
+                        <p id="acknowledge-status" class="status-message" role="status" aria-live="polite"></p>
+                        <button id="acknowledge-button" class="primary-button acknowledge-button" type="button" hidden>
+                          Conferma presa visione
+                        </button>
+                      </div>
+                    </article>
+                  </section>
+                </div>
+              </section>
             </div>
           </section>
         </div>

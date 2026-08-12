@@ -36,6 +36,27 @@
   const propertyDetailTitle = document.getElementById('property-detail-title');
   const propertySummary = document.getElementById('property-summary');
 
+  const timelineLoading = document.getElementById('timeline-loading');
+  const timelineEmpty = document.getElementById('timeline-empty');
+  const timelineError = document.getElementById('timeline-error');
+  const timelineErrorMessage = document.getElementById('timeline-error-message');
+  const timelineRetry = document.getElementById('timeline-retry');
+  const timelineContent = document.getElementById('timeline-content');
+  const timelineList = document.getElementById('timeline-list');
+
+  const publicationDetailLoading = document.getElementById('publication-detail-loading');
+  const publicationDetailEmpty = document.getElementById('publication-detail-empty');
+  const publicationDetailError = document.getElementById('publication-detail-error');
+  const publicationDetailErrorMessage = document.getElementById('publication-detail-error-message');
+  const publicationDetailRetry = document.getElementById('publication-detail-retry');
+  const publicationDetailContent = document.getElementById('publication-detail-content');
+  const publicationDetailTitle = document.getElementById('publication-detail-title');
+  const publicationDetailMeta = document.getElementById('publication-detail-meta');
+  const publicationDetailSummary = document.getElementById('publication-detail-summary');
+  const publicationDetailBody = document.getElementById('publication-detail-body');
+  const acknowledgeStatus = document.getElementById('acknowledge-status');
+  const acknowledgeButton = document.getElementById('acknowledge-button');
+
   const state = {
     session: null,
     busy: false,
@@ -43,6 +64,13 @@
     selectedPropertyId: null,
     dashboardGeneration: 0,
     propertyGeneration: 0,
+    timelineItems: [],
+    timelineGeneration: 0,
+    selectedPublicationId: null,
+    publicationGeneration: 0,
+    selectedPublicationRequiresAck: false,
+    acknowledgedPublicationIds: new Set(),
+    acknowledgeInFlight: new Set(),
   };
 
   class PortalRequestError extends Error {
@@ -136,6 +164,45 @@
     window.history.replaceState({}, '', safeLocation);
   }
 
+  function clearPublicationContent() {
+    publicationDetailTitle.textContent = 'Aggiornamento';
+    publicationDetailMeta.replaceChildren();
+    publicationDetailSummary.textContent = '';
+    publicationDetailSummary.hidden = true;
+    publicationDetailBody.textContent = '';
+    acknowledgeStatus.textContent = '';
+    acknowledgeStatus.classList.remove('is-error');
+    acknowledgeButton.hidden = true;
+    acknowledgeButton.disabled = false;
+    acknowledgeButton.textContent = 'Conferma presa visione';
+    acknowledgeButton.dataset.publicationId = '';
+    state.selectedPublicationRequiresAck = false;
+  }
+
+  function resetPublicationDetail() {
+    state.publicationGeneration += 1;
+    state.selectedPublicationId = null;
+    publicationDetailLoading.hidden = true;
+    publicationDetailEmpty.hidden = false;
+    publicationDetailError.hidden = true;
+    publicationDetailContent.hidden = true;
+    publicationDetailErrorMessage.textContent = '';
+    clearPublicationContent();
+    setSelectedPublicationCardState();
+  }
+
+  function resetTimelineState() {
+    state.timelineGeneration += 1;
+    state.timelineItems = [];
+    timelineList.replaceChildren();
+    timelineLoading.hidden = true;
+    timelineEmpty.hidden = true;
+    timelineError.hidden = true;
+    timelineContent.hidden = true;
+    timelineErrorMessage.textContent = '';
+    resetPublicationDetail();
+  }
+
   function resetPropertyDetail() {
     state.propertyGeneration += 1;
     propertyDetailLoading.hidden = true;
@@ -145,6 +212,7 @@
     propertyDetailErrorMessage.textContent = '';
     propertyDetailTitle.textContent = 'Immobile';
     propertySummary.replaceChildren();
+    resetTimelineState();
   }
 
   function resetDashboardState() {
@@ -152,6 +220,8 @@
     state.propertyGeneration += 1;
     state.properties = [];
     state.selectedPropertyId = null;
+    state.acknowledgedPublicationIds.clear();
+    state.acknowledgeInFlight.clear();
     propertyCount.textContent = '';
     propertyList.replaceChildren();
     dashboardLoading.hidden = true;
@@ -229,6 +299,32 @@
     return error.message;
   }
 
+  function timelineErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare gli aggiornamenti. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare gli aggiornamenti con i dati disponibili.';
+    }
+    return error.message;
+  }
+
+  function publicationErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare l’aggiornamento. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare il contenuto dell’aggiornamento.';
+    }
+    return error.message;
+  }
+
   function showDashboardState(name, message = '') {
     dashboardLoading.hidden = name !== 'loading';
     dashboardEmpty.hidden = name !== 'empty';
@@ -249,12 +345,31 @@
     }
   }
 
+  function showTimelineState(name, message = '') {
+    timelineLoading.hidden = name !== 'loading';
+    timelineEmpty.hidden = name !== 'empty';
+    timelineError.hidden = name !== 'error';
+    timelineContent.hidden = name !== 'content';
+    if (name === 'error') {
+      timelineErrorMessage.textContent = message;
+    }
+  }
+
+  function showPublicationState(name, message = '') {
+    publicationDetailLoading.hidden = name !== 'loading';
+    publicationDetailEmpty.hidden = name !== 'empty';
+    publicationDetailError.hidden = name !== 'error';
+    publicationDetailContent.hidden = name !== 'content';
+    if (name === 'error') {
+      publicationDetailErrorMessage.textContent = message;
+    }
+  }
+
   function textOrEmpty(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
 
-  function propertyId(item) {
-    const value = item && item.id;
+  function positiveId(value) {
     if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
       return value;
     }
@@ -262,6 +377,14 @@
       return Number(value);
     }
     return null;
+  }
+
+  function propertyId(item) {
+    return positiveId(item && item.id);
+  }
+
+  function publicationId(item) {
+    return positiveId(item && item.id);
   }
 
   function roleLabel(role) {
@@ -274,6 +397,18 @@
     return labels[role] || '';
   }
 
+  function publicationTypeLabel(type) {
+    const labels = {
+      general_update: 'Aggiornamento generale',
+      marketing_update: 'Marketing',
+      visit_update: 'Aggiornamento visite',
+      feedback_summary: 'Sintesi feedback',
+      strategy_update: 'Strategia',
+      milestone: 'Traguardo',
+    };
+    return labels[type] || 'Aggiornamento';
+  }
+
   function locationLabel(item) {
     const address = textOrEmpty(item && item.address);
     const city = textOrEmpty(item && item.city);
@@ -281,6 +416,21 @@
       return `${address} · ${city}`;
     }
     return address || city;
+  }
+
+  function formatPublishedAt(value) {
+    const raw = textOrEmpty(value);
+    if (!raw) {
+      return '';
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return raw;
+    }
+    return new Intl.DateTimeFormat('it-IT', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(parsed);
   }
 
   function createTextElement(tag, className, text) {
@@ -299,6 +449,18 @@
         return;
       }
       const selected = Number(button.dataset.propertyId) === state.selectedPropertyId;
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.classList.toggle('is-selected', selected);
+    });
+  }
+
+  function setSelectedPublicationCardState() {
+    Array.from(timelineList.children).forEach((listItem) => {
+      const button = listItem.children[0];
+      if (!button) {
+        return;
+      }
+      const selected = Number(button.dataset.publicationId) === state.selectedPublicationId;
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
       button.classList.toggle('is-selected', selected);
     });
@@ -398,6 +560,130 @@
     showPropertyState('content');
   }
 
+  function createTimelineCard(item) {
+    const id = publicationId(item);
+    const listItem = document.createElement('div');
+    listItem.className = 'timeline-list-item';
+    listItem.setAttribute('role', 'listitem');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'timeline-card';
+    button.dataset.publicationId = String(id);
+    button.setAttribute('aria-pressed', 'false');
+    button.setAttribute('aria-controls', 'publication-detail-section');
+
+    const title = textOrEmpty(item.title) || 'Aggiornamento';
+    button.append(createTextElement('span', 'timeline-card-title', title));
+
+    const meta = document.createElement('span');
+    meta.className = 'timeline-card-meta';
+    meta.append(createTextElement('span', '', publicationTypeLabel(item.publication_type)));
+    const publishedAt = formatPublishedAt(item.published_at);
+    if (publishedAt) {
+      meta.append(createTextElement('span', '', publishedAt));
+    }
+    button.append(meta);
+
+    const summary = textOrEmpty(item.summary);
+    if (summary) {
+      button.append(createTextElement('span', 'timeline-card-summary', summary));
+    }
+
+    if (item.acknowledgement_required === true) {
+      button.append(createTextElement('span', 'timeline-ack-badge', 'Presa visione richiesta'));
+    }
+
+    button.addEventListener('click', () => {
+      if (state.session && state.selectedPropertyId !== null && id !== null) {
+        void openPublication(id);
+      }
+    });
+
+    listItem.append(button);
+    return listItem;
+  }
+
+  function renderTimelineList(items) {
+    timelineList.replaceChildren();
+    items.forEach((item) => {
+      timelineList.append(createTimelineCard(item));
+    });
+    setSelectedPublicationCardState();
+  }
+
+  function addPublicationMeta(label, value) {
+    const cleanValue = textOrEmpty(value);
+    if (!cleanValue) {
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'publication-meta-row';
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const description = document.createElement('dd');
+    description.textContent = cleanValue;
+    wrapper.append(term, description);
+    publicationDetailMeta.append(wrapper);
+  }
+
+  function renderAcknowledgeState(id, required) {
+    acknowledgeStatus.classList.remove('is-error');
+    acknowledgeButton.dataset.publicationId = String(id);
+
+    if (!required) {
+      acknowledgeButton.hidden = true;
+      acknowledgeButton.disabled = false;
+      acknowledgeButton.textContent = 'Conferma presa visione';
+      acknowledgeStatus.textContent = 'Nessuna presa visione richiesta per questo aggiornamento.';
+      return;
+    }
+
+    acknowledgeButton.hidden = false;
+    if (state.acknowledgedPublicationIds.has(id)) {
+      acknowledgeButton.disabled = true;
+      acknowledgeButton.textContent = 'Presa visione confermata';
+      acknowledgeStatus.textContent = 'Hai già confermato la presa visione in questa sessione.';
+      return;
+    }
+
+    if (state.acknowledgeInFlight.has(id)) {
+      acknowledgeButton.disabled = true;
+      acknowledgeButton.textContent = 'Conferma in corso…';
+      acknowledgeStatus.textContent = 'Registrazione della presa visione in corso…';
+      return;
+    }
+
+    acknowledgeButton.disabled = false;
+    acknowledgeButton.textContent = 'Conferma presa visione';
+    acknowledgeStatus.textContent = 'Aprire l’aggiornamento non equivale a confermare la presa visione.';
+  }
+
+  function renderPublicationDetail(payload, id) {
+    const item = payload && typeof payload === 'object' ? payload : {};
+    const title = textOrEmpty(item.title) || 'Aggiornamento';
+    const summary = textOrEmpty(item.summary);
+    const body = textOrEmpty(item.body);
+    const type = publicationTypeLabel(item.publication_type);
+    const publishedAt = formatPublishedAt(item.published_at);
+    const version = Number.isInteger(item.version_number) && item.version_number > 0
+      ? String(item.version_number)
+      : '';
+    const required = item.acknowledgement_required === true;
+
+    publicationDetailTitle.textContent = title;
+    publicationDetailMeta.replaceChildren();
+    addPublicationMeta('Tipo', type);
+    addPublicationMeta('Pubblicato', publishedAt);
+    addPublicationMeta('Versione', version);
+    publicationDetailSummary.textContent = summary;
+    publicationDetailSummary.hidden = !summary;
+    publicationDetailBody.textContent = body;
+    state.selectedPublicationRequiresAck = required;
+    renderAcknowledgeState(id, required);
+    showPublicationState('content');
+  }
+
   async function confirmSessionAfterPropertyNotFound(generation) {
     try {
       const session = await loadSession();
@@ -419,6 +705,272 @@
     }
   }
 
+  async function confirmSessionAfterTimelineNotFound(generation, propertyAtStart) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.timelineGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.timelineGeneration
+        || state.selectedPropertyId !== propertyAtStart
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      showTimelineState('error', timelineErrorText(error));
+      return false;
+    }
+  }
+
+  async function confirmSessionAfterPublicationNotFound(generation, propertyAtStart, id) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.publicationGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedPublicationId !== id
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.publicationGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedPublicationId !== id
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      clearPublicationContent();
+      showPublicationState('error', publicationErrorText(error));
+      return false;
+    }
+  }
+
+  async function loadTimeline(propertyAtStart) {
+    if (!state.session || state.selectedPropertyId !== propertyAtStart) {
+      return;
+    }
+
+    const generation = ++state.timelineGeneration;
+    state.timelineItems = [];
+    timelineList.replaceChildren();
+    resetPublicationDetail();
+    showTimelineState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/timeline`);
+    } catch (error) {
+      if (
+        generation !== state.timelineGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return;
+      }
+
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterTimelineNotFound(generation, propertyAtStart);
+        if (
+          sessionValid
+          && generation === state.timelineGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.session
+        ) {
+          showTimelineState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+
+      showTimelineState('error', timelineErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.timelineGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || !state.session
+    ) {
+      return;
+    }
+
+    const rawItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    state.timelineItems = rawItems.filter((item) => publicationId(item) !== null);
+
+    if (state.timelineItems.length === 0) {
+      showTimelineState('empty');
+      return;
+    }
+
+    renderTimelineList(state.timelineItems);
+    showTimelineState('content');
+    showPublicationState('empty');
+  }
+
+  async function openPublication(id) {
+    if (!state.session || state.selectedPropertyId === null) {
+      return;
+    }
+
+    const available = state.timelineItems.some((item) => publicationId(item) === id);
+    if (!available) {
+      return;
+    }
+
+    const propertyAtStart = state.selectedPropertyId;
+    state.selectedPublicationId = id;
+    state.selectedPublicationRequiresAck = false;
+    setSelectedPublicationCardState();
+    const generation = ++state.publicationGeneration;
+    clearPublicationContent();
+    showPublicationState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/publications/${encodeURIComponent(String(id))}`);
+    } catch (error) {
+      if (
+        generation !== state.publicationGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedPublicationId !== id
+        || !state.session
+      ) {
+        return;
+      }
+
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterPublicationNotFound(generation, propertyAtStart, id);
+        if (
+          sessionValid
+          && generation === state.publicationGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.selectedPublicationId === id
+          && state.session
+        ) {
+          clearPublicationContent();
+          showPublicationState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+
+      clearPublicationContent();
+      showPublicationState('error', publicationErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.publicationGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || state.selectedPublicationId !== id
+      || !state.session
+    ) {
+      return;
+    }
+
+    renderPublicationDetail(payload, id);
+  }
+
+  async function acknowledgeCurrentPublication() {
+    const id = state.selectedPublicationId;
+    const propertyAtStart = state.selectedPropertyId;
+    if (
+      !state.session
+      || propertyAtStart === null
+      || id === null
+      || !state.selectedPublicationRequiresAck
+      || state.acknowledgedPublicationIds.has(id)
+      || state.acknowledgeInFlight.has(id)
+    ) {
+      return;
+    }
+
+    const generation = state.publicationGeneration;
+    state.acknowledgeInFlight.add(id);
+    renderAcknowledgeState(id, true);
+
+    try {
+      await apiRequest(`/publications/${encodeURIComponent(String(id))}/acknowledge`, { method: 'POST' });
+    } catch (error) {
+      state.acknowledgeInFlight.delete(id);
+      if (
+        generation !== state.publicationGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedPublicationId !== id
+        || !state.session
+      ) {
+        return;
+      }
+
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterPublicationNotFound(generation, propertyAtStart, id);
+        if (
+          sessionValid
+          && generation === state.publicationGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.selectedPublicationId === id
+          && state.session
+        ) {
+          clearPublicationContent();
+          showPublicationState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+
+      acknowledgeStatus.textContent = publicationErrorText(error);
+      acknowledgeStatus.classList.add('is-error');
+      renderAcknowledgeState(id, true);
+      acknowledgeStatus.textContent = publicationErrorText(error);
+      acknowledgeStatus.classList.add('is-error');
+      return;
+    }
+
+    state.acknowledgeInFlight.delete(id);
+    state.acknowledgedPublicationIds.add(id);
+    if (
+      generation !== state.publicationGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || state.selectedPublicationId !== id
+      || !state.session
+    ) {
+      return;
+    }
+
+    renderAcknowledgeState(id, true);
+  }
+
   async function selectProperty(id) {
     if (!state.session) {
       return;
@@ -433,6 +985,7 @@
     setSelectedCardState();
     const generation = ++state.propertyGeneration;
     propertySummary.replaceChildren();
+    resetTimelineState();
     showPropertyState('loading');
 
     try {
@@ -441,6 +994,7 @@
         return;
       }
       renderPropertyDetail(payload);
+      await loadTimeline(id);
     } catch (error) {
       if (generation !== state.propertyGeneration || !state.session) {
         return;
@@ -600,6 +1154,22 @@
     if (state.session && state.selectedPropertyId !== null) {
       void selectProperty(state.selectedPropertyId);
     }
+  });
+
+  timelineRetry.addEventListener('click', () => {
+    if (state.session && state.selectedPropertyId !== null) {
+      void loadTimeline(state.selectedPropertyId);
+    }
+  });
+
+  publicationDetailRetry.addEventListener('click', () => {
+    if (state.session && state.selectedPublicationId !== null) {
+      void openPublication(state.selectedPublicationId);
+    }
+  });
+
+  acknowledgeButton.addEventListener('click', () => {
+    void acknowledgeCurrentPublication();
   });
 
   logoutButton.addEventListener('click', async () => {
