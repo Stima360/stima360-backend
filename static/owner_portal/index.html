@@ -49,21 +49,83 @@
       <p id="auth-message" class="status-message" role="status" aria-live="polite"></p>
     </section>
 
-    <section id="app-view" class="panel" hidden>
+    <section id="app-view" class="app-panel" hidden>
       <div class="app-topbar">
         <div>
           <p class="eyebrow">Sessione attiva</p>
-          <h2>Benvenuto nel portale</h2>
+          <h2>Il tuo portale</h2>
         </div>
         <button id="logout-button" class="secondary-button" type="button">Esci</button>
       </div>
 
       <div id="app-message" class="status-message" role="status" aria-live="polite"></div>
 
-      <div id="shell-empty" class="empty-state">
-        <h3>Area proprietario pronta</h3>
-        <p>La sessione è attiva. Le sezioni operative del portale verranno abilitate nei prossimi step di P6.</p>
-      </div>
+      <section id="dashboard-section" class="dashboard-section" aria-labelledby="dashboard-title">
+        <div class="section-heading dashboard-heading">
+          <div>
+            <p class="eyebrow">Dashboard</p>
+            <h2 id="dashboard-title">I tuoi immobili</h2>
+          </div>
+          <p id="property-count" class="count-badge" aria-live="polite"></p>
+        </div>
+
+        <div id="dashboard-loading" class="section-state" role="status" aria-live="polite">
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento degli immobili…</p>
+        </div>
+
+        <div id="shell-empty" class="empty-state" hidden>
+          <h3>Nessun immobile disponibile</h3>
+          <p>Al momento non risultano immobili accessibili con questo account.</p>
+        </div>
+
+        <div id="dashboard-error" class="error-state" role="alert" hidden>
+          <h3>Impossibile caricare la dashboard</h3>
+          <p id="dashboard-error-message">Riprova tra poco.</p>
+          <button id="dashboard-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <div id="dashboard-content" class="dashboard-layout" hidden>
+          <section class="property-selector" aria-labelledby="property-selector-title">
+            <div class="subsection-heading">
+              <h3 id="property-selector-title">Seleziona un immobile</h3>
+              <p>Scegli l'immobile di cui vuoi vedere il riepilogo.</p>
+            </div>
+            <div
+              id="property-list"
+              class="property-list"
+              role="list"
+              aria-label="Immobili accessibili"
+            ></div>
+          </section>
+
+          <section id="property-detail-section" class="property-detail" aria-labelledby="property-detail-title">
+            <div id="property-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+              <div class="spinner spinner-small" aria-hidden="true"></div>
+              <p>Caricamento del riepilogo…</p>
+            </div>
+
+            <div id="property-detail-empty" class="empty-state compact-empty" hidden>
+              <h3>Seleziona un immobile</h3>
+              <p>Il riepilogo apparirà qui.</p>
+            </div>
+
+            <div id="property-detail-error" class="error-state compact-error" role="alert" hidden>
+              <h3>Riepilogo non disponibile</h3>
+              <p id="property-detail-error-message">Immobile non disponibile o accesso non più valido.</p>
+              <button id="property-detail-retry" class="secondary-button" type="button">Riprova</button>
+            </div>
+
+            <div id="property-detail-content" hidden>
+              <div class="subsection-heading detail-heading">
+                <p class="eyebrow">Riepilogo immobile</p>
+                <h3 id="property-detail-title">Immobile</h3>
+              </div>
+              <dl id="property-summary" class="property-summary" aria-label="Riepilogo immobile"></dl>
+            </div>
+          </section>
+        </div>
+      </section>
     </section>
   </main>
 
