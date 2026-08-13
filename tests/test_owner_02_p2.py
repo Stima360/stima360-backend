@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,9 +10,9 @@ from pydantic import ValidationError
 from owner.dependencies import current_owner
 from owner.router_admin import router as admin_router
 from owner.router_portal import router as portal_router
-from owner.schemas import FeedbackCreate, SharedDocumentCreate, VisitFeedbackCreate
+from owner.schemas import FeedbackCreate, FeedbackPublic, SharedDocumentCreate, VisitFeedbackCreate
 from owner import repository as repo
-from core.exceptions import ConflictError
+from core.exceptions import ConflictError, NotFoundError
 
 R = Path(__file__).parents[1]
 
@@ -120,3 +121,204 @@ def test_audit_actions_for_p2():
         "feedback_status_updated",
     ):
         assert action in source
+
+
+# P6.7 blocking backend hardening --------------------------------------------
+FEEDBACK_PUBLIC_KEYS = {
+    "feedback_type",
+    "subject",
+    "message",
+    "status",
+    "submitted_at",
+    "availability_from",
+    "availability_to",
+    "handled_at",
+    "public_response",
+}
+
+
+def _public_feedback_row(**overrides):
+    row = {
+        "feedback_type": "general_message",
+        "subject": "Oggetto",
+        "message": "Messaggio",
+        "status": "new",
+        "submitted_at": datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc),
+        "availability_from": None,
+        "availability_to": None,
+        "handled_at": None,
+        "public_response": None,
+    }
+    row.update(overrides)
+    return row
+
+
+class _FeedbackCursor:
+    def __init__(self, *, rows=None, one_row=None):
+        self.rows = list(rows or [])
+        self.one_row = one_row
+        self.executed = []
+
+    def execute(self, query, params=None):
+        self.executed.append((" ".join(str(query).split()), params))
+
+    def fetchone(self):
+        row, self.one_row = self.one_row, None
+        return row
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+def test_feedback_public_schema_is_exact_whitelist():
+    assert set(FeedbackPublic.model_fields) == FEEDBACK_PUBLIC_KEYS
+    assert "id" not in FeedbackPublic.model_fields
+
+
+def test_feedback_portal_repository_revalidates_canonical_property_access():
+    source = (R / "owner/repository.py").read_text()
+    start = source.index("def list_feedback")
+    end = source.index("def dashboard", start)
+    block = source[start:end]
+    assert "require_property(a,p)" in block
+    assert "SELECT * FROM owner_feedback WHERE owner_account_id" not in block
+    assert "SELECT feedback_type,subject,message,status,submitted_at" in block
+
+    require_source = source[source.index("def require_property"):source.index("def portal_properties")]
+    assert "x.owner_account_id=%s" in require_source
+    assert "x.property_id=%s" in require_source
+    assert "x.access_status='active'" in require_source
+    assert "x.revoked_at IS NULL" in require_source
+    assert "x.valid_until IS NULL OR x.valid_until>NOW()" in require_source
+
+    session_source = source[source.index("def get_session"):source.index("def revoke_session")]
+    assert "a.status account_status" in session_source
+    assert "r['account_status']!='active'" in session_source
+
+
+def test_feedback_list_valid_access_uses_public_projection(monkeypatch):
+    checks = []
+    monkeypatch.setattr(repo, "require_property", lambda account, prop: checks.append((account, prop)) or {"property_id": prop})
+    cursor = _FeedbackCursor(rows=[dict(_public_feedback_row(), owner_account_id=7, internal_notes="secret")])
+
+    @contextmanager
+    def fake_cursor(*, commit=False):
+        assert commit is False
+        yield object(), cursor
+
+    monkeypatch.setattr(repo, "core_cursor", fake_cursor)
+    result = repo.list_feedback(7, 11)
+    assert checks == [(7, 11)]
+    assert result == [_public_feedback_row()]
+    query, params = cursor.executed[0]
+    assert params == (7, 11)
+    assert "SELECT *" not in query.upper()
+    assert "owner_account_id" not in query.split("FROM owner_feedback", 1)[0]
+    assert "internal_notes" not in query
+
+
+@pytest.mark.parametrize("reason", ["revoked", "expired", "different-account"])
+def test_feedback_list_invalid_access_is_uniform_404(monkeypatch, reason):
+    app = FastAPI()
+    app.include_router(portal_router)
+    app.dependency_overrides[current_owner] = lambda: {
+        "owner_account_id": 8 if reason == "different-account" else 7,
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+
+    def denied(account, prop):
+        raise NotFoundError("Risorsa non trovata")
+
+    monkeypatch.setattr(repo, "require_property", denied)
+    client = TestClient(app)
+    response = client.get("/api/owner/portal/properties/11/feedback")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Risorsa non trovata"}
+
+
+def test_feedback_get_response_is_public_whitelist_even_if_repository_has_extras(monkeypatch):
+    app = FastAPI()
+    app.include_router(portal_router)
+    app.dependency_overrides[current_owner] = lambda: {"owner_account_id": 7, "expires_at": "2099-01-01T00:00:00Z"}
+    row = dict(
+        _public_feedback_row(public_response="Risposta pubblica", handled_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)),
+        id=99,
+        owner_account_id=7,
+        property_id=11,
+        handled_by="admin@example.test",
+        linked_activity_id=123,
+        contact_id=4,
+        lead_id=5,
+        activity_id=6,
+        internal_notes="non pubblico",
+        BUY={"secret": True},
+        MATCH={"score": 90},
+        FLOW={"rule": "internal"},
+    )
+    monkeypatch.setattr(repo, "list_feedback", lambda account, prop: [row])
+    client = TestClient(app)
+    response = client.get("/api/owner/portal/properties/11/feedback")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert set(item) == FEEDBACK_PUBLIC_KEYS
+    assert item["public_response"] == "Risposta pubblica"
+    for forbidden in (
+        "id", "owner_account_id", "property_id", "handled_by", "linked_activity_id",
+        "contact_id", "lead_id", "activity_id", "internal_notes", "BUY", "MATCH", "FLOW",
+    ):
+        assert forbidden not in item
+
+
+def test_feedback_post_response_is_public_whitelist_even_if_repository_has_extras(monkeypatch):
+    app = FastAPI()
+    app.include_router(portal_router)
+    app.dependency_overrides[current_owner] = lambda: {"owner_account_id": 7, "expires_at": "2099-01-01T00:00:00Z"}
+    row = dict(
+        _public_feedback_row(),
+        id=101,
+        owner_account_id=7,
+        property_id=11,
+        handled_by="internal-handler",
+        linked_activity_id=123,
+        internal_notes="non pubblico",
+    )
+    monkeypatch.setattr(repo, "create_feedback", lambda account, prop, payload: row)
+    client = TestClient(app)
+    response = client.post(
+        "/api/owner/portal/properties/11/feedback",
+        json={"feedback_type": "general_message", "subject": "Oggetto", "message": "Messaggio"},
+    )
+    assert response.status_code == 201
+    assert set(response.json()) == FEEDBACK_PUBLIC_KEYS
+    assert "id" not in response.json()
+    assert "owner_account_id" not in response.json()
+    assert "property_id" not in response.json()
+    assert "handled_by" not in response.json()
+    assert "linked_activity_id" not in response.json()
+    assert "internal_notes" not in response.json()
+
+
+def test_create_feedback_repository_returns_only_public_fields_and_keeps_internal_id_for_audit(monkeypatch):
+    returned = dict(_public_feedback_row(), id=55, owner_account_id=7, property_id=11, internal_notes="secret")
+    cursor = _FeedbackCursor(one_row=returned)
+    audits = []
+
+    @contextmanager
+    def fake_cursor(*, commit=False):
+        assert commit is True
+        yield object(), cursor
+
+    monkeypatch.setattr(repo, "require_property", lambda account, prop: {"property_id": prop})
+    monkeypatch.setattr(repo, "core_cursor", fake_cursor)
+    monkeypatch.setattr(repo, "audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+    result = repo.create_feedback(
+        7,
+        11,
+        {"feedback_type": "general_message", "subject": "Oggetto", "message": "Messaggio"},
+    )
+    assert set(result) == FEEDBACK_PUBLIC_KEYS
+    assert result["subject"] == "Oggetto"
+    assert audits and audits[0][0][4] == 55
+    query, _ = cursor.executed[0]
+    assert "RETURNING id,feedback_type,subject,message,status,submitted_at" in query
+    assert "RETURNING *" not in query

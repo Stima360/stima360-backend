@@ -95,6 +95,30 @@ class FeedbackCreate(M):
         return self
 
 
+class FeedbackPublic(M):
+    feedback_type: Literal[
+        "contact_request",
+        "correction_request",
+        "general_message",
+        "strategy_feedback",
+        "price_review",
+        "availability_update",
+        "document_question",
+    ]
+    subject: str
+    message: str
+    status: Literal["new", "in_review", "handled", "closed"]
+    submitted_at: datetime
+    availability_from: datetime | None = None
+    availability_to: datetime | None = None
+    handled_at: datetime | None = None
+    public_response: str | None = None
+
+
+class FeedbackListResponse(M):
+    items: list[FeedbackPublic]
+
+
 class FeedbackStatus(M):
     status: Literal["new", "in_review", "handled", "closed"]
     handled_by: str | None = Field(None, max_length=200)

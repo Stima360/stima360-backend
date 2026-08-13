@@ -111,14 +111,56 @@ def read(a,i,ack=False):
  p=publication(a,i)
  with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_publication_reads(publication_id,owner_account_id,view_count,acknowledged_at) VALUES(%s,%s,1,CASE WHEN %s THEN NOW() END) ON CONFLICT(publication_id,owner_account_id) DO UPDATE SET last_viewed_at=NOW(),view_count=owner_publication_reads.view_count+1,acknowledged_at=CASE WHEN %s THEN COALESCE(owner_publication_reads.acknowledged_at,NOW()) ELSE owner_publication_reads.acknowledged_at END RETURNING *",(i,a,ack,ack));r=one(c)
  audit('publication_acknowledged' if ack else 'publication_viewed',a,p['property_id'],'owner_publication',i);return r
+FEEDBACK_PUBLIC_FIELDS = (
+    "feedback_type",
+    "subject",
+    "message",
+    "status",
+    "submitted_at",
+    "availability_from",
+    "availability_to",
+    "handled_at",
+    "public_response",
+)
+
+
+def _public_feedback(row):
+ return {key: row.get(key) for key in FEEDBACK_PUBLIC_FIELDS}
+
+
 def create_feedback(a,p,d):
  require_property(a,p)
- with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_feedback(owner_account_id,property_id,feedback_type,subject,message,status,submitted_at,availability_from,availability_to) VALUES(%s,%s,%s,%s,%s,'new',NOW(),%s,%s) RETURNING *",(a,p,d['feedback_type'],d['subject'],d['message'],d.get('availability_from'),d.get('availability_to')));r=one(c)
- audit('feedback_submitted',a,p,'owner_feedback',r['id']);return r
+ with core_cursor(commit=True) as(_,c):
+  c.execute(
+      """INSERT INTO owner_feedback(
+             owner_account_id,property_id,feedback_type,subject,message,status,submitted_at,
+             availability_from,availability_to
+         ) VALUES(%s,%s,%s,%s,%s,'new',NOW(),%s,%s)
+         RETURNING id,feedback_type,subject,message,status,submitted_at,
+                   availability_from,availability_to,handled_at,public_response""",
+      (a,p,d['feedback_type'],d['subject'],d['message'],d.get('availability_from'),d.get('availability_to')),
+  )
+  r=one(c)
+ audit('feedback_submitted',a,p,'owner_feedback',r['id'])
+ return _public_feedback(r)
+
 def list_feedback(a=None,p=None):
+ if a is not None:
+  # Portal path: revalidate the canonical account-property grant on every read.
+  # current_owner separately guarantees that a disabled account has no valid session.
+  require_property(a,p)
+  with core_cursor() as(_,c):
+   c.execute(
+       """SELECT feedback_type,subject,message,status,submitted_at,availability_from,
+                 availability_to,handled_at,public_response
+            FROM owner_feedback
+           WHERE owner_account_id=%s AND property_id=%s
+           ORDER BY submitted_at DESC""",
+       (a,p),
+   )
+   return [_public_feedback(dict(x)) for x in c.fetchall()]
  with core_cursor() as(_,c):
-  if a:c.execute('SELECT * FROM owner_feedback WHERE owner_account_id=%s AND property_id=%s ORDER BY submitted_at DESC',(a,p))
-  else:c.execute('SELECT * FROM owner_feedback ORDER BY submitted_at DESC')
+  c.execute('SELECT * FROM owner_feedback ORDER BY submitted_at DESC')
   return[dict(x) for x in c.fetchall()]
 def dashboard():
  with core_cursor() as(_,c):c.execute("SELECT (SELECT COUNT(*) FROM owner_accounts WHERE status='active') active_accounts,(SELECT COUNT(*) FROM owner_property_access WHERE access_status='active') active_access,(SELECT COUNT(*) FROM owner_publications WHERE status='published') published,(SELECT COUNT(*) FROM owner_feedback WHERE status='new') new_feedback");return dict(c.fetchone())
