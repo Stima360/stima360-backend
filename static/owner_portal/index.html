@@ -330,6 +330,89 @@
                   </section>
                 </div>
               </section>
+
+              <section id="requests-section" class="requests-section" aria-labelledby="requests-title">
+                <div class="subsection-heading requests-heading">
+                  <p class="eyebrow">Contatto con il consulente</p>
+                  <h3 id="requests-title">Richieste</h3>
+                  <p>Invia una richiesta relativa all’immobile e consulta lo storico delle richieste già inviate.</p>
+                </div>
+
+                <div class="requests-layout">
+                  <section class="request-form-panel" aria-labelledby="request-form-title">
+                    <h4 id="request-form-title">Nuova richiesta</h4>
+                    <form id="request-form" novalidate>
+                      <div class="field-group">
+                        <label for="request-type">Tipo di richiesta</label>
+                        <select id="request-type" name="feedback_type" required>
+                          <option value="">Seleziona una categoria</option>
+                          <option value="contact_request">Essere ricontattato</option>
+                          <option value="correction_request">Segnalare una correzione</option>
+                          <option value="general_message">Messaggio generale</option>
+                          <option value="strategy_feedback">Confronto sulla strategia</option>
+                          <option value="price_review">Revisione del prezzo</option>
+                          <option value="availability_update">Aggiornare la disponibilità</option>
+                          <option value="document_question">Domanda sui documenti</option>
+                        </select>
+                      </div>
+
+                      <div class="field-group">
+                        <label for="request-subject">Oggetto</label>
+                        <input id="request-subject" name="subject" type="text" maxlength="150" required>
+                        <p class="field-hint">Massimo 150 caratteri.</p>
+                      </div>
+
+                      <div class="field-group">
+                        <label for="request-message">Messaggio</label>
+                        <textarea id="request-message" name="message" rows="5" maxlength="5000" required></textarea>
+                        <p class="field-hint">Massimo 5.000 caratteri.</p>
+                      </div>
+
+                      <fieldset id="request-availability-fields" class="request-availability" hidden>
+                        <legend>Disponibilità</legend>
+                        <p class="field-hint">Indica almeno un estremo temporale.</p>
+                        <div class="request-availability-grid">
+                          <div class="field-group">
+                            <label for="request-availability-from">Da</label>
+                            <input id="request-availability-from" name="availability_from" type="datetime-local">
+                          </div>
+                          <div class="field-group">
+                            <label for="request-availability-to">A</label>
+                            <input id="request-availability-to" name="availability_to" type="datetime-local">
+                          </div>
+                        </div>
+                      </fieldset>
+
+                      <button id="request-submit" class="primary-button" type="submit">Invia richiesta</button>
+                      <p id="request-form-status" class="status-message" role="status" aria-live="polite"></p>
+                    </form>
+                  </section>
+
+                  <section class="requests-history" aria-labelledby="requests-history-title">
+                    <h4 id="requests-history-title">Storico richieste</h4>
+
+                    <div id="requests-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento delle richieste…</p>
+                    </div>
+
+                    <div id="requests-empty" class="empty-state compact-empty" hidden>
+                      <h4>Nessuna richiesta inviata</h4>
+                      <p>Le richieste inviate per questo immobile appariranno qui.</p>
+                    </div>
+
+                    <div id="requests-error" class="error-state compact-error" role="alert" hidden>
+                      <h4>Richieste non disponibili</h4>
+                      <p id="requests-error-message">Riprova tra poco.</p>
+                      <button id="requests-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <div id="requests-content" hidden>
+                      <div id="requests-list" class="requests-list" role="list" aria-label="Storico richieste proprietario"></div>
+                    </div>
+                  </section>
+                </div>
+              </section>
             </div>
           </section>
         </div>

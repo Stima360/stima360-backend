@@ -1006,3 +1006,211 @@ button:disabled {
     top: 18px;
   }
 }
+
+
+.requests-section {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #dfe6df;
+}
+
+.requests-heading {
+  margin-bottom: 14px;
+}
+
+.requests-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.request-form-panel,
+.requests-history {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dfe6df;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.request-form-panel h4,
+.requests-history h4 {
+  margin: 0 0 14px;
+  font-size: 1rem;
+}
+
+.request-form-panel form {
+  display: grid;
+  gap: 14px;
+}
+
+.request-form-panel select,
+.request-form-panel input,
+.request-form-panel textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #bfcac2;
+  border-radius: 10px;
+  background: #fff;
+  color: #19211c;
+  font: inherit;
+}
+
+.request-form-panel textarea {
+  resize: vertical;
+}
+
+.request-form-panel select:focus-visible,
+.request-form-panel input:focus-visible,
+.request-form-panel textarea:focus-visible {
+  outline: 3px solid rgba(40, 95, 70, 0.22);
+  outline-offset: 2px;
+  border-color: #285f46;
+}
+
+.request-availability {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #dfe6df;
+  border-radius: 12px;
+}
+
+.request-availability legend {
+  padding: 0 6px;
+  font-weight: 800;
+}
+
+.request-availability-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.requests-list {
+  display: grid;
+  gap: 12px;
+}
+
+.request-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d7dfd9;
+  border-radius: 14px;
+  background: #fbfcfb;
+}
+
+.request-card-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.request-card-category {
+  color: #5b6860;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.request-status-badge {
+  width: fit-content;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #eef2ef;
+  color: #425047;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.request-status-badge.is-new {
+  background: #eef4ef;
+  color: #315440;
+}
+
+.request-status-badge.is-in_review {
+  background: #edf2f7;
+  color: #34506a;
+}
+
+.request-status-badge.is-handled {
+  background: #e9f3ea;
+  color: #285b33;
+}
+
+.request-status-badge.is-closed {
+  background: #f0f0f0;
+  color: #555;
+}
+
+.request-card-subject {
+  margin: 10px 0 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.request-card-message {
+  margin: 8px 0 0;
+  color: #37463d;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.request-meta {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+}
+
+.request-meta-row {
+  display: grid;
+  gap: 2px;
+}
+
+.request-meta-row dt {
+  color: #66736b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.request-meta-row dd {
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.request-public-response {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-left: 3px solid #285f46;
+  background: #f4f8f5;
+}
+
+.request-public-response h6 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.request-public-response p {
+  margin: 7px 0 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (min-width: 640px) {
+  .request-availability-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 860px) {
+  .requests-layout {
+    grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.15fr);
+    align-items: start;
+  }
+}

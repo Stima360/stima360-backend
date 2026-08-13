@@ -97,6 +97,41 @@
   const documentAcknowledgeStatus = document.getElementById('document-acknowledge-status');
   const documentAcknowledgeButton = document.getElementById('document-acknowledge-button');
 
+  const requestForm = document.getElementById('request-form');
+  const requestType = document.getElementById('request-type');
+  const requestSubject = document.getElementById('request-subject');
+  const requestMessage = document.getElementById('request-message');
+  const requestAvailabilityFields = document.getElementById('request-availability-fields');
+  const requestAvailabilityFrom = document.getElementById('request-availability-from');
+  const requestAvailabilityTo = document.getElementById('request-availability-to');
+  const requestSubmit = document.getElementById('request-submit');
+  const requestFormStatus = document.getElementById('request-form-status');
+  const requestsLoading = document.getElementById('requests-loading');
+  const requestsEmpty = document.getElementById('requests-empty');
+  const requestsError = document.getElementById('requests-error');
+  const requestsErrorMessage = document.getElementById('requests-error-message');
+  const requestsRetry = document.getElementById('requests-retry');
+  const requestsContent = document.getElementById('requests-content');
+  const requestsList = document.getElementById('requests-list');
+
+  const REQUEST_TYPE_LABELS = {
+    contact_request: 'Essere ricontattato',
+    correction_request: 'Segnalare una correzione',
+    general_message: 'Messaggio generale',
+    strategy_feedback: 'Confronto sulla strategia',
+    price_review: 'Revisione del prezzo',
+    availability_update: 'Aggiornare la disponibilità',
+    document_question: 'Domanda sui documenti',
+  };
+  const REQUEST_STATUS_LABELS = {
+    new: 'Inviata',
+    in_review: 'In lavorazione',
+    handled: 'Gestita',
+    closed: 'Chiusa',
+  };
+  const REQUEST_SUBJECT_MAX = 150;
+  const REQUEST_MESSAGE_MAX = 5000;
+
   const state = {
     session: null,
     busy: false,
@@ -123,6 +158,9 @@
     selectedDocumentId: null,
     documentDetailGeneration: 0,
     documentAcknowledgeInFlight: new Set(),
+    requestItems: [],
+    requestGeneration: 0,
+    requestSubmitInFlight: false,
   };
 
   class PortalRequestError extends Error {
@@ -333,6 +371,45 @@
     resetDocumentDetail();
   }
 
+  function setRequestAvailabilityVisibility() {
+    const visible = requestType.value === 'availability_update';
+    requestAvailabilityFields.hidden = !visible;
+    if (!visible) {
+      requestAvailabilityFrom.value = '';
+      requestAvailabilityTo.value = '';
+    }
+  }
+
+  function clearRequestFormStatus() {
+    requestFormStatus.textContent = '';
+    requestFormStatus.classList.remove('is-error');
+  }
+
+  function resetRequestForm() {
+    requestType.value = '';
+    requestSubject.value = '';
+    requestMessage.value = '';
+    requestAvailabilityFrom.value = '';
+    requestAvailabilityTo.value = '';
+    requestSubmit.disabled = false;
+    requestSubmit.textContent = 'Invia richiesta';
+    setRequestAvailabilityVisibility();
+  }
+
+  function resetRequestsState() {
+    state.requestGeneration += 1;
+    state.requestItems = [];
+    state.requestSubmitInFlight = false;
+    requestsList.replaceChildren();
+    requestsLoading.hidden = true;
+    requestsEmpty.hidden = true;
+    requestsError.hidden = true;
+    requestsContent.hidden = true;
+    requestsErrorMessage.textContent = '';
+    resetRequestForm();
+    clearRequestFormStatus();
+  }
+
   function resetPropertyDetail() {
     state.propertyGeneration += 1;
     propertyDetailLoading.hidden = true;
@@ -345,6 +422,7 @@
     resetTimelineState();
     resetVisitFeedbackState();
     resetDocumentsState();
+    resetRequestsState();
   }
 
   function resetDashboardState() {
@@ -509,6 +587,32 @@
     return error.message;
   }
 
+  function requestsErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare le richieste. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare le richieste con i dati disponibili.';
+    }
+    return error.message;
+  }
+
+  function requestSubmitErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Invio non riuscito. Controlla la connessione e riprova.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Controlla i campi della richiesta e riprova.';
+    }
+    return error.message;
+  }
+
   function showDashboardState(name, message = '') {
     dashboardLoading.hidden = name !== 'loading';
     dashboardEmpty.hidden = name !== 'empty';
@@ -589,6 +693,16 @@
     }
   }
 
+  function showRequestsState(name, message = '') {
+    requestsLoading.hidden = name !== 'loading';
+    requestsEmpty.hidden = name !== 'empty';
+    requestsError.hidden = name !== 'error';
+    requestsContent.hidden = name !== 'content';
+    if (name === 'error') {
+      requestsErrorMessage.textContent = message;
+    }
+  }
+
   function textOrEmpty(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
@@ -617,6 +731,14 @@
 
   function documentId(item) {
     return positiveId(item && item.id);
+  }
+
+  function requestTypeLabel(type) {
+    return REQUEST_TYPE_LABELS[type] || 'Richiesta';
+  }
+
+  function requestStatusLabel(status) {
+    return REQUEST_STATUS_LABELS[status] || 'Stato non disponibile';
   }
 
   function roleLabel(role) {
@@ -1183,6 +1305,137 @@
     publicationDetailMeta.append(wrapper);
   }
 
+  function requestPublicView(item) {
+    return {
+      feedback_type: textOrEmpty(item && item.feedback_type),
+      subject: textOrEmpty(item && item.subject),
+      message: textOrEmpty(item && item.message),
+      status: textOrEmpty(item && item.status),
+      submitted_at: textOrEmpty(item && item.submitted_at),
+      availability_from: textOrEmpty(item && item.availability_from),
+      availability_to: textOrEmpty(item && item.availability_to),
+      handled_at: textOrEmpty(item && item.handled_at),
+      public_response: textOrEmpty(item && item.public_response),
+    };
+  }
+
+  function appendRequestMeta(container, label, value) {
+    if (!value) {
+      return;
+    }
+    const row = document.createElement('div');
+    row.className = 'request-meta-row';
+    row.append(createTextElement('dt', '', label));
+    row.append(createTextElement('dd', '', value));
+    container.append(row);
+  }
+
+  function createRequestCard(item) {
+    const publicItem = requestPublicView(item);
+    const card = document.createElement('article');
+    card.className = 'request-card';
+    card.setAttribute('role', 'listitem');
+
+    const top = document.createElement('div');
+    top.className = 'request-card-topline';
+    top.append(createTextElement('span', 'request-card-category', requestTypeLabel(publicItem.feedback_type)));
+    const status = createTextElement('span', 'request-status-badge', requestStatusLabel(publicItem.status));
+    if (publicItem.status) {
+      status.classList.add(`is-${publicItem.status}`);
+    }
+    top.append(status);
+    card.append(top);
+
+    if (publicItem.subject) {
+      card.append(createTextElement('h5', 'request-card-subject', publicItem.subject));
+    }
+    if (publicItem.message) {
+      card.append(createTextElement('p', 'request-card-message', publicItem.message));
+    }
+
+    const meta = document.createElement('dl');
+    meta.className = 'request-meta';
+    appendRequestMeta(meta, 'Inviata', formatPublishedAt(publicItem.submitted_at));
+    appendRequestMeta(meta, 'Disponibile da', formatPublishedAt(publicItem.availability_from));
+    appendRequestMeta(meta, 'Disponibile fino a', formatPublishedAt(publicItem.availability_to));
+    appendRequestMeta(meta, 'Gestita il', formatPublishedAt(publicItem.handled_at));
+    if (meta.children.length) {
+      card.append(meta);
+    }
+
+    if (publicItem.public_response) {
+      const response = document.createElement('div');
+      response.className = 'request-public-response';
+      response.append(createTextElement('h6', '', 'Risposta del consulente'));
+      response.append(createTextElement('p', '', publicItem.public_response));
+      card.append(response);
+    }
+    return card;
+  }
+
+  function renderRequests(items) {
+    requestsList.replaceChildren();
+    items.forEach((item) => requestsList.append(createRequestCard(item)));
+  }
+
+  function requestDateTimeValue(raw) {
+    const value = textOrEmpty(raw);
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return parsed.toISOString();
+  }
+
+  function requestValidationResult() {
+    const feedbackType = textOrEmpty(requestType.value);
+    if (!Object.prototype.hasOwnProperty.call(REQUEST_TYPE_LABELS, feedbackType)) {
+      return { message: 'Seleziona un tipo di richiesta valido.', focus: requestType };
+    }
+
+    const subject = textOrEmpty(requestSubject.value);
+    if (!subject) {
+      return { message: 'Inserisci l’oggetto della richiesta.', focus: requestSubject };
+    }
+    if (subject.length > REQUEST_SUBJECT_MAX) {
+      return { message: `L’oggetto non può superare ${REQUEST_SUBJECT_MAX} caratteri.`, focus: requestSubject };
+    }
+
+    const message = textOrEmpty(requestMessage.value);
+    if (!message) {
+      return { message: 'Inserisci il messaggio della richiesta.', focus: requestMessage };
+    }
+    if (message.length > REQUEST_MESSAGE_MAX) {
+      return { message: 'Il messaggio non può superare 5.000 caratteri.', focus: requestMessage };
+    }
+
+    const payload = { feedback_type: feedbackType, subject, message };
+    if (feedbackType === 'availability_update') {
+      const rawFrom = textOrEmpty(requestAvailabilityFrom.value);
+      const rawTo = textOrEmpty(requestAvailabilityTo.value);
+      if (!rawFrom && !rawTo) {
+        return { message: 'Indica almeno una data o un orario di disponibilità.', focus: requestAvailabilityFrom };
+      }
+      const from = rawFrom ? requestDateTimeValue(rawFrom) : null;
+      const to = rawTo ? requestDateTimeValue(rawTo) : null;
+      if (rawFrom && !from) {
+        return { message: 'La data iniziale non è valida.', focus: requestAvailabilityFrom };
+      }
+      if (rawTo && !to) {
+        return { message: 'La data finale non è valida.', focus: requestAvailabilityTo };
+      }
+      if (from && to && new Date(to).getTime() <= new Date(from).getTime()) {
+        return { message: 'La disponibilità finale deve essere successiva a quella iniziale.', focus: requestAvailabilityTo };
+      }
+      if (from) payload.availability_from = from;
+      if (to) payload.availability_to = to;
+    }
+    return { payload };
+  }
+
   function renderAcknowledgeState(id, required) {
     acknowledgeStatus.classList.remove('is-error');
     acknowledgeButton.dataset.publicationId = String(id);
@@ -1435,6 +1688,34 @@
       clearDocumentDetailContent();
       showDocumentDetailState('error', documentDetailErrorText(error));
       return false;
+    }
+  }
+
+  async function confirmSessionAfterRequestsNotFound(generation, propertyAtStart) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.requestGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.requestGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      return true;
     }
   }
 
@@ -2031,6 +2312,137 @@
     renderDocumentAcknowledgeState(updatedItem, id);
   }
 
+  async function loadRequests(propertyAtStart) {
+    if (!state.session || state.selectedPropertyId !== propertyAtStart) {
+      return;
+    }
+
+    const generation = ++state.requestGeneration;
+    state.requestItems = [];
+    requestsList.replaceChildren();
+    showRequestsState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/feedback`);
+    } catch (error) {
+      if (
+        generation !== state.requestGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return;
+      }
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterRequestsNotFound(generation, propertyAtStart);
+        if (
+          sessionValid
+          && generation === state.requestGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.session
+        ) {
+          showRequestsState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      showRequestsState('error', requestsErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.requestGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || !state.session
+    ) {
+      return;
+    }
+
+    const rawItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    state.requestItems = rawItems.filter((item) => item && typeof item === 'object');
+    if (state.requestItems.length === 0) {
+      showRequestsState('empty');
+      return;
+    }
+    renderRequests(state.requestItems);
+    showRequestsState('content');
+  }
+
+  async function submitRequest() {
+    if (
+      !state.session
+      || state.selectedPropertyId === null
+      || state.requestSubmitInFlight
+    ) {
+      return;
+    }
+
+    clearRequestFormStatus();
+    const validation = requestValidationResult();
+    if (!validation.payload) {
+      requestFormStatus.classList.add('is-error');
+      requestFormStatus.textContent = validation.message || 'Controlla i campi della richiesta.';
+      if (validation.focus) validation.focus.focus();
+      return;
+    }
+
+    const propertyAtStart = state.selectedPropertyId;
+    const generation = state.requestGeneration;
+    state.requestSubmitInFlight = true;
+    requestSubmit.disabled = true;
+    requestSubmit.textContent = 'Invio in corso…';
+    requestFormStatus.textContent = 'Invio della richiesta in corso…';
+
+    try {
+      await apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validation.payload),
+      });
+    } catch (error) {
+      if (
+        generation !== state.requestGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return;
+      }
+      state.requestSubmitInFlight = false;
+      requestSubmit.disabled = false;
+      requestSubmit.textContent = 'Invia richiesta';
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterRequestsNotFound(generation, propertyAtStart);
+        if (!sessionValid) {
+          return;
+        }
+      }
+      requestFormStatus.classList.add('is-error');
+      requestFormStatus.textContent = requestSubmitErrorText(error);
+      return;
+    }
+
+    if (
+      generation !== state.requestGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || !state.session
+    ) {
+      return;
+    }
+
+    state.requestSubmitInFlight = false;
+    resetRequestForm();
+    requestFormStatus.classList.remove('is-error');
+    requestFormStatus.textContent = 'Richiesta inviata correttamente.';
+    await loadRequests(propertyAtStart);
+  }
+
   async function selectProperty(id) {
     if (!state.session) {
       return;
@@ -2048,6 +2460,7 @@
     resetTimelineState();
     resetVisitFeedbackState();
     resetDocumentsState();
+    resetRequestsState();
     showPropertyState('loading');
 
     try {
@@ -2059,6 +2472,7 @@
       await loadTimeline(id);
       await loadDocuments(id);
       await loadVisitFeedback(id);
+      await loadRequests(id);
     } catch (error) {
       if (generation !== state.propertyGeneration || !state.session) {
         return;
@@ -2278,6 +2692,22 @@
   documentDownloadLink.addEventListener('click', () => {
     if (!documentDownloadLink.hidden) {
       documentDownloadStatus.textContent = 'Download richiesto tramite il portale autenticato. Se il file non è più disponibile, il portale ne impedirà l’accesso.';
+    }
+  });
+
+  requestType.addEventListener('change', () => {
+    setRequestAvailabilityVisibility();
+    clearRequestFormStatus();
+  });
+
+  requestForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await submitRequest();
+  });
+
+  requestsRetry.addEventListener('click', () => {
+    if (state.session && state.selectedPropertyId !== null) {
+      void loadRequests(state.selectedPropertyId);
     }
   });
 
