@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime, timedelta, timezone
+from typing import get_args
+
+import pytest
 from html.parser import HTMLParser
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from owner.schemas import FeedbackCreate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -141,7 +148,10 @@ const requiredIds = [
   'document-detail-empty','document-detail-error','document-detail-error-message',
   'document-detail-retry','document-detail-content','document-detail-title','document-detail-meta',
   'document-download-status','document-download-link','document-acknowledge-status',
-  'document-acknowledge-button'
+  'document-acknowledge-button','request-form','request-type','request-subject','request-message',
+  'request-availability-fields','request-availability-from','request-availability-to','request-submit',
+  'request-form-status','requests-loading','requests-empty','requests-error','requests-error-message',
+  'requests-retry','requests-content','requests-list'
 ];
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
 ids['login-form'].tagName = 'FORM';
@@ -197,6 +207,20 @@ ids['documents-retry'].tagName = 'BUTTON';
 ids['document-detail-retry'].tagName = 'BUTTON';
 ids['document-download-link'].tagName = 'A';
 ids['document-acknowledge-button'].tagName = 'BUTTON';
+ids['request-form'].tagName = 'FORM';
+ids['request-type'].tagName = 'SELECT';
+ids['request-subject'].tagName = 'INPUT';
+ids['request-message'].tagName = 'TEXTAREA';
+ids['request-availability-fields'].tagName = 'FIELDSET';
+ids['request-availability-from'].tagName = 'INPUT';
+ids['request-availability-to'].tagName = 'INPUT';
+ids['request-submit'].tagName = 'BUTTON';
+ids['requests-retry'].tagName = 'BUTTON';
+ids['request-availability-fields'].hidden = true;
+ids['requests-loading'].hidden = true;
+ids['requests-empty'].hidden = true;
+ids['requests-error'].hidden = true;
+ids['requests-content'].hidden = true;
 
 global.document = {{
   activeElement: null,
@@ -225,7 +249,7 @@ function fakeResponse(spec) {{
 }}
 
 global.fetch = async function(url, options = {{}}) {{
-  calls.push({{ url, method: options.method || 'GET' }});
+  calls.push({{ url, method: options.method || 'GET', body: options.body, headers: options.headers }});
   const queue = routeQueues.get(url);
   if (!queue || queue.length === 0) throw new Error(`No fake response for ${{url}}`);
   const spec = queue.shift();
@@ -436,12 +460,15 @@ def test_p6_3_dashboard_and_property_detail_data_apis_remain_present():
     assert "apiRequest('/dashboard')" in source
     assert "apiRequest(`/properties/${encodeURIComponent(String(id))}`)" in source
 
-    for forbidden in (
-        "/feedback",
-        "/notifications",
-        "/notification-preferences",
-    ):
-        assert forbidden not in source
+    dashboard_start = source.index("async function loadDashboard()")
+    dashboard_end = source.index("async function authenticateWithToken", dashboard_start)
+    dashboard_block = source[dashboard_start:dashboard_end]
+    property_start = source.index("async function selectProperty(id)")
+    property_end = source.index("function preferredPropertyId", property_start)
+    property_block = source[property_start:property_end]
+    for forbidden in ("/notifications", "/notification-preferences"):
+        assert forbidden not in dashboard_block
+        assert forbidden not in property_block
 
 
 def test_p6_3_does_not_render_generic_json_or_internal_fields():
@@ -555,9 +582,12 @@ def test_p6_3_single_property_runtime_loads_detail_and_whitelists_summary():
             "/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0": [
                 {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
             ],
+            "/api/owner/portal/properties/11/feedback": [
+                {"status": 200, "body": {"items": []}}
+            ],
         },
         """
-assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline|/api/owner/portal/properties/11/documents|/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0'), 'single: wrong request order');
+assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline|/api/owner/portal/properties/11/documents|/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0|/api/owner/portal/properties/11/feedback'), 'single: wrong request order');
 assert(ids['property-count'].textContent === '1 immobile', 'single: count mismatch');
 assert(ids['dashboard-content'].hidden === false, 'single: dashboard content hidden');
 assert(ids['property-list'].children.length === 1, 'single: card missing');
@@ -764,18 +794,17 @@ def test_p6_4_timeline_markup_has_accessible_loading_empty_error_list_detail_and
     assert "white-space: pre-wrap" in css
 
 
-def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_7_plus():
+def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_cross_feature_calls():
     source = APP_JS.read_text(encoding="utf-8")
     assert "`/properties/${encodeURIComponent(String(propertyAtStart))}/timeline`" in source
     assert "`/publications/${encodeURIComponent(String(id))}`" in source
     assert "`/publications/${encodeURIComponent(String(id))}/acknowledge`" in source
 
-    for forbidden in (
-        "/feedback",
-        "/notifications",
-        "/notification-preferences",
-    ):
-        assert forbidden not in source
+    start = source.index("async function loadTimeline")
+    end = source.index("async function loadVisitFeedback", start)
+    timeline_block = source[start:end]
+    for forbidden in ("/feedback", "/notifications", "/notification-preferences"):
+        assert forbidden not in timeline_block
 
 
 def test_p6_4_safe_dom_whitelist_has_no_generic_json_or_internal_fields():
@@ -1512,7 +1541,7 @@ def test_p6_5_list_404_with_valid_session_is_neutral_content_error():
 assert(ids['app-view'].hidden === false, 'feedback list 404: app should remain visible');
 assert(ids['visit-feedback-error'].hidden === false, 'feedback list 404: error state missing');
 assert(ids['visit-feedback-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'feedback list 404: wrong neutral message');
-assert(calls[calls.length - 1].url.endsWith('/session'), 'feedback list 404: session probe missing');
+assert(calls.filter((call) => call.url.endsWith('/session')).length >= 2, 'feedback list 404: session probe missing');
 """,
     )
 
@@ -1533,7 +1562,7 @@ def test_p6_5_session_loss_during_list_returns_to_login_and_stops():
 assert(ids['login-view'].hidden === false, 'feedback list auth loss: login not shown');
 assert(ids['app-view'].hidden === true, 'feedback list auth loss: app still visible');
 assert(ids['auth-message'].textContent === 'Sessione non disponibile o scaduta.', 'feedback list auth loss: neutral message missing');
-assert(calls[calls.length - 1].url.endsWith('/session'), 'feedback list auth loss: expected final session probe');
+assert(calls.filter((call) => call.url.endsWith('/session')).length >= 2, 'feedback list auth loss: expected session probe');
 """,
     )
 
@@ -1830,17 +1859,19 @@ def test_p6_6_markup_has_accessible_loading_empty_error_list_detail_download_and
     assert "@media (min-width: 760px)" in css
 
 
-def test_p6_6_uses_only_authorized_document_apis_and_no_p6_7_plus():
+def test_p6_6_uses_only_authorized_document_apis_and_no_cross_feature_calls():
     source = APP_JS.read_text(encoding="utf-8")
     assert "apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/documents`)" in source
     assert "apiRequest(`/documents/${encodeURIComponent(String(id))}`)" in source
     assert "`${API_BASE}/documents/${encodeURIComponent(String(id))}/download`" in source
     assert "apiRequest(`/documents/${encodeURIComponent(String(id))}/acknowledge`, { method: 'POST' })" in source
 
-    assert "/notification-preferences" not in source
-    assert "/notifications" not in source
-    assert "/notification-preferences" not in source
-    assert "}/feedback`" not in source
+    start = source.index("async function loadDocuments")
+    end = source.index("async function loadRequests", start)
+    document_block = source[start:end]
+    assert "/feedback" not in document_block
+    assert "/notifications" not in document_block
+    assert "/notification-preferences" not in document_block
 
 
 def test_p6_6_safe_dom_privacy_and_native_download_contract():
@@ -2359,3 +2390,607 @@ def test_p6_6_document_transport_scope_and_accessibility_remain_memory_only():
     # No P6.7+ features were introduced.
     assert "/notification-preferences" not in source
     assert "apiRequest('/notifications" not in source
+
+
+# OWNER 0.2 P6.7 - Richieste proprietario ----------------------------------
+
+REQUEST_TYPES = {
+    "contact_request",
+    "correction_request",
+    "general_message",
+    "strategy_feedback",
+    "price_review",
+    "availability_update",
+    "document_question",
+}
+REQUEST_STATUSES = {"new", "in_review", "handled", "closed"}
+
+
+def _request_item(
+    i: int,
+    *,
+    feedback_type: str = "general_message",
+    subject: str | None = None,
+    message: str | None = None,
+    status: str = "new",
+    public_response: str | None = None,
+) -> dict:
+    return {
+        "id": i,
+        "owner_account_id": 999,
+        "property_id": 999,
+        "feedback_type": feedback_type,
+        "subject": subject or f"Richiesta {i}",
+        "message": message or f"Messaggio {i}",
+        "status": status,
+        "submitted_at": "2026-08-13T10:00:00Z",
+        "availability_from": None,
+        "availability_to": None,
+        "handled_at": "2026-08-13T11:00:00Z" if status in {"handled", "closed"} else None,
+        "handled_by": "INTERNAL ADMIN",
+        "linked_activity_id": 777,
+        "public_response": public_response,
+        "created_at": "2026-08-13T10:00:00Z",
+        "updated_at": "2026-08-13T11:00:00Z",
+        "internal_notes": "PRIVATE",
+        "BUY": "PRIVATE BUY",
+        "MATCH": "PRIVATE MATCH",
+        "FLOW": "PRIVATE FLOW",
+    }
+
+
+def _p6_7_base_routes(property_id: int, requests: list[dict]) -> dict[str, list[dict]]:
+    return {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [
+            {"status": 200, "body": {"property_count": 1, "properties": [{"id": property_id, "title": "Casa"}]}}
+        ],
+        f"/api/owner/portal/properties/{property_id}": [
+            {"status": 200, "body": {"property": {"title": "Casa"}}}
+        ],
+        f"/api/owner/portal/properties/{property_id}/timeline": [{"status": 200, "body": {"items": []}}],
+        f"/api/owner/portal/properties/{property_id}/documents": [{"status": 200, "body": {"items": []}}],
+        f"/api/owner/portal/properties/{property_id}/visit-feedback?limit=50&offset=0": [
+            {"status": 200, "body": {"items": []}}
+        ],
+        f"/api/owner/portal/properties/{property_id}/feedback": [{"status": 200, "body": {"items": requests}}],
+    }
+
+
+def test_p6_7_precheck_real_backend_feedback_contract_and_routes():
+    assert set(get_args(FeedbackCreate.model_fields["feedback_type"].annotation)) == REQUEST_TYPES
+
+    valid = FeedbackCreate(feedback_type="general_message", subject="x" * 150, message="m" * 5000)
+    assert valid.subject == "x" * 150
+    assert valid.message == "m" * 5000
+    with pytest.raises(ValidationError):
+        FeedbackCreate(feedback_type="general_message", subject="x" * 151, message="ok")
+    with pytest.raises(ValidationError):
+        FeedbackCreate(feedback_type="general_message", subject="ok", message="m" * 5001)
+    with pytest.raises(ValidationError):
+        FeedbackCreate(feedback_type="availability_update", subject="Disponibilità", message="Test")
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        FeedbackCreate(
+            feedback_type="availability_update",
+            subject="Disponibilità",
+            message="Test",
+            availability_from=now,
+            availability_to=now - timedelta(minutes=1),
+        )
+
+    router = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
+    assert '@router.post("/properties/{p}/feedback", status_code=201, response_model=FeedbackPublic)' in router
+    assert '@router.get("/properties/{p}/feedback", response_model=FeedbackListResponse)' in router
+    repository = (ROOT / "owner" / "repository.py").read_text(encoding="utf-8")
+    create_start = repository.index("def create_feedback(a,p,d):")
+    create_end = repository.index("def dashboard():", create_start)
+    feedback_block = repository[create_start:create_end]
+    assert "d['feedback_type']" in feedback_block
+    assert "d['subject']" in feedback_block
+    assert "d['message']" in feedback_block
+    assert "d.get('availability_from')" in feedback_block
+    assert "d.get('availability_to')" in feedback_block
+    assert "ORDER BY submitted_at DESC" in feedback_block
+    assert "SELECT feedback_type,subject,message,status,submitted_at" in feedback_block
+    assert "SELECT * FROM owner_feedback WHERE owner_account_id" not in feedback_block
+
+    migration = (ROOT / "migrations" / "009_owner_01.sql").read_text(encoding="utf-8")
+    migration_p1 = (ROOT / "migrations" / "010_owner_02_p1.sql").read_text(encoding="utf-8")
+    for status in REQUEST_STATUSES:
+        assert f"'{status}'" in migration
+    assert "ADD COLUMN public_response TEXT" in migration_p1
+    assert "ADD COLUMN availability_from TIMESTAMPTZ" in migration_p1
+    assert "ADD COLUMN availability_to TIMESTAMPTZ" in migration_p1
+
+
+def test_p6_7_markup_has_real_enum_form_accessibility_and_history_states():
+    parser = _html_parser()
+    required = {
+        "requests-section",
+        "requests-title",
+        "request-form",
+        "request-type",
+        "request-subject",
+        "request-message",
+        "request-availability-fields",
+        "request-availability-from",
+        "request-availability-to",
+        "request-submit",
+        "request-form-status",
+        "requests-loading",
+        "requests-empty",
+        "requests-error",
+        "requests-error-message",
+        "requests-retry",
+        "requests-content",
+        "requests-list",
+    }
+    assert required <= parser.ids
+    assert {"request-type", "request-subject", "request-message", "request-availability-from", "request-availability-to"} <= parser.labels_for
+    assert "Storico richieste proprietario" in parser.aria_labels
+    html = INDEX.read_text(encoding="utf-8")
+    for value in REQUEST_TYPES:
+        assert f'value="{value}"' in html
+    assert 'maxlength="150"' in html
+    assert 'maxlength="5000"' in html
+    css = APP_CSS.read_text(encoding="utf-8")
+    assert ".requests-section" in css
+    assert ".requests-layout" in css
+    assert ".request-card" in css
+    assert "@media (min-width: 860px)" in css
+
+
+def test_p6_7_frontend_whitelist_is_explicit_and_has_no_generic_json_or_private_rendering():
+    source = APP_JS.read_text(encoding="utf-8")
+    start = source.index("function requestPublicView(item)")
+    end = source.index("function appendRequestMeta", start)
+    block = source[start:end]
+    expected = {
+        "feedback_type",
+        "subject",
+        "message",
+        "status",
+        "submitted_at",
+        "availability_from",
+        "availability_to",
+        "handled_at",
+        "public_response",
+    }
+    import re
+    actual = set(re.findall(r"^\s*([a-z_]+):", block, flags=re.MULTILINE))
+    assert actual == expected
+    assert "JSON.stringify(payload" not in source
+    assert "Object.entries(payload" not in source
+    assert "Object.keys(payload" not in source
+    for forbidden in (
+        ".innerHTML",
+        ".outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+    ):
+        assert forbidden not in source
+
+
+def test_p6_7_history_loads_only_after_property_and_preserves_backend_order():
+    items = [
+        _request_item(2, subject="Seconda dal backend", status="handled", public_response="Risposta due"),
+        _request_item(1, subject="Prima dal backend", status="new"),
+    ]
+    _run_node_scenario(
+        _p6_7_base_routes(90, items),
+        """
+const urls = calls.map((call) => call.url);
+const propertyIndex = urls.findIndex((url) => url.endsWith('/properties/90'));
+const requestsIndex = urls.findIndex((url) => url.endsWith('/properties/90/feedback'));
+assert(requestsIndex > propertyIndex, 'requests order: history must follow selected property');
+assert(ids['requests-content'].hidden === false, 'requests history: content missing');
+assert(ids['requests-list'].children.length === 2, 'requests history: item count mismatch');
+assert(allText(ids['requests-list'].children[0]).includes('Seconda dal backend'), 'requests history: backend order changed');
+assert(allText(ids['requests-list'].children[1]).includes('Prima dal backend'), 'requests history: backend order changed');
+assert(allText(ids['requests-list'].children[0]).includes('Gestita'), 'requests status: handled label missing');
+assert(allText(ids['requests-list'].children[0]).includes('Risposta due'), 'requests public response missing');
+""",
+    )
+
+
+def test_p6_7_zero_requests_shows_empty_state_and_one_request_renders():
+    _run_node_scenario(
+        _p6_7_base_routes(91, []),
+        """
+assert(ids['requests-empty'].hidden === false, 'requests empty: state missing');
+assert(ids['requests-content'].hidden === true, 'requests empty: content should be hidden');
+assert(ids['requests-list'].children.length === 0, 'requests empty: list should be empty');
+""",
+    )
+    _run_node_scenario(
+        _p6_7_base_routes(92, [_request_item(1, subject="Una richiesta")]),
+        """
+assert(ids['requests-content'].hidden === false, 'one request: content missing');
+assert(ids['requests-list'].children.length === 1, 'one request: card missing');
+assert(allText(ids['requests-list']).includes('Una richiesta'), 'one request: subject missing');
+""",
+    )
+
+
+def test_p6_7_history_privacy_and_xss_use_public_fields_as_text_only():
+    item = _request_item(
+        3,
+        subject="<script>alert(1)</script>",
+        message="<img src=x onerror=alert(2)>",
+        status="closed",
+        public_response="<script>alert(3)</script>",
+    )
+    _run_node_scenario(
+        _p6_7_base_routes(93, [item]),
+        """
+const text = allText(ids['requests-list']);
+assert(text.includes('<script>alert(1)</script>'), 'requests xss: subject should remain literal text');
+assert(text.includes('<img src=x onerror=alert(2)>'), 'requests xss: message should remain literal text');
+assert(text.includes('<script>alert(3)</script>'), 'requests xss: public response should remain literal text');
+for (const forbidden of ['PRIVATE', 'INTERNAL ADMIN', 'PRIVATE BUY', 'PRIVATE MATCH', 'PRIVATE FLOW', '999', '777']) {
+  assert(!text.includes(forbidden), `requests privacy: leaked ${forbidden}`);
+}
+""",
+    )
+
+
+def test_p6_7_client_validation_required_lengths_enum_and_availability_rules():
+    routes = _p6_7_base_routes(94, [])
+    _run_node_scenario(
+        routes,
+        """
+ids['request-type'].value = '';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('tipo di richiesta'), 'validation: enum required message missing');
+assert(document.activeElement === ids['request-type'], 'validation: enum focus missing');
+assert(calls.filter((call) => call.method === 'POST' && call.url.endsWith('/feedback')).length === 0, 'validation: invalid enum submitted');
+
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = '   ';
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('oggetto'), 'validation: blank subject missing');
+assert(document.activeElement === ids['request-subject'], 'validation: subject focus missing');
+
+ids['request-subject'].value = 'x'.repeat(151);
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('150'), 'validation: subject max missing');
+
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = '   ';
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('messaggio'), 'validation: blank message missing');
+
+ids['request-message'].value = 'm'.repeat(5001);
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('5.000'), 'validation: message max missing');
+
+ids['request-message'].value = 'Messaggio';
+ids['request-type'].value = 'availability_update';
+await ids['request-type'].trigger('change');
+assert(ids['request-availability-fields'].hidden === false, 'availability: fields should be visible');
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('almeno una'), 'availability: at least one bound missing');
+ids['request-availability-from'].value = '2026-08-14T12:00';
+ids['request-availability-to'].value = '2026-08-14T11:00';
+await ids['request-form'].trigger('submit');
+assert(ids['request-form-status'].textContent.includes('successiva'), 'availability: order validation missing');
+assert(calls.filter((call) => call.method === 'POST' && call.url.endsWith('/feedback')).length === 0, 'validation: invalid availability submitted');
+""",
+    )
+
+
+def test_p6_7_submit_uses_exact_backend_payload_double_submit_guard_and_refreshes_history():
+    routes = _p6_7_base_routes(95, [])
+    routes["/api/owner/portal/properties/95/feedback"] = [
+        {"status": 200, "body": {"items": []}},
+        {"status": 201, "delay_ms": 20, "body": _request_item(10)},
+        {"status": 200, "body": {"items": [_request_item(10, subject="Nuova richiesta")] }},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+ids['request-type'].value = 'availability_update';
+await ids['request-type'].trigger('change');
+ids['request-subject'].value = '  Nuova richiesta  ';
+ids['request-message'].value = '  Possiamo sentirci domani?  ';
+ids['request-availability-from'].value = '2026-08-14T09:00';
+ids['request-availability-to'].value = '2026-08-14T11:00';
+const first = ids['request-form'].trigger('submit');
+await new Promise((resolve) => setTimeout(resolve, 5));
+assert(ids['request-submit'].disabled === true, 'submit: loading button not disabled');
+assert(ids['request-submit'].textContent === 'Invio in corso…', 'submit: loading label missing');
+const second = ids['request-form'].trigger('submit');
+await Promise.all([first, second]);
+await flush();
+const posts = calls.filter((call) => call.method === 'POST' && call.url.endsWith('/properties/95/feedback'));
+assert(posts.length === 1, 'submit: double submit not blocked');
+const payload = JSON.parse(posts[0].body);
+assert(payload.feedback_type === 'availability_update', 'submit payload: feedback_type mismatch');
+assert(payload.subject === 'Nuova richiesta', 'submit payload: subject should be trimmed');
+assert(payload.message === 'Possiamo sentirci domani?', 'submit payload: message should be trimmed');
+assert(typeof payload.availability_from === 'string' && payload.availability_from.includes('2026-08-14'), 'submit payload: availability_from missing');
+assert(typeof payload.availability_to === 'string' && payload.availability_to.includes('2026-08-14'), 'submit payload: availability_to missing');
+assert(Object.keys(payload).sort().join(',') === 'availability_from,availability_to,feedback_type,message,subject', 'submit payload: unexpected fields');
+assert(ids['request-form-status'].textContent === 'Richiesta inviata correttamente.', 'submit: success confirmation missing');
+assert(ids['request-type'].value === '', 'submit: type not reset');
+assert(ids['request-subject'].value === '', 'submit: subject not reset');
+assert(ids['request-message'].value === '', 'submit: message not reset');
+assert(allText(ids['requests-list']).includes('Nuova richiesta'), 'submit: history not refreshed');
+const gets = calls.filter((call) => call.method === 'GET' && call.url.endsWith('/properties/95/feedback'));
+assert(gets.length === 2, 'submit: history should be fetched once initially and once after success');
+""",
+    )
+
+
+def test_p6_7_non_availability_request_omits_availability_fields():
+    routes = _p6_7_base_routes(96, [])
+    routes["/api/owner/portal/properties/96/feedback"] = [
+        {"status": 200, "body": {"items": []}},
+        {"status": 201, "body": _request_item(11)},
+        {"status": 200, "body": {"items": [_request_item(11)]}},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+ids['request-availability-from'].value = '2026-08-14T09:00';
+ids['request-availability-to'].value = '2026-08-14T11:00';
+await ids['request-type'].trigger('change');
+assert(ids['request-availability-fields'].hidden === true, 'non-availability: availability controls should be hidden');
+await ids['request-form'].trigger('submit');
+await flush();
+const post = calls.find((call) => call.method === 'POST' && call.url.endsWith('/properties/96/feedback'));
+const payload = JSON.parse(post.body);
+assert(!Object.prototype.hasOwnProperty.call(payload, 'availability_from'), 'non-availability: from leaked into payload');
+assert(!Object.prototype.hasOwnProperty.call(payload, 'availability_to'), 'non-availability: to leaked into payload');
+""",
+    )
+
+
+def test_p6_7_get_404_is_neutral_with_valid_session_and_auth_loss_logs_out():
+    valid = _p6_7_base_routes(97, [])
+    valid["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    valid["/api/owner/portal/properties/97/feedback"] = [{"status": 404, "body": {"detail": "PRIVATE"}}]
+    _run_node_scenario(
+        valid,
+        """
+assert(ids['requests-error'].hidden === false, 'GET 404: error state missing');
+assert(ids['requests-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'GET 404: neutral message mismatch');
+assert(ids['app-view'].hidden === false, 'GET 404: valid session should remain authenticated');
+assert(!ids['requests-error-message'].textContent.includes('PRIVATE'), 'GET 404: raw payload leaked');
+""",
+    )
+
+    expired = _p6_7_base_routes(98, [])
+    expired["/api/owner/portal/properties/98/feedback"] = [{"status": 403, "body": {"detail": "forbidden"}}]
+    _run_node_scenario(
+        expired,
+        """
+assert(ids['login-view'].hidden === false, 'GET auth loss: login should be visible');
+assert(ids['app-view'].hidden === true, 'GET auth loss: app should be hidden');
+assert(ids['auth-message'].textContent === 'Sessione non disponibile o scaduta.', 'GET auth loss: neutral session message missing');
+""",
+    )
+
+
+def test_p6_7_post_422_429_5xx_network_and_404_are_safe_and_retryable():
+    cases = [
+        (422, "Controlla i campi della richiesta e riprova."),
+        (429, "Troppe richieste. Riprova tra poco."),
+        (500, "Servizio temporaneamente non disponibile."),
+    ]
+    for offset, (status, expected) in enumerate(cases):
+        pid = 100 + offset
+        routes = _p6_7_base_routes(pid, [])
+        routes[f"/api/owner/portal/properties/{pid}/feedback"] = [
+            {"status": 200, "body": {"items": []}},
+            {"status": status, "body": {"secret": "RAW SECRET"}},
+        ]
+        _run_node_scenario(
+            routes,
+            f"""
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+await ids['request-form'].trigger('submit');
+await flush();
+assert(ids['request-form-status'].textContent === {json.dumps(expected)}, 'POST {status}: safe error mismatch');
+assert(!ids['request-form-status'].textContent.includes('RAW SECRET'), 'POST {status}: raw payload leaked');
+assert(ids['request-submit'].disabled === false, 'POST {status}: retry should be enabled');
+""",
+        )
+
+    pid = 103
+    network = _p6_7_base_routes(pid, [])
+    network[f"/api/owner/portal/properties/{pid}/feedback"] = [
+        {"status": 200, "body": {"items": []}},
+        {"network_error": True},
+    ]
+    _run_node_scenario(
+        network,
+        """
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+await ids['request-form'].trigger('submit');
+await flush();
+assert(ids['request-form-status'].textContent === 'Connessione non disponibile. Controlla la rete e riprova.', 'POST network: safe error mismatch');
+assert(ids['request-submit'].disabled === false, 'POST network: retry should be enabled');
+""",
+    )
+
+    pid = 104
+    not_found = _p6_7_base_routes(pid, [])
+    not_found["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    not_found[f"/api/owner/portal/properties/{pid}/feedback"] = [
+        {"status": 200, "body": {"items": []}},
+        {"status": 404, "body": {"detail": "PRIVATE"}},
+    ]
+    _run_node_scenario(
+        not_found,
+        """
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+await ids['request-form'].trigger('submit');
+await flush();
+assert(ids['request-form-status'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'POST 404: neutral message mismatch');
+assert(ids['app-view'].hidden === false, 'POST 404: valid session should remain logged in');
+""",
+    )
+
+
+def test_p6_7_session_loss_during_post_resets_app_state():
+    routes = _p6_7_base_routes(105, [])
+    routes["/api/owner/portal/properties/105/feedback"] = [
+        {"status": 200, "body": {"items": []}},
+        {"status": 401, "body": {"detail": "expired"}},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Oggetto';
+ids['request-message'].value = 'Messaggio';
+await ids['request-form'].trigger('submit');
+await flush();
+assert(ids['login-view'].hidden === false, 'POST session loss: login missing');
+assert(ids['app-view'].hidden === true, 'POST session loss: app still visible');
+assert(ids['requests-list'].children.length === 0, 'POST session loss: request state not cleared');
+""",
+    )
+
+
+def test_p6_7_property_switch_resets_form_and_ignores_stale_get_response():
+    routes = {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [{
+            "status": 200,
+            "body": {"property_count": 2, "properties": [{"id": 106, "title": "Casa Uno", "is_primary": True}, {"id": 107, "title": "Casa Due"}]},
+        }],
+        "/api/owner/portal/properties/106": [{"status": 200, "body": {"property": {"title": "Casa Uno"}}}],
+        "/api/owner/portal/properties/106/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/106/documents": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/106/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/106/feedback": [{"status": 200, "delay_ms": 60, "body": {"items": [_request_item(1, subject="VECCHIA RICHIESTA")]}}],
+        "/api/owner/portal/properties/107": [{"status": 200, "body": {"property": {"title": "Casa Due"}}}],
+        "/api/owner/portal/properties/107/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/107/documents": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/107/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/107/feedback": [{"status": 200, "body": {"items": [_request_item(2, subject="NUOVA RICHIESTA")]}}],
+    }
+    _run_node_scenario(
+        routes,
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Bozza vecchia';
+ids['request-message'].value = 'Da cancellare al cambio immobile';
+await ids['property-list'].children[1].children[0].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+const text = allText(ids['requests-list']);
+assert(text.includes('NUOVA RICHIESTA'), 'request stale GET: new property history missing');
+assert(!text.includes('VECCHIA RICHIESTA'), 'request stale GET: old property history leaked');
+assert(ids['request-type'].value === '', 'request property switch: type form not reset');
+assert(ids['request-subject'].value === '', 'request property switch: subject form not reset');
+assert(ids['request-message'].value === '', 'request property switch: message form not reset');
+""",
+    )
+
+
+def test_p6_7_post_response_after_property_switch_is_ignored_and_does_not_refresh_old_or_new_ui():
+    routes = {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [{
+            "status": 200,
+            "body": {"property_count": 2, "properties": [{"id": 108, "title": "Casa Uno", "is_primary": True}, {"id": 109, "title": "Casa Due"}]},
+        }],
+        "/api/owner/portal/properties/108": [{"status": 200, "body": {"property": {"title": "Casa Uno"}}}],
+        "/api/owner/portal/properties/108/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/108/documents": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/108/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/108/feedback": [
+            {"status": 200, "body": {"items": []}},
+            {"status": 201, "delay_ms": 60, "body": _request_item(10, subject="POST VECCHIA")},
+        ],
+        "/api/owner/portal/properties/109": [{"status": 200, "body": {"property": {"title": "Casa Due"}}}],
+        "/api/owner/portal/properties/109/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/109/documents": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/109/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/109/feedback": [{"status": 200, "body": {"items": [_request_item(11, subject="STORICO NUOVO")]}}],
+    }
+    _run_node_scenario(
+        routes,
+        """
+ids['request-type'].value = 'general_message';
+ids['request-subject'].value = 'Invio vecchio';
+ids['request-message'].value = 'Messaggio';
+const submitPromise = ids['request-form'].trigger('submit');
+await new Promise((resolve) => setTimeout(resolve, 10));
+await ids['property-list'].children[1].children[0].trigger('click');
+await submitPromise;
+await new Promise((resolve) => setTimeout(resolve, 70));
+await flush();
+const text = allText(ids['requests-list']);
+assert(text.includes('STORICO NUOVO'), 'request stale POST: new property history missing');
+assert(!text.includes('POST VECCHIA'), 'request stale POST: old response leaked');
+assert(ids['request-form-status'].textContent === '', 'request stale POST: old success/error contaminated new property form');
+assert(calls.filter((call) => call.method === 'GET' && call.url.endsWith('/properties/108/feedback')).length === 1, 'request stale POST: old history was refreshed after property switch');
+assert(calls.filter((call) => call.method === 'GET' && call.url.endsWith('/properties/109/feedback')).length === 1, 'request stale POST: new history should load exactly once');
+""",
+    )
+
+
+def test_p6_7_get_422_429_5xx_and_network_errors_are_neutral():
+    cases = [
+        (110, {"status": 422, "body": {"secret": "RAW"}}, "Impossibile caricare le richieste con i dati disponibili."),
+        (111, {"status": 429, "body": {"secret": "RAW"}}, "Troppe richieste. Riprova tra poco."),
+        (112, {"status": 500, "body": {"secret": "RAW"}}, "Servizio temporaneamente non disponibile."),
+        (113, {"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for pid, error_spec, expected in cases:
+        routes = _p6_7_base_routes(pid, [])
+        routes[f"/api/owner/portal/properties/{pid}/feedback"] = [error_spec]
+        _run_node_scenario(
+            routes,
+            f"""
+assert(ids['requests-error'].hidden === false, 'GET request error: error state missing');
+assert(ids['requests-error-message'].textContent === {json.dumps(expected)}, 'GET request error: safe message mismatch');
+assert(!ids['requests-error-message'].textContent.includes('RAW'), 'GET request error: raw payload leaked');
+""",
+        )
+
+
+def test_p6_7_scope_only_feedback_api_no_p6_8_and_accessibility_memory_only():
+    source = APP_JS.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    assert "apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/feedback`)" in source
+    assert "apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/feedback`, {" in source
+    assert "method: 'POST'" in source[source.index("async function submitRequest"):source.index("async function selectProperty")]
+    assert "requestGeneration" in source
+    assert "requestSubmitInFlight" in source
+    assert "/notifications" not in source
+    assert "/notification-preferences" not in source
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "document.cookie" not in source
+    assert 'aria-label="Storico richieste proprietario"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
