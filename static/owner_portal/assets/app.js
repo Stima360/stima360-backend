@@ -77,6 +77,26 @@
   const visitFeedbackDetailMeta = document.getElementById('visit-feedback-detail-meta');
   const visitFeedbackDetailSummary = document.getElementById('visit-feedback-detail-summary');
 
+  const documentsLoading = document.getElementById('documents-loading');
+  const documentsEmpty = document.getElementById('documents-empty');
+  const documentsError = document.getElementById('documents-error');
+  const documentsErrorMessage = document.getElementById('documents-error-message');
+  const documentsRetry = document.getElementById('documents-retry');
+  const documentsContent = document.getElementById('documents-content');
+  const documentsList = document.getElementById('documents-list');
+  const documentDetailLoading = document.getElementById('document-detail-loading');
+  const documentDetailEmpty = document.getElementById('document-detail-empty');
+  const documentDetailError = document.getElementById('document-detail-error');
+  const documentDetailErrorMessage = document.getElementById('document-detail-error-message');
+  const documentDetailRetry = document.getElementById('document-detail-retry');
+  const documentDetailContent = document.getElementById('document-detail-content');
+  const documentDetailTitle = document.getElementById('document-detail-title');
+  const documentDetailMeta = document.getElementById('document-detail-meta');
+  const documentDownloadStatus = document.getElementById('document-download-status');
+  const documentDownloadLink = document.getElementById('document-download-link');
+  const documentAcknowledgeStatus = document.getElementById('document-acknowledge-status');
+  const documentAcknowledgeButton = document.getElementById('document-acknowledge-button');
+
   const state = {
     session: null,
     busy: false,
@@ -98,6 +118,11 @@
     visitFeedbackLoadInFlight: false,
     selectedVisitFeedbackId: null,
     visitFeedbackDetailGeneration: 0,
+    documentItems: [],
+    documentGeneration: 0,
+    selectedDocumentId: null,
+    documentDetailGeneration: 0,
+    documentAcknowledgeInFlight: new Set(),
   };
 
   class PortalRequestError extends Error {
@@ -267,6 +292,47 @@
     resetVisitFeedbackDetail();
   }
 
+  function clearDocumentDetailContent() {
+    documentDetailTitle.textContent = 'Documento';
+    documentDetailMeta.replaceChildren();
+    documentDownloadStatus.textContent = '';
+    documentDownloadStatus.classList.remove('is-error');
+    documentDownloadLink.hidden = true;
+    documentDownloadLink.setAttribute('href', '#');
+    documentDownloadLink.removeAttribute('download');
+    documentAcknowledgeStatus.textContent = '';
+    documentAcknowledgeStatus.classList.remove('is-error');
+    documentAcknowledgeButton.hidden = true;
+    documentAcknowledgeButton.disabled = false;
+    documentAcknowledgeButton.textContent = 'Conferma presa visione';
+    documentAcknowledgeButton.dataset.documentId = '';
+  }
+
+  function resetDocumentDetail() {
+    state.documentDetailGeneration += 1;
+    state.selectedDocumentId = null;
+    documentDetailLoading.hidden = true;
+    documentDetailEmpty.hidden = false;
+    documentDetailError.hidden = true;
+    documentDetailContent.hidden = true;
+    documentDetailErrorMessage.textContent = '';
+    clearDocumentDetailContent();
+    setSelectedDocumentCardState();
+  }
+
+  function resetDocumentsState() {
+    state.documentGeneration += 1;
+    state.documentItems = [];
+    documentsList.replaceChildren();
+    documentsLoading.hidden = true;
+    documentsEmpty.hidden = true;
+    documentsError.hidden = true;
+    documentsContent.hidden = true;
+    documentsErrorMessage.textContent = '';
+    state.documentAcknowledgeInFlight.clear();
+    resetDocumentDetail();
+  }
+
   function resetPropertyDetail() {
     state.propertyGeneration += 1;
     propertyDetailLoading.hidden = true;
@@ -278,6 +344,7 @@
     propertySummary.replaceChildren();
     resetTimelineState();
     resetVisitFeedbackState();
+    resetDocumentsState();
   }
 
   function resetDashboardState() {
@@ -416,6 +483,32 @@
     return error.message;
   }
 
+  function documentsErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare i documenti. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare i documenti con i dati disponibili.';
+    }
+    return error.message;
+  }
+
+  function documentDetailErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare il documento. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Documento non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare il contenuto del documento.';
+    }
+    return error.message;
+  }
+
   function showDashboardState(name, message = '') {
     dashboardLoading.hidden = name !== 'loading';
     dashboardEmpty.hidden = name !== 'empty';
@@ -476,6 +569,26 @@
     }
   }
 
+  function showDocumentsState(name, message = '') {
+    documentsLoading.hidden = name !== 'loading';
+    documentsEmpty.hidden = name !== 'empty';
+    documentsError.hidden = name !== 'error';
+    documentsContent.hidden = name !== 'content';
+    if (name === 'error') {
+      documentsErrorMessage.textContent = message;
+    }
+  }
+
+  function showDocumentDetailState(name, message = '') {
+    documentDetailLoading.hidden = name !== 'loading';
+    documentDetailEmpty.hidden = name !== 'empty';
+    documentDetailError.hidden = name !== 'error';
+    documentDetailContent.hidden = name !== 'content';
+    if (name === 'error') {
+      documentDetailErrorMessage.textContent = message;
+    }
+  }
+
   function textOrEmpty(value) {
     return typeof value === 'string' ? value.trim() : '';
   }
@@ -500,6 +613,10 @@
 
   function visitFeedbackId(item) {
     return positiveId(item && item.visit_feedback_publication_id);
+  }
+
+  function documentId(item) {
+    return positiveId(item && item.id);
   }
 
   function roleLabel(role) {
@@ -548,6 +665,24 @@
     }).format(parsed);
   }
 
+  function formatFileSize(value) {
+    if (!Number.isInteger(value) || value < 0) {
+      return '';
+    }
+    if (value < 1024) {
+      return `${value} B`;
+    }
+    const units = ['KB', 'MB', 'GB'];
+    let size = value / 1024;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    const digits = size >= 10 ? 0 : 1;
+    return `${size.toFixed(digits)} ${units[unitIndex]}`;
+  }
+
   function createTextElement(tag, className, text) {
     const element = document.createElement(tag);
     if (className) {
@@ -588,6 +723,18 @@
         return;
       }
       const selected = Number(button.dataset.visitFeedbackId) === state.selectedVisitFeedbackId;
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.classList.toggle('is-selected', selected);
+    });
+  }
+
+  function setSelectedDocumentCardState() {
+    Array.from(documentsList.children).forEach((listItem) => {
+      const button = listItem.children[0];
+      if (!button) {
+        return;
+      }
+      const selected = Number(button.dataset.documentId) === state.selectedDocumentId;
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
       button.classList.toggle('is-selected', selected);
     });
@@ -841,6 +988,186 @@
     showVisitFeedbackDetailState('content');
   }
 
+  function createDocumentCard(item) {
+    const id = documentId(item);
+    const listItem = document.createElement('div');
+    listItem.className = 'document-list-item';
+    listItem.setAttribute('role', 'listitem');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'document-card';
+    button.dataset.documentId = String(id);
+    button.setAttribute('aria-pressed', 'false');
+    button.setAttribute('aria-controls', 'document-detail-section');
+
+    const title = textOrEmpty(item.public_title) || 'Documento';
+    button.append(createTextElement('span', 'document-card-title', title));
+
+    const meta = document.createElement('span');
+    meta.className = 'document-card-meta';
+    const type = textOrEmpty(item.public_document_type_label) || textOrEmpty(item.public_document_type);
+    if (type) {
+      meta.append(createTextElement('span', '', type));
+    }
+    if (Number.isInteger(item.version_number) && item.version_number > 0) {
+      meta.append(createTextElement('span', '', `Versione ${item.version_number}`));
+    }
+    const publishedAt = formatPublishedAt(item.published_at);
+    if (publishedAt) {
+      meta.append(createTextElement('span', '', publishedAt));
+    }
+    if (meta.children.length > 0) {
+      button.append(meta);
+    }
+
+    const filename = textOrEmpty(item.download_filename);
+    if (filename) {
+      button.append(createTextElement('span', 'document-card-file', filename));
+    }
+
+    if (textOrEmpty(item.acknowledged_at)) {
+      button.append(createTextElement('span', 'document-card-status', 'Presa visione confermata'));
+    } else if (item.acknowledgement_required === true) {
+      const required = createTextElement('span', 'document-card-status is-required', 'Presa visione richiesta');
+      button.append(required);
+    }
+
+    button.addEventListener('click', () => {
+      if (state.session && state.selectedPropertyId !== null && id !== null) {
+        void openDocument(id);
+      }
+    });
+
+    listItem.append(button);
+    return listItem;
+  }
+
+  function renderDocumentsList(items) {
+    documentsList.replaceChildren();
+    items.forEach((item) => {
+      documentsList.append(createDocumentCard(item));
+    });
+    setSelectedDocumentCardState();
+  }
+
+  function addDocumentMeta(label, value) {
+    const cleanValue = textOrEmpty(value);
+    if (!cleanValue) {
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'document-meta-row';
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const description = document.createElement('dd');
+    description.textContent = cleanValue;
+    wrapper.append(term, description);
+    documentDetailMeta.append(wrapper);
+  }
+
+  function updateDocumentItemAcknowledgement(id, acknowledgedAt) {
+    state.documentItems = state.documentItems.map((item) => {
+      if (documentId(item) !== id) {
+        return item;
+      }
+      return { ...item, acknowledged_at: acknowledgedAt };
+    });
+    renderDocumentsList(state.documentItems);
+  }
+
+  function renderDocumentAcknowledgeState(item, id) {
+    const required = item.acknowledgement_required === true;
+    const acknowledgedAt = textOrEmpty(item.acknowledged_at);
+    documentAcknowledgeStatus.classList.remove('is-error');
+    documentAcknowledgeButton.dataset.documentId = String(id);
+
+    if (!required) {
+      documentAcknowledgeButton.hidden = true;
+      documentAcknowledgeButton.disabled = false;
+      documentAcknowledgeButton.textContent = 'Conferma presa visione';
+      documentAcknowledgeStatus.textContent = 'Nessuna presa visione richiesta per questo documento.';
+      return;
+    }
+
+    documentAcknowledgeButton.hidden = false;
+    if (acknowledgedAt) {
+      documentAcknowledgeButton.disabled = true;
+      documentAcknowledgeButton.textContent = 'Presa visione confermata';
+      const formatted = formatPublishedAt(acknowledgedAt);
+      documentAcknowledgeStatus.textContent = formatted
+        ? `Presa visione confermata il ${formatted}.`
+        : 'Presa visione già confermata.';
+      return;
+    }
+
+    if (state.documentAcknowledgeInFlight.has(id)) {
+      documentAcknowledgeButton.disabled = true;
+      documentAcknowledgeButton.textContent = 'Conferma in corso…';
+      documentAcknowledgeStatus.textContent = 'Registrazione della presa visione in corso…';
+      return;
+    }
+
+    documentAcknowledgeButton.disabled = false;
+    documentAcknowledgeButton.textContent = 'Conferma presa visione';
+    documentAcknowledgeStatus.textContent = 'Aprire o scaricare il documento non equivale a confermare la presa visione.';
+  }
+
+  function renderDocumentDownload(item, id) {
+    const available = item.download_available === true;
+    const filename = textOrEmpty(item.download_filename);
+    documentDownloadStatus.classList.remove('is-error');
+    documentDownloadLink.hidden = !available;
+    documentDownloadLink.setAttribute('href', available
+      ? `${API_BASE}/documents/${encodeURIComponent(String(id))}/download`
+      : '#');
+    documentDownloadLink.setAttribute('target', '_blank');
+    documentDownloadLink.setAttribute('rel', 'noopener');
+    if (available && filename) {
+      documentDownloadLink.setAttribute('download', filename);
+    } else {
+      documentDownloadLink.removeAttribute('download');
+    }
+    documentDownloadStatus.textContent = available
+      ? 'Il file viene scaricato direttamente tramite il portale autenticato.'
+      : 'Download non disponibile per questo documento.';
+  }
+
+  function renderDocumentDetail(payload, id) {
+    const item = payload && payload.document && typeof payload.document === 'object'
+      ? payload.document
+      : {};
+    const title = textOrEmpty(item.public_title) || 'Documento';
+    const type = textOrEmpty(item.public_document_type_label) || textOrEmpty(item.public_document_type);
+    const version = Number.isInteger(item.version_number) && item.version_number > 0
+      ? String(item.version_number)
+      : '';
+    const publishedAt = formatPublishedAt(item.published_at);
+    const expiresAt = formatPublishedAt(item.expires_at);
+    const mimeType = textOrEmpty(item.mime_type);
+    const size = formatFileSize(item.size_bytes);
+    const filename = textOrEmpty(item.download_filename);
+
+    state.selectedDocumentId = id;
+    const acknowledgedAt = textOrEmpty(item.acknowledged_at);
+    if (acknowledgedAt) {
+      updateDocumentItemAcknowledgement(id, acknowledgedAt);
+    }
+    documentDetailTitle.textContent = title;
+    documentDetailMeta.replaceChildren();
+    addDocumentMeta('Tipo', type);
+    addDocumentMeta('Versione', version);
+    addDocumentMeta('Pubblicato', publishedAt);
+    addDocumentMeta('Scadenza', expiresAt);
+    addDocumentMeta('Formato', mimeType);
+    addDocumentMeta('Dimensione', size);
+    addDocumentMeta('File', filename);
+    renderDocumentDownload(item, id);
+    renderDocumentAcknowledgeState(item, id);
+    setSelectedDocumentCardState();
+    showDocumentDetailState('content');
+  }
+
   function addPublicationMeta(label, value) {
     const cleanValue = textOrEmpty(value);
     if (!cleanValue) {
@@ -1048,6 +1375,65 @@
       }
       clearVisitFeedbackDetailContent();
       showVisitFeedbackDetailState('error', visitFeedbackDetailErrorText(error));
+      return false;
+    }
+  }
+
+  async function confirmSessionAfterDocumentsNotFound(generation, propertyAtStart) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.documentGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.documentGeneration
+        || state.selectedPropertyId !== propertyAtStart
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      showDocumentsState('error', documentsErrorText(error));
+      return false;
+    }
+  }
+
+  async function confirmSessionAfterDocumentDetailNotFound(generation, propertyAtStart, id) {
+    try {
+      const session = await loadSession();
+      if (
+        generation !== state.documentDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedDocumentId !== id
+        || !state.session
+      ) {
+        return false;
+      }
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (
+        generation !== state.documentDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedDocumentId !== id
+      ) {
+        return false;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return false;
+      }
+      clearDocumentDetailContent();
+      showDocumentDetailState('error', documentDetailErrorText(error));
       return false;
     }
   }
@@ -1438,6 +1824,213 @@
     renderVisitFeedbackDetail(payload, id);
   }
 
+  async function loadDocuments(propertyAtStart) {
+    if (!state.session || state.selectedPropertyId !== propertyAtStart) {
+      return;
+    }
+
+    const generation = ++state.documentGeneration;
+    state.documentItems = [];
+    documentsList.replaceChildren();
+    resetDocumentDetail();
+    showDocumentsState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/documents`);
+    } catch (error) {
+      if (
+        generation !== state.documentGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || !state.session
+      ) {
+        return;
+      }
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterDocumentsNotFound(generation, propertyAtStart);
+        if (
+          sessionValid
+          && generation === state.documentGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.session
+        ) {
+          showDocumentsState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      showDocumentsState('error', documentsErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.documentGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || !state.session
+    ) {
+      return;
+    }
+
+    const rawItems = payload && Array.isArray(payload.items) ? payload.items : [];
+    state.documentItems = rawItems.filter((item) => documentId(item) !== null);
+    if (state.documentItems.length === 0) {
+      showDocumentsState('empty');
+      return;
+    }
+    renderDocumentsList(state.documentItems);
+    showDocumentsState('content');
+    showDocumentDetailState('empty');
+  }
+
+  async function openDocument(id) {
+    if (!state.session || state.selectedPropertyId === null) {
+      return;
+    }
+
+    const available = state.documentItems.some((item) => documentId(item) === id);
+    if (!available) {
+      return;
+    }
+
+    const propertyAtStart = state.selectedPropertyId;
+    state.selectedDocumentId = id;
+    setSelectedDocumentCardState();
+    const generation = ++state.documentDetailGeneration;
+    clearDocumentDetailContent();
+    showDocumentDetailState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/documents/${encodeURIComponent(String(id))}`);
+    } catch (error) {
+      if (
+        generation !== state.documentDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedDocumentId !== id
+        || !state.session
+      ) {
+        return;
+      }
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterDocumentDetailNotFound(
+          generation,
+          propertyAtStart,
+          id,
+        );
+        if (
+          sessionValid
+          && generation === state.documentDetailGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.selectedDocumentId === id
+          && state.session
+        ) {
+          clearDocumentDetailContent();
+          showDocumentDetailState('error', 'Documento non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      clearDocumentDetailContent();
+      showDocumentDetailState('error', documentDetailErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.documentDetailGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || state.selectedDocumentId !== id
+      || !state.session
+    ) {
+      return;
+    }
+
+    renderDocumentDetail(payload, id);
+  }
+
+  async function acknowledgeCurrentDocument() {
+    const id = state.selectedDocumentId;
+    if (
+      !state.session
+      || state.selectedPropertyId === null
+      || id === null
+      || state.documentAcknowledgeInFlight.has(id)
+    ) {
+      return;
+    }
+
+    const propertyAtStart = state.selectedPropertyId;
+    const generation = state.documentDetailGeneration;
+    state.documentAcknowledgeInFlight.add(id);
+    const selectedItem = state.documentItems.find((item) => documentId(item) === id) || {};
+    renderDocumentAcknowledgeState(selectedItem, id);
+
+    let receipt;
+    try {
+      receipt = await apiRequest(`/documents/${encodeURIComponent(String(id))}/acknowledge`, { method: 'POST' });
+    } catch (error) {
+      state.documentAcknowledgeInFlight.delete(id);
+      if (
+        generation !== state.documentDetailGeneration
+        || state.selectedPropertyId !== propertyAtStart
+        || state.selectedDocumentId !== id
+        || !state.session
+      ) {
+        return;
+      }
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmSessionAfterDocumentDetailNotFound(
+          generation,
+          propertyAtStart,
+          id,
+        );
+        if (
+          sessionValid
+          && generation === state.documentDetailGeneration
+          && state.selectedPropertyId === propertyAtStart
+          && state.selectedDocumentId === id
+          && state.session
+        ) {
+          clearDocumentDetailContent();
+          showDocumentDetailState('error', 'Documento non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      documentAcknowledgeStatus.classList.add('is-error');
+      documentAcknowledgeStatus.textContent = documentDetailErrorText(error);
+      documentAcknowledgeButton.disabled = false;
+      documentAcknowledgeButton.textContent = 'Riprova presa visione';
+      return;
+    }
+
+    state.documentAcknowledgeInFlight.delete(id);
+    if (
+      generation !== state.documentDetailGeneration
+      || state.selectedPropertyId !== propertyAtStart
+      || state.selectedDocumentId !== id
+      || !state.session
+    ) {
+      return;
+    }
+
+    const acknowledgedAt = textOrEmpty(receipt && receipt.acknowledged_at) || new Date().toISOString();
+    updateDocumentItemAcknowledgement(id, acknowledgedAt);
+    const updatedItem = state.documentItems.find((item) => documentId(item) === id) || {
+      acknowledgement_required: true,
+      acknowledged_at: acknowledgedAt,
+    };
+    renderDocumentAcknowledgeState(updatedItem, id);
+  }
+
   async function selectProperty(id) {
     if (!state.session) {
       return;
@@ -1454,6 +2047,7 @@
     propertySummary.replaceChildren();
     resetTimelineState();
     resetVisitFeedbackState();
+    resetDocumentsState();
     showPropertyState('loading');
 
     try {
@@ -1463,6 +2057,7 @@
       }
       renderPropertyDetail(payload);
       await loadTimeline(id);
+      await loadDocuments(id);
       await loadVisitFeedback(id);
     } catch (error) {
       if (generation !== state.propertyGeneration || !state.session) {
@@ -1661,6 +2256,28 @@
   visitFeedbackDetailRetry.addEventListener('click', () => {
     if (state.session && state.selectedVisitFeedbackId !== null) {
       void openVisitFeedback(state.selectedVisitFeedbackId);
+    }
+  });
+
+  documentsRetry.addEventListener('click', () => {
+    if (state.session && state.selectedPropertyId !== null) {
+      void loadDocuments(state.selectedPropertyId);
+    }
+  });
+
+  documentDetailRetry.addEventListener('click', () => {
+    if (state.session && state.selectedDocumentId !== null) {
+      void openDocument(state.selectedDocumentId);
+    }
+  });
+
+  documentAcknowledgeButton.addEventListener('click', () => {
+    void acknowledgeCurrentDocument();
+  });
+
+  documentDownloadLink.addEventListener('click', () => {
+    if (!documentDownloadLink.hidden) {
+      documentDownloadStatus.textContent = 'Download richiesto tramite il portale autenticato. Se il file non è più disponibile, il portale ne impedirà l’accesso.';
     }
   });
 

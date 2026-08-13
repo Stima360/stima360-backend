@@ -103,6 +103,7 @@ class FakeElement {{
   replaceChildren(...nodes) {{ this.children = [...nodes]; }}
   setAttribute(name, value) {{ this.attributes[name] = String(value); }}
   getAttribute(name) {{ return this.attributes[name]; }}
+  removeAttribute(name) {{ delete this.attributes[name]; }}
   addEventListener(type, listener) {{
     if (!this.listeners[type]) this.listeners[type] = [];
     this.listeners[type].push(listener);
@@ -134,7 +135,13 @@ const requiredIds = [
   'visit-feedback-load-more','visit-feedback-pagination-status','visit-feedback-detail-loading',
   'visit-feedback-detail-empty','visit-feedback-detail-error','visit-feedback-detail-error-message',
   'visit-feedback-detail-retry','visit-feedback-detail-content','visit-feedback-detail-title',
-  'visit-feedback-detail-meta','visit-feedback-detail-summary'
+  'visit-feedback-detail-meta','visit-feedback-detail-summary',
+  'documents-loading','documents-empty','documents-error','documents-error-message',
+  'documents-retry','documents-content','documents-list','document-detail-loading',
+  'document-detail-empty','document-detail-error','document-detail-error-message',
+  'document-detail-retry','document-detail-content','document-detail-title','document-detail-meta',
+  'document-download-status','document-download-link','document-acknowledge-status',
+  'document-acknowledge-button'
 ];
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
 ids['login-form'].tagName = 'FORM';
@@ -170,12 +177,26 @@ ids['visit-feedback-detail-loading'].hidden = true;
 ids['visit-feedback-detail-empty'].hidden = false;
 ids['visit-feedback-detail-error'].hidden = true;
 ids['visit-feedback-detail-content'].hidden = true;
+ids['documents-loading'].hidden = true;
+ids['documents-empty'].hidden = true;
+ids['documents-error'].hidden = true;
+ids['documents-content'].hidden = true;
+ids['document-detail-loading'].hidden = true;
+ids['document-detail-empty'].hidden = false;
+ids['document-detail-error'].hidden = true;
+ids['document-detail-content'].hidden = true;
+ids['document-download-link'].hidden = true;
+ids['document-acknowledge-button'].hidden = true;
 ids['timeline-retry'].tagName = 'BUTTON';
 ids['publication-detail-retry'].tagName = 'BUTTON';
 ids['acknowledge-button'].tagName = 'BUTTON';
 ids['visit-feedback-retry'].tagName = 'BUTTON';
 ids['visit-feedback-load-more'].tagName = 'BUTTON';
 ids['visit-feedback-detail-retry'].tagName = 'BUTTON';
+ids['documents-retry'].tagName = 'BUTTON';
+ids['document-detail-retry'].tagName = 'BUTTON';
+ids['document-download-link'].tagName = 'A';
+ids['document-acknowledge-button'].tagName = 'BUTTON';
 
 global.document = {{
   activeElement: null,
@@ -416,7 +437,6 @@ def test_p6_3_dashboard_and_property_detail_data_apis_remain_present():
     assert "apiRequest(`/properties/${encodeURIComponent(String(id))}`)" in source
 
     for forbidden in (
-        "/documents",
         "/feedback",
         "/notifications",
         "/notification-preferences",
@@ -529,12 +549,15 @@ def test_p6_3_single_property_runtime_loads_detail_and_whitelists_summary():
             "/api/owner/portal/properties/11/timeline": [
                 {"status": 200, "body": {"items": []}}
             ],
+            "/api/owner/portal/properties/11/documents": [
+                {"status": 200, "body": {"items": []}}
+            ],
             "/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0": [
                 {"status": 200, "body": {"items": [], "limit": 50, "offset": 0}}
             ],
         },
         """
-assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline|/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0'), 'single: wrong request order');
+assert(calls.map((call) => call.url).join('|').endsWith('/session|/api/owner/portal/dashboard|/api/owner/portal/properties/11|/api/owner/portal/properties/11/timeline|/api/owner/portal/properties/11/documents|/api/owner/portal/properties/11/visit-feedback?limit=50&offset=0'), 'single: wrong request order');
 assert(ids['property-count'].textContent === '1 immobile', 'single: count mismatch');
 assert(ids['dashboard-content'].hidden === false, 'single: dashboard content hidden');
 assert(ids['property-list'].children.length === 1, 'single: card missing');
@@ -741,14 +764,13 @@ def test_p6_4_timeline_markup_has_accessible_loading_empty_error_list_detail_and
     assert "white-space: pre-wrap" in css
 
 
-def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_6_plus():
+def test_p6_4_uses_only_authorized_timeline_publication_apis_and_no_p6_7_plus():
     source = APP_JS.read_text(encoding="utf-8")
     assert "`/properties/${encodeURIComponent(String(propertyAtStart))}/timeline`" in source
     assert "`/publications/${encodeURIComponent(String(id))}`" in source
     assert "`/publications/${encodeURIComponent(String(id))}/acknowledge`" in source
 
     for forbidden in (
-        "/documents",
         "/feedback",
         "/notifications",
         "/notification-preferences",
@@ -1214,14 +1236,13 @@ def test_p6_5_markup_has_accessible_loading_empty_error_pagination_list_and_deta
     assert "white-space: pre-wrap" in css
 
 
-def test_p6_5_uses_only_authorized_visit_feedback_apis_and_no_p6_6_plus():
+def test_p6_5_uses_only_authorized_visit_feedback_apis_and_no_p6_7_plus():
     source = APP_JS.read_text(encoding="utf-8")
     assert "`/properties/${encodeURIComponent(String(propertyAtStart))}/visit-feedback?limit=${limit}&offset=${offset}`" in source
     assert "`/visit-feedback/${encodeURIComponent(String(id))}`" in source
     assert "const limit = 50;" in source
 
     for forbidden in (
-        "/documents",
         "/properties/${propertyAtStart}/feedback",
         "/notifications",
         "/notification-preferences",
@@ -1677,9 +1698,664 @@ assert(!calls.some((call) => call.url.includes('/properties/49/visit-feedback?li
 def test_p6_5_feedback_transport_is_read_only():
     source = APP_JS.read_text(encoding="utf-8")
     start = source.index("async function loadVisitFeedback")
-    end = source.index("async function selectProperty", start)
+    end = source.index("async function loadDocuments", start)
     feedback_block = source[start:end]
     assert "method: 'POST'" not in feedback_block
     assert "method: 'PUT'" not in feedback_block
     assert "method: 'PATCH'" not in feedback_block
     assert "method: 'DELETE'" not in feedback_block
+
+
+def _document_item(
+    i: int,
+    *,
+    title: str | None = None,
+    acknowledged_at: str | None = None,
+    acknowledgement_required: bool = True,
+    download_available: bool = True,
+) -> dict:
+    return {
+        "id": i,
+        "public_title": title or f"Documento {i}",
+        "public_document_type": "ape",
+        "public_document_type_label": "APE",
+        "version_number": 1,
+        "published_at": "2026-08-12T10:00:00Z",
+        "expires_at": "2027-08-12T10:00:00Z",
+        "acknowledgement_required": acknowledgement_required,
+        "first_viewed_at": None,
+        "last_viewed_at": None,
+        "view_count": 0,
+        "acknowledged_at": acknowledged_at,
+        "mime_type": "application/pdf",
+        "size_bytes": 1536,
+        "download_filename": f"documento-{i}.pdf",
+        "download_available": download_available,
+    }
+
+
+def _p6_6_base_routes(property_id: int, documents: list[dict]) -> dict[str, list[dict]]:
+    return {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [
+            {"status": 200, "body": {"property_count": 1, "properties": [{"id": property_id, "title": "Casa"}]}}
+        ],
+        f"/api/owner/portal/properties/{property_id}": [
+            {"status": 200, "body": {"property": {"title": "Casa"}}}
+        ],
+        f"/api/owner/portal/properties/{property_id}/timeline": [
+            {"status": 200, "body": {"items": []}}
+        ],
+        f"/api/owner/portal/properties/{property_id}/documents": [
+            {"status": 200, "body": {"items": documents}}
+        ],
+        f"/api/owner/portal/properties/{property_id}/visit-feedback?limit=50&offset=0": [
+            {"status": 200, "body": {"items": []}}
+        ],
+    }
+
+
+def test_p6_6_precheck_backend_public_document_dto_fields_are_exactly_known():
+    repository_source = (ROOT / "owner" / "repository.py").read_text(encoding="utf-8")
+    start = repository_source.index("def _public_shared_document(row):")
+    end = repository_source.index("\ndef _authorized_shared_document_source", start)
+    block = repository_source[start:end]
+
+    expected = {
+        "id",
+        "public_title",
+        "public_document_type",
+        "public_document_type_label",
+        "version_number",
+        "published_at",
+        "expires_at",
+        "acknowledgement_required",
+        "first_viewed_at",
+        "last_viewed_at",
+        "view_count",
+        "acknowledged_at",
+        "mime_type",
+        "size_bytes",
+        "download_filename",
+        "download_available",
+    }
+    import re
+
+    actual = set(re.findall(r'^\s*"([a-z0-9_]+)"\s*:', block, flags=re.MULTILINE))
+    assert actual == expected
+
+    router_source = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
+    assert '@router.get("/properties/{p}/documents")' in router_source
+    assert '@router.get("/documents/{i}")' in router_source
+    assert '@router.get("/documents/{i}/download")' in router_source
+    assert '@router.post("/documents/{i}/acknowledge")' in router_source
+
+
+def test_p6_6_markup_has_accessible_loading_empty_error_list_detail_download_and_ack_states():
+    parser = _html_parser()
+    required = {
+        "documents-section",
+        "documents-title",
+        "documents-loading",
+        "documents-empty",
+        "documents-error",
+        "documents-error-message",
+        "documents-retry",
+        "documents-content",
+        "documents-list",
+        "document-detail-section",
+        "document-detail-loading",
+        "document-detail-empty",
+        "document-detail-error",
+        "document-detail-error-message",
+        "document-detail-retry",
+        "document-detail-content",
+        "document-detail-title",
+        "document-detail-meta",
+        "document-download-status",
+        "document-download-link",
+        "document-acknowledge-status",
+        "document-acknowledge-button",
+    }
+    assert required <= parser.ids
+    assert "Documenti condivisi disponibili" in parser.aria_labels
+    assert "Informazioni documento" in parser.aria_labels
+    assert "polite" in parser.live_regions
+    assert "alert" in parser.roles
+
+    css = APP_CSS.read_text(encoding="utf-8")
+    assert ".documents-section" in css
+    assert ".documents-layout" in css
+    assert ".document-card" in css
+    assert "@media (min-width: 760px)" in css
+
+
+def test_p6_6_uses_only_authorized_document_apis_and_no_p6_7_plus():
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "apiRequest(`/properties/${encodeURIComponent(String(propertyAtStart))}/documents`)" in source
+    assert "apiRequest(`/documents/${encodeURIComponent(String(id))}`)" in source
+    assert "`${API_BASE}/documents/${encodeURIComponent(String(id))}/download`" in source
+    assert "apiRequest(`/documents/${encodeURIComponent(String(id))}/acknowledge`, { method: 'POST' })" in source
+
+    assert "/notification-preferences" not in source
+    assert "/notifications" not in source
+    assert "/notification-preferences" not in source
+    assert "}/feedback`" not in source
+
+
+def test_p6_6_safe_dom_privacy_and_native_download_contract():
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "JSON.stringify(payload" not in source
+    assert "Object.entries(payload" not in source
+    assert "Object.keys(payload" not in source
+    assert "documentDetailTitle.textContent" in source
+    assert "addDocumentMeta('Tipo'" in source
+    assert "addDocumentMeta('File'" in source
+
+    for forbidden in (
+        ".innerHTML",
+        ".outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "FileReader",
+        ".blob(",
+        ".arrayBuffer(",
+        "base64",
+    ):
+        assert forbidden not in source
+
+    for forbidden in (
+        "storage_key",
+        "storage_locator",
+        "bucket",
+        "r2_endpoint",
+        "owner_account_id",
+        "contact_id",
+        "lead_id",
+        "visitor_id",
+        "flow_payload",
+        "match_id",
+        "buy_id",
+    ):
+        assert forbidden not in source.lower()
+
+    # The binary is not fetched into JS memory: the UI builds a same-origin native link.
+    assert "documentDownloadLink.setAttribute('href'" in source
+    assert "documentDownloadLink.setAttribute('target', '_blank')" in source
+    assert "documentDownloadLink.setAttribute('rel', 'noopener')" in source
+    assert "apiRequest(`/documents/${encodeURIComponent(String(id))}/download`)" not in source
+
+
+def test_p6_6_documents_are_requested_only_after_authenticated_property_selection():
+    routes = _p6_6_base_routes(61, [])
+    _run_node_scenario(
+        routes,
+        """
+const urls = calls.map((call) => call.url);
+const sessionIndex = urls.findIndex((url) => url.endsWith('/session'));
+const dashboardIndex = urls.findIndex((url) => url.endsWith('/dashboard'));
+const propertyIndex = urls.findIndex((url) => url.endsWith('/properties/61'));
+const documentsIndex = urls.findIndex((url) => url.endsWith('/properties/61/documents'));
+assert(sessionIndex === 0, 'documents order: session must be first');
+assert(dashboardIndex > sessionIndex, 'documents order: dashboard must follow session');
+assert(propertyIndex > dashboardIndex, 'documents order: property must follow dashboard');
+assert(documentsIndex > propertyIndex, 'documents order: list must follow selected property');
+assert(ids['documents-empty'].hidden === false, 'documents order: empty state should be visible');
+""",
+    )
+
+
+def test_p6_6_zero_documents_runtime_shows_empty_state():
+    _run_node_scenario(
+        _p6_6_base_routes(62, []),
+        """
+assert(ids['documents-empty'].hidden === false, 'zero documents: empty state missing');
+assert(ids['documents-content'].hidden === true, 'zero documents: content should stay hidden');
+assert(ids['documents-list'].children.length === 0, 'zero documents: list should be empty');
+assert(!calls.some((call) => call.url.includes('/documents/') && !call.url.endsWith('/properties/62/documents')), 'zero documents: detail must not auto-open');
+""",
+    )
+
+
+def test_p6_6_one_and_multiple_documents_preserve_backend_order_without_auto_open():
+    items = [
+        _document_item(72, title="Secondo dal backend"),
+        _document_item(71, title="Primo dal backend", acknowledgement_required=False),
+    ]
+    _run_node_scenario(
+        _p6_6_base_routes(63, items),
+        """
+assert(ids['documents-content'].hidden === false, 'documents list: content missing');
+assert(ids['documents-list'].children.length === 2, 'documents list: item count mismatch');
+assert(allText(ids['documents-list'].children[0]).includes('Secondo dal backend'), 'documents list: backend order changed');
+assert(allText(ids['documents-list'].children[1]).includes('Primo dal backend'), 'documents list: backend order changed');
+assert(ids['document-detail-empty'].hidden === false, 'documents list: detail must await selection');
+assert(!calls.some((call) => call.url.endsWith('/documents/72')), 'documents list: detail auto-loaded');
+""",
+    )
+
+
+def test_p6_6_detail_uses_exact_public_whitelist_renders_xss_as_text_and_builds_native_download():
+    item = _document_item(73, title="<script>alert(1)</script>.pdf")
+    routes = _p6_6_base_routes(64, [item])
+    routes["/api/owner/portal/documents/73"] = [
+        {
+            "status": 200,
+            "body": {
+                "document": {
+                    **item,
+                    "public_title": "<img src=x onerror=alert(2)>",
+                    "download_filename": "<script>alert(3)</script>.pdf",
+                    "owner_account_id": 999,
+                    "property_id": 64,
+                    "storage_key": "PRIVATE-LOCATOR",
+                    "bucket": "PRIVATE-BUCKET",
+                    "endpoint": "PRIVATE-ENDPOINT",
+                    "sha256": "PRIVATE-HASH",
+                    "metadata": {"internal": True},
+                },
+                "read": {"view_count": 1, "owner_account_id": 999},
+            },
+        }
+    ]
+    _run_node_scenario(
+        routes,
+        """
+const card = ids['documents-list'].children[0].children[0];
+assert(allText(card).includes('<script>alert(1)</script>.pdf'), 'document xss: list title should remain literal text');
+await card.trigger('click');
+await flush();
+assert(ids['document-detail-content'].hidden === false, 'document detail: content missing');
+assert(ids['document-detail-title'].textContent === '<img src=x onerror=alert(2)>', 'document xss: title not literal');
+const meta = allText(ids['document-detail-meta']);
+assert(meta.includes('<script>alert(3)</script>.pdf'), 'document xss: filename not literal');
+assert(meta.includes('application/pdf'), 'document detail: MIME missing');
+assert(meta.includes('1.5 KB'), 'document detail: size missing');
+assert(!meta.includes('PRIVATE-LOCATOR'), 'document privacy: internal locator leaked');
+assert(!meta.includes('PRIVATE-BUCKET'), 'document privacy: private bucket leaked');
+assert(!meta.includes('PRIVATE-ENDPOINT'), 'document privacy: private endpoint leaked');
+assert(!meta.includes('PRIVATE-HASH'), 'document privacy: private hash leaked');
+assert(ids['document-download-link'].getAttribute('href') === '/api/owner/portal/documents/73/download', 'document download: wrong endpoint');
+assert(ids['document-download-link'].getAttribute('download') === '<script>alert(3)</script>.pdf', 'document download: public filename not used');
+assert(ids['document-download-link'].getAttribute('target') === '_blank', 'document download: native isolated target missing');
+assert(ids['document-download-link'].getAttribute('rel') === 'noopener', 'document download: noopener missing');
+assert(!calls.some((call) => call.url.endsWith('/documents/73/download')), 'document download: binary must not be buffered by JS');
+assert(!calls.some((call) => call.url.endsWith('/documents/73/acknowledge')), 'document detail view must not acknowledge');
+""",
+    )
+
+
+def test_p6_6_download_unavailable_hides_native_link_and_never_constructs_external_url():
+    item = _document_item(74, download_available=False)
+    routes = _p6_6_base_routes(65, [item])
+    routes["/api/owner/portal/documents/74"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['document-download-link'].hidden === true, 'document unavailable: download link should be hidden');
+assert(ids['document-download-link'].getAttribute('href') === '#', 'document unavailable: unsafe href should not exist');
+assert(ids['document-download-status'].textContent === 'Download non disponibile per questo documento.', 'document unavailable: neutral status missing');
+""",
+    )
+
+
+def test_p6_6_persistent_acknowledged_state_from_dto_disables_action_without_post():
+    acknowledged = "2026-08-12T15:00:00Z"
+    item = _document_item(75, acknowledged_at=acknowledged)
+    routes = _p6_6_base_routes(66, [item])
+    routes["/api/owner/portal/documents/75"] = [
+        {"status": 200, "body": {"document": item, "read": {"acknowledged_at": acknowledged}}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+assert(allText(ids['documents-list']).includes('Presa visione confermata'), 'persistent ack: list state missing');
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['document-acknowledge-button'].hidden === false, 'persistent ack: required action should remain visible as state');
+assert(ids['document-acknowledge-button'].disabled === true, 'persistent ack: button should be disabled');
+assert(ids['document-acknowledge-button'].textContent === 'Presa visione confermata', 'persistent ack: success label missing');
+assert(ids['document-acknowledge-status'].textContent.includes('Presa visione confermata'), 'persistent ack: status missing');
+assert(!calls.some((call) => call.url.endsWith('/documents/75/acknowledge')), 'persistent ack: unexpected POST');
+""",
+    )
+
+
+def test_p6_6_acknowledge_is_explicit_double_click_safe_updates_only_document_ui():
+    item = _document_item(76)
+    routes = _p6_6_base_routes(67, [item])
+    routes["/api/owner/portal/documents/76"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    routes["/api/owner/portal/documents/76/acknowledge"] = [
+        {"status": 200, "delay_ms": 20, "body": {"acknowledged_at": "2026-08-12T16:00:00Z"}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['document-acknowledge-status'].textContent.includes('non equivale'), 'document ack: view/ack distinction missing');
+assert(calls.filter((call) => call.url.endsWith('/documents/76/acknowledge')).length === 0, 'document ack: detail auto-acknowledged');
+const beforeDashboardCalls = calls.filter((call) => call.url.endsWith('/dashboard')).length;
+await Promise.all([ids['document-acknowledge-button'].trigger('click'), ids['document-acknowledge-button'].trigger('click')]);
+await new Promise((resolve) => setTimeout(resolve, 30));
+await flush();
+const ackCalls = calls.filter((call) => call.url.endsWith('/documents/76/acknowledge'));
+assert(ackCalls.length === 1, 'document ack: double submit was not blocked');
+assert(ackCalls[0].method === 'POST', 'document ack: wrong method');
+assert(ids['document-acknowledge-button'].disabled === true, 'document ack: button should be disabled after success');
+assert(ids['document-acknowledge-button'].textContent === 'Presa visione confermata', 'document ack: success label missing');
+assert(allText(ids['documents-list']).includes('Presa visione confermata'), 'document ack: list state not updated');
+assert(calls.filter((call) => call.url.endsWith('/dashboard')).length === beforeDashboardCalls, 'document ack: dashboard was unnecessarily reloaded');
+""",
+    )
+
+
+def test_p6_6_view_and_native_download_do_not_acknowledge():
+    item = _document_item(77)
+    routes = _p6_6_base_routes(68, [item])
+    routes["/api/owner/portal/documents/77"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+await ids['document-download-link'].trigger('click');
+await flush();
+assert(ids['document-download-status'].textContent.includes('Download richiesto tramite il portale autenticato'), 'document download: status missing');
+assert(calls.filter((call) => call.url.endsWith('/documents/77')).length === 1, 'document view: detail GET missing');
+assert(calls.filter((call) => call.url.endsWith('/documents/77/acknowledge')).length === 0, 'document view/download must not acknowledge');
+assert(calls.filter((call) => call.url.endsWith('/documents/77/download')).length === 0, 'document download should remain browser-native, not JS fetch');
+""",
+    )
+
+
+def test_p6_6_property_switch_resets_documents_and_ignores_stale_list_response():
+    routes = {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [
+            {
+                "status": 200,
+                "body": {
+                    "property_count": 2,
+                    "properties": [
+                        {"id": 69, "title": "Casa Uno", "is_primary": True},
+                        {"id": 70, "title": "Casa Due"},
+                    ],
+                },
+            }
+        ],
+        "/api/owner/portal/properties/69": [{"status": 200, "body": {"property": {"title": "Casa Uno"}}}],
+        "/api/owner/portal/properties/69/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/69/documents": [
+            {"status": 200, "delay_ms": 60, "body": {"items": [_document_item(901, title="VECCHIO DOCUMENTO")]}}
+        ],
+        "/api/owner/portal/properties/70": [{"status": 200, "body": {"property": {"title": "Casa Due"}}}],
+        "/api/owner/portal/properties/70/timeline": [{"status": 200, "body": {"items": []}}],
+        "/api/owner/portal/properties/70/documents": [
+            {"status": 200, "body": {"items": [_document_item(902, title="NUOVO DOCUMENTO")]}}
+        ],
+        "/api/owner/portal/properties/70/visit-feedback?limit=50&offset=0": [{"status": 200, "body": {"items": []}}],
+    }
+    _run_node_scenario(
+        routes,
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+await ids['property-list'].children[1].children[0].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+const text = allText(ids['documents-list']);
+assert(text.includes('NUOVO DOCUMENTO'), 'document stale: new property document missing');
+assert(!text.includes('VECCHIO DOCUMENTO'), 'document stale: old property response leaked');
+assert(ids['documents-list'].children.length === 1, 'document stale: list was not reset');
+assert(ids['document-detail-content'].hidden === true, 'document stale: old detail survived property switch');
+assert(ids['document-detail-empty'].hidden === false, 'document stale: detail empty state missing');
+""",
+    )
+
+
+def test_p6_6_documents_list_404_with_valid_session_is_neutral_and_session_loss_logs_out():
+    valid_routes = _p6_6_base_routes(71, [])
+    valid_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    valid_routes["/api/owner/portal/properties/71/documents"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        valid_routes,
+        """
+assert(ids['app-view'].hidden === false, 'documents 404: app should remain');
+assert(ids['documents-error'].hidden === false, 'documents 404: error state missing');
+assert(ids['documents-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'documents 404: neutral message mismatch');
+const listIndex = calls.findIndex((call) => call.url.endsWith('/properties/71/documents'));
+assert(calls.slice(listIndex + 1).some((call) => call.url.endsWith('/session')), 'documents 404: session probe missing');
+""",
+    )
+
+    lost_routes = _p6_6_base_routes(72, [])
+    lost_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}},
+    ]
+    lost_routes["/api/owner/portal/properties/72/documents"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        lost_routes,
+        """
+assert(ids['login-view'].hidden === false, 'documents auth loss: login not shown');
+assert(ids['app-view'].hidden === true, 'documents auth loss: app still visible');
+assert(ids['auth-message'].textContent === 'Sessione non disponibile o scaduta.', 'documents auth loss: neutral session message missing');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'documents auth loss: requests continued after session probe');
+""",
+    )
+
+
+def test_p6_6_document_detail_404_with_valid_session_and_session_loss_are_handled():
+    item = _document_item(78)
+    valid_routes = _p6_6_base_routes(73, [item])
+    valid_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    valid_routes["/api/owner/portal/documents/78"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        valid_routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['document-detail-error'].hidden === false, 'document detail 404: error state missing');
+assert(ids['document-detail-error-message'].textContent === 'Documento non disponibile o accesso non più valido.', 'document detail 404: neutral message mismatch');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'document detail 404: session probe missing');
+""",
+    )
+
+    lost_routes = _p6_6_base_routes(74, [item])
+    lost_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}},
+    ]
+    lost_routes["/api/owner/portal/documents/78"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        lost_routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['login-view'].hidden === false, 'document detail auth loss: login not shown');
+assert(ids['app-view'].hidden === true, 'document detail auth loss: app still visible');
+""",
+    )
+
+
+def test_p6_6_acknowledge_404_and_session_loss_are_neutral_and_fail_closed():
+    item = _document_item(79)
+    valid_routes = _p6_6_base_routes(75, [item])
+    valid_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    valid_routes["/api/owner/portal/documents/79"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    valid_routes["/api/owner/portal/documents/79/acknowledge"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        valid_routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+await ids['document-acknowledge-button'].trigger('click');
+await flush();
+assert(ids['document-detail-error'].hidden === false, 'document ack 404: detail error missing');
+assert(ids['document-detail-error-message'].textContent === 'Documento non disponibile o accesso non più valido.', 'document ack 404: neutral message mismatch');
+assert(calls[calls.length - 1].url.endsWith('/session'), 'document ack 404: session probe missing');
+""",
+    )
+
+    lost_routes = _p6_6_base_routes(76, [item])
+    lost_routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}},
+    ]
+    lost_routes["/api/owner/portal/documents/79"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    lost_routes["/api/owner/portal/documents/79/acknowledge"] = [
+        {"status": 404, "body": {"detail": "Risorsa non trovata"}}
+    ]
+    _run_node_scenario(
+        lost_routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+await ids['document-acknowledge-button'].trigger('click');
+await flush();
+assert(ids['login-view'].hidden === false, 'document ack auth loss: login not shown');
+assert(ids['app-view'].hidden === true, 'document ack auth loss: app still visible');
+""",
+    )
+
+
+def test_p6_6_list_detail_and_ack_handle_422_429_5xx_network_without_raw_payloads():
+    list_cases = [
+        ({"status": 422, "body": {"secret": "raw-422"}}, "Impossibile caricare i documenti con i dati disponibili."),
+        ({"status": 429, "body": {"secret": "raw-429"}}, "Troppe richieste. Riprova tra poco."),
+        ({"status": 500, "body": {"secret": "raw-500"}}, "Servizio temporaneamente non disponibile."),
+        ({"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for response, expected in list_cases:
+        routes = _p6_6_base_routes(80, [])
+        routes["/api/owner/portal/properties/80/documents"] = [response]
+        _run_node_scenario(
+            routes,
+            f"""
+assert(ids['documents-error'].hidden === false, 'documents list error: state missing');
+assert(ids['documents-error-message'].textContent === {json.dumps(expected)}, 'documents list error: wrong safe message');
+assert(!ids['documents-error-message'].textContent.includes('raw-'), 'documents list error: raw payload leaked');
+""",
+        )
+
+    detail_cases = [
+        ({"status": 422, "body": {"secret": "raw-422"}}, "Impossibile caricare il contenuto del documento."),
+        ({"status": 429, "body": {"secret": "raw-429"}}, "Troppe richieste. Riprova tra poco."),
+        ({"status": 500, "body": {"secret": "raw-500"}}, "Servizio temporaneamente non disponibile."),
+        ({"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for response, expected in detail_cases:
+        item = _document_item(81)
+        routes = _p6_6_base_routes(81, [item])
+        routes["/api/owner/portal/documents/81"] = [response]
+        _run_node_scenario(
+            routes,
+            f"""
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+assert(ids['document-detail-error'].hidden === false, 'document detail error: state missing');
+assert(ids['document-detail-error-message'].textContent === {json.dumps(expected)}, 'document detail error: wrong safe message');
+assert(!ids['document-detail-error-message'].textContent.includes('raw-'), 'document detail error: raw payload leaked');
+""",
+        )
+
+    item = _document_item(82)
+    routes = _p6_6_base_routes(82, [item])
+    routes["/api/owner/portal/documents/82"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    routes["/api/owner/portal/documents/82/acknowledge"] = [
+        {"status": 500, "body": {"secret": "raw-ack"}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+await ids['document-acknowledge-button'].trigger('click');
+await flush();
+assert(ids['document-acknowledge-status'].textContent === 'Servizio temporaneamente non disponibile.', 'document ack error: safe message mismatch');
+assert(!ids['document-acknowledge-status'].textContent.includes('raw-ack'), 'document ack error: raw payload leaked');
+assert(ids['document-acknowledge-button'].disabled === false, 'document ack error: retry should remain possible');
+""",
+    )
+
+
+def test_p6_6_download_404_contract_is_backend_only_native_and_app_state_is_not_rewritten():
+    """Native downloads intentionally do not fetch/buffer the binary in app.js.
+
+    A stale authorization race can therefore return 404 from the download endpoint itself;
+    the frontend keeps a same-origin isolated native link and never exposes an alternate locator.
+    """
+    item = _document_item(83)
+    routes = _p6_6_base_routes(83, [item])
+    routes["/api/owner/portal/documents/83"] = [
+        {"status": 200, "body": {"document": item, "read": {"view_count": 1}}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['documents-list'].children[0].children[0].trigger('click');
+await flush();
+const href = ids['document-download-link'].getAttribute('href');
+assert(href === '/api/owner/portal/documents/83/download', 'download 404 contract: only backend endpoint is allowed');
+assert(ids['document-download-link'].getAttribute('target') === '_blank', 'download 404 contract: app should not be replaced by an error response');
+assert(!calls.some((call) => call.url.endsWith('/documents/83/download')), 'download 404 contract: JS must not fetch/buffer binary');
+""",
+    )
+
+
+def test_p6_6_document_transport_scope_and_accessibility_remain_memory_only():
+    source = APP_JS.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    assert "documentGeneration" in source
+    assert "documentDetailGeneration" in source
+    assert "documentAcknowledgeInFlight" in source
+    assert "dataset.documentId" in source
+    assert "aria-pressed" in source
+    assert "aria-controls" in source
+    assert 'aria-label="Documenti condivisi disponibili"' in html
+    assert 'aria-label="Informazioni documento"' in html
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "document.cookie" not in source
+
+    # No P6.7+ features were introduced.
+    assert "/notification-preferences" not in source
+    assert "apiRequest('/notifications" not in source

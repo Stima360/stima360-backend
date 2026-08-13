@@ -256,6 +256,80 @@
                   </section>
                 </div>
               </section>
+
+
+              <section id="documents-section" class="documents-section" aria-labelledby="documents-title">
+                <div class="subsection-heading documents-heading">
+                  <p class="eyebrow">Documenti condivisi</p>
+                  <h3 id="documents-title">Documenti</h3>
+                  <p>File pubblicati da STIMA360 e disponibili per questo immobile.</p>
+                </div>
+
+                <div id="documents-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento dei documenti…</p>
+                </div>
+
+                <div id="documents-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun documento disponibile</h3>
+                  <p>Quando saranno pubblicati documenti per questo immobile, li troverai qui.</p>
+                </div>
+
+                <div id="documents-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Documenti non disponibili</h3>
+                  <p id="documents-error-message">Riprova tra poco.</p>
+                  <button id="documents-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="documents-content" class="documents-layout" hidden>
+                  <div
+                    id="documents-list"
+                    class="documents-list"
+                    role="list"
+                    aria-label="Documenti condivisi disponibili"
+                  ></div>
+
+                  <section id="document-detail-section" class="document-detail" aria-labelledby="document-detail-title">
+                    <div id="document-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento del documento…</p>
+                    </div>
+
+                    <div id="document-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un documento</h3>
+                      <p>Il dettaglio del documento apparirà qui.</p>
+                    </div>
+
+                    <div id="document-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Documento non disponibile</h3>
+                      <p id="document-detail-error-message">Documento non disponibile o accesso non più valido.</p>
+                      <button id="document-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="document-detail-content" class="document-article" hidden>
+                      <div class="subsection-heading document-detail-heading">
+                        <p class="eyebrow">Dettaglio documento</p>
+                        <h3 id="document-detail-title">Documento</h3>
+                      </div>
+                      <dl id="document-detail-meta" class="document-meta" aria-label="Informazioni documento"></dl>
+
+                      <div class="document-download-area" aria-labelledby="document-download-title">
+                        <h4 id="document-download-title">Download</h4>
+                        <p id="document-download-status" class="status-message" role="status" aria-live="polite"></p>
+                        <a id="document-download-link" class="primary-button document-download-link" href="#" hidden>Scarica documento</a>
+                      </div>
+
+                      <div class="document-acknowledge-area" aria-labelledby="document-acknowledge-title">
+                        <h4 id="document-acknowledge-title">Presa visione</h4>
+                        <p id="document-acknowledge-status" class="status-message" role="status" aria-live="polite"></p>
+                        <button id="document-acknowledge-button" class="primary-button document-acknowledge-button" type="button" hidden>
+                          Conferma presa visione
+                        </button>
+                      </div>
+                    </article>
+                  </section>
+                </div>
+              </section>
             </div>
           </section>
         </div>

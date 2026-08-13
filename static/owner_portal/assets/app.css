@@ -828,3 +828,181 @@ button:disabled {
     top: 18px;
   }
 }
+
+.documents-section {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #dfe6df;
+}
+
+.documents-heading {
+  margin-bottom: 14px;
+}
+
+.documents-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.documents-list {
+  display: grid;
+  gap: 10px;
+}
+
+.document-list-item {
+  min-width: 0;
+}
+
+.document-card {
+  width: 100%;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid #cbd6ce;
+  border-radius: 14px;
+  background: #fff;
+  color: #19211c;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.document-card:hover,
+.document-card.is-selected {
+  border-color: #285f46;
+  background: #f6faf7;
+}
+
+.document-card.is-selected {
+  box-shadow: inset 0 0 0 1px #285f46;
+}
+
+.document-card-title,
+.document-card-meta,
+.document-card-file,
+.document-card-status {
+  display: block;
+}
+
+.document-card-title {
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.document-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 7px;
+  color: #5b6860;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.document-card-file {
+  margin-top: 9px;
+  color: #445049;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.document-card-status {
+  width: fit-content;
+  margin-top: 10px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #eef4ef;
+  color: #315440;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.document-card-status.is-required {
+  background: #f4eee0;
+  color: #654d18;
+}
+
+.document-detail {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dfe6df;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.document-detail-heading {
+  margin-bottom: 14px;
+}
+
+.document-meta {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.document-meta-row {
+  display: grid;
+  gap: 3px;
+}
+
+.document-meta-row dt {
+  color: #66736b;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.document-meta-row dd {
+  margin-bottom: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.document-download-area,
+.document-acknowledge-area {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e9e5;
+}
+
+.document-download-area h4,
+.document-acknowledge-area h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.document-download-area .status-message,
+.document-acknowledge-area .status-message {
+  margin-top: 8px;
+}
+
+.document-download-link,
+.document-acknowledge-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  margin-top: 10px;
+  text-decoration: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-card {
+    transition: none;
+  }
+}
+
+@media (min-width: 760px) {
+  .documents-layout {
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+    align-items: start;
+  }
+
+  .document-detail {
+    position: sticky;
+    top: 18px;
+  }
+}
