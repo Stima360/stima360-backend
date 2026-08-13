@@ -417,6 +417,91 @@
           </section>
         </div>
       </section>
+
+      <section id="notifications-section" class="notifications-section panel-subsection" aria-labelledby="notifications-title">
+        <div class="section-heading notifications-heading">
+          <div>
+            <p class="eyebrow">Centro notifiche</p>
+            <h2 id="notifications-title">Notifiche</h2>
+            <p>Aggiornamenti in-app relativi alle attività del tuo portale.</p>
+          </div>
+          <label class="notification-filter" for="notifications-unread-only">
+            <input id="notifications-unread-only" type="checkbox">
+            <span>Solo non lette</span>
+          </label>
+        </div>
+
+        <div id="notifications-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento delle notifiche…</p>
+        </div>
+
+        <div id="notifications-empty" class="empty-state compact-empty" hidden>
+          <h3>Nessuna notifica</h3>
+          <p id="notifications-empty-message">Non ci sono notifiche da mostrare.</p>
+        </div>
+
+        <div id="notifications-error" class="error-state compact-error" role="alert" hidden>
+          <h3>Notifiche non disponibili</h3>
+          <p id="notifications-error-message">Riprova tra poco.</p>
+          <button id="notifications-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <div id="notifications-content" hidden>
+          <div id="notifications-list" class="notifications-list" role="list" aria-label="Notifiche del portale"></div>
+          <div id="notifications-pagination" class="notifications-pagination" hidden>
+            <button id="notifications-load-more" class="secondary-button" type="button">Carica altre</button>
+            <p id="notifications-pagination-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="notification-preferences-section" class="notification-preferences-section panel-subsection" aria-labelledby="notification-preferences-title">
+        <div class="section-heading">
+          <p class="eyebrow">Impostazioni in-app</p>
+          <h2 id="notification-preferences-title">Preferenze notifiche</h2>
+          <p>Scegli quali aggiornamenti vuoi ricevere nel portale.</p>
+        </div>
+
+        <div id="notification-preferences-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento delle preferenze…</p>
+        </div>
+
+        <div id="notification-preferences-error" class="error-state compact-error" role="alert" hidden>
+          <h3>Preferenze non disponibili</h3>
+          <p id="notification-preferences-error-message">Riprova tra poco.</p>
+          <button id="notification-preferences-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <form id="notification-preferences-form" class="notification-preferences-form" hidden>
+          <label class="preference-toggle" for="preference-in-app">
+            <input id="preference-in-app" name="in_app_enabled" type="checkbox">
+            <span><strong>Notifiche nel portale</strong><small>Abilita o disabilita tutte le notifiche in-app.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-publication">
+            <input id="preference-publication" name="publication_enabled" type="checkbox">
+            <span><strong>Aggiornamenti immobile</strong><small>Nuove pubblicazioni e aggiornamenti condivisi.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-visit-feedback">
+            <input id="preference-visit-feedback" name="visit_feedback_enabled" type="checkbox">
+            <span><strong>Feedback visite</strong><small>Nuovi feedback visita pubblicati.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-document">
+            <input id="preference-document" name="document_enabled" type="checkbox">
+            <span><strong>Documenti condivisi</strong><small>Nuovi documenti disponibili nel portale.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-request-update">
+            <input id="preference-request-update" name="request_update_enabled" type="checkbox">
+            <span><strong>Aggiornamenti richieste</strong><small>Variazioni di stato delle richieste inviate.</small></span>
+          </label>
+
+          <div class="notification-preferences-actions">
+            <button id="notification-preferences-save" class="primary-button" type="submit">Salva preferenze</button>
+            <p id="notification-preferences-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
     </section>
   </main>
 

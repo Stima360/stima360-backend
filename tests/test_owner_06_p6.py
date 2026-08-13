@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from owner.schemas import FeedbackCreate
+from owner.schemas import FeedbackCreate, NotificationPreferencesUpdate, OwnerNotificationDTO
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,7 +151,14 @@ const requiredIds = [
   'document-acknowledge-button','request-form','request-type','request-subject','request-message',
   'request-availability-fields','request-availability-from','request-availability-to','request-submit',
   'request-form-status','requests-loading','requests-empty','requests-error','requests-error-message',
-  'requests-retry','requests-content','requests-list'
+  'requests-retry','requests-content','requests-list',
+  'notifications-unread-only','notifications-loading','notifications-empty','notifications-empty-message',
+  'notifications-error','notifications-error-message','notifications-retry','notifications-content',
+  'notifications-list','notifications-pagination','notifications-load-more','notifications-pagination-status',
+  'notification-preferences-loading','notification-preferences-error','notification-preferences-error-message',
+  'notification-preferences-retry','notification-preferences-form','preference-in-app','preference-publication',
+  'preference-visit-feedback','preference-document','preference-request-update',
+  'notification-preferences-save','notification-preferences-status'
 ];
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
 ids['login-form'].tagName = 'FORM';
@@ -221,6 +228,25 @@ ids['requests-loading'].hidden = true;
 ids['requests-empty'].hidden = true;
 ids['requests-error'].hidden = true;
 ids['requests-content'].hidden = true;
+ids['notifications-unread-only'].tagName = 'INPUT';
+ids['notifications-unread-only'].checked = false;
+ids['notifications-loading'].hidden = true;
+ids['notifications-empty'].hidden = true;
+ids['notifications-error'].hidden = true;
+ids['notifications-content'].hidden = true;
+ids['notifications-pagination'].hidden = true;
+ids['notifications-retry'].tagName = 'BUTTON';
+ids['notifications-load-more'].tagName = 'BUTTON';
+ids['notification-preferences-loading'].hidden = true;
+ids['notification-preferences-error'].hidden = true;
+ids['notification-preferences-form'].hidden = true;
+ids['notification-preferences-retry'].tagName = 'BUTTON';
+ids['notification-preferences-form'].tagName = 'FORM';
+for (const id of ['preference-in-app','preference-publication','preference-visit-feedback','preference-document','preference-request-update']) {{
+  ids[id].tagName = 'INPUT';
+  ids[id].checked = false;
+}}
+ids['notification-preferences-save'].tagName = 'BUTTON';
 
 global.document = {{
   activeElement: null,
@@ -249,8 +275,19 @@ function fakeResponse(spec) {{
 }}
 
 global.fetch = async function(url, options = {{}}) {{
-  calls.push({{ url, method: options.method || 'GET', body: options.body, headers: options.headers }});
   const queue = routeQueues.get(url);
+  if (!queue || queue.length === 0) {{
+    if (url.includes('/api/owner/portal/notifications?')) {{
+      return fakeResponse({{ status: 200, body: {{ items: [], limit: 50, offset: 0, has_more: false }} }});
+    }}
+    if (url.endsWith('/api/owner/portal/notification-preferences') && (options.method || 'GET') === 'GET') {{
+      return fakeResponse({{ status: 200, body: {{
+        in_app_enabled: true, publication_enabled: true, visit_feedback_enabled: true,
+        document_enabled: true, request_update_enabled: true
+      }} }});
+    }}
+  }}
+  calls.push({{ url, method: options.method || 'GET', body: options.body, headers: options.headers }});
   if (!queue || queue.length === 0) throw new Error(`No fake response for ${{url}}`);
   const spec = queue.shift();
   if (spec.delay_ms) await new Promise((resolve) => setTimeout(resolve, spec.delay_ms));
@@ -1271,12 +1308,7 @@ def test_p6_5_uses_only_authorized_visit_feedback_apis_and_no_p6_7_plus():
     assert "`/visit-feedback/${encodeURIComponent(String(id))}`" in source
     assert "const limit = 50;" in source
 
-    for forbidden in (
-        "/properties/${propertyAtStart}/feedback",
-        "/notifications",
-        "/notification-preferences",
-    ):
-        assert forbidden not in source
+    assert "/properties/${propertyAtStart}/feedback" not in source
 
 
 def test_p6_5_safe_dom_and_privacy_whitelist_has_no_generic_json_or_private_crm_fields():
@@ -2388,7 +2420,6 @@ def test_p6_6_document_transport_scope_and_accessibility_remain_memory_only():
     assert "document.cookie" not in source
 
     # No P6.7+ features were introduced.
-    assert "/notification-preferences" not in source
     assert "apiRequest('/notifications" not in source
 
 
@@ -2986,11 +3017,621 @@ def test_p6_7_scope_only_feedback_api_no_p6_8_and_accessibility_memory_only():
     assert "method: 'POST'" in source[source.index("async function submitRequest"):source.index("async function selectProperty")]
     assert "requestGeneration" in source
     assert "requestSubmitInFlight" in source
-    assert "/notifications" not in source
-    assert "/notification-preferences" not in source
+    assert "/notifications" in source
+    assert "/notification-preferences" in source
     assert "localStorage" not in source
     assert "sessionStorage" not in source
     assert "document.cookie" not in source
     assert 'aria-label="Storico richieste proprietario"' in html
     assert 'role="status"' in html
     assert 'aria-live="polite"' in html
+
+
+# OWNER 0.2 P6.8 — notifiche e preferenze ---------------------------------
+
+def _notification_item(
+    notification_id: int,
+    *,
+    notification_type: str = "publication_published",
+    title: str = "Nuovo aggiornamento",
+    body: str = "È disponibile un nuovo aggiornamento.",
+    read_at: str | None = None,
+    created_at: str = "2026-08-13T12:00:00+00:00",
+    target_type: str = "owner_publication",
+    target_id: int = 501,
+) -> dict:
+    return {
+        "id": notification_id,
+        "type": notification_type,
+        "title": title,
+        "body": body,
+        "created_at": created_at,
+        "read_at": read_at,
+        "target_type": target_type,
+        "target_id": target_id,
+        # deliberately private/unsupported fields; the UI must ignore them
+        "owner_account_id": 999,
+        "property_id": 777,
+        "idempotency_key": "PRIVATE-IDEMPOTENCY",
+        "metadata": {"FLOW": "PRIVATE FLOW"},
+        "contact_id": 555,
+        "lead_id": 444,
+    }
+
+
+def _notification_preferences(**overrides) -> dict:
+    values = {
+        "in_app_enabled": True,
+        "publication_enabled": True,
+        "visit_feedback_enabled": True,
+        "document_enabled": True,
+        "request_update_enabled": True,
+    }
+    values.update(overrides)
+    return values
+
+
+def _p6_8_base_routes(items=None, *, has_more=False, preferences=None) -> dict[str, list[dict]]:
+    if items is None:
+        items = []
+    if preferences is None:
+        preferences = _notification_preferences()
+    return {
+        "/api/owner/portal/session": [{"status": 200, "body": {"authenticated": True}}],
+        "/api/owner/portal/dashboard": [{"status": 200, "body": {"property_count": 0, "properties": []}}],
+        "/api/owner/portal/notifications?limit=50&offset=0&unread_only=false": [{
+            "status": 200,
+            "body": {"items": items, "limit": 50, "offset": 0, "has_more": has_more},
+        }],
+        "/api/owner/portal/notification-preferences": [{"status": 200, "body": preferences}],
+    }
+
+
+def test_p6_8_preflight_backend_contract_matches_frozen_api_and_dtos():
+    router_source = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
+    repository_source = (ROOT / "owner" / "repository.py").read_text(encoding="utf-8")
+
+    assert '@router.get("/notifications")' in router_source
+    assert 'limit: int = Query(50, ge=1, le=100)' in router_source
+    assert 'offset: int = Query(0, ge=0)' in router_source
+    assert 'unread_only: bool = False' in router_source
+    assert '"has_more": len(rows) > limit' in router_source
+    assert '@router.post("/notifications/{i}/read")' in router_source
+    assert '@router.get("/notification-preferences")' in router_source
+    assert '@router.put("/notification-preferences")' in router_source
+
+    assert set(OwnerNotificationDTO.model_fields) == {
+        "id", "type", "title", "body", "created_at", "read_at", "target_type", "target_id"
+    }
+    assert set(NotificationPreferencesUpdate.model_fields) == {
+        "in_app_enabled",
+        "publication_enabled",
+        "visit_feedback_enabled",
+        "document_enabled",
+        "request_update_enabled",
+    }
+    for notification_type in (
+        "publication_published",
+        "visit_feedback_published",
+        "shared_document_published",
+        "request_handled",
+    ):
+        assert notification_type in repository_source
+
+
+def test_p6_8_markup_contains_real_notifications_preferences_filter_and_states():
+    parser = _html_parser()
+    required = {
+        "notifications-section",
+        "notifications-title",
+        "notifications-unread-only",
+        "notifications-loading",
+        "notifications-empty",
+        "notifications-error",
+        "notifications-error-message",
+        "notifications-retry",
+        "notifications-content",
+        "notifications-list",
+        "notifications-pagination",
+        "notifications-load-more",
+        "notification-preferences-section",
+        "notification-preferences-form",
+        "notification-preferences-loading",
+        "notification-preferences-error",
+        "notification-preferences-retry",
+        "preference-in-app",
+        "preference-publication",
+        "preference-visit-feedback",
+        "preference-document",
+        "preference-request-update",
+        "notification-preferences-save",
+        "notification-preferences-status",
+    }
+    assert required <= parser.ids
+    assert "notifications-unread-only" in parser.labels_for
+    for field_id in (
+        "preference-in-app",
+        "preference-publication",
+        "preference-visit-feedback",
+        "preference-document",
+        "preference-request-update",
+    ):
+        assert field_id in parser.labels_for
+    html = INDEX.read_text(encoding="utf-8")
+    assert "Solo non lette" in html
+    assert "Preferenze notifiche" in html
+    css = APP_CSS.read_text(encoding="utf-8")
+    for selector in (
+        ".notifications-section",
+        ".notifications-list",
+        ".notification-card",
+        ".notification-filter",
+        ".notification-preferences-section",
+        ".notification-preferences-form",
+        ".preference-toggle",
+    ):
+        assert selector in css
+
+
+def test_p6_8_source_contains_real_functions_exact_endpoints_and_no_future_scope():
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "async function loadNotifications" in source
+    assert "return `/notifications?${params.toString()}`" in source
+    assert "`/notifications/${encodeURIComponent(String(id))}/read`" in source
+    assert "async function loadNotificationPreferences" in source
+    assert "apiRequest('/notification-preferences')" in source
+    assert "apiRequest('/notification-preferences', {" in source
+    assert "method: 'PUT'" in source[source.index("async function saveNotificationPreferences"):source.index("function startP68DataLoads")]
+    assert "notificationGeneration" in source
+    assert "notificationPreferencesGeneration" in source
+    assert "notificationReadInFlight" in source
+    assert "notificationPreferencesSaving" in source
+    for forbidden in ("/owner/admin", "/api/owner/admin", "/flow/", "/buy/", "/match/"):
+        assert forbidden not in source.lower()
+
+
+def test_p6_8_notifications_load_after_auth_zero_one_multiple_and_preserve_backend_order():
+    _run_node_scenario(
+        _p6_8_base_routes([]),
+        """
+assert(ids['notifications-empty'].hidden === false, 'notifications zero: empty state missing');
+assert(ids['notifications-content'].hidden === true, 'notifications zero: content should be hidden');
+""",
+    )
+
+    _run_node_scenario(
+        _p6_8_base_routes([_notification_item(1, title="Una notifica")]),
+        """
+assert(ids['notifications-content'].hidden === false, 'notifications one: content missing');
+assert(ids['notifications-list'].children.length === 1, 'notifications one: item missing');
+assert(allText(ids['notifications-list']).includes('Una notifica'), 'notifications one: title missing');
+""",
+    )
+
+    items = [
+        _notification_item(2, title="Seconda backend", notification_type="shared_document_published"),
+        _notification_item(1, title="Prima backend", notification_type="visit_feedback_published"),
+    ]
+    _run_node_scenario(
+        _p6_8_base_routes(items),
+        """
+const text0 = allText(ids['notifications-list'].children[0]);
+const text1 = allText(ids['notifications-list'].children[1]);
+assert(text0.includes('Seconda backend'), 'notifications order: first backend item changed');
+assert(text1.includes('Prima backend'), 'notifications order: second backend item changed');
+assert(text0.includes('Nuovo documento'), 'notification type label: document mapping missing');
+assert(text1.includes('Nuovo feedback visita'), 'notification type label: visit mapping missing');
+const notificationCall = calls.find((call) => call.url.includes('/notifications?'));
+assert(notificationCall, 'notifications must load after authenticated bootstrap');
+""",
+    )
+
+
+def test_p6_8_notification_whitelist_privacy_and_xss_are_text_only():
+    item = _notification_item(
+        3,
+        title="<script>alert(1)</script>",
+        body="<img src=x onerror=alert(2)>",
+        target_id=123456,
+    )
+    _run_node_scenario(
+        _p6_8_base_routes([item]),
+        """
+const text = allText(ids['notifications-list']);
+assert(text.includes('<script>alert(1)</script>'), 'notification xss: title must remain text');
+assert(text.includes('<img src=x onerror=alert(2)>'), 'notification xss: body must remain text');
+for (const forbidden of ['PRIVATE-IDEMPOTENCY','PRIVATE FLOW','999','777','555','444','123456','owner_publication']) {
+  assert(!text.includes(forbidden), `notification privacy: leaked ${forbidden}`);
+}
+""",
+    )
+    source = APP_JS.read_text(encoding="utf-8")
+    render_start = source.index("function renderNotificationCard")
+    render_end = source.index("function renderNotifications", render_start)
+    block = source[render_start:render_end]
+    for private_name in (
+        "owner_account_id", "property_id", "idempotency_key", "contact_id", "lead_id", "metadata", "target_id"
+    ):
+        assert private_name not in block
+
+
+def test_p6_8_read_is_explicit_idempotent_ui_and_already_read_never_posts():
+    unread = _notification_item(10, title="Da leggere")
+    routes = _p6_8_base_routes([unread])
+    routes["/api/owner/portal/notifications/10/read"] = [{
+        "status": 200,
+        "delay_ms": 20,
+        "body": _notification_item(10, title="Da leggere", read_at="2026-08-13T13:00:00+00:00"),
+    }]
+    _run_node_scenario(
+        routes,
+        """
+assert(calls.filter((call) => call.url.endsWith('/notifications/10/read')).length === 0, 'render must not mark notification read');
+const card = ids['notifications-list'].children[0];
+const button = card.children[4].children[0];
+assert(button.textContent === 'Segna come letta', 'unread action label missing');
+const first = button.trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 5));
+const second = button.trigger('click');
+await Promise.all([first, second]);
+await flush();
+assert(calls.filter((call) => call.method === 'POST' && call.url.endsWith('/notifications/10/read')).length === 1, 'read double click not guarded');
+assert(allText(ids['notifications-list']).includes('Letta'), 'read success did not update only notification state');
+""",
+    )
+
+    already = _notification_item(11, title="Già letta", read_at="2026-08-13T13:00:00+00:00")
+    _run_node_scenario(
+        _p6_8_base_routes([already]),
+        """
+const button = ids['notifications-list'].children[0].children[4].children[0];
+assert(button.disabled === true, 'already read: button must be disabled');
+assert(button.textContent === 'Letta', 'already read: state label missing');
+await button.trigger('click');
+assert(calls.filter((call) => call.url.endsWith('/notifications/11/read')).length === 0, 'already read: must not POST');
+""",
+    )
+
+
+def test_p6_8_pagination_uses_backend_has_more_offset_and_double_request_guard():
+    first = [_notification_item(i, title=f"Prima pagina {i}") for i in (1, 2)]
+    second = [_notification_item(3, title="Seconda pagina")]
+    routes = _p6_8_base_routes(first, has_more=True)
+    routes["/api/owner/portal/notifications?limit=50&offset=50&unread_only=false"] = [{
+        "status": 200,
+        "delay_ms": 20,
+        "body": {"items": second, "limit": 50, "offset": 50, "has_more": False},
+    }]
+    _run_node_scenario(
+        routes,
+        """
+assert(ids['notifications-pagination'].hidden === false, 'pagination: has_more true not honored');
+const firstClick = ids['notifications-load-more'].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 5));
+const secondClick = ids['notifications-load-more'].trigger('click');
+await Promise.all([firstClick, secondClick]);
+await flush();
+assert(calls.filter((call) => call.url.includes('offset=50&unread_only=false')).length === 1, 'pagination: duplicate load-more request');
+assert(ids['notifications-list'].children.length === 3, 'pagination: existing items were lost');
+assert(allText(ids['notifications-list'].children[2]).includes('Seconda pagina'), 'pagination: appended item missing');
+assert(ids['notifications-pagination'].hidden === true, 'pagination: backend has_more false not honored');
+""",
+    )
+
+
+def test_p6_8_unread_filter_resets_offset_uses_real_parameter_and_ignores_stale_response():
+    routes = _p6_8_base_routes([], has_more=False)
+    routes["/api/owner/portal/notifications?limit=50&offset=0&unread_only=false"] = [{
+        "status": 200,
+        "delay_ms": 60,
+        "body": {"items": [_notification_item(1, title="VECCHIA")], "limit": 50, "offset": 0, "has_more": True},
+    }]
+    routes["/api/owner/portal/notifications?limit=50&offset=0&unread_only=true"] = [{
+        "status": 200,
+        "body": {"items": [_notification_item(2, title="NUOVA NON LETTA")], "limit": 50, "offset": 0, "has_more": False},
+    }]
+    _run_node_scenario(
+        routes,
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+ids['notifications-unread-only'].checked = true;
+await ids['notifications-unread-only'].trigger('change');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+const text = allText(ids['notifications-list']);
+assert(text.includes('NUOVA NON LETTA'), 'filter stale: new filtered result missing');
+assert(!text.includes('VECCHIA'), 'filter stale: old response leaked');
+const filtered = calls.filter((call) => call.url.includes('/notifications?') && call.url.includes('unread_only=true'));
+assert(filtered.length === 1, 'filter: true request missing/duplicated');
+assert(filtered[0].url.includes('offset=0'), 'filter: offset was not reset');
+""",
+    )
+
+
+def test_p6_8_read_404_neutral_with_valid_session_and_session_loss_are_safe():
+    routes = _p6_8_base_routes([_notification_item(20)])
+    routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    routes["/api/owner/portal/notifications/20/read"] = [{"status": 404, "body": {"detail": "PRIVATE"}}]
+    _run_node_scenario(
+        routes,
+        """
+const button = ids['notifications-list'].children[0].children[4].children[0];
+await button.trigger('click');
+await flush();
+assert(ids['app-view'].hidden === false, 'read 404: valid session should remain logged in');
+assert(allText(ids['notifications-list']).includes('Contenuto non disponibile o accesso non più valido.'), 'read 404: neutral message missing');
+assert(!allText(ids['notifications-list']).includes('PRIVATE'), 'read 404: raw backend leaked');
+""",
+    )
+
+    expired = _p6_8_base_routes([_notification_item(21)])
+    expired["/api/owner/portal/notifications/21/read"] = [{"status": 401, "body": {"detail": "expired"}}]
+    _run_node_scenario(
+        expired,
+        """
+await ids['notifications-list'].children[0].children[4].children[0].trigger('click');
+await flush();
+assert(ids['login-view'].hidden === false, 'read auth loss: login missing');
+assert(ids['app-view'].hidden === true, 'read auth loss: app still visible');
+assert(ids['notifications-list'].children.length === 0, 'read auth loss: notifications state not reset');
+""",
+    )
+
+
+def test_p6_8_notification_list_422_429_5xx_network_and_404_are_recoverable_neutral():
+    cases = [
+        ({"status": 422, "body": {"secret": "RAW"}}, "Impossibile caricare le notifiche con i dati disponibili."),
+        ({"status": 429, "body": {"secret": "RAW"}}, "Troppe richieste. Riprova tra poco."),
+        ({"status": 500, "body": {"secret": "RAW"}}, "Servizio temporaneamente non disponibile."),
+        ({"network_error": True}, "Connessione non disponibile. Controlla la rete e riprova."),
+    ]
+    for spec, expected in cases:
+        routes = _p6_8_base_routes([])
+        routes["/api/owner/portal/notifications?limit=50&offset=0&unread_only=false"] = [spec]
+        _run_node_scenario(
+            routes,
+            f"""
+assert(ids['notifications-error'].hidden === false, 'notification list error: state missing');
+assert(ids['notifications-error-message'].textContent === {json.dumps(expected)}, 'notification list error: wrong neutral message');
+assert(!ids['notifications-error-message'].textContent.includes('RAW'), 'notification list error: raw payload leaked');
+""",
+        )
+
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    routes["/api/owner/portal/notifications?limit=50&offset=0&unread_only=false"] = [
+        {"status": 404, "body": {"detail": "PRIVATE"}}
+    ]
+    _run_node_scenario(
+        routes,
+        """
+assert(ids['notifications-error'].hidden === false, 'notifications 404: error state missing');
+assert(ids['notifications-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'notifications 404: neutral message mismatch');
+assert(ids['app-view'].hidden === false, 'notifications 404: valid session should remain logged in');
+""",
+    )
+
+
+def test_p6_8_preferences_get_renders_exact_five_booleans_and_labels():
+    prefs = _notification_preferences(
+        in_app_enabled=True,
+        publication_enabled=False,
+        visit_feedback_enabled=True,
+        document_enabled=False,
+        request_update_enabled=True,
+    )
+    _run_node_scenario(
+        _p6_8_base_routes([], preferences=prefs),
+        """
+assert(ids['notification-preferences-form'].hidden === false, 'preferences GET: form missing');
+assert(ids['preference-in-app'].checked === true, 'preferences GET: in_app mismatch');
+assert(ids['preference-publication'].checked === false, 'preferences GET: publication mismatch');
+assert(ids['preference-visit-feedback'].checked === true, 'preferences GET: visit mismatch');
+assert(ids['preference-document'].checked === false, 'preferences GET: document mismatch');
+assert(ids['preference-request-update'].checked === true, 'preferences GET: request mismatch');
+const getCall = calls.find((call) => call.method === 'GET' && call.url.endsWith('/notification-preferences'));
+assert(getCall, 'preferences GET: initial endpoint not called');
+""",
+    )
+
+
+def test_p6_8_preferences_put_exact_five_booleans_double_submit_guard_and_success():
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/notification-preferences"] = [
+        {"status": 200, "body": _notification_preferences()},
+        {"status": 200, "delay_ms": 20, "body": _notification_preferences(
+            in_app_enabled=True,
+            publication_enabled=False,
+            visit_feedback_enabled=False,
+            document_enabled=True,
+            request_update_enabled=False,
+        )},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+ids['preference-in-app'].checked = true;
+ids['preference-publication'].checked = false;
+ids['preference-visit-feedback'].checked = false;
+ids['preference-document'].checked = true;
+ids['preference-request-update'].checked = false;
+const first = ids['notification-preferences-form'].trigger('submit');
+await new Promise((resolve) => setTimeout(resolve, 5));
+assert(ids['notification-preferences-save'].disabled === true, 'preferences PUT: saving button not disabled');
+assert(ids['notification-preferences-save'].textContent === 'Salvataggio…', 'preferences PUT: saving label missing');
+const second = ids['notification-preferences-form'].trigger('submit');
+await Promise.all([first, second]);
+await flush();
+const puts = calls.filter((call) => call.method === 'PUT' && call.url.endsWith('/notification-preferences'));
+assert(puts.length === 1, 'preferences PUT: double submit not blocked');
+const payload = JSON.parse(puts[0].body);
+assert(Object.keys(payload).sort().join(',') === 'document_enabled,in_app_enabled,publication_enabled,request_update_enabled,visit_feedback_enabled', 'preferences PUT: extra/missing fields');
+for (const value of Object.values(payload)) assert(typeof value === 'boolean', 'preferences PUT: non-boolean value');
+assert(payload.in_app_enabled === true && payload.publication_enabled === false && payload.visit_feedback_enabled === false && payload.document_enabled === true && payload.request_update_enabled === false, 'preferences PUT: boolean values mismatch');
+assert(ids['notification-preferences-status'].textContent === 'Preferenze salvate.', 'preferences PUT: success state missing');
+assert(ids['notification-preferences-save'].disabled === false, 'preferences PUT: button not restored');
+""",
+    )
+
+
+def test_p6_8_preferences_put_error_is_recoverable_and_session_loss_logs_out():
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/notification-preferences"] = [
+        {"status": 200, "body": _notification_preferences()},
+        {"status": 429, "body": {"secret": "RAW"}},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await ids['notification-preferences-form'].trigger('submit');
+await flush();
+assert(ids['notification-preferences-status'].textContent === 'Troppe richieste. Riprova tra poco.', 'preferences PUT error: neutral message mismatch');
+assert(!ids['notification-preferences-status'].textContent.includes('RAW'), 'preferences PUT error: raw payload leaked');
+assert(ids['notification-preferences-save'].disabled === false, 'preferences PUT error: retry not enabled');
+assert(ids['notification-preferences-form'].hidden === false, 'preferences PUT error: form not recoverable');
+""",
+    )
+
+    expired = _p6_8_base_routes([])
+    expired["/api/owner/portal/notification-preferences"] = [
+        {"status": 200, "body": _notification_preferences()},
+        {"status": 401, "body": {"detail": "expired"}},
+    ]
+    _run_node_scenario(
+        expired,
+        """
+await ids['notification-preferences-form'].trigger('submit');
+await flush();
+assert(ids['login-view'].hidden === false, 'preferences PUT auth loss: login missing');
+assert(ids['app-view'].hidden === true, 'preferences PUT auth loss: app still visible');
+""",
+    )
+
+
+def test_p6_8_preferences_stale_get_is_ignored_after_newer_retry():
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/notification-preferences"] = [
+        {"status": 200, "delay_ms": 60, "body": _notification_preferences(publication_enabled=False)},
+        {"status": 200, "body": _notification_preferences(publication_enabled=True)},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+await ids['notification-preferences-retry'].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+assert(ids['preference-publication'].checked === true, 'preferences stale: older GET overwrote newer response');
+""",
+    )
+
+
+def test_p6_8_logout_invalidates_pending_notification_response():
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/notifications?limit=50&offset=0&unread_only=false"] = [{
+        "status": 200,
+        "delay_ms": 60,
+        "body": {"items": [_notification_item(40, title="NON DEVE COMPARIRE")], "limit": 50, "offset": 0, "has_more": False},
+    }]
+    routes["/api/owner/portal/auth/logout"] = [{"status": 204, "body": None}]
+    _run_node_scenario(
+        routes,
+        """
+await new Promise((resolve) => setTimeout(resolve, 10));
+await ids['logout-button'].trigger('click');
+await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
+assert(ids['login-view'].hidden === false, 'logout stale: login missing');
+assert(ids['notifications-list'].children.length === 0, 'logout stale: pending notifications repopulated UI');
+assert(!allText(ids['notifications-list']).includes('NON DEVE COMPARIRE'), 'logout stale: old notification leaked');
+""",
+    )
+
+
+def test_p6_8_security_no_generic_json_browser_storage_or_forbidden_dom_and_no_private_fields():
+    source = APP_JS.read_text(encoding="utf-8")
+    for forbidden in (
+        ".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function",
+        "localStorage", "sessionStorage", "document.cookie",
+    ):
+        assert forbidden not in source
+    assert "JSON.stringify(preferencesBody)" in source
+    assert "JSON.stringify(payload" not in source
+    render_start = source.index("function renderNotificationCard")
+    render_end = source.index("function renderNotifications", render_start)
+    render_block = source[render_start:render_end]
+    for private_name in (
+        "owner_account_id", "property_id", "idempotency_key", "contact_id", "lead_id", "activity_id",
+        "BUY", "MATCH", "FLOW", "target_id",
+    ):
+        assert private_name not in render_block
+    pagination_start = source.index("async function loadNotifications")
+    pagination_end = source.index("function notificationCardById", pagination_start)
+    assert ".sort(" not in source[pagination_start:pagination_end]
+
+
+def test_p6_8_anti_regression_frontend_and_tests_all_contain_real_p68_features():
+    html = INDEX.read_text(encoding="utf-8")
+    js = APP_JS.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+    tests = Path(__file__).read_text(encoding="utf-8")
+
+    checks = {
+        "Notifiche": (
+            "notifications-section" in html,
+            "loadNotifications" in js and "/notifications" in js,
+            ".notifications-section" in css and ".notification-card" in css,
+            "test_p6_8_notifications_load_after_auth_zero_one_multiple_and_preserve_backend_order" in tests,
+        ),
+        "Filtro non lette": (
+            "notifications-unread-only" in html,
+            "notificationUnreadOnly" in js and "unread_only" in js,
+            ".notification-filter" in css,
+            "test_p6_8_unread_filter_resets_offset_uses_real_parameter_and_ignores_stale_response" in tests,
+        ),
+        "Segna come letta": (
+            "notifications-list" in html,
+            "markNotificationRead" in js and "/read`" in js,
+            ".notification-read-button" in css or ".notification-actions" in css,
+            "test_p6_8_read_is_explicit_idempotent_ui_and_already_read_never_posts" in tests,
+        ),
+        "Paginazione": (
+            "notifications-load-more" in html,
+            "notificationHasMore" in js and "has_more" in js,
+            ".notifications-pagination" in css,
+            "test_p6_8_pagination_uses_backend_has_more_offset_and_double_request_guard" in tests,
+        ),
+        "Preferenze": (
+            "notification-preferences-form" in html,
+            "loadNotificationPreferences" in js and "saveNotificationPreferences" in js,
+            ".notification-preferences-form" in css and ".preference-toggle" in css,
+            "test_p6_8_preferences_put_exact_five_booleans_double_submit_guard_and_success" in tests,
+        ),
+    }
+    assert all(all(parts) for parts in checks.values()), checks
+
+
+def test_p6_8_preferences_404_uses_session_probe_and_neutral_error():
+    routes = _p6_8_base_routes([])
+    routes["/api/owner/portal/session"] = [
+        {"status": 200, "body": {"authenticated": True}},
+        {"status": 200, "body": {"authenticated": True}},
+    ]
+    routes["/api/owner/portal/notification-preferences"] = [
+        {"status": 404, "body": {"detail": "PRIVATE"}},
+    ]
+    _run_node_scenario(
+        routes,
+        """
+assert(ids['notification-preferences-error'].hidden === false, 'preferences 404: error state missing');
+assert(ids['notification-preferences-error-message'].textContent === 'Contenuto non disponibile o accesso non più valido.', 'preferences 404: neutral message mismatch');
+assert(!ids['notification-preferences-error-message'].textContent.includes('PRIVATE'), 'preferences 404: raw payload leaked');
+assert(ids['app-view'].hidden === false, 'preferences 404: valid session should remain logged in');
+""",
+    )

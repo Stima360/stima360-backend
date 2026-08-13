@@ -114,6 +114,32 @@
   const requestsContent = document.getElementById('requests-content');
   const requestsList = document.getElementById('requests-list');
 
+  const notificationsUnreadOnly = document.getElementById('notifications-unread-only');
+  const notificationsLoading = document.getElementById('notifications-loading');
+  const notificationsEmpty = document.getElementById('notifications-empty');
+  const notificationsEmptyMessage = document.getElementById('notifications-empty-message');
+  const notificationsError = document.getElementById('notifications-error');
+  const notificationsErrorMessage = document.getElementById('notifications-error-message');
+  const notificationsRetry = document.getElementById('notifications-retry');
+  const notificationsContent = document.getElementById('notifications-content');
+  const notificationsList = document.getElementById('notifications-list');
+  const notificationsPagination = document.getElementById('notifications-pagination');
+  const notificationsLoadMore = document.getElementById('notifications-load-more');
+  const notificationsPaginationStatus = document.getElementById('notifications-pagination-status');
+
+  const notificationPreferencesLoading = document.getElementById('notification-preferences-loading');
+  const notificationPreferencesError = document.getElementById('notification-preferences-error');
+  const notificationPreferencesErrorMessage = document.getElementById('notification-preferences-error-message');
+  const notificationPreferencesRetry = document.getElementById('notification-preferences-retry');
+  const notificationPreferencesForm = document.getElementById('notification-preferences-form');
+  const preferenceInApp = document.getElementById('preference-in-app');
+  const preferencePublication = document.getElementById('preference-publication');
+  const preferenceVisitFeedback = document.getElementById('preference-visit-feedback');
+  const preferenceDocument = document.getElementById('preference-document');
+  const preferenceRequestUpdate = document.getElementById('preference-request-update');
+  const notificationPreferencesSave = document.getElementById('notification-preferences-save');
+  const notificationPreferencesStatus = document.getElementById('notification-preferences-status');
+
   const REQUEST_TYPE_LABELS = {
     contact_request: 'Essere ricontattato',
     correction_request: 'Segnalare una correzione',
@@ -131,6 +157,15 @@
   };
   const REQUEST_SUBJECT_MAX = 150;
   const REQUEST_MESSAGE_MAX = 5000;
+
+
+  const NOTIFICATION_TYPE_LABELS = {
+    publication_published: 'Nuovo aggiornamento',
+    visit_feedback_published: 'Nuovo feedback visita',
+    shared_document_published: 'Nuovo documento',
+    request_handled: 'Aggiornamento richiesta',
+  };
+  const NOTIFICATIONS_LIMIT = 50;
 
   const state = {
     session: null,
@@ -161,6 +196,16 @@
     requestItems: [],
     requestGeneration: 0,
     requestSubmitInFlight: false,
+
+    notificationItems: [],
+    notificationGeneration: 0,
+    notificationOffset: 0,
+    notificationHasMore: false,
+    notificationUnreadOnly: false,
+    notificationLoadInFlight: false,
+    notificationReadInFlight: new Set(),
+    notificationPreferencesGeneration: 0,
+    notificationPreferencesSaving: false,
   };
 
   class PortalRequestError extends Error {
@@ -410,6 +455,57 @@
     clearRequestFormStatus();
   }
 
+
+  function resetNotificationsState({ preserveFilter = false } = {}) {
+    state.notificationGeneration += 1;
+    state.notificationItems = [];
+    state.notificationOffset = 0;
+    state.notificationHasMore = false;
+    state.notificationLoadInFlight = false;
+    state.notificationReadInFlight.clear();
+    if (!preserveFilter) {
+      state.notificationUnreadOnly = false;
+      notificationsUnreadOnly.checked = false;
+    }
+    notificationsList.replaceChildren();
+    notificationsLoading.hidden = true;
+    notificationsEmpty.hidden = true;
+    notificationsError.hidden = true;
+    notificationsContent.hidden = true;
+    notificationsErrorMessage.textContent = '';
+    notificationsEmptyMessage.textContent = 'Non ci sono notifiche da mostrare.';
+    notificationsPagination.hidden = true;
+    notificationsLoadMore.disabled = false;
+    notificationsLoadMore.textContent = 'Carica altre';
+    notificationsPaginationStatus.textContent = '';
+  }
+
+  function clearNotificationPreferencesStatus() {
+    notificationPreferencesStatus.textContent = '';
+    notificationPreferencesStatus.classList.remove('is-error');
+  }
+
+  function resetNotificationPreferencesState() {
+    state.notificationPreferencesGeneration += 1;
+    state.notificationPreferencesSaving = false;
+    notificationPreferencesLoading.hidden = true;
+    notificationPreferencesError.hidden = true;
+    notificationPreferencesForm.hidden = true;
+    notificationPreferencesErrorMessage.textContent = '';
+    notificationPreferencesSave.disabled = false;
+    notificationPreferencesSave.textContent = 'Salva preferenze';
+    clearNotificationPreferencesStatus();
+    for (const input of [
+      preferenceInApp,
+      preferencePublication,
+      preferenceVisitFeedback,
+      preferenceDocument,
+      preferenceRequestUpdate,
+    ]) {
+      input.checked = false;
+    }
+  }
+
   function resetPropertyDetail() {
     state.propertyGeneration += 1;
     propertyDetailLoading.hidden = true;
@@ -446,6 +542,8 @@
     state.session = null;
     state.busy = false;
     resetDashboardState();
+    resetNotificationsState();
+    resetNotificationPreferencesState();
     tokenInput.value = '';
     loginButton.disabled = false;
     logoutButton.disabled = false;
@@ -609,6 +707,46 @@
     }
     if (error.status === 422) {
       return 'Controlla i campi della richiesta e riprova.';
+    }
+    return error.message;
+  }
+
+
+  function notificationsErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare le notifiche. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare le notifiche con i dati disponibili.';
+    }
+    return error.message;
+  }
+
+  function notificationReadErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile aggiornare la notifica. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile aggiornare la notifica.';
+    }
+    return error.message;
+  }
+
+  function notificationPreferencesErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare le preferenze. Riprova tra poco.';
+    }
+    if (error.status === 404) {
+      return 'Contenuto non disponibile o accesso non più valido.';
+    }
+    if (error.status === 422) {
+      return 'Impossibile caricare le preferenze con i dati disponibili.';
     }
     return error.message;
   }
@@ -2443,6 +2581,416 @@
     await loadRequests(propertyAtStart);
   }
 
+
+  function showNotificationsState(name, message = '') {
+    notificationsLoading.hidden = name !== 'loading';
+    notificationsEmpty.hidden = name !== 'empty';
+    notificationsError.hidden = name !== 'error';
+    notificationsContent.hidden = name !== 'content';
+    if (name === 'error') {
+      notificationsErrorMessage.textContent = message || 'Riprova tra poco.';
+    }
+    if (name === 'empty') {
+      notificationsEmptyMessage.textContent = state.notificationUnreadOnly
+        ? 'Non ci sono notifiche non lette.'
+        : 'Non ci sono notifiche da mostrare.';
+    }
+  }
+
+  function notificationTypeLabel(type) {
+    return NOTIFICATION_TYPE_LABELS[type] || 'Notifica';
+  }
+
+  function notificationId(item) {
+    const id = Number(item && item.id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  function renderNotificationCard(item) {
+    const id = notificationId(item);
+    const card = document.createElement('article');
+    card.className = 'notification-card';
+    card.setAttribute('role', 'listitem');
+    if (id !== null) card.dataset.notificationId = String(id);
+    card.classList.toggle('is-unread', !item.read_at);
+
+    const top = document.createElement('div');
+    top.className = 'notification-card-topline';
+    const type = document.createElement('span');
+    type.className = 'notification-type-label';
+    type.textContent = notificationTypeLabel(item.type);
+    const readState = document.createElement('span');
+    readState.className = 'notification-read-badge';
+    readState.textContent = item.read_at ? 'Letta' : 'Non letta';
+    top.append(type, readState);
+
+    const title = document.createElement('h3');
+    title.className = 'notification-title';
+    title.textContent = typeof item.title === 'string' && item.title.trim() ? item.title : 'Notifica';
+    const body = document.createElement('p');
+    body.className = 'notification-body';
+    body.textContent = typeof item.body === 'string' ? item.body : '';
+    const date = document.createElement('p');
+    date.className = 'notification-date';
+    date.textContent = item.created_at ? formatPublishedAt(item.created_at) : 'Data non disponibile';
+
+    const actions = document.createElement('div');
+    actions.className = 'notification-actions';
+    const actionStatus = document.createElement('p');
+    actionStatus.className = 'status-message notification-action-status';
+    actionStatus.setAttribute('role', 'status');
+    actionStatus.setAttribute('aria-live', 'polite');
+    if (id !== null) actionStatus.dataset.notificationStatusId = String(id);
+
+    const button = document.createElement('button');
+    button.className = 'secondary-button notification-read-button';
+    button.type = 'button';
+    button.textContent = item.read_at ? 'Letta' : 'Segna come letta';
+    button.disabled = Boolean(item.read_at) || id === null;
+    if (id !== null) button.dataset.notificationId = String(id);
+    button.addEventListener('click', () => {
+      if (id !== null) void markNotificationRead(id);
+    });
+    actions.append(button, actionStatus);
+    card.append(top, title, body, date, actions);
+    return card;
+  }
+
+  function renderNotifications() {
+    notificationsList.replaceChildren();
+    for (const item of state.notificationItems) {
+      if (item && typeof item === 'object') {
+        notificationsList.append(renderNotificationCard(item));
+      }
+    }
+  }
+
+  function notificationPageUrl(offset) {
+    const params = new URLSearchParams({
+      limit: String(NOTIFICATIONS_LIMIT),
+      offset: String(offset),
+      unread_only: state.notificationUnreadOnly ? 'true' : 'false',
+    });
+    return `/notifications?${params.toString()}`;
+  }
+
+  function updateNotificationPagination() {
+    notificationsPagination.hidden = !state.notificationHasMore;
+    notificationsLoadMore.disabled = state.notificationLoadInFlight || !state.notificationHasMore;
+    notificationsLoadMore.textContent = state.notificationLoadInFlight ? 'Caricamento…' : 'Carica altre';
+    notificationsPaginationStatus.textContent = state.notificationHasMore
+      ? `${state.notificationItems.length} notifiche caricate.`
+      : '';
+  }
+
+  async function confirmNotificationSessionAfterNotFound(generation) {
+    try {
+      const session = await loadSession();
+      if (generation !== state.notificationGeneration || !state.session) return false;
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (generation === state.notificationGeneration && state.session && isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+      }
+      return false;
+    }
+  }
+
+  async function loadNotifications({ reset = false } = {}) {
+    if (!state.session) return;
+
+    if (reset) {
+      resetNotificationsState({ preserveFilter: true });
+    }
+    if (state.notificationLoadInFlight || (!reset && !state.notificationHasMore && state.notificationOffset > 0)) {
+      return;
+    }
+
+    const generation = state.notificationGeneration;
+    const filterAtStart = state.notificationUnreadOnly;
+    const offsetAtStart = state.notificationOffset;
+    state.notificationLoadInFlight = true;
+    if (offsetAtStart === 0) showNotificationsState('loading');
+    updateNotificationPagination();
+
+    let payload;
+    try {
+      payload = await apiRequest(notificationPageUrl(offsetAtStart));
+    } catch (error) {
+      if (
+        generation !== state.notificationGeneration
+        || filterAtStart !== state.notificationUnreadOnly
+        || !state.session
+      ) return;
+      state.notificationLoadInFlight = false;
+      updateNotificationPagination();
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmNotificationSessionAfterNotFound(generation);
+        if (sessionValid && generation === state.notificationGeneration && state.session) {
+          showNotificationsState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      showNotificationsState('error', notificationsErrorText(error));
+      return;
+    }
+
+    if (
+      generation !== state.notificationGeneration
+      || filterAtStart !== state.notificationUnreadOnly
+      || !state.session
+    ) return;
+
+    state.notificationLoadInFlight = false;
+    const items = payload && Array.isArray(payload.items)
+      ? payload.items.filter((item) => item && typeof item === 'object')
+      : [];
+    state.notificationItems = offsetAtStart === 0 ? items : state.notificationItems.concat(items);
+    state.notificationHasMore = payload && payload.has_more === true;
+    const payloadLimit = payload && Number.isInteger(payload.limit) && payload.limit > 0
+      ? payload.limit
+      : NOTIFICATIONS_LIMIT;
+    const payloadOffset = payload && Number.isInteger(payload.offset) && payload.offset >= 0
+      ? payload.offset
+      : offsetAtStart;
+    state.notificationOffset = payloadOffset + payloadLimit;
+
+    if (state.notificationItems.length === 0) {
+      showNotificationsState('empty');
+      updateNotificationPagination();
+      return;
+    }
+    renderNotifications();
+    showNotificationsState('content');
+    updateNotificationPagination();
+  }
+
+  function notificationCardById(id) {
+    return notificationsList.children.find
+      ? notificationsList.children.find((card) => Number(card.dataset.notificationId) === id)
+      : Array.from(notificationsList.children).find((card) => Number(card.dataset.notificationId) === id);
+  }
+
+  function updateNotificationItemFromRead(id, payload) {
+    const index = state.notificationItems.findIndex((item) => notificationId(item) === id);
+    if (index < 0) return;
+    const card = notificationCardById(id);
+    if (state.notificationUnreadOnly) {
+      state.notificationItems.splice(index, 1);
+      state.notificationOffset = Math.max(0, state.notificationOffset - 1);
+      if (card) {
+        const remaining = Array.from(notificationsList.children).filter((item) => item !== card);
+        notificationsList.replaceChildren(...remaining);
+      }
+    } else {
+      state.notificationItems[index] = {
+        ...state.notificationItems[index],
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        read_at: payload && payload.read_at ? payload.read_at : new Date().toISOString(),
+      };
+      if (card) {
+        card.classList.remove('is-unread');
+        const readState = card.children[0]?.children?.[1];
+        const button = card.children[4]?.children?.[0];
+        const status = card.children[4]?.children?.[1];
+        if (readState) readState.textContent = 'Letta';
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Letta';
+        }
+        if (status) {
+          status.classList.remove('is-error');
+          status.textContent = 'Notifica segnata come letta.';
+        }
+      }
+    }
+    if (state.notificationItems.length === 0) {
+      showNotificationsState('empty');
+      notificationsList.replaceChildren();
+    } else {
+      showNotificationsState('content');
+    }
+    updateNotificationPagination();
+  }
+
+  async function markNotificationRead(id) {
+    if (!state.session || state.notificationReadInFlight.has(id)) return;
+    const item = state.notificationItems.find((entry) => notificationId(entry) === id);
+    if (!item || item.read_at) return;
+
+    const generation = state.notificationGeneration;
+    state.notificationReadInFlight.add(id);
+    const card = notificationCardById(id);
+    const button = card && card.children.length ? card.children[4]?.children?.[0] : null;
+    const status = card && card.children.length ? card.children[4]?.children?.[1] : null;
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Aggiornamento…';
+    }
+    if (status) status.textContent = 'Aggiornamento della notifica in corso…';
+
+    let payload;
+    try {
+      payload = await apiRequest(`/notifications/${encodeURIComponent(String(id))}/read`, { method: 'POST' });
+    } catch (error) {
+      if (generation !== state.notificationGeneration || !state.session) return;
+      state.notificationReadInFlight.delete(id);
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmNotificationSessionAfterNotFound(generation);
+        if (!sessionValid || generation !== state.notificationGeneration || !state.session) return;
+      }
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Segna come letta';
+      }
+      if (status) {
+        status.classList.add('is-error');
+        status.textContent = notificationReadErrorText(error);
+      }
+      return;
+    }
+
+    if (generation !== state.notificationGeneration || !state.session) return;
+    state.notificationReadInFlight.delete(id);
+    updateNotificationItemFromRead(id, payload);
+  }
+
+  function showNotificationPreferencesState(name, message = '') {
+    notificationPreferencesLoading.hidden = name !== 'loading';
+    notificationPreferencesError.hidden = name !== 'error';
+    notificationPreferencesForm.hidden = name !== 'content';
+    if (name === 'error') {
+      notificationPreferencesErrorMessage.textContent = message || 'Riprova tra poco.';
+    }
+  }
+
+  function applyNotificationPreferences(payload) {
+    const values = payload && typeof payload === 'object' ? payload : {};
+    preferenceInApp.checked = values.in_app_enabled === true;
+    preferencePublication.checked = values.publication_enabled === true;
+    preferenceVisitFeedback.checked = values.visit_feedback_enabled === true;
+    preferenceDocument.checked = values.document_enabled === true;
+    preferenceRequestUpdate.checked = values.request_update_enabled === true;
+  }
+
+  function notificationPreferencesPayload() {
+    return {
+      in_app_enabled: Boolean(preferenceInApp.checked),
+      publication_enabled: Boolean(preferencePublication.checked),
+      visit_feedback_enabled: Boolean(preferenceVisitFeedback.checked),
+      document_enabled: Boolean(preferenceDocument.checked),
+      request_update_enabled: Boolean(preferenceRequestUpdate.checked),
+    };
+  }
+
+  async function confirmNotificationPreferencesSessionAfterNotFound(generation) {
+    try {
+      const session = await loadSession();
+      if (generation !== state.notificationPreferencesGeneration || !state.session) return false;
+      state.session = session;
+      return true;
+    } catch (error) {
+      if (generation === state.notificationPreferencesGeneration && state.session && isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+      }
+      return false;
+    }
+  }
+
+  async function loadNotificationPreferences() {
+    if (!state.session) return;
+    const generation = ++state.notificationPreferencesGeneration;
+    state.notificationPreferencesSaving = false;
+    notificationPreferencesSave.disabled = false;
+    notificationPreferencesSave.textContent = 'Salva preferenze';
+    clearNotificationPreferencesStatus();
+    showNotificationPreferencesState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest('/notification-preferences');
+    } catch (error) {
+      if (generation !== state.notificationPreferencesGeneration || !state.session) return;
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmNotificationPreferencesSessionAfterNotFound(generation);
+        if (sessionValid && generation === state.notificationPreferencesGeneration && state.session) {
+          showNotificationPreferencesState('error', 'Contenuto non disponibile o accesso non più valido.');
+        }
+        return;
+      }
+      showNotificationPreferencesState('error', notificationPreferencesErrorText(error));
+      return;
+    }
+
+    if (generation !== state.notificationPreferencesGeneration || !state.session) return;
+    applyNotificationPreferences(payload);
+    showNotificationPreferencesState('content');
+  }
+
+  async function saveNotificationPreferences() {
+    if (!state.session || state.notificationPreferencesSaving) return;
+    const generation = state.notificationPreferencesGeneration;
+    const preferencesBody = notificationPreferencesPayload();
+    state.notificationPreferencesSaving = true;
+    notificationPreferencesSave.disabled = true;
+    notificationPreferencesSave.textContent = 'Salvataggio…';
+    notificationPreferencesStatus.classList.remove('is-error');
+    notificationPreferencesStatus.textContent = 'Salvataggio delle preferenze in corso…';
+
+    let responsePayload;
+    try {
+      responsePayload = await apiRequest('/notification-preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(preferencesBody),
+      });
+    } catch (error) {
+      if (generation !== state.notificationPreferencesGeneration || !state.session) return;
+      state.notificationPreferencesSaving = false;
+      notificationPreferencesSave.disabled = false;
+      notificationPreferencesSave.textContent = 'Salva preferenze';
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        const sessionValid = await confirmNotificationPreferencesSessionAfterNotFound(generation);
+        if (!sessionValid || generation !== state.notificationPreferencesGeneration || !state.session) return;
+      }
+      notificationPreferencesStatus.classList.add('is-error');
+      notificationPreferencesStatus.textContent = notificationPreferencesErrorText(error);
+      return;
+    }
+
+    if (generation !== state.notificationPreferencesGeneration || !state.session) return;
+    state.notificationPreferencesSaving = false;
+    notificationPreferencesSave.disabled = false;
+    notificationPreferencesSave.textContent = 'Salva preferenze';
+    applyNotificationPreferences(responsePayload);
+    notificationPreferencesStatus.classList.remove('is-error');
+    notificationPreferencesStatus.textContent = 'Preferenze salvate.';
+  }
+
+  function startP68DataLoads() {
+    if (!state.session) return;
+    state.notificationUnreadOnly = notificationsUnreadOnly.checked === true;
+    void loadNotifications({ reset: true });
+    void loadNotificationPreferences();
+  }
+
   async function selectProperty(id) {
     if (!state.session) {
       return;
@@ -2564,6 +3112,7 @@
     await exchangeToken(token);
     const session = await loadSession();
     enterAuthenticated(session);
+    startP68DataLoads();
     await loadDashboard();
   }
 
@@ -2590,6 +3139,7 @@
     try {
       const session = await loadSession();
       enterAuthenticated(session);
+      startP68DataLoads();
       await loadDashboard();
     } catch (error) {
       if (isAuthLoss(error)) {
@@ -2709,6 +3259,32 @@
     if (state.session && state.selectedPropertyId !== null) {
       void loadRequests(state.selectedPropertyId);
     }
+  });
+
+
+  notificationsUnreadOnly.addEventListener('change', () => {
+    if (!state.session) return;
+    state.notificationUnreadOnly = notificationsUnreadOnly.checked === true;
+    void loadNotifications({ reset: true });
+  });
+
+  notificationsRetry.addEventListener('click', () => {
+    if (state.session) void loadNotifications({ reset: true });
+  });
+
+  notificationsLoadMore.addEventListener('click', () => {
+    if (state.session && state.notificationHasMore && !state.notificationLoadInFlight) {
+      void loadNotifications();
+    }
+  });
+
+  notificationPreferencesRetry.addEventListener('click', () => {
+    if (state.session) void loadNotificationPreferences();
+  });
+
+  notificationPreferencesForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveNotificationPreferences();
   });
 
   logoutButton.addEventListener('click', async () => {
