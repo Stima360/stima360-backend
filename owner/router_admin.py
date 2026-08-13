@@ -1,7 +1,10 @@
 from datetime import datetime
+import os
+import secrets
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from .schemas import (
@@ -34,7 +37,51 @@ from .document_storage import (
     upload_limits_from_env,
 )
 
-router = APIRouter(prefix="/api/owner/admin", tags=["owner-admin"])
+_admin_security = HTTPBasic(auto_error=False)
+
+
+def require_owner_admin(
+    credentials: HTTPBasicCredentials | None = Depends(_admin_security),
+) -> str:
+    """Authenticate every OWNER admin API request against server credentials.
+
+    The application already provisions ADMIN_USER/ADMIN_PASS.  OWNER Admin does
+    not create a browser session here: credentials are verified server-side on
+    every request, so no frontend state can grant access on its own.
+    """
+
+    admin_user = os.getenv("ADMIN_USER")
+    admin_pass = os.getenv("ADMIN_PASS")
+    if not admin_user or not admin_pass:
+        raise HTTPException(
+            status_code=503,
+            detail="Servizio amministrativo non disponibile",
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Non autorizzato",
+            headers={"WWW-Authenticate": 'Basic realm="STIMA360 OWNER Admin"'},
+        )
+
+    user_ok = secrets.compare_digest(credentials.username, admin_user)
+    password_ok = secrets.compare_digest(credentials.password, admin_pass)
+    if not (user_ok and password_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="Non autorizzato",
+            headers={"WWW-Authenticate": 'Basic realm="STIMA360 OWNER Admin"'},
+        )
+
+    return credentials.username
+
+
+router = APIRouter(
+    prefix="/api/owner/admin",
+    tags=["owner-admin"],
+    dependencies=[Depends(require_owner_admin)],
+)
 
 
 def x(f, *a, **kw):

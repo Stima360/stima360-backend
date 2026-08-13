@@ -34,7 +34,7 @@ from owner.document_storage import (
     sanitize_filename,
     stage_upload,
 )
-from owner.router_admin import router as admin_router
+from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
 from property import repository as property_repo
 
@@ -429,6 +429,7 @@ def test_admin_upload_route_stages_and_passes_safe_metadata(monkeypatch):
     monkeypatch.setattr(repo, "create_uploaded_shared_document", fake_create)
     app = FastAPI()
     app.include_router(admin_router)
+    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
     client = TestClient(app)
     response = client.post(
         "/api/owner/admin/documents/upload",
@@ -458,6 +459,7 @@ def test_admin_upload_route_rejects_mime_mismatch_before_repository(monkeypatch)
     monkeypatch.setattr(repo, "create_uploaded_shared_document", fake_create)
     app = FastAPI()
     app.include_router(admin_router)
+    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
     response = TestClient(app).post(
         "/api/owner/admin/documents/upload",
         files={"file": ("atto.pdf", PNG, "application/pdf")},

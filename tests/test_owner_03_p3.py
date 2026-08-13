@@ -13,7 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 from core.exceptions import ConflictError
 from owner import repository as repo
 from owner.dependencies import current_owner
-from owner.router_admin import router as admin_router
+from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
 from owner.schemas import (
     VisitFeedbackCreate,
@@ -102,6 +102,7 @@ def test_update_and_supersede_apply_same_privacy_rules():
 def test_privacy_endpoint_returns_codes_without_echoing_text():
     client = TestClient(FastAPI())
     client.app.include_router(admin_router)
+    client.app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
     sensitive = "mario.rossi@example.com"
     response = client.post(
         "/api/owner/admin/visit-feedback/validate-privacy",
@@ -373,6 +374,7 @@ def test_portal_list_and_detail_are_account_isolated(monkeypatch):
 def test_admin_list_filters_and_detail(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
+    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
     captured = {}
 
     def fake_list(*args):

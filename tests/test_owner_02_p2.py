@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from owner.dependencies import current_owner
-from owner.router_admin import router as admin_router
+from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
 from owner.schemas import FeedbackCreate, FeedbackPublic, SharedDocumentCreate, VisitFeedbackCreate
 from owner import repository as repo
@@ -91,6 +91,7 @@ def test_portal_http_isolation_and_reads(monkeypatch):
 def test_admin_http_document_lifecycle(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
+    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
     monkeypatch.setattr(repo, "create_shared_document", lambda d: {"id": 1, **d, "status": "draft"})
     monkeypatch.setattr(repo, "publish_shared_document", lambda i: {"id": i, "status": "published"})
     c = TestClient(app)

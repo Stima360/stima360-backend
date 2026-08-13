@@ -38,5 +38,5 @@ def test_formally_valid_but_nonexistent_owner_token(base):
 
 def test_invalid_payload_nonpersistent(base):
     response=requests.post(base+"/api/owner/admin/accounts",json={},timeout=20)
-    assert response.status_code in {400,404,422}
+    assert response.status_code == 401
     assert_no_server_or_sql_leak(response)
