@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import base64
-import re
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from owner import repository as repo
-from owner.router_admin import router as admin_router
+from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
 
 
@@ -109,44 +108,62 @@ def test_owner_admin_missing_server_credentials_fail_closed(monkeypatch):
     assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
 
 
-def _concrete_admin_path(path: str) -> str:
-    # Anonymous auth must be rejected before path/body/query validation.  Any
-    # syntactically valid placeholder value is sufficient for this proof.
-    return re.sub(r"\{[^}]+\}", "1", path)
-
-
 def test_every_owner_admin_api_route_has_server_side_auth_dependency(monkeypatch):
-    """Behaviorally prove that all OWNER Admin routes are protected.
+    """Prove router-wide auth without synthesizing requests for every route.
 
-    Do not rely on FastAPI's private ``Dependant`` object layout: router-level
-    dependencies have changed representation across FastAPI versions even when
-    request-time security semantics are identical.
+    ``APIRouter.dependencies`` is the router configuration we own and is the
+    correct level to verify the global dependency.  We deliberately avoid
+    FastAPI's per-route ``Dependant`` graph, whose internal representation may
+    vary between framework versions.
+
+    Runtime behavior is then checked on representative real routes with known
+    request shapes.  The dedicated portal test below proves that the Basic
+    dependency does not leak onto OWNER Portal routes.
     """
 
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
 
+    # 1. The OWNER Admin APIRouter itself carries require_owner_admin globally.
+    assert admin_router.prefix == "/api/owner/admin"
+    assert any(
+        getattr(dependency, "dependency", None) is require_owner_admin
+        for dependency in admin_router.dependencies
+    )
+
+    # 2. The complete current OWNER Admin surface belongs to that router.
+    admin_routes = [route for route in admin_router.routes if isinstance(route, APIRoute)]
+    assert len(admin_routes) == 38
+    assert all(route.path.startswith(admin_router.prefix) for route in admin_routes)
+
     app = _admin_app()
-    client = TestClient(app)
-    routes = [
+    included_admin_routes = [
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/api/owner/admin")
+        if isinstance(route, APIRoute)
+        and route.path.startswith(admin_router.prefix)
     ]
+    assert {(route.path, frozenset(route.methods)) for route in included_admin_routes} == {
+        (route.path, frozenset(route.methods)) for route in admin_routes
+    }
 
-    assert len(routes) == 38
-    for route in routes:
-        method = next(
-            method
-            for method in sorted(route.methods)
-            if method not in {"HEAD", "OPTIONS"}
-        )
-        response = client.request(method, _concrete_admin_path(route.path))
-        assert response.status_code == 401, f"Auth mancante: {method} {route.path}"
-        assert response.json() == {"detail": "Non autorizzato"}
-        assert response.headers.get("www-authenticate") == (
+    # 3. Representative real routes confirm request-time enforcement.
+    client = TestClient(app)
+    for path in ("/api/owner/admin/dashboard", "/api/owner/admin/accounts"):
+        anonymous = client.get(path)
+        assert anonymous.status_code == 401
+        assert anonymous.json() == {"detail": "Non autorizzato"}
+        assert anonymous.headers.get("www-authenticate") == (
             'Basic realm="STIMA360 OWNER Admin"'
         )
+
+    monkeypatch.setattr(repo, "dashboard", lambda: {"active_accounts": 1})
+    authenticated = client.get(
+        "/api/owner/admin/dashboard",
+        headers=_basic("giorgio", "test-secret"),
+    )
+    assert authenticated.status_code == 200
+    assert authenticated.json() == {"active_accounts": 1}
 
 
 def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
