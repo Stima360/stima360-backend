@@ -47,6 +47,8 @@
           <button id="nav-dashboard" class="nav-button" type="button" aria-controls="section-dashboard">Dashboard</button>
           <button id="nav-accounts" class="nav-button" type="button" aria-controls="section-accounts">Proprietari</button>
           <button id="nav-access" class="nav-button" type="button" aria-controls="section-access">Accessi</button>
+          <button id="nav-publications" class="nav-button" type="button" aria-controls="section-publications">Pubblicazioni</button>
+          <button id="nav-requests" class="nav-button" type="button" aria-controls="section-requests">Richieste</button>
         </nav>
         <button id="admin-logout" class="button secondary logout-button" type="button">Esci</button>
       </aside>
@@ -165,6 +167,84 @@
             <button id="access-retry" class="button secondary" type="button">Riprova</button>
           </div>
           <div id="access-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-publications" class="admin-section" hidden aria-labelledby="publications-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="publications-heading">Pubblicazioni</h3>
+              <p class="muted">Gestisci gli aggiornamenti OWNER nel rispetto dello stato e del versionamento backend.</p>
+            </div>
+            <button id="publications-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel">
+            <h4>Nuova pubblicazione draft</h4>
+            <p class="muted">L'ID immobile viene inserito manualmente. Nessuna API PROPERTY viene chiamata.</p>
+            <form id="publication-create-form" class="form-grid form-grid-wide" novalidate>
+              <div class="field">
+                <label for="publication-property-id">ID immobile</label>
+                <input id="publication-property-id" name="property_id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="publication-type">Tipo pubblicazione</label>
+                <select id="publication-type" name="publication_type" required>
+                  <option value="general_update">Aggiornamento generale</option>
+                  <option value="marketing_update">Aggiornamento marketing</option>
+                  <option value="visit_update">Aggiornamento visite</option>
+                  <option value="feedback_summary">Sintesi feedback</option>
+                  <option value="strategy_update">Aggiornamento strategia</option>
+                  <option value="milestone">Traguardo</option>
+                </select>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-title">Titolo</label>
+                <input id="publication-title" name="title" type="text" maxlength="200" required>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-summary">Sintesi</label>
+                <textarea id="publication-summary" name="summary" maxlength="1000" rows="3"></textarea>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-body">Contenuto</label>
+                <textarea id="publication-body" name="body" maxlength="20000" rows="7" required></textarea>
+              </div>
+              <div class="field checkbox-field">
+                <input id="publication-ack-required" name="acknowledgement_required" type="checkbox">
+                <label for="publication-ack-required">Richiedi presa visione</label>
+              </div>
+              <div class="form-actions">
+                <button id="publication-create-submit" class="button primary" type="submit">Crea draft</button>
+              </div>
+            </form>
+            <p id="publication-form-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div id="publications-loading" class="state-card" hidden role="status">Caricamento pubblicazioni…</div>
+          <div id="publications-empty" class="state-card" hidden>Nessuna pubblicazione OWNER disponibile.</div>
+          <div id="publications-error" class="state-card error-state" hidden>
+            <p id="publications-error-message"></p>
+            <button id="publications-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="publications-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-requests" class="admin-section" hidden aria-labelledby="requests-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="requests-heading">Richieste</h3>
+              <p class="muted">Richieste inviate dai proprietari tramite il portale OWNER.</p>
+            </div>
+            <button id="requests-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div id="requests-loading" class="state-card" hidden role="status">Caricamento richieste…</div>
+          <div id="requests-empty" class="state-card" hidden>Nessuna richiesta proprietario disponibile.</div>
+          <div id="requests-error" class="state-card error-state" hidden>
+            <p id="requests-error-message"></p>
+            <button id="requests-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="requests-content" class="entity-list" hidden aria-live="polite"></div>
         </section>
       </div>
     </section>

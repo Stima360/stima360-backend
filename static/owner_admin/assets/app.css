@@ -118,3 +118,57 @@ h4 { margin: 0 0 14px; font-size: 1rem; }
   .button { width: 100%; }
   .entity-actions .button { width: auto; flex: 1 1 140px; }
 }
+
+/* OWNER 0.2 P7.2 — Pubblicazioni e richieste */
+.field textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #c9d5e3;
+  border-radius: 10px;
+  background: #fff;
+  color: #172033;
+  padding: 10px 11px;
+  font: inherit;
+  line-height: 1.45;
+}
+.field textarea:focus { outline: 3px solid rgba(42, 104, 170, .24); outline-offset: 2px; }
+.form-grid-wide .field-span-2,
+.inline-editor .field-span-2 { grid-column: 1 / -1; }
+.entity-copy { margin: 12px 0 0; color: #34465e; line-height: 1.55; white-space: pre-wrap; }
+.body-copy { padding-top: 12px; border-top: 1px solid #edf1f5; }
+.action-area { margin-top: 12px; }
+.inline-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #cfd9e5;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.editor-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.editor-status { grid-column: 1 / -1; margin: 0; }
+.public-response {
+  margin-top: 14px;
+  padding: 14px;
+  border-left: 4px solid #6e91ba;
+  border-radius: 8px;
+  background: #f4f8fc;
+}
+.public-response p { margin: 6px 0 0; color: #26384f; line-height: 1.5; white-space: pre-wrap; }
+.publication-card .status-badge.draft { background: #fff4dd; color: #775511; }
+.publication-card .status-badge.published { background: #e7f6ed; color: #17623b; }
+.publication-card .status-badge.archived { background: #edf1f6; color: #53657d; }
+.request-card .status-badge.new { background: #fff4dd; color: #775511; }
+.request-card .status-badge.in_review { background: #e8eef7; color: #263d5b; }
+.request-card .status-badge.handled { background: #e7f6ed; color: #17623b; }
+.request-card .status-badge.closed { background: #edf1f6; color: #53657d; }
+
+@media (max-width: 760px) {
+  .inline-editor { grid-template-columns: 1fr; }
+  .form-grid-wide .field-span-2,
+  .inline-editor .field-span-2,
+  .editor-status { grid-column: 1; }
+}
+.request-editor { border-left: 4px solid #6e91ba; }
