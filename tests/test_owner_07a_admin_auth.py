@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import ast
 import base64
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from owner import repository as repo
@@ -108,62 +109,80 @@ def test_owner_admin_missing_server_credentials_fail_closed(monkeypatch):
     assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
 
 
-def test_every_owner_admin_api_route_has_server_side_auth_dependency(monkeypatch):
-    """Prove router-wide auth without synthesizing requests for every route.
+def test_every_owner_admin_api_route_has_server_side_auth_dependency():
+    """Verify router-wide auth and the 38 declarations without shared-router state.
 
-    ``APIRouter.dependencies`` is the router configuration we own and is the
-    correct level to verify the global dependency.  We deliberately avoid
-    FastAPI's per-route ``Dependant`` graph, whose internal representation may
-    vary between framework versions.
-
-    Runtime behavior is then checked on representative real routes with known
-    request shapes.  The dedicated portal test below proves that the Basic
-    dependency does not leak onto OWNER Portal routes.
+    Route enumeration is intentionally source/AST based, matching the robust P4
+    approach.  This test therefore does not re-include or traverse a shared
+    ``APIRouter`` instance that another test may already have mutated.  Runtime
+    enforcement is covered by the dedicated anonymous/authenticated tests above.
     """
 
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
-
-    # 1. The OWNER Admin APIRouter itself carries require_owner_admin globally.
+    # 1. Live router configuration: the OWNER Admin router carries Basic auth
+    # globally, at the router level, rather than relying on individual handlers.
     assert admin_router.prefix == "/api/owner/admin"
     assert any(
         getattr(dependency, "dependency", None) is require_owner_admin
         for dependency in admin_router.dependencies
     )
 
-    # 2. The complete current OWNER Admin surface belongs to that router.
-    admin_routes = [route for route in admin_router.routes if isinstance(route, APIRoute)]
-    assert len(admin_routes) == 38
-    assert all(route.path.startswith(admin_router.prefix) for route in admin_routes)
+    # 2. Enumerate the declared route surface directly from source.  This is
+    # deterministic across test order and avoids FastAPI ``route.dependant``
+    # internals as well as re-including the shared router object.
+    router_path = Path(__file__).parents[1] / "owner/router_admin.py"
+    source = router_path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(router_path))
 
-    app = _admin_app()
-    included_admin_routes = [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and route.path.startswith(admin_router.prefix)
-    ]
-    assert {(route.path, frozenset(route.methods)) for route in included_admin_routes} == {
-        (route.path, frozenset(route.methods)) for route in admin_routes
-    }
+    declared_prefix = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "router"
+            for target in node.targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+        if not (
+            isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "APIRouter"
+        ):
+            continue
+        for keyword in node.value.keywords:
+            if (
+                keyword.arg == "prefix"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ):
+                declared_prefix = keyword.value.value
+                break
 
-    # 3. Representative real routes confirm request-time enforcement.
-    client = TestClient(app)
-    for path in ("/api/owner/admin/dashboard", "/api/owner/admin/accounts"):
-        anonymous = client.get(path)
-        assert anonymous.status_code == 401
-        assert anonymous.json() == {"detail": "Non autorizzato"}
-        assert anonymous.headers.get("www-authenticate") == (
-            'Basic realm="STIMA360 OWNER Admin"'
-        )
+    assert declared_prefix == admin_router.prefix == "/api/owner/admin"
 
-    monkeypatch.setattr(repo, "dashboard", lambda: {"active_accounts": 1})
-    authenticated = client.get(
-        "/api/owner/admin/dashboard",
-        headers=_basic("giorgio", "test-secret"),
-    )
-    assert authenticated.status_code == 200
-    assert authenticated.json() == {"active_accounts": 1}
+    supported_methods = {"get", "post", "patch", "put", "delete"}
+    declared_routes: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        for decorator in getattr(node, "decorator_list", ()):
+            if not isinstance(decorator, ast.Call):
+                continue
+            func = decorator.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "router"
+                and func.attr in supported_methods
+                and decorator.args
+                and isinstance(decorator.args[0], ast.Constant)
+                and isinstance(decorator.args[0].value, str)
+            ):
+                continue
+            full_path = declared_prefix + decorator.args[0].value
+            declared_routes.append((func.attr.upper(), full_path))
+
+    assert len(declared_routes) == 38
+    assert len(declared_routes) == len(set(declared_routes))
+    assert all(path.startswith("/api/owner/admin/") for _, path in declared_routes)
 
 
 def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
