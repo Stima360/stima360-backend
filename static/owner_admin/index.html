@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>STIMA360 Admin</title>
+  <link rel="stylesheet" href="/owner-admin/assets/app.css">
+</head>
+<body>
+  <main class="admin-root">
+    <section id="login-view" class="login-shell" aria-labelledby="login-title">
+      <div class="login-card">
+        <div class="brand-row">
+          <div>
+            <p class="eyebrow">STIMA360</p>
+            <h1 id="login-title">Admin</h1>
+          </div>
+          <span class="release-badge">OWNER 0.2</span>
+        </div>
+        <p class="muted">Accesso riservato all'amministrazione OWNER.</p>
+        <form id="admin-login-form" novalidate>
+          <div class="field">
+            <label for="admin-username">Username</label>
+            <input id="admin-username" name="username" type="text" autocomplete="username" required>
+          </div>
+          <div class="field">
+            <label for="admin-password">Password</label>
+            <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <button id="admin-login-submit" class="button primary" type="submit">Accedi</button>
+        </form>
+        <p id="admin-login-status" class="status-message" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section id="admin-app" class="app-shell" hidden aria-label="STIMA360 Admin OWNER">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div>
+            <p class="eyebrow">STIMA360</p>
+            <h1>Admin</h1>
+          </div>
+          <span class="release-badge">OWNER 0.2</span>
+        </div>
+        <nav class="admin-nav" aria-label="Navigazione OWNER Admin">
+          <button id="nav-dashboard" class="nav-button" type="button" aria-controls="section-dashboard">Dashboard</button>
+          <button id="nav-accounts" class="nav-button" type="button" aria-controls="section-accounts">Proprietari</button>
+          <button id="nav-access" class="nav-button" type="button" aria-controls="section-access">Accessi</button>
+        </nav>
+        <button id="admin-logout" class="button secondary logout-button" type="button">Esci</button>
+      </aside>
+
+      <div class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">OWNER 0.2</p>
+            <h2 id="section-title">Dashboard</h2>
+          </div>
+          <p id="admin-global-status" class="status-message compact" role="status" aria-live="polite"></p>
+        </header>
+
+        <section id="section-dashboard" class="admin-section" aria-labelledby="dashboard-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="dashboard-heading">Dashboard OWNER</h3>
+              <p class="muted">Stato operativo delle funzioni OWNER già disponibili.</p>
+            </div>
+            <button id="dashboard-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+          <div id="dashboard-loading" class="state-card" role="status">Caricamento dashboard…</div>
+          <div id="dashboard-error" class="state-card error-state" hidden>
+            <p id="dashboard-error-message"></p>
+            <button id="dashboard-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="dashboard-content" class="kpi-grid" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-accounts" class="admin-section" hidden aria-labelledby="accounts-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="accounts-heading">Proprietari</h3>
+              <p class="muted">Account OWNER collegati ai contatti esistenti.</p>
+            </div>
+            <button id="accounts-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel">
+            <h4>Crea account proprietario</h4>
+            <p class="muted">Inserisci manualmente l'ID contatto. Nessuna ricerca CORE viene eseguita.</p>
+            <form id="account-create-form" class="form-grid" novalidate>
+              <div class="field">
+                <label for="account-contact-id">ID contatto</label>
+                <input id="account-contact-id" name="contact_id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="account-language">Lingua preferita</label>
+                <input id="account-language" name="preferred_language" type="text" value="it" maxlength="10" required>
+              </div>
+              <div class="form-actions">
+                <button id="account-create-submit" class="button primary" type="submit">Crea account</button>
+              </div>
+            </form>
+            <p id="account-form-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div id="accounts-loading" class="state-card" hidden role="status">Caricamento proprietari…</div>
+          <div id="accounts-empty" class="state-card" hidden>Nessun account proprietario disponibile.</div>
+          <div id="accounts-error" class="state-card error-state" hidden>
+            <p id="accounts-error-message"></p>
+            <button id="accounts-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="accounts-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-access" class="admin-section" hidden aria-labelledby="access-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="access-heading">Accessi immobili</h3>
+              <p class="muted">Associa un account OWNER a un immobile tramite ID esistenti.</p>
+            </div>
+            <button id="access-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel">
+            <h4>Nuovo accesso</h4>
+            <p class="muted">Gli ID account e immobile sono inseriti manualmente. Nessuna API CORE o PROPERTY viene chiamata.</p>
+            <form id="access-create-form" class="form-grid" novalidate>
+              <div class="field">
+                <label for="access-owner-account-id">ID account proprietario</label>
+                <input id="access-owner-account-id" name="owner_account_id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="access-property-id">ID immobile</label>
+                <input id="access-property-id" name="property_id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="access-role">Ruolo accesso</label>
+                <select id="access-role" name="access_role" required>
+                  <option value="owner">Proprietario</option>
+                  <option value="co_owner">Comproprietario</option>
+                  <option value="delegate">Delegato</option>
+                  <option value="legal_representative">Rappresentante legale</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="access-valid-until">Valido fino al</label>
+                <input id="access-valid-until" name="valid_until" type="datetime-local">
+              </div>
+              <div class="field checkbox-field">
+                <input id="access-primary" name="is_primary" type="checkbox">
+                <label for="access-primary">Immobile principale</label>
+              </div>
+              <div class="form-actions">
+                <button id="access-create-submit" class="button primary" type="submit">Crea accesso</button>
+              </div>
+            </form>
+            <p id="access-form-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div id="access-loading" class="state-card" hidden role="status">Caricamento accessi…</div>
+          <div id="access-empty" class="state-card" hidden>Nessun accesso OWNER disponibile.</div>
+          <div id="access-error" class="state-card error-state" hidden>
+            <p id="access-error-message"></p>
+            <button id="access-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="access-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <script src="/owner-admin/assets/app.js"></script>
+</body>
+</html>
