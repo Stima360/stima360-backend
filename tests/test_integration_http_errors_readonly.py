@@ -1,6 +1,9 @@
+import os
 import secrets
+
 import pytest
 import requests
+from requests.auth import HTTPBasicAuth
 from integration_p2_support import require_test_environment
 
 SQL_DETAIL_MARKERS=("psycopg","postgres","sqlstate","duplicate key","syntax error","traceback")
@@ -36,7 +39,18 @@ def test_formally_valid_but_nonexistent_owner_token(base):
     assert response.status_code==404
     assert_no_server_or_sql_leak(response)
 
+def _owner_admin_auth():
+    user = os.getenv("ADMIN_USER")
+    password = os.getenv("ADMIN_PASS")
+    assert user and password, "ADMIN_USER/ADMIN_PASS richiesti per il test admin autenticato"
+    return HTTPBasicAuth(user, password)
+
 def test_invalid_payload_nonpersistent(base):
-    response=requests.post(base+"/api/owner/admin/accounts",json={},timeout=20)
-    assert response.status_code == 401
+    response=requests.post(
+        base+"/api/owner/admin/accounts",
+        json={},
+        auth=_owner_admin_auth(),
+        timeout=20,
+    )
+    assert response.status_code == 422
     assert_no_server_or_sql_leak(response)
