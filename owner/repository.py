@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
+from core.repository import create_activity_with_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .security import generate_secret,hash_secret,utcnow,valid_session
 from .schemas import validate_visit_feedback_summary, visit_feedback_privacy_issues
@@ -129,8 +130,20 @@ def _public_feedback(row):
 
 
 def create_feedback(a,p,d):
- require_property(a,p)
  with core_cursor(commit=True) as(_,c):
+  c.execute(
+      """SELECT oa.contact_id
+           FROM owner_accounts oa
+           JOIN owner_property_access x ON x.owner_account_id=oa.id
+          WHERE oa.id=%s AND oa.status='active' AND x.property_id=%s
+            AND x.access_status='active' AND x.revoked_at IS NULL
+            AND (x.valid_until IS NULL OR x.valid_until>NOW())
+          FOR UPDATE OF oa,x""",
+      (a,p),
+  )
+  access=c.fetchone()
+  if not access:raise NotFoundError(NF)
+  contact_id=access['contact_id']
   c.execute(
       """INSERT INTO owner_feedback(
              owner_account_id,property_id,feedback_type,subject,message,status,submitted_at,
@@ -141,7 +154,33 @@ def create_feedback(a,p,d):
       (a,p,d['feedback_type'],d['subject'],d['message'],d.get('availability_from'),d.get('availability_to')),
   )
   r=one(c)
- audit('feedback_submitted',a,p,'owner_feedback',r['id'])
+  activity=create_activity_with_cursor(c,{
+      'contact_id':contact_id,
+      'lead_id':None,
+      'stima_id':None,
+      'activity_type':'note',
+      'direction':'in',
+      'channel':'owner_portal',
+      'subject':r['subject'],
+      'description':r['message'],
+      'outcome':None,
+      'occurred_at':r['submitted_at'],
+      'created_by':None,
+      'metadata':{
+          'source_module':'owner',
+          'owner_feedback_id':r['id'],
+          'owner_request_type':r['feedback_type'],
+          'property_id':p,
+      },
+  })
+  c.execute(
+      """UPDATE owner_feedback
+            SET linked_activity_id=%s,updated_at=NOW()
+          WHERE id=%s AND linked_activity_id IS NULL""",
+      (activity['id'],r['id']),
+  )
+  if c.rowcount != 1:raise ConflictError('Collegamento activity OWNER non riuscito')
+  _audit_with_cursor(c,'feedback_submitted',a,p,'owner_feedback',r['id'])
  return _public_feedback(r)
 
 def list_feedback(a=None,p=None):

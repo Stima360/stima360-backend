@@ -203,24 +203,29 @@ def _validate_references(cur, data: dict[str, Any]) -> None:
             _ensure_exists(cur, table, data[field], label)
 
 
+def create_activity_with_cursor(cur, data: dict[str, Any]) -> dict[str, Any]:
+    """Create one CORE activity using an already-open database transaction."""
+    _validate_references(cur, data)
+    data = {**data, "metadata": Json(data.get("metadata") or {})}
+    cur.execute(
+        """
+        INSERT INTO activities (
+            contact_id, lead_id, stima_id, activity_type, direction, channel,
+            subject, description, outcome, occurred_at, created_by, metadata
+        ) VALUES (
+            %(contact_id)s, %(lead_id)s, %(stima_id)s, %(activity_type)s, %(direction)s,
+            %(channel)s, %(subject)s, %(description)s, %(outcome)s,
+            COALESCE(%(occurred_at)s, NOW()), %(created_by)s, %(metadata)s
+        ) RETURNING *
+        """,
+        data,
+    )
+    return _row(cur.fetchone())
+
+
 def create_activity(data: dict[str, Any]) -> dict[str, Any]:
     with core_cursor(commit=True) as (_, cur):
-        _validate_references(cur, data)
-        data = {**data, "metadata": Json(data.get("metadata") or {})}
-        cur.execute(
-            """
-            INSERT INTO activities (
-                contact_id, lead_id, stima_id, activity_type, direction, channel,
-                subject, description, outcome, occurred_at, created_by, metadata
-            ) VALUES (
-                %(contact_id)s, %(lead_id)s, %(stima_id)s, %(activity_type)s, %(direction)s,
-                %(channel)s, %(subject)s, %(description)s, %(outcome)s,
-                COALESCE(%(occurred_at)s, NOW()), %(created_by)s, %(metadata)s
-            ) RETURNING *
-            """,
-            data,
-        )
-        return _row(cur.fetchone())
+        return create_activity_with_cursor(cur, data)
 
 
 def list_activities(limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None):

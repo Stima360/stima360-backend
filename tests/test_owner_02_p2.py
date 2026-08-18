@@ -299,19 +299,46 @@ def test_feedback_post_response_is_public_whitelist_even_if_repository_has_extra
     assert "internal_notes" not in response.json()
 
 
-def test_create_feedback_repository_returns_only_public_fields_and_keeps_internal_id_for_audit(monkeypatch):
+def test_create_feedback_repository_returns_only_public_fields_and_links_activity_atomically(monkeypatch):
     returned = dict(_public_feedback_row(), id=55, owner_account_id=7, property_id=11, internal_notes="secret")
-    cursor = _FeedbackCursor(one_row=returned)
-    audits = []
+
+    class CreateFeedbackCursor:
+        def __init__(self):
+            self.executed = []
+            self.current = None
+            self.rowcount = -1
+
+        def execute(self, query, params=None):
+            normalized = " ".join(str(query).split())
+            self.executed.append((normalized, params))
+            self.rowcount = -1
+            if normalized.startswith("SELECT oa.contact_id"):
+                self.current = {"contact_id": 44}
+            elif "INSERT INTO owner_feedback" in normalized:
+                self.current = returned
+            elif normalized.startswith("UPDATE owner_feedback"):
+                self.current = None
+                self.rowcount = 1
+            else:
+                self.current = None
+
+        def fetchone(self):
+            return self.current
+
+    cursor = CreateFeedbackCursor()
+    activities = []
 
     @contextmanager
     def fake_cursor(*, commit=False):
         assert commit is True
         yield object(), cursor
 
-    monkeypatch.setattr(repo, "require_property", lambda account, prop: {"property_id": prop})
+    def fake_activity(cur, data):
+        activities.append((cur, data))
+        return {"id": 91}
+
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
-    monkeypatch.setattr(repo, "audit", lambda *args, **kwargs: audits.append((args, kwargs)))
+    monkeypatch.setattr(repo, "create_activity_with_cursor", fake_activity)
     result = repo.create_feedback(
         7,
         11,
@@ -319,7 +346,18 @@ def test_create_feedback_repository_returns_only_public_fields_and_keeps_interna
     )
     assert set(result) == FEEDBACK_PUBLIC_KEYS
     assert result["subject"] == "Oggetto"
-    assert audits and audits[0][0][4] == 55
-    query, _ = cursor.executed[0]
-    assert "RETURNING id,feedback_type,subject,message,status,submitted_at" in query
-    assert "RETURNING *" not in query
+    assert len(activities) == 1
+    assert activities[0][0] is cursor
+    assert activities[0][1]["contact_id"] == 44
+    assert activities[0][1]["lead_id"] is None
+    assert activities[0][1]["stima_id"] is None
+    access_query, access_params = cursor.executed[0]
+    assert "oa.status='active'" in access_query
+    assert "FOR UPDATE OF oa,x" in access_query
+    assert access_params == (7, 11)
+    feedback_query = next(query for query, _ in cursor.executed if "INSERT INTO owner_feedback" in query)
+    assert "RETURNING id,feedback_type,subject,message,status,submitted_at" in feedback_query
+    assert "RETURNING *" not in feedback_query
+    link_query = next(query for query, _ in cursor.executed if query.startswith("UPDATE owner_feedback"))
+    assert "linked_activity_id IS NULL" in link_query
+    assert any("INSERT INTO owner_audit_log" in query for query, _ in cursor.executed)
