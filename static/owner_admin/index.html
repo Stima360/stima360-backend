@@ -93,11 +93,21 @@
 
           <div class="panel">
             <h4>Crea account proprietario</h4>
-            <p class="muted">Inserisci manualmente l'ID contatto. Nessuna ricerca CORE viene eseguita.</p>
+            <p class="muted">Cerca un contatto CORE e selezionalo senza esporre il record CRM completo.</p>
             <form id="account-create-form" class="form-grid" novalidate>
-              <div class="field">
-                <label for="account-contact-id">ID contatto</label>
-                <input id="account-contact-id" name="contact_id" type="number" min="1" step="1" inputmode="numeric" required>
+              <div class="field field-span-2">
+                <label for="account-contact-search">Cerca contatto</label>
+                <div class="lookup-row">
+                  <input id="account-contact-search" type="search" maxlength="200" autocomplete="off" placeholder="Nome o email">
+                  <button id="account-contact-search-button" class="button secondary" type="button">Cerca</button>
+                </div>
+                <p id="account-contact-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
+              </div>
+              <div class="field field-span-2">
+                <label for="account-contact-id">Contatto CORE</label>
+                <select id="account-contact-id" name="contact_id" required disabled>
+                  <option value="">Cerca e seleziona un contatto</option>
+                </select>
               </div>
               <div class="field">
                 <label for="account-language">Lingua preferita</label>
@@ -123,22 +133,30 @@
           <div class="section-heading">
             <div>
               <h3 id="access-heading">Accessi immobili</h3>
-              <p class="muted">Associa un account OWNER a un immobile tramite ID esistenti.</p>
+              <p class="muted">Associa un account OWNER solo a immobili per cui il contatto collegato ha ruolo PROPERTY <strong>owner</strong>.</p>
             </div>
             <button id="access-reload" class="button secondary" type="button">Aggiorna</button>
           </div>
 
           <div class="panel">
             <h4>Nuovo accesso</h4>
-            <p class="muted">Gli ID account e immobile sono inseriti manualmente. Nessuna API CORE o PROPERTY viene chiamata.</p>
+            <p class="muted">Carica gli account OWNER e scegli poi uno degli immobili OWNER-eligible restituiti dal backend.</p>
             <form id="access-create-form" class="form-grid" novalidate>
               <div class="field">
-                <label for="access-owner-account-id">ID account proprietario</label>
-                <input id="access-owner-account-id" name="owner_account_id" type="number" min="1" step="1" inputmode="numeric" required>
+                <label for="access-owner-account-id">Account proprietario</label>
+                <div class="lookup-row lookup-row-select">
+                  <select id="access-owner-account-id" name="owner_account_id" required>
+                    <option value="">Carica e seleziona un account</option>
+                  </select>
+                  <button id="access-accounts-load" class="button secondary" type="button">Carica account</button>
+                </div>
               </div>
               <div class="field">
-                <label for="access-property-id">ID immobile</label>
-                <input id="access-property-id" name="property_id" type="number" min="1" step="1" inputmode="numeric" required>
+                <label for="access-property-id">Immobile OWNER-eligible</label>
+                <select id="access-property-id" name="property_id" required disabled>
+                  <option value="">Seleziona prima un account</option>
+                </select>
+                <p id="access-property-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
               </div>
               <div class="field">
                 <label for="access-role">Ruolo accesso</label>
@@ -274,15 +292,34 @@
           <div class="admin-two-column">
             <div class="panel">
               <h4>Collega documento esistente</h4>
-              <p class="muted">Inserisci manualmente l'ID del documento PROPERTY già esistente.</p>
+              <p class="muted">Seleziona account, immobile OWNER-eligible e poi un documento appartenente esclusivamente a quell'immobile.</p>
               <form id="document-link-form" class="form-grid form-grid-wide" novalidate>
                 <div class="field">
-                  <label for="document-property-document-id">ID documento PROPERTY</label>
-                  <input id="document-property-document-id" type="number" min="1" step="1" inputmode="numeric" required>
+                  <label for="document-owner-account-id">Account di riferimento</label>
+                  <div class="lookup-row lookup-row-select">
+                    <select id="document-owner-account-id" required>
+                      <option value="">Carica e seleziona un account</option>
+                    </select>
+                    <button id="document-accounts-load" class="button secondary" type="button">Carica account</button>
+                  </div>
                 </div>
                 <div class="field">
-                  <label for="document-owner-account-id">ID account destinatario</label>
-                  <input id="document-owner-account-id" type="number" min="1" step="1" inputmode="numeric">
+                  <label for="document-property-id">Immobile OWNER-eligible</label>
+                  <select id="document-property-id" required disabled>
+                    <option value="">Seleziona prima un account</option>
+                  </select>
+                  <p id="document-property-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
+                </div>
+                <div class="field field-span-2">
+                  <label for="document-property-document-id">Documento PROPERTY</label>
+                  <select id="document-property-document-id" required disabled>
+                    <option value="">Seleziona prima un immobile</option>
+                  </select>
+                  <p id="document-source-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
+                </div>
+                <div class="field checkbox-field field-span-2">
+                  <input id="document-all-authorized" type="checkbox">
+                  <label for="document-all-authorized">Condividi con tutti gli account OWNER autorizzati sull'immobile</label>
                 </div>
                 <div class="field field-span-2">
                   <label for="document-public-title">Titolo pubblico</label>
@@ -424,12 +461,31 @@
             <p class="muted">Gli identificativi visita e account sono inseriti manualmente. Nessuna API PROPERTY viene chiamata.</p>
             <form id="visit-feedback-create-form" class="form-grid form-grid-wide" novalidate>
               <div class="field">
-                <label for="visit-feedback-property-visit-id">ID visita immobile</label>
-                <input id="visit-feedback-property-visit-id" type="number" min="1" step="1" inputmode="numeric" required>
+                <label for="visit-feedback-owner-account-id">Account di riferimento</label>
+                <div class="lookup-row lookup-row-select">
+                  <select id="visit-feedback-owner-account-id" required>
+                    <option value="">Carica e seleziona un account</option>
+                  </select>
+                  <button id="visit-feedback-accounts-load" class="button secondary" type="button">Carica account</button>
+                </div>
               </div>
               <div class="field">
-                <label for="visit-feedback-owner-account-id">ID account destinatario</label>
-                <input id="visit-feedback-owner-account-id" type="number" min="1" step="1" inputmode="numeric">
+                <label for="visit-feedback-property-id">Immobile OWNER-eligible</label>
+                <select id="visit-feedback-property-id" required disabled>
+                  <option value="">Seleziona prima un account</option>
+                </select>
+                <p id="visit-feedback-property-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
+              </div>
+              <div class="field field-span-2">
+                <label for="visit-feedback-property-visit-id">Visita PROPERTY</label>
+                <select id="visit-feedback-property-visit-id" required disabled>
+                  <option value="">Seleziona prima un immobile</option>
+                </select>
+                <p id="visit-feedback-source-lookup-status" class="status-message compact" role="status" aria-live="polite"></p>
+              </div>
+              <div class="field checkbox-field field-span-2">
+                <input id="visit-feedback-all-authorized" type="checkbox">
+                <label for="visit-feedback-all-authorized">Pubblica per tutti gli account OWNER autorizzati sull'immobile</label>
               </div>
               <div class="field">
                 <label for="visit-feedback-category">Categoria</label>

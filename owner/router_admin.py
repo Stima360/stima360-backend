@@ -28,6 +28,7 @@ from .schemas import (
     VisitFeedbackUpdate,
 )
 from . import repository as r
+from .router_admin_lookups import router as lookup_router
 from .document_storage import (
     DocumentFileValidationError,
     DocumentStorageError,
@@ -82,6 +83,7 @@ router = APIRouter(
     tags=["owner-admin"],
     dependencies=[Depends(require_owner_admin)],
 )
+router.include_router(lookup_router)
 
 
 def x(f, *a, **kw):

@@ -109,59 +109,30 @@ def test_owner_admin_missing_server_credentials_fail_closed(monkeypatch):
     assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
 
 
-def test_every_owner_admin_api_route_has_server_side_auth_dependency():
-    """Verify router-wide auth and the 38 declarations without shared-router state.
-
-    Route enumeration is intentionally source/AST based, matching the robust P4
-    approach.  This test therefore does not re-include or traverse a shared
-    ``APIRouter`` instance that another test may already have mutated.  Runtime
-    enforcement is covered by the dedicated anonymous/authenticated tests above.
-    """
-
-    # 1. Live router configuration: the OWNER Admin router carries Basic auth
-    # globally, at the router level, rather than relying on individual handlers.
-    assert admin_router.prefix == "/api/owner/admin"
-    assert any(
-        getattr(dependency, "dependency", None) is require_owner_admin
-        for dependency in admin_router.dependencies
-    )
-
-    # 2. Enumerate the declared route surface directly from source.  This is
-    # deterministic across test order and avoids FastAPI ``route.dependant``
-    # internals as well as re-including the shared router object.
-    router_path = Path(__file__).parents[1] / "owner/router_admin.py"
-    source = router_path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(router_path))
-
-    declared_prefix = None
+def _declared_routes(relative_path: str, inherited_prefix: str = "") -> list[tuple[str, str]]:
+    path = Path(__file__).parents[1] / relative_path
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    prefix = None
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(
-            isinstance(target, ast.Name) and target.id == "router"
-            for target in node.targets
-        ):
+        if not any(isinstance(target, ast.Name) and target.id == "router" for target in node.targets):
             continue
         if not isinstance(node.value, ast.Call):
             continue
-        if not (
-            isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "APIRouter"
-        ):
+        if not isinstance(node.value.func, ast.Name) or node.value.func.id != "APIRouter":
             continue
+        prefix = ""
         for keyword in node.value.keywords:
-            if (
-                keyword.arg == "prefix"
-                and isinstance(keyword.value, ast.Constant)
-                and isinstance(keyword.value.value, str)
-            ):
-                declared_prefix = keyword.value.value
+            if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
+                prefix = keyword.value.value
                 break
-
-    assert declared_prefix == admin_router.prefix == "/api/owner/admin"
+        break
+    assert prefix is not None, f"Prefix APIRouter non determinabile in {relative_path}"
 
     supported_methods = {"get", "post", "patch", "put", "delete"}
-    declared_routes: list[tuple[str, str]] = []
+    declared: list[tuple[str, str]] = []
     for node in ast.walk(tree):
         for decorator in getattr(node, "decorator_list", ()):
             if not isinstance(decorator, ast.Call):
@@ -177,17 +148,37 @@ def test_every_owner_admin_api_route_has_server_side_auth_dependency():
                 and isinstance(decorator.args[0].value, str)
             ):
                 continue
-            full_path = declared_prefix + decorator.args[0].value
-            declared_routes.append((func.attr.upper(), full_path))
+            declared.append((func.attr.upper(), inherited_prefix + prefix + decorator.args[0].value))
+    return declared
 
-    assert len(declared_routes) == 38
+
+def test_every_owner_admin_api_route_has_server_side_auth_dependency():
+    """Verify router-wide Basic auth and the complete 42-route P8.1 surface."""
+    assert admin_router.prefix == "/api/owner/admin"
+    assert any(
+        getattr(dependency, "dependency", None) is require_owner_admin
+        for dependency in admin_router.dependencies
+    )
+
+    parent_source = (Path(__file__).parents[1] / "owner/router_admin.py").read_text(encoding="utf-8")
+    assert "router.include_router(lookup_router)" in parent_source
+
+    declared_routes = _declared_routes("owner/router_admin.py")
+    declared_routes += _declared_routes("owner/router_admin_lookups.py", "/api/owner/admin")
+
+    assert len(declared_routes) == 42
     assert len(declared_routes) == len(set(declared_routes))
     assert all(path.startswith("/api/owner/admin/") for _, path in declared_routes)
+    assert {
+        ("GET", "/api/owner/admin/lookups/contacts"),
+        ("GET", "/api/owner/admin/lookups/accounts/{owner_account_id}/properties"),
+        ("GET", "/api/owner/admin/lookups/accounts/{owner_account_id}/properties/{property_id}/documents"),
+        ("GET", "/api/owner/admin/lookups/accounts/{owner_account_id}/properties/{property_id}/visits"),
+    } <= set(declared_routes)
 
 
 def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
     """Prove portal routing remains independent from OWNER Admin HTTP Basic."""
-
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
 
@@ -196,9 +187,6 @@ def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
     app.include_router(portal_router)
     client = TestClient(app)
 
-    # This portal request is deliberately malformed.  Portal validation must
-    # answer 422; if admin HTTP Basic leaked onto portal routes it would answer
-    # 401 with the Basic challenge before body validation.
     response = client.post(
         "/api/owner/portal/auth/token",
         json={"token": "too-short"},
@@ -209,7 +197,7 @@ def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
 
 
 def test_auth_hardening_uses_existing_env_credentials_without_browser_session_storage():
-    source = __import__("pathlib").Path(__file__).parents[1].joinpath("owner/router_admin.py").read_text()
+    source = Path(__file__).parents[1].joinpath("owner/router_admin.py").read_text()
     assert 'os.getenv("ADMIN_USER")' in source
     assert 'os.getenv("ADMIN_PASS")' in source
     assert "secrets.compare_digest" in source

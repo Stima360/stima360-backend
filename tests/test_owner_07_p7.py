@@ -138,6 +138,7 @@ class FakeElement {{
   focus() {{ document.activeElement = this; }}
   reset() {{
     if (this.id === 'account-create-form') {{
+      ids['account-contact-search'].value = '';
       ids['account-contact-id'].value = '';
       ids['account-language'].value = '';
     }}
@@ -149,7 +150,8 @@ class FakeElement {{
       ids['access-valid-until'].value = '';
     }}
     if (this.id === 'document-link-form') {{
-      for (const id of ['document-property-document-id','document-owner-account-id','document-public-title','document-expires-at','document-created-by']) ids[id].value = '';
+      for (const id of ['document-owner-account-id','document-property-id','document-property-document-id','document-public-title','document-expires-at','document-created-by']) ids[id].value = '';
+      ids['document-all-authorized'].checked = false;
       ids['document-ack-required'].checked = false;
       ids['document-public-type'].value = '';
     }}
@@ -160,7 +162,8 @@ class FakeElement {{
       ids['document-upload-public-type'].value = '';
     }}
     if (this.id === 'visit-feedback-create-form') {{
-      for (const id of ['visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-summary','visit-feedback-created-by']) ids[id].value = '';
+      for (const id of ['visit-feedback-owner-account-id','visit-feedback-property-id','visit-feedback-property-visit-id','visit-feedback-summary','visit-feedback-created-by']) ids[id].value = '';
+      ids['visit-feedback-all-authorized'].checked = false;
       ids['visit-feedback-category'].value = ''; ids['visit-feedback-sentiment'].value = '';
     }}
     if (this.id === 'token-create-form') {{
@@ -180,9 +183,9 @@ const requiredIds = [
   'login-view','admin-app','admin-login-form','admin-username','admin-password','admin-login-submit','admin-login-status',
   'admin-logout','admin-global-status','section-title','nav-dashboard','nav-accounts','nav-access','nav-publications','nav-requests',
   'section-dashboard','section-accounts','section-access','section-publications','section-requests','dashboard-loading','dashboard-error','dashboard-error-message',
-  'dashboard-retry','dashboard-reload','dashboard-content','account-create-form','account-contact-id','account-language',
+  'dashboard-retry','dashboard-reload','dashboard-content','account-create-form','account-contact-search','account-contact-search-button','account-contact-lookup-status','account-contact-id','account-language',
   'account-create-submit','account-form-status','accounts-loading','accounts-empty','accounts-error','accounts-error-message',
-  'accounts-retry','accounts-reload','accounts-content','access-create-form','access-owner-account-id','access-property-id',
+  'accounts-retry','accounts-reload','accounts-content','access-create-form','access-owner-account-id','access-accounts-load','access-property-id','access-property-lookup-status',
   'access-role','access-primary','access-valid-until','access-create-submit','access-form-status','access-loading','access-empty',
   'access-error','access-error-message','access-retry','access-reload','access-content',
   'publication-create-form','publication-property-id','publication-type','publication-title','publication-summary','publication-body',
@@ -190,18 +193,18 @@ const requiredIds = [
   'publications-error','publications-error-message','publications-retry','publications-reload','publications-content',
   'requests-loading','requests-empty','requests-error','requests-error-message','requests-retry','requests-reload','requests-content',
   'nav-documents','nav-visit-feedback','section-documents','section-visit-feedback','document-storage-health-check','document-storage-health-status',
-  'document-link-form','document-property-document-id','document-owner-account-id','document-public-title','document-public-type','document-expires-at','document-created-by','document-ack-required','document-link-submit','document-link-status',
+  'document-link-form','document-owner-account-id','document-accounts-load','document-property-id','document-property-lookup-status','document-property-document-id','document-source-lookup-status','document-all-authorized','document-public-title','document-public-type','document-expires-at','document-created-by','document-ack-required','document-link-submit','document-link-status',
   'document-upload-form','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-public-type','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','document-upload-submit','document-upload-status',
   'document-detail-panel','document-detail-close','document-detail-status','document-detail-content','document-reads-panel','document-reads-close','document-reads-status','document-reads-content','documents-loading','documents-empty','documents-error','documents-error-message','documents-retry','documents-reload','documents-content',
-  'visit-feedback-create-form','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-category','visit-feedback-sentiment','visit-feedback-summary','visit-feedback-created-by','visit-feedback-privacy-check','visit-feedback-create-submit','visit-feedback-form-status','visit-feedback-privacy-issues','visit-feedback-detail-panel','visit-feedback-detail-close','visit-feedback-detail-status','visit-feedback-detail-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-error-message','visit-feedback-retry','visit-feedback-reload','visit-feedback-content',
+  'visit-feedback-create-form','visit-feedback-owner-account-id','visit-feedback-accounts-load','visit-feedback-property-id','visit-feedback-property-lookup-status','visit-feedback-property-visit-id','visit-feedback-source-lookup-status','visit-feedback-all-authorized','visit-feedback-category','visit-feedback-sentiment','visit-feedback-summary','visit-feedback-created-by','visit-feedback-privacy-check','visit-feedback-create-submit','visit-feedback-form-status','visit-feedback-privacy-issues','visit-feedback-detail-panel','visit-feedback-detail-close','visit-feedback-detail-status','visit-feedback-detail-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-error-message','visit-feedback-retry','visit-feedback-reload','visit-feedback-content',
   'nav-token-access','nav-audit','section-token-access','section-audit','token-form-panel','token-create-form','token-owner-account-id','token-type','token-expires-minutes','token-created-by','token-create-submit','token-form-status','token-result-panel','token-result-meta','token-result-value','token-copy','token-close','token-copy-status','audit-loading','audit-empty','audit-error','audit-error-message','audit-retry','audit-reload','audit-content'
 ];
 const ids = {{}};
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
 for (const id of ['admin-login-form','account-create-form','access-create-form','publication-create-form','document-link-form','document-upload-form','visit-feedback-create-form','token-create-form']) ids[id].tagName = 'FORM';
-for (const id of ['admin-username','admin-password','account-contact-id','account-language','access-owner-account-id','access-property-id','access-primary','access-valid-until','publication-property-id','publication-title','publication-ack-required','document-property-document-id','document-owner-account-id','document-public-title','document-expires-at','document-created-by','document-ack-required','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-created-by','token-owner-account-id','token-expires-minutes','token-created-by']) ids[id].tagName = 'INPUT';
+for (const id of ['admin-username','admin-password','account-contact-search','account-language','access-primary','access-valid-until','publication-property-id','publication-title','publication-ack-required','document-all-authorized','document-public-title','document-expires-at','document-created-by','document-ack-required','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','visit-feedback-all-authorized','visit-feedback-created-by','token-owner-account-id','token-expires-minutes','token-created-by']) ids[id].tagName = 'INPUT';
 for (const id of ['publication-summary','publication-body','visit-feedback-summary']) ids[id].tagName = 'TEXTAREA';
-for (const id of ['access-role','publication-type','document-public-type','document-upload-public-type','visit-feedback-category','visit-feedback-sentiment','token-type']) ids[id].tagName = 'SELECT';
+for (const id of ['account-contact-id','access-owner-account-id','access-property-id','access-role','publication-type','document-owner-account-id','document-property-id','document-property-document-id','document-public-type','document-upload-public-type','visit-feedback-owner-account-id','visit-feedback-property-id','visit-feedback-property-visit-id','visit-feedback-category','visit-feedback-sentiment','token-type']) ids[id].tagName = 'SELECT';
 ids['account-language'].value = 'it';
 ids['access-role'].value = 'owner';
 ids['publication-type'].value = 'general_update';
@@ -320,9 +323,9 @@ def test_p71_files_markup_navigation_and_accessibility():
         "login-view", "admin-login-form", "admin-username", "admin-password", "admin-login-submit",
         "admin-logout", "nav-dashboard", "nav-accounts", "nav-access",
         "section-dashboard", "dashboard-loading", "dashboard-error", "dashboard-content",
-        "section-accounts", "account-create-form", "account-contact-id", "account-language",
+        "section-accounts", "account-create-form", "account-contact-search", "account-contact-search-button", "account-contact-lookup-status", "account-contact-id", "account-language",
         "accounts-loading", "accounts-empty", "accounts-error", "accounts-content",
-        "section-access", "access-create-form", "access-owner-account-id", "access-property-id",
+        "section-access", "access-create-form", "access-owner-account-id", "access-accounts-load", "access-property-id", "access-property-lookup-status",
         "access-role", "access-primary", "access-valid-until", "access-loading", "access-empty",
         "access-error", "access-content",
     }
@@ -1172,7 +1175,7 @@ def test_document_link_create_exact_payload_double_submit_and_reload():
         },
         r"""
 ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-documents'].trigger('click');
-ids['document-property-document-id'].value='77'; ids['document-owner-account-id'].value='5'; ids['document-public-title'].value='Titolo'; ids['document-public-type'].value='ape'; ids['document-created-by'].value='Operatore'; ids['document-ack-required'].checked=true;
+ids['document-owner-account-id'].value='5'; ids['document-property-id'].value='44'; ids['document-property-document-id'].value='77'; ids['document-public-title'].value='Titolo'; ids['document-public-type'].value='ape'; ids['document-created-by'].value='Operatore'; ids['document-ack-required'].checked=true;
 const first=ids['document-link-form'].trigger('submit'); await sleepTick(); const second=ids['document-link-form'].trigger('submit'); await sleepTick();
 assert(countCalls('POST','/api/owner/admin/documents')===1,'link create double submit');
 const payload=JSON.parse(calls.find(c=>c.method==='POST'&&c.url==='/api/owner/admin/documents').body);
@@ -1330,7 +1333,7 @@ def test_visit_feedback_create_requires_privacy_exact_payload_double_submit_and_
             "POST /api/owner/admin/visit-feedback": [{"status": 201, "body": {"id": 50, "status": "draft"}}],
         },
         r"""
-ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-visit-feedback'].trigger('click'); ids['visit-feedback-property-visit-id'].value='301'; ids['visit-feedback-owner-account-id'].value='5'; ids['visit-feedback-category'].value='layout'; ids['visit-feedback-sentiment'].value='positive'; ids['visit-feedback-summary'].value='Gli spazi sono stati valutati positivamente'; ids['visit-feedback-created-by'].value='Admin';
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-visit-feedback'].trigger('click'); ids['visit-feedback-owner-account-id'].value='5'; ids['visit-feedback-property-id'].value='44'; ids['visit-feedback-property-visit-id'].value='301'; ids['visit-feedback-category'].value='layout'; ids['visit-feedback-sentiment'].value='positive'; ids['visit-feedback-summary'].value='Gli spazi sono stati valutati positivamente'; ids['visit-feedback-created-by'].value='Admin';
 const first=ids['visit-feedback-create-form'].trigger('submit'); await sleepTick(); const second=ids['visit-feedback-create-form'].trigger('submit'); await sleepTick(); assert(countCalls('POST','/api/owner/admin/visit-feedback/validate-privacy')===1,'privacy double submit'); assert(countCalls('POST','/api/owner/admin/visit-feedback')===0,'create before privacy'); deferred.privacyCreate(); await first; await second; assert(countCalls('POST','/api/owner/admin/visit-feedback')===1,'create count'); const payload=JSON.parse(calls.find(c=>c.url==='/api/owner/admin/visit-feedback').body); assert(JSON.stringify(payload)===JSON.stringify({property_visit_id:301,owner_account_id:5,category:'layout',public_summary:'Gli spazi sono stati valutati positivamente',sentiment:'positive',created_by:'Admin'}),'visit create contract mismatch'); assert(countCalls('GET','/api/owner/admin/visit-feedback?limit=50&offset=0')===2,'visit list reload missing');
 """,
     )

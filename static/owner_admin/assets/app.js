@@ -116,6 +116,15 @@ const state = {
   privacyGeneration: 0,
   tokenGeneration: 0,
   auditGeneration: 0,
+  contactLookupGeneration: 0,
+  accessAccountLookupGeneration: 0,
+  accessPropertyLookupGeneration: 0,
+  documentAccountLookupGeneration: 0,
+  documentPropertyLookupGeneration: 0,
+  documentSourceLookupGeneration: 0,
+  visitAccountLookupGeneration: 0,
+  visitPropertyLookupGeneration: 0,
+  visitSourceLookupGeneration: 0,
   oneTimeToken: null,
   mutationsInFlight: new Set(),
 };
@@ -156,6 +165,9 @@ const el = {
   dashboardReload: document.getElementById('dashboard-reload'),
   dashboardContent: document.getElementById('dashboard-content'),
   accountForm: document.getElementById('account-create-form'),
+  accountContactSearch: document.getElementById('account-contact-search'),
+  accountContactSearchButton: document.getElementById('account-contact-search-button'),
+  accountContactLookupStatus: document.getElementById('account-contact-lookup-status'),
   accountContactId: document.getElementById('account-contact-id'),
   accountLanguage: document.getElementById('account-language'),
   accountSubmit: document.getElementById('account-create-submit'),
@@ -169,7 +181,9 @@ const el = {
   accountsContent: document.getElementById('accounts-content'),
   accessForm: document.getElementById('access-create-form'),
   accessOwnerAccountId: document.getElementById('access-owner-account-id'),
+  accessAccountsLoad: document.getElementById('access-accounts-load'),
   accessPropertyId: document.getElementById('access-property-id'),
+  accessPropertyLookupStatus: document.getElementById('access-property-lookup-status'),
   accessRole: document.getElementById('access-role'),
   accessPrimary: document.getElementById('access-primary'),
   accessValidUntil: document.getElementById('access-valid-until'),
@@ -208,8 +222,13 @@ const el = {
   documentStorageHealthCheck: document.getElementById('document-storage-health-check'),
   documentStorageHealthStatus: document.getElementById('document-storage-health-status'),
   documentLinkForm: document.getElementById('document-link-form'),
-  documentPropertyDocumentId: document.getElementById('document-property-document-id'),
   documentOwnerAccountId: document.getElementById('document-owner-account-id'),
+  documentAccountsLoad: document.getElementById('document-accounts-load'),
+  documentPropertyId: document.getElementById('document-property-id'),
+  documentPropertyLookupStatus: document.getElementById('document-property-lookup-status'),
+  documentPropertyDocumentId: document.getElementById('document-property-document-id'),
+  documentSourceLookupStatus: document.getElementById('document-source-lookup-status'),
+  documentAllAuthorized: document.getElementById('document-all-authorized'),
   documentPublicTitle: document.getElementById('document-public-title'),
   documentPublicType: document.getElementById('document-public-type'),
   documentExpiresAt: document.getElementById('document-expires-at'),
@@ -247,8 +266,13 @@ const el = {
   documentsReload: document.getElementById('documents-reload'),
   documentsContent: document.getElementById('documents-content'),
   visitFeedbackForm: document.getElementById('visit-feedback-create-form'),
-  visitFeedbackPropertyVisitId: document.getElementById('visit-feedback-property-visit-id'),
   visitFeedbackOwnerAccountId: document.getElementById('visit-feedback-owner-account-id'),
+  visitFeedbackAccountsLoad: document.getElementById('visit-feedback-accounts-load'),
+  visitFeedbackPropertyId: document.getElementById('visit-feedback-property-id'),
+  visitFeedbackPropertyLookupStatus: document.getElementById('visit-feedback-property-lookup-status'),
+  visitFeedbackPropertyVisitId: document.getElementById('visit-feedback-property-visit-id'),
+  visitFeedbackSourceLookupStatus: document.getElementById('visit-feedback-source-lookup-status'),
+  visitFeedbackAllAuthorized: document.getElementById('visit-feedback-all-authorized'),
   visitFeedbackCategory: document.getElementById('visit-feedback-category'),
   visitFeedbackSentiment: document.getElementById('visit-feedback-sentiment'),
   visitFeedbackSummary: document.getElementById('visit-feedback-summary'),
@@ -442,6 +466,15 @@ function invalidatePending() {
   state.privacyGeneration += 1;
   state.tokenGeneration += 1;
   state.auditGeneration += 1;
+  state.contactLookupGeneration += 1;
+  state.accessAccountLookupGeneration += 1;
+  state.accessPropertyLookupGeneration += 1;
+  state.documentAccountLookupGeneration += 1;
+  state.documentPropertyLookupGeneration += 1;
+  state.documentSourceLookupGeneration += 1;
+  state.visitAccountLookupGeneration += 1;
+  state.visitPropertyLookupGeneration += 1;
+  state.visitSourceLookupGeneration += 1;
   state.mutationsInFlight.clear();
 }
 
@@ -475,14 +508,20 @@ function resetDynamicUi() {
   clearOneTimeToken(false);
   setStatus(el.globalStatus, '');
   setStatus(el.accountFormStatus, '');
+  setStatus(el.accountContactLookupStatus, '');
   setStatus(el.accessFormStatus, '');
+  setStatus(el.accessPropertyLookupStatus, '');
   setStatus(el.publicationFormStatus, '');
   setStatus(el.documentLinkStatus, '');
+  setStatus(el.documentPropertyLookupStatus, '');
+  setStatus(el.documentSourceLookupStatus, '');
   setStatus(el.documentUploadStatus, '');
   setStatus(el.documentStorageHealthStatus, '');
   setStatus(el.documentDetailStatus, '');
   setStatus(el.documentReadsStatus, '');
   setStatus(el.visitFeedbackFormStatus, '');
+  setStatus(el.visitFeedbackPropertyLookupStatus, '');
+  setStatus(el.visitFeedbackSourceLookupStatus, '');
   setStatus(el.visitFeedbackDetailStatus, '');
   setStatus(el.tokenFormStatus, '');
   setStatus(el.auditErrorMessage, '');
@@ -497,15 +536,24 @@ function resetDynamicUi() {
   el.visitFeedbackDetailPanel.hidden = true;
   el.accountForm.reset();
   el.accountLanguage.value = 'it';
+  resetLookupSelect(el.accountContactId, 'Cerca e seleziona un contatto', true);
   el.accessForm.reset();
   el.accessRole.value = 'owner';
+  resetLookupSelect(el.accessOwnerAccountId, 'Carica e seleziona un account', false);
+  resetLookupSelect(el.accessPropertyId, 'Seleziona prima un account', true);
   el.publicationForm.reset();
   el.publicationType.value = 'general_update';
   el.documentLinkForm.reset();
   el.documentPublicType.value = 'mandate';
+  resetLookupSelect(el.documentOwnerAccountId, 'Carica e seleziona un account', false);
+  resetLookupSelect(el.documentPropertyId, 'Seleziona prima un account', true);
+  resetLookupSelect(el.documentPropertyDocumentId, 'Seleziona prima un immobile', true);
   el.documentUploadForm.reset();
   el.documentUploadPublicType.value = 'mandate';
   el.visitFeedbackForm.reset();
+  resetLookupSelect(el.visitFeedbackOwnerAccountId, 'Carica e seleziona un account', false);
+  resetLookupSelect(el.visitFeedbackPropertyId, 'Seleziona prima un account', true);
+  resetLookupSelect(el.visitFeedbackPropertyVisitId, 'Seleziona prima un immobile', true);
   el.visitFeedbackCategory.value = 'price';
   el.visitFeedbackSentiment.value = '';
   el.tokenForm.reset();
@@ -789,13 +837,200 @@ function parsePositiveInt(value) {
   return Number.isInteger(number) && number > 0 ? number : null;
 }
 
+// OWNER 0.2 P8.1 — read-only CORE / PROPERTY reference resolution ---------
+function resetLookupSelect(select, placeholder, disabled = true) {
+  if (!select) return;
+  const option = document.createElement('option');
+  option.value = '';
+  option.textContent = placeholder;
+  select.replaceChildren(option);
+  select.value = '';
+  select.disabled = disabled;
+}
+
+function appendLookupOption(select, value, label) {
+  const option = document.createElement('option');
+  option.value = String(value);
+  option.textContent = label || `#${value}`;
+  select.append(option);
+}
+
+function lookupStillCurrent(generationKey, generation, sessionGeneration, parentNode = null, parentValue = null) {
+  if (!state.authenticated || state.sessionGeneration !== sessionGeneration) return false;
+  if (state[generationKey] !== generation) return false;
+  if (parentNode && String(parentNode.value) !== String(parentValue)) return false;
+  return true;
+}
+
+function contactLookupLabel(item) {
+  const name = item && item.display_name ? String(item.display_name) : `Contatto #${item && item.id !== undefined ? item.id : '—'}`;
+  const email = item && item.email ? String(item.email) : '';
+  return email ? `${name} — ${email}` : name;
+}
+
+function ownerAccountLookupLabel(item) {
+  const name = item && item.display_name ? String(item.display_name) : `Account #${item && item.id !== undefined ? item.id : '—'}`;
+  const email = item && item.email ? String(item.email) : '';
+  return email ? `${name} — ${email}` : `${name} (#${item && item.id !== undefined ? item.id : '—'})`;
+}
+
+function propertyLookupLabel(item) {
+  const title = item && item.title ? String(item.title) : `Immobile #${item && item.id !== undefined ? item.id : '—'}`;
+  const code = item && item.code ? String(item.code) : '';
+  const locality = [item && item.address ? String(item.address) : '', item && item.city ? String(item.city) : ''].filter(Boolean).join(', ');
+  return [code ? `${code} — ${title}` : title, locality].filter(Boolean).join(' · ');
+}
+
+function documentLookupLabel(item) {
+  const title = item && item.title ? String(item.title) : `Documento #${item && item.id !== undefined ? item.id : '—'}`;
+  const type = item && item.document_type ? String(item.document_type) : '';
+  const status = item && item.status ? String(item.status) : '';
+  return [title, type, status].filter(Boolean).join(' · ');
+}
+
+function visitLookupLabel(item) {
+  const when = item && item.scheduled_at ? formatDate(item.scheduled_at) : `Visita #${item && item.id !== undefined ? item.id : '—'}`;
+  const status = item && item.status ? String(item.status) : '';
+  return [when, status].filter(Boolean).join(' · ');
+}
+
+function handleLookupError(error, statusNode) {
+  if (error instanceof ApiError && error.status === 401) {
+    forceLoginAfterUnauthorized();
+    return;
+  }
+  setStatus(statusNode, statusMessage(error), 'error');
+}
+
+async function searchAccountContacts() {
+  if (!state.authenticated) return;
+  const generation = ++state.contactLookupGeneration;
+  const sessionGeneration = state.sessionGeneration;
+  const search = el.accountContactSearch.value.trim();
+  resetLookupSelect(el.accountContactId, 'Ricerca in corso…', true);
+  setStatus(el.accountContactLookupStatus, 'Ricerca contatti…');
+  try {
+    const query = search ? `?search=${encodeURIComponent(search)}&limit=50` : '?limit=50';
+    const data = await request(`/lookups/contacts${query}`);
+    if (!lookupStillCurrent('contactLookupGeneration', generation, sessionGeneration)) return;
+    if (el.accountContactSearch.value.trim() !== search) return;
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    resetLookupSelect(el.accountContactId, items.length ? 'Seleziona un contatto' : 'Nessun contatto trovato', items.length === 0);
+    for (const item of items) appendLookupOption(el.accountContactId, item.id, contactLookupLabel(item));
+    setStatus(el.accountContactLookupStatus, items.length ? `${items.length} contatti disponibili.` : 'Nessun contatto trovato.', items.length ? 'success' : '');
+  } catch (error) {
+    if (!lookupStillCurrent('contactLookupGeneration', generation, sessionGeneration)) return;
+    resetLookupSelect(el.accountContactId, 'Ricerca non disponibile', true);
+    handleLookupError(error, el.accountContactLookupStatus);
+  }
+}
+
+async function loadOwnerAccountChoices(select, statusNode, generationKey) {
+  if (!state.authenticated) return;
+  const generation = ++state[generationKey];
+  const sessionGeneration = state.sessionGeneration;
+  resetLookupSelect(select, 'Caricamento account…', true);
+  setStatus(statusNode, 'Caricamento account OWNER…');
+  try {
+    const data = await request('/accounts');
+    if (!lookupStillCurrent(generationKey, generation, sessionGeneration)) return;
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    resetLookupSelect(select, items.length ? 'Seleziona un account' : 'Nessun account disponibile', items.length === 0);
+    for (const item of items) appendLookupOption(select, item.id, ownerAccountLookupLabel(item));
+    setStatus(statusNode, items.length ? `${items.length} account disponibili.` : 'Nessun account disponibile.', items.length ? 'success' : '');
+  } catch (error) {
+    if (!lookupStillCurrent(generationKey, generation, sessionGeneration)) return;
+    resetLookupSelect(select, 'Account non disponibili', true);
+    handleLookupError(error, statusNode);
+  }
+}
+
+async function loadEligibleProperties(accountSelect, propertySelect, statusNode, generationKey, onReset = null) {
+  const accountId = parsePositiveInt(accountSelect.value);
+  const generation = ++state[generationKey];
+  const sessionGeneration = state.sessionGeneration;
+  if (onReset) onReset();
+  if (accountId === null) {
+    resetLookupSelect(propertySelect, 'Seleziona prima un account', true);
+    setStatus(statusNode, '');
+    return;
+  }
+  resetLookupSelect(propertySelect, 'Caricamento immobili…', true);
+  setStatus(statusNode, 'Caricamento immobili OWNER-eligible…');
+  const parentValue = accountSelect.value;
+  try {
+    const data = await request(`/lookups/accounts/${encodeURIComponent(accountId)}/properties`);
+    if (!lookupStillCurrent(generationKey, generation, sessionGeneration, accountSelect, parentValue)) return;
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    resetLookupSelect(propertySelect, items.length ? 'Seleziona un immobile' : 'Nessun immobile OWNER-eligible', items.length === 0);
+    for (const item of items) appendLookupOption(propertySelect, item.id, propertyLookupLabel(item));
+    setStatus(statusNode, items.length ? `${items.length} immobili disponibili.` : 'Nessun immobile associato con ruolo owner.', items.length ? 'success' : '');
+  } catch (error) {
+    if (!lookupStillCurrent(generationKey, generation, sessionGeneration, accountSelect, parentValue)) return;
+    resetLookupSelect(propertySelect, 'Immobili non disponibili', true);
+    handleLookupError(error, statusNode);
+  }
+}
+
+async function loadPropertyDocumentsForAccount() {
+  const accountId = parsePositiveInt(el.documentOwnerAccountId.value);
+  const propertyId = parsePositiveInt(el.documentPropertyId.value);
+  const generation = ++state.documentSourceLookupGeneration;
+  const sessionGeneration = state.sessionGeneration;
+  resetLookupSelect(el.documentPropertyDocumentId, propertyId === null ? 'Seleziona prima un immobile' : 'Caricamento documenti…', true);
+  setStatus(el.documentSourceLookupStatus, propertyId === null ? '' : 'Caricamento documenti PROPERTY…');
+  if (accountId === null || propertyId === null) return;
+  const accountValue = el.documentOwnerAccountId.value;
+  const propertyValue = el.documentPropertyId.value;
+  try {
+    const data = await request(`/lookups/accounts/${encodeURIComponent(accountId)}/properties/${encodeURIComponent(propertyId)}/documents`);
+    if (!lookupStillCurrent('documentSourceLookupGeneration', generation, sessionGeneration, el.documentOwnerAccountId, accountValue)) return;
+    if (String(el.documentPropertyId.value) !== String(propertyValue)) return;
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    resetLookupSelect(el.documentPropertyDocumentId, items.length ? 'Seleziona un documento' : 'Nessun documento disponibile', items.length === 0);
+    for (const item of items) appendLookupOption(el.documentPropertyDocumentId, item.id, documentLookupLabel(item));
+    setStatus(el.documentSourceLookupStatus, items.length ? `${items.length} documenti disponibili.` : 'Nessun documento PROPERTY per questo immobile.', items.length ? 'success' : '');
+  } catch (error) {
+    if (!lookupStillCurrent('documentSourceLookupGeneration', generation, sessionGeneration, el.documentOwnerAccountId, accountValue)) return;
+    if (String(el.documentPropertyId.value) !== String(propertyValue)) return;
+    resetLookupSelect(el.documentPropertyDocumentId, 'Documenti non disponibili', true);
+    handleLookupError(error, el.documentSourceLookupStatus);
+  }
+}
+
+async function loadPropertyVisitsForAccount() {
+  const accountId = parsePositiveInt(el.visitFeedbackOwnerAccountId.value);
+  const propertyId = parsePositiveInt(el.visitFeedbackPropertyId.value);
+  const generation = ++state.visitSourceLookupGeneration;
+  const sessionGeneration = state.sessionGeneration;
+  resetLookupSelect(el.visitFeedbackPropertyVisitId, propertyId === null ? 'Seleziona prima un immobile' : 'Caricamento visite…', true);
+  setStatus(el.visitFeedbackSourceLookupStatus, propertyId === null ? '' : 'Caricamento visite PROPERTY…');
+  if (accountId === null || propertyId === null) return;
+  const accountValue = el.visitFeedbackOwnerAccountId.value;
+  const propertyValue = el.visitFeedbackPropertyId.value;
+  try {
+    const data = await request(`/lookups/accounts/${encodeURIComponent(accountId)}/properties/${encodeURIComponent(propertyId)}/visits`);
+    if (!lookupStillCurrent('visitSourceLookupGeneration', generation, sessionGeneration, el.visitFeedbackOwnerAccountId, accountValue)) return;
+    if (String(el.visitFeedbackPropertyId.value) !== String(propertyValue)) return;
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    resetLookupSelect(el.visitFeedbackPropertyVisitId, items.length ? 'Seleziona una visita' : 'Nessuna visita disponibile', items.length === 0);
+    for (const item of items) appendLookupOption(el.visitFeedbackPropertyVisitId, item.id, visitLookupLabel(item));
+    setStatus(el.visitFeedbackSourceLookupStatus, items.length ? `${items.length} visite disponibili.` : 'Nessuna visita PROPERTY per questo immobile.', items.length ? 'success' : '');
+  } catch (error) {
+    if (!lookupStillCurrent('visitSourceLookupGeneration', generation, sessionGeneration, el.visitFeedbackOwnerAccountId, accountValue)) return;
+    if (String(el.visitFeedbackPropertyId.value) !== String(propertyValue)) return;
+    resetLookupSelect(el.visitFeedbackPropertyVisitId, 'Visite non disponibili', true);
+    handleLookupError(error, el.visitFeedbackSourceLookupStatus);
+  }
+}
+
 async function submitAccount(event) {
   event.preventDefault();
   if (!state.authenticated || state.mutationsInFlight.has('account:create')) return;
   const contactId = parsePositiveInt(el.accountContactId.value);
   const language = el.accountLanguage.value.trim();
   if (contactId === null) {
-    setStatus(el.accountFormStatus, 'Inserisci un ID contatto valido.', 'error');
+    setStatus(el.accountFormStatus, 'Cerca e seleziona un contatto CORE.', 'error');
     el.accountContactId.focus();
     return;
   }
@@ -921,12 +1156,12 @@ async function submitAccess(event) {
   const propertyId = parsePositiveInt(el.accessPropertyId.value);
   const role = el.accessRole.value;
   if (ownerAccountId === null) {
-    setStatus(el.accessFormStatus, 'Inserisci un ID account proprietario valido.', 'error');
+    setStatus(el.accessFormStatus, 'Seleziona un account proprietario.', 'error');
     el.accessOwnerAccountId.focus();
     return;
   }
   if (propertyId === null) {
-    setStatus(el.accessFormStatus, 'Inserisci un ID immobile valido.', 'error');
+    setStatus(el.accessFormStatus, 'Seleziona un immobile OWNER-eligible.', 'error');
     el.accessPropertyId.focus();
     return;
   }
@@ -963,6 +1198,10 @@ async function submitAccess(event) {
     if (sessionGeneration !== state.sessionGeneration || !state.authenticated) return;
     el.accessForm.reset();
     el.accessRole.value = 'owner';
+    resetLookupSelect(el.accessOwnerAccountId, 'Carica e seleziona un account', false);
+    resetLookupSelect(el.accessPropertyId, 'Seleziona prima un account', true);
+    state.accessPropertyLookupGeneration += 1;
+    setStatus(el.accessPropertyLookupStatus, '');
     setStatus(el.accessFormStatus, 'Accesso creato.', 'success');
     if (state.activeSection === 'access') await loadAccess();
   } catch (error) {
@@ -2049,13 +2288,50 @@ async function loadDocuments() {
 
 async function submitDocumentLink(event) {
   event.preventDefault();
-  const key='document:create-link'; if (!state.authenticated || state.mutationsInFlight.has(key)) return;
-  const values={ propertyDocumentId:el.documentPropertyDocumentId.value.trim(), ownerAccountId:el.documentOwnerAccountId.value.trim(), publicTitle:el.documentPublicTitle.value.trim(), publicType:el.documentPublicType.value, expiresAt:el.documentExpiresAt.value, acknowledgementRequired:el.documentAckRequired.checked===true, createdBy:el.documentCreatedBy.value.trim() };
-  const error=validateSharedDocumentValues(values,true); if(error){setStatus(el.documentLinkStatus,error,'error'); return;}
-  state.mutationsInFlight.add(key); const sessionGeneration=state.sessionGeneration; el.documentLinkSubmit.disabled=true; setStatus(el.documentLinkStatus,'Creazione collegamento…');
-  try { await request('/documents',{method:'POST',json:sharedDocumentPayload(values,true)}); if(sessionGeneration!==state.sessionGeneration||!state.authenticated)return; el.documentLinkForm.reset(); el.documentPublicType.value='mandate'; setStatus(el.documentLinkStatus,'Documento collegato come draft.','success'); if(state.activeSection==='documents')await loadDocuments(); }
-  catch(error){ if(sessionGeneration!==state.sessionGeneration)return; handleApiError(error,el.documentLinkStatus); }
-  finally { state.mutationsInFlight.delete(key); if(sessionGeneration===state.sessionGeneration)el.documentLinkSubmit.disabled=false; }
+  const key = 'document:create-link';
+  if (!state.authenticated || state.mutationsInFlight.has(key)) return;
+  const referenceAccountId = parsePositiveInt(el.documentOwnerAccountId.value);
+  const propertyId = parsePositiveInt(el.documentPropertyId.value);
+  const propertyDocumentId = parsePositiveInt(el.documentPropertyDocumentId.value);
+  if (referenceAccountId === null) { setStatus(el.documentLinkStatus, 'Seleziona un account di riferimento.', 'error'); return; }
+  if (propertyId === null) { setStatus(el.documentLinkStatus, 'Seleziona un immobile OWNER-eligible.', 'error'); return; }
+  if (propertyDocumentId === null) { setStatus(el.documentLinkStatus, 'Seleziona un documento PROPERTY.', 'error'); return; }
+  const values = {
+    propertyDocumentId: String(propertyDocumentId),
+    ownerAccountId: el.documentAllAuthorized.checked ? '' : String(referenceAccountId),
+    publicTitle: el.documentPublicTitle.value.trim(),
+    publicType: el.documentPublicType.value,
+    expiresAt: el.documentExpiresAt.value,
+    acknowledgementRequired: el.documentAckRequired.checked === true,
+    createdBy: el.documentCreatedBy.value.trim(),
+  };
+  const error = validateSharedDocumentValues(values, true);
+  if (error) { setStatus(el.documentLinkStatus, error, 'error'); return; }
+  state.mutationsInFlight.add(key);
+  const sessionGeneration = state.sessionGeneration;
+  el.documentLinkSubmit.disabled = true;
+  setStatus(el.documentLinkStatus, 'Creazione collegamento…');
+  try {
+    await request('/documents', { method: 'POST', json: sharedDocumentPayload(values, true) });
+    if (sessionGeneration !== state.sessionGeneration || !state.authenticated) return;
+    el.documentLinkForm.reset();
+    el.documentPublicType.value = 'mandate';
+    resetLookupSelect(el.documentOwnerAccountId, 'Carica e seleziona un account', false);
+    resetLookupSelect(el.documentPropertyId, 'Seleziona prima un account', true);
+    resetLookupSelect(el.documentPropertyDocumentId, 'Seleziona prima un immobile', true);
+    state.documentPropertyLookupGeneration += 1;
+    state.documentSourceLookupGeneration += 1;
+    setStatus(el.documentPropertyLookupStatus, '');
+    setStatus(el.documentSourceLookupStatus, '');
+    setStatus(el.documentLinkStatus, 'Documento collegato come draft.', 'success');
+    if (state.activeSection === 'documents') await loadDocuments();
+  } catch (error) {
+    if (sessionGeneration !== state.sessionGeneration) return;
+    handleApiError(error, el.documentLinkStatus);
+  } finally {
+    state.mutationsInFlight.delete(key);
+    if (sessionGeneration === state.sessionGeneration) el.documentLinkSubmit.disabled = false;
+  }
 }
 
 async function submitDocumentUpload(event) {
@@ -2120,7 +2396,60 @@ function renderVisitFeedbackCard(item){const card=document.createElement('articl
 function renderVisitFeedback(items){el.visitFeedbackContent.replaceChildren();if(!Array.isArray(items)||items.length===0){setVisitFeedbackState('empty');return;}for(const item of items)el.visitFeedbackContent.append(renderVisitFeedbackCard(item||{}));setVisitFeedbackState('content');}
 async function loadVisitFeedback(){if(!state.authenticated||state.activeSection!=='visit-feedback')return;const generation=++state.visitFeedbackGeneration;state.visitFeedbackDetailGeneration+=1;state.privacyGeneration+=1;const sessionGeneration=state.sessionGeneration;el.visitFeedbackDetailPanel.hidden=true;el.visitFeedbackDetailContent.replaceChildren();setVisitFeedbackState('loading');try{const data=await request('/visit-feedback?limit=50&offset=0');if(!isCurrent('visit-feedback',generation,sessionGeneration))return;renderVisitFeedback(data&&Array.isArray(data.items)?data.items:[]);}catch(error){if(!isCurrent('visit-feedback',generation,sessionGeneration))return;if(error instanceof ApiError&&error.status===401){forceLoginAfterUnauthorized();return;}setVisitFeedbackState('error',statusMessage(error));}}
 
-async function submitVisitFeedback(event){event.preventDefault();const key='visit-feedback:create';if(!state.authenticated||state.mutationsInFlight.has(key))return;const visitId=parsePositiveInt(el.visitFeedbackPropertyVisitId.value);const accountId=el.visitFeedbackOwnerAccountId.value.trim()?parsePositiveInt(el.visitFeedbackOwnerAccountId.value):null;const category=el.visitFeedbackCategory.value;const sentiment=el.visitFeedbackSentiment.value;const summary=el.visitFeedbackSummary.value.trim();const createdBy=el.visitFeedbackCreatedBy.value.trim();if(visitId===null){setStatus(el.visitFeedbackFormStatus,'Inserisci un ID visita valido.','error');return;}if(accountId===null&&el.visitFeedbackOwnerAccountId.value.trim()){setStatus(el.visitFeedbackFormStatus,'Inserisci un ID account destinatario valido.','error');return;}if(!Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_CATEGORY_LABELS,category)){setStatus(el.visitFeedbackFormStatus,'Seleziona una categoria valida.','error');return;}if(sentiment&&!Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_SENTIMENT_LABELS,sentiment)){setStatus(el.visitFeedbackFormStatus,'Seleziona una valutazione valida.','error');return;}if(!summary||summary.length>5000){setStatus(el.visitFeedbackFormStatus,'Inserisci una sintesi da 1 a 5000 caratteri.','error');return;}if(createdBy.length>200){setStatus(el.visitFeedbackFormStatus,'Il nome operatore non può superare 200 caratteri.','error');return;}state.mutationsInFlight.add(key);const sessionGeneration=state.sessionGeneration;el.visitFeedbackSubmit.disabled=true;el.visitFeedbackPrivacyCheck.disabled=true;try{const valid=await validateVisitFeedbackPrivacy(summary,el.visitFeedbackFormStatus,el.visitFeedbackPrivacyIssues,'create-submit');if(!valid)return;setStatus(el.visitFeedbackFormStatus,'Creazione draft in corso…');await request('/visit-feedback',{method:'POST',json:{property_visit_id:visitId,owner_account_id:accountId,category,public_summary:summary,sentiment:sentiment||null,created_by:createdBy||null}});if(sessionGeneration!==state.sessionGeneration||!state.authenticated)return;el.visitFeedbackForm.reset();el.visitFeedbackCategory.value='price';el.visitFeedbackSentiment.value='';el.visitFeedbackPrivacyIssues.replaceChildren();el.visitFeedbackPrivacyIssues.hidden=true;setStatus(el.visitFeedbackFormStatus,'Feedback visita draft creato.','success');if(state.activeSection==='visit-feedback')await loadVisitFeedback();}catch(error){if(sessionGeneration!==state.sessionGeneration)return;handleApiError(error,el.visitFeedbackFormStatus);}finally{state.mutationsInFlight.delete(key);if(sessionGeneration===state.sessionGeneration){el.visitFeedbackSubmit.disabled=false;el.visitFeedbackPrivacyCheck.disabled=false;}}}
+async function submitVisitFeedback(event) {
+  event.preventDefault();
+  const key = 'visit-feedback:create';
+  if (!state.authenticated || state.mutationsInFlight.has(key)) return;
+  const referenceAccountId = parsePositiveInt(el.visitFeedbackOwnerAccountId.value);
+  const propertyId = parsePositiveInt(el.visitFeedbackPropertyId.value);
+  const visitId = parsePositiveInt(el.visitFeedbackPropertyVisitId.value);
+  const category = el.visitFeedbackCategory.value;
+  const sentiment = el.visitFeedbackSentiment.value;
+  const summary = el.visitFeedbackSummary.value.trim();
+  const createdBy = el.visitFeedbackCreatedBy.value.trim();
+  if (referenceAccountId === null) { setStatus(el.visitFeedbackFormStatus, 'Seleziona un account di riferimento.', 'error'); return; }
+  if (propertyId === null) { setStatus(el.visitFeedbackFormStatus, 'Seleziona un immobile OWNER-eligible.', 'error'); return; }
+  if (visitId === null) { setStatus(el.visitFeedbackFormStatus, 'Seleziona una visita PROPERTY.', 'error'); return; }
+  if (!Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_CATEGORY_LABELS, category)) { setStatus(el.visitFeedbackFormStatus, 'Seleziona una categoria valida.', 'error'); return; }
+  if (sentiment && !Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_SENTIMENT_LABELS, sentiment)) { setStatus(el.visitFeedbackFormStatus, 'Seleziona una valutazione valida.', 'error'); return; }
+  if (!summary || summary.length > 5000) { setStatus(el.visitFeedbackFormStatus, 'Inserisci una sintesi da 1 a 5000 caratteri.', 'error'); return; }
+  if (createdBy.length > 200) { setStatus(el.visitFeedbackFormStatus, 'Il nome operatore non può superare 200 caratteri.', 'error'); return; }
+  const targetAccountId = el.visitFeedbackAllAuthorized.checked ? null : referenceAccountId;
+  state.mutationsInFlight.add(key);
+  const sessionGeneration = state.sessionGeneration;
+  el.visitFeedbackSubmit.disabled = true;
+  el.visitFeedbackPrivacyCheck.disabled = true;
+  try {
+    const valid = await validateVisitFeedbackPrivacy(summary, el.visitFeedbackFormStatus, el.visitFeedbackPrivacyIssues, 'create-submit');
+    if (!valid) return;
+    setStatus(el.visitFeedbackFormStatus, 'Creazione draft in corso…');
+    await request('/visit-feedback', { method: 'POST', json: { property_visit_id: visitId, owner_account_id: targetAccountId, category, public_summary: summary, sentiment: sentiment || null, created_by: createdBy || null } });
+    if (sessionGeneration !== state.sessionGeneration || !state.authenticated) return;
+    el.visitFeedbackForm.reset();
+    resetLookupSelect(el.visitFeedbackOwnerAccountId, 'Carica e seleziona un account', false);
+    resetLookupSelect(el.visitFeedbackPropertyId, 'Seleziona prima un account', true);
+    resetLookupSelect(el.visitFeedbackPropertyVisitId, 'Seleziona prima un immobile', true);
+    state.visitPropertyLookupGeneration += 1;
+    state.visitSourceLookupGeneration += 1;
+    el.visitFeedbackCategory.value = 'price';
+    el.visitFeedbackSentiment.value = '';
+    el.visitFeedbackPrivacyIssues.replaceChildren();
+    el.visitFeedbackPrivacyIssues.hidden = true;
+    setStatus(el.visitFeedbackPropertyLookupStatus, '');
+    setStatus(el.visitFeedbackSourceLookupStatus, '');
+    setStatus(el.visitFeedbackFormStatus, 'Feedback visita draft creato.', 'success');
+    if (state.activeSection === 'visit-feedback') await loadVisitFeedback();
+  } catch (error) {
+    if (sessionGeneration !== state.sessionGeneration) return;
+    handleApiError(error, el.visitFeedbackFormStatus);
+  } finally {
+    state.mutationsInFlight.delete(key);
+    if (sessionGeneration === state.sessionGeneration) {
+      el.visitFeedbackSubmit.disabled = false;
+      el.visitFeedbackPrivacyCheck.disabled = false;
+    }
+  }
+}
 
 
 function tokenTypeLabel(value) {
@@ -2155,7 +2484,7 @@ async function submitToken(event) {
   const expiresMinutes = Number(el.tokenExpiresMinutes.value);
   const createdBy = el.tokenCreatedBy.value.trim();
   if (accountId === null) {
-    setStatus(el.tokenFormStatus, 'Inserisci un ID account proprietario valido.', 'error');
+    setStatus(el.tokenFormStatus, 'Seleziona un account proprietario.', 'error');
     return;
   }
   if (!Object.prototype.hasOwnProperty.call(TOKEN_TYPE_LABELS, tokenType)) {
@@ -2351,6 +2680,15 @@ function activateSection(name, options = {}) {
   state.privacyGeneration += 1;
   state.tokenGeneration += 1;
   state.auditGeneration += 1;
+  state.contactLookupGeneration += 1;
+  state.accessAccountLookupGeneration += 1;
+  state.accessPropertyLookupGeneration += 1;
+  state.documentAccountLookupGeneration += 1;
+  state.documentPropertyLookupGeneration += 1;
+  state.documentSourceLookupGeneration += 1;
+  state.visitAccountLookupGeneration += 1;
+  state.visitPropertyLookupGeneration += 1;
+  state.visitSourceLookupGeneration += 1;
   state.activeSection = name;
 
   for (const sectionName of ['dashboard', 'accounts', 'access', 'publications', 'requests', 'documents', 'visit-feedback', 'token-access', 'audit']) {
@@ -2451,6 +2789,28 @@ el.tokenCopy.addEventListener('click', copyOneTimeToken);
 el.tokenClose.addEventListener('click', () => clearOneTimeToken(true));
 el.visitFeedbackDetailClose.addEventListener('click', () => { state.visitFeedbackDetailGeneration += 1; el.visitFeedbackDetailPanel.hidden = true; el.visitFeedbackDetailContent.replaceChildren(); setStatus(el.visitFeedbackDetailStatus, ''); });
 el.visitFeedbackPrivacyCheck.addEventListener('click', () => validateVisitFeedbackPrivacy(el.visitFeedbackSummary.value.trim(), el.visitFeedbackFormStatus, el.visitFeedbackPrivacyIssues, 'create-manual'));
+el.accountContactSearchButton.addEventListener('click', searchAccountContacts);
+el.accountContactSearch.addEventListener('input', () => {
+  state.contactLookupGeneration += 1;
+  resetLookupSelect(el.accountContactId, 'Avvia una nuova ricerca', true);
+  setStatus(el.accountContactLookupStatus, '');
+});
+el.accessAccountsLoad.addEventListener('click', () => loadOwnerAccountChoices(el.accessOwnerAccountId, el.accessPropertyLookupStatus, 'accessAccountLookupGeneration'));
+el.accessOwnerAccountId.addEventListener('change', () => loadEligibleProperties(el.accessOwnerAccountId, el.accessPropertyId, el.accessPropertyLookupStatus, 'accessPropertyLookupGeneration'));
+el.documentAccountsLoad.addEventListener('click', () => loadOwnerAccountChoices(el.documentOwnerAccountId, el.documentPropertyLookupStatus, 'documentAccountLookupGeneration'));
+el.documentOwnerAccountId.addEventListener('change', () => loadEligibleProperties(el.documentOwnerAccountId, el.documentPropertyId, el.documentPropertyLookupStatus, 'documentPropertyLookupGeneration', () => {
+  state.documentSourceLookupGeneration += 1;
+  resetLookupSelect(el.documentPropertyDocumentId, 'Seleziona prima un immobile', true);
+  setStatus(el.documentSourceLookupStatus, '');
+}));
+el.documentPropertyId.addEventListener('change', loadPropertyDocumentsForAccount);
+el.visitFeedbackAccountsLoad.addEventListener('click', () => loadOwnerAccountChoices(el.visitFeedbackOwnerAccountId, el.visitFeedbackPropertyLookupStatus, 'visitAccountLookupGeneration'));
+el.visitFeedbackOwnerAccountId.addEventListener('change', () => loadEligibleProperties(el.visitFeedbackOwnerAccountId, el.visitFeedbackPropertyId, el.visitFeedbackPropertyLookupStatus, 'visitPropertyLookupGeneration', () => {
+  state.visitSourceLookupGeneration += 1;
+  resetLookupSelect(el.visitFeedbackPropertyVisitId, 'Seleziona prima un immobile', true);
+  setStatus(el.visitFeedbackSourceLookupStatus, '');
+}));
+el.visitFeedbackPropertyId.addEventListener('change', loadPropertyVisitsForAccount);
 el.accountForm.addEventListener('submit', submitAccount);
 el.accessForm.addEventListener('submit', submitAccess);
 el.publicationForm.addEventListener('submit', submitPublication);

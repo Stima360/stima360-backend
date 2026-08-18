@@ -263,3 +263,24 @@ h4 { margin: 0 0 14px; font-size: 1rem; }
 @media (max-width: 520px) {
   .token-result-actions .button { width: 100%; }
 }
+
+/* OWNER 0.2 P8.1 — lookup guidati CORE / PROPERTY */
+.lookup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.lookup-row-select { align-items: stretch; }
+.lookup-row .button { white-space: nowrap; }
+.lookup-row select { min-width: 0; }
+select:disabled {
+  cursor: not-allowed;
+  opacity: .68;
+  background: #f5f7fa;
+}
+
+@media (max-width: 620px) {
+  .lookup-row { grid-template-columns: 1fr; }
+  .lookup-row .button { width: 100%; }
+}
