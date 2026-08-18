@@ -217,3 +217,49 @@ h4 { margin: 0 0 14px; font-size: 1rem; }
   .detail-meta { grid-template-columns: 1fr; }
   .grouped-actions .button { width: 100%; }
 }
+
+/* OWNER 0.2 P7.4 — Inviti/accessi e Audit */
+.token-form-panel,
+.token-result-panel { max-width: 860px; }
+.token-warning {
+  margin: 8px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e4c88b;
+  border-radius: 10px;
+  background: #fff9ea;
+  color: #6d5217;
+  font-weight: 750;
+}
+.token-result-meta { margin-bottom: 16px; }
+.token-secret {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #cfd9e5;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.token-value {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: #172033;
+  font: 700 .9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.token-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.audit-list { max-width: 1100px; }
+.audit-card { overflow: hidden; }
+.audit-action,
+.audit-meta .meta-value { overflow-wrap: anywhere; }
+.audit-result { max-width: 220px; overflow-wrap: anywhere; white-space: normal; }
+
+@media (max-width: 520px) {
+  .token-result-actions .button { width: 100%; }
+}

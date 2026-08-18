@@ -51,6 +51,8 @@
           <button id="nav-requests" class="nav-button" type="button" aria-controls="section-requests">Richieste</button>
           <button id="nav-documents" class="nav-button" type="button" aria-controls="section-documents">Documenti</button>
           <button id="nav-visit-feedback" class="nav-button" type="button" aria-controls="section-visit-feedback">Feedback visite</button>
+          <button id="nav-token-access" class="nav-button" type="button" aria-controls="section-token-access">Inviti e accessi</button>
+          <button id="nav-audit" class="nav-button" type="button" aria-controls="section-audit">Audit</button>
         </nav>
         <button id="admin-logout" class="button secondary logout-button" type="button">Esci</button>
       </aside>
@@ -483,6 +485,77 @@
             <button id="visit-feedback-retry" class="button secondary" type="button">Riprova</button>
           </div>
           <div id="visit-feedback-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-token-access" class="admin-section" hidden aria-labelledby="token-access-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="token-access-heading">Inviti e accessi</h3>
+              <p class="muted">Genera un invito o un accesso temporaneo per un account proprietario esistente.</p>
+            </div>
+          </div>
+
+          <div id="token-form-panel" class="panel token-form-panel">
+            <h4>Genera credenziale temporanea</h4>
+            <p class="muted">Inserisci l'ID account OWNER. Il token sarà mostrato una sola volta in questa schermata.</p>
+            <form id="token-create-form" class="form-grid" novalidate>
+              <div class="field">
+                <label for="token-owner-account-id">ID account proprietario</label>
+                <input id="token-owner-account-id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="token-type">Tipo accesso</label>
+                <select id="token-type" required>
+                  <option value="invitation">Invito</option>
+                  <option value="login">Accesso</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="token-expires-minutes">Durata (minuti)</label>
+                <input id="token-expires-minutes" type="number" min="5" max="1440" step="1" value="30" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="token-created-by">Operatore</label>
+                <input id="token-created-by" type="text">
+              </div>
+              <div class="form-actions">
+                <button id="token-create-submit" class="button primary" type="submit">Genera token</button>
+              </div>
+            </form>
+            <p id="token-form-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div id="token-result-panel" class="panel token-result-panel" hidden aria-labelledby="token-result-heading">
+            <h4 id="token-result-heading">Token generato</h4>
+            <p class="token-warning" role="status">Visibile solo ora. Conservalo in modo sicuro.</p>
+            <div id="token-result-meta" class="entity-meta token-result-meta"></div>
+            <div class="token-secret">
+              <span class="meta-label">Token</span>
+              <code id="token-result-value" class="token-value"></code>
+            </div>
+            <div class="token-result-actions">
+              <button id="token-copy" class="button secondary" type="button">Copia</button>
+              <button id="token-close" class="button primary" type="button">Ho copiato il token</button>
+            </div>
+            <p id="token-copy-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section id="section-audit" class="admin-section" hidden aria-labelledby="audit-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="audit-heading">Audit</h3>
+              <p class="muted">Ultime operazioni OWNER registrate dal backend. Vista esclusivamente in lettura.</p>
+            </div>
+            <button id="audit-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+          <div id="audit-loading" class="state-card" hidden role="status">Caricamento audit…</div>
+          <div id="audit-empty" class="state-card" hidden>Nessun evento audit disponibile.</div>
+          <div id="audit-error" class="state-card error-state" hidden>
+            <p id="audit-error-message"></p>
+            <button id="audit-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="audit-content" class="entity-list audit-list" hidden aria-live="polite"></div>
         </section>
       </div>
     </section>

@@ -17,6 +17,7 @@ from owner.schemas import (
     SharedDocumentCreate,
     SharedDocumentSupersede,
     SharedDocumentUpdate,
+    TokenCreate,
     VisitFeedbackCreate,
     VisitFeedbackSupersede,
     VisitFeedbackUpdate,
@@ -29,6 +30,7 @@ INDEX = ADMIN / "index.html"
 APP_JS = ADMIN / "assets" / "app.js"
 APP_CSS = ADMIN / "assets" / "app.css"
 REPOSITORY = ROOT / "owner" / "repository.py"
+ROUTER_ADMIN = ROOT / "owner" / "router_admin.py"
 
 
 class _AdminHtmlParser(HTMLParser):
@@ -161,6 +163,12 @@ class FakeElement {{
       for (const id of ['visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-summary','visit-feedback-created-by']) ids[id].value = '';
       ids['visit-feedback-category'].value = ''; ids['visit-feedback-sentiment'].value = '';
     }}
+    if (this.id === 'token-create-form') {{
+      ids['token-owner-account-id'].value = '';
+      ids['token-type'].value = '';
+      ids['token-expires-minutes'].value = '';
+      ids['token-created-by'].value = '';
+    }}
   }}
   async trigger(type) {{
     const event = {{ preventDefault() {{}} }};
@@ -185,14 +193,15 @@ const requiredIds = [
   'document-link-form','document-property-document-id','document-owner-account-id','document-public-title','document-public-type','document-expires-at','document-created-by','document-ack-required','document-link-submit','document-link-status',
   'document-upload-form','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-public-type','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','document-upload-submit','document-upload-status',
   'document-detail-panel','document-detail-close','document-detail-status','document-detail-content','document-reads-panel','document-reads-close','document-reads-status','document-reads-content','documents-loading','documents-empty','documents-error','documents-error-message','documents-retry','documents-reload','documents-content',
-  'visit-feedback-create-form','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-category','visit-feedback-sentiment','visit-feedback-summary','visit-feedback-created-by','visit-feedback-privacy-check','visit-feedback-create-submit','visit-feedback-form-status','visit-feedback-privacy-issues','visit-feedback-detail-panel','visit-feedback-detail-close','visit-feedback-detail-status','visit-feedback-detail-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-error-message','visit-feedback-retry','visit-feedback-reload','visit-feedback-content'
+  'visit-feedback-create-form','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-category','visit-feedback-sentiment','visit-feedback-summary','visit-feedback-created-by','visit-feedback-privacy-check','visit-feedback-create-submit','visit-feedback-form-status','visit-feedback-privacy-issues','visit-feedback-detail-panel','visit-feedback-detail-close','visit-feedback-detail-status','visit-feedback-detail-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-error-message','visit-feedback-retry','visit-feedback-reload','visit-feedback-content',
+  'nav-token-access','nav-audit','section-token-access','section-audit','token-form-panel','token-create-form','token-owner-account-id','token-type','token-expires-minutes','token-created-by','token-create-submit','token-form-status','token-result-panel','token-result-meta','token-result-value','token-copy','token-close','token-copy-status','audit-loading','audit-empty','audit-error','audit-error-message','audit-retry','audit-reload','audit-content'
 ];
 const ids = {{}};
 for (const id of requiredIds) ids[id] = new FakeElement('div', id);
-for (const id of ['admin-login-form','account-create-form','access-create-form','publication-create-form','document-link-form','document-upload-form','visit-feedback-create-form']) ids[id].tagName = 'FORM';
-for (const id of ['admin-username','admin-password','account-contact-id','account-language','access-owner-account-id','access-property-id','access-primary','access-valid-until','publication-property-id','publication-title','publication-ack-required','document-property-document-id','document-owner-account-id','document-public-title','document-expires-at','document-created-by','document-ack-required','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-created-by']) ids[id].tagName = 'INPUT';
+for (const id of ['admin-login-form','account-create-form','access-create-form','publication-create-form','document-link-form','document-upload-form','visit-feedback-create-form','token-create-form']) ids[id].tagName = 'FORM';
+for (const id of ['admin-username','admin-password','account-contact-id','account-language','access-owner-account-id','access-property-id','access-primary','access-valid-until','publication-property-id','publication-title','publication-ack-required','document-property-document-id','document-owner-account-id','document-public-title','document-expires-at','document-created-by','document-ack-required','document-upload-file','document-upload-property-id','document-upload-document-type','document-upload-source-title','document-upload-public-title','document-upload-owner-account-id','document-upload-supersedes-id','document-upload-expires-at','document-upload-created-by','document-upload-ack-required','visit-feedback-property-visit-id','visit-feedback-owner-account-id','visit-feedback-created-by','token-owner-account-id','token-expires-minutes','token-created-by']) ids[id].tagName = 'INPUT';
 for (const id of ['publication-summary','publication-body','visit-feedback-summary']) ids[id].tagName = 'TEXTAREA';
-for (const id of ['access-role','publication-type','document-public-type','document-upload-public-type','visit-feedback-category','visit-feedback-sentiment']) ids[id].tagName = 'SELECT';
+for (const id of ['access-role','publication-type','document-public-type','document-upload-public-type','visit-feedback-category','visit-feedback-sentiment','token-type']) ids[id].tagName = 'SELECT';
 ids['account-language'].value = 'it';
 ids['access-role'].value = 'owner';
 ids['publication-type'].value = 'general_update';
@@ -200,6 +209,8 @@ ids['document-public-type'].value = 'mandate';
 ids['document-upload-public-type'].value = 'mandate';
 ids['visit-feedback-category'].value = 'price';
 ids['visit-feedback-sentiment'].value = '';
+ids['token-type'].value = 'invitation';
+ids['token-expires-minutes'].value = '30';
 ids['admin-app'].hidden = true;
 ids['section-accounts'].hidden = true;
 ids['section-access'].hidden = true;
@@ -207,6 +218,9 @@ ids['section-publications'].hidden = true;
 ids['section-requests'].hidden = true;
 ids['section-documents'].hidden = true;
 ids['section-visit-feedback'].hidden = true;
+ids['section-token-access'].hidden = true;
+ids['section-audit'].hidden = true;
+ids['token-result-panel'].hidden = true;
 ids['document-detail-panel'].hidden = true;
 ids['document-reads-panel'].hidden = true;
 ids['visit-feedback-detail-panel'].hidden = true;
@@ -229,7 +243,7 @@ ids['requests-loading'].hidden = true;
 ids['requests-empty'].hidden = true;
 ids['requests-error'].hidden = true;
 ids['requests-content'].hidden = true;
-for (const id of ['documents-loading','documents-empty','documents-error','documents-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-content']) ids[id].hidden = true;
+for (const id of ['documents-loading','documents-empty','documents-error','documents-content','visit-feedback-loading','visit-feedback-empty','visit-feedback-error','visit-feedback-content','audit-loading','audit-empty','audit-error','audit-content']) ids[id].hidden = true;
 
 const createdElements = [];
 const document = {{
@@ -243,6 +257,9 @@ global.btoa = text => Buffer.from(text, 'binary').toString('base64');
 class FakeFormData {{ constructor() {{ this.entriesList = []; }} append(name, value) {{ this.entriesList.push([name, value]); }} get(name) {{ const row = this.entriesList.find(pair => pair[0] === name); return row ? row[1] : null; }} }}
 global.FormData = FakeFormData;
 global.URL = {{ createObjectURL(blob) {{ return `blob:fake/${{blob && blob.size ? blob.size : 0}}`; }}, revokeObjectURL(_url) {{}} }};
+const clipboardWrites = [];
+let clipboardShouldFail = false;
+Object.defineProperty(global, 'navigator', {{ value: {{ clipboard: {{ async writeText(value) {{ if (clipboardShouldFail) throw new Error('clipboard denied'); clipboardWrites.push(String(value)); }} }} }}, configurable: true }});
 
 const routeQueues = {route_json};
 const calls = [];
@@ -358,17 +375,16 @@ def test_security_has_no_legacy_generic_renderer_or_browser_persistence():
     assert "createElement" in source and "textContent" in source and "setAttribute" in source
 
 
-def test_p73_scope_does_not_call_future_or_cross_module_apis():
+def test_p74_scope_calls_only_real_owner_admin_apis_and_no_future_cross_module_apis():
     source = APP_JS.read_text(encoding="utf-8")
     for forbidden in (
-        "/audit", "/tokens",
         "/api/core", "/api/property", "/api/buy", "/api/match", "/api/flow",
-        "/notifications", "/notification-preferences",
+        "/notifications", "/notification-preferences", "tokens/revoke", "/tokens?",
     ):
         assert forbidden not in source
     for expected in (
-        "'/dashboard'", "'/accounts'", "'/access'", "'/publications'", "'/feedback'",
-        "/accounts/${", "/access/${", "/publications/${", "/feedback/${",
+        "'/dashboard'", "'/accounts'", "'/access'", "'/publications'", "'/feedback'", "'/audit'",
+        "/accounts/${", "/access/${", "/publications/${", "/feedback/${", "/tokens`",
     ):
         assert expected in source
 
@@ -630,7 +646,7 @@ assert(calls.length === before, 'API request allowed after local logout');
 
 def test_error_mapping_and_mutation_guards_are_present_for_required_statuses():
     source = APP_JS.read_text(encoding="utf-8")
-    for status in (401, 403, 404, 409, 422, 429, 503, 500):
+    for status in (400, 401, 403, 404, 409, 422, 429, 503, 500):
         assert f"error.status === {status}" in source or (status == 500 and "error.status >= 500" in source)
     assert "mutationsInFlight" in source
     assert "dashboardGeneration" in source
@@ -1081,13 +1097,13 @@ def test_p73_markup_navigation_document_and_visit_feedback_forms_are_real():
         assert field_id in parser.labels_for
 
 
-def test_p73_security_has_safe_dom_no_storage_locators_and_no_future_admin_sections():
+def test_p73_security_has_safe_dom_no_storage_locators_and_no_cross_module_calls():
     source = APP_JS.read_text(encoding="utf-8")
     forbidden = (
         "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function",
         "Object.keys", "Object.entries", "localStorage", "sessionStorage", "document.cookie", "/api/admin/check",
         "storage_key", "storage_locator", "r2_endpoint", "access_key", "secret_key", "presigned",
-        "/audit", "/tokens", "/api/core", "/api/property", "/api/flow", "/api/buy", "/api/match",
+        "/api/core", "/api/property", "/api/flow", "/api/buy", "/api/match",
     )
     for token in forbidden:
         assert token not in source
@@ -1383,3 +1399,275 @@ def test_p73_css_generations_error_mapping_and_anti_error_features_are_real():
     ):
         assert selector in css
     assert "@media (max-width: 760px)" in css
+
+
+# OWNER 0.2 P7.4 — Inviti/accessi e Audit -------------------------------
+
+def test_p74_real_backend_contract_token_and_audit_is_frozen():
+    assert set(TokenCreate.model_fields) == {"token_type", "expires_minutes", "created_by"}
+    assert set(get_args(TokenCreate.model_fields["token_type"].annotation)) == {"invitation", "login"}
+    expires_field = TokenCreate.model_fields["expires_minutes"]
+    assert expires_field.default == 30
+    assert any(getattr(rule, "ge", None) == 5 for rule in expires_field.metadata)
+    assert any(getattr(rule, "le", None) == 1440 for rule in expires_field.metadata)
+    assert TokenCreate.model_fields["created_by"].is_required() is False
+
+    router_source = ROUTER_ADMIN.read_text(encoding="utf-8")
+    assert '@router.post("/accounts/{i}/tokens")' in router_source
+    assert "p.token_type" in router_source
+    assert "p.expires_minutes" in router_source
+    assert "p.created_by" in router_source
+    for response_field in ('"token_id"', '"expires_at"', '"token"', '"one_time_display"'):
+        assert response_field in router_source
+    assert '@router.get("/audit")' in router_source
+    assert 'return {"items": x(r.audits)}' in router_source
+
+    repo_source = REPOSITORY.read_text(encoding="utf-8")
+    assert "def create_token(" in repo_source
+    assert "hash_secret(raw)" in repo_source
+    assert "returnr,raw" in repo_source.replace(" ", "")
+    assert "SELECT * FROM owner_audit_log ORDER BY created_at DESC LIMIT 200" in repo_source
+
+
+def test_p74_markup_has_final_navigation_token_form_one_time_result_and_audit_states():
+    parser = _html()
+    required = {
+        "nav-token-access", "nav-audit", "section-token-access", "section-audit",
+        "token-form-panel", "token-create-form", "token-owner-account-id", "token-type",
+        "token-expires-minutes", "token-created-by", "token-create-submit", "token-form-status",
+        "token-result-panel", "token-result-meta", "token-result-value", "token-copy", "token-close",
+        "token-copy-status", "audit-loading", "audit-empty", "audit-error", "audit-error-message",
+        "audit-retry", "audit-reload", "audit-content",
+    }
+    assert required <= parser.ids
+    assert {"token-owner-account-id", "token-type", "token-expires-minutes", "token-created-by"} <= parser.labels_for
+    assert parser.select_options["token-type"] == ["invitation", "login"]
+    ttl = parser.inputs["token-expires-minutes"]
+    assert ttl.get("min") == "5" and ttl.get("max") == "1440" and ttl.get("step") == "1" and ttl.get("value") == "30"
+    assert parser.inputs["token-owner-account-id"].get("min") == "1"
+    assert parser.inputs["token-created-by"].get("required") is None
+
+    html = INDEX.read_text(encoding="utf-8")
+    labels = [
+        "Dashboard", "Proprietari", "Accessi", "Pubblicazioni", "Richieste", "Documenti",
+        "Feedback visite", "Inviti e accessi", "Audit",
+    ]
+    positions = [html.index(f'>{label}</button>') for label in labels]
+    assert positions == sorted(positions)
+    assert "Token generato" in html
+    assert "Visibile solo ora. Conservalo in modo sicuro." in html
+
+
+def test_p74_token_invitation_login_double_submit_copy_reset_and_xss_are_safe():
+    raw_one = "<script>ONE_TIME_SECRET</script>"
+    raw_two = "LOGIN_SECRET_ABC"
+    out = _run_node(
+        {
+            "GET /api/owner/admin/dashboard": [{"status": 200, "body": {}}],
+            "POST /api/owner/admin/accounts/7/tokens": [
+                {"status": 200, "body": {"token_id": 91, "expires_at": "2030-01-01T10:30:00Z", "token": raw_one, "one_time_display": True}, "defer": "tokenOne"},
+                {"status": 200, "body": {"token_id": 92, "expires_at": "2030-01-01T10:05:00Z", "token": raw_two, "one_time_display": True}},
+            ],
+        },
+        rf"""
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-token-access'].trigger('click');
+ids['token-owner-account-id'].value='7'; ids['token-type'].value='invitation'; ids['token-expires-minutes'].value='30'; ids['token-created-by'].value='Admin P7.4';
+const first=ids['token-create-form'].trigger('submit'); await sleepTick();
+assert(ids['token-create-submit'].disabled===true,'token button must disable during POST');
+assert(ids['token-create-submit'].textContent==='Generazione…','token loading label missing');
+assert(countCalls('POST','/api/owner/admin/accounts/7/tokens')===1,'first token POST missing');
+await ids['token-create-form'].trigger('submit');
+assert(countCalls('POST','/api/owner/admin/accounts/7/tokens')===1,'double submit generated a second token');
+assert(ids['token-result-value'].textContent!=={json.dumps(raw_one)},'token rendered before successful response');
+assert(clipboardWrites.length===0,'token copied automatically');
+const firstCall=calls.find(c=>c.method==='POST'&&c.url==='/api/owner/admin/accounts/7/tokens');
+assert(firstCall.headers.Authorization==='Basic '+Buffer.from('u:p').toString('base64'),'Basic auth missing on token POST');
+const firstPayload=JSON.parse(firstCall.body);
+assert(JSON.stringify(firstPayload)===JSON.stringify({{token_type:'invitation',expires_minutes:30,created_by:'Admin P7.4'}}),'invitation payload contract mismatch');
+deferred.tokenOne(); await first; await sleepTick();
+assert(ids['token-result-panel'].hidden===false&&ids['token-form-panel'].hidden===true,'token success screen missing');
+assert(ids['token-result-value'].textContent==={json.dumps(raw_one)},'raw token not rendered as text after success');
+assert(flatten(ids['token-result-meta']).includes('Invito')&&flatten(ids['token-result-meta']).includes('91'),'useful token metadata missing');
+assert(calls.every(c=>!c.url.includes('ONE_TIME_SECRET')),'raw token inserted in URL');
+await ids['token-copy'].trigger('click'); assert(clipboardWrites.length===1&&clipboardWrites[0]==={json.dumps(raw_one)},'explicit clipboard copy failed');
+clipboardShouldFail=true; await ids['token-copy'].trigger('click');
+assert(ids['token-copy-status'].textContent==='Copia non riuscita. Seleziona il token e copialo manualmente.','clipboard failure not controlled');
+assert(ids['token-result-value'].textContent==={json.dumps(raw_one)},'clipboard failure lost token');
+await ids['token-close'].trigger('click');
+assert(ids['token-result-value'].textContent===''&&!flatten(ids['token-result-meta']).includes('ONE_TIME_SECRET'),'reset did not clear raw token DOM');
+assert(ids['token-result-panel'].hidden===true&&ids['token-form-panel'].hidden===false,'reset did not return to form');
+clipboardShouldFail=false;
+ids['token-owner-account-id'].value='7'; ids['token-type'].value='login'; ids['token-expires-minutes'].value='5'; ids['token-created-by'].value='';
+await ids['token-create-form'].trigger('submit');
+const posts=calls.filter(c=>c.method==='POST'&&c.url==='/api/owner/admin/accounts/7/tokens');
+assert(posts.length===2,'login token POST missing'); const secondPayload=JSON.parse(posts[1].body);
+assert(JSON.stringify(secondPayload)===JSON.stringify({{token_type:'login',expires_minutes:5,created_by:null}}),'login payload contract mismatch');
+assert(ids['token-result-value'].textContent==={json.dumps(raw_two)},'login token success missing');
+""",
+    )
+    assert "SCENARIO_PASS" in out
+
+
+def test_p74_token_error_is_controlled_recoverable_and_network_safe():
+    out = _run_node(
+        {
+            "GET /api/owner/admin/dashboard": [{"status": 200, "body": {}}],
+            "POST /api/owner/admin/accounts/5/tokens": [
+                {"status": 422, "body": {"detail": "RAW PYDANTIC TOKEN"}},
+                {"network_error": True},
+            ],
+        },
+        r"""
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-token-access'].trigger('click');
+ids['token-owner-account-id'].value='5'; ids['token-type'].value='login'; ids['token-expires-minutes'].value='30';
+await ids['token-create-form'].trigger('submit');
+assert(ids['token-form-status'].textContent==='Controlla i dati inseriti e riprova.','422 token message');
+assert(!ids['token-form-status'].textContent.includes('RAW PYDANTIC'),'raw 422 leaked');
+assert(ids['token-create-submit'].disabled===false&&ids['token-form-panel'].hidden===false,'token form not recoverable after 422');
+await ids['token-create-form'].trigger('submit');
+assert(ids['token-form-status'].textContent==='Errore di connessione. Riprova.','network error not controlled');
+assert(ids['token-create-submit'].disabled===false,'token form not recoverable after network error');
+assert(ids['token-result-value'].textContent==='','token unexpectedly present after errors');
+""",
+    )
+    assert "SCENARIO_PASS" in out
+
+
+def test_p74_token_stale_logout_and_401_clear_one_time_secret_and_credentials():
+    stale_secret = "STALE_SECRET_NEVER_SHOW"
+    visible_secret = "VISIBLE_SECRET_CLEAR_ON_401"
+    out = _run_node(
+        {
+            "GET /api/owner/admin/dashboard": [
+                {"status": 200, "body": {}},
+                {"status": 200, "body": {}},
+            ],
+            "POST /api/owner/admin/accounts/8/tokens": [
+                {"status": 200, "body": {"token_id": 1, "expires_at": "2030-01-01T00:00:00Z", "token": stale_secret, "one_time_display": True}, "defer": "staleToken"},
+                {"status": 200, "body": {"token_id": 2, "expires_at": "2030-01-01T00:00:00Z", "token": visible_secret, "one_time_display": True}},
+            ],
+            "GET /api/owner/admin/audit": [{"status": 401, "body": {"detail": "RAW AUTH"}}],
+        },
+        rf"""
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-token-access'].trigger('click');
+ids['token-owner-account-id'].value='8'; ids['token-type'].value='invitation'; ids['token-expires-minutes'].value='30';
+const pending=ids['token-create-form'].trigger('submit'); await sleepTick(); await ids['admin-logout'].trigger('click');
+assert(ids['token-result-value'].textContent==='','logout must clear token DOM'); deferred.staleToken(); await pending; await sleepTick();
+assert(ids['token-result-value'].textContent!=={json.dumps(stale_secret)},'stale token response reappeared after logout');
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit'); await ids['nav-token-access'].trigger('click');
+ids['token-owner-account-id'].value='8'; ids['token-type'].value='login'; ids['token-expires-minutes'].value='30'; await ids['token-create-form'].trigger('submit');
+assert(ids['token-result-value'].textContent==={json.dumps(visible_secret)},'precondition token not visible');
+await ids['nav-audit'].trigger('click');
+assert(ids['login-view'].hidden===false&&ids['admin-app'].hidden===true,'audit 401 must return login');
+assert(ids['token-result-value'].textContent===''&&!flatten(ids['token-result-meta']).includes('VISIBLE_SECRET_CLEAR_ON_401'),'401 did not clear raw token');
+assert(ids['admin-username'].value===''&&ids['admin-password'].value==='','credential inputs not cleared on 401');
+assert(ids['admin-login-status'].textContent==='Credenziali non valide.','401 controlled message missing');
+""",
+    )
+    assert "SCENARIO_PASS" in out
+
+
+def test_p74_audit_loading_content_whitelist_order_xss_refresh_and_empty():
+    first_action = "<img src=x onerror=alert(1)>"
+    out = _run_node(
+        {
+            "GET /api/owner/admin/dashboard": [{"status": 200, "body": {}}],
+            "GET /api/owner/admin/audit": [
+                {"status": 200, "defer": "auditFirst", "body": {"items": [
+                    {"id": 777777, "created_at": "2030-01-02T12:00:00Z", "owner_account_id": 7, "property_id": 40, "action": first_action, "entity_type": "owner_shared_document", "entity_id": "55", "result": "success", "metadata": {"version_number": 2, "previous": 54, "supersedes": 53, "reason": "<script>motivo</script>", "storage_key": "PRIVATE_STORAGE", "secret": "PRIVATE_META"}, "internal_secret": "PRIVATE_TOP"},
+                    {"id": 888888, "created_at": "2030-01-01T12:00:00Z", "owner_account_id": None, "property_id": None, "action": "second_action", "entity_type": "owner_token", "entity_id": "90", "result": "success", "metadata": {"unknown": "PRIVATE_SECOND"}},
+                ]}},
+                {"status": 200, "body": {"items": []}},
+            ],
+        },
+        rf"""
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit');
+const loading=ids['nav-audit'].trigger('click'); await sleepTick(); assert(ids['audit-loading'].hidden===false,'audit loading state missing');
+deferred.auditFirst(); await loading; await sleepTick();
+assert(ids['audit-content'].hidden===false&&ids['audit-content'].children.length===2,'audit content state/count');
+const text=flatten(ids['audit-content']);
+assert(text.includes({json.dumps(first_action)}),'audit XSS must remain text');
+assert(text.indexOf({json.dumps(first_action)})<text.indexOf('second_action'),'backend audit order changed');
+for (const allowed of ['Versione','2','Versione precedente','54','Sostituisce','53','<script>motivo</script>']) assert(text.includes(allowed),'whitelisted audit metadata missing: '+allowed);
+for (const forbidden of ['PRIVATE_STORAGE','PRIVATE_META','PRIVATE_TOP','PRIVATE_SECOND','777777','888888']) assert(!text.includes(forbidden),'non-whitelisted audit data rendered: '+forbidden);
+assert(countCalls('GET','/api/owner/admin/audit')===1,'unexpected audit request count');
+await ids['audit-reload'].trigger('click'); assert(countCalls('GET','/api/owner/admin/audit')===2,'controlled audit refresh missing');
+assert(ids['audit-empty'].hidden===false&&ids['audit-content'].hidden===true,'audit empty state missing after refresh');
+""",
+    )
+    assert "SCENARIO_PASS" in out
+
+
+def test_p74_audit_error_stale_response_and_read_only_contract_are_safe():
+    out = _run_node(
+        {
+            "GET /api/owner/admin/dashboard": [
+                {"status": 200, "body": {}},
+                {"status": 200, "body": {"active_accounts": 1}},
+            ],
+            "GET /api/owner/admin/audit": [
+                {"status": 429, "body": {"detail": "RAW RATE"}},
+                {"status": 200, "defer": "oldAudit", "body": {"items": [{"action": "OLD AUDIT SHOULD NOT RENDER"}]}},
+                {"status": 503, "body": {"detail": "RAW SERVICE"}},
+            ],
+        },
+        r"""
+ids['admin-username'].value='u'; ids['admin-password'].value='p'; await ids['admin-login-form'].trigger('submit');
+await ids['nav-audit'].trigger('click');
+assert(ids['audit-error'].hidden===false&&ids['audit-error-message'].textContent==='Troppe richieste. Riprova tra poco.','audit 429 error state');
+assert(!ids['audit-error-message'].textContent.includes('RAW RATE'),'raw audit error leaked');
+const old=ids['audit-retry'].trigger('click'); await sleepTick(); await ids['nav-dashboard'].trigger('click'); deferred.oldAudit(); await old; await sleepTick();
+assert(!flatten(ids['audit-content']).includes('OLD AUDIT SHOULD NOT RENDER'),'stale audit response rendered');
+await ids['nav-audit'].trigger('click');
+assert(ids['audit-error-message'].textContent==='Servizio amministrativo non disponibile.','audit 503 controlled message');
+assert(!ids['audit-error-message'].textContent.includes('RAW SERVICE'),'raw 503 leaked');
+""",
+    )
+    assert "SCENARIO_PASS" in out
+
+    source = APP_JS.read_text(encoding="utf-8")
+    assert source.count("request('/audit')") == 1
+    assert "request('/audit'," not in source
+    for method in ("POST", "PATCH", "DELETE"):
+        assert f"{method} /audit" not in source
+
+
+def test_p74_security_no_persistence_generic_metadata_dump_token_logging_or_invented_endpoints():
+    source = APP_JS.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    combined = source + html
+    for forbidden in (
+        "localStorage", "sessionStorage", "document.cookie", "indexedDB", "innerHTML", "outerHTML",
+        "insertAdjacentHTML", "document.write", "eval(", "new Function", "Object.keys", "Object.entries",
+        "response.text", "/api/admin/check", "console.log", "console.debug", "console.info", "console.warn",
+        "history.pushState", "history.replaceState", "document.execCommand", "tokens/revoke", "/tokens?",
+        "/api/core", "/api/property", "/api/buy", "/api/match", "/api/flow",
+    ):
+        assert forbidden not in combined
+    assert source.count("/tokens") == 1
+    assert source.count("'/audit'") == 1
+    assert "navigator.clipboard.writeText" in source
+    assert "clearOneTimeToken" in source
+    assert "data.token = ''" in source
+    assert "state.oneTimeToken = null" in source
+    assert "metadata.version_number" in source
+    assert "metadata.previous" in source
+    assert "metadata.supersedes" in source
+    assert "metadata.reason" in source
+
+
+def test_p74_css_generations_and_anti_error_matrix_features_are_present():
+    source = APP_JS.read_text(encoding="utf-8")
+    css = APP_CSS.read_text(encoding="utf-8")
+    for token in (
+        "tokenGeneration", "auditGeneration", "oneTimeToken", "submitToken", "copyOneTimeToken",
+        "clearOneTimeToken", "loadAudit", "renderAudit", "appendAuditMetadata", "Generazione…",
+        "expires_minutes", "token_type", "created_by", "error.status === 400",
+    ):
+        assert token in source
+    for selector in (
+        ".token-form-panel", ".token-result-panel", ".token-warning", ".token-secret", ".token-value",
+        ".token-result-actions", ".audit-list", ".audit-card", ".audit-action", ".audit-result",
+    ):
+        assert selector in css
+    assert "@media (max-width: 520px)" in css

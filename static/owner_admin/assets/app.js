@@ -92,6 +92,11 @@ const VISIT_FEEDBACK_STATUS_LABELS = Object.freeze({
   archived: 'Archiviato',
 });
 
+const TOKEN_TYPE_LABELS = Object.freeze({
+  invitation: 'Invito',
+  login: 'Accesso',
+});
+
 const state = {
   credentials: null,
   authenticated: false,
@@ -109,6 +114,9 @@ const state = {
   visitFeedbackGeneration: 0,
   visitFeedbackDetailGeneration: 0,
   privacyGeneration: 0,
+  tokenGeneration: 0,
+  auditGeneration: 0,
+  oneTimeToken: null,
   mutationsInFlight: new Set(),
 };
 
@@ -130,6 +138,8 @@ const el = {
   navRequests: document.getElementById('nav-requests'),
   navDocuments: document.getElementById('nav-documents'),
   navVisitFeedback: document.getElementById('nav-visit-feedback'),
+  navTokenAccess: document.getElementById('nav-token-access'),
+  navAudit: document.getElementById('nav-audit'),
   dashboardSection: document.getElementById('section-dashboard'),
   accountsSection: document.getElementById('section-accounts'),
   accessSection: document.getElementById('section-access'),
@@ -137,6 +147,8 @@ const el = {
   requestsSection: document.getElementById('section-requests'),
   documentsSection: document.getElementById('section-documents'),
   visitFeedbackSection: document.getElementById('section-visit-feedback'),
+  tokenAccessSection: document.getElementById('section-token-access'),
+  auditSection: document.getElementById('section-audit'),
   dashboardLoading: document.getElementById('dashboard-loading'),
   dashboardError: document.getElementById('dashboard-error'),
   dashboardErrorMessage: document.getElementById('dashboard-error-message'),
@@ -256,6 +268,27 @@ const el = {
   visitFeedbackRetry: document.getElementById('visit-feedback-retry'),
   visitFeedbackReload: document.getElementById('visit-feedback-reload'),
   visitFeedbackContent: document.getElementById('visit-feedback-content'),
+  tokenFormPanel: document.getElementById('token-form-panel'),
+  tokenForm: document.getElementById('token-create-form'),
+  tokenOwnerAccountId: document.getElementById('token-owner-account-id'),
+  tokenType: document.getElementById('token-type'),
+  tokenExpiresMinutes: document.getElementById('token-expires-minutes'),
+  tokenCreatedBy: document.getElementById('token-created-by'),
+  tokenSubmit: document.getElementById('token-create-submit'),
+  tokenFormStatus: document.getElementById('token-form-status'),
+  tokenResultPanel: document.getElementById('token-result-panel'),
+  tokenResultMeta: document.getElementById('token-result-meta'),
+  tokenResultValue: document.getElementById('token-result-value'),
+  tokenCopy: document.getElementById('token-copy'),
+  tokenClose: document.getElementById('token-close'),
+  tokenCopyStatus: document.getElementById('token-copy-status'),
+  auditLoading: document.getElementById('audit-loading'),
+  auditEmpty: document.getElementById('audit-empty'),
+  auditError: document.getElementById('audit-error'),
+  auditErrorMessage: document.getElementById('audit-error-message'),
+  auditRetry: document.getElementById('audit-retry'),
+  auditReload: document.getElementById('audit-reload'),
+  auditContent: document.getElementById('audit-content'),
 };
 
 class ApiError extends Error {
@@ -281,6 +314,8 @@ function setStatus(node, message, kind = '') {
 
 function statusMessage(error) {
   if (!(error instanceof ApiError)) return 'Errore di connessione. Riprova.';
+  if (error.status === 0) return 'Errore di connessione. Riprova.';
+  if (error.status === 400) return 'Richiesta non valida. Controlla i dati e riprova.';
   if (error.status === 401) return 'Credenziali non valide.';
   if (error.status === 403) return 'Accesso non autorizzato.';
   if (error.status === 404) return 'Risorsa non disponibile.';
@@ -405,7 +440,24 @@ function invalidatePending() {
   state.visitFeedbackGeneration += 1;
   state.visitFeedbackDetailGeneration += 1;
   state.privacyGeneration += 1;
+  state.tokenGeneration += 1;
+  state.auditGeneration += 1;
   state.mutationsInFlight.clear();
+}
+
+function clearOneTimeToken(invalidateGeneration = true) {
+  if (invalidateGeneration) state.tokenGeneration += 1;
+  if (state.oneTimeToken && typeof state.oneTimeToken.raw === 'string') {
+    state.oneTimeToken.raw = '';
+  }
+  state.oneTimeToken = null;
+  el.tokenResultValue.textContent = '';
+  el.tokenResultMeta.replaceChildren();
+  setStatus(el.tokenCopyStatus, '');
+  el.tokenResultPanel.hidden = true;
+  el.tokenFormPanel.hidden = false;
+  el.tokenSubmit.disabled = false;
+  el.tokenSubmit.textContent = 'Genera token';
 }
 
 function resetDynamicUi() {
@@ -419,6 +471,8 @@ function resetDynamicUi() {
   el.documentReadsContent.replaceChildren();
   el.visitFeedbackContent.replaceChildren();
   el.visitFeedbackDetailContent.replaceChildren();
+  el.auditContent.replaceChildren();
+  clearOneTimeToken(false);
   setStatus(el.globalStatus, '');
   setStatus(el.accountFormStatus, '');
   setStatus(el.accessFormStatus, '');
@@ -430,6 +484,12 @@ function resetDynamicUi() {
   setStatus(el.documentReadsStatus, '');
   setStatus(el.visitFeedbackFormStatus, '');
   setStatus(el.visitFeedbackDetailStatus, '');
+  setStatus(el.tokenFormStatus, '');
+  setStatus(el.auditErrorMessage, '');
+  el.auditLoading.hidden = true;
+  el.auditEmpty.hidden = true;
+  el.auditError.hidden = true;
+  el.auditContent.hidden = true;
   el.visitFeedbackPrivacyIssues.replaceChildren();
   el.visitFeedbackPrivacyIssues.hidden = true;
   el.documentDetailPanel.hidden = true;
@@ -448,6 +508,9 @@ function resetDynamicUi() {
   el.visitFeedbackForm.reset();
   el.visitFeedbackCategory.value = 'price';
   el.visitFeedbackSentiment.value = '';
+  el.tokenForm.reset();
+  el.tokenType.value = 'invitation';
+  el.tokenExpiresMinutes.value = '30';
 }
 
 function logout(message = '') {
@@ -483,6 +546,8 @@ function isCurrent(section, generation, sessionGeneration) {
   if (section === 'requests') return generation === state.requestsGeneration && state.activeSection === 'requests';
   if (section === 'documents') return generation === state.documentsGeneration && state.activeSection === 'documents';
   if (section === 'visit-feedback') return generation === state.visitFeedbackGeneration && state.activeSection === 'visit-feedback';
+  if (section === 'token-access') return generation === state.tokenGeneration && state.activeSection === 'token-access';
+  if (section === 'audit') return generation === state.auditGeneration && state.activeSection === 'audit';
   return false;
 }
 
@@ -2057,6 +2122,208 @@ async function loadVisitFeedback(){if(!state.authenticated||state.activeSection!
 
 async function submitVisitFeedback(event){event.preventDefault();const key='visit-feedback:create';if(!state.authenticated||state.mutationsInFlight.has(key))return;const visitId=parsePositiveInt(el.visitFeedbackPropertyVisitId.value);const accountId=el.visitFeedbackOwnerAccountId.value.trim()?parsePositiveInt(el.visitFeedbackOwnerAccountId.value):null;const category=el.visitFeedbackCategory.value;const sentiment=el.visitFeedbackSentiment.value;const summary=el.visitFeedbackSummary.value.trim();const createdBy=el.visitFeedbackCreatedBy.value.trim();if(visitId===null){setStatus(el.visitFeedbackFormStatus,'Inserisci un ID visita valido.','error');return;}if(accountId===null&&el.visitFeedbackOwnerAccountId.value.trim()){setStatus(el.visitFeedbackFormStatus,'Inserisci un ID account destinatario valido.','error');return;}if(!Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_CATEGORY_LABELS,category)){setStatus(el.visitFeedbackFormStatus,'Seleziona una categoria valida.','error');return;}if(sentiment&&!Object.prototype.hasOwnProperty.call(VISIT_FEEDBACK_SENTIMENT_LABELS,sentiment)){setStatus(el.visitFeedbackFormStatus,'Seleziona una valutazione valida.','error');return;}if(!summary||summary.length>5000){setStatus(el.visitFeedbackFormStatus,'Inserisci una sintesi da 1 a 5000 caratteri.','error');return;}if(createdBy.length>200){setStatus(el.visitFeedbackFormStatus,'Il nome operatore non può superare 200 caratteri.','error');return;}state.mutationsInFlight.add(key);const sessionGeneration=state.sessionGeneration;el.visitFeedbackSubmit.disabled=true;el.visitFeedbackPrivacyCheck.disabled=true;try{const valid=await validateVisitFeedbackPrivacy(summary,el.visitFeedbackFormStatus,el.visitFeedbackPrivacyIssues,'create-submit');if(!valid)return;setStatus(el.visitFeedbackFormStatus,'Creazione draft in corso…');await request('/visit-feedback',{method:'POST',json:{property_visit_id:visitId,owner_account_id:accountId,category,public_summary:summary,sentiment:sentiment||null,created_by:createdBy||null}});if(sessionGeneration!==state.sessionGeneration||!state.authenticated)return;el.visitFeedbackForm.reset();el.visitFeedbackCategory.value='price';el.visitFeedbackSentiment.value='';el.visitFeedbackPrivacyIssues.replaceChildren();el.visitFeedbackPrivacyIssues.hidden=true;setStatus(el.visitFeedbackFormStatus,'Feedback visita draft creato.','success');if(state.activeSection==='visit-feedback')await loadVisitFeedback();}catch(error){if(sessionGeneration!==state.sessionGeneration)return;handleApiError(error,el.visitFeedbackFormStatus);}finally{state.mutationsInFlight.delete(key);if(sessionGeneration===state.sessionGeneration){el.visitFeedbackSubmit.disabled=false;el.visitFeedbackPrivacyCheck.disabled=false;}}}
 
+
+function tokenTypeLabel(value) {
+  return TOKEN_TYPE_LABELS[value] || 'Tipo non disponibile';
+}
+
+function renderOneTimeToken() {
+  const secret = state.oneTimeToken;
+  if (!secret || !secret.raw) {
+    clearOneTimeToken(false);
+    return;
+  }
+  el.tokenResultMeta.replaceChildren(
+    createMeta('Tipo', tokenTypeLabel(secret.tokenType)),
+    createMeta('Scadenza', formatDate(secret.expiresAt)),
+    createMeta('ID token', secret.tokenId),
+  );
+  el.tokenResultValue.textContent = secret.raw;
+  setStatus(el.tokenFormStatus, '');
+  setStatus(el.tokenCopyStatus, '');
+  el.tokenFormPanel.hidden = true;
+  el.tokenResultPanel.hidden = false;
+}
+
+async function submitToken(event) {
+  event.preventDefault();
+  const key = 'token:create';
+  if (!state.authenticated || state.mutationsInFlight.has(key)) return;
+
+  const accountId = parsePositiveInt(el.tokenOwnerAccountId.value);
+  const tokenType = el.tokenType.value;
+  const expiresMinutes = Number(el.tokenExpiresMinutes.value);
+  const createdBy = el.tokenCreatedBy.value.trim();
+  if (accountId === null) {
+    setStatus(el.tokenFormStatus, 'Inserisci un ID account proprietario valido.', 'error');
+    return;
+  }
+  if (!Object.prototype.hasOwnProperty.call(TOKEN_TYPE_LABELS, tokenType)) {
+    setStatus(el.tokenFormStatus, 'Seleziona un tipo di accesso valido.', 'error');
+    return;
+  }
+  if (!Number.isInteger(expiresMinutes) || expiresMinutes < 5 || expiresMinutes > 1440) {
+    setStatus(el.tokenFormStatus, 'La durata deve essere compresa tra 5 e 1440 minuti.', 'error');
+    return;
+  }
+
+  clearOneTimeToken(false);
+  const generation = ++state.tokenGeneration;
+  const sessionGeneration = state.sessionGeneration;
+  state.mutationsInFlight.add(key);
+  el.tokenSubmit.disabled = true;
+  el.tokenSubmit.textContent = 'Generazione…';
+  setStatus(el.tokenFormStatus, 'Generazione in corso…');
+
+  try {
+    const data = await request(`/accounts/${encodeURIComponent(String(accountId))}/tokens`, {
+      method: 'POST',
+      json: {
+        token_type: tokenType,
+        expires_minutes: expiresMinutes,
+        created_by: createdBy || null,
+      },
+    });
+    if (!isCurrent('token-access', generation, sessionGeneration)) {
+      if (data && typeof data.token === 'string') data.token = '';
+      return;
+    }
+    if (!data || typeof data.token !== 'string' || !data.token) {
+      throw new ApiError(500, 'Token response missing');
+    }
+    const raw = data.token;
+    data.token = '';
+    state.oneTimeToken = {
+      raw,
+      tokenType,
+      tokenId: data.token_id === undefined ? null : data.token_id,
+      expiresAt: data.expires_at || null,
+    };
+    renderOneTimeToken();
+  } catch (error) {
+    if (sessionGeneration !== state.sessionGeneration || generation !== state.tokenGeneration) return;
+    handleApiError(error, el.tokenFormStatus);
+  } finally {
+    state.mutationsInFlight.delete(key);
+    if (sessionGeneration === state.sessionGeneration && generation === state.tokenGeneration) {
+      el.tokenSubmit.disabled = false;
+      el.tokenSubmit.textContent = 'Genera token';
+    }
+  }
+}
+
+async function copyOneTimeToken() {
+  if (!state.oneTimeToken || !state.oneTimeToken.raw) return;
+  try {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      throw new Error('Clipboard unavailable');
+    }
+    await navigator.clipboard.writeText(state.oneTimeToken.raw);
+    setStatus(el.tokenCopyStatus, 'Token copiato.', 'success');
+  } catch (_error) {
+    setStatus(el.tokenCopyStatus, 'Copia non riuscita. Seleziona il token e copialo manualmente.', 'error');
+  }
+}
+
+function auditPublicView(item) {
+  return {
+    created_at: item && item.created_at,
+    owner_account_id: item && item.owner_account_id,
+    property_id: item && item.property_id,
+    action: item && item.action,
+    entity_type: item && item.entity_type,
+    entity_id: item && item.entity_id,
+    result: item && item.result,
+    metadata: item && item.metadata,
+  };
+}
+
+function appendAuditMetadata(container, metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+  if (metadata.version_number !== undefined && metadata.version_number !== null) {
+    container.append(createMeta('Versione', metadata.version_number));
+  }
+  if (metadata.previous !== undefined && metadata.previous !== null) {
+    container.append(createMeta('Versione precedente', metadata.previous));
+  }
+  if (metadata.supersedes !== undefined && metadata.supersedes !== null) {
+    container.append(createMeta('Sostituisce', metadata.supersedes));
+  }
+  if (typeof metadata.reason === 'string' && metadata.reason.trim()) {
+    container.append(createMeta('Motivo', metadata.reason));
+  }
+}
+
+function createAuditCard(item) {
+  const audit = auditPublicView(item);
+  const card = document.createElement('article');
+  card.className = 'entity-card audit-card';
+  card.setAttribute('role', 'listitem');
+
+  const header = document.createElement('div');
+  header.className = 'entity-card-header';
+  const title = document.createElement('h4');
+  title.className = 'entity-title audit-action';
+  title.textContent = audit.action || 'Azione audit';
+  header.append(title);
+  if (audit.result) {
+    const result = document.createElement('span');
+    result.className = 'status-badge audit-result';
+    result.textContent = String(audit.result);
+    header.append(result);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'entity-meta audit-meta';
+  meta.append(
+    createMeta('Data', formatDate(audit.created_at)),
+    createMeta('Account', audit.owner_account_id),
+    createMeta('Immobile', audit.property_id),
+    createMeta('Tipo entità', audit.entity_type),
+    createMeta('ID entità', audit.entity_id),
+  );
+  appendAuditMetadata(meta, audit.metadata);
+  card.append(header, meta);
+  return card;
+}
+
+function setAuditState(mode, message = '') {
+  el.auditLoading.hidden = mode !== 'loading';
+  el.auditEmpty.hidden = mode !== 'empty';
+  el.auditError.hidden = mode !== 'error';
+  el.auditContent.hidden = mode !== 'content';
+  if (mode === 'error') el.auditErrorMessage.textContent = message;
+  else el.auditErrorMessage.textContent = '';
+}
+
+function renderAudit(items) {
+  el.auditContent.replaceChildren();
+  if (!items.length) {
+    setAuditState('empty');
+    return;
+  }
+  for (const item of items) el.auditContent.append(createAuditCard(item || {}));
+  setAuditState('content');
+}
+
+async function loadAudit() {
+  const generation = ++state.auditGeneration;
+  const sessionGeneration = state.sessionGeneration;
+  setAuditState('loading');
+  try {
+    const data = await request('/audit');
+    if (!isCurrent('audit', generation, sessionGeneration)) return;
+    renderAudit(data && Array.isArray(data.items) ? data.items : []);
+  } catch (error) {
+    if (!isCurrent('audit', generation, sessionGeneration)) return;
+    if (error instanceof ApiError && error.status === 401) {
+      forceLoginAfterUnauthorized();
+      return;
+    }
+    setAuditState('error', statusMessage(error));
+  }
+}
+
 function sectionConfig(name) {
   if (name === 'accounts') return { node: el.accountsSection, nav: el.navAccounts, title: 'Proprietari' };
   if (name === 'access') return { node: el.accessSection, nav: el.navAccess, title: 'Accessi' };
@@ -2064,6 +2331,8 @@ function sectionConfig(name) {
   if (name === 'requests') return { node: el.requestsSection, nav: el.navRequests, title: 'Richieste' };
   if (name === 'documents') return { node: el.documentsSection, nav: el.navDocuments, title: 'Documenti' };
   if (name === 'visit-feedback') return { node: el.visitFeedbackSection, nav: el.navVisitFeedback, title: 'Feedback visite' };
+  if (name === 'token-access') return { node: el.tokenAccessSection, nav: el.navTokenAccess, title: 'Inviti e accessi' };
+  if (name === 'audit') return { node: el.auditSection, nav: el.navAudit, title: 'Audit' };
   return { node: el.dashboardSection, nav: el.navDashboard, title: 'Dashboard' };
 }
 
@@ -2080,9 +2349,11 @@ function activateSection(name, options = {}) {
   state.visitFeedbackGeneration += 1;
   state.visitFeedbackDetailGeneration += 1;
   state.privacyGeneration += 1;
+  state.tokenGeneration += 1;
+  state.auditGeneration += 1;
   state.activeSection = name;
 
-  for (const sectionName of ['dashboard', 'accounts', 'access', 'publications', 'requests', 'documents', 'visit-feedback']) {
+  for (const sectionName of ['dashboard', 'accounts', 'access', 'publications', 'requests', 'documents', 'visit-feedback', 'token-access', 'audit']) {
     const config = sectionConfig(sectionName);
     const active = sectionName === name;
     config.node.hidden = !active;
@@ -2105,6 +2376,8 @@ function activateSection(name, options = {}) {
   if (name === 'requests') return loadRequests();
   if (name === 'documents') return Promise.all([loadDocuments(), checkDocumentStorageHealth()]);
   if (name === 'visit-feedback') return loadVisitFeedback();
+  if (name === 'token-access') return Promise.resolve();
+  if (name === 'audit') return loadAudit();
   return Promise.resolve();
 }
 
@@ -2153,6 +2426,8 @@ el.navPublications.addEventListener('click', () => activateSection('publications
 el.navRequests.addEventListener('click', () => activateSection('requests'));
 el.navDocuments.addEventListener('click', () => activateSection('documents'));
 el.navVisitFeedback.addEventListener('click', () => activateSection('visit-feedback'));
+el.navTokenAccess.addEventListener('click', () => activateSection('token-access'));
+el.navAudit.addEventListener('click', () => activateSection('audit'));
 el.dashboardRetry.addEventListener('click', loadDashboard);
 el.dashboardReload.addEventListener('click', loadDashboard);
 el.accountsRetry.addEventListener('click', loadAccounts);
@@ -2170,6 +2445,10 @@ el.documentDetailClose.addEventListener('click', () => { state.documentDetailGen
 el.documentReadsClose.addEventListener('click', () => { state.documentReadsGeneration += 1; el.documentReadsPanel.hidden = true; el.documentReadsContent.replaceChildren(); setStatus(el.documentReadsStatus, ''); });
 el.visitFeedbackRetry.addEventListener('click', loadVisitFeedback);
 el.visitFeedbackReload.addEventListener('click', loadVisitFeedback);
+el.auditRetry.addEventListener('click', loadAudit);
+el.auditReload.addEventListener('click', loadAudit);
+el.tokenCopy.addEventListener('click', copyOneTimeToken);
+el.tokenClose.addEventListener('click', () => clearOneTimeToken(true));
 el.visitFeedbackDetailClose.addEventListener('click', () => { state.visitFeedbackDetailGeneration += 1; el.visitFeedbackDetailPanel.hidden = true; el.visitFeedbackDetailContent.replaceChildren(); setStatus(el.visitFeedbackDetailStatus, ''); });
 el.visitFeedbackPrivacyCheck.addEventListener('click', () => validateVisitFeedbackPrivacy(el.visitFeedbackSummary.value.trim(), el.visitFeedbackFormStatus, el.visitFeedbackPrivacyIssues, 'create-manual'));
 el.accountForm.addEventListener('submit', submitAccount);
@@ -2178,5 +2457,6 @@ el.publicationForm.addEventListener('submit', submitPublication);
 el.documentLinkForm.addEventListener('submit', submitDocumentLink);
 el.documentUploadForm.addEventListener('submit', submitDocumentUpload);
 el.visitFeedbackForm.addEventListener('submit', submitVisitFeedback);
+el.tokenForm.addEventListener('submit', submitToken);
 
 logout('');
