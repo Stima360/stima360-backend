@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core.repository import create_activity_with_cursor
-from flow.repository import add_event_with_cursor
+from integration_owner_request import record_owner_request_event_with_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .security import generate_secret,hash_secret,utcnow,valid_session
 from .schemas import validate_visit_feedback_summary, visit_feedback_privacy_issues
@@ -181,7 +181,7 @@ def create_feedback(a,p,d):
       (activity['id'],r['id']),
   )
   if c.rowcount != 1:raise ConflictError('Collegamento activity OWNER non riuscito')
-  add_event_with_cursor(c,{
+  record_owner_request_event_with_cursor(c,{
       'source_module':'owner',
       'event_type':'owner.request_submitted',
       'entity_type':'owner_feedback',

@@ -344,7 +344,7 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
 
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
     monkeypatch.setattr(repo, "create_activity_with_cursor", fake_activity)
-    monkeypatch.setattr(repo, "add_event_with_cursor", fake_flow_event)
+    monkeypatch.setattr(repo, "record_owner_request_event_with_cursor", fake_flow_event)
     result = repo.create_feedback(
         7,
         11,

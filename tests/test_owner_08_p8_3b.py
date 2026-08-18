@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import copy
 import inspect
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -12,6 +14,7 @@ from core import repository as core_repo
 from flow import repository as flow_repo
 from flow.schemas import EventCreate
 from owner import repository as owner_repo
+import integration_owner_request as owner_request_integration
 
 
 FEEDBACK_TYPES = (
@@ -194,7 +197,7 @@ def run_atomic(monkeypatch, *, feedback_type="general_message", fail_stage=None,
     tx = TxHarness(state, cursor)
     monkeypatch.setattr(owner_repo, "core_cursor", tx.factory)
     monkeypatch.setattr(owner_repo, "create_activity_with_cursor", core_repo.create_activity_with_cursor)
-    monkeypatch.setattr(owner_repo, "add_event_with_cursor", flow_repo.add_event_with_cursor)
+    monkeypatch.setattr(owner_repo, "record_owner_request_event_with_cursor", owner_request_integration.record_owner_request_event_with_cursor)
     result = owner_repo.create_feedback(12, 34, payload(feedback_type))
     return result, state, cursor, tx
 
@@ -366,7 +369,7 @@ def test_p8_3b_registers_event_only_no_task_rule_action_or_p5_submit_notificatio
         "create_task", "execute_live", "flow_action_records", "_emit_notification_event", "sync_rules", "get_rule("
     ):
         assert forbidden not in combined
-    assert "add_event_with_cursor" in submit_src
+    assert "record_owner_request_event_with_cursor" in submit_src
     assert "INSERT INTO flow_events" in flow_helper_src
 
     handled_src = inspect.getsource(owner_repo.update_feedback_status)
@@ -398,3 +401,64 @@ def test_flow_helper_source_keeps_legacy_default_key_when_explicit_key_absent():
     assert "data.get('deduplication_key') or" in source
     assert "%Y%m%d%H" in source
     assert "data.get('occurred_at')" in source
+
+
+def test_owner_package_has_no_direct_buy_match_flow_imports():
+    """Freeze the integration privacy boundary: OWNER cannot import BUY/MATCH/FLOW."""
+    owner_dir = Path(owner_repo.__file__).resolve().parent
+    forbidden = {"buy", "match", "flow"}
+    violations = []
+    for path in sorted(owner_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".", 1)[0]
+                    if root in forbidden:
+                        violations.append((path.name, node.lineno, alias.name))
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                root = module.split(".", 1)[0] if module else ""
+                if root in forbidden:
+                    violations.append((path.name, node.lineno, module))
+    assert violations == []
+
+
+def test_neutral_bridge_delegates_same_cursor_and_payload(monkeypatch):
+    cursor = object()
+    data = {
+        "source_module": "owner",
+        "event_type": "owner.request_submitted",
+        "entity_type": "owner_feedback",
+        "entity_id": 101,
+        "deduplication_key": "owner:feedback:101:submitted",
+        "payload": {
+            "owner_request_type": "general_message",
+            "property_id": 34,
+            "contact_id": 77,
+            "linked_activity_id": 501,
+        },
+        "occurred_at": datetime(2026, 8, 18, 18, 5, 7, tzinfo=timezone.utc),
+    }
+    captured = {}
+
+    def fake_add_event_with_cursor(cur, event):
+        captured["cur"] = cur
+        captured["data"] = event
+        return {"id": 701}
+
+    monkeypatch.setattr(owner_request_integration, "_add_event_with_cursor", fake_add_event_with_cursor)
+    result = owner_request_integration.record_owner_request_event_with_cursor(cursor, data)
+    assert result == {"id": 701}
+    assert captured["cur"] is cursor
+    assert captured["data"] is data
+
+
+def test_owner_repository_uses_neutral_bridge_not_direct_flow_import():
+    source = Path(owner_repo.__file__).read_text()
+    assert "from flow" not in source
+    assert "import flow" not in source
+    assert "from integration_owner_request import record_owner_request_event_with_cursor" in source
+    submit_src = inspect.getsource(owner_repo.create_feedback)
+    assert "record_owner_request_event_with_cursor" in submit_src
+    assert "add_event_with_cursor" not in submit_src
