@@ -118,3 +118,102 @@ h4 { margin: 0 0 14px; font-size: 1rem; }
   .button { width: 100%; }
   .entity-actions .button { width: auto; flex: 1 1 140px; }
 }
+
+/* OWNER 0.2 P7.2 — Pubblicazioni e richieste */
+.field textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #c9d5e3;
+  border-radius: 10px;
+  background: #fff;
+  color: #172033;
+  padding: 10px 11px;
+  font: inherit;
+  line-height: 1.45;
+}
+.field textarea:focus { outline: 3px solid rgba(42, 104, 170, .24); outline-offset: 2px; }
+.form-grid-wide .field-span-2,
+.inline-editor .field-span-2 { grid-column: 1 / -1; }
+.entity-copy { margin: 12px 0 0; color: #34465e; line-height: 1.55; white-space: pre-wrap; }
+.body-copy { padding-top: 12px; border-top: 1px solid #edf1f5; }
+.action-area { margin-top: 12px; }
+.inline-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #cfd9e5;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.editor-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.editor-status { grid-column: 1 / -1; margin: 0; }
+.public-response {
+  margin-top: 14px;
+  padding: 14px;
+  border-left: 4px solid #6e91ba;
+  border-radius: 8px;
+  background: #f4f8fc;
+}
+.public-response p { margin: 6px 0 0; color: #26384f; line-height: 1.5; white-space: pre-wrap; }
+.publication-card .status-badge.draft { background: #fff4dd; color: #775511; }
+.publication-card .status-badge.published { background: #e7f6ed; color: #17623b; }
+.publication-card .status-badge.archived { background: #edf1f6; color: #53657d; }
+.request-card .status-badge.new { background: #fff4dd; color: #775511; }
+.request-card .status-badge.in_review { background: #e8eef7; color: #263d5b; }
+.request-card .status-badge.handled { background: #e7f6ed; color: #17623b; }
+.request-card .status-badge.closed { background: #edf1f6; color: #53657d; }
+
+@media (max-width: 760px) {
+  .inline-editor { grid-template-columns: 1fr; }
+  .form-grid-wide .field-span-2,
+  .inline-editor .field-span-2,
+  .editor-status { grid-column: 1; }
+}
+.request-editor { border-left: 4px solid #6e91ba; }
+
+/* OWNER 0.2 P7.3 — Documenti condivisi e feedback visite */
+.admin-two-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.compact-panel { padding-top: 16px; padding-bottom: 16px; }
+.panel-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.panel-heading-row h4 { margin-bottom: 4px; }
+.small-copy { margin: 2px 0 0; font-size: .9rem; }
+.grouped-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.detail-panel { scroll-margin-top: 18px; }
+.detail-content { display: grid; gap: 14px; }
+.detail-copy { margin: 0; white-space: pre-wrap; line-height: 1.55; color: #26384f; }
+.detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 18px; }
+.compact-list .entity-card { padding: 14px; }
+.document-card .status-badge.draft,
+.visit-feedback-card .status-badge.draft { background: #fff4dd; color: #775511; }
+.document-card .status-badge.published,
+.visit-feedback-card .status-badge.published { background: #e7f6ed; color: #17623b; }
+.document-card .status-badge.revoked { background: #f8e9e9; color: #922626; }
+.document-card .status-badge.archived,
+.visit-feedback-card .status-badge.archived { background: #edf1f6; color: #53657d; }
+.storage-health { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; }
+.storage-health::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: #8b99aa; }
+.storage-health.ok::before { background: #2f8a59; }
+.storage-health.error::before { background: #b73b3b; }
+.privacy-issues { margin-top: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid #e4c88b; background: #fff9ea; color: #6d5217; }
+.privacy-issues.ok { border-color: #b8dfc8; background: #f2fbf6; color: #17623b; }
+.privacy-issues p { margin: 0; }
+.privacy-issues ul { margin: 8px 0 0; padding-left: 20px; }
+.privacy-issues li + li { margin-top: 4px; }
+.file-note { margin: 8px 0 0; font-size: .84rem; color: #66778c; }
+.download-status { width: 100%; margin-top: 8px; }
+
+@media (max-width: 1100px) {
+  .admin-two-column { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .panel-heading-row { flex-direction: column; align-items: stretch; }
+  .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .detail-meta { grid-template-columns: 1fr; }
+  .grouped-actions .button { width: 100%; }
+}

@@ -47,6 +47,10 @@
           <button id="nav-dashboard" class="nav-button" type="button" aria-controls="section-dashboard">Dashboard</button>
           <button id="nav-accounts" class="nav-button" type="button" aria-controls="section-accounts">Proprietari</button>
           <button id="nav-access" class="nav-button" type="button" aria-controls="section-access">Accessi</button>
+          <button id="nav-publications" class="nav-button" type="button" aria-controls="section-publications">Pubblicazioni</button>
+          <button id="nav-requests" class="nav-button" type="button" aria-controls="section-requests">Richieste</button>
+          <button id="nav-documents" class="nav-button" type="button" aria-controls="section-documents">Documenti</button>
+          <button id="nav-visit-feedback" class="nav-button" type="button" aria-controls="section-visit-feedback">Feedback visite</button>
         </nav>
         <button id="admin-logout" class="button secondary logout-button" type="button">Esci</button>
       </aside>
@@ -165,6 +169,320 @@
             <button id="access-retry" class="button secondary" type="button">Riprova</button>
           </div>
           <div id="access-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-publications" class="admin-section" hidden aria-labelledby="publications-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="publications-heading">Pubblicazioni</h3>
+              <p class="muted">Gestisci gli aggiornamenti OWNER nel rispetto dello stato e del versionamento backend.</p>
+            </div>
+            <button id="publications-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel">
+            <h4>Nuova pubblicazione draft</h4>
+            <p class="muted">L'ID immobile viene inserito manualmente. Nessuna API PROPERTY viene chiamata.</p>
+            <form id="publication-create-form" class="form-grid form-grid-wide" novalidate>
+              <div class="field">
+                <label for="publication-property-id">ID immobile</label>
+                <input id="publication-property-id" name="property_id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="publication-type">Tipo pubblicazione</label>
+                <select id="publication-type" name="publication_type" required>
+                  <option value="general_update">Aggiornamento generale</option>
+                  <option value="marketing_update">Aggiornamento marketing</option>
+                  <option value="visit_update">Aggiornamento visite</option>
+                  <option value="feedback_summary">Sintesi feedback</option>
+                  <option value="strategy_update">Aggiornamento strategia</option>
+                  <option value="milestone">Traguardo</option>
+                </select>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-title">Titolo</label>
+                <input id="publication-title" name="title" type="text" maxlength="200" required>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-summary">Sintesi</label>
+                <textarea id="publication-summary" name="summary" maxlength="1000" rows="3"></textarea>
+              </div>
+              <div class="field field-span-2">
+                <label for="publication-body">Contenuto</label>
+                <textarea id="publication-body" name="body" maxlength="20000" rows="7" required></textarea>
+              </div>
+              <div class="field checkbox-field">
+                <input id="publication-ack-required" name="acknowledgement_required" type="checkbox">
+                <label for="publication-ack-required">Richiedi presa visione</label>
+              </div>
+              <div class="form-actions">
+                <button id="publication-create-submit" class="button primary" type="submit">Crea draft</button>
+              </div>
+            </form>
+            <p id="publication-form-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div id="publications-loading" class="state-card" hidden role="status">Caricamento pubblicazioni…</div>
+          <div id="publications-empty" class="state-card" hidden>Nessuna pubblicazione OWNER disponibile.</div>
+          <div id="publications-error" class="state-card error-state" hidden>
+            <p id="publications-error-message"></p>
+            <button id="publications-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="publications-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-requests" class="admin-section" hidden aria-labelledby="requests-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="requests-heading">Richieste</h3>
+              <p class="muted">Richieste inviate dai proprietari tramite il portale OWNER.</p>
+            </div>
+            <button id="requests-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div id="requests-loading" class="state-card" hidden role="status">Caricamento richieste…</div>
+          <div id="requests-empty" class="state-card" hidden>Nessuna richiesta proprietario disponibile.</div>
+          <div id="requests-error" class="state-card error-state" hidden>
+            <p id="requests-error-message"></p>
+            <button id="requests-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="requests-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-documents" class="admin-section" hidden aria-labelledby="documents-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="documents-heading">Documenti</h3>
+              <p class="muted">Gestisci documenti OWNER condivisi mantenendo lo storage privato dietro il backend.</p>
+            </div>
+            <button id="documents-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel compact-panel">
+            <div class="panel-heading-row">
+              <div>
+                <h4>Storage documentale</h4>
+                <p class="muted small-copy">Verifica disponibilità del servizio senza esporre provider o locator.</p>
+              </div>
+              <button id="document-storage-health-check" class="button secondary small" type="button">Verifica storage</button>
+            </div>
+            <p id="document-storage-health-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+
+          <div class="admin-two-column">
+            <div class="panel">
+              <h4>Collega documento esistente</h4>
+              <p class="muted">Inserisci manualmente l'ID del documento PROPERTY già esistente.</p>
+              <form id="document-link-form" class="form-grid form-grid-wide" novalidate>
+                <div class="field">
+                  <label for="document-property-document-id">ID documento PROPERTY</label>
+                  <input id="document-property-document-id" type="number" min="1" step="1" inputmode="numeric" required>
+                </div>
+                <div class="field">
+                  <label for="document-owner-account-id">ID account destinatario</label>
+                  <input id="document-owner-account-id" type="number" min="1" step="1" inputmode="numeric">
+                </div>
+                <div class="field field-span-2">
+                  <label for="document-public-title">Titolo pubblico</label>
+                  <input id="document-public-title" type="text" maxlength="200" required>
+                </div>
+                <div class="field">
+                  <label for="document-public-type">Tipo pubblico</label>
+                  <select id="document-public-type" required>
+                    <option value="mandate">Mandato</option>
+                    <option value="floor_plan">Planimetria</option>
+                    <option value="ape">APE</option>
+                    <option value="cadastral_extract">Documento catastale</option>
+                    <option value="photo_report">Report fotografico</option>
+                    <option value="activity_report">Report attività</option>
+                    <option value="information">Documento informativo</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="document-expires-at">Scadenza condivisione</label>
+                  <input id="document-expires-at" type="datetime-local">
+                </div>
+                <div class="field">
+                  <label for="document-created-by">Operatore</label>
+                  <input id="document-created-by" type="text" maxlength="200">
+                </div>
+                <div class="field checkbox-field">
+                  <input id="document-ack-required" type="checkbox">
+                  <label for="document-ack-required">Richiedi presa visione</label>
+                </div>
+                <div class="form-actions">
+                  <button id="document-link-submit" class="button primary" type="submit">Crea collegamento</button>
+                </div>
+              </form>
+              <p id="document-link-status" class="status-message" role="status" aria-live="polite"></p>
+            </div>
+
+            <div class="panel">
+              <h4>Upload file privato</h4>
+              <p class="muted">PDF, JPEG o PNG. Il file viene inviato al backend OWNER senza conversione base64.</p>
+              <form id="document-upload-form" class="form-grid form-grid-wide" novalidate>
+                <div class="field field-span-2">
+                  <label for="document-upload-file">File</label>
+                  <input id="document-upload-file" type="file" accept="application/pdf,image/jpeg,image/png" required>
+                </div>
+                <div class="field">
+                  <label for="document-upload-property-id">ID immobile</label>
+                  <input id="document-upload-property-id" type="number" min="1" step="1" inputmode="numeric" required>
+                </div>
+                <div class="field">
+                  <label for="document-upload-document-type">Tipo documento sorgente</label>
+                  <input id="document-upload-document-type" type="text" maxlength="80" required>
+                </div>
+                <div class="field field-span-2">
+                  <label for="document-upload-source-title">Titolo sorgente</label>
+                  <input id="document-upload-source-title" type="text" maxlength="200" required>
+                </div>
+                <div class="field field-span-2">
+                  <label for="document-upload-public-title">Titolo pubblico</label>
+                  <input id="document-upload-public-title" type="text" maxlength="200" required>
+                </div>
+                <div class="field">
+                  <label for="document-upload-public-type">Tipo pubblico</label>
+                  <select id="document-upload-public-type" required>
+                    <option value="mandate">Mandato</option>
+                    <option value="floor_plan">Planimetria</option>
+                    <option value="ape">APE</option>
+                    <option value="cadastral_extract">Documento catastale</option>
+                    <option value="photo_report">Report fotografico</option>
+                    <option value="activity_report">Report attività</option>
+                    <option value="information">Documento informativo</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="document-upload-owner-account-id">ID account destinatario</label>
+                  <input id="document-upload-owner-account-id" type="number" min="1" step="1" inputmode="numeric">
+                </div>
+                <div class="field">
+                  <label for="document-upload-supersedes-id">ID condivisione sostituita</label>
+                  <input id="document-upload-supersedes-id" type="number" min="1" step="1" inputmode="numeric">
+                </div>
+                <div class="field">
+                  <label for="document-upload-expires-at">Scadenza condivisione</label>
+                  <input id="document-upload-expires-at" type="datetime-local">
+                </div>
+                <div class="field">
+                  <label for="document-upload-created-by">Operatore</label>
+                  <input id="document-upload-created-by" type="text" maxlength="200">
+                </div>
+                <div class="field checkbox-field">
+                  <input id="document-upload-ack-required" type="checkbox">
+                  <label for="document-upload-ack-required">Richiedi presa visione</label>
+                </div>
+                <div class="form-actions">
+                  <button id="document-upload-submit" class="button primary" type="submit">Carica documento</button>
+                </div>
+              </form>
+              <p id="document-upload-status" class="status-message" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div id="document-detail-panel" class="panel detail-panel" hidden aria-labelledby="document-detail-heading">
+            <div class="panel-heading-row">
+              <h4 id="document-detail-heading">Dettaglio documento</h4>
+              <button id="document-detail-close" class="button secondary small" type="button">Chiudi</button>
+            </div>
+            <p id="document-detail-status" class="status-message" role="status" aria-live="polite"></p>
+            <div id="document-detail-content" class="detail-content"></div>
+          </div>
+
+          <div id="document-reads-panel" class="panel detail-panel" hidden aria-labelledby="document-reads-heading">
+            <div class="panel-heading-row">
+              <h4 id="document-reads-heading">Letture e prese visione</h4>
+              <button id="document-reads-close" class="button secondary small" type="button">Chiudi</button>
+            </div>
+            <p id="document-reads-status" class="status-message" role="status" aria-live="polite"></p>
+            <div id="document-reads-content" class="entity-list compact-list"></div>
+          </div>
+
+          <div id="documents-loading" class="state-card" hidden role="status">Caricamento documenti…</div>
+          <div id="documents-empty" class="state-card" hidden>Nessun documento condiviso disponibile.</div>
+          <div id="documents-error" class="state-card error-state" hidden>
+            <p id="documents-error-message"></p>
+            <button id="documents-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="documents-content" class="entity-list" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="section-visit-feedback" class="admin-section" hidden aria-labelledby="visit-feedback-heading">
+          <div class="section-heading">
+            <div>
+              <h3 id="visit-feedback-heading">Feedback visite</h3>
+              <p class="muted">Sintesi anonimizzate delle visite. La privacy validation OWNER resta obbligatoria.</p>
+            </div>
+            <button id="visit-feedback-reload" class="button secondary" type="button">Aggiorna</button>
+          </div>
+
+          <div class="panel">
+            <h4>Nuovo feedback visita draft</h4>
+            <p class="muted">Gli identificativi visita e account sono inseriti manualmente. Nessuna API PROPERTY viene chiamata.</p>
+            <form id="visit-feedback-create-form" class="form-grid form-grid-wide" novalidate>
+              <div class="field">
+                <label for="visit-feedback-property-visit-id">ID visita immobile</label>
+                <input id="visit-feedback-property-visit-id" type="number" min="1" step="1" inputmode="numeric" required>
+              </div>
+              <div class="field">
+                <label for="visit-feedback-owner-account-id">ID account destinatario</label>
+                <input id="visit-feedback-owner-account-id" type="number" min="1" step="1" inputmode="numeric">
+              </div>
+              <div class="field">
+                <label for="visit-feedback-category">Categoria</label>
+                <select id="visit-feedback-category" required>
+                  <option value="price">Posizionamento economico</option>
+                  <option value="state">Stato e presentazione</option>
+                  <option value="layout">Distribuzione degli spazi</option>
+                  <option value="location">Posizione</option>
+                  <option value="accessories">Accessori e pertinenze</option>
+                  <option value="general">Osservazione generale</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="visit-feedback-sentiment">Valutazione</label>
+                <select id="visit-feedback-sentiment">
+                  <option value="">Non specificata</option>
+                  <option value="positive">Positivo</option>
+                  <option value="neutral">Neutro</option>
+                  <option value="negative">Critico</option>
+                  <option value="mixed">Misto</option>
+                </select>
+              </div>
+              <div class="field field-span-2">
+                <label for="visit-feedback-summary">Sintesi pubblica anonimizzata</label>
+                <textarea id="visit-feedback-summary" maxlength="5000" rows="5" required></textarea>
+              </div>
+              <div class="field">
+                <label for="visit-feedback-created-by">Operatore</label>
+                <input id="visit-feedback-created-by" type="text" maxlength="200">
+              </div>
+              <div class="form-actions grouped-actions">
+                <button id="visit-feedback-privacy-check" class="button secondary" type="button">Verifica privacy</button>
+                <button id="visit-feedback-create-submit" class="button primary" type="submit">Crea draft</button>
+              </div>
+            </form>
+            <p id="visit-feedback-form-status" class="status-message" role="status" aria-live="polite"></p>
+            <div id="visit-feedback-privacy-issues" class="privacy-issues" hidden aria-live="polite"></div>
+          </div>
+
+          <div id="visit-feedback-detail-panel" class="panel detail-panel" hidden aria-labelledby="visit-feedback-detail-heading">
+            <div class="panel-heading-row">
+              <h4 id="visit-feedback-detail-heading">Dettaglio feedback visita</h4>
+              <button id="visit-feedback-detail-close" class="button secondary small" type="button">Chiudi</button>
+            </div>
+            <p id="visit-feedback-detail-status" class="status-message" role="status" aria-live="polite"></p>
+            <div id="visit-feedback-detail-content" class="detail-content"></div>
+          </div>
+
+          <div id="visit-feedback-loading" class="state-card" hidden role="status">Caricamento feedback visite…</div>
+          <div id="visit-feedback-empty" class="state-card" hidden>Nessun feedback visita disponibile.</div>
+          <div id="visit-feedback-error" class="state-card error-state" hidden>
+            <p id="visit-feedback-error-message"></p>
+            <button id="visit-feedback-retry" class="button secondary" type="button">Riprova</button>
+          </div>
+          <div id="visit-feedback-content" class="entity-list" hidden aria-live="polite"></div>
         </section>
       </div>
     </section>
