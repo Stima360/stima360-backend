@@ -327,6 +327,7 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
 
     cursor = CreateFeedbackCursor()
     activities = []
+    flow_events = []
 
     @contextmanager
     def fake_cursor(*, commit=False):
@@ -337,8 +338,13 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
         activities.append((cur, data))
         return {"id": 91}
 
+    def fake_flow_event(cur, data):
+        flow_events.append((cur, data))
+        return {"id": 81}
+
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
     monkeypatch.setattr(repo, "create_activity_with_cursor", fake_activity)
+    monkeypatch.setattr(repo, "add_event_with_cursor", fake_flow_event)
     result = repo.create_feedback(
         7,
         11,
@@ -351,6 +357,8 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
     assert activities[0][1]["contact_id"] == 44
     assert activities[0][1]["lead_id"] is None
     assert activities[0][1]["stima_id"] is None
+    assert len(flow_events) == 1
+    assert flow_events[0][0] is cursor
     access_query, access_params = cursor.executed[0]
     assert "oa.status='active'" in access_query
     assert "FOR UPDATE OF oa,x" in access_query

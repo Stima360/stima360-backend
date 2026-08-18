@@ -21,6 +21,16 @@ FEEDBACK_TYPES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _p8_2_isolate_newer_flow_side_effect(monkeypatch):
+    """P8.2 regression focuses on the validated OWNER↔CORE contract.
+
+    P8.3B adds a FLOW event after the P8.2 link step; stub that newer layer here
+    so the historical P8.2 failure-injection tests keep exercising only P8.2.
+    """
+    monkeypatch.setattr(owner_repo, "add_event_with_cursor", lambda cur, data: {"id": 701})
+
+
 class TxState:
     def __init__(self, cursor):
         self.cursor = cursor
@@ -349,11 +359,10 @@ def test_portal_feedback_whitelist_remains_internal_id_free():
     assert forbidden.isdisjoint(owner_repo._public_feedback(row))
 
 
-def test_submit_does_not_emit_p5_notification_task_or_flow_and_handled_p5_is_preserved():
+def test_submit_does_not_emit_p5_notification_or_task_and_handled_p5_is_preserved():
     submit_src = inspect.getsource(owner_repo.create_feedback)
     assert "_emit_notification_event" not in submit_src
     assert "create_task" not in submit_src
-    assert "flow" not in submit_src.lower()
     assert "_audit_with_cursor" in submit_src
     handled_src = inspect.getsource(owner_repo.update_feedback_status)
     assert "request_handled" in handled_src

@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core.repository import create_activity_with_cursor
+from flow.repository import add_event_with_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .security import generate_secret,hash_secret,utcnow,valid_session
 from .schemas import validate_visit_feedback_summary, visit_feedback_privacy_issues
@@ -180,6 +181,20 @@ def create_feedback(a,p,d):
       (activity['id'],r['id']),
   )
   if c.rowcount != 1:raise ConflictError('Collegamento activity OWNER non riuscito')
+  add_event_with_cursor(c,{
+      'source_module':'owner',
+      'event_type':'owner.request_submitted',
+      'entity_type':'owner_feedback',
+      'entity_id':r['id'],
+      'deduplication_key':f"owner:feedback:{r['id']}:submitted",
+      'payload':{
+          'owner_request_type':r['feedback_type'],
+          'property_id':p,
+          'contact_id':contact_id,
+          'linked_activity_id':activity['id'],
+      },
+      'occurred_at':r['submitted_at'],
+  })
   _audit_with_cursor(c,'feedback_submitted',a,p,'owner_feedback',r['id'])
  return _public_feedback(r)
 

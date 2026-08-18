@@ -82,12 +82,18 @@ def deactivate(code):
     row=get_rule_row(code)
     with core_cursor(commit=True) as (_,cur): cur.execute("UPDATE flow_rules SET is_active=FALSE,updated_at=NOW() WHERE id=%s RETURNING *",(row['id'],)); return dict(cur.fetchone())
 
+def add_event_with_cursor(cur, data):
+    key=data.get('deduplication_key') or f"{data['event_type']}:{data['entity_type']}:{data['entity_id']}:{datetime.now(timezone.utc).strftime('%Y%m%d%H')}"
+    cur.execute("""INSERT INTO flow_events(event_type,entity_type,entity_id,source_module,payload,deduplication_key,status,occurred_at,received_at)
+        VALUES(%s,%s,%s,%s,%s,%s,'received',COALESCE(%s,NOW()),NOW()) ON CONFLICT(deduplication_key) DO UPDATE SET received_at=flow_events.received_at RETURNING *""",
+        (data['event_type'],data['entity_type'],data['entity_id'],data['source_module'],Json(data.get('payload') or {}),key,data.get('occurred_at')))
+    return dict(cur.fetchone())
+
 def add_event(data):
     key=data.get('deduplication_key') or f"{data['event_type']}:{data['entity_type']}:{data['entity_id']}:{datetime.now(timezone.utc).strftime('%Y%m%d%H')}"
+    prepared={**data,'deduplication_key':key}
     with core_cursor(commit=True) as (_,cur):
-        cur.execute("""INSERT INTO flow_events(event_type,entity_type,entity_id,source_module,payload,deduplication_key,status,occurred_at,received_at)
-            VALUES(%s,%s,%s,%s,%s,%s,'received',NOW(),NOW()) ON CONFLICT(deduplication_key) DO UPDATE SET received_at=flow_events.received_at RETURNING *""",
-            (data['event_type'],data['entity_type'],data['entity_id'],data['source_module'],Json(data.get('payload') or {}),key)); return dict(cur.fetchone())
+        return add_event_with_cursor(cur,prepared)
 
 def update_event_status(event_id, status, error_message=None):
     with core_cursor(commit=True) as (_,cur):
