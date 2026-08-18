@@ -15,7 +15,7 @@ class EventCreate(BaseModel):
     event_type: str
     entity_type: str
     entity_id: int = Field(gt=0)
-    source_module: Literal["core", "property", "buy", "match", "flow"]
+    source_module: Literal["core", "property", "buy", "match", "flow", "owner"]
     payload: dict[str, Any] = Field(default_factory=dict)
     deduplication_key: str | None = None
 
