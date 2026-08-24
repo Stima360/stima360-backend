@@ -141,26 +141,48 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
             cur.execute("""INSERT INTO flow_action_records(execution_id,action_type,target_module,target_entity_type,idempotency_key,payload,status,created_at)
                 VALUES(%s,%s,'core','task',%s,%s,'pending',NOW()) ON CONFLICT(idempotency_key) DO NOTHING RETURNING *""",(ex['id'],action['action_type'],idem,Json(action)))
             ar=cur.fetchone()
-        if not ar:
-            with core_cursor(commit=True) as (_,cur): cur.execute("UPDATE flow_executions SET status='skipped',actions_result=%s,completed_at=NOW() WHERE id=%s RETURNING *",(Json({'reason':'duplicate_or_cooldown'}),ex['id'])); return dict(cur.fetchone())
-        if action['action_type']=='create_core_task':
-            if not action.get('contact_id') and not action.get('lead_id'):
-                raise ValidationError("FLOW task requires contact_id or lead_id")
-            task=core_repository.create_task({
-                'contact_id':action.get('contact_id'),'lead_id':action.get('lead_id'),'stima_id':None,
-                'title':action['title'],'description':action['description'],'task_type':'flow_follow_up','priority':action['priority'],'status':'open',
-                'due_at':datetime.now(timezone.utc)+timedelta(hours=action.get('due_hours',24)),'completed_at':None,
-                'assigned_to':action.get('assigned_to'),'created_by':requested_by or 'FLOW',
-                'metadata':{'source':'flow','flow_rule_code':code,'flow_execution_id':ex['id'],'idempotency_key':idem}
-            })
-            result={'task_id':task['id']}
-        else: result={'logged':True}
-        with core_cursor(commit=True) as (_,cur):
-            cur.execute("UPDATE flow_action_records SET target_entity_id=%s,status='completed' WHERE id=%s",(result.get('task_id'),ar['id']))
-            cur.execute("UPDATE flow_executions SET status='executed',actions_result=%s,completed_at=NOW() WHERE id=%s RETURNING *",(Json(result),ex['id'])); return dict(cur.fetchone())
+            if ar:
+                ar=dict(ar)
+            else:
+                cur.execute("SELECT * FROM flow_action_records WHERE idempotency_key=%s FOR UPDATE",(idem,))
+                existing=cur.fetchone()
+                if not existing: raise RuntimeError("FLOW action idempotency conflict without action record")
+                ar=dict(existing)
+                if ar['status']=='completed':
+                    result={'task_id':ar.get('target_entity_id')} if ar.get('target_entity_id') is not None else {}
+                    cur.execute("UPDATE flow_executions SET status='skipped',actions_result=%s,completed_at=NOW() WHERE id=%s RETURNING *",(Json({'reason':'duplicate_or_cooldown',**result}),ex['id']))
+                    return dict(cur.fetchone())
+
+            if action['action_type']=='create_core_task':
+                if not action.get('contact_id') and not action.get('lead_id'):
+                    raise ValidationError("FLOW task requires contact_id or lead_id")
+                cur.execute("SELECT id FROM tasks WHERE metadata->>'idempotency_key'=%s ORDER BY id LIMIT 1",(idem,))
+                existing_task=cur.fetchone()
+                if existing_task:
+                    task={'id':existing_task['id']}
+                else:
+                    task=core_repository.create_task({
+                        'contact_id':action.get('contact_id'),'lead_id':action.get('lead_id'),'stima_id':None,
+                        'title':action['title'],'description':action['description'],'task_type':'flow_follow_up','priority':action['priority'],'status':'open',
+                        'due_at':datetime.now(timezone.utc)+timedelta(hours=action.get('due_hours',24)),'completed_at':None,
+                        'assigned_to':action.get('assigned_to'),'created_by':requested_by or 'FLOW',
+                        'metadata':{'source':'flow','flow_rule_code':code,'flow_execution_id':ex['id'],'idempotency_key':idem}
+                    })
+                result={'task_id':task['id']}
+            else:
+                result={'logged':True}
+
+            cur.execute("UPDATE flow_action_records SET execution_id=%s,target_entity_type='task',target_entity_id=%s,status='completed',error_message=NULL WHERE id=%s",(ex['id'],result.get('task_id'),ar['id']))
+            cur.execute("UPDATE flow_executions SET status='executed',actions_result=%s,error_message=NULL,completed_at=NOW() WHERE id=%s RETURNING *",(Json(result),ex['id']))
+            return dict(cur.fetchone())
     except Exception as exc:
         with core_cursor(commit=True) as (_,cur):
-            cur.execute("UPDATE flow_action_records SET status='failed',error_message=%s WHERE execution_id=%s AND status='pending'",(str(exc),ex['id']))
+            cur.execute("""UPDATE flow_action_records
+                SET execution_id=%s,status='failed',error_message=%s
+                WHERE idempotency_key=%s AND status<>'completed'""",(ex['id'],str(exc),idem))
+            if cur.rowcount==0:
+                cur.execute("""INSERT INTO flow_action_records(execution_id,action_type,target_module,target_entity_type,idempotency_key,payload,status,error_message,created_at)
+                    VALUES(%s,%s,'core','task',%s,%s,'failed',%s,NOW()) ON CONFLICT(idempotency_key) DO NOTHING""",(ex['id'],action['action_type'],idem,Json(action),str(exc)))
             cur.execute("UPDATE flow_executions SET status='failed',error_message=%s,completed_at=NOW() WHERE id=%s RETURNING *",(str(exc),ex['id'])); failed=dict(cur.fetchone())
         return failed
 

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from . import service
 from .schemas import *
 from .enums import SCAN_DEFAULT_LIMIT, SCAN_MAX_LIMIT
+from owner.router_admin import require_owner_admin
 
-router=APIRouter(prefix="/api/flow",tags=["flow"])
+router=APIRouter(prefix="/api/flow",tags=["flow"],dependencies=[Depends(require_owner_admin)])
 
 def tr(fn,*a,**kw):
     try: return fn(*a,**kw)

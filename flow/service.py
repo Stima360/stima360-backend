@@ -56,7 +56,7 @@ def _process_saved_event(saved):
         if row["is_active"] and row["event_type"]==saved["event_type"] and row["entity_type"]==saved["entity_type"]:
             rule=get_rule(row["code"]); entity=load_entity(saved["entity_type"],saved["entity_id"]); entity["event_payload"]=payload; p=rule.validate_parameters(dict(row["parameters"])); matched,reasons=evaluate_rule(row["code"],entity,p); action=build_action(row["code"],entity,p) if matched else None
             results.append(repository.execute_live(row["code"],entity,matched,reasons,action,event_id=saved["id"]))
-    status='processed' if results else 'ignored'
+    status='failed' if any(x.get('status')=='failed' for x in results) else ('processed' if results else 'ignored')
     return {"event":repository.update_event_status(saved['id'],status),"executions":results}
 
 
