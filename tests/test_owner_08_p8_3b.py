@@ -198,6 +198,7 @@ def run_atomic(monkeypatch, *, feedback_type="general_message", fail_stage=None,
     monkeypatch.setattr(owner_repo, "core_cursor", tx.factory)
     monkeypatch.setattr(owner_repo, "create_activity_with_cursor", core_repo.create_activity_with_cursor)
     monkeypatch.setattr(owner_repo, "record_owner_request_event_with_cursor", owner_request_integration.record_owner_request_event_with_cursor)
+    monkeypatch.setattr(owner_repo, "process_saved_owner_request_event", lambda event_id: None)
     result = owner_repo.create_feedback(12, 34, payload(feedback_type))
     return result, state, cursor, tx
 

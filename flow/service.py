@@ -49,14 +49,29 @@ def evaluate(payload):
     return repository.execute_live(code,entity,matched,reasons,action,data.get("requested_by"))
 
 
-def process_event(event):
-    data=dump(event); saved=repository.add_event(data); results=[]
+def _process_saved_event(saved):
+    results=[]
+    payload=dict(saved.get("payload") or {})
     for row in repository.list_rules():
-        if row["is_active"] and row["event_type"]==data["event_type"] and row["entity_type"]==data["entity_type"]:
-            rule=get_rule(row["code"]); entity=load_entity(data["entity_type"],data["entity_id"]); p=rule.validate_parameters(dict(row["parameters"])); matched,reasons=evaluate_rule(row["code"],entity,p); action=build_action(row["code"],entity,p) if matched else None
+        if row["is_active"] and row["event_type"]==saved["event_type"] and row["entity_type"]==saved["entity_type"]:
+            rule=get_rule(row["code"]); entity=load_entity(saved["entity_type"],saved["entity_id"]); entity["event_payload"]=payload; p=rule.validate_parameters(dict(row["parameters"])); matched,reasons=evaluate_rule(row["code"],entity,p); action=build_action(row["code"],entity,p) if matched else None
             results.append(repository.execute_live(row["code"],entity,matched,reasons,action,event_id=saved["id"]))
-    repository.update_event_status(saved['id'], 'processed' if results else 'ignored')
-    return {"event":repository.update_event_status(saved['id'], 'processed' if results else 'ignored'),"executions":results}
+    status='processed' if results else 'ignored'
+    return {"event":repository.update_event_status(saved['id'],status),"executions":results}
+
+
+def process_event(event):
+    data=dump(event); saved=repository.add_event(data)
+    return _process_saved_event(saved)
+
+
+def process_saved_event(event_id):
+    saved=repository.get_event(event_id)
+    try:
+        return _process_saved_event(saved)
+    except Exception as exc:
+        repository.update_event_status(event_id,'failed',str(exc))
+        raise
 
 
 def scan(payload):
@@ -77,4 +92,4 @@ def scan(payload):
 def retry(execution_id,payload):
     original=repository.increment_retry(execution_id); ex=repository.get_execution(execution_id); code=ex["rule_code"]
     entity=load_entity(ex["entity_type"],ex["entity_id"]); row=repository.get_rule_row(code); rule=get_rule(code); p=rule.validate_parameters(dict(row["parameters"])); matched,reasons=evaluate_rule(code,entity,p); action=build_action(code,entity,p) if matched else None
-    return repository.execute_live(code,entity,matched,reasons,action,dump(payload).get("requested_by"),retry_of_execution_id=execution_id)
+    return repository.execute_live(code,entity,matched,reasons,action,dump(payload).get("requested_by"),event_id=ex.get("event_id"),retry_of_execution_id=execution_id)

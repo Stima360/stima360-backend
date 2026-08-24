@@ -37,6 +37,18 @@ def load_entity(entity_type: str, entity_id: int) -> dict:
             x = _one(cur, """SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE v.id=%s""", (entity_id,), f"visit {entity_id} not found")
             cur.execute("SELECT COUNT(*) AS n FROM buy_request_interactions WHERE property_visit_id=%s AND interaction_type IN ('visited','interested','discarded','offer_candidate')", (entity_id,)); x["feedback_count"] = cur.fetchone()["n"]
             x["entity_type"]="property_visit"; x["entity_id"]=entity_id; return x
+        if entity_type == "owner_feedback":
+            x = _one(cur, """SELECT f.id,f.feedback_type,f.property_id,f.linked_activity_id,oa.contact_id
+                FROM owner_feedback f JOIN owner_accounts oa ON oa.id=f.owner_account_id
+                WHERE f.id=%s""", (entity_id,), f"owner feedback {entity_id} not found")
+            return {
+                "entity_type": "owner_feedback",
+                "entity_id": entity_id,
+                "owner_request_type": x["feedback_type"],
+                "property_id": x["property_id"],
+                "contact_id": x["contact_id"],
+                "linked_activity_id": x["linked_activity_id"],
+            }
     raise ValueError(f"unsupported entity_type {entity_type}")
 
 

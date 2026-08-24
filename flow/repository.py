@@ -4,7 +4,7 @@ from psycopg2.extras import Json
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from core import repository as core_repository
-from .rules import RULES, get_rule
+from .rules.registry import ALL_RULES, get_rule
 from .enums import MAX_RETRY
 
 
@@ -13,7 +13,7 @@ def _dict(row): return dict(row) if row else None
 def sync_rules():
     items=[]
     with core_cursor(commit=True) as (_,cur):
-        for code,rule in RULES.items():
+        for code,rule in ALL_RULES.items():
             cur.execute("SELECT * FROM flow_rules WHERE code=%s",(code,)); existing=cur.fetchone()
             defaults=rule.validate_parameters({})
             allowed=rule.allowed_parameters
@@ -95,6 +95,12 @@ def add_event(data):
     with core_cursor(commit=True) as (_,cur):
         return add_event_with_cursor(cur,prepared)
 
+def get_event(event_id):
+    with core_cursor() as (_,cur):
+        cur.execute("SELECT * FROM flow_events WHERE id=%s",(event_id,)); row=cur.fetchone()
+        if not row: raise NotFoundError(f"flow event {event_id} not found")
+        return dict(row)
+
 def update_event_status(event_id, status, error_message=None):
     with core_cursor(commit=True) as (_,cur):
         cur.execute("UPDATE flow_events SET status=%s,error_message=%s WHERE id=%s RETURNING *",(status,error_message,event_id)); return dict(cur.fetchone())
@@ -120,7 +126,10 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
     if not row['is_active']: raise ConflictError("rule is not active")
     if is_suppressed(row['id'],entity['entity_type'],entity['entity_id']):
         matched=False; reasons=[*reasons,'soppressione attiva']
-    idem=_idempotency_key(code,entity['entity_type'],entity['entity_id'],int(p.get('cooldown_minutes',0)))
+    if rule.idempotency_scope=='event' and event_id is not None:
+        idem=f"{code}:event:{event_id}"
+    else:
+        idem=_idempotency_key(code,entity['entity_type'],entity['entity_id'],int(p.get('cooldown_minutes',0)))
     with core_cursor(commit=True) as (_,cur):
         cur.execute("""INSERT INTO flow_executions(event_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,retry_count,max_retry,retry_of_execution_id,started_at,created_at)
             VALUES(%s,%s,%s,%s,'live',%s,%s,%s,%s,%s,%s,0,%s,%s,NOW(),NOW()) RETURNING *""",

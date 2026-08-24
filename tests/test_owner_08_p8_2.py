@@ -29,6 +29,7 @@ def _p8_2_isolate_newer_flow_side_effect(monkeypatch):
     so the historical P8.2 failure-injection tests keep exercising only P8.2.
     """
     monkeypatch.setattr(owner_repo, "record_owner_request_event_with_cursor", lambda cur, data: {"id": 701})
+    monkeypatch.setattr(owner_repo, "process_saved_owner_request_event", lambda event_id: None)
 
 
 class TxState:

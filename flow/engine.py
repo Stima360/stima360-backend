@@ -25,6 +25,18 @@ def evaluate(rule_code: str, entity: dict, p: dict) -> tuple[bool, list[str]]:
         matched=bool(entity.get("review_required")); reasons.append("revisione richiesta" if matched else "revisione non richiesta")
     elif rule_code == "FLOW-R007":
         updated=entity.get("updated_at") or entity.get("scheduled_at"); matched=entity.get("status")=="completed" and int(entity.get("feedback_count") or 0)==0 and updated <= now-timedelta(hours=p["feedback_wait_hours"]); reasons.append("visita senza feedback" if matched else "feedback presente o soglia non raggiunta")
+    elif rule_code in {"FLOW-R008","FLOW-R009","FLOW-R010","FLOW-R011","FLOW-R012"}:
+        expected={
+            "FLOW-R008":"contact_request",
+            "FLOW-R009":"correction_request",
+            "FLOW-R010":"strategy_feedback",
+            "FLOW-R011":"price_review",
+            "FLOW-R012":"document_question",
+        }[rule_code]
+        event_payload=entity.get("event_payload") or {}
+        request_type=event_payload.get("owner_request_type") or entity.get("owner_request_type")
+        matched=request_type==expected
+        reasons.append(f"owner request type: {request_type or 'missing'}")
     else: raise ValueError(f"unsupported rule {rule_code}")
     return matched,reasons
 
@@ -40,6 +52,25 @@ def build_action(rule_code: str, entity: dict, p: dict) -> dict:
         "FLOW-R007":"Raccogliere feedback dopo visita",
     }
     due_hours={"FLOW-R001":4,"FLOW-R002":24,"FLOW-R003":24,"FLOW-R004":4,"FLOW-R005":8,"FLOW-R006":8,"FLOW-R007":8}
+    owner_labels={
+        "FLOW-R008":"Contattare proprietario",
+        "FLOW-R009":"Verificare richiesta di correzione",
+        "FLOW-R010":"Rivedere strategia con proprietario",
+        "FLOW-R011":"Valutare revisione prezzo",
+        "FLOW-R012":"Rispondere a richiesta documentale",
+    }
+    if rule_code in owner_labels:
+        owner_due={"FLOW-R008":4,"FLOW-R009":24,"FLOW-R010":24,"FLOW-R011":24,"FLOW-R012":24}
+        return {
+            "action_type":"create_core_task",
+            "title":owner_labels[rule_code],
+            "description":"Richiesta ricevuta dal portale proprietario.",
+            "priority":p["task_priority"],
+            "due_hours":owner_due[rule_code],
+            "contact_id":entity.get("contact_id"),
+            "lead_id":None,
+            "assigned_to":None,
+        }
     return {
         "action_type":"create_core_task",
         "title":labels[rule_code],

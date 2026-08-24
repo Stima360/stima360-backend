@@ -13,6 +13,47 @@ RULES = {
 "FLOW-R007": RuleDefinition("FLOW-R007",1,"Visita senza feedback","Crea un task per visite completate senza feedback entro la soglia.","property.visit_completed","property_visit",{"feedback_wait_hours":24,"task_priority":"normal","cooldown_minutes":1440},{"feedback_wait_hours":{"type":"integer","min":1,"max":168},"task_priority":P,"cooldown_minutes":C},"create_core_task"),
 }
 
+
+OWNER_RULES = {
+    "FLOW-R008": RuleDefinition(
+        "FLOW-R008", 1, "Contattare proprietario",
+        "Crea un task per una richiesta OWNER di contatto.",
+        "owner.request_submitted", "owner_feedback",
+        {"task_priority": "high", "cooldown_minutes": 0}, {"task_priority":P,"cooldown_minutes":C},
+        "create_core_task", idempotency_scope="event",
+    ),
+    "FLOW-R009": RuleDefinition(
+        "FLOW-R009", 1, "Verificare richiesta di correzione",
+        "Crea un task per una richiesta OWNER di correzione.",
+        "owner.request_submitted", "owner_feedback",
+        {"task_priority": "high", "cooldown_minutes": 0}, {"task_priority":P,"cooldown_minutes":C},
+        "create_core_task", idempotency_scope="event",
+    ),
+    "FLOW-R010": RuleDefinition(
+        "FLOW-R010", 1, "Rivedere strategia con proprietario",
+        "Crea un task per un feedback OWNER sulla strategia.",
+        "owner.request_submitted", "owner_feedback",
+        {"task_priority": "high", "cooldown_minutes": 0}, {"task_priority":P,"cooldown_minutes":C},
+        "create_core_task", idempotency_scope="event",
+    ),
+    "FLOW-R011": RuleDefinition(
+        "FLOW-R011", 1, "Valutare revisione prezzo",
+        "Crea un task per una richiesta OWNER di revisione prezzo.",
+        "owner.request_submitted", "owner_feedback",
+        {"task_priority": "high", "cooldown_minutes": 0}, {"task_priority":P,"cooldown_minutes":C},
+        "create_core_task", idempotency_scope="event",
+    ),
+    "FLOW-R012": RuleDefinition(
+        "FLOW-R012", 1, "Rispondere a richiesta documentale",
+        "Crea un task per una domanda OWNER sui documenti.",
+        "owner.request_submitted", "owner_feedback",
+        {"task_priority": "normal", "cooldown_minutes": 0}, {"task_priority":P,"cooldown_minutes":C},
+        "create_core_task", idempotency_scope="event",
+    ),
+}
+
+ALL_RULES = {**RULES, **OWNER_RULES}
+
 def get_rule(code):
-    try: return RULES[code]
+    try: return ALL_RULES[code]
     except KeyError: raise ValueError(f"unknown predefined rule {code}")

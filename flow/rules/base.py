@@ -14,6 +14,7 @@ class RuleDefinition:
     default_parameters: dict[str, Any]
     allowed_parameters: dict[str, dict[str, Any]]
     action_type: str
+    idempotency_scope: str = "cooldown"
 
     def parameters_hash(self, parameters: dict[str, Any]) -> str:
         raw = json.dumps(parameters, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
