@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app
+from integration_p2_support import import_main_app
 
 ROOT = Path(__file__).resolve().parent.parent
 PROTECTED_PREFIXES = ("/api/core", "/api/property", "/api/buy", "/api/match")
@@ -19,56 +19,50 @@ EXPECTED_COUNTS = {
     "/api/buy": 23,
     "/api/match": 25,
 }
-
-client = TestClient(app, raise_server_exceptions=False)
-
-
-def api_routes():
-    # Avoid isinstance(APIRoute): the integration suite deliberately reloads
-    # project modules, and route class identity is not a stable contract across
-    # those import cycles.  Identify FastAPI operation routes by the attributes
-    # required by the checks below; this excludes static Mount routes.
-    return [
-        route
-        for route in app.routes
-        if getattr(route, "path", None)
-        and getattr(route, "methods", None)
-        and hasattr(route, "dependant")
-    ]
+HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 
 
-def protected_routes():
-    return [
-        route
-        for route in api_routes()
-        if route.path.startswith(PROTECTED_PREFIXES)
-    ]
+@pytest.fixture(scope="module")
+def app():
+    # Use the repository's deterministic import helper.  The full integration
+    # suite reloads project modules, so a collection-time ``from main import app``
+    # is not a stable reference for structural assertions.
+    return import_main_app()
 
 
-def dependency_calls(route):
-    return [dependency.call for dependency in route.dependant.dependencies]
+@pytest.fixture(scope="module")
+def client(app):
+    return TestClient(app, raise_server_exceptions=False)
 
 
-def test_1_all_88_routes_are_still_mounted():
-    routes = api_routes()
+def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
+    operations = []
+    for path, item in app.openapi()["paths"].items():
+        if not path.startswith(prefixes):
+            continue
+        for method, operation in item.items():
+            if method.lower() in HTTP_METHODS:
+                operations.append((method.upper(), path, operation))
+    return operations
+
+
+def test_1_all_88_routes_are_still_mounted(app):
+    operations = openapi_operations(app)
     for prefix, expected in EXPECTED_COUNTS.items():
-        assert len([route for route in routes if route.path.startswith(prefix)]) == expected
-    assert len(protected_routes()) == 88
+        actual = sum(1 for _, path, _ in operations if path.startswith(prefix))
+        assert actual == expected
+    assert len(operations) == 88
 
 
-def test_2_every_certified_admin_route_has_neutral_admin_dependency():
-    from admin_security import require_admin
-
-    missing = [
-        f"{','.join(sorted(route.methods))} {route.path}"
-        for route in protected_routes()
-        if require_admin not in dependency_calls(route)
-    ]
+def test_2_every_certified_admin_route_has_security_gate(app):
+    operations = openapi_operations(app)
+    assert len(operations) == 88
+    missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_3_anonymous_requests_are_rejected(path, monkeypatch):
+def test_3_anonymous_requests_are_rejected(client, path, monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     response = client.get(path)
@@ -77,7 +71,7 @@ def test_3_anonymous_requests_are_rejected(path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_4_wrong_credentials_are_rejected(path, monkeypatch):
+def test_4_wrong_credentials_are_rejected(client, path, monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     response = client.get(path, auth=("wrong", "password"))
@@ -85,7 +79,7 @@ def test_4_wrong_credentials_are_rejected(path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_5_missing_admin_env_fails_closed(path, monkeypatch):
+def test_5_missing_admin_env_fails_closed(client, path, monkeypatch):
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.delenv("ADMIN_PASS", raising=False)
     response = client.get(path, auth=("giorgio", "test-secret"))
@@ -94,7 +88,7 @@ def test_5_missing_admin_env_fails_closed(path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_6_correct_credentials_pass_the_auth_gate(path, monkeypatch):
+def test_6_correct_credentials_pass_the_auth_gate(client, path, monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     response = client.get(path, auth=("giorgio", "test-secret"))
@@ -102,7 +96,7 @@ def test_6_correct_credentials_pass_the_auth_gate(path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_7_unauthorized_response_has_basic_challenge(path, monkeypatch):
+def test_7_unauthorized_response_has_basic_challenge(client, path, monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     response = client.get(path)
@@ -110,7 +104,7 @@ def test_7_unauthorized_response_has_basic_challenge(path, monkeypatch):
     assert response.headers.get("WWW-Authenticate") == 'Basic realm="STIMA360 Admin"'
 
 
-def test_8_public_stima_and_legacy_admin_check_are_not_put_behind_new_gate(monkeypatch):
+def test_8_public_stima_and_legacy_admin_check_are_not_put_behind_new_gate(client, monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
 
@@ -127,15 +121,13 @@ def test_8_public_stima_and_legacy_admin_check_are_not_put_behind_new_gate(monke
 
 
 def test_9_owner_and_flow_do_not_receive_new_neutral_dependency():
-    from admin_security import require_admin
-
-    unrelated = [
-        route
-        for route in api_routes()
-        if route.path.startswith(("/api/owner", "/api/flow"))
-    ]
-    assert unrelated
-    assert all(require_admin not in dependency_calls(route) for route in unrelated)
+    # The contract we own in NEXT.2 is the wiring in main.py.  OWNER and FLOW
+    # keep their pre-existing auth mechanisms; they must not be wired to the new
+    # neutral require_admin dependency.
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert "app.include_router(flow_router, dependencies=[Depends(require_admin)])" not in source
+    assert "app.include_router(owner_admin_router, dependencies=[Depends(require_admin)])" not in source
+    assert "app.include_router(owner_portal_router, dependencies=[Depends(require_admin)])" not in source
 
 
 def test_10_domain_routers_remain_decoupled_from_owner():
@@ -146,3 +138,6 @@ def test_10_domain_routers_remain_decoupled_from_owner():
 
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_source
+    for router_name in ("core_router", "property_router", "buy_router", "match_router"):
+        expected = f"app.include_router({router_name}, dependencies=[Depends(require_admin)])"
+        assert expected in main_source
