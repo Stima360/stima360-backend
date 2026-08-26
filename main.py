@@ -15,6 +15,7 @@ from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from valuation import BASE_MQ
 from urllib.parse import urlencode
+from admin_security import require_admin
 from core.router import router as core_router
 from property.router import router as property_router
 from buy.router import router as buy_router
@@ -37,12 +38,12 @@ WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whats
 app = FastAPI()
 
 # Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
-app.include_router(core_router)
+app.include_router(core_router, dependencies=[Depends(require_admin)])
 
 # Additive PROPERTY 0.1 routes. CORE and legacy routes remain unchanged.
-app.include_router(property_router)
-app.include_router(buy_router)
-app.include_router(match_router)
+app.include_router(property_router, dependencies=[Depends(require_admin)])
+app.include_router(buy_router, dependencies=[Depends(require_admin)])
+app.include_router(match_router, dependencies=[Depends(require_admin)])
 app.include_router(flow_router)
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
