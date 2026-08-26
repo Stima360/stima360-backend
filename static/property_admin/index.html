@@ -1,3 +1,18 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>STIMA360 PROPERTY 0.2</title><link rel="stylesheet" href="/property-admin/assets/app.css"></head><body>
+  <section id="login-view" aria-labelledby="login-title" style="max-width:360px;margin:80px auto;padding:24px;background:#fff;border:1px solid #dfe6f1;border-radius:14px;box-shadow:0 12px 34px rgba(23,32,51,.08)">
+    <h1 id="login-title" style="margin-top:0">STIMA360 Admin</h1>
+    <p style="color:#6d7688">Accesso riservato.</p>
+    <form id="login-form">
+      <label for="admin-username">Username</label>
+      <input id="admin-username" name="username" type="text" autocomplete="username" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" name="password" type="password" autocomplete="current-password" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <button type="submit" style="width:100%;padding:10px;cursor:pointer">Accedi</button>
+    </form>
+    <p id="login-status" role="status" aria-live="polite" style="min-height:1.2em;color:#b42318"></p>
+  </section>
+<div id="app-view" hidden>
 <aside><div class="brand"><b>S360</b><span>STIMA360 OS<small>PROPERTY 0.2</small></span></div><button class="nav active" data-view="dashboard">Oggi</button><button class="nav" data-view="properties">Immobili</button><button class="nav" data-view="visits">Visite</button><button class="nav" data-view="alerts">Avvisi</button><a class="nav link" href="/core-admin/">CORE CRM</a></aside>
-<main><header><div><h1 id="title">PROPERTY 0.2</h1><p id="subtitle">Gestione operativa del portafoglio</p></div><div class="actions"><button class="btn" id="refresh">Aggiorna</button><button class="btn primary" id="new-property">+ Nuovo immobile</button></div></header><section id="content"></section></main><div id="modal"></div><div id="toasts"></div><script src="/property-admin/assets/app.js"></script></body></html>
+<main><header><div><h1 id="title">PROPERTY 0.2</h1><p id="subtitle">Gestione operativa del portafoglio</p></div><div class="actions"><button class="btn" id="logout-btn">Logout</button><button class="btn" id="refresh">Aggiorna</button><button class="btn primary" id="new-property">+ Nuovo immobile</button></div></header><section id="content"></section></main>
+</div>
+<div id="modal"></div><div id="toasts"></div><script src="/property-admin/assets/app.js"></script></body></html>

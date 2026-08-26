@@ -7,7 +7,19 @@
   <link rel="stylesheet" href="/core-admin/assets/app.css?v=0.3">
 </head>
 <body>
-  <div class="app-shell">
+  <section id="login-view" aria-labelledby="login-title" style="max-width:360px;margin:80px auto;padding:24px;background:#fff;border:1px solid #dfe6f1;border-radius:14px;box-shadow:0 12px 34px rgba(23,32,51,.08)">
+    <h1 id="login-title" style="margin-top:0">STIMA360 Admin</h1>
+    <p style="color:#6d7688">Accesso riservato.</p>
+    <form id="login-form">
+      <label for="admin-username">Username</label>
+      <input id="admin-username" name="username" type="text" autocomplete="username" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" name="password" type="password" autocomplete="current-password" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <button type="submit" style="width:100%;padding:10px;cursor:pointer">Accedi</button>
+    </form>
+    <p id="login-status" role="status" aria-live="polite" style="min-height:1.2em;color:#b42318"></p>
+  </section>
+  <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">S360</span><div><strong>STIMA360 OS</strong><small>CORE Admin 0.3</small></div></div>
       <nav id="nav">
@@ -22,7 +34,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1 id="page-title">Panoramica</h1><p id="page-subtitle">Gestione operativa del CORE CRM</p></div>
-        <div class="top-actions"><button class="btn ghost" id="refresh-btn">Aggiorna</button><button class="btn primary" id="quick-add">+ Nuovo contatto</button></div>
+        <div class="top-actions"><button class="btn ghost" id="logout-btn">Logout</button><button class="btn ghost" id="refresh-btn">Aggiorna</button><button class="btn primary" id="quick-add">+ Nuovo contatto</button></div>
       </header>
       <section id="content" class="content"></section>
     </main>

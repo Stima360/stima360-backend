@@ -1,11 +1,19 @@
 const API='/api/match';
+let credentials=null;
 const el=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>v==null?'—':v;
 const dt=v=>v?new Date(v).toLocaleString('it-IT'):'—';
 const score=m=>fmt(m.manual_score??m.score_total);
 function toast(message){const t=el('toast');t.textContent=message;t.style.display='block';setTimeout(()=>t.style.display='none',2600)}
-async function api(path,opt={}){const response=await fetch(API+path,{headers:{'Content-Type':'application/json'},...opt});if(!response.ok){let message=response.statusText;try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
+function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${username}:${password}`);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return `Basic ${btoa(binary)}`;}
+function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
+function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
+function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
+function logout(message=''){credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}credentials={username,password};showApp();load('dashboard');}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
+
+async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(credentials)headers.Authorization=encodeBasic(credentials.username,credentials.password);const response=await fetch(API+path,{...opt,headers});if(response.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(!response.ok){let message=response.statusText;try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
 
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));el(button.dataset.view).classList.remove('hidden');load(button.dataset.view)});
 
@@ -44,4 +52,4 @@ async function addExclusion(){await api('/exclusions',{method:'POST',body:JSON.s
 async function removeExclusion(id){await api('/exclusions/'+id,{method:'DELETE'});toast('Esclusione rimossa');exclusions()}
 
 function load(view){({dashboard,matches,freshness,calculate,exclusions}[view]||dashboard)()}
-dashboard();
+el('login-form').addEventListener('submit',login);el('logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));showLogin();
