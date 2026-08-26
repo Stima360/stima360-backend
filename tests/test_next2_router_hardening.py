@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from main import app
@@ -25,7 +24,17 @@ client = TestClient(app, raise_server_exceptions=False)
 
 
 def api_routes():
-    return [route for route in app.routes if isinstance(route, APIRoute)]
+    # Avoid isinstance(APIRoute): the integration suite deliberately reloads
+    # project modules, and route class identity is not a stable contract across
+    # those import cycles.  Identify FastAPI operation routes by the attributes
+    # required by the checks below; this excludes static Mount routes.
+    return [
+        route
+        for route in app.routes
+        if getattr(route, "path", None)
+        and getattr(route, "methods", None)
+        and hasattr(route, "dependant")
+    ]
 
 
 def protected_routes():
