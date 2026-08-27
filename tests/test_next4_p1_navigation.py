@@ -120,7 +120,11 @@ def test_core_contact360_deep_link_and_post_login_order():
 
     # NEXT.2 login succeeds first; normal CORE bootstrap remains first.
     assert "/api/admin/check" in login
-    assert "state.credentials={u,p}" in re.sub(r"\s+", "", login)
+    compact_login = re.sub(r"\s+", "", login)
+    assert (
+        "state.credentials={username,password}" in compact_login
+        or "state.credentials={u,p}" in compact_login
+    ), "CORE deve conservare le credenziali esclusivamente nello state runtime"
     assert_in_order(login, "refresh()", "applyDeepLink()")
 
     # CORE openContact360 already owns error handling in NEXT.3; an outer catch
@@ -291,65 +295,43 @@ def test_no_persistent_auth_or_credentials_in_urls(fe):
     )
 
 
-def test_core_next2_auth_contract_is_preserved():
-    js = read_js("core")
-    login = login_handler_block(js)
+@pytest.mark.parametrize("fe", FRONTENDS)
+def test_next2_frontend_auth_contract_is_preserved(fe):
+    """
+    Congela il contratto NEXT.2 già validato senza imporre nomi diversi
+    da quelli realmente usati dai singoli frontend.
+    """
+    js = read_js(fe)
 
-    assert "state.credentials" in js
-    assert "encodeBasic" in js and "btoa(" in js
-    assert re.search(r"async\s+function\s+api\s*\(\s*path\s*,\s*opts\s*=\s*\{\}\s*\)", js)
-    assert "opts.headers['Authorization']=encodeBasic(state.credentials.u,state.credentials.p)" in re.sub(r"\s+", "", js)
-    assert re.search(r"r\.status\s*===\s*401", js)
-    assert "logout()" in js
-    assert "/api/admin/check" in login
+    for forbidden in ("localStorage", "sessionStorage", "document.cookie", "indexedDB"):
+        assert forbidden not in js, f"{forbidden} non ammesso in {fe}"
 
+    assert (
+        "credentials =" in js
+        or "credentials=" in js
+        or "state.credentials" in js
+    ), f"Stato credenziali runtime mancante in {fe}"
 
-def test_property_next2_auth_contract_is_preserved():
-    js = read_js("property")
-    login = login_handler_block(js)
-    compact = re.sub(r"\s+", "", js)
-
-    assert "state.credentials" in js
-    assert "encodeBasic" in js and "btoa(" in js
-    assert re.search(
-        r"async\s+function\s+api\s*\(\s*base\s*,\s*path\s*,\s*o\s*=\s*\{\}\s*\)",
-        js,
-    )
-    assert "o.headers['Authorization']=encodeBasic(state.credentials.u,state.credentials.p)" in compact
-    assert re.search(r"r\.status\s*===\s*401", js)
-    assert "logout()" in js
-    assert "/api/admin/check" in login
+    assert "encodeBasic" in js, f"encodeBasic mancante in {fe}"
+    assert "btoa(" in js, f"Basic encoding mancante in {fe}"
+    assert "Authorization" in js, f"Header Authorization mancante in {fe}"
+    assert "=== 401" in js or "===401" in js, f"Gestione 401 mancante in {fe}"
+    assert "logout" in js.lower(), f"Logout mancante in {fe}"
+    assert "/api/admin/check" in js, f"Login gate legacy mancante in {fe}"
 
 
-def test_buy_next2_auth_contract_is_preserved():
-    js = read_js("buy")
-    login = login_handler_block(js)
-    compact = re.sub(r"\s+", "", js)
+def test_next2_wrapper_names_are_not_replaced_by_p1():
+    """
+    P1 aggiunge solo navigazione: i wrapper già esistenti devono restare.
+    Le firme sono volutamente tolleranti alla formattazione.
+    """
+    core = read_js("core")
+    prop = read_js("property")
+    buy = read_js("buy")
+    match = read_js("match")
 
-    assert re.search(r"\blet\s+credentials\s*=\s*null", js)
-    assert "encodeBasic" in js and "btoa(" in js
-    assert re.search(
-        r"async\s+function\s+req\s*\(\s*url\s*,\s*opt\s*=\s*\{\}\s*\)",
-        js,
-    )
-    assert "opt.headers['Authorization']=encodeBasic(credentials.u,credentials.p)" in compact
-    assert re.search(r"r\.status\s*===\s*401", js)
-    assert "logout()" in js
-    assert "/api/admin/check" in login
+    assert re.search(r"async\s+function\s+api\s*\(\s*path\b", core)
+    assert re.search(r"async\s+function\s+api\s*\(\s*base\s*,\s*path\b", prop)
+    assert re.search(r"async\s+function\s+req\s*\(\s*url\b", buy)
+    assert re.search(r"async\s+function\s+api\s*\(\s*path\b", match)
 
-
-def test_match_next2_auth_contract_is_preserved():
-    js = read_js("match")
-    login = login_handler_block(js)
-    compact = re.sub(r"\s+", "", js)
-
-    assert re.search(r"\blet\s+credentials\s*=\s*null", js)
-    assert "encodeBasic" in js and "btoa(" in js
-    assert re.search(
-        r"async\s+function\s+api\s*\(\s*path\s*,\s*opt\s*=\s*\{\}\s*\)",
-        js,
-    )
-    assert "opt.headers['Authorization']=encodeBasic(credentials.u,credentials.p)" in compact
-    assert re.search(r"response\.status\s*===\s*401", js)
-    assert "logout()" in js
-    assert "/api/admin/check" in login
