@@ -46,15 +46,27 @@ def function_block(js: str, name: str) -> str:
 
 
 def login_handler_block(js: str) -> str:
+    # Pattern inline legacy, se presente.
     patterns = (
-        r"(?:qs|\$)\(\s*['\"]#login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
-        r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
+        r"(?:qs|\\$)\\(\\s*['\\\"]#login-form['\\\"]\\s*\\)\\.onsubmit\\s*=\\s*async\\s+\\w+\\s*=>\\s*\\{",
+        r"document\\.getElementById\\(\\s*['\\\"]login-form['\\\"]\\s*\\)\\.onsubmit\\s*=\\s*async\\s+\\w+\\s*=>\\s*\\{",
     )
     for pattern in patterns:
         m = re.search(pattern, js)
         if m:
             opening_brace = js.find("{", m.start())
             return _extract_braced_block(js, opening_brace)
+
+    # Contratto reale CORE e compatibile con gli altri frontend:
+    # #login-form.addEventListener('submit', login)
+    binding = re.search(
+        r"(?:qs\\(\\s*['\\\"]#login-form['\\\"]\\s*\\)|"
+        r"document\\.getElementById\\(\\s*['\\\"]login-form['\\\"]\\s*\\))"
+        r"\\.addEventListener\\(\\s*['\\\"]submit['\\\"]\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*\\)",
+        js,
+    )
+    if binding:
+        return function_block(js, binding.group(1))
 
     raise AssertionError("Handler reale di #login-form non trovato")
 
@@ -98,11 +110,24 @@ def test_apply_deep_link_uses_positive_id_for_query_id(fe):
 
     assert "window.location.search" in block
     assert "URLSearchParams" in block
-    assert re.search(
+    direct = re.search(
         r"positiveId\s*\([^;]*?\.get\(\s*['\"]id['\"]\s*\)\s*\)",
         block,
         re.DOTALL,
-    ), f"applyDeepLink deve validare il query param id con positiveId in {fe}"
+    )
+    raw_assignment = re.search(
+        r"(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*?\.get\(\s*['\"]id['\"]\s*\)\s*;",
+        block,
+        re.DOTALL,
+    )
+    indirect = False
+    if raw_assignment:
+        raw_name = re.escape(raw_assignment.group(1))
+        indirect = re.search(rf"positiveId\s*\(\s*{raw_name}\s*\)", block) is not None
+
+    assert direct or indirect, (
+        f"applyDeepLink deve validare il query param id con positiveId in {fe}"
+    )
 
 
 # ---------------------------------------------------------------------------
