@@ -218,6 +218,19 @@ def list_visits(limit,offset,status,from_date,to_date):
         cur.execute(f"SELECT v.*,p.title AS property_title,p.code AS property_code,c.display_name AS contact_name FROM property_visits v JOIN properties p ON p.id=v.property_id LEFT JOIN contacts c ON c.id=v.contact_id{where} ORDER BY v.scheduled_at DESC,v.id DESC LIMIT %s OFFSET %s",params)
         return [dict(x) for x in cur.fetchall()]
 
+def list_visits_by_contact(contact_id):
+    with core_cursor() as (_,cur):
+        cur.execute(
+            """SELECT v.*,p.title AS property_title,p.code AS property_code,c.display_name AS contact_name
+               FROM property_visits v
+               JOIN properties p ON p.id=v.property_id
+               LEFT JOIN contacts c ON c.id=v.contact_id
+               WHERE v.contact_id=%s
+               ORDER BY v.scheduled_at DESC,v.id DESC""",
+            (contact_id,),
+        )
+        return [dict(x) for x in cur.fetchall()]
+
 def update_visit(visit_id,data):
     if not data:
         with core_cursor() as (_,cur):cur.execute('SELECT * FROM property_visits WHERE id=%s',(visit_id,));r=cur.fetchone()
