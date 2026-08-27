@@ -46,10 +46,10 @@ def function_block(js: str, name: str) -> str:
 
 
 def login_handler_block(js: str) -> str:
-    # Pattern inline legacy, se presente.
+    # Handler inline legacy, se presente.
     patterns = (
-        r"(?:qs|\\$)\\(\\s*['\\\"]#login-form['\\\"]\\s*\\)\\.onsubmit\\s*=\\s*async\\s+\\w+\\s*=>\\s*\\{",
-        r"document\\.getElementById\\(\\s*['\\\"]login-form['\\\"]\\s*\\)\\.onsubmit\\s*=\\s*async\\s+\\w+\\s*=>\\s*\\{",
+        r"(?:qs|\$)\(\s*['\"]#login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
+        r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
     )
     for pattern in patterns:
         m = re.search(pattern, js)
@@ -57,16 +57,16 @@ def login_handler_block(js: str) -> str:
             opening_brace = js.find("{", m.start())
             return _extract_braced_block(js, opening_brace)
 
-    # Contratto reale CORE e compatibile con gli altri frontend:
-    # #login-form.addEventListener('submit', login)
-    binding = re.search(
-        r"(?:qs\\(\\s*['\\\"]#login-form['\\\"]\\s*\\)|"
-        r"document\\.getElementById\\(\\s*['\\\"]login-form['\\\"]\\s*\\))"
-        r"\\.addEventListener\\(\\s*['\\\"]submit['\\\"]\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*\\)",
-        js,
+    # Contratto reale: il form può delegare a una funzione nominata:
+    # qs('#login-form').addEventListener('submit', login)
+    binding_patterns = (
+        r"qs\(\s*['\"]#login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
+        r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
     )
-    if binding:
-        return function_block(js, binding.group(1))
+    for pattern in binding_patterns:
+        binding = re.search(pattern, js)
+        if binding:
+            return function_block(js, binding.group(1))
 
     raise AssertionError("Handler reale di #login-form non trovato")
 
