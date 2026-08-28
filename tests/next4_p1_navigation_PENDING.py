@@ -61,6 +61,7 @@ def login_handler_block(js: str) -> str:
     binding_patterns = (
         r"(?:qs|\$)\(\s*['\"]#login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
         r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
+        r"el\(\s*['\"]login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
     )
     for pattern in binding_patterns:
         binding = re.search(pattern, js)
@@ -192,12 +193,12 @@ def test_buy_deep_link_and_post_login_order():
 
     assert "/api/admin/check" in login
 
-compact = re.sub(r"\s+", "", login)
+    compact = re.sub(r"\s+", "", login)
 
-assert (
-    "credentials={username,password}" in compact
-    or "credentials={u,p}" in compact
-), "BUY deve conservare le credenziali esclusivamente nello state runtime"
+    assert (
+        "credentials={username,password}" in compact
+        or "credentials={u,p}" in compact
+    ), "BUY deve conservare le credenziali esclusivamente nello state runtime"
 
     assert_in_order(
         login,
@@ -216,15 +217,19 @@ def test_match_deep_link_owns_detail_or_dashboard_choice():
 
     compact = re.sub(r"\s+", "", login)
 
-    assert "credentials={u,p}" in compact
+    assert (
+        "credentials={username,password}" in compact
+        or "credentials={u,p}" in compact
+    ), "MATCH deve conservare le credenziali esclusivamente nello state runtime"
+
     assert "applyDeepLink()" in login
 
     assert "detail(" in dl
 
-    assert re.search(
-        r"getElementById\(\s*['\"]matches['\"]\s*\)",
-        dl,
-    )
+    assert (
+        re.search(r"getElementById\(\s*['\"]matches['\"]\s*\)", dl)
+        or re.search(r"el\(\s*['\"]matches['\"]\s*\)", dl)
+    ), "MATCH deve aprire esplicitamente la view matches"
 
     assert (
         "load('dashboard')" in dl
