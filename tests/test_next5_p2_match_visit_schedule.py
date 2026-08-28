@@ -382,6 +382,101 @@ def run_js(function_name, argument, *, timezone_name="Europe/Rome"):
     return json.loads(result.stdout)
 
 
+def run_action_visibility(actions):
+    js = JS_PATH.read_text(encoding="utf-8")
+    start = js.index("function updateActionScheduleField(){")
+    end = js.index("\n}\n\nfunction bindUi", start) + 2
+    function_source = js[start:end]
+    script = f"""
+{function_source}
+const action={{value:'proposed'}};
+const input={{value:'',disabled:true,required:false}};
+const field={{hidden:true,style:{{display:'block'}}}};
+const form={{querySelector(selector){{
+  if(selector==='[name=action]')return action;
+  if(selector==='[name=scheduled_at]')return input;
+  throw new Error('selector inatteso: '+selector);
+}}}};
+function $(selector){{
+  if(selector==='#actionForm')return form;
+  if(selector==='#actionScheduledAtField')return field;
+  throw new Error('selector inatteso: '+selector);
+}}
+const states=[];
+for(const value of {json.dumps(actions)}){{
+  action.value=value;
+  if(value==='visit_scheduled')input.value='2026-08-30T10:15';
+  updateActionScheduleField();
+  states.push({{
+    action:value,
+    hidden:field.hidden,
+    display:field.style.display,
+    required:input.required,
+    disabled:input.disabled,
+    value:input.value,
+  }});
+}}
+process.stdout.write(JSON.stringify(states));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_action_datetime_is_hidden_at_author_style_level_before_javascript_runs():
+    html = HTML_PATH.read_text(encoding="utf-8")
+    field = re.search(r'<label[^>]+id="actionScheduledAtField"[^>]*>', html)
+
+    assert field
+    assert re.search(r"\bhidden\b", field.group(0))
+    assert re.search(r'style="[^"]*display\s*:\s*none', field.group(0))
+
+
+def test_action_datetime_visibility_required_state_and_value_follow_action():
+    states = run_action_visibility(
+        [
+            "proposed",
+            "visit_scheduled",
+            "proposed",
+            "visit_scheduled",
+            "discarded",
+            "interested",
+            "visit_requested",
+            "visited",
+            "offer_candidate",
+        ]
+    )
+
+    initial = states[0]
+    assert initial == {
+        "action": "proposed",
+        "hidden": True,
+        "display": "none",
+        "required": False,
+        "disabled": True,
+        "value": "",
+    }
+
+    for state in states:
+        if state["action"] == "visit_scheduled":
+            assert state["hidden"] is False
+            assert state["display"] == "block"
+            assert state["required"] is True
+            assert state["disabled"] is False
+        else:
+            assert state["hidden"] is True
+            assert state["display"] == "none"
+            assert state["required"] is False
+            assert state["disabled"] is True
+            assert state["value"] == ""
+
+
 def test_frontend_requires_datetime_only_for_scheduled_visit_and_sends_iso():
     html = HTML_PATH.read_text(encoding="utf-8")
     action_form = re.search(r'<form[^>]+id="actionForm"[^>]*>(.*?)</form>', html, re.DOTALL)
@@ -399,8 +494,19 @@ def test_frontend_requires_datetime_only_for_scheduled_visit_and_sends_iso():
         "scheduled_at": "2026-08-30T08:15:00.000Z",
         "notes": "Nota",
     }
-    ordinary = run_js("buildMatchDecisionPayload", {"action": "interested", "scheduled_at": ""})
-    assert ordinary == {"action": "interested"}
+    for action in (
+        "proposed",
+        "discarded",
+        "interested",
+        "visit_requested",
+        "visited",
+        "offer_candidate",
+    ):
+        values = {"action": action, "scheduled_at": "2026-08-30T10:15"}
+        if action == "discarded":
+            values["reason_code"] = "buyer_decision"
+        ordinary = run_js("buildMatchDecisionPayload", values)
+        assert "scheduled_at" not in ordinary
 
 
 def test_frontend_guards_double_submit_and_preserves_safe_links():

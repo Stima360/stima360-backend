@@ -187,7 +187,7 @@
         <h2 id="actionTitle">Registra azione</h2>
         <input type="hidden" name="match_id">
         <label>Azione<select name="action"><option value="proposed">Proposto</option><option value="discarded">Scartato</option><option value="interested">Interessato</option><option value="visit_requested">Visita richiesta</option><option value="visit_scheduled">Visita programmata</option><option value="visited">Visitato</option><option value="offer_candidate">Possibile offerta</option></select></label>
-        <label id="actionScheduledAtField" hidden>Data e ora visita<input name="scheduled_at" type="datetime-local" disabled></label>
+        <label id="actionScheduledAtField" hidden style="display:none">Data e ora visita<input name="scheduled_at" type="datetime-local" disabled></label>
         <label>Motivo<select name="reason_code"><option value="">—</option><option>price_too_high</option><option>wrong_location</option><option>too_small</option><option>too_large</option><option>missing_elevator</option><option>wrong_floor</option><option>poor_condition</option><option>no_parking</option><option>no_outdoor_space</option><option>already_seen</option><option>not_available</option><option>buyer_decision</option><option>agent_decision</option><option>other</option></select></label>
         <label>Note<textarea name="notes"></textarea></label>
         <menu><button type="button" class="secondary" id="actionCancel">Annulla</button><button type="submit" id="actionSubmit">Registra</button></menu>

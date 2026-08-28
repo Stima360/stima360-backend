@@ -492,6 +492,7 @@ function updateActionScheduleField(){
   const input=form.querySelector('[name=scheduled_at]');
   const scheduled=form.querySelector('[name=action]').value==='visit_scheduled';
   field.hidden=!scheduled;
+  field.style.display=scheduled?'block':'none';
   input.disabled=!scheduled;
   input.required=scheduled;
   if(!scheduled)input.value='';
