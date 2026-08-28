@@ -20,7 +20,14 @@ def add_interaction(i,p): return repository.add_interaction(i,dump(p))
 def update_interaction(i,p): return repository.update_interaction(i,dump(p,True))
 def delete_interaction(i): return repository.delete_interaction(i)
 def match_decision(i,match_id,p):
-    data=dump(p);data['match_id']=match_id;data['interaction_type']=data.pop('action');return repository.add_interaction(i,data)
+    data=dump(p)
+    action=data.pop('action')
+    if action == 'visit_scheduled':
+        return repository.schedule_match_visit(i,match_id,data)
+    data.pop('scheduled_at',None)
+    data['match_id']=match_id
+    data['interaction_type']=action
+    return repository.add_interaction(i,data)
 def create_task(i,p): return repository.create_task(i,dump(p))
 def list_tasks(i): return repository.list_tasks(i)
 def unlink_task(i): return repository.unlink_task(i)

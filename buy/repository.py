@@ -9,7 +9,7 @@ from core.exceptions import NotFoundError, ConflictError, ValidationError
 RELEVANT_FIELDS={'budget_min','budget_target','budget_max','budget_flexibility_percent','includes_agency_fees','includes_renovation','finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','surface_min','surface_target','surface_max','rooms_min','bedrooms_min','bathrooms_min','status','urgency','target_purchase_date'}
 FINANCE_FIELDS={'finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','finance_review_at','finance_notes'}
 NEXT_ACTION_FIELDS={'next_action_at','next_action_note'}
-MATCH_STATUS={'proposed':'suggested','discarded':'rejected','interested':'interested','visit_requested':'visit_requested','visit_scheduled':'visit_requested','visited':'visited','offer_candidate':'interested'}
+MATCH_STATUS={'proposed':'suggested','discarded':'rejected','interested':'interested','visit_requested':'visit_requested','visit_scheduled':'visit_scheduled','visited':'visited','offer_candidate':'interested'}
 HISTORY_EVENT={'proposed':'match_proposed','discarded':'match_discarded','interested':'match_interested','visit_requested':'visit_requested','visit_scheduled':'visit_scheduled','visited':'visited','offer_candidate':'offer_candidate','other':'note'}
 
 def _jsonable(value):
@@ -145,6 +145,30 @@ def add_interaction(request_id,data):
         if match_id and action in MATCH_STATUS:
             cur.execute('UPDATE matches SET commercial_status=%s,last_reviewed_at=NOW(),updated_at=NOW() WHERE id=%s',(MATCH_STATUS[action],match_id))
         history(cur,request_id,HISTORY_EVENT[action],result.get('notes') or action,match_id=match_id,property_id=property_id,reason_code=result.get('reason_code'),new_value={'interaction_type':action})
+        return result
+
+def schedule_match_visit(request_id,match_id,data):
+    data=dict(data);scheduled_at=data.pop('scheduled_at',None)
+    if scheduled_at is None:raise ValidationError('scheduled_at is required when scheduling a visit')
+    with core_cursor(commit=True) as (_,cur):
+        cur.execute('SELECT contact_id,lead_id FROM buy_requests WHERE id=%s FOR UPDATE',(request_id,));buy=cur.fetchone()
+        if not buy:raise NotFoundError(f'buy request {request_id} not found')
+        cur.execute('SELECT property_id,buy_request_id FROM matches WHERE id=%s FOR UPDATE',(match_id,));match=cur.fetchone()
+        if not match:raise NotFoundError(f'match {match_id} not found')
+        if match['buy_request_id']!=request_id:raise ValidationError('match does not belong to buy request')
+        property_id=match['property_id']
+        cur.execute("""SELECT i.* FROM buy_request_interactions i JOIN property_visits v ON v.id=i.property_visit_id
+        WHERE i.buy_request_id=%s AND i.match_id=%s AND i.interaction_type='visit_scheduled' AND v.scheduled_at=%s
+        ORDER BY i.id DESC LIMIT 1""",(request_id,match_id,scheduled_at));existing=cur.fetchone()
+        if existing:return row(existing)
+        cur.execute("""INSERT INTO property_visits(property_id,contact_id,lead_id,scheduled_at,status,created_by)
+        VALUES(%s,%s,%s,%s,%s,%s) RETURNING *""",(property_id,buy['contact_id'],buy['lead_id'],scheduled_at,'scheduled',data.get('created_by')));visit=row(cur.fetchone())
+        interaction={'buy_request_id':request_id,'match_id':match_id,'property_id':property_id,'property_visit_id':visit['id'],'interaction_type':'visit_scheduled','reason_code':data.get('reason_code'),'notes':data.get('notes'),'occurred_at':data.get('occurred_at'),'created_by':data.get('created_by')}
+        if interaction['occurred_at'] is None:interaction.pop('occurred_at')
+        cols=list(interaction)
+        cur.execute(f"INSERT INTO buy_request_interactions({','.join(cols)}) VALUES({','.join(['%s']*len(cols))}) RETURNING *",list(interaction.values()));result=row(cur.fetchone())
+        cur.execute('UPDATE matches SET commercial_status=%s,last_reviewed_at=NOW(),updated_at=NOW() WHERE id=%s',(MATCH_STATUS['visit_scheduled'],match_id))
+        history(cur,request_id,HISTORY_EVENT['visit_scheduled'],result.get('notes') or 'visit_scheduled',match_id=match_id,property_id=property_id,reason_code=result.get('reason_code'),new_value={'interaction_type':'visit_scheduled'})
         return result
 
 def update_interaction(interaction_id,data):

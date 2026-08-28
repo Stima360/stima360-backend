@@ -9,6 +9,7 @@ const CHILD_KINDS=['locations','typologies','features'];
 
 let current=null;
 let credentials=null;
+let actionSubmitPending=false;
 
 const $=selector=>document.querySelector(selector);
 const money=value=>value==null?'—':new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(value);
@@ -117,6 +118,24 @@ function buildFeaturePayload(values){
   }else{
     payload.value_text=String(values.value_text??'').trim();
     if(!payload.value_text)throw new Error('Valore testuale obbligatorio');
+  }
+  return payload;
+}
+
+function buildMatchDecisionPayload(values){
+  const action=String(values.action||'');
+  const allowed=['proposed','discarded','interested','visit_requested','visit_scheduled','visited','offer_candidate'];
+  if(!allowed.includes(action))throw new Error('Azione non valida');
+  const payload={action};
+  for(const field of ['reason_code','notes']){
+    if(values[field]!==undefined&&values[field]!==null&&String(values[field])!=='')payload[field]=String(values[field]);
+  }
+  if(action==='visit_scheduled'){
+    const raw=String(values.scheduled_at||'').trim();
+    if(!raw)throw new Error('Data e ora visita obbligatorie');
+    const scheduledAt=new Date(raw);
+    if(Number.isNaN(scheduledAt.getTime()))throw new Error('Data e ora visita non valide');
+    payload.scheduled_at=scheduledAt.toISOString();
   }
   return payload;
 }
@@ -366,6 +385,7 @@ function openAction(matchId){
   const title=match?.property_title||match?.property_code||'Immobile';
   $('#actionTitle').textContent='Esito: '+title;
   $('#actionForm [name=match_id]').value=id;
+  updateActionScheduleField();
   $('#actionModal').showModal();
 }
 
@@ -466,6 +486,17 @@ function updateFeatureFields(){
   textFields.querySelectorAll('input,select').forEach(input=>{input.disabled=textFields.hidden;});
 }
 
+function updateActionScheduleField(){
+  const form=$('#actionForm');
+  const field=$('#actionScheduledAtField');
+  const input=form.querySelector('[name=scheduled_at]');
+  const scheduled=form.querySelector('[name=action]').value==='visit_scheduled';
+  field.hidden=!scheduled;
+  input.disabled=!scheduled;
+  input.required=scheduled;
+  if(!scheduled)input.value='';
+}
+
 function bindUi(){
   $('#actionCancel').onclick=()=>$('#actionModal').close();
   $('#taskCancel').onclick=()=>$('#taskModal').close();
@@ -483,6 +514,7 @@ function bindUi(){
   $('#status').onchange=()=>load();
   $('#priority').onchange=()=>load();
   $('#featureForm [name=value_type]').onchange=updateFeatureFields;
+  $('#actionForm [name=action]').onchange=updateActionScheduleField;
 
   $('#form').onsubmit=async event=>{
     event.preventDefault();
@@ -521,17 +553,28 @@ function bindUi(){
 
   $('#actionForm').onsubmit=async event=>{
     event.preventDefault();
+    if(actionSubmitPending)return;
     const requestId=positiveId(current?.id);
     const values=formValues(event.target);
     const matchId=positiveId(values.match_id);
     if(requestId===null||matchId===null)return;
-    const body=Object.fromEntries(Object.entries(values).filter(([key,value])=>key!=='match_id'&&value!==''));
-    await req(`${api}/requests/${requestId}/matches/${matchId}/decision`,{method:'POST',body:JSON.stringify(body)});
-    $('#actionModal').close();
-    event.target.reset();
-    toast('Esito registrato');
-    await detail(requestId);
-    await dashboard();
+    const submit=$('#actionSubmit');
+    actionSubmitPending=true;
+    submit.disabled=true;
+    try{
+      const body=buildMatchDecisionPayload(values);
+      await req(`${api}/requests/${requestId}/matches/${matchId}/decision`,{method:'POST',body:JSON.stringify(body)});
+      $('#actionModal').close();
+      event.target.reset();
+      updateActionScheduleField();
+      toast('Esito registrato');
+      await detail(requestId);
+      await dashboard();
+    }catch(error){toast('Errore: '+error.message);}
+    finally{
+      actionSubmitPending=false;
+      submit.disabled=false;
+    }
   };
 
   $('#taskForm').onsubmit=async event=>{
@@ -551,11 +594,12 @@ function bindUi(){
   $('#login-form').addEventListener('submit',login);
   $('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));
   updateFeatureFields();
+  updateActionScheduleField();
   showLogin();
 }
 
 if(typeof document!=='undefined')bindUi();
 
 if(typeof module!=='undefined'&&module.exports){
-  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,childCollectionUrl,childItemUrl};
+  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,buildMatchDecisionPayload,childCollectionUrl,childItemUrl};
 }

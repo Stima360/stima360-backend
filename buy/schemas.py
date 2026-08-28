@@ -160,12 +160,14 @@ class MatchDecision(BuyModel):
     notes: str | None = None
     occurred_at: datetime | None = None
     created_by: str | None = None
+    scheduled_at: datetime | None = None
     @root_validator(skip_on_failure=True)
     def validate_action(cls,v):
         if v.get('action') not in INTERACTION_TYPES - {'other'}: raise ValueError('invalid action')
         reason=v.get('reason_code')
         if reason is not None and reason not in REJECTION_REASONS: raise ValueError('invalid reason_code')
         if v.get('action') == 'discarded' and not reason: raise ValueError('reason_code is required when discarding a match')
+        if v.get('action') == 'visit_scheduled' and v.get('scheduled_at') is None: raise ValueError('scheduled_at is required when scheduling a visit')
         return v
 
 class BuyTaskCreate(BuyModel):
