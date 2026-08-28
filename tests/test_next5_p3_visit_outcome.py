@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import subprocess
 from contextlib import contextmanager
@@ -538,6 +539,7 @@ def run_export(function_name, *arguments):
     result = subprocess.run(
         ["node", "-e", script],
         cwd=ROOT,
+        env={**os.environ, "TZ": "Europe/Rome"},
         capture_output=True,
         text=True,
         check=False,
@@ -695,3 +697,51 @@ const slow=async()=>{calls+=1;await gate;return {id:1}};
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"during": 1, "calls": 4, "failed": True}
+
+
+def test_property_visit_status_only_patch_preserves_instant_and_rome_display():
+    original = "2026-08-29T08:00:00.000Z"
+    local = run_export("visitDateTimeLocal", original)
+    payload = run_export(
+        "buildVisitPayload",
+        {
+            "scheduled_at": local,
+            "status": "completed",
+            "contact_id": 31,
+            "lead_id": 41,
+            "outcome": None,
+            "rating": 4,
+            "feedback": "Visita completata",
+        },
+        original,
+    )
+
+    assert local == "2026-08-29T10:00"
+    assert "scheduled_at" not in payload
+    assert "10:00" in run_export("dt", original)
+
+    from property.schemas import VisitUpdate
+
+    backend_patch = VisitUpdate(status="completed").model_dump(exclude_unset=True)
+    assert backend_patch == {"status": "completed"}
+
+
+def test_property_visit_intentional_time_change_sends_single_utc_conversion():
+    original = "2026-08-29T08:00:00.000Z"
+    payload = run_export(
+        "buildVisitPayload",
+        {
+            "scheduled_at": "2026-08-29T11:30",
+            "status": "completed",
+            "contact_id": 31,
+            "lead_id": 41,
+            "outcome": None,
+            "rating": None,
+            "feedback": None,
+        },
+        original,
+    )
+
+    assert payload["scheduled_at"] == "2026-08-29T09:30:00.000Z"
+    assert run_export("visitDateTimeLocal", payload["scheduled_at"]) == "2026-08-29T11:30"
+    assert "11:30" in run_export("dt", payload["scheduled_at"])
