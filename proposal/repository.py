@@ -91,6 +91,7 @@ def _history_value(proposal: dict) -> dict:
 
 def create_proposal(data: dict, created_by: str):
     data = dict(data)
+    data["idempotency_key"] = str(data["idempotency_key"])
     with core_cursor(commit=True) as (_, cur):
         relation = _relation(cur, data["match_id"], lock=True)
         cur.execute(

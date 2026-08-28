@@ -15,6 +15,7 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError as PydanticValidationError
+from psycopg2.extensions import adapt
 
 from core.exceptions import ConflictError, ValidationError
 from integration_p2_support import import_main_app
@@ -57,7 +58,7 @@ def _json_value(value):
 
 
 class ProposalDatabase:
-    def __init__(self, *, fail_history=False):
+    def __init__(self, *, fail_history=False, cursor_class=None):
         self.state = {
             "buy_requests": {
                 7: {"id": 7, "contact_id": 31, "lead_id": 41, "title": "Casa mare", "archived_at": None},
@@ -83,6 +84,7 @@ class ProposalDatabase:
             "tasks": [],
         }
         self.fail_history = fail_history
+        self.cursor_class = cursor_class or ProposalCursor
         self.transactions = 0
         self.commits = 0
         self.rollbacks = 0
@@ -92,7 +94,7 @@ class ProposalDatabase:
     def cursor(self, commit=False):
         self.transactions += 1
         staged = copy.deepcopy(self.state)
-        cursor = ProposalCursor(self, staged)
+        cursor = self.cursor_class(self, staged)
         try:
             yield object(), cursor
         except Exception:
@@ -248,6 +250,13 @@ class ProposalCursor:
 
     def fetchall(self):
         return copy.deepcopy(self.rows)
+
+
+class AdaptingProposalCursor(ProposalCursor):
+    def execute(self, query, params=()):
+        for value in params:
+            adapt(value).getquoted()
+        return super().execute(query, params)
 
 
 def test_migration_up_and_down_define_only_the_proposal_domain_and_buy_history_events():
@@ -466,6 +475,26 @@ def test_idempotency_returns_same_proposal_for_same_payload_and_conflicts_on_dif
 
     with pytest.raises(ConflictError, match="idempotency"):
         repository.create_proposal({**payload, "amount": Decimal("190000.00")}, "giorgio")
+
+
+def test_service_create_uses_psycopg2_adaptable_uuid_and_preserves_idempotency(monkeypatch):
+    repository = proposal_module("repository")
+    schemas = proposal_module("schemas")
+    service = proposal_module("service")
+    database = ProposalDatabase(cursor_class=AdaptingProposalCursor)
+    monkeypatch.setattr(repository, "core_cursor", database.cursor)
+    model = schemas.ProposalCreate(**create_payload())
+
+    first = service.create_proposal(model, "giorgio")
+    second = service.create_proposal(model, "giorgio")
+
+    assert second["id"] == first["id"]
+    assert len(database.state["proposals"]) == 1
+    with pytest.raises(ConflictError, match="idempotency"):
+        service.create_proposal(
+            schemas.ProposalCreate(**create_payload(amount=Decimal("190000.00"))),
+            "giorgio",
+        )
 
 
 def test_idempotency_compares_timestamptz_round_trip_by_instant(monkeypatch):
