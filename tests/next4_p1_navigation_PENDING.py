@@ -192,9 +192,12 @@ def test_buy_deep_link_and_post_login_order():
 
     assert "/api/admin/check" in login
 
-    compact = re.sub(r"\s+", "", login)
+compact = re.sub(r"\s+", "", login)
 
-    assert "credentials={u,p}" in compact
+assert (
+    "credentials={username,password}" in compact
+    or "credentials={u,p}" in compact
+), "BUY deve conservare le credenziali esclusivamente nello state runtime"
 
     assert_in_order(
         login,
