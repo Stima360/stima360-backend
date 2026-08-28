@@ -17,7 +17,7 @@ EXPECTED_COUNTS = {
     "/api/core": 19,
     "/api/property": 21,
     "/api/buy": 23,
-    "/api/match": 25,
+    "/api/match": 26,
 }
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 
@@ -46,17 +46,17 @@ def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
     return operations
 
 
-def test_1_all_88_routes_are_still_mounted(app):
+def test_1_all_89_routes_are_still_mounted(app):
     operations = openapi_operations(app)
     for prefix, expected in EXPECTED_COUNTS.items():
         actual = sum(1 for _, path, _ in operations if path.startswith(prefix))
         assert actual == expected
-    assert len(operations) == 88
+    assert len(operations) == 89
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 88
+    assert len(operations) == 89
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

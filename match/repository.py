@@ -9,6 +9,7 @@ from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .engine import calculate
 from .enums import ALGORITHM_VERSION, MODULE_VERSION, ACTIVE_PROPERTY_STATUSES
+from .readiness import match_readiness, require_ready
 from .refresh import changed_fields as _refresh_changed_fields, requires_review
 
 
@@ -53,6 +54,39 @@ def _property(cur, property_id):
     return data
 
 
+def _buy_for_readiness(cur, request_id):
+    cur.execute("SELECT * FROM buy_requests WHERE id=%s", (request_id,))
+    row = cur.fetchone()
+    if not row:
+        raise NotFoundError(f"buy request {request_id} not found")
+    data = dict(row)
+    for key, table in (
+        ("locations", "buy_request_locations"),
+        ("typologies", "buy_request_typologies"),
+        ("features", "buy_request_features"),
+    ):
+        cur.execute(f"SELECT * FROM {table} WHERE buy_request_id=%s ORDER BY id", (request_id,))
+        data[key] = [dict(x) for x in cur.fetchall()]
+    return data
+
+
+def _property_for_readiness(cur, property_id):
+    cur.execute("SELECT * FROM properties WHERE id=%s", (property_id,))
+    row = cur.fetchone()
+    if not row:
+        raise NotFoundError(f"property {property_id} not found")
+    return dict(row)
+
+
+def get_readiness(buy_request_id=None, property_id=None):
+    if buy_request_id is None and property_id is None:
+        raise ValidationError("buy_request_id o property_id richiesto")
+    with core_cursor() as (_, cur):
+        buy = _buy_for_readiness(cur, buy_request_id) if buy_request_id is not None else None
+        prop = _property_for_readiness(cur, property_id) if property_id is not None else None
+    return match_readiness(buy, prop)
+
+
 def _is_excluded(cur, buy_request_id, property_id):
     cur.execute(
         """SELECT id FROM match_exclusions
@@ -68,6 +102,7 @@ def calculate_pair(buy_request_id, property_id, run_type="single", created_by=No
     with core_cursor(commit=True) as (_, cur):
         buy = _buy(cur, buy_request_id)
         prop = _property(cur, property_id)
+        require_ready(buy, prop)
         if _is_excluded(cur, buy_request_id, property_id):
             raise ConflictError("pair is excluded")
 
@@ -186,7 +221,8 @@ def calculate_pair(buy_request_id, property_id, run_type="single", created_by=No
 
 def calculate_for_buy(request_id, created_by=None):
     with core_cursor() as (_, cur):
-        _buy(cur, request_id)
+        buy = _buy(cur, request_id)
+        require_ready(buy=buy)
         cur.execute(
             "SELECT id FROM properties WHERE archived_at IS NULL AND commercial_status=ANY(%s) ORDER BY id",
             (list(ACTIVE_PROPERTY_STATUSES),),
@@ -205,7 +241,8 @@ def calculate_for_buy(request_id, created_by=None):
 
 def calculate_for_property(property_id, created_by=None):
     with core_cursor() as (_, cur):
-        _property(cur, property_id)
+        prop = _property(cur, property_id)
+        require_ready(prop=prop)
         cur.execute("SELECT id FROM buy_requests WHERE status='active' AND archived_at IS NULL ORDER BY id")
         ids = [x["id"] for x in cur.fetchall()]
     items, errors = [], []
@@ -529,11 +566,17 @@ def _refresh_ids(filters, params, trigger_source, created_by=None, trigger_reaso
 
 
 def refresh_for_buy(request_id, created_by=None, trigger_reason=None):
+    with core_cursor() as (_, cur):
+        buy = _buy(cur, request_id)
+        require_ready(buy=buy)
     detect_stale(buy_request_id=request_id)
     return _refresh_ids(["m.buy_request_id=%s", "m.freshness_status IN ('stale','failed')"], [request_id], "buy", created_by, trigger_reason)
 
 
 def refresh_for_property(property_id, created_by=None, trigger_reason=None):
+    with core_cursor() as (_, cur):
+        prop = _property(cur, property_id)
+        require_ready(prop=prop)
     detect_stale(property_id=property_id)
     return _refresh_ids(["m.property_id=%s", "m.freshness_status IN ('stale','failed')"], [property_id], "property", created_by, trigger_reason)
 

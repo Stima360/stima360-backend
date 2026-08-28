@@ -40,6 +40,14 @@ def dashboard_review(limit: int = Query(100, ge=1, le=500)):
     return {"items": tr(service.dashboard_review, limit)}
 
 
+@router.get("/readiness")
+def readiness(
+    buy_request_id: int | None = Query(None, gt=0),
+    property_id: int | None = Query(None, gt=0),
+):
+    return tr(service.get_readiness, buy_request_id, property_id)
+
+
 @router.post("/calculate", status_code=201)
 def calculate_pair(payload: SingleMatchRequest):
     return tr(service.calculate_pair, payload)

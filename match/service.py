@@ -17,6 +17,10 @@ def calculate_for_property(property_id, payload):
     return repository.calculate_for_property(property_id, payload.created_by)
 
 
+def get_readiness(buy_request_id=None, property_id=None):
+    return repository.get_readiness(buy_request_id, property_id)
+
+
 def list_matches(*args):
     return repository.list_matches(*args)
 
