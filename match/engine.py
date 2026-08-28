@@ -150,7 +150,7 @@ def _feature_score(feature, prop):
     wanted = feature.get("value_boolean") if vtype == "boolean" else feature.get("value_text")
     matched = False
     if vtype == "boolean":
-        matched = bool(actual) == bool(wanted)
+        matched = actual is not None and bool(actual) == bool(wanted)
     elif vtype in ("number", "range"):
         number = _num(actual)
         low, high = _num(feature.get("value_min")), _num(feature.get("value_max"))
