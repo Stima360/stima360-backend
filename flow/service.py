@@ -74,19 +74,74 @@ def process_saved_event(event_id):
         raise
 
 
+def _scan_failure(code, stage, error, entity_type=None, entity_id=None, mode="simulation", requested_by=None):
+    item={
+        "status":"failed",
+        "rule_code":code,
+        "stage":stage,
+        "entity_type":entity_type,
+        "entity_id":entity_id,
+        "error_message":str(error),
+    }
+    if entity_type is not None and entity_id is not None:
+        try:
+            saved=repository.record_failure(code,entity_type,entity_id,mode,str(error),requested_by)
+            item={**saved,**item}
+        except Exception as persistence_error:
+            item["persistence_error"]=str(persistence_error)
+    return item
+
+
 def scan(payload):
-    data=dump(payload); codes=data.get("rule_codes") or [r["code"] for r in repository.list_rules() if r["is_active"] or data.get("simulation")]
-    results=[]; remaining=data["limit"]
+    data=dump(payload); repository.sync_rules()
+    codes=data.get("rule_codes")
+    if not codes:
+        codes=[r["code"] for r in repository.list_rules(synchronize=False) if r["is_active"] or data.get("simulation")]
+    results=[]; plans=[]
     for code in codes:
-        if remaining<=0: break
-        row=repository.get_rule_row(code); rule=get_rule(code); p=rule.validate_parameters(dict(row["parameters"])); candidates=scan_candidates(code,p,remaining)
-        for entity_type,entity_id in candidates:
-            entity=load_entity(entity_type,entity_id); matched,reasons=evaluate_rule(code,entity,p); action=build_action(code,entity,p) if matched else None
-            if data["simulation"]: ex=repository.record_simulation(code,entity_type,entity_id,matched,reasons,action,data.get("requested_by"))
-            else: ex=repository.execute_live(code,entity,matched,reasons,action,data.get("requested_by"))
-            results.append(ex); remaining-=1
-            if remaining<=0: break
-    return {"requested_limit":data["limit"],"processed":len(results),"simulation":data["simulation"],"items":results}
+        try:
+            row=repository.get_rule_row(code,synchronize=False); rule=get_rule(code)
+            p=rule.validate_parameters(dict(row["parameters"])); candidates=scan_candidates(code,p,data["limit"])
+            plans.append({"code":code,"parameters":p,"candidates":list(candidates),"offset":0})
+        except Exception as exc:
+            results.append(_scan_failure(code,"adapter",exc,mode="simulation" if data["simulation"] else "live",requested_by=data.get("requested_by")))
+
+    processed=0
+    while processed<data["limit"]:
+        progressed=False
+        for plan in plans:
+            if processed>=data["limit"]: break
+            offset=plan["offset"]
+            if offset>=len(plan["candidates"]): continue
+            progressed=True; plan["offset"]+=1; processed+=1
+            code=plan["code"]; p=plan["parameters"]
+            entity_type,entity_id=plan["candidates"][offset]
+            try:
+                entity=load_entity(entity_type,entity_id)
+            except Exception as exc:
+                results.append(_scan_failure(code,"load",exc,entity_type,entity_id,"simulation" if data["simulation"] else "live",data.get("requested_by")))
+                continue
+            try:
+                matched,reasons=evaluate_rule(code,entity,p); action=build_action(code,entity,p) if matched else None
+            except Exception as exc:
+                results.append(_scan_failure(code,"evaluate",exc,entity_type,entity_id,"simulation" if data["simulation"] else "live",data.get("requested_by")))
+                continue
+            try:
+                if data["simulation"]: ex=repository.record_simulation(code,entity_type,entity_id,matched,reasons,action,data.get("requested_by"))
+                else: ex=repository.execute_live(code,entity,matched,reasons,action,data.get("requested_by"))
+                results.append({"rule_code":code,**dict(ex)})
+            except Exception as exc:
+                results.append(_scan_failure(code,"execute",exc,entity_type,entity_id,"simulation" if data["simulation"] else "live",data.get("requested_by")))
+        if not progressed: break
+
+    failures=sum(1 for item in results if item.get("status")=="failed")
+    skips=sum(1 for item in results if item.get("status")=="skipped")
+    successes=len(results)-failures-skips
+    status="failed" if failures and not successes and not skips else ("partial_failure" if failures else "completed")
+    return {
+        "requested_limit":data["limit"],"processed":processed,"simulation":data["simulation"],"status":status,
+        "successes":successes,"failures":failures,"skips":skips,"items":results,
+    }
 
 
 def retry(execution_id,payload):

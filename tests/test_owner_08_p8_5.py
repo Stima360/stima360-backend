@@ -58,11 +58,31 @@ class FakeCursor:
         self.state = state
         self.current = None
         self.rowcount = 0
+        self.savepoint = None
 
     def execute(self, sql, params=None):
         q = " ".join(str(sql).split())
         self.current = None
         self.rowcount = 0
+
+        if q == "SAVEPOINT flow_action":
+            self.savepoint = (
+                copy.deepcopy(self.state.actions),
+                copy.deepcopy(self.state.executions),
+                copy.deepcopy(self.state.tasks),
+            )
+            return
+
+        if q == "ROLLBACK TO SAVEPOINT flow_action":
+            actions, executions, tasks = self.savepoint
+            self.state.actions = actions
+            self.state.executions = executions
+            self.state.tasks = tasks
+            return
+
+        if q == "RELEASE SAVEPOINT flow_action":
+            self.savepoint = None
+            return
 
         if q.startswith("INSERT INTO flow_executions"):
             self.state.execution_seq += 1
@@ -196,6 +216,7 @@ def _install_fake_runtime(monkeypatch, state: FakeState):
     def fake_cursor(commit=False):
         actions_snapshot = copy.deepcopy(state.actions)
         executions_snapshot = copy.deepcopy(state.executions)
+        tasks_snapshot = copy.deepcopy(state.tasks)
         cursor = FakeCursor(state)
         try:
             yield object(), cursor
@@ -203,21 +224,22 @@ def _install_fake_runtime(monkeypatch, state: FakeState):
             if commit:
                 state.actions = actions_snapshot
                 state.executions = executions_snapshot
+                state.tasks = tasks_snapshot
             raise
 
     monkeypatch.setattr(repository, "core_cursor", fake_cursor)
     monkeypatch.setattr(
         repository,
-        "get_rule_row",
-        lambda code: {
+        "_get_rule_row_with_cursor",
+        lambda cur, code: {
             "id": 8 if code == "FLOW-R008" else 1,
             "is_active": True,
             "parameters": dict((OWNER_RULES if code == "FLOW-R008" else RULES)[code].default_parameters),
         },
     )
-    monkeypatch.setattr(repository, "is_suppressed", lambda *args: False)
+    monkeypatch.setattr(repository, "_is_suppressed_with_cursor", lambda *args: False)
 
-    def fake_create_task(data):
+    def fake_create_task(cur, data):
         state.create_task_calls += 1
         if state.fail_create_task_once:
             state.fail_create_task_once = False
@@ -230,7 +252,7 @@ def _install_fake_runtime(monkeypatch, state: FakeState):
         state.tasks[idem] = task
         return task
 
-    monkeypatch.setattr(repository.core_repository, "create_task", fake_create_task)
+    monkeypatch.setattr(repository.core_repository, "create_task_with_cursor", fake_create_task)
 
 
 def test_failed_task_creation_is_recoverable_without_duplicate(monkeypatch):
@@ -240,7 +262,7 @@ def test_failed_task_creation_is_recoverable_without_duplicate(monkeypatch):
 
     first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701)
     assert first["status"] == "failed"
-    assert state.actions["FLOW-R008:event:701"]["status"] == "failed"
+    assert state.actions == {}
     assert state.tasks == {}
 
     recovered = repository.execute_live(
@@ -257,15 +279,15 @@ def test_failed_task_creation_is_recoverable_without_duplicate(monkeypatch):
     assert len(state.tasks) == 1
 
 
-def test_task_created_then_finalize_failure_reconciles_existing_task(monkeypatch):
+def test_task_and_action_rollback_when_finalize_fails_then_retry_recovers(monkeypatch):
     state = FakeState()
     state.fail_finalize_once = True
     _install_fake_runtime(monkeypatch, state)
 
     first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=702)
     assert first["status"] == "failed"
-    assert len(state.tasks) == 1
-    assert state.actions["FLOW-R008:event:702"]["status"] == "failed"
+    assert state.tasks == {}
+    assert state.actions == {}
     assert state.create_task_calls == 1
 
     recovered = repository.execute_live(
@@ -273,7 +295,7 @@ def test_task_created_then_finalize_failure_reconciles_existing_task(monkeypatch
     )
     assert recovered["status"] == "executed"
     assert len(state.tasks) == 1
-    assert state.create_task_calls == 1
+    assert state.create_task_calls == 2
     action = state.actions["FLOW-R008:event:702"]
     assert action["status"] == "completed"
     assert action["target_entity_id"] == next(iter(state.tasks.values()))["id"]

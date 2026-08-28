@@ -10,6 +10,11 @@ from .enums import MAX_RETRY
 
 def _dict(row): return dict(row) if row else None
 
+def _get_rule_row_with_cursor(cur, code):
+    cur.execute("SELECT * FROM flow_rules WHERE code=%s AND archived_at IS NULL",(code,)); row=cur.fetchone()
+    if not row: raise NotFoundError(f"flow rule {code} not found")
+    return dict(row)
+
 def sync_rules():
     items=[]
     with core_cursor(commit=True) as (_,cur):
@@ -34,16 +39,14 @@ def sync_rules():
     return items
 
 
-def list_rules():
-    sync_rules()
+def list_rules(synchronize=True):
+    if synchronize: sync_rules()
     with core_cursor() as (_,cur): cur.execute("SELECT * FROM flow_rules WHERE archived_at IS NULL ORDER BY code"); return [dict(x) for x in cur.fetchall()]
 
-def get_rule_row(code):
-    sync_rules()
+def get_rule_row(code, synchronize=True):
+    if synchronize: sync_rules()
     with core_cursor() as (_,cur):
-        cur.execute("SELECT * FROM flow_rules WHERE code=%s AND archived_at IS NULL",(code,)); row=cur.fetchone()
-        if not row: raise NotFoundError(f"flow rule {code} not found")
-        return dict(row)
+        return _get_rule_row_with_cursor(cur,code)
 
 def update_parameters(code, parameters, updated_by=None):
     row=get_rule_row(code); rule=get_rule(code); valid=rule.validate_parameters(parameters)
@@ -59,7 +62,7 @@ def update_parameters(code, parameters, updated_by=None):
 def reset_parameters(code): return update_parameters(code,get_rule(code).default_parameters)
 
 def record_simulation(code, entity_type, entity_id, matched, reasons, action, requested_by=None, error=None):
-    row=get_rule_row(code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
+    row=get_rule_row(code,synchronize=False); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
     status='failed' if error else ('matched' if matched else 'not_matched')
     with core_cursor(commit=True) as (_,cur):
         cur.execute("""INSERT INTO flow_executions(rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
@@ -113,7 +116,10 @@ def list_events(limit=100,offset=0,status=None):
 
 def is_suppressed(rule_id,entity_type,entity_id):
     with core_cursor() as (_,cur):
-        cur.execute("SELECT 1 FROM flow_suppressions WHERE rule_id=%s AND entity_type=%s AND entity_id=%s AND (expires_at IS NULL OR expires_at>NOW())",(rule_id,entity_type,entity_id)); return bool(cur.fetchone())
+        return _is_suppressed_with_cursor(cur,rule_id,entity_type,entity_id)
+
+def _is_suppressed_with_cursor(cur,rule_id,entity_type,entity_id):
+    cur.execute("SELECT 1 FROM flow_suppressions WHERE rule_id=%s AND entity_type=%s AND entity_id=%s AND (expires_at IS NULL OR expires_at>NOW())",(rule_id,entity_type,entity_id)); return bool(cur.fetchone())
 
 def _idempotency_key(code,entity_type,entity_id,cooldown):
     if cooldown<=0: bucket=datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')
@@ -122,22 +128,22 @@ def _idempotency_key(code,entity_type,entity_id,cooldown):
     return f"{code}:{entity_type}:{entity_id}:{bucket}"
 
 def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=None,retry_of_execution_id=None):
-    row=get_rule_row(code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
-    if not row['is_active']: raise ConflictError("rule is not active")
-    if is_suppressed(row['id'],entity['entity_type'],entity['entity_id']):
-        matched=False; reasons=[*reasons,'soppressione attiva']
-    if rule.idempotency_scope=='event' and event_id is not None:
-        idem=f"{code}:event:{event_id}"
-    else:
-        idem=_idempotency_key(code,entity['entity_type'],entity['entity_id'],int(p.get('cooldown_minutes',0)))
     with core_cursor(commit=True) as (_,cur):
+        row=_get_rule_row_with_cursor(cur,code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
+        if not row['is_active']: raise ConflictError("rule is not active")
+        if _is_suppressed_with_cursor(cur,row['id'],entity['entity_type'],entity['entity_id']):
+            matched=False; reasons=[*reasons,'soppressione attiva']
+        if rule.idempotency_scope=='event' and event_id is not None:
+            idem=f"{code}:event:{event_id}"
+        else:
+            idem=_idempotency_key(code,entity['entity_type'],entity['entity_id'],int(p.get('cooldown_minutes',0)))
         cur.execute("""INSERT INTO flow_executions(event_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,retry_count,max_retry,retry_of_execution_id,started_at,created_at)
             VALUES(%s,%s,%s,%s,'live',%s,%s,%s,%s,%s,%s,0,%s,%s,NOW(),NOW()) RETURNING *""",
             (event_id,row['id'],entity['entity_type'],entity['entity_id'],'matched' if matched else 'not_matched',Json({'matched':matched,'reasons':reasons}),Json({}),rule.version,Json(p),h,MAX_RETRY,retry_of_execution_id)); ex=dict(cur.fetchone())
-    if not matched:
-        with core_cursor(commit=True) as (_,cur): cur.execute("UPDATE flow_executions SET status='not_matched',completed_at=NOW() WHERE id=%s RETURNING *",(ex['id'],)); return dict(cur.fetchone())
-    try:
-        with core_cursor(commit=True) as (_,cur):
+        if not matched:
+            cur.execute("UPDATE flow_executions SET status='not_matched',completed_at=NOW() WHERE id=%s RETURNING *",(ex['id'],)); return dict(cur.fetchone())
+        cur.execute("SAVEPOINT flow_action")
+        try:
             cur.execute("""INSERT INTO flow_action_records(execution_id,action_type,target_module,target_entity_type,idempotency_key,payload,status,created_at)
                 VALUES(%s,%s,'core','task',%s,%s,'pending',NOW()) ON CONFLICT(idempotency_key) DO NOTHING RETURNING *""",(ex['id'],action['action_type'],idem,Json(action)))
             ar=cur.fetchone()
@@ -151,7 +157,9 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
                 if ar['status']=='completed':
                     result={'task_id':ar.get('target_entity_id')} if ar.get('target_entity_id') is not None else {}
                     cur.execute("UPDATE flow_executions SET status='skipped',actions_result=%s,completed_at=NOW() WHERE id=%s RETURNING *",(Json({'reason':'duplicate_or_cooldown',**result}),ex['id']))
-                    return dict(cur.fetchone())
+                    skipped=dict(cur.fetchone())
+                    cur.execute("RELEASE SAVEPOINT flow_action")
+                    return skipped
 
             if action['action_type']=='create_core_task':
                 if not action.get('contact_id') and not action.get('lead_id'):
@@ -161,7 +169,7 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
                 if existing_task:
                     task={'id':existing_task['id']}
                 else:
-                    task=core_repository.create_task({
+                    task=core_repository.create_task_with_cursor(cur,{
                         'contact_id':action.get('contact_id'),'lead_id':action.get('lead_id'),'stima_id':None,
                         'title':action['title'],'description':action['description'],'task_type':'flow_follow_up','priority':action['priority'],'status':'open',
                         'due_at':datetime.now(timezone.utc)+timedelta(hours=action.get('due_hours',24)),'completed_at':None,
@@ -174,17 +182,22 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
 
             cur.execute("UPDATE flow_action_records SET execution_id=%s,target_entity_type='task',target_entity_id=%s,status='completed',error_message=NULL WHERE id=%s",(ex['id'],result.get('task_id'),ar['id']))
             cur.execute("UPDATE flow_executions SET status='executed',actions_result=%s,error_message=NULL,completed_at=NOW() WHERE id=%s RETURNING *",(Json(result),ex['id']))
+            completed=dict(cur.fetchone())
+            cur.execute("RELEASE SAVEPOINT flow_action")
+            return completed
+        except Exception as exc:
+            cur.execute("ROLLBACK TO SAVEPOINT flow_action")
+            cur.execute("RELEASE SAVEPOINT flow_action")
+            cur.execute("UPDATE flow_executions SET status='failed',error_message=%s,completed_at=NOW() WHERE id=%s RETURNING *",(str(exc),ex['id']))
             return dict(cur.fetchone())
-    except Exception as exc:
-        with core_cursor(commit=True) as (_,cur):
-            cur.execute("""UPDATE flow_action_records
-                SET execution_id=%s,status='failed',error_message=%s
-                WHERE idempotency_key=%s AND status<>'completed'""",(ex['id'],str(exc),idem))
-            if cur.rowcount==0:
-                cur.execute("""INSERT INTO flow_action_records(execution_id,action_type,target_module,target_entity_type,idempotency_key,payload,status,error_message,created_at)
-                    VALUES(%s,%s,'core','task',%s,%s,'failed',%s,NOW()) ON CONFLICT(idempotency_key) DO NOTHING""",(ex['id'],action['action_type'],idem,Json(action),str(exc)))
-            cur.execute("UPDATE flow_executions SET status='failed',error_message=%s,completed_at=NOW() WHERE id=%s RETURNING *",(str(exc),ex['id'])); failed=dict(cur.fetchone())
-        return failed
+
+def record_failure(code,entity_type,entity_id,mode,error,requested_by=None):
+    with core_cursor(commit=True) as (_,cur):
+        row=_get_rule_row_with_cursor(cur,code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
+        cur.execute("""INSERT INTO flow_executions(rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
+            VALUES(%s,%s,%s,%s,'failed',%s,%s,%s,%s,%s,%s,0,%s,NOW(),NOW(),NOW()) RETURNING *""",
+            (row['id'],entity_type,entity_id,mode,Json({'matched':False,'reasons':[]}),Json({}),rule.version,Json(p),h,str(error),MAX_RETRY))
+        return dict(cur.fetchone())
 
 def get_execution(execution_id):
     with core_cursor() as (_,cur):

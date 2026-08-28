@@ -242,24 +242,28 @@ def list_activities(limit: int, offset: int, contact_id: int | None, lead_id: in
         return [dict(row) for row in cur.fetchall()]
 
 
+def create_task_with_cursor(cur, data: dict[str, Any]) -> dict[str, Any]:
+    _validate_references(cur, data)
+    prepared = {**data, "metadata": Json(data.get("metadata") or {})}
+    cur.execute(
+        """
+        INSERT INTO tasks (
+            contact_id, lead_id, stima_id, title, description, task_type,
+            priority, status, due_at, completed_at, assigned_to, created_by, metadata
+        ) VALUES (
+            %(contact_id)s, %(lead_id)s, %(stima_id)s, %(title)s, %(description)s,
+            %(task_type)s, %(priority)s, %(status)s, %(due_at)s, %(completed_at)s,
+            %(assigned_to)s, %(created_by)s, %(metadata)s
+        ) RETURNING *
+        """,
+        prepared,
+    )
+    return _row(cur.fetchone())
+
+
 def create_task(data: dict[str, Any]) -> dict[str, Any]:
     with core_cursor(commit=True) as (_, cur):
-        _validate_references(cur, data)
-        data = {**data, "metadata": Json(data.get("metadata") or {})}
-        cur.execute(
-            """
-            INSERT INTO tasks (
-                contact_id, lead_id, stima_id, title, description, task_type,
-                priority, status, due_at, completed_at, assigned_to, created_by, metadata
-            ) VALUES (
-                %(contact_id)s, %(lead_id)s, %(stima_id)s, %(title)s, %(description)s,
-                %(task_type)s, %(priority)s, %(status)s, %(due_at)s, %(completed_at)s,
-                %(assigned_to)s, %(created_by)s, %(metadata)s
-            ) RETURNING *
-            """,
-            data,
-        )
-        return _row(cur.fetchone())
+        return create_task_with_cursor(cur, data)
 
 
 def list_tasks(limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None, status: str | None):

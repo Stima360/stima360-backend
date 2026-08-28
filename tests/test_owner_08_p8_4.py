@@ -196,8 +196,8 @@ def test_event_bound_key_for_owner_and_legacy_key_for_r001(monkeypatch):
         "FLOW-R008":{"id":8,"is_active":True,"parameters":dict(OWNER_RULES["FLOW-R008"].default_parameters)},
         "FLOW-R001":{"id":1,"is_active":True,"parameters":dict(RULES["FLOW-R001"].default_parameters)},
     }
-    monkeypatch.setattr(repository,"get_rule_row",lambda code:rows[code])
-    monkeypatch.setattr(repository,"is_suppressed",lambda *args:False)
+    monkeypatch.setattr(repository,"_get_rule_row_with_cursor",lambda cur,code:rows[code])
+    monkeypatch.setattr(repository,"_is_suppressed_with_cursor",lambda *args:False)
     monkeypatch.setattr(repository,"_idempotency_key",lambda *args:"LEGACY-KEY")
     class Cursor:
         def __init__(self): self.current=None
@@ -205,13 +205,14 @@ def test_event_bound_key_for_owner_and_legacy_key_for_r001(monkeypatch):
             q=" ".join(str(sql).split())
             if "INSERT INTO flow_executions" in q: self.current={"id":900}
             elif "INSERT INTO flow_action_records" in q: captured.append(params[2]); self.current={"id":901}
+            elif q.startswith("SELECT id FROM tasks"): self.current=None
             elif "UPDATE flow_action_records" in q: self.current=None
             elif "UPDATE flow_executions" in q: self.current={"id":900,"status":"executed"}
         def fetchone(self): return self.current
     @contextmanager
     def fake_cursor(commit=False): yield object(),Cursor()
     monkeypatch.setattr(repository,"core_cursor",fake_cursor)
-    monkeypatch.setattr(repository.core_repository,"create_task",lambda data:{"id":1})
+    monkeypatch.setattr(repository.core_repository,"create_task_with_cursor",lambda cur,data:{"id":1})
     action={"action_type":"create_core_task","title":"x","description":"x","priority":"high","due_hours":4,"contact_id":77,"lead_id":None,"assigned_to":None}
     repository.execute_live("FLOW-R008",owner_entity(),True,[],action,event_id=701)
     legacy_entity={"entity_type":"lead","entity_id":3,"id":3}
