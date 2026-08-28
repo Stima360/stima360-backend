@@ -1,4 +1,6 @@
 from __future__ import annotations
+from decimal import Decimal
+from datetime import date, datetime
 from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
@@ -10,6 +12,17 @@ NEXT_ACTION_FIELDS={'next_action_at','next_action_note'}
 MATCH_STATUS={'proposed':'suggested','discarded':'rejected','interested':'interested','visit_requested':'visit_requested','visit_scheduled':'visit_requested','visited':'visited','offer_candidate':'interested'}
 HISTORY_EVENT={'proposed':'match_proposed','discarded':'match_discarded','interested':'match_interested','visit_requested':'visit_requested','visit_scheduled':'visit_scheduled','visited':'visited','offer_candidate':'offer_candidate','other':'note'}
 
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
 def row(value): return dict(value) if value else None
 
 def ensure(cur,table,item_id,label):
@@ -18,7 +31,7 @@ def ensure(cur,table,item_id,label):
 
 def history(cur, request_id, event_type, description=None, old_value=None, new_value=None, match_id=None, property_id=None, task_id=None, reason_code=None, created_by=None):
     cur.execute("""INSERT INTO buy_request_history(buy_request_id,event_type,match_id,property_id,task_id,reason_code,description,old_value,new_value,created_by)
-    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",(request_id,event_type,match_id,property_id,task_id,reason_code,description,Json(old_value) if old_value is not None else None,Json(new_value) if new_value is not None else None,created_by))
+    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",(request_id,event_type,match_id,property_id,task_id,reason_code,description,Json(_jsonable(old_value)) if old_value is not None else None,Json(_jsonable(new_value)) if new_value is not None else None,created_by))
 
 def create_request(data):
     data=dict(data); data['metadata']=Json(data.get('metadata') or {})
