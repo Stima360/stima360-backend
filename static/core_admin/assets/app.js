@@ -38,7 +38,178 @@ async function loadAll(){const [c,l,a,t]=await Promise.all([api('/contacts?limit
 function contactName(id){const c=state.contacts.find(x=>x.id===id);return c?.display_name||c?.company_name||[c?.first_name,c?.last_name].filter(Boolean).join(' ')||`#${id}`}
 function setView(view){state.view=view;state.selected=null;qsa('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));render()}
 async function refresh(){qs('#content').innerHTML='<div class="card loading">Caricamento…</div>';try{await loadAll();render()}catch(e){qs('#content').innerHTML=`<div class="card empty">Errore: ${esc(e.message)}</div>`}}
-function render(){const titles={dashboard:['Panoramica','Gestione operativa del CORE CRM'],contacts:['Contatti','Anagrafiche, ruoli e stato'],leads:['Lead','Pipeline commerciale e prossime azioni'],activities:['Attività','Cronologia delle interazioni'],tasks:['Task','Azioni operative e scadenze'],contactDetail:['Scheda contatto','Dettaglio, ruoli e relazioni'],contact360:['Contact 360','Vista CRM globale'],leadDetail:['Scheda lead','Pipeline, attività, task e stime collegate']};const [t,s]=titles[state.view]||titles.dashboard;qs('#page-title').textContent=t;qs('#page-subtitle').textContent=s;qs('#quick-add').style.display=['contactDetail','contact360','leadDetail'].includes(state.view)?'none':'';({dashboard:renderDashboard,contacts:renderContacts,leads:renderLeads,activities:renderActivities,tasks:renderTasks,contactDetail:renderContactDetail,contact360:renderContact360,leadDetail:renderLeadDetail}[state.view]||renderDashboard)()}
+function render(){const titles={dashboard:['Panoramica','Gestione operativa del CORE CRM'],agenda:['Agenda','Task CORE, follow-up BUY e visite PROPERTY'],contacts:['Contatti','Anagrafiche, ruoli e stato'],leads:['Lead','Pipeline commerciale e prossime azioni'],activities:['Attività','Cronologia delle interazioni'],tasks:['Task','Azioni operative e scadenze'],contactDetail:['Scheda contatto','Dettaglio, ruoli e relazioni'],contact360:['Contact 360','Vista CRM globale'],leadDetail:['Scheda lead','Pipeline, attività, task e stime collegate']};const [t,s]=titles[state.view]||titles.dashboard;qs('#page-title').textContent=t;qs('#page-subtitle').textContent=s;qs('#quick-add').style.display=['contactDetail','contact360','leadDetail'].includes(state.view)?'none':'';({dashboard:renderDashboard,agenda:renderAgenda,contacts:renderContacts,leads:renderLeads,activities:renderActivities,tasks:renderTasks,contactDetail:renderContactDetail,contact360:renderContact360,leadDetail:renderLeadDetail}[state.view]||renderDashboard)()}
+
+async function renderAgenda(){
+ qs('#content').innerHTML='<div class="card loading">Caricamento agenda…</div>';
+
+ try{
+   const [buyData,visitData]=await Promise.all([
+     api('/api/buy/requests?limit=200'),
+     api('/api/property/visits?limit=500')
+   ]);
+
+   if(state.view!=='agenda')return;
+
+   const now=new Date();
+   const todayEnd=endOfToday();
+
+   const items=[];
+
+   state.tasks
+     .filter(t=>
+       !['completed','cancelled'].includes(t.status) &&
+       t.due_at &&
+       new Date(t.due_at)<=todayEnd
+     )
+     .forEach(t=>{
+       items.push({
+         kind:'task',
+         when:t.due_at,
+         title:t.title||`Task #${t.id}`,
+         detail:t.description||'',
+         status:t.priority||t.status,
+         overdue:new Date(t.due_at)<now
+       });
+     });
+
+   (buyData.items||[])
+     .filter(b=>
+       b.status==='active' &&
+       b.next_action_at &&
+       new Date(b.next_action_at)<=todayEnd
+     )
+     .forEach(b=>{
+       items.push({
+         kind:'buy',
+         id:positiveId(b.id),
+         when:b.next_action_at,
+         title:b.title||`Richiesta #${b.id}`,
+         detail:b.next_action_note||'Follow-up BUY',
+         contact:b.contact_name||'',
+         status:b.priority||b.status,
+         overdue:new Date(b.next_action_at)<now
+       });
+     });
+
+   (visitData.items||[])
+     .filter(v=>
+       ['scheduled','confirmed'].includes(v.status) &&
+       v.scheduled_at &&
+       sameDay(v.scheduled_at)
+     )
+     .forEach(v=>{
+       items.push({
+         kind:'visit',
+         propertyId:positiveId(v.property_id),
+         when:v.scheduled_at,
+         title:v.property_title||`Immobile #${v.property_id}`,
+         detail:v.contact_name?`Visita con ${v.contact_name}`:'Visita PROPERTY',
+         status:v.status,
+         overdue:new Date(v.scheduled_at)<now
+       });
+     });
+
+   items.sort((a,b)=>
+     Number(!a.overdue)-Number(!b.overdue) ||
+     new Date(a.when)-new Date(b.when)
+   );
+
+   const taskCount=items.filter(x=>x.kind==='task').length;
+   const buyCount=items.filter(x=>x.kind==='buy').length;
+   const visitCount=items.filter(x=>x.kind==='visit').length;
+   const overdueCount=items.filter(x=>x.overdue).length;
+
+   const rows=items.map(item=>{
+     const type=item.kind==='task'
+       ?'CORE TASK'
+       :item.kind==='buy'
+         ?'BUY'
+         :'VISITA';
+
+     let title=`<strong>${esc(item.title)}</strong>`;
+
+     if(item.kind==='buy'&&item.id){
+       title=`<a href="/buy-admin/?id=${item.id}" target="_blank" rel="noopener noreferrer"><strong>${esc(item.title)}</strong></a>`;
+     }
+
+     if(item.kind==='visit'&&item.propertyId){
+       title=`<a href="/property-admin/?id=${item.propertyId}" target="_blank" rel="noopener noreferrer"><strong>${esc(item.title)}</strong></a>`;
+     }
+
+     const action=item.kind==='task'
+       ?`<button class="btn small" onclick="setView('tasks')">Apri task</button>`
+       :'';
+
+     return `
+       <div class="list-item ${item.overdue?'overdue':''}">
+         <div class="list-item-head">
+           <div>
+             <span class="badge gray">${type}</span>
+             ${title}
+             <div class="muted">
+               ${esc(item.detail||'')}
+               ${item.contact?` · ${esc(item.contact)}`:''}
+             </div>
+           </div>
+           <div class="actions">
+             ${badge(item.status)}
+             ${action}
+           </div>
+         </div>
+         <div class="muted" style="margin-top:8px">
+           ${item.overdue?'SCADUTO · ':''}${dt(item.when)}
+         </div>
+       </div>`;
+   }).join('');
+
+   qs('#content').innerHTML=`
+     <div class="grid stats daily-stats">
+       <div class="card stat">
+         <div class="label">Totale agenda</div>
+         <div class="value">${items.length}</div>
+         <div class="hint">Oggi + scaduti</div>
+       </div>
+
+       <div class="card stat ${overdueCount?'attention':''}">
+         <div class="label">Scaduti</div>
+         <div class="value">${overdueCount}</div>
+         <div class="hint">Da recuperare</div>
+       </div>
+
+       <div class="card stat">
+         <div class="label">Follow-up BUY</div>
+         <div class="value">${buyCount}</div>
+         <div class="hint">Richieste attive</div>
+       </div>
+
+       <div class="card stat">
+         <div class="label">Visite oggi</div>
+         <div class="value">${visitCount}</div>
+         <div class="hint">Scheduled / confirmed</div>
+       </div>
+     </div>
+
+     <div class="card panel focus-panel">
+       <div class="panel-head">
+         <div>
+           <h2>Agenda operativa</h2>
+           <div class="muted">
+             ${taskCount} task CORE ·
+             ${buyCount} follow-up BUY ·
+             ${visitCount} visite PROPERTY
+           </div>
+         </div>
+       </div>
+
+       ${rows||'<div class="empty">Nessuna scadenza operativa per oggi.</div>'}
+     </div>`;
+ }catch(e){
+   if(state.view!=='agenda')return;
+   qs('#content').innerHTML=`<div class="card empty">Errore agenda: ${esc(e.message)}</div>`;
+   toast(e.message,true);
+ }
+}
 function renderDashboard(){
  const now=new Date(),todayEnd=endOfToday();
  const openTasks=state.tasks.filter(x=>!['completed','cancelled'].includes(x.status));
