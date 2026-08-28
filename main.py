@@ -21,6 +21,7 @@ from property.router import router as property_router
 from buy.router import router as buy_router
 from match.router import router as match_router
 from crm.router import router as crm_router
+from proposal.router import router as proposal_router
 from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
 # ---------------------------------------------------------
@@ -46,6 +47,7 @@ app.include_router(property_router, dependencies=[Depends(require_admin)])
 app.include_router(buy_router, dependencies=[Depends(require_admin)])
 app.include_router(match_router, dependencies=[Depends(require_admin)])
 app.include_router(crm_router, dependencies=[Depends(require_admin)])
+app.include_router(proposal_router, dependencies=[Depends(require_admin)])
 app.include_router(flow_router)
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)

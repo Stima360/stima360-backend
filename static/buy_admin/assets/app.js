@@ -10,6 +10,7 @@ const CHILD_KINDS=['locations','typologies','features'];
 let current=null;
 let credentials=null;
 let actionSubmitPending=false;
+let proposalSubmitPending=false;
 
 const $=selector=>document.querySelector(selector);
 const money=value=>value==null?'—':new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(value);
@@ -138,6 +139,59 @@ function buildMatchDecisionPayload(values){
     payload.scheduled_at=scheduledAt.toISOString();
   }
   return payload;
+}
+
+function proposalDateTimeLocal(value){
+  if(!value)return '';
+  const parsed=new Date(value);
+  if(Number.isNaN(parsed.getTime()))return '';
+  return new Date(parsed.getTime()-parsed.getTimezoneOffset()*60000).toISOString().slice(0,16);
+}
+
+function proposalAmount(value){
+  const amount=numericValue(value,'Importo',{min:0});
+  if(amount===null||amount<=0)throw new Error('Importo deve essere maggiore di zero');
+  return amount;
+}
+
+function proposalExpiry(value){
+  const raw=String(value||'').trim();
+  const expiry=new Date(raw);
+  if(!raw||Number.isNaN(expiry.getTime()))throw new Error('Scadenza non valida');
+  return expiry.toISOString();
+}
+
+function buildProposalCreatePayload(values){
+  const matchId=positiveId(values.match_id);
+  if(matchId===null)throw new Error('ID MATCH non valido');
+  const idempotencyKey=String(values.idempotency_key||'').trim();
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey))throw new Error('Chiave idempotenza non valida');
+  return {
+    match_id:matchId,
+    amount:proposalAmount(values.amount),
+    expires_at:proposalExpiry(values.expires_at),
+    notes:String(values.notes||'').trim()||null,
+    idempotency_key:idempotencyKey,
+  };
+}
+
+function buildProposalUpdatePayload(values){
+  return {
+    amount:proposalAmount(values.amount),
+    expires_at:proposalExpiry(values.expires_at),
+    notes:String(values.notes||'').trim()||null,
+  };
+}
+
+function proposalActions(proposal){
+  if(proposal?.status==='draft')return ['edit','submitted','withdrawn'];
+  if(proposal?.status==='submitted'){
+    const actions=['accepted','rejected','withdrawn'];
+    const expiresAt=new Date(proposal.expires_at);
+    if(!Number.isNaN(expiresAt.getTime())&&expiresAt<=new Date())actions.push('expired');
+    return actions;
+  }
+  return [];
 }
 
 function childCollectionUrl(kind,requestId){
@@ -327,9 +381,14 @@ function renderMatchCriteria(request){
 async function detail(id){
   const requestId=positiveId(id);
   if(requestId===null)throw new Error('ID richiesta non valido');
-  current=await req(api+'/requests/'+requestId+'/workflow');
+  const [workflow,proposalData]=await Promise.all([
+    req(api+'/requests/'+requestId+'/workflow'),
+    req(`/api/proposals?buy_request_id=${requestId}`),
+  ]);
+  current={...workflow,proposals:Array.isArray(proposalData?.items)?proposalData.items:[]};
   const x=current;
   const matches=Array.isArray(x.matches)?x.matches:[];
+  const proposals=Array.isArray(x.proposals)?x.proposals:[];
   const tasks=Array.isArray(x.tasks)?x.tasks:[];
   const history=Array.isArray(x.history)?x.history:[];
   const cid=positiveId(x.contact_id);
@@ -343,8 +402,19 @@ async function detail(id){
     const score=Number.isFinite(Number(m.effective_score))?Math.round(Number(m.effective_score)):0;
     const matchLabel=`${score} · ${esc(m.match_class)}`;
     const matchLink=mid?`<a href="/match-admin/?id=${mid}" target="_blank" rel="noopener noreferrer"><span class="badge ${matchClass(m.match_class)}">${matchLabel}</span></a>`:`<span class="badge ${matchClass(m.match_class)}">${matchLabel}</span>`;
-    const action=mid?`<button type="button" onclick="openAction(${mid})">Registra esito</button>`:'';
-    return `<div class="match"><div class="row"><div>${propertyLink}<br><small>${esc([m.city,m.microzone].filter(Boolean).join(' · '))}</small></div>${matchLink}</div><p>${esc(money(m.asking_price))} · ${esc(m.commercial_status)}${m.last_interaction?` · ultimo: ${esc(m.last_interaction)}`:''}</p>${action}</div>`;
+    const related=mid===null?[]:proposals.filter(item=>positiveId(item.match_id)===mid);
+    const proposalCards=related.map(proposal=>{
+      const proposalId=positiveId(proposal.id);
+      if(proposalId===null)return '';
+      const buttons=proposalActions(proposal).map(actionName=>actionName==='edit'
+        ?`<button type="button" onclick="openProposal(${mid},${proposalId})">Modifica</button>`
+        :`<button type="button" onclick="transitionProposal(${proposalId},'${actionName}')">${esc({submitted:'Invia',accepted:'Accetta',rejected:'Rifiuta',withdrawn:'Ritira',expired:'Segna scaduta'}[actionName])}</button>`
+      ).join(' ');
+      return `<div class="event"><b>${esc(money(proposal.amount))}</b> <span class="badge">${esc(proposal.status)}</span><br><small>Scadenza ${esc(dt(proposal.expires_at))}</small>${proposal.notes?`<div>${esc(proposal.notes)}</div>`:''}${buttons?`<div>${buttons}</div>`:''}</div>`;
+    }).join('');
+    const hasOpen=related.some(proposal=>['draft','submitted'].includes(proposal.status));
+    const action=mid?`<button type="button" onclick="openAction(${mid})">Registra esito</button> ${hasOpen?'':`<button type="button" onclick="openProposal(${mid})">Crea proposta</button>`}`:'';
+    return `<div class="match"><div class="row"><div>${propertyLink}<br><small>${esc([m.city,m.microzone].filter(Boolean).join(' · '))}</small></div>${matchLink}</div><p>${esc(money(m.asking_price))} · ${esc(m.commercial_status)}${m.last_interaction?` · ultimo: ${esc(m.last_interaction)}`:''}</p>${action}${proposalCards?`<div class="timeline">${proposalCards}</div>`:''}</div>`;
   }).join('')||'<p class="muted">Nessun match calcolato.</p>';
   const taskCards=tasks.map(task=>`<div class="match"><b>${esc(task.title)}</b> <span class="badge">${esc(task.status)}</span><br><small class="${overdue(task.due_at)&&!['completed','cancelled'].includes(task.status)?'overdue':''}">${esc(dt(task.due_at))} · ${esc(task.priority)}</small></div>`).join('')||'<p class="muted">Nessun task collegato.</p>';
   const historyCards=history.map(event=>`<div class="event"><b>${esc(event.event_type)}</b><br><small>${esc(dt(event.created_at))}${event.property_title?' · '+esc(event.property_title):''}</small><div>${esc(event.description||event.reason_code||'')}</div></div>`).join('')||'<p class="muted">Nessun evento.</p>';
@@ -387,6 +457,35 @@ function openAction(matchId){
   $('#actionForm [name=match_id]').value=id;
   updateActionScheduleField();
   $('#actionModal').showModal();
+}
+
+function openProposal(matchId,proposalId=null){
+  const validMatchId=positiveId(matchId);
+  const validProposalId=proposalId===null?null:positiveId(proposalId);
+  if(validMatchId===null||proposalId!==null&&validProposalId===null)return;
+  const proposal=validProposalId===null?null:current?.proposals?.find(item=>positiveId(item.id)===validProposalId);
+  if(validProposalId!==null&&!proposal)return;
+  const form=$('#proposalForm');
+  form.reset();
+  form.elements.proposal_id.value=validProposalId??'';
+  form.elements.match_id.value=validMatchId;
+  form.elements.idempotency_key.value=proposal?'':crypto.randomUUID();
+  form.elements.amount.value=proposal?.amount??'';
+  form.elements.expires_at.value=proposalDateTimeLocal(proposal?.expires_at);
+  form.elements.notes.value=proposal?.notes??'';
+  $('#proposalTitle').textContent=proposal?'Modifica proposta':'Nuova proposta';
+  $('#proposalModal').showModal();
+}
+
+async function transitionProposal(proposalId,targetStatus){
+  const id=positiveId(proposalId);
+  const requestId=positiveId(current?.id);
+  if(id===null||requestId===null)return;
+  try{
+    await req(`/api/proposals/${id}/transition`,{method:'POST',body:JSON.stringify({target_status:targetStatus})});
+    toast('Stato proposta aggiornato');
+    await detail(requestId);
+  }catch(error){toast('Errore: '+error.message);}
 }
 
 function openTask(){
@@ -500,6 +599,7 @@ function updateActionScheduleField(){
 
 function bindUi(){
   $('#actionCancel').onclick=()=>$('#actionModal').close();
+  $('#proposalCancel').onclick=()=>$('#proposalModal').close();
   $('#taskCancel').onclick=()=>$('#taskModal').close();
   $('#cancel').onclick=()=>$('#modal').close();
   $('#editCancel').onclick=()=>$('#editModal').close();
@@ -578,6 +678,30 @@ function bindUi(){
     }
   };
 
+  $('#proposalForm').onsubmit=async event=>{
+    event.preventDefault();
+    if(proposalSubmitPending)return;
+    const requestId=positiveId(current?.id);
+    const values=formValues(event.target);
+    const proposalId=values.proposal_id?positiveId(values.proposal_id):null;
+    if(requestId===null||values.proposal_id&&proposalId===null)return;
+    const submit=$('#proposalSubmit');
+    proposalSubmitPending=true;
+    submit.disabled=true;
+    try{
+      const body=proposalId===null?buildProposalCreatePayload(values):buildProposalUpdatePayload(values);
+      await req(proposalId===null?'/api/proposals':`/api/proposals/${proposalId}`,{method:proposalId===null?'POST':'PATCH',body:JSON.stringify(body)});
+      $('#proposalModal').close();
+      event.target.reset();
+      toast(proposalId===null?'Proposta creata':'Proposta aggiornata');
+      await detail(requestId);
+    }catch(error){toast('Errore: '+error.message);}
+    finally{
+      proposalSubmitPending=false;
+      submit.disabled=false;
+    }
+  };
+
   $('#taskForm').onsubmit=async event=>{
     event.preventDefault();
     const requestId=positiveId(current?.id);
@@ -601,6 +725,11 @@ function bindUi(){
 
 if(typeof document!=='undefined')bindUi();
 
+if(typeof window!=='undefined'){
+  window.openProposal=openProposal;
+  window.transitionProposal=transitionProposal;
+}
+
 if(typeof module!=='undefined'&&module.exports){
-  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,buildMatchDecisionPayload,childCollectionUrl,childItemUrl};
+  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,buildMatchDecisionPayload,buildProposalCreatePayload,buildProposalUpdatePayload,proposalActions,childCollectionUrl,childItemUrl};
 }

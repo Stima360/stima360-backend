@@ -193,6 +193,18 @@
         <menu><button type="button" class="secondary" id="actionCancel">Annulla</button><button type="submit" id="actionSubmit">Registra</button></menu>
       </form>
     </dialog>
+    <dialog id="proposalModal">
+      <form id="proposalForm">
+        <h2 id="proposalTitle">Nuova proposta</h2>
+        <input type="hidden" name="proposal_id">
+        <input type="hidden" name="match_id">
+        <input type="hidden" name="idempotency_key">
+        <label>Importo<input name="amount" type="number" min="0.01" step="0.01" required></label>
+        <label>Scadenza<input name="expires_at" type="datetime-local" required></label>
+        <label>Note<textarea name="notes"></textarea></label>
+        <menu><button type="button" class="secondary" id="proposalCancel">Annulla</button><button type="submit" id="proposalSubmit">Salva</button></menu>
+      </form>
+    </dialog>
     <dialog id="taskModal"><form id="taskForm"><h2>Nuovo task CORE</h2><label>Titolo<input name="title" required></label><label>Scadenza<input name="due_at" type="datetime-local"></label><label>Priorità<select name="priority"><option>normal</option><option>high</option><option>urgent</option><option>low</option></select></label><label>Descrizione<textarea name="description"></textarea></label><menu><button type="button" class="secondary" id="taskCancel">Annulla</button><button type="submit">Crea task</button></menu></form></dialog>
   </div>
 

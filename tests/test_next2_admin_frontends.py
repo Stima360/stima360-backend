@@ -59,5 +59,5 @@ def test_frontend_uses_existing_admin_check_contract(fe):
 def test_backend_is_protected_in_p3():
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_py
-    for router_name in ("core_router", "property_router", "buy_router", "match_router"):
+    for router_name in ("core_router", "property_router", "buy_router", "match_router", "proposal_router"):
         assert f"app.include_router({router_name}, dependencies=[Depends(require_admin)])" in main_py

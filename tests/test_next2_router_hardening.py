@@ -6,18 +6,20 @@ from fastapi.testclient import TestClient
 from integration_p2_support import import_main_app
 
 ROOT = Path(__file__).resolve().parent.parent
-PROTECTED_PREFIXES = ("/api/core", "/api/property", "/api/buy", "/api/match")
+PROTECTED_PREFIXES = ("/api/core", "/api/property", "/api/buy", "/api/match", "/api/proposals")
 REPRESENTATIVE_PATHS = (
     "/api/core/contacts",
     "/api/property/properties",
     "/api/buy/requests",
     "/api/match/matches",
+    "/api/proposals",
 )
 EXPECTED_COUNTS = {
     "/api/core": 19,
     "/api/property": 21,
     "/api/buy": 23,
     "/api/match": 26,
+    "/api/proposals": 5,
 }
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 
@@ -46,17 +48,17 @@ def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
     return operations
 
 
-def test_1_all_89_routes_are_still_mounted(app):
+def test_1_all_94_routes_are_still_mounted(app):
     operations = openapi_operations(app)
     for prefix, expected in EXPECTED_COUNTS.items():
         actual = sum(1 for _, path, _ in operations if path.startswith(prefix))
         assert actual == expected
-    assert len(operations) == 89
+    assert len(operations) == 94
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 89
+    assert len(operations) == 94
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 
@@ -131,13 +133,13 @@ def test_9_owner_and_flow_do_not_receive_new_neutral_dependency():
 
 
 def test_10_domain_routers_remain_decoupled_from_owner():
-    for module in ("core", "property", "buy", "match"):
+    for module in ("core", "property", "buy", "match", "proposal"):
         source = (ROOT / module / "router.py").read_text(encoding="utf-8")
         assert "from owner" not in source
         assert "import owner" not in source
 
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_source
-    for router_name in ("core_router", "property_router", "buy_router", "match_router"):
+    for router_name in ("core_router", "property_router", "buy_router", "match_router", "proposal_router"):
         expected = f"app.include_router({router_name}, dependencies=[Depends(require_admin)])"
         assert expected in main_source
