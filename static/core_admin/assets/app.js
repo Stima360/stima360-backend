@@ -1,421 +1,140 @@
-import re
-from pathlib import Path
-
-import pytest
-
-
-ROOT = Path(__file__).resolve().parent.parent
-FRONTENDS = ("core", "property", "buy", "match")
-
-
-def read_js(fe: str) -> str:
-    return (ROOT / f"static/{fe}_admin/assets/app.js").read_text(encoding="utf-8")
-
-
-def _extract_braced_block(js: str, opening_brace: int) -> str:
-    """
-    Extract a JS {...} block starting at opening_brace.
-
-    The target blocks used by these tests (login handlers / small helper
-    functions) do not contain unmatched literal braces, so brace balancing is
-    sufficient and avoids fragile global `.*` regexes.
-    """
-    assert js[opening_brace] == "{"
-    depth = 0
-
-    for i in range(opening_brace, len(js)):
-        ch = js[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return js[opening_brace : i + 1]
-
-    raise AssertionError("Blocco JavaScript non chiuso")
-
-
-def function_block(js: str, name: str) -> str:
-    m = re.search(
-        rf"(?:async\s+)?function\s+{re.escape(name)}\s*\([^)]*\)\s*\{{",
-        js,
-    )
-    assert m, f"Funzione {name} mancante"
-    opening_brace = js.find("{", m.start())
-    return _extract_braced_block(js, opening_brace)
-
-
-def login_handler_block(js: str) -> str:
-    # Handler inline legacy, se presente.
-    patterns = (
-        r"(?:qs|\$)\(\s*['\"]#login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
-        r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.onsubmit\s*=\s*async\s+\w+\s*=>\s*\{",
-    )
-    for pattern in patterns:
-        m = re.search(pattern, js)
-        if m:
-            opening_brace = js.find("{", m.start())
-            return _extract_braced_block(js, opening_brace)
-
-    # Contratto reale: il form può delegare a una funzione nominata.
-    binding_patterns = (
-        r"(?:qs|\$)\(\s*['\"]#login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
-        r"document\.getElementById\(\s*['\"]login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
-        r"el\(\s*['\"]login-form['\"]\s*\)\.addEventListener\(\s*['\"]submit['\"]\s*,\s*([A-Za-z_$][\w$]*)\s*\)",
-    )
-    for pattern in binding_patterns:
-        binding = re.search(pattern, js)
-        if binding:
-            return function_block(js, binding.group(1))
-
-    raise AssertionError("Handler reale di #login-form non trovato")
-
-
-def assert_in_order(text: str, *needles: str) -> None:
-    pos = -1
-    for needle in needles:
-        new_pos = text.find(needle, pos + 1)
-        assert new_pos >= 0, f"{needle!r} non trovato nell'ordine richiesto"
-        pos = new_pos
-
-
-@pytest.mark.parametrize("fe", FRONTENDS)
-def test_frontend_has_deep_link_foundation(fe):
-    js = read_js(fe)
-
-    assert "URLSearchParams" in js, f"Manca URLSearchParams in {fe}"
-    assert "applyDeepLink" in js, f"Manca applyDeepLink in {fe}"
-    assert "positiveId" in js, f"Manca positiveId in {fe}"
-
-    positive = function_block(js, "positiveId")
-    assert re.search(r"\bNumber\s*\(\s*value\s*\)", positive), (
-        f"positiveId deve convertire value con Number() in {fe}"
-    )
-    assert re.search(r"Number\.isInteger\s*\(\s*n\s*\)", positive), (
-        f"positiveId deve verificare Number.isInteger(n) in {fe}"
-    )
-    assert re.search(r"\bn\s*>\s*0\b", positive), (
-        f"positiveId deve accettare solo ID > 0 in {fe}"
-    )
-
-
-@pytest.mark.parametrize("fe", FRONTENDS)
-def test_apply_deep_link_uses_positive_id_for_query_id(fe):
-    js = read_js(fe)
-    block = function_block(js, "applyDeepLink")
-
-    assert "window.location.search" in block
-    assert "URLSearchParams" in block
-
-    direct = re.search(
-        r"positiveId\s*\([^;]*?\.get\(\s*['\"]id['\"]\s*\)\s*\)",
-        block,
-        re.DOTALL,
-    )
-
-    raw_assignment = re.search(
-        r"(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*?\.get\(\s*['\"]id['\"]\s*\)\s*;",
-        block,
-        re.DOTALL,
-    )
-
-    indirect = False
-    if raw_assignment:
-        raw_name = re.escape(raw_assignment.group(1))
-        indirect = re.search(
-            rf"positiveId\s*\(\s*{raw_name}\s*\)",
-            block,
-        ) is not None
-
-    assert direct or indirect, (
-        f"applyDeepLink deve validare il query param id con positiveId in {fe}"
-    )
-
-
-def test_core_contact360_deep_link_and_post_login_order():
-    js = read_js("core")
-    dl = function_block(js, "applyDeepLink")
-    login = login_handler_block(js)
-
-    assert re.search(r"\.get\(\s*['\"]view['\"]\s*\)", dl)
-    assert re.search(r"contact360", dl)
-    assert "openContact360(" in dl
-
-    assert "/api/admin/check" in login
-
-    compact_login = re.sub(r"\s+", "", login)
-
-    assert (
-        "state.credentials={username,password}" in compact_login
-        or "state.credentials={u,p}" in compact_login
-    ), "CORE deve conservare le credenziali esclusivamente nello state runtime"
-
-    assert_in_order(login, "refresh()", "applyDeepLink()")
-
-    open_360 = function_block(js, "openContact360")
-
-    assert "catch" in dl or "catch" in open_360, (
-        "CORE deve gestire 404/errori nel deep-link o in openContact360"
-    )
-
-    assert "toast(" in dl or "toast(" in open_360
-
-
-def test_property_deep_link_and_post_login_order():
-    js = read_js("property")
-    dl = function_block(js, "applyDeepLink")
-    login = login_handler_block(js)
-
-    assert "openDetail(" in dl
-    assert "catch" in dl
-    assert "toast(" in dl
-
-    assert "/api/admin/check" in login
-
-    compact = re.sub(r"\s+", "", login)
-
-    assert (
-        "state.credentials={username,password}" in compact
-        or "state.credentials={u,p}" in compact
-    ), "PROPERTY deve conservare le credenziali esclusivamente nello state runtime"
-
-    assert_in_order(login, "refresh()", "applyDeepLink()")
-
-
-def test_buy_deep_link_and_post_login_order():
-    js = read_js("buy")
-    dl = function_block(js, "applyDeepLink")
-    login = login_handler_block(js)
-
-    assert "detail(" in dl
-    assert "catch" in dl
-    assert "toast(" in dl
-
-    assert "/api/admin/check" in login
-
-    compact = re.sub(r"\s+", "", login)
-
-    assert (
-        "credentials={username,password}" in compact
-        or "credentials={u,p}" in compact
-    ), "BUY deve conservare le credenziali esclusivamente nello state runtime"
-
-    assert_in_order(
-        login,
-        "dashboard()",
-        "load()",
-        "applyDeepLink()",
-    )
-
-
-def test_match_deep_link_owns_detail_or_dashboard_choice():
-    js = read_js("match")
-    dl = function_block(js, "applyDeepLink")
-    login = login_handler_block(js)
-
-    assert "/api/admin/check" in login
-
-    compact = re.sub(r"\s+", "", login)
-
-    assert (
-        "credentials={username,password}" in compact
-        or "credentials={u,p}" in compact
-    ), "MATCH deve conservare le credenziali esclusivamente nello state runtime"
-
-    assert "applyDeepLink()" in login
-
-    assert "detail(" in dl
-
-    assert (
-        re.search(r"getElementById\(\s*['\"]matches['\"]\s*\)", dl)
-        or re.search(r"el\(\s*['\"]matches['\"]\s*\)", dl)
-    ), "MATCH deve aprire esplicitamente la view matches"
-
-    assert (
-        "load('dashboard')" in dl
-        or 'load("dashboard")' in dl
-    )
-
-    assert "catch" in dl
-    assert "toast(" in dl
-
-
-def test_core_contact360_cross_links_use_only_validated_ids():
-    js = read_js("core")
-    block = function_block(js, "renderContact360")
-
-    for marker in (
-        "positiveId(p.id)",
-        "positiveId(b.id)",
-        "positiveId(m.id)",
-        "positiveId(v.property_id)",
-    ):
-        assert marker in re.sub(r"\s+", "", block), (
-            f"Manca {marker} in CORE"
-        )
-
-    assert 'href="/property-admin/?id=${pid}"' in block
-    assert 'href="/buy-admin/?id=${bid}"' in block
-    assert 'href="/match-admin/?id=${mid}"' in block
-
-    assert block.count(
-        'href="/property-admin/?id=${pid}"'
-    ) >= 2
-
-    assert block.count('target="_blank"') >= 4
-    assert block.count('rel="noopener noreferrer"') >= 4
-
-
-def test_property_contact_to_core360_uses_validated_contact_id():
-    js = read_js("property")
-    block = function_block(js, "renderDetail")
-
-    compact = re.sub(r"\s+", "", block)
-
-    assert "positiveId(x.contact_id)" in compact
-
-    assert (
-        'href="/core-admin/?view=contact360&id=${cid}"'
-        in block
-    )
-
-    assert 'target="_blank"' in block
-    assert 'rel="noopener noreferrer"' in block
-
-
-def test_buy_contact_property_and_match_links_use_validated_ids():
-    js = read_js("buy")
-    block = function_block(js, "detail")
-
-    compact = re.sub(r"\s+", "", block)
-
-    assert "positiveId(x.contact_id)" in compact
-    assert "positiveId(m.property_id)" in compact
-    assert "positiveId(m.id)" in compact
-
-    assert (
-        'href="/core-admin/?view=contact360&id=${cid}"'
-        in block
-    )
-
-    assert 'href="/property-admin/?id=${pid}"' in block
-    assert 'href="/match-admin/?id=${mid}"' in block
-
-    assert block.count('target="_blank"') >= 3
-    assert block.count('rel="noopener noreferrer"') >= 3
-
-
-def test_match_buy_and_property_links_and_no_contact360_link():
-    js = read_js("match")
-    block = function_block(js, "detail")
-
-    compact = re.sub(r"\s+", "", block)
-
-    assert "positiveId(m.buy_request_id)" in compact
-    assert "positiveId(m.property_id)" in compact
-
-    assert 'href="/buy-admin/?id=${bid}"' in block
-    assert 'href="/property-admin/?id=${pid}"' in block
-
-    assert block.count('target="_blank"') >= 2
-    assert block.count('rel="noopener noreferrer"') >= 2
-
-    assert "/core-admin/?view=contact360" not in block
-
-
-@pytest.mark.parametrize("fe", FRONTENDS)
-def test_no_persistent_auth_or_credentials_in_urls(fe):
-    js = read_js(fe)
-
-    for forbidden in (
-        "localStorage",
-        "sessionStorage",
-        "document.cookie",
-        "indexedDB",
-    ):
-        assert forbidden not in js, (
-            f"{forbidden} non ammesso in {fe}"
-        )
-
-    credential_query = re.compile(
-        r"[\?&]\s*(?:user(?:name)?|pass(?:word)?|token|access_token|auth(?:orization)?)\s*=",
-        re.IGNORECASE,
-    )
-
-    assert not credential_query.search(js), (
-        f"Possibile credenziale/token inserita "
-        f"in query string in {fe}"
-    )
-
-    params_set = re.compile(
-        r"\.set\(\s*['\"](?:user(?:name)?|pass(?:word)?|token|access_token|auth(?:orization)?)['\"]\s*,",
-        re.IGNORECASE,
-    )
-
-    assert not params_set.search(js), (
-        f"Possibile credenziale/token inserita "
-        f"via URLSearchParams.set in {fe}"
-    )
-
-
-@pytest.mark.parametrize("fe", FRONTENDS)
-def test_next2_frontend_auth_contract_is_preserved(fe):
-    js = read_js(fe)
-
-    for forbidden in (
-        "localStorage",
-        "sessionStorage",
-        "document.cookie",
-        "indexedDB",
-    ):
-        assert forbidden not in js, (
-            f"{forbidden} non ammesso in {fe}"
-        )
-
-    assert (
-        "credentials =" in js
-        or "credentials=" in js
-        or "state.credentials" in js
-    ), f"Stato credenziali runtime mancante in {fe}"
-
-    assert "encodeBasic" in js, f"encodeBasic mancante in {fe}"
-    assert "btoa(" in js, f"Basic encoding mancante in {fe}"
-    assert "Authorization" in js, f"Header Authorization mancante in {fe}"
-
-    assert (
-        "=== 401" in js
-        or "===401" in js
-    ), f"Gestione 401 mancante in {fe}"
-
-    assert "logout" in js.lower(), f"Logout mancante in {fe}"
-
-    assert "/api/admin/check" in js, (
-        f"Login gate legacy mancante in {fe}"
-    )
-
-
-def test_next2_wrapper_names_are_not_replaced_by_p1():
-    core = read_js("core")
-    prop = read_js("property")
-    buy = read_js("buy")
-    match = read_js("match")
-
-    assert re.search(
-        r"async\s+function\s+api\s*\(\s*path\b",
-        core,
-    )
-
-    assert re.search(
-        r"async\s+function\s+api\s*\(\s*base\s*,\s*path\b",
-        prop,
-    )
-
-    assert re.search(
-        r"async\s+function\s+req\s*\(\s*url\b",
-        buy,
-    )
-
-    assert re.search(
-        r"async\s+function\s+api\s*\(\s*path\b",
-        match,
-    )
+const API='/api/core';
+const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],selected:null,selected360:null,credentials:null};
+const qs=(s,p=document)=>p.querySelector(s),qsa=(s,p=document)=>[...p.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const dt=v=>v?new Date(v).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'}):'—';
+const localInput=v=>{if(!v)return'';const d=new Date(v);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)};
+const sameDay=(a,b=new Date())=>{if(!a)return false;const d=new Date(a);return d.getFullYear()===b.getFullYear()&&d.getMonth()===b.getMonth()&&d.getDate()===b.getDate()};
+const endOfToday=()=>{const d=new Date();d.setHours(23,59,59,999);return d};
+const money=v=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(v)||0);
+const priorityRank=v=>({urgent:0,high:1,normal:2,low:3}[v]??4);
+const val=id=>qs('#'+id)?.value.trim()||'';
+const opt=v=>v||null;
+function positiveId(value){const n=Number(value);return Number.isInteger(n)&&n>0?n:null;}
+function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${username}:${password}`);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return `Basic ${btoa(binary)}`;}
+function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
+function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
+function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
+function logout(message=''){state.credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}state.credentials={username,password};showApp();await refresh();await applyDeepLink();}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
+
+async function applyDeepLink(){
+ const params=new URLSearchParams(window.location.search);
+ const view=params.get('view');
+ const rawId=params.get('id');
+ if(view!=='contact360')return;
+ if(rawId===null)return;
+ const id=positiveId(rawId);
+ if(id===null){toast('ID contatto non valido.',true);setView('dashboard');return;}
+ await openContact360(id);
+}
+
+async function api(path,opts={}){const headers={'Content-Type':'application/json',...(opts.headers||{})};if(state.credentials)headers.Authorization=encodeBasic(state.credentials.username,state.credentials.password);const url=path.startsWith('/api/')?path:API+path;const r=await fetch(url,{...opts,headers});if(r.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);throw new Error(d||`Errore ${r.status}`)}return data}
+function toast(msg,error=false){const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=msg;qs('#toast-root').appendChild(el);setTimeout(()=>el.remove(),3300)}
+function badge(v){const c=['active','open','completed','won'].includes(v)?'ok':['urgent','high','lost','cancelled'].includes(v)?'warn':'gray';return `<span class="badge ${c}">${esc(v||'—')}</span>`}
+function confirmAction(message){return window.confirm(message)}
+function modal(title,body,onSave,saveLabel='Salva'){qs('#modal-root').innerHTML=`<div class="modal-backdrop"><div class="modal"><div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" data-close>×</button></div><div class="modal-body">${body}</div><div class="modal-foot"><button class="btn" data-close>Annulla</button><button class="btn primary" id="modal-save">${esc(saveLabel)}</button></div></div></div>`;qsa('[data-close]').forEach(b=>b.onclick=()=>qs('#modal-root').innerHTML='');qs('#modal-save').onclick=async()=>{const b=qs('#modal-save');b.disabled=true;try{await onSave();qs('#modal-root').innerHTML=''}catch(e){toast(e.message,true);b.disabled=false}}}
+async function loadAll(){const [c,l,a,t]=await Promise.all([api('/contacts?limit=200'),api('/leads?limit=200'),api('/activities?limit=200'),api('/tasks?limit=200')]);state.contacts=c.items;state.leads=l.items;state.activities=a.items;state.tasks=t.items}
+function contactName(id){const c=state.contacts.find(x=>x.id===id);return c?.display_name||c?.company_name||[c?.first_name,c?.last_name].filter(Boolean).join(' ')||`#${id}`}
+function setView(view){state.view=view;state.selected=null;qsa('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));render()}
+async function refresh(){qs('#content').innerHTML='<div class="card loading">Caricamento…</div>';try{await loadAll();render()}catch(e){qs('#content').innerHTML=`<div class="card empty">Errore: ${esc(e.message)}</div>`}}
+function render(){const titles={dashboard:['Panoramica','Gestione operativa del CORE CRM'],contacts:['Contatti','Anagrafiche, ruoli e stato'],leads:['Lead','Pipeline commerciale e prossime azioni'],activities:['Attività','Cronologia delle interazioni'],tasks:['Task','Azioni operative e scadenze'],contactDetail:['Scheda contatto','Dettaglio, ruoli e relazioni'],contact360:['Contact 360','Vista CRM globale'],leadDetail:['Scheda lead','Pipeline, attività, task e stime collegate']};const [t,s]=titles[state.view]||titles.dashboard;qs('#page-title').textContent=t;qs('#page-subtitle').textContent=s;qs('#quick-add').style.display=['contactDetail','contact360','leadDetail'].includes(state.view)?'none':'';({dashboard:renderDashboard,contacts:renderContacts,leads:renderLeads,activities:renderActivities,tasks:renderTasks,contactDetail:renderContactDetail,contact360:renderContact360,leadDetail:renderLeadDetail}[state.view]||renderDashboard)()}
+function renderDashboard(){
+ const now=new Date(),todayEnd=endOfToday();
+ const openTasks=state.tasks.filter(x=>!['completed','cancelled'].includes(x.status));
+ const overdue=openTasks.filter(t=>t.due_at&&new Date(t.due_at)<now).sort((a,b)=>new Date(a.due_at)-new Date(b.due_at));
+ const dueToday=openTasks.filter(t=>t.due_at&&sameDay(t.due_at)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority)||new Date(a.due_at)-new Date(b.due_at));
+ const callbacks=state.leads.filter(l=>l.status==='open'&&l.next_action_at&&new Date(l.next_action_at)<=todayEnd).sort((a,b)=>new Date(a.next_action_at)-new Date(b.next_action_at));
+ const highPriority=openTasks.filter(t=>['urgent','high'].includes(t.priority)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority));
+ const activitiesToday=state.activities.filter(a=>sameDay(a.occurred_at)).length;
+ const completedToday=state.tasks.filter(t=>t.status==='completed'&&sameDay(t.completed_at)).length;
+ const openLeads=state.leads.filter(l=>l.status==='open');
+ const pipelineValue=openLeads.reduce((sum,l)=>sum+(Number(l.estimated_value)||0),0);
+ const operational=[...dueToday,...overdue.filter(x=>!dueToday.some(y=>y.id===x.id)),...highPriority.filter(x=>!dueToday.some(y=>y.id===x.id)&&!overdue.some(y=>y.id===x.id))].slice(0,8);
+ qs('#content').innerHTML=`
+ <div class="grid stats daily-stats">
+   <div class="card stat kpi-link" data-go="tasks"><div class="label">Da fare oggi</div><div class="value">${dueToday.length}</div><div class="hint">${completedToday} completati oggi</div></div>
+   <div class="card stat kpi-link ${overdue.length?'attention':''}" data-go="tasks"><div class="label">Task scaduti</div><div class="value">${overdue.length}</div><div class="hint">Da recuperare subito</div></div>
+   <div class="card stat kpi-link ${callbacks.length?'attention':''}" data-go="leads"><div class="label">Lead da ricontattare</div><div class="value">${callbacks.length}</div><div class="hint">Entro oggi o già scaduti</div></div>
+   <div class="card stat kpi-link" data-go="activities"><div class="label">Attività oggi</div><div class="value">${activitiesToday}</div><div class="hint">Interazioni registrate</div></div>
+ </div>
+ <div class="grid stats secondary-stats">
+   <div class="card stat"><div class="label">Lead aperti</div><div class="value">${openLeads.length}</div><div class="hint">Pipeline attiva</div></div>
+   <div class="card stat"><div class="label">Valore pipeline</div><div class="value money-value">${money(pipelineValue)}</div><div class="hint">Somma valori stimati aperti</div></div>
+   <div class="card stat"><div class="label">Contatti CORE</div><div class="value">${state.contacts.length}</div><div class="hint">Anagrafiche operative</div></div>
+   <div class="card stat"><div class="label">Priorità alte</div><div class="value">${highPriority.length}</div><div class="hint">Task high o urgent</div></div>
+ </div>
+ <div class="grid dashboard-grid">
+  <div class="card panel focus-panel"><div class="panel-head"><div><h2>Agenda operativa</h2><div class="muted">Task di oggi, scaduti e prioritari</div></div><button class="btn small" onclick="setView('tasks')">Apri task</button></div>${taskList(operational)}</div>
+  <div class="card panel"><div class="panel-head"><div><h2>Lead da ricontattare</h2><div class="muted">Prossima azione entro oggi</div></div><button class="btn small" onclick="setView('leads')">Apri lead</button></div>${leadTable(callbacks.slice(0,8))}</div>
+ </div>
+ <div class="grid two-panels dashboard-bottom">
+  <div class="card panel"><div class="panel-head"><h2>Lead recenti</h2><button class="btn small" onclick="setView('leads')">Vedi tutti</button></div>${leadTable(state.leads.slice(0,6))}</div>
+  <div class="card panel"><div class="panel-head"><h2>Ultime attività</h2><button class="btn small" onclick="setView('activities')">Vedi tutte</button></div>${activityList(state.activities.slice(0,6))}</div>
+ </div>`;
+ qsa('[data-go]').forEach(x=>x.onclick=()=>setView(x.dataset.go));bindLeadRows();bindTaskEvents();bindActivityEvents()
+}
+function contactTable(items){if(!items.length)return '<div class="empty">Nessun contatto</div>';return `<div class="table-wrap"><table class="table"><thead><tr><th>Nome</th><th>Contatti</th><th>Fonte</th><th>Stato</th><th>Azioni</th></tr></thead><tbody>${items.map(c=>`<tr><td class="clickable" data-contact="${c.id}"><strong>${esc(c.display_name||c.company_name||[c.first_name,c.last_name].filter(Boolean).join(' ')||`Contatto #${c.id}`)}</strong><div class="muted">${esc(c.contact_type)} · #${c.id}</div></td><td>${esc(c.email||'—')}<div class="muted">${esc(c.phone||'')}</div></td><td>${esc(c.source||'—')}</td><td>${badge(c.status)}</td><td><button class="btn small" data-edit-contact="${c.id}">Modifica</button></td></tr>`).join('')}</tbody></table></div>`}
+function renderContacts(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="contact-search" placeholder="Cerca nome, email, telefono"><select class="select" id="contact-status"><option value="">Tutti gli stati</option><option>active</option><option>inactive</option><option>archived</option></select></div><button class="btn primary" id="new-contact">+ Nuovo contatto</button></div><div id="contacts-table">${contactTable(state.contacts)}</div></div>`;qs('#new-contact').onclick=()=>openContactForm();qs('#contact-search').oninput=filterContacts;qs('#contact-status').onchange=filterContacts;bindContactRows()}
+function filterContacts(){const q=val('contact-search').toLowerCase(),st=val('contact-status');const arr=state.contacts.filter(c=>(!st||c.status===st)&&(!q||JSON.stringify(c).toLowerCase().includes(q)));qs('#contacts-table').innerHTML=contactTable(arr);bindContactRows()}
+function bindContactRows(){qsa('[data-contact]').forEach(r=>r.onclick=()=>openContactDetail(+r.dataset.contact));qsa('[data-edit-contact]').forEach(b=>b.onclick=e=>{e.stopPropagation();openContactForm(state.contacts.find(c=>c.id===+b.dataset.editContact))})}
+function leadTable(items){if(!items.length)return '<div class="empty">Nessun lead</div>';return `<div class="table-wrap"><table class="table"><thead><tr><th>Contatto</th><th>Pipeline</th><th>Stage</th><th>Priorità</th><th>Stato</th><th>Prossima azione</th></tr></thead><tbody>${items.map(l=>`<tr class="clickable" data-lead="${l.id}"><td><strong>${esc(contactName(l.contact_id))}</strong><div class="muted">Lead #${l.id}</div></td><td>${badge(l.pipeline)}</td><td>${badge(l.stage)}</td><td>${badge(l.priority)}</td><td>${badge(l.status)}</td><td>${dt(l.next_action_at)}</td></tr>`).join('')}</tbody></table></div>`}
+function renderLeads(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="lead-search" placeholder="Cerca contatto o ID"><select class="select" id="lead-pipeline"><option value="">Tutte le pipeline</option><option>sell</option><option>buy</option><option>general</option></select><select class="select" id="lead-stage"><option value="">Tutti gli stage</option>${['new','contacted','qualified','appointment','proposal','won','lost'].map(x=>`<option>${x}</option>`).join('')}</select><select class="select" id="lead-status"><option value="">Tutti gli stati</option><option>open</option><option>paused</option><option>closed</option></select></div><button class="btn primary" id="new-lead">+ Nuovo lead</button></div><div id="leads-table">${leadTable(state.leads)}</div></div>`;qs('#new-lead').onclick=()=>openLeadForm();['lead-search','lead-pipeline','lead-stage','lead-status'].forEach(id=>qs('#'+id).oninput=filterLeads);bindLeadRows()}
+function filterLeads(){const q=val('lead-search').toLowerCase(),p=val('lead-pipeline'),g=val('lead-stage'),s=val('lead-status');const arr=state.leads.filter(l=>(!p||l.pipeline===p)&&(!g||l.stage===g)&&(!s||l.status===s)&&(!q||contactName(l.contact_id).toLowerCase().includes(q)||String(l.id)===q));qs('#leads-table').innerHTML=leadTable(arr);bindLeadRows()}
+function bindLeadRows(){qsa('[data-lead]').forEach(r=>r.onclick=()=>openLeadDetail(+r.dataset.lead))}
+function activityList(items){if(!items.length)return '<div class="empty">Nessuna attività</div>';return `<div class="list">${items.map(a=>`<div class="list-item"><div class="list-item-head"><div><strong>${esc(a.subject||a.activity_type)}</strong><div class="muted">${esc(a.description||'')}</div></div><div class="actions"><span class="muted">${dt(a.occurred_at)}</span><button class="btn small danger" data-delete-activity="${a.id}">Elimina</button></div></div><div style="margin-top:7px">${badge(a.activity_type)} ${a.contact_id?`<span class="badge gray">${esc(contactName(a.contact_id))}</span>`:''} ${a.lead_id?`<span class="badge gray">Lead #${a.lead_id}</span>`:''}</div></div>`).join('')}</div>`}
+function renderActivities(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="activity-search" placeholder="Cerca attività"><select class="select" id="activity-type"><option value="">Tutti i tipi</option>${['note','call','email','whatsapp','meeting','valuation','status_change','system'].map(x=>`<option>${x}</option>`).join('')}</select></div><button class="btn primary" id="new-activity">+ Registra attività</button></div><div id="activities-list">${activityList(state.activities)}</div></div>`;qs('#new-activity').onclick=()=>openActivityForm({});qs('#activity-search').oninput=filterActivities;qs('#activity-type').onchange=filterActivities;bindActivityEvents()}
+function filterActivities(){const q=val('activity-search').toLowerCase(),t=val('activity-type');const arr=state.activities.filter(a=>(!t||a.activity_type===t)&&(!q||JSON.stringify(a).toLowerCase().includes(q)));qs('#activities-list').innerHTML=activityList(arr);bindActivityEvents()}
+function bindActivityEvents(){qsa('[data-delete-activity]').forEach(b=>b.onclick=async()=>{if(!confirmAction('Eliminare questa attività?'))return;try{await api(`/activities/${b.dataset.deleteActivity}`,{method:'DELETE'});toast('Attività eliminata');await refresh()}catch(e){toast(e.message,true)}})}
+function taskList(items){if(!items.length)return '<div class="empty">Nessun task</div>';return `<div class="list">${items.map(t=>{const overdue=t.due_at&&!['completed','cancelled'].includes(t.status)&&new Date(t.due_at)<new Date();return `<div class="list-item ${overdue?'overdue':''}"><div class="list-item-head"><div><strong>${esc(t.title)}</strong><div class="muted">${esc(t.description||'')}</div></div><div class="actions"><select class="select task-status" data-task-id="${t.id}" style="width:auto">${['open','in_progress','completed','cancelled'].map(x=>`<option ${t.status===x?'selected':''}>${x}</option>`).join('')}</select><button class="btn small" data-edit-task="${t.id}">Modifica</button><button class="btn small danger" data-delete-task="${t.id}">Elimina</button></div></div><div style="margin-top:8px">${badge(t.priority)} <span class="muted">Scadenza: ${dt(t.due_at)}</span> ${t.contact_id?`<span class="badge gray">${esc(contactName(t.contact_id))}</span>`:''}</div></div>`}).join('')}</div>`}
+function renderTasks(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="task-search" placeholder="Cerca task"><select class="select" id="task-filter"><option value="">Tutti gli stati</option><option>open</option><option>in_progress</option><option>completed</option><option>cancelled</option></select><select class="select" id="task-priority"><option value="">Tutte le priorità</option><option>low</option><option>normal</option><option>high</option><option>urgent</option></select></div><button class="btn primary" id="new-task">+ Nuovo task</button></div><div id="tasks-list">${taskList(state.tasks)}</div></div>`;qs('#new-task').onclick=()=>openTaskForm({});['task-search','task-filter','task-priority'].forEach(id=>qs('#'+id).oninput=filterTasks);bindTaskEvents()}
+function filterTasks(){const q=val('task-search').toLowerCase(),s=val('task-filter'),p=val('task-priority');const arr=state.tasks.filter(t=>(!s||t.status===s)&&(!p||t.priority===p)&&(!q||JSON.stringify(t).toLowerCase().includes(q)));qs('#tasks-list').innerHTML=taskList(arr);bindTaskEvents()}
+function bindTaskEvents(){qsa('.task-status').forEach(s=>s.onchange=async()=>{try{await api(`/tasks/${s.dataset.taskId}`,{method:'PATCH',body:JSON.stringify({status:s.value})});toast('Task aggiornato');await loadAll();render()}catch(e){toast(e.message,true)}});qsa('[data-edit-task]').forEach(b=>b.onclick=()=>openTaskForm({},state.tasks.find(t=>t.id===+b.dataset.editTask)));qsa('[data-delete-task]').forEach(b=>b.onclick=async()=>{if(!confirmAction('Eliminare questo task?'))return;try{await api(`/tasks/${b.dataset.deleteTask}`,{method:'DELETE'});toast('Task eliminato');await refresh()}catch(e){toast(e.message,true)}})}
+function contactSelect(id,selected=''){return `<select class="select" id="${id}"><option value="">— Seleziona —</option>${state.contacts.map(c=>`<option value="${c.id}" ${String(c.id)===String(selected)?'selected':''}>${esc(contactName(c.id))}</option>`).join('')}</select>`}
+function openContactForm(c=null){modal(c?'Modifica contatto':'Nuovo contatto',`<div class="form-grid"><div class="field"><label>Tipo</label><select class="select" id="c-type"><option ${c?.contact_type==='person'?'selected':''}>person</option><option ${c?.contact_type==='company'?'selected':''}>company</option></select></div><div class="field"><label>Stato</label><select class="select" id="c-status">${['active','inactive','archived'].map(x=>`<option ${c?.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Nome</label><input class="input" id="c-first" value="${esc(c?.first_name||'')}"></div><div class="field"><label>Cognome</label><input class="input" id="c-last" value="${esc(c?.last_name||'')}"></div><div class="field full"><label>Azienda</label><input class="input" id="c-company" value="${esc(c?.company_name||'')}"></div><div class="field"><label>Email</label><input class="input" id="c-email" type="email" value="${esc(c?.email||'')}"></div><div class="field"><label>Telefono</label><input class="input" id="c-phone" value="${esc(c?.phone||'')}"></div><div class="field"><label>Secondo telefono</label><input class="input" id="c-phone2" value="${esc(c?.secondary_phone||'')}"></div><div class="field"><label>Fonte</label><input class="input" id="c-source" value="${esc(c?.source||'admin_ui')}"></div><div class="field full"><label>Note</label><textarea class="textarea" id="c-notes">${esc(c?.notes||'')}</textarea></div></div>`,async()=>{const body={contact_type:val('c-type'),first_name:opt(val('c-first')),last_name:opt(val('c-last')),company_name:opt(val('c-company')),email:opt(val('c-email')),phone:opt(val('c-phone')),secondary_phone:opt(val('c-phone2')),source:opt(val('c-source')),status:val('c-status'),notes:opt(val('c-notes'))};await api(c?`/contacts/${c.id}`:'/contacts',{method:c?'PATCH':'POST',body:JSON.stringify(body)});toast(c?'Contatto aggiornato':'Contatto creato');await refresh();if(c)await openContactDetail(c.id)},c?'Salva modifiche':'Crea contatto')}
+function openLeadForm(contactId=''){modal('Nuovo lead',`<div class="form-grid"><div class="field full"><label>Contatto</label>${contactSelect('l-contact',contactId)}</div><div class="field"><label>Pipeline</label><select class="select" id="l-pipeline"><option>sell</option><option>buy</option><option>general</option></select></div><div class="field"><label>Priorità</label><select class="select" id="l-priority"><option>normal</option><option>low</option><option>high</option><option>urgent</option></select></div><div class="field"><label>Fonte</label><input class="input" id="l-source" value="admin_ui"></div><div class="field"><label>Assegnato a</label><input class="input" id="l-assigned"></div><div class="field"><label>Prossima azione</label><input class="input" id="l-next" type="datetime-local"></div><div class="field"><label>Valore stimato</label><input class="input" id="l-value" type="number" step="0.01"></div><div class="field full"><label>Note</label><textarea class="textarea" id="l-notes"></textarea></div></div>`,async()=>{await api('/leads',{method:'POST',body:JSON.stringify({contact_id:+val('l-contact'),source:opt(val('l-source')),pipeline:val('l-pipeline'),stage:'new',priority:val('l-priority'),status:'open',assigned_to:opt(val('l-assigned')),next_action_at:opt(val('l-next')),estimated_value:opt(val('l-value')),notes:opt(val('l-notes'))})});toast('Lead creato');await refresh()},'Crea lead')}
+function openActivityForm(ref={}){modal('Registra attività',`<div class="form-grid"><div class="field"><label>Contatto</label>${contactSelect('a-contact',ref.contact_id||'')}</div><div class="field"><label>Lead ID</label><input class="input" id="a-lead" type="number" value="${esc(ref.lead_id||'')}"></div><div class="field"><label>Stima ID</label><input class="input" id="a-stima" type="number"></div><div class="field"><label>Tipo</label><select class="select" id="a-type">${['note','call','email','whatsapp','meeting','valuation','status_change','system'].map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Direzione</label><select class="select" id="a-dir"><option value="">—</option><option>in</option><option>out</option><option>internal</option></select></div><div class="field"><label>Canale</label><input class="input" id="a-channel"></div><div class="field full"><label>Oggetto</label><input class="input" id="a-subject"></div><div class="field full"><label>Descrizione</label><textarea class="textarea" id="a-desc"></textarea></div><div class="field"><label>Esito</label><input class="input" id="a-outcome"></div><div class="field"><label>Data attività</label><input class="input" id="a-date" type="datetime-local"></div></div>`,async()=>{const c=val('a-contact'),l=val('a-lead'),s=val('a-stima');await api('/activities',{method:'POST',body:JSON.stringify({contact_id:c?+c:null,lead_id:l?+l:null,stima_id:s?+s:null,activity_type:val('a-type'),direction:opt(val('a-dir')),channel:opt(val('a-channel')),subject:opt(val('a-subject')),description:opt(val('a-desc')),outcome:opt(val('a-outcome')),occurred_at:opt(val('a-date'))})});toast('Attività registrata');await refresh()},'Registra')}
+function openTaskForm(ref={},task=null){modal(task?'Modifica task':'Nuovo task',`<div class="form-grid"><div class="field"><label>Contatto</label>${contactSelect('t-contact',task?.contact_id||ref.contact_id||'')}</div><div class="field"><label>Lead ID</label><input class="input" id="t-lead" type="number" value="${esc(task?.lead_id||ref.lead_id||'')}"></div><div class="field"><label>Stima ID</label><input class="input" id="t-stima" type="number" value="${esc(task?.stima_id||'')}"></div><div class="field"><label>Tipo</label><input class="input" id="t-type" value="${esc(task?.task_type||'follow_up')}"></div><div class="field full"><label>Titolo</label><input class="input" id="t-title" value="${esc(task?.title||'')}"></div><div class="field"><label>Priorità</label><select class="select" id="t-priority">${['low','normal','high','urgent'].map(x=>`<option ${task?.priority===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stato</label><select class="select" id="t-status">${['open','in_progress','completed','cancelled'].map(x=>`<option ${task?.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Scadenza</label><input class="input" id="t-due" type="datetime-local" value="${localInput(task?.due_at)}"></div><div class="field"><label>Assegnato a</label><input class="input" id="t-assigned" value="${esc(task?.assigned_to||'')}"></div><div class="field full"><label>Descrizione</label><textarea class="textarea" id="t-desc">${esc(task?.description||'')}</textarea></div></div>`,async()=>{const c=val('t-contact'),l=val('t-lead'),s=val('t-stima');const body={title:val('t-title'),description:opt(val('t-desc')),task_type:opt(val('t-type')),priority:val('t-priority'),status:val('t-status'),due_at:opt(val('t-due')),assigned_to:opt(val('t-assigned'))};if(!task){Object.assign(body,{contact_id:c?+c:null,lead_id:l?+l:null,stima_id:s?+s:null})}await api(task?`/tasks/${task.id}`:'/tasks',{method:task?'PATCH':'POST',body:JSON.stringify(body)});toast(task?'Task aggiornato':'Task creato');await refresh()},task?'Salva modifiche':'Crea task')}
+async function openContactDetail(id){try{state.selected=await api(`/contacts/${id}`);state.view='contactDetail';render()}catch(e){toast(e.message,true)}}
+function renderContactDetail(){const c=state.selected;const leads=state.leads.filter(l=>l.contact_id===c.id),acts=state.activities.filter(a=>a.contact_id===c.id),tasks=state.tasks.filter(t=>t.contact_id===c.id);qs('#content').innerHTML=`<div class="split"><div class="card detail-card"><div class="panel-head"><div><h2>${esc(c.display_name||contactName(c.id))}</h2><div class="muted">Contatto #${c.id}</div></div><div class="toolbar"><button class="btn" id="edit-contact">Modifica</button><button class="btn primary" id="open-360">Apri Vista 360</button></div></div><div class="detail-grid"><div class="detail-item"><label>Email</label>${esc(c.email||'—')}</div><div class="detail-item"><label>Telefono</label>${esc(c.phone||'—')}</div><div class="detail-item"><label>Secondo telefono</label>${esc(c.secondary_phone||'—')}</div><div class="detail-item"><label>Fonte</label>${esc(c.source||'—')}</div><div class="detail-item"><label>Stato</label>${badge(c.status)}</div><div class="detail-item"><label>Consenso marketing</label>${c.marketing_consent?'Sì':'No'}</div></div><h3 class="section-title">Ruoli</h3><div class="toolbar">${(c.roles||[]).map(r=>`<span class="badge role-chip">${esc(r.role)}<button data-remove-role="${esc(r.role)}">×</button></span>`).join('')||'<span class="muted">Nessun ruolo</span>'}<button class="btn small" id="add-role">+ Ruolo</button></div><h3 class="section-title">Note</h3><div>${esc(c.notes||'Nessuna nota')}</div><h3 class="section-title">Lead collegati</h3>${leadTable(leads)}</div><div class="grid"><div class="card panel"><div class="panel-head"><h2>Azioni</h2></div><div class="grid"><button class="btn primary" id="contact-new-lead">+ Nuovo lead</button><button class="btn" id="contact-new-activity">+ Attività</button><button class="btn" id="contact-new-task">+ Task</button><button class="btn ghost" id="back-contacts">← Torna ai contatti</button></div></div><div class="card panel"><h2>Attività recenti</h2>${activityList(acts.slice(0,5))}</div><div class="card panel"><h2>Task</h2>${taskList(tasks.slice(0,5))}</div></div></div>`;qs('#edit-contact').onclick=()=>openContactForm(c);qs('#open-360').onclick=()=>openContact360(c.id);qs('#add-role').onclick=()=>openRoleForm(c.id);qsa('[data-remove-role]').forEach(b=>b.onclick=async()=>{if(!confirmAction(`Rimuovere il ruolo ${b.dataset.removeRole}?`))return;try{await api(`/contacts/${c.id}/roles/${b.dataset.removeRole}`,{method:'DELETE'});toast('Ruolo rimosso');await openContactDetail(c.id)}catch(e){toast(e.message,true)}});qs('#contact-new-lead').onclick=()=>openLeadForm(c.id);qs('#contact-new-activity').onclick=()=>openActivityForm({contact_id:c.id});qs('#contact-new-task').onclick=()=>openTaskForm({contact_id:c.id});qs('#back-contacts').onclick=()=>setView('contacts');bindLeadRows();bindTaskEvents();bindActivityEvents()}
+async function openContact360(id){try{state.selected360=await api(`/api/crm/contacts/${id}/360`);state.view='contact360';render()}catch(e){toast(e.message,true)}}
+function renderContact360(){
+ const d=state.selected360||{},c=d.contact||{};
+ const block=(title,items,renderItem)=>`<div class="card panel"><h3>${esc(title)} (${items.length})</h3>${items.length?`<div class="list">${items.map(renderItem).join('')}</div>`:'<div class="empty">Nessun dato</div>'}</div>`;
+ let html=`<div class="card detail-card"><div class="panel-head"><div><h2>${esc(c.display_name||contactName(c.id))}</h2><div class="muted">${esc(c.email||'—')} · ${esc(c.phone||'—')}</div></div><button class="btn ghost" id="back-to-contact">← Torna al contatto</button></div><div class="toolbar">${(d.roles||[]).map(r=>`<span class="badge role-chip">${esc(r.role)}</span>`).join('')||'<span class="muted">Nessun ruolo</span>'}</div></div><div class="grid two-panels">`;
+ html+=block('Leads',d.leads||[],l=>`<div class="list-item"><div><b>Lead #${esc(l.id)}</b> <span class="muted">${esc(l.pipeline||'—')}</span></div>${badge(l.stage)}</div>`);
+ html+=block('Immobili',d.properties||[],p=>{
+   const pid=positiveId(p.id);
+   const label=esc(p.title||`Immobile #${p.id}`);
+   const link=pid?`<a href="/property-admin/?id=${pid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">${esc(p.code||'')}</span></div>${badge(p.commercial_status)}</div>`;
+ });
+ html+=block('Richieste BUY',d.buy_requests||[],b=>{
+   const bid=positiveId(b.id);
+   const label=esc(b.title||`Richiesta #${b.id}`);
+   const link=bid?`<a href="/buy-admin/?id=${bid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">Target: ${money(b.budget_target)}</span></div>${badge(b.status)}</div>`;
+ });
+ html+=block('Match',d.matches||[],m=>{
+   const mid=positiveId(m.id);
+   const link=mid?`<a href="/match-admin/?id=${mid}" target="_blank" rel="noopener noreferrer"><b>Match #${esc(m.id)}</b></a>`:`<b>Match #${esc(m.id)}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">Req #${esc(m.buy_request_id)} ↔ Prop #${esc(m.property_id)}</span></div>${badge(m.match_class)}</div>`;
+ });
+ html+=block('Visite',d.visits||[],v=>{
+   const pid=positiveId(v.property_id);
+   const label=dt(v.scheduled_at);
+   const link=pid?`<a href="/property-admin/?id=${pid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">${esc(v.property_title||`Immobile #${v.property_id}`)}</span></div>${badge(v.status)}</div>`;
+ });
+ html+=block('Attività',d.activities||[],a=>`<div class="list-item"><div><b>${esc(a.activity_type||'Attività')}</b> <span class="muted">${esc(a.subject||'')}</span></div><span class="muted">${dt(a.occurred_at)}</span></div>`);
+ html+=block('Task',d.tasks||[],t=>`<div class="list-item"><div><b>${esc(t.title||`Task #${t.id}`)}</b> <span class="muted">Scadenza: ${dt(t.due_at)}</span></div>${badge(t.status)}</div>`);
+ html+='</div>';
+ qs('#content').innerHTML=html;
+ qs('#back-to-contact').onclick=()=>{state.view='contactDetail';state.selected=c;render()};
+}
+function openRoleForm(contactId){modal('Aggiungi ruolo',`<div class="form-grid"><div class="field"><label>Ruolo</label><select class="select" id="role">${['owner','seller','buyer','prospect','referrer','agency','professional','other'].map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Principale</label><select class="select" id="role-primary"><option value="false">No</option><option value="true">Sì</option></select></div></div>`,async()=>{await api(`/contacts/${contactId}/roles`,{method:'POST',body:JSON.stringify({role:val('role'),is_primary:val('role-primary')==='true',metadata:{}})});toast('Ruolo aggiunto');await openContactDetail(contactId)},'Aggiungi')}
+async function openLeadDetail(id){try{state.selected=await api(`/leads/${id}`);state.view='leadDetail';render()}catch(e){toast(e.message,true)}}
+function renderLeadDetail(){const l=state.selected,acts=state.activities.filter(a=>a.lead_id===l.id),tasks=state.tasks.filter(t=>t.lead_id===l.id);qs('#content').innerHTML=`<div class="split"><div class="card detail-card"><div class="panel-head"><div><h2>Lead #${l.id}</h2><div class="muted">${esc(contactName(l.contact_id))}</div></div><button class="btn" id="edit-lead">Modifica</button></div><div class="detail-grid"><div class="detail-item"><label>Pipeline</label>${badge(l.pipeline)}</div><div class="detail-item"><label>Stage</label>${badge(l.stage)}</div><div class="detail-item"><label>Priorità</label>${badge(l.priority)}</div><div class="detail-item"><label>Stato</label>${badge(l.status)}</div><div class="detail-item"><label>Assegnato a</label>${esc(l.assigned_to||'—')}</div><div class="detail-item"><label>Prossima azione</label>${dt(l.next_action_at)}</div><div class="detail-item"><label>Valore stimato</label>${l.estimated_value??'—'}</div><div class="detail-item"><label>Motivo perdita</label>${esc(l.lost_reason||'—')}</div></div><h3 class="section-title">Note</h3><div>${esc(l.notes||'Nessuna nota')}</div><h3 class="section-title">Stime collegate</h3><div class="list">${(l.estimations||[]).map(e=>`<div class="list-item"><div class="list-item-head"><strong>Stima #${e.stima_id}</strong><div class="actions">${badge(e.relation_type)}<button class="btn small danger" data-unlink-stima="${e.stima_id}">Scollega</button></div></div></div>`).join('')||'<div class="muted">Nessuna stima collegata</div>'}</div></div><div class="grid"><div class="card panel"><div class="panel-head"><h2>Azioni</h2></div><div class="grid"><button class="btn primary" id="link-estimation">Collega stima esistente</button><button class="btn" id="lead-new-activity">+ Attività</button><button class="btn" id="lead-new-task">+ Task</button><button class="btn ghost" id="back-leads">← Torna ai lead</button></div></div><div class="card panel"><h2>Attività recenti</h2>${activityList(acts.slice(0,5))}</div><div class="card panel"><h2>Task</h2>${taskList(tasks.slice(0,5))}</div></div></div>`;qs('#edit-lead').onclick=()=>openLeadUpdate(l);qs('#link-estimation').onclick=()=>openEstimationLink(l.id);qsa('[data-unlink-stima]').forEach(b=>b.onclick=async()=>{if(!confirmAction(`Scollegare la stima #${b.dataset.unlinkStima}?`))return;try{await api(`/leads/${l.id}/stime/${b.dataset.unlinkStima}`,{method:'DELETE'});toast('Stima scollegata');await openLeadDetail(l.id)}catch(e){toast(e.message,true)}});qs('#lead-new-activity').onclick=()=>openActivityForm({contact_id:l.contact_id,lead_id:l.id});qs('#lead-new-task').onclick=()=>openTaskForm({contact_id:l.contact_id,lead_id:l.id});qs('#back-leads').onclick=()=>setView('leads');bindTaskEvents();bindActivityEvents()}
+function openLeadUpdate(l){modal('Modifica lead',`<div class="form-grid"><div class="field"><label>Pipeline</label><select class="select" id="u-pipeline">${['sell','buy','general'].map(x=>`<option ${l.pipeline===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stage</label><select class="select" id="u-stage">${['new','contacted','qualified','appointment','proposal','won','lost'].map(x=>`<option ${l.stage===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stato</label><select class="select" id="u-status">${['open','paused','closed'].map(x=>`<option ${l.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Priorità</label><select class="select" id="u-priority">${['low','normal','high','urgent'].map(x=>`<option ${l.priority===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Assegnato a</label><input class="input" id="u-assigned" value="${esc(l.assigned_to||'')}"></div><div class="field"><label>Prossima azione</label><input class="input" id="u-next" type="datetime-local" value="${localInput(l.next_action_at)}"></div><div class="field"><label>Valore stimato</label><input class="input" id="u-value" type="number" step="0.01" value="${esc(l.estimated_value||'')}"></div><div class="field"><label>Motivo perdita</label><input class="input" id="u-lost" value="${esc(l.lost_reason||'')}"></div><div class="field full"><label>Note</label><textarea class="textarea" id="u-notes">${esc(l.notes||'')}</textarea></div></div>`,async()=>{await api(`/leads/${l.id}`,{method:'PATCH',body:JSON.stringify({pipeline:val('u-pipeline'),stage:val('u-stage'),status:val('u-status'),priority:val('u-priority'),assigned_to:opt(val('u-assigned')),next_action_at:opt(val('u-next')),estimated_value:opt(val('u-value')),lost_reason:opt(val('u-lost')),notes:opt(val('u-notes'))})});toast('Lead aggiornato');await loadAll();await openLeadDetail(l.id)},'Salva modifiche')}
+function openEstimationLink(leadId){modal('Collega stima esistente',`<div class="form-grid"><div class="field"><label>ID stima legacy</label><input class="input" id="e-id" type="number" min="1" placeholder="Es. 123"></div><div class="field"><label>Relazione</label><select class="select" id="e-rel"><option>origin</option><option>related</option><option>follow_up</option></select></div><div class="field full"><p class="muted">Inserisci manualmente l’ID di una stima già presente. Nessun backfill automatico viene eseguito.</p></div></div>`,async()=>{const id=+val('e-id');if(!id)throw new Error('Inserisci un ID stima valido');await api(`/leads/${leadId}/stime/${id}`,{method:'POST',body:JSON.stringify({relation_type:val('e-rel')})});toast('Stima collegata');await openLeadDetail(leadId)},'Collega')}
+qs('#nav').onclick=e=>{const b=e.target.closest('[data-view]');if(b)setView(b.dataset.view)};qs('#refresh-btn').onclick=refresh;qs('#quick-add').onclick=()=>openContactForm();qs('#login-form').addEventListener('submit',login);qs('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));window.setView=setView;showLogin();
