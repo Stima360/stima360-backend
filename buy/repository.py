@@ -130,14 +130,24 @@ def list_matches(request_id):
 def add_interaction(request_id,data):
     data=dict(data)
     with core_cursor(commit=True) as (_,cur):
-        ensure(cur,'buy_requests',request_id,'buy request')
-        match_id=data.get('match_id');property_id=data.get('property_id')
+        cur.execute('SELECT id FROM buy_requests WHERE id=%s FOR UPDATE',(request_id,));buy=cur.fetchone()
+        if not buy:raise NotFoundError(f'buy request {request_id} not found')
+        match_id=data.get('match_id');property_id=data.get('property_id');property_visit_id=data.get('property_visit_id')
         if match_id:
-            cur.execute('SELECT property_id,buy_request_id FROM matches WHERE id=%s',(match_id,));m=cur.fetchone()
+            cur.execute('SELECT property_id,buy_request_id FROM matches WHERE id=%s FOR UPDATE',(match_id,));m=cur.fetchone()
             if not m:raise NotFoundError(f'match {match_id} not found')
             if m['buy_request_id']!=request_id:raise ValidationError('match does not belong to buy request')
             property_id=m['property_id'];data['property_id']=property_id
         elif property_id:ensure(cur,'properties',property_id,'property')
+        if property_visit_id is not None:
+            if not match_id:raise ValidationError('match_id is required when property_visit_id is provided')
+            cur.execute('SELECT property_id FROM property_visits WHERE id=%s FOR UPDATE',(property_visit_id,));visit=cur.fetchone()
+            if not visit:raise NotFoundError(f'property visit {property_visit_id} not found')
+            if visit['property_id']!=property_id:raise ValidationError('property visit does not belong to match property')
+            cur.execute("""SELECT id FROM buy_request_interactions
+            WHERE property_visit_id=%s AND buy_request_id=%s AND match_id=%s AND property_id=%s
+            AND interaction_type='visit_scheduled' ORDER BY occurred_at DESC,id DESC LIMIT 1""",(property_visit_id,request_id,match_id,property_id));linked=cur.fetchone()
+            if not linked:raise ValidationError('property visit is not linked to buy request and match')
         if data.get('occurred_at') is None:data.pop('occurred_at',None)
         data['buy_request_id']=request_id;cols=list(data)
         cur.execute(f"INSERT INTO buy_request_interactions({','.join(cols)}) VALUES({','.join(['%s']*len(cols))}) RETURNING *",list(data.values()));result=row(cur.fetchone())

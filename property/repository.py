@@ -67,7 +67,27 @@ def get_property(property_id):
         cur.execute('SELECT pl.*,l.pipeline,l.stage,l.status,l.contact_id FROM property_leads pl JOIN leads l ON l.id=pl.lead_id WHERE pl.property_id=%s ORDER BY pl.id',(property_id,)); p['leads']=[dict(x) for x in cur.fetchall()]
         for table,key in [('property_documents','documents'),('property_photos','photos'),('property_visits','visits')]:
             order='sort_order,id' if table=='property_photos' else ('scheduled_at DESC,id DESC' if table=='property_visits' else 'created_at DESC,id DESC')
-            cur.execute(f'SELECT * FROM {table} WHERE property_id=%s ORDER BY {order}',(property_id,)); p[key]=[dict(x) for x in cur.fetchall()]
+            if table=='property_visits':
+                cur.execute("""SELECT v.*,scheduled.buy_request_id,scheduled.match_id,
+                latest.id AS last_commercial_interaction_id,
+                latest.interaction_type AS last_commercial_interaction_type
+                FROM property_visits v
+                LEFT JOIN LATERAL (
+                    SELECT i.buy_request_id,i.match_id
+                    FROM buy_request_interactions i
+                    WHERE i.property_visit_id=v.id AND i.interaction_type='visit_scheduled'
+                    ORDER BY i.occurred_at DESC,i.id DESC LIMIT 1
+                ) scheduled ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT i.id,i.interaction_type
+                    FROM buy_request_interactions i
+                    WHERE i.property_visit_id=v.id
+                      AND i.interaction_type IN ('visited','interested','discarded','offer_candidate')
+                    ORDER BY i.occurred_at DESC,i.id DESC LIMIT 1
+                ) latest ON TRUE
+                WHERE v.property_id=%s ORDER BY v.scheduled_at DESC,v.id DESC""",(property_id,))
+            else:cur.execute(f'SELECT * FROM {table} WHERE property_id=%s ORDER BY {order}',(property_id,))
+            p[key]=[dict(x) for x in cur.fetchall()]
         cur.execute('SELECT * FROM property_price_history WHERE property_id=%s ORDER BY created_at DESC,id DESC',(property_id,)); p['price_history']=[dict(x) for x in cur.fetchall()]
         cur.execute('SELECT * FROM property_status_history WHERE property_id=%s ORDER BY created_at DESC,id DESC',(property_id,)); p['status_history']=[dict(x) for x in cur.fetchall()]
         today=__import__('datetime').date.today()
