@@ -35,7 +35,30 @@
     <main class="main">
       <header class="topbar">
         <div><h1 id="page-title">Panoramica</h1><p id="page-subtitle">Gestione operativa del CORE CRM</p></div>
-        <div class="top-actions"><button class="btn ghost" id="logout-btn">Logout</button><button class="btn ghost" id="refresh-btn">Aggiorna</button><button class="btn primary" id="quick-add">+ Nuovo contatto</button></div>
+        <!-- NEXT4_P3_GLOBAL_SEARCH -->
+        <div class="top-actions">
+          <div id="global-search-wrap" style="position:relative;min-width:320px">
+            <input
+              class="input"
+              id="global-search"
+              type="search"
+              autocomplete="off"
+              maxlength="200"
+              placeholder="Cerca ovunque — Mario, 392, Via Roma"
+              aria-label="Cerca ovunque"
+              style="width:100%"
+            >
+            <div
+              id="global-search-results"
+              hidden
+              role="listbox"
+              style="position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:50;max-height:420px;overflow:auto;background:#fff;border:1px solid #dfe6f1;border-radius:12px;box-shadow:0 14px 36px rgba(23,32,51,.16);padding:6px"
+            ></div>
+          </div>
+          <button class="btn ghost" id="logout-btn">Logout</button>
+          <button class="btn ghost" id="refresh-btn">Aggiorna</button>
+          <button class="btn primary" id="quick-add">+ Nuovo contatto</button>
+        </div>
       </header>
       <section id="content" class="content"></section>
     </main>

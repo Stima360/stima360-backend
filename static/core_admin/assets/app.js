@@ -1,5 +1,8 @@
 const API='/api/core';
 const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],selected:null,selected360:null,credentials:null};
+// NEXT4_P3_GLOBAL_SEARCH
+let globalSearchTimer=null;
+let globalSearchSequence=0;
 const qs=(s,p=document)=>p.querySelector(s),qsa=(s,p=document)=>[...p.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const dt=v=>v?new Date(v).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'}):'—';
@@ -15,7 +18,7 @@ function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${
 function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
 function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
 function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
-function logout(message=''){state.credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+function logout(message=''){cancelGlobalSearch();state.credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
 async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}state.credentials={username,password};showApp();await refresh();await applyDeepLink();}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
 
 async function applyDeepLink(){
@@ -29,7 +32,225 @@ async function applyDeepLink(){
  await openContact360(id);
 }
 
-async function api(path,opts={}){const headers={'Content-Type':'application/json',...(opts.headers||{})};if(state.credentials)headers.Authorization=encodeBasic(state.credentials.username,state.credentials.password);const url=path.startsWith('/api/')?path:API+path;const r=await fetch(url,{...opts,headers});if(r.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);throw new Error(d||`Errore ${r.status}`)}return data}
+async function api(path,opts={}){const headers={'Content-Type':'application/json',...(opts.headers||{})};if(state.credentials)headers.Authorization=encodeBasic(state.credentials.username,state.credentials.password);const url=path.startsWith('/api/')?path:API+path;const r=await fetch(url,{...opts,headers});if(r.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);const error=new Error(d||`Errore ${r.status}`);error.status=r.status;throw error}return data}
+
+function globalSearchHref(type,itemId){
+ const id=positiveId(itemId);
+ if(id===null)return null;
+ if(type==='contact')return `/core-admin/?view=contact360&id=${id}`;
+ if(type==='property')return `/property-admin/?id=${id}`;
+ if(type==='buy')return `/buy-admin/?id=${id}`;
+ if(type==='match')return `/match-admin/?id=${id}`;
+ return null;
+}
+
+function globalSearchResultNode(item){
+ const href=globalSearchHref(item.type,item.id);
+ if(!href)return null;
+
+ const link=document.createElement('a');
+ link.href=href;
+ link.target='_blank';
+ link.rel='noopener noreferrer';
+ link.className='list-item';
+ link.style.display='block';
+ link.style.textDecoration='none';
+ link.style.color='inherit';
+
+ const head=document.createElement('div');
+ head.className='list-item-head';
+
+ const titleWrap=document.createElement('div');
+
+ const type=document.createElement('span');
+ type.className='badge gray';
+ type.textContent=String(item.typeLabel||item.type||'');
+
+ const title=document.createElement('strong');
+ title.textContent=String(item.title||'');
+ title.style.marginLeft='8px';
+
+ const subtitle=document.createElement('div');
+ subtitle.className='muted';
+ subtitle.textContent=String(item.subtitle||'');
+
+ titleWrap.append(type,title,subtitle);
+ head.appendChild(titleWrap);
+
+ if(item.status){
+   const status=document.createElement('span');
+   status.className='badge gray';
+   status.textContent=String(item.status);
+   head.appendChild(status);
+ }
+
+ link.appendChild(head);
+ return link;
+}
+
+function renderGlobalSearchResults(items,message=''){
+ const root=qs('#global-search-results');
+ if(!root)return;
+
+ root.replaceChildren();
+
+ if(message){
+   const row=document.createElement('div');
+   row.className='list-item muted';
+   row.textContent=message;
+   root.appendChild(row);
+   root.hidden=false;
+   return;
+ }
+
+ const nodes=items.map(globalSearchResultNode).filter(Boolean);
+
+ if(!nodes.length){
+   const row=document.createElement('div');
+   row.className='list-item muted';
+   row.textContent='Nessun risultato';
+   root.appendChild(row);
+   root.hidden=false;
+   return;
+ }
+
+ nodes.forEach(node=>root.appendChild(node));
+ root.hidden=false;
+}
+
+function clearGlobalSearchResults(){
+ const root=qs('#global-search-results');
+ if(root){
+   root.replaceChildren();
+   root.hidden=true;
+ }
+}
+
+function cancelGlobalSearch(){
+ clearTimeout(globalSearchTimer);
+ globalSearchTimer=null;
+ globalSearchSequence+=1;
+ clearGlobalSearchResults();
+}
+
+async function lookupGlobalSearchMatch(id){
+ try{
+   return await api(`/api/match/matches/${id}`);
+ }catch(e){
+   if(e.status===404)return null;
+   throw e;
+ }
+}
+
+function normalizeGlobalSearchResults(type,items){
+ return (items||[]).map(item=>{
+   if(type==='contact')return {
+     type,
+     id:item.id,
+     typeLabel:'CONTATTO',
+     title:item.display_name||item.company_name||[item.first_name,item.last_name].filter(Boolean).join(' ')||`Contatto #${item.id}`,
+     subtitle:[item.email,item.phone].filter(Boolean).join(' · '),
+     status:item.status||''
+   };
+
+   if(type==='property')return {
+     type,
+     id:item.id,
+     typeLabel:'IMMOBILE',
+     title:item.title||`Immobile #${item.id}`,
+     subtitle:[item.code,item.address,item.city].filter(Boolean).join(' · '),
+     status:item.commercial_status||''
+   };
+
+   if(type==='buy')return {
+     type,
+     id:item.id,
+     typeLabel:'BUY',
+     title:item.title||`Richiesta #${item.id}`,
+     subtitle:[item.contact_name,item.contact_phone].filter(Boolean).join(' · '),
+     status:item.status||''
+   };
+
+   if(type==='match')return {
+     type,
+     id:item.id,
+     typeLabel:'MATCH',
+     title:`Match #${item.id}`,
+     subtitle:[item.buy_title,item.property_title].filter(Boolean).join(' ↔ '),
+     status:item.match_class||item.commercial_status||''
+   };
+
+   return null;
+ }).filter(Boolean);
+}
+
+async function runGlobalSearch(query,sequence){
+ const encoded=encodeURIComponent(query);
+
+ const requests=[
+   api(`/contacts?search=${encoded}&limit=5`)
+     .then(data=>({type:'contact',items:data.items||[]})),
+   api(`/api/property/properties?search=${encoded}&limit=5`)
+     .then(data=>({type:'property',items:data.items||[]})),
+   api(`/api/buy/requests?search=${encoded}&limit=5`)
+     .then(data=>({type:'buy',items:data.items||[]}))
+ ];
+
+ const matchId=positiveId(query);
+
+ if(matchId!==null){
+   requests.push(
+     lookupGlobalSearchMatch(matchId)
+       .then(item=>({type:'match',items:item?[item]:[]}))
+   );
+ }
+
+ const settled=await Promise.allSettled(requests);
+
+ if(sequence!==globalSearchSequence)return;
+
+ const items=[];
+ let failed=0;
+
+ for(const result of settled){
+   if(result.status==='fulfilled'){
+     items.push(
+       ...normalizeGlobalSearchResults(
+         result.value.type,
+         result.value.items
+       )
+     );
+   }else{
+     failed+=1;
+   }
+ }
+
+ if(!items.length&&failed===settled.length){
+   renderGlobalSearchResults([], 'Ricerca temporaneamente non disponibile.');
+   return;
+ }
+
+ renderGlobalSearchResults(items);
+}
+
+function scheduleGlobalSearch(){
+ const input=qs('#global-search');
+ if(!input)return;
+
+ const query=input.value.trim();
+
+ clearTimeout(globalSearchTimer);
+
+ const sequence=++globalSearchSequence;
+
+ if(query.length<2){
+   clearGlobalSearchResults();
+   return;
+ }
+
+ const execute=()=>runGlobalSearch(query,sequence);
+ globalSearchTimer=setTimeout(execute,300);
+}
 function toast(msg,error=false){const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=msg;qs('#toast-root').appendChild(el);setTimeout(()=>el.remove(),3300)}
 function badge(v){const c=['active','open','completed','won'].includes(v)?'ok':['urgent','high','lost','cancelled'].includes(v)?'warn':'gray';return `<span class="badge ${c}">${esc(v||'—')}</span>`}
 function confirmAction(message){return window.confirm(message)}
@@ -308,4 +529,15 @@ async function openLeadDetail(id){try{state.selected=await api(`/leads/${id}`);s
 function renderLeadDetail(){const l=state.selected,acts=state.activities.filter(a=>a.lead_id===l.id),tasks=state.tasks.filter(t=>t.lead_id===l.id);qs('#content').innerHTML=`<div class="split"><div class="card detail-card"><div class="panel-head"><div><h2>Lead #${l.id}</h2><div class="muted">${esc(contactName(l.contact_id))}</div></div><button class="btn" id="edit-lead">Modifica</button></div><div class="detail-grid"><div class="detail-item"><label>Pipeline</label>${badge(l.pipeline)}</div><div class="detail-item"><label>Stage</label>${badge(l.stage)}</div><div class="detail-item"><label>Priorità</label>${badge(l.priority)}</div><div class="detail-item"><label>Stato</label>${badge(l.status)}</div><div class="detail-item"><label>Assegnato a</label>${esc(l.assigned_to||'—')}</div><div class="detail-item"><label>Prossima azione</label>${dt(l.next_action_at)}</div><div class="detail-item"><label>Valore stimato</label>${l.estimated_value??'—'}</div><div class="detail-item"><label>Motivo perdita</label>${esc(l.lost_reason||'—')}</div></div><h3 class="section-title">Note</h3><div>${esc(l.notes||'Nessuna nota')}</div><h3 class="section-title">Stime collegate</h3><div class="list">${(l.estimations||[]).map(e=>`<div class="list-item"><div class="list-item-head"><strong>Stima #${e.stima_id}</strong><div class="actions">${badge(e.relation_type)}<button class="btn small danger" data-unlink-stima="${e.stima_id}">Scollega</button></div></div></div>`).join('')||'<div class="muted">Nessuna stima collegata</div>'}</div></div><div class="grid"><div class="card panel"><div class="panel-head"><h2>Azioni</h2></div><div class="grid"><button class="btn primary" id="link-estimation">Collega stima esistente</button><button class="btn" id="lead-new-activity">+ Attività</button><button class="btn" id="lead-new-task">+ Task</button><button class="btn ghost" id="back-leads">← Torna ai lead</button></div></div><div class="card panel"><h2>Attività recenti</h2>${activityList(acts.slice(0,5))}</div><div class="card panel"><h2>Task</h2>${taskList(tasks.slice(0,5))}</div></div></div>`;qs('#edit-lead').onclick=()=>openLeadUpdate(l);qs('#link-estimation').onclick=()=>openEstimationLink(l.id);qsa('[data-unlink-stima]').forEach(b=>b.onclick=async()=>{if(!confirmAction(`Scollegare la stima #${b.dataset.unlinkStima}?`))return;try{await api(`/leads/${l.id}/stime/${b.dataset.unlinkStima}`,{method:'DELETE'});toast('Stima scollegata');await openLeadDetail(l.id)}catch(e){toast(e.message,true)}});qs('#lead-new-activity').onclick=()=>openActivityForm({contact_id:l.contact_id,lead_id:l.id});qs('#lead-new-task').onclick=()=>openTaskForm({contact_id:l.contact_id,lead_id:l.id});qs('#back-leads').onclick=()=>setView('leads');bindTaskEvents();bindActivityEvents()}
 function openLeadUpdate(l){modal('Modifica lead',`<div class="form-grid"><div class="field"><label>Pipeline</label><select class="select" id="u-pipeline">${['sell','buy','general'].map(x=>`<option ${l.pipeline===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stage</label><select class="select" id="u-stage">${['new','contacted','qualified','appointment','proposal','won','lost'].map(x=>`<option ${l.stage===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stato</label><select class="select" id="u-status">${['open','paused','closed'].map(x=>`<option ${l.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Priorità</label><select class="select" id="u-priority">${['low','normal','high','urgent'].map(x=>`<option ${l.priority===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Assegnato a</label><input class="input" id="u-assigned" value="${esc(l.assigned_to||'')}"></div><div class="field"><label>Prossima azione</label><input class="input" id="u-next" type="datetime-local" value="${localInput(l.next_action_at)}"></div><div class="field"><label>Valore stimato</label><input class="input" id="u-value" type="number" step="0.01" value="${esc(l.estimated_value||'')}"></div><div class="field"><label>Motivo perdita</label><input class="input" id="u-lost" value="${esc(l.lost_reason||'')}"></div><div class="field full"><label>Note</label><textarea class="textarea" id="u-notes">${esc(l.notes||'')}</textarea></div></div>`,async()=>{await api(`/leads/${l.id}`,{method:'PATCH',body:JSON.stringify({pipeline:val('u-pipeline'),stage:val('u-stage'),status:val('u-status'),priority:val('u-priority'),assigned_to:opt(val('u-assigned')),next_action_at:opt(val('u-next')),estimated_value:opt(val('u-value')),lost_reason:opt(val('u-lost')),notes:opt(val('u-notes'))})});toast('Lead aggiornato');await loadAll();await openLeadDetail(l.id)},'Salva modifiche')}
 function openEstimationLink(leadId){modal('Collega stima esistente',`<div class="form-grid"><div class="field"><label>ID stima legacy</label><input class="input" id="e-id" type="number" min="1" placeholder="Es. 123"></div><div class="field"><label>Relazione</label><select class="select" id="e-rel"><option>origin</option><option>related</option><option>follow_up</option></select></div><div class="field full"><p class="muted">Inserisci manualmente l’ID di una stima già presente. Nessun backfill automatico viene eseguito.</p></div></div>`,async()=>{const id=+val('e-id');if(!id)throw new Error('Inserisci un ID stima valido');await api(`/leads/${leadId}/stime/${id}`,{method:'POST',body:JSON.stringify({relation_type:val('e-rel')})});toast('Stima collegata');await openLeadDetail(leadId)},'Collega')}
+const globalSearchInput=qs('#global-search');
+if(globalSearchInput){
+ globalSearchInput.addEventListener('input',scheduleGlobalSearch);
+ globalSearchInput.addEventListener('keydown',event=>{
+   if(event.key==='Escape')cancelGlobalSearch();
+ });
+}
+document.addEventListener('click',event=>{
+ const wrap=qs('#global-search-wrap');
+ if(wrap&&!wrap.contains(event.target)){cancelGlobalSearch();}
+});
 qs('#nav').onclick=e=>{const b=e.target.closest('[data-view]');if(b)setView(b.dataset.view)};qs('#refresh-btn').onclick=refresh;qs('#quick-add').onclick=()=>openContactForm();qs('#login-form').addEventListener('submit',login);qs('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));window.setView=setView;showLogin();
