@@ -176,6 +176,35 @@ def link_stima(lead_id: int, stima_id: int, relation_type: str) -> dict[str, Any
     with core_cursor(commit=True) as (_, cur):
         _ensure_exists(cur, "leads", lead_id, "lead")
         _ensure_exists(cur, "stime", stima_id, "stima")
+
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",
+            (f"core:public_stima:{stima_id}",),
+        )
+
+        cur.execute(
+            """
+            SELECT lead_id
+            FROM lead_stime
+            WHERE stima_id = %s
+            ORDER BY id
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (stima_id,),
+        )
+        existing_link = _row(cur.fetchone())
+
+        if existing_link:
+            if existing_link["lead_id"] == lead_id:
+                raise ConflictError(
+                    f"stima {stima_id} is already linked to lead {lead_id}"
+                )
+
+            raise ConflictError(
+                f"stima {stima_id} is already linked to lead {existing_link['lead_id']}"
+            )
+
         try:
             cur.execute(
                 """
@@ -185,7 +214,10 @@ def link_stima(lead_id: int, stima_id: int, relation_type: str) -> dict[str, Any
                 (lead_id, stima_id, relation_type),
             )
         except errors.UniqueViolation as exc:
-            raise ConflictError(f"stima {stima_id} is already linked to lead {lead_id}") from exc
+            raise ConflictError(
+                f"stima {stima_id} is already linked to lead {lead_id}"
+            ) from exc
+
         return _row(cur.fetchone())
 
 
