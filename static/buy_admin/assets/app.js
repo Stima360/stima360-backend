@@ -141,6 +141,38 @@ function buildMatchDecisionPayload(values){
   return payload;
 }
 
+function nextActionDateTimeLocal(value){
+  if(!value)return '';
+  const parsed=new Date(value);
+  if(Number.isNaN(parsed.getTime()))return '';
+  return new Date(parsed.getTime()-parsed.getTimezoneOffset()*60000).toISOString().slice(0,16);
+}
+
+function nextActionFormValues(item){
+  return {
+    next_action_note:String(item?.next_action_note??''),
+    next_action_at:nextActionDateTimeLocal(item?.next_action_at),
+  };
+}
+
+function buildNextActionPayload(values){
+  const note=String(values.next_action_note||'').trim();
+  if(!note)throw new Error('Prossima azione obbligatoria');
+  const raw=String(values.next_action_at||'').trim();
+  if(!raw)throw new Error('Data e ora obbligatorie');
+  const nextActionAt=new Date(raw);
+  if(Number.isNaN(nextActionAt.getTime()))throw new Error('Data e ora non valide');
+  return {next_action_note:note,next_action_at:nextActionAt.toISOString()};
+}
+
+async function saveNextAction(requestId,values,request=req){
+  const id=positiveId(requestId);
+  if(id===null)throw new Error('ID richiesta non valido');
+  const payload=buildNextActionPayload(values);
+  await request(`${api}/requests/${id}`,{method:'PATCH',body:JSON.stringify(payload)});
+  return payload;
+}
+
 function proposalDateTimeLocal(value){
   if(!value)return '';
   const parsed=new Date(value);
@@ -435,17 +467,14 @@ function editRequest(){
   $('#editModal').showModal();
 }
 
-async function quickNextAction(){
+function quickNextAction(){
   const requestId=positiveId(current?.id);
   if(requestId===null)return;
-  const note=prompt('Prossima azione');
-  if(!note)return;
-  const when=prompt('Data/ora ISO, es. 2026-07-20T10:00:00+02:00');
-  await req(api+'/requests/'+requestId,{method:'PATCH',body:JSON.stringify({next_action_note:note,next_action_at:when||null})});
-  toast('Prossima azione salvata');
-  await detail(requestId);
-  await load();
-  await dashboard();
+  const form=$('#nextActionForm');
+  const values=nextActionFormValues(current);
+  form.elements.namedItem('next_action_note').value=values.next_action_note;
+  form.elements.namedItem('next_action_at').value=values.next_action_at;
+  $('#nextActionModal').showModal();
 }
 
 function openAction(matchId){
@@ -599,6 +628,7 @@ function updateActionScheduleField(){
 
 function bindUi(){
   $('#actionCancel').onclick=()=>$('#actionModal').close();
+  $('#nextActionCancel').onclick=()=>{$('#nextActionModal').close();$('#nextActionForm').reset();};
   $('#proposalCancel').onclick=()=>$('#proposalModal').close();
   $('#taskCancel').onclick=()=>$('#taskModal').close();
   $('#cancel').onclick=()=>$('#modal').close();
@@ -645,6 +675,21 @@ function bindUi(){
       await dashboard();
       await load();
       await detail(requestId);
+    }catch(error){toast('Errore: '+error.message);}
+  };
+
+  $('#nextActionForm').onsubmit=async event=>{
+    event.preventDefault();
+    const requestId=positiveId(current?.id);
+    if(requestId===null)return;
+    try{
+      await saveNextAction(requestId,formValues(event.target));
+      $('#nextActionModal').close();
+      event.target.reset();
+      toast('Prossima azione salvata');
+      await detail(requestId);
+      await load();
+      await dashboard();
     }catch(error){toast('Errore: '+error.message);}
   };
 
@@ -731,5 +776,5 @@ if(typeof window!=='undefined'){
 }
 
 if(typeof module!=='undefined'&&module.exports){
-  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,buildMatchDecisionPayload,buildProposalCreatePayload,buildProposalUpdatePayload,proposalActions,childCollectionUrl,childItemUrl};
+  module.exports={positiveId,buildBuyRequestPayload,buildLocationPayload,buildTypologyPayload,buildFeaturePayload,buildMatchDecisionPayload,buildNextActionPayload,nextActionFormValues,saveNextAction,buildProposalCreatePayload,buildProposalUpdatePayload,proposalActions,childCollectionUrl,childItemUrl};
 }

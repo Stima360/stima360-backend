@@ -182,6 +182,15 @@
       </form>
     </dialog>
 
+    <dialog id="nextActionModal">
+      <form id="nextActionForm">
+        <h2>Imposta prossima azione</h2>
+        <label>Prossima azione<input name="next_action_note" type="text" required></label>
+        <label>Data e ora<input name="next_action_at" type="datetime-local" required></label>
+        <menu><button id="nextActionCancel" type="button" class="secondary">Annulla</button><button type="submit">Salva</button></menu>
+      </form>
+    </dialog>
+
     <dialog id="actionModal">
       <form id="actionForm">
         <h2 id="actionTitle">Registra azione</h2>
