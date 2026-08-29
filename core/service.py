@@ -91,6 +91,64 @@ def link_stima(lead_id, stima_id, payload):
     return repository.link_stima(lead_id, stima_id, payload.relation_type)
 
 
+def bridge_public_stima(
+    stima_id,
+    *,
+    first_name,
+    last_name,
+    email,
+    phone,
+    marketing_consent,
+    marketing_consent_at,
+):
+    def clean(value):
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+    first_name = clean(first_name)
+    last_name = clean(last_name)
+    email = clean(email)
+    phone = clean(phone)
+    display_name = " ".join(part for part in (first_name, last_name) if part) or None
+    contact_data = {
+        "contact_type": "person",
+        "first_name": first_name,
+        "last_name": last_name,
+        "company_name": None,
+        "display_name": display_name,
+        "email": email,
+        "email_normalized": normalize_email(email),
+        "phone": phone,
+        "phone_normalized": normalize_phone(phone),
+        "secondary_phone": None,
+        "source": "public_stima",
+        "status": "active",
+        "marketing_consent": bool(marketing_consent),
+        "marketing_consent_at": marketing_consent_at,
+        "notes": None,
+    }
+    lead_data = {
+        "source": "public_stima",
+        "pipeline": "general",
+        "stage": "new",
+        "priority": "normal",
+        "status": "open",
+        "assigned_to": None,
+        "estimated_value": None,
+        "next_action_at": None,
+        "lost_reason": None,
+        "notes": None,
+    }
+    return repository.bridge_public_stima(
+        int(stima_id),
+        contact_data,
+        lead_data,
+        "related",
+    )
+
+
 def unlink_stima(lead_id, stima_id):
     repository.unlink_stima(lead_id, stima_id)
 

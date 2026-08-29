@@ -189,6 +189,147 @@ def link_stima(lead_id: int, stima_id: int, relation_type: str) -> dict[str, Any
         return _row(cur.fetchone())
 
 
+def bridge_public_stima(
+    stima_id: int,
+    contact_data: dict[str, Any],
+    lead_data: dict[str, Any],
+    relation_type: str,
+) -> dict[str, Any]:
+    """Atomically reconcile one public stima with its dedicated CORE lead."""
+
+    def result(status, contact_id=None, lead_id=None, *, reason=None, contact_created=False, lead_created=False):
+        value = {
+            "status": status,
+            "stima_id": stima_id,
+            "contact_id": contact_id,
+            "lead_id": lead_id,
+            "contact_created": contact_created,
+            "lead_created": lead_created,
+        }
+        if reason is not None:
+            value["reason"] = reason
+        return value
+
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",
+            (f"core:public_stima:{stima_id}",),
+        )
+        cur.execute(
+            """SELECT ls.lead_id,l.contact_id
+            FROM lead_stime ls JOIN leads l ON l.id=ls.lead_id
+            WHERE ls.stima_id=%s ORDER BY ls.id LIMIT 1 FOR UPDATE OF ls,l""",
+            (stima_id,),
+        )
+        existing_link = _row(cur.fetchone())
+        if existing_link:
+            return result(
+                "already_linked",
+                existing_link["contact_id"],
+                existing_link["lead_id"],
+            )
+
+        identity_scopes = []
+        if contact_data.get("email_normalized"):
+            identity_scopes.append(f"core:contact:email:{contact_data['email_normalized']}")
+        if contact_data.get("phone_normalized"):
+            identity_scopes.append(f"core:contact:phone:{contact_data['phone_normalized']}")
+        for scope in sorted(identity_scopes):
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",
+                (scope,),
+            )
+
+        email_matches = []
+        if contact_data.get("email_normalized"):
+            cur.execute(
+                "SELECT * FROM contacts WHERE email_normalized=%s ORDER BY id FOR UPDATE",
+                (contact_data["email_normalized"],),
+            )
+            email_matches = [dict(item) for item in cur.fetchall()]
+
+        phone_matches = []
+        if contact_data.get("phone_normalized"):
+            cur.execute(
+                "SELECT * FROM contacts WHERE phone_normalized=%s ORDER BY id FOR UPDATE",
+                (contact_data["phone_normalized"],),
+            )
+            phone_matches = [dict(item) for item in cur.fetchall()]
+
+        if len(email_matches) > 1 or len(phone_matches) > 1:
+            return result("conflict", reason="ambiguous_identity")
+
+        email_contact = email_matches[0] if email_matches else None
+        phone_contact = phone_matches[0] if phone_matches else None
+        if email_contact and phone_contact and email_contact["id"] != phone_contact["id"]:
+            return result("conflict", reason="identity_conflict")
+
+        contact = email_contact or phone_contact
+        contact_created = False
+        if contact and (contact.get("status") == "archived" or contact.get("archived_at") is not None):
+            return result("skipped", contact["id"], reason="archived_contact")
+
+        if contact is None:
+            if not contact_data.get("display_name"):
+                return result("skipped", reason="insufficient_contact_identity")
+            cur.execute(
+                """INSERT INTO contacts(
+                    contact_type,first_name,last_name,company_name,display_name,
+                    email,email_normalized,phone,phone_normalized,secondary_phone,
+                    source,status,marketing_consent,marketing_consent_at,notes
+                ) VALUES(
+                    %(contact_type)s,%(first_name)s,%(last_name)s,%(company_name)s,%(display_name)s,
+                    %(email)s,%(email_normalized)s,%(phone)s,%(phone_normalized)s,%(secondary_phone)s,
+                    %(source)s,%(status)s,%(marketing_consent)s,%(marketing_consent_at)s,%(notes)s
+                ) RETURNING *""",
+                contact_data,
+            )
+            contact = _row(cur.fetchone())
+            contact_created = True
+
+        prepared_lead = {**lead_data, "contact_id": contact["id"]}
+        cur.execute(
+            """INSERT INTO leads(
+                contact_id,source,pipeline,stage,priority,status,assigned_to,
+                estimated_value,next_action_at,lost_reason,notes
+            ) VALUES(
+                %(contact_id)s,%(source)s,%(pipeline)s,%(stage)s,%(priority)s,%(status)s,%(assigned_to)s,
+                %(estimated_value)s,%(next_action_at)s,%(lost_reason)s,%(notes)s
+            ) RETURNING *""",
+            prepared_lead,
+        )
+        lead = _row(cur.fetchone())
+        cur.execute(
+            """INSERT INTO lead_stime(lead_id,stima_id,relation_type)
+            VALUES(%s,%s,%s) ON CONFLICT(lead_id,stima_id) DO NOTHING RETURNING *""",
+            (lead["id"], stima_id, relation_type),
+        )
+        link = _row(cur.fetchone())
+        if not link:
+            cur.execute(
+                """SELECT ls.lead_id,l.contact_id
+                FROM lead_stime ls JOIN leads l ON l.id=ls.lead_id
+                WHERE ls.stima_id=%s ORDER BY ls.id LIMIT 1 FOR UPDATE OF ls,l""",
+                (stima_id,),
+            )
+            existing_link = _row(cur.fetchone())
+            if existing_link:
+                return result(
+                    "already_linked",
+                    existing_link["contact_id"],
+                    existing_link["lead_id"],
+                )
+            raise ConflictError(f"stima {stima_id} could not be linked")
+
+        return result(
+            "linked",
+            contact["id"],
+            lead["id"],
+            contact_created=contact_created,
+            lead_created=True,
+        )
+
+
 def unlink_stima(lead_id: int, stima_id: int) -> None:
     with core_cursor(commit=True) as (_, cur):
         cur.execute("DELETE FROM lead_stime WHERE lead_id = %s AND stima_id = %s", (lead_id, stima_id))

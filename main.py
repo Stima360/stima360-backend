@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import hashlib, hmac, os, uvicorn, secrets, uuid, requests
+import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
@@ -16,6 +16,7 @@ from valuation import compute_from_payload
 from valuation import BASE_MQ
 from urllib.parse import urlencode
 from admin_security import require_admin
+from core import service as core_service
 from core.router import router as core_router
 from property.router import router as property_router
 from buy.router import router as buy_router
@@ -33,6 +34,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
 # APP & CORS
@@ -486,6 +488,32 @@ async def salva_stima(request: Request):
     finally:
         try: cur.close(); conn.close()
         except: pass
+
+    try:
+        bridge_result = core_service.bridge_public_stima(
+            new_id,
+            first_name=data["nome"],
+            last_name=data["cognome"],
+            email=data["email"],
+            phone=data["telefono"],
+            marketing_consent=consenso_marketing,
+            marketing_consent_at=consenso_marketing_at,
+        )
+        bridge_log = logger.warning if bridge_result["status"] in {"conflict", "skipped"} else logger.info
+        bridge_log(
+            "public_stima_crm_bridge bridge_status=%s stima_id=%s contact_id=%s lead_id=%s reason=%s",
+            bridge_result["status"],
+            new_id,
+            bridge_result.get("contact_id"),
+            bridge_result.get("lead_id"),
+            bridge_result.get("reason"),
+        )
+    except Exception as exc:
+        logger.error(
+            "public_stima_crm_bridge bridge_status=error stima_id=%s contact_id=None lead_id=None error_type=%s",
+            new_id,
+            type(exc).__name__,
+        )
 
     # --- 5. TOKEN e prezzo base ---
     conn = get_connection(); cur = conn.cursor()
