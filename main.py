@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import os, uvicorn, secrets, uuid, requests
+import hashlib, hmac, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
@@ -111,6 +111,25 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     if s.startswith("39"):
         return s
     return "39" + s.lstrip("0")
+
+def verify_whatsapp_signature(raw_body: bytes, signature: str | None) -> None:
+    app_secret = os.getenv("WHATSAPP_APP_SECRET")
+    if not app_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook signature verification unavailable",
+        )
+    if not signature:
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
+    digest = hmac.new(
+        app_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    expected = f"sha256={digest}"
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
     print("WA URL:", WHATSAPP_SERVICE_URL)
@@ -189,7 +208,7 @@ def admin_check(data: dict):
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — MESSAGGI (INBOX)
 # ---------------------------------------------------------
-@app.get("/api/admin/whatsapp/messages")
+@app.get("/api/admin/whatsapp/messages", dependencies=[Depends(require_admin)])
 def admin_whatsapp_messages():
     conn = get_connection()
     cur = conn.cursor()
@@ -242,7 +261,7 @@ def admin_whatsapp_messages():
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — INVIO RISPOSTA
 # ---------------------------------------------------------
-@app.post("/api/admin/whatsapp/reply")
+@app.post("/api/admin/whatsapp/reply", dependencies=[Depends(require_admin)])
 def admin_whatsapp_reply(data: dict):
 
     to = data.get("to")
@@ -281,7 +300,7 @@ def admin_whatsapp_reply(data: dict):
 class DeleteRequest(BaseModel):
     ids: list[int]
 
-@app.post("/api/admin/stime/delete")
+@app.post("/api/admin/stime/delete", dependencies=[Depends(require_admin)])
 def admin_delete_stime(payload: DeleteRequest):
 
     ids = payload.ids
@@ -300,7 +319,7 @@ def admin_delete_stime(payload: DeleteRequest):
 # ---------------------------------------------------------
 # CANCELLA STIME DETTAGLIATE 
 # ---------------------------------------------------------
-@app.post("/api/admin/stime_dettagliate/delete")
+@app.post("/api/admin/stime_dettagliate/delete", dependencies=[Depends(require_admin)])
 def admin_delete_stime_dettagliate(payload: DeleteRequest):
 
     ids = payload.ids
@@ -1069,7 +1088,7 @@ async def salva_stima_dettagliata(request: Request):
 # ---------------------------------------------------------
 # ADMIN STIME PRO
 # ---------------------------------------------------------
-@app.get("/api/admin/stime_pro")
+@app.get("/api/admin/stime_pro", dependencies=[Depends(require_admin)])
 def admin_lista_stime_pro(
     day: str = "oggi",
     dal: date | None = None,
@@ -1106,7 +1125,7 @@ class LeadUpdate(BaseModel):
     lead_status: str | None = None
     note_internal: str | None = None
 
-@app.get("/api/admin/stime")
+@app.get("/api/admin/stime", dependencies=[Depends(require_admin)])
 def admin_lista_stime(
     day: str = "oggi",
     dal: date | None = None,
@@ -1141,7 +1160,7 @@ def admin_lista_stime(
 # ---------------------------------------------------------
 # UPDATE
 # ---------------------------------------------------------
-@app.post("/api/admin/stime/{stima_id}/update")
+@app.post("/api/admin/stime/{stima_id}/update", dependencies=[Depends(require_admin)])
 def admin_update_stima(stima_id: int, payload: LeadUpdate):
 
     updates = []
@@ -1186,6 +1205,11 @@ def whatsapp_verify(
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
+    raw_body = await request.body()
+    verify_whatsapp_signature(
+        raw_body,
+        request.headers.get("X-Hub-Signature-256"),
+    )
     payload = await request.json()
 
     try:
