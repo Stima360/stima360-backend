@@ -33,6 +33,11 @@ def owner_entity(request_type="contact_request"):
     }
 
 
+@contextmanager
+def claimed_event(saved):
+    yield {"claim_status": "claimed", "event": saved}
+
+
 def test_registry_preserves_r001_r007_and_adds_five_owner_rules():
     assert list(RULES) == [f"FLOW-R00{i}" for i in range(1, 8)]
     assert set(OWNER_RULES) == set(OWNER_MAPPING)
@@ -136,7 +141,7 @@ def test_process_saved_event_uses_existing_event_payload_and_same_event_id(monke
     saved={"id":701,"event_type":"owner.request_submitted","entity_type":"owner_feedback","entity_id":101,"source_module":"owner","payload":{"owner_request_type":"contact_request","property_id":34,"contact_id":77,"linked_activity_id":501}}
     rows=[{"code":"FLOW-R008","is_active":True,"event_type":"owner.request_submitted","entity_type":"owner_feedback","parameters":dict(OWNER_RULES["FLOW-R008"].default_parameters)}]
     seen={}
-    monkeypatch.setattr(service.repository,"get_event",lambda event_id: saved)
+    monkeypatch.setattr(service.repository,"claim_event_for_processing",lambda event_id,received_only=False:claimed_event(saved))
     monkeypatch.setattr(service.repository,"list_rules",lambda: rows)
     monkeypatch.setattr(service,"load_entity",lambda et,eid: owner_entity("general_message"))
     def fake_execute(code, entity, matched, reasons, action, requested_by=None, event_id=None, retry_of_execution_id=None):
@@ -154,13 +159,13 @@ def test_process_saved_event_uses_existing_event_payload_and_same_event_id(monke
 def test_process_saved_event_does_not_insert_second_flow_event():
     src=inspect.getsource(service.process_saved_event)+inspect.getsource(service._process_saved_event)
     assert "add_event(" not in src
-    assert "get_event(" in src
+    assert "claim_event_for_processing(" in src
 
 
 def test_process_saved_event_marks_failure(monkeypatch):
     saved={"id":701,"event_type":"owner.request_submitted","entity_type":"owner_feedback","entity_id":101,"payload":{}}
     statuses=[]
-    monkeypatch.setattr(service.repository,"get_event",lambda event_id:saved)
+    monkeypatch.setattr(service.repository,"claim_event_for_processing",lambda event_id,received_only=False:claimed_event(saved))
     monkeypatch.setattr(service.repository,"list_rules",lambda:[{"code":"FLOW-R008","is_active":True,"event_type":"owner.request_submitted","entity_type":"owner_feedback","parameters":dict(OWNER_RULES["FLOW-R008"].default_parameters)}])
     monkeypatch.setattr(service,"load_entity",lambda *args: (_ for _ in ()).throw(RuntimeError("adapter failed")))
     monkeypatch.setattr(service.repository,"update_event_status",lambda event_id,status,error_message=None: statuses.append((event_id,status,error_message)) or {"id":event_id,"status":status})
@@ -190,7 +195,7 @@ def test_owner_dispatch_is_after_transaction_and_privacy_boundary(monkeypatch):
     assert violations == []
 
 
-def test_event_bound_key_for_owner_and_legacy_key_for_r001(monkeypatch):
+def test_event_bound_key_for_owner_and_execution_key_for_r001(monkeypatch):
     captured=[]
     rows={
         "FLOW-R008":{"id":8,"is_active":True,"parameters":dict(OWNER_RULES["FLOW-R008"].default_parameters)},
@@ -198,12 +203,13 @@ def test_event_bound_key_for_owner_and_legacy_key_for_r001(monkeypatch):
     }
     monkeypatch.setattr(repository,"_get_rule_row_with_cursor",lambda cur,code:rows[code])
     monkeypatch.setattr(repository,"_is_suppressed_with_cursor",lambda *args:False)
-    monkeypatch.setattr(repository,"_idempotency_key",lambda *args:"LEGACY-KEY")
     class Cursor:
         def __init__(self): self.current=None
         def execute(self,sql,params=None):
             q=" ".join(str(sql).split())
             if "INSERT INTO flow_executions" in q: self.current={"id":900}
+            elif "pg_advisory_xact_lock" in q: self.current={"locked":True}
+            elif "FROM flow_action_records a" in q: self.current=None
             elif "INSERT INTO flow_action_records" in q: captured.append(params[2]); self.current={"id":901}
             elif q.startswith("SELECT id FROM tasks"): self.current=None
             elif "UPDATE flow_action_records" in q: self.current=None
@@ -217,7 +223,7 @@ def test_event_bound_key_for_owner_and_legacy_key_for_r001(monkeypatch):
     repository.execute_live("FLOW-R008",owner_entity(),True,[],action,event_id=701)
     legacy_entity={"entity_type":"lead","entity_id":3,"id":3}
     repository.execute_live("FLOW-R001",legacy_entity,True,[],{**action,"contact_id":None,"lead_id":3},event_id=702)
-    assert captured == ["FLOW-R008:event:701","LEGACY-KEY"]
+    assert captured == ["FLOW-R008:event:701","FLOW-R001:lead:3:create_core_task:execution:900"]
 
 
 def test_retry_preserves_event_id(monkeypatch):
@@ -238,9 +244,9 @@ def test_retry_preserves_event_id(monkeypatch):
 
 def test_same_owner_rule_and_event_has_stable_key_by_source_contract():
     src=inspect.getsource(repository.execute_live)
-    assert "rule.idempotency_scope=='event' and event_id is not None" in src
+    assert "elif event_id is not None" in src
     assert 'f"{code}:event:{event_id}"' in src
-    assert "_idempotency_key" in src
+    assert "_lock_and_find_rolling_cooldown" in src
 
 
 def test_sync_source_inserts_new_rules_inactive_never_run():

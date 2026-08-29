@@ -33,6 +33,8 @@ def deactivate(code:str): return tr(service.deactivate,code)
 
 @router.post("/events",status_code=201)
 def event(payload:EventCreate): return tr(service.process_event,payload)
+@router.post("/events/recover")
+def recover_events(payload:EventRecoveryRequest): return tr(service.recover_received_events,payload.limit)
 @router.get("/events")
 def events(limit:int=Query(100,ge=1,le=500),offset:int=Query(0,ge=0),status:str|None=None): return {"items":tr(service.list_events,limit,offset,status)}
 

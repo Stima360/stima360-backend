@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
@@ -114,6 +115,37 @@ def list_events(limit=100,offset=0,status=None):
         else: cur.execute("SELECT * FROM flow_events ORDER BY received_at DESC LIMIT %s OFFSET %s",(limit,offset))
         return [dict(x) for x in cur.fetchall()]
 
+def list_received_owner_event_ids(limit):
+    with core_cursor() as (_,cur):
+        cur.execute("""SELECT id FROM flow_events
+            WHERE source_module='owner' AND status='received'
+            ORDER BY received_at ASC, id ASC LIMIT %s""",(limit,))
+        return [row['id'] for row in cur.fetchall()]
+
+@contextmanager
+def claim_event_for_processing(event_id, received_only=False):
+    """Hold one stable event lock across processing done by nested transactions."""
+    with core_cursor() as (_,cur):
+        cur.execute("SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS acquired",(f"flow:event:{event_id}",))
+        acquired=cur.fetchone()
+        if not acquired or not acquired['acquired']:
+            yield {'claim_status':'busy','event':{'id':event_id}}
+            return
+        if received_only:
+            cur.execute("""SELECT * FROM flow_events
+                WHERE id=%s AND source_module='owner' AND status='received'""",(event_id,))
+        else:
+            cur.execute("SELECT * FROM flow_events WHERE id=%s",(event_id,))
+        row=cur.fetchone()
+        if not row:
+            yield {'claim_status':'ineligible','event':{'id':event_id}}
+            return
+        event=dict(row)
+        if not received_only and event.get('status') not in ('received','failed'):
+            yield {'claim_status':'ineligible','event':event}
+            return
+        yield {'claim_status':'claimed','event':event}
+
 def is_suppressed(rule_id,entity_type,entity_id):
     with core_cursor() as (_,cur):
         return _is_suppressed_with_cursor(cur,rule_id,entity_type,entity_id)
@@ -121,11 +153,22 @@ def is_suppressed(rule_id,entity_type,entity_id):
 def _is_suppressed_with_cursor(cur,rule_id,entity_type,entity_id):
     cur.execute("SELECT 1 FROM flow_suppressions WHERE rule_id=%s AND entity_type=%s AND entity_id=%s AND (expires_at IS NULL OR expires_at>NOW())",(rule_id,entity_type,entity_id)); return bool(cur.fetchone())
 
-def _idempotency_key(code,entity_type,entity_id,cooldown):
-    if cooldown<=0: bucket=datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')
-    else:
-        seconds=cooldown*60; bucket=int(datetime.now(timezone.utc).timestamp()//seconds)
-    return f"{code}:{entity_type}:{entity_id}:{bucket}"
+def _lock_and_find_rolling_cooldown(cur, rule_id, entity_type, entity_id, action_type, cooldown_minutes):
+    scope=f"flow:cooldown:{rule_id}:{entity_type}:{entity_id}:{action_type}"
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",(scope,))
+    if cooldown_minutes<=0:
+        return None
+    cur.execute("""SELECT a.*,e.completed_at,
+            CASE WHEN a.status='completed' THEN COALESCE(e.completed_at,a.created_at) ELSE a.created_at END AS relevant_at
+        FROM flow_action_records a
+        JOIN flow_executions e ON e.id=a.execution_id
+        WHERE e.rule_id=%s AND e.entity_type=%s AND e.entity_id=%s AND a.action_type=%s
+          AND a.status IN ('completed','pending')
+          AND CASE WHEN a.status='completed' THEN COALESCE(e.completed_at,a.created_at) ELSE a.created_at END
+              > NOW()-(%s*INTERVAL '1 minute')
+        ORDER BY relevant_at DESC LIMIT 1""",
+        (rule_id,entity_type,entity_id,action_type,cooldown_minutes))
+    return _dict(cur.fetchone())
 
 def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=None,retry_of_execution_id=None):
     with core_cursor(commit=True) as (_,cur):
@@ -133,15 +176,22 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
         if not row['is_active']: raise ConflictError("rule is not active")
         if _is_suppressed_with_cursor(cur,row['id'],entity['entity_type'],entity['entity_id']):
             matched=False; reasons=[*reasons,'soppressione attiva']
-        if rule.idempotency_scope=='event' and event_id is not None:
-            idem=f"{code}:event:{event_id}"
-        else:
-            idem=_idempotency_key(code,entity['entity_type'],entity['entity_id'],int(p.get('cooldown_minutes',0)))
         cur.execute("""INSERT INTO flow_executions(event_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,retry_count,max_retry,retry_of_execution_id,started_at,created_at)
             VALUES(%s,%s,%s,%s,'live',%s,%s,%s,%s,%s,%s,0,%s,%s,NOW(),NOW()) RETURNING *""",
             (event_id,row['id'],entity['entity_type'],entity['entity_id'],'matched' if matched else 'not_matched',Json({'matched':matched,'reasons':reasons}),Json({}),rule.version,Json(p),h,MAX_RETRY,retry_of_execution_id)); ex=dict(cur.fetchone())
         if not matched:
             cur.execute("UPDATE flow_executions SET status='not_matched',completed_at=NOW() WHERE id=%s RETURNING *",(ex['id'],)); return dict(cur.fetchone())
+        if rule.idempotency_scope=='cooldown':
+            cooldown=_lock_and_find_rolling_cooldown(cur,row['id'],entity['entity_type'],entity['entity_id'],action['action_type'],int(p.get('cooldown_minutes',0)))
+            if cooldown:
+                result={'task_id':cooldown.get('target_entity_id')} if cooldown.get('target_entity_id') is not None else {}
+                cur.execute("UPDATE flow_executions SET status='skipped',actions_result=%s,completed_at=NOW() WHERE id=%s RETURNING *",(Json({'reason':'duplicate_or_cooldown',**result}),ex['id']))
+                return dict(cur.fetchone())
+            idem=f"{code}:{entity['entity_type']}:{entity['entity_id']}:{action['action_type']}:execution:{ex['id']}"
+        elif event_id is not None:
+            idem=f"{code}:event:{event_id}"
+        else:
+            idem=f"{code}:{entity['entity_type']}:{entity['entity_id']}:{action['action_type']}:execution:{ex['id']}"
         cur.execute("SAVEPOINT flow_action")
         try:
             cur.execute("""INSERT INTO flow_action_records(execution_id,action_type,target_module,target_entity_type,idempotency_key,payload,status,created_at)

@@ -40,6 +40,11 @@ def _owner_action():
     }
 
 
+@contextmanager
+def _claimed_event(saved):
+    yield {"claim_status": "claimed", "event": saved}
+
+
 class FakeState:
     def __init__(self):
         self.execution_seq = 800
@@ -319,7 +324,7 @@ def test_process_saved_event_failed_execution_sets_failed_then_recovery_processe
     statuses = []
     outcomes = iter([{"id": 1, "status": "failed"}, {"id": 2, "status": "executed"}])
 
-    monkeypatch.setattr(service.repository, "get_event", lambda event_id: saved)
+    monkeypatch.setattr(service.repository, "claim_event_for_processing", lambda event_id, received_only=False: _claimed_event(saved))
     monkeypatch.setattr(service.repository, "list_rules", lambda: rows)
     monkeypatch.setattr(service, "load_entity", lambda *args: _owner_entity())
     monkeypatch.setattr(service.repository, "execute_live", lambda *args, **kwargs: next(outcomes))

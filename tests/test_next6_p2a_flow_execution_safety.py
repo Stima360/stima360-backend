@@ -4,7 +4,6 @@ import copy
 import json
 import subprocess
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -97,6 +96,17 @@ class FlowCursor:
             self.current = copy.deepcopy(_rule_row(params[0]))
             return
         if "select 1 from flow_suppressions" in lowered:
+            return
+        if "pg_advisory_xact_lock" in lowered:
+            self.current = {"locked": True}
+            return
+        if "from flow_action_records a" in lowered and "join flow_executions e" in lowered:
+            self.current = copy.deepcopy(
+                next(
+                    (item for item in self.state["actions"] if item["status"] in {"completed", "pending"}),
+                    None,
+                )
+            )
             return
         if lowered.startswith("insert into flow_executions"):
             execution = {
@@ -351,7 +361,6 @@ def test_execute_live_completed_dedupe_returns_skipped_without_new_task(monkeypa
             "target_entity_id": 555,
         }
     )
-    monkeypatch.setattr(flow_repository, "_idempotency_key", lambda *args: "fixed-key")
 
     result = _run_live(
         monkeypatch,
@@ -515,41 +524,6 @@ def test_rule_failure_does_not_prevent_next_requested_rule(monkeypatch, failing_
     assert result["status"] == "partial_failure"
     assert any(item.get("stage") == failing_stage for item in result["items"])
     assert any(call.args[0] == "FLOW-R004" for call in recorder.call_args_list)
-
-
-class FrozenDatetime:
-    value = datetime(2030, 1, 1, 12, 10, tzinfo=timezone.utc)
-
-    @classmethod
-    def now(cls, tz=None):
-        return cls.value
-
-
-def test_bucket_dedupe_same_entity_same_bucket_has_same_key(monkeypatch):
-    monkeypatch.setattr(flow_repository, "datetime", FrozenDatetime)
-    FrozenDatetime.value = datetime(2030, 1, 1, 12, 10, tzinfo=timezone.utc)
-    first = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 60)
-    FrozenDatetime.value = datetime(2030, 1, 1, 12, 59, tzinfo=timezone.utc)
-    second = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 60)
-    assert first == second
-
-
-def test_bucket_dedupe_can_change_inside_cooldown_across_boundary(monkeypatch):
-    monkeypatch.setattr(flow_repository, "datetime", FrozenDatetime)
-    FrozenDatetime.value = datetime(2030, 1, 1, 12, 59, 59, 900000, tzinfo=timezone.utc)
-    before = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 60)
-    FrozenDatetime.value = datetime(2030, 1, 1, 13, 0, 0, 100000, tzinfo=timezone.utc)
-    after = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 60)
-    assert before != after
-
-
-def test_bucket_size_follows_cooldown_minutes(monkeypatch):
-    monkeypatch.setattr(flow_repository, "datetime", FrozenDatetime)
-    FrozenDatetime.value = datetime(2030, 1, 1, 12, 59, tzinfo=timezone.utc)
-    before = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 120)
-    FrozenDatetime.value = datetime(2030, 1, 1, 13, 1, tzinfo=timezone.utc)
-    after = flow_repository._idempotency_key("FLOW-R001", "lead", 10, 120)
-    assert before == after
 
 
 def test_flow_admin_has_explicit_login_and_memory_only_credentials():

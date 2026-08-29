@@ -19,6 +19,9 @@ class EventCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     deduplication_key: str | None = None
 
+class EventRecoveryRequest(BaseModel):
+    limit: int = Field(default=100, ge=1, le=500)
+
 class EvaluateRequest(BaseModel):
     rule_code: str
     entity_type: str

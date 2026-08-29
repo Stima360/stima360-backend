@@ -62,16 +62,46 @@ def _process_saved_event(saved):
 
 def process_event(event):
     data=dump(event); saved=repository.add_event(data)
-    return _process_saved_event(saved)
+    return process_saved_event(saved['id'])
 
 
-def process_saved_event(event_id):
-    saved=repository.get_event(event_id)
-    try:
-        return _process_saved_event(saved)
-    except Exception as exc:
-        repository.update_event_status(event_id,'failed',str(exc))
-        raise
+def process_saved_event(event_id,received_only=False):
+    with repository.claim_event_for_processing(event_id,received_only=received_only) as claim:
+        if claim['claim_status']!='claimed':
+            return {**claim,'executions':[]}
+        saved=claim['event']
+        try:
+            return {'claim_status':'claimed',**_process_saved_event(saved)}
+        except Exception as exc:
+            repository.update_event_status(event_id,'failed',str(exc))
+            raise
+
+
+def recover_received_events(limit):
+    items=[]
+    counts={'processed':0,'ignored':0,'failed':0,'busy':0}
+    for event_id in repository.list_received_owner_event_ids(limit):
+        try:
+            result=process_saved_event(event_id,received_only=True)
+            claim_status=result.get('claim_status')
+            event_status=(result.get('event') or {}).get('status')
+            if claim_status=='busy':
+                counts['busy']+=1; item_status='busy'
+            elif claim_status=='ineligible':
+                counts['ignored']+=1; item_status='ignored'
+            elif event_status=='processed':
+                counts['processed']+=1; item_status='processed'
+            elif event_status=='ignored':
+                counts['ignored']+=1; item_status='ignored'
+            else:
+                counts['failed']+=1; item_status='failed'
+            items.append({'event_id':event_id,'status':item_status})
+        except Exception as exc:
+            counts['failed']+=1
+            items.append({'event_id':event_id,'status':'failed','error_message':str(exc)})
+    problems=counts['failed']+counts['busy']
+    status='failed' if counts['failed'] and not (counts['processed']+counts['ignored']+counts['busy']) else ('partial_failure' if problems else 'completed')
+    return {'status':status,'requested_limit':limit,**counts,'items':items}
 
 
 def _scan_failure(code, stage, error, entity_type=None, entity_id=None, mode="simulation", requested_by=None):
