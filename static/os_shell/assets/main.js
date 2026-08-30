@@ -12,6 +12,8 @@ import { renderImmobili } from './views/immobili.js';
 import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
 import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
+import { renderAbbinamenti } from './views/abbinamenti.js';
+import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
 import { makePlaceholderView } from './views/placeholder.js';
 
 const SECTIONS = [
@@ -52,8 +54,14 @@ registerRoute('immobili', (container, params = []) => {
 registerRoute('acquirenti', (container, params = []) => {
   return params[0] ? renderAcquirenteDettaglio(container, params) : renderAcquirenti(container);
 });
+// "abbinamenti" copre sia la graduatoria (#/abbinamenti) sia la scheda
+// Match (#/abbinamenti/{match_id}), stesso pattern dispatcher gia' usato
+// per "contatti", "immobili" e "acquirenti".
+registerRoute('abbinamenti', (container, params = []) => {
+  return params[0] ? renderAbbinamentoDettaglio(container, params) : renderAbbinamenti(container);
+});
 for (const section of SECTIONS) {
-  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti') continue;
+  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti') continue;
   registerRoute(section.name, makePlaceholderView(section.label));
 }
 

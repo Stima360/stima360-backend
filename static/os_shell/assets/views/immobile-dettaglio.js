@@ -37,6 +37,7 @@
 // riordino o azione di stato in questa tab.
 
 import { apiGet } from '../core/api-client.js';
+import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 
 const STATUS_LABELS = {
@@ -127,6 +128,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'abbinamenti': {
           const matches = await loadMatchesLazy(property.id, lazyCache);
           contentEl.innerHTML = renderAbbinamenti(matches);
+          bindOpenMatchLinks(contentEl);
           break;
         }
         default: contentEl.innerHTML = '<p class="muted">Sezione non disponibile.</p>';
@@ -270,10 +272,20 @@ function renderAbbinamenti(matches) {
       { label: 'Classe', render: (m) => renderBadge(m.match_class || '—', 'gray') },
       { label: 'Stato commerciale', render: (m) => escapeHtml(m.commercial_status || '—') },
       { label: 'Compatibilità', render: (m) => renderBadge(m.compatibility_status || '—', m.compatibility_status === 'incompatible' ? 'danger' : 'ok') },
+      { label: '', render: (m) => `<button type="button" class="btn ghost open-match-btn" data-match-id="${escapeHtml(m.id)}">Apri match</button>` },
     ],
     matches,
     { emptyMessage: 'Nessun abbinamento presente per questo immobile.' },
   );
+}
+
+// P4: colonna "Apri match" -> #/abbinamenti/{match_id} (scheda MATCH nella
+// nuova App Shell, mai match-admin legacy). Questa tabella non ha oggi altra
+// navigazione di riga da preservare.
+function bindOpenMatchLinks(contentEl) {
+  contentEl.querySelectorAll('.open-match-btn').forEach((btn) => {
+    btn.addEventListener('click', () => navigate('abbinamenti', [btn.dataset.matchId]));
+  });
 }
 
 // --- Proposte (gia' caricate all'apertura scheda, come property_admin) -----

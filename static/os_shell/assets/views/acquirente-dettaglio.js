@@ -190,6 +190,15 @@ function bindMatchRowClicks(contentEl) {
       if (propertyId) navigate('immobili', [propertyId]);
     });
   });
+  // P4: colonna "Apri match" -> #/abbinamenti/{match_id} (solo tab Abbinamenti,
+  // vedi renderAbbinamenti). stopPropagation per non attivare anche il click
+  // di riga verso l'immobile gestito sopra.
+  contentEl.querySelectorAll('.open-match-btn').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      navigate('abbinamenti', [btn.dataset.matchId]);
+    });
+  });
 }
 
 // --- Panoramica -------------------------------------------------------
@@ -323,6 +332,7 @@ function renderAbbinamenti(matches) {
     { label: 'Aggiornamento', render: (m) => renderBadge(m.freshness_status || '—', m.freshness_status === 'stale' ? 'warn' : 'gray') },
     { label: 'Revisione richiesta', render: (m) => m.review_required ? renderBadge('Sì', 'warn') : '' },
     { label: 'Ultima interazione', render: (m) => escapeHtml(INTERACTION_TYPE_LABELS[m.last_interaction] || m.last_interaction || '—') },
+    { label: '', render: (m) => `<button type="button" class="btn ghost open-match-btn" data-match-id="${escapeHtml(m.id)}">Apri match</button>` },
   ], 'Nessun abbinamento calcolato.');
 }
 

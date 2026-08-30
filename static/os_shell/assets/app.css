@@ -202,7 +202,7 @@ body {
   font-family: inherit;
 }
 
-.list-toolbar { margin-bottom: 16px; display: flex; gap: 10px; }
+.list-toolbar { margin-bottom: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
 .list-toolbar .input { flex: 1; max-width: 360px; }
 
 .list-pager {
@@ -326,5 +326,23 @@ dialog.modal::backdrop { background: rgba(23, 35, 58, 0.45); }
   background: var(--bg);
 }
 #contact-search-results .list-item:hover { background: var(--bg); }
+
+/* P4: Abbinamenti (dashboard KPI riusa .kpi-grid gia' esistente; qui solo le
+   classi nuove per checkbox filtro, dialog piu' largo, banda azioni fuori
+   dialog e box di conferma positiva, in aggiunta a .error-box gia' esistente). */
+.checkbox-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; }
+dialog.modal.modal-wide { max-width: 680px; }
+.action-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.success-box {
+  background: #e3f6e8;
+  border: 1px solid #bfe6c9;
+  color: #1c7a3c;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.readiness-side { margin-top: 8px; }
+
 
 
