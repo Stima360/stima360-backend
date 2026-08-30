@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STIMA360 OS</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="/os/assets/app.css">
+</head>
+<body>
+  <div id="login-view">
+    <div class="login-box">
+      <h1>STIMA360 OS</h1>
+      <p>Accesso operatore</p>
+      <form id="login-form">
+        <label for="login-username">Utente</label>
+        <input id="login-username" name="username" type="text" autocomplete="username" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <div id="login-error" class="field-error" role="alert"></div>
+        <button type="submit" class="btn primary">Accedi</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-view" hidden>
+    <aside class="sidebar">
+      <div class="brand">STIMA360 OS</div>
+      <nav id="nav"></nav>
+      <div id="env-badge" class="env-badge"></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <h1 id="page-title">Oggi</h1>
+        <div class="top-actions">
+          <button id="logout-btn" type="button" class="btn ghost">Logout</button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+
+  <script type="module" src="/os/assets/main.js"></script>
+</body>
+</html>

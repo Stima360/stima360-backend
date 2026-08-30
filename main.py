@@ -101,6 +101,11 @@ app.add_middleware(
 # Static (PDF)
 app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
 
+# Additive STIMA360 OS App Shell (unified internal frontend), isolated from
+# the 6 legacy admin UIs above, which remain unchanged and fully functional.
+OS_SHELL_DIR = BASE_DIR / "static" / "os_shell"
+app.mount("/os", StaticFiles(directory=str(OS_SHELL_DIR), html=True), name="os-shell")
+
 # ---------------------------------------------------------
 # UTILS
 # ---------------------------------------------------------
