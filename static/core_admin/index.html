@@ -30,7 +30,7 @@
         <button class="nav-item" data-view="activities">Attività</button>
         <button class="nav-item" data-view="tasks">Task</button>
       </nav>
-      <div class="env-badge">AMBIENTE TEST</div>
+      <div id="env-badge" class="env-badge"></div>
     </aside>
     <main class="main">
       <header class="topbar">
@@ -65,5 +65,21 @@
   </div>
   <div id="modal-root"></div><div id="toast-root"></div>
   <script src="/core-admin/assets/app.js?v=0.4" defer></script>
+  <script>
+    (function () {
+      var badge = document.getElementById('env-badge');
+      if (!badge) return;
+      var host = window.location.hostname || '';
+      var label = 'AMBIENTE LOCALE';
+      if (host.indexOf('stima360-backend-test') !== -1) {
+        label = 'AMBIENTE TEST';
+      } else if (host.indexOf('stima360-backend.onrender.com') !== -1) {
+        label = 'AMBIENTE PROD';
+      } else if (host === 'localhost' || host === '127.0.0.1') {
+        label = 'AMBIENTE LOCALE';
+      }
+      badge.textContent = label;
+    })();
+  </script>
 </body>
 </html>
