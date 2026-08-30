@@ -1381,6 +1381,13 @@ def sitemap():
     return Response(content=xml, media_type="application/xml")
 
 # ---------------------------------------------------------
+# ROBOTS.TXT (blocca indicizzazione del backend Render; la SEO resta su stima360.it)
+# ---------------------------------------------------------
+@app.get("/robots.txt")
+def robots_txt():
+    return Response(content="User-agent: *\nDisallow: /\n", media_type="text/plain")
+
+# ---------------------------------------------------------
 # API VETRINA SUCCESSI (Unificata e corretta)
 # ---------------------------------------------------------
 @app.get("/api/successi")
