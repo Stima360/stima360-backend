@@ -10,6 +10,8 @@ import { renderContatti } from './views/contatti.js';
 import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
 import { renderImmobili } from './views/immobili.js';
 import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
+import { renderAcquirenti } from './views/acquirenti.js';
+import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { makePlaceholderView } from './views/placeholder.js';
 
 const SECTIONS = [
@@ -44,8 +46,14 @@ registerRoute('contatti', (container, params = []) => {
 registerRoute('immobili', (container, params = []) => {
   return params[0] ? renderImmobileDettaglio(container, params) : renderImmobili(container);
 });
+// "acquirenti" copre sia la lista richieste BUY (#/acquirenti) sia la scheda
+// (#/acquirenti/{buy_request_id}), stesso pattern dispatcher gia' usato per
+// "contatti" e "immobili".
+registerRoute('acquirenti', (container, params = []) => {
+  return params[0] ? renderAcquirenteDettaglio(container, params) : renderAcquirenti(container);
+});
 for (const section of SECTIONS) {
-  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili') continue;
+  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti') continue;
   registerRoute(section.name, makePlaceholderView(section.label));
 }
 

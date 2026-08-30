@@ -1,0 +1,453 @@
+// STIMA360 OS — acquirente-dettaglio.js
+// Scheda Richiesta BUY. L'identita' resta il CORE Contact: questa scheda
+// rappresenta CONTATTO -> RICHIESTA BUY, non una seconda anagrafica.
+//
+// Fonte principale: GET /api/buy/requests/{id}/workflow (buy/router.py:24,
+// buy/repository.py:workflow) che aggrega in un'unica chiamata: dati
+// richiesta + Contatto/Lead (via get_request), locations/typologies/features
+// (criteri raw), interactions (buy_request_interactions), history
+// (buy_request_history), matches (buy/repository.py:list_matches, gia'
+// arricchiti con last_interaction/last_reason) e tasks (via
+// buy_request_task_links). La lista Proposte proviene da un fetch separato
+// (/api/proposals?buy_request_id=...), NON da un Promise.all che le lega:
+// il workflow e' indispensabile (un suo errore impedisce l'apertura della
+// scheda), le Proposte sono secondarie (un loro errore isola solo la tab
+// Proposte — vedi renderProposte/proposalsError — senza bloccare Panoramica,
+// Criteri, Immobili compatibili, Abbinamenti, Visite, Task o Storico).
+//
+// Verifica CRITERI vs NORMALIZZATI (richiesta esplicitamente dal brief P3):
+// GET /api/buy/requests/{id}/normalized (buy/repository.py:normalized) e'
+// stato letto per intero: si limita a raggruppare in oggetti nidificati
+// (budget/finance/dimensions) GLI STESSI campi gia' presenti in get_request()
+// (quindi gia' dentro workflow()), piu' gli stessi array locations/typologies/
+// features passati as-is. NON esiste alcuna differenza di valore tra "criteri
+// inseriti" e "criteri normalizzati": e' una pura re-forma per la BUY Admin
+// legacy, senza calcolo aggiuntivo. Di conseguenza la tab Criteri usa i campi
+// gia' presenti in workflow() senza una seconda chiamata di rete: nessuna
+// logica di normalizzazione viene ricostruita lato browser, si mostrano solo
+// gli stessi valori che il backend BUY possiede.
+//
+// Immobili compatibili / Abbinamenti: entrambe le tab leggono lo stesso
+// array workflow.matches (autorizzato esplicitamente dal brief P3, a
+// differenza di P2 dove il riuso sotto altro nome era vietato). Nessun
+// calculate/refresh viene mai invocato entrando in queste tab.
+//
+// Visite: derivate da workflow.interactions filtrando interaction_type in
+// (visit_requested, visit_scheduled, visited) — relazione certa (colonna
+// buy_request_id su buy_request_interactions), non dedotta. I dettagli del
+// singolo appuntamento (property_visits: stato, esito, valutazione) NON sono
+// mostrati: property/router.py non espone un GET /api/property/visits/{id}
+// ne' un filtro per buy_request_id/match_id su GET /api/property/visits,
+// quindi recuperarli richiederebbe N+1 non autorizzato. Gap riportato.
+//
+// Attivita: core/repository.py:list_activities non ha parametro
+// buy_request_id (stesso gap gia' verificato in P2 per property_id):
+// nessuna relazione Attivita CORE <-> Richiesta BUY esiste oggi. Le
+// buy_request_interactions/history (eventi BUY) sono mostrate nelle tab
+// Visite/Storico e NON vengono fuse semanticamente con le Attivita CORE.
+//
+// Task: fonte CORE `tasks`, relazione via buy_request_task_links (gia'
+// risolta server-side da list_tasks). Sola lettura in P3.
+//
+// Prossima azione: mostrata in Panoramica da next_action_at/next_action_note
+// (colonne dirette su buy_requests). Nessuna scrittura/registrazione azione
+// in P3 (rimane funzione della BUY Admin legacy, vedi report finale).
+//
+// Vista interamente in sola lettura salvo la creazione (gestita in
+// acquirenti.js): nessuna modifica criteri, nessuna transizione proposta,
+// nessun calcolo/refresh match in questo file.
+
+import { apiGet } from '../core/api-client.js';
+import { navigate } from '../core/router.js';
+import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+
+const STATUS_LABELS = { draft: 'Bozza', active: 'Attiva', paused: 'In pausa', satisfied: 'Soddisfatta', closed: 'Chiusa', archived: 'Archiviata' };
+const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
+const URGENCY_LABELS = { exploratory: 'Esplorativa', flexible: 'Flessibile', within_6_months: 'Entro 6 mesi', within_3_months: 'Entro 3 mesi', immediate: 'Immediata' };
+const FINANCE_STATUS_LABELS = { unknown: 'Da definire', cash: 'Liquidità propria', mortgage_to_assess: 'Mutuo da valutare', mortgage_in_progress: 'Mutuo in corso', mortgage_preapproved: 'Mutuo pre-approvato', sale_dependent: 'Subordinata a vendita' };
+const REQUIREMENT_LEVEL_LABELS = { required: 'Obbligatorio', preferred: 'Preferito', optional: 'Opzionale', excluded: 'Escluso' };
+const LOCATION_TYPE_LABELS = { region: 'Regione', province: 'Provincia', municipality: 'Comune', microzone: 'Microzona', radius: 'Raggio' };
+const INTERACTION_TYPE_LABELS = { proposed: 'Proposto', discarded: 'Scartato', interested: 'Interessato', visit_requested: 'Visita richiesta', visit_scheduled: 'Visita programmata', visited: 'Visitato', offer_candidate: 'Candidato per offerta', other: 'Altro' };
+const HISTORY_EVENT_LABELS = {
+  request_created: 'Richiesta creata', request_updated: 'Richiesta aggiornata', status_changed: 'Stato cambiato',
+  finance_updated: 'Finanza aggiornata', next_action_updated: 'Prossima azione aggiornata',
+  match_proposed: 'Match proposto', match_discarded: 'Match scartato', match_interested: 'Interesse su match',
+  visit_requested: 'Visita richiesta', visit_scheduled: 'Visita programmata', visited: 'Visita effettuata',
+  offer_candidate: 'Candidato per offerta', note: 'Nota', task_created: 'Task creato', task_unlinked: 'Task scollegato',
+};
+const PROPERTY_STATUS_LABELS = { draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo', reserved: 'Riservato', under_offer: 'Sotto offerta', sold: 'Venduto', withdrawn: 'Ritirato', archived: 'Archiviato' };
+
+const VISIT_INTERACTION_TYPES = new Set(['visit_requested', 'visit_scheduled', 'visited']);
+
+const TABS = [
+  { key: 'panoramica', label: 'Panoramica' },
+  { key: 'criteri', label: 'Criteri' },
+  { key: 'immobili', label: 'Immobili compatibili' },
+  { key: 'abbinamenti', label: 'Abbinamenti' },
+  { key: 'visite', label: 'Visite' },
+  { key: 'proposte', label: 'Proposte' },
+  { key: 'attivita', label: 'Attività' },
+  { key: 'task', label: 'Task' },
+  { key: 'storico', label: 'Storico' },
+];
+
+export async function renderAcquirenteDettaglio(container, params = []) {
+  const requestId = params[0];
+  if (!requestId || !/^\d+$/.test(String(requestId))) {
+    container.innerHTML = '<div class="error-box">Identificativo richiesta non valido.</div>';
+    return;
+  }
+
+  container.innerHTML = '<p class="muted">Caricamento scheda richiesta…</p>';
+
+  // Il workflow (dati richiesta + Contatto + criteri + match + task + storico)
+  // e' indispensabile: se fallisce, la scheda non puo' aprirsi. Le Proposte
+  // sono invece secondarie (fonte esterna al dominio BUY, /api/proposals):
+  // un loro errore non deve impedire l'apertura della scheda ne' bloccare le
+  // altre tab, quindi vengono caricate con un fetch separato e un fallimento
+  // viene isolato solo alla tab Proposte (nessun Promise.all che le lega).
+  let data;
+  try {
+    data = await apiGet(`/api/buy/requests/${requestId}/workflow`);
+  } catch (error) {
+    const notFound = /non trovato|not found/i.test(error.message || '');
+    container.innerHTML = `<div class="error-box">${notFound ? 'Richiesta non trovata.' : `Errore nel caricamento della richiesta: ${escapeHtml(error.message)}`}</div>`;
+    return;
+  }
+
+  let proposals = [];
+  let proposalsError = null;
+  try {
+    const proposalsData = await apiGet(`/api/proposals?buy_request_id=${requestId}`);
+    proposals = Array.isArray(proposalsData?.items) ? proposalsData.items : [];
+  } catch (error) {
+    proposalsError = error.message || 'errore sconosciuto';
+  }
+
+  const contactId = data.contact_id;
+  const contactName = data.contact_name || `Contatto #${contactId}`;
+
+  container.innerHTML = `
+    <div class="contact-header card">
+      <h2>${escapeHtml(data.title || `Richiesta #${data.id}`)}</h2>
+      <div class="muted">
+        Contatto: <a href="#/contatti/${escapeHtml(contactId)}" id="acquirente-contact-link"><strong>${escapeHtml(contactName)}</strong></a>
+        · Richiesta #${escapeHtml(data.id)}
+      </div>
+      <div class="badge-row">
+        ${renderBadge(STATUS_LABELS[data.status] || data.status || '—', statusTone(data.status))}
+        ${renderBadge(PRIORITY_LABELS[data.priority] || data.priority || '—', priorityTone(data.priority))}
+        ${renderBadge(URGENCY_LABELS[data.urgency] || data.urgency || '—', 'gray')}
+      </div>
+    </div>
+    <div class="tabs" id="request-tabs"></div>
+    <div id="request-tab-content" class="card panel"></div>
+  `;
+
+  const contactLink = container.querySelector('#acquirente-contact-link');
+  contactLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    navigate('contatti', [contactId]);
+  });
+
+  const tabsEl = container.querySelector('#request-tabs');
+  tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
+
+  const contentEl = container.querySelector('#request-tab-content');
+
+  function showTab(key) {
+    tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
+    try {
+      switch (key) {
+        case 'panoramica': contentEl.innerHTML = renderPanoramica(data, proposals, proposalsError); break;
+        case 'criteri': contentEl.innerHTML = renderCriteri(data); break;
+        case 'immobili': contentEl.innerHTML = renderImmobiliCompatibili(data.matches); break;
+        case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;
+        case 'visite': contentEl.innerHTML = renderVisite(data.interactions); break;
+        case 'proposte': contentEl.innerHTML = renderProposte(proposals, proposalsError); break;
+        case 'attivita': contentEl.innerHTML = renderAttivita(); break;
+        case 'task': contentEl.innerHTML = renderTask(data.tasks); break;
+        case 'storico': contentEl.innerHTML = renderStorico(data.history); break;
+        default: contentEl.innerHTML = '<p class="muted">Sezione non disponibile.</p>';
+      }
+    } catch (error) {
+      contentEl.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(error.message)}</div>`;
+    }
+    bindMatchRowClicks(contentEl);
+  }
+
+  tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => showTab(btn.dataset.tab));
+  });
+
+  showTab('panoramica');
+}
+
+function bindMatchRowClicks(contentEl) {
+  contentEl.querySelectorAll('tr.row-clickable[data-row-id]').forEach((tr) => {
+    tr.addEventListener('click', () => {
+      const propertyId = tr.dataset.propertyId;
+      if (propertyId) navigate('immobili', [propertyId]);
+    });
+  });
+}
+
+// --- Panoramica -------------------------------------------------------
+
+function renderPanoramica(x, proposals, proposalsError) {
+  const fields = [
+    ['Contatto', x.contact_name || `Contatto #${x.contact_id}`],
+    ['Email contatto', x.contact_email], ['Telefono contatto', x.contact_phone],
+    ['Stato', STATUS_LABELS[x.status] || x.status], ['Priorità', PRIORITY_LABELS[x.priority] || x.priority],
+    ['Urgenza', URGENCY_LABELS[x.urgency] || x.urgency],
+    ['Creata il', formatDateTime(x.created_at)], ['Aggiornata il', formatDateTime(x.updated_at)],
+    ['Budget minimo', formatPrice(x.budget_min)], ['Budget target', formatPrice(x.budget_target)], ['Budget massimo', formatPrice(x.budget_max)],
+    ['Superficie minima (mq)', x.surface_min], ['Superficie target (mq)', x.surface_target], ['Superficie massima (mq)', x.surface_max],
+    ['Locali minimi', x.rooms_min], ['Camere minime', x.bedrooms_min], ['Bagni minimi', x.bathrooms_min],
+    ['Situazione finanziaria', FINANCE_STATUS_LABELS[x.finance_status] || x.finance_status],
+    ['Ricerca avviata il', formatDate(x.search_start_date)], ['Acquisto entro', formatDate(x.target_purchase_date)],
+    ['Assegnata a', x.assigned_to],
+  ];
+  const counts = [
+    ['Match', (x.matches || []).length],
+    ['Proposte', proposalsError ? 'n/d' : proposals.length],
+    ['Task', (x.tasks || []).length],
+    ['Eventi storico', (x.history || []).length],
+  ];
+  return `
+    <h3 class="section-title">Dati richiesta</h3>
+    <div class="detail-grid">
+      ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
+    </div>
+    <h3 class="section-title">Prossima azione</h3>
+    <p>${x.next_action_at || x.next_action_note ? `${escapeHtml(formatDateTime(x.next_action_at))} — ${escapeHtml(x.next_action_note || 'Nessuna nota')}` : 'Nessuna prossima azione impostata.'}</p>
+    <h3 class="section-title">Note</h3>
+    <p>${escapeHtml(x.notes || 'Nessuna nota.')}</p>
+    <h3 class="section-title">Riepilogo</h3>
+    <div class="stat-chip-row">
+      ${counts.map(([label, value]) => `<div class="stat-chip"><span>${value}</span><small>${escapeHtml(label)}</small></div>`).join('')}
+    </div>
+  `;
+}
+
+// --- Criteri (raw = normalizzato: nessuna seconda chiamata, vedi header) --
+
+function renderCriteri(x) {
+  const budgetGrid = [
+    ['Minimo', formatPrice(x.budget_min)], ['Target', formatPrice(x.budget_target)], ['Massimo', formatPrice(x.budget_max)],
+    ['Flessibilità', x.budget_flexibility_percent != null ? `${x.budget_flexibility_percent}%` : null],
+    ['Include spese agenzia', x.includes_agency_fees ? 'Sì' : 'No'], ['Include ristrutturazione', x.includes_renovation ? 'Sì' : 'No'],
+  ];
+  const dimGrid = [
+    ['Superficie minima', x.surface_min], ['Superficie target', x.surface_target], ['Superficie massima', x.surface_max],
+    ['Locali minimi', x.rooms_min], ['Camere minime', x.bedrooms_min], ['Bagni minimi', x.bathrooms_min],
+  ];
+
+  const locationsTable = renderTable(
+    [
+      { label: 'Livello', render: (l) => renderBadge(LOCATION_TYPE_LABELS[l.location_type] || l.location_type || '—', 'gray') },
+      { label: 'Valore', render: (l) => escapeHtml([l.region, l.province, l.municipality, l.microzone].filter(Boolean).join(' / ') || '—') },
+      { label: 'Priorità', render: (l) => escapeHtml(l.priority ?? '—') },
+      { label: 'Raggio (km)', render: (l) => l.radius_km != null ? escapeHtml(l.radius_km) : '—' },
+      { label: 'Vincolo', render: (l) => l.is_required ? renderBadge('Obbligatoria', 'ok') : (l.is_excluded ? renderBadge('Esclusa', 'danger') : '') },
+    ],
+    x.locations,
+    { emptyMessage: 'Nessuna zona impostata.' },
+  );
+
+  const typologiesTable = renderTable(
+    [
+      { label: 'Tipo immobile', render: (t) => escapeHtml(t.property_type || '—') },
+      { label: 'Livello', render: (t) => renderBadge(REQUIREMENT_LEVEL_LABELS[t.requirement_level] || t.requirement_level || '—', requirementTone(t.requirement_level)) },
+      { label: 'Priorità', render: (t) => escapeHtml(t.priority ?? '—') },
+    ],
+    x.typologies,
+    { emptyMessage: 'Nessuna tipologia impostata.' },
+  );
+
+  const featuresTable = renderTable(
+    [
+      { label: 'Caratteristica', render: (f) => escapeHtml(f.feature_code || '—') },
+      { label: 'Livello', render: (f) => renderBadge(REQUIREMENT_LEVEL_LABELS[f.requirement_level] || f.requirement_level || '—', requirementTone(f.requirement_level)) },
+      { label: 'Valore', render: (f) => escapeHtml(formatFeatureValue(f)) },
+    ],
+    x.features,
+    { emptyMessage: 'Nessuna caratteristica impostata.' },
+  );
+
+  return `
+    <h3 class="section-title">Budget</h3>
+    <div class="detail-grid">${budgetGrid.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}</div>
+    <h3 class="section-title">Dimensioni</h3>
+    <div class="detail-grid">${dimGrid.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}</div>
+    <h3 class="section-title">Zone</h3>
+    ${locationsTable}
+    <h3 class="section-title">Tipologie</h3>
+    ${typologiesTable}
+    <h3 class="section-title">Caratteristiche</h3>
+    ${featuresTable}
+    <p class="muted">Modifica criteri non disponibile in questa fase: usare la BUY Admin legacy.</p>
+  `;
+}
+
+function formatFeatureValue(f) {
+  if (f.value_type === 'boolean') return f.value_boolean === true ? 'Sì' : f.value_boolean === false ? 'No' : '—';
+  if (f.value_type === 'text') return f.value_text || '—';
+  const min = f.value_min ?? '—'; const max = f.value_max ?? '—';
+  return `${min} – ${max}`;
+}
+
+// --- Immobili compatibili (workflow.matches, nessun calcolo) --------------
+
+function renderImmobiliCompatibili(matches) {
+  const list = Array.isArray(matches) ? matches : [];
+  if (!list.length) return '<p class="muted">Nessun abbinamento calcolato.</p>';
+  return renderMatchTable(list, [
+    { label: 'Immobile', render: (m) => escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`) },
+    { label: 'Comune', render: (m) => escapeHtml(m.city || '—') },
+    { label: 'Prezzo', render: (m) => formatPrice(m.asking_price) },
+    { label: 'Stato immobile', render: (m) => renderBadge(PROPERTY_STATUS_LABELS[m.property_status] || m.property_status || '—', 'gray') },
+  ], 'Nessun abbinamento calcolato.');
+}
+
+// --- Abbinamenti (stesso array di Immobili compatibili, vista dettagliata) --
+
+function renderAbbinamenti(matches) {
+  const list = Array.isArray(matches) ? matches : [];
+  if (!list.length) return '<p class="muted">Nessun abbinamento calcolato.</p>';
+  return renderMatchTable(list, [
+    { label: 'Immobile', render: (m) => escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`) },
+    { label: 'Punteggio', render: (m) => escapeHtml(m.effective_score ?? m.score_total ?? '—') },
+    { label: 'Classe', render: (m) => renderBadge(m.match_class || '—', matchClassTone(m.match_class)) },
+    { label: 'Stato commerciale', render: (m) => escapeHtml(m.commercial_status || '—') },
+    { label: 'Aggiornamento', render: (m) => renderBadge(m.freshness_status || '—', m.freshness_status === 'stale' ? 'warn' : 'gray') },
+    { label: 'Revisione richiesta', render: (m) => m.review_required ? renderBadge('Sì', 'warn') : '' },
+    { label: 'Ultima interazione', render: (m) => escapeHtml(INTERACTION_TYPE_LABELS[m.last_interaction] || m.last_interaction || '—') },
+  ], 'Nessun abbinamento calcolato.');
+}
+
+// Tabella match con click-through a #/immobili/{property_id} (non property-admin).
+function renderMatchTable(matches, columns, emptyMessage) {
+  const table = renderTable(columns, matches, { emptyMessage, onRowClick: true });
+  // renderTable usa row.id come data-row-id: qui serve property_id per la navigazione,
+  // quindi il container viene marcato con data-property-id via post-processing minimo.
+  return table.replace(/data-row-id="(\d+)"/g, (full, matchId) => {
+    const match = matches.find((m) => String(m.id) === matchId);
+    return match ? `${full} data-property-id="${match.property_id}"` : full;
+  });
+}
+
+// --- Visite (da buy_request_interactions, relazione certa) ----------------
+
+function renderVisite(interactions) {
+  const list = (Array.isArray(interactions) ? interactions : []).filter((i) => VISIT_INTERACTION_TYPES.has(i.interaction_type));
+  const note = '<p class="muted">Elenco dagli eventi di visita registrati sulla richiesta (buy_request_interactions). Stato, esito e valutazione della singola visita non sono disponibili qui: nessuna API espone il dettaglio property_visits per id o filtrato su questa richiesta.</p>';
+  const table = renderTable(
+    [
+      { label: 'Immobile', render: (i) => escapeHtml(i.property_title || i.property_code || (i.property_id ? `Immobile #${i.property_id}` : '—')) },
+      { label: 'Tipo evento', render: (i) => renderBadge(INTERACTION_TYPE_LABELS[i.interaction_type] || i.interaction_type || '—', 'gray') },
+      { label: 'Quando', render: (i) => escapeHtml(formatDateTime(i.occurred_at)) },
+      { label: 'Note', render: (i) => escapeHtml(i.notes || '—') },
+    ],
+    list,
+    { emptyMessage: 'Nessuna visita registrata per questa richiesta.' },
+  );
+  return note + table;
+}
+
+// --- Proposte (fonte unica /api/proposals, gia' caricate all'apertura) ----
+
+function renderProposte(items, proposalsError) {
+  if (proposalsError) {
+    return `<div class="error-box">Proposte temporaneamente non disponibili: ${escapeHtml(proposalsError)}</div>`;
+  }
+  return renderTable(
+    [
+      { label: 'Immobile', render: (p) => escapeHtml(p.property_title || p.property_code || `Immobile #${p.property_id}`) },
+      { label: 'Importo', render: (p) => formatPrice(p.amount) },
+      { label: 'Stato', render: (p) => renderBadge(p.status || '—', statusTone(p.status)) },
+      { label: 'Scadenza', render: (p) => escapeHtml(formatDateTime(p.expires_at)) },
+      { label: 'Note', render: (p) => escapeHtml(p.notes || '—') },
+    ],
+    items,
+    { emptyMessage: 'Nessuna proposta presente per questa richiesta.' },
+  );
+}
+
+// --- Attività: nessuna relazione Attivita CORE <-> Richiesta BUY oggi -----
+
+function renderAttivita() {
+  return '<p class="muted">Non è disponibile oggi un collegamento tra Attività CORE e Richiesta BUY nelle API esistenti (core/repository.py: list_activities non filtra per richiesta). Gli eventi specifici BUY sono visibili nelle tab Visite e Storico.</p>';
+}
+
+// --- Task (CORE tasks via buy_request_task_links, sola lettura) -----------
+
+function renderTask(items) {
+  return renderTable(
+    [
+      { label: 'Titolo', render: (t) => escapeHtml(t.title || `Task #${t.id}`) },
+      { label: 'Stato', render: (t) => renderBadge(t.status || '—', statusTone(t.status)) },
+      { label: 'Priorità', render: (t) => escapeHtml(PRIORITY_LABELS[t.priority] || t.priority || '—') },
+      { label: 'Scadenza', render: (t) => escapeHtml(formatDateTime(t.due_at)) },
+      { label: 'Descrizione', render: (t) => escapeHtml(t.description || '—') },
+    ],
+    items,
+    { emptyMessage: 'Nessun task collegato a questa richiesta.' },
+  );
+}
+
+// --- Storico (buy_request_history) -----------------------------------------
+
+function renderStorico(items) {
+  const table = renderTable(
+    [
+      { label: 'Evento', render: (h) => renderBadge(HISTORY_EVENT_LABELS[h.event_type] || h.event_type || '—', 'gray') },
+      { label: 'Quando', render: (h) => escapeHtml(formatDateTime(h.created_at)) },
+      { label: 'Immobile', render: (h) => escapeHtml(h.property_title || '—') },
+      { label: 'Task', render: (h) => escapeHtml(h.task_title || '—') },
+      { label: 'Descrizione', render: (h) => escapeHtml(h.description || h.reason_code || '—') },
+    ],
+    items,
+    { emptyMessage: 'Nessun evento registrato per questa richiesta.' },
+  );
+  return table;
+}
+
+// --- utility ---------------------------------------------------------------
+
+function formatPrice(value) {
+  // Ritorna sempre una stringa sicura da inserire in un template literal
+  // (mai null/undefined): usato sia in celle di renderTable — dove un valore
+  // non-stringa verrebbe interpolato letteralmente come "null" — sia nei
+  // campi di detail-grid.
+  if (value === null || value === undefined) return '—';
+  const n = Number(value);
+  if (Number.isNaN(n)) return '—';
+  return n.toLocaleString('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+}
+
+function statusTone(status) {
+  if (['active', 'satisfied', 'completed', 'accepted', 'open'].includes(status)) return 'ok';
+  if (['paused', 'in_progress', 'submitted'].includes(status)) return 'warn';
+  if (['closed', 'archived', 'rejected', 'expired', 'withdrawn', 'cancelled'].includes(status)) return 'danger';
+  return 'gray';
+}
+
+function priorityTone(priority) {
+  if (priority === 'urgent') return 'danger';
+  if (priority === 'high') return 'warn';
+  return 'gray';
+}
+
+function requirementTone(level) {
+  if (level === 'required') return 'ok';
+  if (level === 'excluded') return 'danger';
+  return 'gray';
+}
+
+function matchClassTone(matchClass) {
+  if (['excellent', 'strong'].includes(matchClass)) return 'ok';
+  if (['good', 'possible'].includes(matchClass)) return 'warn';
+  if (['weak', 'poor', 'incompatible'].includes(matchClass)) return 'danger';
+  return 'gray';
+}

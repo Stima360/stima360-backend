@@ -296,3 +296,35 @@ body {
 .photo-item img { display: block; width: 100%; height: 120px; object-fit: cover; }
 .photo-item figcaption { padding: 6px 8px; font-size: 12px; color: var(--muted); }
 
+/* P3: Acquirenti (dialog nuova richiesta, form, contatto selezionato). */
+dialog.modal {
+  border: none;
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+dialog.modal::backdrop { background: rgba(23, 35, 58, 0.45); }
+.form-field { margin-bottom: 14px; }
+.form-field label { display: block; font-size: 13px; margin-bottom: 4px; color: var(--muted); }
+.form-field .input,
+.form-field textarea.input { width: 100%; }
+.form-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.form-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px; }
+.form-grid-3 .form-field { margin-bottom: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.selected-contact-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+#contact-search-results .list-item:hover { background: var(--bg); }
+
+
