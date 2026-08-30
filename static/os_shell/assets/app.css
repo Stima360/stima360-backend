@@ -13,6 +13,13 @@
 
 * { box-sizing: border-box; }
 
+/* HOTFIX P0/P1: main.js alterna le viste con l'attributo [hidden], ma le
+   regole sopra (#login-view, #app-view) impostano display:flex, che vince
+   su hidden in assenza di questa regola. [hidden] deve prevalere sempre. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
