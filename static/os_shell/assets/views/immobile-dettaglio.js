@@ -301,9 +301,9 @@ function renderAttivita() {
 // --- utility ---------------------------------------------------------------
 
 function formatPrice(value) {
-  if (value === null || value === undefined) return null;
+  if (value === null || value === undefined) return '—';
   const n = Number(value);
-  if (Number.isNaN(n)) return null;
+  if (Number.isNaN(n)) return '—';
   return n.toLocaleString('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
 }
 
