@@ -1,0 +1,1 @@
+"""PROPERTY proposal lifecycle domain."""

@@ -1,0 +1,23 @@
+STIMA360 FLOW 0.1 — RISULTATI TEST LOCALI
+
+Compilazione Python: OK
+Sintassi JavaScript: OK
+Test unitari e di integrazione: 32 passed, 0 failed
+Durata pytest: 0.06s
+
+Copertura funzionale verificata:
+- registro delle 7 regole predefinite
+- versionamento regole
+- allowlist parametri e limiti
+- hash deterministico dei parametri
+- valutazione condizioni principali
+- sole azioni interne create_core_task
+- scan default 50 / massimo 200
+- vincolo retry_count 0..3 e max_retry=3 nella migrazione
+- assenza di modifiche schema CORE/PROPERTY/BUY/MATCH
+- rollback limitato a tabelle flow_*
+- simulazione separata dall'esecuzione live
+- UI senza creazione libera di regole
+- harness E2E con blocco produzione, cleanup e test retry
+
+E2E live Render: NON eseguito dalla sessione di preparazione perché richiede il deploy su stima360-backend-test e accesso a stima360-db-test. Lo script completo run_flow_01_e2e.py è incluso per l'esecuzione post-deploy.

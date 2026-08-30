@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>Area proprietario | STIMA360</title>
+  <link rel="stylesheet" href="/owner/assets/app.css">
+</head>
+<body>
+  <main class="portal-shell" aria-labelledby="page-title">
+    <header class="brand-header">
+      <div class="brand-mark" aria-hidden="true">S360</div>
+      <div>
+        <p class="eyebrow">STIMA360</p>
+        <h1 id="page-title">Area proprietario</h1>
+      </div>
+    </header>
+
+    <section id="loading-view" class="panel state-panel" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-message">Verifica della sessione in corso…</p>
+    </section>
+
+    <section id="login-view" class="panel" hidden>
+      <div class="section-heading">
+        <p class="eyebrow">Accesso riservato</p>
+        <h2>Entra nel tuo portale</h2>
+        <p>Inserisci il codice monouso ricevuto da STIMA360.</p>
+      </div>
+
+      <form id="login-form" novalidate>
+        <label for="token-input">Codice monouso</label>
+        <input
+          id="token-input"
+          name="token"
+          type="text"
+          inputmode="text"
+          autocomplete="one-time-code"
+          autocapitalize="none"
+          spellcheck="false"
+          required
+          aria-describedby="auth-message"
+        >
+        <button id="login-button" class="primary-button" type="submit">Accedi</button>
+      </form>
+
+      <p id="auth-message" class="status-message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="app-view" class="app-panel" hidden>
+      <div class="app-topbar">
+        <div>
+          <p class="eyebrow">Sessione attiva</p>
+          <h2>Il tuo portale</h2>
+        </div>
+        <button id="logout-button" class="secondary-button" type="button">Esci</button>
+      </div>
+
+      <div id="app-message" class="status-message" role="status" aria-live="polite"></div>
+
+      <section id="dashboard-section" class="dashboard-section" aria-labelledby="dashboard-title">
+        <div class="section-heading dashboard-heading">
+          <div>
+            <p class="eyebrow">Dashboard</p>
+            <h2 id="dashboard-title">I tuoi immobili</h2>
+          </div>
+          <p id="property-count" class="count-badge" aria-live="polite"></p>
+        </div>
+
+        <div id="dashboard-loading" class="section-state" role="status" aria-live="polite">
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento degli immobili…</p>
+        </div>
+
+        <div id="shell-empty" class="empty-state" hidden>
+          <h3>Nessun immobile disponibile</h3>
+          <p>Al momento non risultano immobili accessibili con questo account.</p>
+        </div>
+
+        <div id="dashboard-error" class="error-state" role="alert" hidden>
+          <h3>Impossibile caricare la dashboard</h3>
+          <p id="dashboard-error-message">Riprova tra poco.</p>
+          <button id="dashboard-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <div id="dashboard-content" class="dashboard-layout" hidden>
+          <section class="property-selector" aria-labelledby="property-selector-title">
+            <div class="subsection-heading">
+              <h3 id="property-selector-title">Seleziona un immobile</h3>
+              <p>Scegli l'immobile di cui vuoi vedere il riepilogo.</p>
+            </div>
+            <div
+              id="property-list"
+              class="property-list"
+              role="list"
+              aria-label="Immobili accessibili"
+            ></div>
+          </section>
+
+          <section id="property-detail-section" class="property-detail" aria-labelledby="property-detail-title">
+            <div id="property-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+              <div class="spinner spinner-small" aria-hidden="true"></div>
+              <p>Caricamento del riepilogo…</p>
+            </div>
+
+            <div id="property-detail-empty" class="empty-state compact-empty" hidden>
+              <h3>Seleziona un immobile</h3>
+              <p>Il riepilogo apparirà qui.</p>
+            </div>
+
+            <div id="property-detail-error" class="error-state compact-error" role="alert" hidden>
+              <h3>Riepilogo non disponibile</h3>
+              <p id="property-detail-error-message">Immobile non disponibile o accesso non più valido.</p>
+              <button id="property-detail-retry" class="secondary-button" type="button">Riprova</button>
+            </div>
+
+            <div id="property-detail-content" hidden>
+              <div class="subsection-heading detail-heading">
+                <p class="eyebrow">Riepilogo immobile</p>
+                <h3 id="property-detail-title">Immobile</h3>
+              </div>
+              <dl id="property-summary" class="property-summary" aria-label="Riepilogo immobile"></dl>
+
+              <section id="timeline-section" class="timeline-section" aria-labelledby="timeline-title">
+                <div class="subsection-heading timeline-heading">
+                  <p class="eyebrow">Pubblicazioni OWNER</p>
+                  <h3 id="timeline-title">Aggiornamenti</h3>
+                  <p>Gli aggiornamenti pubblicati per questo immobile.</p>
+                </div>
+
+                <div id="timeline-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento degli aggiornamenti…</p>
+                </div>
+
+                <div id="timeline-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun aggiornamento pubblicato</h3>
+                  <p>Quando saranno disponibili nuovi aggiornamenti, li troverai qui.</p>
+                </div>
+
+                <div id="timeline-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Aggiornamenti non disponibili</h3>
+                  <p id="timeline-error-message">Riprova tra poco.</p>
+                  <button id="timeline-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="timeline-content" class="timeline-layout" hidden>
+                  <div
+                    id="timeline-list"
+                    class="timeline-list"
+                    role="list"
+                    aria-label="Aggiornamenti pubblicati"
+                  ></div>
+
+                  <section id="publication-detail-section" class="publication-detail" aria-labelledby="publication-detail-title">
+                    <div id="publication-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento dell'aggiornamento…</p>
+                    </div>
+
+                    <div id="publication-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un aggiornamento</h3>
+                      <p>Il dettaglio della pubblicazione apparirà qui.</p>
+                    </div>
+
+                    <div id="publication-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Contenuto non disponibile</h3>
+                      <p id="publication-detail-error-message">Contenuto non disponibile o accesso non più valido.</p>
+                      <button id="publication-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="publication-detail-content" class="publication-article" hidden>
+                      <div class="subsection-heading publication-heading">
+                        <p class="eyebrow">Dettaglio pubblicazione</p>
+                        <h3 id="publication-detail-title">Aggiornamento</h3>
+                      </div>
+                      <dl id="publication-detail-meta" class="publication-meta" aria-label="Informazioni pubblicazione"></dl>
+                      <p id="publication-detail-summary" class="publication-summary" hidden></p>
+                      <p id="publication-detail-body" class="publication-body"></p>
+                      <div class="acknowledge-area" aria-labelledby="acknowledge-title">
+                        <h4 id="acknowledge-title">Presa visione</h4>
+                        <p id="acknowledge-status" class="status-message" role="status" aria-live="polite"></p>
+                        <button id="acknowledge-button" class="primary-button acknowledge-button" type="button" hidden>
+                          Conferma presa visione
+                        </button>
+                      </div>
+                    </article>
+                  </section>
+                </div>
+              </section>
+
+              <section id="visit-feedback-section" class="visit-feedback-section" aria-labelledby="visit-feedback-title">
+                <div class="subsection-heading visit-feedback-heading">
+                  <p class="eyebrow">Feedback anonimizzati</p>
+                  <h3 id="visit-feedback-title">Feedback visite</h3>
+                  <p>Commenti pubblicati dopo le visite, senza dati identificativi dei visitatori.</p>
+                </div>
+
+                <div id="visit-feedback-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento dei feedback…</p>
+                </div>
+
+                <div id="visit-feedback-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun feedback pubblicato</h3>
+                  <p>Quando saranno disponibili feedback pubblici sulle visite, li troverai qui.</p>
+                </div>
+
+                <div id="visit-feedback-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Feedback non disponibili</h3>
+                  <p id="visit-feedback-error-message">Riprova tra poco.</p>
+                  <button id="visit-feedback-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="visit-feedback-content" class="visit-feedback-layout" hidden>
+                  <div class="visit-feedback-list-column">
+                    <div
+                      id="visit-feedback-list"
+                      class="visit-feedback-list"
+                      role="list"
+                      aria-label="Feedback visite pubblicati"
+                    ></div>
+                    <div id="visit-feedback-pagination" class="visit-feedback-pagination" hidden>
+                      <button id="visit-feedback-load-more" class="secondary-button" type="button">Carica altri</button>
+                      <p id="visit-feedback-pagination-status" class="status-message" role="status" aria-live="polite"></p>
+                    </div>
+                  </div>
+
+                  <section id="visit-feedback-detail-section" class="visit-feedback-detail" aria-labelledby="visit-feedback-detail-title">
+                    <div id="visit-feedback-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento del feedback…</p>
+                    </div>
+
+                    <div id="visit-feedback-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un feedback</h3>
+                      <p>Il dettaglio del feedback anonimizzato apparirà qui.</p>
+                    </div>
+
+                    <div id="visit-feedback-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Contenuto non disponibile</h3>
+                      <p id="visit-feedback-detail-error-message">Contenuto non disponibile o accesso non più valido.</p>
+                      <button id="visit-feedback-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="visit-feedback-detail-content" class="visit-feedback-article" hidden>
+                      <div class="subsection-heading visit-feedback-detail-heading">
+                        <p class="eyebrow">Feedback visita</p>
+                        <h3 id="visit-feedback-detail-title">Feedback anonimizzato</h3>
+                      </div>
+                      <dl id="visit-feedback-detail-meta" class="visit-feedback-meta" aria-label="Informazioni feedback visita"></dl>
+                      <p id="visit-feedback-detail-summary" class="visit-feedback-summary"></p>
+                    </article>
+                  </section>
+                </div>
+              </section>
+
+
+              <section id="documents-section" class="documents-section" aria-labelledby="documents-title">
+                <div class="subsection-heading documents-heading">
+                  <p class="eyebrow">Documenti condivisi</p>
+                  <h3 id="documents-title">Documenti</h3>
+                  <p>File pubblicati da STIMA360 e disponibili per questo immobile.</p>
+                </div>
+
+                <div id="documents-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                  <div class="spinner spinner-small" aria-hidden="true"></div>
+                  <p>Caricamento dei documenti…</p>
+                </div>
+
+                <div id="documents-empty" class="empty-state compact-empty" hidden>
+                  <h3>Nessun documento disponibile</h3>
+                  <p>Quando saranno pubblicati documenti per questo immobile, li troverai qui.</p>
+                </div>
+
+                <div id="documents-error" class="error-state compact-error" role="alert" hidden>
+                  <h3>Documenti non disponibili</h3>
+                  <p id="documents-error-message">Riprova tra poco.</p>
+                  <button id="documents-retry" class="secondary-button" type="button">Riprova</button>
+                </div>
+
+                <div id="documents-content" class="documents-layout" hidden>
+                  <div
+                    id="documents-list"
+                    class="documents-list"
+                    role="list"
+                    aria-label="Documenti condivisi disponibili"
+                  ></div>
+
+                  <section id="document-detail-section" class="document-detail" aria-labelledby="document-detail-title">
+                    <div id="document-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento del documento…</p>
+                    </div>
+
+                    <div id="document-detail-empty" class="empty-state compact-empty">
+                      <h3>Seleziona un documento</h3>
+                      <p>Il dettaglio del documento apparirà qui.</p>
+                    </div>
+
+                    <div id="document-detail-error" class="error-state compact-error" role="alert" hidden>
+                      <h3>Documento non disponibile</h3>
+                      <p id="document-detail-error-message">Documento non disponibile o accesso non più valido.</p>
+                      <button id="document-detail-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <article id="document-detail-content" class="document-article" hidden>
+                      <div class="subsection-heading document-detail-heading">
+                        <p class="eyebrow">Dettaglio documento</p>
+                        <h3 id="document-detail-title">Documento</h3>
+                      </div>
+                      <dl id="document-detail-meta" class="document-meta" aria-label="Informazioni documento"></dl>
+
+                      <div class="document-download-area" aria-labelledby="document-download-title">
+                        <h4 id="document-download-title">Download</h4>
+                        <p id="document-download-status" class="status-message" role="status" aria-live="polite"></p>
+                        <a id="document-download-link" class="primary-button document-download-link" href="#" hidden>Scarica documento</a>
+                      </div>
+
+                      <div class="document-acknowledge-area" aria-labelledby="document-acknowledge-title">
+                        <h4 id="document-acknowledge-title">Presa visione</h4>
+                        <p id="document-acknowledge-status" class="status-message" role="status" aria-live="polite"></p>
+                        <button id="document-acknowledge-button" class="primary-button document-acknowledge-button" type="button" hidden>
+                          Conferma presa visione
+                        </button>
+                      </div>
+                    </article>
+                  </section>
+                </div>
+              </section>
+
+              <section id="requests-section" class="requests-section" aria-labelledby="requests-title">
+                <div class="subsection-heading requests-heading">
+                  <p class="eyebrow">Contatto con il consulente</p>
+                  <h3 id="requests-title">Richieste</h3>
+                  <p>Invia una richiesta relativa all’immobile e consulta lo storico delle richieste già inviate.</p>
+                </div>
+
+                <div class="requests-layout">
+                  <section class="request-form-panel" aria-labelledby="request-form-title">
+                    <h4 id="request-form-title">Nuova richiesta</h4>
+                    <form id="request-form" novalidate>
+                      <div class="field-group">
+                        <label for="request-type">Tipo di richiesta</label>
+                        <select id="request-type" name="feedback_type" required>
+                          <option value="">Seleziona una categoria</option>
+                          <option value="contact_request">Essere ricontattato</option>
+                          <option value="correction_request">Segnalare una correzione</option>
+                          <option value="general_message">Messaggio generale</option>
+                          <option value="strategy_feedback">Confronto sulla strategia</option>
+                          <option value="price_review">Revisione del prezzo</option>
+                          <option value="availability_update">Aggiornare la disponibilità</option>
+                          <option value="document_question">Domanda sui documenti</option>
+                        </select>
+                      </div>
+
+                      <div class="field-group">
+                        <label for="request-subject">Oggetto</label>
+                        <input id="request-subject" name="subject" type="text" maxlength="150" required>
+                        <p class="field-hint">Massimo 150 caratteri.</p>
+                      </div>
+
+                      <div class="field-group">
+                        <label for="request-message">Messaggio</label>
+                        <textarea id="request-message" name="message" rows="5" maxlength="5000" required></textarea>
+                        <p class="field-hint">Massimo 5.000 caratteri.</p>
+                      </div>
+
+                      <fieldset id="request-availability-fields" class="request-availability" hidden>
+                        <legend>Disponibilità</legend>
+                        <p class="field-hint">Indica almeno un estremo temporale.</p>
+                        <div class="request-availability-grid">
+                          <div class="field-group">
+                            <label for="request-availability-from">Da</label>
+                            <input id="request-availability-from" name="availability_from" type="datetime-local">
+                          </div>
+                          <div class="field-group">
+                            <label for="request-availability-to">A</label>
+                            <input id="request-availability-to" name="availability_to" type="datetime-local">
+                          </div>
+                        </div>
+                      </fieldset>
+
+                      <button id="request-submit" class="primary-button" type="submit">Invia richiesta</button>
+                      <p id="request-form-status" class="status-message" role="status" aria-live="polite"></p>
+                    </form>
+                  </section>
+
+                  <section class="requests-history" aria-labelledby="requests-history-title">
+                    <h4 id="requests-history-title">Storico richieste</h4>
+
+                    <div id="requests-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+                      <div class="spinner spinner-small" aria-hidden="true"></div>
+                      <p>Caricamento delle richieste…</p>
+                    </div>
+
+                    <div id="requests-empty" class="empty-state compact-empty" hidden>
+                      <h4>Nessuna richiesta inviata</h4>
+                      <p>Le richieste inviate per questo immobile appariranno qui.</p>
+                    </div>
+
+                    <div id="requests-error" class="error-state compact-error" role="alert" hidden>
+                      <h4>Richieste non disponibili</h4>
+                      <p id="requests-error-message">Riprova tra poco.</p>
+                      <button id="requests-retry" class="secondary-button" type="button">Riprova</button>
+                    </div>
+
+                    <div id="requests-content" hidden>
+                      <div id="requests-list" class="requests-list" role="list" aria-label="Storico richieste proprietario"></div>
+                    </div>
+                  </section>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="notifications-section" class="notifications-section panel-subsection" aria-labelledby="notifications-title">
+        <div class="section-heading notifications-heading">
+          <div>
+            <p class="eyebrow">Centro notifiche</p>
+            <h2 id="notifications-title">Notifiche</h2>
+            <p>Aggiornamenti in-app relativi alle attività del tuo portale.</p>
+          </div>
+          <label class="notification-filter" for="notifications-unread-only">
+            <input id="notifications-unread-only" type="checkbox">
+            <span>Solo non lette</span>
+          </label>
+        </div>
+
+        <div id="notifications-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento delle notifiche…</p>
+        </div>
+
+        <div id="notifications-empty" class="empty-state compact-empty" hidden>
+          <h3>Nessuna notifica</h3>
+          <p id="notifications-empty-message">Non ci sono notifiche da mostrare.</p>
+        </div>
+
+        <div id="notifications-error" class="error-state compact-error" role="alert" hidden>
+          <h3>Notifiche non disponibili</h3>
+          <p id="notifications-error-message">Riprova tra poco.</p>
+          <button id="notifications-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <div id="notifications-content" hidden>
+          <div id="notifications-list" class="notifications-list" role="list" aria-label="Notifiche del portale"></div>
+          <div id="notifications-pagination" class="notifications-pagination" hidden>
+            <button id="notifications-load-more" class="secondary-button" type="button">Carica altre</button>
+            <p id="notifications-pagination-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="notification-preferences-section" class="notification-preferences-section panel-subsection" aria-labelledby="notification-preferences-title">
+        <div class="section-heading">
+          <p class="eyebrow">Impostazioni in-app</p>
+          <h2 id="notification-preferences-title">Preferenze notifiche</h2>
+          <p>Scegli quali aggiornamenti vuoi ricevere nel portale.</p>
+        </div>
+
+        <div id="notification-preferences-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento delle preferenze…</p>
+        </div>
+
+        <div id="notification-preferences-error" class="error-state compact-error" role="alert" hidden>
+          <h3>Preferenze non disponibili</h3>
+          <p id="notification-preferences-error-message">Riprova tra poco.</p>
+          <button id="notification-preferences-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <form id="notification-preferences-form" class="notification-preferences-form" hidden>
+          <label class="preference-toggle" for="preference-in-app">
+            <input id="preference-in-app" name="in_app_enabled" type="checkbox">
+            <span><strong>Notifiche nel portale</strong><small>Abilita o disabilita tutte le notifiche in-app.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-publication">
+            <input id="preference-publication" name="publication_enabled" type="checkbox">
+            <span><strong>Aggiornamenti immobile</strong><small>Nuove pubblicazioni e aggiornamenti condivisi.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-visit-feedback">
+            <input id="preference-visit-feedback" name="visit_feedback_enabled" type="checkbox">
+            <span><strong>Feedback visite</strong><small>Nuovi feedback visita pubblicati.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-document">
+            <input id="preference-document" name="document_enabled" type="checkbox">
+            <span><strong>Documenti condivisi</strong><small>Nuovi documenti disponibili nel portale.</small></span>
+          </label>
+          <label class="preference-toggle" for="preference-request-update">
+            <input id="preference-request-update" name="request_update_enabled" type="checkbox">
+            <span><strong>Aggiornamenti richieste</strong><small>Variazioni di stato delle richieste inviate.</small></span>
+          </label>
+
+          <div class="notification-preferences-actions">
+            <button id="notification-preferences-save" class="primary-button" type="submit">Salva preferenze</button>
+            <p id="notification-preferences-status" class="status-message" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <noscript>
+    <p class="noscript-message">Per usare l’Area proprietario è necessario abilitare JavaScript.</p>
+  </noscript>
+
+  <script src="/owner/assets/app.js"></script>
+</body>
+</html>

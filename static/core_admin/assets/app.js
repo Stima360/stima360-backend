@@ -1,0 +1,550 @@
+const API='/api/core';
+const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],selected:null,selected360:null,credentials:null};
+// NEXT4_P3_GLOBAL_SEARCH
+let globalSearchTimer=null;
+let globalSearchSequence=0;
+const qs=(s,p=document)=>p.querySelector(s),qsa=(s,p=document)=>[...p.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const dt=v=>v?new Date(v).toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'}):'—';
+const localInput=v=>{if(!v)return'';const d=new Date(v);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)};
+const sameDay=(a,b=new Date())=>{if(!a)return false;const d=new Date(a);return d.getFullYear()===b.getFullYear()&&d.getMonth()===b.getMonth()&&d.getDate()===b.getDate()};
+const endOfToday=()=>{const d=new Date();d.setHours(23,59,59,999);return d};
+const money=v=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(v)||0);
+const priorityRank=v=>({urgent:0,high:1,normal:2,low:3}[v]??4);
+const val=id=>qs('#'+id)?.value.trim()||'';
+const opt=v=>v||null;
+function positiveId(value){const n=Number(value);return Number.isInteger(n)&&n>0?n:null;}
+function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${username}:${password}`);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return `Basic ${btoa(binary)}`;}
+function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
+function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
+function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
+function logout(message=''){cancelGlobalSearch();state.credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}state.credentials={username,password};showApp();await refresh();await applyDeepLink();}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
+
+async function applyDeepLink(){
+ const params=new URLSearchParams(window.location.search);
+ const view=params.get('view');
+ const rawId=params.get('id');
+ if(view!=='contact360')return;
+ if(rawId===null)return;
+ const id=positiveId(rawId);
+ if(id===null){toast('ID contatto non valido.',true);setView('dashboard');return;}
+ await openContact360(id);
+}
+
+async function api(path,opts={}){const headers={'Content-Type':'application/json',...(opts.headers||{})};if(state.credentials)headers.Authorization=encodeBasic(state.credentials.username,state.credentials.password);const url=path.startsWith('/api/')?path:API+path;const r=await fetch(url,{...opts,headers});if(r.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);const error=new Error(d||`Errore ${r.status}`);error.status=r.status;throw error}return data}
+
+function globalSearchHref(type,itemId){
+ const id=positiveId(itemId);
+ if(id===null)return null;
+ if(type==='contact')return `/core-admin/?view=contact360&id=${id}`;
+ if(type==='property')return `/property-admin/?id=${id}`;
+ if(type==='buy')return `/buy-admin/?id=${id}`;
+ if(type==='match')return `/match-admin/?id=${id}`;
+ return null;
+}
+
+function globalSearchResultNode(item){
+ const href=globalSearchHref(item.type,item.id);
+ if(!href)return null;
+
+ const link=document.createElement('a');
+ link.href=href;
+ link.target='_blank';
+ link.rel='noopener noreferrer';
+ link.className='list-item';
+ link.style.display='block';
+ link.style.textDecoration='none';
+ link.style.color='inherit';
+
+ const head=document.createElement('div');
+ head.className='list-item-head';
+
+ const titleWrap=document.createElement('div');
+
+ const type=document.createElement('span');
+ type.className='badge gray';
+ type.textContent=String(item.typeLabel||item.type||'');
+
+ const title=document.createElement('strong');
+ title.textContent=String(item.title||'');
+ title.style.marginLeft='8px';
+
+ const subtitle=document.createElement('div');
+ subtitle.className='muted';
+ subtitle.textContent=String(item.subtitle||'');
+
+ titleWrap.append(type,title,subtitle);
+ head.appendChild(titleWrap);
+
+ if(item.status){
+   const status=document.createElement('span');
+   status.className='badge gray';
+   status.textContent=String(item.status);
+   head.appendChild(status);
+ }
+
+ link.appendChild(head);
+ return link;
+}
+
+function renderGlobalSearchResults(items,message=''){
+ const root=qs('#global-search-results');
+ if(!root)return;
+
+ root.replaceChildren();
+
+ if(message){
+   const row=document.createElement('div');
+   row.className='list-item muted';
+   row.textContent=message;
+   root.appendChild(row);
+   root.hidden=false;
+   return;
+ }
+
+ const nodes=items.map(globalSearchResultNode).filter(Boolean);
+
+ if(!nodes.length){
+   const row=document.createElement('div');
+   row.className='list-item muted';
+   row.textContent='Nessun risultato';
+   root.appendChild(row);
+   root.hidden=false;
+   return;
+ }
+
+ nodes.forEach(node=>root.appendChild(node));
+ root.hidden=false;
+}
+
+function clearGlobalSearchResults(){
+ const root=qs('#global-search-results');
+ if(root){
+   root.replaceChildren();
+   root.hidden=true;
+ }
+}
+
+function cancelGlobalSearch(){
+ clearTimeout(globalSearchTimer);
+ globalSearchTimer=null;
+ globalSearchSequence+=1;
+ clearGlobalSearchResults();
+}
+
+async function lookupGlobalSearchMatch(id){
+ try{
+   return await api(`/api/match/matches/${id}`);
+ }catch(e){
+   if(e.status===404)return null;
+   throw e;
+ }
+}
+
+function normalizeGlobalSearchResults(type,items){
+ return (items||[]).map(item=>{
+   if(type==='contact')return {
+     type,
+     id:item.id,
+     typeLabel:'CONTATTO',
+     title:item.display_name||item.company_name||[item.first_name,item.last_name].filter(Boolean).join(' ')||`Contatto #${item.id}`,
+     subtitle:[item.email,item.phone].filter(Boolean).join(' · '),
+     status:item.status||''
+   };
+
+   if(type==='property')return {
+     type,
+     id:item.id,
+     typeLabel:'IMMOBILE',
+     title:item.title||`Immobile #${item.id}`,
+     subtitle:[item.code,item.address,item.city].filter(Boolean).join(' · '),
+     status:item.commercial_status||''
+   };
+
+   if(type==='buy')return {
+     type,
+     id:item.id,
+     typeLabel:'BUY',
+     title:item.title||`Richiesta #${item.id}`,
+     subtitle:[item.contact_name,item.contact_phone].filter(Boolean).join(' · '),
+     status:item.status||''
+   };
+
+   if(type==='match')return {
+     type,
+     id:item.id,
+     typeLabel:'MATCH',
+     title:`Match #${item.id}`,
+     subtitle:[item.buy_title,item.property_title].filter(Boolean).join(' ↔ '),
+     status:item.match_class||item.commercial_status||''
+   };
+
+   return null;
+ }).filter(Boolean);
+}
+
+async function runGlobalSearch(query,sequence){
+ const encoded=encodeURIComponent(query);
+
+ const requests=[
+   api(`/contacts?search=${encoded}&limit=5`)
+     .then(data=>({type:'contact',items:data.items||[]})),
+   api(`/api/property/properties?search=${encoded}&limit=5`)
+     .then(data=>({type:'property',items:data.items||[]})),
+   api(`/api/buy/requests?search=${encoded}&limit=5`)
+     .then(data=>({type:'buy',items:data.items||[]}))
+ ];
+
+ const matchId=positiveId(query);
+
+ if(matchId!==null){
+   requests.push(
+     lookupGlobalSearchMatch(matchId)
+       .then(item=>({type:'match',items:item?[item]:[]}))
+   );
+ }
+
+ const settled=await Promise.allSettled(requests);
+
+ if(sequence!==globalSearchSequence)return;
+
+ const items=[];
+ let failed=0;
+
+ for(const result of settled){
+   if(result.status==='fulfilled'){
+     items.push(
+       ...normalizeGlobalSearchResults(
+         result.value.type,
+         result.value.items
+       )
+     );
+   }else{
+     failed+=1;
+   }
+ }
+
+ if(!items.length&&failed===settled.length){
+   renderGlobalSearchResults([], 'Ricerca temporaneamente non disponibile.');
+   return;
+ }
+
+ renderGlobalSearchResults(items);
+}
+
+function scheduleGlobalSearch(){
+ const input=qs('#global-search');
+ if(!input)return;
+
+ const query=input.value.trim();
+
+ clearTimeout(globalSearchTimer);
+
+ const sequence=++globalSearchSequence;
+
+ if(query.length<2){
+   clearGlobalSearchResults();
+   return;
+ }
+
+ const execute=()=>runGlobalSearch(query,sequence);
+ globalSearchTimer=setTimeout(execute,300);
+}
+function toast(msg,error=false){const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=msg;qs('#toast-root').appendChild(el);setTimeout(()=>el.remove(),3300)}
+function badge(v){const c=['active','open','completed','won'].includes(v)?'ok':['urgent','high','lost','cancelled'].includes(v)?'warn':'gray';return `<span class="badge ${c}">${esc(v||'—')}</span>`}
+function confirmAction(message){return window.confirm(message)}
+function modal(title,body,onSave,saveLabel='Salva'){qs('#modal-root').innerHTML=`<div class="modal-backdrop"><div class="modal"><div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" data-close>×</button></div><div class="modal-body">${body}</div><div class="modal-foot"><button class="btn" data-close>Annulla</button><button class="btn primary" id="modal-save">${esc(saveLabel)}</button></div></div></div>`;qsa('[data-close]').forEach(b=>b.onclick=()=>qs('#modal-root').innerHTML='');qs('#modal-save').onclick=async()=>{const b=qs('#modal-save');b.disabled=true;try{await onSave();qs('#modal-root').innerHTML=''}catch(e){toast(e.message,true);b.disabled=false}}}
+async function loadAll(){const [c,l,a,t]=await Promise.all([api('/contacts?limit=200'),api('/leads?limit=200'),api('/activities?limit=200'),api('/tasks?limit=200')]);state.contacts=c.items;state.leads=l.items;state.activities=a.items;state.tasks=t.items}
+function contactName(id){const c=state.contacts.find(x=>x.id===id);return c?.display_name||c?.company_name||[c?.first_name,c?.last_name].filter(Boolean).join(' ')||`#${id}`}
+function setView(view){state.view=view;state.selected=null;qsa('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));render()}
+async function refresh(){qs('#content').innerHTML='<div class="card loading">Caricamento…</div>';try{await loadAll();render()}catch(e){qs('#content').innerHTML=`<div class="card empty">Errore: ${esc(e.message)}</div>`}}
+function render(){const titles={dashboard:['Panoramica','Gestione operativa del CORE CRM'],agenda:['Agenda','Task CORE, follow-up BUY e visite PROPERTY'],contacts:['Contatti','Anagrafiche, ruoli e stato'],leads:['Lead','Pipeline commerciale e prossime azioni'],activities:['Attività','Cronologia delle interazioni'],tasks:['Task','Azioni operative e scadenze'],contactDetail:['Scheda contatto','Dettaglio, ruoli e relazioni'],contact360:['Contact 360','Vista CRM globale'],leadDetail:['Scheda lead','Pipeline, attività, task e stime collegate']};const [t,s]=titles[state.view]||titles.dashboard;qs('#page-title').textContent=t;qs('#page-subtitle').textContent=s;qs('#quick-add').style.display=['contactDetail','contact360','leadDetail'].includes(state.view)?'none':'';({dashboard:renderDashboard,agenda:renderAgenda,contacts:renderContacts,leads:renderLeads,activities:renderActivities,tasks:renderTasks,contactDetail:renderContactDetail,contact360:renderContact360,leadDetail:renderLeadDetail}[state.view]||renderDashboard)()}
+
+async function renderAgenda(){
+ qs('#content').innerHTML='<div class="card loading">Caricamento agenda…</div>';
+
+ try{
+   const [buyData,visitData]=await Promise.all([
+     api('/api/buy/requests?limit=200'),
+     api('/api/property/visits?limit=500')
+   ]);
+
+   if(state.view!=='agenda')return;
+
+   const now=new Date();
+   const todayEnd=endOfToday();
+
+   const items=[];
+
+   state.tasks
+     .filter(t=>
+       !['completed','cancelled'].includes(t.status) &&
+       t.due_at &&
+       new Date(t.due_at)<=todayEnd
+     )
+     .forEach(t=>{
+       items.push({
+         kind:'task',
+         when:t.due_at,
+         title:t.title||`Task #${t.id}`,
+         detail:t.description||'',
+         status:t.priority||t.status,
+         overdue:new Date(t.due_at)<now
+       });
+     });
+
+   (buyData.items||[])
+     .filter(b=>
+       b.status==='active' &&
+       b.next_action_at &&
+       new Date(b.next_action_at)<=todayEnd
+     )
+     .forEach(b=>{
+       items.push({
+         kind:'buy',
+         id:positiveId(b.id),
+         when:b.next_action_at,
+         title:b.title||`Richiesta #${b.id}`,
+         detail:b.next_action_note||'Follow-up BUY',
+         contact:b.contact_name||'',
+         status:b.priority||b.status,
+         overdue:new Date(b.next_action_at)<now
+       });
+     });
+
+   (visitData.items||[])
+     .filter(v=>
+       ['scheduled','confirmed'].includes(v.status) &&
+       v.scheduled_at &&
+       sameDay(v.scheduled_at)
+     )
+     .forEach(v=>{
+       items.push({
+         kind:'visit',
+         propertyId:positiveId(v.property_id),
+         when:v.scheduled_at,
+         title:v.property_title||`Immobile #${v.property_id}`,
+         detail:v.contact_name?`Visita con ${v.contact_name}`:'Visita PROPERTY',
+         status:v.status,
+         overdue:new Date(v.scheduled_at)<now
+       });
+     });
+
+   items.sort((a,b)=>
+     Number(!a.overdue)-Number(!b.overdue) ||
+     new Date(a.when)-new Date(b.when)
+   );
+
+   const taskCount=items.filter(x=>x.kind==='task').length;
+   const buyCount=items.filter(x=>x.kind==='buy').length;
+   const visitCount=items.filter(x=>x.kind==='visit').length;
+   const overdueCount=items.filter(x=>x.overdue).length;
+
+   const rows=items.map(item=>{
+     const type=item.kind==='task'
+       ?'CORE TASK'
+       :item.kind==='buy'
+         ?'BUY'
+         :'VISITA';
+
+     let title=`<strong>${esc(item.title)}</strong>`;
+
+     if(item.kind==='buy'&&item.id){
+       title=`<a href="/buy-admin/?id=${item.id}" target="_blank" rel="noopener noreferrer"><strong>${esc(item.title)}</strong></a>`;
+     }
+
+     if(item.kind==='visit'&&item.propertyId){
+       title=`<a href="/property-admin/?id=${item.propertyId}" target="_blank" rel="noopener noreferrer"><strong>${esc(item.title)}</strong></a>`;
+     }
+
+     const action=item.kind==='task'
+       ?`<button class="btn small" onclick="setView('tasks')">Apri task</button>`
+       :'';
+
+     return `
+       <div class="list-item ${item.overdue?'overdue':''}">
+         <div class="list-item-head">
+           <div>
+             <span class="badge gray">${type}</span>
+             ${title}
+             <div class="muted">
+               ${esc(item.detail||'')}
+               ${item.contact?` · ${esc(item.contact)}`:''}
+             </div>
+           </div>
+           <div class="actions">
+             ${badge(item.status)}
+             ${action}
+           </div>
+         </div>
+         <div class="muted" style="margin-top:8px">
+           ${item.overdue?'SCADUTO · ':''}${dt(item.when)}
+         </div>
+       </div>`;
+   }).join('');
+
+   qs('#content').innerHTML=`
+     <div class="grid stats daily-stats">
+       <div class="card stat">
+         <div class="label">Totale agenda</div>
+         <div class="value">${items.length}</div>
+         <div class="hint">Oggi + scaduti</div>
+       </div>
+
+       <div class="card stat ${overdueCount?'attention':''}">
+         <div class="label">Scaduti</div>
+         <div class="value">${overdueCount}</div>
+         <div class="hint">Da recuperare</div>
+       </div>
+
+       <div class="card stat">
+         <div class="label">Follow-up BUY</div>
+         <div class="value">${buyCount}</div>
+         <div class="hint">Richieste attive</div>
+       </div>
+
+       <div class="card stat">
+         <div class="label">Visite oggi</div>
+         <div class="value">${visitCount}</div>
+         <div class="hint">Scheduled / confirmed</div>
+       </div>
+     </div>
+
+     <div class="card panel focus-panel">
+       <div class="panel-head">
+         <div>
+           <h2>Agenda operativa</h2>
+           <div class="muted">
+             ${taskCount} task CORE ·
+             ${buyCount} follow-up BUY ·
+             ${visitCount} visite PROPERTY
+           </div>
+         </div>
+       </div>
+
+       ${rows||'<div class="empty">Nessuna scadenza operativa per oggi.</div>'}
+     </div>`;
+ }catch(e){
+   if(state.view!=='agenda')return;
+   qs('#content').innerHTML=`<div class="card empty">Errore agenda: ${esc(e.message)}</div>`;
+   toast(e.message,true);
+ }
+}
+function renderDashboard(){
+ const now=new Date(),todayEnd=endOfToday();
+ const openTasks=state.tasks.filter(x=>!['completed','cancelled'].includes(x.status));
+ const overdue=openTasks.filter(t=>t.due_at&&new Date(t.due_at)<now).sort((a,b)=>new Date(a.due_at)-new Date(b.due_at));
+ const dueToday=openTasks.filter(t=>t.due_at&&sameDay(t.due_at)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority)||new Date(a.due_at)-new Date(b.due_at));
+ const callbacks=state.leads.filter(l=>l.status==='open'&&l.next_action_at&&new Date(l.next_action_at)<=todayEnd).sort((a,b)=>new Date(a.next_action_at)-new Date(b.next_action_at));
+ const highPriority=openTasks.filter(t=>['urgent','high'].includes(t.priority)).sort((a,b)=>priorityRank(a.priority)-priorityRank(b.priority));
+ const activitiesToday=state.activities.filter(a=>sameDay(a.occurred_at)).length;
+ const completedToday=state.tasks.filter(t=>t.status==='completed'&&sameDay(t.completed_at)).length;
+ const openLeads=state.leads.filter(l=>l.status==='open');
+ const pipelineValue=openLeads.reduce((sum,l)=>sum+(Number(l.estimated_value)||0),0);
+ const operational=[...dueToday,...overdue.filter(x=>!dueToday.some(y=>y.id===x.id)),...highPriority.filter(x=>!dueToday.some(y=>y.id===x.id)&&!overdue.some(y=>y.id===x.id))].slice(0,8);
+ qs('#content').innerHTML=`
+ <div class="grid stats daily-stats">
+   <div class="card stat kpi-link" data-go="tasks"><div class="label">Da fare oggi</div><div class="value">${dueToday.length}</div><div class="hint">${completedToday} completati oggi</div></div>
+   <div class="card stat kpi-link ${overdue.length?'attention':''}" data-go="tasks"><div class="label">Task scaduti</div><div class="value">${overdue.length}</div><div class="hint">Da recuperare subito</div></div>
+   <div class="card stat kpi-link ${callbacks.length?'attention':''}" data-go="leads"><div class="label">Lead da ricontattare</div><div class="value">${callbacks.length}</div><div class="hint">Entro oggi o già scaduti</div></div>
+   <div class="card stat kpi-link" data-go="activities"><div class="label">Attività oggi</div><div class="value">${activitiesToday}</div><div class="hint">Interazioni registrate</div></div>
+ </div>
+ <div class="grid stats secondary-stats">
+   <div class="card stat"><div class="label">Lead aperti</div><div class="value">${openLeads.length}</div><div class="hint">Pipeline attiva</div></div>
+   <div class="card stat"><div class="label">Valore pipeline</div><div class="value money-value">${money(pipelineValue)}</div><div class="hint">Somma valori stimati aperti</div></div>
+   <div class="card stat"><div class="label">Contatti CORE</div><div class="value">${state.contacts.length}</div><div class="hint">Anagrafiche operative</div></div>
+   <div class="card stat"><div class="label">Priorità alte</div><div class="value">${highPriority.length}</div><div class="hint">Task high o urgent</div></div>
+ </div>
+ <div class="grid dashboard-grid">
+  <div class="card panel focus-panel"><div class="panel-head"><div><h2>Agenda operativa</h2><div class="muted">Task di oggi, scaduti e prioritari</div></div><button class="btn small" onclick="setView('tasks')">Apri task</button></div>${taskList(operational)}</div>
+  <div class="card panel"><div class="panel-head"><div><h2>Lead da ricontattare</h2><div class="muted">Prossima azione entro oggi</div></div><button class="btn small" onclick="setView('leads')">Apri lead</button></div>${leadTable(callbacks.slice(0,8))}</div>
+ </div>
+ <div class="grid two-panels dashboard-bottom">
+  <div class="card panel"><div class="panel-head"><h2>Lead recenti</h2><button class="btn small" onclick="setView('leads')">Vedi tutti</button></div>${leadTable(state.leads.slice(0,6))}</div>
+  <div class="card panel"><div class="panel-head"><h2>Ultime attività</h2><button class="btn small" onclick="setView('activities')">Vedi tutte</button></div>${activityList(state.activities.slice(0,6))}</div>
+ </div>`;
+ qsa('[data-go]').forEach(x=>x.onclick=()=>setView(x.dataset.go));bindLeadRows();bindTaskEvents();bindActivityEvents()
+}
+function contactTable(items){if(!items.length)return '<div class="empty">Nessun contatto</div>';return `<div class="table-wrap"><table class="table"><thead><tr><th>Nome</th><th>Contatti</th><th>Fonte</th><th>Stato</th><th>Azioni</th></tr></thead><tbody>${items.map(c=>`<tr><td class="clickable" data-contact="${c.id}"><strong>${esc(c.display_name||c.company_name||[c.first_name,c.last_name].filter(Boolean).join(' ')||`Contatto #${c.id}`)}</strong><div class="muted">${esc(c.contact_type)} · #${c.id}</div></td><td>${esc(c.email||'—')}<div class="muted">${esc(c.phone||'')}</div></td><td>${esc(c.source||'—')}</td><td>${badge(c.status)}</td><td><button class="btn small" data-edit-contact="${c.id}">Modifica</button></td></tr>`).join('')}</tbody></table></div>`}
+function renderContacts(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="contact-search" placeholder="Cerca nome, email, telefono"><select class="select" id="contact-status"><option value="">Tutti gli stati</option><option>active</option><option>inactive</option><option>archived</option></select></div><button class="btn primary" id="new-contact">+ Nuovo contatto</button></div><div id="contacts-table">${contactTable(state.contacts)}</div></div>`;qs('#new-contact').onclick=()=>openContactForm();qs('#contact-search').oninput=filterContacts;qs('#contact-status').onchange=filterContacts;bindContactRows()}
+function filterContacts(){const q=val('contact-search').toLowerCase(),st=val('contact-status');const arr=state.contacts.filter(c=>(!st||c.status===st)&&(!q||JSON.stringify(c).toLowerCase().includes(q)));qs('#contacts-table').innerHTML=contactTable(arr);bindContactRows()}
+function bindContactRows(){qsa('[data-contact]').forEach(r=>r.onclick=()=>openContactDetail(+r.dataset.contact));qsa('[data-edit-contact]').forEach(b=>b.onclick=e=>{e.stopPropagation();openContactForm(state.contacts.find(c=>c.id===+b.dataset.editContact))})}
+function leadTable(items){if(!items.length)return '<div class="empty">Nessun lead</div>';return `<div class="table-wrap"><table class="table"><thead><tr><th>Contatto</th><th>Pipeline</th><th>Stage</th><th>Priorità</th><th>Stato</th><th>Prossima azione</th></tr></thead><tbody>${items.map(l=>`<tr class="clickable" data-lead="${l.id}"><td><strong>${esc(contactName(l.contact_id))}</strong><div class="muted">Lead #${l.id}</div></td><td>${badge(l.pipeline)}</td><td>${badge(l.stage)}</td><td>${badge(l.priority)}</td><td>${badge(l.status)}</td><td>${dt(l.next_action_at)}</td></tr>`).join('')}</tbody></table></div>`}
+function renderLeads(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="lead-search" placeholder="Cerca contatto o ID"><select class="select" id="lead-pipeline"><option value="">Tutte le pipeline</option><option>sell</option><option>buy</option><option>general</option></select><select class="select" id="lead-stage"><option value="">Tutti gli stage</option>${['new','contacted','qualified','appointment','proposal','won','lost'].map(x=>`<option>${x}</option>`).join('')}</select><select class="select" id="lead-status"><option value="">Tutti gli stati</option><option>open</option><option>paused</option><option>closed</option></select></div><button class="btn primary" id="new-lead">+ Nuovo lead</button></div><div id="leads-table">${leadTable(state.leads)}</div></div>`;qs('#new-lead').onclick=()=>openLeadForm();['lead-search','lead-pipeline','lead-stage','lead-status'].forEach(id=>qs('#'+id).oninput=filterLeads);bindLeadRows()}
+function filterLeads(){const q=val('lead-search').toLowerCase(),p=val('lead-pipeline'),g=val('lead-stage'),s=val('lead-status');const arr=state.leads.filter(l=>(!p||l.pipeline===p)&&(!g||l.stage===g)&&(!s||l.status===s)&&(!q||contactName(l.contact_id).toLowerCase().includes(q)||String(l.id)===q));qs('#leads-table').innerHTML=leadTable(arr);bindLeadRows()}
+function bindLeadRows(){qsa('[data-lead]').forEach(r=>r.onclick=()=>openLeadDetail(+r.dataset.lead))}
+function activityList(items){if(!items.length)return '<div class="empty">Nessuna attività</div>';return `<div class="list">${items.map(a=>`<div class="list-item"><div class="list-item-head"><div><strong>${esc(a.subject||a.activity_type)}</strong><div class="muted">${esc(a.description||'')}</div></div><div class="actions"><span class="muted">${dt(a.occurred_at)}</span><button class="btn small danger" data-delete-activity="${a.id}">Elimina</button></div></div><div style="margin-top:7px">${badge(a.activity_type)} ${a.contact_id?`<span class="badge gray">${esc(contactName(a.contact_id))}</span>`:''} ${a.lead_id?`<span class="badge gray">Lead #${a.lead_id}</span>`:''}</div></div>`).join('')}</div>`}
+function renderActivities(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="activity-search" placeholder="Cerca attività"><select class="select" id="activity-type"><option value="">Tutti i tipi</option>${['note','call','email','whatsapp','meeting','valuation','status_change','system'].map(x=>`<option>${x}</option>`).join('')}</select></div><button class="btn primary" id="new-activity">+ Registra attività</button></div><div id="activities-list">${activityList(state.activities)}</div></div>`;qs('#new-activity').onclick=()=>openActivityForm({});qs('#activity-search').oninput=filterActivities;qs('#activity-type').onchange=filterActivities;bindActivityEvents()}
+function filterActivities(){const q=val('activity-search').toLowerCase(),t=val('activity-type');const arr=state.activities.filter(a=>(!t||a.activity_type===t)&&(!q||JSON.stringify(a).toLowerCase().includes(q)));qs('#activities-list').innerHTML=activityList(arr);bindActivityEvents()}
+function bindActivityEvents(){qsa('[data-delete-activity]').forEach(b=>b.onclick=async()=>{if(!confirmAction('Eliminare questa attività?'))return;try{await api(`/activities/${b.dataset.deleteActivity}`,{method:'DELETE'});toast('Attività eliminata');await refresh()}catch(e){toast(e.message,true)}})}
+function taskList(items){if(!items.length)return '<div class="empty">Nessun task</div>';return `<div class="list">${items.map(t=>{const overdue=t.due_at&&!['completed','cancelled'].includes(t.status)&&new Date(t.due_at)<new Date();return `<div class="list-item ${overdue?'overdue':''}"><div class="list-item-head"><div><strong>${esc(t.title)}</strong><div class="muted">${esc(t.description||'')}</div></div><div class="actions"><select class="select task-status" data-task-id="${t.id}" style="width:auto">${['open','in_progress','completed','cancelled'].map(x=>`<option ${t.status===x?'selected':''}>${x}</option>`).join('')}</select><button class="btn small" data-edit-task="${t.id}">Modifica</button><button class="btn small danger" data-delete-task="${t.id}">Elimina</button></div></div><div style="margin-top:8px">${badge(t.priority)} <span class="muted">Scadenza: ${dt(t.due_at)}</span> ${t.contact_id?`<span class="badge gray">${esc(contactName(t.contact_id))}</span>`:''}</div></div>`}).join('')}</div>`}
+function renderTasks(){qs('#content').innerHTML=`<div class="card panel"><div class="panel-head"><div class="toolbar"><input class="input" id="task-search" placeholder="Cerca task"><select class="select" id="task-filter"><option value="">Tutti gli stati</option><option>open</option><option>in_progress</option><option>completed</option><option>cancelled</option></select><select class="select" id="task-priority"><option value="">Tutte le priorità</option><option>low</option><option>normal</option><option>high</option><option>urgent</option></select></div><button class="btn primary" id="new-task">+ Nuovo task</button></div><div id="tasks-list">${taskList(state.tasks)}</div></div>`;qs('#new-task').onclick=()=>openTaskForm({});['task-search','task-filter','task-priority'].forEach(id=>qs('#'+id).oninput=filterTasks);bindTaskEvents()}
+function filterTasks(){const q=val('task-search').toLowerCase(),s=val('task-filter'),p=val('task-priority');const arr=state.tasks.filter(t=>(!s||t.status===s)&&(!p||t.priority===p)&&(!q||JSON.stringify(t).toLowerCase().includes(q)));qs('#tasks-list').innerHTML=taskList(arr);bindTaskEvents()}
+function bindTaskEvents(){qsa('.task-status').forEach(s=>s.onchange=async()=>{try{await api(`/tasks/${s.dataset.taskId}`,{method:'PATCH',body:JSON.stringify({status:s.value})});toast('Task aggiornato');await loadAll();render()}catch(e){toast(e.message,true)}});qsa('[data-edit-task]').forEach(b=>b.onclick=()=>openTaskForm({},state.tasks.find(t=>t.id===+b.dataset.editTask)));qsa('[data-delete-task]').forEach(b=>b.onclick=async()=>{if(!confirmAction('Eliminare questo task?'))return;try{await api(`/tasks/${b.dataset.deleteTask}`,{method:'DELETE'});toast('Task eliminato');await refresh()}catch(e){toast(e.message,true)}})}
+function contactSelect(id,selected=''){return `<select class="select" id="${id}"><option value="">— Seleziona —</option>${state.contacts.map(c=>`<option value="${c.id}" ${String(c.id)===String(selected)?'selected':''}>${esc(contactName(c.id))}</option>`).join('')}</select>`}
+function openContactForm(c=null){modal(c?'Modifica contatto':'Nuovo contatto',`<div class="form-grid"><div class="field"><label>Tipo</label><select class="select" id="c-type"><option ${c?.contact_type==='person'?'selected':''}>person</option><option ${c?.contact_type==='company'?'selected':''}>company</option></select></div><div class="field"><label>Stato</label><select class="select" id="c-status">${['active','inactive','archived'].map(x=>`<option ${c?.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Nome</label><input class="input" id="c-first" value="${esc(c?.first_name||'')}"></div><div class="field"><label>Cognome</label><input class="input" id="c-last" value="${esc(c?.last_name||'')}"></div><div class="field full"><label>Azienda</label><input class="input" id="c-company" value="${esc(c?.company_name||'')}"></div><div class="field"><label>Email</label><input class="input" id="c-email" type="email" value="${esc(c?.email||'')}"></div><div class="field"><label>Telefono</label><input class="input" id="c-phone" value="${esc(c?.phone||'')}"></div><div class="field"><label>Secondo telefono</label><input class="input" id="c-phone2" value="${esc(c?.secondary_phone||'')}"></div><div class="field"><label>Fonte</label><input class="input" id="c-source" value="${esc(c?.source||'admin_ui')}"></div><div class="field full"><label>Note</label><textarea class="textarea" id="c-notes">${esc(c?.notes||'')}</textarea></div></div>`,async()=>{const body={contact_type:val('c-type'),first_name:opt(val('c-first')),last_name:opt(val('c-last')),company_name:opt(val('c-company')),email:opt(val('c-email')),phone:opt(val('c-phone')),secondary_phone:opt(val('c-phone2')),source:opt(val('c-source')),status:val('c-status'),notes:opt(val('c-notes'))};await api(c?`/contacts/${c.id}`:'/contacts',{method:c?'PATCH':'POST',body:JSON.stringify(body)});toast(c?'Contatto aggiornato':'Contatto creato');await refresh();if(c)await openContactDetail(c.id)},c?'Salva modifiche':'Crea contatto')}
+function openLeadForm(contactId=''){modal('Nuovo lead',`<div class="form-grid"><div class="field full"><label>Contatto</label>${contactSelect('l-contact',contactId)}</div><div class="field"><label>Pipeline</label><select class="select" id="l-pipeline"><option>sell</option><option>buy</option><option>general</option></select></div><div class="field"><label>Priorità</label><select class="select" id="l-priority"><option>normal</option><option>low</option><option>high</option><option>urgent</option></select></div><div class="field"><label>Fonte</label><input class="input" id="l-source" value="admin_ui"></div><div class="field"><label>Assegnato a</label><input class="input" id="l-assigned"></div><div class="field"><label>Prossima azione</label><input class="input" id="l-next" type="datetime-local"></div><div class="field"><label>Valore stimato</label><input class="input" id="l-value" type="number" step="0.01"></div><div class="field full"><label>Note</label><textarea class="textarea" id="l-notes"></textarea></div></div>`,async()=>{await api('/leads',{method:'POST',body:JSON.stringify({contact_id:+val('l-contact'),source:opt(val('l-source')),pipeline:val('l-pipeline'),stage:'new',priority:val('l-priority'),status:'open',assigned_to:opt(val('l-assigned')),next_action_at:opt(val('l-next')),estimated_value:opt(val('l-value')),notes:opt(val('l-notes'))})});toast('Lead creato');await refresh()},'Crea lead')}
+function openActivityForm(ref={}){modal('Registra attività',`<div class="form-grid"><div class="field"><label>Contatto</label>${contactSelect('a-contact',ref.contact_id||'')}</div><div class="field"><label>Lead ID</label><input class="input" id="a-lead" type="number" value="${esc(ref.lead_id||'')}"></div><div class="field"><label>Stima ID</label><input class="input" id="a-stima" type="number"></div><div class="field"><label>Tipo</label><select class="select" id="a-type">${['note','call','email','whatsapp','meeting','valuation','status_change','system'].map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Direzione</label><select class="select" id="a-dir"><option value="">—</option><option>in</option><option>out</option><option>internal</option></select></div><div class="field"><label>Canale</label><input class="input" id="a-channel"></div><div class="field full"><label>Oggetto</label><input class="input" id="a-subject"></div><div class="field full"><label>Descrizione</label><textarea class="textarea" id="a-desc"></textarea></div><div class="field"><label>Esito</label><input class="input" id="a-outcome"></div><div class="field"><label>Data attività</label><input class="input" id="a-date" type="datetime-local"></div></div>`,async()=>{const c=val('a-contact'),l=val('a-lead'),s=val('a-stima');await api('/activities',{method:'POST',body:JSON.stringify({contact_id:c?+c:null,lead_id:l?+l:null,stima_id:s?+s:null,activity_type:val('a-type'),direction:opt(val('a-dir')),channel:opt(val('a-channel')),subject:opt(val('a-subject')),description:opt(val('a-desc')),outcome:opt(val('a-outcome')),occurred_at:opt(val('a-date'))})});toast('Attività registrata');await refresh()},'Registra')}
+function openTaskForm(ref={},task=null){modal(task?'Modifica task':'Nuovo task',`<div class="form-grid"><div class="field"><label>Contatto</label>${contactSelect('t-contact',task?.contact_id||ref.contact_id||'')}</div><div class="field"><label>Lead ID</label><input class="input" id="t-lead" type="number" value="${esc(task?.lead_id||ref.lead_id||'')}"></div><div class="field"><label>Stima ID</label><input class="input" id="t-stima" type="number" value="${esc(task?.stima_id||'')}"></div><div class="field"><label>Tipo</label><input class="input" id="t-type" value="${esc(task?.task_type||'follow_up')}"></div><div class="field full"><label>Titolo</label><input class="input" id="t-title" value="${esc(task?.title||'')}"></div><div class="field"><label>Priorità</label><select class="select" id="t-priority">${['low','normal','high','urgent'].map(x=>`<option ${task?.priority===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stato</label><select class="select" id="t-status">${['open','in_progress','completed','cancelled'].map(x=>`<option ${task?.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Scadenza</label><input class="input" id="t-due" type="datetime-local" value="${localInput(task?.due_at)}"></div><div class="field"><label>Assegnato a</label><input class="input" id="t-assigned" value="${esc(task?.assigned_to||'')}"></div><div class="field full"><label>Descrizione</label><textarea class="textarea" id="t-desc">${esc(task?.description||'')}</textarea></div></div>`,async()=>{const c=val('t-contact'),l=val('t-lead'),s=val('t-stima');const body={title:val('t-title'),description:opt(val('t-desc')),task_type:opt(val('t-type')),priority:val('t-priority'),status:val('t-status'),due_at:opt(val('t-due')),assigned_to:opt(val('t-assigned'))};if(!task){Object.assign(body,{contact_id:c?+c:null,lead_id:l?+l:null,stima_id:s?+s:null})}await api(task?`/tasks/${task.id}`:'/tasks',{method:task?'PATCH':'POST',body:JSON.stringify(body)});toast(task?'Task aggiornato':'Task creato');await refresh()},task?'Salva modifiche':'Crea task')}
+async function openContactDetail(id){try{state.selected=await api(`/contacts/${id}`);state.view='contactDetail';render()}catch(e){toast(e.message,true)}}
+function renderContactDetail(){const c=state.selected;const leads=state.leads.filter(l=>l.contact_id===c.id),acts=state.activities.filter(a=>a.contact_id===c.id),tasks=state.tasks.filter(t=>t.contact_id===c.id);qs('#content').innerHTML=`<div class="split"><div class="card detail-card"><div class="panel-head"><div><h2>${esc(c.display_name||contactName(c.id))}</h2><div class="muted">Contatto #${c.id}</div></div><div class="toolbar"><button class="btn" id="edit-contact">Modifica</button><button class="btn primary" id="open-360">Apri Vista 360</button></div></div><div class="detail-grid"><div class="detail-item"><label>Email</label>${esc(c.email||'—')}</div><div class="detail-item"><label>Telefono</label>${esc(c.phone||'—')}</div><div class="detail-item"><label>Secondo telefono</label>${esc(c.secondary_phone||'—')}</div><div class="detail-item"><label>Fonte</label>${esc(c.source||'—')}</div><div class="detail-item"><label>Stato</label>${badge(c.status)}</div><div class="detail-item"><label>Consenso marketing</label>${c.marketing_consent?'Sì':'No'}</div></div><h3 class="section-title">Ruoli</h3><div class="toolbar">${(c.roles||[]).map(r=>`<span class="badge role-chip">${esc(r.role)}<button data-remove-role="${esc(r.role)}">×</button></span>`).join('')||'<span class="muted">Nessun ruolo</span>'}<button class="btn small" id="add-role">+ Ruolo</button></div><h3 class="section-title">Note</h3><div>${esc(c.notes||'Nessuna nota')}</div><h3 class="section-title">Lead collegati</h3>${leadTable(leads)}</div><div class="grid"><div class="card panel"><div class="panel-head"><h2>Azioni</h2></div><div class="grid"><button class="btn primary" id="contact-new-lead">+ Nuovo lead</button><button class="btn" id="contact-new-activity">+ Attività</button><button class="btn" id="contact-new-task">+ Task</button><button class="btn ghost" id="back-contacts">← Torna ai contatti</button></div></div><div class="card panel"><h2>Attività recenti</h2>${activityList(acts.slice(0,5))}</div><div class="card panel"><h2>Task</h2>${taskList(tasks.slice(0,5))}</div></div></div>`;qs('#edit-contact').onclick=()=>openContactForm(c);qs('#open-360').onclick=()=>openContact360(c.id);qs('#add-role').onclick=()=>openRoleForm(c.id);qsa('[data-remove-role]').forEach(b=>b.onclick=async()=>{if(!confirmAction(`Rimuovere il ruolo ${b.dataset.removeRole}?`))return;try{await api(`/contacts/${c.id}/roles/${b.dataset.removeRole}`,{method:'DELETE'});toast('Ruolo rimosso');await openContactDetail(c.id)}catch(e){toast(e.message,true)}});qs('#contact-new-lead').onclick=()=>openLeadForm(c.id);qs('#contact-new-activity').onclick=()=>openActivityForm({contact_id:c.id});qs('#contact-new-task').onclick=()=>openTaskForm({contact_id:c.id});qs('#back-contacts').onclick=()=>setView('contacts');bindLeadRows();bindTaskEvents();bindActivityEvents()}
+async function openContact360(id){try{id=positiveId(id);if(id===null)throw new Error('ID contatto non valido');const contact360=await api(`/api/crm/contacts/${id}/360`);const proposalData=await api(`/api/proposals?contact_id=${id}`);state.selected360={...contact360,proposals:Array.isArray(proposalData?.items)?proposalData.items:[]};state.view='contact360';render()}catch(e){toast(e.message,true)}}
+function renderContact360(){
+ const d=state.selected360||{},c=d.contact||{};
+ const block=(title,items,renderItem)=>`<div class="card panel"><h3>${esc(title)} (${items.length})</h3>${items.length?`<div class="list">${items.map(renderItem).join('')}</div>`:'<div class="empty">Nessun dato</div>'}</div>`;
+ let html=`<div class="card detail-card"><div class="panel-head"><div><h2>${esc(c.display_name||contactName(c.id))}</h2><div class="muted">${esc(c.email||'—')} · ${esc(c.phone||'—')}</div></div><button class="btn ghost" id="back-to-contact">← Torna al contatto</button></div><div class="toolbar">${(d.roles||[]).map(r=>`<span class="badge role-chip">${esc(r.role)}</span>`).join('')||'<span class="muted">Nessun ruolo</span>'}</div></div><div class="grid two-panels">`;
+ html+=block('Leads',d.leads||[],l=>`<div class="list-item"><div><b>Lead #${esc(l.id)}</b> <span class="muted">${esc(l.pipeline||'—')}</span></div>${badge(l.stage)}</div>`);
+ html+=block('Immobili',d.properties||[],p=>{
+   const pid=positiveId(p.id);
+   const label=esc(p.title||`Immobile #${p.id}`);
+   const link=pid?`<a href="/property-admin/?id=${pid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">${esc(p.code||'')}</span></div>${badge(p.commercial_status)}</div>`;
+ });
+ html+=block('Richieste BUY',d.buy_requests||[],b=>{
+   const bid=positiveId(b.id);
+   const label=esc(b.title||`Richiesta #${b.id}`);
+   const link=bid?`<a href="/buy-admin/?id=${bid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">Target: ${money(b.budget_target)}</span></div>${badge(b.status)}</div>`;
+ });
+ html+=block('Match',d.matches||[],m=>{
+   const mid=positiveId(m.id);
+   const link=mid?`<a href="/match-admin/?id=${mid}" target="_blank" rel="noopener noreferrer"><b>Match #${esc(m.id)}</b></a>`:`<b>Match #${esc(m.id)}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">Req #${esc(m.buy_request_id)} ↔ Prop #${esc(m.property_id)}</span></div>${badge(m.match_class)}</div>`;
+ });
+ html+=block('Proposte',d.proposals||[],p=>{
+   const bid=positiveId(p.buy_request_id),pid=positiveId(p.property_id),mid=positiveId(p.match_id);
+   const buyLink=bid?`<a href="/buy-admin/?id=${bid}" target="_blank" rel="noopener noreferrer"><b>${esc(p.buy_title||`Richiesta #${bid}`)}</b></a>`:`<b>${esc(p.buy_title||'Richiesta BUY')}</b>`;
+   const propertyLink=pid?`<a href="/property-admin/?id=${pid}" target="_blank" rel="noopener noreferrer">${esc(p.property_title||p.property_code||`Immobile #${pid}`)}</a>`:esc(p.property_title||p.property_code||'Immobile');
+   const matchLink=mid?`<a href="/match-admin/?id=${mid}" target="_blank" rel="noopener noreferrer">MATCH #${mid}</a>`:'MATCH';
+   return `<div class="list-item"><div>${buyLink}<div class="muted">${propertyLink} · ${matchLink} · ${money(p.amount)} · scade ${dt(p.expires_at)}</div></div>${badge(p.status)}</div>`;
+ });
+ html+=block('Visite',d.visits||[],v=>{
+   const pid=positiveId(v.property_id);
+   const label=dt(v.scheduled_at);
+   const link=pid?`<a href="/property-admin/?id=${pid}" target="_blank" rel="noopener noreferrer"><b>${label}</b></a>`:`<b>${label}</b>`;
+   return `<div class="list-item"><div>${link} <span class="muted">${esc(v.property_title||`Immobile #${v.property_id}`)}</span></div>${badge(v.status)}</div>`;
+ });
+ html+=block('Attività',d.activities||[],a=>`<div class="list-item"><div><b>${esc(a.activity_type||'Attività')}</b> <span class="muted">${esc(a.subject||'')}</span></div><span class="muted">${dt(a.occurred_at)}</span></div>`);
+ html+=block('Task',d.tasks||[],t=>`<div class="list-item"><div><b>${esc(t.title||`Task #${t.id}`)}</b> <span class="muted">Scadenza: ${dt(t.due_at)}</span></div>${badge(t.status)}</div>`);
+ html+='</div>';
+ qs('#content').innerHTML=html;
+ qs('#back-to-contact').onclick=()=>{state.view='contactDetail';state.selected=c;render()};
+}
+function openRoleForm(contactId){modal('Aggiungi ruolo',`<div class="form-grid"><div class="field"><label>Ruolo</label><select class="select" id="role">${['owner','seller','buyer','prospect','referrer','agency','professional','other'].map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Principale</label><select class="select" id="role-primary"><option value="false">No</option><option value="true">Sì</option></select></div></div>`,async()=>{await api(`/contacts/${contactId}/roles`,{method:'POST',body:JSON.stringify({role:val('role'),is_primary:val('role-primary')==='true',metadata:{}})});toast('Ruolo aggiunto');await openContactDetail(contactId)},'Aggiungi')}
+async function openLeadDetail(id){try{state.selected=await api(`/leads/${id}`);state.view='leadDetail';render()}catch(e){toast(e.message,true)}}
+function renderLeadDetail(){const l=state.selected,acts=state.activities.filter(a=>a.lead_id===l.id),tasks=state.tasks.filter(t=>t.lead_id===l.id);qs('#content').innerHTML=`<div class="split"><div class="card detail-card"><div class="panel-head"><div><h2>Lead #${l.id}</h2><div class="muted">${esc(contactName(l.contact_id))}</div></div><button class="btn" id="edit-lead">Modifica</button></div><div class="detail-grid"><div class="detail-item"><label>Pipeline</label>${badge(l.pipeline)}</div><div class="detail-item"><label>Stage</label>${badge(l.stage)}</div><div class="detail-item"><label>Priorità</label>${badge(l.priority)}</div><div class="detail-item"><label>Stato</label>${badge(l.status)}</div><div class="detail-item"><label>Assegnato a</label>${esc(l.assigned_to||'—')}</div><div class="detail-item"><label>Prossima azione</label>${dt(l.next_action_at)}</div><div class="detail-item"><label>Valore stimato</label>${l.estimated_value??'—'}</div><div class="detail-item"><label>Motivo perdita</label>${esc(l.lost_reason||'—')}</div></div><h3 class="section-title">Note</h3><div>${esc(l.notes||'Nessuna nota')}</div><h3 class="section-title">Stime collegate</h3><div class="list">${(l.estimations||[]).map(e=>`<div class="list-item"><div class="list-item-head"><strong>Stima #${e.stima_id}</strong><div class="actions">${badge(e.relation_type)}<button class="btn small danger" data-unlink-stima="${e.stima_id}">Scollega</button></div></div></div>`).join('')||'<div class="muted">Nessuna stima collegata</div>'}</div></div><div class="grid"><div class="card panel"><div class="panel-head"><h2>Azioni</h2></div><div class="grid"><button class="btn primary" id="link-estimation">Collega stima esistente</button><button class="btn" id="lead-new-activity">+ Attività</button><button class="btn" id="lead-new-task">+ Task</button><button class="btn ghost" id="back-leads">← Torna ai lead</button></div></div><div class="card panel"><h2>Attività recenti</h2>${activityList(acts.slice(0,5))}</div><div class="card panel"><h2>Task</h2>${taskList(tasks.slice(0,5))}</div></div></div>`;qs('#edit-lead').onclick=()=>openLeadUpdate(l);qs('#link-estimation').onclick=()=>openEstimationLink(l.id);qsa('[data-unlink-stima]').forEach(b=>b.onclick=async()=>{if(!confirmAction(`Scollegare la stima #${b.dataset.unlinkStima}?`))return;try{await api(`/leads/${l.id}/stime/${b.dataset.unlinkStima}`,{method:'DELETE'});toast('Stima scollegata');await openLeadDetail(l.id)}catch(e){toast(e.message,true)}});qs('#lead-new-activity').onclick=()=>openActivityForm({contact_id:l.contact_id,lead_id:l.id});qs('#lead-new-task').onclick=()=>openTaskForm({contact_id:l.contact_id,lead_id:l.id});qs('#back-leads').onclick=()=>setView('leads');bindTaskEvents();bindActivityEvents()}
+function openLeadUpdate(l){modal('Modifica lead',`<div class="form-grid"><div class="field"><label>Pipeline</label><select class="select" id="u-pipeline">${['sell','buy','general'].map(x=>`<option ${l.pipeline===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stage</label><select class="select" id="u-stage">${['new','contacted','qualified','appointment','proposal','won','lost'].map(x=>`<option ${l.stage===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Stato</label><select class="select" id="u-status">${['open','paused','closed'].map(x=>`<option ${l.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Priorità</label><select class="select" id="u-priority">${['low','normal','high','urgent'].map(x=>`<option ${l.priority===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Assegnato a</label><input class="input" id="u-assigned" value="${esc(l.assigned_to||'')}"></div><div class="field"><label>Prossima azione</label><input class="input" id="u-next" type="datetime-local" value="${localInput(l.next_action_at)}"></div><div class="field"><label>Valore stimato</label><input class="input" id="u-value" type="number" step="0.01" value="${esc(l.estimated_value||'')}"></div><div class="field"><label>Motivo perdita</label><input class="input" id="u-lost" value="${esc(l.lost_reason||'')}"></div><div class="field full"><label>Note</label><textarea class="textarea" id="u-notes">${esc(l.notes||'')}</textarea></div></div>`,async()=>{await api(`/leads/${l.id}`,{method:'PATCH',body:JSON.stringify({pipeline:val('u-pipeline'),stage:val('u-stage'),status:val('u-status'),priority:val('u-priority'),assigned_to:opt(val('u-assigned')),next_action_at:opt(val('u-next')),estimated_value:opt(val('u-value')),lost_reason:opt(val('u-lost')),notes:opt(val('u-notes'))})});toast('Lead aggiornato');await loadAll();await openLeadDetail(l.id)},'Salva modifiche')}
+function openEstimationLink(leadId){modal('Collega stima esistente',`<div class="form-grid"><div class="field"><label>ID stima legacy</label><input class="input" id="e-id" type="number" min="1" placeholder="Es. 123"></div><div class="field"><label>Relazione</label><select class="select" id="e-rel"><option>origin</option><option>related</option><option>follow_up</option></select></div><div class="field full"><p class="muted">Inserisci manualmente l’ID di una stima già presente. Nessun backfill automatico viene eseguito.</p></div></div>`,async()=>{const id=+val('e-id');if(!id)throw new Error('Inserisci un ID stima valido');await api(`/leads/${leadId}/stime/${id}`,{method:'POST',body:JSON.stringify({relation_type:val('e-rel')})});toast('Stima collegata');await openLeadDetail(leadId)},'Collega')}
+const globalSearchInput=qs('#global-search');
+if(globalSearchInput){
+ globalSearchInput.addEventListener('input',scheduleGlobalSearch);
+ globalSearchInput.addEventListener('keydown',event=>{
+   if(event.key==='Escape')cancelGlobalSearch();
+ });
+}
+document.addEventListener('click',event=>{
+ const wrap=qs('#global-search-wrap');
+ if(wrap&&!wrap.contains(event.target)){cancelGlobalSearch();}
+});
+qs('#nav').onclick=e=>{const b=e.target.closest('[data-view]');if(b)setView(b.dataset.view)};qs('#refresh-btn').onclick=refresh;qs('#quick-add').onclick=()=>openContactForm();qs('#login-form').addEventListener('submit',login);qs('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));window.setView=setView;showLogin();

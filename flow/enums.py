@@ -1,0 +1,14 @@
+MODULE_VERSION = "flow-0.1"
+MAX_RETRY = 3
+SCAN_DEFAULT_LIMIT = 50
+SCAN_MAX_LIMIT = 200
+SIMULATION_STATUSES = {"never_run", "success", "failed", "outdated"}
+EXECUTION_MODES = {"simulation", "live"}
+EXECUTION_STATUSES = {"matched", "not_matched", "executed", "skipped", "failed"}
+EVENT_STATUSES = {"received", "processed", "ignored", "failed"}
+ACTION_TYPES = {"create_core_task", "create_core_activity", "mark_for_review", "log_only"}
+TASK_PRIORITIES = {"low", "normal", "high", "urgent"}
+RULE_CODES = {f"FLOW-R00{i}" for i in range(1, 8)}
+
+OWNER_RULE_CODES = {f"FLOW-R00{i}" for i in range(8, 10)} | {f"FLOW-R0{i}" for i in range(10, 13)}
+ALL_RULE_CODES = RULE_CODES | OWNER_RULE_CODES

@@ -1,0 +1,23 @@
+FLOW 0.1 — INTEGRAZIONE CUMULATIVA IN main.py
+
+NON sostituire main.py con un file del pacchetto.
+Aggiungere soltanto queste righe al main.py cumulativo già operativo.
+
+1) Accanto agli altri router:
+
+from flow.router import router as flow_router
+
+2) Dopo gli altri app.include_router(...):
+
+app.include_router(flow_router)
+
+3) Dopo i mount delle altre UI admin:
+
+FLOW_ADMIN_DIR = BASE_DIR / "static" / "flow_admin"
+app.mount(
+    "/flow-admin",
+    StaticFiles(directory=str(FLOW_ADMIN_DIR), html=True),
+    name="flow-admin",
+)
+
+Non rimuovere o sostituire i router e i mount di CORE, PROPERTY, BUY o MATCH.

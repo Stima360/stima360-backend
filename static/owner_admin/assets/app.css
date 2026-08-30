@@ -172,3 +172,115 @@ h4 { margin: 0 0 14px; font-size: 1rem; }
   .editor-status { grid-column: 1; }
 }
 .request-editor { border-left: 4px solid #6e91ba; }
+
+/* OWNER 0.2 P7.3 — Documenti condivisi e feedback visite */
+.admin-two-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.compact-panel { padding-top: 16px; padding-bottom: 16px; }
+.panel-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.panel-heading-row h4 { margin-bottom: 4px; }
+.small-copy { margin: 2px 0 0; font-size: .9rem; }
+.grouped-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.detail-panel { scroll-margin-top: 18px; }
+.detail-content { display: grid; gap: 14px; }
+.detail-copy { margin: 0; white-space: pre-wrap; line-height: 1.55; color: #26384f; }
+.detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 18px; }
+.compact-list .entity-card { padding: 14px; }
+.document-card .status-badge.draft,
+.visit-feedback-card .status-badge.draft { background: #fff4dd; color: #775511; }
+.document-card .status-badge.published,
+.visit-feedback-card .status-badge.published { background: #e7f6ed; color: #17623b; }
+.document-card .status-badge.revoked { background: #f8e9e9; color: #922626; }
+.document-card .status-badge.archived,
+.visit-feedback-card .status-badge.archived { background: #edf1f6; color: #53657d; }
+.storage-health { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; }
+.storage-health::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: #8b99aa; }
+.storage-health.ok::before { background: #2f8a59; }
+.storage-health.error::before { background: #b73b3b; }
+.privacy-issues { margin-top: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid #e4c88b; background: #fff9ea; color: #6d5217; }
+.privacy-issues.ok { border-color: #b8dfc8; background: #f2fbf6; color: #17623b; }
+.privacy-issues p { margin: 0; }
+.privacy-issues ul { margin: 8px 0 0; padding-left: 20px; }
+.privacy-issues li + li { margin-top: 4px; }
+.file-note { margin: 8px 0 0; font-size: .84rem; color: #66778c; }
+.download-status { width: 100%; margin-top: 8px; }
+
+@media (max-width: 1100px) {
+  .admin-two-column { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .panel-heading-row { flex-direction: column; align-items: stretch; }
+  .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .detail-meta { grid-template-columns: 1fr; }
+  .grouped-actions .button { width: 100%; }
+}
+
+/* OWNER 0.2 P7.4 — Inviti/accessi e Audit */
+.token-form-panel,
+.token-result-panel { max-width: 860px; }
+.token-warning {
+  margin: 8px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e4c88b;
+  border-radius: 10px;
+  background: #fff9ea;
+  color: #6d5217;
+  font-weight: 750;
+}
+.token-result-meta { margin-bottom: 16px; }
+.token-secret {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #cfd9e5;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.token-value {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: #172033;
+  font: 700 .9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.token-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.audit-list { max-width: 1100px; }
+.audit-card { overflow: hidden; }
+.audit-action,
+.audit-meta .meta-value { overflow-wrap: anywhere; }
+.audit-result { max-width: 220px; overflow-wrap: anywhere; white-space: normal; }
+
+@media (max-width: 520px) {
+  .token-result-actions .button { width: 100%; }
+}
+
+/* OWNER 0.2 P8.1 — lookup guidati CORE / PROPERTY */
+.lookup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.lookup-row-select { align-items: stretch; }
+.lookup-row .button { white-space: nowrap; }
+.lookup-row select { min-width: 0; }
+select:disabled {
+  cursor: not-allowed;
+  opacity: .68;
+  background: #f5f7fa;
+}
+
+@media (max-width: 620px) {
+  .lookup-row { grid-template-columns: 1fr; }
+  .lookup-row .button { width: 100%; }
+}

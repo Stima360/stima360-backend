@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>STIMA360 OS — CORE Admin 0.3</title>
+  <link rel="stylesheet" href="/core-admin/assets/app.css?v=0.3">
+</head>
+<body>
+  <section id="login-view" aria-labelledby="login-title" style="max-width:360px;margin:80px auto;padding:24px;background:#fff;border:1px solid #dfe6f1;border-radius:14px;box-shadow:0 12px 34px rgba(23,32,51,.08)">
+    <h1 id="login-title" style="margin-top:0">STIMA360 Admin</h1>
+    <p style="color:#6d7688">Accesso riservato.</p>
+    <form id="login-form">
+      <label for="admin-username">Username</label>
+      <input id="admin-username" name="username" type="text" autocomplete="username" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" name="password" type="password" autocomplete="current-password" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <button type="submit" style="width:100%;padding:10px;cursor:pointer">Accedi</button>
+    </form>
+    <p id="login-status" role="status" aria-live="polite" style="min-height:1.2em;color:#b42318"></p>
+  </section>
+  <div id="app-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">S360</span><div><strong>STIMA360 OS</strong><small>CORE Admin 0.3</small></div></div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="dashboard">Oggi</button>
+        <button class="nav-item" data-view="agenda">Agenda</button>
+        <button class="nav-item" data-view="contacts">Contatti</button>
+        <button class="nav-item" data-view="leads">Lead</button>
+        <button class="nav-item" data-view="activities">Attività</button>
+        <button class="nav-item" data-view="tasks">Task</button>
+      </nav>
+      <div class="env-badge">AMBIENTE TEST</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><h1 id="page-title">Panoramica</h1><p id="page-subtitle">Gestione operativa del CORE CRM</p></div>
+        <!-- NEXT4_P3_GLOBAL_SEARCH -->
+        <div class="top-actions">
+          <div id="global-search-wrap" style="position:relative;min-width:320px">
+            <input
+              class="input"
+              id="global-search"
+              type="search"
+              autocomplete="off"
+              maxlength="200"
+              placeholder="Cerca ovunque — Mario, 392, Via Roma"
+              aria-label="Cerca ovunque"
+              style="width:100%"
+            >
+            <div
+              id="global-search-results"
+              hidden
+              role="listbox"
+              style="position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:50;max-height:420px;overflow:auto;background:#fff;border:1px solid #dfe6f1;border-radius:12px;box-shadow:0 14px 36px rgba(23,32,51,.16);padding:6px"
+            ></div>
+          </div>
+          <button class="btn ghost" id="logout-btn">Logout</button>
+          <button class="btn ghost" id="refresh-btn">Aggiorna</button>
+          <button class="btn primary" id="quick-add">+ Nuovo contatto</button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+  <div id="modal-root"></div><div id="toast-root"></div>
+  <script src="/core-admin/assets/app.js?v=0.4" defer></script>
+</body>
+</html>

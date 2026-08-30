@@ -7,3 +7,8 @@ requests
 yagmail
 pytz
 python-multipart
+
+pytest==9.1.1
+httpx2==2.7.0
+
+boto3==1.43.18

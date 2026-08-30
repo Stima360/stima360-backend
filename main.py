@@ -1,20 +1,30 @@
 # backend/main.py — versione ripulita Stima360
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBasic, HTTPBasicCredentials 
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-
+from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import os, uvicorn, secrets, uuid, requests
+import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from valuation import BASE_MQ
 from urllib.parse import urlencode
+from admin_security import require_admin
+from core import service as core_service
+from core.router import router as core_router
+from property.router import router as property_router
+from buy.router import router as buy_router
+from match.router import router as match_router
+from crm.router import router as crm_router
+from proposal.router import router as proposal_router
+from owner.router_admin import router as owner_admin_router
+from owner.router_portal import router as owner_portal_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -24,12 +34,59 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
 # APP & CORS
 # ---------------------------------------------------------
 app = FastAPI()
 
+# Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
+app.include_router(core_router, dependencies=[Depends(require_admin)])
+
+# Additive PROPERTY 0.1 routes. CORE and legacy routes remain unchanged.
+app.include_router(property_router, dependencies=[Depends(require_admin)])
+app.include_router(buy_router, dependencies=[Depends(require_admin)])
+app.include_router(match_router, dependencies=[Depends(require_admin)])
+app.include_router(crm_router, dependencies=[Depends(require_admin)])
+app.include_router(proposal_router, dependencies=[Depends(require_admin)])
+app.include_router(flow_router)
+app.include_router(owner_admin_router)
+app.include_router(owner_portal_router)
+# Additive CORE admin UI, isolated from legacy frontend flows.
+CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
+app.mount("/core-admin", StaticFiles(directory=str(CORE_ADMIN_DIR), html=True), name="core-admin")
+
+# Additive PROPERTY admin UI, isolated from CORE and legacy frontend flows.
+PROPERTY_ADMIN_DIR = BASE_DIR / "static" / "property_admin"
+app.mount("/property-admin", StaticFiles(directory=str(PROPERTY_ADMIN_DIR), html=True), name="property-admin")
+
+BUY_ADMIN_DIR = BASE_DIR / "static" / "buy_admin"
+app.mount("/buy-admin", StaticFiles(directory=str(BUY_ADMIN_DIR), html=True), name="buy-admin")
+
+MATCH_ADMIN_DIR = BASE_DIR / "static" / "match_admin"
+app.mount("/match-admin", StaticFiles(directory=str(MATCH_ADMIN_DIR), html=True), name="match-admin")
+FLOW_ADMIN_DIR = BASE_DIR / "static" / "flow_admin"
+app.mount(
+    "/flow-admin",
+    StaticFiles(directory=str(FLOW_ADMIN_DIR), html=True),
+    name="flow-admin",
+)
+OWNER_ADMIN_DIR = BASE_DIR / "static" / "owner_admin"
+
+app.mount(
+    "/owner-admin",
+    StaticFiles(directory=str(OWNER_ADMIN_DIR), html=True),
+    name="owner-admin",
+)
+
+OWNER_PORTAL_DIR = BASE_DIR / "static" / "owner_portal"
+
+app.mount(
+    "/owner",
+    StaticFiles(directory=str(OWNER_PORTAL_DIR), html=True),
+    name="owner-portal",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -40,8 +97,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 # Static (PDF)
 app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
@@ -58,6 +113,25 @@ def normalizza_numero_whatsapp(raw: str | None) -> str | None:
     if s.startswith("39"):
         return s
     return "39" + s.lstrip("0")
+
+def verify_whatsapp_signature(raw_body: bytes, signature: str | None) -> None:
+    app_secret = os.getenv("WHATSAPP_APP_SECRET")
+    if not app_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook signature verification unavailable",
+        )
+    if not signature:
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
+    digest = hmac.new(
+        app_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    expected = f"sha256={digest}"
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
     print("WA URL:", WHATSAPP_SERVICE_URL)
@@ -82,7 +156,6 @@ def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
             print("WA ERROR:", r.status_code, r.text)
     except Exception as e:
         print("WA EXC:", e)
-
 
 def to_int(v): 
     try: return int(v)
@@ -111,6 +184,7 @@ def normalizza_comune(v: str | None) -> str | None:
         return None
     v = " ".join(w.capitalize() for w in v.replace("_", " ").split())
     return v if v in {"Alba Adriatica", "Martinsicuro", "Tortoreto"} else None
+
 # ---------------------------------------------------------
 # ADMIN GATE — ACCESSO RISERVATO (HTML)
 # ---------------------------------------------------------    
@@ -136,7 +210,7 @@ def admin_check(data: dict):
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — MESSAGGI (INBOX)
 # ---------------------------------------------------------
-@app.get("/api/admin/whatsapp/messages")
+@app.get("/api/admin/whatsapp/messages", dependencies=[Depends(require_admin)])
 def admin_whatsapp_messages():
     conn = get_connection()
     cur = conn.cursor()
@@ -180,7 +254,6 @@ def admin_whatsapp_messages():
         END
     )
     ORDER BY wi.received_at ASC;
-
     """)
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
@@ -190,7 +263,7 @@ def admin_whatsapp_messages():
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — INVIO RISPOSTA
 # ---------------------------------------------------------
-@app.post("/api/admin/whatsapp/reply")
+@app.post("/api/admin/whatsapp/reply", dependencies=[Depends(require_admin)])
 def admin_whatsapp_reply(data: dict):
 
     to = data.get("to")
@@ -223,15 +296,13 @@ def admin_whatsapp_reply(data: dict):
 
     return {"ok": True}
 
-
-
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)
 # ---------------------------------------------------------
 class DeleteRequest(BaseModel):
     ids: list[int]
 
-@app.post("/api/admin/stime/delete")
+@app.post("/api/admin/stime/delete", dependencies=[Depends(require_admin)])
 def admin_delete_stime(payload: DeleteRequest):
 
     ids = payload.ids
@@ -246,10 +317,11 @@ def admin_delete_stime(payload: DeleteRequest):
 
     cur.close(); conn.close()
     return {"ok": True, "deleted": len(ids)}
+
 # ---------------------------------------------------------
 # CANCELLA STIME DETTAGLIATE 
 # ---------------------------------------------------------
-@app.post("/api/admin/stime_dettagliate/delete")
+@app.post("/api/admin/stime_dettagliate/delete", dependencies=[Depends(require_admin)])
 def admin_delete_stime_dettagliate(payload: DeleteRequest):
 
     ids = payload.ids
@@ -265,6 +337,7 @@ def admin_delete_stime_dettagliate(payload: DeleteRequest):
     cur.close(); conn.close()
 
     return {"ok": True, "deleted": len(ids)}
+
 # ---------------------------------------------------------
 # STIMA BASE
 # ---------------------------------------------------------    
@@ -311,7 +384,6 @@ async def stima_base(request: Request):
         
     }
 
-
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
 # ---------------------------------------------------------
@@ -326,50 +398,51 @@ async def salva_stima(request: Request):
             raw = dict(await request.form())
     except:
         raw = {}
+        
     # --------------------------
     # CONSENSO MARKETING (GDPR)
     # --------------------------
     consenso_marketing = bool(raw.get("consenso_marketing", False))
     consenso_marketing_at = datetime.now(timezone.utc) if consenso_marketing else None
         
-    # --- 2. Normalizza ---
+    # --- 2. Normalizza (CON VALORI DI DEFAULT PER FORM LEGGERO) ---
     data = {
         "comune": raw.get("comune"),
         "microzona": raw.get("microzona"),
-        "fascia_mare": (raw.get("fascia_mare") or "").lower().strip(),
-        "via": raw.get("via"),
-        "civico": raw.get("civico"),
-        "tipologia": raw.get("tipologia"),
+        "fascia_mare": (raw.get("fascia_mare") or "oltre_800m").lower().strip(),
+        "via": raw.get("via") or "Zona",
+        "civico": raw.get("civico") or "",
+        "tipologia": raw.get("tipologia") or "Appartamento",
         "mq": to_float(raw.get("mq")),
-        "piano": raw.get("piano"),
-        "locali": to_int(raw.get("locali")),
-        "bagni": to_int(raw.get("bagni")),
-        "pertinenze": raw.get("pertinenze"),
-        "ascensore": to_bool(raw.get("ascensore")),
+        "piano": raw.get("piano") or "1",
+        "locali": to_int(raw.get("locali")) or 3,
+        "bagni": to_int(raw.get("bagni")) or 1,
+        "pertinenze": raw.get("pertinenze") or "",
+        "ascensore": to_bool(raw.get("ascensore")) if raw.get("ascensore") is not None else True,
         "nome": raw.get("nome"),
-        "cognome": raw.get("cognome"),
+        "cognome": raw.get("cognome") or "",
         "email": raw.get("email"),
         "telefono": raw.get("telefono"),
         "prezzo_mq_base": to_float(raw.get("prezzo_mq_base")),
-        "anno": to_int(raw.get("anno")),
-        "stato": raw.get("stato"),
+        "anno": to_int(raw.get("anno")) or 2000,
+        "stato": raw.get("stato") or "buono",
 
-        # Campi extra dal frontend
-        "posizioneMare": raw.get("posizioneMare"),
-        "distanzaMare": raw.get("distanzaMare"),
-        "barrieraMare": raw.get("barrieraMare"),
-        "vistaMareYN": raw.get("vistaMareYN"),
-        "vistaMare": raw.get("vistaMare"),
-        "vistaMareDettaglio": raw.get("vistaMareDettaglio"),
-        "mqGiardino": raw.get("mqGiardino"),
-        "mqGarage": raw.get("mqGarage"),
-        "mqCantina": raw.get("mqCantina"),
-        "mqPostoAuto": raw.get("mqPostoAuto"),
-        "mqTaverna": raw.get("mqTaverna"),
-        "mqSoffitta": raw.get("mqSoffitta"),
-        "mqTerrazzo": raw.get("mqTerrazzo"),
-        "numBalconi": raw.get("numBalconi"),
-        "altroDescrizione": raw.get("altroDescrizione"),
+        # Campi extra dal frontend (valorizzati a 0 o stringa vuota per non rompere i calcoli)
+        "posizioneMare": raw.get("posizioneMare") or "oltre",
+        "distanzaMare": raw.get("distanzaMare") or "500-1000",
+        "barrieraMare": raw.get("barrieraMare") or "no",
+        "vistaMareYN": raw.get("vistaMareYN") or "no",
+        "vistaMare": raw.get("vistaMare") or "",
+        "vistaMareDettaglio": raw.get("vistaMareDettaglio") or "",
+        "mqGiardino": raw.get("mqGiardino") or 0,
+        "mqGarage": raw.get("mqGarage") or 0,
+        "mqCantina": raw.get("mqCantina") or 0,
+        "mqPostoAuto": raw.get("mqPostoAuto") or 0,
+        "mqTaverna": raw.get("mqTaverna") or 0,
+        "mqSoffitta": raw.get("mqSoffitta") or 0,
+        "mqTerrazzo": raw.get("mqTerrazzo") or 0,
+        "numBalconi": raw.get("numBalconi") or 0,
+        "altroDescrizione": raw.get("altroDescrizione") or "",
     }
 
     # --- 3. Se €mq base non presente → leggi DB ---
@@ -416,6 +489,31 @@ async def salva_stima(request: Request):
         try: cur.close(); conn.close()
         except: pass
 
+    try:
+        bridge_result = core_service.bridge_public_stima(
+            new_id,
+            first_name=data["nome"],
+            last_name=data["cognome"],
+            email=data["email"],
+            phone=data["telefono"],
+            marketing_consent=consenso_marketing,
+            marketing_consent_at=consenso_marketing_at,
+        )
+        bridge_log = logger.warning if bridge_result["status"] in {"conflict", "skipped"} else logger.info
+        bridge_log(
+            "public_stima_crm_bridge bridge_status=%s stima_id=%s contact_id=%s lead_id=%s reason=%s",
+            bridge_result["status"],
+            new_id,
+            bridge_result.get("contact_id"),
+            bridge_result.get("lead_id"),
+            bridge_result.get("reason"),
+        )
+    except Exception as exc:
+        logger.error(
+            "public_stima_crm_bridge bridge_status=error stima_id=%s contact_id=None lead_id=None error_type=%s",
+            new_id,
+            type(exc).__name__,
+        )
 
     # --- 5. TOKEN e prezzo base ---
     conn = get_connection(); cur = conn.cursor()
@@ -485,8 +583,10 @@ async def salva_stima(request: Request):
     finally:
         try: cur.close(); conn.close()
         except: pass
+        
     link_token = f"https://www.stima360.it/stima_dettagliata.html?token={token}"
-      # --- 6. Stima completa (engine ufficiale) ---
+    
+    # --- 6. Stima completa (engine ufficiale) ---
     # Usa i valori "grezzi" del form dove serve (es. locali in testo)
     locali_raw = raw.get("locali")  # es. "Trilocale" oppure "3"
 
@@ -607,8 +707,6 @@ async def salva_stima(request: Request):
         + urlencode({"pdf": pdf_url_finale, "token": token})
     )
 
-
-
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
     # Link stima completa sul sito (usato sia in email che in WhatsApp)
@@ -627,91 +725,173 @@ async def salva_stima(request: Request):
       + urlencode({"token": token})
     )
 
-
-   
     # --- 9. Email ---
     try:
         fondatore_img = "https://www.stima360.it/IMGVendere/Fondatore.png"
-    
-        corpo = f"""
-        <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
-    
-          <h2 style="margin:0 0 14px 0; color:#0b6bff;">
-            🏡 La tua Stima360 è pronta
-          </h2>
-    
-          <p style="margin:0 0 12px 0;">
-            Ciao <b>{data['nome']}</b>,
-          </p>
-    
-          <p style="margin:0 0 14px 0;">
-            ricevi questa email perché hai richiesto una valutazione immobiliare tramite <b>Stima360</b>.
-          </p>
-    
-          <!-- IMMAGINE FONDATORE -->
-          <div style="margin:18px 0 18px 0; text-align:center;">
-            <img src="{fondatore_img}" alt="Fondatore Stima360"
-                 style="max-width:100%; width:560px; height:auto; border-radius:14px; display:block; margin:0 auto; box-shadow:0 8px 22px rgba(0,0,0,0.10);">
-            <div style="font-size:12px; color:#666; margin-top:8px;">
-              Il fondatore di Stima360
+        numero_whatsapp = "393925172478"
+        
+        # Capiamo da dove arriva il cliente (lo passeremo dal frontend)
+        origine = raw.get("origine", "index")
+
+        if origine == "microzona":
+            # =========================================================
+            # 1. EMAIL IPER-SPECIFICA PER LE LANDING MICROZONA
+            # =========================================================
+            oggetto_mail = f"📍 Il tuo Piano Vendita specifico per {data['microzona']} è pronto!"
+            corpo = f"""
+            <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
+              <h2 style="margin:0 0 14px 0; color:#0b6bff;">
+                📍 Analisi completata per la zona di {data['microzona']}
+              </h2>
+              <p style="margin:0 0 12px 0;">
+                Ciao <b>{data['nome']}</b>,
+              </p>
+              <p style="margin:0 0 14px 0;">
+                hai fatto benissimo a richiedere un'analisi dedicata per la zona di <b>{data['microzona']}</b> a {data['comune']}. Il mercato immobiliare non è uguale ovunque: ogni quartiere ha dinamiche, richieste e prezzi completamente diversi dai comuni limitrofi.
+              </p>
+              <p style="margin:0 0 14px 0;">
+                📎 <b style="color:#1f9d55;">PDF della stima</b><br>
+                <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
+                  Clicca qui per scaricare e aprire il PDF
+                </a>
+              </p>
+              <p style="margin:0 0 14px 0;">
+                I dati OMI che trovi nel report sono un ottimo punto di partenza matematico. Tuttavia, in una microzona richiesta come questa, i dettagli fanno sbalzare il prezzo di decine di migliaia di euro. La vista, l'esposizione, lo stato del condominio o un terrazzo abitabile non possono essere calcolati da un algoritmo.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                Prima di fare mosse affrettate o pubblicare l'immobile al prezzo sbagliato, confrontiamoci. Opero su {data['comune']} da anni e conosco il vero polso degli acquirenti in questo momento.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                📲 <a href="https://wa.me/{numero_whatsapp}?text=Ciao%20Giorgio,%20ho%20ricevuto%20il%20report%20per%20la%20mia%20casa%20in%20zona%20{data['microzona']}%20e%20vorrei%20farti%20una%20domanda" style="display:inline-block; padding:10px 18px; background-color:#25D366; color:#ffffff; text-decoration:none; border-radius:6px; font-weight:bold;">Scrivimi su WhatsApp senza impegno</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                  <img src="{fondatore_img}" alt="Giorgio Censori" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                  <div>
+                      <p style="font-size:14px; color:#333; margin:0;">
+                        <b>Giorgio Censori</b><br>
+                        Specialista del mercato di {data['comune']}
+                      </p>
+                      <p style="font-size:13px; color:#555; margin:4px 0 0 0;">
+                        📞 <a href="tel:+{numero_whatsapp}" style="color:#0b6bff; text-decoration:none;">392 517 2478</a>
+                      </p>
+                  </div>
+              </div>
             </div>
-          </div>
-    
-          <p style="margin:0 0 14px 0;">
-            📄 <b style="color:#1f9d55;">PDF della stima</b><br>
-            <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
-              Apri il PDF
-            </a>
-          </p>
-    
-          <p style="margin:0 0 6px 0;">
-            🔍 <b style="color:#ff7a00;">
-              Vuoi una valutazione professionale più approfondita?
-            </b>
-          </p>
-    
-          <p style="margin:0 0 16px 0;">
-            Con <b>Stima Pro</b> puoi richiedere un’analisi completa e personalizzata,
-            <b>completamente gratuita e senza alcun impegno</b>.
-            <br>
-            🧩 <a href="{link_token}" style="color:#ff7a00; text-decoration:underline;">
-              <b>Richiedi Stima Pro</b>
-            </a>
-          </p>
-    
-          <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
-    
-          <!-- FIRMA PROFESSIONALE -->
-          <p style="font-size:13px; color:#333; margin:0;">
-            <b>Stima360 di Giorgio Censori</b><br>
-            Agente Immobiliare
-          </p>
-    
-          <p style="font-size:13px; color:#555; margin:8px 0 0 0;">
-            📞 <b>Cellulare:</b> <a href="tel:+393925172478" style="color:#0b6bff; text-decoration:none;">392 517 2478</a><br>
-            ✉️ <b>Email:</b> <a href="mailto:info@stima360.it" style="color:#0b6bff; text-decoration:none;">info@stima360.it</a><br>
-            📷 <b>Instagram:</b> <a href="https://www.instagram.com/stima360" target="_blank" style="color:#0b6bff; text-decoration:none;">@stima360</a>
-          </p>
-    
-          <p style="font-size:12px; color:#666; margin:14px 0 0 0;">
-            Informative:
-            <a href="https://stima360.it/privacy.html" style="color:#0b6bff; text-decoration:underline;">Privacy</a> ·
-            <a href="https://stima360.it/termini.html" style="color:#0b6bff; text-decoration:underline;">Termini e Condizioni</a> ·
-            <a href="https://stima360.it/eliminazionedati.html" style="color:#0b6bff; text-decoration:underline;">Eliminazione dei dati</a>
-          </p>
-    
-          <p style="font-size:12px; color:#777; margin:10px 0 0 0;">
-            Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta.
-          </p>
-    
+            """
+        else:
+            # =========================================================
+            # 2. EMAIL STANDARD PER LA HOME PAGE (INDEX.HTML)
+            # =========================================================
+            oggetto_mail = f"📄 Il tuo Piano Vendita per l'immobile a {data['comune']} è pronto!"
+            corpo = f"""
+            <div style="font-family:Arial,Helvetica,sans-serif; color:#222; line-height:1.6; max-width:640px; margin:0 auto;">
+              <h2 style="margin:0 0 14px 0; color:#0b6bff;">
+                📄 Il tuo Piano Vendita è pronto!
+              </h2>
+              <p style="margin:0 0 12px 0;">
+                Ciao <b>{data['nome']}</b>,
+              </p>
+              <p style="margin:0 0 14px 0;">
+                ti ringrazio per aver utilizzato il sistema di valutazione avanzato di <b>Stima360</b>.
+              </p>
+              <p style="margin:0 0 14px 0;">
+                📎 <b style="color:#1f9d55;">PDF della stima</b><br>
+                <a href="{loader_url}" style="color:#1f9d55; text-decoration:underline;">
+                  Clicca qui per scaricare e aprire il PDF
+                </a>
+              </p>
+              <p style="margin:0 0 14px 0;">
+                Il nostro algoritmo incrocia centinaia di dati OMI e trend di mercato per darti una forbice di prezzo altamente realistica. Tuttavia, essendo un calcolo matematico, non può "vedere" i dettagli unici di casa tua: la luminosità, lo stato degli infissi o la distribuzione degli spazi.
+              </p>
+              <p style="margin:0 0 14px 0; padding: 12px; border-left: 4px solid #ff7a00; background-color: #fff9f2;">
+                <i>Nel mercato attuale, sbagliare il prezzo di uscita anche solo del 5% significa bruciare l'immobile o perdere decine di migliaia di euro.</i>
+              </p>
+              <p style="margin:0 0 16px 0;">
+                Se stai pensando di vendere e vuoi trasformare questa stima in un <b>prezzo di realizzo garantito al 100%</b>, il prossimo passo è un rapido confronto dal vivo.
+              </p>
+              <p style="margin:0 0 16px 0;">
+                📲 <b>Rispondi semplicemente a questa email</b>, oppure scrivimi direttamente su WhatsApp:
+                <br><br>
+                <a href="https://wa.me/{numero_whatsapp}?text=Ciao%20Giorgio,%20ho%20ricevuto%20la%20stima%20PDF%20e%20vorrei%20farti%20una%20domanda" style="display:inline-block; padding:10px 18px; background-color:#25D366; color:#ffffff; text-decoration:none; border-radius:6px; font-weight:bold;">Parliamone su WhatsApp</a>
+              </p>
+              <hr style="border:none; border-top:1px solid #e6e6e6; margin:22px 0;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                  <img src="{fondatore_img}" alt="Giorgio Censori" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                  <div>
+                      <p style="font-size:14px; color:#333; margin:0;">
+                        <b>Giorgio Censori</b><br>
+                        Fondatore Stima360 - Agente Immobiliare
+                      </p>
+                      <p style="font-size:13px; color:#555; margin:4px 0 0 0;">
+                        📞 <a href="tel:+{numero_whatsapp}" style="color:#0b6bff; text-decoration:none;">392 517 2478</a><br>
+                        ✉️ <a href="mailto:info@stima360.it" style="color:#0b6bff; text-decoration:none;">info@stima360.it</a>
+                      </p>
+                  </div>
+              </div>
+             <p style="font-size:11px; color:#999; margin:20px 0 0 0; text-align: center;">
+                Questa comunicazione è inviata esclusivamente per finalità di servizio connesse alla tua richiesta su www.stima360.it.
+              </p>
+            </div>
+            """
+
+        # 1. Invia la mail al cliente
+        invia_mail(data["email"], oggetto_mail, corpo)
+        
+        # =========================================================
+        # 2. INVIA ALERT DI DEFAULT ALL'AMMINISTRATORE
+        # =========================================================
+        # Puoi usare una variabile d'ambiente o lasciare l'email fissa
+        admin_email = os.getenv("ADMIN_EMAIL", "info@stima360.it") 
+        
+        oggetto_admin = f"🚨 NUOVO LEAD: Stima richiesta a {data['comune']} ({data['microzona']})"
+        corpo_admin = f"""
+        <div style="font-family:Arial,sans-serif; color:#333; line-height:1.6;">
+            <h2 style="color:#d9534f;">Nuovo Lead Immobiliare Ricevuto</h2>
+            <p>È stata appena completata una nuova valutazione sul sito.</p>
+            
+            <table style="border-collapse: collapse; width: 100%; max-width: 600px; margin-bottom: 20px;">
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Nome:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{data['nome']} {data['cognome']}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Telefono:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">
+                        <a href="https://wa.me/{data['telefono']}" style="color:#25D366; font-weight:bold;">{data['telefono']}</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Email:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{data['email']}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Immobile:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{data['tipologia']} - {data['mq']} mq</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Zona:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{data['comune']}, {data['microzona']}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><b>Valore Stimato:</b></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd; color:#1f9d55; font-weight:bold;">{price_exact:,.0f} €</td>
+                </tr>
+            </table>
+            
+            <p>
+                <a href="{url_stima_completa}" style="display:inline-block; padding:10px 15px; background-color:#0b6bff; color:#fff; text-decoration:none; border-radius:5px;">
+                    Vedi Dettaglio Stima Completa
+                </a>
+            </p>
         </div>
         """
-    
-        invia_mail(data["email"], f"Stima360 – {indirizzo}", corpo)
-    
+        
+        # Invia la notifica interna
+        invia_mail(admin_email, oggetto_admin, corpo_admin)
+        
     except Exception as e:
         print("MAIL EXC:", e)
-
 
     # --- 10. WhatsApp ---
     try:
@@ -719,12 +899,10 @@ async def salva_stima(request: Request):
             data["telefono"],
             data["nome"],          # p1
             indirizzo,             # p2
-            link_token,            # p3
+            link_token             # p3
         )
     except Exception as e:
         print("WA EXC:", e)
-
-
 
     # --- 11. Risposta JSON al frontend ---
     return {
@@ -736,7 +914,6 @@ async def salva_stima(request: Request):
         "valore_pertinenze": valore_pertinenze,
         "base_mq": base_mq,
     }
-
 
 # ---------------------------------------------------------
 # PREFILL TOKEN
@@ -809,11 +986,7 @@ async def prefill(t: str):
       "altroDescrizione"
     ]
 
-
-
-
     return dict(zip(keys, row))
-
 
 # ---------------------------------------------------------
 # SALVA STIMA DETTAGLIATA
@@ -943,8 +1116,7 @@ async def salva_stima_dettagliata(request: Request):
 # ---------------------------------------------------------
 # ADMIN STIME PRO
 # ---------------------------------------------------------
-
-@app.get("/api/admin/stime_pro")
+@app.get("/api/admin/stime_pro", dependencies=[Depends(require_admin)])
 def admin_lista_stime_pro(
     day: str = "oggi",
     dal: date | None = None,
@@ -974,17 +1146,14 @@ def admin_lista_stime_pro(
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
 
-
-
 # ---------------------------------------------------------
 # ADMIN
 # ---------------------------------------------------------
-
 class LeadUpdate(BaseModel):
     lead_status: str | None = None
     note_internal: str | None = None
 
-@app.get("/api/admin/stime")
+@app.get("/api/admin/stime", dependencies=[Depends(require_admin)])
 def admin_lista_stime(
     day: str = "oggi",
     dal: date | None = None,
@@ -1015,11 +1184,11 @@ def admin_lista_stime(
     cur.close(); conn.close()
 
     return {"items": [dict(zip(cols, r)) for r in rows]}
+
 # ---------------------------------------------------------
 # UPDATE
 # ---------------------------------------------------------
-
-@app.post("/api/admin/stime/{stima_id}/update")
+@app.post("/api/admin/stime/{stima_id}/update", dependencies=[Depends(require_admin)])
 def admin_update_stima(stima_id: int, payload: LeadUpdate):
 
     updates = []
@@ -1049,7 +1218,6 @@ def admin_update_stima(stima_id: int, payload: LeadUpdate):
 # ---------------------------------------------------------
 # WHATSAPP WEBHOOK (RICEZIONE MESSAGGI REALI)
 # ---------------------------------------------------------
-
 @app.get("/webhook/whatsapp")
 def whatsapp_verify(
     hub_mode: str = None,
@@ -1063,9 +1231,13 @@ def whatsapp_verify(
 
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
-
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
+    raw_body = await request.body()
+    verify_whatsapp_signature(
+        raw_body,
+        request.headers.get("X-Hub-Signature-256"),
+    )
     payload = await request.json()
 
     try:
@@ -1108,7 +1280,6 @@ async def whatsapp_webhook(request: Request):
 # ---------------------------------------------------------
 # WHATSAPP SEND (META GRAPH API)
 # ---------------------------------------------------------
-
 def invia_whatsapp_text(numero: str, testo: str):
     PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_ID")
     ACCESS_TOKEN    = os.getenv("WHATSAPP_TOKEN")
@@ -1134,13 +1305,105 @@ def invia_whatsapp_text(numero: str, testo: str):
 
     return requests.post(url, headers=headers, json=payload)
 
+# ---------------------------------------------------------
+# CONTATORE PUBBLICO (Home Page)
+# ---------------------------------------------------------
+@app.get("/api/public/contatore_oggi")
+def api_contatore_oggi():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) FROM stime WHERE DATE(data) = CURRENT_DATE")
+        count_oggi = cur.fetchone()[0]
+        
+        cur.close()
+        conn.close()
+        return {"success": True, "count": count_oggi}
+    except Exception as e:
+        print("Errore contatore:", e)
+        return {"success": False, "count": 0}
+
+# ---------------------------------------------------------
+# NUOVA API SEO - RECUPERA METADATI PER LA PAGINA
+# ---------------------------------------------------------
+@app.get("/api/seo/data")
+def get_seo_data(comune: str, microzona: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT h1_title, descrizione_locale 
+            FROM seo_microzone 
+            WHERE comune = %s AND microzona = %s
+        """, (comune, microzona))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if row:
+            return {"success": True, "h1": row[0], "descrizione": row[1]}
+            
+        return {"success": False, "h1": f"Valutazione Immobiliare a {comune} - {microzona}", "descrizione": f"Scopri il valore del tuo immobile a {microzona} di {comune}."}
+    except Exception as e:
+        print("SEO API ERROR:", e)
+        return {"success": False, "h1": f"Valutazione Immobiliare a {comune} - {microzona}", "descrizione": f"Scopri il valore del tuo immobile a {microzona} di {comune}."}
+
+# ---------------------------------------------------------
+# SITEMAP.XML (Versione Automatica, non tocca zone_valori)
+# ---------------------------------------------------------
+@app.get("/sitemap.xml")
+def sitemap():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        # Estrae le zone uniche dallo storico stime
+        cur.execute("SELECT comune, microzona FROM seo_microzone WHERE comune IS NOT NULL AND microzona IS NOT NULL")
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+    except Exception as e:
+        print("SITEMAP ERROR:", e)
+        raise HTTPException(status_code=500, detail="Errore database sitemap")
+    
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    
+    for r in rows:
+        c = str(r[0] or "").strip().lower().replace(" ", "-")
+        m = str(r[1] or "").strip().lower().replace(" ", "-")
+        xml += f'''
+        <url>
+            <loc>https://stima360.it/valutazione/{c}/{m}</loc>
+            <changefreq>weekly</changefreq>
+            <priority>0.8</priority>
+        </url>'''
+        
+    xml += '\n</urlset>'
+    return Response(content=xml, media_type="application/xml")
+
+# ---------------------------------------------------------
+# API VETRINA SUCCESSI (Unificata e corretta)
+# ---------------------------------------------------------
+@app.get("/api/successi")
+def api_successi():
+    conn = get_connection()
+    cur = conn.cursor()
+    # Query corretta per estrarre tutte le colonne che abbiamo aggiunto
+    cur.execute("""
+        SELECT comune, tipologia, giorni_vendita, 
+               foto1_url, foto2_url, foto3_url, piantina_url, video_url 
+        FROM case_vendute 
+        ORDER BY data_vendita DESC 
+        LIMIT 6
+    """)
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description]
+    data = [dict(zip(cols, r)) for r in rows]
+    cur.close(); conn.close()
+    
+    return {"success": True, "data": data}
 
 # ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
-
-
-
-
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

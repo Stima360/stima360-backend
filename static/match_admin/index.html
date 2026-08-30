@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>STIMA360 MATCH 0.2</title>
+  <link rel="stylesheet" href="/match-admin/assets/app.css">
+</head>
+<body>
+  <section id="login-view" aria-labelledby="login-title" style="max-width:360px;margin:80px auto;padding:24px;background:#fff;border:1px solid #dfe6f1;border-radius:14px;box-shadow:0 12px 34px rgba(23,32,51,.08)">
+    <h1 id="login-title" style="margin-top:0">STIMA360 Admin</h1>
+    <p style="color:#6d7688">Accesso riservato.</p>
+    <form id="login-form">
+      <label for="admin-username">Username</label>
+      <input id="admin-username" name="username" type="text" autocomplete="username" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" name="password" type="password" autocomplete="current-password" required style="width:100%;margin:6px 0 12px;padding:10px">
+      <button type="submit" style="width:100%;padding:10px;cursor:pointer">Accedi</button>
+    </form>
+    <p id="login-status" role="status" aria-live="polite" style="min-height:1.2em;color:#b42318"></p>
+  </section>
+<div id="app-view" hidden>
+<header>
+  <div><strong>STIMA360 OS</strong><span>MATCH 0.2</span></div>
+  <nav>
+    <button id="logout-btn" class="secondary" type="button">Logout</button>
+    <button data-view="dashboard">Dashboard</button>
+    <button data-view="matches">Graduatoria</button>
+    <button data-view="freshness">Freschezza</button>
+    <button data-view="calculate">Calcola</button>
+    <button data-view="exclusions">Esclusioni</button>
+  </nav>
+</header>
+<main>
+  <section id="dashboard" class="view"></section>
+  <section id="matches" class="view hidden"></section>
+  <section id="freshness" class="view hidden"></section>
+  <section id="calculate" class="view hidden"></section>
+  <section id="exclusions" class="view hidden"></section>
+</main>
+<dialog id="feedbackModal">
+  <form id="feedbackForm">
+    <h2>Nuovo feedback</h2>
+    <input type="hidden" name="match_id">
+    <label>Fonte<select name="source"><option value="agent">Agente</option><option value="buyer">Acquirente</option></select></label>
+    <label>Esito<select name="feedback_type"><option value="positive">Positivo</option><option value="neutral">Neutro</option><option value="negative">Negativo</option></select></label>
+    <label>Motivo<select name="reason_code"><option value="">—</option><option>price</option><option>location</option><option>size</option><option>condition</option><option>floor</option><option>elevator</option><option>parking</option><option>outdoor_space</option><option>not_available</option><option>other</option></select></label>
+    <label>Note<textarea name="notes"></textarea></label>
+    <menu><button type="button" class="secondary" id="feedbackCancel">Annulla</button><button type="submit">Salva</button></menu>
+  </form>
+</dialog>
+</div>
+<div id="toast"></div>
+<script src="/match-admin/assets/app.js"></script>
+</body></html>
