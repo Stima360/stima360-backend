@@ -15,8 +15,9 @@ export function initRouter(contentContainer, { onNavigate } = {}) {
   window.addEventListener('hashchange', renderCurrentRoute);
 }
 
-export function navigate(name) {
-  const target = `#/${name}`;
+export function navigate(name, params = []) {
+  const segments = [name, ...params].filter((s) => s !== undefined && s !== null && s !== '');
+  const target = `#/${segments.join('/')}`;
   if (window.location.hash === target) {
     renderCurrentRoute();
   } else {
@@ -30,18 +31,28 @@ export function currentRouteName() {
   return routes.has(name) ? name : 'oggi';
 }
 
+// Estensione minima P1: segmenti dopo il nome sezione (es. "#/contatti/42" -> ["42"]).
+// Retrocompatibile: le viste P0 esistenti (renderOggi, i placeholder) non dichiarano
+// un secondo parametro e continuano a funzionare invariate.
+export function currentRouteParams() {
+  const raw = window.location.hash.replace(/^#\/?/, '');
+  const segments = raw.split('/').filter(Boolean);
+  return segments.slice(1);
+}
+
 export async function renderCurrentRoute() {
   if (!container) return;
   const name = currentRouteName();
   const renderFn = routes.get(name);
-  if (onNavigateCallback) onNavigateCallback(name);
+  const params = currentRouteParams();
+  if (onNavigateCallback) onNavigateCallback(name, params);
   container.innerHTML = '';
   if (!renderFn) {
     container.textContent = 'Sezione non trovata.';
     return;
   }
   try {
-    await renderFn(container);
+    await renderFn(container, params);
   } catch (error) {
     const message = (error && error.message) ? error.message : 'errore sconosciuto';
     container.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(message)}</div>`;

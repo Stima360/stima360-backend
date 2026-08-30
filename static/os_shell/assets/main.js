@@ -6,6 +6,8 @@ import { login, logout, isAuthenticated, onAuthChange } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
+import { renderContatti } from './views/contatti.js';
+import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
 import { makePlaceholderView } from './views/placeholder.js';
 
 const SECTIONS = [
@@ -30,8 +32,13 @@ const navEl = document.getElementById('nav');
 const envBadgeEl = document.getElementById('env-badge');
 
 registerRoute('oggi', renderOggi);
+// "contatti" copre sia la lista (#/contatti) sia il dettaglio (#/contatti/{id}):
+// il router passa i segmenti successivi al nome sezione come `params`.
+registerRoute('contatti', (container, params = []) => {
+  return params[0] ? renderContattoDettaglio(container, params) : renderContatti(container);
+});
 for (const section of SECTIONS) {
-  if (section.name === 'oggi') continue;
+  if (section.name === 'oggi' || section.name === 'contatti') continue;
   registerRoute(section.name, makePlaceholderView(section.label));
 }
 
