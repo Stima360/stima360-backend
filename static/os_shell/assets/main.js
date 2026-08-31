@@ -15,6 +15,8 @@ import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
 import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
 import { renderAttivita } from './views/attivita.js';
+import { renderAutomazioni } from './views/automazioni.js';
+import { renderAutomazioneDettaglio } from './views/automazione-dettaglio.js';
 import { makePlaceholderView } from './views/placeholder.js';
 
 const SECTIONS = [
@@ -64,8 +66,14 @@ registerRoute('abbinamenti', (container, params = []) => {
 // "attivita" e' sola lista (nessun dettaglio: vedi commento in testa a
 // attivita.js sul perche' non esiste attivita-dettaglio.js).
 registerRoute('attivita', (container) => renderAttivita(container));
+// "automazioni" copre sia l'elenco (#/automazioni) sia la scheda regola
+// (#/automazioni/{code}), stesso pattern dispatcher gia' usato per le altre
+// sezioni con lista+dettaglio.
+registerRoute('automazioni', (container, params = []) => {
+  return params[0] ? renderAutomazioneDettaglio(container, params) : renderAutomazioni(container);
+});
 for (const section of SECTIONS) {
-  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti' || section.name === 'attivita') continue;
+  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti' || section.name === 'attivita' || section.name === 'automazioni') continue;
   registerRoute(section.name, makePlaceholderView(section.label));
 }
 
