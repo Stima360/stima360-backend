@@ -36,7 +36,7 @@
 // Vista interamente in sola lettura: nessuna scrittura, upload, eliminazione,
 // riordino o azione di stato in questa tab.
 
-import { apiGet } from '../core/api-client.js';
+import { apiGet, apiPatch } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 
@@ -95,6 +95,12 @@ export async function renderImmobileDettaglio(container, params = []) {
   // Cache locale per la tab Abbinamenti (caricamento posticipato al primo click).
   const lazyCache = { matches: null };
 
+  // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
+  // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
+  // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
+  // gia' esistente (property/schemas.py:PropertyUpdate).
+  let incaricoEditMode = false;
+
   const title = property.title || property.code || `Immobile #${property.id}`;
 
   container.innerHTML = `
@@ -117,7 +123,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
       switch (key) {
-        case 'panoramica': contentEl.innerHTML = renderPanoramica(property); break;
+        case 'panoramica': contentEl.innerHTML = renderPanoramica(property, incaricoEditMode); bindIncaricoSection(contentEl); break;
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
@@ -138,6 +144,81 @@ export async function renderImmobileDettaglio(container, params = []) {
     }
   }
 
+  // P8: azioni della sezione Incarico (Panoramica). Nessuna chiamata al
+  // caricamento pagina: la PATCH parte solo al click esplicito su "Salva".
+  function bindIncaricoSection(panelEl) {
+    const editBtn = panelEl.querySelector('#incarico-edit-btn');
+    if (editBtn) {
+      editBtn.addEventListener('click', () => {
+        incaricoEditMode = true;
+        showTab('panoramica');
+      });
+    }
+
+    const cancelBtn = panelEl.querySelector('#incarico-cancel-btn');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        incaricoEditMode = false;
+        showTab('panoramica');
+      });
+    }
+
+    const saveBtn = panelEl.querySelector('#incarico-save-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const errorEl = panelEl.querySelector('#incarico-error');
+        const typeInput = panelEl.querySelector('#incarico-type');
+        const startInput = panelEl.querySelector('#incarico-start');
+        const endInput = panelEl.querySelector('#incarico-end');
+        if (errorEl) errorEl.textContent = '';
+
+        const typeVal = typeInput.value.trim();
+        const startVal = startInput.value;
+        const endVal = endInput.value;
+
+        // Validazione UX preventiva: il backend resta source of truth
+        // (property/schemas.py:PropertyUpdate.validate_update applica la
+        // stessa regola su cio' che viene effettivamente inviato).
+        if (startVal && endVal && endVal < startVal) {
+          if (errorEl) errorEl.textContent = 'La data di scadenza non pu\u00f2 precedere la data di inizio.';
+          return;
+        }
+
+        // Solo i campi realmente modificati entrano nel payload: PropertyUpdate
+        // usa exclude_unset, quindi un campo omesso resta invariato lato server,
+        // mentre null lo azzera esplicitamente (verificato su property/schemas.py,
+        // property/service.py:dump(p,True) e property/repository.py:update_property).
+        const payload = {};
+        if (typeVal !== (property.mandate_type || '')) payload.mandate_type = typeVal === '' ? null : typeVal;
+        if (startVal !== toDateInputValue(property.mandate_start)) payload.mandate_start = startVal === '' ? null : startVal;
+        if (endVal !== toDateInputValue(property.mandate_end)) payload.mandate_end = endVal === '' ? null : endVal;
+
+        if (!Object.keys(payload).length) {
+          incaricoEditMode = false;
+          showTab('panoramica');
+          return;
+        }
+
+        saveBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+        saveBtn.textContent = 'Salvataggio\u2026';
+        try {
+          const updated = await apiPatch(`/api/property/properties/${property.id}`, payload);
+          property.mandate_type = updated.mandate_type;
+          property.mandate_start = updated.mandate_start;
+          property.mandate_end = updated.mandate_end;
+          incaricoEditMode = false;
+          showTab('panoramica');
+        } catch (error) {
+          saveBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          saveBtn.textContent = 'Salva';
+          if (errorEl) errorEl.textContent = error.message || 'Errore nel salvataggio.';
+        }
+      });
+    }
+  }
+
   tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
@@ -147,7 +228,7 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 // --- Panoramica -------------------------------------------------------
 
-function renderPanoramica(p) {
+function renderPanoramica(p, editMode) {
   const fields = [
     ['Tipologia', p.property_type], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
@@ -158,7 +239,6 @@ function renderPanoramica(p) {
     ['Ascensore', p.elevator === null || p.elevator === undefined ? null : (p.elevator ? 'Sì' : 'No')],
     ['Anno costruzione', p.year_built], ['Condizione', p.condition], ['Classe energetica', p.energy_class],
     ['Prezzo richiesto', formatPrice(p.asking_price)], ['Prezzo minimo', formatPrice(p.minimum_price)],
-    ['Tipo mandato', p.mandate_type], ['Inizio mandato', formatDate(p.mandate_start)], ['Fine mandato', formatDate(p.mandate_end)],
     ['Assegnato a', p.assigned_to], ['Fonte', p.source],
     ['Punteggio completezza', p.readiness_score != null ? `${p.readiness_score}%` : null],
   ];
@@ -167,9 +247,51 @@ function renderPanoramica(p) {
     <div class="detail-grid">
       ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
     </div>
+    ${renderIncaricoSection(p, editMode)}
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(p.public_notes || p.internal_notes || 'Nessuna nota.')}</p>
   `;
+}
+
+// --- Incarico (mandate_type/mandate_start/mandate_end su properties; P8) ---
+// Source of truth: properties.mandate_type/mandate_start/mandate_end (nessuna
+// nuova entita' introdotta). Scrittura tramite il contratto generico gia'
+// esistente PATCH /api/property/properties/{id} (PropertyUpdate) — nessun
+// endpoint dedicato. commercial_status non viene mai incluso nel payload di
+// questa sezione: resta indipendente (property/schemas.py non impone alcun
+// accoppiamento tra i campi mandate_* e commercial_status).
+function renderIncaricoSection(p, editMode) {
+  if (!editMode) {
+    return `
+      <h3 class="section-title">Incarico</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Tipo incarico</label>${escapeHtml(p.mandate_type || '—')}</div>
+        <div class="detail-item"><label>Data inizio</label>${escapeHtml(formatDate(p.mandate_start))}</div>
+        <div class="detail-item"><label>Data scadenza</label>${escapeHtml(formatDate(p.mandate_end))}</div>
+      </div>
+      <div class="action-bar" style="margin-top:12px">
+        <button type="button" id="incarico-edit-btn" class="btn ghost">Modifica</button>
+      </div>
+    `;
+  }
+  return `
+    <h3 class="section-title">Incarico</h3>
+    <div class="form-grid-3">
+      <div class="form-field"><label>Tipo incarico</label><input type="text" id="incarico-type" class="input" maxlength="80" value="${escapeHtml(p.mandate_type || '')}"></div>
+      <div class="form-field"><label>Data inizio</label><input type="date" id="incarico-start" class="input" value="${toDateInputValue(p.mandate_start)}"></div>
+      <div class="form-field"><label>Data scadenza</label><input type="date" id="incarico-end" class="input" value="${toDateInputValue(p.mandate_end)}"></div>
+    </div>
+    <div id="incarico-error" class="field-error"></div>
+    <div class="action-bar" style="margin-top:4px">
+      <button type="button" id="incarico-cancel-btn" class="btn ghost">Annulla</button>
+      <button type="button" id="incarico-save-btn" class="btn primary">Salva</button>
+    </div>
+  `;
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  return String(value).slice(0, 10);
 }
 
 // --- Proprietari (property_contacts, ruolo reale, non owner_accounts) ------
