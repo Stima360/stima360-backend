@@ -14,6 +14,7 @@ import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
 import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
+import { renderAttivita } from './views/attivita.js';
 import { makePlaceholderView } from './views/placeholder.js';
 
 const SECTIONS = [
@@ -60,8 +61,11 @@ registerRoute('acquirenti', (container, params = []) => {
 registerRoute('abbinamenti', (container, params = []) => {
   return params[0] ? renderAbbinamentoDettaglio(container, params) : renderAbbinamenti(container);
 });
+// "attivita" e' sola lista (nessun dettaglio: vedi commento in testa a
+// attivita.js sul perche' non esiste attivita-dettaglio.js).
+registerRoute('attivita', (container) => renderAttivita(container));
 for (const section of SECTIONS) {
-  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti') continue;
+  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti' || section.name === 'attivita') continue;
   registerRoute(section.name, makePlaceholderView(section.label));
 }
 
