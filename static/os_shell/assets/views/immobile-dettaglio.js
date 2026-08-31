@@ -10,6 +10,19 @@
 // Promise.all([properties/{id}, /api/proposals?property_id=...])) — endpoint
 // verificato in proposal/router.py:30-49 (property_id: int|None = Query(None,gt=0)).
 //
+// P9: la tab Proposte diventa operativa (creazione, modifica in bozza,
+// transizioni di stato) sul contratto gia' verificato in fase di audit P9
+// (proposal/router.py, proposal/repository.py). Nessuna nuova entita': fonte
+// unica property_proposals. La creazione e' sempre contestuale a un
+// abbinamento (match) reale gia' esistente — mai un match_id digitato
+// manualmente — riusando loadMatchesLazy, la stessa funzione di rete gia'
+// usata dalla tab Abbinamenti (nessun nuovo endpoint, nessuna nuova
+// chiamata oltre a quella gia' presente). Le transizioni di stato rispettano
+// esattamente proposal/enums.py:PROPOSAL_TRANSITIONS: nessun selettore di
+// stato generico. Accettare una proposta non tocca mai
+// properties.commercial_status ne' buy_requests (verificato in repository.py:
+// transition_proposal — unica UPDATE su property_proposals).
+//
 // Abbinamenti: tab a caricamento posticipato (al primo click, non al caricamento
 // iniziale) verso GET /api/match/matches?property_id={id} (match/router.py:94-104,
 // property_id: int|None=None). Lettura pura (list_matches), nessun calcolo/refresh
@@ -36,7 +49,7 @@
 // Vista interamente in sola lettura: nessuna scrittura, upload, eliminazione,
 // riordino o azione di stato in questa tab.
 
-import { apiGet, apiPatch } from '../core/api-client.js';
+import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 
@@ -95,6 +108,14 @@ export async function renderImmobileDettaglio(container, params = []) {
   // Cache locale per la tab Abbinamenti (caricamento posticipato al primo click).
   const lazyCache = { matches: null };
 
+  // P9: ricarica proposte dopo creazione/modifica/transizione. Stessa fonte
+  // gia' usata al caricamento iniziale (/api/proposals?property_id=...),
+  // nessun nuovo endpoint.
+  async function reloadProposals() {
+    const data = await apiGet(`/api/proposals?property_id=${property.id}`);
+    proposals = Array.isArray(data?.items) ? data.items : [];
+  }
+
   // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
   // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
   // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
@@ -111,6 +132,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     </div>
     <div class="tabs" id="property-tabs"></div>
     <div id="property-tab-content" class="card panel"></div>
+    <dialog id="proposal-dialog" class="modal"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
@@ -128,7 +150,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits); break;
-        case 'proposte': contentEl.innerHTML = renderProposte(proposals); break;
+        case 'proposte': contentEl.innerHTML = renderProposte(proposals); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
         case 'attivita': contentEl.innerHTML = renderAttivita(); break;
         case 'abbinamenti': {
@@ -216,6 +238,161 @@ export async function renderImmobileDettaglio(container, params = []) {
           if (errorEl) errorEl.textContent = error.message || 'Errore nel salvataggio.';
         }
       });
+    }
+  }
+
+  // P9: sezione Proposte (Panoramica gestisce Incarico sopra, vedi
+  // bindIncaricoSection). Creazione sempre contestuale a un abbinamento
+  // reale gia' esistente (mai un match_id digitato), modifica diretta solo
+  // in stato draft, transizioni secondo la macchina a stati reale.
+  function bindProposteSection(panelEl) {
+    const newBtn = panelEl.querySelector('#proposal-new-btn');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => { openProposalCreateDialog(); });
+    }
+    panelEl.querySelectorAll('.proposal-action-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const proposalId = Number(btn.dataset.proposalId);
+        const action = btn.dataset.action;
+        const proposal = proposals.find((p) => p.id === proposalId);
+        if (!proposal) return;
+        if (action === 'edit') {
+          openProposalEditDialog(proposal);
+        } else {
+          runProposalTransition(btn, proposalId, action);
+        }
+      });
+    });
+  }
+
+  async function openProposalCreateDialog() {
+    const dialogEl = container.querySelector('#proposal-dialog');
+    const feedbackEl = contentEl.querySelector('#proposal-feedback');
+    if (!dialogEl) return;
+    const newBtn = contentEl.querySelector('#proposal-new-btn');
+    if (newBtn) { newBtn.disabled = true; newBtn.textContent = 'Caricamento\u2026'; }
+    let matches;
+    try {
+      matches = await loadMatchesLazy(property.id, lazyCache);
+    } catch (error) {
+      matches = { error: error.message };
+    }
+    if (newBtn) { newBtn.disabled = false; newBtn.textContent = 'Nuova proposta'; }
+    if (!Array.isArray(matches)) {
+      if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile caricare gli abbinamenti per la creazione della proposta: ${escapeHtml(matches?.error || 'errore sconosciuto')}</div>`;
+      return;
+    }
+    const openMatchIds = new Set(proposals.filter((p) => ['draft', 'submitted'].includes(p.status)).map((p) => p.match_id));
+    const eligible = matches.filter((m) => !openMatchIds.has(m.id));
+    if (!eligible.length) {
+      if (feedbackEl) feedbackEl.innerHTML = '<div class="error-box">Nessun abbinamento disponibile: tutti gli abbinamenti di questo immobile hanno gi\u00e0 una proposta aperta, oppure non esiste ancora alcun abbinamento (vedi tab Abbinamenti).</div>';
+      return;
+    }
+    openProposalDialog(dialogEl, { mode: 'create', eligible });
+  }
+
+  function openProposalEditDialog(proposal) {
+    const dialogEl = container.querySelector('#proposal-dialog');
+    if (!dialogEl) return;
+    openProposalDialog(dialogEl, { mode: 'edit', proposal });
+  }
+
+  function openProposalDialog(dialogEl, opts) {
+    const isEdit = opts.mode === 'edit';
+    const proposal = opts.proposal || null;
+    // Chiave di idempotenza stabile per l'intera vita di QUESTA apertura del
+    // dialog in modalita' create: generata una sola volta qui (mai dentro
+    // buildProposalCreatePayload), cosi' un retry dopo un errore di rete sullo
+    // stesso dialog riusa la stessa chiave invece di generarne una nuova.
+    const createIdempotencyKey = isEdit ? null : crypto.randomUUID();
+    dialogEl.innerHTML = `
+      <form id="proposal-form">
+        <h3 class="section-title">${isEdit ? 'Modifica proposta' : 'Nuova proposta'}</h3>
+        ${isEdit ? '' : `
+          <div class="form-field">
+            <label>Abbinamento</label>
+            <select id="proposal-match" class="input" required>
+              ${opts.eligible.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(matchOptionLabel(m))}</option>`).join('')}
+            </select>
+          </div>
+        `}
+        <div class="form-grid-2">
+          <div class="form-field"><label>Importo (\u20ac)</label><input type="number" id="proposal-amount" class="input" min="0.01" step="0.01" required value="${proposal ? escapeHtml(proposal.amount) : ''}"></div>
+          <div class="form-field"><label>Scadenza</label><input type="datetime-local" id="proposal-expiry" class="input" required value="${proposal ? proposalDateTimeLocal(proposal.expires_at) : ''}"></div>
+        </div>
+        <div class="form-field"><label>Note</label><textarea id="proposal-notes" class="input">${proposal ? escapeHtml(proposal.notes || '') : ''}</textarea></div>
+        <div id="proposal-form-error" class="field-error"></div>
+        <div class="modal-actions">
+          <button type="button" id="proposal-form-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" id="proposal-form-submit" class="btn primary">Salva</button>
+        </div>
+      </form>
+    `;
+
+    dialogEl.querySelector('#proposal-form-cancel').addEventListener('click', () => dialogEl.close());
+
+    let submitting = false;
+    dialogEl.querySelector('#proposal-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitting) return;
+      const errorEl = dialogEl.querySelector('#proposal-form-error');
+      if (errorEl) errorEl.textContent = '';
+
+      let payload;
+      try {
+        payload = isEdit ? buildProposalUpdatePayload(dialogEl) : buildProposalCreatePayload(dialogEl, createIdempotencyKey);
+      } catch (error) {
+        if (errorEl) errorEl.textContent = error.message || 'Dati non validi.';
+        return;
+      }
+
+      submitting = true;
+      const submitBtn = dialogEl.querySelector('#proposal-form-submit');
+      const cancelBtn = dialogEl.querySelector('#proposal-form-cancel');
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio\u2026';
+      try {
+        if (isEdit) {
+          await apiPatch(`/api/proposals/${proposal.id}`, payload);
+        } else {
+          await apiPost('/api/proposals', payload);
+        }
+        dialogEl.close();
+        await reloadProposals();
+        showTab('proposte');
+        const fb = contentEl.querySelector('#proposal-feedback');
+        if (fb) fb.innerHTML = `<div class="success-box">${isEdit ? 'Proposta aggiornata.' : 'Proposta creata.'}</div>`;
+      } catch (error) {
+        submitting = false;
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+        if (errorEl) errorEl.textContent = error.message || 'Errore nel salvataggio.';
+      }
+    });
+
+    dialogEl.showModal();
+  }
+
+  async function runProposalTransition(btn, proposalId, targetStatus) {
+    const allButtons = Array.from(contentEl.querySelectorAll('.proposal-action-btn'));
+    const originalText = btn.textContent;
+    allButtons.forEach((b) => { b.disabled = true; });
+    btn.textContent = 'Attendere\u2026';
+    const feedbackEl = contentEl.querySelector('#proposal-feedback');
+    if (feedbackEl) feedbackEl.innerHTML = '';
+    try {
+      await apiPost(`/api/proposals/${proposalId}/transition`, { target_status: targetStatus });
+      await reloadProposals();
+      showTab('proposte');
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = '<div class="success-box">Stato proposta aggiornato.</div>';
+    } catch (error) {
+      allButtons.forEach((b) => { b.disabled = false; });
+      btn.textContent = originalText;
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nella transizione di stato.')}</div>`;
     }
   }
 
@@ -410,20 +587,115 @@ function bindOpenMatchLinks(contentEl) {
   });
 }
 
-// --- Proposte (gia' caricate all'apertura scheda, come property_admin) -----
+// --- Proposte (P9: operative — creazione, modifica in bozza, transizioni) --
+
+const PROPOSAL_STATUS_LABELS = {
+  draft: 'Bozza', submitted: 'Inviata', accepted: 'Accettata',
+  rejected: 'Rifiutata', expired: 'Scaduta', withdrawn: 'Ritirata',
+};
+
+const PROPOSAL_ACTION_LABELS = {
+  edit: 'Modifica', submitted: 'Invia', accepted: 'Accetta',
+  rejected: 'Rifiuta', withdrawn: 'Ritira', expired: 'Segna scaduta',
+};
+
+// Stessa logica di static/buy_admin/assets/app.js:proposalActions (riferimento
+// comportamentale P9), riletta sullo stato reale della proposta. "expired" e'
+// solo un suggerimento client-side: il backend ricontrolla sempre database_now.
+function proposalActions(proposal) {
+  if (proposal.status === 'draft') return ['edit', 'submitted', 'withdrawn'];
+  if (proposal.status === 'submitted') {
+    const actions = ['accepted', 'rejected', 'withdrawn'];
+    const expiresAt = new Date(proposal.expires_at);
+    if (!Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()) actions.push('expired');
+    return actions;
+  }
+  return [];
+}
+
+function renderProposalActionButtons(pr) {
+  const actions = proposalActions(pr);
+  if (!actions.length) return '';
+  return `<div class="action-bar">${actions.map((a) => `<button type="button" class="btn ghost proposal-action-btn" data-proposal-id="${escapeHtml(pr.id)}" data-action="${escapeHtml(a)}">${escapeHtml(PROPOSAL_ACTION_LABELS[a] || a)}</button>`).join('')}</div>`;
+}
 
 function renderProposte(items) {
-  return renderTable(
+  const table = renderTable(
     [
       { label: 'Proposta', render: (pr) => `#${escapeHtml(pr.id)}` },
       { label: 'Acquirente', render: (pr) => escapeHtml(pr.contact_name || `Contatto #${pr.contact_id}`) },
       { label: 'Importo', render: (pr) => formatPrice(pr.amount) },
-      { label: 'Stato', render: (pr) => renderBadge(pr.status || '—', statusTone(pr.status)) },
+      { label: 'Stato', render: (pr) => renderBadge(PROPOSAL_STATUS_LABELS[pr.status] || pr.status || '—', statusTone(pr.status)) },
       { label: 'Scadenza', render: (pr) => escapeHtml(formatDateTime(pr.expires_at)) },
+      { label: '', render: (pr) => renderProposalActionButtons(pr) },
     ],
     items,
     { emptyMessage: 'Nessuna proposta presente per questo immobile.' },
   );
+  return `
+    <div class="action-bar" style="margin-bottom:12px">
+      <button type="button" id="proposal-new-btn" class="btn primary">Nuova proposta</button>
+    </div>
+    <div id="proposal-feedback"></div>
+    ${table}
+  `;
+}
+
+// Etichetta di un abbinamento eleggibile nel selettore "Nuova proposta": mai
+// un match_id digitato manualmente, solo scelta da un elenco di abbinamenti
+// reali gia' presenti (stesso principio gia' applicato in P3 per il Contatto).
+function matchOptionLabel(m) {
+  const buyer = m.buyer_name || `Richiesta #${m.buy_request_id}`;
+  const scoreText = m.effective_score ?? m.score_total;
+  return `${buyer}${scoreText != null ? ` \u2014 punteggio ${scoreText}` : ''}${m.match_class ? ` (${m.match_class})` : ''}`;
+}
+
+function proposalDateTimeLocal(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+// Converte il valore di un input datetime-local (orario locale del browser,
+// senza timezone) in un ISO string con offset esplicito, come richiesto da
+// proposal/schemas.py (expiry_requires_timezone). Stesso pattern di
+// static/buy_admin/assets/app.js:proposalExpiry.
+function proposalExpiryToIso(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) throw new Error('Data di scadenza non valida.');
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) throw new Error('Data di scadenza non valida.');
+  return parsed.toISOString();
+}
+
+function proposalAmountValue(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error('Importo deve essere maggiore di zero.');
+  return value;
+}
+
+function buildProposalCreatePayload(dialogEl, idempotencyKey) {
+  const matchSelect = dialogEl.querySelector('#proposal-match');
+  const matchId = matchSelect ? Number(matchSelect.value) : NaN;
+  if (!Number.isInteger(matchId) || matchId <= 0) throw new Error('Seleziona un abbinamento valido.');
+  const notes = dialogEl.querySelector('#proposal-notes').value.trim();
+  return {
+    match_id: matchId,
+    amount: proposalAmountValue(dialogEl.querySelector('#proposal-amount').value),
+    expires_at: proposalExpiryToIso(dialogEl.querySelector('#proposal-expiry').value),
+    notes: notes || null,
+    idempotency_key: idempotencyKey,
+  };
+}
+
+function buildProposalUpdatePayload(dialogEl) {
+  const notes = dialogEl.querySelector('#proposal-notes').value.trim();
+  return {
+    amount: proposalAmountValue(dialogEl.querySelector('#proposal-amount').value),
+    expires_at: proposalExpiryToIso(dialogEl.querySelector('#proposal-expiry').value),
+    notes: notes || null,
+  };
 }
 
 // --- Attività: nessuna relazione attivita<->immobile nelle API esistenti ---
