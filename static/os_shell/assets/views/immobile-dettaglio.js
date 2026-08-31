@@ -46,10 +46,18 @@
 // in questa risposta, quindi NON viene mostrato (nessun badge "condiviso"
 // inventato). Nessuna azione di condivisione presente in questa vista.
 //
-// Vista interamente in sola lettura: nessuna scrittura, upload, eliminazione,
-// riordino o azione di stato in questa tab.
+// Vista in prevalenza di sola lettura: Foto, Documenti, Visite e Attivita
+// restano senza alcuna scrittura, upload, eliminazione, riordino o azione di
+// stato. Fa eccezione la tab Proprietari (P12): collegamento/rimozione di
+// referenti (property_contacts) tramite gli endpoint gia' esistenti
+// property/router.py:25-28 (POST/DELETE .../contacts), nessuna creazione di
+// contatto qui (il contatto va sempre scelto tra quelli CORE gia' esistenti,
+// via GET /api/core/contacts?search=, stesso endpoint gia' usato in
+// acquirenti.js e contatti.js) e nessun PATCH inventato (non esiste lato
+// backend: per cambiare ruolo/quota di un collegamento esistente serve un
+// task separato).
 
-import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
+import { apiDelete, apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 
@@ -63,6 +71,10 @@ const PROPERTY_ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', tenant: 'Inquilino', contact: 'Referente',
   professional: 'Professionista', other: 'Altro',
 };
+
+// P12: valori ammessi da property_contacts_role_check (migrations/002_property_01.sql:58),
+// stesso ordine di PROPERTY_ROLE_LABELS sopra.
+const PROPERTY_CONTACT_ROLES = ['owner', 'seller', 'tenant', 'contact', 'professional', 'other'];
 
 const DOCUMENT_STATUS_LABELS = {
   missing: 'Mancante', requested: 'Richiesto', available: 'Disponibile',
@@ -143,6 +155,16 @@ export async function renderImmobileDettaglio(container, params = []) {
     }
   }
 
+  // P12: ricarica i referenti dopo collegamento/rimozione di un
+  // property_contacts. Stessa fonte del caricamento iniziale (GET
+  // /api/property/properties/{id}, property/repository.py:62-96, che
+  // include gia' p.contacts), nessun nuovo endpoint. Aggiorna solo
+  // property.contacts, senza toccare il resto dell'oggetto property.
+  async function reloadPropertyContacts() {
+    const updated = await apiGet(`/api/property/properties/${property.id}`);
+    property.contacts = updated.contacts;
+  }
+
   // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
   // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
   // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
@@ -161,6 +183,12 @@ export async function renderImmobileDettaglio(container, params = []) {
   // pilotato da re-render, stesso principio di incaricoEditMode sopra.
   const saleCancelConfirm = new Set();
 
+  // P12: stato locale "conferma rimozione referente" (secondo click prima
+  // della DELETE reale su property_contacts). Stesso principio di
+  // saleCancelConfirm sopra: chiave "{contact_id}:{role}" perche' un
+  // contatto puo' comparire con piu' ruoli sullo stesso immobile.
+  const contactRemoveConfirm = new Set();
+
   const title = property.title || property.code || `Immobile #${property.id}`;
 
   container.innerHTML = `
@@ -173,6 +201,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     <div id="property-tab-content" class="card panel"></div>
     <dialog id="proposal-dialog" class="modal"></dialog>
     <dialog id="sale-dialog" class="modal"></dialog>
+    <dialog id="contact-dialog" class="modal"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
@@ -186,7 +215,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     try {
       switch (key) {
         case 'panoramica': contentEl.innerHTML = renderPanoramica(property, incaricoEditMode); bindIncaricoSection(contentEl); break;
-        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts); break;
+        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits); break;
@@ -329,6 +358,34 @@ export async function renderImmobileDettaglio(container, params = []) {
     });
     panelEl.querySelectorAll('.sale-cancel-confirm-btn').forEach((btn) => {
       btn.addEventListener('click', () => { runSaleCancel(btn, Number(btn.dataset.saleId)); });
+    });
+  }
+
+  // P12: azioni Proprietari (property_contacts). Il collegamento e' sempre
+  // verso un contatto CORE gia' esistente (mai un contact_id digitato a
+  // mano, stesso principio gia' applicato al match_id delle Proposte),
+  // nessuna creazione di contatto in questa vista.
+  function bindProprietariSection(panelEl) {
+    const linkBtn = panelEl.querySelector('#contact-link-btn');
+    if (linkBtn) {
+      linkBtn.addEventListener('click', () => { openContactLinkDialog(); });
+    }
+    panelEl.querySelectorAll('.contact-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        contactRemoveConfirm.add(btn.dataset.contactKey);
+        showTab('proprietari');
+      });
+    });
+    panelEl.querySelectorAll('.contact-remove-back-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        contactRemoveConfirm.delete(btn.dataset.contactKey);
+        showTab('proprietari');
+      });
+    });
+    panelEl.querySelectorAll('.contact-remove-confirm-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        runContactRemove(btn, Number(btn.dataset.contactId), btn.dataset.role);
+      });
     });
   }
 
@@ -596,6 +653,187 @@ export async function renderImmobileDettaglio(container, params = []) {
     }
   }
 
+  // P12: elenco pulsanti azione Proprietari, stesso principio di
+  // allSaleAndProposalButtons sopra (nessun doppio submit durante una
+  // mutazione in corso).
+  function allProprietariButtons() {
+    return Array.from(contentEl.querySelectorAll(
+      '#contact-link-btn, .contact-remove-btn, .contact-remove-confirm-btn, .contact-remove-back-btn',
+    ));
+  }
+
+  // P12: dialog "Collega contatto", stesso pattern di openSaleCreateDialog/
+  // openProposalDialog sopra. Il contatto e' sempre selezionato da una
+  // ricerca su contatti CORE gia' esistenti (GET /api/core/contacts?search=,
+  // stesso endpoint gia' usato in acquirenti.js:263 e contatti.js:43), mai
+  // un contact_id digitato a mano e mai la creazione di un nuovo contatto
+  // qui. property_id e' sempre quello dell'immobile corrente, mai chiesto.
+  function openContactLinkDialog() {
+    const dialogEl = container.querySelector('#contact-dialog');
+    if (!dialogEl) return;
+    let selectedContact = null;
+    let searchDebounce = null;
+
+    dialogEl.innerHTML = `
+      <form id="contact-link-form">
+        <h3 class="section-title">Collega contatto</h3>
+        <div class="form-field">
+          <label>Contatto</label>
+          <input type="search" id="contact-search-input" class="input" placeholder="Cerca per nome, email o telefono…" autocomplete="off">
+          <div id="contact-search-results"></div>
+          <div id="contact-selected" hidden></div>
+        </div>
+        <div class="form-field">
+          <label>Ruolo</label>
+          <select id="contact-role" class="input">
+            ${PROPERTY_CONTACT_ROLES.map((r) => `<option value="${r}">${escapeHtml(PROPERTY_ROLE_LABELS[r] || r)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-field"><label><input type="checkbox" id="contact-is-primary"> Contatto principale</label></div>
+        <div class="form-field"><label>Quota proprietà (%)</label><input type="number" id="contact-share" class="input" min="0" max="100" step="0.01"></div>
+        <div class="form-field"><label>Note</label><textarea id="contact-notes" class="input"></textarea></div>
+        <div id="contact-form-error" class="field-error"></div>
+        <div class="modal-actions">
+          <button type="button" id="contact-form-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" id="contact-form-submit" class="btn primary" disabled>Salva</button>
+        </div>
+      </form>
+    `;
+
+    const searchInput = dialogEl.querySelector('#contact-search-input');
+    const resultsEl = dialogEl.querySelector('#contact-search-results');
+    const selectedEl = dialogEl.querySelector('#contact-selected');
+    const submitBtn = dialogEl.querySelector('#contact-form-submit');
+
+    function selectContact(contact) {
+      selectedContact = contact;
+      resultsEl.innerHTML = '';
+      searchInput.value = '';
+      searchInput.hidden = true;
+      selectedEl.hidden = false;
+      selectedEl.innerHTML = `
+        <div class="selected-contact-card">
+          <div><strong>${escapeHtml(contactLabel(contact))}</strong><br><small class="muted">${escapeHtml([contact.phone, contact.email].filter(Boolean).join(' · ') || '—')}</small></div>
+          <button type="button" class="btn ghost" id="contact-change-btn">Cambia</button>
+        </div>
+      `;
+      selectedEl.querySelector('#contact-change-btn').addEventListener('click', () => {
+        selectedContact = null;
+        selectedEl.hidden = true;
+        selectedEl.innerHTML = '';
+        searchInput.hidden = false;
+        searchInput.value = '';
+        searchInput.focus();
+        submitBtn.disabled = true;
+      });
+      submitBtn.disabled = false;
+    }
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      const term = searchInput.value.trim();
+      if (!term) { resultsEl.innerHTML = ''; return; }
+      searchDebounce = setTimeout(async () => {
+        resultsEl.innerHTML = '<p class="muted">Ricerca…</p>';
+        try {
+          const data = await apiGet(`/api/core/contacts?search=${encodeURIComponent(term)}&limit=10`);
+          const contacts = Array.isArray(data?.items) ? data.items : [];
+          resultsEl.innerHTML = contacts.length
+            ? `<div class="list">${contacts.map((c) => `<div class="list-item contact-result" data-contact-id="${escapeHtml(c.id)}" style="cursor:pointer"><span><strong>${escapeHtml(contactLabel(c))}</strong><br><small class="muted">${escapeHtml([c.phone, c.email].filter(Boolean).join(' · ') || '—')}</small></span></div>`).join('')}</div>`
+            : '<p class="muted">Nessun contatto trovato.</p>';
+          resultsEl.querySelectorAll('.contact-result').forEach((el) => {
+            el.addEventListener('click', () => {
+              const contact = contacts.find((c) => String(c.id) === el.dataset.contactId);
+              if (contact) selectContact(contact);
+            });
+          });
+        } catch (error) {
+          resultsEl.innerHTML = `<div class="error-box">Errore nella ricerca: ${escapeHtml(error.message)}</div>`;
+        }
+      }, 300);
+    });
+
+    dialogEl.querySelector('#contact-form-cancel').addEventListener('click', () => dialogEl.close());
+
+    let submitting = false;
+    dialogEl.querySelector('#contact-link-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitting) return;
+      const errorEl = dialogEl.querySelector('#contact-form-error');
+      if (errorEl) errorEl.textContent = '';
+
+      if (!selectedContact) {
+        if (errorEl) errorEl.textContent = 'Seleziona un contatto.';
+        return;
+      }
+
+      let ownershipShare = null;
+      const shareRaw = dialogEl.querySelector('#contact-share').value.trim();
+      if (shareRaw !== '') {
+        const parsed = Number(shareRaw);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+          if (errorEl) errorEl.textContent = 'La quota deve essere un numero tra 0 e 100.';
+          return;
+        }
+        ownershipShare = parsed;
+      }
+
+      const payload = {
+        contact_id: selectedContact.id,
+        role: dialogEl.querySelector('#contact-role').value,
+        is_primary: dialogEl.querySelector('#contact-is-primary').checked,
+        ownership_share: ownershipShare,
+        notes: dialogEl.querySelector('#contact-notes').value.trim() || null,
+      };
+
+      submitting = true;
+      const cancelBtn = dialogEl.querySelector('#contact-form-cancel');
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      try {
+        await apiPost(`/api/property/properties/${property.id}/contacts`, payload);
+        dialogEl.close();
+        await reloadPropertyContacts();
+        showTab('proprietari');
+        const fb = contentEl.querySelector('#proprietari-feedback');
+        if (fb) fb.innerHTML = '<div class="success-box">Contatto collegato.</div>';
+      } catch (error) {
+        submitting = false;
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+        if (errorEl) errorEl.textContent = error.message || 'Errore nel collegamento del contatto.';
+      }
+    });
+
+    dialogEl.showModal();
+  }
+
+  // P12: rimozione property_contacts. Conferma inline a due click (nessun
+  // window.confirm(), stesso principio di runSaleCancel sopra).
+  async function runContactRemove(btn, contactId, role) {
+    const allButtons = allProprietariButtons();
+    allButtons.forEach((b) => { b.disabled = true; });
+    const originalText = btn.textContent;
+    btn.textContent = 'Attendere…';
+    const feedbackEl = contentEl.querySelector('#proprietari-feedback');
+    if (feedbackEl) feedbackEl.innerHTML = '';
+    try {
+      await apiDelete(`/api/property/properties/${property.id}/contacts/${contactId}/${role}`);
+      contactRemoveConfirm.delete(`${contactId}:${role}`);
+      await reloadPropertyContacts();
+      showTab('proprietari');
+      const fb = contentEl.querySelector('#proprietari-feedback');
+      if (fb) fb.innerHTML = '<div class="success-box">Collegamento rimosso.</div>';
+    } catch (error) {
+      allButtons.forEach((b) => { b.disabled = false; });
+      btn.textContent = originalText;
+      const fb = contentEl.querySelector('#proprietari-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nella rimozione del collegamento.')}</div>`;
+    }
+  }
+
   tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
@@ -672,8 +910,32 @@ function toDateInputValue(value) {
 }
 
 // --- Proprietari (property_contacts, ruolo reale, non owner_accounts) ------
+// P12: collegamento/rimozione operativi (vedi bindProprietariSection,
+// openContactLinkDialog, runContactRemove sopra). Il contatto e' sempre
+// scelto tra quelli CORE gia' esistenti: nessuna creazione qui.
 
-function renderProprietari(items) {
+function contactLabel(contact) {
+  if (contact.display_name) return contact.display_name;
+  if (contact.contact_type === 'company') return contact.company_name || `Contatto #${contact.id}`;
+  const parts = [contact.first_name, contact.last_name].filter(Boolean);
+  return parts.length ? parts.join(' ') : `Contatto #${contact.id}`;
+}
+
+// P12: azioni Rimuovi/Conferma rimozione per una riga property_contacts,
+// stesso pattern a due click gia' usato per Annulla vendita
+// (renderVenditaCell). Chiave "{contact_id}:{role}" perche' la UNIQUE di
+// property_contacts e' su (property_id, contact_id, role): lo stesso
+// contatto puo' comparire piu' volte con ruoli diversi.
+function renderContactActions(c, contactRemoveConfirm) {
+  const key = `${c.contact_id}:${c.role}`;
+  const confirming = contactRemoveConfirm ? contactRemoveConfirm.has(key) : false;
+  if (confirming) {
+    return `<button type="button" class="btn ghost contact-remove-confirm-btn" data-contact-id="${escapeHtml(c.contact_id)}" data-role="${escapeHtml(c.role)}">Conferma rimozione</button> <button type="button" class="btn ghost contact-remove-back-btn" data-contact-key="${escapeHtml(key)}">Indietro</button>`;
+  }
+  return `<button type="button" class="btn ghost contact-remove-btn" data-contact-key="${escapeHtml(key)}">Rimuovi</button>`;
+}
+
+function renderProprietari(items, contactRemoveConfirm) {
   const note = '<p class="muted">Elenco dai referenti collegati all\'immobile (property_contacts). Non riflette gli account di accesso all\'Owner Portal.</p>';
   const table = renderTable(
     [
@@ -683,11 +945,19 @@ function renderProprietari(items) {
       { label: 'Quota (%)', render: (c) => c.ownership_share != null ? escapeHtml(c.ownership_share) : '—' },
       { label: 'Email', render: (c) => escapeHtml(c.email || '—') },
       { label: 'Telefono', render: (c) => escapeHtml(c.phone || '—') },
+      { label: 'Azioni', render: (c) => renderContactActions(c, contactRemoveConfirm) },
     ],
     items,
     { emptyMessage: 'Nessun referente collegato a questo immobile.' },
   );
-  return note + table;
+  return `
+    <div class="action-bar" style="margin-bottom:12px">
+      <button type="button" id="contact-link-btn" class="btn primary">Collega contatto</button>
+    </div>
+    <div id="proprietari-feedback"></div>
+    ${note}
+    ${table}
+  `;
 }
 
 // --- Foto (sola lettura: nessun upload/elimina/riordina) -------------------
