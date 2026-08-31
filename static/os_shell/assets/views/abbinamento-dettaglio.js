@@ -50,6 +50,7 @@ import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../compone
 
 const MATCH_CLASS_LABELS = { excellent: 'Eccellente', strong: 'Forte', good: 'Buono', possible: 'Possibile', weak: 'Debole', poor: 'Scarso', incompatible: 'Incompatibile' };
 const FRESHNESS_LABELS = { fresh: 'Aggiornato', stale: 'Da ricalcolare', recalculating: 'Ricalcolo in corso', failed: 'Errore', excluded: 'Escluso' };
+const COMPATIBILITY_STATUS_LABELS = { compatible: 'Compatibile', exception: 'Compatibile con eccezioni', incompatible: 'Incompatibile' };
 const COMMERCIAL_STATUSES = ['new', 'to_review', 'approved', 'rejected', 'suggested', 'interested', 'visit_requested', 'visit_scheduled', 'visited', 'offer_candidate', 'archived'];
 const COMMERCIAL_STATUS_LABELS = { new: 'Nuovo', to_review: 'Da valutare', approved: 'Approvato', rejected: 'Rifiutato', suggested: 'Suggerito', interested: 'Interessato', visit_requested: 'Visita richiesta', visit_scheduled: 'Visita programmata', visited: 'Visitato', offer_candidate: 'Candidato offerta', archived: 'Archiviato' };
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
@@ -249,7 +250,7 @@ function renderPanoramica(m) {
     ['Priorità', PRIORITY_LABELS[m.priority] || m.priority],
     ['Assegnato a', m.assigned_to],
     ['Revisione necessaria', m.review_required ? 'Sì' : 'No'],
-    ['Compatibilità', m.compatibility_status],
+    ['Compatibilità', COMPATIBILITY_STATUS_LABELS[m.compatibility_status] || m.compatibility_status],
     ['Versione algoritmo', m.algorithm_version],
     ['Ultimo calcolo', formatDateTime(m.last_calculated_at)],
     ['Primo abbinamento', formatDateTime(m.first_matched_at)],
@@ -349,10 +350,27 @@ function formatCriterionValue(value) {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) return value.length ? value.map(formatScalar).join(', ') : '—';
   if (typeof value === 'object') {
+    // Un criterio del gruppo "features" porta come requested_value l'intera
+    // riga buy_request_features (id, created_at, buy_request_id, feature_code,
+    // value_type, weight_override, ecc.): riconoscibile dalla presenza di
+    // value_type (marcatore strutturale univoco di quella tabella). In quel
+    // caso NON si fa il dump generico Object.entries: si riusa la stessa
+    // logica gia' collaudata in acquirente-dettaglio.js (formatFeatureValue),
+    // mostrando solo il valore umano effettivo in base al value_type.
+    if ('value_type' in value) return formatFeatureValue(value);
     const entries = Object.entries(value);
     return entries.length ? entries.map(([k, v]) => `${k}: ${formatScalar(v)}`).join(', ') : '—';
   }
   return String(value);
+}
+
+// Stessa logica di acquirente-dettaglio.js:formatFeatureValue (riusata, non
+// reinventata): boolean -> Si/No, text -> value_text, number/range -> min-max.
+function formatFeatureValue(f) {
+  if (f.value_type === 'boolean') return f.value_boolean === true ? 'Sì' : f.value_boolean === false ? 'No' : '—';
+  if (f.value_type === 'text') return f.value_text || '—';
+  const min = f.value_min ?? '—'; const max = f.value_max ?? '—';
+  return `${min} – ${max}`;
 }
 
 function formatScalar(v) {
@@ -382,7 +400,7 @@ async function renderStoricoLazy(matchId, cache) {
       { label: 'Motivo', render: (h) => escapeHtml(h.trigger_reason || '—') },
       { label: 'Punteggio', render: (h) => `${escapeHtml(h.previous_score ?? '—')} → ${escapeHtml(h.new_score ?? '—')}` },
       { label: 'Classe', render: (h) => `${escapeHtml(MATCH_CLASS_LABELS[h.previous_class] || h.previous_class || '—')} → ${escapeHtml(MATCH_CLASS_LABELS[h.new_class] || h.new_class || '—')}` },
-      { label: 'Compatibilità', render: (h) => `${escapeHtml(h.previous_compatibility_status || '—')} → ${escapeHtml(h.new_compatibility_status || '—')}` },
+      { label: 'Compatibilità', render: (h) => `${escapeHtml(COMPATIBILITY_STATUS_LABELS[h.previous_compatibility_status] || h.previous_compatibility_status || '—')} → ${escapeHtml(COMPATIBILITY_STATUS_LABELS[h.new_compatibility_status] || h.new_compatibility_status || '—')}` },
       { label: 'Altri campi cambiati', render: (h) => formatChangedFieldsExtra(h.changed_fields) },
     ],
     cache.history,
