@@ -92,13 +92,16 @@ export async function renderImmobileDettaglio(container, params = []) {
 
   let property;
   let proposals = [];
+  let sales = [];
   try {
-    const [propertyData, proposalsData] = await Promise.all([
+    const [propertyData, proposalsData, salesData] = await Promise.all([
       apiGet(`/api/property/properties/${propertyId}`),
       apiGet(`/api/proposals?property_id=${propertyId}`),
+      apiGet(`/api/sales?property_id=${propertyId}`),
     ]);
     property = propertyData;
     proposals = Array.isArray(proposalsData?.items) ? proposalsData.items : [];
+    sales = Array.isArray(salesData?.items) ? salesData.items : [];
   } catch (error) {
     const notFound = /non trovato|not found/i.test(error.message || '');
     container.innerHTML = `<div class="error-box">${notFound ? 'Immobile non trovato.' : `Errore nel caricamento dell'immobile: ${escapeHtml(error.message)}`}</div>`;
@@ -116,11 +119,47 @@ export async function renderImmobileDettaglio(container, params = []) {
     proposals = Array.isArray(data?.items) ? data.items : [];
   }
 
+  // P11: ricarica sale dopo creazione/completamento/annullamento. Stessa
+  // fonte del caricamento iniziale (/api/sales?property_id=...), nessun
+  // nuovo endpoint (contratto sale/router.py:list_sales gia' verificato).
+  async function reloadSales() {
+    const data = await apiGet(`/api/sales?property_id=${property.id}`);
+    sales = Array.isArray(data?.items) ? data.items : [];
+  }
+
+  // P11: aggiorna solo commercial_status dopo il completamento di una
+  // vendita (side-effect di complete_sale su properties, sale/repository.py)
+  // e riflette il nuovo badge nell'header senza reload completo pagina.
+  // Best-effort: la vendita e' gia' stata completata lato backend, un
+  // errore qui non deve nascondere il feedback di successo gia' mostrato.
+  async function reloadPropertyStatus() {
+    try {
+      const updated = await apiGet(`/api/property/properties/${property.id}`);
+      property.commercial_status = updated.commercial_status;
+      const badgeEl = container.querySelector('#property-status-badge');
+      if (badgeEl) badgeEl.innerHTML = headerBadgeHtml();
+    } catch (_error) {
+      // ignorato volutamente, vedi commento sopra
+    }
+  }
+
   // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
   // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
   // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
   // gia' esistente (property/schemas.py:PropertyUpdate).
   let incaricoEditMode = false;
+
+  // P11: badge di stato commerciale nell'header, isolato in una funzione
+  // cosi' da poter essere ri-renderizzato dopo il completamento di una
+  // vendita (reloadPropertyStatus) senza toccare il resto dell'header.
+  function headerBadgeHtml() {
+    return renderBadge(STATUS_LABELS[property.commercial_status] || property.commercial_status || '—', statusTone(property.commercial_status));
+  }
+
+  // P11: stato locale "conferma annullamento vendita" (secondo click prima
+  // di eseguire la cancel reale). Nessun window.confirm(): pattern inline
+  // pilotato da re-render, stesso principio di incaricoEditMode sopra.
+  const saleCancelConfirm = new Set();
 
   const title = property.title || property.code || `Immobile #${property.id}`;
 
@@ -128,11 +167,12 @@ export async function renderImmobileDettaglio(container, params = []) {
     <div class="contact-header card">
       <h2>${escapeHtml(title)}</h2>
       <div class="muted">Immobile #${escapeHtml(property.id)} · ${escapeHtml(property.code || '—')} · ${escapeHtml([property.address, property.city].filter(Boolean).join(', ') || '—')}</div>
-      <div class="badge-row">${renderBadge(STATUS_LABELS[property.commercial_status] || property.commercial_status || '—', statusTone(property.commercial_status))}</div>
+      <div class="badge-row" id="property-status-badge">${headerBadgeHtml()}</div>
     </div>
     <div class="tabs" id="property-tabs"></div>
     <div id="property-tab-content" class="card panel"></div>
     <dialog id="proposal-dialog" class="modal"></dialog>
+    <dialog id="sale-dialog" class="modal"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
@@ -150,7 +190,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits); break;
-        case 'proposte': contentEl.innerHTML = renderProposte(proposals); bindProposteSection(contentEl); break;
+        case 'proposte': contentEl.innerHTML = renderProposte(proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
         case 'attivita': contentEl.innerHTML = renderAttivita(); break;
         case 'abbinamenti': {
@@ -262,6 +302,33 @@ export async function renderImmobileDettaglio(container, params = []) {
           runProposalTransition(btn, proposalId, action);
         }
       });
+    });
+    // P11: azioni vendita, stesso #proposal-feedback della sezione Proposte.
+    panelEl.querySelectorAll('.sale-create-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const proposalId = Number(btn.dataset.proposalId);
+        const proposal = proposals.find((p) => p.id === proposalId);
+        if (!proposal) return;
+        openSaleCreateDialog(proposal);
+      });
+    });
+    panelEl.querySelectorAll('.sale-complete-btn').forEach((btn) => {
+      btn.addEventListener('click', () => { runSaleComplete(btn, Number(btn.dataset.saleId)); });
+    });
+    panelEl.querySelectorAll('.sale-cancel-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        saleCancelConfirm.add(Number(btn.dataset.saleId));
+        showTab('proposte');
+      });
+    });
+    panelEl.querySelectorAll('.sale-cancel-back-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        saleCancelConfirm.delete(Number(btn.dataset.saleId));
+        showTab('proposte');
+      });
+    });
+    panelEl.querySelectorAll('.sale-cancel-confirm-btn').forEach((btn) => {
+      btn.addEventListener('click', () => { runSaleCancel(btn, Number(btn.dataset.saleId)); });
     });
   }
 
@@ -393,6 +460,139 @@ export async function renderImmobileDettaglio(container, params = []) {
       btn.textContent = originalText;
       const fb = contentEl.querySelector('#proposal-feedback');
       if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nella transizione di stato.')}</div>`;
+    }
+  }
+
+  // P11: elenco pulsanti azione vendita/proposta usato per disabilitare tutto
+  // durante una mutazione in corso, stesso principio di "allButtons" in
+  // runProposalTransition sopra (nessun doppio submit).
+  function allSaleAndProposalButtons() {
+    return Array.from(contentEl.querySelectorAll(
+      '.proposal-action-btn, .sale-create-btn, .sale-complete-btn, .sale-cancel-btn, .sale-cancel-confirm-btn, .sale-cancel-back-btn',
+    ));
+  }
+
+  // Dialog "Nuova vendita", stesso pattern del dialog proposta sopra
+  // (openProposalDialog): un solo campo obbligatorio (prezzo vendita,
+  // precompilato con l'importo della proposta), idempotency_key generata
+  // una sola volta all'apertura. property_id/buy_request_id/created_by non
+  // vengono mai chiesti: sono derivati dal backend a partire da proposal_id
+  // (sale/repository.py:create_sale -> _proposal_for_sale).
+  function openSaleCreateDialog(proposal) {
+    const dialogEl = container.querySelector('#sale-dialog');
+    if (!dialogEl) return;
+    const idempotencyKey = crypto.randomUUID();
+    dialogEl.innerHTML = `
+      <form id="sale-form">
+        <h3 class="section-title">Nuova vendita</h3>
+        <div class="form-field"><label>Prezzo vendita (€)</label><input type="number" id="sale-price" class="input" min="0.01" step="0.01" required value="${proposal.amount != null ? escapeHtml(proposal.amount) : ''}"></div>
+        <div class="form-field"><label>Note</label><textarea id="sale-notes" class="input"></textarea></div>
+        <div id="sale-form-error" class="field-error"></div>
+        <div class="modal-actions">
+          <button type="button" id="sale-form-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" id="sale-form-submit" class="btn primary">Salva</button>
+        </div>
+      </form>
+    `;
+
+    dialogEl.querySelector('#sale-form-cancel').addEventListener('click', () => dialogEl.close());
+
+    let submitting = false;
+    dialogEl.querySelector('#sale-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitting) return;
+      const errorEl = dialogEl.querySelector('#sale-form-error');
+      if (errorEl) errorEl.textContent = '';
+
+      let salePrice;
+      try {
+        // Stessa validazione (numero finito, > 0) di proposalAmountValue,
+        // riusata qui senza duplicare la regola.
+        salePrice = proposalAmountValue(dialogEl.querySelector('#sale-price').value);
+      } catch (error) {
+        if (errorEl) errorEl.textContent = error.message || 'Prezzo vendita non valido.';
+        return;
+      }
+      const notes = dialogEl.querySelector('#sale-notes').value.trim();
+
+      submitting = true;
+      const submitBtn = dialogEl.querySelector('#sale-form-submit');
+      const cancelBtn = dialogEl.querySelector('#sale-form-cancel');
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      try {
+        await apiPost('/api/sales', {
+          proposal_id: proposal.id,
+          sale_price: salePrice,
+          notes: notes || null,
+          idempotency_key: idempotencyKey,
+        });
+        dialogEl.close();
+        await reloadSales();
+        showTab('proposte');
+        const fb = contentEl.querySelector('#proposal-feedback');
+        if (fb) fb.innerHTML = '<div class="success-box">Vendita creata.</div>';
+      } catch (error) {
+        submitting = false;
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+        if (errorEl) errorEl.textContent = error.message || 'Errore nella creazione della vendita.';
+      }
+    });
+
+    dialogEl.showModal();
+  }
+
+  async function runSaleComplete(btn, saleId) {
+    const allButtons = allSaleAndProposalButtons();
+    allButtons.forEach((b) => { b.disabled = true; });
+    const originalText = btn.textContent;
+    btn.textContent = 'Attendere…';
+    const feedbackEl = contentEl.querySelector('#proposal-feedback');
+    if (feedbackEl) feedbackEl.innerHTML = '';
+    try {
+      await apiPost(`/api/sales/${saleId}/complete`);
+      await reloadSales();
+      // Side-effect backend di complete_sale su properties.commercial_status
+      // (sale/repository.py:complete_sale): riflesso nel badge header senza
+      // reload completo pagina.
+      await reloadPropertyStatus();
+      showTab('proposte');
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = '<div class="success-box">Vendita completata.</div>';
+    } catch (error) {
+      allButtons.forEach((b) => { b.disabled = false; });
+      btn.textContent = originalText;
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nel completamento della vendita.')}</div>`;
+    }
+  }
+
+  // Conferma inline a due click (nessun window.confirm(), non esiste nella
+  // shell): il primo click su "Annulla vendita" aggiunge il sale_id a
+  // saleCancelConfirm e ri-renderizza la tab (vedi bindProposteSection),
+  // il secondo click su "Conferma annullamento" esegue davvero la POST.
+  async function runSaleCancel(btn, saleId) {
+    const allButtons = allSaleAndProposalButtons();
+    allButtons.forEach((b) => { b.disabled = true; });
+    const originalText = btn.textContent;
+    btn.textContent = 'Attendere…';
+    const feedbackEl = contentEl.querySelector('#proposal-feedback');
+    if (feedbackEl) feedbackEl.innerHTML = '';
+    try {
+      await apiPost(`/api/sales/${saleId}/cancel`);
+      saleCancelConfirm.delete(saleId);
+      await reloadSales();
+      showTab('proposte');
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = '<div class="success-box">Vendita annullata.</div>';
+    } catch (error) {
+      allButtons.forEach((b) => { b.disabled = false; });
+      btn.textContent = originalText;
+      const fb = contentEl.querySelector('#proposal-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nell’annullamento della vendita.')}</div>`;
     }
   }
 
@@ -599,6 +799,72 @@ const PROPOSAL_ACTION_LABELS = {
   rejected: 'Rifiuta', withdrawn: 'Ritira', expired: 'Segna scaduta',
 };
 
+// P11: chiusura frontend P10 SALE. Nessuna nuova entita': fonte unica
+// property_sales via il contratto gia' verificato (sale/router.py,
+// sale/repository.py). GET /api/sales non ha un filtro proposal_id
+// (verificato in sale/repository.py:list_sales), quindi l'associazione
+// vendita<->proposta e' fatta qui, lato client, filtrando l'elenco gia'
+// caricato per property_id.
+const SALE_STATUS_LABELS = { pending: 'In corso', completed: 'Completata', cancelled: 'Annullata' };
+
+// Una proposta puo' avere piu' sale nel tempo (es. una cancelled seguita da
+// una nuova creazione: il partial unique index di property_sales si applica
+// solo a status IN ('pending','completed'), quindi una cancelled non blocca
+// mai una nuova vendita). Priorita' nella scelta della sale da mostrare:
+// completed > pending > cancelled piu' recente.
+function saleForProposal(proposalId, sales) {
+  const related = (sales || []).filter((s) => s.proposal_id === proposalId);
+  if (!related.length) return null;
+  const completed = related.find((s) => s.status === 'completed');
+  if (completed) return completed;
+  const pending = related.find((s) => s.status === 'pending');
+  if (pending) return pending;
+  const cancelled = related
+    .filter((s) => s.status === 'cancelled')
+    .sort((a, b) => (new Date(b.created_at || 0) - new Date(a.created_at || 0)) || (b.id - a.id));
+  return cancelled[0] || null;
+}
+
+// Azioni vendita valide per la coppia (proposta, sale associata), lette
+// direttamente dal contratto backend: nessuna macchina a stati reinventata
+// qui (sale/enums.py:SALE_TRANSITIONS resta l'unica fonte, il backend
+// ricontrolla sempre). soldMismatch e' il solo caso in cui "Crea vendita"
+// viene nascosto anche a proposta accettata e sale non attiva (vedi
+// renderProposte: debito noto commercial_status='sold' senza sale completed).
+function saleActions(proposal, sale, soldMismatch) {
+  if (proposal.status !== 'accepted') return [];
+  if (sale && sale.status === 'completed') return [];
+  if (sale && sale.status === 'pending') return ['complete', 'cancel'];
+  if (soldMismatch) return [];
+  return ['create'];
+}
+
+// Colonna "Vendita" nella tab Proposte: badge di stato (se esiste una sale)
+// piu' le azioni pertinenti. Nessun window.confirm(): l'annullamento usa una
+// conferma inline a due click pilotata da saleCancelConfirm (Set di sale_id
+// in attesa di conferma), passato dal chiamante e non ricreato qui.
+function renderVenditaCell(pr, sale, saleCancelConfirm, soldMismatch) {
+  if (pr.status !== 'accepted') return '<span class="muted">—</span>';
+  const actions = saleActions(pr, sale, soldMismatch);
+  const statusBadge = sale
+    ? renderBadge(SALE_STATUS_LABELS[sale.status] || sale.status || '—', sale.status === 'completed' ? 'ok' : sale.status === 'pending' ? 'warn' : 'gray')
+    : '';
+  const confirming = sale ? saleCancelConfirm.has(sale.id) : false;
+  const buttonsHtml = actions.map((a) => {
+    if (a === 'create') return `<button type="button" class="btn ghost sale-create-btn" data-proposal-id="${escapeHtml(pr.id)}">Crea vendita</button>`;
+    if (a === 'complete') return `<button type="button" class="btn ghost sale-complete-btn" data-sale-id="${escapeHtml(sale.id)}"${confirming ? ' disabled' : ''}>Completa vendita</button>`;
+    if (a === 'cancel') {
+      if (confirming) {
+        return `<button type="button" class="btn ghost sale-cancel-confirm-btn" data-sale-id="${escapeHtml(sale.id)}">Conferma annullamento</button><button type="button" class="btn ghost sale-cancel-back-btn" data-sale-id="${escapeHtml(sale.id)}">Indietro</button>`;
+      }
+      return `<button type="button" class="btn ghost sale-cancel-btn" data-sale-id="${escapeHtml(sale.id)}">Annulla vendita</button>`;
+    }
+    return '';
+  }).join('');
+  if (!statusBadge && !buttonsHtml) return '<span class="muted">—</span>';
+  return `${statusBadge}${buttonsHtml ? `<div class="action-bar" style="margin-top:6px">${buttonsHtml}</div>` : ''}`;
+}
+
 // Stessa logica di static/buy_admin/assets/app.js:proposalActions (riferimento
 // comportamentale P9), riletta sullo stato reale della proposta. "expired" e'
 // solo un suggerimento client-side: il backend ricontrolla sempre database_now.
@@ -619,7 +885,9 @@ function renderProposalActionButtons(pr) {
   return `<div class="action-bar">${actions.map((a) => `<button type="button" class="btn ghost proposal-action-btn" data-proposal-id="${escapeHtml(pr.id)}" data-action="${escapeHtml(a)}">${escapeHtml(PROPOSAL_ACTION_LABELS[a] || a)}</button>`).join('')}</div>`;
 }
 
-function renderProposte(items) {
+function renderProposte(items, sales, property, saleCancelConfirm) {
+  const hasCompletedSale = (sales || []).some((s) => s.status === 'completed');
+  const soldMismatch = property.commercial_status === 'sold' && !hasCompletedSale;
   const table = renderTable(
     [
       { label: 'Proposta', render: (pr) => `#${escapeHtml(pr.id)}` },
@@ -627,6 +895,7 @@ function renderProposte(items) {
       { label: 'Importo', render: (pr) => formatPrice(pr.amount) },
       { label: 'Stato', render: (pr) => renderBadge(PROPOSAL_STATUS_LABELS[pr.status] || pr.status || '—', statusTone(pr.status)) },
       { label: 'Scadenza', render: (pr) => escapeHtml(formatDateTime(pr.expires_at)) },
+      { label: 'Vendita', render: (pr) => renderVenditaCell(pr, saleForProposal(pr.id, sales), saleCancelConfirm, soldMismatch) },
       { label: '', render: (pr) => renderProposalActionButtons(pr) },
     ],
     items,
@@ -636,6 +905,7 @@ function renderProposte(items) {
     <div class="action-bar" style="margin-bottom:12px">
       <button type="button" id="proposal-new-btn" class="btn primary">Nuova proposta</button>
     </div>
+    ${soldMismatch ? '<div class="error-box" style="margin-bottom:12px">Immobile già segnato come venduto. Verificare lo stato prima di creare una nuova vendita.</div>' : ''}
     <div id="proposal-feedback"></div>
     ${table}
   `;
