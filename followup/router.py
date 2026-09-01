@@ -19,9 +19,14 @@ class TemporalScanRequest(BaseModel):
 @router.post("/scan-temporal")
 def scan_temporal(payload: TemporalScanRequest):
     try:
-        return service.safe_run_temporal_escalation_scan(
+        return service.run_temporal_escalation_scan(
             limit=payload.limit,
             created_by=payload.created_by,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="followup temporal scan failed",
+        ) from None

@@ -201,12 +201,19 @@ def run_temporal_escalation_scan(
             items.append(row)
         except Exception as exc:  # noqa: BLE001 - scan must continue candidate-by-candidate
             failed += 1
+            logger.error(
+                "followup_temporal_candidate_failed rule_code=%s task_id=%s error_type=%s error=%s",
+                rule.rule_code,
+                task_id,
+                type(exc).__name__,
+                exc,
+            )
             items.append(
                 {
                     "task_id": task_id,
                     "idempotency_key": idempotency_key,
                     "status": "failed",
-                    "error_message": str(exc),
+                    "error_message": "temporal_escalation_failed",
                 }
             )
 
