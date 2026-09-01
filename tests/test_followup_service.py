@@ -54,7 +54,7 @@ def test_run_followup_passes_rule_fields_through_unchanged(fake_repository):
     assert call["trigger_type"] == "event"
     assert call["task_title"] == "Contattare proprietario"
     assert call["task_type"] == "automated_followup"
-    assert call["priority"] == "high"
+    assert call["priority"] == "normal"
     assert call["stima_id"] == 501
 
 

@@ -49,7 +49,7 @@ ALL_RULES: dict[str, FollowupRule] = {
         action="create_core_task",
         title="Contattare proprietario",
         task_type="automated_followup",
-        priority="high",
+        priority="normal",
         due_hours=24,
         enabled=True,
     ),

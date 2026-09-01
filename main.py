@@ -28,6 +28,7 @@ from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
+from followup import service as followup_service
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -547,6 +548,27 @@ async def salva_stima(request: Request):
             "mq": data["mq"],
         },
         idempotency_key=f"stima_richiesta:{new_id}",
+    )
+
+    # --- P18 Follow-up Engine: FOLLOWUP_STIMA_RICHIESTA (additive,
+    # non-blocking) ---
+    # Registrato subito dopo l'evento P17 stima_richiesta, con lo stesso
+    # pattern (bridge_result or {}).get(...) gia' usato sopra: il bridge
+    # CORE puo' essere fallito o non aver trovato contact_id/lead_id, ma
+    # stima_id=new_id e' sempre disponibile e da solo soddisfa il
+    # constraint CORE tasks_reference_chk (vedi followup/service.py). Usa
+    # ESCLUSIVAMENTE safe_run_followup(): non solleva mai eccezioni (vedi
+    # followup/service.py) e usa una propria transazione locale P18,
+    # separata da quella della stima, del bridge e di Seller Intelligence -
+    # nessun failure qui puo' mai alterare la request/response di questo
+    # endpoint.
+    followup_service.safe_run_followup(
+        rule_code="FOLLOWUP_STIMA_RICHIESTA",
+        trigger_type="event",
+        stima_id=new_id,
+        contact_id=(bridge_result or {}).get("contact_id"),
+        lead_id=(bridge_result or {}).get("lead_id"),
+        created_by="FOLLOWUP",
     )
 
     # --- 5. TOKEN e prezzo base ---

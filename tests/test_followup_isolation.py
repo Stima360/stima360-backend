@@ -138,13 +138,26 @@ def test_package_only_depends_on_shared_database_module():
     assert "from database import get_connection" in database_py
 
 
-def test_main_py_is_completely_untouched_by_followup():
-    # The P18-B safety barrier: the engine exists but is not wired in.
+def test_main_py_references_followup_only_through_the_p18c_contract():
+    # Updated in P18-C: before this phase main.py had to be completely
+    # untouched (the P18-B barrier this test originally enforced). From
+    # P18-C it deliberately references followup - but only through the one
+    # import and the one safe_run_followup(...) call authorized by the
+    # P18-C wiring, not a scattered import or direct access to
+    # followup.repository/.rules/.exceptions, and never a direct call to
+    # run_followup() (only the never-raising wrapper is an authorized
+    # public-funnel entry point). Same pattern already used for
+    # seller_intelligence in
+    # test_seller_intelligence_isolation.py::test_main_py_references_seller_intelligence_only_through_the_p17b1_contract.
     main_source = MAIN_PY.read_text(encoding="utf-8")
-    assert "followup" not in main_source.lower(), (
-        "main.py non deve contenere alcun riferimento a followup in P18-B - "
-        "il wiring reale arriva in P18-C"
-    )
+    assert "from followup import service as followup_service" in main_source
+    assert "followup_service.safe_run_followup(" in main_source
+    for forbidden in ("followup.repository", "followup.rules", "followup.exceptions", "followup.database"):
+        assert forbidden not in main_source, f"main.py non deve accedere direttamente a {forbidden}"
+    assert "followup_service.run_followup(" not in main_source
+    # Nessun router followup: fuori scope per P18-C (arriva in P18-D).
+    assert "followup_router" not in main_source
+    assert "followup.router" not in main_source
 
 
 def test_core_property_buy_match_proposal_owner_flow_do_not_import_followup():
