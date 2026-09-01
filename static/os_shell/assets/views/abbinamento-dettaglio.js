@@ -16,6 +16,21 @@
 //         reason_code?,notes?}                      (router.py:141-143, schema
 //         FeedbackCreate: reason_code obbligatorio SOLO se feedback_type=='negative')
 //
+// P16 (patch MATCH -> VISITA): "Programma visita" chiama l'endpoint BUY gia'
+// esistente POST /api/buy/requests/{request_id}/matches/{match_id}/decision
+// (buy/router.py:31, schema MatchDecision) con action='visit_scheduled'.
+// Verificato in buy/repository.py:schedule_match_visit che questo endpoint
+// crea atomicamente property_visits + buy_request_interactions(match_id,
+// buy_request_id, property_visit_id, interaction_type='visit_scheduled') e
+// aggiorna matches.commercial_status='visit_scheduled' — e' l'UNICO percorso
+// che produce una visita realmente collegata al match (property_visits non
+// ha una colonna match_id: la CRUD standalone in immobile-dettaglio.js resta
+// per le visite senza contesto MATCH). Nessun property_id/match_id/
+// buy_request_id/contact_id/lead_id viene chiesto in questo dialog: sono
+// tutti derivati server-side dal match/richiesta (schedule_match_visit
+// legge match.property_id e buy_requests.contact_id/lead_id). Nessuna
+// seconda POST verso /api/property/.../visits viene mai fatta da qui.
+//
 // GET .../matches/{id} e' indispensabile: se fallisce la scheda non apre.
 // refresh-history e feedback sono secondari e caricati a tab (nessun
 // Promise.all che li lega al GET principale ne' tra loro): un loro errore
@@ -102,6 +117,7 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
       <div id="match-action-feedback"></div>
       <div class="tabs" id="match-tabs"></div>
       <div id="match-tab-content" class="card panel"></div>
+      <dialog id="visit-schedule-dialog" class="modal"></dialog>
     `;
 
     container.querySelector('#match-badges').innerHTML = renderBadgeRow(match);
@@ -212,6 +228,81 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
         }
       });
     }
+
+    const scheduleVisitBtn = container.querySelector('#match-schedule-visit');
+    if (scheduleVisitBtn) {
+      scheduleVisitBtn.addEventListener('click', () => { openVisitScheduleDialog(); });
+    }
+  }
+
+  // Patch MATCH -> VISITA: dialog "Programma visita". Unico dato realmente
+  // richiesto all'operatore e' scheduled_at (obbligatorio lato MatchDecision,
+  // buy/schemas.py: "scheduled_at is required when scheduling a visit"); le
+  // note sono opzionali e vengono incluse nel payload solo se valorizzate.
+  // Nessun campo property_id/match_id/buy_request_id/contact_id/lead_id e'
+  // chiesto qui: schedule_match_visit li deriva da match_id (property_id) e
+  // da buy_requests.contact_id/lead_id (buy/repository.py:152-176).
+  function openVisitScheduleDialog() {
+    const dialogEl = container.querySelector('#visit-schedule-dialog');
+    if (!dialogEl) return;
+
+    dialogEl.innerHTML = `
+      <form id="visit-schedule-form">
+        <h3 class="section-title">Programma visita</h3>
+        <div class="form-field"><label>Data e ora *</label><input type="datetime-local" id="visit-schedule-at" class="input" required></div>
+        <div class="form-field"><label>Note</label><textarea id="visit-schedule-notes" class="input"></textarea></div>
+        <div id="visit-schedule-error" class="field-error"></div>
+        <div class="modal-actions">
+          <button type="button" id="visit-schedule-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" id="visit-schedule-submit" class="btn primary">Programma</button>
+        </div>
+      </form>
+    `;
+
+    dialogEl.querySelector('#visit-schedule-cancel').addEventListener('click', () => dialogEl.close());
+
+    let submitting = false;
+    dialogEl.querySelector('#visit-schedule-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitting) return;
+      const errorEl = dialogEl.querySelector('#visit-schedule-error');
+      if (errorEl) errorEl.textContent = '';
+
+      const raw = String(dialogEl.querySelector('#visit-schedule-at').value || '').trim();
+      if (!raw) {
+        if (errorEl) errorEl.textContent = 'Data e ora visita obbligatorie.';
+        return;
+      }
+      const scheduledAt = new Date(raw);
+      if (Number.isNaN(scheduledAt.getTime())) {
+        if (errorEl) errorEl.textContent = 'Data e ora visita non valide.';
+        return;
+      }
+      const payload = { action: 'visit_scheduled', scheduled_at: scheduledAt.toISOString() };
+      const notes = dialogEl.querySelector('#visit-schedule-notes').value.trim();
+      if (notes) payload.notes = notes;
+
+      submitting = true;
+      const submitBtn = dialogEl.querySelector('#visit-schedule-submit');
+      const cancelBtn = dialogEl.querySelector('#visit-schedule-cancel');
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      try {
+        await apiPost(`/api/buy/requests/${match.buy_request_id}/matches/${matchId}/decision`, payload);
+        dialogEl.close();
+        await reload({ invalidateHistory: true });
+        showFeedbackMessage('Visita programmata sul match.', false);
+      } catch (error) {
+        submitting = false;
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.textContent = 'Programma';
+        if (errorEl) errorEl.textContent = error.message || 'Errore nella programmazione della visita.';
+      }
+    });
+
+    dialogEl.showModal();
   }
 }
 
@@ -292,6 +383,7 @@ function renderPanoramica(m) {
       </select>
       <button type="button" id="match-status-save" class="btn">Salva stato</button>
       ${m.review_required ? '<button type="button" id="match-mark-reviewed" class="btn">Segna come revisionato</button>' : ''}
+      <button type="button" id="match-schedule-visit" class="btn">Programma visita</button>
       <button type="button" id="match-refresh" class="btn primary" ${canRefresh ? '' : 'disabled'}>Ricalcola abbinamento</button>
       ${canRefresh ? '' : '<span class="muted">Un abbinamento escluso non può essere ricalcolato.</span>'}
     </div>

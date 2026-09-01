@@ -81,6 +81,14 @@ const DOCUMENT_STATUS_LABELS = {
   expired: 'Scaduto', rejected: 'Rifiutato', archived: 'Archiviato',
 };
 
+// P16: valori ammessi da VISIT_STATUSES (property/enums.py:7), stesso ordine
+// gia' usato dal form legacy (static/property_admin/assets/app.js:visitForm).
+const VISIT_STATUSES = ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'];
+const VISIT_STATUS_LABELS = {
+  scheduled: 'Programmata', confirmed: 'Confermata', completed: 'Completata',
+  cancelled: 'Annullata', no_show: 'Mancata presentazione',
+};
+
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
   { key: 'proprietari', label: 'Proprietari' },
@@ -165,6 +173,17 @@ export async function renderImmobileDettaglio(container, params = []) {
     property.contacts = updated.contacts;
   }
 
+  // P16: ricarica le visite dopo creazione/modifica/eliminazione. Stessa
+  // fonte del caricamento iniziale (GET /api/property/properties/{id},
+  // property/repository.py:62-96 -> get_property, che include gia' p.visits
+  // arricchito in sola lettura con buy_request_id/match_id derivati da
+  // buy_request_interactions), nessun nuovo endpoint. Aggiorna solo
+  // property.visits, senza toccare il resto dell'oggetto property.
+  async function reloadPropertyVisits() {
+    const updated = await apiGet(`/api/property/properties/${property.id}`);
+    property.visits = updated.visits;
+  }
+
   // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
   // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
   // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
@@ -189,6 +208,11 @@ export async function renderImmobileDettaglio(container, params = []) {
   // contatto puo' comparire con piu' ruoli sullo stesso immobile.
   const contactRemoveConfirm = new Set();
 
+  // P16: stato locale "conferma eliminazione visita" (secondo click prima
+  // della DELETE reale su property_visits). Stesso principio di
+  // contactRemoveConfirm sopra.
+  const visitRemoveConfirm = new Set();
+
   const title = property.title || property.code || `Immobile #${property.id}`;
 
   container.innerHTML = `
@@ -202,6 +226,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     <dialog id="proposal-dialog" class="modal"></dialog>
     <dialog id="sale-dialog" class="modal"></dialog>
     <dialog id="contact-dialog" class="modal"></dialog>
+    <dialog id="visit-dialog" class="modal"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
@@ -218,7 +243,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
-        case 'visite': contentEl.innerHTML = renderVisite(property.visits); break;
+        case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
         case 'proposte': contentEl.innerHTML = renderProposte(proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
         case 'attivita': contentEl.innerHTML = renderAttivita(); break;
@@ -834,6 +859,249 @@ export async function renderImmobileDettaglio(container, params = []) {
     }
   }
 
+  // P16: azioni Visite (property_visits). Stesso principio del blocco
+  // Proprietari sopra: nessun window.confirm(), conferma inline a due click
+  // per l'eliminazione (runVisitRemove).
+  function bindVisiteSection(panelEl) {
+    const newBtn = panelEl.querySelector('#visit-new-btn');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => { openVisitCreateDialog(); });
+    }
+    panelEl.querySelectorAll('.visit-edit-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const visitId = Number(btn.dataset.visitId);
+        const visit = (property.visits || []).find((v) => v.id === visitId);
+        if (visit) openVisitEditDialog(visit);
+      });
+    });
+    panelEl.querySelectorAll('.visit-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        visitRemoveConfirm.add(Number(btn.dataset.visitId));
+        showTab('visite');
+      });
+    });
+    panelEl.querySelectorAll('.visit-remove-back-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        visitRemoveConfirm.delete(Number(btn.dataset.visitId));
+        showTab('visite');
+      });
+    });
+    panelEl.querySelectorAll('.visit-remove-confirm-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        runVisitRemove(btn, Number(btn.dataset.visitId));
+      });
+    });
+  }
+
+  function allVisiteButtons() {
+    return Array.from(contentEl.querySelectorAll(
+      '#visit-new-btn, .visit-edit-btn, .visit-remove-btn, .visit-remove-confirm-btn, .visit-remove-back-btn',
+    ));
+  }
+
+  function openVisitCreateDialog() {
+    const dialogEl = container.querySelector('#visit-dialog');
+    if (!dialogEl) return;
+    openVisitDialog(dialogEl, { mode: 'create' });
+  }
+
+  function openVisitEditDialog(visit) {
+    const dialogEl = container.querySelector('#visit-dialog');
+    if (!dialogEl) return;
+    openVisitDialog(dialogEl, { mode: 'edit', visit });
+  }
+
+  // P16: dialog unico creazione/modifica visita (property_visits), stesso
+  // pattern di openProposalDialog sopra. Campi limitati a quelli reali di
+  // VisitCreate/VisitUpdate (property/schemas.py:164-192): scheduled_at,
+  // status (VISIT_STATUSES, property/enums.py), contact_id, lead_id,
+  // outcome, rating, feedback, assigned_to. Nessun campo match_id: non
+  // esiste sullo schema (property_visits non ha una colonna match_id — il
+  // collegamento con un abbinamento e' derivato in sola lettura da
+  // buy_request_interactions, dominio BUY non modificabile qui). Il
+  // contatto e' sempre scelto da una ricerca sui contatti CORE gia'
+  // esistenti (stesso endpoint e stessa logica di openContactLinkDialog
+  // sopra, GET /api/core/contacts?search=), mai un contact_id digitato a
+  // mano. Il lead e' scelto tra i lead gia' collegati a questo immobile
+  // (property.leads, gia' incluso nella risposta di get_property, nessuna
+  // nuova chiamata): non esiste oggi in os_shell un selettore lead
+  // riusabile piu' ampio, e non e' nello scope di P16 introdurne uno.
+  function openVisitDialog(dialogEl, opts) {
+    const isEdit = opts.mode === 'edit';
+    const visit = opts.visit || null;
+    let selectedContact = visit && visit.contact_id
+      ? { id: visit.contact_id, display_name: visit.contact_name || `Contatto #${visit.contact_id}` }
+      : null;
+    let searchDebounce = null;
+
+    const leadOptions = (property.leads || []).map((l) => `<option value="${escapeHtml(l.lead_id)}" ${visit && visit.lead_id === l.lead_id ? 'selected' : ''}>Lead #${escapeHtml(l.lead_id)}${l.stage ? ` \u2014 ${escapeHtml(l.stage)}` : ''}</option>`).join('');
+
+    dialogEl.innerHTML = `
+      <form id="visit-form">
+        <h3 class="section-title">${isEdit ? 'Aggiorna visita' : 'Nuova visita'}</h3>
+        <div class="form-grid-2">
+          <div class="form-field"><label>Data e ora *</label><input type="datetime-local" id="visit-scheduled-at" class="input" required value="${visit ? visitDateTimeLocal(visit.scheduled_at) : ''}"></div>
+          <div class="form-field">
+            <label>Stato</label>
+            <select id="visit-status" class="input">
+              ${VISIT_STATUSES.map((s) => `<option value="${s}" ${(visit ? visit.status : 'scheduled') === s ? 'selected' : ''}>${escapeHtml(VISIT_STATUS_LABELS[s] || s)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-field">
+          <label>Contatto (acquirente/visitatore)</label>
+          <input type="search" id="visit-contact-search-input" class="input" placeholder="Cerca per nome, email o telefono…" autocomplete="off" ${selectedContact ? 'hidden' : ''}>
+          <div id="visit-contact-search-results"></div>
+          <div id="visit-contact-selected" ${selectedContact ? '' : 'hidden'}></div>
+        </div>
+        ${leadOptions ? `
+        <div class="form-field">
+          <label>Lead collegato</label>
+          <select id="visit-lead" class="input">
+            <option value="">—</option>
+            ${leadOptions}
+          </select>
+        </div>` : ''}
+        <div class="form-grid-2">
+          <div class="form-field"><label>Esito</label><input type="text" id="visit-outcome" class="input" maxlength="80" value="${visit ? escapeHtml(visit.outcome || '') : ''}"></div>
+          <div class="form-field"><label>Valutazione (1-5)</label><input type="number" id="visit-rating" class="input" min="1" max="5" step="1" value="${visit && visit.rating != null ? escapeHtml(visit.rating) : ''}"></div>
+        </div>
+        <div class="form-field"><label>Assegnata a</label><input type="text" id="visit-assigned-to" class="input" value="${visit ? escapeHtml(visit.assigned_to || '') : ''}"></div>
+        <div class="form-field"><label>Feedback / note</label><textarea id="visit-feedback" class="input">${visit ? escapeHtml(visit.feedback || '') : ''}</textarea></div>
+        <div id="visit-form-error" class="field-error"></div>
+        <div class="modal-actions">
+          <button type="button" id="visit-form-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" id="visit-form-submit" class="btn primary">Salva</button>
+        </div>
+      </form>
+    `;
+
+    const searchInput = dialogEl.querySelector('#visit-contact-search-input');
+    const resultsEl = dialogEl.querySelector('#visit-contact-search-results');
+    const selectedEl = dialogEl.querySelector('#visit-contact-selected');
+
+    function renderSelectedContact() {
+      if (!selectedContact) { selectedEl.hidden = true; selectedEl.innerHTML = ''; return; }
+      selectedEl.hidden = false;
+      selectedEl.innerHTML = `
+        <div class="selected-contact-card">
+          <div><strong>${escapeHtml(selectedContact.display_name)}</strong></div>
+          <button type="button" class="btn ghost" id="visit-contact-change-btn">Cambia</button>
+        </div>
+      `;
+      selectedEl.querySelector('#visit-contact-change-btn').addEventListener('click', () => {
+        selectedContact = null;
+        renderSelectedContact();
+        searchInput.hidden = false;
+        searchInput.value = '';
+        searchInput.focus();
+      });
+    }
+    function selectContact(contact) {
+      selectedContact = contact;
+      resultsEl.innerHTML = '';
+      searchInput.value = '';
+      searchInput.hidden = true;
+      renderSelectedContact();
+    }
+    renderSelectedContact();
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchDebounce);
+      const term = searchInput.value.trim();
+      if (!term) { resultsEl.innerHTML = ''; return; }
+      searchDebounce = setTimeout(async () => {
+        resultsEl.innerHTML = '<p class="muted">Ricerca…</p>';
+        try {
+          const data = await apiGet(`/api/core/contacts?search=${encodeURIComponent(term)}&limit=10`);
+          const contacts = Array.isArray(data?.items) ? data.items : [];
+          resultsEl.innerHTML = contacts.length
+            ? `<div class="list">${contacts.map((c) => `<div class="list-item visit-contact-result" data-contact-id="${escapeHtml(c.id)}" style="cursor:pointer"><span><strong>${escapeHtml(contactLabel(c))}</strong><br><small class="muted">${escapeHtml([c.phone, c.email].filter(Boolean).join(' · ') || '—')}</small></span></div>`).join('')}</div>`
+            : '<p class="muted">Nessun contatto trovato.</p>';
+          resultsEl.querySelectorAll('.visit-contact-result').forEach((el) => {
+            el.addEventListener('click', () => {
+              const contact = contacts.find((c) => String(c.id) === el.dataset.contactId);
+              if (contact) selectContact({ id: contact.id, display_name: contactLabel(contact) });
+            });
+          });
+        } catch (error) {
+          resultsEl.innerHTML = `<div class="error-box">Errore nella ricerca: ${escapeHtml(error.message)}</div>`;
+        }
+      }, 300);
+    });
+
+    dialogEl.querySelector('#visit-form-cancel').addEventListener('click', () => dialogEl.close());
+
+    let submitting = false;
+    dialogEl.querySelector('#visit-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitting) return;
+      const errorEl = dialogEl.querySelector('#visit-form-error');
+      if (errorEl) errorEl.textContent = '';
+
+      let payload;
+      try {
+        payload = buildVisitPayload(dialogEl, selectedContact, isEdit);
+      } catch (error) {
+        if (errorEl) errorEl.textContent = error.message || 'Dati non validi.';
+        return;
+      }
+
+      submitting = true;
+      const submitBtn = dialogEl.querySelector('#visit-form-submit');
+      const cancelBtn = dialogEl.querySelector('#visit-form-cancel');
+      submitBtn.disabled = true;
+      cancelBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      try {
+        if (isEdit) {
+          await apiPatch(`/api/property/visits/${visit.id}`, payload);
+        } else {
+          await apiPost(`/api/property/properties/${property.id}/visits`, payload);
+        }
+        dialogEl.close();
+        await reloadPropertyVisits();
+        showTab('visite');
+        const fb = contentEl.querySelector('#visite-feedback');
+        if (fb) fb.innerHTML = `<div class="success-box">${isEdit ? 'Visita aggiornata.' : 'Visita creata.'}</div>`;
+      } catch (error) {
+        submitting = false;
+        submitBtn.disabled = false;
+        cancelBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+        if (errorEl) errorEl.textContent = error.message || 'Errore nel salvataggio della visita.';
+      }
+    });
+
+    dialogEl.showModal();
+  }
+
+  // P16: eliminazione property_visits (DELETE /api/property/visits/{id},
+  // property/router.py:52 -> service.delete_visit -> repository.delete_child,
+  // gia' verificato in fase di audit). Conferma inline a due click, stesso
+  // principio di runContactRemove sopra.
+  async function runVisitRemove(btn, visitId) {
+    const allButtons = allVisiteButtons();
+    allButtons.forEach((b) => { b.disabled = true; });
+    const originalText = btn.textContent;
+    btn.textContent = 'Attendere…';
+    const feedbackEl = contentEl.querySelector('#visite-feedback');
+    if (feedbackEl) feedbackEl.innerHTML = '';
+    try {
+      await apiDelete(`/api/property/visits/${visitId}`);
+      visitRemoveConfirm.delete(visitId);
+      await reloadPropertyVisits();
+      showTab('visite');
+      const fb = contentEl.querySelector('#visite-feedback');
+      if (fb) fb.innerHTML = '<div class="success-box">Visita eliminata.</div>';
+    } catch (error) {
+      allButtons.forEach((b) => { b.disabled = false; });
+      btn.textContent = originalText;
+      const fb = contentEl.querySelector('#visite-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Errore nell\'eliminazione della visita.')}</div>`;
+    }
+  }
+
   tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
@@ -992,22 +1260,97 @@ function renderDocumenti(items) {
   return note + table;
 }
 
-// --- Visite (con contesto BUY/MATCH gia' incluso da get_property, solo testo) ---
+// --- Visite (property_visits; P16: create/modifica/elimina operativi) -----
+// Fonte dati: p.visits da get_property (property/repository.py:62-96),
+// gia' arricchito in sola lettura con buy_request_id/match_id derivati da
+// buy_request_interactions (dominio BUY, migrations/006_buy_02.sql) quando
+// la visita e' nata da un abbinamento. Questi due campi sono SOLO
+// visualizzati (badge "Origine"): non esiste alcuna colonna match_id su
+// property_visits e nessuna scrittura viene mai fatta verso
+// buy_request_interactions o verso /api/buy/* da questa vista — la
+// registrazione dell'esito commerciale BUY (legacy property_admin
+// openVisitOutcome/submitVisitOutcome, che scrive su
+// /api/buy/requests/{id}/interactions) resta esplicitamente fuori scope
+// P16 (vincolo assoluto: non modificare BUY).
 
-function renderVisite(items) {
+function visitDateTimeLocal(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+// Costruisce il payload reale per POST /properties/{id}/visits o PATCH
+// /visits/{id} (VisitCreate/VisitUpdate, property/schemas.py:164-192).
+// Nessun campo inventato: solo scheduled_at, status, contact_id, lead_id,
+// outcome, rating, feedback, assigned_to. scheduled_at e' obbligatorio solo
+// in creazione (VisitCreate); in modifica viene comunque inviato se
+// valorizzato, dato che il campo esiste anche su VisitUpdate.
+function buildVisitPayload(dialogEl, selectedContact, isEdit) {
+  const scheduledRaw = String(dialogEl.querySelector('#visit-scheduled-at').value || '').trim();
+  if (!scheduledRaw && !isEdit) throw new Error('Data e ora visita obbligatorie.');
+  const payload = {
+    status: dialogEl.querySelector('#visit-status').value,
+    contact_id: selectedContact ? selectedContact.id : null,
+    outcome: dialogEl.querySelector('#visit-outcome').value.trim() || null,
+    feedback: dialogEl.querySelector('#visit-feedback').value.trim() || null,
+    assigned_to: dialogEl.querySelector('#visit-assigned-to').value.trim() || null,
+  };
+  const leadEl = dialogEl.querySelector('#visit-lead');
+  if (leadEl) {
+    const leadRaw = leadEl.value;
+    payload.lead_id = leadRaw ? Number(leadRaw) : null;
+  }
+  if (scheduledRaw) {
+    const scheduledAt = new Date(scheduledRaw);
+    if (Number.isNaN(scheduledAt.getTime())) throw new Error('Data e ora visita non valide.');
+    payload.scheduled_at = scheduledAt.toISOString();
+  }
+  const ratingRaw = dialogEl.querySelector('#visit-rating').value.trim();
+  if (ratingRaw !== '') {
+    const rating = Number(ratingRaw);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new Error('La valutazione deve essere un numero intero tra 1 e 5.');
+    payload.rating = rating;
+  } else {
+    payload.rating = null;
+  }
+  return payload;
+}
+
+function renderVisitActionButtons(v, visitRemoveConfirm) {
+  const confirming = visitRemoveConfirm ? visitRemoveConfirm.has(v.id) : false;
+  if (confirming) {
+    return `<div class="action-bar"><button type="button" class="btn ghost visit-remove-confirm-btn" data-visit-id="${escapeHtml(v.id)}">Conferma eliminazione</button> <button type="button" class="btn ghost visit-remove-back-btn" data-visit-id="${escapeHtml(v.id)}">Indietro</button></div>`;
+  }
+  return `<div class="action-bar"><button type="button" class="btn ghost visit-edit-btn" data-visit-id="${escapeHtml(v.id)}">Aggiorna</button> <button type="button" class="btn ghost visit-remove-btn" data-visit-id="${escapeHtml(v.id)}">Elimina</button></div>`;
+}
+
+function renderVisite(items, visitRemoveConfirm) {
   const table = renderTable(
     [
       { label: 'Data', render: (v) => escapeHtml(formatDateTime(v.scheduled_at)) },
-      { label: 'Stato', render: (v) => renderBadge(v.status || '—', statusTone(v.status)) },
+      { label: 'Stato', render: (v) => renderBadge(VISIT_STATUS_LABELS[v.status] || v.status || '—', statusTone(v.status)) },
       { label: 'Esito', render: (v) => escapeHtml(v.outcome || '—') },
       { label: 'Valutazione', render: (v) => v.rating != null ? `${escapeHtml(v.rating)}/5` : '—' },
       { label: 'Assegnata a', render: (v) => escapeHtml(v.assigned_to || '—') },
-      { label: 'Origine', render: (v) => v.buy_request_id ? renderBadge(`Richiesta BUY #${v.buy_request_id}`, 'buy') : '<span class="muted">—</span>' },
+      { label: 'Origine', render: (v) => {
+        const badges = [];
+        if (v.buy_request_id) badges.push(renderBadge(`Richiesta BUY #${v.buy_request_id}`, 'buy'));
+        if (v.match_id) badges.push(renderBadge(`Match #${v.match_id}`, 'gray'));
+        return badges.length ? badges.join(' ') : '<span class="muted">—</span>';
+      } },
+      { label: '', render: (v) => renderVisitActionButtons(v, visitRemoveConfirm) },
     ],
     items,
     { emptyMessage: 'Nessuna visita registrata per questo immobile.' },
   );
-  return table;
+  return `
+    <div class="action-bar" style="margin-bottom:12px">
+      <button type="button" id="visit-new-btn" class="btn primary">Nuova visita</button>
+    </div>
+    <div id="visite-feedback"></div>
+    ${table}
+  `;
 }
 
 // --- Acquirenti compatibili: gap esplicito, nessun riuso dati Abbinamenti ---
