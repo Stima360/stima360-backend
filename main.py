@@ -26,6 +26,8 @@ from proposal.router import router as proposal_router
 from sale.router import router as sale_router
 from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
+from seller_intelligence import service as seller_intelligence_service
+from seller_intelligence.router import router as seller_intelligence_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -55,6 +57,11 @@ app.include_router(sale_router, dependencies=[Depends(require_admin)])
 app.include_router(flow_router)
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
+
+# Additive P17 Seller Intelligence routes. CORE and legacy routes remain
+# unchanged; same admin auth pattern as every other domain router above.
+app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])
+
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
 app.mount("/core-admin", StaticFiles(directory=str(CORE_ADMIN_DIR), html=True), name="core-admin")
@@ -496,6 +503,7 @@ async def salva_stima(request: Request):
         try: cur.close(); conn.close()
         except: pass
 
+    bridge_result = None
     try:
         bridge_result = core_service.bridge_public_stima(
             new_id,
@@ -521,6 +529,25 @@ async def salva_stima(request: Request):
             new_id,
             type(exc).__name__,
         )
+
+    # --- P17 Seller Intelligence: stima_richiesta (additive, non-blocking) ---
+    # Registrato dopo che la riga stime esiste e il bridge CORE e' stato
+    # tentato (sopra), indipendentemente dal suo esito. Non puo' mai
+    # alterare la request/response di questo endpoint: safe_record_event
+    # non solleva mai eccezioni (vedi seller_intelligence/service.py).
+    seller_intelligence_service.safe_record_event(
+        event_type="stima_richiesta",
+        event_source="stima360_it",
+        stima_id=new_id,
+        contact_id=(bridge_result or {}).get("contact_id"),
+        lead_id=(bridge_result or {}).get("lead_id"),
+        payload={
+            "comune": data["comune"],
+            "tipologia": data["tipologia"],
+            "mq": data["mq"],
+        },
+        idempotency_key=f"stima_richiesta:{new_id}",
+    )
 
     # --- 5. TOKEN e prezzo base ---
     conn = get_connection(); cur = conn.cursor()
@@ -647,6 +674,34 @@ async def salva_stima(request: Request):
     eur_mq_finale = calc["eur_mq_finale"]
     valore_pertinenze = calc["valore_pertinenze"]
     base_mq = calc["base_mq"]
+
+    # --- P17 Seller Intelligence: stima_completata (additive, non-blocking) ---
+    # Significa ESCLUSIVAMENTE "il motore di valutazione ha completato con
+    # successo il calcolo": registrato qui, subito dopo che
+    # compute_from_payload() ha prodotto un risultato valido (le tre righe
+    # sopra sarebbero gia' fallite con KeyError su un risultato malformato),
+    # PRIMA di PDF ed email - che sono effetti successivi e indipendenti.
+    # Se il calcolo riesce ma la generazione PDF fallisce sotto, questo
+    # evento deve comunque esistere (vedi
+    # tests/test_seller_intelligence_p17b1_integration.py::test_p17b2_stima_completata_exists_even_if_pdf_generation_fails).
+    # Nessuna UPDATE su `stime`: il codice attuale non persiste il risultato
+    # calcolato sulla riga stima (verificato, nessuna colonna esistente per
+    # farlo) e P17 resta additivo - la persistenza per Seller Intelligence
+    # e' il payload di questo stesso evento, non una modifica allo schema
+    # legacy.
+    seller_intelligence_service.safe_record_event(
+        event_type="stima_completata",
+        event_source="stima360_it",
+        stima_id=new_id,
+        contact_id=(bridge_result or {}).get("contact_id"),
+        lead_id=(bridge_result or {}).get("lead_id"),
+        payload={
+            "price_exact": price_exact,
+            "eur_mq_finale": eur_mq_finale,
+            "base_mq": base_mq,
+        },
+        idempotency_key=f"stima_completata:{new_id}",
+    )
 
     indirizzo = format_indirizzo(data["via"], data["civico"], data["comune"])
     
@@ -843,8 +898,24 @@ async def salva_stima(request: Request):
             """
 
         # 1. Invia la mail al cliente
-        invia_mail(data["email"], oggetto_mail, corpo)
-        
+        mail_sent = invia_mail(data["email"], oggetto_mail, corpo)
+
+        # --- P17 Seller Intelligence: email_stima_inviata (additive,
+        # non-blocking). Significa ESATTAMENTE "invia_mail() per il cliente
+        # ha ritornato True" - non un tentativo, non l'email admin (sotto),
+        # non la generazione PDF. invia_mail() non solleva mai eccezioni
+        # (ritorna sempre bool), quindi mail_sent e' sempre definito qui.
+        if mail_sent:
+            seller_intelligence_service.safe_record_event(
+                event_type="email_stima_inviata",
+                event_source="stima360_it",
+                stima_id=new_id,
+                contact_id=(bridge_result or {}).get("contact_id"),
+                lead_id=(bridge_result or {}).get("lead_id"),
+                payload={"pdf_url": pdf_url_finale},
+                idempotency_key=f"email_stima_inviata:{new_id}",
+            )
+
         # =========================================================
         # 2. INVIA ALERT DI DEFAULT ALL'AMMINISTRATORE
         # =========================================================
