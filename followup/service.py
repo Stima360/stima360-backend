@@ -23,6 +23,7 @@ from .exceptions import ValidationError
 from .rules import get_rule
 
 logger = logging.getLogger(__name__)
+TEMPORAL_ESCALATION_RULE_CODE = "FOLLOWUP_TASK_STALE_ESCALATE_V1"
 
 
 def _build_idempotency_key(*, event_type: str, stima_id: int) -> str:
@@ -131,3 +132,123 @@ def safe_run_followup(**kwargs: Any) -> dict[str, Any] | None:
             exc,
         )
         return None
+
+
+def _build_temporal_idempotency_key(*, task_id: int) -> str:
+    return (
+        "followup:time:"
+        f"{TEMPORAL_ESCALATION_RULE_CODE}:"
+        f"task:{task_id}:v1"
+    )
+
+
+def run_temporal_escalation_scan(
+    *,
+    limit: int = 100,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    if limit < 1 or limit > 500:
+        raise ValidationError("limit must be between 1 and 500")
+
+    try:
+        rule = get_rule(TEMPORAL_ESCALATION_RULE_CODE)
+    except KeyError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    if not rule.enabled:
+        raise ValidationError(
+            f"followup rule {TEMPORAL_ESCALATION_RULE_CODE!r} is not enabled"
+        )
+    if rule.trigger_type != "time":
+        raise ValidationError(
+            f"followup rule {TEMPORAL_ESCALATION_RULE_CODE!r} expects "
+            f"trigger_type='time', got {rule.trigger_type!r}"
+        )
+
+    candidates = repository.list_temporal_escalation_candidates(
+        limit=limit,
+        rule_code=rule.rule_code,
+    )
+
+    items: list[dict[str, Any]] = []
+    escalated = 0
+    skipped = 0
+    failed = 0
+
+    for candidate in candidates:
+        task_id = int(candidate["id"])
+        idempotency_key = _build_temporal_idempotency_key(task_id=task_id)
+        try:
+            result = repository.execute_temporal_escalation(
+                rule_code=rule.rule_code,
+                trigger_type=rule.trigger_type,
+                task_id=task_id,
+                contact_id=candidate.get("contact_id"),
+                lead_id=candidate.get("lead_id"),
+                stima_id=candidate.get("stima_id"),
+                idempotency_key=idempotency_key,
+                created_by=created_by or "FOLLOWUP",
+            )
+            row = {
+                "task_id": task_id,
+                "idempotency_key": idempotency_key,
+                "status": result["status"],
+            }
+            if result["status"] == "completed":
+                escalated += 1
+            else:
+                skipped += 1
+            items.append(row)
+        except Exception as exc:  # noqa: BLE001 - scan must continue candidate-by-candidate
+            failed += 1
+            items.append(
+                {
+                    "task_id": task_id,
+                    "idempotency_key": idempotency_key,
+                    "status": "failed",
+                    "error_message": str(exc),
+                }
+            )
+
+    status = (
+        "failed"
+        if failed and not (escalated or skipped)
+        else ("partial_failure" if failed else "completed")
+    )
+    return {
+        "status": status,
+        "requested_limit": limit,
+        "processed": len(candidates),
+        "escalated": escalated,
+        "skipped": skipped,
+        "failed": failed,
+        "items": items,
+    }
+
+
+def safe_run_temporal_escalation_scan(**kwargs: Any) -> dict[str, Any]:
+    try:
+        return run_temporal_escalation_scan(**kwargs)
+    except Exception as exc:  # noqa: BLE001 - intentional fail-open for admin trigger
+        logger.error(
+            "followup_temporal_scan_failed rule_code=%s error_type=%s error=%s",
+            TEMPORAL_ESCALATION_RULE_CODE,
+            type(exc).__name__,
+            exc,
+        )
+        return {
+            "status": "failed",
+            "requested_limit": kwargs.get("limit", 100),
+            "processed": 0,
+            "escalated": 0,
+            "skipped": 0,
+            "failed": 1,
+            "items": [
+                {
+                    "task_id": None,
+                    "idempotency_key": None,
+                    "status": "failed",
+                    "error_message": str(exc),
+                }
+            ],
+        }

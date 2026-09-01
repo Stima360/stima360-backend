@@ -33,7 +33,10 @@ everything were one transaction, a failure in step 2 would roll back step
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+
+from psycopg2.extras import Json
 
 from core import repository as core_repository
 
@@ -223,6 +226,159 @@ def execute_followup_action(
 
     return {
         "task_id": task["id"],
+        "followup_action_id": action["id"],
+        "status": "completed",
+    }
+
+
+def list_temporal_escalation_candidates(*, limit: int, rule_code: str) -> list[dict[str, Any]]:
+    with followup_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT
+                t.id,
+                t.contact_id,
+                t.lead_id,
+                t.stima_id,
+                t.priority,
+                t.metadata
+            FROM tasks t
+            LEFT JOIN leads l ON l.id = t.lead_id
+            WHERE t.status = 'open'
+              AND t.priority IN ('low', 'normal')
+              AND t.task_type = 'automated_followup'
+              AND t.title = 'Contattare proprietario'
+              AND t.due_at IS NOT NULL
+              AND t.due_at <= NOW() - INTERVAL '24 hours'
+              AND COALESCE(t.metadata->>'source', '') = 'followup'
+              AND COALESCE(t.metadata->>'rule_code', '') = 'FOLLOWUP_STIMA_RICHIESTA'
+              AND (
+                    t.lead_id IS NULL
+                    OR (
+                        l.status NOT IN ('closed', 'paused')
+                        AND l.stage = 'new'
+                    )
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM followup_actions fa
+                    WHERE fa.idempotency_key = (
+                        'followup:time:' || %s || ':task:' || t.id::text || ':v1'
+                    )
+                    AND fa.status = 'completed'
+              )
+            ORDER BY t.due_at ASC, t.id ASC
+            LIMIT %s
+            """,
+            (rule_code, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def execute_temporal_escalation(
+    *,
+    rule_code: str,
+    trigger_type: str,
+    task_id: int,
+    contact_id: int | None,
+    lead_id: int | None,
+    stima_id: int | None,
+    idempotency_key: str,
+    created_by: str,
+) -> dict[str, Any]:
+    action = _insert_pending_action(
+        rule_code=rule_code,
+        trigger_type=trigger_type,
+        idempotency_key=idempotency_key,
+        contact_id=contact_id,
+        lead_id=lead_id,
+        stima_id=stima_id,
+    )
+    if not action["_created"]:
+        if action["status"] == "completed":
+            return {
+                "task_id": action["task_id"],
+                "followup_action_id": action["id"],
+                "status": "already_completed",
+            }
+        raise ConflictError(
+            f"followup_actions {idempotency_key!r} already exists with "
+            f"status={action['status']!r} (id={action['id']}) - not "
+            "retrying automatically"
+        )
+
+    try:
+        with followup_cursor(commit=True) as (_, cur):
+            cur.execute("SELECT id, priority, metadata FROM tasks WHERE id = %s FOR UPDATE", (task_id,))
+            task = _row(cur.fetchone())
+            if task is None:
+                raise ConflictError(f"task {task_id} not found")
+
+            previous_priority = task["priority"]
+            if previous_priority not in {"low", "normal"}:
+                raise ConflictError(f"task {task_id} is not eligible for escalation")
+
+            temporal_metadata = {
+                "temporal_escalations": {
+                    rule_code: {
+                        "applied_at": datetime.now(timezone.utc).isoformat(),
+                        "applied_by": created_by,
+                        "reason": "task_overdue_24h_after_due_at",
+                        "previous_priority": previous_priority,
+                        "new_priority": "high",
+                        "idempotency_key": idempotency_key,
+                    }
+                }
+            }
+            cur.execute(
+                """
+                UPDATE tasks t
+                SET priority = 'high',
+                    metadata = COALESCE(t.metadata, '{}'::jsonb) || %s::jsonb,
+                    updated_at = NOW()
+                WHERE t.id = %s
+                  AND t.status = 'open'
+                  AND t.priority IN ('low', 'normal')
+                  AND t.task_type = 'automated_followup'
+                  AND t.title = 'Contattare proprietario'
+                  AND t.due_at IS NOT NULL
+                  AND t.due_at <= NOW() - INTERVAL '24 hours'
+                  AND COALESCE(t.metadata->>'source', '') = 'followup'
+                  AND COALESCE(t.metadata->>'rule_code', '') = 'FOLLOWUP_STIMA_RICHIESTA'
+                  AND (
+                        t.lead_id IS NULL
+                        OR (
+                            EXISTS (
+                                SELECT 1
+                                FROM leads l
+                                WHERE l.id = t.lead_id
+                                  AND l.status NOT IN ('closed', 'paused')
+                                  AND l.stage = 'new'
+                            )
+                        )
+                  )
+                RETURNING t.id
+                """,
+                (Json(temporal_metadata), task_id),
+            )
+            updated = cur.fetchone()
+            if not updated:
+                raise ConflictError(f"task {task_id} no longer eligible for escalation")
+
+            cur.execute(
+                """
+                UPDATE followup_actions
+                SET status = 'completed', task_id = %s, error_message = NULL
+                WHERE id = %s
+                """,
+                (task_id, action["id"]),
+            )
+    except Exception as exc:
+        _mark_failed_best_effort(action["id"], exc)
+        raise
+
+    return {
+        "task_id": task_id,
         "followup_action_id": action["id"],
         "status": "completed",
     }
