@@ -31,7 +31,11 @@ def test_main_includes_seller_intent_router_with_admin_dependency():
 
 def test_repository_contains_no_write_statements():
     src = (PACKAGE_DIR / "repository.py").read_text(encoding="utf-8").lower()
-    assert not re.search(r"\\binsert\\b", src)
-    assert not re.search(r"\\bupdate\\b", src)
-    assert not re.search(r"\\bdelete\\b", src)
+    assert not re.search(r"\binsert\b", src)
+    assert not re.search(r"\bupdate\b", src)
+    assert not re.search(r"\bdelete\b", src)
 
+
+def test_write_statement_regexes_would_detect_sql_keywords():
+    for sample in ("insert into tasks", "update leads set stage='new'", "delete from lead_stime"):
+        assert re.search(r"\binsert\b|\bupdate\b|\bdelete\b", sample)
