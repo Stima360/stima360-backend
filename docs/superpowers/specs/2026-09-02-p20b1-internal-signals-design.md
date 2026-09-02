@@ -116,17 +116,18 @@ defined internal/external discriminator, while a PROPERTY row is the existing
 internal inventory record. The query has no joins to `stime`, leads, contacts,
 buyers, matches, proposals, tasks, or messages.
 
-The first successful count emits `internal_supply_snapshot`, even when its
-count is zero. Later runs compare against the `current_count` in the latest
-relevant supply observation (`internal_supply_changed` first, otherwise
+The first successful count emits `internal_supply_snapshot`, including
+`current_count: 0` when no PROPERTY row qualifies. A successful `COUNT(*)`
+always yields valid source data, so the absence of PROPERTY rows is never
+`source_unavailable`. Later runs compare against the `current_count` in the
+latest relevant supply observation (`internal_supply_changed` first, otherwise
 `internal_supply_snapshot`) and emit `internal_supply_changed` only when that
 count differs. Equal counts write nothing.
 
-Missing baseline locality is `baseline_unavailable`; an absent canonical source
-row is `source_unavailable`. Both cases write nothing, leave prior state
-intact, and are visible in the explicit collector result and structured log.
-An unexpected database error is handled by the safe wrapper as `failed`, not
-misreported as source unavailability.
+Missing baseline locality is `baseline_unavailable` and writes nothing. Only a
+real inability to read the PROPERTY source, such as an unexpected database
+failure, is a failed collector outcome. The safe wrapper logs that failure,
+leaves prior state intact, and does not misreport it as source unavailability.
 
 ## 6. Exact PROPERTY status policy
 
@@ -233,9 +234,11 @@ Provide these service entry points:
 
 - `collect_internal_signals_for_stima(stima_id)`: invokes both strict
   collectors and returns their individual outcomes.
-- `safe_collect_internal_signals_for_stima(stima_id)`: catches an unexpected
-  collector exception, logs `stima_id`, collector name, and exception type
-  without logging payloads, then returns an explicit failed outcome.
+- `safe_collect_internal_signals_for_stima(stima_id)`: invokes the microzone
+  and supply collectors inside separate fault boundaries. Each boundary catches
+  only its own unexpected exception, logs `stima_id`, collector name, and
+  exception type without payload data, and returns an explicit failed outcome
+  for that collector.
 - `collect_internal_signals_for_active_watches()`: obtains active watches with
   non-null `stima_id` in deterministic `id` order and invokes the safe
   single-watch wrapper once per watch.
@@ -247,9 +250,13 @@ running. Each source write is independently committed through the existing
 Property Watch transaction helper, so no batch-wide transaction can roll back
 already valid observations.
 
-An expected unavailable source is an explicit no-write outcome and warning,
-not an exception. Unexpected database or serialization errors are logged by
-the safe wrapper and reported as failed; the batch continues.
+There is no outer catch around both collectors that can skip the second after
+the first fails. A microzone error therefore never stops the supply collector;
+a supply error never invalidates, purges, or changes an already valid
+microzone outcome. An expected unavailable microzone reference is an explicit
+no-write outcome and warning, not an exception. Unexpected database or
+serialization errors are reported as failed only for their collector; the
+batch continues.
 
 ## 10. API/admin surface
 
@@ -313,26 +320,33 @@ Add focused Property Watch tests before implementation for:
 2. subsequent equal reference writes no duplicate, and a later changed
    reference compares with the latest relevant change rather than the original
    baseline;
-3. first supply collection writes exactly one zero-or-greater
-   `internal_supply_snapshot`, equal later counts do not write, and changed
-   counts write `internal_supply_changed` with aggregate fields only;
+3. first supply collection writes exactly one
+   `internal_supply_snapshot`, including `current_count: 0` when no PROPERTY
+   rows qualify; zero is valid source data rather than `source_unavailable`;
+   equal later counts do not write, and changed counts write
+   `internal_supply_changed` with aggregate fields only;
 4. all nine PROPERTY statuses and non-null `archived_at` prove that only
    `mandate`, `active`, `reserved`, and `under_offer` are counted;
 5. only `properties` rows with the exact same city/microzone pair are counted,
    without joins to buyer, match, CRM, or external data;
 6. missing baseline price/locality and unavailable `zone_valori` source are
-   explicit fail-open no-write outcomes, logged without PII;
+   explicit fail-open no-write outcomes, logged without PII, while an empty
+   PROPERTY result remains the valid zero supply snapshot;
 7. Decimal arithmetic and repository serialization produce JSON-safe numeric
    values with `allow_nan=False`, including zero-previous
    `delta_percent: null`;
 8. retrying a collector returns the existing row for its deterministic key,
    concurrent same-watch collection produces one row, and a return-to-prior
    value creates a new row because the prior observation ID differs;
-9. one failing collector/watch is logged and isolated while the batch processes
-   the remaining collector/watches;
-10. the GET state remains read-only and correctly derives baseline, latest
+9. a microzone collector failure still runs the supply collector and returns
+    its outcome;
+10. a supply collector failure preserves the already-valid microzone outcome
+     and does not purge or invalidate its observation;
+11. one watch failure is logged and isolated while the batch processes later
+     watches;
+12. the GET state remains read-only and correctly derives baseline, latest
     microzone reference, latest supply count, histories, counts, and times;
-11. the two POST refresh routes are present and admin-protected, while no GET
+13. the two POST refresh routes are present and admin-protected, while no GET
     route causes a write.
 
 ## 14. Explicit non-goals
