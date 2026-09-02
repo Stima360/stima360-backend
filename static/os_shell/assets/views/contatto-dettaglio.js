@@ -35,6 +35,30 @@ const PROPERTY_ROLE_LABELS = {
   professional: 'Professionista', other: 'Altro',
 };
 
+const SELLER_INTENT_BAND_LABELS = {
+  freddo: 'Freddo',
+  tiepido: 'Tiepido',
+  caldo: 'Caldo',
+  molto_caldo: 'Molto caldo',
+};
+
+const SELLER_STAGE_LABELS = {
+  new: 'Nuovo',
+  contacted: 'Contattato',
+  qualified: 'Qualificato',
+  appointment: 'Appuntamento',
+  proposal: 'Proposta',
+  won: 'Convertito',
+  lost: 'Da recuperare',
+};
+
+const SELLER_INTENT_STATE_LABELS = {
+  active: 'Attivo',
+  paused: 'In pausa',
+  converted: 'Convertito',
+  da_recuperare: 'Da recuperare',
+};
+
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
   { key: 'immobili', label: 'Immobili' },
@@ -67,7 +91,12 @@ export async function renderContattoDettaglio(container, params = []) {
 
   // Cache locale per le due tab a caricamento posticipato: evita di richiamare
   // le stesse API se l'operatore passa più volte da una tab all'altra.
-  const lazyCache = { properties: null, leadsWithEstimations: null };
+  const lazyCache = {
+    properties: null,
+    leadsWithEstimations: null,
+    sellerIntentByLead: null,
+    sellerIntentPromise: null,
+  };
 
   const contact = data.contact || {};
   const name = contact.display_name || fallbackName(contact);
@@ -98,7 +127,10 @@ export async function renderContattoDettaglio(container, params = []) {
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
       switch (key) {
-        case 'panoramica': contentEl.innerHTML = renderPanoramica(contact, data); break;
+        case 'panoramica':
+          contentEl.innerHTML = renderPanoramica(contact, data);
+          void hydrateSellerIntent(contentEl, data, lazyCache);
+          break;
         case 'richieste': contentEl.innerHTML = renderRichieste(data.buy_requests); break;
         case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;
         case 'visite': contentEl.innerHTML = renderVisite(data.visits); break;
@@ -160,12 +192,144 @@ function renderPanoramica(contact, data) {
     </div>
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(contact.notes || 'Nessuna nota.')}</p>
+    <h3 class="section-title">Seller Intelligence</h3>
+    <div class="seller-intelligence-section" data-seller-intent-mount>
+      <p class="muted">Calcolo Seller Intent…</p>
+    </div>
     <h3 class="section-title">Relazioni operative</h3>
     <p class="muted">Conteggi informativi, non ruoli in anagrafica.</p>
     <div class="stat-chip-row">
       ${relCounts.map(([label, value]) => `<div class="stat-chip"><span>${value}</span><small>${escapeHtml(label)}</small></div>`).join('')}
     </div>
   `;
+}
+
+function sellerStageLabel(stage) {
+  return SELLER_STAGE_LABELS[stage] || stage || '—';
+}
+
+function sellerBandLabel(band) {
+  return SELLER_INTENT_BAND_LABELS[band] || band || '—';
+}
+
+function sellerStateLabel(state) {
+  return SELLER_INTENT_STATE_LABELS[state] || state || '—';
+}
+
+function getSellLeads(leads) {
+  const list = Array.isArray(leads) ? leads : [];
+  return list.filter((lead) => lead && lead.pipeline === 'sell');
+}
+
+async function loadSellerIntentLazy(leadsFromContact360, cache) {
+  if (cache.sellerIntentByLead) return cache.sellerIntentByLead;
+  if (cache.sellerIntentPromise) return cache.sellerIntentPromise;
+
+  const sellLeads = getSellLeads(leadsFromContact360);
+  cache.sellerIntentPromise = Promise.allSettled(
+    sellLeads.map((lead) => apiGet(`/api/seller-intent/leads/${lead.id}/score`)),
+  ).then((results) => {
+    const byLead = sellLeads.map((lead, idx) => {
+      const result = results[idx];
+      if (result && result.status === 'fulfilled') {
+        return {
+          lead,
+          status: 'ok',
+          scoreData: result.value,
+        };
+      }
+      return {
+        lead,
+        status: 'error',
+      };
+    });
+    cache.sellerIntentByLead = byLead;
+    return byLead;
+  }).finally(() => {
+    cache.sellerIntentPromise = null;
+  });
+
+  return cache.sellerIntentPromise;
+}
+
+function renderSellerIntentFactor(factor) {
+  const points = Number(factor && factor.points);
+  const pointsLabel = Number.isFinite(points) ? (points > 0 ? `+${points}` : `${points}`) : '—';
+  return `<li><span>${escapeHtml(factor && factor.label ? factor.label : 'Fattore')}</span><strong>${escapeHtml(pointsLabel)}</strong></li>`;
+}
+
+function renderSellerIntentCard({ lead, scoreData }) {
+  const factors = Array.isArray(scoreData.factors) ? scoreData.factors : [];
+  const operationalFlags = Array.isArray(scoreData.operational_flags) ? scoreData.operational_flags : [];
+  const stateHtml = scoreData.state && scoreData.state !== 'active'
+    ? `<div class="seller-intent-meta muted">Stato: ${escapeHtml(sellerStateLabel(scoreData.state))}</div>`
+    : '';
+  const factorsHtml = factors.length
+    ? `
+      <details class="seller-intent-factors">
+        <summary>Perché questo punteggio?</summary>
+        <ul>
+          ${factors.map((factor) => renderSellerIntentFactor(factor)).join('')}
+        </ul>
+      </details>
+    `
+    : '<p class="muted">Nessun dettaglio fattori disponibile.</p>';
+  const flagsHtml = operationalFlags.length
+    ? `
+      <div class="seller-intent-flags">
+        ${operationalFlags.map((flag) => `<div class="seller-intent-flag">⚠ ${escapeHtml(flag.label || flag.code || 'Segnalazione operativa')}</div>`).join('')}
+      </div>
+    `
+    : '';
+
+  return `
+    <article class="seller-intent-card">
+      <div class="seller-intent-score-row">
+        <div class="seller-intent-score">${escapeHtml(scoreData.score)}/100</div>
+        <div>${escapeHtml(sellerBandLabel(scoreData.band))}</div>
+      </div>
+      <div class="seller-intent-meta">Lead #${escapeHtml(lead.id)} · ${escapeHtml(sellerStageLabel(lead.stage))}</div>
+      ${stateHtml}
+      ${flagsHtml}
+      ${factorsHtml}
+    </article>
+  `;
+}
+
+function renderSellerIntentUnavailableCard({ lead }) {
+  return `
+    <article class="seller-intent-card">
+      <div class="seller-intent-meta">Lead #${escapeHtml(lead.id)} · ${escapeHtml(sellerStageLabel(lead.stage))}</div>
+      <p class="muted">Seller Intent non disponibile.</p>
+    </article>
+  `;
+}
+
+function renderSellerIntentSection(items) {
+  if (!items.length) {
+    return '<p class="muted">Nessuna opportunità venditore collegata.</p>';
+  }
+  return `
+    <div class="seller-intent-grid">
+      ${items.map((item) => (item.status === 'ok' ? renderSellerIntentCard(item) : renderSellerIntentUnavailableCard(item))).join('')}
+    </div>
+  `;
+}
+
+async function hydrateSellerIntent(contentEl, data, cache) {
+  const mount = contentEl.querySelector('[data-seller-intent-mount]');
+  if (!mount) return;
+  const requestId = `seller-intent-${Date.now()}-${Math.random()}`;
+  mount.dataset.requestId = requestId;
+
+  try {
+    const items = await loadSellerIntentLazy(data.leads, cache);
+    if (!mount.isConnected || mount.dataset.requestId !== requestId) return;
+    mount.innerHTML = renderSellerIntentSection(items);
+  } catch (_error) {
+    if (!mount.isConnected || mount.dataset.requestId !== requestId) return;
+    mount.innerHTML = '<p class="muted">Seller Intent non disponibile.</p>';
+  }
 }
 
 // --- Richieste (BUY) ----------------------------------------------------

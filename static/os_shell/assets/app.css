@@ -280,6 +280,64 @@ body {
 .stat-chip span { display: block; font-size: 20px; font-weight: 700; }
 .stat-chip small { color: var(--muted); font-size: 12px; }
 
+.seller-intelligence-section { margin-bottom: 10px; }
+.seller-intent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.seller-intent-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--panel);
+}
+.seller-intent-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.seller-intent-score {
+  font-size: 20px;
+  font-weight: 700;
+}
+.seller-intent-meta {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.seller-intent-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.seller-intent-flag {
+  color: #92650a;
+  background: #fdf3d8;
+  border: 1px solid #f3d48b;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.seller-intent-factors summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--primary);
+}
+.seller-intent-factors ul {
+  list-style: none;
+  padding: 8px 0 0;
+  margin: 0;
+}
+.seller-intent-factors li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  padding: 2px 0;
+}
+
 /* P2: Foto immobile — sola lettura, nessun upload/riordino. */
 .photo-grid {
   display: grid;
