@@ -31,6 +31,8 @@ from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
 from followup.router import router as followup_router
 from seller_intent.router import router as seller_intent_router
+from property_watch import service as property_watch_service
+from property_watch.router import router as property_watch_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -66,6 +68,7 @@ app.include_router(owner_portal_router)
 app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])
 app.include_router(followup_router, dependencies=[Depends(require_admin)])
 app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
+app.include_router(property_watch_router, dependencies=[Depends(require_admin)])
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
@@ -728,6 +731,10 @@ async def salva_stima(request: Request):
         },
         idempotency_key=f"stima_completata:{new_id}",
     )
+
+    # P20-A starts only after the valuation result exists. Its service owns a
+    # separate fail-open transaction, so an outage cannot affect PDF/email.
+    property_watch_service.safe_ensure_watch_for_stima(new_id)
 
     indirizzo = format_indirizzo(data["via"], data["civico"], data["comune"])
     

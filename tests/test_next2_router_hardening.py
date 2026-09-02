@@ -6,10 +6,18 @@ from fastapi.testclient import TestClient
 from integration_p2_support import import_main_app
 
 ROOT = Path(__file__).resolve().parent.parent
-PROTECTED_PREFIXES = ("/api/core", "/api/property", "/api/buy", "/api/match", "/api/proposals")
+PROTECTED_PREFIXES = (
+    "/api/core",
+    "/api/property",
+    "/api/property-watch",
+    "/api/buy",
+    "/api/match",
+    "/api/proposals",
+)
 REPRESENTATIVE_PATHS = (
     "/api/core/contacts",
     "/api/property/properties",
+    "/api/property-watch/stime/1",
     "/api/buy/requests",
     "/api/match/matches",
     "/api/proposals",
@@ -17,6 +25,7 @@ REPRESENTATIVE_PATHS = (
 EXPECTED_COUNTS = {
     "/api/core": 19,
     "/api/property": 21,
+    "/api/property-watch": 2,
     "/api/buy": 23,
     "/api/match": 26,
     "/api/proposals": 5,
@@ -40,7 +49,7 @@ def client(app):
 def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
     operations = []
     for path, item in app.openapi()["paths"].items():
-        if not path.startswith(prefixes):
+        if not any(path == prefix or path.startswith(f"{prefix}/") for prefix in prefixes):
             continue
         for method, operation in item.items():
             if method.lower() in HTTP_METHODS:
@@ -48,17 +57,21 @@ def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
     return operations
 
 
-def test_1_all_94_routes_are_still_mounted(app):
+def test_1_all_96_routes_are_still_mounted(app):
     operations = openapi_operations(app)
     for prefix, expected in EXPECTED_COUNTS.items():
-        actual = sum(1 for _, path, _ in operations if path.startswith(prefix))
+        actual = sum(
+            1
+            for _, path, _ in operations
+            if path == prefix or path.startswith(f"{prefix}/")
+        )
         assert actual == expected
-    assert len(operations) == 94
+    assert len(operations) == 96
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 94
+    assert len(operations) == 96
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 
