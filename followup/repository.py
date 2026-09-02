@@ -319,22 +319,31 @@ def execute_temporal_escalation(
                 raise ConflictError(f"task {task_id} is not eligible for escalation")
 
             temporal_metadata = {
-                "temporal_escalations": {
-                    rule_code: {
-                        "applied_at": datetime.now(timezone.utc).isoformat(),
-                        "applied_by": created_by,
-                        "reason": "task_overdue_24h_after_due_at",
-                        "previous_priority": previous_priority,
-                        "new_priority": "high",
-                        "idempotency_key": idempotency_key,
-                    }
+                rule_code: {
+                    "applied_at": datetime.now(timezone.utc).isoformat(),
+                    "applied_by": created_by,
+                    "reason": "task_overdue_24h_after_due_at",
+                    "previous_priority": previous_priority,
+                    "new_priority": "high",
+                    "idempotency_key": idempotency_key,
                 }
             }
             cur.execute(
                 """
                 UPDATE tasks t
                 SET priority = 'high',
-                    metadata = COALESCE(t.metadata, '{}'::jsonb) || %s::jsonb,
+                    metadata = jsonb_set(
+                        COALESCE(t.metadata, '{}'::jsonb),
+                        '{temporal_escalations}',
+                        (
+                            CASE
+                                WHEN jsonb_typeof(COALESCE(t.metadata, '{}'::jsonb)->'temporal_escalations') = 'object'
+                                THEN COALESCE(t.metadata, '{}'::jsonb)->'temporal_escalations'
+                                ELSE '{}'::jsonb
+                            END
+                        ) || %s::jsonb,
+                        true
+                    ),
                     updated_at = NOW()
                 WHERE t.id = %s
                   AND t.status = 'open'

@@ -147,7 +147,13 @@ class FakeCursor:
                 self.rows = []
                 return
             task["priority"] = "high"
-            task["metadata"] = {**md, **metadata_patch}
+            temporal_escalations = md.get("temporal_escalations")
+            if not isinstance(temporal_escalations, dict):
+                temporal_escalations = {}
+            task["metadata"] = {
+                **md,
+                "temporal_escalations": {**temporal_escalations, **metadata_patch},
+            }
             self.rows = [{"id": task_id}]
             return
 
@@ -258,3 +264,38 @@ def test_execute_temporal_escalation_updates_priority_and_preserves_due_at(monke
     assert db.tasks[0]["due_at"] == due_at
     assert db.actions[0]["status"] == "completed"
 
+
+def test_execute_temporal_escalation_preserves_other_temporal_entries(monkeypatch):
+    db = FakeDb()
+    monkeypatch.setattr(repository, "followup_cursor", db.cursor)
+    db.leads[10] = {"status": "open", "stage": "new"}
+    db.tasks.append(
+        _base_task(
+            1,
+            metadata={
+                "source": "followup",
+                "rule_code": "FOLLOWUP_STIMA_RICHIESTA",
+                "temporal_escalations": {
+                    "FOLLOWUP_TASK_STALE_ESCALATE_V0": {
+                        "previous_priority": "low",
+                        "new_priority": "normal",
+                    }
+                },
+            },
+        )
+    )
+
+    repository.execute_temporal_escalation(
+        rule_code="FOLLOWUP_TASK_STALE_ESCALATE_V1",
+        trigger_type="time",
+        task_id=1,
+        contact_id=1,
+        lead_id=10,
+        stima_id=100,
+        idempotency_key="followup:time:FOLLOWUP_TASK_STALE_ESCALATE_V1:task:1:v1",
+        created_by="FOLLOWUP",
+    )
+
+    temporal = db.tasks[0]["metadata"]["temporal_escalations"]
+    assert "FOLLOWUP_TASK_STALE_ESCALATE_V0" in temporal
+    assert "FOLLOWUP_TASK_STALE_ESCALATE_V1" in temporal
