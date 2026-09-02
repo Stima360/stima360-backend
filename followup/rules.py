@@ -53,6 +53,17 @@ ALL_RULES: dict[str, FollowupRule] = {
         due_hours=24,
         enabled=True,
     ),
+    "FOLLOWUP_TASK_STALE_ESCALATE_V1": FollowupRule(
+        rule_code="FOLLOWUP_TASK_STALE_ESCALATE_V1",
+        trigger_type="time",
+        event_type=None,
+        action="escalate_core_task_priority",
+        title="Contattare proprietario",
+        task_type="automated_followup",
+        priority="high",
+        due_hours=0,
+        enabled=True,
+    ),
 }
 
 

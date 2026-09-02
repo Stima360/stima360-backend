@@ -358,6 +358,24 @@ def test_salva_stima_continues_when_repository_task_creation_fails(monkeypatch):
     assert "stima_richiesta" in event_types
 
 
+def test_salva_stima_does_not_run_temporal_scan_logic(monkeypatch):
+    main_module, si_db, pdf_calls, emails, whatsapp, bridge_calls = _setup_happy_path(monkeypatch)
+    followup_calls = _spy_run_followup(monkeypatch, main_module)
+    temporal_calls = []
+
+    def _temporal_scan(**kwargs):
+        temporal_calls.append(kwargs)
+        return {"status": "completed", "processed": 0, "escalated": 0, "skipped": 0, "failed": 0, "items": []}
+
+    monkeypatch.setattr(main_module.followup_service, "run_temporal_escalation_scan", _temporal_scan)
+
+    response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+
+    assert response == expected_success_response(main_module)
+    assert len(followup_calls) == 1
+    assert temporal_calls == []
+
+
 # --- TEST 5 & 6: never called for stima_completata / email_stima_inviata ---
 
 def test_followup_is_never_called_for_stima_completata_or_email_stima_inviata(monkeypatch):

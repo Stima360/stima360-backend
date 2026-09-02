@@ -11,11 +11,11 @@ verify, mechanically, the guarantees P18-B was scoped to:
    owner/, flow/ or seller_intelligence/ - it is allowed to import core/
    (unlike seller_intelligence/), because creating CORE tasks is the whole
    point of this module (see followup/repository.py).
-3. Nothing outside followup/ imports it yet, and - the critical P18-B
-   barrier - main.py is completely untouched: no import, no reference, no
-   wiring. The engine exists but is not called by any real flow.
-4. No router.py and no cron script exist yet (both are explicitly out of
-   scope for P18-B; they arrive in P18-D).
+3. main.py references followup only through the approved contracts:
+   - service import + safe_run_followup() wiring inside /api/salva_stima
+   - followup router inclusion with the existing admin auth pattern for
+     the temporal scan endpoint.
+4. P18-D2 adds followup/router.py and one dedicated cron runner script.
 """
 
 from __future__ import annotations
@@ -108,11 +108,9 @@ def test_package_files_exist():
         assert (PACKAGE_DIR / name).exists(), f"followup/{name} mancante"
 
 
-def test_no_router_or_cron_script_exists_yet():
-    # Explicitly out of scope for P18-B (arrive in P18-D per the design).
-    assert not (PACKAGE_DIR / "router.py").exists(), "router.py non deve esistere ancora in P18-B"
-    for path in ROOT.glob("run_followup*"):
-        raise AssertionError(f"cron script non atteso in P18-B: {path.name}")
+def test_router_and_cron_script_exist_for_p18d2():
+    assert (PACKAGE_DIR / "router.py").exists(), "router.py atteso in P18-D2"
+    assert (ROOT / "run_followup_p18d_cron.py").exists(), "cron runner P18-D2 mancante"
 
 
 def test_package_does_not_import_forbidden_domain_packages():
@@ -155,9 +153,8 @@ def test_main_py_references_followup_only_through_the_p18c_contract():
     for forbidden in ("followup.repository", "followup.rules", "followup.exceptions", "followup.database"):
         assert forbidden not in main_source, f"main.py non deve accedere direttamente a {forbidden}"
     assert "followup_service.run_followup(" not in main_source
-    # Nessun router followup: fuori scope per P18-C (arriva in P18-D).
-    assert "followup_router" not in main_source
-    assert "followup.router" not in main_source
+    assert "from followup.router import router as followup_router" in main_source
+    assert "app.include_router(followup_router, dependencies=[Depends(require_admin)])" in main_source
 
 
 def test_core_property_buy_match_proposal_owner_flow_do_not_import_followup():

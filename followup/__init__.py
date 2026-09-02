@@ -8,8 +8,8 @@ the exact, already-proven entry point FLOW itself uses for the same reason
 match/, owner/, flow/ or seller_intelligence/, and no existing module
 imports from here.
 
-P18-B ships the engine "off": run_followup()/safe_run_followup() exist and
-are fully tested, but nothing in main.py calls them yet. No router, no
-cron script - both arrive in a later milestone (P18-C for the immediate
-stima_richiesta trigger wiring, P18-D for the time-based scan endpoint).
+P18-C wires safe_run_followup() into /api/salva_stima for the immediate
+event rule (FOLLOWUP_STIMA_RICHIESTA). P18-D2 adds a separate admin
+temporal scan endpoint and external cron runner for one additive
+time-based escalation rule, keeping all public-funnel behavior unchanged.
 """
