@@ -216,7 +216,7 @@ def test_new_stima_creates_contact_lead_and_link_with_approved_defaults(bridge_d
             "id": 1,
             "contact_id": 1,
             "source": "public_stima",
-            "pipeline": "general",
+            "pipeline": "sell",
             "stage": "new",
             "priority": "normal",
             "status": "open",

@@ -131,7 +131,7 @@ def bridge_public_stima(
     }
     lead_data = {
         "source": "public_stima",
-        "pipeline": "general",
+        "pipeline": "sell",
         "stage": "new",
         "priority": "normal",
         "status": "open",
