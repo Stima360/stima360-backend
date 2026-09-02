@@ -30,6 +30,7 @@ from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
 from followup.router import router as followup_router
+from seller_intent.router import router as seller_intent_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -64,6 +65,7 @@ app.include_router(owner_portal_router)
 # unchanged; same admin auth pattern as every other domain router above.
 app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])
 app.include_router(followup_router, dependencies=[Depends(require_admin)])
+app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
