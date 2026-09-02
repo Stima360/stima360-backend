@@ -9,6 +9,8 @@ from typing import Any
 
 from psycopg2.extras import Json
 
+from match.enums import ACTIVE_PROPERTY_STATUSES
+
 from .database import property_watch_cursor
 
 
@@ -118,6 +120,100 @@ def get_watch_for_stima(stima_id: int) -> dict[str, Any] | None:
         return _row(cur.fetchone())
 
 
+def get_collection_context_for_update(
+    cur: Any, stima_id: int
+) -> dict[str, dict[str, Any] | None] | None:
+    """Lock an active watch and retrieve its immutable watch-started baseline."""
+    cur.execute(
+        """
+        SELECT *
+        FROM property_watches
+        WHERE stima_id = %s
+          AND status = 'active'
+        FOR UPDATE
+        """,
+        (stima_id,),
+    )
+    watch = _row(cur.fetchone())
+    if watch is None:
+        return None
+
+    cur.execute(
+        """
+        SELECT *
+        FROM property_watch_observations
+        WHERE watch_id = %s
+          AND observation_type = 'watch_started'
+        ORDER BY observed_at ASC, id ASC
+        LIMIT 1
+        """,
+        (watch["id"],),
+    )
+    return {"watch": watch, "baseline": _row(cur.fetchone())}
+
+
+def list_active_watch_stima_ids() -> list[int]:
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT stima_id
+            FROM property_watches
+            WHERE status = 'active'
+              AND stima_id IS NOT NULL
+            ORDER BY id ASC
+            """
+        )
+        return [row["stima_id"] for row in cur.fetchall()]
+
+
+def get_zone_value(cur: Any, comune: str, microzona: str) -> Any | None:
+    cur.execute(
+        """
+        SELECT prezzo_mq_base
+        FROM zone_valori
+        WHERE comune = %s
+          AND microzona = %s
+        LIMIT 1
+        """,
+        (comune, microzona),
+    )
+    row = _row(cur.fetchone())
+    return None if row is None else row["prezzo_mq_base"]
+
+
+def count_internal_supply(cur: Any, comune: str, microzona: str) -> int:
+    cur.execute(
+        """
+        SELECT COUNT(*) AS supply_count
+        FROM properties
+        WHERE city = %s
+          AND microzone = %s
+          AND archived_at IS NULL
+          AND commercial_status IN (%s, %s, %s, %s)
+        """,
+        (comune, microzona, *ACTIVE_PROPERTY_STATUSES),
+    )
+    row = _row(cur.fetchone())
+    return int(row["supply_count"]) if row is not None else 0
+
+
+def get_latest_relevant_observation(
+    cur: Any, watch_id: int, observation_types: tuple[str, ...]
+) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT *
+        FROM property_watch_observations
+        WHERE watch_id = %s
+          AND observation_type = ANY(%s)
+        ORDER BY observed_at DESC, id DESC
+        LIMIT 1
+        """,
+        (watch_id, list(observation_types)),
+    )
+    return _row(cur.fetchone())
+
+
 def insert_observation(
     watch_id: int,
     observation_type: str,
@@ -139,7 +235,7 @@ def insert_observation(
                 watch_id,
                 observation_type,
                 source,
-                Json(payload),
+                Json(payload, dumps=_json_dumps),
                 idempotency_key,
                 observed_at,
             ),
