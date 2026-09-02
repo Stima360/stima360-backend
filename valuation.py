@@ -210,12 +210,12 @@ def coeff_bagni(n_bagni: int) -> float:
 # ---------------------------
 # Locali
 # ---------------------------
-def coeff_locali(locali: str) -> float:
+def coeff_locali(locali: str | int) -> float:
     """
     Leggero coeff in base al numero di locali.
     Accetta sia "3", sia "Trilocale", ecc.
     """
-    txt = (locali or "").strip().lower()
+    txt = str(locali or "").strip().lower()
     n = 0
 
     # numero diretto
