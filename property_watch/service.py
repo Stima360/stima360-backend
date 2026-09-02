@@ -21,11 +21,25 @@ def ensure_watch_for_stima(stima_id: int) -> dict[str, dict[str, Any]]:
     if stima is None:
         raise StimaNotFoundError(f"stima {stima_id} not found")
 
+    completed = repository.get_stima_completed_valuation(stima_id)
+    if completed is None:
+        raise ValidationError(
+            f"completed valuation not found for stima {stima_id}"
+        )
+
     baseline = {
         key: stima[key]
         for key in ("comune", "microzona", "tipologia", "mq", "prezzo_mq_base")
         if stima.get(key) is not None
     }
+    baseline.update(
+        {
+            key: completed[key]
+            for key in ("price_exact", "eur_mq_finale", "base_mq")
+            if completed.get(key) is not None
+        }
+    )
+
     return repository.ensure_watch_with_baseline(stima_id, baseline)
 
 

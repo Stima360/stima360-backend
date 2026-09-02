@@ -28,6 +28,27 @@ def get_stima_baseline_data(stima_id: int) -> dict[str, Any] | None:
         return _row(cur.fetchone())
 
 
+def get_stima_completed_valuation(stima_id: int) -> dict[str, Any] | None:
+    """Return the persisted P17 completed valuation payload for this stima."""
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT payload
+            FROM seller_timeline_events
+            WHERE stima_id = %s
+              AND event_type = 'stima_completata'
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT 1
+            """,
+            (stima_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        payload = row["payload"]
+        return dict(payload) if isinstance(payload, dict) else None
+
+
 def ensure_watch_with_baseline(
     stima_id: int, baseline: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:

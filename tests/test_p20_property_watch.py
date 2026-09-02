@@ -55,6 +55,15 @@ def test_service_initializes_one_watch_and_one_private_data_free_baseline(monkey
         }
 
     monkeypatch.setattr(repository, "get_stima_baseline_data", lambda stima_id: stima if stima_id == 501 else None)
+    monkeypatch.setattr(
+        repository,
+        "get_stima_completed_valuation",
+        lambda stima_id: {
+            "price_exact": 210000,
+            "eur_mq_finale": 2333.33,
+            "base_mq": 1500,
+        } if stima_id == 501 else None,
+    )
     monkeypatch.setattr(repository, "ensure_watch_with_baseline", ensure)
 
     first = service.ensure_watch_for_stima(501)
@@ -69,6 +78,9 @@ def test_service_initializes_one_watch_and_one_private_data_free_baseline(monkey
         "tipologia": "Appartamento",
         "mq": 90,
         "prezzo_mq_base": 1500,
+        "price_exact": 210000,
+        "eur_mq_finale": 2333.33,
+        "base_mq": 1500,
     }
     assert not {"email", "telefono", "nome", "cognome", "note"} & baseline.keys()
 
@@ -83,6 +95,50 @@ def test_service_rejects_nonexistent_stima_without_writing(monkeypatch):
 
     with pytest.raises(StimaNotFoundError, match="501"):
         service.ensure_watch_for_stima(501)
+
+
+def test_watch_baseline_preserves_completed_valuation(monkeypatch):
+    stima = {
+        "id": 501,
+        "comune": "Alba Adriatica",
+        "microzona": "Centro",
+        "tipologia": "Appartamento",
+        "mq": 90,
+        "prezzo_mq_base": 1500,
+    }
+    completed = {
+        "price_exact": 210000,
+        "eur_mq_finale": 2333.33,
+        "base_mq": 1500,
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        repository,
+        "get_stima_baseline_data",
+        lambda _stima_id: stima,
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_stima_completed_valuation",
+        lambda _stima_id: completed,
+        raising=False,
+    )
+
+    def ensure(stima_id, baseline):
+        captured["baseline"] = baseline
+        return {
+            "watch": {"id": 10, "stima_id": stima_id, "status": "active"},
+            "baseline": {"payload": baseline},
+        }
+
+    monkeypatch.setattr(repository, "ensure_watch_with_baseline", ensure)
+
+    service.ensure_watch_for_stima(501)
+
+    assert captured["baseline"]["price_exact"] == 210000
+    assert captured["baseline"]["eur_mq_finale"] == 2333.33
+    assert captured["baseline"]["base_mq"] == 1500
 
 
 def test_record_observation_uses_deterministic_database_deduplication(monkeypatch):
