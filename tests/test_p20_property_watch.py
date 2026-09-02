@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
+import json
 from pathlib import Path
 
 import pytest
@@ -139,6 +141,51 @@ def test_watch_baseline_preserves_completed_valuation(monkeypatch):
     assert captured["baseline"]["price_exact"] == 210000
     assert captured["baseline"]["eur_mq_finale"] == 2333.33
     assert captured["baseline"]["base_mq"] == 1500
+
+
+def test_repository_serializes_decimal_baseline_price_as_json_numeric(monkeypatch):
+    captured = {}
+
+    class Cursor:
+        def __init__(self):
+            self.rows = [
+                {"id": 10, "stima_id": 501, "status": "active"},
+                {"id": 11, "watch_id": 10, "observation_type": "watch_started"},
+            ]
+
+        def execute(self, query, params=None):
+            if "INSERT INTO property_watch_observations" in query:
+                captured["baseline_json"] = params[1]
+
+        def fetchone(self):
+            return self.rows.pop(0)
+
+    class CursorContext:
+        def __init__(self, cursor):
+            self.cursor = cursor
+
+        def __enter__(self):
+            return None, self.cursor
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            return False
+
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(Cursor()),
+    )
+
+    repository.ensure_watch_with_baseline(
+        501,
+        {"prezzo_mq_base": Decimal("1500.00")},
+    )
+
+    baseline_json = captured["baseline_json"]
+    assert b"1500.0" in baseline_json.getquoted()
+    assert json.loads(baseline_json.dumps(baseline_json.adapted)) == {
+        "prezzo_mq_base": 1500.0
+    }
 
 
 def test_record_observation_uses_deterministic_database_deduplication(monkeypatch):

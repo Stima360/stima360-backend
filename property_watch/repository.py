@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
+import json
 from typing import Any
 
 from psycopg2.extras import Json
@@ -12,6 +14,16 @@ from .database import property_watch_cursor
 
 def _row(row: Any) -> dict[str, Any] | None:
     return dict(row) if row else None
+
+
+def _json_default(value: Any) -> float:
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, default=_json_default, allow_nan=False)
 
 
 def get_stima_baseline_data(stima_id: int) -> dict[str, Any] | None:
@@ -83,7 +95,7 @@ def ensure_watch_with_baseline(
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             """,
-            (watch["id"], Json(baseline), idempotency_key),
+            (watch["id"], Json(baseline, dumps=_json_dumps), idempotency_key),
         )
         observation = _row(cur.fetchone())
         if observation is None:
