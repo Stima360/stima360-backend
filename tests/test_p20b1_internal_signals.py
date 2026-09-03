@@ -1,0 +1,1038 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal
+import json
+
+import pytest
+
+from integration_p2_support import import_project_module
+from property_watch import repository
+from property_watch import router as property_watch_router
+from property_watch import service
+from property_watch.exceptions import ValidationError, WatchNotFoundError
+
+
+class CursorContext:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __enter__(self):
+        return None, self.cursor
+
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        return False
+
+
+def test_collection_repository_primitives_use_exact_internal_sources(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.executions = []
+
+        def execute(self, query, params=None):
+            self.executions.append((query, params))
+
+        def fetchone(self):
+            return {"prezzo_mq_base": Decimal("1500.00")}
+
+    cursor = Cursor()
+
+    zone_value = repository.get_zone_value(cursor, "Alba Adriatica", "Nord")
+
+    assert zone_value == Decimal("1500.00")
+    query, params = cursor.executions[0]
+    assert "FROM zone_valori" in query
+    assert "comune = %s" in query and "microzona = %s" in query
+    assert params == ("Alba Adriatica", "Nord")
+    assert "LOWER" not in query and "JOIN" not in query
+
+
+def test_count_internal_supply_uses_exact_allowlist_and_archive_filter():
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+            self.params = None
+
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            return {"supply_count": 0}
+
+    cursor = Cursor()
+
+    assert repository.count_internal_supply(cursor, "Alba Adriatica", "Nord") == 0
+    assert "FROM properties" in cursor.query
+    assert "city = %s" in cursor.query and "microzone = %s" in cursor.query
+    assert "archived_at IS NULL" in cursor.query
+    assert "commercial_status IN" in cursor.query
+    assert cursor.params[:2] == ("Alba Adriatica", "Nord")
+    assert set(cursor.params[2:]) == {
+        "mandate",
+        "active",
+        "reserved",
+        "under_offer",
+    }
+    assert "JOIN" not in cursor.query
+
+
+def test_active_watch_stima_ids_are_deterministic_and_exclude_null_or_inactive(monkeypatch):
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+
+        def execute(self, query, _params=None):
+            self.query = query
+
+        def fetchall(self):
+            return [{"stima_id": 9}, {"stima_id": 21}]
+
+    cursor = Cursor()
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(cursor),
+    )
+
+    assert repository.list_active_watch_stima_ids() == [9, 21]
+    assert "status = 'active'" in cursor.query
+    assert "stima_id IS NOT NULL" in cursor.query
+    assert "ORDER BY id ASC" in cursor.query
+
+
+def test_latest_relevant_observation_is_ordered_by_timestamp_then_id():
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+            self.params = None
+
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            return {"id": 8, "observation_type": "microzone_price_changed"}
+
+    cursor = Cursor()
+
+    observation = repository.get_latest_relevant_observation(
+        cursor,
+        3,
+        ("watch_started", "microzone_price_changed"),
+    )
+
+    assert observation == {"id": 8, "observation_type": "microzone_price_changed"}
+    assert cursor.params == (3, ["watch_started", "microzone_price_changed"])
+    assert "observation_type = ANY(%s)" in cursor.query
+    assert "ORDER BY observed_at DESC, id DESC" in cursor.query
+
+
+def test_collection_context_locks_active_watch_and_reads_watch_started():
+    class Cursor:
+        def __init__(self):
+            self.executions = []
+            self.rows = [
+                {"id": 3, "stima_id": 501, "status": "active"},
+                {
+                    "id": 4,
+                    "watch_id": 3,
+                    "observation_type": "watch_started",
+                    "payload": {"comune": "Alba Adriatica"},
+                },
+            ]
+
+        def execute(self, query, params=None):
+            self.executions.append((query, params))
+
+        def fetchone(self):
+            return self.rows.pop(0)
+
+    cursor = Cursor()
+
+    context = repository.get_collection_context_for_update(cursor, 501)
+
+    assert context["watch"]["id"] == 3
+    assert context["baseline"]["id"] == 4
+    watch_query, watch_params = cursor.executions[0]
+    assert "status = 'active'" in watch_query
+    assert "FOR UPDATE" in watch_query
+    assert watch_params == (501,)
+    baseline_query, baseline_params = cursor.executions[1]
+    assert "observation_type = 'watch_started'" in baseline_query
+    assert baseline_params == (3,)
+
+
+def test_insert_observation_serializes_decimal_payload_as_json_numeric(monkeypatch):
+    captured = {}
+
+    class Cursor:
+        def execute(self, query, params=None):
+            if "INSERT INTO property_watch_observations" in query:
+                captured["payload"] = params[3]
+
+        def fetchone(self):
+            return {"id": 4, "watch_id": 3}
+
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(Cursor()),
+    )
+
+    repository.insert_observation(
+        3,
+        "microzone_price_changed",
+        "internal",
+        {"current": Decimal("1500.00")},
+        "property_watch:test:v1",
+    )
+
+    payload = captured["payload"]
+    assert b"1500.0" in payload.getquoted()
+    assert json.loads(payload.dumps(payload.adapted)) == {"current": 1500.0}
+
+
+class MemoryCollectionStore:
+    def __init__(self, baseline, zone_value=None, supply_count=0):
+        self.baseline = baseline
+        self.zone_value = zone_value
+        self.supply_count = supply_count
+        self.observations = []
+        self.by_key = {}
+        self.next_id = 100
+
+    def get_latest(self, _cursor, _watch_id, observation_types):
+        candidates = [
+            item
+            for item in [self.baseline, *self.observations]
+            if item["observation_type"] in observation_types
+        ]
+        return candidates[-1] if candidates else None
+
+    def get_zone_value(self, _cursor, _comune, _microzona):
+        return self.zone_value
+
+    def count_internal_supply(self, _cursor, _comune, _microzona):
+        return self.supply_count
+
+    def insert(self, _cursor, watch_id, observation_type, source, payload, key):
+        if key in self.by_key:
+            return self.by_key[key]
+        self.next_id += 1
+        observation = {
+            "id": self.next_id,
+            "watch_id": watch_id,
+            "observation_type": observation_type,
+            "source": source,
+            "payload": payload,
+            "idempotency_key": key,
+        }
+        self.observations.append(observation)
+        self.by_key[key] = observation
+        return observation
+
+
+def _wire_microzone_collector(monkeypatch, store):
+    cursor = object()
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(cursor),
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_collection_context_for_update",
+        lambda _cursor, _stima_id: {
+            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "baseline": store.baseline,
+        },
+    )
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
+    monkeypatch.setattr(repository, "get_zone_value", store.get_zone_value)
+    monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
+
+
+def _wire_supply_collector(monkeypatch, store):
+    cursor = object()
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(cursor),
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_collection_context_for_update",
+        lambda _cursor, _stima_id: {
+            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "baseline": store.baseline,
+        },
+    )
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
+    monkeypatch.setattr(repository, "count_internal_supply", store.count_internal_supply)
+    monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
+
+
+def _baseline(payload=None):
+    return {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": payload
+        or {
+            "prezzo_mq_base": Decimal("1500.00"),
+            "comune": "Alba Adriatica",
+            "microzona": "Nord",
+        },
+    }
+
+
+def test_microzone_collector_writes_only_when_exact_source_differs(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1500.00"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    unchanged = service.collect_microzone_market_signal_for_stima(501)
+
+    assert unchanged["status"] == "unchanged"
+    assert store.observations == []
+
+    store.zone_value = Decimal("1600.00")
+    written = service.collect_microzone_market_signal_for_stima(501)
+
+    assert written["status"] == "written"
+    assert written["watch_id"] == 3
+    assert written["observation"]["payload"] == {
+        "previous": Decimal("1500.00"),
+        "current": Decimal("1600.00"),
+        "delta": Decimal("100.00"),
+        "delta_percent": Decimal("6.666666666666666666666666667"),
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert written["observation"]["idempotency_key"] == (
+        "property_watch:microzone_price_changed:watch:3:after:10:current:1600:v1"
+    )
+    assert json.loads(repository._json_dumps(written["observation"]["payload"])) == {
+        "previous": 1500.0,
+        "current": 1600.0,
+        "delta": 100.0,
+        "delta_percent": 6.666666666666667,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+
+
+def test_microzone_collector_uses_latest_change_and_predecessor_aware_history(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1600"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    first = service.collect_microzone_market_signal_for_stima(501)
+    assert first["status"] == "written"
+
+    assert service.collect_microzone_market_signal_for_stima(501)["status"] == "unchanged"
+    store.zone_value = Decimal("1500")
+    returned = service.collect_microzone_market_signal_for_stima(501)
+
+    assert returned["status"] == "written"
+    assert returned["observation"]["payload"]["previous"] == Decimal("1600")
+    assert returned["observation"]["payload"]["delta"] == Decimal("-100")
+    assert returned["observation"]["idempotency_key"] == (
+        "property_watch:microzone_price_changed:watch:3:after:101:current:1500:v1"
+    )
+    assert len(store.observations) == 2
+
+
+def test_microzone_collector_returns_existing_observation_on_idempotency_collision(
+    monkeypatch,
+):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1600"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    def baseline_only(_cursor, _watch_id, observation_types):
+        return store.baseline if observation_types == ("watch_started",) else None
+
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", baseline_only)
+
+    first = service.collect_microzone_market_signal_for_stima(501)
+    retry = service.collect_microzone_market_signal_for_stima(501)
+
+    assert first["status"] == retry["status"] == "written"
+    assert retry["observation"] == first["observation"]
+    assert len(store.observations) == 1
+
+
+def test_microzone_collector_handles_zero_previous_and_unavailable_inputs(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(
+        _baseline(
+            {
+                "prezzo_mq_base": Decimal("0"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            }
+        ),
+        Decimal("100"),
+    )
+    _wire_microzone_collector(monkeypatch, store)
+
+    written = service.collect_microzone_market_signal_for_stima(501)
+    assert written["observation"]["payload"]["delta_percent"] is None
+
+    for payload, source_value, expected in (
+        (
+            {
+                "prezzo_mq_base": Decimal("NaN"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            },
+            Decimal("1600"),
+            "baseline_unavailable",
+        ),
+        (
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": None,
+                "microzona": "Nord",
+            },
+            Decimal("1600"),
+            "baseline_unavailable",
+        ),
+        (
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            },
+            None,
+            "source_unavailable",
+        ),
+    ):
+        unavailable_store = MemoryCollectionStore(_baseline(payload), source_value)
+        _wire_microzone_collector(monkeypatch, unavailable_store)
+
+        result = service.collect_microzone_market_signal_for_stima(501)
+
+        assert result["status"] == expected
+        assert unavailable_store.observations == []
+
+
+def test_supply_count_policy_excludes_all_non_inventory_statuses_and_archived_rows():
+    rows = [
+        {
+            "city": "Alba Adriatica",
+            "microzone": "Nord",
+            "commercial_status": status,
+            "archived_at": None,
+        }
+        for status in (
+            "draft",
+            "evaluation",
+            "mandate",
+            "active",
+            "reserved",
+            "under_offer",
+            "sold",
+            "withdrawn",
+            "archived",
+        )
+    ]
+    rows.extend(
+        [
+            {
+                "city": "Alba Adriatica",
+                "microzone": "Nord",
+                "commercial_status": "active",
+                "archived_at": "2026-09-01T00:00:00Z",
+            },
+            {
+                "city": "Other City",
+                "microzone": "Nord",
+                "commercial_status": "active",
+                "archived_at": None,
+            },
+            {
+                "city": "Alba Adriatica",
+                "microzone": "Other Zone",
+                "commercial_status": "active",
+                "archived_at": None,
+            },
+        ]
+    )
+
+    class Cursor:
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            city, microzone, *statuses = self.params
+            return {
+                "supply_count": sum(
+                    row["city"] == city
+                    and row["microzone"] == microzone
+                    and row["archived_at"] is None
+                    and row["commercial_status"] in statuses
+                    for row in rows
+                )
+            }
+
+    cursor = Cursor()
+
+    assert repository.count_internal_supply(cursor, "Alba Adriatica", "Nord") == 4
+    assert set(cursor.params[2:]) == {
+        "mandate",
+        "active",
+        "reserved",
+        "under_offer",
+    }
+
+
+def test_supply_collector_always_writes_first_snapshot_including_zero(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=0)
+    _wire_supply_collector(monkeypatch, store)
+
+    result = service.collect_internal_supply_signal_for_stima(501)
+
+    assert result["status"] == "written"
+    assert result["observation"]["observation_type"] == "internal_supply_snapshot"
+    assert result["observation"]["source"] == "internal"
+    assert result["observation"]["payload"] == {
+        "current_count": 0,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert result["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_snapshot:watch:3:after:10:count:0:v1"
+    )
+    assert not {
+        "property_id",
+        "title",
+        "address",
+        "price",
+        "owner",
+        "contact",
+        "lead",
+        "buyer",
+    } & result["observation"]["payload"].keys()
+
+
+def test_supply_collector_appends_only_aggregate_count_changes(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=4)
+    _wire_supply_collector(monkeypatch, store)
+
+    snapshot = service.collect_internal_supply_signal_for_stima(501)
+    assert snapshot["status"] == "written"
+    assert service.collect_internal_supply_signal_for_stima(501)["status"] == "unchanged"
+
+    store.supply_count = 6
+    increased = service.collect_internal_supply_signal_for_stima(501)
+
+    assert increased["status"] == "written"
+    assert increased["observation"]["observation_type"] == "internal_supply_changed"
+    assert increased["observation"]["payload"] == {
+        "previous_count": 4,
+        "current_count": 6,
+        "delta": 2,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert increased["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_changed:watch:3:after:101:count:6:v1"
+    )
+
+    store.supply_count = 4
+    returned = service.collect_internal_supply_signal_for_stima(501)
+    assert returned["status"] == "written"
+    assert returned["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_changed:watch:3:after:102:count:4:v1"
+    )
+    assert len(store.observations) == 3
+
+
+def test_supply_collector_returns_existing_snapshot_on_idempotency_collision(
+    monkeypatch,
+):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=0)
+    _wire_supply_collector(monkeypatch, store)
+
+    def baseline_only(_cursor, _watch_id, observation_types):
+        return store.baseline if observation_types == ("watch_started",) else None
+
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", baseline_only)
+
+    first = service.collect_internal_supply_signal_for_stima(501)
+    retry = service.collect_internal_supply_signal_for_stima(501)
+
+    assert first["status"] == retry["status"] == "written"
+    assert retry["observation"] == first["observation"]
+    assert len(store.observations) == 1
+
+
+def test_supply_collector_requires_baseline_locality_but_not_source_rows(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(
+        _baseline(
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": None,
+                "microzona": "Nord",
+            }
+        ),
+        supply_count=0,
+    )
+    _wire_supply_collector(monkeypatch, store)
+
+    unavailable = service.collect_internal_supply_signal_for_stima(501)
+
+    assert unavailable["status"] == "baseline_unavailable"
+    assert store.observations == []
+
+
+def test_strict_orchestration_returns_separate_collector_outcomes(monkeypatch):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda stima_id: calls.append(("microzone", stima_id))
+        or {"status": "written", "watch_id": 3, "observation": {"id": 11}},
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda stima_id: calls.append(("internal_supply", stima_id))
+        or {"status": "unchanged", "watch_id": 3, "observation": None},
+    )
+
+    result = service.collect_internal_signals_for_stima(501)
+
+    assert calls == [("microzone", 501), ("internal_supply", 501)]
+    assert result == {
+        "watch_id": 3,
+        "microzone": {"status": "written", "watch_id": 3, "observation": {"id": 11}},
+        "internal_supply": {
+            "status": "unchanged",
+            "watch_id": 3,
+            "observation": None,
+        },
+    }
+
+
+def test_safe_orchestration_isolates_microzone_failure_and_logs_no_payload(
+    monkeypatch, caplog
+):
+    from property_watch import service
+
+    supply_calls = []
+
+    def fail_microzone(_stima_id):
+        raise RuntimeError("payload={'buyer': 'not permitted'}")
+
+    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima", fail_microzone)
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda stima_id: supply_calls.append(stima_id)
+        or {"status": "written", "watch_id": 3, "observation": {"id": 12}},
+    )
+
+    result = service.safe_collect_internal_signals_for_stima(501)
+
+    assert supply_calls == [501]
+    assert result["microzone"] == {
+        "status": "failed",
+        "watch_id": None,
+        "observation": None,
+    }
+    assert result["internal_supply"]["status"] == "written"
+    record = next(
+        item
+        for item in caplog.records
+        if item.msg
+        == "property_watch_collector_failed stima_id=%s collector=%s error_type=%s"
+    )
+    assert record.args == (501, "microzone", "RuntimeError")
+    assert "buyer" not in record.getMessage()
+
+
+def test_safe_orchestration_preserves_microzone_outcome_when_supply_fails(monkeypatch):
+    from property_watch import service
+
+    microzone = {"status": "written", "watch_id": 3, "observation": {"id": 11}}
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: microzone,
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValueError("source query failed")),
+    )
+
+    result = service.safe_collect_internal_signals_for_stima(501)
+
+    assert result["microzone"] is microzone
+    assert result["internal_supply"] == {
+        "status": "failed",
+        "watch_id": None,
+        "observation": None,
+    }
+
+
+def test_safe_orchestration_reraises_expected_validation_and_not_found_errors(
+    monkeypatch,
+):
+    from property_watch import service
+
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: pytest.fail("not-found must not be recast as failure"),
+    )
+
+    with pytest.raises(WatchNotFoundError):
+        service.safe_collect_internal_signals_for_stima(501)
+
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: {"status": "unchanged", "watch_id": 3, "observation": None},
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
+    )
+
+    with pytest.raises(ValidationError):
+        service.safe_collect_internal_signals_for_stima(501)
+
+
+def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkeypatch):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+
+    def microzone(stima_id):
+        calls.append(("microzone", stima_id))
+        if stima_id == 7:
+            raise RuntimeError("database failure")
+        return {"status": "written", "watch_id": 21, "observation": {"id": 31}}
+
+    def supply(stima_id):
+        calls.append(("internal_supply", stima_id))
+        return {"status": "unchanged", "watch_id": stima_id, "observation": None}
+
+    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima", microzone)
+    monkeypatch.setattr(service, "collect_internal_supply_signal_for_stima", supply)
+
+    result = service.collect_internal_signals_for_active_watches()
+
+    assert calls == [
+        ("microzone", 7),
+        ("internal_supply", 7),
+        ("microzone", 11),
+        ("internal_supply", 11),
+    ]
+    assert result["processed"] == 2
+    assert result["written"] == 1
+    assert result["unchanged"] == 2
+    assert result["unavailable"] == 0
+    assert result["failed"] == 1
+    assert [item["stima_id"] for item in result["outcomes"]] == [7, 11]
+
+
+def test_batch_continues_when_a_listed_watch_disappears(monkeypatch, caplog):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+
+    def collect(stima_id):
+        calls.append(stima_id)
+        if stima_id == 7:
+            raise WatchNotFoundError("active property watch for stima 7 not found")
+        return {
+            "watch_id": 21,
+            "microzone": {"status": "written", "watch_id": 21, "observation": {"id": 31}},
+            "internal_supply": {
+                "status": "unchanged",
+                "watch_id": 21,
+                "observation": None,
+            },
+        }
+
+    monkeypatch.setattr(service, "safe_collect_internal_signals_for_stima", collect)
+
+    result = service.collect_internal_signals_for_active_watches()
+
+    assert calls == [7, 11]
+    assert result["processed"] == 2
+    assert result["written"] == 1
+    assert result["unchanged"] == 1
+    assert result["unavailable"] == 0
+    assert result["failed"] == 2
+    assert result["outcomes"] == [
+        {
+            "stima_id": 7,
+            "watch_id": None,
+            "microzone": {
+                "status": "failed",
+                "watch_id": None,
+                "observation": None,
+            },
+            "internal_supply": {
+                "status": "failed",
+                "watch_id": None,
+                "observation": None,
+            },
+        },
+        {
+            "stima_id": 11,
+            "watch_id": 21,
+            "microzone": {"status": "written", "watch_id": 21, "observation": {"id": 31}},
+            "internal_supply": {
+                "status": "unchanged",
+                "watch_id": 21,
+                "observation": None,
+            },
+        },
+    ]
+    record = next(
+        item
+        for item in caplog.records
+        if item.msg == "property_watch_active_batch_item_failed stima_id=%s error_type=%s"
+    )
+    assert record.args == (7, "WatchNotFoundError")
+    assert "payload" not in record.getMessage()
+
+
+def test_current_state_derives_internal_signals_without_any_write(monkeypatch):
+    from property_watch import service
+
+    started_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    first_change_at = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    second_change_at = datetime(2026, 9, 3, tzinfo=timezone.utc)
+    snapshot_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    supply_change_at = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    baseline = {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": {
+            "prezzo_mq_base": 1500,
+            "comune": "Alba Adriatica",
+            "microzona": "Nord",
+        },
+        "observed_at": started_at,
+    }
+    first_change = {
+        "id": 11,
+        "watch_id": 3,
+        "observation_type": "microzone_price_changed",
+        "source": "internal",
+        "payload": {"previous": 1500, "current": 1600},
+        "observed_at": first_change_at,
+    }
+    second_change = {
+        "id": 12,
+        "watch_id": 3,
+        "observation_type": "microzone_price_changed",
+        "source": "internal",
+        "payload": {"previous": 1600, "current": 1550},
+        "observed_at": second_change_at,
+    }
+    snapshot = {
+        "id": 13,
+        "watch_id": 3,
+        "observation_type": "internal_supply_snapshot",
+        "source": "internal",
+        "payload": {"current_count": 0},
+        "observed_at": snapshot_at,
+    }
+    supply_change = {
+        "id": 14,
+        "watch_id": 3,
+        "observation_type": "internal_supply_changed",
+        "source": "internal",
+        "payload": {"previous_count": 0, "current_count": 2, "delta": 2},
+        "observed_at": supply_change_at,
+    }
+    observations = [baseline, first_change, second_change, snapshot, supply_change]
+    monkeypatch.setattr(
+        repository,
+        "get_watch_for_stima",
+        lambda _stima_id: {"id": 3, "stima_id": 501, "status": "active"},
+    )
+    monkeypatch.setattr(repository, "list_observations", lambda _watch_id: observations)
+    monkeypatch.setattr(
+        repository,
+        "insert_observation",
+        lambda *_args, **_kwargs: pytest.fail("GET must not write observations"),
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_signals_for_stima",
+        lambda _stima_id: pytest.fail("GET must not collect signals"),
+    )
+
+    state = service.get_current_watch_state(501)
+
+    assert state["baseline"] == baseline
+    assert state["microzone_reference"] == {
+        "prezzo_mq_base": 1500,
+        "current": 1550,
+        "latest_change": second_change,
+        "observed_at": second_change_at,
+        "observation_count": 2,
+    }
+    assert state["internal_supply"] == {
+        "current_count": 2,
+        "latest_observation": supply_change,
+        "observed_at": supply_change_at,
+        "observation_count": 2,
+    }
+    assert state["observations"] == observations
+    assert state["observation_count"] == 5
+    assert "computed_at" in state
+    assert not {"score", "band", "recommendation", "buyer_pressure", "trend"} & state.keys()
+
+
+def test_current_state_keeps_baseline_microzone_reference_and_no_supply_before_snapshot(
+    monkeypatch,
+):
+    from property_watch import service
+
+    baseline = {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": {"prezzo_mq_base": 1500},
+        "observed_at": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr(
+        repository,
+        "get_watch_for_stima",
+        lambda _stima_id: {"id": 3, "stima_id": 501, "status": "active"},
+    )
+    monkeypatch.setattr(repository, "list_observations", lambda _watch_id: [baseline])
+
+    state = service.get_current_watch_state(501)
+
+    assert state["microzone_reference"] == {
+        "prezzo_mq_base": 1500,
+        "current": 1500,
+        "latest_change": None,
+        "observed_at": None,
+        "observation_count": 0,
+    }
+    assert state["internal_supply"] is None
+
+
+def test_internal_signal_refresh_routes_are_registered_admin_protected_and_body_free():
+    main_module = import_project_module("main")
+    paths = main_module.app.openapi()["paths"]
+
+    for path in (
+        "/api/property-watch/stime/{stima_id}/internal-signals/refresh",
+        "/api/property-watch/internal-signals/refresh-active",
+    ):
+        assert set(paths[path]) == {"post"}
+        operation = paths[path]["post"]
+        assert operation.get("security")
+        assert "requestBody" not in operation
+
+
+def test_single_refresh_endpoint_uses_safe_service_without_client_controls(monkeypatch):
+    expected = {
+        "watch_id": 3,
+        "microzone": {"status": "written", "watch_id": 3, "observation": None},
+        "internal_supply": {
+            "status": "unchanged",
+            "watch_id": 3,
+            "observation": None,
+        },
+    }
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda stima_id: expected if stima_id == 501 else pytest.fail("unexpected id"),
+    )
+
+    assert property_watch_router.refresh_internal_signals(501) == expected
+
+
+def test_single_refresh_endpoint_maps_expected_service_errors(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
+    )
+
+    with pytest.raises(Exception) as not_found:
+        property_watch_router.refresh_internal_signals(501)
+    assert not_found.value.status_code == 404
+
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
+    )
+    with pytest.raises(Exception) as invalid:
+        property_watch_router.refresh_internal_signals(0)
+    assert invalid.value.status_code == 400
+
+
+def test_batch_refresh_endpoint_returns_aggregate_service_result(monkeypatch):
+    expected = {
+        "processed": 2,
+        "written": 1,
+        "unchanged": 2,
+        "unavailable": 0,
+        "failed": 1,
+        "outcomes": [],
+    }
+    monkeypatch.setattr(
+        service,
+        "collect_internal_signals_for_active_watches",
+        lambda: expected,
+    )
+
+    assert property_watch_router.refresh_active_internal_signals() == expected
+
+
+def test_get_route_only_reads_current_state(monkeypatch):
+    expected = {"watch": {"id": 3}, "observations": []}
+    monkeypatch.setattr(service, "get_current_watch_state", lambda _stima_id: expected)
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: pytest.fail("GET must not collect"),
+    )
+
+    assert property_watch_router.get_watch_state(501) == expected
