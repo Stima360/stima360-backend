@@ -172,12 +172,16 @@ def _log_collector_failure(stima_id: int, collector: str, exc: Exception) -> Non
 def safe_collect_internal_signals_for_stima(stima_id: int) -> dict[str, Any]:
     try:
         microzone = collect_microzone_market_signal_for_stima(stima_id)
+    except (ValidationError, WatchNotFoundError):
+        raise
     except Exception as exc:  # noqa: BLE001 - collector-level fault isolation
         _log_collector_failure(stima_id, "microzone", exc)
         microzone = _failed_collector_outcome()
 
     try:
         internal_supply = collect_internal_supply_signal_for_stima(stima_id)
+    except (ValidationError, WatchNotFoundError):
+        raise
     except Exception as exc:  # noqa: BLE001 - collector-level fault isolation
         _log_collector_failure(stima_id, "internal_supply", exc)
         internal_supply = _failed_collector_outcome()

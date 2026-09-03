@@ -696,6 +696,40 @@ def test_safe_orchestration_preserves_microzone_outcome_when_supply_fails(monkey
     }
 
 
+def test_safe_orchestration_reraises_expected_validation_and_not_found_errors(
+    monkeypatch,
+):
+    from property_watch import service
+
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: pytest.fail("not-found must not be recast as failure"),
+    )
+
+    with pytest.raises(WatchNotFoundError):
+        service.safe_collect_internal_signals_for_stima(501)
+
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: {"status": "unchanged", "watch_id": 3, "observation": None},
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
+    )
+
+    with pytest.raises(ValidationError):
+        service.safe_collect_internal_signals_for_stima(501)
+
+
 def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkeypatch):
     from property_watch import service
 
