@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import json
 
+import pytest
+
+from integration_p2_support import import_project_module
 from property_watch import repository
+from property_watch import router as property_watch_router
+from property_watch import service
+from property_watch.exceptions import ValidationError, WatchNotFoundError
 
 
 class CursorContext:
@@ -847,3 +853,87 @@ def test_current_state_keeps_baseline_microzone_reference_and_no_supply_before_s
         "observation_count": 0,
     }
     assert state["internal_supply"] is None
+
+
+def test_internal_signal_refresh_routes_are_registered_admin_protected_and_body_free():
+    main_module = import_project_module("main")
+    paths = main_module.app.openapi()["paths"]
+
+    for path in (
+        "/api/property-watch/stime/{stima_id}/internal-signals/refresh",
+        "/api/property-watch/internal-signals/refresh-active",
+    ):
+        assert set(paths[path]) == {"post"}
+        operation = paths[path]["post"]
+        assert operation.get("security")
+        assert "requestBody" not in operation
+
+
+def test_single_refresh_endpoint_uses_safe_service_without_client_controls(monkeypatch):
+    expected = {
+        "watch_id": 3,
+        "microzone": {"status": "written", "watch_id": 3, "observation": None},
+        "internal_supply": {
+            "status": "unchanged",
+            "watch_id": 3,
+            "observation": None,
+        },
+    }
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda stima_id: expected if stima_id == 501 else pytest.fail("unexpected id"),
+    )
+
+    assert property_watch_router.refresh_internal_signals(501) == expected
+
+
+def test_single_refresh_endpoint_maps_expected_service_errors(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
+    )
+
+    with pytest.raises(Exception) as not_found:
+        property_watch_router.refresh_internal_signals(501)
+    assert not_found.value.status_code == 404
+
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
+    )
+    with pytest.raises(Exception) as invalid:
+        property_watch_router.refresh_internal_signals(0)
+    assert invalid.value.status_code == 400
+
+
+def test_batch_refresh_endpoint_returns_aggregate_service_result(monkeypatch):
+    expected = {
+        "processed": 2,
+        "written": 1,
+        "unchanged": 2,
+        "unavailable": 0,
+        "failed": 1,
+        "outcomes": [],
+    }
+    monkeypatch.setattr(
+        service,
+        "collect_internal_signals_for_active_watches",
+        lambda: expected,
+    )
+
+    assert property_watch_router.refresh_active_internal_signals() == expected
+
+
+def test_get_route_only_reads_current_state(monkeypatch):
+    expected = {"watch": {"id": 3}, "observations": []}
+    monkeypatch.setattr(service, "get_current_watch_state", lambda _stima_id: expected)
+    monkeypatch.setattr(
+        service,
+        "safe_collect_internal_signals_for_stima",
+        lambda _stima_id: pytest.fail("GET must not collect"),
+    )
+
+    assert property_watch_router.get_watch_state(501) == expected

@@ -6,6 +6,10 @@ from fastapi import APIRouter, HTTPException
 
 from . import service
 from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
+from .schemas import (
+    PropertyWatchInternalSignalsBatchRefresh,
+    PropertyWatchInternalSignalsRefresh,
+)
 
 
 router = APIRouter(prefix="/api/property-watch", tags=["property-watch"])
@@ -25,3 +29,24 @@ def initialize_watch(stima_id: int):
         return service.ensure_watch_for_stima(stima_id)
     except (ValidationError, StimaNotFoundError) as exc:
         raise HTTPException(status_code=404 if isinstance(exc, StimaNotFoundError) else 400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/stime/{stima_id}/internal-signals/refresh",
+    response_model=PropertyWatchInternalSignalsRefresh,
+)
+def refresh_internal_signals(stima_id: int):
+    try:
+        return service.safe_collect_internal_signals_for_stima(stima_id)
+    except WatchNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/internal-signals/refresh-active",
+    response_model=PropertyWatchInternalSignalsBatchRefresh,
+)
+def refresh_active_internal_signals():
+    return service.collect_internal_signals_for_active_watches()

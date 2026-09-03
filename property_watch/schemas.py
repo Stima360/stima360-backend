@@ -38,6 +38,33 @@ class InternalSupply(PropertyWatchModel):
     observation_count: int
 
 
+class PropertyWatchCollectorOutcome(PropertyWatchModel):
+    status: str
+    watch_id: int | None
+    observation: PropertyWatchObservation | None
+
+
+class PropertyWatchInternalSignalsRefresh(PropertyWatchModel):
+    watch_id: int | None
+    microzone: PropertyWatchCollectorOutcome
+    internal_supply: PropertyWatchCollectorOutcome
+
+
+class PropertyWatchInternalSignalsBatchOutcome(
+    PropertyWatchInternalSignalsRefresh
+):
+    stima_id: int
+
+
+class PropertyWatchInternalSignalsBatchRefresh(PropertyWatchModel):
+    processed: int
+    written: int
+    unchanged: int
+    unavailable: int
+    failed: int
+    outcomes: list[PropertyWatchInternalSignalsBatchOutcome]
+
+
 class PropertyWatchState(PropertyWatchModel):
     watch: dict[str, Any]
     baseline: PropertyWatchObservation | None
