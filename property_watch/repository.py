@@ -384,6 +384,124 @@ def collect_microzone_price_change(
     return {"status": "written", "watch_id": watch_id, "observation": observation}
 
 
+def collect_internal_supply_change(
+    watch_id: int,
+    baseline_payload: dict[str, Any],
+    *,
+    cur: Any | None = None,
+) -> dict[str, Any]:
+    """Collect one append-only internal supply transition under a watch lock."""
+    if cur is None:
+        with property_watch_cursor(commit=True) as (_, transaction_cursor):
+            transaction_cursor.execute(
+                """
+                SELECT id
+                FROM property_watches
+                WHERE id = %s
+                  AND status = 'active'
+                FOR UPDATE
+                """,
+                (watch_id,),
+            )
+            if transaction_cursor.fetchone() is None:
+                return {
+                    "status": "baseline_unavailable",
+                    "watch_id": watch_id,
+                    "observation": None,
+                }
+            return collect_internal_supply_change(
+                watch_id,
+                baseline_payload,
+                cur=transaction_cursor,
+            )
+
+    if not isinstance(baseline_payload, dict):
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+    comune = baseline_payload.get("comune")
+    microzona = baseline_payload.get("microzona")
+    if (
+        not isinstance(comune, str)
+        or not comune
+        or not isinstance(microzona, str)
+        or not microzona
+    ):
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+
+    latest_supply = get_latest_relevant_observation(
+        cur,
+        watch_id,
+        ("internal_supply_changed", "internal_supply_snapshot"),
+    )
+    current_count = count_internal_supply(cur, comune, microzona)
+    if latest_supply is None:
+        baseline = get_latest_relevant_observation(cur, watch_id, ("watch_started",))
+        if baseline is None:
+            return {
+                "status": "baseline_unavailable",
+                "watch_id": watch_id,
+                "observation": None,
+            }
+        observation_type = "internal_supply_snapshot"
+        payload = {
+            "current_count": current_count,
+            "comune": comune,
+            "microzona": microzona,
+        }
+        idempotency_key = (
+            "property_watch:internal_supply_snapshot:"
+            f"watch:{watch_id}:after:{baseline['id']}:count:{current_count}:v1"
+        )
+    else:
+        latest_payload = latest_supply.get("payload")
+        previous_count = (
+            latest_payload.get("current_count")
+            if isinstance(latest_payload, dict)
+            else None
+        )
+        if (
+            not isinstance(previous_count, int)
+            or isinstance(previous_count, bool)
+            or previous_count < 0
+        ):
+            return {
+                "status": "baseline_unavailable",
+                "watch_id": watch_id,
+                "observation": None,
+            }
+        if current_count == previous_count:
+            return {"status": "unchanged", "watch_id": watch_id, "observation": None}
+        observation_type = "internal_supply_changed"
+        payload = {
+            "previous_count": previous_count,
+            "current_count": current_count,
+            "delta": current_count - previous_count,
+            "comune": comune,
+            "microzona": microzona,
+        }
+        idempotency_key = (
+            "property_watch:internal_supply_changed:"
+            f"watch:{watch_id}:after:{latest_supply['id']}:count:{current_count}:v1"
+        )
+
+    observation = _insert_observation_with_cursor(
+        cur,
+        watch_id,
+        observation_type,
+        "internal",
+        payload,
+        idempotency_key,
+    )
+    return {"status": "written", "watch_id": watch_id, "observation": observation}
+
+
 def insert_observation(
     watch_id: int,
     observation_type: str,

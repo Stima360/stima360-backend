@@ -122,6 +122,24 @@ def collect_microzone_market_signal_for_stima(stima_id: int) -> dict[str, Any]:
     return outcome
 
 
+def collect_internal_supply_signal_for_stima(stima_id: int) -> dict[str, Any]:
+    _validate_stima_id(stima_id)
+    with repository.property_watch_cursor(commit=True) as (_, cur):
+        context = repository.get_collection_context_for_update(cur, stima_id)
+        if context is None:
+            raise WatchNotFoundError(
+                f"active property watch for stima {stima_id} not found"
+            )
+        baseline = context["baseline"]
+        outcome = repository.collect_internal_supply_change(
+            context["watch"]["id"],
+            baseline["payload"] if baseline is not None else {},
+            cur=cur,
+        )
+    _log_unavailable(stima_id, "internal_supply", outcome)
+    return outcome
+
+
 def get_current_watch_state(stima_id: int) -> dict[str, Any]:
     watch = get_watch_for_stima(stima_id)
     observations = repository.list_observations(watch["id"])

@@ -187,9 +187,10 @@ def test_insert_observation_serializes_decimal_payload_as_json_numeric(monkeypat
 
 
 class MemoryCollectionStore:
-    def __init__(self, baseline, zone_value=None):
+    def __init__(self, baseline, zone_value=None, supply_count=0):
         self.baseline = baseline
         self.zone_value = zone_value
+        self.supply_count = supply_count
         self.observations = []
         self.by_key = {}
         self.next_id = 100
@@ -204,6 +205,9 @@ class MemoryCollectionStore:
 
     def get_zone_value(self, _cursor, _comune, _microzona):
         return self.zone_value
+
+    def count_internal_supply(self, _cursor, _comune, _microzona):
+        return self.supply_count
 
     def insert(self, _cursor, watch_id, observation_type, source, payload, key):
         if key in self.by_key:
@@ -239,6 +243,26 @@ def _wire_microzone_collector(monkeypatch, store):
     )
     monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
     monkeypatch.setattr(repository, "get_zone_value", store.get_zone_value)
+    monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
+
+
+def _wire_supply_collector(monkeypatch, store):
+    cursor = object()
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(cursor),
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_collection_context_for_update",
+        lambda _cursor, _stima_id: {
+            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "baseline": store.baseline,
+        },
+    )
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
+    monkeypatch.setattr(repository, "count_internal_supply", store.count_internal_supply)
     monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
 
 
@@ -391,3 +415,182 @@ def test_microzone_collector_handles_zero_previous_and_unavailable_inputs(monkey
 
         assert result["status"] == expected
         assert unavailable_store.observations == []
+
+
+def test_supply_count_policy_excludes_all_non_inventory_statuses_and_archived_rows():
+    rows = [
+        {
+            "city": "Alba Adriatica",
+            "microzone": "Nord",
+            "commercial_status": status,
+            "archived_at": None,
+        }
+        for status in (
+            "draft",
+            "evaluation",
+            "mandate",
+            "active",
+            "reserved",
+            "under_offer",
+            "sold",
+            "withdrawn",
+            "archived",
+        )
+    ]
+    rows.extend(
+        [
+            {
+                "city": "Alba Adriatica",
+                "microzone": "Nord",
+                "commercial_status": "active",
+                "archived_at": "2026-09-01T00:00:00Z",
+            },
+            {
+                "city": "Other City",
+                "microzone": "Nord",
+                "commercial_status": "active",
+                "archived_at": None,
+            },
+            {
+                "city": "Alba Adriatica",
+                "microzone": "Other Zone",
+                "commercial_status": "active",
+                "archived_at": None,
+            },
+        ]
+    )
+
+    class Cursor:
+        def execute(self, query, params=None):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            city, microzone, *statuses = self.params
+            return {
+                "supply_count": sum(
+                    row["city"] == city
+                    and row["microzone"] == microzone
+                    and row["archived_at"] is None
+                    and row["commercial_status"] in statuses
+                    for row in rows
+                )
+            }
+
+    cursor = Cursor()
+
+    assert repository.count_internal_supply(cursor, "Alba Adriatica", "Nord") == 4
+    assert set(cursor.params[2:]) == {
+        "mandate",
+        "active",
+        "reserved",
+        "under_offer",
+    }
+
+
+def test_supply_collector_always_writes_first_snapshot_including_zero(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=0)
+    _wire_supply_collector(monkeypatch, store)
+
+    result = service.collect_internal_supply_signal_for_stima(501)
+
+    assert result["status"] == "written"
+    assert result["observation"]["observation_type"] == "internal_supply_snapshot"
+    assert result["observation"]["source"] == "internal"
+    assert result["observation"]["payload"] == {
+        "current_count": 0,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert result["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_snapshot:watch:3:after:10:count:0:v1"
+    )
+    assert not {
+        "property_id",
+        "title",
+        "address",
+        "price",
+        "owner",
+        "contact",
+        "lead",
+        "buyer",
+    } & result["observation"]["payload"].keys()
+
+
+def test_supply_collector_appends_only_aggregate_count_changes(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=4)
+    _wire_supply_collector(monkeypatch, store)
+
+    snapshot = service.collect_internal_supply_signal_for_stima(501)
+    assert snapshot["status"] == "written"
+    assert service.collect_internal_supply_signal_for_stima(501)["status"] == "unchanged"
+
+    store.supply_count = 6
+    increased = service.collect_internal_supply_signal_for_stima(501)
+
+    assert increased["status"] == "written"
+    assert increased["observation"]["observation_type"] == "internal_supply_changed"
+    assert increased["observation"]["payload"] == {
+        "previous_count": 4,
+        "current_count": 6,
+        "delta": 2,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert increased["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_changed:watch:3:after:101:count:6:v1"
+    )
+
+    store.supply_count = 4
+    returned = service.collect_internal_supply_signal_for_stima(501)
+    assert returned["status"] == "written"
+    assert returned["observation"]["idempotency_key"] == (
+        "property_watch:internal_supply_changed:watch:3:after:102:count:4:v1"
+    )
+    assert len(store.observations) == 3
+
+
+def test_supply_collector_returns_existing_snapshot_on_idempotency_collision(
+    monkeypatch,
+):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), supply_count=0)
+    _wire_supply_collector(monkeypatch, store)
+
+    def baseline_only(_cursor, _watch_id, observation_types):
+        return store.baseline if observation_types == ("watch_started",) else None
+
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", baseline_only)
+
+    first = service.collect_internal_supply_signal_for_stima(501)
+    retry = service.collect_internal_supply_signal_for_stima(501)
+
+    assert first["status"] == retry["status"] == "written"
+    assert retry["observation"] == first["observation"]
+    assert len(store.observations) == 1
+
+
+def test_supply_collector_requires_baseline_locality_but_not_source_rows(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(
+        _baseline(
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": None,
+                "microzona": "Nord",
+            }
+        ),
+        supply_count=0,
+    )
+    _wire_supply_collector(monkeypatch, store)
+
+    unavailable = service.collect_internal_supply_signal_for_stima(501)
+
+    assert unavailable["status"] == "baseline_unavailable"
+    assert store.observations == []
