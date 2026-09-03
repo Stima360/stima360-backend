@@ -25,7 +25,7 @@ REPRESENTATIVE_PATHS = (
 EXPECTED_COUNTS = {
     "/api/core": 19,
     "/api/property": 21,
-    "/api/property-watch": 4,
+    "/api/property-watch": 6,
     "/api/buy": 23,
     "/api/match": 26,
     "/api/proposals": 5,
@@ -57,7 +57,7 @@ def openapi_operations(app, prefixes=PROTECTED_PREFIXES):
     return operations
 
 
-def test_1_all_98_routes_are_still_mounted(app):
+def test_1_all_100_routes_are_still_mounted(app):
     operations = openapi_operations(app)
     for prefix, expected in EXPECTED_COUNTS.items():
         actual = sum(
@@ -66,12 +66,12 @@ def test_1_all_98_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 98
+    assert len(operations) == 100
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 98
+    assert len(operations) == 100
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

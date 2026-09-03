@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from . import repository
+from . import buyer_pressure, repository
 from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 
 
@@ -227,6 +227,78 @@ def collect_internal_signals_for_active_watches() -> dict[str, Any]:
     }
 
 
+def collect_buyer_pressure_for_stima(stima_id: int) -> dict[str, Any]:
+    _validate_stima_id(stima_id)
+    inputs = repository.get_buyer_pressure_inputs(stima_id)
+    if inputs is None:
+        raise WatchNotFoundError(f"active property watch for stima {stima_id} not found")
+    metrics = buyer_pressure.calculate_buyer_pressure_metrics(
+        inputs["buyers"], inputs["baseline_payload"], inputs["collection_time"]
+    )
+    if metrics is None or inputs["baseline_observation_id"] is None:
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": inputs["watch_id"],
+            "observation": None,
+        }
+    outcome = repository.store_buyer_pressure_metrics(
+        stima_id=stima_id,
+        watch_id=inputs["watch_id"],
+        baseline_observation_id=inputs["baseline_observation_id"],
+        metrics=metrics,
+        observed_at=inputs["collection_time"],
+    )
+    if outcome is None:
+        raise WatchNotFoundError(f"active property watch for stima {stima_id} not found")
+    return outcome
+
+
+def safe_collect_buyer_pressure_for_stima(stima_id: int) -> dict[str, Any]:
+    try:
+        return collect_buyer_pressure_for_stima(stima_id)
+    except (ValidationError, WatchNotFoundError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - collector fault boundary
+        logger.error(
+            "property_watch_buyer_pressure_failed stima_id=%s error_type=%s",
+            stima_id,
+            type(exc).__name__,
+        )
+        return {"status": "failed", "watch_id": None, "observation": None}
+
+
+def collect_buyer_pressure_for_active_watches() -> dict[str, Any]:
+    outcomes = []
+    for stima_id in repository.list_active_watch_stima_ids():
+        try:
+            outcome = safe_collect_buyer_pressure_for_stima(stima_id)
+        except (ValidationError, WatchNotFoundError) as exc:
+            logger.error(
+                "property_watch_buyer_pressure_batch_item_failed "
+                "stima_id=%s error_type=%s",
+                stima_id,
+                type(exc).__name__,
+            )
+            outcome = {"status": "failed", "watch_id": None, "observation": None}
+        outcomes.append({"stima_id": stima_id, **outcome})
+    totals = {
+        "written": 0,
+        "unchanged": 0,
+        "unavailable": 0,
+        "superseded": 0,
+        "failed": 0,
+    }
+    for outcome in outcomes:
+        status = outcome["status"]
+        if status == "baseline_unavailable":
+            totals["unavailable"] += 1
+        elif status in totals:
+            totals[status] += 1
+        else:
+            totals["failed"] += 1
+    return {"processed": len(outcomes), **totals, "outcomes": outcomes}
+
+
 def _latest_observation_of_type(
     observations: list[dict[str, Any]], observation_types: set[str]
 ) -> dict[str, Any] | None:
@@ -316,11 +388,30 @@ def get_current_watch_state(stima_id: int) -> dict[str, Any]:
         if latest_supply_observation is not None
         else None
     )
+    buyer_pressure_observations = [
+        item
+        for item in observations
+        if item["observation_type"]
+        in {"buyer_pressure_snapshot", "buyer_pressure_changed"}
+    ]
+    latest_buyer_pressure = _latest_observation_of_type(
+        observations, {"buyer_pressure_snapshot", "buyer_pressure_changed"}
+    )
+    buyer_pressure_metrics = None
+    if latest_buyer_pressure is not None:
+        metrics = buyer_pressure.canonicalize_metrics(latest_buyer_pressure.get("payload"))
+        buyer_pressure_metrics = {
+            **metrics,
+            "latest_observation": latest_buyer_pressure,
+            "observed_at": latest_buyer_pressure["observed_at"],
+            "observation_count": len(buyer_pressure_observations),
+        }
     return {
         "watch": watch,
         "baseline": baseline,
         "microzone_reference": microzone_reference,
         "internal_supply": internal_supply,
+        "buyer_pressure_metrics": buyer_pressure_metrics,
         "observation_count": len(observations),
         "observations": observations,
         "computed_at": datetime.now(timezone.utc),

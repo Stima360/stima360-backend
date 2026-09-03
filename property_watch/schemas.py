@@ -66,11 +66,44 @@ class PropertyWatchInternalSignalsBatchRefresh(PropertyWatchModel):
     outcomes: list[PropertyWatchInternalSignalsBatchOutcome]
 
 
+class PropertyWatchBuyerPressureRefresh(PropertyWatchCollectorOutcome):
+    pass
+
+
+class PropertyWatchBuyerPressureBatchOutcome(PropertyWatchCollectorOutcome):
+    stima_id: int
+
+
+class PropertyWatchBuyerPressureBatchRefresh(PropertyWatchModel):
+    processed: int
+    written: int
+    unchanged: int
+    unavailable: int
+    superseded: int
+    failed: int
+    outcomes: list[PropertyWatchBuyerPressureBatchOutcome]
+
+
+class BuyerPressureMetricsState(PropertyWatchModel):
+    evaluated_buyers: int
+    compatible_buyers: int
+    highly_compatible_buyers: int
+    recent_compatible_buyers_30d: int
+    average_match_score: float | None
+    maximum_match_score: float | None
+    average_budget: float | None
+    algorithm_version: str
+    latest_observation: PropertyWatchObservation
+    observed_at: datetime
+    observation_count: int
+
+
 class PropertyWatchState(PropertyWatchModel):
     watch: dict[str, Any]
     baseline: PropertyWatchObservation | None
     microzone_reference: MicrozoneReference | None
     internal_supply: InternalSupply | None
+    buyer_pressure_metrics: BuyerPressureMetricsState | None
     observation_count: int
     observations: list[PropertyWatchObservation]
     computed_at: datetime

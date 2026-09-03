@@ -11,6 +11,7 @@ from psycopg2.extras import Json
 
 from match.enums import ACTIVE_PROPERTY_STATUSES
 
+from .buyer_pressure import canonicalize_metrics, metrics_digest
 from .database import property_watch_cursor
 
 
@@ -237,12 +238,14 @@ def _insert_observation_with_cursor(
     source: str,
     payload: dict[str, Any],
     idempotency_key: str,
+    *,
+    observed_at: datetime | None = None,
 ) -> dict[str, Any]:
     cur.execute(
         """
         INSERT INTO property_watch_observations (
-            watch_id, observation_type, source, payload, idempotency_key
-        ) VALUES (%s, %s, %s, %s, %s)
+            watch_id, observation_type, source, payload, idempotency_key, observed_at
+        ) VALUES (%s, %s, %s, %s, %s, COALESCE(%s, NOW()))
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
         """,
@@ -252,6 +255,7 @@ def _insert_observation_with_cursor(
             source,
             Json(payload, dumps=_json_dumps),
             idempotency_key,
+            observed_at,
         ),
     )
     observation = _row(cur.fetchone())
@@ -268,6 +272,168 @@ def _insert_observation_with_cursor(
             "property watch observation conflict without an existing observation"
         )
     return observation
+
+
+def get_buyer_pressure_inputs(stima_id: int) -> dict[str, Any] | None:
+    """Read a coherent, privacy-minimized BUY snapshot for one active watch."""
+    with property_watch_cursor() as (_, cur):
+        cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        cur.execute("SELECT transaction_timestamp() AS collection_time")
+        collection_time = cur.fetchone()["collection_time"]
+        cur.execute(
+            """
+                SELECT w.id AS watch_id, o.id AS baseline_observation_id,
+                       o.payload AS baseline_payload
+                FROM property_watches w
+                LEFT JOIN LATERAL (
+                    SELECT id, payload
+                    FROM property_watch_observations
+                    WHERE watch_id = w.id AND observation_type = 'watch_started'
+                    ORDER BY observed_at ASC, id ASC
+                    LIMIT 1
+                ) o ON TRUE
+                WHERE w.stima_id = %s AND w.status = 'active'
+            """,
+            (stima_id,),
+        )
+        context = _row(cur.fetchone())
+        if context is None:
+            return None
+        cur.execute(
+            """
+                SELECT b.id, b.status, b.archived_at, b.budget_min, b.budget_target,
+                       b.budget_max, b.budget_flexibility_percent, b.surface_min,
+                       b.surface_target, b.surface_max, b.rooms_min, b.bedrooms_min,
+                       b.bathrooms_min, b.created_at, b.updated_at,
+                       GREATEST(b.created_at, b.updated_at,
+                           COALESCE(MAX(i.occurred_at), b.created_at)) AS last_activity_at
+                FROM buy_requests b
+                LEFT JOIN buy_request_interactions i ON i.buy_request_id = b.id
+                WHERE b.status = 'active' AND b.archived_at IS NULL
+                GROUP BY b.id
+                ORDER BY b.id ASC
+            """
+        )
+        buyers = [dict(row) for row in cur.fetchall()]
+        for buy in buyers:
+            buy["locations"] = []
+            buy["typologies"] = []
+            buy["features"] = []
+        request_ids = [buy["id"] for buy in buyers]
+        if request_ids:
+            child_specs = (
+                    (
+                        "locations",
+                        "buy_request_locations",
+                        "microzone, municipality, province, priority, is_required, is_excluded",
+                    ),
+                    (
+                        "typologies",
+                        "buy_request_typologies",
+                        "property_type, requirement_level, priority",
+                    ),
+                    (
+                        "features",
+                        "buy_request_features",
+                        "feature_code, requirement_level, value_type, value_boolean, "
+                        "value_min, value_target, value_max, value_text, weight_override",
+                    ),
+            )
+            buyers_by_id = {buy["id"]: buy for buy in buyers}
+            for key, table, columns in child_specs:
+                cur.execute(
+                    f"""
+                        SELECT buy_request_id, {columns}
+                        FROM {table}
+                        WHERE buy_request_id = ANY(%s)
+                        ORDER BY buy_request_id ASC, id ASC
+                    """,
+                    (request_ids,),
+                )
+                for row in cur.fetchall():
+                    item = dict(row)
+                    buyers_by_id[item.pop("buy_request_id")][key].append(item)
+        return {
+            "watch_id": context["watch_id"],
+            "baseline_observation_id": context["baseline_observation_id"],
+            "baseline_payload": context.get("baseline_payload"),
+            "collection_time": collection_time,
+            "buyers": buyers,
+        }
+
+
+def _get_earliest_watch_started_observation(
+    cur: Any, watch_id: int
+) -> dict[str, Any] | None:
+    cur.execute(
+        """
+            SELECT *
+            FROM property_watch_observations
+            WHERE watch_id = %s AND observation_type = 'watch_started'
+            ORDER BY observed_at ASC, id ASC
+            LIMIT 1
+        """,
+        (watch_id,),
+    )
+    return _row(cur.fetchone())
+
+
+def store_buyer_pressure_metrics(
+    *,
+    stima_id: int,
+    watch_id: int,
+    baseline_observation_id: int,
+    metrics: dict[str, Any],
+    observed_at: datetime,
+) -> dict[str, Any] | None:
+    canonical = canonicalize_metrics(metrics)
+    digest = metrics_digest(canonical)
+    with property_watch_cursor(commit=True) as (_, cur):
+        cur.execute(
+            """
+                SELECT id
+                FROM property_watches
+                WHERE id = %s AND stima_id = %s AND status = 'active'
+                FOR UPDATE
+            """,
+            (watch_id, stima_id),
+        )
+        if cur.fetchone() is None:
+            return None
+        baseline = _get_earliest_watch_started_observation(cur, watch_id)
+        if baseline is None or baseline["id"] != baseline_observation_id:
+            return {
+                "status": "baseline_unavailable",
+                "watch_id": watch_id,
+                "observation": None,
+            }
+        latest = get_latest_relevant_observation(
+            cur, watch_id, ("buyer_pressure_snapshot", "buyer_pressure_changed")
+        )
+        if latest is not None and latest["observed_at"] > observed_at:
+            return {"status": "superseded", "watch_id": watch_id, "observation": None}
+        if latest is None:
+            observation_type = "buyer_pressure_snapshot"
+            predecessor_id = baseline_observation_id
+        else:
+            if canonicalize_metrics(latest.get("payload")) == canonical:
+                return {"status": "unchanged", "watch_id": watch_id, "observation": None}
+            observation_type = "buyer_pressure_changed"
+            predecessor_id = latest["id"]
+        idempotency_key = (
+            f"property_watch:{observation_type}:watch:{watch_id}:"
+            f"after:{predecessor_id}:metrics:{digest}:v1"
+        )
+        observation = _insert_observation_with_cursor(
+            cur,
+            watch_id,
+            observation_type,
+            "internal",
+            canonical,
+            idempotency_key,
+            observed_at=observed_at,
+        )
+        return {"status": "written", "watch_id": watch_id, "observation": observation}
 
 
 def collect_microzone_price_change(
