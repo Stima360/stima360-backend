@@ -140,6 +140,80 @@ def collect_internal_supply_signal_for_stima(stima_id: int) -> dict[str, Any]:
     return outcome
 
 
+def _combined_outcomes(
+    microzone: dict[str, Any], internal_supply: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "watch_id": microzone.get("watch_id") or internal_supply.get("watch_id"),
+        "microzone": microzone,
+        "internal_supply": internal_supply,
+    }
+
+
+def collect_internal_signals_for_stima(stima_id: int) -> dict[str, Any]:
+    microzone = collect_microzone_market_signal_for_stima(stima_id)
+    internal_supply = collect_internal_supply_signal_for_stima(stima_id)
+    return _combined_outcomes(microzone, internal_supply)
+
+
+def _failed_collector_outcome() -> dict[str, Any]:
+    return {"status": "failed", "watch_id": None, "observation": None}
+
+
+def _log_collector_failure(stima_id: int, collector: str, exc: Exception) -> None:
+    logger.error(
+        "property_watch_collector_failed stima_id=%s collector=%s error_type=%s",
+        stima_id,
+        collector,
+        type(exc).__name__,
+    )
+
+
+def safe_collect_internal_signals_for_stima(stima_id: int) -> dict[str, Any]:
+    try:
+        microzone = collect_microzone_market_signal_for_stima(stima_id)
+    except Exception as exc:  # noqa: BLE001 - collector-level fault isolation
+        _log_collector_failure(stima_id, "microzone", exc)
+        microzone = _failed_collector_outcome()
+
+    try:
+        internal_supply = collect_internal_supply_signal_for_stima(stima_id)
+    except Exception as exc:  # noqa: BLE001 - collector-level fault isolation
+        _log_collector_failure(stima_id, "internal_supply", exc)
+        internal_supply = _failed_collector_outcome()
+
+    return _combined_outcomes(microzone, internal_supply)
+
+
+def _summarize_collector_statuses(outcomes: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {"written": 0, "unchanged": 0, "unavailable": 0, "failed": 0}
+    for outcome in outcomes:
+        for collector in ("microzone", "internal_supply"):
+            status = outcome[collector]["status"]
+            if status in {"baseline_unavailable", "source_unavailable"}:
+                summary["unavailable"] += 1
+            elif status in summary:
+                summary[status] += 1
+            else:
+                summary["failed"] += 1
+    return summary
+
+
+def collect_internal_signals_for_active_watches() -> dict[str, Any]:
+    outcomes = [
+        {
+            "stima_id": stima_id,
+            **safe_collect_internal_signals_for_stima(stima_id),
+        }
+        for stima_id in repository.list_active_watch_stima_ids()
+    ]
+    return {
+        "processed": len(outcomes),
+        **_summarize_collector_statuses(outcomes),
+        "outcomes": outcomes,
+    }
+
+
 def get_current_watch_state(stima_id: int) -> dict[str, Any]:
     watch = get_watch_for_stima(stima_id)
     observations = repository.list_observations(watch["id"])

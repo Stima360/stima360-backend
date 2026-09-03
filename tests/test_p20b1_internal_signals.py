@@ -594,3 +594,131 @@ def test_supply_collector_requires_baseline_locality_but_not_source_rows(monkeyp
 
     assert unavailable["status"] == "baseline_unavailable"
     assert store.observations == []
+
+
+def test_strict_orchestration_returns_separate_collector_outcomes(monkeypatch):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda stima_id: calls.append(("microzone", stima_id))
+        or {"status": "written", "watch_id": 3, "observation": {"id": 11}},
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda stima_id: calls.append(("internal_supply", stima_id))
+        or {"status": "unchanged", "watch_id": 3, "observation": None},
+    )
+
+    result = service.collect_internal_signals_for_stima(501)
+
+    assert calls == [("microzone", 501), ("internal_supply", 501)]
+    assert result == {
+        "watch_id": 3,
+        "microzone": {"status": "written", "watch_id": 3, "observation": {"id": 11}},
+        "internal_supply": {
+            "status": "unchanged",
+            "watch_id": 3,
+            "observation": None,
+        },
+    }
+
+
+def test_safe_orchestration_isolates_microzone_failure_and_logs_no_payload(
+    monkeypatch, caplog
+):
+    from property_watch import service
+
+    supply_calls = []
+
+    def fail_microzone(_stima_id):
+        raise RuntimeError("payload={'buyer': 'not permitted'}")
+
+    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima", fail_microzone)
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda stima_id: supply_calls.append(stima_id)
+        or {"status": "written", "watch_id": 3, "observation": {"id": 12}},
+    )
+
+    result = service.safe_collect_internal_signals_for_stima(501)
+
+    assert supply_calls == [501]
+    assert result["microzone"] == {
+        "status": "failed",
+        "watch_id": None,
+        "observation": None,
+    }
+    assert result["internal_supply"]["status"] == "written"
+    record = next(
+        item
+        for item in caplog.records
+        if item.msg
+        == "property_watch_collector_failed stima_id=%s collector=%s error_type=%s"
+    )
+    assert record.args == (501, "microzone", "RuntimeError")
+    assert "buyer" not in record.getMessage()
+
+
+def test_safe_orchestration_preserves_microzone_outcome_when_supply_fails(monkeypatch):
+    from property_watch import service
+
+    microzone = {"status": "written", "watch_id": 3, "observation": {"id": 11}}
+    monkeypatch.setattr(
+        service,
+        "collect_microzone_market_signal_for_stima",
+        lambda _stima_id: microzone,
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_supply_signal_for_stima",
+        lambda _stima_id: (_ for _ in ()).throw(ValueError("source query failed")),
+    )
+
+    result = service.safe_collect_internal_signals_for_stima(501)
+
+    assert result["microzone"] is microzone
+    assert result["internal_supply"] == {
+        "status": "failed",
+        "watch_id": None,
+        "observation": None,
+    }
+
+
+def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkeypatch):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+
+    def microzone(stima_id):
+        calls.append(("microzone", stima_id))
+        if stima_id == 7:
+            raise RuntimeError("database failure")
+        return {"status": "written", "watch_id": 21, "observation": {"id": 31}}
+
+    def supply(stima_id):
+        calls.append(("internal_supply", stima_id))
+        return {"status": "unchanged", "watch_id": stima_id, "observation": None}
+
+    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima", microzone)
+    monkeypatch.setattr(service, "collect_internal_supply_signal_for_stima", supply)
+
+    result = service.collect_internal_signals_for_active_watches()
+
+    assert calls == [
+        ("microzone", 7),
+        ("internal_supply", 7),
+        ("microzone", 11),
+        ("internal_supply", 11),
+    ]
+    assert result["processed"] == 2
+    assert result["written"] == 1
+    assert result["unchanged"] == 2
+    assert result["unavailable"] == 0
+    assert result["failed"] == 1
+    assert [item["stima_id"] for item in result["outcomes"]] == [7, 11]
