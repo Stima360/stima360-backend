@@ -13,9 +13,23 @@ from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 logger = logging.getLogger(__name__)
 
 
-def ensure_watch_for_stima(stima_id: int) -> dict[str, dict[str, Any]]:
+def _validate_stima_id(stima_id: int) -> None:
     if not isinstance(stima_id, int) or isinstance(stima_id, bool) or stima_id < 1:
         raise ValidationError("stima_id must be a positive integer")
+
+
+def _log_unavailable(stima_id: int, collector: str, outcome: dict[str, Any]) -> None:
+    if outcome["status"] in {"baseline_unavailable", "source_unavailable"}:
+        logger.warning(
+            "property_watch_internal_signal_unavailable stima_id=%s collector=%s outcome=%s",
+            stima_id,
+            collector,
+            outcome["status"],
+        )
+
+
+def ensure_watch_for_stima(stima_id: int) -> dict[str, dict[str, Any]]:
+    _validate_stima_id(stima_id)
 
     stima = repository.get_stima_baseline_data(stima_id)
     if stima is None:
@@ -90,6 +104,22 @@ def get_watch_for_stima(stima_id: int) -> dict[str, Any]:
     if watch is None:
         raise WatchNotFoundError(f"property watch for stima {stima_id} not found")
     return watch
+
+
+def collect_microzone_market_signal_for_stima(stima_id: int) -> dict[str, Any]:
+    _validate_stima_id(stima_id)
+    with repository.property_watch_cursor(commit=True) as (_, cur):
+        context = repository.get_collection_context_for_update(cur, stima_id)
+        if context is None:
+            raise WatchNotFoundError(f"active property watch for stima {stima_id} not found")
+        baseline = context["baseline"]
+        outcome = repository.collect_microzone_price_change(
+            context["watch"]["id"],
+            baseline["payload"] if baseline is not None else {},
+            cur=cur,
+        )
+    _log_unavailable(stima_id, "microzone", outcome)
+    return outcome
 
 
 def get_current_watch_state(stima_id: int) -> dict[str, Any]:

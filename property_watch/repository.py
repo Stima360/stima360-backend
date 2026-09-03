@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 from typing import Any
 
@@ -212,6 +212,176 @@ def get_latest_relevant_observation(
         (watch_id, list(observation_types)),
     )
     return _row(cur.fetchone())
+
+
+def _finite_decimal(value: Any) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return decimal_value if decimal_value.is_finite() else None
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def _insert_observation_with_cursor(
+    cur: Any,
+    watch_id: int,
+    observation_type: str,
+    source: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO property_watch_observations (
+            watch_id, observation_type, source, payload, idempotency_key
+        ) VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        (
+            watch_id,
+            observation_type,
+            source,
+            Json(payload, dumps=_json_dumps),
+            idempotency_key,
+        ),
+    )
+    observation = _row(cur.fetchone())
+    if observation is not None:
+        return observation
+
+    cur.execute(
+        "SELECT * FROM property_watch_observations WHERE idempotency_key = %s",
+        (idempotency_key,),
+    )
+    observation = _row(cur.fetchone())
+    if observation is None:
+        raise RuntimeError(
+            "property watch observation conflict without an existing observation"
+        )
+    return observation
+
+
+def collect_microzone_price_change(
+    watch_id: int,
+    baseline_payload: dict[str, Any],
+    *,
+    cur: Any | None = None,
+) -> dict[str, Any]:
+    """Collect one append-only microzone price transition under a watch lock."""
+    if cur is None:
+        with property_watch_cursor(commit=True) as (_, transaction_cursor):
+            transaction_cursor.execute(
+                """
+                SELECT id
+                FROM property_watches
+                WHERE id = %s
+                  AND status = 'active'
+                FOR UPDATE
+                """,
+                (watch_id,),
+            )
+            if transaction_cursor.fetchone() is None:
+                return {
+                    "status": "baseline_unavailable",
+                    "watch_id": watch_id,
+                    "observation": None,
+                }
+            return collect_microzone_price_change(
+                watch_id,
+                baseline_payload,
+                cur=transaction_cursor,
+            )
+
+    if not isinstance(baseline_payload, dict):
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+    comune = baseline_payload.get("comune")
+    microzona = baseline_payload.get("microzona")
+    if (
+        not isinstance(comune, str)
+        or not comune
+        or not isinstance(microzona, str)
+        or not microzona
+    ):
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+
+    latest_change = get_latest_relevant_observation(
+        cur,
+        watch_id,
+        ("microzone_price_changed",),
+    )
+    if latest_change is None:
+        baseline = get_latest_relevant_observation(cur, watch_id, ("watch_started",))
+        if baseline is None:
+            return {
+                "status": "baseline_unavailable",
+                "watch_id": watch_id,
+                "observation": None,
+            }
+        prior_observation_id = baseline["id"]
+        previous = _finite_decimal(baseline_payload.get("prezzo_mq_base"))
+    else:
+        prior_observation_id = latest_change["id"]
+        latest_payload = latest_change.get("payload")
+        previous = _finite_decimal(
+            latest_payload.get("current") if isinstance(latest_payload, dict) else None
+        )
+    if previous is None:
+        return {
+            "status": "baseline_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+
+    current = _finite_decimal(get_zone_value(cur, comune, microzona))
+    if current is None:
+        return {
+            "status": "source_unavailable",
+            "watch_id": watch_id,
+            "observation": None,
+        }
+    if current == previous:
+        return {"status": "unchanged", "watch_id": watch_id, "observation": None}
+
+    delta = current - previous
+    payload = {
+        "previous": previous,
+        "current": current,
+        "delta": delta,
+        "delta_percent": None if previous == 0 else (delta / previous) * Decimal("100"),
+        "comune": comune,
+        "microzona": microzona,
+    }
+    idempotency_key = (
+        "property_watch:microzone_price_changed:"
+        f"watch:{watch_id}:after:{prior_observation_id}:"
+        f"current:{_canonical_decimal(current)}:v1"
+    )
+    observation = _insert_observation_with_cursor(
+        cur,
+        watch_id,
+        "microzone_price_changed",
+        "internal",
+        payload,
+        idempotency_key,
+    )
+    return {"status": "written", "watch_id": watch_id, "observation": observation}
 
 
 def insert_observation(

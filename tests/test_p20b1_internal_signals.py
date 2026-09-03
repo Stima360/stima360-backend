@@ -184,3 +184,210 @@ def test_insert_observation_serializes_decimal_payload_as_json_numeric(monkeypat
     payload = captured["payload"]
     assert b"1500.0" in payload.getquoted()
     assert json.loads(payload.dumps(payload.adapted)) == {"current": 1500.0}
+
+
+class MemoryCollectionStore:
+    def __init__(self, baseline, zone_value=None):
+        self.baseline = baseline
+        self.zone_value = zone_value
+        self.observations = []
+        self.by_key = {}
+        self.next_id = 100
+
+    def get_latest(self, _cursor, _watch_id, observation_types):
+        candidates = [
+            item
+            for item in [self.baseline, *self.observations]
+            if item["observation_type"] in observation_types
+        ]
+        return candidates[-1] if candidates else None
+
+    def get_zone_value(self, _cursor, _comune, _microzona):
+        return self.zone_value
+
+    def insert(self, _cursor, watch_id, observation_type, source, payload, key):
+        if key in self.by_key:
+            return self.by_key[key]
+        self.next_id += 1
+        observation = {
+            "id": self.next_id,
+            "watch_id": watch_id,
+            "observation_type": observation_type,
+            "source": source,
+            "payload": payload,
+            "idempotency_key": key,
+        }
+        self.observations.append(observation)
+        self.by_key[key] = observation
+        return observation
+
+
+def _wire_microzone_collector(monkeypatch, store):
+    cursor = object()
+    monkeypatch.setattr(
+        repository,
+        "property_watch_cursor",
+        lambda **_kwargs: CursorContext(cursor),
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_collection_context_for_update",
+        lambda _cursor, _stima_id: {
+            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "baseline": store.baseline,
+        },
+    )
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
+    monkeypatch.setattr(repository, "get_zone_value", store.get_zone_value)
+    monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
+
+
+def _baseline(payload=None):
+    return {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": payload
+        or {
+            "prezzo_mq_base": Decimal("1500.00"),
+            "comune": "Alba Adriatica",
+            "microzona": "Nord",
+        },
+    }
+
+
+def test_microzone_collector_writes_only_when_exact_source_differs(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1500.00"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    unchanged = service.collect_microzone_market_signal_for_stima(501)
+
+    assert unchanged["status"] == "unchanged"
+    assert store.observations == []
+
+    store.zone_value = Decimal("1600.00")
+    written = service.collect_microzone_market_signal_for_stima(501)
+
+    assert written["status"] == "written"
+    assert written["watch_id"] == 3
+    assert written["observation"]["payload"] == {
+        "previous": Decimal("1500.00"),
+        "current": Decimal("1600.00"),
+        "delta": Decimal("100.00"),
+        "delta_percent": Decimal("6.666666666666666666666666667"),
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+    assert written["observation"]["idempotency_key"] == (
+        "property_watch:microzone_price_changed:watch:3:after:10:current:1600:v1"
+    )
+    assert json.loads(repository._json_dumps(written["observation"]["payload"])) == {
+        "previous": 1500.0,
+        "current": 1600.0,
+        "delta": 100.0,
+        "delta_percent": 6.666666666666667,
+        "comune": "Alba Adriatica",
+        "microzona": "Nord",
+    }
+
+
+def test_microzone_collector_uses_latest_change_and_predecessor_aware_history(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1600"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    first = service.collect_microzone_market_signal_for_stima(501)
+    assert first["status"] == "written"
+
+    assert service.collect_microzone_market_signal_for_stima(501)["status"] == "unchanged"
+    store.zone_value = Decimal("1500")
+    returned = service.collect_microzone_market_signal_for_stima(501)
+
+    assert returned["status"] == "written"
+    assert returned["observation"]["payload"]["previous"] == Decimal("1600")
+    assert returned["observation"]["payload"]["delta"] == Decimal("-100")
+    assert returned["observation"]["idempotency_key"] == (
+        "property_watch:microzone_price_changed:watch:3:after:101:current:1500:v1"
+    )
+    assert len(store.observations) == 2
+
+
+def test_microzone_collector_returns_existing_observation_on_idempotency_collision(
+    monkeypatch,
+):
+    from property_watch import service
+
+    store = MemoryCollectionStore(_baseline(), Decimal("1600"))
+    _wire_microzone_collector(monkeypatch, store)
+
+    def baseline_only(_cursor, _watch_id, observation_types):
+        return store.baseline if observation_types == ("watch_started",) else None
+
+    monkeypatch.setattr(repository, "get_latest_relevant_observation", baseline_only)
+
+    first = service.collect_microzone_market_signal_for_stima(501)
+    retry = service.collect_microzone_market_signal_for_stima(501)
+
+    assert first["status"] == retry["status"] == "written"
+    assert retry["observation"] == first["observation"]
+    assert len(store.observations) == 1
+
+
+def test_microzone_collector_handles_zero_previous_and_unavailable_inputs(monkeypatch):
+    from property_watch import service
+
+    store = MemoryCollectionStore(
+        _baseline(
+            {
+                "prezzo_mq_base": Decimal("0"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            }
+        ),
+        Decimal("100"),
+    )
+    _wire_microzone_collector(monkeypatch, store)
+
+    written = service.collect_microzone_market_signal_for_stima(501)
+    assert written["observation"]["payload"]["delta_percent"] is None
+
+    for payload, source_value, expected in (
+        (
+            {
+                "prezzo_mq_base": Decimal("NaN"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            },
+            Decimal("1600"),
+            "baseline_unavailable",
+        ),
+        (
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": None,
+                "microzona": "Nord",
+            },
+            Decimal("1600"),
+            "baseline_unavailable",
+        ),
+        (
+            {
+                "prezzo_mq_base": Decimal("1500"),
+                "comune": "Alba Adriatica",
+                "microzona": "Nord",
+            },
+            None,
+            "source_unavailable",
+        ),
+    ):
+        unavailable_store = MemoryCollectionStore(_baseline(payload), source_value)
+        _wire_microzone_collector(monkeypatch, unavailable_store)
+
+        result = service.collect_microzone_market_signal_for_stima(501)
+
+        assert result["status"] == expected
+        assert unavailable_store.observations == []
