@@ -15,6 +15,7 @@ class PropertyWatchModel(BaseModel):
 
 class PropertyWatchObservation(PropertyWatchModel):
     id: int
+    watch_id: int
     observation_type: str
     source: str
     payload: dict[str, Any]

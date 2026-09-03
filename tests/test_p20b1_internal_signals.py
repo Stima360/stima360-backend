@@ -5,7 +5,10 @@ from decimal import Decimal
 import json
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 
+from admin_security import require_admin
 from integration_p2_support import import_project_module
 from property_watch import repository
 from property_watch import router as property_watch_router
@@ -1024,6 +1027,67 @@ def test_batch_refresh_endpoint_returns_aggregate_service_result(monkeypatch):
     )
 
     assert property_watch_router.refresh_active_internal_signals() == expected
+
+
+def test_batch_refresh_http_serializes_db_observation_watch_id(monkeypatch):
+    monkeypatch.setenv("ADMIN_USER", "test-admin")
+    monkeypatch.setenv("ADMIN_PASS", "test-password")
+    observed_at = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+    observation = {
+        "id": 44,
+        "watch_id": 3,
+        "observation_type": "internal_supply_snapshot",
+        "source": "internal",
+        "payload": {
+            "current_count": 4,
+            "comune": "Alba Adriatica",
+            "microzona": "Nord",
+        },
+        "idempotency_key": "property_watch:internal_supply_snapshot:watch:3:v1",
+        "observed_at": observed_at,
+        "created_at": observed_at,
+    }
+    monkeypatch.setattr(
+        service,
+        "collect_internal_signals_for_active_watches",
+        lambda: {
+            "processed": 1,
+            "written": 1,
+            "unchanged": 1,
+            "unavailable": 0,
+            "failed": 0,
+            "outcomes": [
+                {
+                    "stima_id": 501,
+                    "watch_id": 3,
+                    "microzone": {
+                        "status": "unchanged",
+                        "watch_id": 3,
+                        "observation": None,
+                    },
+                    "internal_supply": {
+                        "status": "written",
+                        "watch_id": 3,
+                        "observation": observation,
+                    },
+                }
+            ],
+        },
+    )
+    app = FastAPI()
+    app.include_router(
+        property_watch_router.router,
+        dependencies=[Depends(require_admin)],
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/property-watch/internal-signals/refresh-active",
+        auth=("test-admin", "test-password"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["outcomes"][0]["internal_supply"]["observation"]["watch_id"] == 3
 
 
 def test_get_route_only_reads_current_state(monkeypatch):
