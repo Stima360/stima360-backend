@@ -154,9 +154,13 @@ def test_core_property_buy_match_proposal_owner_flow_still_do_not_import_seller_
             assert "seller_intelligence" not in text, f"{path} non deve importare seller_intelligence"
 
 
-def test_contatto_dettaglio_does_not_depend_on_p17_seller_intelligence():
+def test_contatto_dettaglio_only_uses_the_approved_read_only_p17b3_timeline_integration():
     view = ROOT / "static" / "os_shell" / "assets" / "views" / "contatto-dettaglio.js"
     if view.exists():
         text = view.read_text(encoding="utf-8")
-        assert "seller_intelligence" not in text
+        assert "from '../components/timeline.js'" in text
+        assert "loadSellerTimeline(contact.id, lazyCache)" in text
+        assert "renderSellerTimeline" in text
         assert "/api/seller-intelligence" not in text
+        for forbidden in ("apiPost", "apiPatch", "apiDelete", "/api/core/activities"):
+            assert forbidden not in text

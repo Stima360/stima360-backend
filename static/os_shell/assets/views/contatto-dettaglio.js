@@ -24,6 +24,7 @@
 
 import { apiGet } from '../core/api-client.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+import { loadSellerTimeline, renderSellerTimeline } from '../components/timeline.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -61,6 +62,7 @@ const SELLER_INTENT_STATE_LABELS = {
 
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
+  { key: 'timeline', label: 'Timeline' },
   { key: 'immobili', label: 'Immobili' },
   { key: 'richieste', label: 'Richieste' },
   { key: 'stime', label: 'Stime' },
@@ -96,6 +98,8 @@ export async function renderContattoDettaglio(container, params = []) {
     leadsWithEstimations: null,
     sellerIntentByLead: null,
     sellerIntentPromise: null,
+    timelineResult: null,
+    timelinePromise: null,
   };
 
   const contact = data.contact || {};
@@ -121,8 +125,10 @@ export async function renderContattoDettaglio(container, params = []) {
   tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
 
   const contentEl = container.querySelector('#contact-tab-content');
+  let activeTab = 'panoramica';
 
   async function showTab(key) {
+    activeTab = key;
     tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
@@ -131,6 +137,12 @@ export async function renderContattoDettaglio(container, params = []) {
           contentEl.innerHTML = renderPanoramica(contact, data);
           void hydrateSellerIntent(contentEl, data, lazyCache);
           break;
+        case 'timeline': {
+          contentEl.innerHTML = renderSellerTimeline({ status: 'loading' });
+          const timeline = await loadSellerTimeline(contact.id, lazyCache);
+          if (activeTab === 'timeline') contentEl.innerHTML = renderSellerTimeline(timeline);
+          break;
+        }
         case 'richieste': contentEl.innerHTML = renderRichieste(data.buy_requests); break;
         case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;
         case 'visite': contentEl.innerHTML = renderVisite(data.visits); break;
