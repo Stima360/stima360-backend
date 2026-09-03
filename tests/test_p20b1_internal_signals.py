@@ -765,6 +765,71 @@ def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkey
     assert [item["stima_id"] for item in result["outcomes"]] == [7, 11]
 
 
+def test_batch_continues_when_a_listed_watch_disappears(monkeypatch, caplog):
+    from property_watch import service
+
+    calls = []
+    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+
+    def collect(stima_id):
+        calls.append(stima_id)
+        if stima_id == 7:
+            raise WatchNotFoundError("active property watch for stima 7 not found")
+        return {
+            "watch_id": 21,
+            "microzone": {"status": "written", "watch_id": 21, "observation": {"id": 31}},
+            "internal_supply": {
+                "status": "unchanged",
+                "watch_id": 21,
+                "observation": None,
+            },
+        }
+
+    monkeypatch.setattr(service, "safe_collect_internal_signals_for_stima", collect)
+
+    result = service.collect_internal_signals_for_active_watches()
+
+    assert calls == [7, 11]
+    assert result["processed"] == 2
+    assert result["written"] == 1
+    assert result["unchanged"] == 1
+    assert result["unavailable"] == 0
+    assert result["failed"] == 2
+    assert result["outcomes"] == [
+        {
+            "stima_id": 7,
+            "watch_id": None,
+            "microzone": {
+                "status": "failed",
+                "watch_id": None,
+                "observation": None,
+            },
+            "internal_supply": {
+                "status": "failed",
+                "watch_id": None,
+                "observation": None,
+            },
+        },
+        {
+            "stima_id": 11,
+            "watch_id": 21,
+            "microzone": {"status": "written", "watch_id": 21, "observation": {"id": 31}},
+            "internal_supply": {
+                "status": "unchanged",
+                "watch_id": 21,
+                "observation": None,
+            },
+        },
+    ]
+    record = next(
+        item
+        for item in caplog.records
+        if item.msg == "property_watch_active_batch_item_failed stima_id=%s error_type=%s"
+    )
+    assert record.args == (7, "WatchNotFoundError")
+    assert "payload" not in record.getMessage()
+
+
 def test_current_state_derives_internal_signals_without_any_write(monkeypatch):
     from property_watch import service
 

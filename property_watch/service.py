@@ -160,6 +160,10 @@ def _failed_collector_outcome() -> dict[str, Any]:
     return {"status": "failed", "watch_id": None, "observation": None}
 
 
+def _failed_watch_outcome() -> dict[str, Any]:
+    return _combined_outcomes(_failed_collector_outcome(), _failed_collector_outcome())
+
+
 def _log_collector_failure(stima_id: int, collector: str, exc: Exception) -> None:
     logger.error(
         "property_watch_collector_failed stima_id=%s collector=%s error_type=%s",
@@ -204,13 +208,18 @@ def _summarize_collector_statuses(outcomes: list[dict[str, Any]]) -> dict[str, i
 
 
 def collect_internal_signals_for_active_watches() -> dict[str, Any]:
-    outcomes = [
-        {
-            "stima_id": stima_id,
-            **safe_collect_internal_signals_for_stima(stima_id),
-        }
-        for stima_id in repository.list_active_watch_stima_ids()
-    ]
+    outcomes = []
+    for stima_id in repository.list_active_watch_stima_ids():
+        try:
+            outcome = safe_collect_internal_signals_for_stima(stima_id)
+        except (ValidationError, WatchNotFoundError) as exc:
+            logger.error(
+                "property_watch_active_batch_item_failed stima_id=%s error_type=%s",
+                stima_id,
+                type(exc).__name__,
+            )
+            outcome = _failed_watch_outcome()
+        outcomes.append({"stima_id": stima_id, **outcome})
     return {
         "processed": len(outcomes),
         **_summarize_collector_statuses(outcomes),
