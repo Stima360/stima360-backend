@@ -23,9 +23,26 @@ class PropertyWatchObservation(PropertyWatchModel):
     created_at: datetime
 
 
+class MicrozoneReference(PropertyWatchModel):
+    prezzo_mq_base: Any | None
+    current: Any | None
+    latest_change: PropertyWatchObservation | None
+    observed_at: datetime | None
+    observation_count: int
+
+
+class InternalSupply(PropertyWatchModel):
+    current_count: int | None
+    latest_observation: PropertyWatchObservation
+    observed_at: datetime
+    observation_count: int
+
+
 class PropertyWatchState(PropertyWatchModel):
     watch: dict[str, Any]
     baseline: PropertyWatchObservation | None
+    microzone_reference: MicrozoneReference | None
+    internal_supply: InternalSupply | None
     observation_count: int
     observations: list[PropertyWatchObservation]
     computed_at: datetime

@@ -214,6 +214,19 @@ def collect_internal_signals_for_active_watches() -> dict[str, Any]:
     }
 
 
+def _latest_observation_of_type(
+    observations: list[dict[str, Any]], observation_types: set[str]
+) -> dict[str, Any] | None:
+    return next(
+        (
+            observation
+            for observation in reversed(observations)
+            if observation["observation_type"] in observation_types
+        ),
+        None,
+    )
+
+
 def get_current_watch_state(stima_id: int) -> dict[str, Any]:
     watch = get_watch_for_stima(stima_id)
     observations = repository.list_observations(watch["id"])
@@ -221,9 +234,80 @@ def get_current_watch_state(stima_id: int) -> dict[str, Any]:
         (item for item in observations if item["observation_type"] == "watch_started"),
         None,
     )
+    baseline_payload = baseline.get("payload", {}) if baseline is not None else {}
+    baseline_payload = baseline_payload if isinstance(baseline_payload, dict) else {}
+
+    microzone_changes = [
+        item
+        for item in observations
+        if item["observation_type"] == "microzone_price_changed"
+    ]
+    latest_microzone_change = _latest_observation_of_type(
+        observations,
+        {"microzone_price_changed"},
+    )
+    latest_microzone_payload = (
+        latest_microzone_change.get("payload", {})
+        if latest_microzone_change is not None
+        else {}
+    )
+    latest_microzone_payload = (
+        latest_microzone_payload
+        if isinstance(latest_microzone_payload, dict)
+        else {}
+    )
+    microzone_reference = (
+        {
+            "prezzo_mq_base": baseline_payload.get("prezzo_mq_base"),
+            "current": latest_microzone_payload.get(
+                "current",
+                baseline_payload.get("prezzo_mq_base"),
+            ),
+            "latest_change": latest_microzone_change,
+            "observed_at": (
+                latest_microzone_change.get("observed_at")
+                if latest_microzone_change is not None
+                else None
+            ),
+            "observation_count": len(microzone_changes),
+        }
+        if baseline is not None
+        else None
+    )
+
+    supply_observations = [
+        item
+        for item in observations
+        if item["observation_type"]
+        in {"internal_supply_snapshot", "internal_supply_changed"}
+    ]
+    latest_supply_observation = _latest_observation_of_type(
+        observations,
+        {"internal_supply_snapshot", "internal_supply_changed"},
+    )
+    latest_supply_payload = (
+        latest_supply_observation.get("payload", {})
+        if latest_supply_observation is not None
+        else {}
+    )
+    latest_supply_payload = (
+        latest_supply_payload if isinstance(latest_supply_payload, dict) else {}
+    )
+    internal_supply = (
+        {
+            "current_count": latest_supply_payload.get("current_count"),
+            "latest_observation": latest_supply_observation,
+            "observed_at": latest_supply_observation.get("observed_at"),
+            "observation_count": len(supply_observations),
+        }
+        if latest_supply_observation is not None
+        else None
+    )
     return {
         "watch": watch,
         "baseline": baseline,
+        "microzone_reference": microzone_reference,
+        "internal_supply": internal_supply,
         "observation_count": len(observations),
         "observations": observations,
         "computed_at": datetime.now(timezone.utc),

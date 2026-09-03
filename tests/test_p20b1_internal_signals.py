@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 import json
 
@@ -722,3 +723,127 @@ def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkey
     assert result["unavailable"] == 0
     assert result["failed"] == 1
     assert [item["stima_id"] for item in result["outcomes"]] == [7, 11]
+
+
+def test_current_state_derives_internal_signals_without_any_write(monkeypatch):
+    from property_watch import service
+
+    started_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    first_change_at = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    second_change_at = datetime(2026, 9, 3, tzinfo=timezone.utc)
+    snapshot_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    supply_change_at = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    baseline = {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": {
+            "prezzo_mq_base": 1500,
+            "comune": "Alba Adriatica",
+            "microzona": "Nord",
+        },
+        "observed_at": started_at,
+    }
+    first_change = {
+        "id": 11,
+        "watch_id": 3,
+        "observation_type": "microzone_price_changed",
+        "source": "internal",
+        "payload": {"previous": 1500, "current": 1600},
+        "observed_at": first_change_at,
+    }
+    second_change = {
+        "id": 12,
+        "watch_id": 3,
+        "observation_type": "microzone_price_changed",
+        "source": "internal",
+        "payload": {"previous": 1600, "current": 1550},
+        "observed_at": second_change_at,
+    }
+    snapshot = {
+        "id": 13,
+        "watch_id": 3,
+        "observation_type": "internal_supply_snapshot",
+        "source": "internal",
+        "payload": {"current_count": 0},
+        "observed_at": snapshot_at,
+    }
+    supply_change = {
+        "id": 14,
+        "watch_id": 3,
+        "observation_type": "internal_supply_changed",
+        "source": "internal",
+        "payload": {"previous_count": 0, "current_count": 2, "delta": 2},
+        "observed_at": supply_change_at,
+    }
+    observations = [baseline, first_change, second_change, snapshot, supply_change]
+    monkeypatch.setattr(
+        repository,
+        "get_watch_for_stima",
+        lambda _stima_id: {"id": 3, "stima_id": 501, "status": "active"},
+    )
+    monkeypatch.setattr(repository, "list_observations", lambda _watch_id: observations)
+    monkeypatch.setattr(
+        repository,
+        "insert_observation",
+        lambda *_args, **_kwargs: pytest.fail("GET must not write observations"),
+    )
+    monkeypatch.setattr(
+        service,
+        "collect_internal_signals_for_stima",
+        lambda _stima_id: pytest.fail("GET must not collect signals"),
+    )
+
+    state = service.get_current_watch_state(501)
+
+    assert state["baseline"] == baseline
+    assert state["microzone_reference"] == {
+        "prezzo_mq_base": 1500,
+        "current": 1550,
+        "latest_change": second_change,
+        "observed_at": second_change_at,
+        "observation_count": 2,
+    }
+    assert state["internal_supply"] == {
+        "current_count": 2,
+        "latest_observation": supply_change,
+        "observed_at": supply_change_at,
+        "observation_count": 2,
+    }
+    assert state["observations"] == observations
+    assert state["observation_count"] == 5
+    assert "computed_at" in state
+    assert not {"score", "band", "recommendation", "buyer_pressure", "trend"} & state.keys()
+
+
+def test_current_state_keeps_baseline_microzone_reference_and_no_supply_before_snapshot(
+    monkeypatch,
+):
+    from property_watch import service
+
+    baseline = {
+        "id": 10,
+        "watch_id": 3,
+        "observation_type": "watch_started",
+        "source": "internal",
+        "payload": {"prezzo_mq_base": 1500},
+        "observed_at": datetime(2026, 9, 1, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr(
+        repository,
+        "get_watch_for_stima",
+        lambda _stima_id: {"id": 3, "stima_id": 501, "status": "active"},
+    )
+    monkeypatch.setattr(repository, "list_observations", lambda _watch_id: [baseline])
+
+    state = service.get_current_watch_state(501)
+
+    assert state["microzone_reference"] == {
+        "prezzo_mq_base": 1500,
+        "current": 1500,
+        "latest_change": None,
+        "observed_at": None,
+        "observation_count": 0,
+    }
+    assert state["internal_supply"] is None
