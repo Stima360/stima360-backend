@@ -22,7 +22,7 @@
 // Le relazioni operative (numero di lead, richieste, immobili collegati) sono
 // mostrate a parte, chiaramente etichettate come conteggi e non come ruoli.
 
-import { apiGet } from '../core/api-client.js';
+import { apiGet, apiPatch, apiPost, apiDelete } from '../core/api-client.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 import {
   createBuyerPressureCache,
@@ -70,8 +70,21 @@ const SELLER_INTENT_STATE_LABELS = {
   da_recuperare: 'Da recuperare',
 };
 
+// P25.2 — valori reali core/enums.py (LEAD_PIPELINES/LEAD_STATUSES/
+// PRIORITIES), stesso principio già applicato altrove nel progetto: nessun
+// valore inventato, sempre letto dal backend prima di scrivere l'elenco.
+const LEAD_PIPELINE_LABELS = { sell: 'Vendita', buy: 'Acquisto', general: 'Generico' };
+const LEAD_STATUS_LABELS = { open: 'Aperto', paused: 'In pausa', closed: 'Chiuso' };
+const LEAD_PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
+// property/enums.py::PROPERTY_LEAD_RELATIONS, per il collegamento Lead<->Immobile.
+const PROPERTY_LEAD_RELATION_LABELS = {
+  origin: 'Origine', seller: 'Venditore', buyer_interest: 'Interesse acquirente',
+  related: 'Correlato', follow_up: 'Follow-up',
+};
+
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
+  { key: 'lead', label: 'Lead' },
   { key: 'timeline', label: 'Timeline' },
   { key: 'immobili', label: 'Immobili' },
   { key: 'richieste', label: 'Richieste' },
@@ -130,6 +143,9 @@ export async function renderContattoDettaglio(container, params = []) {
     <div id="contact-tab-content" class="card panel"></div>
     <dialog id="contact-activity-dialog" class="modal"></dialog>
     <dialog id="contact-task-dialog" class="modal"></dialog>
+    <dialog id="lead-new-dialog" class="modal"></dialog>
+    <dialog id="lead-edit-dialog" class="modal"></dialog>
+    <dialog id="lead-properties-dialog" class="modal modal-wide"></dialog>
   `;
 
   const badgeRow = container.querySelector('#contact-role-badges');
@@ -171,6 +187,324 @@ export async function renderContattoDettaglio(container, params = []) {
     });
   });
 
+  // --- P25.2: Lead SELL — creazione, modifica, collegamento Immobili -------
+  // Endpoint reali (verificati in core/router.py e property/router.py prima
+  // di scrivere questo blocco, nessuno inventato):
+  //  POST  /api/core/leads                              (LeadCreate)
+  //  PATCH /api/core/leads/{id}                          (LeadUpdate; closed_at
+  //        è derivato automaticamente da status lato backend — mai inviato
+  //        da qui, stesso principio di completed_at per i task in P25.1)
+  //  GET   /api/property/properties?lead_id={id}&limit=  (immobili collegati)
+  //  GET   /api/property/properties?search=&limit=       (ricerca immobile)
+  //  POST  /api/property/properties/{pid}/leads           (PropertyLeadCreate)
+  //  DELETE /api/property/properties/{pid}/leads/{lead_id}
+  // Nessun endpoint di cancellazione lead esiste: qui non viene offerta.
+
+  async function reloadLeads() {
+    try {
+      const fresh = await apiGet(`/api/crm/contacts/${contact.id}/360`);
+      data.leads = fresh.leads;
+    } catch (_error) {
+      // best-effort, stesso principio di reloadTasksAndActivities: la
+      // mutazione è già avvenuta, un errore di refresh non deve nasconderla.
+    }
+    await showTab(activeTab);
+  }
+
+  function bindLeadTabActions() {
+    const newBtn = contentEl.querySelector('#lead-new-btn');
+    if (newBtn) newBtn.addEventListener('click', () => openNewLeadDialog());
+    contentEl.querySelectorAll('[data-lead-edit]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lead = (data.leads || []).find((l) => String(l.id) === btn.dataset.leadEdit);
+        if (lead) openEditLeadDialog(lead);
+      });
+    });
+    contentEl.querySelectorAll('[data-lead-properties]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lead = (data.leads || []).find((l) => String(l.id) === btn.dataset.leadProperties);
+        if (lead) openLeadPropertiesDialog(lead);
+      });
+    });
+  }
+
+  function openNewLeadDialog() {
+    const dialog = container.querySelector('#lead-new-dialog');
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Nuovo lead</h3>
+        <div class="error-box" hidden></div>
+        <form id="lead-new-form">
+          <label>Pipeline
+            <select name="pipeline">
+              ${Object.entries(LEAD_PIPELINE_LABELS).map(([v, l]) => `<option value="${v}" ${v === 'sell' ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Priorità
+            <select name="priority">
+              ${Object.entries(LEAD_PRIORITY_LABELS).map(([v, l]) => `<option value="${v}" ${v === 'normal' ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Note<textarea name="notes" rows="3"></textarea></label>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-cancel>Annulla</button>
+            <button type="submit" class="btn primary">Crea lead</button>
+          </div>
+        </form>
+      </div>
+    `;
+    const errorBox = dialog.querySelector('.error-box');
+    dialog.querySelector('[data-cancel]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('#lead-new-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submitBtn = dialog.querySelector('button[type="submit"]');
+      const formData = new FormData(event.target);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creazione…';
+      errorBox.hidden = true;
+      try {
+        await apiPost('/api/core/leads', {
+          contact_id: contact.id,
+          pipeline: formData.get('pipeline'),
+          priority: formData.get('priority'),
+          notes: formData.get('notes') || null,
+        });
+        dialog.close();
+        await reloadLeads();
+      } catch (error) {
+        errorBox.hidden = false;
+        errorBox.textContent = `Errore nella creazione del lead: ${error.message}`;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Crea lead';
+      }
+    });
+    dialog.showModal();
+  }
+
+  function openEditLeadDialog(lead) {
+    const dialog = container.querySelector('#lead-edit-dialog');
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Modifica lead #${escapeHtml(lead.id)}</h3>
+        <div class="error-box" hidden></div>
+        <form id="lead-edit-form">
+          <label>Stage
+            <select name="stage">
+              ${Object.entries(SELLER_STAGE_LABELS).map(([v, l]) => `<option value="${v}" ${v === lead.stage ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Stato
+            <select name="status">
+              ${Object.entries(LEAD_STATUS_LABELS).map(([v, l]) => `<option value="${v}" ${v === lead.status ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Priorità
+            <select name="priority">
+              ${Object.entries(LEAD_PRIORITY_LABELS).map(([v, l]) => `<option value="${v}" ${v === lead.priority ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Assegnato a<input type="text" name="assigned_to" value="${escapeHtml(lead.assigned_to || '')}"></label>
+          <label>Valore stimato<input type="number" step="0.01" name="estimated_value" value="${lead.estimated_value != null ? escapeHtml(lead.estimated_value) : ''}"></label>
+          <label>Prossima azione<input type="datetime-local" name="next_action_at" value="${toDatetimeLocalValue(lead.next_action_at)}"></label>
+          <label>Motivo perdita (se applicabile)<input type="text" name="lost_reason" value="${escapeHtml(lead.lost_reason || '')}"></label>
+          <label>Note<textarea name="notes" rows="3">${escapeHtml(lead.notes || '')}</textarea></label>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-cancel>Annulla</button>
+            <button type="submit" class="btn primary">Salva</button>
+          </div>
+        </form>
+      </div>
+    `;
+    const errorBox = dialog.querySelector('.error-box');
+    dialog.querySelector('[data-cancel]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('#lead-edit-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submitBtn = dialog.querySelector('button[type="submit"]');
+      const formData = new FormData(event.target);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      errorBox.hidden = true;
+      const estimatedValueRaw = formData.get('estimated_value');
+      const nextActionRaw = formData.get('next_action_at');
+      try {
+        await apiPatch(`/api/core/leads/${lead.id}`, {
+          stage: formData.get('stage'),
+          status: formData.get('status'),
+          priority: formData.get('priority'),
+          assigned_to: formData.get('assigned_to') || null,
+          estimated_value: estimatedValueRaw ? Number(estimatedValueRaw) : null,
+          next_action_at: nextActionRaw ? new Date(nextActionRaw).toISOString() : null,
+          lost_reason: formData.get('lost_reason') || null,
+          notes: formData.get('notes') || null,
+        });
+        dialog.close();
+        await reloadLeads();
+      } catch (error) {
+        errorBox.hidden = false;
+        errorBox.textContent = `Errore nel salvataggio del lead: ${error.message}`;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+      }
+    });
+    dialog.showModal();
+  }
+
+  function openLeadPropertiesDialog(lead) {
+    const dialog = container.querySelector('#lead-properties-dialog');
+    const unlinkConfirm = new Set();
+    let linkedProperties = [];
+    let pickedProperty = null;
+    let loadError = null;
+    let searchDebounce = null;
+
+    async function loadLinked() {
+      try {
+        const res = await apiGet(`/api/property/properties?lead_id=${lead.id}&limit=50`);
+        linkedProperties = Array.isArray(res && res.items) ? res.items : [];
+        loadError = null;
+      } catch (error) {
+        linkedProperties = [];
+        loadError = error.message;
+      }
+    }
+
+    function propertyLabel(p) {
+      return p.title || p.code || `Immobile #${p.id}`;
+    }
+
+    function render() {
+      const errorHtml = loadError ? `<div class="error-box">Errore nel caricamento degli immobili collegati: ${escapeHtml(loadError)}</div>` : '';
+      const linkedHtml = linkedProperties.length
+        ? `<ul class="list">${linkedProperties.map((p) => `
+            <li class="list-item">
+              <span><a href="#/immobili/${escapeHtml(p.id)}"><strong>${escapeHtml(propertyLabel(p))}</strong></a><br><small class="muted">${escapeHtml(p.city || '—')} · ${escapeHtml(p.commercial_status || '—')}</small></span>
+              <button type="button" class="btn ghost danger" data-unlink="${p.id}">${unlinkConfirm.has(p.id) ? 'Conferma scollega' : 'Scollega'}</button>
+            </li>
+          `).join('')}</ul>`
+        : '<p class="muted">Nessun immobile collegato a questo lead.</p>';
+
+      dialog.innerHTML = `
+        <div class="modal-content">
+          <h3>Immobili collegati — Lead #${escapeHtml(lead.id)}</h3>
+          <div class="error-box" data-link-error hidden></div>
+          ${errorHtml}
+          ${linkedHtml}
+          <h4 class="section-title">Collega un immobile esistente</h4>
+          <input type="search" class="input" id="lead-property-search" placeholder="Cerca per titolo, codice, indirizzo o comune…" autocomplete="off">
+          <div id="lead-property-results"></div>
+          <div id="lead-property-selected" hidden></div>
+          <div id="lead-property-link-row" hidden>
+            <label>Relazione
+              <select id="lead-property-relation">
+                ${Object.entries(PROPERTY_LEAD_RELATION_LABELS).map(([v, l]) => `<option value="${v}" ${v === 'origin' ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+              </select>
+            </label>
+            <button type="button" id="lead-property-link-btn" class="btn primary">Collega</button>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-close>Chiudi</button>
+          </div>
+        </div>
+      `;
+      bind();
+    }
+
+    function bind() {
+      dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close());
+      const linkErrorBox = dialog.querySelector('[data-link-error]');
+
+      dialog.querySelectorAll('[data-unlink]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const propertyId = Number(btn.dataset.unlink);
+          if (!unlinkConfirm.has(propertyId)) {
+            unlinkConfirm.add(propertyId);
+            render();
+            return;
+          }
+          btn.disabled = true;
+          btn.textContent = 'Scollegamento…';
+          try {
+            await apiDelete(`/api/property/properties/${propertyId}/leads/${lead.id}`);
+            unlinkConfirm.delete(propertyId);
+            await loadLinked();
+            render();
+          } catch (error) {
+            unlinkConfirm.delete(propertyId);
+            linkErrorBox.hidden = false;
+            linkErrorBox.textContent = `Errore nello scollegamento: ${error.message}`;
+            btn.disabled = false;
+            btn.textContent = 'Scollega';
+          }
+        });
+      });
+
+      const searchInput = dialog.querySelector('#lead-property-search');
+      const resultsEl = dialog.querySelector('#lead-property-results');
+      const selectedEl = dialog.querySelector('#lead-property-selected');
+      const linkRow = dialog.querySelector('#lead-property-link-row');
+
+      searchInput.addEventListener('input', () => {
+        clearTimeout(searchDebounce);
+        const term = searchInput.value.trim();
+        if (!term) { resultsEl.innerHTML = ''; return; }
+        searchDebounce = setTimeout(async () => {
+          resultsEl.innerHTML = '<p class="muted">Ricerca…</p>';
+          try {
+            const res = await apiGet(`/api/property/properties?search=${encodeURIComponent(term)}&limit=10`);
+            const results = Array.isArray(res && res.items) ? res.items : [];
+            resultsEl.innerHTML = results.length
+              ? `<div class="list">${results.map((p, i) => `<div class="list-item" data-index="${i}" style="cursor:pointer"><span><strong>${escapeHtml(propertyLabel(p))}</strong><br><small class="muted">${escapeHtml(p.city || '—')}</small></span></div>`).join('')}</div>`
+              : '<p class="muted">Nessun immobile trovato.</p>';
+            resultsEl.querySelectorAll('.list-item').forEach((el) => {
+              el.addEventListener('click', () => {
+                pickedProperty = results[Number(el.dataset.index)];
+                resultsEl.innerHTML = '';
+                searchInput.value = '';
+                selectedEl.hidden = false;
+                selectedEl.innerHTML = `<div class="selected-contact-card"><span><strong>${escapeHtml(propertyLabel(pickedProperty))}</strong></span><button type="button" class="btn ghost" id="lead-property-change">Cambia</button></div>`;
+                selectedEl.querySelector('#lead-property-change').addEventListener('click', () => {
+                  pickedProperty = null;
+                  selectedEl.hidden = true;
+                  selectedEl.innerHTML = '';
+                  linkRow.hidden = true;
+                });
+                linkRow.hidden = false;
+              });
+            });
+          } catch (error) {
+            resultsEl.innerHTML = `<div class="error-box">Errore nella ricerca: ${escapeHtml(error.message)}</div>`;
+          }
+        }, 300);
+      });
+
+      dialog.querySelector('#lead-property-link-btn').addEventListener('click', async () => {
+        if (!pickedProperty) return;
+        const linkBtn = dialog.querySelector('#lead-property-link-btn');
+        const relation = dialog.querySelector('#lead-property-relation').value;
+        linkBtn.disabled = true;
+        linkBtn.textContent = 'Collegamento…';
+        try {
+          await apiPost(`/api/property/properties/${pickedProperty.id}/leads`, {
+            lead_id: lead.id,
+            relation_type: relation,
+          });
+          pickedProperty = null;
+          await loadLinked();
+          render();
+        } catch (error) {
+          linkErrorBox.hidden = false;
+          linkErrorBox.textContent = `Errore nel collegamento: ${error.message}`;
+          linkBtn.disabled = false;
+          linkBtn.textContent = 'Collega';
+        }
+      });
+    }
+
+    dialog.innerHTML = '<div class="modal-content"><p class="muted">Caricamento…</p></div>';
+    dialog.showModal();
+    loadLinked().then(render);
+  }
+
   const tabsEl = container.querySelector('#contact-tabs');
   tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
 
@@ -204,6 +538,10 @@ export async function renderContattoDettaglio(container, params = []) {
           if (activeTab === 'timeline') contentEl.innerHTML = renderSellerTimeline(timeline);
           break;
         }
+        case 'lead':
+          contentEl.innerHTML = renderLeadTab(data.leads);
+          bindLeadTabActions();
+          break;
         case 'richieste': contentEl.innerHTML = renderRichieste(data.buy_requests); break;
         case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;
         case 'visite': contentEl.innerHTML = renderVisite(data.visits); break;
@@ -429,6 +767,47 @@ async function hydrateSellerIntent(contentEl, data, cache) {
     if (!mount.isConnected || mount.dataset.requestId !== requestId) return;
     mount.innerHTML = '<p class="muted">Seller Intent non disponibile.</p>';
   }
+}
+
+// --- Lead (P25.2) ----------------------------------------------------------
+
+function renderLeadTab(leads) {
+  const items = Array.isArray(leads) ? leads : [];
+  const actionBar = `
+    <div class="action-bar" style="margin-bottom:12px">
+      <button type="button" id="lead-new-btn" class="btn primary">+ Nuovo lead</button>
+    </div>
+  `;
+  const table = renderTable(
+    [
+      { label: 'Pipeline', render: (l) => renderBadge(LEAD_PIPELINE_LABELS[l.pipeline] || l.pipeline || '—', 'gray') },
+      { label: 'Stage', render: (l) => escapeHtml(sellerStageLabel(l.stage)) },
+      { label: 'Stato', render: (l) => renderBadge(LEAD_STATUS_LABELS[l.status] || l.status || '—', statusTone(l.status)) },
+      { label: 'Priorità', render: (l) => renderBadge(LEAD_PRIORITY_LABELS[l.priority] || l.priority || '—', statusTone(l.priority)) },
+      { label: 'Prossima azione', render: (l) => escapeHtml(formatDateTime(l.next_action_at)) },
+      { label: 'Assegnato a', render: (l) => escapeHtml(l.assigned_to || '—') },
+      { label: 'Azioni', render: (l) => `
+        <button type="button" class="btn ghost" data-lead-edit="${l.id}">Modifica</button>
+        <button type="button" class="btn ghost" data-lead-properties="${l.id}">Immobili collegati</button>
+      ` },
+    ],
+    items,
+    { emptyMessage: 'Nessun lead collegato a questo contatto.' },
+  );
+  return actionBar + table;
+}
+
+// Converte un valore ISO in valore per <input type="datetime-local"> in
+// orario locale del browser. Stessa funzione (duplicata volutamente, non
+// estratta) già presente localmente in activity-task-dialogs.js,
+// immobile-dettaglio.js (visitDateTimeLocal) e acquirente-dettaglio.js
+// (proposalDateTimeLocal): è una utility pura di 3 righe, la duplicazione è
+// il pattern già stabilito nel progetto per questo caso specifico.
+function toDatetimeLocalValue(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
 // --- Richieste (BUY) ----------------------------------------------------
