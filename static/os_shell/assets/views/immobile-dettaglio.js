@@ -46,16 +46,29 @@
 // in questa risposta, quindi NON viene mostrato (nessun badge "condiviso"
 // inventato). Nessuna azione di condivisione presente in questa vista.
 //
-// Vista in prevalenza di sola lettura: Foto, Documenti, Visite e Attivita
-// restano senza alcuna scrittura, upload, eliminazione, riordino o azione di
-// stato. Fa eccezione la tab Proprietari (P12): collegamento/rimozione di
-// referenti (property_contacts) tramite gli endpoint gia' esistenti
-// property/router.py:25-28 (POST/DELETE .../contacts), nessuna creazione di
-// contatto qui (il contatto va sempre scelto tra quelli CORE gia' esistenti,
-// via GET /api/core/contacts?search=, stesso endpoint gia' usato in
-// acquirenti.js e contatti.js) e nessun PATCH inventato (non esiste lato
-// backend: per cambiare ruolo/quota di un collegamento esistente serve un
-// task separato).
+// Proprietari (P12): collegamento/rimozione di referenti (property_contacts)
+// tramite gli endpoint gia' esistenti property/router.py:25-28 (POST/DELETE
+// .../contacts), nessuna creazione di contatto qui (il contatto va sempre
+// scelto tra quelli CORE gia' esistenti, via GET /api/core/contacts?search=,
+// stesso endpoint gia' usato in acquirenti.js e contatti.js) e nessun PATCH
+// inventato (non esiste lato backend: per cambiare ruolo/quota di un
+// collegamento esistente serve un task separato).
+//
+// Foto/Documenti (P25.6): aggiunta ed eliminazione operative tramite gli
+// endpoint gia' esistenti property/router.py:33-44 (POST/DELETE
+// .../documents, .../photos). IMPORTANTE: property/schemas.py::PhotoCreate.url
+// e DocumentCreate.url/storage_key sono stringhe (un link a un file gia'
+// ospitato altrove) — non esiste alcun endpoint di upload binario/multipart
+// in questo backend (verificato: nessun UploadFile in property/router.py,
+// nessun servizio di storage file altrove). "Aggiungi" qui significa quindi
+// registrare il collegamento a un URL gia' esistente, mai un vero upload dal
+// computer dell'agente. Nessuna "Modifica documento/foto" (solo
+// aggiunta/eliminazione, come richiesto dal brief "base"): is_cover si
+// imposta gia' in fase di aggiunta, il backend gestisce da solo
+// l'esclusivita' (property/repository.py:199,221-224).
+//
+// Attivita resta a sola lettura (nessuna relazione Attivita CORE <->
+// Immobile esiste oggi, vedi commento sopra).
 
 import { apiDelete, apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
@@ -200,6 +213,20 @@ export async function renderImmobileDettaglio(container, params = []) {
     property.visits = updated.visits;
   }
 
+  // P25.6: ricarica foto/documenti dopo aggiunta/eliminazione. Stessa fonte
+  // del caricamento iniziale (GET /api/property/properties/{id}, che
+  // include gia' p.photos/p.documents), nessun nuovo endpoint - stesso
+  // principio di reloadPropertyContacts/reloadPropertyVisits sopra.
+  async function reloadPropertyPhotos() {
+    const updated = await apiGet(`/api/property/properties/${property.id}`);
+    property.photos = updated.photos;
+  }
+
+  async function reloadPropertyDocuments() {
+    const updated = await apiGet(`/api/property/properties/${property.id}`);
+    property.documents = updated.documents;
+  }
+
   // P8: stato locale di modifica per la sezione Incarico dentro Panoramica.
   // Nessuna nuova entita': mandate_type/mandate_start/mandate_end restano
   // colonne di properties, scritte tramite PATCH /api/property/properties/{id}
@@ -236,6 +263,24 @@ export async function renderImmobileDettaglio(container, params = []) {
   // contactRemoveConfirm sopra.
   const visitRemoveConfirm = new Set();
 
+  // P25.6: Foto/Documenti — aggiunta/rimozione operative. IMPORTANTE:
+  // property/schemas.py::PhotoCreate.url e DocumentCreate.url/storage_key
+  // sono stringhe (un link a un file gia' ospitato altrove), NON esiste
+  // alcun endpoint di upload binario/multipart nel backend (verificato:
+  // nessun UploadFile in property/router.py, nessun servizio di storage
+  // file in property/service.py o property/repository.py). "Aggiungi
+  // foto/documento" qui significa quindi registrare il collegamento a un
+  // URL gia' esistente, non caricare un file dal computer dell'agente -
+  // questo e' esattamente cio' che il backend supporta oggi, nulla di
+  // meno e nulla di piu' inventato. Stato locale toggle "+ Aggiungi" (stesso
+  // principio di criteriaAddMode in acquirente-dettaglio.js) + conferma
+  // inline a due click per l'eliminazione (stesso principio di
+  // contactRemoveConfirm sopra).
+  let photoAddMode = false;
+  let documentAddMode = false;
+  const photoRemoveConfirm = new Set();
+  const documentRemoveConfirm = new Set();
+
   const title = property.title || property.code || `Immobile #${property.id}`;
 
   container.innerHTML = `
@@ -268,8 +313,8 @@ export async function renderImmobileDettaglio(container, params = []) {
           bindCommercialStatusSection(contentEl);
           break;
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm); bindProprietariSection(contentEl); break;
-        case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
-        case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
+        case 'foto': contentEl.innerHTML = renderFoto(property.photos, photoAddMode, photoRemoveConfirm); bindFotoSection(contentEl); break;
+        case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
         case 'proposte': contentEl.innerHTML = renderProposte(proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
@@ -997,6 +1042,169 @@ export async function renderImmobileDettaglio(container, params = []) {
     ));
   }
 
+  // P25.6: Foto — aggiunta (POST /api/property/properties/{id}/photos,
+  // PhotoCreate) ed eliminazione (DELETE /api/property/photos/{id}) a due
+  // click. Nessun "imposta come copertina" separato: is_cover si imposta
+  // gia' in fase di aggiunta (checkbox nel form), il backend gestisce da
+  // solo l'esclusivita' (property/repository.py:199 - un solo is_cover=TRUE
+  // per immobile), nessuna logica duplicata qui.
+  function bindFotoSection(panelEl) {
+    const toggleBtn = panelEl.querySelector('#photo-add-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        photoAddMode = true;
+        showTab('foto');
+      });
+    }
+    const cancelBtn = panelEl.querySelector('#photo-add-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        photoAddMode = false;
+        showTab('foto');
+      });
+    }
+    const form = panelEl.querySelector('#photo-add-form');
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const errorEl = panelEl.querySelector('#photo-add-error');
+        if (errorEl) errorEl.textContent = '';
+        const formData = new FormData(form);
+        const url = String(formData.get('url') || '').trim();
+        if (!url) {
+          if (errorEl) errorEl.textContent = 'Indica l\'URL della foto.';
+          return;
+        }
+        const payload = {
+          url,
+          title: String(formData.get('title') || '').trim() || null,
+          sort_order: Number(formData.get('sort_order')) || 0,
+          is_cover: formData.get('is_cover') === 'on',
+        };
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Aggiunta…';
+        try {
+          await apiPost(`/api/property/properties/${property.id}/photos`, payload);
+          photoAddMode = false;
+          await reloadPropertyPhotos();
+          showTab('foto');
+        } catch (error) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Aggiungi';
+          if (errorEl) errorEl.textContent = error.message || 'Errore nell\'aggiunta della foto.';
+        }
+      });
+    }
+    panelEl.querySelectorAll('[data-photo-remove]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const photoId = Number(btn.dataset.photoRemove);
+        if (!photoRemoveConfirm.has(photoId)) {
+          photoRemoveConfirm.add(photoId);
+          showTab('foto');
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Eliminazione…';
+        try {
+          await apiDelete(`/api/property/photos/${photoId}`);
+          photoRemoveConfirm.delete(photoId);
+          await reloadPropertyPhotos();
+          showTab('foto');
+        } catch (error) {
+          photoRemoveConfirm.delete(photoId);
+          btn.disabled = false;
+          btn.textContent = 'Elimina';
+          const errorEl = panelEl.querySelector('#photo-add-error');
+          if (errorEl) errorEl.textContent = error.message || 'Errore nell\'eliminazione della foto.';
+        }
+      });
+    });
+  }
+
+  // P25.6: Documenti — aggiunta (POST /api/property/properties/{id}/documents,
+  // DocumentCreate) ed eliminazione (DELETE /api/property/documents/{id}) a
+  // due click. Nessuna "Modifica" qui: il brief P25.6 chiede esplicitamente
+  // solo upload/view/delete (base), non un editor completo del documento.
+  function bindDocumentiSection(panelEl) {
+    const toggleBtn = panelEl.querySelector('#document-add-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        documentAddMode = true;
+        showTab('documenti');
+      });
+    }
+    const cancelBtn = panelEl.querySelector('#document-add-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        documentAddMode = false;
+        showTab('documenti');
+      });
+    }
+    const form = panelEl.querySelector('#document-add-form');
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const errorEl = panelEl.querySelector('#document-add-error');
+        if (errorEl) errorEl.textContent = '';
+        const formData = new FormData(form);
+        const documentType = String(formData.get('document_type') || '').trim();
+        const docTitle = String(formData.get('title') || '').trim();
+        if (!documentType || !docTitle) {
+          if (errorEl) errorEl.textContent = 'Tipo e titolo del documento sono obbligatori.';
+          return;
+        }
+        const url = String(formData.get('url') || '').trim();
+        const status = formData.get('status');
+        const payload = {
+          document_type: documentType,
+          title: docTitle,
+          url: url || null,
+          status,
+          expires_at: formData.get('expires_at') || null,
+          notes: String(formData.get('notes') || '').trim() || null,
+        };
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Aggiunta…';
+        try {
+          await apiPost(`/api/property/properties/${property.id}/documents`, payload);
+          documentAddMode = false;
+          await reloadPropertyDocuments();
+          showTab('documenti');
+        } catch (error) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Aggiungi';
+          if (errorEl) errorEl.textContent = error.message || 'Errore nell\'aggiunta del documento.';
+        }
+      });
+    }
+    panelEl.querySelectorAll('[data-document-remove]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const documentId = Number(btn.dataset.documentRemove);
+        if (!documentRemoveConfirm.has(documentId)) {
+          documentRemoveConfirm.add(documentId);
+          showTab('documenti');
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Eliminazione…';
+        try {
+          await apiDelete(`/api/property/documents/${documentId}`);
+          documentRemoveConfirm.delete(documentId);
+          await reloadPropertyDocuments();
+          showTab('documenti');
+        } catch (error) {
+          documentRemoveConfirm.delete(documentId);
+          btn.disabled = false;
+          btn.textContent = 'Elimina';
+          const errorEl = panelEl.querySelector('#document-add-error');
+          if (errorEl) errorEl.textContent = error.message || 'Errore nell\'eliminazione del documento.';
+        }
+      });
+    });
+  }
+
   function openVisitCreateDialog() {
     const dialogEl = container.querySelector('#visit-dialog');
     if (!dialogEl) return;
@@ -1370,21 +1578,26 @@ function renderProprietari(items, contactRemoveConfirm) {
 
 // --- Foto (sola lettura: nessun upload/elimina/riordina) -------------------
 
-function renderFoto(items) {
+function renderFoto(items, addMode, removeConfirm) {
   const list = Array.isArray(items) ? items : [];
-  if (!list.length) return '<p class="muted">Nessuna foto disponibile per questo immobile.</p>';
   const sorted = [...list].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  return `<div class="photo-grid">${sorted.map((photo) => `
-    <figure class="photo-item">
-      <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.title || 'Foto immobile')}" loading="lazy">
-      <figcaption>${photo.is_cover ? renderBadge('Copertina', 'role') + ' ' : ''}${escapeHtml(photo.title || '—')}</figcaption>
-    </figure>
-  `).join('')}</div>`;
+  const grid = sorted.length
+    ? `<div class="photo-grid">${sorted.map((photo) => `
+        <figure class="photo-item">
+          <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.title || 'Foto immobile')}" loading="lazy">
+          <figcaption>
+            ${photo.is_cover ? renderBadge('Copertina', 'role') + ' ' : ''}${escapeHtml(photo.title || '—')}
+            <button type="button" class="btn ghost" data-photo-remove="${escapeHtml(photo.id)}">${removeConfirm.has(photo.id) ? 'Conferma' : 'Elimina'}</button>
+          </figcaption>
+        </figure>
+      `).join('')}</div>`
+    : '<p class="muted">Nessuna foto disponibile per questo immobile.</p>';
+  return `${grid}<div id="photo-add-error" class="field-error"></div>${renderMediaAddSection('photo', addMode)}`;
 }
 
 // --- Documenti (property_documents; nessuno stato di condivisione OWNER) ---
 
-function renderDocumenti(items) {
+function renderDocumenti(items, addMode, removeConfirm) {
   const note = '<p class="muted">Documenti dell\'immobile (sistema PROPERTY). Lo stato di condivisione con il Proprietario (Owner Portal) non è incluso in questa risposta e non è mostrato qui.</p>';
   const table = renderTable(
     [
@@ -1393,11 +1606,57 @@ function renderDocumenti(items) {
       { label: 'Stato', render: (d) => renderBadge(DOCUMENT_STATUS_LABELS[d.status] || d.status || '—', documentStatusTone(d.status)) },
       { label: 'Scadenza', render: (d) => escapeHtml(formatDate(d.expires_at)) },
       { label: 'Note', render: (d) => escapeHtml(d.notes || '—') },
+      { label: '', render: (d) => `<button type="button" class="btn ghost" data-document-remove="${escapeHtml(d.id)}">${removeConfirm.has(d.id) ? 'Conferma' : 'Elimina'}</button>` },
     ],
     items,
     { emptyMessage: 'Nessun documento presente per questo immobile.' },
   );
-  return note + table;
+  return `${note}${table}<div id="document-add-error" class="field-error"></div>${renderMediaAddSection('document', addMode)}`;
+}
+
+// P25.6: sezione "+ Aggiungi foto/documento" — pulsante che rivela un
+// piccolo form inline (stesso principio toggle di renderCriteriaAddSection
+// in acquirente-dettaglio.js), mai un intero dialog per un'aggiunta cosi'
+// piccola. url e' sempre un collegamento a un file gia' ospitato altrove:
+// vedi il commento in testa a renderImmobileDettaglio sul perche' non
+// esiste un vero upload binario in questo backend.
+function renderMediaAddSection(kind, isOpen) {
+  if (!isOpen) {
+    const label = kind === 'photo' ? 'foto' : 'documento';
+    return `<div class="action-bar" style="margin:12px 0"><button type="button" id="${kind}-add-toggle" class="btn ghost">+ Aggiungi ${label}</button></div>`;
+  }
+  if (kind === 'photo') {
+    return `
+      <form id="photo-add-form" class="form-grid-3" style="margin:12px 0;align-items:end">
+        <div class="form-field"><label>URL foto *</label><input type="url" name="url" class="input" placeholder="https://…" required></div>
+        <div class="form-field"><label>Titolo</label><input type="text" name="title" class="input" maxlength="200"></div>
+        <div class="form-field"><label>Ordine</label><input type="number" name="sort_order" class="input" min="0" value="0"></div>
+        <div class="form-field"><label><input type="checkbox" name="is_cover"> Imposta come copertina</label></div>
+        <div class="modal-actions">
+          <button type="button" id="photo-add-cancel" class="btn ghost">Annulla</button>
+          <button type="submit" class="btn primary">Aggiungi</button>
+        </div>
+      </form>
+    `;
+  }
+  return `
+    <form id="document-add-form" class="form-grid-3" style="margin:12px 0;align-items:end">
+      <div class="form-field"><label>Tipo documento *</label><input type="text" name="document_type" class="input" maxlength="80" placeholder="Es. planimetria" required></div>
+      <div class="form-field"><label>Titolo *</label><input type="text" name="title" class="input" maxlength="200" required></div>
+      <div class="form-field"><label>Stato</label>
+        <select name="status" class="input">
+          ${Object.entries(DOCUMENT_STATUS_LABELS).map(([v, l]) => `<option value="${v}" ${v === 'available' ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-field"><label>URL documento</label><input type="url" name="url" class="input" placeholder="https://… (obbligatorio salvo stato Mancante/Richiesto)"></div>
+      <div class="form-field"><label>Scadenza</label><input type="date" name="expires_at" class="input"></div>
+      <div class="form-field"><label>Note</label><input type="text" name="notes" class="input" maxlength="500"></div>
+      <div class="modal-actions">
+        <button type="button" id="document-add-cancel" class="btn ghost">Annulla</button>
+        <button type="submit" class="btn primary">Aggiungi</button>
+      </div>
+    </form>
+  `;
 }
 
 // --- Visite (property_visits; P16: create/modifica/elimina operativi) -----
