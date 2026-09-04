@@ -24,6 +24,10 @@
 
 import { apiGet } from '../core/api-client.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+import {
+  createBuyerPressureCache,
+  hydrateBuyerPressure,
+} from '../components/buyer-pressure.js';
 import { loadSellerTimeline, renderSellerTimeline } from '../components/timeline.js';
 
 const ROLE_LABELS = {
@@ -100,6 +104,7 @@ export async function renderContattoDettaglio(container, params = []) {
     sellerIntentPromise: null,
     timelineResult: null,
     timelinePromise: null,
+    buyerPressure: createBuyerPressureCache(),
   };
 
   const contact = data.contact || {};
@@ -136,6 +141,12 @@ export async function renderContattoDettaglio(container, params = []) {
         case 'panoramica':
           contentEl.innerHTML = renderPanoramica(contact, data);
           void hydrateSellerIntent(contentEl, data, lazyCache);
+          void hydrateBuyerPressure(
+            contentEl.querySelector('[data-buyer-pressure-mount]'),
+            data.leads,
+            lazyCache.buyerPressure,
+            () => loadLeadEstimationsLazy(data.leads, lazyCache),
+          );
           break;
         case 'timeline': {
           contentEl.innerHTML = renderSellerTimeline({ status: 'loading' });
@@ -207,6 +218,10 @@ function renderPanoramica(contact, data) {
     <h3 class="section-title">Seller Intelligence</h3>
     <div class="seller-intelligence-section" data-seller-intent-mount>
       <p class="muted">Calcolo Seller Intent…</p>
+    </div>
+    <h3 class="section-title">Domanda buyer</h3>
+    <div class="buyer-pressure-section" data-buyer-pressure-mount>
+      <p class="muted">Calcolo domanda buyer in caricamento…</p>
     </div>
     <h3 class="section-title">Relazioni operative</h3>
     <p class="muted">Conteggi informativi, non ruoli in anagrafica.</p>

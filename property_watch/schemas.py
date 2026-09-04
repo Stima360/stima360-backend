@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PropertyWatchModel(BaseModel):
@@ -98,12 +98,31 @@ class BuyerPressureMetricsState(PropertyWatchModel):
     observation_count: int
 
 
+class BuyerPressureFactor(PropertyWatchModel):
+    code: str
+    label: str
+    points: int = Field(ge=0)
+    max_points: int = Field(gt=0)
+
+
+class BuyerPressureInsight(PropertyWatchModel):
+    score_version: str
+    score: int = Field(ge=0, le=100)
+    band: Literal["none", "low", "medium", "high"]
+    band_label: str
+    headline: str
+    message: str
+    disclaimer: str
+    factors: list[BuyerPressureFactor]
+
+
 class PropertyWatchState(PropertyWatchModel):
     watch: dict[str, Any]
     baseline: PropertyWatchObservation | None
     microzone_reference: MicrozoneReference | None
     internal_supply: InternalSupply | None
     buyer_pressure_metrics: BuyerPressureMetricsState | None
+    buyer_pressure_insight: BuyerPressureInsight | None
     observation_count: int
     observations: list[PropertyWatchObservation]
     computed_at: datetime

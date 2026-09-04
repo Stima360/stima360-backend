@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from . import buyer_pressure, repository
+from . import buyer_pressure, buyer_pressure_score, repository
 from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 
 
@@ -398,20 +398,37 @@ def get_current_watch_state(stima_id: int) -> dict[str, Any]:
         observations, {"buyer_pressure_snapshot", "buyer_pressure_changed"}
     )
     buyer_pressure_metrics = None
+    buyer_pressure_insight = None
     if latest_buyer_pressure is not None:
-        metrics = buyer_pressure.canonicalize_metrics(latest_buyer_pressure.get("payload"))
-        buyer_pressure_metrics = {
-            **metrics,
-            "latest_observation": latest_buyer_pressure,
-            "observed_at": latest_buyer_pressure["observed_at"],
-            "observation_count": len(buyer_pressure_observations),
-        }
+        try:
+            metrics = buyer_pressure.canonicalize_metrics(latest_buyer_pressure.get("payload"))
+            observed_at = latest_buyer_pressure.get("observed_at")
+            if observed_at is None:
+                raise ValueError("buyer pressure observation timestamp is required")
+            buyer_pressure_insight = buyer_pressure_score.derive_buyer_pressure_insight(
+                metrics
+            )
+            buyer_pressure_metrics = {
+                **metrics,
+                "latest_observation": latest_buyer_pressure,
+                "observed_at": observed_at,
+                "observation_count": len(buyer_pressure_observations),
+            }
+        except ValueError as exc:
+            logger.error(
+                "property_watch_buyer_pressure_state_invalid "
+                "stima_id=%s watch_id=%s error_type=%s",
+                stima_id,
+                watch.get("id"),
+                type(exc).__name__,
+            )
     return {
         "watch": watch,
         "baseline": baseline,
         "microzone_reference": microzone_reference,
         "internal_supply": internal_supply,
         "buyer_pressure_metrics": buyer_pressure_metrics,
+        "buyer_pressure_insight": buyer_pressure_insight,
         "observation_count": len(observations),
         "observations": observations,
         "computed_at": datetime.now(timezone.utc),
