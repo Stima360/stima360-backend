@@ -287,7 +287,7 @@ export async function refreshBuyerPressure(stimaId, cache, post = apiPost, getWa
     } catch (_error) {
       return { status: 'failed' };
     }
-    if (!outcome || !["written", "unchanged"].includes(outcome.status)) {
+    if (!outcome || !["written", "unchanged", "superseded"].includes(outcome.status)) {
       return {
         status: outcome && outcome.status === 'baseline_unavailable'
           ? 'baseline_unavailable'

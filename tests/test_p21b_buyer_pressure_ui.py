@@ -228,6 +228,45 @@ def test_manual_refresh_is_bodyless_deduplicated_and_target_scoped():
     )
 
 
+def test_manual_refresh_treats_superseded_as_a_successful_targeted_refresh():
+    _run_module(
+        """
+        import assert from 'node:assert/strict';
+        import {
+          createBuyerPressureCache,
+          refreshBuyerPressure,
+        } from './static/os_shell/assets/components/buyer-pressure.js';
+
+        const cache = createBuyerPressureCache();
+        const otherCard = { status: 'ready', state: { marker: 'unchanged' } };
+        cache.watchResults.set(2, otherCard);
+        const postCalls = [];
+        const watchCalls = [];
+
+        const result = await refreshBuyerPressure(
+          1,
+          cache,
+          (...args) => {
+            postCalls.push(args);
+            return Promise.resolve({ status: 'superseded' });
+          },
+          async (path) => {
+            watchCalls.push(path);
+            return { buyer_pressure_metrics: null, buyer_pressure_insight: null };
+          },
+        );
+
+        assert.deepEqual(postCalls, [
+          ['/api/property-watch/stime/1/buyer-pressure/refresh'],
+        ]);
+        assert.deepEqual(watchCalls, ['/api/property-watch/stime/1']);
+        assert.equal(result.status, 'ready');
+        assert.equal(cache.watchResults.get(2), otherCard);
+        assert.equal(cache.watchResults.has(1), true);
+        """
+    )
+
+
 def test_component_and_css_keep_the_safety_boundary_explicit():
     component = COMPONENT.read_text(encoding="utf-8")
     css = CSS.read_text(encoding="utf-8")
