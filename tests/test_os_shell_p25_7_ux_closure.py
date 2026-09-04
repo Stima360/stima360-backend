@@ -185,14 +185,24 @@ def test_no_dead_links_anywhere_in_os_shell():
     assert not offenders, f"link morti/legacy trovati: {offenders}"
 
 
-# --- 3. Impostazioni placeholder removal -------------------------------------
+# --- 3. Impostazioni removed from sidebar (pre-push compliance patch) -------
+#
+# La specifica P25.7 approvata era: NON implementare Impostazioni, e
+# rimuoverla/nasconderla dalla sidebar (nessun nuovo settings backend, nessuna
+# vista reale). Una precedente implementazione di questo file dava invece a
+# 'impostazioni' una vista reale + registerRoute dedicata - uno scostamento
+# individuato in una review di compliance pre-push e corretto qui: i test
+# sotto verificano ora l'assenza completa di 'impostazioni' dall'app (non
+# solo l'assenza del vecchio placeholder "Sezione in preparazione").
 
 
-def test_impostazioni_no_longer_uses_placeholder_view():
+def test_impostazioni_not_present_in_sections_or_routes():
     main_js = _read(MAIN_JS)
-    assert "Sezione in preparazione" not in main_js
+    names = set(re.findall(r"name:\s*'([a-z]+)'", main_js))
+    assert "impostazioni" not in names, "'impostazioni' non deve piu' comparire in SECTIONS (sidebar)"
     explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
-    assert "impostazioni" in explicit, "impostazioni deve avere una route esplicita reale, non il placeholder"
+    assert "impostazioni" not in explicit, "'impostazioni' non deve avere alcuna registerRoute"
+    assert "renderImpostazioni" not in main_js, "import/uso di renderImpostazioni non deve piu' comparire in main.js"
 
 
 def test_placeholder_view_import_removed_if_now_unused():

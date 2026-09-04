@@ -32,8 +32,16 @@ MAIN_JS = ASSETS / "main.js"
 
 EXPECTED_SECTION_NAMES = [
     "oggi", "contatti", "immobili", "acquirenti", "abbinamenti",
-    "attivita", "automazioni", "impostazioni",
+    "attivita", "automazioni",
 ]
+# NOTA (P25 pre-push compliance patch): 'impostazioni' era nella baseline
+# P0/P25.0 come sezione placeholder in sidebar. La specifica P25.7 approvata
+# richiedeva di NON implementare Impostazioni e di rimuoverla/nasconderla
+# dalla sidebar; una precedente implementazione le aveva invece dato una
+# vista reale + route esplicita, deviando dalla specifica - corretto qui.
+# 'impostazioni' non fa piu' parte delle sezioni attese: non deve comparire
+# ne' in SECTIONS (main.js) ne' come registerRoute (vedi
+# test_os_shell_p25_7_ux_closure.py::test_impostazioni_not_present_in_sections_or_routes).
 
 
 def _read(path: Path) -> str:
@@ -55,12 +63,15 @@ def test_every_section_has_a_registered_route_or_placeholder():
     """Every name in SECTIONS must have a route registered somehow. At the
     P25.0 baseline this could be an explicit registerRoute(...) call OR a
     fall-through to the makePlaceholderView loop (main.js:75-78, pre-P25.7).
-    As of P25.7 (see test_os_shell_p25_7_ux_closure.py), 'impostazioni' also
-    gained an explicit registerRoute call and the placeholder loop/import
-    were removed as no longer used by any section - so this check now
-    simplifies to "every SECTIONS name has an explicit registerRoute", which
-    is a strictly stronger guarantee than the original either/or baseline
-    (a section wired to neither would still be a real dead route)."""
+    As of the P25 pre-push compliance patch, every remaining SECTIONS name
+    (oggi/contatti/immobili/acquirenti/abbinamenti/attivita/automazioni) has
+    an explicit registerRoute and the placeholder loop/import were removed
+    as no longer used by any section - 'impostazioni' itself was removed
+    from SECTIONS entirely (see test_os_shell_p25_7_ux_closure.py), not
+    given a route. This check now simplifies to "every SECTIONS name has an
+    explicit registerRoute", a strictly stronger guarantee than the original
+    either/or baseline (a section wired to neither would still be a real
+    dead route)."""
     main_js = _read(MAIN_JS)
     names = re.findall(r"name:\s*'([a-z]+)'", main_js)
     explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
@@ -121,12 +132,17 @@ def test_placeholder_view_no_longer_used_after_p25_7():
     """Was the P25.0 baseline snapshot ("only 'impostazioni' is rendered by
     makePlaceholderView"); superseded by P25.7 as documented in the original
     docstring here ("if 'impostazioni' stops using it, P25.7 owns updating
-    this expectation - see test_os_shell_p25_7_ux_closure.py"). P25.7 gave
-    'impostazioni' a real explicit route (views/impostazioni.js), so every
-    SECTIONS name now has an explicit registerRoute and makePlaceholderView
-    is unused - test_os_shell_p25_7_ux_closure.py owns asserting the import
-    itself is gone; this test only locks in that no section falls back to
-    it any more."""
+    this expectation - see test_os_shell_p25_7_ux_closure.py"). An earlier
+    version of P25.7 had instead given 'impostazioni' a real explicit route
+    (views/impostazioni.js) - this deviated from the approved specification
+    (which required 'impostazioni' to be removed/hidden from the sidebar,
+    not implemented) and was corrected by a pre-push compliance patch:
+    'impostazioni' was removed from SECTIONS entirely rather than routed.
+    Every remaining SECTIONS name has an explicit registerRoute and
+    makePlaceholderView is unused - test_os_shell_p25_7_ux_closure.py owns
+    asserting both the import removal and 'impostazioni' absence; this test
+    only locks in that no *remaining* section falls back to the placeholder
+    any more."""
     main_js = _read(MAIN_JS)
     explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
     non_explicit = [n for n in EXPECTED_SECTION_NAMES if n not in explicit]

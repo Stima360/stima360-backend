@@ -17,7 +17,6 @@ import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
 import { renderAttivita } from './views/attivita.js';
 import { renderAutomazioni } from './views/automazioni.js';
 import { renderAutomazioneDettaglio } from './views/automazione-dettaglio.js';
-import { renderImpostazioni } from './views/impostazioni.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -27,7 +26,6 @@ const SECTIONS = [
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
   { name: 'automazioni', label: 'Automazioni' },
-  { name: 'impostazioni', label: 'Impostazioni' },
 ];
 
 const loginView = document.getElementById('login-view');
@@ -72,12 +70,13 @@ registerRoute('attivita', (container) => renderAttivita(container));
 registerRoute('automazioni', (container, params = []) => {
   return params[0] ? renderAutomazioneDettaglio(container, params) : renderAutomazioni(container);
 });
-// "impostazioni" (P25.7): rimosso il placeholder generico ereditato da P0,
-// ora e' una vista reale (minimale: info sessione + logout, vedi
-// views/impostazioni.js). Con questa route esplicita, tutte le sezioni di
-// SECTIONS hanno un registerRoute dedicato: nessuna sezione usa piu'
-// makePlaceholderView, quindi placeholder.js non e' piu' importato qui.
-registerRoute('impostazioni', (container) => renderImpostazioni(container));
+// "impostazioni" (P25 pre-push compliance patch): la specifica P25.7
+// approvata richiedeva di NON implementare Impostazioni e di
+// rimuoverla/nasconderla dalla sidebar - una precedente implementazione
+// (vista reale + route dedicata) deviava da questo requisito ed e' stata
+// rimossa qui. "impostazioni" non compare piu' in SECTIONS (vedi sopra),
+// quindi non ha ne' un bottone in sidebar ne' un registerRoute: e'
+// interamente assente dall'app, non solo nascosta via CSS.
 
 initRouter(contentEl, {
   onNavigate(name) {
