@@ -323,7 +323,11 @@ export async function renderAttivita(container) {
         } catch (err) {
           btn.disabled = false;
           btn.textContent = 'Completa';
-          window.alert(`Impossibile completare il task: ${err && err.message ? err.message : 'errore sconosciuto'}`);
+          // P25.7: sostituito window.alert() con lo stesso pattern
+          // error-box inline già usato per gli altri errori di questa vista
+          // (vedi bindTaskEditDeleteActions/bindActivityDeleteActions sotto).
+          const feedbackEl = container.querySelector('#attivita-action-feedback');
+          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile completare il task: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
         }
       });
     });

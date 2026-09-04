@@ -52,22 +52,20 @@ def test_expected_sections_present_in_nav():
 
 
 def test_every_section_has_a_registered_route_or_placeholder():
-    """Every name in SECTIONS must either have an explicit registerRoute(...)
-    call, or fall through to the makePlaceholderView loop (main.js:75-78).
-    Both are legitimate at this baseline; a section wired to neither would
-    be a real dead route."""
+    """Every name in SECTIONS must have a route registered somehow. At the
+    P25.0 baseline this could be an explicit registerRoute(...) call OR a
+    fall-through to the makePlaceholderView loop (main.js:75-78, pre-P25.7).
+    As of P25.7 (see test_os_shell_p25_7_ux_closure.py), 'impostazioni' also
+    gained an explicit registerRoute call and the placeholder loop/import
+    were removed as no longer used by any section - so this check now
+    simplifies to "every SECTIONS name has an explicit registerRoute", which
+    is a strictly stronger guarantee than the original either/or baseline
+    (a section wired to neither would still be a real dead route)."""
     main_js = _read(MAIN_JS)
     names = re.findall(r"name:\s*'([a-z]+)'", main_js)
     explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
-    # main.js:75-78: any SECTIONS name not explicitly registered above falls
-    # into the placeholder loop - this IS a valid registration path.
-    for name in names:
-        assert name in explicit or True, name  # placeholder loop always covers the rest
-    # Stronger check: the placeholder-loop guard condition must list every
-    # explicitly-registered name (otherwise a name could silently get BOTH
-    # an explicit route AND a placeholder, double-registering).
-    guard_match = re.search(r"if \(section\.name === '([a-z]+)'(?:.*?)\) continue;", main_js, re.DOTALL)
-    assert guard_match, "guard condition del loop placeholder non trovata in main.js"
+    missing = [name for name in names if name not in explicit]
+    assert not missing, f"sezioni senza registerRoute esplicita: {missing}"
 
 
 def test_core_infrastructure_files_exist():
@@ -119,18 +117,19 @@ def test_all_shell_js_files_are_syntactically_valid():
     assert not failures, f"errori di sintassi: {failures}"
 
 
-def test_placeholder_view_still_used_only_for_impostazioni_at_this_baseline():
-    """Baseline snapshot (P25.0): only 'impostazioni' should be rendered by
-    makePlaceholderView. If more sections start using it, that is a real
-    regression worth catching; if 'impostazioni' stops using it, P25.7 owns
-    updating this expectation (see test_os_shell_p25_ux_closure.py)."""
+def test_placeholder_view_no_longer_used_after_p25_7():
+    """Was the P25.0 baseline snapshot ("only 'impostazioni' is rendered by
+    makePlaceholderView"); superseded by P25.7 as documented in the original
+    docstring here ("if 'impostazioni' stops using it, P25.7 owns updating
+    this expectation - see test_os_shell_p25_7_ux_closure.py"). P25.7 gave
+    'impostazioni' a real explicit route (views/impostazioni.js), so every
+    SECTIONS name now has an explicit registerRoute and makePlaceholderView
+    is unused - test_os_shell_p25_7_ux_closure.py owns asserting the import
+    itself is gone; this test only locks in that no section falls back to
+    it any more."""
     main_js = _read(MAIN_JS)
-    assert "makePlaceholderView" in main_js
-    # oggi/contatti/immobili/acquirenti/abbinamenti/attivita/automazioni all
-    # have an explicit registerRoute call (verified above); only
-    # impostazioni is left to fall through to the placeholder loop.
     explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
     non_explicit = [n for n in EXPECTED_SECTION_NAMES if n not in explicit]
-    assert non_explicit == ["impostazioni"], (
-        f"attese solo 'impostazioni' senza route esplicita, trovate: {non_explicit}"
+    assert non_explicit == [], (
+        f"attese tutte le sezioni con route esplicita, mancanti: {non_explicit}"
     )

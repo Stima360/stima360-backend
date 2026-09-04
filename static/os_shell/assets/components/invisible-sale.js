@@ -50,8 +50,11 @@ export function renderInvisibleSale(container, state, options = {}) {
       const row = element('div', undefined, 'invisible-sale-candidate');
       row.append(element('strong', `BUY #${candidate.buy_request_id} · ${candidate.score_total}/100`));
       row.append(element('span', `${(candidate.reason_codes || []).join(', ') || '—'} · ${formatMoney(candidate.budget_reference)}`, 'muted'));
+      // P25.7: link morto corretto - main.js registra la scheda Richiesta
+      // BUY sotto la route 'acquirenti' (renderAcquirenteDettaglio), non
+      // 'buy/richieste' (che non è mai stata una route registrata).
       const link = element('a', 'Apri richiesta BUY');
-      link.href = `#/buy/richieste/${candidate.buy_request_id}`;
+      link.href = `#/acquirenti/${candidate.buy_request_id}`;
       row.append(link);
       if (candidate.status !== 'stale' && state.status !== 'closed') {
         for (const [label, decision] of [['Approva', 'approve'], ['Rifiuta', 'reject']]) {

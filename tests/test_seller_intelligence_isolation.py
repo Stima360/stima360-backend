@@ -155,6 +155,17 @@ def test_core_property_buy_match_proposal_owner_flow_still_do_not_import_seller_
 
 
 def test_contatto_dettaglio_only_uses_the_approved_read_only_p17b3_timeline_integration():
+    """At P17B3 time contatto-dettaglio.js had no write capability at all, so
+    scanning the whole file for apiPost/apiPatch/apiDelete was a valid proxy
+    for "the timeline integration is read-only". Since then, P25 (P25.2
+    Lead workflow, P25.4 contact editing, P25.5 buyer/match actions - all
+    explicitly authorized additive OS Shell work, unrelated to seller
+    intelligence) legitimately added real write actions to OTHER tabs of
+    this same file. The proxy no longer holds, so this test now scopes the
+    write-absence checks to the timeline case-block itself (main.js-style
+    `case 'timeline': { ... break; }`), which is the only region this test
+    is actually meant to guard - the P17B3 read-only contract for the
+    timeline integration is unchanged and still verified precisely."""
     view = ROOT / "static" / "os_shell" / "assets" / "views" / "contatto-dettaglio.js"
     if view.exists():
         text = view.read_text(encoding="utf-8")
@@ -162,5 +173,9 @@ def test_contatto_dettaglio_only_uses_the_approved_read_only_p17b3_timeline_inte
         assert "loadSellerTimeline(contact.id, lazyCache)" in text
         assert "renderSellerTimeline" in text
         assert "/api/seller-intelligence" not in text
+
+        match = re.search(r"case 'timeline': \{(.*?)\n\s*break;\n\s*\}", text, re.DOTALL)
+        assert match, "blocco case 'timeline' non trovato in contatto-dettaglio.js"
+        timeline_block = match.group(1)
         for forbidden in ("apiPost", "apiPatch", "apiDelete", "/api/core/activities"):
-            assert forbidden not in text
+            assert forbidden not in timeline_block

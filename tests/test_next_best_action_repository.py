@@ -37,10 +37,17 @@ class FakeCursor:
             self._result = [{"subject_type": k[0], "subject_id": k[1]} for k in self.db.rows]
         elif sql.startswith("delete from next_best_actions where subject_type"):
             self.db.rows.pop(tuple(params), None)
-        elif sql.startswith("select * from next_best_actions where subject_type"):
+        # P25.7: list_current/get_current now LEFT JOIN contacts for the
+        # additive subject_label enrichment (Gap C fix) - the query text no
+        # longer starts with "select * from next_best_actions". This fake
+        # has no contacts table, so it returns the stored nba-only columns
+        # unchanged; repository._row() already tolerates the missing
+        # _contact_* keys (subject_label simply comes back None), which is
+        # exactly the fallback behaviour these tests don't otherwise assert.
+        elif "from next_best_actions nba" in sql and "where nba.subject_type" in sql:
             row = self.db.rows.get(tuple(params))
             self._result = [row] if row else []
-        elif sql.startswith("select * from next_best_actions"):
+        elif "from next_best_actions nba" in sql:
             self._result = list(self.db.rows.values())
         else:
             raise AssertionError(f"unexpected query in test fake: {sql}")

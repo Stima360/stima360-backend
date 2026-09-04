@@ -94,8 +94,8 @@ const PROPERTY_LEAD_RELATION_LABELS = {
 
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
-  { key: 'lead', label: 'Lead' },
   { key: 'timeline', label: 'Timeline' },
+  { key: 'lead', label: 'Lead' },
   { key: 'immobili', label: 'Immobili' },
   { key: 'richieste', label: 'Richieste' },
   { key: 'stime', label: 'Stime' },

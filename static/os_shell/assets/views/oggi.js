@@ -133,7 +133,14 @@ function renderNbaList(items) {
   }).join('')}</div>`;
 }
 
+// P25.7 (Gap C fix): il backend ora fornisce subject_label (additivo,
+// next_best_action/repository.py::_row - dynamic LEFT JOIN su contacts,
+// nessuna migration), calcolato dal nome reale del contatto collegato
+// quando disponibile. Se assente (contact_id nullo, nessun match, o
+// contatto senza nome utilizzabile) resta il fallback preesistente
+// "{Tipo} #{id}" — comportamento identico a prima di questo fix.
 function nbaSubjectLabel(n) {
+  if (n.subject_label) return n.subject_label;
   const labels = { lead: 'Venditore', buy_request: 'Acquirente', stima: 'Stima', match: 'Match' };
   const label = labels[n.subject_type] || n.subject_type || 'Soggetto';
   return `${label} #${n.subject_id}`;

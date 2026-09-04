@@ -17,7 +17,7 @@ import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
 import { renderAttivita } from './views/attivita.js';
 import { renderAutomazioni } from './views/automazioni.js';
 import { renderAutomazioneDettaglio } from './views/automazione-dettaglio.js';
-import { makePlaceholderView } from './views/placeholder.js';
+import { renderImpostazioni } from './views/impostazioni.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -72,10 +72,12 @@ registerRoute('attivita', (container) => renderAttivita(container));
 registerRoute('automazioni', (container, params = []) => {
   return params[0] ? renderAutomazioneDettaglio(container, params) : renderAutomazioni(container);
 });
-for (const section of SECTIONS) {
-  if (section.name === 'oggi' || section.name === 'contatti' || section.name === 'immobili' || section.name === 'acquirenti' || section.name === 'abbinamenti' || section.name === 'attivita' || section.name === 'automazioni') continue;
-  registerRoute(section.name, makePlaceholderView(section.label));
-}
+// "impostazioni" (P25.7): rimosso il placeholder generico ereditato da P0,
+// ora e' una vista reale (minimale: info sessione + logout, vedi
+// views/impostazioni.js). Con questa route esplicita, tutte le sezioni di
+// SECTIONS hanno un registerRoute dedicato: nessuna sezione usa piu'
+// makePlaceholderView, quindi placeholder.js non e' piu' importato qui.
+registerRoute('impostazioni', (container) => renderImpostazioni(container));
 
 initRouter(contentEl, {
   onNavigate(name) {
