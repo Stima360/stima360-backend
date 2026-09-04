@@ -4,18 +4,22 @@
 //   GET /api/core/tasks?limit=200          (core/router.py)
 //   GET /api/core/activities?limit=20      (core/router.py)
 //   GET /api/property/visits?limit=20      (property/router.py)
-// Nessuna nuova API. Nessun dato inventato: se una chiamata fallisce,
-// la relativa sezione mostra un avviso e le altre restano utilizzabili.
+//   GET /api/next-best-action?limit=20     (next_best_action/router.py, P23)
+// Nessuna nuova API oltre a P23. Nessun dato inventato: se una chiamata
+// fallisce, la relativa sezione mostra un avviso e le altre restano
+// utilizzabili. La sezione "Priorità di oggi" (P23) è additiva: le liste
+// esistenti sopra non vengono toccate né sostituite.
 
 import { apiGet } from '../core/api-client.js';
 
 export async function renderOggi(container) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
 
-  const [tasksResult, activitiesResult, visitsResult] = await Promise.allSettled([
+  const [tasksResult, activitiesResult, visitsResult, nbaResult] = await Promise.allSettled([
     apiGet('/api/core/tasks?limit=200'),
     apiGet('/api/core/activities?limit=20'),
     apiGet('/api/property/visits?limit=20'),
+    apiGet('/api/next-best-action?limit=20'),
   ]);
 
   const failedSections = [];
@@ -23,6 +27,7 @@ export async function renderOggi(container) {
   const tasks = extractItems(tasksResult, failedSections, 'task');
   const activities = extractItems(activitiesResult, failedSections, 'attività');
   const visits = extractItems(visitsResult, failedSections, 'visite');
+  const nextBestActions = extractItems(nbaResult, failedSections, 'priorità di oggi (P23)');
 
   const now = new Date();
   const openTasks = tasks.filter((t) => !['completed', 'cancelled'].includes(t.status));
@@ -60,6 +65,10 @@ export async function renderOggi(container) {
     </div>
     <div class="panel-grid">
       <div class="card panel">
+        <h2>Priorità di oggi</h2>
+        ${renderNbaList(nextBestActions)}
+      </div>
+      <div class="card panel">
         <h2>Task scaduti e di oggi</h2>
         ${renderTaskList(focusTasks)}
       </div>
@@ -95,6 +104,46 @@ function formatDateTime(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// P23 — Next Best Action: già ordinate dall'API (/api/next-best-action),
+// non riordiniamo qui. Ogni item è già la singola azione vincente per il
+// suo soggetto (calcolata da next_best_action/engine.py), questa funzione
+// si limita a visualizzarla; non decide nulla.
+const NBA_PRIORITY_LABELS = { urgent: 'Urgente', high: 'Alta', normal: 'Normale', low: 'Bassa' };
+
+function renderNbaList(items) {
+  if (!items.length) return '<p class="muted">Nessuna priorità da segnalare oggi.</p>';
+  return `<div class="list">${items.map((n) => {
+    const priorityLabel = NBA_PRIORITY_LABELS[n.priority] || escapeHtml(n.priority || '—');
+    const subjectLabel = escapeHtml(nbaSubjectLabel(n));
+    const cta = nbaCtaHref(n);
+    return `
+    <div class="list-item">
+      <div>
+        <strong>${subjectLabel}</strong>
+        <div class="muted">${escapeHtml(n.reason || '')}</div>
+      </div>
+      <div class="muted">
+        ${escapeHtml(priorityLabel)}
+        ${cta ? ` · <a href="${cta}">Apri</a>` : ''}
+      </div>
+    </div>
+  `;
+  }).join('')}</div>`;
+}
+
+function nbaSubjectLabel(n) {
+  const labels = { lead: 'Venditore', buy_request: 'Acquirente', stima: 'Stima', match: 'Match' };
+  const label = labels[n.subject_type] || n.subject_type || 'Soggetto';
+  return `${label} #${n.subject_id}`;
+}
+
+function nbaCtaHref(n) {
+  if (!n.cta_route || !Array.isArray(n.cta_params) || !n.cta_params.length) return null;
+  const params = n.cta_params.filter((p) => p !== null && p !== undefined);
+  if (!params.length) return null;
+  return `#/${n.cta_route}/${params.map((p) => encodeURIComponent(p)).join('/')}`;
 }
 
 function renderTaskList(items) {

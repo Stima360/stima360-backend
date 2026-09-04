@@ -33,6 +33,7 @@ from followup.router import router as followup_router
 from seller_intent.router import router as seller_intent_router
 from property_watch import service as property_watch_service
 from property_watch.router import router as property_watch_router
+from next_best_action.router import router as next_best_action_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -69,6 +70,7 @@ app.include_router(seller_intelligence_router, dependencies=[Depends(require_adm
 app.include_router(followup_router, dependencies=[Depends(require_admin)])
 app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
 app.include_router(property_watch_router, dependencies=[Depends(require_admin)])
+app.include_router(next_best_action_router, dependencies=[Depends(require_admin)])
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
