@@ -133,6 +133,27 @@ def test_11_matches_are_aggregated_for_each_buy_request(monkeypatch):
     assert [item["buy_request_id"] for item in matches] == [30, 31]
 
 
+def test_11b_real_match_service_accepts_contact_360_keyword_filters(monkeypatch):
+    """A contact with a BUY request must cross the real CRM -> MATCH wrapper.
+
+    This catches wrappers which accept only positional arguments while the CRM
+    read model uses the named filter contract exposed by the MATCH endpoint.
+    """
+    service = _patch_empty_contact(monkeypatch)
+    monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [{"id": 30}])
+
+    import match.service as match_service
+
+    monkeypatch.setattr(
+        match_service.repository,
+        "list_matches",
+        lambda *args, **kwargs: [{"id": 130, "buy_request_id": kwargs["buy_request_id"]}],
+    )
+    monkeypatch.setattr(service, "list_matches", match_service.list_matches)
+
+    assert service.get_contact_360(1)["matches"] == [{"id": 130, "buy_request_id": 30}]
+
+
 def test_12_visits_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [{"id": 40, "contact_id": contact_id}])

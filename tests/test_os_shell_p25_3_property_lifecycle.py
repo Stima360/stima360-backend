@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import json
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,22 @@ def _read(path: Path) -> str:
 
 def _strip_js_line_comments(text: str) -> str:
     return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+
+
+def _function_block(text: str, name: str) -> str:
+    match = re.search(rf"(?:async\s+)?function\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", text)
+    assert match, f"{name} non trovata"
+    start = match.start()
+    brace = match.end() - 1
+    depth = 0
+    for index in range(brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    raise AssertionError(f"{name} non chiusa")
 
 
 def _real_enum_set(name: str, path: Path) -> set[str]:
@@ -81,12 +99,28 @@ def test_archived_transition_uses_dedicated_delete_endpoint_not_raw_patch():
     archived_at - una PATCH diretta a commercial_status='archived' non lo
     farebbe, rompendo l'invariante usata da mandate_expiring/KPI/alerts."""
     text = _read(IMMOBILE_JS)
-    start = text.index("function bindCommercialStatusSection")
-    end = text.index("function bindProposteSection")
-    save_handler = text[start:end]
+    save_handler = _function_block(text, "applyCommercialStatusSave")
     assert "target === 'archived'" in save_handler
-    assert re.search(r"apiDelete\(`/api/property/properties/\$\{property\.id\}`\)", save_handler)
-    assert re.search(r"apiPatch\(`/api/property/properties/\$\{property\.id\}`, \{ commercial_status: target \}\)", save_handler)
+    assert re.search(r"deleteRequest\(`/api/property/properties/\$\{property\.id\}`\)", save_handler)
+    assert re.search(r"patchRequest\(`/api/property/properties/\$\{property\.id\}`, \{ commercial_status: target \}\)", save_handler)
+
+
+def test_archive_repository_sets_status_timestamp_and_returns_persisted_row(monkeypatch):
+    from property import repository
+
+    persisted = {"id": 12, "commercial_status": "draft", "archived_at": None}
+
+    def persist(property_id, changes):
+        assert property_id == 12
+        persisted.update(changes)
+        return dict(persisted)
+
+    monkeypatch.setattr(repository, "update_property", persist)
+    archived = repository.archive_property(12)
+
+    assert archived["commercial_status"] == "archived"
+    assert isinstance(archived["archived_at"], datetime)
+    assert persisted == archived
 
 
 def test_sold_status_has_no_manual_edit_control():
@@ -105,6 +139,65 @@ def test_two_step_confirm_not_window_confirm():
     assert "window.confirm(" not in code_only
     assert "window.prompt(" not in code_only
     assert "commercialStatusPendingConfirm" in code_only
+
+
+def test_two_step_confirm_preserves_the_selected_status_across_rerender():
+    """The first confirmation click re-renders the section.
+
+    The selected target therefore needs independent state; otherwise the new
+    select falls back to the persisted status and the second click is a no-op.
+    """
+    text = _read(IMMOBILE_JS)
+    assert "commercialStatusPendingTarget" in text
+    render_call = re.search(
+        r"renderCommercialStatusSection\(p,\s*commercialStatusEditMode,\s*commercialStatusPendingConfirm,\s*commercialStatusPendingTarget\)",
+        text,
+    )
+    assert render_call, "il target pending deve attraversare il re-render"
+    section = text[text.index("function renderCommercialStatusSection"):]
+    assert "s === (pendingTarget || p.commercial_status)" in section
+    save_handler = text[text.index("const saveBtn = panelEl.querySelector('#commercial-status-save-btn')"):]
+    assert "commercialStatusPendingTarget = decision.pendingTarget;" in save_handler
+    assert "resolveCommercialStatusSave(property.commercial_status, select.value, commercialStatusPendingTarget)" in save_handler
+    assert "pendingConfirm ? 'disabled' : ''" in section
+
+
+def test_archive_confirmation_state_machine_requires_two_clicks_before_submit():
+    function = _function_block(_read(IMMOBILE_JS), "resolveCommercialStatusSave")
+    script = f"""
+const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
+{function}
+const first = resolveCommercialStatusSave('draft', 'archived', null);
+const second = resolveCommercialStatusSave('draft', 'archived', first.pendingTarget);
+process.stdout.write(JSON.stringify({{first, second}}));
+"""
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    states = json.loads(result.stdout)
+    assert states["first"] == {"action": "confirm", "target": "archived", "pendingTarget": "archived"}
+    assert states["second"] == {"action": "submit", "target": "archived", "pendingTarget": None}
+
+
+def test_archive_submit_calls_delete_once_and_applies_persisted_response():
+    function = _function_block(_read(IMMOBILE_JS), "applyCommercialStatusSave")
+    script = f"""
+{function}
+const calls = [];
+const property = {{id: 12, commercial_status: 'draft', archived_at: null}};
+const apiDelete = async (path) => {{
+  calls.push(['DELETE', path]);
+  return {{id: 12, commercial_status: 'archived', archived_at: '2026-09-04T22:00:00Z'}};
+}};
+const apiPatch = async (path, body) => {{ calls.push(['PATCH', path, body]); }};
+await applyCommercialStatusSave(property, 'archived', apiDelete, apiPatch);
+process.stdout.write(JSON.stringify({{calls, property}}));
+"""
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+    assert outcome["calls"] == [["DELETE", "/api/property/properties/12"]]
+    assert outcome["property"]["commercial_status"] == "archived"
+    assert outcome["property"]["archived_at"] == "2026-09-04T22:00:00Z"
 
 
 def test_header_badge_still_refreshed_via_existing_helper_after_manual_change():

@@ -21,8 +21,8 @@ def get_readiness(buy_request_id=None, property_id=None):
     return repository.get_readiness(buy_request_id, property_id)
 
 
-def list_matches(*args):
-    return repository.list_matches(*args)
+def list_matches(*args, **kwargs):
+    return repository.list_matches(*args, **kwargs)
 
 
 def get_match(match_id):

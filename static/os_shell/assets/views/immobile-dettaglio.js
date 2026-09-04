@@ -96,6 +96,24 @@ const MANUAL_COMMERCIAL_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 
 // window.confirm().
 const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
 
+function resolveCommercialStatusSave(currentStatus, selectedStatus, pendingTarget) {
+  const target = pendingTarget || selectedStatus;
+  if (target === currentStatus) return { action: 'unchanged', target, pendingTarget: null };
+  if (CONFIRM_REQUIRED_STATUSES.has(target) && pendingTarget !== target) {
+    return { action: 'confirm', target, pendingTarget: target };
+  }
+  return { action: 'submit', target, pendingTarget: null };
+}
+
+async function applyCommercialStatusSave(property, target, deleteRequest = apiDelete, patchRequest = apiPatch) {
+  const updated = target === 'archived'
+    ? await deleteRequest(`/api/property/properties/${property.id}`)
+    : await patchRequest(`/api/property/properties/${property.id}`, { commercial_status: target });
+  property.commercial_status = updated.commercial_status;
+  property.archived_at = updated.archived_at;
+  return updated;
+}
+
 const PROPERTY_ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', tenant: 'Inquilino', contact: 'Referente',
   professional: 'Professionista', other: 'Altro',
@@ -239,6 +257,7 @@ export async function renderImmobileDettaglio(container, params = []) {
   // quando il target scelto e' in CONFIRM_REQUIRED_STATUSES.
   let commercialStatusEditMode = false;
   let commercialStatusPendingConfirm = false;
+  let commercialStatusPendingTarget = null;
 
   // P11: badge di stato commerciale nell'header, isolato in una funzione
   // cosi' da poter essere ri-renderizzato dopo il completamento di una
@@ -308,7 +327,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     try {
       switch (key) {
         case 'panoramica':
-          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm);
+          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget);
           bindIncaricoSection(contentEl);
           bindCommercialStatusSection(contentEl);
           break;
@@ -419,6 +438,7 @@ export async function renderImmobileDettaglio(container, params = []) {
       editBtn.addEventListener('click', () => {
         commercialStatusEditMode = true;
         commercialStatusPendingConfirm = false;
+        commercialStatusPendingTarget = null;
         showTab('panoramica');
       });
     }
@@ -428,6 +448,7 @@ export async function renderImmobileDettaglio(container, params = []) {
       cancelBtn.addEventListener('click', () => {
         commercialStatusEditMode = false;
         commercialStatusPendingConfirm = false;
+        commercialStatusPendingTarget = null;
         showTab('panoramica');
       });
     }
@@ -438,17 +459,20 @@ export async function renderImmobileDettaglio(container, params = []) {
         const select = panelEl.querySelector('#commercial-status-select');
         const errorEl = panelEl.querySelector('#commercial-status-error');
         if (errorEl) errorEl.textContent = '';
-        const target = select.value;
+        const decision = resolveCommercialStatusSave(property.commercial_status, select.value, commercialStatusPendingTarget);
+        const target = decision.target;
 
-        if (target === property.commercial_status) {
+        if (decision.action === 'unchanged') {
           commercialStatusEditMode = false;
           commercialStatusPendingConfirm = false;
+          commercialStatusPendingTarget = null;
           showTab('panoramica');
           return;
         }
 
-        if (CONFIRM_REQUIRED_STATUSES.has(target) && !commercialStatusPendingConfirm) {
+        if (decision.action === 'confirm') {
           commercialStatusPendingConfirm = true;
+          commercialStatusPendingTarget = decision.pendingTarget;
           showTab('panoramica');
           return;
         }
@@ -457,18 +481,16 @@ export async function renderImmobileDettaglio(container, params = []) {
         if (cancelBtn) cancelBtn.disabled = true;
         saveBtn.textContent = 'Salvataggio…';
         try {
-          const updated = target === 'archived'
-            ? await apiDelete(`/api/property/properties/${property.id}`)
-            : await apiPatch(`/api/property/properties/${property.id}`, { commercial_status: target });
-          property.commercial_status = updated.commercial_status;
-          property.archived_at = updated.archived_at;
+          await applyCommercialStatusSave(property, target);
           commercialStatusEditMode = false;
           commercialStatusPendingConfirm = false;
+          commercialStatusPendingTarget = null;
           const badgeEl = container.querySelector('#property-status-badge');
           if (badgeEl) badgeEl.innerHTML = headerBadgeHtml();
           showTab('panoramica');
         } catch (error) {
           commercialStatusPendingConfirm = false;
+          commercialStatusPendingTarget = null;
           saveBtn.disabled = false;
           if (cancelBtn) cancelBtn.disabled = false;
           saveBtn.textContent = 'Salva';
@@ -1417,7 +1439,7 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 // --- Panoramica -------------------------------------------------------
 
-function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm) {
+function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget) {
   const fields = [
     ['Tipologia', p.property_type], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
@@ -1436,7 +1458,7 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
     <div class="detail-grid">
       ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
     </div>
-    ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm)}
+    ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget)}
     ${renderIncaricoSection(p, editMode)}
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(p.public_notes || p.internal_notes || 'Nessuna nota.')}</p>
@@ -1448,7 +1470,7 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
 // Vedi commenti su MANUAL_COMMERCIAL_STATUSES/CONFIRM_REQUIRED_STATUSES in
 // testa al file per il motivo dell'esclusione di 'sold' e del trattamento
 // speciale di 'archived'.
-function renderCommercialStatusSection(p, editMode, pendingConfirm) {
+function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarget) {
   if (p.commercial_status === 'sold') {
     return `
       <h3 class="section-title">Stato commerciale</h3>
@@ -1469,11 +1491,11 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm) {
       </div>
     `;
   }
-  const options = MANUAL_COMMERCIAL_STATUSES.map((s) => `<option value="${s}" ${s === p.commercial_status ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
+  const options = MANUAL_COMMERCIAL_STATUSES.map((s) => `<option value="${s}" ${s === (pendingTarget || p.commercial_status) ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
   return `
     <h3 class="section-title">Stato commerciale</h3>
     <div class="form-grid-3">
-      <div class="form-field"><label>Nuovo stato</label><select id="commercial-status-select" class="input">${options}</select></div>
+      <div class="form-field"><label>Nuovo stato</label><select id="commercial-status-select" class="input" ${pendingConfirm ? 'disabled' : ''}>${options}</select></div>
     </div>
     ${pendingConfirm ? '<p class="field-error">Transizione significativa: premi di nuovo per confermare.</p>' : ''}
     <div id="commercial-status-error" class="field-error"></div>
