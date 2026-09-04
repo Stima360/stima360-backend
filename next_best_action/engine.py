@@ -9,6 +9,7 @@ regardless of any other value.
   3. seller intent molto caldo    source_signal="seller_intent_hot"
   4. vendita invisibile ready     source_signal="invisible_sale_ready"
   5. match forte non proposto     source_signal="match_strong_unproposed"
+  6. seller database revival      source_signal="database_revival" (P24)
 
 This module is pure and DB-free by design: it only combines already-
 collected candidate dicts (produced by signals.py) for ONE
@@ -28,6 +29,7 @@ PRECEDENCE: dict[str, int] = {
     "seller_intent_hot": 3,
     "invisible_sale_ready": 4,
     "match_strong_unproposed": 5,
+    "database_revival": 6,
 }
 
 # Sentinel used only for the tie-break sort key below: a candidate without

@@ -54,6 +54,11 @@ def test_only_match_strong_unproposed():
     assert winner["source_signal"] == "match_strong_unproposed"
 
 
+def test_only_database_revival():
+    winner = select_winner([_candidate("database_revival")])
+    assert winner["source_signal"] == "database_revival"
+
+
 def test_followup_beats_next_action():
     winner = select_winner([_candidate("next_action_overdue"), _candidate("followup_overdue")])
     assert winner["source_signal"] == "followup_overdue"
@@ -79,7 +84,31 @@ def test_invisible_sale_beats_match():
     assert winner["source_signal"] == "invisible_sale_ready"
 
 
+def test_match_beats_database_revival():
+    winner = select_winner([_candidate("database_revival"), _candidate("match_strong_unproposed")])
+    assert winner["source_signal"] == "match_strong_unproposed"
+
+
+def test_database_revival_loses_against_each_higher_rank():
+    for higher in (
+        "followup_overdue",
+        "next_action_overdue",
+        "seller_intent_hot",
+        "invisible_sale_ready",
+        "match_strong_unproposed",
+    ):
+        winner = select_winner([_candidate("database_revival"), _candidate(higher)])
+        assert winner["source_signal"] == higher, f"database_revival non deve battere {higher}"
+
+
 def test_all_five_signals_together_picks_highest_precedence():
+    all_candidates = [_candidate(signal) for signal in PRECEDENCE]
+    winner = select_winner(all_candidates)
+    assert winner["source_signal"] == "followup_overdue"
+
+
+def test_all_six_signals_together_picks_highest_precedence():
+    assert len(PRECEDENCE) == 6, "atteso il rank #6 database_revival aggiunto da P24"
     all_candidates = [_candidate(signal) for signal in PRECEDENCE]
     winner = select_winner(all_candidates)
     assert winner["source_signal"] == "followup_overdue"

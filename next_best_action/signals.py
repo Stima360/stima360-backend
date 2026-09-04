@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core import repository as core_repository
+from database_revival import service as database_revival_service
 from flow import adapters as flow_adapters
 from flow import engine as flow_engine
 from property_watch import invisible_sale_repository
@@ -323,8 +324,26 @@ def collect_match_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
     return candidates
 
 
+def collect_database_revival_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signal #6 (P24 - seller database revival).
+
+    Thin delegate to database_revival.service.collect_today_signals(),
+    same shape as collect_invisible_sale_signals delegating to
+    property_watch.invisible_sale_service above: next_best_action knows
+    nothing about the P24 eligibility algorithm (dormancy, cooldown, daily
+    cap), it only asks database_revival to hand over whatever is in
+    today's already-decided batch and still live-eligible.
+
+    Subject: (subject_type="lead", subject_id=lead_id) - same subject
+    space as collect_lead_signals, so a dormant lead's revival candidate
+    competes normally against ranks #1-#5 for that same lead in
+    engine.select_winner.
+    """
+    return database_revival_service.collect_today_signals()[:limit]
+
+
 def collect_all_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
-    """Collect all five V1 signals in one call, grouped by nothing - the
+    """Collect all six V1 signals in one call, grouped by nothing - the
     caller (service.py) is responsible for grouping by (subject_type,
     subject_id) before handing each group to engine.select_winner."""
     return (
@@ -332,4 +351,5 @@ def collect_all_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
         + collect_next_action_signals(limit)
         + collect_invisible_sale_signals(limit)
         + collect_match_signals(limit)
+        + collect_database_revival_signals(limit)
     )

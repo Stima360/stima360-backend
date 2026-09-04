@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core import repository as core_repository
+from database_revival import service as database_revival_service
 
 from . import repository as nba_repository
 from .engine import select_winner
@@ -62,7 +63,16 @@ def refresh(limit: int = DEFAULT_LIMIT) -> dict[str, int]:
     Deterministic and idempotent: given the same underlying P17-P22 data,
     two consecutive calls produce the same winners and the same stored
     rows (see repository.replace_current_actions).
+
+    P24 addition: before collecting signals, ensure today's seller
+    database-revival batch is created/topped-up (rank #6 - see
+    next_best_action/engine.py PRECEDENCE and signals.py
+    ::collect_database_revival_signals). Always through the non-raising
+    safe_ensure_today_batch() wrapper: a P24 failure must never prevent
+    the other five P23 signals from refreshing.
     """
+    database_revival_service.safe_ensure_today_batch()
+
     candidates = collect_all_signals(limit)
 
     grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)

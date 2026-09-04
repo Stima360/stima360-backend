@@ -92,6 +92,42 @@ def test_followup_overdue_beats_next_action_overdue(monkeypatch):
     assert winner["source_signal"] == "followup_overdue"
 
 
+def test_collect_database_revival_signals_delegates_to_database_revival_service(monkeypatch):
+    """P24, Task 4: this collector is a thin delegate, same shape as
+    collect_invisible_sale_signals delegating to property_watch's own
+    service - no eligibility logic lives in next_best_action itself."""
+    canned = [{"subject_type": "lead", "subject_id": 14, "source_signal": "database_revival"}]
+    monkeypatch.setattr(signals.database_revival_service, "collect_today_signals", lambda: canned)
+
+    candidates = signals.collect_database_revival_signals()
+
+    assert candidates == canned
+
+
+def test_collect_database_revival_signals_respects_limit(monkeypatch):
+    canned = [
+        {"subject_type": "lead", "subject_id": i, "source_signal": "database_revival"}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(signals.database_revival_service, "collect_today_signals", lambda: canned)
+
+    candidates = signals.collect_database_revival_signals(limit=2)
+
+    assert len(candidates) == 2
+
+
+def test_collect_all_signals_includes_database_revival_candidates(monkeypatch):
+    canned = [{"subject_type": "lead", "subject_id": 77, "source_signal": "database_revival"}]
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [])
+    monkeypatch.setattr(signals.flow_adapters, "scan_candidates", lambda code, params, limit: [])
+    monkeypatch.setattr(signals.invisible_sale_repository, "list_active_watch_refs", lambda: [])
+    monkeypatch.setattr(signals.database_revival_service, "collect_today_signals", lambda: canned)
+
+    all_candidates = signals.collect_all_signals()
+
+    assert canned[0] in all_candidates
+
+
 def test_buy_request_next_action_signal_unchanged(monkeypatch):
     """Regression (case 7): the buy_request branch is untouched by this
     fix - it still goes through flow.adapters/flow.engine exactly as
