@@ -67,6 +67,22 @@ const STATUS_LABELS = {
   withdrawn: 'Ritirato', archived: 'Archiviato',
 };
 
+// P25.3: transizioni manuali di commercial_status disponibili in questa UI.
+// 'sold' e' deliberatamente escluso (property/enums.py::PROPERTY_STATUSES lo
+// contiene, ma e' raggiunto solo come side-effect di sale/repository.py::
+// complete_sale - vedi soldMismatch piu' sotto, gia' trattato come debito
+// noto quando disallineato: impostarlo qui a mano creerebbe lo stesso
+// disallineamento). Tutte le altre transizioni sono ammesse dal backend
+// senza macchina a stati (PropertyUpdate.commercial_status valida solo
+// l'appartenenza a PROPERTY_STATUSES, nessun vincolo di sequenza).
+const MANUAL_COMMERCIAL_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'withdrawn', 'archived'];
+// 'withdrawn' e 'archived' sono transizioni significative (un immobile
+// ritirato/archiviato esce dai filtri operativi standard - vedi
+// property/repository.py: mandate_expiring, KPI, alerts escludono sempre
+// questi due stati): richiedono conferma inline a due click, mai
+// window.confirm().
+const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
+
 const PROPERTY_ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', tenant: 'Inquilino', contact: 'Referente',
   professional: 'Professionista', other: 'Altro',
@@ -190,6 +206,13 @@ export async function renderImmobileDettaglio(container, params = []) {
   // gia' esistente (property/schemas.py:PropertyUpdate).
   let incaricoEditMode = false;
 
+  // P25.3: stato locale della sezione "Stato commerciale" in Panoramica
+  // (stesso principio di incaricoEditMode sopra). commercialStatusPendingConfirm
+  // e' il secondo stadio della conferma inline a due click, attivo solo
+  // quando il target scelto e' in CONFIRM_REQUIRED_STATUSES.
+  let commercialStatusEditMode = false;
+  let commercialStatusPendingConfirm = false;
+
   // P11: badge di stato commerciale nell'header, isolato in una funzione
   // cosi' da poter essere ri-renderizzato dopo il completamento di una
   // vendita (reloadPropertyStatus) senza toccare il resto dell'header.
@@ -239,7 +262,11 @@ export async function renderImmobileDettaglio(container, params = []) {
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
       switch (key) {
-        case 'panoramica': contentEl.innerHTML = renderPanoramica(property, incaricoEditMode); bindIncaricoSection(contentEl); break;
+        case 'panoramica':
+          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm);
+          bindIncaricoSection(contentEl);
+          bindCommercialStatusSection(contentEl);
+          break;
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents); break;
@@ -326,6 +353,77 @@ export async function renderImmobileDettaglio(container, params = []) {
           incaricoEditMode = false;
           showTab('panoramica');
         } catch (error) {
+          saveBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          saveBtn.textContent = 'Salva';
+          if (errorEl) errorEl.textContent = error.message || 'Errore nel salvataggio.';
+        }
+      });
+    }
+  }
+
+  // P25.3: sezione "Stato commerciale" in Panoramica. 'archived' passa
+  // sempre da DELETE /api/property/properties/{id} (archive_property),
+  // mai da una PATCH diretta - vedi commento su CONFIRM_REQUIRED_STATUSES
+  // e su MANUAL_COMMERCIAL_STATUSES per il motivo. Tutte le altre
+  // transizioni ammesse usano la PATCH generica gia' esistente
+  // (PropertyUpdate.commercial_status).
+  function bindCommercialStatusSection(panelEl) {
+    const editBtn = panelEl.querySelector('#commercial-status-edit-btn');
+    if (editBtn) {
+      editBtn.addEventListener('click', () => {
+        commercialStatusEditMode = true;
+        commercialStatusPendingConfirm = false;
+        showTab('panoramica');
+      });
+    }
+
+    const cancelBtn = panelEl.querySelector('#commercial-status-cancel-btn');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        commercialStatusEditMode = false;
+        commercialStatusPendingConfirm = false;
+        showTab('panoramica');
+      });
+    }
+
+    const saveBtn = panelEl.querySelector('#commercial-status-save-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const select = panelEl.querySelector('#commercial-status-select');
+        const errorEl = panelEl.querySelector('#commercial-status-error');
+        if (errorEl) errorEl.textContent = '';
+        const target = select.value;
+
+        if (target === property.commercial_status) {
+          commercialStatusEditMode = false;
+          commercialStatusPendingConfirm = false;
+          showTab('panoramica');
+          return;
+        }
+
+        if (CONFIRM_REQUIRED_STATUSES.has(target) && !commercialStatusPendingConfirm) {
+          commercialStatusPendingConfirm = true;
+          showTab('panoramica');
+          return;
+        }
+
+        saveBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+        saveBtn.textContent = 'Salvataggio…';
+        try {
+          const updated = target === 'archived'
+            ? await apiDelete(`/api/property/properties/${property.id}`)
+            : await apiPatch(`/api/property/properties/${property.id}`, { commercial_status: target });
+          property.commercial_status = updated.commercial_status;
+          property.archived_at = updated.archived_at;
+          commercialStatusEditMode = false;
+          commercialStatusPendingConfirm = false;
+          const badgeEl = container.querySelector('#property-status-badge');
+          if (badgeEl) badgeEl.innerHTML = headerBadgeHtml();
+          showTab('panoramica');
+        } catch (error) {
+          commercialStatusPendingConfirm = false;
           saveBtn.disabled = false;
           if (cancelBtn) cancelBtn.disabled = false;
           saveBtn.textContent = 'Salva';
@@ -1111,7 +1209,7 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 // --- Panoramica -------------------------------------------------------
 
-function renderPanoramica(p, editMode) {
+function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm) {
   const fields = [
     ['Tipologia', p.property_type], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
@@ -1130,9 +1228,51 @@ function renderPanoramica(p, editMode) {
     <div class="detail-grid">
       ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
     </div>
+    ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm)}
     ${renderIncaricoSection(p, editMode)}
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(p.public_notes || p.internal_notes || 'Nessuna nota.')}</p>
+  `;
+}
+
+// --- Stato commerciale (P25.3) ---------------------------------------------
+// Source of truth: properties.commercial_status (nessuna nuova colonna).
+// Vedi commenti su MANUAL_COMMERCIAL_STATUSES/CONFIRM_REQUIRED_STATUSES in
+// testa al file per il motivo dell'esclusione di 'sold' e del trattamento
+// speciale di 'archived'.
+function renderCommercialStatusSection(p, editMode, pendingConfirm) {
+  if (p.commercial_status === 'sold') {
+    return `
+      <h3 class="section-title">Stato commerciale</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS.sold)}</div>
+      </div>
+      <p class="muted">Lo stato "Venduto" è gestito automaticamente dal completamento della vendita (tab Proposte) e non è modificabile manualmente da qui.</p>
+    `;
+  }
+  if (!editMode) {
+    return `
+      <h3 class="section-title">Stato commerciale</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS[p.commercial_status] || p.commercial_status || '—')}</div>
+      </div>
+      <div class="action-bar" style="margin-top:12px">
+        <button type="button" id="commercial-status-edit-btn" class="btn ghost">Cambia stato</button>
+      </div>
+    `;
+  }
+  const options = MANUAL_COMMERCIAL_STATUSES.map((s) => `<option value="${s}" ${s === p.commercial_status ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
+  return `
+    <h3 class="section-title">Stato commerciale</h3>
+    <div class="form-grid-3">
+      <div class="form-field"><label>Nuovo stato</label><select id="commercial-status-select" class="input">${options}</select></div>
+    </div>
+    ${pendingConfirm ? '<p class="field-error">Transizione significativa: premi di nuovo per confermare.</p>' : ''}
+    <div id="commercial-status-error" class="field-error"></div>
+    <div class="action-bar" style="margin-top:4px">
+      <button type="button" id="commercial-status-cancel-btn" class="btn ghost">Annulla</button>
+      <button type="button" id="commercial-status-save-btn" class="btn primary">${pendingConfirm ? 'Conferma' : 'Salva'}</button>
+    </div>
   `;
 }
 
