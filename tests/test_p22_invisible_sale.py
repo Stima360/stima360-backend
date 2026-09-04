@@ -248,6 +248,11 @@ class _FakeInvisibleSaleCursor:
                     copy.deepcopy(row)
                     for _, row in sorted(self.database.candidates.items())
                 ]
+        elif lowered.startswith("select buy_request_id, score_total, compatibility_status"):
+            self.result = [
+                copy.deepcopy(row)
+                for _, row in sorted(self.database.candidates.items())
+            ]
         elif lowered.startswith("update invisible_sale_candidates set status = 'stale'"):
             row = next(row for row in self.database.candidates.values() if row["id"] == params[1])
             if row["status"] != "stale":
@@ -610,3 +615,76 @@ def test_p22_get_is_read_only_for_every_visible_state(monkeypatch, status):
     assert response.status_code == 200
     assert response.json() == state
     assert calls == [12]
+
+
+def _persisted_opportunity(status):
+    return {
+        "id": 31,
+        "watch_id": 11,
+        "status": status,
+        "candidate_digest": "a" * 64,
+        "current_candidate_count": 0,
+        "algorithm_version": "invisible-sale-1.0",
+        "revision": 1,
+        "last_evaluated_at": datetime(2026, 9, 4, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 9, 4, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 9, 4, tzinfo=timezone.utc),
+    }
+
+
+def test_p22_get_http_projects_persisted_empty_opportunity(monkeypatch, p22_database):
+    _, client = _p22_client(monkeypatch)
+    p22_database.opportunity = _persisted_opportunity("empty")
+
+    response = client.get(
+        "/api/property-watch/stime/7/invisible-sale",
+        auth=("giorgio", "test-secret"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "empty",
+        "current_candidate_count": 0,
+        "candidates": [],
+    }
+
+
+def test_p22_get_http_projects_db_shaped_ready_candidate(monkeypatch, p22_database):
+    _, client = _p22_client(monkeypatch)
+    p22_database.opportunity = _persisted_opportunity("ready")
+    p22_database.opportunity["current_candidate_count"] = 1
+    candidate = _candidate()
+    candidate.update(
+        {
+            "id": 107,
+            "opportunity_id": 31,
+            "status": "pending_review",
+            "decision_version": 2,
+            "created_at": datetime(2026, 9, 4, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 9, 4, tzinfo=timezone.utc),
+        }
+    )
+    p22_database.candidates[7] = candidate
+
+    response = client.get(
+        "/api/property-watch/stime/7/invisible-sale",
+        auth=("giorgio", "test-secret"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "current_candidate_count": 1,
+        "candidates": [
+            {
+                "buy_request_id": 7,
+                "score_total": 91.0,
+                "compatibility_status": "compatible",
+                "reason_codes": ["location"],
+                "last_activity_at": "2026-09-04T09:00:00Z",
+                "budget_reference": 300000.0,
+                "match_algorithm_version": "match-0.1",
+                "status": "pending_review",
+            }
+        ],
+    }

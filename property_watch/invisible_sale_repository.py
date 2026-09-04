@@ -15,6 +15,22 @@ def _row(row: Any) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _public_candidate(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row[key]
+        for key in (
+            "buy_request_id",
+            "score_total",
+            "compatibility_status",
+            "reason_codes",
+            "last_activity_at",
+            "budget_reference",
+            "match_algorithm_version",
+            "status",
+        )
+    }
+
+
 def get_watch_and_baseline_for_stima(stima_id: int) -> dict[str, Any] | None:
     with property_watch_cursor() as (_, cur):
         cur.execute(
@@ -83,7 +99,11 @@ def get_invisible_sale_for_stima(stima_id: int) -> dict[str, Any]:
                         score_total DESC, last_activity_at DESC, buy_request_id ASC""",
             (opportunity["id"],),
         )
-        return {**opportunity, "candidates": [_row(row) for row in cur.fetchall()]}
+        return {
+            "status": opportunity["status"],
+            "current_candidate_count": opportunity["current_candidate_count"],
+            "candidates": [_public_candidate(_row(row)) for row in cur.fetchall()],
+        }
 
 
 def persist_invisible_sale_refresh(
