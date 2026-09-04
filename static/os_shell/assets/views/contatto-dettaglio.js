@@ -30,6 +30,11 @@ import {
 } from '../components/buyer-pressure.js';
 import { loadSellerTimeline, renderSellerTimeline } from '../components/timeline.js';
 import { mountInvisibleSale } from '../components/invisible-sale.js';
+// P25.1: azioni rapide "Nuova attività"/"Nuovo task" con contact_id
+// precompilato (e lead_id selezionabile tra i lead già caricati in
+// data.leads, nessuna nuova chiamata). Stessi dialog condivisi già usati da
+// attivita.js — vedi components/activity-task-dialogs.js.
+import { openNewActivityDialog, openNewTaskDialog } from '../components/activity-task-dialogs.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -116,9 +121,15 @@ export async function renderContattoDettaglio(container, params = []) {
       <h2>${escapeHtml(name)}</h2>
       <div class="muted">Contatto #${escapeHtml(contact.id)} · ${escapeHtml(contact.contact_type === 'company' ? 'Azienda' : 'Persona')}</div>
       <div id="contact-role-badges" class="badge-row"></div>
+      <div class="action-bar" style="margin-top:8px">
+        <button type="button" id="contact-quick-activity" class="btn ghost">+ Nuova attività</button>
+        <button type="button" id="contact-quick-task" class="btn ghost">+ Nuovo task</button>
+      </div>
     </div>
     <div class="tabs" id="contact-tabs"></div>
     <div id="contact-tab-content" class="card panel"></div>
+    <dialog id="contact-activity-dialog" class="modal"></dialog>
+    <dialog id="contact-task-dialog" class="modal"></dialog>
   `;
 
   const badgeRow = container.querySelector('#contact-role-badges');
@@ -126,6 +137,39 @@ export async function renderContattoDettaglio(container, params = []) {
   badgeRow.innerHTML = roles.length
     ? roles.map((r) => renderBadge(ROLE_LABELS[r.role] || r.role, 'role')).join('')
     : '<span class="muted">Nessun ruolo assegnato in anagrafica.</span>';
+
+  // P25.1: azioni rapide, sempre visibili indipendentemente dalla tab attiva.
+  // contact_id è sempre precompilato (mai richiesto), il lead è selezionabile
+  // tra data.leads già caricato dal Contact 360 (nessuna nuova chiamata per
+  // popolare il selettore).
+  async function reloadTasksAndActivities() {
+    try {
+      const fresh = await apiGet(`/api/crm/contacts/${contact.id}/360`);
+      data.activities = fresh.activities;
+      data.tasks = fresh.tasks;
+    } catch (_error) {
+      // best-effort: la creazione è già avvenuta lato backend (il dialog ha
+      // già mostrato l'esito), un errore di refresh qui non deve nascondere
+      // il successo già ottenuto — stesso principio di reloadPropertyStatus
+      // in immobile-dettaglio.js.
+    }
+    await showTab(activeTab);
+  }
+
+  container.querySelector('#contact-quick-activity').addEventListener('click', () => {
+    openNewActivityDialog(container.querySelector('#contact-activity-dialog'), {
+      presetContact: { id: contact.id, label: name },
+      presetLeads: data.leads,
+      onSuccess: reloadTasksAndActivities,
+    });
+  });
+  container.querySelector('#contact-quick-task').addEventListener('click', () => {
+    openNewTaskDialog(container.querySelector('#contact-task-dialog'), {
+      presetContact: { id: contact.id, label: name },
+      presetLeads: data.leads,
+      onSuccess: reloadTasksAndActivities,
+    });
+  });
 
   const tabsEl = container.querySelector('#contact-tabs');
   tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');

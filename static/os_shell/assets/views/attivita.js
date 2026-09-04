@@ -73,9 +73,26 @@
 // Le due aree richieste dal brief non vengono MAI mescolate in un'unica
 // tabella: sono due tab distinti, con due caricamenti indipendenti e due
 // insiemi di colonne diversi (renderDaFareTab / renderCronologiaTab).
+//
+// P25.1: creazione/modifica/eliminazione operative per Task e Attività
+// (creazione/eliminazione), tramite gli endpoint CORE già esistenti e già
+// verificati sopra (POST/PATCH/DELETE /api/core/tasks, POST/DELETE
+// /api/core/activities) — vedi components/activity-task-dialogs.js per i
+// dettagli di contratto. Le Visite restano volutamente sola lettura qui: la
+// loro gestione (creazione/modifica/eliminazione) è già interamente in
+// immobile-dettaglio.js (P16) e non va duplicata in questa vista.
 
 import { apiGet, apiPatch } from '../core/api-client.js';
 import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
+// P25.1: creazione/modifica/eliminazione task e creazione/eliminazione
+// attività, dialog condivisi con contatto-dettaglio.js (vedi
+// components/activity-task-dialogs.js per il razionale e i contratti
+// backend verificati). Nessun nuovo endpoint: stesso CORE già usato sopra
+// per il completamento task (PATCH /api/core/tasks/{id}).
+import {
+  openNewActivityDialog, deleteActivity,
+  openNewTaskDialog, openEditTaskDialog, deleteTask,
+} from '../components/activity-task-dialogs.js';
 
 const TASK_STATUS_LABELS = { open: 'Da fare', in_progress: 'In corso', completed: 'Completato', cancelled: 'Annullato' };
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
@@ -170,17 +187,48 @@ export async function renderAttivita(container) {
     activeTab: 'dafare',
     cache: { dafare: null, cronologia: null },
     cronologiaVisibleCount: 30,
+    // P25.1: conferma inline a due click prima di eliminare un task o
+    // un'attività (nessun window.confirm(), stesso principio già usato in
+    // immobile-dettaglio.js per referenti/visite/vendite). Chiave
+    // "{kind}:{id}" perché task e attività condividono lo stesso set.
+    deleteConfirm: new Set(),
   };
 
   container.innerHTML = `
-    <div class="tabs" id="attivita-tabs">
-      ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}
+    <div class="list-toolbar">
+      <div class="tabs" id="attivita-tabs">
+        ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}
+      </div>
+      <button type="button" id="attivita-new-activity" class="btn ghost">+ Nuova attività</button>
+      <button type="button" id="attivita-new-task" class="btn primary">+ Nuovo task</button>
     </div>
+    <div id="attivita-action-feedback"></div>
     <div id="attivita-tab-content"><p class="muted">Caricamento…</p></div>
+    <dialog id="activity-dialog" class="modal"></dialog>
+    <dialog id="task-dialog" class="modal"></dialog>
   `;
 
   const tabsEl = container.querySelector('#attivita-tabs');
   const contentEl = container.querySelector('#attivita-tab-content');
+  const activityDialogEl = container.querySelector('#activity-dialog');
+  const taskDialogEl = container.querySelector('#task-dialog');
+
+  // P25.1: dopo qualunque creazione/modifica/eliminazione entrambe le cache
+  // vengono invalidate (un task nuovo/cambiato può spostarsi tra "Da fare" e
+  // "Cronologia") e viene ricaricata solo la tab attiva, stesso principio
+  // già usato altrove (es. reloadProposals in immobile-dettaglio.js).
+  async function reloadAfterMutation() {
+    state.cache.dafare = null;
+    state.cache.cronologia = null;
+    await showTab(state.activeTab);
+  }
+
+  container.querySelector('#attivita-new-activity').addEventListener('click', () => {
+    openNewActivityDialog(activityDialogEl, { onSuccess: reloadAfterMutation });
+  });
+  container.querySelector('#attivita-new-task').addEventListener('click', () => {
+    openNewTaskDialog(taskDialogEl, { onSuccess: reloadAfterMutation });
+  });
 
   tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
@@ -197,7 +245,7 @@ export async function renderAttivita(container) {
 
   async function loadDaFare(force = false) {
     if (state.cache.dafare && !force) {
-      contentEl.innerHTML = renderDaFareTab(state.cache.dafare);
+      contentEl.innerHTML = renderDaFareTab(state.cache.dafare, state.deleteConfirm);
       bindDaFareActions();
       return;
     }
@@ -224,7 +272,7 @@ export async function renderAttivita(container) {
 
   async function loadCronologia(force = false) {
     if (state.cache.cronologia && !force) {
-      contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount);
+      contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount, state.deleteConfirm);
       bindCronologiaActions();
       return;
     }
@@ -259,7 +307,7 @@ export async function renderAttivita(container) {
       truncated: tasksTruncated || visitsTruncated || activitiesTruncated,
     };
     state.cronologiaVisibleCount = 30;
-    contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount);
+    contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount, state.deleteConfirm);
     bindCronologiaActions();
   }
 
@@ -279,6 +327,91 @@ export async function renderAttivita(container) {
         }
       });
     });
+    bindTaskEditDeleteActions(state.cache.dafare.tasks, loadDaFare);
+  }
+
+  // P25.1: azioni Modifica/Elimina task, condivise tra "Da fare" e
+  // "Cronologia" (un task chiuso resta modificabile/eliminabile anche in
+  // Cronologia). `tasks` è l'elenco già caricato per la tab corrente (nessuna
+  // nuova chiamata per risolvere l'id in un oggetto task). Conferma inline a
+  // due click prima della DELETE reale, stesso principio già usato in
+  // immobile-dettaglio.js (nessun window.confirm()).
+  function bindTaskEditDeleteActions(tasks, reload) {
+    contentEl.querySelectorAll('[data-edit-task]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const task = tasks.find((t) => String(t.id) === btn.dataset.editTask);
+        if (task) openEditTaskDialog(taskDialogEl, task, { onSuccess: reloadAfterMutation });
+      });
+    });
+    contentEl.querySelectorAll('[data-delete-task]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        // Solo toggle dello stato di conferma: `reload` senza force=true
+        // re-renderizza dalla cache già presente (nessuna nuova chiamata di
+        // rete), esattamente come contactRemoveConfirm in
+        // immobile-dettaglio.js.
+        state.deleteConfirm.add(`task:${btn.dataset.deleteTask}`);
+        reload();
+      });
+    });
+    contentEl.querySelectorAll('[data-delete-task-back]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.deleteConfirm.delete(`task:${btn.dataset.deleteTaskBack}`);
+        reload();
+      });
+    });
+    contentEl.querySelectorAll('[data-delete-task-confirm]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const taskId = btn.dataset.deleteTaskConfirm;
+        btn.disabled = true;
+        btn.textContent = 'Eliminazione…';
+        try {
+          await deleteTask(taskId);
+          state.deleteConfirm.delete(`task:${taskId}`);
+          await reloadAfterMutation();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Conferma eliminazione';
+          const feedbackEl = container.querySelector('#attivita-action-feedback');
+          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile eliminare il task: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
+        }
+      });
+    });
+  }
+
+  // P25.1: azioni Elimina attività (activities non ha PATCH lato backend,
+  // vedi components/activity-task-dialogs.js: solo creazione ed eliminazione).
+  function bindActivityDeleteActions(activities) {
+    contentEl.querySelectorAll('[data-delete-activity]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        // Solo toggle: re-render dalla cache, nessuna chiamata di rete
+        // (stesso principio del toggle task sopra).
+        state.deleteConfirm.add(`attivita:${btn.dataset.deleteActivity}`);
+        loadCronologia();
+      });
+    });
+    contentEl.querySelectorAll('[data-delete-activity-back]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.deleteConfirm.delete(`attivita:${btn.dataset.deleteActivityBack}`);
+        loadCronologia();
+      });
+    });
+    contentEl.querySelectorAll('[data-delete-activity-confirm]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const activityId = btn.dataset.deleteActivityConfirm;
+        btn.disabled = true;
+        btn.textContent = 'Eliminazione…';
+        try {
+          await deleteActivity(activityId);
+          state.deleteConfirm.delete(`attivita:${activityId}`);
+          await reloadAfterMutation();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Conferma eliminazione';
+          const feedbackEl = container.querySelector('#attivita-action-feedback');
+          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile eliminare l'attività: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
+        }
+      });
+    });
   }
 
   function bindCronologiaActions() {
@@ -286,10 +419,12 @@ export async function renderAttivita(container) {
     if (loadMoreBtn) {
       loadMoreBtn.addEventListener('click', () => {
         state.cronologiaVisibleCount += 30;
-        contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount);
+        contentEl.innerHTML = renderCronologiaTab(state.cache.cronologia, state.cronologiaVisibleCount, state.deleteConfirm);
         bindCronologiaActions();
       });
     }
+    bindTaskEditDeleteActions(state.cache.cronologia.tasks, loadCronologia);
+    bindActivityDeleteActions(state.cache.cronologia.activities);
   }
 
   await showTab('dafare');
@@ -300,7 +435,7 @@ const TRUNCATION_NOTICE = `Il volume dei dati ha superato il tetto di sicurezza 
 
 // --- Tab "Da fare" ----------------------------------------------------------
 
-function renderDaFareTab(data) {
+function renderDaFareTab(data, deleteConfirm) {
   const { tasks, visits, failedSections, truncated } = data;
   const now = new Date();
 
@@ -344,10 +479,10 @@ function renderDaFareTab(data) {
         </div>
       `).join('')}
     </div>
-    ${renderBucket('Scadute', scadute, 'Nessun task o visita scaduti.')}
-    ${renderBucket('Oggi', oggi, 'Nessun task o visita in programma oggi.')}
-    ${renderBucket('Prossime', prossime, 'Nessun task o visita futuri in programma.')}
-    ${renderBucket('Senza scadenza', senzaScadenza, 'Nessun task senza scadenza.')}
+    ${renderBucket('Scadute', scadute, 'Nessun task o visita scaduti.', deleteConfirm)}
+    ${renderBucket('Oggi', oggi, 'Nessun task o visita in programma oggi.', deleteConfirm)}
+    ${renderBucket('Prossime', prossime, 'Nessun task o visita futuri in programma.', deleteConfirm)}
+    ${renderBucket('Senza scadenza', senzaScadenza, 'Nessun task senza scadenza.', deleteConfirm)}
   `;
 }
 
@@ -363,21 +498,42 @@ function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-function renderBucket(title, items, emptyMessage) {
+function renderBucket(title, items, emptyMessage, deleteConfirm) {
   return `
     <div class="card panel" style="margin-top:16px">
       <h2 class="section-title">${escapeHtml(title)} (${items.length})</h2>
-      ${items.length ? `<div class="list">${items.map(renderDaFareItem).join('')}</div>` : `<p class="muted">${escapeHtml(emptyMessage)}</p>`}
+      ${items.length ? `<div class="list">${items.map((item) => renderDaFareItem(item, deleteConfirm)).join('')}</div>` : `<p class="muted">${escapeHtml(emptyMessage)}</p>`}
     </div>
   `;
 }
 
-function renderDaFareItem(item) {
-  if (item.kind === 'task') return renderTaskItem(item.data);
+function renderDaFareItem(item, deleteConfirm) {
+  if (item.kind === 'task') return renderTaskItem(item.data, deleteConfirm);
   return renderVisitItem(item.data);
 }
 
-function renderTaskItem(t) {
+// P25.1: azioni Modifica/Elimina aggiunte accanto a "Completa" (già
+// esistente). Conferma inline a due click per l'eliminazione (nessun
+// window.confirm()), chiave "task:{id}" nel Set deleteConfirm condiviso.
+function renderTaskActions(t, deleteConfirm) {
+  const confirming = deleteConfirm ? deleteConfirm.has(`task:${t.id}`) : false;
+  if (confirming) {
+    return `
+      <button type="button" class="btn ghost" data-delete-task-confirm="${escapeHtml(t.id)}">Conferma eliminazione</button>
+      <button type="button" class="btn ghost" data-delete-task-back="${escapeHtml(t.id)}">Indietro</button>
+    `;
+  }
+  const completeBtn = OPEN_TASK_STATUSES.includes(t.status)
+    ? `<button type="button" class="btn ghost" data-complete-task="${escapeHtml(t.id)}">Completa</button>`
+    : '';
+  return `
+    ${completeBtn}
+    <button type="button" class="btn ghost" data-edit-task="${escapeHtml(t.id)}">Modifica</button>
+    <button type="button" class="btn ghost" data-delete-task="${escapeHtml(t.id)}">Elimina</button>
+  `;
+}
+
+function renderTaskItem(t, deleteConfirm) {
   const isAutomation = t.metadata && t.metadata.source === 'flow';
   const buyId = t.metadata && t.metadata.buy_request_id;
   const priorityTone = ['high', 'urgent'].includes(t.priority) ? 'warn' : 'gray';
@@ -396,7 +552,7 @@ function renderTaskItem(t) {
       </div>
       <div style="text-align:right">
         <div class="muted">${escapeHtml(formatDateTime(t.due_at))}</div>
-        <button type="button" class="btn ghost" data-complete-task="${escapeHtml(t.id)}">Completa</button>
+        <div class="action-bar">${renderTaskActions(t, deleteConfirm)}</div>
       </div>
     </div>
   `;
@@ -421,7 +577,7 @@ function renderVisitItem(v) {
 
 // --- Tab "Cronologia" --------------------------------------------------------
 
-function renderCronologiaTab(data, visibleCount) {
+function renderCronologiaTab(data, visibleCount, deleteConfirm) {
   const { tasks, activities, visits, failedSections, truncated } = data;
 
   const closedTasks = tasks.filter((t) => CLOSED_TASK_STATUSES.includes(t.status));
@@ -448,6 +604,7 @@ function renderCronologiaTab(data, visibleCount) {
     { label: 'Descrizione', render: (i) => renderCronologiaDescription(i) },
     { label: 'Collegamenti', render: (i) => renderCronologiaLinks(i) },
     { label: 'Quando', render: (i) => escapeHtml(formatDateTime(i.when)) },
+    { label: '', render: (i) => renderCronologiaActions(i, deleteConfirm) },
   ];
 
   return `
@@ -459,6 +616,25 @@ function renderCronologiaTab(data, visibleCount) {
       ${hasMore ? '<div style="margin-top:12px"><button type="button" class="btn ghost" id="cronologia-load-more">Carica altri</button></div>' : ''}
     </div>
   `;
+}
+
+// P25.1: azioni Modifica/Elimina per un task chiuso, Elimina per un'attività
+// (nessuna azione per le visite: la loro gestione resta in
+// immobile-dettaglio.js, P16, non duplicata qui). Stesso principio di
+// conferma inline a due click di renderTaskActions sopra.
+function renderCronologiaActions(item, deleteConfirm) {
+  if (item.kind === 'task') return renderTaskActions(item.data, deleteConfirm);
+  if (item.kind === 'attivita') {
+    const confirming = deleteConfirm ? deleteConfirm.has(`attivita:${item.data.id}`) : false;
+    if (confirming) {
+      return `
+        <button type="button" class="btn ghost" data-delete-activity-confirm="${escapeHtml(item.data.id)}">Conferma eliminazione</button>
+        <button type="button" class="btn ghost" data-delete-activity-back="${escapeHtml(item.data.id)}">Indietro</button>
+      `;
+    }
+    return `<button type="button" class="btn ghost" data-delete-activity="${escapeHtml(item.data.id)}">Elimina</button>`;
+  }
+  return '';
 }
 
 function renderCronologiaTypeBadge(item) {
