@@ -40,6 +40,16 @@ const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
   referrer: 'Segnalatore', agency: 'Agenzia', professional: 'Professionista', other: 'Altro',
 };
+// P25.4: elenco derivato da ROLE_LABELS sopra (chiavi = core/enums.py::
+// CONTACT_ROLES, verificato in audit), riusato per il selettore "+ Aggiungi
+// ruolo": nessun secondo elenco duplicato.
+const CONTACT_ROLES_LIST = Object.keys(ROLE_LABELS);
+
+// P25.4: core/enums.py::CONTACT_STATUSES. 'archived' e' un valore piatto
+// come gli altri (nessun side-effect collegato, a differenza di
+// property.commercial_status='archived' che imposta anche archived_at via
+// un endpoint dedicato) - qui basta la PATCH generica.
+const CONTACT_STATUS_LABELS = { active: 'Attivo', inactive: 'Inattivo', archived: 'Archiviato' };
 
 const PROPERTY_ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', tenant: 'Inquilino', contact: 'Referente',
@@ -127,14 +137,20 @@ export async function renderContattoDettaglio(container, params = []) {
   };
 
   const contact = data.contact || {};
-  const name = contact.display_name || fallbackName(contact);
+  // P25.4: 'let', non 'const' - il nome visualizzato (titolo header, label
+  // precompilata nei dialog attività/task) deve riflettere display_name
+  // dopo una modifica contatto, senza reload completo pagina. Le closure che
+  // lo referenziano (es. i listener quick-activity/quick-task sotto) lo
+  // rileggono al momento del click, non alla definizione.
+  let name = contact.display_name || fallbackName(contact);
 
   container.innerHTML = `
     <div class="contact-header card">
-      <h2>${escapeHtml(name)}</h2>
-      <div class="muted">Contatto #${escapeHtml(contact.id)} · ${escapeHtml(contact.contact_type === 'company' ? 'Azienda' : 'Persona')}</div>
+      <h2 id="contact-header-title">${escapeHtml(name)}</h2>
+      <div class="muted" id="contact-header-subtitle">Contatto #${escapeHtml(contact.id)} · ${escapeHtml(contact.contact_type === 'company' ? 'Azienda' : 'Persona')}</div>
       <div id="contact-role-badges" class="badge-row"></div>
       <div class="action-bar" style="margin-top:8px">
+        <button type="button" id="contact-edit-btn" class="btn ghost">Modifica contatto</button>
         <button type="button" id="contact-quick-activity" class="btn ghost">+ Nuova attività</button>
         <button type="button" id="contact-quick-task" class="btn ghost">+ Nuovo task</button>
       </div>
@@ -143,16 +159,112 @@ export async function renderContattoDettaglio(container, params = []) {
     <div id="contact-tab-content" class="card panel"></div>
     <dialog id="contact-activity-dialog" class="modal"></dialog>
     <dialog id="contact-task-dialog" class="modal"></dialog>
+    <dialog id="contact-edit-dialog" class="modal"></dialog>
     <dialog id="lead-new-dialog" class="modal"></dialog>
     <dialog id="lead-edit-dialog" class="modal"></dialog>
     <dialog id="lead-properties-dialog" class="modal modal-wide"></dialog>
   `;
 
+  // P25.4: ruoli (contact_roles) diventano gestibili qui — aggiunta tramite
+  // POST /api/core/contacts/{id}/roles (ContactRoleCreate), rimozione
+  // tramite DELETE /api/core/contacts/{id}/roles/{role}, conferma inline a
+  // due click (stesso principio di contactRemoveConfirm in
+  // immobile-dettaglio.js), mai window.confirm(). CONTACT_ROLES_LIST deriva
+  // da ROLE_LABELS (le cui chiavi corrispondono gia' esattamente a
+  // core/enums.py::CONTACT_ROLES, verificato in audit), nessun elenco
+  // duplicato.
   const badgeRow = container.querySelector('#contact-role-badges');
-  const roles = Array.isArray(data.roles) ? data.roles : [];
-  badgeRow.innerHTML = roles.length
-    ? roles.map((r) => renderBadge(ROLE_LABELS[r.role] || r.role, 'role')).join('')
-    : '<span class="muted">Nessun ruolo assegnato in anagrafica.</span>';
+  const roleRemoveConfirm = new Set();
+
+  function renderRoleBadgesHtml() {
+    const roles = Array.isArray(data.roles) ? data.roles : [];
+    const badgesHtml = roles.length
+      ? roles.map((r) => `
+          <span class="role-badge-editable">
+            ${renderBadge(ROLE_LABELS[r.role] || r.role, 'role')}
+            <button type="button" class="btn ghost role-remove-btn" data-role="${escapeHtml(r.role)}">${roleRemoveConfirm.has(r.role) ? 'Conferma rimozione' : 'Rimuovi'}</button>
+          </span>
+        `).join('')
+      : '<span class="muted">Nessun ruolo assegnato in anagrafica.</span>';
+    const availableRoles = CONTACT_ROLES_LIST.filter((r) => !roles.some((x) => x.role === r));
+    const addControl = availableRoles.length
+      ? `<div style="margin-top:6px"><select id="role-add-select" class="input" style="display:inline-block;width:auto">${availableRoles.map((r) => `<option value="${r}">${escapeHtml(ROLE_LABELS[r] || r)}</option>`).join('')}</select> <button type="button" id="role-add-btn" class="btn ghost">+ Aggiungi ruolo</button></div>`
+      : '';
+    return `${badgesHtml}${addControl}<div id="role-error" class="field-error"></div>`;
+  }
+
+  function bindRoleBadgeActions() {
+    const addBtn = badgeRow.querySelector('#role-add-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', async () => {
+        const select = badgeRow.querySelector('#role-add-select');
+        if (!select) return;
+        const role = select.value;
+        addBtn.disabled = true;
+        addBtn.textContent = 'Aggiunta…';
+        try {
+          await apiPost(`/api/core/contacts/${contact.id}/roles`, { role });
+          await reloadContactAndRoles();
+        } catch (error) {
+          addBtn.disabled = false;
+          addBtn.textContent = '+ Aggiungi ruolo';
+          const errorEl = badgeRow.querySelector('#role-error');
+          if (errorEl) errorEl.textContent = error.message || 'Errore nell\'aggiunta del ruolo.';
+        }
+      });
+    }
+    badgeRow.querySelectorAll('.role-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const role = btn.dataset.role;
+        if (!roleRemoveConfirm.has(role)) {
+          roleRemoveConfirm.add(role);
+          renderRoleBadges();
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Rimozione…';
+        try {
+          await apiDelete(`/api/core/contacts/${contact.id}/roles/${role}`);
+          roleRemoveConfirm.delete(role);
+          await reloadContactAndRoles();
+        } catch (error) {
+          roleRemoveConfirm.delete(role);
+          btn.disabled = false;
+          btn.textContent = 'Rimuovi';
+          const errorEl = badgeRow.querySelector('#role-error');
+          if (errorEl) errorEl.textContent = error.message || 'Errore nella rimozione del ruolo.';
+        }
+      });
+    });
+  }
+
+  function renderRoleBadges() {
+    badgeRow.innerHTML = renderRoleBadgesHtml();
+    bindRoleBadgeActions();
+  }
+
+  renderRoleBadges();
+
+  // P25.4: ricarica contatto+ruoli dopo una modifica (Modifica contatto,
+  // aggiunta/rimozione ruolo). Stessa fonte di reloadTasksAndActivities
+  // sotto (Contact 360), nessun nuovo endpoint. Aggiorna anche header e
+  // badge-row senza reload completo pagina.
+  async function reloadContactAndRoles() {
+    try {
+      const fresh = await apiGet(`/api/crm/contacts/${contact.id}/360`);
+      Object.assign(contact, fresh.contact);
+      data.roles = fresh.roles;
+      name = contact.display_name || fallbackName(contact);
+      const titleEl = container.querySelector('#contact-header-title');
+      if (titleEl) titleEl.textContent = name;
+      const subtitleEl = container.querySelector('#contact-header-subtitle');
+      if (subtitleEl) subtitleEl.textContent = `Contatto #${contact.id} · ${contact.contact_type === 'company' ? 'Azienda' : 'Persona'}`;
+    } catch (_error) {
+      // best-effort, stesso principio di reloadTasksAndActivities.
+    }
+    renderRoleBadges();
+    await showTab(activeTab);
+  }
 
   // P25.1: azioni rapide, sempre visibili indipendentemente dalla tab attiva.
   // contact_id è sempre precompilato (mai richiesto), il lead è selezionabile
@@ -186,6 +298,139 @@ export async function renderContattoDettaglio(container, params = []) {
       onSuccess: reloadTasksAndActivities,
     });
   });
+
+  // --- P25.4: Modifica contatto (ContactUpdate) -----------------------------
+  // Copre esattamente i campi reali di core/schemas.py::ContactUpdate.
+  // Esclusioni deliberate:
+  //  - archived_at: non esposto qui. Nessuna cancellazione/archiviazione
+  //    dedicata viene inventata (nessun endpoint DELETE /contacts/{id}
+  //    esiste, verificato in core/router.py); 'archived' resta comunque
+  //    selezionabile come normale valore del campo "Stato" (CONTACT_STATUSES
+  //    lo contiene alla pari di active/inactive, nessun side-effect
+  //    collegato a differenza di property.commercial_status='archived').
+  //  - marketing_consent_at: colonna derivata, mai scritta manualmente da
+  //    qui (core/service.py::update_contact non la deriva automaticamente
+  //    come fa create_contact, ma esporla per la scrittura manuale
+  //    introdurrebbe uno stato incoerente non richiesto).
+  // Solo i campi realmente modificati entrano nel payload (PATCH usa
+  // exclude_unset lato backend, core/service.py::update_contact), stesso
+  // principio di bindIncaricoSection in immobile-dettaglio.js.
+  container.querySelector('#contact-edit-btn').addEventListener('click', () => {
+    openEditContactDialog();
+  });
+
+  function openEditContactDialog() {
+    const dialog = container.querySelector('#contact-edit-dialog');
+    const currentConsent = contact.marketing_consent === true ? 'true' : contact.marketing_consent === false ? 'false' : '';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Modifica contatto</h3>
+        <div class="error-box" hidden></div>
+        <form id="contact-edit-form">
+          <div class="form-grid-3">
+            <div class="form-field"><label>Tipo</label>
+              <select name="contact_type" id="contact-edit-type" class="input">
+                <option value="person" ${contact.contact_type !== 'company' ? 'selected' : ''}>Persona</option>
+                <option value="company" ${contact.contact_type === 'company' ? 'selected' : ''}>Azienda</option>
+              </select>
+            </div>
+            <div class="form-field"><label>Stato</label>
+              <select name="status" class="input">
+                ${Object.entries(CONTACT_STATUS_LABELS).map(([v, l]) => `<option value="${v}" ${v === contact.status ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-field"><label>Consenso marketing</label>
+              <select name="marketing_consent" class="input">
+                <option value="" ${currentConsent === '' ? 'selected' : ''}>Non specificato</option>
+                <option value="true" ${currentConsent === 'true' ? 'selected' : ''}>Sì</option>
+                <option value="false" ${currentConsent === 'false' ? 'selected' : ''}>No</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid-3" id="contact-edit-person-fields" ${contact.contact_type === 'company' ? 'hidden' : ''}>
+            <div class="form-field"><label>Nome</label><input type="text" name="first_name" class="input" maxlength="100" value="${escapeHtml(contact.first_name || '')}"></div>
+            <div class="form-field"><label>Cognome</label><input type="text" name="last_name" class="input" maxlength="100" value="${escapeHtml(contact.last_name || '')}"></div>
+          </div>
+          <div class="form-grid-3" id="contact-edit-company-fields" ${contact.contact_type !== 'company' ? 'hidden' : ''}>
+            <div class="form-field"><label>Ragione sociale</label><input type="text" name="company_name" class="input" maxlength="200" value="${escapeHtml(contact.company_name || '')}"></div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-field"><label>Nome visualizzato</label><input type="text" name="display_name" class="input" maxlength="200" value="${escapeHtml(contact.display_name || '')}"></div>
+            <div class="form-field"><label>Email</label><input type="email" name="email" class="input" maxlength="320" value="${escapeHtml(contact.email || '')}"></div>
+            <div class="form-field"><label>Telefono</label><input type="text" name="phone" class="input" maxlength="50" value="${escapeHtml(contact.phone || '')}"></div>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-field"><label>Secondo telefono</label><input type="text" name="secondary_phone" class="input" maxlength="50" value="${escapeHtml(contact.secondary_phone || '')}"></div>
+            <div class="form-field"><label>Fonte</label><input type="text" name="source" class="input" maxlength="100" value="${escapeHtml(contact.source || '')}"></div>
+          </div>
+          <div class="form-field"><label>Note</label><textarea name="notes" rows="3" class="input">${escapeHtml(contact.notes || '')}</textarea></div>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-cancel>Annulla</button>
+            <button type="submit" class="btn primary">Salva</button>
+          </div>
+        </form>
+      </div>
+    `;
+    const errorBox = dialog.querySelector('.error-box');
+    dialog.querySelector('[data-cancel]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('#contact-edit-type').addEventListener('change', (event) => {
+      const isCompany = event.target.value === 'company';
+      dialog.querySelector('#contact-edit-person-fields').hidden = isCompany;
+      dialog.querySelector('#contact-edit-company-fields').hidden = !isCompany;
+    });
+    dialog.querySelector('#contact-edit-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submitBtn = dialog.querySelector('button[type="submit"]');
+      const formData = new FormData(event.target);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Salvataggio…';
+      errorBox.hidden = true;
+
+      // Solo i campi realmente cambiati entrano nel payload — vedi commento
+      // in testa a questa sezione.
+      const payload = {};
+      const textField = (name, current) => {
+        const raw = formData.get(name);
+        const value = raw === null ? '' : raw.trim();
+        if (value !== (current || '')) payload[name] = value === '' ? null : value;
+      };
+      const selectField = (name, current) => {
+        const value = formData.get(name);
+        if (value !== current) payload[name] = value;
+      };
+      selectField('contact_type', contact.contact_type);
+      selectField('status', contact.status);
+      textField('first_name', contact.first_name);
+      textField('last_name', contact.last_name);
+      textField('company_name', contact.company_name);
+      textField('display_name', contact.display_name);
+      textField('email', contact.email);
+      textField('phone', contact.phone);
+      textField('secondary_phone', contact.secondary_phone);
+      textField('source', contact.source);
+      textField('notes', contact.notes);
+      const consentRaw = formData.get('marketing_consent');
+      const consentTarget = consentRaw === '' ? null : consentRaw === 'true';
+      if (consentTarget !== (contact.marketing_consent ?? null)) payload.marketing_consent = consentTarget;
+
+      if (!Object.keys(payload).length) {
+        dialog.close();
+        return;
+      }
+
+      try {
+        await apiPatch(`/api/core/contacts/${contact.id}`, payload);
+        dialog.close();
+        await reloadContactAndRoles();
+      } catch (error) {
+        errorBox.hidden = false;
+        errorBox.textContent = `Errore nel salvataggio del contatto: ${error.message}`;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Salva';
+      }
+    });
+    dialog.showModal();
+  }
 
   // --- P25.2: Lead SELL — creazione, modifica, collegamento Immobili -------
   // Endpoint reali (verificati in core/router.py e property/router.py prima
