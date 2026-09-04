@@ -29,6 +29,7 @@ import {
   hydrateBuyerPressure,
 } from '../components/buyer-pressure.js';
 import { loadSellerTimeline, renderSellerTimeline } from '../components/timeline.js';
+import { mountInvisibleSale } from '../components/invisible-sale.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -147,6 +148,11 @@ export async function renderContattoDettaglio(container, params = []) {
             lazyCache.buyerPressure,
             () => loadLeadEstimationsLazy(data.leads, lazyCache),
           );
+          void hydrateInvisibleSale(
+            contentEl.querySelector('[data-invisible-sale-mount]'),
+            data.leads,
+            lazyCache,
+          );
           break;
         case 'timeline': {
           contentEl.innerHTML = renderSellerTimeline({ status: 'loading' });
@@ -223,12 +229,34 @@ function renderPanoramica(contact, data) {
     <div class="buyer-pressure-section" data-buyer-pressure-mount>
       <p class="muted">Calcolo domanda buyer in caricamento…</p>
     </div>
+    <h3 class="section-title">Potenziali acquirenti prima della pubblicazione</h3>
+    <div class="invisible-sale-section" data-invisible-sale-mount>
+      <p class="muted">Caricamento potenziali acquirenti…</p>
+    </div>
     <h3 class="section-title">Relazioni operative</h3>
     <p class="muted">Conteggi informativi, non ruoli in anagrafica.</p>
     <div class="stat-chip-row">
       ${relCounts.map(([label, value]) => `<div class="stat-chip"><span>${value}</span><small>${escapeHtml(label)}</small></div>`).join('')}
     </div>
   `;
+}
+
+async function hydrateInvisibleSale(mount, leads, cache) {
+  if (!mount) return;
+  const token = `invisible-sale-${Date.now()}-${Math.random()}`;
+  mount.dataset.invisibleSaleToken = token;
+  try {
+    const details = await loadLeadEstimationsLazy(leads, cache);
+    const ids = new Set();
+    for (const lead of details.leads || []) {
+      for (const estimation of lead.estimations || []) {
+        if (Number.isSafeInteger(Number(estimation.stima_id)) && Number(estimation.stima_id) > 0) ids.add(Number(estimation.stima_id));
+      }
+    }
+    if (mount.isConnected && mount.dataset.invisibleSaleToken === token) mountInvisibleSale(mount, [...ids], token);
+  } catch (_error) {
+    if (mount.isConnected && mount.dataset.invisibleSaleToken === token) mount.textContent = 'Potenziali acquirenti non disponibili.';
+  }
 }
 
 function sellerStageLabel(stage) {

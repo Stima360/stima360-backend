@@ -173,6 +173,11 @@ body {
   font-size: 14px;
 }
 
+.invisible-sale { display: grid; gap: 10px; margin-bottom: 10px; }
+.invisible-sale-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.invisible-sale-candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+.invisible-sale-candidate a { color: var(--primary); }
+
 .placeholder { text-align: center; padding: 60px 20px; color: var(--muted); }
 .placeholder h2 { color: var(--text); }
 
@@ -462,5 +467,4 @@ dialog.modal.modal-wide { max-width: 680px; }
   font-size: 14px;
 }
 .readiness-side { margin-top: 8px; }
-
 

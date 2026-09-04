@@ -126,3 +126,37 @@ class PropertyWatchState(PropertyWatchModel):
     observation_count: int
     observations: list[PropertyWatchObservation]
     computed_at: datetime
+
+
+class InvisibleSaleCandidate(PropertyWatchModel):
+    buy_request_id: int
+    score_total: float
+    compatibility_status: Literal["compatible", "exception"]
+    reason_codes: list[
+        Literal["location", "budget", "typology", "dimensions", "rooms", "features", "condition"]
+    ]
+    last_activity_at: datetime
+    budget_reference: float | None
+    match_algorithm_version: str
+    status: Literal["pending_review", "approved", "rejected", "stale"]
+
+
+class InvisibleSaleState(PropertyWatchModel):
+    status: Literal["not_collected", "ready", "empty", "closed"]
+    current_candidate_count: int = Field(ge=0)
+    candidates: list[InvisibleSaleCandidate]
+
+
+class InvisibleSaleOutcome(PropertyWatchModel):
+    status: Literal["written", "unchanged", "baseline_unavailable", "closed", "failed"]
+    watch_id: int | None
+
+
+class InvisibleSaleBatchOutcome(InvisibleSaleOutcome):
+    stima_id: int
+
+
+class InvisibleSaleBatchRefresh(PropertyWatchModel):
+    processed: int = Field(ge=0)
+    outcomes: list[InvisibleSaleBatchOutcome]
+    totals: dict[str, int]
