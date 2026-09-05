@@ -745,3 +745,28 @@ def test_property_visit_intentional_time_change_sends_single_utc_conversion():
     assert payload["scheduled_at"] == "2026-08-29T09:30:00.000Z"
     assert run_export("visitDateTimeLocal", payload["scheduled_at"]) == "2026-08-29T11:30"
     assert "11:30" in run_export("dt", payload["scheduled_at"])
+
+@pytest.mark.parametrize("action", POST_VISIT_ACTIONS)
+@pytest.mark.parametrize("visit_id", (101, 102))
+def test_os_match_decision_preserves_selected_visit(monkeypatch, action, visit_id):
+    from buy import repository, service
+    from buy.schemas import MatchDecision
+
+    database = OutcomeDatabase()
+    monkeypatch.setattr(repository, "core_cursor", database.cursor)
+    payload = MatchDecision(
+        action=action, property_visit_id=visit_id,
+        reason_code="buyer_decision" if action == "discarded" else None,
+    )
+    result = service.match_decision(7, 11, payload)
+    assert result["property_visit_id"] == visit_id
+    assert result["match_id"] == 11
+    assert result["buy_request_id"] == 7
+    assert result["property_id"] == 21
+
+
+def test_os_decision_ui_offers_scheduled_visit_selection():
+    source = (ROOT / "static/os_shell/assets/views/acquirente-dettaglio.js").read_text()
+    assert 'name="property_visit_id"' in source
+    assert "payload.property_visit_id" in source
+    assert "visit-outcome-btn" in source

@@ -156,6 +156,7 @@ class InteractionUpdate(BuyModel):
 
 class MatchDecision(BuyModel):
     action: str
+    property_visit_id: int | None = Field(None, gt=0)
     reason_code: str | None = None
     notes: str | None = None
     occurred_at: datetime | None = None

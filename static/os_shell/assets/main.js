@@ -1,3 +1,4 @@
+import { mountGlobalSearch } from './components/global-search.js';
 // STIMA360 OS — main.js
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
@@ -81,7 +82,7 @@ registerRoute('automazioni', (container, params = []) => {
 initRouter(contentEl, {
   onNavigate(name) {
     const active = SECTIONS.find((s) => s.name === name);
-    pageTitle.textContent = active ? active.label : 'Oggi';
+    pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === name);
     }
@@ -89,6 +90,7 @@ initRouter(contentEl, {
 });
 
 mountEnvBadge(envBadgeEl);
+mountGlobalSearch(contentEl.parentElement);
 
 for (const section of SECTIONS) {
   const btn = document.createElement('button');

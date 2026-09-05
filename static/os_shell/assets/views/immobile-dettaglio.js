@@ -1,3 +1,4 @@
+import { bindSaleDetails } from '../components/sale-detail.js';
 // STIMA360 OS — immobile-dettaglio.js
 // Scheda Immobile: riusa GET /api/property/properties/{id} (property/router.py:19-20 ->
 // property/repository.py:62-96, get_property) come fonte unica per Panoramica,
@@ -331,11 +332,11 @@ export async function renderImmobileDettaglio(container, params = []) {
           bindIncaricoSection(contentEl);
           bindCommercialStatusSection(contentEl);
           break;
-        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm); bindProprietariSection(contentEl); break;
+        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm) + renderLeadLinks(property.leads); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos, photoAddMode, photoRemoveConfirm); bindFotoSection(contentEl); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
-        case 'proposte': contentEl.innerHTML = renderProposte(proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
+        case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
         case 'attivita': contentEl.innerHTML = renderAttivita(); break;
         case 'abbinamenti': {
@@ -505,6 +506,7 @@ export async function renderImmobileDettaglio(container, params = []) {
   // reale gia' esistente (mai un match_id digitato), modifica diretta solo
   // in stato draft, transizioni secondo la macchina a stati reale.
   function bindProposteSection(panelEl) {
+    bindSaleDetails(panelEl);
     const newBtn = panelEl.querySelector('#proposal-new-btn');
     if (newBtn) {
       newBtn.addEventListener('click', () => { openProposalCreateDialog(); });
@@ -1434,7 +1436,11 @@ export async function renderImmobileDettaglio(container, params = []) {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
 
-  await showTab('panoramica');
+  await showTab(TABS.some((tab) => tab.key === params[1]) ? params[1] : 'panoramica');
+  if (params[1] === 'visite' && /^\d+$/.test(params[2] || '')) {
+    const row = contentEl.querySelector(`tr[data-row-id="${params[2]}"]`);
+    if (row) { row.tabIndex = -1; row.focus(); row.scrollIntoView({ block: 'center' }); }
+  }
 }
 
 // --- Panoramica -------------------------------------------------------
@@ -1577,7 +1583,7 @@ function renderProprietari(items, contactRemoveConfirm) {
   const note = '<p class="muted">Elenco dai referenti collegati all\'immobile (property_contacts). Non riflette gli account di accesso all\'Owner Portal.</p>';
   const table = renderTable(
     [
-      { label: 'Nominativo', render: (c) => escapeHtml(c.display_name || `Contatto #${c.contact_id}`) },
+      { label: 'Nominativo', render: (c) => `<a href="#/contatti/${escapeHtml(c.contact_id)}">${escapeHtml(c.display_name || `Contatto #${c.contact_id}`)}</a>` },
       { label: 'Ruolo', render: (c) => renderBadge(PROPERTY_ROLE_LABELS[c.role] || c.role || '—', c.role === 'owner' ? 'role' : 'gray') },
       { label: 'Principale', render: (c) => c.is_primary ? renderBadge('Principale', 'ok') : '' },
       { label: 'Quota (%)', render: (c) => c.ownership_share != null ? escapeHtml(c.ownership_share) : '—' },
@@ -1896,7 +1902,7 @@ function renderVenditaCell(pr, sale, saleCancelConfirm, soldMismatch) {
     return '';
   }).join('');
   if (!statusBadge && !buttonsHtml) return '<span class="muted">—</span>';
-  return `${statusBadge}${buttonsHtml ? `<div class="action-bar" style="margin-top:6px">${buttonsHtml}</div>` : ''}`;
+  return `${statusBadge}${sale ? `<button type="button" class="btn ghost sale-detail-btn" data-sale-id="${escapeHtml(sale.id)}">Apri vendita</button>` : ''}${buttonsHtml ? `<div class="action-bar" style="margin-top:6px">${buttonsHtml}</div>` : ''}`;
 }
 
 // Stessa logica di static/buy_admin/assets/app.js:proposalActions (riferimento
@@ -2029,4 +2035,10 @@ function documentStatusTone(status) {
   if (['missing', 'expired', 'rejected'].includes(status)) return 'danger';
   if (status === 'requested') return 'warn';
   return 'gray';
+}
+
+function renderLeadLinks(leads) {
+  return '<h3>Lead collegati</h3>' + (leads || []).map((lead) =>
+    `<p><a href="#/contatti/${escapeHtml(lead.contact_id)}/lead/${escapeHtml(lead.lead_id)}">Lead #${escapeHtml(lead.lead_id)}</a></p>`
+  ).join('');
 }

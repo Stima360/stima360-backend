@@ -113,6 +113,7 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
         <h2>${renderPairHeading(match)}</h2>
         <div class="muted">Match #${escapeHtml(match.id)} · Richiesta: ${escapeHtml(match.buy_title || '—')} · Immobile: ${escapeHtml(match.property_code || match.property_title || '—')}${match.city ? ` · ${escapeHtml(match.city)}` : ''}</div>
         <div class="badge-row" id="match-badges"></div>
+        <a class="btn ghost" href="#/immobili/${escapeHtml(match.property_id)}/proposte/${escapeHtml(match.id)}">Apri proposte abbinamento</a>
       </div>
       <div id="match-action-feedback"></div>
       <div class="tabs" id="match-tabs"></div>

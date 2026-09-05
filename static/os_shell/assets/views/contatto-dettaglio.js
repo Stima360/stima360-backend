@@ -818,7 +818,11 @@ export async function renderContattoDettaglio(container, params = []) {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
 
-  await showTab('panoramica');
+  await showTab(TABS.some((tab) => tab.key === params[1]) ? params[1] : 'panoramica');
+  if (params[1] === 'lead' && /^\d+$/.test(params[2] || '')) {
+    const row = contentEl.querySelector(`tr[data-row-id="${params[2]}"]`);
+    if (row) { row.tabIndex = -1; row.focus(); row.scrollIntoView({ block: 'center' }); }
+  }
 }
 
 function fallbackName(contact) {
@@ -1060,7 +1064,7 @@ function toDatetimeLocalValue(value) {
 function renderRichieste(items) {
   return renderTable(
     [
-      { label: 'Titolo', render: (r) => escapeHtml(r.title || `Richiesta #${r.id}`) },
+      { label: 'Titolo', render: (r) => `<a href="#/acquirenti/${escapeHtml(r.id)}">${escapeHtml(r.title || `Richiesta #${r.id}`)}</a>` },
       { label: 'Stato', render: (r) => renderBadge(r.status || '—', statusTone(r.status)) },
       { label: 'Budget target', render: (r) => r.budget_target != null ? escapeHtml(r.budget_target) : '—' },
       { label: 'Creata il', render: (r) => escapeHtml(formatDate(r.created_at)) },
@@ -1075,7 +1079,7 @@ function renderRichieste(items) {
 function renderAbbinamenti(items) {
   return renderTable(
     [
-      { label: 'Match', render: (m) => `#${escapeHtml(m.id)}` },
+      { label: 'Match', render: (m) => `<a href="#/abbinamenti/${escapeHtml(m.id)}">#${escapeHtml(m.id)}</a>` },
       { label: 'Immobile', render: (m) => escapeHtml(m.property_title || `Immobile #${m.property_id}`) },
       { label: 'Punteggio', render: (m) => escapeHtml(m.score_total ?? '—') },
       { label: 'Classe', render: (m) => renderBadge(m.match_class || '—', 'gray') },
@@ -1091,7 +1095,7 @@ function renderAbbinamenti(items) {
 function renderVisite(items) {
   return renderTable(
     [
-      { label: 'Immobile', render: (v) => escapeHtml(v.property_title || `Immobile #${v.property_id}`) },
+      { label: 'Immobile', render: (v) => `<a href="#/immobili/${escapeHtml(v.property_id)}/visite/${escapeHtml(v.id)}">${escapeHtml(v.property_title || `Immobile #${v.property_id}`)} · Visita #${escapeHtml(v.id)}</a>` },
       { label: 'Data', render: (v) => escapeHtml(formatDateTime(v.scheduled_at)) },
       { label: 'Stato', render: (v) => renderBadge(v.status || '—', statusTone(v.status)) },
       { label: 'Esito', render: (v) => escapeHtml(v.outcome || '—') },
@@ -1157,7 +1161,7 @@ function renderImmobili(loaded) {
     : '';
   const table = renderTable(
     [
-      { label: 'Immobile', render: (p) => escapeHtml(p.title || p.code || `Immobile #${p.id}`) },
+      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>` },
       { label: 'Città', render: (p) => escapeHtml(p.city || '—') },
       { label: 'Ruolo del contatto', render: (p) => {
         const link = (p.contacts || []).find((c) => String(c.contact_id) === String(contactId));

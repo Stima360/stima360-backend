@@ -46,7 +46,9 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Errore ${response.status}`;
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
 
   return data;

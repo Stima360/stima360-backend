@@ -133,104 +133,16 @@ function cancelGlobalSearch(){
  clearGlobalSearchResults();
 }
 
-async function lookupGlobalSearchMatch(id){
- try{
-   return await api(`/api/match/matches/${id}`);
- }catch(e){
-   if(e.status===404)return null;
-   throw e;
- }
-}
-
-function normalizeGlobalSearchResults(type,items){
- return (items||[]).map(item=>{
-   if(type==='contact')return {
-     type,
-     id:item.id,
-     typeLabel:'CONTATTO',
-     title:item.display_name||item.company_name||[item.first_name,item.last_name].filter(Boolean).join(' ')||`Contatto #${item.id}`,
-     subtitle:[item.email,item.phone].filter(Boolean).join(' · '),
-     status:item.status||''
-   };
-
-   if(type==='property')return {
-     type,
-     id:item.id,
-     typeLabel:'IMMOBILE',
-     title:item.title||`Immobile #${item.id}`,
-     subtitle:[item.code,item.address,item.city].filter(Boolean).join(' · '),
-     status:item.commercial_status||''
-   };
-
-   if(type==='buy')return {
-     type,
-     id:item.id,
-     typeLabel:'BUY',
-     title:item.title||`Richiesta #${item.id}`,
-     subtitle:[item.contact_name,item.contact_phone].filter(Boolean).join(' · '),
-     status:item.status||''
-   };
-
-   if(type==='match')return {
-     type,
-     id:item.id,
-     typeLabel:'MATCH',
-     title:`Match #${item.id}`,
-     subtitle:[item.buy_title,item.property_title].filter(Boolean).join(' ↔ '),
-     status:item.match_class||item.commercial_status||''
-   };
-
-   return null;
- }).filter(Boolean);
-}
-
 async function runGlobalSearch(query,sequence){
- const encoded=encodeURIComponent(query);
-
- const requests=[
-   api(`/contacts?search=${encoded}&limit=5`)
-     .then(data=>({type:'contact',items:data.items||[]})),
-   api(`/api/property/properties?search=${encoded}&limit=5`)
-     .then(data=>({type:'property',items:data.items||[]})),
-   api(`/api/buy/requests?search=${encoded}&limit=5`)
-     .then(data=>({type:'buy',items:data.items||[]}))
- ];
-
- const matchId=positiveId(query);
-
- if(matchId!==null){
-   requests.push(
-     lookupGlobalSearchMatch(matchId)
-       .then(item=>({type:'match',items:item?[item]:[]}))
-   );
- }
-
- const settled=await Promise.allSettled(requests);
-
- if(sequence!==globalSearchSequence)return;
-
- const items=[];
- let failed=0;
-
- for(const result of settled){
-   if(result.status==='fulfilled'){
-     items.push(
-       ...normalizeGlobalSearchResults(
-         result.value.type,
-         result.value.items
-       )
-     );
-   }else{
-     failed+=1;
-   }
- }
-
- if(!items.length&&failed===settled.length){
+ try {
+   const {searchGlobal}=await import('/os/assets/core/global-search.js');
+   const result=await searchGlobal(query,api);
+   if(sequence!==globalSearchSequence)return;
+   renderGlobalSearchResults(result.items,result.unavailable?'Ricerca temporaneamente non disponibile.':'');
+ } catch(error) {
+   if(sequence!==globalSearchSequence)return;
    renderGlobalSearchResults([], 'Ricerca temporaneamente non disponibile.');
-   return;
  }
-
- renderGlobalSearchResults(items);
 }
 
 function scheduleGlobalSearch(){

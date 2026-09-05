@@ -28,7 +28,7 @@ export function navigate(name, params = []) {
 export function currentRouteName() {
   const raw = window.location.hash.replace(/^#\/?/, '');
   const name = raw.split('/')[0] || 'oggi';
-  return routes.has(name) ? name : 'oggi';
+  return name;
 }
 
 // Estensione minima P1: segmenti dopo il nome sezione (es. "#/contatti/42" -> ["42"]).
@@ -48,7 +48,7 @@ export async function renderCurrentRoute() {
   if (onNavigateCallback) onNavigateCallback(name, params);
   container.innerHTML = '';
   if (!renderFn) {
-    container.textContent = 'Sezione non trovata.';
+    container.textContent = 'Pagina non trovata. Seleziona una sezione dal menu.';
     return;
   }
   try {

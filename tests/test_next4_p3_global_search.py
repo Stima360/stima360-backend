@@ -6,7 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 JS_PATH = ROOT / "static/core_admin/assets/app.js"
 HTML_PATH = ROOT / "static/core_admin/index.html"
 
-JS = JS_PATH.read_text(encoding="utf-8")
+UI_JS = JS_PATH.read_text(encoding="utf-8")
+ENGINE_JS = (ROOT / "static/os_shell/assets/core/global-search.js").read_text(encoding="utf-8")
+JS = UI_JS + "\n" + ENGINE_JS
 HTML = HTML_PATH.read_text(encoding="utf-8")
 
 
@@ -86,7 +88,7 @@ def test_search_requires_two_characters_and_debounces_for_300_ms():
 
 
 def test_query_is_encoded_and_existing_search_endpoints_are_reused():
-    run = block("runGlobalSearch")
+    run = block("searchGlobal")
 
     assert "encodeURIComponent(query)" in compact(run)
     assert "/contacts?search=${encoded}&limit=5" in run
@@ -95,16 +97,16 @@ def test_query_is_encoded_and_existing_search_endpoints_are_reused():
 
 
 def test_module_failure_does_not_block_results_and_stale_responses_are_ignored():
-    run = block("runGlobalSearch")
+    run = block("searchGlobal")
     compact_run = compact(run)
 
     assert "Promise.allSettled(" in run
     assert "result.status==='fulfilled'" in compact_run
-    assert "sequence!==globalSearchSequence" in compact_run
+    assert "sequence!==globalSearchSequence" in compact(block("runGlobalSearch"))
 
 
 def test_numeric_match_lookup_uses_positive_id_and_404_is_not_global_error():
-    run = block("runGlobalSearch")
+    run = block("searchGlobal")
     lookup = block("lookupGlobalSearchMatch")
     api = block("api")
 

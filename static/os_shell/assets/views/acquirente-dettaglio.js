@@ -1,3 +1,4 @@
+import { bindSaleDetails } from '../components/sale-detail.js';
 // STIMA360 OS — acquirente-dettaglio.js
 // Scheda Richiesta BUY. L'identita' resta il CORE Contact: questa scheda
 // rappresenta CONTATTO -> RICHIESTA BUY, non una seconda anagrafica.
@@ -493,6 +494,12 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     } catch (error) {
       contentEl.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(error.message)}</div>`;
     }
+    contentEl.querySelectorAll('.visit-outcome-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const match = (data.matches || []).find((m) => String(m.id) === btn.dataset.matchId);
+        if (match) openMatchDecisionDialog(match, btn.dataset.visitId);
+      });
+    });
     bindMatchRowClicks(contentEl);
   }
 
@@ -536,7 +543,11 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     });
   }
 
-  function openMatchDecisionDialog(match) {
+  function openMatchDecisionDialog(match, visitId = null) {
+    const visits = [...new Set((data.interactions || []).filter((i) =>
+      i.interaction_type === 'visit_scheduled' && String(i.match_id) === String(match.id) && i.property_visit_id
+    ).map((i) => i.property_visit_id))];
+    const outcomeActions = ['visited', 'interested', 'discarded', 'offer_candidate'];
     const dialog = container.querySelector('#match-decision-dialog');
     const propertyLabel = match.property_title || match.property_code || `Immobile #${match.property_id}`;
     dialog.innerHTML = `
@@ -546,7 +557,13 @@ export async function renderAcquirenteDettaglio(container, params = []) {
         <form id="match-decision-form">
           <div class="form-field"><label>Esito</label>
             <select name="action" id="match-decision-action" class="input">
-              ${MATCH_DECISION_ACTIONS.map((a) => `<option value="${a}">${escapeHtml(INTERACTION_TYPE_LABELS[a] || a)}</option>`).join('')}
+              ${(visitId ? outcomeActions : MATCH_DECISION_ACTIONS).map((a) => `<option value="${a}">${escapeHtml(INTERACTION_TYPE_LABELS[a] || a)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-field" id="match-decision-visit-field" hidden><label>Visita collegata</label>
+            <select name="property_visit_id" class="input">
+              ${visitId ? '' : '<option value="">Nessuna visita — esito sul match</option>'}
+              ${visits.filter((id) => !visitId || String(id) === String(visitId)).map((id) => `<option value="${escapeHtml(id)}">Visita #${escapeHtml(id)}</option>`).join('')}
             </select>
           </div>
           <div class="form-field" id="match-decision-reason-field" hidden><label>Motivo</label>
@@ -570,6 +587,7 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     const reasonField = dialog.querySelector('#match-decision-reason-field');
     const scheduleField = dialog.querySelector('#match-decision-schedule-field');
     function syncFields() {
+      dialog.querySelector('#match-decision-visit-field').hidden = !outcomeActions.includes(actionSelect.value);
       reasonField.hidden = actionSelect.value !== 'discarded';
       scheduleField.hidden = actionSelect.value !== 'visit_scheduled';
     }
@@ -583,6 +601,13 @@ export async function renderAcquirenteDettaglio(container, params = []) {
       errorBox.hidden = true;
       const action = formData.get('action');
       const payload = { action };
+      const selectedVisit = formData.get('property_visit_id');
+      if (outcomeActions.includes(action) && selectedVisit) payload.property_visit_id = Number(selectedVisit);
+      if (visitId && !payload.property_visit_id) {
+        errorBox.hidden = false;
+        errorBox.textContent = 'Visita collegata non disponibile. Ricaricare la richiesta.';
+        return;
+      }
       const notes = String(formData.get('notes') || '').trim();
       if (notes) payload.notes = notes;
       if (action === 'discarded') payload.reason_code = formData.get('reason_code');
@@ -756,6 +781,7 @@ export async function renderAcquirenteDettaglio(container, params = []) {
   // diretta solo in stato draft, transizioni secondo la macchina a stati
   // reale.
   function bindProposteSection(panelEl) {
+    bindSaleDetails(panelEl);
     const newBtn = panelEl.querySelector('#proposal-new-btn');
     if (newBtn) {
       newBtn.addEventListener('click', () => { openProposalCreateDialog(); });
@@ -1335,6 +1361,8 @@ function renderVisite(interactions) {
       { label: 'Tipo evento', render: (i) => renderBadge(INTERACTION_TYPE_LABELS[i.interaction_type] || i.interaction_type || '—', 'gray') },
       { label: 'Quando', render: (i) => escapeHtml(formatDateTime(i.occurred_at)) },
       { label: 'Note', render: (i) => escapeHtml(i.notes || '—') },
+      { label: 'Esito', render: (i) => i.interaction_type === 'visit_scheduled' && i.property_visit_id && i.match_id
+        ? `<button type="button" class="btn ghost visit-outcome-btn" data-match-id="${escapeHtml(i.match_id)}" data-visit-id="${escapeHtml(i.property_visit_id)}">Registra esito visita #${escapeHtml(i.property_visit_id)}</button>` : '—' },
     ],
     list,
     { emptyMessage: 'Nessuna visita registrata per questa richiesta.' },
@@ -1417,7 +1445,7 @@ function renderVenditaCell(pr, sale, saleCancelConfirm) {
     return '';
   }).join('');
   if (!statusBadge && !buttonsHtml) return '<span class="muted">—</span>';
-  return `${statusBadge}${buttonsHtml ? `<div class="action-bar" style="margin-top:6px">${buttonsHtml}</div>` : ''}`;
+  return `${statusBadge}${sale ? `<button type="button" class="btn ghost sale-detail-btn" data-sale-id="${escapeHtml(sale.id)}">Apri vendita</button>` : ''}${buttonsHtml ? `<div class="action-bar" style="margin-top:6px">${buttonsHtml}</div>` : ''}`;
 }
 
 // Stessa logica di static/buy_admin/assets/app.js:proposalActions (riferimento
