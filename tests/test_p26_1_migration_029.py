@@ -389,21 +389,32 @@ def test_c9_the_named_recovery_document_exists():
 # ---------------------------------------------------------------------------
 
 def test_c10_the_p26_1_migration_set_is_complete():
-    """The P26-1 migration set is complete: 026 through 030.
+    """The P26-1 migration set is intact: 026 through 030.
 
     This guard was fail-closed while the set was being built, firing as each
-    task legitimately added its migration. With 030 in place there is no later
-    migration to exclude, so it now asserts the finished shape instead - and
-    will fire again if a 031 appears without a decision to extend P26-1.
+    task legitimately added its migration. It fired again when P26-2B's 031
+    appeared - which is what it was for: a later migration must arrive with a
+    decision, not by accident.
+
+    P26-2B is that decision (STIMA root ownership, ownership matrix approved in
+    P26-2A). So the rule is narrowed from "these are the only P26 migrations"
+    to "these five are P26-1's, unchanged, and every later one belongs to a
+    later phase". P26-1's own shape is still pinned exactly; what is no longer
+    asserted is that no other phase may exist.
     """
-    present = sorted(
-        path.stem for path in MIGRATIONS.glob("0[23]*_p26*.sql")
-        if not path.stem.endswith("_down")
-    )
-    assert present == [
+    p26_1 = [
         "026_p26_baseline",
         "027_p26_agency_identity",
         "028_p26_core_agency_columns",
         "029_p26_core_agency_backfill",
         "030_p26_core_agency_enforce",
-    ], present
+    ]
+    present = sorted(
+        path.stem for path in MIGRATIONS.glob("0[23]*_p26*.sql")
+        if not path.stem.endswith("_down")
+    )
+    assert present[: len(p26_1)] == p26_1, present
+    for later in present[len(p26_1):]:
+        assert int(later[:3]) > 30, (
+            f"{later} sits inside P26-1's range without being one of its five"
+        )
