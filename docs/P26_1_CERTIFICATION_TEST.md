@@ -1,6 +1,6 @@
 # P26-1 — TEST certification checklist
 
-**Status: NOT YET EXECUTED.**
+**Status: TEST EXECUTION COMPLETED — final evidence recorded below.**
 
 This document is created *before* the TEST migration, deliberately and with
 every evidence field empty. P26-0 established the rule it follows: **a test not
@@ -118,3 +118,122 @@ Each is a decision already taken in spec §21, not an outstanding question.
 Any row still reading `NOT YET EXECUTED` at that point is reported as
 outstanding. It is never quietly deleted, and never marked passed on the
 strength of an offline test that stands in for it.
+
+
+---
+
+# FINAL TEST EXECUTION EVIDENCE
+
+Certification date: 2026-09-07
+
+Branch: `core-0.1-test`
+
+Deployed TEST commit:
+`811095bca354d751e98561c594d4c9dca31e2866`
+
+Database:
+`stima360_db_test`
+
+## Migrations
+
+Applied and registered:
+
+- `027_p26_agency_identity`
+- `028_p26_core_agency_columns`
+- `029_p26_core_agency_backfill`
+- `030_p26_core_agency_enforce`
+
+Pre-029 backup:
+`/tmp/p26_1/stima360_db_test_pre029_20260907_062106.dump`
+
+Backup size: `399K`
+
+SHA-256:
+`6a5e029e25c4303ac86e98c78012e30a8e39158466ce6330a4a1197824479531`
+
+## Schema verification
+
+P26 CORE columns: `10`
+
+Row counts preserved:
+
+- contacts: `48`
+- leads: `23`
+- activities: `20`
+- tasks: `30`
+
+NULL agency_id:
+
+- contacts: `0`
+- leads: `0`
+- activities: `0`
+- tasks: `0`
+
+agency_id is NOT NULL on all four CORE tables.
+
+Physical triggers:
+
+- `activities.trg_activities_agency_integrity`
+- `tasks.trg_tasks_agency_integrity`
+
+Integrity function:
+`core_agency_integrity`
+
+## TEST seed
+
+Agencies:
+
+- `stima360` — active
+- `agenzia-b-test` — active
+
+Seed result:
+
+- agencies: `+1`
+- operators: `+6`
+- memberships: `+5`
+
+## Runtime smoke
+
+Operator login: `204`
+
+Operator session → CORE: `200`
+
+Anonymous CORE: `401`
+
+WWW-Authenticate:
+`Basic realm="STIMA360 Admin"`
+
+Legacy Basic → CORE: `200`
+
+Forged `agency_id=999` query:
+`200`; authenticated scope was not widened.
+
+NBA legacy Basic compatibility: `200`
+
+## Regression evidence
+
+Render pre-deploy:
+
+`2810 passed, 23 skipped, 0 failed, 0 errors`
+
+Post-migration targeted P26-1 suite:
+
+`834 passed, 24 warnings, 0 failed`
+
+No unexpected HTTP 500 observed during final runtime smoke.
+
+## Certification boundary
+
+Automated P26-1 suites certify the hostile A/B isolation matrix.
+The final live HTTP smoke certifies deployed authentication, CORE protection,
+legacy Basic compatibility and NBA compatibility.
+
+GATE-MA1 remains OPEN.
+
+P26-1 does not certify platform-wide isolation while non-CORE legacy Basic compatibility routes remain active.
+
+A second real production agency must not be activated until those legacy compatibility routes are migrated.
+
+## FINAL VERDICT
+
+**P26-1 MULTI-AGENCY FOUNDATION — CERTIFIED ON TEST WITH GATE-MA1 OPEN**
