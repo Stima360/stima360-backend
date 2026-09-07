@@ -525,8 +525,27 @@ def test_h8_030_is_not_modified():
     assert "LIMIT 1" in body
 
 
-def test_h8_no_034_exists():
-    assert not list(MIGRATIONS.glob("034*.sql")), "this block ships no 034"
+def test_h8_033_is_the_last_of_the_stima_slice():
+    """Retargeted when 034 arrived.
+
+    This asserted that no 034 existed at all - a scope check for the 2B2D
+    block, which correctly fired the moment the PROPERTY slice began. What it
+    protects is that 033 finishes STIMA ownership and does not reach into the
+    next subject; whether a later migration exists is not its business.
+    """
+    up = _squash(_strip_sql_strings(_up())).lower()
+    for later_subject in ("properties", "property_contacts", "property_visits"):
+        assert later_subject not in up, f"033 reaches into {later_subject}"
+
+    stima_slice = sorted(
+        path.stem for path in MIGRATIONS.glob("03[123]_p26_stima*.sql")
+        if not path.stem.endswith("_down")
+    )
+    assert stima_slice == [
+        "031_p26_stima_agency_columns",
+        "032_p26_stima_agency_backfill",
+        "033_p26_stima_agency_enforce",
+    ], stima_slice
 
 
 def test_h8_no_runtime_auth_or_admin_file_is_referenced():
