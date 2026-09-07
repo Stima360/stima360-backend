@@ -146,9 +146,18 @@ def runner():
 
 
 def test_a3_the_runner_discovers_a_contiguous_026_to_031(runner):
+    """031 must be present and the set contiguous from the baseline.
+
+    Retargeted when 032 arrived: this asserted the set *ended* at 031, which
+    made it a tripwire on every later migration rather than a check on this
+    one. What 031 needs to certify is that it sits in an unbroken run from 026;
+    whether anything follows is not its business.
+    """
     discovered = runner.discover_migrations()
     numbers = [item.number for item in discovered]
-    assert numbers == list(range(26, 32)), numbers
+    assert numbers[:6] == list(range(26, 32)), numbers
+    for later in numbers[6:]:
+        assert later > 31, numbers
     # verify_contiguous raises rather than returning; calling it is the test.
     runner.verify_contiguous(discovered)
 

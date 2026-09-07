@@ -530,12 +530,28 @@ def test_b5_the_flow_performs_no_backfill(public_stima):
         assert "SET AGENCY_ID" not in upper, f"a backfill hid in the flow: {sql}"
 
 
-def test_b5_no_migration_was_added_by_this_block():
-    present = sorted(
-        path.stem for path in (ROOT / "migrations").glob("0[23]*_p26*.sql")
-        if not path.stem.endswith("_down")
+def test_b5_the_historical_backfill_is_a_migration_not_runtime_code():
+    """Retargeted when 032 arrived.
+
+    This asserted that 031 was the newest migration - a scope check for the
+    writer block, which correctly fired the moment the backfill block landed.
+    What it was really protecting is that the runtime writer never rewrites
+    historical rows: the ten legacy NULLs are moved by a reviewed, transactional
+    migration, or not at all.
+
+    The behavioural half is `test_b5_the_flow_performs_no_backfill` above; this
+    is the structural half.
+    """
+    writer = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert not re.search(r"UPDATE\s+stime\s+SET\s+agency_id", writer, re.IGNORECASE), (
+        "main.py rewrites the agency of existing estimations"
     )
-    assert present[-1] == "031_p26_stima_agency_columns", present
+
+    backfill = ROOT / "migrations" / "032_p26_stima_agency_backfill.sql"
+    assert backfill.exists(), "the historical backfill is not a migration"
+    assert (
+        ROOT / "migrations" / "032_p26_stima_agency_backfill_down.sql"
+    ).exists(), "the backfill migration ships no down file"
 
 
 # ---------------------------------------------------------------------------
