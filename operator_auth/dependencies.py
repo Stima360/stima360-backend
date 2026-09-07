@@ -28,13 +28,11 @@ what that credential is.
 """
 from __future__ import annotations
 
-import base64
-import binascii
 from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.security import HTTPBasicCredentials
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from admin_security import require_admin
 from core.scope import resolve_default_agency_id
@@ -52,7 +50,19 @@ LEGACY_BASIC_ROLE = "agency_owner"
 # One message for every rejection: absent cookie, unknown, revoked, expired,
 # idle, disabled account, suspended membership, suspended agency. A caller
 # learns only that they are not authenticated.
-NOT_AUTHENTICATED_MESSAGE = "Non autorizzato."
+#
+# The wording and the challenge header below are byte-identical to what
+# admin_security.require_admin returned before P26-1. /api/core kept that
+# contract through the transition, and the OS Shell relies on the challenge to
+# prompt for the legacy credential - a 401 without it simply fails silently in
+# a browser.
+NOT_AUTHENTICATED_MESSAGE = "Non autorizzato"
+BASIC_CHALLENGE = {"WWW-Authenticate": 'Basic realm="STIMA360 Admin"'}
+
+# Declared once, at module level, so FastAPI treats it as the route's security
+# scheme. auto_error=False because an absent credential is not yet a failure -
+# the cookie branch may still succeed.
+_basic_scheme = HTTPBasic(auto_error=False)
 
 
 @dataclass(frozen=True)
@@ -114,8 +124,8 @@ def current_session(
 
 
 def require_operator(
-    request: Request,
     session: AuthenticatedSession | None = Depends(optional_session),
+    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> OperatorContext:
     """The authenticated caller's scope, from either approved channel.
 
@@ -142,53 +152,50 @@ def require_operator(
     absent or dead cookie falls through to the Basic branch instead of raising
     401 inside a nested dependency - and, because that dependency is shared and
     cached, a handler declaring both still costs one session resolution.
+
+    The Basic credential arrives through FastAPI's own `HTTPBasic` scheme
+    rather than by parsing the header here. That is what keeps the OpenAPI
+    document honest: the scheme is a `SecurityBase`, so every route declaring
+    this dependency continues to advertise `security`, exactly as it did when
+    `require_admin` guarded it. A hand-rolled header parse authenticates just
+    as well and silently drops that declaration - which is how CORE briefly
+    came to look unauthenticated to anything reading the schema.
     """
     if session is not None:
         return session.context
 
-    credentials = _basic_credentials(request)
     if credentials is not None:
-        return legacy_basic_agency_context(credentials)
+        username = _verify_legacy_credentials(credentials)
+        if username is not None:
+            return legacy_basic_agency_context(username)
 
-    raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_MESSAGE)
+    raise HTTPException(
+        status_code=401,
+        detail=NOT_AUTHENTICATED_MESSAGE,
+        headers=BASIC_CHALLENGE,
+    )
 
 
-def _basic_credentials(request: Request) -> str | None:
+def _verify_legacy_credentials(credentials: HTTPBasicCredentials) -> str | None:
     """Return the verified legacy username, or None.
 
-    The comparison itself is delegated to `admin_security.require_admin`, which
-    P26-1 leaves untouched and which remains the single definition of what the
-    legacy credential is. This function only adapts its shape: it parses the
-    header FastAPI would have parsed, and turns "raise 401" into "return None"
-    so a failed Basic attempt falls through to one 401 rather than producing a
-    second, differently-worded one.
+    The comparison is delegated to `admin_security.require_admin`, which P26-1
+    leaves untouched and which remains the single definition of what the legacy
+    credential is. This only turns "raise 401" into "return None", so a failed
+    Basic attempt falls through to one 401 rather than producing a second,
+    differently-worded one.
 
     A 503 is deliberately re-raised rather than swallowed. It means the server
     has no admin credentials configured at all, which is an operational fault -
     reporting it as "not authenticated" would send an operator hunting for the
     wrong problem, and it is the answer this path gave before P26-1.
     """
-    header = request.headers.get("Authorization")
-    if not header or not header.lower().startswith("basic "):
-        return None
-
     try:
-        raw = base64.b64decode(header.split(" ", 1)[1]).decode("utf-8")
-    except (ValueError, UnicodeDecodeError, binascii.Error):
-        return None
-    username, separator, password = raw.partition(":")
-    if not separator:
-        return None
-
-    try:
-        return require_admin(
-            HTTPBasicCredentials(username=username, password=password)
-        )
+        return require_admin(credentials)
     except HTTPException as exc:
         if exc.status_code == 503:
             raise
         return None
-
 
 def legacy_basic_agency_context(
     _credential: str = Depends(require_admin),

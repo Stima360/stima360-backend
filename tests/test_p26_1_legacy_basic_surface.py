@@ -615,3 +615,150 @@ def _leakage_probe_source(module_source: str) -> str:
     start = module_source.index("def _leakage_assertions")
     end = module_source.index("def test_d14_search_does_not_leak")
     return module_source[start:end]
+
+
+# ---------------------------------------------------------------------------
+# G8 - CRM: the second legacy-Basic CORE reader, and its scope
+#
+# crm/service.get_contact_360 reads four CORE tables, so since P26-1 it needs a
+# scope. CRM sits outside D-1's operator-session allowlist and is mounted behind
+# legacy Basic, so there is no session to derive one from - it uses the same C2
+# compatibility dependency as Next Best Action.
+#
+# The pre-deploy failure that produced these tests was a real 500: the router
+# still called the service with one argument after the service had gained `ctx`.
+# ---------------------------------------------------------------------------
+
+CRM_ROUTER = ROOT / "crm" / "router.py"
+CRM_SERVICE = ROOT / "crm" / "service.py"
+
+
+def _function_source(path: Path, name: str) -> str:
+    """One function's executable source, docstring removed."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            body = node.body
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+            return ast.unparse(node)
+    raise AssertionError(f"{path.name} defines no function named {name!r}")
+
+
+def _executable_source(path: Path) -> str:
+    """A module's code with every docstring removed.
+
+    The rule below is about what the code *does*. crm/router.py's docstring
+    legitimately explains that a SystemAgencyContext must never be used here,
+    and a raw-text rule would read that explanation as a violation.
+    """
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and body:
+            first = body[0]
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
+def test_g8_the_crm_route_forwards_a_scope_to_the_service():
+    """The regression itself: one argument where two are required."""
+    import inspect as _inspect
+
+    from crm import router as crm_router, service as crm_service
+
+    handler = _inspect.signature(crm_router.get_contact_360).parameters
+    assert "ctx" in handler, handler
+
+    service_params = list(_inspect.signature(crm_service.get_contact_360).parameters)
+    assert service_params[0] == "ctx", service_params
+
+    source = _function_source(CRM_ROUTER, "get_contact_360")
+    assert "service.get_contact_360(ctx, contact_id)" in source, source
+
+
+def test_g8_the_crm_scope_comes_from_the_compatibility_dependency():
+    source = _function_source(CRM_ROUTER, "get_contact_360")
+    assert "Depends(legacy_basic_agency_context)" in source, source
+
+
+def test_g8_crm_never_receives_a_system_context():
+    """SystemAgencyContext is for server-originated work with no principal."""
+    assert "SystemAgencyContext" not in _executable_source(CRM_ROUTER)
+    assert "SystemAgencyContext" not in _executable_source(CRM_SERVICE)
+
+
+def test_g8_crm_accepts_no_agency_selector_from_http():
+    import inspect as _inspect
+
+    from crm import router as crm_router
+
+    parameters = _inspect.signature(crm_router.get_contact_360).parameters
+    for forbidden in ("agency_id", "agency", "role", "is_platform_admin", "slug"):
+        assert forbidden not in parameters, forbidden
+
+
+def test_g8_crm_synthesizes_no_context_of_its_own():
+    assert "OperatorContext(" not in _executable_source(CRM_ROUTER), (
+        "the router builds a context itself"
+    )
+
+
+def test_g8_the_crm_scope_is_agency_bound_and_reaches_core_scoped(monkeypatch):
+    """End to end at the service layer: the ctx the route supplies is the ctx
+    the four CORE reads receive, and it is Default-Agency-bound."""
+    from core import service as core_service
+    from crm import service as crm_service
+    from operator_auth.context import OperatorContext
+
+    ctx = OperatorContext(
+        user_id=None, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    seen = []
+
+    monkeypatch.setattr(crm_service, "get_contact", lambda c, i: seen.append(("get_contact", c)) or {"id": i, "roles": []})
+    monkeypatch.setattr(crm_service, "list_leads", lambda c, *a: seen.append(("list_leads", c)) or [])
+    monkeypatch.setattr(crm_service, "list_activities", lambda c, *a: seen.append(("list_activities", c)) or [])
+    monkeypatch.setattr(crm_service, "list_tasks", lambda c, *a: seen.append(("list_tasks", c)) or [])
+    monkeypatch.setattr(crm_service, "list_properties", lambda *a, **k: [])
+    monkeypatch.setattr(crm_service, "list_buy_requests", lambda *a, **k: [])
+    monkeypatch.setattr(crm_service, "list_matches", lambda *a, **k: [])
+    monkeypatch.setattr(crm_service, "list_visits_by_contact", lambda i: [])
+
+    crm_service.get_contact_360(ctx, 7)
+
+    assert {name for name, _ in seen} == {
+        "get_contact", "list_leads", "list_activities", "list_tasks"
+    }, seen
+    for name, forwarded in seen:
+        assert forwarded is ctx, name
+        assert forwarded.agency_id == 4242
+        assert forwarded.is_platform_admin is False
+
+
+def test_g8_a_missing_default_agency_fails_crm_closed():
+    """No Default Agency means no scope, and therefore no CRM read."""
+    from core.exceptions import ConflictError
+    from core.scope import resolve_default_agency_id
+
+    class _EmptyCursor:
+        def execute(self, sql, params=None):
+            pass
+
+        def fetchone(self):
+            return None
+
+    with pytest.raises(ConflictError):
+        resolve_default_agency_id(_EmptyCursor())
+
+
+def test_g8_crm_remains_in_the_frozen_legacy_basic_surface():
+    assert "crm_router" in FROZEN_LEGACY_BASIC_CORE_READERS
+    assert _include_router_calls()["crm_router"] == "[Depends(require_admin)]"

@@ -1485,11 +1485,43 @@ def test_the_cookie_is_read_in_exactly_one_place():
     assert readers == ["optional_session"], readers
 
 
-def test_the_legacy_channel_reads_only_the_authorization_header():
-    code = _function_source(DEPS_SOURCE, "_basic_credentials")
-    assert "request.headers.get('Authorization')" in code
-    for forbidden in ("query_params", "path_params", "json()", "cookies"):
-        assert forbidden not in code, f"_basic_credentials reads {forbidden!r}"
+def test_the_legacy_channel_does_not_parse_the_header_by_hand():
+    """The credential arrives through FastAPI's HTTPBasic scheme.
+
+    An earlier form of this branch parsed the Authorization header itself.
+    That authenticated correctly but silently dropped the route's OpenAPI
+    `security` declaration, because a plain function is not a SecurityBase -
+    which is how /api/core briefly came to look unauthenticated to anything
+    reading the schema. The scheme is now declared, so the rule changed from
+    "reads only this header" to "does not touch headers at all".
+    """
+    code = _function_source(DEPS_SOURCE, "_verify_legacy_credentials")
+    for forbidden in ("request.headers", "b64decode", "query_params",
+                      "path_params", "json()", "cookies"):
+        assert forbidden not in code, f"_verify_legacy_credentials reads {forbidden!r}"
+    assert "require_admin(credentials)" in code, (
+        "the comparison must stay delegated to admin_security"
+    )
+
+
+def test_the_basic_scheme_is_declared_so_openapi_stays_honest():
+    from operator_auth import dependencies
+    from fastapi.security.base import SecurityBase
+
+    assert isinstance(dependencies._basic_scheme, SecurityBase)
+    assert dependencies._basic_scheme.auto_error is False, (
+        "an absent credential is not yet a failure; the cookie branch may win"
+    )
+
+
+def test_the_401_matches_the_certified_legacy_contract():
+    """Byte-identical to what require_admin returned before P26-1."""
+    from operator_auth import dependencies
+
+    assert dependencies.NOT_AUTHENTICATED_MESSAGE == "Non autorizzato"
+    assert dependencies.BASIC_CHALLENGE == {
+        "WWW-Authenticate": 'Basic realm="STIMA360 Admin"'
+    }
 
 
 def _function_source(path, name: str) -> str:
@@ -1551,8 +1583,8 @@ def test_the_compatibility_context_is_the_only_basic_aware_function():
             if "legacy_basic" in ast.unparse(node) or "require_admin" in ast.unparse(node):
                 basic_aware.append(node.name)
     assert basic_aware == [
-        "require_operator",           # chooses the channel
-        "_basic_credentials",         # verifies the credential, via require_admin
+        "require_operator",             # chooses the channel
+        "_verify_legacy_credentials",   # verifies it, via require_admin
         "legacy_basic_agency_context",  # builds the agency-bound scope
     ], basic_aware
 
@@ -1582,7 +1614,7 @@ def test_require_operator_returns_only_a_context_or_raises():
         if isinstance(n, ast.FunctionDef) and n.name == "require_operator"
     )
     returns = [ast.unparse(n.value) for n in ast.walk(node) if isinstance(n, ast.Return)]
-    assert returns == ["session.context", "legacy_basic_agency_context(credentials)"], returns
+    assert returns == ["session.context", "legacy_basic_agency_context(username)"], returns
     raises = [ast.unparse(n) for n in ast.walk(node) if isinstance(n, ast.Raise)]
     assert any("401" in r for r in raises), raises
     assert "None" not in returns

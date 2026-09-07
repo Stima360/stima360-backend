@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
+from operator_auth.context import OperatorContext
 
 ROOT = Path(__file__).resolve().parent.parent
 CLIENT = TestClient(app)
@@ -26,14 +27,29 @@ def _crm_service():
     return importlib.import_module("crm.service")
 
 
+# P26-1: crm.service.get_contact_360 takes an AgencyScope first. These are
+# legitimate unit callers of the service, so they supply the same context the
+# route supplies in production - the C2 legacy-Basic compatibility scope:
+# agency-bound to the Default Agency, never platform admin, never a
+# SystemAgencyContext.
+CTX = OperatorContext(
+    user_id=None,
+    agency_id=1,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=None,
+    auth_channel="legacy_basic",
+)
+
+
 def _patch_empty_contact(monkeypatch, *, contact=None, roles=None):
     service = _crm_service()
-    monkeypatch.setattr(service, "get_contact", lambda contact_id: {**(contact or {"id": contact_id, "display_name": "Mario Test"}), "roles": list(roles or [])})
+    monkeypatch.setattr(service, "get_contact", lambda ctx, contact_id: {**(contact or {"id": contact_id, "display_name": "Mario Test"}), "roles": list(roles or [])})
     monkeypatch.setattr(service, "list_leads", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_properties", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_matches", lambda *args, **kwargs: [])
-    monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [])
+    monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [])  # non-CORE: unscoped by design
     monkeypatch.setattr(service, "list_activities", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_tasks", lambda *args, **kwargs: [])
     return service
@@ -74,22 +90,34 @@ def test_04_crm_missing_env_fails_closed(monkeypatch):
 
 def test_05_crm_contact_not_found_returns_404(monkeypatch):
     from core.exceptions import NotFoundError
+    from operator_auth.dependencies import legacy_basic_agency_context
+
     crm_service = _crm_service()
 
-    def missing(contact_id):
+    def missing(ctx, contact_id):
         raise NotFoundError(f"contact {contact_id} not found")
 
     monkeypatch.setattr(crm_service, "get_contact_360", missing)
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    response = CLIENT.get("/api/crm/contacts/999/360", auth=("giorgio", "test-secret"))
+
+    # P26-1: the route now resolves the Default Agency from the database before
+    # the handler runs. This test is about the 404 mapping, not about that
+    # lookup, so the dependency is overridden with the context it would have
+    # built. Tests 02-04 above still exercise the real dependency's auth.
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: CTX
+    try:
+        response = CLIENT.get("/api/crm/contacts/999/360", auth=("giorgio", "test-secret"))
+    finally:
+        app.dependency_overrides.pop(legacy_basic_agency_context, None)
+
     assert response.status_code == 404
     assert response.json()["detail"] == "contact 999 not found"
 
 
 def test_06_contact_only_core_returns_empty_relations(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
-    result = service.get_contact_360(1)
+    result = service.get_contact_360(CTX, 1)
     assert result["contact"]["id"] == 1
     for key in EXPECTED_KEYS - {"contact"}:
         assert result[key] == []
@@ -98,7 +126,7 @@ def test_06_contact_only_core_returns_empty_relations(monkeypatch):
 def test_07_roles_are_split_from_contact(monkeypatch):
     roles = [{"contact_id": 1, "role": "owner"}, {"contact_id": 1, "role": "buyer"}]
     service = _patch_empty_contact(monkeypatch, roles=roles)
-    result = service.get_contact_360(1)
+    result = service.get_contact_360(CTX, 1)
     assert result["roles"] == roles
     assert "roles" not in result["contact"]
 
@@ -106,19 +134,19 @@ def test_07_roles_are_split_from_contact(monkeypatch):
 def test_08_leads_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_leads", lambda *args, **kwargs: [{"id": 10, "contact_id": 1}])
-    assert service.get_contact_360(1)["leads"] == [{"id": 10, "contact_id": 1}]
+    assert service.get_contact_360(CTX, 1)["leads"] == [{"id": 10, "contact_id": 1}]
 
 
 def test_09_properties_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_properties", lambda *args, **kwargs: [{"id": 20, "title": "Casa"}])
-    assert service.get_contact_360(1)["properties"] == [{"id": 20, "title": "Casa"}]
+    assert service.get_contact_360(CTX, 1)["properties"] == [{"id": 20, "title": "Casa"}]
 
 
 def test_10_buy_requests_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [{"id": 30, "contact_id": 1}])
-    assert service.get_contact_360(1)["buy_requests"] == [{"id": 30, "contact_id": 1}]
+    assert service.get_contact_360(CTX, 1)["buy_requests"] == [{"id": 30, "contact_id": 1}]
 
 
 def test_11_matches_are_aggregated_for_each_buy_request(monkeypatch):
@@ -129,7 +157,7 @@ def test_11_matches_are_aggregated_for_each_buy_request(monkeypatch):
         "list_matches",
         lambda *args, **kwargs: [{"id": 100 + kwargs["buy_request_id"], "buy_request_id": kwargs["buy_request_id"]}],
     )
-    matches = service.get_contact_360(1)["matches"]
+    matches = service.get_contact_360(CTX, 1)["matches"]
     assert [item["buy_request_id"] for item in matches] == [30, 31]
 
 
@@ -151,30 +179,30 @@ def test_11b_real_match_service_accepts_contact_360_keyword_filters(monkeypatch)
     )
     monkeypatch.setattr(service, "list_matches", match_service.list_matches)
 
-    assert service.get_contact_360(1)["matches"] == [{"id": 130, "buy_request_id": 30}]
+    assert service.get_contact_360(CTX, 1)["matches"] == [{"id": 130, "buy_request_id": 30}]
 
 
 def test_12_visits_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [{"id": 40, "contact_id": contact_id}])
-    assert service.get_contact_360(1)["visits"] == [{"id": 40, "contact_id": 1}]
+    assert service.get_contact_360(CTX, 1)["visits"] == [{"id": 40, "contact_id": 1}]
 
 
 def test_13_activities_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_activities", lambda *args, **kwargs: [{"id": 50, "contact_id": 1}])
-    assert service.get_contact_360(1)["activities"] == [{"id": 50, "contact_id": 1}]
+    assert service.get_contact_360(CTX, 1)["activities"] == [{"id": 50, "contact_id": 1}]
 
 
 def test_14_tasks_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     monkeypatch.setattr(service, "list_tasks", lambda *args, **kwargs: [{"id": 60, "contact_id": 1}])
-    assert service.get_contact_360(1)["tasks"] == [{"id": 60, "contact_id": 1}]
+    assert service.get_contact_360(CTX, 1)["tasks"] == [{"id": 60, "contact_id": 1}]
 
 
 def test_15_payload_has_exactly_nine_sections(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
-    assert set(service.get_contact_360(1)) == EXPECTED_KEYS
+    assert set(service.get_contact_360(CTX, 1)) == EXPECTED_KEYS
 
 
 def test_16_crm_has_no_owner_imports():

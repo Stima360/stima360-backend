@@ -22,8 +22,14 @@ REPRESENTATIVE_PATHS = (
     "/api/match/matches",
     "/api/proposals",
 )
+# P26-1 Task 12 added the two assignment endpoints - PATCH
+# /api/core/{contacts,leads}/{id}/assignment - so CORE goes 19 -> 21 and the
+# certified total 106 -> 108. The count is updated only because the *security*
+# property below still holds for every operation, including the two new ones:
+# both are on the CORE router behind Depends(require_operator), and
+# test_2 re-proves that no operation lacks a security gate.
 EXPECTED_COUNTS = {
-    "/api/core": 19,
+    "/api/core": 21,
     "/api/property": 21,
     "/api/property-watch": 12,
     "/api/buy": 23,
@@ -66,12 +72,12 @@ def test_1_all_100_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 106
+    assert len(operations) == 108
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 106
+    assert len(operations) == 108
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 
