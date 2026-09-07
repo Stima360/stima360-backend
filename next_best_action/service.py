@@ -19,7 +19,7 @@ from .signals import DEFAULT_LIMIT, collect_all_signals
 OPEN_TASK_STATUSES = {"open", "in_progress"}
 
 
-def _has_open_equivalent_task(candidate: dict[str, Any]) -> bool:
+def _has_open_equivalent_task(ctx, candidate: dict[str, Any]) -> bool:
     """Anti-duplication (section 4 / frozen rule): if CORE already has an
     open or in_progress task linked to this subject's contact_id, lead_id
     or stima_id, an equivalent follow-up already exists and P23 must NOT
@@ -41,13 +41,13 @@ def _has_open_equivalent_task(candidate: dict[str, Any]) -> bool:
             continue
         kwargs = {"contact_id": None, "lead_id": None, "stima_id": None}
         kwargs[column] = value
-        tasks = core_repository.list_tasks(limit=50, offset=0, status=None, **kwargs)
+        tasks = core_repository.list_tasks(ctx, limit=50, offset=0, status=None, **kwargs)
         if any(t.get("status") in OPEN_TASK_STATUSES for t in tasks):
             return True
     return False
 
 
-def refresh(limit: int = DEFAULT_LIMIT) -> dict[str, int]:
+def refresh(ctx, limit: int = DEFAULT_LIMIT) -> dict[str, int]:
     """Full on-demand refresh (section 7, frozen model: no scheduler/queue).
 
     1. collect current signals (signals.py, read-only against P17-P22);
@@ -73,7 +73,7 @@ def refresh(limit: int = DEFAULT_LIMIT) -> dict[str, int]:
     """
     database_revival_service.safe_ensure_today_batch()
 
-    candidates = collect_all_signals(limit)
+    candidates = collect_all_signals(ctx, limit)
 
     grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
@@ -86,7 +86,7 @@ def refresh(limit: int = DEFAULT_LIMIT) -> dict[str, int]:
         winner = select_winner(subject_candidates)
         if winner is None:
             continue
-        if _has_open_equivalent_task(winner):
+        if _has_open_equivalent_task(ctx, winner):
             suppressed_duplicates += 1
             continue
         signal_at = winner.get("signal_at")

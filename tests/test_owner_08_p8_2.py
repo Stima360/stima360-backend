@@ -126,6 +126,21 @@ class CoreCursor:
         return self.current
 
 
+# P26-1 Task 11: create_activity is an operator-originated create and now
+# takes an AgencyScope. The cursor-aware helper below deliberately does NOT
+# (design spec R-4), which is what keeps this module's own call site working.
+from operator_auth.context import OperatorContext
+
+CTX = OperatorContext(
+    user_id=1,
+    agency_id=10,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=100,
+    auth_channel="operator_session",
+)
+
+
 def feedback_payload(feedback_type):
     payload = {
         "feedback_type": feedback_type,
@@ -334,12 +349,16 @@ def test_public_core_create_activity_keeps_own_transaction(monkeypatch):
     tx = TxState(cursor)
     calls = []
     monkeypatch.setattr(core_repo, "core_cursor", tx.factory)
-    monkeypatch.setattr(core_repo, "create_activity_with_cursor", lambda cur, data: calls.append((cur, data)) or {"id": 5})
+    monkeypatch.setattr(
+        core_repo,
+        "create_activity_with_cursor",
+        lambda cur, data, ctx=None: calls.append((cur, data, ctx)) or {"id": 5},
+    )
     payload = {"contact_id": 1}
-    assert core_repo.create_activity(payload) == {"id": 5}
+    assert core_repo.create_activity(CTX, payload) == {"id": 5}
     assert tx.calls == [True]
     assert tx.committed
-    assert calls == [(cursor, payload)]
+    assert calls == [(cursor, payload, CTX)]
 
 
 def test_portal_feedback_whitelist_remains_internal_id_free():
@@ -378,7 +397,12 @@ def test_core_helper_is_cursor_aware_by_source_contract():
     assert "_validate_references" in helper_src
     assert "INSERT INTO activities" in helper_src
     assert "with core_cursor(commit=True)" in public_src
-    assert "create_activity_with_cursor(cur, data)" in public_src
+    # The public entry point forwards its scope; the helper stays optional.
+    assert "create_activity_with_cursor(cur, data" in public_src
+    assert "ctx=ctx" in public_src
+    assert "ctx" not in inspect.signature(core_repo.create_activity_with_cursor).parameters or (
+        inspect.signature(core_repo.create_activity_with_cursor).parameters["ctx"].default is None
+    )
 
 
 def test_owner_feedback_and_real_core_helper_share_one_cursor_and_transaction(monkeypatch):

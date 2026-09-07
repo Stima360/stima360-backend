@@ -59,5 +59,14 @@ def test_frontend_uses_existing_admin_check_contract(fe):
 def test_backend_is_protected_in_p3():
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_py
-    for router_name in ("core_router", "property_router", "buy_router", "match_router", "proposal_router"):
+    # P26-1 Task 15: core_router moved from require_admin to require_operator.
+    # The protection this test exists to guarantee is unchanged - CORE is still
+    # unreachable without a credential - but the dependency now accepts BOTH
+    # approved channels: an operator session cookie, or the same legacy
+    # ADMIN_USER/ADMIN_PASS Basic credential as before, resolved server-side
+    # into a Default-Agency-bound scope (design spec D-2). The other four
+    # routers below are deliberately untouched.
+    assert "app.include_router(core_router, dependencies=[Depends(require_operator)])" in main_py
+    assert "from operator_auth.dependencies import require_operator" in main_py
+    for router_name in ("property_router", "buy_router", "match_router", "proposal_router"):
         assert f"app.include_router({router_name}, dependencies=[Depends(require_admin)])" in main_py

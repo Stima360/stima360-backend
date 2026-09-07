@@ -4,8 +4,27 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from operator_auth import permissions
+
 from . import repository
+from .exceptions import PermissionDenied
 from .normalization import normalize_email, normalize_phone
+
+ASSIGNMENT_DENIED_MESSAGE = (
+    "Questa operazione richiede un ruolo di amministrazione dell'agenzia."
+)
+
+
+def _require_assignment_permission(ctx) -> None:
+    """The single role gate for assignment, checked before any lookup.
+
+    Uses the shared predicate rather than restating the role list, so the
+    router, the service and the repository cannot drift apart. Checked first so
+    that an agent's refusal is identical whether or not the record exists, and
+    whichever agency it belongs to.
+    """
+    if not permissions.may_assign_records(ctx.role, ctx.is_platform_admin):
+        raise PermissionDenied(ASSIGNMENT_DENIED_MESSAGE)
 
 
 def _dump(model, *, exclude_unset: bool = False) -> dict:
@@ -15,7 +34,7 @@ def _dump(model, *, exclude_unset: bool = False) -> dict:
     return model.dict(exclude_unset=exclude_unset)
 
 
-def create_contact(payload):
+def create_contact(ctx, payload):
     data = _dump(payload)
     data["email_normalized"] = normalize_email(data.get("email"))
     data["phone_normalized"] = normalize_phone(data.get("phone"))
@@ -26,18 +45,18 @@ def create_contact(payload):
             data["display_name"] = " ".join(
                 part for part in (data.get("first_name"), data.get("last_name")) if part
             ) or None
-    return repository.create_contact(data)
+    return repository.create_contact(ctx, data)
 
 
-def list_contacts(limit, offset, search, status):
-    return repository.list_contacts(limit, offset, search, status)
+def list_contacts(ctx, limit, offset, search, status):
+    return repository.list_contacts(ctx, limit, offset, search, status)
 
 
-def get_contact(contact_id):
-    return repository.get_contact(contact_id)
+def get_contact(ctx, contact_id):
+    return repository.get_contact(ctx, contact_id)
 
 
-def update_contact(contact_id, payload):
+def update_contact(ctx, contact_id, payload):
     data = _dump(payload, exclude_unset=True)
     if "email" in data:
         data["email_normalized"] = normalize_email(data.get("email"))
@@ -47,7 +66,7 @@ def update_contact(contact_id, payload):
     # Keep display_name coherent when person/company identity fields change.
     identity_fields = {"contact_type", "first_name", "last_name", "company_name"}
     if identity_fields.intersection(data) and "display_name" not in data:
-        current = repository.get_contact(contact_id)
+        current = repository.get_contact(ctx, contact_id)
         merged = {**current, **data}
         if merged.get("contact_type") == "company":
             data["display_name"] = merged.get("company_name")
@@ -55,40 +74,52 @@ def update_contact(contact_id, payload):
             data["display_name"] = " ".join(
                 part for part in (merged.get("first_name"), merged.get("last_name")) if part
             ) or merged.get("display_name")
-    return repository.update_contact(contact_id, data)
+    return repository.update_contact(ctx, contact_id, data)
 
 
-def add_contact_role(contact_id, payload):
-    return repository.add_contact_role(contact_id, _dump(payload))
+def add_contact_role(ctx, contact_id, payload):
+    return repository.add_contact_role(ctx, contact_id, _dump(payload))
 
 
-def delete_contact_role(contact_id, role):
-    repository.delete_contact_role(contact_id, role)
+def delete_contact_role(ctx, contact_id, role):
+    repository.delete_contact_role(ctx, contact_id, role)
 
 
-def create_lead(payload):
-    return repository.create_lead(_dump(payload))
+def set_contact_assignment(ctx, contact_id, payload):
+    """Assign or clear a contact's agent. Permission first, then the record."""
+    _require_assignment_permission(ctx)
+    return repository.set_contact_assignment(ctx, contact_id, payload.assigned_agent_id)
 
 
-def list_leads(limit, offset, contact_id, pipeline, stage, status):
-    return repository.list_leads(limit, offset, contact_id, pipeline, stage, status)
+def set_lead_assignment(ctx, lead_id, payload):
+    """Assign or clear a lead's agent. Permission first, then the record."""
+    _require_assignment_permission(ctx)
+    return repository.set_lead_assignment(ctx, lead_id, payload.assigned_agent_id)
 
 
-def get_lead(lead_id):
-    return repository.get_lead(lead_id)
+def create_lead(ctx, payload):
+    return repository.create_lead(ctx, _dump(payload))
 
 
-def update_lead(lead_id, payload):
+def list_leads(ctx, limit, offset, contact_id, pipeline, stage, status):
+    return repository.list_leads(ctx, limit, offset, contact_id, pipeline, stage, status)
+
+
+def get_lead(ctx, lead_id):
+    return repository.get_lead(ctx, lead_id)
+
+
+def update_lead(ctx, lead_id, payload):
     data = _dump(payload, exclude_unset=True)
     if data.get("status") == "closed" and "closed_at" not in data:
         data["closed_at"] = datetime.now(timezone.utc)
     elif data.get("status") in {"open", "paused"} and "closed_at" not in data:
         data["closed_at"] = None
-    return repository.update_lead(lead_id, data)
+    return repository.update_lead(ctx, lead_id, data)
 
 
-def link_stima(lead_id, stima_id, payload):
-    return repository.link_stima(lead_id, stima_id, payload.relation_type)
+def link_stima(ctx, lead_id, stima_id, payload):
+    return repository.link_stima(ctx, lead_id, stima_id, payload.relation_type)
 
 
 def bridge_public_stima(
@@ -149,41 +180,41 @@ def bridge_public_stima(
     )
 
 
-def unlink_stima(lead_id, stima_id):
-    repository.unlink_stima(lead_id, stima_id)
+def unlink_stima(ctx, lead_id, stima_id):
+    repository.unlink_stima(ctx, lead_id, stima_id)
 
 
-def create_activity(payload):
-    return repository.create_activity(_dump(payload))
+def create_activity(ctx, payload):
+    return repository.create_activity(ctx, _dump(payload))
 
 
-def list_activities(limit, offset, contact_id, lead_id, stima_id):
-    return repository.list_activities(limit, offset, contact_id, lead_id, stima_id)
+def list_activities(ctx, limit, offset, contact_id, lead_id, stima_id):
+    return repository.list_activities(ctx, limit, offset, contact_id, lead_id, stima_id)
 
 
-def create_task(payload):
+def create_task(ctx, payload):
     data = _dump(payload)
     if data.get("status") == "completed" and data.get("completed_at") is None:
         data["completed_at"] = datetime.now(timezone.utc)
-    return repository.create_task(data)
+    return repository.create_task(ctx, data)
 
 
-def list_tasks(limit, offset, contact_id, lead_id, stima_id, status):
-    return repository.list_tasks(limit, offset, contact_id, lead_id, stima_id, status)
+def list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status):
+    return repository.list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status)
 
 
-def update_task(task_id, payload):
+def update_task(ctx, task_id, payload):
     data = _dump(payload, exclude_unset=True)
     if data.get("status") == "completed" and "completed_at" not in data:
         data["completed_at"] = datetime.now(timezone.utc)
     elif data.get("status") in {"open", "in_progress", "cancelled"} and "completed_at" not in data:
         data["completed_at"] = None
-    return repository.update_task(task_id, data)
+    return repository.update_task(ctx, task_id, data)
 
 
-def delete_activity(activity_id):
-    repository.delete_activity(activity_id)
+def delete_activity(ctx, activity_id):
+    repository.delete_activity(ctx, activity_id)
 
 
-def delete_task(task_id):
-    repository.delete_task(task_id)
+def delete_task(ctx, task_id):
+    repository.delete_task(ctx, task_id)

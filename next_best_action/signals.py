@@ -61,7 +61,7 @@ def _is_overdue(due_at: datetime | None, now: datetime) -> bool:
     return due_at < now
 
 
-def collect_lead_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+def collect_lead_signals(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
     """Signals #1 (follow-up scaduto), #2 (next_action scaduto, lead-side)
     and #3 (seller intent molto caldo).
 
@@ -88,7 +88,7 @@ def collect_lead_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
     precedence.
     """
     leads = core_repository.list_leads(
-        limit=limit, offset=0, contact_id=None, pipeline=None, stage=None, status="open"
+        ctx, limit=limit, offset=0, contact_id=None, pipeline=None, stage=None, status="open"
     )
     now = datetime.now(timezone.utc)
     candidates: list[dict[str, Any]] = []
@@ -342,12 +342,18 @@ def collect_database_revival_signals(limit: int = DEFAULT_LIMIT) -> list[dict[st
     return database_revival_service.collect_today_signals()[:limit]
 
 
-def collect_all_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+def collect_all_signals(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
     """Collect all six V1 signals in one call, grouped by nothing - the
     caller (service.py) is responsible for grouping by (subject_type,
-    subject_id) before handing each group to engine.select_winner."""
+    subject_id) before handing each group to engine.select_winner.
+
+    `ctx` is the caller's AgencyScope. Only the lead collector below reads a
+    CORE table directly, so it is the only one that receives the scope; the
+    other four read through flow/, property_watch/, seller_intent/ and
+    database_revival/, which P26-1 leaves unchanged. Threading a scope into
+    them would imply an isolation this phase does not deliver."""
     return (
-        collect_lead_signals(limit)
+        collect_lead_signals(ctx, limit)
         + collect_next_action_signals(limit)
         + collect_invisible_sale_signals(limit)
         + collect_match_signals(limit)

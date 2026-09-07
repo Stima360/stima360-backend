@@ -20,8 +20,14 @@ Design boundaries, all enforced below.
 * **Append-only ledger.** Nothing here removes a ledger row. A rolled-back
   version is consumed: it is never re-executed and never overwritten.
 * **Transactions.** An ordinary migration runs inside one transaction together
-  with its ledger row. The single exception is a migration explicitly marked
-  non-transactional for a concurrent index build.
+  with its ledger row. From version ``027`` this runner owns that transaction:
+  the migration body carries no ``BEGIN``/``COMMIT``, and the body plus its
+  ``schema_migrations`` row are committed once. Versions below ``027`` bracket
+  themselves, as P26-0 section 6 rule 3 required; ``026`` is applied and
+  certified and keeps that shape. The single exception in either era is a
+  migration explicitly marked non-transactional for a concurrent index build,
+  whose ledger row is necessarily written in a following transaction.
+  See ``docs/P26_0_MIGRATION_ATOMICITY_ADDENDUM.md``.
 * **TEST only.** P26-0 refuses to run against production.
 
 Typical use::
@@ -53,6 +59,20 @@ MIN_VERSION = 26
 # 026 installs the ledger itself, so it cannot register itself inside it.
 BASELINE_VERSION = 26
 BASELINE_VERSION_LABEL = "P26-BASELINE-001"
+
+# From this version the runner owns the UP transaction: it executes the
+# migration body, writes the schema_migrations row through register(), and
+# commits both together. Files at or above it must therefore contain neither
+# BEGIN nor COMMIT - a file that committed itself would leave the ledger insert
+# in a second, separate transaction, so a failure between the two would change
+# the schema without recording it.
+#
+# Below this version P26-0 section 6 rule 3 stands unchanged: the file brackets
+# its own transaction. 026 is applied and certified and is never re-validated
+# under the new rule.
+#
+# See docs/P26_0_MIGRATION_ATOMICITY_ADDENDUM.md.
+RUNNER_OWNED_TRANSACTION_FROM = 27
 
 PROD_DATABASE_NAMES = frozenset({"stima360_db", "stima360"})
 REQUIRED_NAME_MARKER = "test"
@@ -168,6 +188,95 @@ def parse_version(filename: str) -> tuple[int, str] | None:
     return int(match.group(1)), stem
 
 
+def strip_sql_comments(sql: str) -> str:
+    """Return ``sql`` with comments removed and string literals preserved.
+
+    The semantic rules below describe what a migration *does*. Scanning raw
+    text made them describe what its prose mentions instead: a comment reading
+    "this uses no CONCURRENTLY" was enough to have a migration refused, and the
+    same held for a comment naming the ledger deletion that rule 12 forbids.
+
+    (This docstring deliberately does not spell that phrase out. P26-0's h13
+    guard scans this file's own raw source for it, and is right to: in the
+    runner's source, unlike in a migration's prose, even a mention deserves a
+    second look.)
+
+    Stripping must be literal-aware, not a line split on ``--``. A naive split
+    would also cut inside a quoted or dollar-quoted body, hiding whatever
+    followed it on that line - which would turn a false positive into a far
+    worse false negative in a guard whose job is to reject. Dollar-quoted
+    blocks matter in practice: 026 and 027 both use them.
+
+    Newlines are preserved so that the line-anchored BEGIN/COMMIT patterns keep
+    working.
+    """
+    out: list[str] = []
+    index = 0
+    length = len(sql)
+    dollar_tag = re.compile(r"\$[A-Za-z_0-9]*\$")
+
+    while index < length:
+        char = sql[index]
+
+        # Dollar-quoted body: copied verbatim, comments inside included.
+        if char == "$":
+            match = dollar_tag.match(sql, index)
+            if match:
+                tag = match.group(0)
+                end = sql.find(tag, index + len(tag))
+                if end == -1:
+                    out.append(sql[index:])
+                    break
+                out.append(sql[index:end + len(tag)])
+                index = end + len(tag)
+                continue
+
+        # Single-quoted literal, honouring the doubled '' escape.
+        if char == "'":
+            cursor = index + 1
+            while cursor < length:
+                if sql[cursor] == "'":
+                    if cursor + 1 < length and sql[cursor + 1] == "'":
+                        cursor += 2
+                        continue
+                    break
+                cursor += 1
+            out.append(sql[index:cursor + 1])
+            index = cursor + 1
+            continue
+
+        # Quoted identifier.
+        if char == '"':
+            end = sql.find('"', index + 1)
+            if end == -1:
+                out.append(sql[index:])
+                break
+            out.append(sql[index:end + 1])
+            index = end + 1
+            continue
+
+        # Line comment: drop to end of line, keep the newline itself.
+        if sql.startswith("--", index):
+            end = sql.find("\n", index)
+            if end == -1:
+                break
+            index = end
+            continue
+
+        # Block comment.
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            if end == -1:
+                break
+            index = end + 2
+            continue
+
+        out.append(char)
+        index += 1
+
+    return "".join(out)
+
+
 def is_non_transactional(sql_text: str) -> bool:
     """True when the file declares itself non-transactional in its header.
 
@@ -223,9 +332,15 @@ def validate_migration(migration: Migration, sql_text: str | None = None) -> lis
     text = sql_text if sql_text is not None else migration.path.read_text(encoding="utf-8")
     violations: list[str] = []
 
-    has_begin = bool(BEGIN_RE.search(text))
-    has_commit = bool(COMMIT_RE.search(text))
-    has_concurrently = bool(CONCURRENTLY_RE.search(text))
+    # Every rule below judges executable SQL, never prose. The one comment the
+    # runner *does* read is the '-- NON-TRANSACTIONAL' marker, and that is
+    # detected from the raw header by is_non_transactional() during discovery,
+    # before this function runs - so stripping here cannot hide it.
+    executable = strip_sql_comments(text)
+
+    has_begin = bool(BEGIN_RE.search(executable))
+    has_commit = bool(COMMIT_RE.search(executable))
+    has_concurrently = bool(CONCURRENTLY_RE.search(executable))
 
     if migration.non_transactional:
         # The concurrent index build is the only admitted exception.
@@ -239,11 +354,32 @@ def validate_migration(migration: Migration, sql_text: str | None = None) -> lis
                 f"{migration.version}: declared non-transactional but performs "
                 "no concurrent index build; the marker is only for CONCURRENTLY"
             )
-    else:
+    elif migration.number < RUNNER_OWNED_TRANSACTION_FROM:
+        # Pre-addendum era. The file brackets its own transaction. Preserved
+        # exactly as certified: 026 is applied and its rule does not change.
         if not has_begin or not has_commit:
             violations.append(
                 f"{migration.version}: an ordinary migration must open BEGIN "
                 "and close COMMIT"
+            )
+        if has_concurrently:
+            violations.append(
+                f"{migration.version}: CONCURRENTLY cannot run inside a "
+                "transaction; move it to a dedicated migration marked "
+                f"'{NON_TRANSACTIONAL_MARKER}'"
+            )
+    else:
+        # Runner-owned era. The runner brackets the body and its ledger row in
+        # one transaction, so the file must not open or close one itself.
+        if has_begin or has_commit:
+            violations.append(
+                f"{migration.version}: an ordinary migration from "
+                f"{RUNNER_OWNED_TRANSACTION_FROM:03d} must contain neither "
+                "BEGIN nor COMMIT. The runner executes the migration body and "
+                "writes its schema_migrations row in one transaction and "
+                "commits them together; a file that brackets itself would "
+                "commit the schema change before the ledger row, letting the "
+                "two diverge"
             )
         if has_concurrently:
             violations.append(
@@ -258,7 +394,7 @@ def validate_migration(migration: Migration, sql_text: str | None = None) -> lis
             "even one that refuses loudly."
         )
 
-    if re.search(r"DELETE\s+FROM\s+schema_migrations", text, re.IGNORECASE):
+    if re.search(r"DELETE\s+FROM\s+schema_migrations", executable, re.IGNORECASE):
         violations.append(
             f"{migration.version}: the ledger is append-only; record a "
             "rollback with rolled_back_at instead of removing the row"

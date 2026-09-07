@@ -36,10 +36,23 @@ except ImportError:
     sys.modules["psycopg2.sql"] = sql
 
 from core import service
+from operator_auth.context import OperatorContext
+
+# P26-1: the service forwards an AgencyScope to every repository call.
+# A real OperatorContext, not a stand-in, so the fakes below assert on the
+# value the production code actually passes through.
+CTX = OperatorContext(
+    user_id=1,
+    agency_id=10,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=100,
+    auth_channel="operator_session",
+)
 
 
 def test_update_contact_rebuilds_display_name(monkeypatch):
-    monkeypatch.setattr(service.repository, "get_contact", lambda contact_id: {
+    monkeypatch.setattr(service.repository, "get_contact", lambda ctx, contact_id: {
         "id": contact_id,
         "contact_type": "person",
         "first_name": "Mario",
@@ -47,31 +60,49 @@ def test_update_contact_rebuilds_display_name(monkeypatch):
         "display_name": "Mario Rossi",
     })
     captured = {}
-    monkeypatch.setattr(service.repository, "update_contact", lambda contact_id, data: captured.update(data) or data)
+    seen = {}
+    monkeypatch.setattr(
+        service.repository,
+        "update_contact",
+        lambda ctx, contact_id, data: seen.update(ctx=ctx) or captured.update(data) or data,
+    )
 
     payload = SimpleNamespace(model_dump=lambda exclude_unset=False: {"first_name": "Luigi"})
-    service.update_contact(1, payload)
+    service.update_contact(CTX, 1, payload)
 
     assert captured["display_name"] == "Luigi Rossi"
+    assert seen["ctx"] is CTX
 
 
 def test_reopen_lead_clears_closed_at(monkeypatch):
     captured = {}
-    monkeypatch.setattr(service.repository, "update_lead", lambda lead_id, data: captured.update(data) or data)
+    seen = {}
+    monkeypatch.setattr(
+        service.repository,
+        "update_lead",
+        lambda ctx, lead_id, data: seen.update(ctx=ctx) or captured.update(data) or data,
+    )
     payload = SimpleNamespace(model_dump=lambda exclude_unset=False: {"status": "open"})
 
-    service.update_lead(1, payload)
+    service.update_lead(CTX, 1, payload)
 
     assert "closed_at" in captured
     assert captured["closed_at"] is None
+    assert seen["ctx"] is CTX
 
 
 def test_reopen_task_clears_completed_at(monkeypatch):
     captured = {}
-    monkeypatch.setattr(service.repository, "update_task", lambda task_id, data: captured.update(data) or data)
+    seen = {}
+    monkeypatch.setattr(
+        service.repository,
+        "update_task",
+        lambda ctx, task_id, data: seen.update(ctx=ctx) or captured.update(data) or data,
+    )
     payload = SimpleNamespace(model_dump=lambda exclude_unset=False: {"status": "in_progress"})
 
-    service.update_task(1, payload)
+    service.update_task(CTX, 1, payload)
 
     assert "completed_at" in captured
     assert captured["completed_at"] is None
+    assert seen["ctx"] is CTX

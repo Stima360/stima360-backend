@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 
 import pytest
 
+# P26-1: the Default Agency the public bridge resolves server-side.
+DEFAULT_AGENCY_SLUG = "stima360"
+DEFAULT_AGENCY_ID = 1
+
 from core import repository, service
 from integration_p2_support import import_project_module
 
@@ -23,11 +27,22 @@ class BridgeCursor:
         self.rows = []
         self.rowcount = 0
 
+        # P26-1: the bridge builds its SystemAgencyContext from the Default
+        # Agency slug before anything else. The fake answers that lookup so the
+        # scoping the bridge applies below is the real thing, not a bypass.
+        if "from agencies" in sql:
+            assert params == (DEFAULT_AGENCY_SLUG,), params
+            assert "status = 'active'" in sql, sql
+            self.rows = [] if self.database.default_agency_missing else [{"id": DEFAULT_AGENCY_ID}]
+            return
+
         if "pg_advisory_xact_lock" in sql:
             self.rows = [{"locked": True}]
             return
 
         if "from lead_stime ls" in sql:
+            assert "l.agency_id = %s" in sql, sql
+            assert params[1] == DEFAULT_AGENCY_ID, params
             stima_id = int(params[0])
             links = sorted(
                 (item for item in self.database.links if item["stima_id"] == stima_id),
@@ -40,20 +55,26 @@ class BridgeCursor:
             return
 
         if "from contacts" in sql and "email_normalized" in sql:
-            value = params[0]
+            assert "c.agency_id = %s" in sql, sql
+            agency_id, value = params[0], params[-1]
+            assert agency_id == DEFAULT_AGENCY_ID, agency_id
             self.rows = [
                 copy.deepcopy(item)
                 for item in sorted(self.database.contacts, key=lambda item: item["id"])
                 if item.get("email_normalized") == value
+                and item.get("agency_id") == agency_id
             ]
             return
 
         if "from contacts" in sql and "phone_normalized" in sql:
-            value = params[0]
+            assert "c.agency_id = %s" in sql, sql
+            agency_id, value = params[0], params[-1]
+            assert agency_id == DEFAULT_AGENCY_ID, agency_id
             self.rows = [
                 copy.deepcopy(item)
                 for item in sorted(self.database.contacts, key=lambda item: item["id"])
                 if item.get("phone_normalized") == value
+                and item.get("agency_id") == agency_id
             ]
             return
 
@@ -114,6 +135,7 @@ class BridgeCursor:
 
 class BridgeDatabase:
     def __init__(self):
+        self.default_agency_missing = False
         self.contacts = []
         self.leads = []
         self.links = []
@@ -161,6 +183,7 @@ class BridgeDatabase:
         status="active",
         archived_at=None,
         display_name="Existing Contact",
+        agency_id=DEFAULT_AGENCY_ID,
     ):
         item = {
             "id": self.next_contact_id,
@@ -170,6 +193,9 @@ class BridgeDatabase:
             "phone_normalized": phone,
             "status": status,
             "archived_at": archived_at,
+            # Migration 029 backfills every pre-existing contact into the
+            # Default Agency, so a seeded fixture row carries it too.
+            "agency_id": agency_id,
         }
         self.next_contact_id += 1
         self.contacts.append(item)
@@ -211,6 +237,8 @@ def test_new_stima_creates_contact_lead_and_link_with_approved_defaults(bridge_d
     assert bridge_database.contacts[0]["email_normalized"] == "mario@example.com"
     assert bridge_database.contacts[0]["phone_normalized"] == "393331234567"
     assert bridge_database.contacts[0]["source"] == "public_stima"
+    assert bridge_database.contacts[0]["agency_id"] == DEFAULT_AGENCY_ID
+    assert bridge_database.contacts[0]["created_by_user_id"] is None
     assert bridge_database.leads == [
         {
             "id": 1,
@@ -225,6 +253,11 @@ def test_new_stima_creates_contact_lead_and_link_with_approved_defaults(bridge_d
             "next_action_at": None,
             "lost_reason": None,
             "notes": None,
+            # P26-1: stamped server-side from the SystemAgencyContext the
+            # bridge builds from the Default Agency slug. The anonymous public
+            # caller supplies neither of these.
+            "agency_id": DEFAULT_AGENCY_ID,
+            "created_by_user_id": None,
         }
     ]
     assert bridge_database.links == [

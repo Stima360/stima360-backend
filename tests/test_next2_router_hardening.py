@@ -153,6 +153,17 @@ def test_10_domain_routers_remain_decoupled_from_owner():
 
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_source
-    for router_name in ("core_router", "property_router", "buy_router", "match_router", "proposal_router"):
+    # P26-1 Task 15: core_router moved from require_admin to require_operator.
+    # The protection this test exists to guarantee is unchanged - CORE is still
+    # unreachable without a credential - but the dependency now accepts BOTH
+    # approved channels: an operator session cookie, or the same legacy
+    # ADMIN_USER/ADMIN_PASS Basic credential as before, resolved server-side
+    # into a Default-Agency-bound scope (design spec D-2). The other four
+    # routers below are deliberately untouched.
+    assert (
+        "app.include_router(core_router, dependencies=[Depends(require_operator)])"
+        in main_source
+    )
+    for router_name in ("property_router", "buy_router", "match_router", "proposal_router"):
         expected = f"app.include_router({router_name}, dependencies=[Depends(require_admin)])"
         assert expected in main_source

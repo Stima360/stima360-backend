@@ -28,8 +28,8 @@ def conn():
 def setup():
     global rule_backup
     c=conn(); cur=c.cursor(cursor_factory=RealDictCursor)
-    cur.execute("INSERT INTO contacts(contact_type,display_name,status,source) VALUES('person',%s,'active','flow_e2e') RETURNING id",(RUN,)); created['contact']=cur.fetchone()['id']
-    cur.execute("INSERT INTO leads(contact_id,source,pipeline,stage,priority,status,notes,created_at,updated_at) VALUES(%s,'flow_e2e','general','new','normal','open',%s,NOW()-INTERVAL '48 hours',NOW()-INTERVAL '48 hours') RETURNING id",(created['contact'],RUN)); created['lead']=cur.fetchone()['id']
+    cur.execute("INSERT INTO contacts(contact_type,display_name,status,source,agency_id) VALUES('person',%s,'active','flow_e2e',(SELECT id FROM agencies WHERE slug='stima360' AND status='active')) RETURNING id",(RUN,)); created['contact']=cur.fetchone()['id']
+    cur.execute("INSERT INTO leads(contact_id,source,pipeline,stage,priority,status,notes,created_at,updated_at,agency_id) VALUES(%s,'flow_e2e','general','new','normal','open',%s,NOW()-INTERVAL '48 hours',NOW()-INTERVAL '48 hours',(SELECT id FROM agencies WHERE slug='stima360' AND status='active')) RETURNING id",(created['contact'],RUN)); created['lead']=cur.fetchone()['id']
     c.commit(); cur.close(); c.close()
     api('POST','/api/flow/sync-rules')
     c=conn(); cur=c.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT * FROM flow_rules WHERE code='FLOW-R001'"); rule_backup=dict(cur.fetchone()); cur.close(); c.close()

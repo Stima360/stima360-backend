@@ -28,6 +28,25 @@ class CoreModel(BaseModel):
         extra = "forbid"
 
 
+class AssignmentUpdate(CoreModel):
+    """The only request body that may carry an assigned agent.
+
+    Deliberately separate from ContactUpdate and LeadUpdate, which do not
+    declare `assigned_agent_id` at all: a reassignment must be an explicit act
+    against an explicit endpoint, never something that rides along on an
+    ordinary field update (design spec section 10).
+
+    One field, and `extra = "forbid"` inherited from CoreModel, so `agency_id`,
+    `role`, `is_platform_admin` or any other smuggled key is a 422 before the
+    handler runs. The record's agency is derived server-side from the record
+    itself and is not expressible here.
+
+    `None` clears the assignment.
+    """
+
+    assigned_agent_id: int | None = None
+
+
 class ContactCreate(CoreModel):
     contact_type: str = "person"
     first_name: str | None = Field(default=None, max_length=100)

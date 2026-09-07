@@ -18,6 +18,8 @@ from urllib.parse import urlencode
 from admin_security import require_admin
 from core import service as core_service
 from core.router import router as core_router
+from operator_auth.dependencies import require_operator
+from operator_auth.router import router as operator_auth_router
 from property.router import router as property_router
 from buy.router import router as buy_router
 from match.router import router as match_router
@@ -50,8 +52,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------
 app = FastAPI()
 
+# P26-1 operator identity: login, logout, me. No router-level dependency -
+# /login must stay reachable unauthenticated.
+app.include_router(operator_auth_router)
+
 # Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
-app.include_router(core_router, dependencies=[Depends(require_admin)])
+#
+# require_operator accepts both approved channels: an operator session cookie
+# first, else the legacy ADMIN_USER/ADMIN_PASS credential resolved server-side
+# into a Default-Agency-bound scope (design spec D-2). Every other router below
+# keeps require_admin byte for byte - D-1 confines the operator session to
+# /api/operator-auth/* and /api/core/*.
+app.include_router(core_router, dependencies=[Depends(require_operator)])
 
 # Additive PROPERTY 0.1 routes. CORE and legacy routes remain unchanged.
 app.include_router(property_router, dependencies=[Depends(require_admin)])

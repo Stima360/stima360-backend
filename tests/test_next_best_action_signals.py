@@ -11,6 +11,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from next_best_action import signals
+from operator_auth.context import OperatorContext
+
+# P26-1 Task 11: NBA reads CORE leads/tasks, so it now carries an AgencyScope.
+# In production this is the legacy-Basic compatibility context built by
+# operator_auth.dependencies.legacy_basic_agency_context - agency-bound, never
+# cross-agency. The fixture below is that same shape.
+CTX = OperatorContext(
+    user_id=None,
+    agency_id=10,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=None,
+    auth_channel="legacy_basic",
+)
+
 from next_best_action.engine import select_winner
 
 
@@ -31,10 +46,10 @@ def _score(band="tiepido", followup_overdue=False, computed_at=None):
 def test_lead_with_future_next_action_produces_no_next_action_overdue(monkeypatch):
     now = datetime.now(timezone.utc)
     lead = _lead(next_action_at=now + timedelta(days=1))
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [lead])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [lead])
     monkeypatch.setattr(signals, "get_seller_intent_score", lambda *, lead_id: _score())
 
-    candidates = signals.collect_lead_signals()
+    candidates = signals.collect_lead_signals(CTX)
 
     assert all(c["source_signal"] != "next_action_overdue" for c in candidates)
 
@@ -43,10 +58,10 @@ def test_lead_with_overdue_next_action_produces_candidate(monkeypatch):
     now = datetime.now(timezone.utc)
     overdue_at = now - timedelta(hours=2)
     lead = _lead(next_action_at=overdue_at)
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [lead])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [lead])
     monkeypatch.setattr(signals, "get_seller_intent_score", lambda *, lead_id: _score())
 
-    candidates = signals.collect_lead_signals()
+    candidates = signals.collect_lead_signals(CTX)
 
     matching = [c for c in candidates if c["source_signal"] == "next_action_overdue"]
     assert len(matching) == 1
@@ -58,10 +73,10 @@ def test_lead_with_overdue_next_action_produces_candidate(monkeypatch):
 
 def test_lead_with_null_next_action_produces_no_candidate_and_no_crash(monkeypatch):
     lead = _lead(next_action_at=None)
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [lead])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [lead])
     monkeypatch.setattr(signals, "get_seller_intent_score", lambda *, lead_id: _score())
 
-    candidates = signals.collect_lead_signals()
+    candidates = signals.collect_lead_signals(CTX)
 
     assert all(c["source_signal"] != "next_action_overdue" for c in candidates)
 
@@ -69,10 +84,10 @@ def test_lead_with_null_next_action_produces_no_candidate_and_no_crash(monkeypat
 def test_next_action_overdue_beats_seller_intent_hot(monkeypatch):
     now = datetime.now(timezone.utc)
     lead = _lead(next_action_at=now - timedelta(hours=1))
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [lead])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [lead])
     monkeypatch.setattr(signals, "get_seller_intent_score", lambda *, lead_id: _score(band="molto_caldo"))
 
-    candidates = signals.collect_lead_signals()
+    candidates = signals.collect_lead_signals(CTX)
     winner = select_winner(candidates)
 
     assert winner["source_signal"] == "next_action_overdue"
@@ -81,12 +96,12 @@ def test_next_action_overdue_beats_seller_intent_hot(monkeypatch):
 def test_followup_overdue_beats_next_action_overdue(monkeypatch):
     now = datetime.now(timezone.utc)
     lead = _lead(next_action_at=now - timedelta(hours=1))
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [lead])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [lead])
     monkeypatch.setattr(
         signals, "get_seller_intent_score", lambda *, lead_id: _score(followup_overdue=True)
     )
 
-    candidates = signals.collect_lead_signals()
+    candidates = signals.collect_lead_signals(CTX)
     winner = select_winner(candidates)
 
     assert winner["source_signal"] == "followup_overdue"
@@ -118,12 +133,12 @@ def test_collect_database_revival_signals_respects_limit(monkeypatch):
 
 def test_collect_all_signals_includes_database_revival_candidates(monkeypatch):
     canned = [{"subject_type": "lead", "subject_id": 77, "source_signal": "database_revival"}]
-    monkeypatch.setattr(signals.core_repository, "list_leads", lambda **kwargs: [])
+    monkeypatch.setattr(signals.core_repository, "list_leads", lambda ctx, **kwargs: [])
     monkeypatch.setattr(signals.flow_adapters, "scan_candidates", lambda code, params, limit: [])
     monkeypatch.setattr(signals.invisible_sale_repository, "list_active_watch_refs", lambda: [])
     monkeypatch.setattr(signals.database_revival_service, "collect_today_signals", lambda: canned)
 
-    all_candidates = signals.collect_all_signals()
+    all_candidates = signals.collect_all_signals(CTX)
 
     assert canned[0] in all_candidates
 

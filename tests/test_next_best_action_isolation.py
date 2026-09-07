@@ -7,6 +7,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from next_best_action import service
+from operator_auth.context import OperatorContext
+
+# P26-1 Task 11: NBA reads CORE leads/tasks, so it now carries an AgencyScope.
+# In production this is the legacy-Basic compatibility context built by
+# operator_auth.dependencies.legacy_basic_agency_context - agency-bound, never
+# cross-agency. The fixture below is that same shape.
+CTX = OperatorContext(
+    user_id=None,
+    agency_id=10,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=None,
+    auth_channel="legacy_basic",
+)
+
 
 
 def _candidate(**overrides):
@@ -29,11 +44,11 @@ def _candidate(**overrides):
 
 
 def test_refresh_suppresses_nba_when_open_task_already_exists(monkeypatch):
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: [_candidate()])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: [_candidate()])
     monkeypatch.setattr(
         service.core_repository,
         "list_tasks",
-        lambda **kwargs: [{"status": "open"}] if kwargs.get("contact_id") == 3 else [],
+        lambda ctx, **kwargs: [{"status": "open"}] if kwargs.get("contact_id") == 3 else [],
     )
     captured = {}
     monkeypatch.setattr(
@@ -42,7 +57,7 @@ def test_refresh_suppresses_nba_when_open_task_already_exists(monkeypatch):
         lambda rows: captured.setdefault("rows", rows) or {"created": 0, "updated": 0, "removed": 0},
     )
 
-    result = service.refresh()
+    result = service.refresh(CTX)
 
     assert captured["rows"] == []
     assert result["suppressed_duplicates"] == 1
@@ -50,8 +65,8 @@ def test_refresh_suppresses_nba_when_open_task_already_exists(monkeypatch):
 
 
 def test_refresh_keeps_nba_when_no_open_task_exists(monkeypatch):
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: [_candidate()])
-    monkeypatch.setattr(service.core_repository, "list_tasks", lambda **kwargs: [])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: [_candidate()])
+    monkeypatch.setattr(service.core_repository, "list_tasks", lambda ctx, **kwargs: [])
     captured = {}
 
     def _fake_replace(rows):
@@ -60,7 +75,7 @@ def test_refresh_keeps_nba_when_no_open_task_exists(monkeypatch):
 
     monkeypatch.setattr(service.nba_repository, "replace_current_actions", _fake_replace)
 
-    result = service.refresh()
+    result = service.refresh(CTX)
 
     assert len(captured["rows"]) == 1
     assert captured["rows"][0]["subject_id"] == 14
@@ -73,8 +88,8 @@ def test_refresh_groups_multiple_candidates_per_subject_into_single_winner(monke
         _candidate(source_signal="match_strong_unproposed", cta_route="abbinamenti"),
         _candidate(source_signal="seller_intent_hot"),
     ]
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: candidates)
-    monkeypatch.setattr(service.core_repository, "list_tasks", lambda **kwargs: [])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: candidates)
+    monkeypatch.setattr(service.core_repository, "list_tasks", lambda ctx, **kwargs: [])
     captured = {}
 
     def _fake_replace(rows):
@@ -83,7 +98,7 @@ def test_refresh_groups_multiple_candidates_per_subject_into_single_winner(monke
 
     monkeypatch.setattr(service.nba_repository, "replace_current_actions", _fake_replace)
 
-    result = service.refresh()
+    result = service.refresh(CTX)
 
     assert len(captured["rows"]) == 1
     assert captured["rows"][0]["source_signal"] == "seller_intent_hot"
@@ -93,14 +108,14 @@ def test_refresh_groups_multiple_candidates_per_subject_into_single_winner(monke
 def test_anti_duplication_checks_contact_lead_and_stima_ids_independently(monkeypatch):
     seen_filters = []
 
-    def _fake_list_tasks(**kwargs):
+    def _fake_list_tasks(ctx, **kwargs):
         seen_filters.append({k: v for k, v in kwargs.items() if v is not None and k != "limit" and k != "offset" and k != "status"})
         return []
 
     monkeypatch.setattr(service.core_repository, "list_tasks", _fake_list_tasks)
     candidate = _candidate(lead_id=14, stima_id=None)
 
-    service._has_open_equivalent_task(candidate)
+    service._has_open_equivalent_task(CTX, candidate)
 
     assert {"contact_id": 3} in seen_filters
     assert {"lead_id": 14} in seen_filters
@@ -115,11 +130,11 @@ def test_anti_duplication_suppresses_lead_next_action_overdue_when_task_open(mon
         action_type="contact_overdue_next_action",
         reason="Prossima azione pianificata gia' scaduta",
     )
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: [candidate])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: [candidate])
     monkeypatch.setattr(
         service.core_repository,
         "list_tasks",
-        lambda **kwargs: [{"status": "open"}] if kwargs.get("contact_id") == 3 else [],
+        lambda ctx, **kwargs: [{"status": "open"}] if kwargs.get("contact_id") == 3 else [],
     )
     captured = {}
 
@@ -129,7 +144,7 @@ def test_anti_duplication_suppresses_lead_next_action_overdue_when_task_open(mon
 
     monkeypatch.setattr(service.nba_repository, "replace_current_actions", _fake_replace)
 
-    result = service.refresh()
+    result = service.refresh(CTX)
 
     assert captured["rows"] == []
     assert result["suppressed_duplicates"] == 1
@@ -140,11 +155,11 @@ def test_refresh_calls_safe_ensure_today_batch_before_collect_all_signals(monkey
     monkeypatch.setattr(
         service.database_revival_service, "safe_ensure_today_batch", lambda: calls.append("ensure")
     )
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: calls.append("collect") or [])
-    monkeypatch.setattr(service.core_repository, "list_tasks", lambda **kwargs: [])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: calls.append("collect") or [])
+    monkeypatch.setattr(service.core_repository, "list_tasks", lambda ctx, **kwargs: [])
     monkeypatch.setattr(service.nba_repository, "replace_current_actions", lambda rows: {"created": 0, "updated": 0, "removed": 0})
 
-    service.refresh()
+    service.refresh(CTX)
 
     assert calls == ["ensure", "collect"]
 
@@ -163,8 +178,8 @@ def test_refresh_has_no_redundant_exception_handling_around_ensure_call(monkeypa
         raise RuntimeError("stand-in bypassing the real safe wrapper's own try/except")
 
     monkeypatch.setattr(service.database_revival_service, "safe_ensure_today_batch", _boom)
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: [_candidate()])
-    monkeypatch.setattr(service.core_repository, "list_tasks", lambda **kwargs: [])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: [_candidate()])
+    monkeypatch.setattr(service.core_repository, "list_tasks", lambda ctx, **kwargs: [])
     monkeypatch.setattr(
         service.nba_repository,
         "replace_current_actions",
@@ -174,7 +189,7 @@ def test_refresh_has_no_redundant_exception_handling_around_ensure_call(monkeypa
     import pytest
 
     with pytest.raises(RuntimeError):
-        service.refresh()
+        service.refresh(CTX)
 
 
 def test_refresh_result_unaffected_when_no_database_revival_candidates(monkeypatch):
@@ -182,8 +197,8 @@ def test_refresh_result_unaffected_when_no_database_revival_candidates(monkeypat
     4/5) - with zero candidates from it, refresh()'s result must be
     identical to the pre-P24 behaviour for the other five signals."""
     monkeypatch.setattr(service.database_revival_service, "safe_ensure_today_batch", lambda: None)
-    monkeypatch.setattr(service, "collect_all_signals", lambda limit: [_candidate()])
-    monkeypatch.setattr(service.core_repository, "list_tasks", lambda **kwargs: [])
+    monkeypatch.setattr(service, "collect_all_signals", lambda ctx, limit: [_candidate()])
+    monkeypatch.setattr(service.core_repository, "list_tasks", lambda ctx, **kwargs: [])
     captured = {}
 
     def _fake_replace(rows):
@@ -192,7 +207,7 @@ def test_refresh_result_unaffected_when_no_database_revival_candidates(monkeypat
 
     monkeypatch.setattr(service.nba_repository, "replace_current_actions", _fake_replace)
 
-    result = service.refresh()
+    result = service.refresh(CTX)
 
     assert len(captured["rows"]) == 1
     assert result["total_active"] == 1

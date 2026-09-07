@@ -13,11 +13,26 @@ from fastapi.testclient import TestClient
 
 from admin_security import require_admin
 from next_best_action.router import router as next_best_action_router
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context
+
+# The refresh route depends on the C2 compatibility context, which resolves
+# the Default Agency from the database. These tests are offline, so the
+# dependency is overridden with the exact context it would have built.
+CTX = OperatorContext(
+    user_id=None,
+    agency_id=10,
+    role="agency_owner",
+    is_platform_admin=False,
+    session_id=None,
+    auth_channel="legacy_basic",
+)
 
 
 def build_app():
     app = FastAPI()
     app.include_router(next_best_action_router, dependencies=[Depends(require_admin)])
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: CTX
     return app
 
 
@@ -94,7 +109,10 @@ def test_refresh_calls_service_and_returns_counters(monkeypatch):
     _auth_env(monkeypatch)
     import next_best_action.router as router_module
 
-    def _fake_refresh():
+    seen = {}
+
+    def _fake_refresh(ctx):
+        seen["ctx"] = ctx
         return {
             "evaluated_subjects": 5,
             "created": 2,
@@ -111,3 +129,7 @@ def test_refresh_calls_service_and_returns_counters(monkeypatch):
     assert response.status_code == 200
     assert response.json()["created"] == 2
     assert response.json()["suppressed_duplicates"] == 1
+    # The route really did hand the service an agency-bound scope.
+    assert seen["ctx"] is CTX
+    assert seen["ctx"].agency_id == 10
+    assert seen["ctx"].is_platform_admin is False

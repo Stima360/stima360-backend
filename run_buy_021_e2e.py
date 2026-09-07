@@ -93,33 +93,50 @@ class Runner:
             cur.execute("DELETE FROM tasks WHERE title LIKE %s", (PREFIX + "%",))
             cur.execute("DELETE FROM buy_requests WHERE title LIKE %s", (PREFIX + "%",))
             cur.execute("DELETE FROM properties WHERE code LIKE %s", (PREFIX + "%",))
-            cur.execute("DELETE FROM leads WHERE source LIKE %s", (PREFIX + "%",))
-            cur.execute("DELETE FROM contacts WHERE source LIKE %s", (PREFIX + "%",))
+            # P26-1: a source marker is not a boundary once a second agency
+            # exists - another agency could hold a row with the same marker.
+            # This sweep covers previous runs whose ids are unknown, so it
+            # cannot be id-based; it carries the agency predicate instead.
+            cur.execute(
+                "DELETE FROM leads WHERE source LIKE %s AND agency_id = "
+                "(SELECT id FROM agencies WHERE slug='stima360' AND status='active')",
+                (PREFIX + "%",),
+            )
+            cur.execute(
+                "DELETE FROM contacts WHERE source LIKE %s AND agency_id = "
+                "(SELECT id FROM agencies WHERE slug='stima360' AND status='active')",
+                (PREFIX + "%",),
+            )
 
     def cleanup_current(self):
         if not self.conn:
             return
         with self.conn.cursor() as cur:
-            # Titoli/codici/source sono il confine di sicurezza: non vengono usati ID esterni.
+            # Titoli/codici sono il confine per le tabelle non-CORE.
             cur.execute("DELETE FROM tasks WHERE title LIKE %s", (self.run_id + "%",))
             cur.execute("DELETE FROM buy_requests WHERE title LIKE %s", (self.run_id + "%",))
             cur.execute("DELETE FROM properties WHERE code LIKE %s", (self.run_id + "%",))
-            cur.execute("DELETE FROM leads WHERE source=%s", (self.run_id,))
-            cur.execute("DELETE FROM contacts WHERE source=%s", (self.run_id,))
+            # P26-1: CORE rows are removed by the ids this run captured, which
+            # is both narrower and agency-safe - an id cannot belong to two
+            # agencies, whereas a source string can.
+            cur.execute("DELETE FROM leads WHERE id = ANY(%s)", (self.ids["leads"],))
+            cur.execute("DELETE FROM contacts WHERE id = ANY(%s)", (self.ids["contacts"],))
 
     def bootstrap(self):
         print("\n[1/10] Creazione dati test isolati")
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO contacts(contact_type,first_name,last_name,display_name,email,email_normalized,phone,phone_normalized,source,status)
-                VALUES('person','E2E','Buyer',%s,%s,%s,%s,%s,%s,'active') RETURNING id
+                INSERT INTO contacts(contact_type,first_name,last_name,display_name,email,email_normalized,phone,phone_normalized,source,status,agency_id)
+                VALUES('person','E2E','Buyer',%s,%s,%s,%s,%s,%s,'active',
+                       (SELECT id FROM agencies WHERE slug='stima360' AND status='active')) RETURNING id
             """, (self.run_id, f"{self.run_id.lower()}@example.test", f"{self.run_id.lower()}@example.test", "+390000000001", "390000000001", self.run_id))
             contact_id = cur.fetchone()["id"]
             self.ids["contacts"].append(contact_id)
 
             cur.execute("""
-                INSERT INTO leads(contact_id,source,pipeline,stage,priority,status,notes)
-                VALUES(%s,%s,'buy','qualified','high','open',%s) RETURNING id
+                INSERT INTO leads(contact_id,source,pipeline,stage,priority,status,notes,agency_id)
+                VALUES(%s,%s,'buy','qualified','high','open',%s,
+                       (SELECT id FROM agencies WHERE slug='stima360' AND status='active')) RETURNING id
             """, (contact_id, self.run_id, self.run_id))
             lead_id = cur.fetchone()["id"]
             self.ids["leads"].append(lead_id)
