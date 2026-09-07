@@ -38,6 +38,7 @@ import pytest
 
 from core import repository
 from core.exceptions import ConflictError
+from core.scope import system_context_for_public_stima
 
 DEFAULT_AGENCY_ID = 77
 OTHER_AGENCY_ID = 88
@@ -141,7 +142,15 @@ def bridge(monkeypatch):
             "estimated_value": None, "next_action_at": None, "lost_reason": None,
             "notes": None,
         }
-        result = repository.bridge_public_stima(stima_id, contact_data, lead_data, "related")
+        # P26-2B2B-R1: the public writer resolves the Default Agency once and
+        # hands the context down, so the fixture stands in for the writer and
+        # does exactly that. The factory still runs against this same cursor,
+        # which is why the J1 assertions below - first statement, resolved by
+        # slug, fails closed - remain true and remain about this request.
+        system_ctx = system_context_for_public_stima(cursor)
+        result = repository.bridge_public_stima(
+            stima_id, contact_data, lead_data, "related", system_ctx=system_ctx
+        )
         return result, cursor
 
     return _run
@@ -162,8 +171,16 @@ def test_j1_the_agency_lookup_is_the_first_statement(bridge):
 def test_j1_the_agency_is_resolved_by_slug_not_by_number(bridge):
     _, cursor = bridge()
     source = inspect.getsource(repository.bridge_public_stima)
-    assert "system_context_for_public_stima(cur)" in source
     assert str(DEFAULT_AGENCY_ID) not in source
+    # R1: the bridge no longer resolves anything - it receives the context the
+    # writer resolved. Asserting the absence is what keeps a second, independent
+    # lookup from creeping back in.
+    assert "system_context_for_public_stima" not in source
+    assert "system_ctx" in [
+        argument for argument in inspect.signature(
+            repository.bridge_public_stima
+        ).parameters
+    ], "the bridge does not admit a system context"
 
 
 def test_j1_a_missing_default_agency_fails_the_bridge_closed(bridge):

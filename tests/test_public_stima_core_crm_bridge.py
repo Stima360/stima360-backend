@@ -13,6 +13,12 @@ DEFAULT_AGENCY_ID = 1
 
 from core import repository, service
 from integration_p2_support import import_project_module
+from operator_auth.context import SystemAgencyContext
+
+# The context the public writer resolves and hands to the bridge.
+PUBLIC_WRITER_CTX = SystemAgencyContext(
+    agency_id=DEFAULT_AGENCY_ID, origin="public_stima"
+)
 
 
 class BridgeCursor:
@@ -27,14 +33,16 @@ class BridgeCursor:
         self.rows = []
         self.rowcount = 0
 
-        # P26-1: the bridge builds its SystemAgencyContext from the Default
-        # Agency slug before anything else. The fake answers that lookup so the
-        # scoping the bridge applies below is the real thing, not a bypass.
+        # P26-2B2B-R1: the bridge no longer resolves an agency - the public
+        # writer resolves once and passes the context down. This branch is kept
+        # as a tripwire rather than deleted: answering the lookup would let a
+        # returning second resolution pass unnoticed, which is exactly the bug
+        # R1 removed.
         if "from agencies" in sql:
-            assert params == (DEFAULT_AGENCY_SLUG,), params
-            assert "status = 'active'" in sql, sql
-            self.rows = [] if self.database.default_agency_missing else [{"id": DEFAULT_AGENCY_ID}]
-            return
+            raise AssertionError(
+                "the bridge resolved the Default Agency itself; it must use the "
+                f"context it was given (sql={sql!r} params={params!r})"
+            )
 
         if "pg_advisory_xact_lock" in sql:
             self.rows = [{"locked": True}]
@@ -134,8 +142,12 @@ class BridgeCursor:
 
 
 class BridgeDatabase:
+    # `default_agency_missing` was removed with P26-2B2B-R1: the bridge no
+    # longer resolves an agency, so the flag could no longer make it fail and
+    # would have sat here reading like a live control that does nothing. The
+    # missing-Default-Agency case now belongs to the writer and is covered in
+    # tests/test_p26_2b_public_stima_writer.py, group B3.
     def __init__(self):
-        self.default_agency_missing = False
         self.contacts = []
         self.leads = []
         self.links = []
@@ -219,7 +231,9 @@ def bridge(stima_id, **overrides):
         "marketing_consent_at": datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc),
     }
     data.update(overrides)
-    return service.bridge_public_stima(stima_id, **data)
+    # Stands in for the public writer, which resolves this once per request and
+    # stamps the same agency on stime.agency_id (P26-2B2B-R1).
+    return service.bridge_public_stima(stima_id, system_ctx=PUBLIC_WRITER_CTX, **data)
 
 
 def test_new_stima_creates_contact_lead_and_link_with_approved_defaults(bridge_database):
@@ -386,14 +400,32 @@ def test_failure_after_contact_insert_rolls_back_and_retry_does_not_duplicate(br
 
 
 class LegacyCursor:
-    def __init__(self, connection):
+    """The public writer's own connection, as it behaves at runtime.
+
+    P26-2B2B: `salva_stima` now resolves the Default Agency on this connection
+    before inserting, so the fake answers that lookup. `dict_rows` mirrors the
+    RealDictCursor the writer opens for it - the factory reads `row["id"]`,
+    while the INSERT's `fetchone()[0]` reads a tuple, and the fake keeps the
+    two shapes distinct rather than papering over a difference the real driver
+    enforces.
+    """
+
+    def __init__(self, connection, *, dict_rows=False):
         self.connection = connection
+        self.dict_rows = dict_rows
         self.current = None
 
     def execute(self, query, params=None):
         self.connection.executions.append((" ".join(query.split()), params))
         if "INSERT INTO stime" in query:
             self.current = (501,)
+        elif "FROM agencies" in query:
+            if self.connection.default_agency_missing:
+                self.current = None
+            else:
+                self.current = (
+                    {"id": DEFAULT_AGENCY_ID} if self.dict_rows else (DEFAULT_AGENCY_ID,)
+                )
         else:
             self.current = None
 
@@ -405,14 +437,15 @@ class LegacyCursor:
 
 
 class LegacyConnection:
-    def __init__(self):
+    def __init__(self, default_agency_missing=False):
         self.executions = []
         self.commit_count = 0
         self.closed_cursor = False
         self.closed = False
+        self.default_agency_missing = default_agency_missing
 
-    def cursor(self, **_kwargs):
-        return LegacyCursor(self)
+    def cursor(self, **kwargs):
+        return LegacyCursor(self, dict_rows="cursor_factory" in kwargs)
 
     def commit(self):
         self.commit_count += 1

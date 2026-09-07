@@ -550,8 +550,14 @@ def test_g6_public_stima_remains_server_originated():
     from core import repository
 
     source = inspect.getsource(repository.bridge_public_stima)
-    assert "system_context_for_public_stima(cur)" in source
     assert "require_operator" not in source
+
+    # P26-2B2B-R1: the scope is resolved by the public writer and passed in,
+    # so "server-originated" is now proved by what the bridge *accepts* rather
+    # than by what it builds: a SystemAgencyContext, which only the factory can
+    # produce, and nothing else.
+    assert "system_ctx" in inspect.signature(repository.bridge_public_stima).parameters
+    assert "SystemAgencyContext" in source, source
 
     # The origin literal lives in the factory, which is the only place a
     # SystemAgencyContext can be built.

@@ -42,14 +42,25 @@ from integration_p2_support import import_project_module
 #     tests/test_public_stima_core_crm_bridge.py's LegacyConnection/Cursor ---
 
 class LegacyCursor:
-    def __init__(self, connection):
+    # P26-2B2B: salva_stima resolves the Default Agency on this connection
+    # before inserting, so the fake answers that lookup. It honours
+    # cursor_factory the way psycopg2 does - dict rows for the factory, which
+    # reads row["id"], tuple rows for the INSERT, which reads fetchone()[0].
+    def __init__(self, connection, *, dict_rows=False):
         self.connection = connection
+        self.dict_rows = dict_rows
         self.current = None
 
     def execute(self, query, params=None):
         self.connection.executions.append((" ".join(query.split()), params))
         if "INSERT INTO stime" in query:
             self.current = (self.connection.stima_id,)
+        elif "FROM agencies" in query:
+            agency_id = self.connection.agency_id
+            if agency_id is None:
+                self.current = None
+            else:
+                self.current = {"id": agency_id} if self.dict_rows else (agency_id,)
         else:
             self.current = None
 
@@ -61,13 +72,14 @@ class LegacyCursor:
 
 
 class LegacyConnection:
-    def __init__(self, stima_id=501):
+    def __init__(self, stima_id=501, agency_id=1):
         self.stima_id = stima_id
+        self.agency_id = agency_id
         self.executions = []
         self.commit_count = 0
 
-    def cursor(self, **_kwargs):
-        return LegacyCursor(self)
+    def cursor(self, **kwargs):
+        return LegacyCursor(self, dict_rows="cursor_factory" in kwargs)
 
     def commit(self):
         self.commit_count += 1

@@ -506,17 +506,48 @@ def test_a3_the_system_context_registry_stays_singular():
     assert SYSTEM_CONTEXT_FUNCTIONS == frozenset({"bridge_public_stima"})
 
 
-def test_a4_the_bridge_builds_its_scope_as_its_first_statement():
-    """A4: inside the cursor block, before anything else can run unscoped."""
+def test_a4_the_bridge_validates_its_scope_before_it_opens_a_cursor():
+    """A4, after P26-2B2B-R1: the scope arrives, so it must be *checked*.
+
+    The rule used to require the scope to be built as the first statement
+    inside the cursor block, so nothing could run unscoped. The bridge no
+    longer builds one - the public writer resolves it once and passes it down,
+    so the estimation and its CORE records share a single decision.
+
+    The property therefore moves outward and gets stricter: the context is
+    validated before the transaction opens at all. Nothing runs unscoped, and
+    nothing runs under a scope this function has not accepted.
+    """
     tree = ast.parse(REPOSITORY.read_text(encoding="utf-8"))
     bridge = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "bridge_public_stima"
     )
+
     with_blocks = [node for node in ast.walk(bridge) if isinstance(node, ast.With)]
     assert with_blocks, "bridge_public_stima opens no cursor"
-    first = ast.unparse(with_blocks[0].body[0])
-    assert "system_context_for_public_stima(cur)" in first, first
+
+    # Every guard must sit above the cursor block in the function body.
+    cursor_line = with_blocks[0].lineno
+    raises = [
+        node for node in ast.walk(bridge)
+        if isinstance(node, ast.Raise) and node.lineno < cursor_line
+    ]
+    assert len(raises) >= 2, (
+        "the bridge admits its scope without checking both its type and its origin"
+    )
+
+    guard = ast.unparse(
+        ast.Module(
+            body=[s for s in bridge.body if s.lineno < cursor_line], type_ignores=[]
+        )
+    )
+    assert "SystemAgencyContext" in guard, guard
+    assert "origin" in guard, guard
+    assert "require_agency()" in guard, guard
+
+    # And it must not have quietly regained a resolution of its own.
+    assert "system_context_for_public_stima" not in ast.unparse(bridge)
 
 
 def test_a5_the_repository_never_reads_agency_from_the_payload():

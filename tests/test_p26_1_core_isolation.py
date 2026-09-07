@@ -710,38 +710,72 @@ def test_d7_bound_platform_admin_is_scoped_like_anyone_else(cur):
 # D8 - SystemAgencyContext
 # ---------------------------------------------------------------------------
 
-def test_d8_the_bridge_builds_its_own_system_context_first(monkeypatch):
-    """The bridge is the one function that creates a scope instead of taking one."""
-    recorder = install(monkeypatch, RecordingCursor(rows=[{"id": 99}, None, None, None]))
-    repository.bridge_public_stima(1, {"display_name": None}, {}, "related")
-    assert "FROM agencies" in recorder.calls[0].sql
-    assert "slug = %s" in recorder.calls[0].sql
+def test_d8_the_bridge_opens_no_agency_lookup_of_its_own(monkeypatch):
+    """P26-2B2B-R1: the bridge receives a scope instead of resolving one.
+
+    It used to build its own `SystemAgencyContext` here, which meant a public
+    estimation resolved the Default Agency twice - once for `stime.agency_id`
+    and again, in a later transaction, for its contact and lead. Two lookups
+    are two decisions, and they can disagree. Now the writer decides once and
+    the context travels, so this asserts the second lookup is *gone*.
+    """
+    recorder = install(monkeypatch, RecordingCursor(rows=[None, None, None]))
+    repository.bridge_public_stima(
+        1, {"display_name": None}, {}, "related", system_ctx=system_ctx()
+    )
+    assert not [c for c in recorder.calls if "FROM agencies" in c.sql], recorder.calls
 
 
 def test_d8_the_bridge_scopes_its_identity_lookups(monkeypatch):
     recorder = install(
         monkeypatch,
         RecordingCursor(
-            # agencies -> lead_stime (absent) -> INSERT contact -> INSERT lead
-            # -> INSERT link
-            rows=[{"id": 99}, None, {"id": 5}, {"id": 6}, {"id": 7}],
+            # lead_stime (absent) -> INSERT contact -> INSERT lead -> INSERT link
+            rows=[None, {"id": 5}, {"id": 6}, {"id": 7}],
             rowsets=[[], []],
         ),
     )
     repository.bridge_public_stima(
-        1, {"display_name": "X", "email_normalized": "a@b.c"}, {}, "related"
+        1,
+        {"display_name": "X", "email_normalized": "a@b.c"},
+        {},
+        "related",
+        system_ctx=system_ctx(),
     )
     lookups = [c for c in recorder.calls if "email_normalized" in c.sql and "SELECT" in c.sql]
     assert lookups, "the identity lookup did not run"
     for lookup in lookups:
         assert "agency_id = %s" in lookup.sql, lookup
-        assert 99 in lookup.bound, lookup
+        assert AGENCY in lookup.bound, lookup
 
 
-def test_d8_a_missing_default_agency_fails_the_bridge_closed(monkeypatch):
-    install(monkeypatch, RecordingCursor(rows=[None]))
-    with pytest.raises(ConflictError):
-        repository.bridge_public_stima(1, {"display_name": "X"}, {}, "related")
+def test_d8_the_bridge_fails_closed_on_a_scope_it_will_not_accept(monkeypatch):
+    """Fail-closed moved with the resolution, it did not disappear.
+
+    A missing Default Agency is now caught in the writer, before any row is
+    written (tests/test_p26_2b_public_stima_writer.py, group B3). What the
+    bridge must still refuse is being handed something that is not the public
+    flow's own server-built scope - otherwise threading the context would just
+    relocate the authority to whoever calls it.
+    """
+    recorder = install(monkeypatch, RecordingCursor(rows=[None, None, None]))
+
+    class LookAlike:
+        agency_id = 999
+        origin = "public_stima"
+        role = None
+        user_id = None
+        is_platform_admin = False
+
+        def require_agency(self):
+            return self.agency_id
+
+    for hostile in (LookAlike(), None, owner_ctx()):
+        with pytest.raises(ProgrammingError):
+            repository.bridge_public_stima(
+                1, {"display_name": "X"}, {}, "related", system_ctx=hostile
+            )
+    assert not recorder.calls, "the bridge issued SQL under a rejected scope"
 
 
 def test_d8_system_context_gets_no_assignment_filter(cur):

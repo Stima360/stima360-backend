@@ -13,11 +13,13 @@ table without carrying its scope. The SQL below stays plain and greppable:
 guard is the security property proved in tests/test_p26_1_core_isolation.py,
 not a ban on table literals.
 
-Three public functions deliberately do not take a scope:
+Three public functions deliberately do not take an *operator* scope:
 
-* `bridge_public_stima` builds its own `SystemAgencyContext` from the cursor -
-  it serves an unauthenticated caller, so there is no scope to receive. It is
-  the single member of `SYSTEM_CONTEXT_FUNCTIONS`.
+* `bridge_public_stima` takes a `SystemAgencyContext` instead - it serves an
+  unauthenticated caller, so there is no operator scope to receive. The public
+  writer resolves that context once and passes it here, so the estimation and
+  the CORE records it produces share a single ownership decision (P26-2B2B-R1).
+  It is the single member of `SYSTEM_CONTEXT_FUNCTIONS`.
 * `create_activity_with_cursor` and `create_task_with_cursor` accept an
   *optional* `ctx`. Three P17-P25-certified modules call them with
   `(cur, data)` inside their own transaction and are explicitly unmodified in
@@ -39,17 +41,24 @@ from operator_auth.repository import membership_exists
 
 from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, ValidationError
+from operator_auth.context import SystemAgencyContext
+
 from .scope import (
     ProgrammingError,
     scoped_predicate,
     scoped_source,
-    system_context_for_public_stima,
 )
 
 # Columns that record where a row came from. They are written from the scope,
 # never from a payload, so a caller cannot place a record in another agency or
 # attribute it to another operator.
 SERVER_OWNED_COLUMNS = ("agency_id", "created_by_user_id")
+
+# The only origin `bridge_public_stima` will act under. Declared here rather
+# than imported so core/scope.py keeps the origin literal it was certified with;
+# a test pins this to what the factory actually produces, so the two cannot
+# drift apart.
+PUBLIC_STIMA_ORIGIN = "public_stima"
 
 
 def _row(row):
@@ -404,15 +413,40 @@ def bridge_public_stima(
     contact_data: dict[str, Any],
     lead_data: dict[str, Any],
     relation_type: str,
+    *,
+    system_ctx: SystemAgencyContext,
 ) -> dict[str, Any]:
     """Atomically reconcile one public stima with its dedicated CORE lead.
 
-    The single member of `SYSTEM_CONTEXT_FUNCTIONS`. Its caller is an
-    unauthenticated public estimation, so there is no scope to receive: it
-    builds a `SystemAgencyContext` from the cursor as the first statement in
-    the transaction, and every subsequent read and write goes through the same
-    builder every authenticated caller uses.
+    The single member of `SYSTEM_CONTEXT_FUNCTIONS`: it runs under a
+    `SystemAgencyContext` rather than an operator's scope, because its caller is
+    an unauthenticated public estimation.
+
+    P26-2B2B-R1: that context is *received*, not built here. The writer resolves
+    the Default Agency once, on its own connection, and stamps `stime.agency_id`
+    with it; the same object then travels here so the contact and the lead land
+    in the agency the estimation already belongs to. Resolving a second time
+    would be a second, independent decision - two lookups in two transactions,
+    which can disagree if the Default Agency changes between them, and nothing
+    in the schema would catch a stima whose lead lives elsewhere.
+
+    Receiving a scope is not the same as trusting one. `system_ctx` is admitted
+    only if it is a `SystemAgencyContext` carrying this flow's origin, so no
+    caller can substitute an operator's scope, a look-alike object, or a
+    context built for some other system flow. The guard runs before the cursor
+    opens: nothing unscoped executes, and nothing executes at all under a scope
+    this function did not accept.
     """
+    if type(system_ctx) is not SystemAgencyContext:
+        raise ProgrammingError(
+            "bridge_public_stima requires a SystemAgencyContext, "
+            f"received {type(system_ctx).__name__}"
+        )
+    if system_ctx.origin != PUBLIC_STIMA_ORIGIN:
+        raise ProgrammingError(
+            f"bridge_public_stima refuses a context with origin {system_ctx.origin!r}"
+        )
+    system_ctx.require_agency()
 
     def result(status, contact_id=None, lead_id=None, *, reason=None, contact_created=False, lead_created=False):
         value = {
@@ -428,7 +462,7 @@ def bridge_public_stima(
         return value
 
     with core_cursor(commit=True) as (_, cur):
-        ctx = system_context_for_public_stima(cur)
+        ctx = system_ctx
         lead_predicate, lead_scope = scoped_predicate(ctx, "leads", "l")
         contact_source, contact_scope = scoped_source(ctx, "contacts", "c")
 

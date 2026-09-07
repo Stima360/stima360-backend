@@ -11,6 +11,7 @@ from datetime import datetime, date, timedelta, timezone
 import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
+from psycopg2.extras import RealDictCursor
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from valuation import BASE_MQ
@@ -18,6 +19,7 @@ from urllib.parse import urlencode
 from admin_security import require_admin
 from core import service as core_service
 from core.router import router as core_router
+from core.scope import system_context_for_public_stima
 from operator_auth.dependencies import require_operator
 from operator_auth.router import router as operator_auth_router
 from property.router import router as property_router
@@ -500,14 +502,35 @@ async def salva_stima(request: Request):
     # --- 4. Salva stima base ---
     conn = get_connection(); cur = conn.cursor()
     try:
+        # P26-2B2B: this endpoint is anonymous, so the owning agency cannot come
+        # from the caller. It is resolved server-side from the Default Agency
+        # slug by the factory already certified in P26-1 - the same factory the
+        # CORE bridge below resolves through, so the stima and the contact and
+        # lead it produces cannot end up in different agencies.
+        #
+        # Resolved on this connection, therefore inside the transaction the
+        # INSERT below commits: the agency is proven to exist and to be active
+        # at the moment the row is written, not merely at some earlier point.
+        #
+        # The factory reads its row by name, so it needs a dict cursor;
+        # get_connection() hands out tuple cursors. A second cursor on the same
+        # connection is the whole adaptation - a second *connection* would
+        # reintroduce the gap this ordering exists to close.
+        agency_cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            system_ctx = system_context_for_public_stima(agency_cur)
+        finally:
+            try: agency_cur.close()
+            except: pass
+
         comune_db = normalizza_comune(data["comune"]) or data["comune"]
-    
+
         cur.execute("""
              INSERT INTO stime
              (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
               bagni, pertinenze, ascensore, nome, cognome, email, telefono,
-              consenso_marketing, consenso_marketing_at)
-              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+              consenso_marketing, consenso_marketing_at, agency_id)
+              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
               RETURNING id
         """, (
             comune_db, data["microzona"], data["fascia_mare"],
@@ -515,10 +538,13 @@ async def salva_stima(request: Request):
             data["mq"], data["piano"], data["locali"], data["bagni"],
             data["pertinenze"], data["ascensore"],
             data["nome"], data["cognome"], data["email"], data["telefono"],
-            consenso_marketing, consenso_marketing_at
+            consenso_marketing, consenso_marketing_at,
+            system_ctx.require_agency()
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore INSERT DB: {e}")
     finally:
@@ -535,6 +561,9 @@ async def salva_stima(request: Request):
             phone=data["telefono"],
             marketing_consent=consenso_marketing,
             marketing_consent_at=consenso_marketing_at,
+            # The context resolved above, not a fresh lookup: the contact and
+            # the lead must land in the agency this stima already carries.
+            system_ctx=system_ctx,
         )
         bridge_log = logger.warning if bridge_result["status"] in {"conflict", "skipped"} else logger.info
         bridge_log(

@@ -131,7 +131,16 @@ def bridge_public_stima(
     phone,
     marketing_consent,
     marketing_consent_at,
+    system_ctx,
 ):
+    """Shape one public estimation into CORE contact and lead data.
+
+    `system_ctx` is the `SystemAgencyContext` the public writer already
+    resolved and stamped on the stima. It is threaded straight through to the
+    repository, unread and unmodified: this layer decides what the records
+    look like, never which agency they belong to (P26-2B2B-R1).
+    """
+
     def clean(value):
         if value is None:
             return None
@@ -177,6 +186,7 @@ def bridge_public_stima(
         contact_data,
         lead_data,
         "related",
+        system_ctx=system_ctx,
     )
 
 

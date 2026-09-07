@@ -272,18 +272,23 @@ def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypat
             }
 
     class Cursor:
+        # P26-2B2B: honours cursor_factory the way psycopg2 does, so the
+        # Default Agency lookup salva_stima now performs gets a dict row.
+        def __init__(self, dict_rows=False):
+            self.dict_rows = dict_rows
+
         def execute(self, _query, _params=None):
             pass
 
         def fetchone(self):
-            return (501,)
+            return {"id": 1} if self.dict_rows else (501,)
 
         def close(self):
             pass
 
     class Connection:
-        def cursor(self, **_kwargs):
-            return Cursor()
+        def cursor(self, **kwargs):
+            return Cursor(dict_rows="cursor_factory" in kwargs)
 
         def commit(self):
             pass
