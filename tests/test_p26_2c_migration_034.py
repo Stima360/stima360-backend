@@ -26,10 +26,19 @@ Ownership matrix (P26-2C, approved):
     property_visits     CHILD-DERIVED  -> must NOT get one
     property_price_history   CHILD-DERIVED
     property_status_history  CHILD-DERIVED
-    property_watches         CHILD-DERIVED
-    property_watch_observations  CHILD-DERIVED
 
-The nine children are asserted as *absences* below. The cheapest way for a
+CANONICAL ARCHITECTURAL DECISION & HISTORICAL 034 ERRATA:
+The canonical PROPERTY child-derived tables are EXACTLY the seven above.
+P20:
+    property_watches             ROOT-OWNED P20
+    property_watch_observations  CHILD-DERIVED from property_watches
+The comment block inside migrations/034_p26_property_agency_columns.sql
+(lines 18-21) that lists property_watches and property_watch_observations
+as "CHILD-DERIVED" belonging to PROPERTY is historical documentation errata.
+Migration 034 is immutable and must not be altered byte-for-byte, but that
+comment is NOT the canonical architectural source for P20.
+Both P20 tables are completely out of scope for PROPERTY.
+The seven children are asserted as *absences* below. The cheapest way for a
 migration like this to go wrong is to quietly do more than it was scoped to do,
 and an agency column on a child table would be a second copy of the same fact -
 one more thing to keep consistent, and one more place for the two to disagree.
@@ -80,6 +89,7 @@ FK_NAME = "properties_agency_id_fk"
 INDEX_NAME = "idx_properties_agency_id"
 
 # Every PROPERTY child in the approved matrix. None may gain an agency column.
+# P20 tables (property_watches, property_watch_observations) are out of scope.
 CHILD_TABLES = (
     "property_contacts",
     "property_leads",
@@ -88,8 +98,6 @@ CHILD_TABLES = (
     "property_visits",
     "property_price_history",
     "property_status_history",
-    "property_watches",
-    "property_watch_observations",
 )
 
 
@@ -416,8 +424,49 @@ def test_k8_only_properties_is_altered():
     assert altered == {TABLE}, altered
 
 
-def test_k8_no_035_exists():
-    assert not list(MIGRATIONS.glob("035*.sql")), "this block ships no 035"
+def test_k8_property_children_exact_seven():
+    """Anti-regression: PROPERTY child-derived tables are exactly the approved 7.
+
+    P20 (property_watches = ROOT-OWNED P20, property_watch_observations =
+    CHILD-DERIVED from property_watches) is out of scope for PROPERTY.
+    """
+    assert len(CHILD_TABLES) == 7, f"expected exactly 7 child tables, found {len(CHILD_TABLES)}"
+    assert CHILD_TABLES == (
+        "property_contacts",
+        "property_leads",
+        "property_documents",
+        "property_photos",
+        "property_visits",
+        "property_price_history",
+        "property_status_history",
+    )
+    assert "property_watches" not in CHILD_TABLES
+    assert "property_watch_observations" not in CHILD_TABLES
+
+
+def test_k8_034_historical_errata_documented_and_p20_unmodified():
+    """034 comment contains historical documentation errata mentioning P20.
+
+    034 SQL is immutable and kept byte-identical. This test documents that:
+    1. The comment in 034 mentioning property_watches is recognized as historical errata;
+    2. 034 SQL executes NO DDL against property_watches or property_watch_observations;
+    3. Neither table is altered or given an agency_id column by 034.
+    """
+    raw_sql = UP_PATH.read_text(encoding="utf-8")
+    assert "property_watches" in raw_sql
+    assert "property_watch_observations" in raw_sql
+
+    up_code = _squash(_strip_sql_strings(_up()))
+    assert not re.search(r"ALTER\s+TABLE\s+property_watch", up_code, re.IGNORECASE)
+    assert not re.search(r"CREATE\s+(?:TABLE|INDEX|TRIGGER)\s+.*?property_watch", up_code, re.IGNORECASE)
+
+
+def test_k8_036_now_exists():
+    """036 enforcement was shipped; confirm both files are present."""
+    assert (MIGRATIONS / "036_p26_property_agency_enforce.sql").exists(), \
+        "036 UP missing - enforcement block not yet materialized"
+    assert (MIGRATIONS / "036_p26_property_agency_enforce_down.sql").exists(), \
+        "036 DOWN missing - enforcement block not yet materialized"
 
 
 def test_k8_no_runtime_property_file_changed():
