@@ -145,6 +145,13 @@ def create_feedback(a,p,d):
   access=c.fetchone()
   if not access:raise NotFoundError(NF)
   contact_id=access['contact_id']
+  # P26-6C: the owner account's tenant, read on the same cursor and inside the
+  # same transaction as the row it will stamp. This is the OWNER chain the
+  # architecture settles - owner_account -> contact -> agency - resolved here
+  # because this is the only layer that knows it. It is a read, not a
+  # migration: no OWNER table or route changes in this slice.
+  c.execute("SELECT agency_id FROM contacts WHERE id=%s",(contact_id,))
+  owner_agency=one(c)['agency_id']
   c.execute(
       """INSERT INTO owner_feedback(
              owner_account_id,property_id,feedback_type,subject,message,status,submitted_at,
@@ -194,7 +201,7 @@ def create_feedback(a,p,d):
           'linked_activity_id':activity['id'],
       },
       'occurred_at':r['submitted_at'],
-  })
+  },agency_id=owner_agency)
   _audit_with_cursor(c,'feedback_submitted',a,p,'owner_feedback',r['id'])
  result=_public_feedback(r)
  process_saved_owner_request_event(flow_event['id'])

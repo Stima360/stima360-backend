@@ -434,12 +434,17 @@ def test_g4_the_operator_auth_router_carries_no_router_level_auth():
 # AGENCY_SCOPED_LEGACY_BASIC_ROUTERS below and excluded from this residual - and
 # the exclusion is earned by a static proof on every route, re-run on each
 # execution, not granted by being named.
-FROZEN_LEGACY_BASIC_CORE_READERS = {
-    # get_contact_360 -> core.service get_contact/list_leads/list_activities/
-    # list_tasks. Scoped since Task 11, so it is Default-Agency-bound on this
-    # channel, and unscoped for the non-CORE modules it also reads.
-    "crm_router",
-}
+# Empty since P26-6C. Every router that reads a CORE table over legacy Basic
+# now proves, from its own AST on every run, that all of its routes take an
+# agency context.
+#
+# An empty residual is not the same claim as a closed GATE-MA1, and this file
+# has never measured the wider one: it sees routers mounted behind
+# `require_admin`, so it cannot see FLOW and OWNER, which authenticate
+# themselves, and it cannot see the `@app` routes declared in main.py at all.
+# Those are enumerated and frozen in tests/test_p26_6c_backend_gate_closure.py,
+# and while that set is populated the gate stays OPEN.
+FROZEN_LEGACY_BASIC_CORE_READERS = set()
 
 # P26-6A removed `followup_router` from the residual above. That is the
 # deliberate spec change this file asks for when the set shrinks, and it arrives
@@ -449,6 +454,16 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
 # trigger. The exemption is still recomputed on every run - see
 # AGENCY_SCOPED_LEGACY_BASIC_ROUTERS - so if the route ever loses its context,
 # followup reappears here as "added".
+#
+# P26-6C removes `crm_router`, the last entry, on the same terms - and CRM
+# earned it differently from every router before it. CRM owns no table, so
+# there was no migration that could have helped: the whole of its isolation is
+# which surface it calls and what it passes. Four of its eight reads took the
+# context already; PROPERTY and VISITS now get it as an argument, and BUY and
+# MATCH are called through `list_requests_scoped` / `list_matches_scoped`
+# instead of their legacy twins. The match loop and the buy read had to move
+# together - a scoped match query handed a foreign request id returns that
+# request's matches perfectly correctly.
 #
 # P26-6B removes `next_best_action_router` on the same terms, and it is worth
 # stating what "earned" means here, because this router reads CORE on its
@@ -506,6 +521,11 @@ AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
     # route here is a surface change that has to be made deliberately, even if
     # it is correctly scoped.
     "next_best_action_router": ("next_best_action", 3),
+    # P26-6C. One route, taking legacy_basic_agency_context, and all eight of
+    # its downstream reads now taking the same context object. The count is
+    # pinned at 1: CRM is a single aggregate view, and a second route here
+    # would be a new tenant surface that has to be argued for.
+    "crm_router": ("crm", 1),
 }
 
 AGENCY_CONTEXT_DEPENDENCY = "legacy_basic_agency_context"
@@ -849,9 +869,7 @@ def test_g7_clause_c_the_basic_surface_is_frozen_and_acknowledged():
     change to the residual has to be made twice, deliberately, in two places -
     which is what stops it drifting quietly in either direction.
     """
-    assert FROZEN_LEGACY_BASIC_CORE_READERS == {
-        "crm_router",
-    }
+    assert FROZEN_LEGACY_BASIC_CORE_READERS == set()
 
 
 def test_g7_no_claim_is_made_that_search_is_scoped_under_legacy_basic():
@@ -976,7 +994,13 @@ def test_g8_crm_synthesizes_no_context_of_its_own():
 
 def test_g8_the_crm_scope_is_agency_bound_and_reaches_core_scoped(monkeypatch):
     """End to end at the service layer: the ctx the route supplies is the ctx
-    the four CORE reads receive, and it is Default-Agency-bound."""
+    every read receives, and it is Default-Agency-bound.
+
+    P26-6C widened this from four to eight. Through P26-6B only the CORE reads
+    took a context and the assertion was written around them; the other four
+    are what put crm_router in the residual, so proving they take it now is the
+    same proof this test always was, applied to the whole aggregate.
+    """
     from core import service as core_service
     from crm import service as crm_service
     from operator_auth.context import OperatorContext
@@ -991,15 +1015,17 @@ def test_g8_the_crm_scope_is_agency_bound_and_reaches_core_scoped(monkeypatch):
     monkeypatch.setattr(crm_service, "list_leads", lambda c, *a: seen.append(("list_leads", c)) or [])
     monkeypatch.setattr(crm_service, "list_activities", lambda c, *a: seen.append(("list_activities", c)) or [])
     monkeypatch.setattr(crm_service, "list_tasks", lambda c, *a: seen.append(("list_tasks", c)) or [])
-    monkeypatch.setattr(crm_service, "list_properties", lambda *a, **k: [])
-    monkeypatch.setattr(crm_service, "list_buy_requests", lambda *a, **k: [])
-    monkeypatch.setattr(crm_service, "list_matches", lambda *a, **k: [])
-    monkeypatch.setattr(crm_service, "list_visits_by_contact", lambda i: [])
+    monkeypatch.setattr(crm_service, "list_properties", lambda c, *a, **k: seen.append(("list_properties", c)) or [])
+    monkeypatch.setattr(crm_service, "list_requests_scoped", lambda c, *a, **k: seen.append(("list_requests_scoped", c)) or [{"id": 30}])
+    monkeypatch.setattr(crm_service, "list_matches_scoped", lambda c, *a, **k: seen.append(("list_matches_scoped", c)) or [])
+    monkeypatch.setattr(crm_service, "list_visits_by_contact", lambda c, i: seen.append(("list_visits_by_contact", c)) or [])
 
     crm_service.get_contact_360(ctx, 7)
 
     assert {name for name, _ in seen} == {
-        "get_contact", "list_leads", "list_activities", "list_tasks"
+        "get_contact", "list_leads", "list_activities", "list_tasks",
+        "list_properties", "list_requests_scoped", "list_matches_scoped",
+        "list_visits_by_contact",
     }, seen
     for name, forwarded in seen:
         assert forwarded is ctx, name
@@ -1023,6 +1049,14 @@ def test_g8_a_missing_default_agency_fails_crm_closed():
         resolve_default_agency_id(_EmptyCursor())
 
 
-def test_g8_crm_remains_in_the_frozen_legacy_basic_surface():
-    assert "crm_router" in FROZEN_LEGACY_BASIC_CORE_READERS
+def test_g8_crm_has_left_the_frozen_legacy_basic_surface():
+    """The inverse of what this test asserted through P26-6B.
+
+    CRM is still mounted behind Basic - that has not changed and is not what
+    the exemption is about. What changed is that its route, and every read
+    beneath it, now carries an agency context, which `_is_fully_agency_scoped`
+    re-derives from the router's AST on every run.
+    """
+    assert "crm_router" not in FROZEN_LEGACY_BASIC_CORE_READERS
     assert _include_router_calls()["crm_router"] == "[Depends(require_admin)]"
+    assert _is_fully_agency_scoped("crm_router")

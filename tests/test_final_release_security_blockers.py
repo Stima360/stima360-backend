@@ -29,12 +29,16 @@ class FakeCursor:
         self.description = []
         self.executions = []
         self.closed = False
+        self.rowcount = 1
 
     def execute(self, query, params=None):
         self.executions.append((query, params))
 
     def fetchall(self):
         return []
+
+    def fetchone(self):
+        return None
 
     def close(self):
         self.closed = True
@@ -46,7 +50,10 @@ class FakeConnection:
         self.commit_count = 0
         self.closed = False
 
-    def cursor(self):
+    # P26-6C: the admin routes now ask for a RealDictCursor in places, so this
+    # accepts the kwarg. The double is shape-agnostic - it returns no rows -
+    # so one instance still serves both.
+    def cursor(self, *_args, **_kwargs):
         return self.cursor_instance
 
     def commit(self):
@@ -70,6 +77,33 @@ def client(main_module):
 def admin_env(monkeypatch):
     monkeypatch.setenv("ADMIN_USER", ADMIN_USER)
     monkeypatch.setenv("ADMIN_PASS", ADMIN_PASS)
+
+
+@pytest.fixture
+def agency_scope(main_module):
+    """P26-6C: the six admin routes resolve an agency server-side.
+
+    These tests are about the Basic guard, not about scoping, so the DB-backed
+    resolution is overridden the way every other P26 suite overrides it. The
+    Basic guard itself stays real - the 401 assertions still mean what they
+    meant, and `test_legacy_admin_routes_reject_anonymous_before_business_logic`
+    deliberately does NOT use this fixture, so the anonymous path is still
+    proved to reach no database at all.
+    """
+    from operator_auth.context import OperatorContext
+
+    main_module.app.dependency_overrides[
+        main_module.legacy_basic_agency_context
+    ] = lambda: OperatorContext(
+        user_id=None, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    try:
+        yield
+    finally:
+        main_module.app.dependency_overrides.pop(
+            main_module.legacy_basic_agency_context, None
+        )
 
 
 def _request(client, method, path, payload, **kwargs):
@@ -112,6 +146,7 @@ def test_legacy_admin_routes_are_reachable_with_valid_credentials(
     client,
     main_module,
     admin_env,
+    agency_scope,
     monkeypatch,
     method,
     path,

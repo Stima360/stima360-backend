@@ -62,13 +62,19 @@ def update_parameters(code, parameters, updated_by=None):
 
 def reset_parameters(code): return update_parameters(code,get_rule(code).default_parameters)
 
-def record_simulation(code, entity_type, entity_id, matched, reasons, action, requested_by=None, error=None):
+def record_simulation(code, entity_type, entity_id, matched, reasons, action, requested_by=None, error=None, *, agency_id):
+    """P26-6C: `agency_id` is keyword-only and has no default.
+
+    Every FLOW write stamps the tenant, and forgetting it is a TypeError here
+    rather than a NULL that 054's NOT NULL rejects one layer down with a far
+    worse message. Same discipline as P26-6B's collect_internal_supply_change.
+    """
     row=get_rule_row(code,synchronize=False); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
     status='failed' if error else ('matched' if matched else 'not_matched')
     with core_cursor(commit=True) as (_,cur):
-        cur.execute("""INSERT INTO flow_executions(rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
-            VALUES(%s,%s,%s,'simulation',%s,%s,%s,%s,%s,%s,%s,0,%s,NOW(),NOW(),NOW()) RETURNING *""",
-            (row['id'],entity_type,entity_id,status,Json({'matched':matched,'reasons':reasons}),Json({'planned_action':action}),rule.version,Json(p),h,error,MAX_RETRY))
+        cur.execute("""INSERT INTO flow_executions(agency_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
+            VALUES(%s,%s,%s,%s,'simulation',%s,%s,%s,%s,%s,%s,%s,0,%s,NOW(),NOW(),NOW()) RETURNING *""",
+            (agency_id,row['id'],entity_type,entity_id,status,Json({'matched':matched,'reasons':reasons}),Json({'planned_action':action}),rule.version,Json(p),h,error,MAX_RETRY))
         execution=dict(cur.fetchone())
         cur.execute("""UPDATE flow_rules SET last_simulation_at=NOW(),last_simulation_status=%s,last_simulation_execution_id=%s,
             last_simulation_parameters_hash=%s,last_simulation_rule_version=%s,updated_at=NOW() WHERE id=%s""",
@@ -86,18 +92,26 @@ def deactivate(code):
     row=get_rule_row(code)
     with core_cursor(commit=True) as (_,cur): cur.execute("UPDATE flow_rules SET is_active=FALSE,updated_at=NOW() WHERE id=%s RETURNING *",(row['id'],)); return dict(cur.fetchone())
 
-def add_event_with_cursor(cur, data):
+def add_event_with_cursor(cur, data, *, agency_id):
+    """P26-6C: the event carries the tenant it was raised for.
+
+    `deduplication_key` stays a GLOBAL unique key. Its components already name
+    a specific entity id, and entity ids come from tenant-owned tables on a
+    single sequence, so two agencies cannot collide on one - widening it with
+    the agency would not add isolation, it would weaken the dedup by letting
+    the same occurrence through twice.
+    """
     key=data.get('deduplication_key') or f"{data['event_type']}:{data['entity_type']}:{data['entity_id']}:{datetime.now(timezone.utc).strftime('%Y%m%d%H')}"
-    cur.execute("""INSERT INTO flow_events(event_type,entity_type,entity_id,source_module,payload,deduplication_key,status,occurred_at,received_at)
-        VALUES(%s,%s,%s,%s,%s,%s,'received',COALESCE(%s,NOW()),NOW()) ON CONFLICT(deduplication_key) DO UPDATE SET received_at=flow_events.received_at RETURNING *""",
-        (data['event_type'],data['entity_type'],data['entity_id'],data['source_module'],Json(data.get('payload') or {}),key,data.get('occurred_at')))
+    cur.execute("""INSERT INTO flow_events(agency_id,event_type,entity_type,entity_id,source_module,payload,deduplication_key,status,occurred_at,received_at)
+        VALUES(%s,%s,%s,%s,%s,%s,%s,'received',COALESCE(%s,NOW()),NOW()) ON CONFLICT(deduplication_key) DO UPDATE SET received_at=flow_events.received_at RETURNING *""",
+        (agency_id,data['event_type'],data['entity_type'],data['entity_id'],data['source_module'],Json(data.get('payload') or {}),key,data.get('occurred_at')))
     return dict(cur.fetchone())
 
-def add_event(data):
+def add_event(data, *, agency_id):
     key=data.get('deduplication_key') or f"{data['event_type']}:{data['entity_type']}:{data['entity_id']}:{datetime.now(timezone.utc).strftime('%Y%m%d%H')}"
     prepared={**data,'deduplication_key':key}
     with core_cursor(commit=True) as (_,cur):
-        return add_event_with_cursor(cur,prepared)
+        return add_event_with_cursor(cur,prepared,agency_id=agency_id)
 
 def get_event(event_id):
     with core_cursor() as (_,cur):
@@ -170,15 +184,25 @@ def _lock_and_find_rolling_cooldown(cur, rule_id, entity_type, entity_id, action
         (rule_id,entity_type,entity_id,action_type,cooldown_minutes))
     return _dict(cur.fetchone())
 
-def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=None,retry_of_execution_id=None):
+def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=None,retry_of_execution_id=None,*,agency_id):
+    """P26-6C: keyword-only, no default - see record_simulation.
+
+    054's trigger checks the two optional links from here: an execution must
+    agree with the event it came from and with the execution it retries. This
+    stamp is the first line; the trigger is the second.
+    """
     with core_cursor(commit=True) as (_,cur):
         row=_get_rule_row_with_cursor(cur,code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
         if not row['is_active']: raise ConflictError("rule is not active")
-        if _is_suppressed_with_cursor(cur,row['id'],entity['entity_type'],entity['entity_id']):
+        # P26-6C: the suppression probe is scoped. A suppression is a decision
+        # this agency made, not a fact about the entity - agency B silencing a
+        # rule must not silence it for agency A, and the unscoped probe did
+        # exactly that while returning no foreign row.
+        if _is_suppressed_with_cursor_for_agency(cur,row['id'],entity['entity_type'],entity['entity_id'],agency_id):
             matched=False; reasons=[*reasons,'soppressione attiva']
-        cur.execute("""INSERT INTO flow_executions(event_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,retry_count,max_retry,retry_of_execution_id,started_at,created_at)
-            VALUES(%s,%s,%s,%s,'live',%s,%s,%s,%s,%s,%s,0,%s,%s,NOW(),NOW()) RETURNING *""",
-            (event_id,row['id'],entity['entity_type'],entity['entity_id'],'matched' if matched else 'not_matched',Json({'matched':matched,'reasons':reasons}),Json({}),rule.version,Json(p),h,MAX_RETRY,retry_of_execution_id)); ex=dict(cur.fetchone())
+        cur.execute("""INSERT INTO flow_executions(agency_id,event_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,retry_count,max_retry,retry_of_execution_id,started_at,created_at)
+            VALUES(%s,%s,%s,%s,%s,'live',%s,%s,%s,%s,%s,%s,0,%s,%s,NOW(),NOW()) RETURNING *""",
+            (agency_id,event_id,row['id'],entity['entity_type'],entity['entity_id'],'matched' if matched else 'not_matched',Json({'matched':matched,'reasons':reasons}),Json({}),rule.version,Json(p),h,MAX_RETRY,retry_of_execution_id)); ex=dict(cur.fetchone())
         if not matched:
             cur.execute("UPDATE flow_executions SET status='not_matched',completed_at=NOW() WHERE id=%s RETURNING *",(ex['id'],)); return dict(cur.fetchone())
         if rule.idempotency_scope=='cooldown':
@@ -241,12 +265,12 @@ def execute_live(code,entity,matched,reasons,action,requested_by=None,event_id=N
             cur.execute("UPDATE flow_executions SET status='failed',error_message=%s,completed_at=NOW() WHERE id=%s RETURNING *",(str(exc),ex['id']))
             return dict(cur.fetchone())
 
-def record_failure(code,entity_type,entity_id,mode,error,requested_by=None):
+def record_failure(code,entity_type,entity_id,mode,error,requested_by=None,*,agency_id):
     with core_cursor(commit=True) as (_,cur):
         row=_get_rule_row_with_cursor(cur,code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
-        cur.execute("""INSERT INTO flow_executions(rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
-            VALUES(%s,%s,%s,%s,'failed',%s,%s,%s,%s,%s,%s,0,%s,NOW(),NOW(),NOW()) RETURNING *""",
-            (row['id'],entity_type,entity_id,mode,Json({'matched':False,'reasons':[]}),Json({}),rule.version,Json(p),h,str(error),MAX_RETRY))
+        cur.execute("""INSERT INTO flow_executions(agency_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)
+            VALUES(%s,%s,%s,%s,%s,'failed',%s,%s,%s,%s,%s,%s,0,%s,NOW(),NOW(),NOW()) RETURNING *""",
+            (agency_id,row['id'],entity_type,entity_id,mode,Json({'matched':False,'reasons':[]}),Json({}),rule.version,Json(p),h,str(error),MAX_RETRY))
         return dict(cur.fetchone())
 
 def get_execution(execution_id):
@@ -271,11 +295,11 @@ def list_executions(limit=100,offset=0,status=None):
         if status: sql+=" WHERE e.status=%s"; params.append(status)
         sql+=" ORDER BY e.created_at DESC LIMIT %s OFFSET %s"; params += [limit,offset]; cur.execute(sql,params); return [dict(x) for x in cur.fetchall()]
 
-def add_suppression(data):
+def add_suppression(data, *, agency_id):
     row=get_rule_row(data['rule_code'])
     with core_cursor(commit=True) as (_,cur):
-        cur.execute("""INSERT INTO flow_suppressions(rule_id,entity_type,entity_id,reason,expires_at,created_by,created_at)
-            VALUES(%s,%s,%s,%s,%s,%s,NOW()) RETURNING *""",(row['id'],data['entity_type'],data['entity_id'],data['reason'],data.get('expires_at'),data.get('created_by'))); return dict(cur.fetchone())
+        cur.execute("""INSERT INTO flow_suppressions(agency_id,rule_id,entity_type,entity_id,reason,expires_at,created_by,created_at)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING *""",(agency_id,row['id'],data['entity_type'],data['entity_id'],data['reason'],data.get('expires_at'),data.get('created_by'))); return dict(cur.fetchone())
 
 def list_suppressions():
     with core_cursor() as (_,cur): cur.execute("SELECT s.*,r.code AS rule_code FROM flow_suppressions s JOIN flow_rules r ON r.id=s.rule_id ORDER BY s.created_at DESC"); return [dict(x) for x in cur.fetchall()]
@@ -292,3 +316,182 @@ def dashboard():
           (SELECT COUNT(*) FROM flow_executions WHERE status='skipped') skipped,
           (SELECT COUNT(*) FROM flow_action_records WHERE status='completed' AND action_type='create_core_task') tasks_created,
           (SELECT COUNT(*) FROM flow_suppressions WHERE expires_at IS NULL OR expires_at>NOW()) active_suppressions"""); return dict(cur.fetchone())
+
+
+# ---------------------------------------------------------------------------
+# P26-6C: the scoped read surface.
+#
+# The functions above are unchanged in shape - the historical FLOW tests call
+# them directly - but every write among them now requires a tenant, and none of
+# them is reachable from an HTTP route any more.
+#
+# Everything below takes a resolved `agency_id` rather than a context. FLOW's
+# router authenticates itself with `require_owner_admin` instead of being
+# mounted behind `require_admin`, so its routes resolve the compatibility
+# context themselves and hand down the integer - the same shape P26-6A and
+# P26-6B settled on for a bounded cycle.
+#
+# `flow_rules` is deliberately absent. It is the platform-global rule registry:
+# one catalogue, the same for every agency, with no tenant to scope by.
+# ---------------------------------------------------------------------------
+
+def get_execution_for_agency(execution_id, agency_id):
+    """One execution, visible only inside its own agency.
+
+    A foreign id raises the same NotFoundError an absent one would: the caller
+    learns the execution is not available to it, not that it exists elsewhere.
+    """
+    with core_cursor() as (_,cur):
+        cur.execute(
+            "SELECT e.*,r.code AS rule_code FROM flow_executions e "
+            "JOIN flow_rules r ON r.id=e.rule_id WHERE e.id=%s AND e.agency_id=%s",
+            (execution_id, agency_id),
+        )
+        row=cur.fetchone()
+        if not row: raise NotFoundError(f"flow execution {execution_id} not found")
+        return dict(row)
+
+
+def increment_retry_for_agency(execution_id, agency_id):
+    """As `increment_retry`, with every statement bounded to one agency.
+
+    The recovery probe matters as much as the read. Without its predicate one
+    agency's successful retry could make another agency's execution look
+    already recovered and block a legitimate retry - a cross-tenant effect that
+    returns no foreign row and would pass any test that only checked what came
+    back.
+    """
+    ex=get_execution_for_agency(execution_id, agency_id)
+    if ex['status']!='failed': raise ConflictError("only failed executions can be retried")
+    with core_cursor() as (_,cur):
+        cur.execute(
+            "SELECT 1 FROM flow_executions WHERE retry_of_execution_id=%s "
+            "AND agency_id=%s AND status IN ('executed','skipped') LIMIT 1",
+            (execution_id, agency_id),
+        )
+        if cur.fetchone(): raise ConflictError("execution already recovered by a successful retry")
+    if ex['retry_count']>=MAX_RETRY: raise ConflictError("Limite massimo di 3 retry raggiunto. È richiesto un intervento amministrativo.")
+    with core_cursor(commit=True) as (_,cur):
+        cur.execute(
+            "UPDATE flow_executions SET retry_count=retry_count+1,last_retry_at=NOW() "
+            "WHERE id=%s AND agency_id=%s RETURNING *",
+            (execution_id, agency_id),
+        )
+        row=cur.fetchone()
+        if not row: raise NotFoundError(f"flow execution {execution_id} not found")
+        return dict(row)
+
+
+def list_executions_for_agency(agency_id, limit=100, offset=0, status=None):
+    with core_cursor() as (_,cur):
+        sql=("SELECT e.*,r.code AS rule_code,r.name AS rule_name FROM flow_executions e "
+             "JOIN flow_rules r ON r.id=e.rule_id WHERE e.agency_id=%s")
+        params=[agency_id]
+        if status: sql+=" AND e.status=%s"; params.append(status)
+        sql+=" ORDER BY e.created_at DESC LIMIT %s OFFSET %s"; params += [limit,offset]
+        cur.execute(sql,params); return [dict(x) for x in cur.fetchall()]
+
+
+def list_events_for_agency(agency_id, limit=100, offset=0, status=None):
+    with core_cursor() as (_,cur):
+        sql="SELECT * FROM flow_events WHERE agency_id=%s"; params=[agency_id]
+        if status: sql+=" AND status=%s"; params.append(status)
+        sql+=" ORDER BY received_at DESC LIMIT %s OFFSET %s"; params += [limit,offset]
+        cur.execute(sql,params); return [dict(x) for x in cur.fetchall()]
+
+
+def get_event_for_agency(event_id, agency_id):
+    with core_cursor() as (_,cur):
+        cur.execute("SELECT * FROM flow_events WHERE id=%s AND agency_id=%s",(event_id,agency_id))
+        row=cur.fetchone()
+        if not row: raise NotFoundError(f"flow event {event_id} not found")
+        return dict(row)
+
+
+def list_received_owner_event_ids_for_agency(agency_id, limit):
+    with core_cursor() as (_,cur):
+        cur.execute(
+            "SELECT id FROM flow_events WHERE agency_id=%s AND status='received' "
+            "AND event_type='owner.request_submitted' ORDER BY received_at LIMIT %s",
+            (agency_id, limit),
+        )
+        return [r['id'] for r in cur.fetchall()]
+
+
+def is_suppressed_for_agency(rule_id, entity_type, entity_id, agency_id):
+    """Whether this agency has suppressed this rule for this entity.
+
+    Scoped because a suppression is a decision, not a fact about the entity:
+    agency B choosing to silence a rule must not silence it for agency A, and
+    an unscoped probe would do exactly that while returning no foreign row.
+    """
+    with core_cursor() as (_,cur):
+        return _is_suppressed_with_cursor_for_agency(cur, rule_id, entity_type, entity_id, agency_id)
+
+
+def _is_suppressed_with_cursor_for_agency(cur, rule_id, entity_type, entity_id, agency_id):
+    cur.execute(
+        "SELECT 1 FROM flow_suppressions WHERE rule_id=%s AND entity_type=%s "
+        "AND entity_id=%s AND agency_id=%s AND (expires_at IS NULL OR expires_at>NOW()) LIMIT 1",
+        (rule_id, entity_type, entity_id, agency_id),
+    )
+    return cur.fetchone() is not None
+
+
+def list_suppressions_for_agency(agency_id):
+    with core_cursor() as (_,cur):
+        cur.execute(
+            "SELECT s.*,r.code AS rule_code FROM flow_suppressions s "
+            "JOIN flow_rules r ON r.id=s.rule_id WHERE s.agency_id=%s ORDER BY s.id DESC",
+            (agency_id,),
+        )
+        return [dict(x) for x in cur.fetchall()]
+
+
+def delete_suppression_for_agency(suppression_id, agency_id):
+    with core_cursor(commit=True) as (_,cur):
+        cur.execute(
+            "DELETE FROM flow_suppressions WHERE id=%s AND agency_id=%s RETURNING id",
+            (suppression_id, agency_id),
+        )
+        if not cur.fetchone():
+            raise NotFoundError(f"flow suppression {suppression_id} not found")
+
+
+def dashboard_for_agency(agency_id):
+    """The counters, computed inside one agency.
+
+    This is the shape P26-6B named a quiet leak: a dashboard returns no foreign
+    row, only a number computed over them, so an unscoped version would show
+    one agency the size of the whole platform's automation and nothing about
+    the response would look wrong.
+    """
+    with core_cursor() as (_,cur):
+        cur.execute(
+            "SELECT status, COUNT(*) AS n FROM flow_executions "
+            "WHERE agency_id=%s GROUP BY status",
+            (agency_id,),
+        )
+        by_status={r['status']: r['n'] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM flow_events WHERE agency_id=%s AND status='received'",
+            (agency_id,),
+        )
+        pending=cur.fetchone()['n']
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM flow_suppressions WHERE agency_id=%s",
+            (agency_id,),
+        )
+        suppressions=cur.fetchone()['n']
+        return {
+            "executions_by_status": by_status,
+            "pending_events": pending,
+            "suppressions": suppressions,
+        }
+
+
+def list_active_agency_ids():
+    """The tenants a server-only FLOW cycle iterates, one bounded pass each."""
+    with core_cursor() as (_,cur):
+        cur.execute("SELECT id FROM agencies WHERE status = 'active' ORDER BY id")
+        return [r['id'] for r in cur.fetchall()]

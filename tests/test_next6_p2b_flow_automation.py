@@ -20,6 +20,13 @@ from fastapi.testclient import TestClient
 from flow import repository, router as flow_router, service
 from flow.rules.registry import OWNER_RULES, RULES
 
+# P26-6C: every FLOW write stamps a tenant, so these direct repository calls
+# supply one. The value is a fixture id and never a constant the runtime
+# knows: these tests are about execution semantics, and the isolation itself
+# is proved in tests/test_p26_6c_flow_isolation.py.
+P26_TEST_AGENCY = 4242
+
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
@@ -85,16 +92,26 @@ class CooldownCursor:
             self.current = copy.deepcopy(_rule_row(params[0]))
             return
         if "select 1 from flow_suppressions" in lowered:
+            # P26-6C: the probe now carries the tenant as its last parameter.
+            # The double still answers from `database.suppressed`, but the
+            # assertion below proves the predicate is actually there - a fake
+            # that ignored it would hide an unscoped probe.
+            assert "agency_id=%s" in lowered, lowered
             self.current = {"exists": 1} if self.database.suppressed else None
             return
         if lowered.startswith("insert into flow_executions"):
             with self.database.state_lock:
+                # P26-6C: agency_id leads the column list, so every positional
+                # index after it moved by one. Reading them by the old offsets
+                # silently mislabelled entity_type as the rule id, which is why
+                # the cooldown stopped matching before this was corrected.
                 execution = {
                     "id": len(self.state["executions"]) + 1,
+                    "agency_id": params[0],
                     "rule_id": _rule_row(params and "FLOW-R001")["id"],
-                    "entity_type": params[2],
-                    "entity_id": params[3],
-                    "status": params[4],
+                    "entity_type": params[3],
+                    "entity_id": params[4],
+                    "status": params[5],
                     "completed_at": None,
                     "actions_result": {},
                     "error_message": None,
@@ -264,6 +281,7 @@ def _run_cooldown(monkeypatch, database, *, retry_of=None):
         _action(),
         requested_by="test",
         retry_of_execution_id=retry_of,
+    agency_id=P26_TEST_AGENCY,
     )
 
 
@@ -343,7 +361,7 @@ def test_new_cooldown_action_key_is_execution_based_but_event_key_is_unchanged(m
     _install_cooldown_runtime(monkeypatch, event_db)
     owner_entity = {"entity_type": "owner_feedback", "entity_id": 101}
     owner_action = {**_action(), "contact_id": 7, "lead_id": None}
-    repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=701)
+    repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=701, agency_id=P26_TEST_AGENCY)
     assert event_db.state["actions"][0]["idempotency_key"] == "FLOW-R008:event:701"
 
 
@@ -352,8 +370,8 @@ def test_recovery_after_event_processing_crash_reuses_event_key_without_duplicat
     _install_cooldown_runtime(monkeypatch, event_db)
     owner_entity = {"entity_type": "owner_feedback", "entity_id": 101}
     owner_action = {**_action(), "contact_id": 7, "lead_id": None}
-    first = repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=702)
-    recovered = repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=702)
+    first = repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=702, agency_id=P26_TEST_AGENCY)
+    recovered = repository.execute_live("FLOW-R008", owner_entity, True, ["matched"], owner_action, event_id=702, agency_id=P26_TEST_AGENCY)
     assert (first["status"], recovered["status"]) == ("executed", "skipped")
     assert len(event_db.state["tasks"]) == 1
     assert len(event_db.state["actions"]) == 1
@@ -367,7 +385,7 @@ def test_two_concurrent_transactions_same_scope_create_one_task(monkeypatch):
 
     def invoke():
         try:
-            results.append(repository.execute_live("FLOW-R001", _entity(), True, ["matched"], _action()))
+            results.append(repository.execute_live("FLOW-R001", _entity(), True, ["matched"], _action(), agency_id=P26_TEST_AGENCY))
         except Exception as exc:  # pragma: no cover - assertion reports thread failures
             errors.append(exc)
 
@@ -632,9 +650,17 @@ def test_recovery_schema_bounds_and_router_auth(monkeypatch):
     monkeypatch.setenv("ADMIN_PASS", "secret")
     app = FastAPI()
     app.include_router(flow_router.router)
+    # P26-6C: the route resolves an agency server-side, so the DB-backed
+    # resolution is overridden the way every other P26 suite overrides it. The
+    # Basic guard stays real - the 401 assertion below still means what it meant.
+    from operator_auth.context import OperatorContext
+    app.dependency_overrides[flow_router.legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
     client = TestClient(app)
     assert client.post("/api/flow/events/recover", json={"limit": 10}).status_code == 401
-    monkeypatch.setattr(flow_router.service, "recover_received_events", lambda limit: {"status": "completed", "requested_limit": limit})
+    monkeypatch.setattr(flow_router.service, "recover_received_events_for_agency", lambda agency_id, limit: {"status": "completed", "requested_limit": limit})
     response = client.post("/api/flow/events/recover", json={"limit": 10}, auth=("admin", "secret"))
     assert response.status_code == 200
     assert response.json()["requested_limit"] == 10

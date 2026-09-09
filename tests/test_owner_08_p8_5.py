@@ -14,6 +14,13 @@ from flow.rules.registry import RULES, OWNER_RULES
 from owner.router_admin import require_owner_admin
 import flow.router as flow_router_module
 
+# P26-6C: every FLOW write stamps a tenant, so these direct repository calls
+# supply one. The value is a fixture id and never a constant the runtime
+# knows: these tests are about execution semantics, and the isolation itself
+# is proved in tests/test_p26_6c_flow_isolation.py.
+P26_TEST_AGENCY = 4242
+
+
 
 def _owner_entity():
     return {
@@ -242,7 +249,8 @@ def _install_fake_runtime(monkeypatch, state: FakeState):
             "parameters": dict((OWNER_RULES if code == "FLOW-R008" else RULES)[code].default_parameters),
         },
     )
-    monkeypatch.setattr(repository, "_is_suppressed_with_cursor", lambda *args: False)
+    # P26-6C: the suppression probe carries the tenant, so the stub follows it.
+    monkeypatch.setattr(repository, "_is_suppressed_with_cursor_for_agency", lambda *args: False)
 
     def fake_create_task(cur, data):
         state.create_task_calls += 1
@@ -265,21 +273,21 @@ def test_failed_task_creation_is_recoverable_without_duplicate(monkeypatch):
     state.fail_create_task_once = True
     _install_fake_runtime(monkeypatch, state)
 
-    first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701)
+    first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701, agency_id=P26_TEST_AGENCY)
     assert first["status"] == "failed"
     assert state.actions == {}
     assert state.tasks == {}
 
     recovered = repository.execute_live(
         "FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701, retry_of_execution_id=first["id"]
-    )
+    , agency_id=P26_TEST_AGENCY)
     assert recovered["status"] == "executed"
     assert len(state.tasks) == 1
     action = state.actions["FLOW-R008:event:701"]
     assert action["status"] == "completed"
     assert action["target_entity_id"] == next(iter(state.tasks.values()))["id"]
 
-    replay = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701)
+    replay = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=701, agency_id=P26_TEST_AGENCY)
     assert replay["status"] == "skipped"
     assert len(state.tasks) == 1
 
@@ -289,7 +297,7 @@ def test_task_and_action_rollback_when_finalize_fails_then_retry_recovers(monkey
     state.fail_finalize_once = True
     _install_fake_runtime(monkeypatch, state)
 
-    first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=702)
+    first = repository.execute_live("FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=702, agency_id=P26_TEST_AGENCY)
     assert first["status"] == "failed"
     assert state.tasks == {}
     assert state.actions == {}
@@ -297,7 +305,7 @@ def test_task_and_action_rollback_when_finalize_fails_then_retry_recovers(monkey
 
     recovered = repository.execute_live(
         "FLOW-R008", _owner_entity(), True, [], _owner_action(), event_id=702, retry_of_execution_id=first["id"]
-    )
+    , agency_id=P26_TEST_AGENCY)
     assert recovered["status"] == "executed"
     assert len(state.tasks) == 1
     assert state.create_task_calls == 2
@@ -350,9 +358,16 @@ def test_flow_router_is_protected_by_existing_owner_admin_dependency():
 def test_flow_router_http_auth_anonymous_bad_and_valid(monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "p8admin")
     monkeypatch.setenv("ADMIN_PASS", "p8secret")
-    monkeypatch.setattr(flow_router_module.service, "dashboard", lambda: {"ok": True})
+    # P26-6C: the dashboard is per-agency now - its counters are computed over
+    # this agency's executions, not the platform's.
+    monkeypatch.setattr(flow_router_module.service, "dashboard_for_agency", lambda agency_id: {"ok": True})
     app = FastAPI()
     app.include_router(flow_router_module.router)
+    from operator_auth.context import OperatorContext
+    app.dependency_overrides[flow_router_module.legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
     client = TestClient(app)
 
     assert client.get("/api/flow/dashboard").status_code == 401

@@ -20,7 +20,8 @@ from admin_security import require_admin
 from core import service as core_service
 from core.router import router as core_router
 from core.scope import system_context_for_public_stima
-from operator_auth.dependencies import require_operator
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context, require_operator
 from operator_auth.router import router as operator_auth_router
 from property.router import router as property_router
 from buy.router import router as buy_router
@@ -85,6 +86,29 @@ app.include_router(followup_router, dependencies=[Depends(require_admin)])
 app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
 app.include_router(property_watch_router, dependencies=[Depends(require_admin)])
 app.include_router(next_best_action_router, dependencies=[Depends(require_admin)])
+
+
+def _public_stima_system_context(conn):
+    """The single call site of the public-STIMA agency factory in this module.
+
+    P26-2B's B4 invariant is that the Default Agency is resolved once, by the
+    writer, and travels from there - two calls are two independent decisions
+    rather than one shared one. Two public-funnel writers now need it, so the
+    call lives here rather than being copied into each: one place decides, and
+    the invariant is literal instead of incidental.
+
+    The factory reads its row by name, so it needs a dict cursor;
+    `get_connection()` hands out tuple cursors. A second cursor on the same
+    connection is the whole adaptation - a second *connection* would reintroduce
+    the gap the ordering exists to close.
+    """
+    agency_cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        return system_context_for_public_stima(agency_cur)
+    finally:
+        try: agency_cur.close()
+        except: pass
+
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
@@ -249,50 +273,91 @@ def admin_check(data: dict):
 # ADMIN WHATSAPP — MESSAGGI (INBOX)
 # ---------------------------------------------------------
 @app.get("/api/admin/whatsapp/messages", dependencies=[Depends(require_admin)])
-def admin_whatsapp_messages():
+def admin_whatsapp_messages(
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """P26-6C: inbound WhatsApp, attributed by agency rather than by phone alone.
+
+    `whatsapp_incoming` has no `agency_id` and no parent: it is ingress to one
+    platform number, and a message arrives before anyone knows whose it is. Its
+    tenancy is therefore entirely derived, and the only thing that derives it is
+    the `stime` row whose normalised phone matches the sender.
+
+    That gives three cases, and the query distinguishes all three:
+
+      matches one of MY estimations   visible, with the lead's name attached
+      matches ANOTHER agency's        hidden entirely - the message text and
+                                      the number are that agency's prospect
+      matches nothing at all          visible to everyone, unattributed, which
+                                      is what it is: ingress no tenant owns yet
+
+    The middle case is why a scoped LEFT JOIN alone would not have been enough.
+    It would have blanked the name and still handed over the number and the
+    message body. `owned_elsewhere` exists to catch it, and it projects nothing
+    - it is an existence check on a normalised phone, never a source of rows.
+    """
+    agency_id = ctx.require_agency()
+
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT
-        wi.from_number,
-        wi.text,
-        wi.direction,
-        wi.received_at,
-        s.nome,
-        s.cognome,
-        s.id AS stima_id
-    FROM whatsapp_incoming wi
-    LEFT JOIN (
-        SELECT DISTINCT ON (telefono_norm)
-            telefono_norm,
+    WITH incoming AS (
+        SELECT
+            wi.from_number,
+            wi.text,
+            wi.direction,
+            wi.received_at,
+            CASE
+                WHEN regexp_replace(wi.from_number, '\D', '', 'g') LIKE '39%%'
+                    THEN regexp_replace(wi.from_number, '\D', '', 'g')
+                ELSE '39' || regexp_replace(wi.from_number, '\D', '', 'g')
+            END AS telefono_norm
+        FROM whatsapp_incoming wi
+    ),
+    normalised AS (
+        SELECT
+            id,
             nome,
             cognome,
-            id
-        FROM (
-            SELECT
-                id,
-                nome,
-                cognome,
-                CASE
-                    WHEN regexp_replace(telefono, '\D', '', 'g') LIKE '39%'
-                        THEN regexp_replace(telefono, '\D', '', 'g')
-                    ELSE '39' || regexp_replace(telefono, '\D', '', 'g')
-                END AS telefono_norm
-            FROM stime
-            WHERE telefono IS NOT NULL
-        ) t
+            agency_id,
+            CASE
+                WHEN regexp_replace(telefono, '\D', '', 'g') LIKE '39%%'
+                    THEN regexp_replace(telefono, '\D', '', 'g')
+                ELSE '39' || regexp_replace(telefono, '\D', '', 'g')
+            END AS telefono_norm
+        FROM stime
+        WHERE telefono IS NOT NULL
+    ),
+    mine AS (
+        SELECT DISTINCT ON (telefono_norm)
+            telefono_norm, nome, cognome, id
+        FROM normalised
+        WHERE agency_id = %s
         ORDER BY telefono_norm, id DESC
-    ) s
-    ON s.telefono_norm = (
-        CASE
-            WHEN regexp_replace(wi.from_number, '\D', '', 'g') LIKE '39%'
-                THEN regexp_replace(wi.from_number, '\D', '', 'g')
-            ELSE '39' || regexp_replace(wi.from_number, '\D', '', 'g')
-        END
+    ),
+    owned_elsewhere AS (
+        SELECT DISTINCT telefono_norm
+        FROM normalised
+        WHERE agency_id <> %s
     )
-    ORDER BY wi.received_at ASC;
-    """)
+    SELECT
+        i.from_number,
+        i.text,
+        i.direction,
+        i.received_at,
+        m.nome,
+        m.cognome,
+        m.id AS stima_id
+    FROM incoming i
+    LEFT JOIN mine m ON m.telefono_norm = i.telefono_norm
+    WHERE m.telefono_norm IS NOT NULL
+       OR NOT EXISTS (
+            SELECT 1 FROM owned_elsewhere o
+            WHERE o.telefono_norm = i.telefono_norm
+       )
+    ORDER BY i.received_at ASC;
+    """, (agency_id, agency_id))
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
     cur.close(); conn.close()
@@ -341,7 +406,20 @@ class DeleteRequest(BaseModel):
     ids: list[int]
 
 @app.post("/api/admin/stime/delete", dependencies=[Depends(require_admin)])
-def admin_delete_stime(payload: DeleteRequest):
+def admin_delete_stime(
+    payload: DeleteRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """P26-6C: a delete bounded to this agency, and reporting what it deleted.
+
+    The id list is client-supplied, so before this the route destroyed any row
+    whose id was named. Both statements carry the tenant - the child by its own
+    column, since 049 gives `stime_dettagliate` one - and the count returned is
+    now the number of rows actually removed rather than the number requested.
+    Reporting `len(ids)` would have told a caller its cross-agency delete
+    succeeded.
+    """
+    agency_id = ctx.require_agency()
 
     ids = payload.ids
     if not ids:
@@ -349,18 +427,36 @@ def admin_delete_stime(payload: DeleteRequest):
 
     conn = get_connection(); cur = conn.cursor()
 
-    cur.execute("DELETE FROM stime_dettagliate WHERE stima_id = ANY(%s)", (ids,))
-    cur.execute("DELETE FROM stime WHERE id = ANY(%s)", (ids,))
+    cur.execute(
+        "DELETE FROM stime_dettagliate WHERE stima_id = ANY(%s) AND agency_id = %s",
+        (ids, agency_id),
+    )
+    cur.execute(
+        "DELETE FROM stime WHERE id = ANY(%s) AND agency_id = %s",
+        (ids, agency_id),
+    )
+    deleted = cur.rowcount
     conn.commit()
 
     cur.close(); conn.close()
-    return {"ok": True, "deleted": len(ids)}
+    return {"ok": True, "deleted": deleted}
 
 # ---------------------------------------------------------
 # CANCELLA STIME DETTAGLIATE 
 # ---------------------------------------------------------
 @app.post("/api/admin/stime_dettagliate/delete", dependencies=[Depends(require_admin)])
-def admin_delete_stime_dettagliate(payload: DeleteRequest):
+def admin_delete_stime_dettagliate(
+    payload: DeleteRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """P26-6C: the detail rows only, and only this agency's.
+
+    Deleted by their own id, so the tenant cannot come from the parent even
+    when there is one - hence 049's physical column. A row whose `stima_id` is
+    NULL still has an agency, which is exactly the case a JOIN-based scope
+    would have made permanently unreachable.
+    """
+    agency_id = ctx.require_agency()
 
     ids = payload.ids
     if not ids:
@@ -369,12 +465,16 @@ def admin_delete_stime_dettagliate(payload: DeleteRequest):
     conn = get_connection(); cur = conn.cursor()
 
     # Cancella ESCLUSIVAMENTE le righe della tabella stime_dettagliate
-    cur.execute("DELETE FROM stime_dettagliate WHERE id = ANY(%s)", (ids,))
+    cur.execute(
+        "DELETE FROM stime_dettagliate WHERE id = ANY(%s) AND agency_id = %s",
+        (ids, agency_id),
+    )
+    deleted = cur.rowcount
 
     conn.commit()
     cur.close(); conn.close()
 
-    return {"ok": True, "deleted": len(ids)}
+    return {"ok": True, "deleted": deleted}
 
 # ---------------------------------------------------------
 # STIMA BASE
@@ -512,16 +612,9 @@ async def salva_stima(request: Request):
         # INSERT below commits: the agency is proven to exist and to be active
         # at the moment the row is written, not merely at some earlier point.
         #
-        # The factory reads its row by name, so it needs a dict cursor;
-        # get_connection() hands out tuple cursors. A second cursor on the same
-        # connection is the whole adaptation - a second *connection* would
-        # reintroduce the gap this ordering exists to close.
-        agency_cur = conn.cursor(cursor_factory=RealDictCursor)
-        try:
-            system_ctx = system_context_for_public_stima(agency_cur)
-        finally:
-            try: agency_cur.close()
-            except: pass
+        # Through the module's single call site - see
+        # _public_stima_system_context for why there is exactly one.
+        system_ctx = _public_stima_system_context(conn)
 
         comune_db = normalizza_comune(data["comune"]) or data["comune"]
 
@@ -1166,9 +1259,40 @@ async def salva_stima_dettagliata(request: Request):
 
     conn = get_connection(); cur = conn.cursor()
 
+    # P26-6C: the detail row carries its own agency from 049 on, so this system
+    # writer has to supply one. Two sources, in this order:
+    #
+    #   the parent estimation, when the payload names one - it is the row this
+    #   detail describes, and 051's trigger requires the two to agree;
+    #
+    #   otherwise the public-STIMA system context, resolved server-side exactly
+    #   as `salva_stima` resolves it. That branch is what makes an orphan detail
+    #   a legal row with an explicit owner rather than an unassignable one.
+    #
+    # Nothing here reads an agency from the request. `stima_id` is client-
+    # supplied, but it is used as a lookup key against a server-side table, and
+    # a value naming another agency's estimation simply files the detail with
+    # that estimation - which is where it belongs, and what the trigger checks.
+    stima_id_value = to_int_safe(data.get("stima_id"))
+    detail_agency_id = None
+    if stima_id_value is not None:
+        parent_cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            parent_cur.execute(
+                "SELECT agency_id FROM stime WHERE id = %s", (stima_id_value,)
+            )
+            parent = parent_cur.fetchone()
+            detail_agency_id = parent["agency_id"] if parent else None
+        finally:
+            try: parent_cur.close()
+            except: pass
+    if detail_agency_id is None:
+        detail_agency_id = _public_stima_system_context(conn).agency_id
+
     try:
         cur.execute("""
             INSERT INTO stime_dettagliate (
+                agency_id,
                 stima_id,
                 nome, cognome, email, telefono,
                 indirizzo, stato, anno,
@@ -1182,7 +1306,7 @@ async def salva_stima_dettagliata(request: Request):
                 numbalconi
             )
             VALUES (
-                %s,%s,%s,%s,%s,
+                %s,%s,%s,%s,%s,%s,
                 %s,%s,%s,
                 %s,%s,%s,%s,%s,
                 %s,%s,%s,%s,%s,
@@ -1194,8 +1318,11 @@ async def salva_stima_dettagliata(request: Request):
                 %s
             )
         """, (
+            # agency_id (server-derived: parent stima, else public-STIMA system context)
+            detail_agency_id,
+
             # stima_id
-            to_int_safe(data.get("stima_id")),
+            stima_id_value,
 
             # anagrafica
             data.get("nome") or None,
@@ -1274,8 +1401,18 @@ async def salva_stima_dettagliata(request: Request):
 def admin_lista_stime_pro(
     day: str = "oggi",
     dal: date | None = None,
-    al: date | None = None
+    al: date | None = None,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
+    """P26-6C: the detailed-estimation list, bounded to the caller's agency.
+
+    `stime_dettagliate` gets its own `agency_id` in migration 049 rather than
+    deriving through `stima_id`, because `stima_id` is nullable and the public
+    funnel writes it from `to_int_safe(data.get("stima_id"))` - a row can be
+    born with no parent at all, and a row with no parent cannot inherit a
+    tenant. That is the same test 046 applied to `next_best_actions`.
+    """
+    agency_id = ctx.require_agency()
 
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
@@ -1289,9 +1426,9 @@ def admin_lista_stime_pro(
     cur.execute("""
         SELECT *
         FROM stime_dettagliate
-        WHERE data >= %s AND data < %s
+        WHERE data >= %s AND data < %s AND agency_id = %s
         ORDER BY data DESC
-    """, (start, end))
+    """, (start, end, agency_id))
 
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
@@ -1312,7 +1449,20 @@ def admin_lista_stime(
     day: str = "oggi",
     dal: date | None = None,
     al: date | None = None,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
+    """P26-6C: the lead list, bounded to the caller's agency.
+
+    The scope arrives through the same C2 compatibility dependency the routers
+    use - resolved server-side from the Default Agency's slug, never from the
+    request. The route stays behind Basic; this slice does not touch the auth
+    model, only what the query is allowed to see.
+
+    This list projects `nome`, `cognome`, `email` and `telefono`, so an
+    unscoped read here was not an abstract isolation gap: it handed one
+    agency's operator another agency's leads with their contact details.
+    """
+    agency_id = ctx.require_agency()
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
         end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
@@ -1330,9 +1480,9 @@ def admin_lista_stime(
             FROM stime s
             LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
 
-        WHERE s.data >= %s AND s.data < %s
+        WHERE s.data >= %s AND s.data < %s AND s.agency_id = %s
         ORDER BY s.data DESC
-    """, (start, end))
+    """, (start, end, agency_id))
     rows = cur.fetchall()
     cols = [c[0] for c in cur.description]
     cur.close(); conn.close()
@@ -1343,7 +1493,19 @@ def admin_lista_stime(
 # UPDATE
 # ---------------------------------------------------------
 @app.post("/api/admin/stime/{stima_id}/update", dependencies=[Depends(require_admin)])
-def admin_update_stima(stima_id: int, payload: LeadUpdate):
+def admin_update_stima(
+    stima_id: int,
+    payload: LeadUpdate,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """P26-6C: an update that can only reach this agency's own estimation.
+
+    The id comes from the path, so before this the route would rewrite any
+    row in the table for whoever guessed an integer. The predicate is added to
+    the WHERE rather than checked first: one statement, no window between the
+    check and the write, and `rowcount` tells us whether it matched.
+    """
+    agency_id = ctx.require_agency()
 
     updates = []
     values = []
@@ -1359,13 +1521,20 @@ def admin_update_stima(stima_id: int, payload: LeadUpdate):
         return {"ok": True}
 
     values.append(stima_id)
+    values.append(agency_id)
 
     conn = get_connection(); cur = conn.cursor()
     cur.execute(f"""
-        UPDATE stime SET {",".join(updates)} WHERE id=%s
+        UPDATE stime SET {",".join(updates)} WHERE id=%s AND agency_id=%s
     """, tuple(values))
+    matched = cur.rowcount
     conn.commit()
     cur.close(); conn.close()
+
+    # A foreign id is indistinguishable from an absent one: the caller learns
+    # the estimation is not available to it, not that it exists elsewhere.
+    if not matched:
+        raise HTTPException(status_code=404, detail="Stima non trovata")
 
     return {"ok": True}
 

@@ -1096,11 +1096,19 @@ def test_49_flow_refuses_an_unscoped_rule_rather_than_scanning_globally():
     any rule without a scoped implementation."""
     from flow import adapters as flow_adapters
 
-    assert flow_adapters.AGENCY_SCOPED_RULES == ("FLOW-R004", "FLOW-R005")
+    # P26-6B scoped exactly the two rules NBA consumes and refused the rest.
+    # P26-6C scoped all twelve, so FLOW-R001 and `lead` are no longer refusals -
+    # they are implemented. What this test protects is unchanged: a rule or
+    # entity type with no scoped implementation is REFUSED, never quietly
+    # served by the global surface. Both sets are derived from the runtime, so
+    # a rule added to the registry without a scan still fails here.
+    assert set(flow_adapters.AGENCY_SCOPED_RULES) == set(flow_adapters._SCANS)
+    assert "FLOW-R004" in flow_adapters.AGENCY_SCOPED_RULES
+    assert "FLOW-R005" in flow_adapters.AGENCY_SCOPED_RULES
     with pytest.raises(flow_adapters.UnscopedRuleError):
-        flow_adapters.scan_candidates_for_agency(A, "FLOW-R001", {}, 10)
+        flow_adapters.scan_candidates_for_agency(A, "FLOW-R999", {}, 10)
     with pytest.raises(flow_adapters.UnscopedRuleError):
-        flow_adapters.load_entity_for_agency(A, "lead", 1)
+        flow_adapters.load_entity_for_agency(A, "invoice", 1)
 
 
 def test_50_collect_all_signals_calls_six_scoped_collectors_and_nothing_else():

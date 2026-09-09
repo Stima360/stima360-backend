@@ -109,6 +109,49 @@ def _application_failure(data):
     return data.get('status') not in ('completed','success') or bool(data.get('failed',0)) or bool(data.get('failures',0)) or bool(data.get('busy',0))
 
 
+# ---------------------------------------------------------------------------
+# P26-6C: two runners, because there are two deployments.
+#
+# `main()` is unchanged and still drives the HTTP API. What changed underneath
+# it is that `/api/flow/scan` and `/api/flow/events/recover` are no longer
+# global: since P26-6C each resolves an agency server-side and runs ONE
+# bounded cycle. So this runner is no longer a cross-tenant operation - it is
+# one tenant's cycle, the tenant the compatibility context resolves.
+#
+# `main_all_agencies()` is the server-only path for a platform-wide sweep. It
+# runs in-process, enumerates active agencies through the certified
+# `list_active_agency_ids()`, and calls the same bounded cycle once per tenant.
+# It is deliberately NOT an HTTP route: a user-facing endpoint that swept every
+# agency is precisely what P26-6C removed, and adding one back to serve a cron
+# would undo the slice.
+#
+# Which one to schedule is a deployment decision. While a single agency is
+# active the two are equivalent; onboarding a second makes the difference real.
+# ---------------------------------------------------------------------------
+
+def main_all_agencies(limit=None):
+    """Server-only: one bounded FLOW cycle per active agency, in-process.
+
+    No HTTP, no credentials, no global query. Each cycle carries its own tenant
+    predicate, so one agency's failing rule cannot end another agency's scan.
+    """
+    from flow import service as flow_service
+    from flow.schemas import ScanRequest
+
+    scan_limit = limit if limit is not None else _integer('FLOW_SCAN_LIMIT', 100)
+    started = time.monotonic()
+    result = flow_service.scan_for_all_agencies(
+        ScanRequest(simulation=False, limit=scan_limit)
+    )
+    _log(
+        'scan_all_agencies',
+        'completed' if not result['failures'] else 'partial_failure',
+        int((time.monotonic() - started) * 1000),
+        counts=result,
+    )
+    return 0 if not result['failures'] else 2
+
+
 def main():
     try:
         config=load_config()
@@ -121,6 +164,7 @@ def main():
         return 1
     application_problem=_application_failure(recovery)
     try:
+        # One agency's bounded cycle - see the note above main_all_agencies.
         scan=_post(config,'scan','/api/flow/scan',{'simulation':False,'limit':config.scan_limit})
     except TechnicalError:
         return 1

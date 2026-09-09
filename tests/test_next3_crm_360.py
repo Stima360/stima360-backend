@@ -47,9 +47,10 @@ def _patch_empty_contact(monkeypatch, *, contact=None, roles=None):
     monkeypatch.setattr(service, "get_contact", lambda ctx, contact_id: {**(contact or {"id": contact_id, "display_name": "Mario Test"}), "roles": list(roles or [])})
     monkeypatch.setattr(service, "list_leads", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_properties", lambda *args, **kwargs: [])
-    monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [])
-    monkeypatch.setattr(service, "list_matches", lambda *args, **kwargs: [])
-    monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [])  # non-CORE: unscoped by design
+    monkeypatch.setattr(service, "list_requests_scoped", lambda *args, **kwargs: [])
+    monkeypatch.setattr(service, "list_matches_scoped", lambda *args, **kwargs: [])
+    # P26-6C: visits take the context now, so the stub takes it too.
+    monkeypatch.setattr(service, "list_visits_by_contact", lambda ctx, contact_id: [])
     monkeypatch.setattr(service, "list_activities", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_tasks", lambda *args, **kwargs: [])
     return service
@@ -145,16 +146,16 @@ def test_09_properties_are_aggregated(monkeypatch):
 
 def test_10_buy_requests_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
-    monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [{"id": 30, "contact_id": 1}])
+    monkeypatch.setattr(service, "list_requests_scoped", lambda *args, **kwargs: [{"id": 30, "contact_id": 1}])
     assert service.get_contact_360(CTX, 1)["buy_requests"] == [{"id": 30, "contact_id": 1}]
 
 
 def test_11_matches_are_aggregated_for_each_buy_request(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
-    monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [{"id": 30}, {"id": 31}])
+    monkeypatch.setattr(service, "list_requests_scoped", lambda *args, **kwargs: [{"id": 30}, {"id": 31}])
     monkeypatch.setattr(
         service,
-        "list_matches",
+        "list_matches_scoped",
         lambda *args, **kwargs: [{"id": 100 + kwargs["buy_request_id"], "buy_request_id": kwargs["buy_request_id"]}],
     )
     matches = service.get_contact_360(CTX, 1)["matches"]
@@ -168,23 +169,23 @@ def test_11b_real_match_service_accepts_contact_360_keyword_filters(monkeypatch)
     read model uses the named filter contract exposed by the MATCH endpoint.
     """
     service = _patch_empty_contact(monkeypatch)
-    monkeypatch.setattr(service, "list_buy_requests", lambda *args, **kwargs: [{"id": 30}])
+    monkeypatch.setattr(service, "list_requests_scoped", lambda *args, **kwargs: [{"id": 30}])
 
     import match.service as match_service
 
     monkeypatch.setattr(
         match_service.repository,
-        "list_matches",
+        "list_matches_scoped",
         lambda *args, **kwargs: [{"id": 130, "buy_request_id": kwargs["buy_request_id"]}],
     )
-    monkeypatch.setattr(service, "list_matches", match_service.list_matches)
+    monkeypatch.setattr(service, "list_matches_scoped", match_service.list_matches_scoped)
 
     assert service.get_contact_360(CTX, 1)["matches"] == [{"id": 130, "buy_request_id": 30}]
 
 
 def test_12_visits_are_aggregated(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
-    monkeypatch.setattr(service, "list_visits_by_contact", lambda contact_id: [{"id": 40, "contact_id": contact_id}])
+    monkeypatch.setattr(service, "list_visits_by_contact", lambda ctx, contact_id: [{"id": 40, "contact_id": contact_id}])
     assert service.get_contact_360(CTX, 1)["visits"] == [{"id": 40, "contact_id": 1}]
 
 

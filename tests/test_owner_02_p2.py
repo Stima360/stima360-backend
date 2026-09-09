@@ -312,7 +312,11 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
             normalized = " ".join(str(query).split())
             self.executed.append((normalized, params))
             self.rowcount = -1
-            if normalized.startswith("SELECT oa.contact_id"):
+            if normalized.startswith("SELECT agency_id FROM contacts"):
+                # P26-6C: OWNER resolves its own tenant on this cursor before
+                # stamping the FLOW event - owner_account -> contact -> agency.
+                self.current = {"agency_id": 4242}
+            elif normalized.startswith("SELECT oa.contact_id"):
                 self.current = {"contact_id": 44}
             elif "INSERT INTO owner_feedback" in normalized:
                 self.current = returned
@@ -338,7 +342,7 @@ def test_create_feedback_repository_returns_only_public_fields_and_links_activit
         activities.append((cur, data))
         return {"id": 91}
 
-    def fake_flow_event(cur, data):
+    def fake_flow_event(cur, data, **_kw):
         flow_events.append((cur, data))
         return {"id": 81}
 

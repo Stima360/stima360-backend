@@ -16,6 +16,17 @@ from flow.schemas import EventCreate
 from owner import repository as owner_repo
 import integration_owner_request as owner_request_integration
 
+# P26-6C: the agency OWNER resolves from the account's contact.
+OWNER_TEST_AGENCY = 4242
+
+
+# P26-6C: every FLOW write stamps a tenant, so these direct repository calls
+# supply one. The value is a fixture id and never a constant the runtime
+# knows: these tests are about execution semantics, and the isolation itself
+# is proved in tests/test_p26_6c_flow_isolation.py.
+P26_TEST_AGENCY = 4242
+
+
 
 FEEDBACK_TYPES = (
     "contact_request",
@@ -114,16 +125,25 @@ class AtomicCursor:
             self.rowcount = 1
             return
 
+        if query.startswith("SELECT agency_id FROM contacts"):
+            # P26-6C: OWNER resolves its own tenant - owner_account -> contact
+            # -> agency - on this same cursor and inside this same transaction,
+            # then hands it to FLOW. Modelled here so the transaction-order and
+            # rollback assertions below still see the real statement sequence.
+            self.current = {"agency_id": OWNER_TEST_AGENCY}
+            return
+
         if "INSERT INTO flow_events" in query:
             if self.fail_stage == "flow":
                 raise RuntimeError("flow insert failed")
-            event_type, entity_type, entity_id, source_module, payload_json, key, occurred_at = params
+            agency_id, event_type, entity_type, entity_id, source_module, payload_json, key, occurred_at = params
             payload = getattr(payload_json, "adapted", payload_json)
             if key in self.state.flow_events:
                 row = self.state.flow_events[key]
             else:
                 row = {
                     "id": self.state.next_flow_id,
+                    "agency_id": agency_id,
                     "event_type": event_type,
                     "entity_type": entity_type,
                     "entity_id": entity_id,
@@ -216,6 +236,8 @@ def test_each_owner_request_creates_exact_flow_contract(monkeypatch, feedback_ty
     assert feedback["linked_activity_id"] == activity["id"]
     assert event == {
         "id": 701,
+        # P26-6C: the event now records the tenant OWNER resolved for it.
+        "agency_id": OWNER_TEST_AGENCY,
         "event_type": "owner.request_submitted",
         "entity_type": "owner_feedback",
         "entity_id": feedback["id"],
@@ -272,7 +294,7 @@ def test_flow_helper_is_cursor_aware_and_explicit_occurred_at_is_used(monkeypatc
         "payload": {"property_id": 34},
         "deduplication_key": "owner:feedback:101:submitted",
         "occurred_at": stamp,
-    })
+    }, agency_id=P26_TEST_AGENCY)
     assert event["occurred_at"] == stamp
     flow_sql, flow_params = next((sql, params) for sql, params in cursor.executed if "INSERT INTO flow_events" in sql)
     assert "COALESCE(%s,NOW())" in flow_sql
@@ -292,7 +314,7 @@ def test_public_add_event_keeps_own_transaction_and_old_now_fallback(monkeypatch
         "payload": {},
         "deduplication_key": "legacy-flow-event",
     }
-    event = flow_repo.add_event(data)
+    event = flow_repo.add_event(data, agency_id=P26_TEST_AGENCY)
     assert tx.calls == [True]
     assert tx.committed
     assert event["occurred_at"] == "DB_NOW"
@@ -322,8 +344,8 @@ def test_flow_insert_preserves_dedup_on_conflict_semantics(monkeypatch):
         "deduplication_key": "owner:feedback:101:submitted",
         "occurred_at": cursor.submitted_at,
     }
-    first = flow_repo.add_event_with_cursor(cursor, data)
-    second = flow_repo.add_event_with_cursor(cursor, {**data, "payload": {"owner_request_type": "price_review"}})
+    first = flow_repo.add_event_with_cursor(cursor, data, agency_id=P26_TEST_AGENCY)
+    second = flow_repo.add_event_with_cursor(cursor, {**data, "payload": {"owner_request_type": "price_review"}}, agency_id=P26_TEST_AGENCY)
     assert first["id"] == second["id"] == 701
     assert len(state.flow_events) == 1
     assert state.flow_events[data["deduplication_key"]]["payload"] == {"owner_request_type": "general_message"}
@@ -443,16 +465,20 @@ def test_neutral_bridge_delegates_same_cursor_and_payload(monkeypatch):
     }
     captured = {}
 
-    def fake_add_event_with_cursor(cur, event):
+    def fake_add_event_with_cursor(cur, event, *, agency_id):
         captured["cur"] = cur
         captured["data"] = event
+        captured["agency_id"] = agency_id
         return {"id": 701}
 
     monkeypatch.setattr(owner_request_integration, "_add_event_with_cursor", fake_add_event_with_cursor)
-    result = owner_request_integration.record_owner_request_event_with_cursor(cursor, data)
+    result = owner_request_integration.record_owner_request_event_with_cursor(cursor, data, agency_id=P26_TEST_AGENCY)
     assert result == {"id": 701}
     assert captured["cur"] is cursor
     assert captured["data"] is data
+    # P26-6C: the bridge forwards the tenant unchanged. It resolves nothing of
+    # its own - OWNER decides, FLOW records.
+    assert captured["agency_id"] == P26_TEST_AGENCY
 
 
 def test_owner_repository_uses_neutral_bridge_not_direct_flow_import():

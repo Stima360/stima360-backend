@@ -16,6 +16,13 @@ from flow import repository as flow_repository
 from flow import service as flow_service
 from integration_p2_support import import_main_app
 
+# P26-6C: every FLOW write stamps a tenant, so these direct repository calls
+# supply one. The value is a fixture id and never a constant the runtime
+# knows: these tests are about execution semantics, and the isolation itself
+# is proved in tests/test_p26_6c_flow_isolation.py.
+P26_TEST_AGENCY = 4242
+
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOW_HTML = ROOT / "static/flow_admin/index.html"
@@ -262,6 +269,7 @@ def _run_live(monkeypatch, database, public_create_task):
         ["lead aperto senza attività/task"],
         _action(),
         requested_by="test",
+    agency_id=P26_TEST_AGENCY,
     )
 
 
@@ -343,7 +351,7 @@ def test_execute_live_does_not_sync_rules_in_the_hot_path(monkeypatch):
     )
     monkeypatch.setattr(core_repository, "create_task", lambda data: (_ for _ in ()).throw(AssertionError("public create_task")))
 
-    result = flow_repository.execute_live("FLOW-R001", _entity(), True, ["matched"], _action())
+    result = flow_repository.execute_live("FLOW-R001", _entity(), True, ["matched"], _action(), agency_id=P26_TEST_AGENCY)
 
     assert result["status"] == "executed"
     assert database.calls == [True]
@@ -408,7 +416,7 @@ def _patch_scan_basics(monkeypatch, *, candidates, load=None, evaluate=None, exe
     recorder = Mock(
         side_effect=execute
         or (
-            lambda code, entity_type, entity_id, matched, reasons, action, requested_by: {
+            lambda code, entity_type, entity_id, matched, reasons, action, requested_by, **_kw: {
                 "status": "matched" if matched else "not_matched",
                 "rule_code": code,
                 "entity_type": entity_type,
@@ -418,7 +426,7 @@ def _patch_scan_basics(monkeypatch, *, candidates, load=None, evaluate=None, exe
     )
     monkeypatch.setattr(flow_service.repository, "record_simulation", recorder)
     failures = Mock(
-        side_effect=lambda code, entity_type, entity_id, mode, error, requested_by=None: {
+        side_effect=lambda code, entity_type, entity_id, mode, error, requested_by=None, **_kw: {
             "status": "failed",
             "rule_code": code,
             "entity_type": entity_type,
@@ -497,7 +505,7 @@ def test_rule_failure_does_not_prevent_next_requested_rule(monkeypatch, failing_
             raise RuntimeError("evaluate failed")
         return True, ["matched"]
 
-    def execute(code, entity_type, entity_id, matched, reasons, action, requested_by):
+    def execute(code, entity_type, entity_id, matched, reasons, action, requested_by, **_kw):
         if code == "FLOW-R001" and failing_stage == "execute":
             raise RuntimeError("execute failed")
         return {

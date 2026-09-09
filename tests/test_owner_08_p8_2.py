@@ -28,7 +28,7 @@ def _p8_2_isolate_newer_flow_side_effect(monkeypatch):
     P8.3B adds a FLOW event after the P8.2 link step; stub that newer layer here
     so the historical P8.2 failure-injection tests keep exercising only P8.2.
     """
-    monkeypatch.setattr(owner_repo, "record_owner_request_event_with_cursor", lambda cur, data: {"id": 701})
+    monkeypatch.setattr(owner_repo, "record_owner_request_event_with_cursor", lambda cur, data, **_kw: {"id": 701})
     monkeypatch.setattr(owner_repo, "process_saved_owner_request_event", lambda event_id: None)
 
 
@@ -74,6 +74,10 @@ class OwnerCursor:
         self.rowcount = -1
         if normalized.startswith("SELECT oa.contact_id"):
             self.current = {"contact_id": 77}
+        elif normalized.startswith("SELECT agency_id FROM contacts"):
+            # P26-6C: OWNER resolves its own tenant on this same cursor before
+            # stamping the FLOW event - owner_account -> contact -> agency.
+            self.current = {"agency_id": 4242}
         elif "INSERT INTO owner_feedback" in normalized:
             if self.fail_feedback:
                 raise RuntimeError("feedback insert failed")
@@ -414,6 +418,8 @@ def test_owner_feedback_and_real_core_helper_share_one_cursor_and_transaction(mo
             self.rowcount = -1
             if normalized.startswith("SELECT oa.contact_id"):
                 self.current = {"contact_id": 77}
+            elif normalized.startswith("SELECT agency_id FROM contacts"):
+                self.current = {"agency_id": 4242}
             elif "INSERT INTO owner_feedback" in normalized:
                 self.current = {
                     "id": 101,

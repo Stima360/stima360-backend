@@ -532,7 +532,11 @@ def test_existing_consumers_read_the_new_property_visit_and_auth_is_unchanged():
 
     assert "FROM property_visits v" in property_repository
     assert "WHERE v.contact_id=%s" in property_repository
-    assert "list_visits_by_contact(contact_id)" in crm_service
+    # P26-6C: the same consumer, one argument stronger. This assertion pins
+    # that CRM still reads visits by contact; the context in front of it is
+    # what stops that read crossing agencies, and pinning the ctx-less spelling
+    # would now be pinning the bug.
+    assert "list_visits_by_contact(ctx, contact_id)" in crm_service
     assert "api('/api/property/visits?limit=500')" in agenda
     assert "app.include_router(buy_router, dependencies=[Depends(require_admin)])" in main
     assert "@router.post('/requests/{request_id}/matches/{match_id}/decision',status_code=201)" in router

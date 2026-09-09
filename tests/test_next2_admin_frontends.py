@@ -67,6 +67,13 @@ def test_backend_is_protected_in_p3():
     # into a Default-Agency-bound scope (design spec D-2). The other four
     # routers below are deliberately untouched.
     assert "app.include_router(core_router, dependencies=[Depends(require_operator)])" in main_py
-    assert "from operator_auth.dependencies import require_operator" in main_py
+    # P26-6C added `legacy_basic_agency_context` to the same import. What this
+    # assertion protects is that `require_operator` comes from the certified
+    # dependency module, not that it is imported alone.
+    assert re.search(
+        r"^from operator_auth\.dependencies import [^\n]*\brequire_operator\b",
+        main_py,
+        re.MULTILINE,
+    ), "require_operator is no longer imported from operator_auth.dependencies"
     for router_name in ("property_router", "buy_router", "match_router", "proposal_router"):
         assert f"app.include_router({router_name}, dependencies=[Depends(require_admin)])" in main_py

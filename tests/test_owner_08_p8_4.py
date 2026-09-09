@@ -13,6 +13,13 @@ from flow.rules.registry import RULES, OWNER_RULES, ALL_RULES
 from owner import repository as owner_repo
 import integration_owner_request as bridge
 
+# P26-6C: every FLOW write stamps a tenant, so these direct repository calls
+# supply one. The value is a fixture id and never a constant the runtime
+# knows: these tests are about execution semantics, and the isolation itself
+# is proved in tests/test_p26_6c_flow_isolation.py.
+P26_TEST_AGENCY = 4242
+
+
 OWNER_MAPPING = {
     "FLOW-R008": ("contact_request", "Contattare proprietario", "high", 4),
     "FLOW-R009": ("correction_request", "Verificare richiesta di correzione", "high", 24),
@@ -98,7 +105,7 @@ def test_simulation_without_live_payload_uses_owner_adapter_context(monkeypatch)
         "parameters": dict(OWNER_RULES[code].default_parameters)
     })
     monkeypatch.setattr(service, "load_entity", lambda et, eid: owner_entity("contact_request"))
-    monkeypatch.setattr(service.repository, "record_simulation", lambda code, et, eid, matched, reasons, action, requested_by=None, error=None: captured.update(
+    monkeypatch.setattr(service.repository, "record_simulation", lambda code, et, eid, matched, reasons, action, requested_by=None, error=None, **_kw: captured.update(
         matched=matched, action=action, error=error
     ) or {"execution_mode": "simulation", "status": "matched" if matched else "not_matched"})
 
@@ -144,8 +151,8 @@ def test_process_saved_event_uses_existing_event_payload_and_same_event_id(monke
     monkeypatch.setattr(service.repository,"claim_event_for_processing",lambda event_id,received_only=False:claimed_event(saved))
     monkeypatch.setattr(service.repository,"list_rules",lambda: rows)
     monkeypatch.setattr(service,"load_entity",lambda et,eid: owner_entity("general_message"))
-    def fake_execute(code, entity, matched, reasons, action, requested_by=None, event_id=None, retry_of_execution_id=None):
-        seen.update(code=code,entity=entity,matched=matched,action=action,event_id=event_id)
+    def fake_execute(code, entity, matched, reasons, action, requested_by=None, event_id=None, retry_of_execution_id=None, *, agency_id=None):
+        seen.update(code=code,entity=entity,matched=matched,action=action,event_id=event_id,agency_id=agency_id)
         return {"id":801,"status":"executed"}
     monkeypatch.setattr(service.repository,"execute_live",fake_execute)
     monkeypatch.setattr(service.repository,"update_event_status",lambda event_id,status,error_message=None:{**saved,"status":status,"error_message":error_message})
@@ -220,9 +227,9 @@ def test_event_bound_key_for_owner_and_execution_key_for_r001(monkeypatch):
     monkeypatch.setattr(repository,"core_cursor",fake_cursor)
     monkeypatch.setattr(repository.core_repository,"create_task_with_cursor",lambda cur,data:{"id":1})
     action={"action_type":"create_core_task","title":"x","description":"x","priority":"high","due_hours":4,"contact_id":77,"lead_id":None,"assigned_to":None}
-    repository.execute_live("FLOW-R008",owner_entity(),True,[],action,event_id=701)
+    repository.execute_live("FLOW-R008",owner_entity(),True,[],action,event_id=701, agency_id=P26_TEST_AGENCY)
     legacy_entity={"entity_type":"lead","entity_id":3,"id":3}
-    repository.execute_live("FLOW-R001",legacy_entity,True,[],{**action,"contact_id":None,"lead_id":3},event_id=702)
+    repository.execute_live("FLOW-R001",legacy_entity,True,[],{**action,"contact_id":None,"lead_id":3},event_id=702, agency_id=P26_TEST_AGENCY)
     assert captured == ["FLOW-R008:event:701","FLOW-R001:lead:3:create_core_task:execution:900"]
 
 
