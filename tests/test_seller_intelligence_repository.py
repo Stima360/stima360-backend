@@ -14,6 +14,7 @@ can be exercised as close to real DB semantics as a pure-Python fake allows.
 from __future__ import annotations
 
 import copy
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -37,6 +38,15 @@ class FakeCursor:
     def execute(self, query, params=None):
         sql = " ".join(str(query).split()).lower()
         self.database.sql.append((sql, params))
+
+        # P26-6A: insert_event now derives the row's agency from its references
+        # before writing, so the fake answers those lookups. Every reference in
+        # this fixture belongs to AGENCY, which is what makes the derivation
+        # unambiguous - the ambiguous and orphan cases are covered by migration
+        # 044's guards and by tests/test_p26_6a_seller_engine_isolation.py.
+        if re.match(r"select agency_id from (contacts|leads|stime|properties) where id = %s", sql):
+            self.rows = [{"agency_id": self.database.agency_id}]
+            return
 
         if "insert into seller_timeline_events" in sql:
             self._handle_insert(params)
@@ -135,8 +145,12 @@ class FakeCursor:
         return list(self.rows)
 
 
+AGENCY = 7
+
+
 class FakeDatabase:
-    def __init__(self):
+    def __init__(self, agency_id=AGENCY):
+        self.agency_id = agency_id
         self.rows = []
         self.next_id = 1
         self.sql = []

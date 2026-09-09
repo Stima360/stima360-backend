@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -145,6 +146,15 @@ class SICursor:
     def execute(self, query, params=None):
         sql = " ".join(str(query).split()).lower()
         self.database.sql.append((sql, params))
+        # P26-6A: the system write path derives the event's agency from its
+        # references before inserting - there is no operator in the public
+        # funnel - so the fake answers those lookups. Every reference here
+        # belongs to one agency, which is what makes the derivation
+        # unambiguous; the ambiguous and orphan cases are covered by migration
+        # 044 and tests/test_p26_6a_seller_engine_isolation.py.
+        if re.match(r"select agency_id from (contacts|leads|stime|properties) where id = %s", sql):
+            self.rows = [{"agency_id": self.database.agency_id}]
+            return
         if "insert into seller_timeline_events" in sql:
             self._handle_insert(params)
             return
@@ -190,7 +200,8 @@ class SICursor:
 
 
 class SIDatabase:
-    def __init__(self):
+    def __init__(self, agency_id=1):
+        self.agency_id = agency_id
         self.rows = []
         self.next_id = 1
         self.sql = []

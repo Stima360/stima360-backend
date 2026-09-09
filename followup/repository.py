@@ -41,7 +41,7 @@ from psycopg2.extras import Json
 from core import repository as core_repository
 
 from .database import followup_cursor
-from .exceptions import ConflictError
+from .exceptions import ConflictError, ValidationError
 
 
 def _row(row):
@@ -391,3 +391,181 @@ def execute_temporal_escalation(
         "followup_action_id": action["id"],
         "status": "completed",
     }
+
+
+# ---------------------------------------------------------------------------
+# P26-6A agency scoping.
+#
+# `followup_actions` carries a physical agency_id (migration 043) for the same
+# reason the timeline does: every reference is nullable and ON DELETE SET NULL,
+# so a historical action can outlive its parents.
+#
+# The legacy functions above are untouched - tests/test_followup_p18d2_*.py and
+# the P18-C integration path call them directly.
+# ---------------------------------------------------------------------------
+
+def list_temporal_escalation_candidates_for_agency(
+    agency_id: int, *, limit: int, rule_code: str
+) -> list[dict[str, Any]]:
+    """Candidates from one agency only, decided in SQL.
+
+    Selecting globally and narrowing in Python afterwards would still have read
+    every tenant's tasks into this process - the leak happens at the query, not
+    at the filter. The predicate is on `t.agency_id` and on the follow-up
+    actions the anti-join consults, so neither side can reach across.
+    """
+    with followup_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT
+                t.id,
+                t.contact_id,
+                t.lead_id,
+                t.stima_id,
+                t.priority,
+                t.metadata
+            FROM tasks t
+            LEFT JOIN leads l ON l.id = t.lead_id AND l.agency_id = %s
+            WHERE t.agency_id = %s
+              AND t.status = 'open'
+              AND t.priority IN ('low', 'normal')
+              AND t.task_type = 'automated_followup'
+              AND t.title = 'Contattare proprietario'
+              AND t.due_at IS NOT NULL
+              AND t.due_at <= NOW() - INTERVAL '24 hours'
+              AND COALESCE(t.metadata->>'source', '') = 'followup'
+              AND COALESCE(t.metadata->>'rule_code', '') = 'FOLLOWUP_STIMA_RICHIESTA'
+              AND (
+                    t.lead_id IS NULL
+                    OR (
+                        l.status NOT IN ('closed', 'paused')
+                        AND l.stage = 'new'
+                    )
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM followup_actions fa
+                    WHERE fa.agency_id = %s
+                    AND fa.idempotency_key = (
+                        'followup:time:' || %s || ':task:' || t.id::text || ':v1'
+                    )
+                    AND fa.status = 'completed'
+              )
+            ORDER BY t.due_at ASC, t.id ASC
+            LIMIT %s
+            """,
+            (agency_id, agency_id, agency_id, rule_code, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _insert_pending_action_for_agency(
+    agency_id: int,
+    *,
+    rule_code: str,
+    trigger_type: str,
+    idempotency_key: str,
+    contact_id: int | None,
+    lead_id: int | None,
+    stima_id: int | None,
+) -> dict[str, Any]:
+    with followup_cursor(commit=True) as (_, cur):
+        cur.execute(
+            """
+            INSERT INTO followup_actions (
+                agency_id, rule_code, trigger_type, contact_id, lead_id, stima_id,
+                idempotency_key, status
+            ) VALUES (
+                %(agency_id)s, %(rule_code)s, %(trigger_type)s, %(contact_id)s,
+                %(lead_id)s, %(stima_id)s, %(idempotency_key)s, 'pending'
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING *
+            """,
+            {
+                "agency_id": agency_id,
+                "rule_code": rule_code,
+                "trigger_type": trigger_type,
+                "contact_id": contact_id,
+                "lead_id": lead_id,
+                "stima_id": stima_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        row = _row(cur.fetchone())
+        if row is not None:
+            return {**row, "_created": True}
+
+        # Scoped: a replay of another tenant's globally unique key finds nothing
+        # and raises, so the caller never receives that tenant's action.
+        cur.execute(
+            """SELECT * FROM followup_actions
+               WHERE idempotency_key = %s AND agency_id = %s""",
+            (idempotency_key, agency_id),
+        )
+        existing = _row(cur.fetchone())
+        if existing is None:
+            raise ValidationError("idempotency key already used")
+        return {**existing, "_created": False}
+
+
+def execute_temporal_escalation_for_agency(
+    agency_id: int,
+    *,
+    rule_code: str,
+    trigger_type: str,
+    task_id: int,
+    contact_id: int | None,
+    lead_id: int | None,
+    stima_id: int | None,
+    idempotency_key: str,
+    created_by: str,
+) -> dict[str, Any]:
+    """As the legacy escalation, with every write bounded to one agency.
+
+    The task is re-read inside the agency before it is escalated: the candidate
+    list already restricted it, but a task can change hands between listing and
+    execution, and this is the statement that actually mutates it.
+    """
+    action = _insert_pending_action_for_agency(
+        agency_id,
+        rule_code=rule_code,
+        trigger_type=trigger_type,
+        idempotency_key=idempotency_key,
+        contact_id=contact_id,
+        lead_id=lead_id,
+        stima_id=stima_id,
+    )
+    if not action["_created"]:
+        if action["status"] == "completed":
+            return {"task_id": action["task_id"], "status": "completed", "action_id": action["id"]}
+        return {"task_id": task_id, "status": action["status"], "action_id": action["id"]}
+
+    try:
+        with followup_cursor(commit=True) as (_, cur):
+            cur.execute(
+                """
+                UPDATE tasks
+                   SET priority = 'high',
+                       status = 'in_progress',
+                       updated_at = NOW()
+                 WHERE id = %s AND agency_id = %s
+                RETURNING id
+                """,
+                (task_id, agency_id),
+            )
+            if cur.fetchone() is None:
+                raise ValidationError(f"task {task_id} not found")
+            cur.execute(
+                """
+                UPDATE followup_actions
+                   SET status = 'completed', task_id = %s, executed_at = NOW()
+                 WHERE id = %s AND agency_id = %s
+                """,
+                (task_id, action["id"], agency_id),
+            )
+    except Exception as exc:  # noqa: BLE001 - re-raised after best-effort marking
+        _mark_failed_best_effort(action["id"], exc)
+        raise
+
+    return {"task_id": task_id, "status": "completed", "action_id": action["id"]}

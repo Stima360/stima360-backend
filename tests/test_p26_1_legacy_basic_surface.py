@@ -442,10 +442,16 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
     # signals -> core.repository.list_leads; service -> list_tasks. Carries the
     # C2 compatibility context since Task 11.
     "next_best_action_router",
-    # repository -> core.repository.create_task_with_cursor. The R-4 path: no
-    # ctx, agency derived by migration 030's trigger from the row's references.
-    "followup_router",
 }
+
+# P26-6A removed `followup_router` from the residual above. That is the
+# deliberate spec change this file asks for when the set shrinks, and it arrives
+# with the migrations that earned it (043-045): the scan route now takes an
+# agency context, the candidate query is bounded in SQL rather than filtered
+# afterwards, and followup_actions carries a physical agency_id enforced by a
+# trigger. The exemption is still recomputed on every run - see
+# AGENCY_SCOPED_LEGACY_BASIC_ROUTERS - so if the route ever loses its context,
+# followup reappears here as "added".
 
 # Routers on the legacy Basic channel that have been fully migrated to an agency
 # context, mapped to (package, expected route count).
@@ -462,10 +468,20 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
 # surface changes visible, not only to catch unsafe ones.
 AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
     # P26-2D. 23 routes, each taking legacy_basic_agency_context; the CORE read
-    # is core.repository.create_task_with_cursor called *with* that ctx - the
-    # same R-4 helper followup uses ctx-less, which is precisely the difference
-    # between the two entries.
+    # is core.repository.create_task_with_cursor called *with* that ctx.
     "buy_router": ("buy", 23),
+    # P26-6A. One route, taking legacy_basic_agency_context, whose scan is
+    # bounded to ctx.require_agency() in SQL rather than filtered afterwards.
+    #
+    # What earns the exemption is the HTTP surface: nothing a Basic-authenticated
+    # caller can reach through this router reads CORE without a tenant. The
+    # module still contains the R-4 ctx-less `create_task_with_cursor` call, but
+    # only on the system path main.py drives from the public estimation funnel -
+    # which has no operator, and whose agency migration 030's trigger derives
+    # from the row's own references. That path is not part of the legacy Basic
+    # surface this set measures, and it is recorded here so the distinction is
+    # visible rather than assumed.
+    "followup_router": ("followup", 1),
 }
 
 AGENCY_CONTEXT_DEPENDENCY = "legacy_basic_agency_context"
@@ -801,11 +817,17 @@ def test_g7_clause_b_the_operator_session_reaches_only_the_allowlist():
 
 
 def test_g7_clause_c_the_basic_surface_is_frozen_and_acknowledged():
-    """(c) What legacy Basic still reaches is enumerated, not discovered."""
+    """(c) What legacy Basic still reaches is enumerated, not discovered.
+
+    `followup_router` left this set in P26-6A, when its route gained an agency
+    context and its scan became bounded in SQL. The set is restated here rather
+    than derived from the constant above on purpose: this assertion exists so a
+    change to the residual has to be made twice, deliberately, in two places -
+    which is what stops it drifting quietly in either direction.
+    """
     assert FROZEN_LEGACY_BASIC_CORE_READERS == {
         "crm_router",
         "next_best_action_router",
-        "followup_router",
     }
 
 

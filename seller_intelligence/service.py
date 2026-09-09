@@ -124,3 +124,56 @@ def safe_record_event(**kwargs: Any) -> dict[str, Any] | None:
             exc,
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# P26-6A. Two entry points, because there are genuinely two callers.
+#
+#   record_event_scoped(ctx, ...)   the operator HTTP route
+#   record_event(...)               unchanged: the public funnel calls it
+#                                   through safe_record_event and has no
+#                                   operator, so the repository derives the
+#                                   agency from the references instead.
+#
+# `created_by` is server-derived on the HTTP path: it is the authenticated
+# admin identity, never a field of the request body.
+# ---------------------------------------------------------------------------
+
+def record_event_scoped(
+    ctx,
+    *,
+    contact_id: int | None = None,
+    lead_id: int | None = None,
+    stima_id: int | None = None,
+    property_id: int | None = None,
+    event_type: str,
+    event_source: str | None = None,
+    occurred_at: datetime | None = None,
+    payload: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    values = {
+        "contact_id": contact_id,
+        "lead_id": lead_id,
+        "stima_id": stima_id,
+        "property_id": property_id,
+    }
+    _require_at_least_one_reference(values)
+    if not event_type or not event_type.strip():
+        raise ValidationError("event_type is required")
+
+    data = {
+        **values,
+        "event_type": event_type,
+        "event_source": event_source,
+        "occurred_at": occurred_at or datetime.now(timezone.utc),
+        "payload": payload or {},
+        "idempotency_key": idempotency_key,
+        "created_by": created_by,
+    }
+    return repository.insert_event_scoped(ctx, data)
+
+
+def list_timeline_scoped(ctx, **filters: Any) -> list[dict[str, Any]]:
+    return repository.list_timeline_scoped(ctx, **filters)

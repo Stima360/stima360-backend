@@ -21,9 +21,31 @@ from seller_intelligence.router import router as seller_intelligence_router
 
 
 def build_app():
+    from seller_intelligence import router as router_module
+
     app = FastAPI()
     app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])
+    return _with_agency_context(app, router_module)
+
+
+# P26-6A: the routes now resolve an agency context server-side. These tests
+# exercise the HTTP contract, not the scoping, so the DB-backed resolution is
+# overridden and the scoped service functions are the ones patched. The Basic
+# guard is left real - the 401 assertions still mean what they meant.
+#
+# The dependency object is taken from the router module rather than imported
+# here, so it is the same function object FastAPI resolved.
+def _with_agency_context(app, router_module):
+    from operator_auth.context import OperatorContext
+
+    app.dependency_overrides[router_module.legacy_basic_agency_context] = lambda: (
+        OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
     return app
+
 
 
 def test_router_is_mounted_under_its_own_prefix_and_does_not_touch_core():
@@ -63,7 +85,7 @@ def test_post_event_with_valid_admin_creds_delegates_to_service(monkeypatch):
         return {"id": 1, **kwargs}
 
     import seller_intelligence.router as router_module
-    monkeypatch.setattr(router_module.service, "record_event", fake_record_event)
+    monkeypatch.setattr(router_module.service, "record_event_scoped", lambda _ctx, **kw: fake_record_event(**kw))
 
     response = client.post(
         "/api/seller-intelligence/events",
@@ -100,10 +122,10 @@ def test_service_validation_error_translates_to_400(monkeypatch):
 
     import seller_intelligence.router as router_module
 
-    def raising_record_event(**kwargs):
+    def raising_record_event(_ctx, **kwargs):
         raise ValidationError("controlled validation failure")
 
-    monkeypatch.setattr(router_module.service, "record_event", raising_record_event)
+    monkeypatch.setattr(router_module.service, "record_event_scoped", raising_record_event)
 
     response = client.post(
         "/api/seller-intelligence/events",
@@ -125,11 +147,11 @@ def test_get_timeline_passes_filters_through_to_service(monkeypatch):
 
     import seller_intelligence.router as router_module
 
-    def fake_list_timeline(**kwargs):
+    def fake_list_timeline(_ctx, **kwargs):
         captured.update(kwargs)
         return [{"id": 1, "event_type": "stima_richiesta"}]
 
-    monkeypatch.setattr(router_module.service, "list_timeline", fake_list_timeline)
+    monkeypatch.setattr(router_module.service, "list_timeline_scoped", fake_list_timeline)
 
     response = client.get(
         "/api/seller-intelligence/timeline",

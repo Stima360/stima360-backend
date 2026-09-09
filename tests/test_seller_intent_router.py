@@ -11,9 +11,31 @@ from seller_intent.router import router as seller_intent_router
 
 
 def build_app():
+    from seller_intent import router as router_module
+
     app = FastAPI()
     app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
+    return _with_agency_context(app, router_module)
+
+
+# P26-6A: the routes now resolve an agency context server-side. These tests
+# exercise the HTTP contract, not the scoping, so the DB-backed resolution is
+# overridden and the scoped service functions are the ones patched. The Basic
+# guard is left real - the 401 assertions still mean what they meant.
+#
+# The dependency object is taken from the router module rather than imported
+# here, so it is the same function object FastAPI resolved.
+def _with_agency_context(app, router_module):
+    from operator_auth.context import OperatorContext
+
+    app.dependency_overrides[router_module.legacy_basic_agency_context] = lambda: (
+        OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
     return app
+
 
 
 def test_endpoint_requires_admin_auth(monkeypatch):
@@ -32,7 +54,7 @@ def test_endpoint_not_found(monkeypatch):
     def _missing(*, lead_id: int):
         raise NotFoundError(f"lead {lead_id} not found")
 
-    monkeypatch.setattr(router_module, "get_seller_intent_score", _missing)
+    monkeypatch.setattr(router_module, "get_seller_intent_score_scoped", lambda _ctx, **kw: _missing(**kw))
     client = TestClient(build_app(), raise_server_exceptions=False)
 
     response = client.get("/api/seller-intent/leads/999/score", auth=("giorgio", "test-secret"))
@@ -62,7 +84,7 @@ def test_endpoint_payload_contains_operational_flags(monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(router_module, "get_seller_intent_score", _ok)
+    monkeypatch.setattr(router_module, "get_seller_intent_score_scoped", lambda _ctx, **kw: _ok(**kw))
     client = TestClient(build_app(), raise_server_exceptions=False)
     response = client.get("/api/seller-intent/leads/14/score", auth=("giorgio", "test-secret"))
     assert response.status_code == 200

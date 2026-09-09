@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -154,6 +155,11 @@ class SICursor:
     def execute(self, query, params=None):
         sql = " ".join(str(query).split()).lower()
         self.database.sql.append((sql, params))
+        # P26-6A: the system write path derives the event's agency from its
+        # references before inserting, so the fake answers those lookups.
+        if re.match(r"select agency_id from (contacts|leads|stime|properties) where id = %s", sql):
+            self.rows = [{"agency_id": getattr(self.database, "agency_id", 1)}]
+            return
         if "insert into seller_timeline_events" in sql:
             self._handle_insert(params)
             return

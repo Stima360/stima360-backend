@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import repository
+from .database import followup_cursor
 from .exceptions import ValidationError
 from .rules import get_rule
 
@@ -259,3 +260,143 @@ def safe_run_temporal_escalation_scan(**kwargs: Any) -> dict[str, Any]:
                 }
             ],
         }
+
+
+# ---------------------------------------------------------------------------
+# P26-6A. The scan gains an explicit tenant boundary.
+#
+# `run_temporal_escalation_scan` above is unchanged: tests/test_followup_p18d2_*
+# call it directly and it remains the ctx-less legacy entry point.
+#
+# Three new entry points, for three genuinely different callers:
+#
+#   run_temporal_escalation_scan_scoped(ctx, ...)      the HTTP route
+#   run_temporal_escalation_scan_for_agency(agency_id) one bounded cycle
+#   run_temporal_escalation_scan_for_all_agencies()    a server-only
+#                                                      orchestrator that calls
+#                                                      the bounded cycle once
+#                                                      per active agency
+#
+# The orchestrator exists so that a background job never has to run a query
+# without a tenant predicate. It iterates agencies; it does not sweep the
+# database and sort the results out afterwards.
+#
+# The actor is server-defined. The scan request used to carry `created_by`,
+# which meant any caller could stamp an action with an arbitrary identity.
+# ---------------------------------------------------------------------------
+
+SYSTEM_ACTOR = "FOLLOWUP"
+
+
+def _validated_temporal_rule(limit: int):
+    if limit < 1 or limit > 500:
+        raise ValidationError("limit must be between 1 and 500")
+    try:
+        rule = get_rule(TEMPORAL_ESCALATION_RULE_CODE)
+    except KeyError as exc:
+        raise ValidationError(str(exc)) from exc
+    if not rule.enabled:
+        raise ValidationError(
+            f"followup rule {TEMPORAL_ESCALATION_RULE_CODE!r} is not enabled"
+        )
+    if rule.trigger_type != "time":
+        raise ValidationError(
+            f"followup rule {TEMPORAL_ESCALATION_RULE_CODE!r} expects "
+            f"trigger_type='time', got {rule.trigger_type!r}"
+        )
+    return rule
+
+
+def run_temporal_escalation_scan_for_agency(
+    agency_id: int,
+    *,
+    limit: int = 100,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    """One scan cycle, bounded to one agency in SQL."""
+    rule = _validated_temporal_rule(limit)
+    actor = created_by or SYSTEM_ACTOR
+
+    candidates = repository.list_temporal_escalation_candidates_for_agency(
+        agency_id, limit=limit, rule_code=rule.rule_code
+    )
+
+    items: list[dict[str, Any]] = []
+    escalated = skipped = failed = 0
+
+    for candidate in candidates:
+        task_id = int(candidate["id"])
+        idempotency_key = _build_temporal_idempotency_key(task_id=task_id)
+        try:
+            result = repository.execute_temporal_escalation_for_agency(
+                agency_id,
+                rule_code=rule.rule_code,
+                trigger_type=rule.trigger_type,
+                task_id=task_id,
+                contact_id=candidate.get("contact_id"),
+                lead_id=candidate.get("lead_id"),
+                stima_id=candidate.get("stima_id"),
+                idempotency_key=idempotency_key,
+                created_by=actor,
+            )
+            row = {
+                "task_id": task_id,
+                "idempotency_key": idempotency_key,
+                "status": result["status"],
+            }
+            if result["status"] == "completed":
+                escalated += 1
+            else:
+                skipped += 1
+        except Exception as exc:  # noqa: BLE001 - one bad task must not stop the scan
+            failed += 1
+            row = {
+                "task_id": task_id,
+                "idempotency_key": idempotency_key,
+                "status": "failed",
+                "error": str(exc),
+            }
+            logger.error(
+                "followup_temporal_escalation_failed agency_id=%s task_id=%s error_type=%s error=%s",
+                agency_id, task_id, type(exc).__name__, exc,
+            )
+        items.append(row)
+
+    return {
+        "agency_id": agency_id,
+        "scanned": len(candidates),
+        "escalated": escalated,
+        "skipped": skipped,
+        "failed": failed,
+        "items": items,
+    }
+
+
+def run_temporal_escalation_scan_scoped(ctx, *, limit: int = 100) -> dict[str, Any]:
+    """The HTTP entry point. The agency is the caller's; the actor is ours."""
+    agency_id = ctx.require_agency()
+    return run_temporal_escalation_scan_for_agency(agency_id, limit=limit)
+
+
+def run_temporal_escalation_scan_for_all_agencies(*, limit: int = 100) -> dict[str, Any]:
+    """Server-only orchestrator: one bounded cycle per active agency.
+
+    Deliberately not a single global query. Every statement the scan issues
+    carries a tenant predicate, and this loop is what supplies it - so there is
+    no code path in the module that reads follow-up candidates without one.
+    """
+    with followup_cursor() as (_, cur):
+        cur.execute("SELECT id FROM agencies WHERE status = 'active' ORDER BY id")
+        agency_ids = [row["id"] for row in cur.fetchall()]
+
+    runs = [
+        run_temporal_escalation_scan_for_agency(agency_id, limit=limit)
+        for agency_id in agency_ids
+    ]
+    return {
+        "agencies": len(runs),
+        "escalated": sum(run["escalated"] for run in runs),
+        "skipped": sum(run["skipped"] for run in runs),
+        "failed": sum(run["failed"] for run in runs),
+        "runs": runs,
+    }
