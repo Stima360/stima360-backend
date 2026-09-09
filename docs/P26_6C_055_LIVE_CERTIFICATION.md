@@ -77,7 +77,20 @@ test databases. This certification, and the live suite it drives, write fixture
 rows, so both name `stima360_db_test` exactly and refuse anything else,
 including another legitimate test database.
 
-### 0c — pending must be exactly [055]
+### 0c — the ledger is where it should be
+
+**Choose the path before running anything below.** The two are mutually
+exclusive and each is self-contained; do not run them in sequence.
+
+| Situation | Path | Then |
+|---|---|---|
+| 055 has never been applied to TEST | **0c-FIRST**, immediately below | step 1, then step 2 |
+| 055 is already applied (the 2026-09-09 run applied it) | **0c-RERUN**, further down | step 2 — **skip step 1** |
+
+If you do not know which applies, run 0c-RERUN's `status` first: it prints the
+ledger, and the pending line answers the question without changing anything.
+
+### 0c-FIRST — pending must be exactly [055]
 
 Read from the runner's own `status`, which compares the migration files against
 the live ledger. An earlier draft of this document tested a hand-written array
@@ -121,7 +134,58 @@ test "$APPLIED" -eq 29 || {
 
 `status` opens a read-only transaction and rolls it back; it changes nothing.
 
+### 0c-RERUN — 055 is already applied
+
+The run of 2026-09-09 applied 055 to TEST and then failed one assertion in the
+live suite, so the proof has to be repeated against a database where 055 is no
+longer pending. **Use this path instead of 0c-FIRST, not after it** — 0c-FIRST
+demands `pending = [055]` and exits, which is precisely what an already-applied
+ledger cannot satisfy.
+
+Steps 0a and 0b are unchanged and still apply. This block runs its own `status`
+and derives its own values, so it is complete on its own.
+
+```bash
+set -o pipefail
+
+python scripts/p26_migrate.py status --operator "giorgio.larasa" > /tmp/p26_status.txt 2>&1
+STATUS_RC=$?
+cat /tmp/p26_status.txt
+test "$STATUS_RC" -eq 0 || { echo "BLOCKED: status exited $STATUS_RC"; exit 1; }
+
+# The runner reports the database it actually reached; it must be the TEST one.
+grep -qE '^database +: stima360_db_test$' /tmp/p26_status.txt || {
+  echo "BLOCKED: status did not confirm stima360_db_test"; exit 1; }
+
+# No PROBLEM lines.
+if grep -q '^  PROBLEM' /tmp/p26_status.txt; then
+  echo "BLOCKED: status reports a PROBLEM"; exit 1
+fi
+
+# Derived from the output just obtained, not carried over from another block.
+PENDING=$(awk '$1=="pending"{print $2}' /tmp/p26_status.txt | sort | paste -sd, -)
+APPLIED=$(awk '$1=="applied"{c++} END{print c+0}' /tmp/p26_status.txt)
+
+# Nothing may be pending: 055 is in, and no later migration has appeared.
+test -z "$PENDING" || { echo "BLOCKED: unexpected pending [$PENDING]"; exit 1; }
+
+# The ledger holds 30 applied migrations (026-055).
+test "$APPLIED" -eq 30 || {
+  echo "BLOCKED: $APPLIED applied migrations, expected 30 (026-055)"; exit 1; }
+
+# And 055 specifically - a count of 30 alone would not prove which 30.
+grep -qE '^  applied +055_p26_flow_agency_immutability$' /tmp/p26_status.txt || {
+  echo "BLOCKED: 055_p26_flow_agency_immutability is not in the ledger"; exit 1; }
+
+echo "RE-RUN preconditions OK - skip step 1, go to step 2"
+```
+
+Then go **straight to step 2**. Do not run step 1: the ledger is forward-only
+and 055 must not be applied twice.
+
 ## Step 1 — apply 055 through the certified runner
+
+**First run only — the 0c-FIRST path.** Skip this entirely if 0c-RERUN passed.
 
 The runner is the only migration channel; it refuses production database names
 and owns the transaction.

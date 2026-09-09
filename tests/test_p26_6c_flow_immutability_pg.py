@@ -132,6 +132,13 @@ SUPPRESSION = -9401
 ACTION = -9501
 RULE = -9601
 
+# The three FKs 052 created, `<table>_agency_id_fk ... ON DELETE RESTRICT`.
+FLOW_AGENCY_FKS = (
+    "flow_events_agency_id_fk",
+    "flow_executions_agency_id_fk",
+    "flow_suppressions_agency_id_fk",
+)
+
 
 # ---------------------------------------------------------------------------
 # pg_trigger.tgtype, decoded once.
@@ -527,8 +534,51 @@ def test_the_existing_foreign_keys_and_on_delete_semantics_survive(db):
     assert execution_fk == ["c"], execution_fk  # CASCADE
 
     # An agency that still owns FLOW rows cannot be deleted.
-    with pytest.raises(pg_errors.ForeignKeyViolation):
+    #
+    # The refusal is SQLSTATE 23001 RestrictViolation, NOT 23503
+    # ForeignKeyViolation. PostgreSQL reports the two from different paths:
+    # ON DELETE NO ACTION defers the check to end of statement and reports
+    # 23503 ("violates foreign key constraint"), while ON DELETE RESTRICT
+    # refuses immediately and reports 23001 ("violates RESTRICT setting of
+    # foreign key constraint"). 052 declares RESTRICT and the catalogue
+    # assertion four lines above pins `confdeltype = 'r'`, so 23001 is the only
+    # class this DELETE can produce.
+    #
+    # psycopg2 maps them to SIBLING classes - RestrictViolation is not a
+    # subclass of ForeignKeyViolation, they share only IntegrityError - so the
+    # first version of this assertion could never have passed against a
+    # correctly built schema. It expected the error of the ON DELETE mode the
+    # test itself had just proved was not in use.
+    #
+    # The DELETE aborts the transaction, so it runs inside its own savepoint:
+    # everything after it needs a usable session.
+    db.execute("SAVEPOINT restrict_probe")
+    with pytest.raises(pg_errors.RestrictViolation) as excinfo:
         db.execute("DELETE FROM agencies WHERE id = %s", (AGENCY_A,))
+    error = excinfo.value
+    assert error.pgcode == "23001", (error.pgcode, str(error))
+
+    # And it must be a FLOW constraint that refused, not an unrelated FK to
+    # agencies. AGENCY_A owns rows in all three FLOW tables and the RI triggers
+    # fire in creation order, so exactly one of the three does the refusing but
+    # which one is not fixed by anything this test controls.
+    refused_by = {name for name in FLOW_AGENCY_FKS if name in str(error)}
+    assert len(refused_by) == 1, (
+        f"expected exactly one FLOW agency FK to refuse the delete, got "
+        f"{sorted(refused_by)} / constraint={error.diag.constraint_name!r}: {error}"
+    )
+
+    # The session recovers from the refusal and the fixtures are intact - the
+    # savepoint discipline this module relies on has to survive an aborted
+    # statement, not only the successful ones.
+    db.execute("ROLLBACK TO SAVEPOINT restrict_probe")
+    db.execute("RELEASE SAVEPOINT restrict_probe")
+    db.execute(
+        "SELECT count(*) AS n FROM flow_events WHERE agency_id = %s", (AGENCY_A,)
+    )
+    assert db.fetchone()["n"] == 2, "the fixtures did not survive the refusal"
+    db.execute("SELECT count(*) AS n FROM agencies WHERE id = %s", (AGENCY_A,))
+    assert db.fetchone()["n"] == 1, "the agency was deleted after all"
 
 
 def test_the_four_guards_are_installed_and_armed(db):

@@ -1543,3 +1543,86 @@ def test_58_without_the_flag_no_connection_is_opened(tmp_path):
     assert "skipped" in result.stdout, result.stdout[-2000:]
     for symptom in ("OperationalError", "could not connect", "Connection refused"):
         assert symptom not in result.stdout, (symptom, result.stdout[-2000:])
+
+
+# ===========================================================================
+# 59-60 - THE EXPECTED SQLSTATE MUST MATCH THE DECLARED ON DELETE MODE
+#
+# The live certification ran 28 passed / 1 failed on Render TEST. The failure
+# was in the test, not in the schema:
+#
+#     DELETE FROM agencies WHERE id = -9101
+#     -> psycopg2.errors.RestrictViolation: update or delete on table
+#        "agencies" violates RESTRICT setting of foreign key constraint
+#        "flow_events_agency_id_fk" on table "flow_events"
+#
+# while the test expected `ForeignKeyViolation`. PostgreSQL reports the two
+# from different paths:
+#
+#     ON DELETE NO ACTION  -> 23503  "violates foreign key constraint"
+#     ON DELETE RESTRICT   -> 23001  "violates RESTRICT setting of ..."
+#
+# 052 declares RESTRICT, and the same test asserts `confdeltype = 'r'` a few
+# lines earlier - so it asserted one ON DELETE mode from the catalogue and
+# expected the error class of the other. psycopg2 maps the two SQLSTATEs to
+# SIBLING classes, so the expectation could not have passed against a
+# correctly built schema; it was unfalsifiable in the wrong direction.
+#
+# Nothing here could have caught it before: the live module skips without a
+# database, so the expectation was never evaluated. These two tests evaluate
+# what can be evaluated offline - the exception hierarchy, and the agreement
+# between the catalogue assertion and the expected class.
+# ===========================================================================
+
+def test_59_restrict_and_foreign_key_violations_are_sibling_classes():
+    """The reason the wrong expectation could never have passed.
+
+    If psycopg2 ever made one a subclass of the other, the assertion in the
+    live suite would start passing for the wrong reason and this test is what
+    would notice.
+    """
+    from psycopg2 import errors as pg_errors
+
+    assert not issubclass(pg_errors.RestrictViolation, pg_errors.ForeignKeyViolation)
+    assert not issubclass(pg_errors.ForeignKeyViolation, pg_errors.RestrictViolation)
+    # Their only shared ancestor is the generic integrity error, which is
+    # exactly why the live suite must not fall back to catching that instead.
+    assert pg_errors.RestrictViolation.__bases__ == (pg_errors.IntegrityError,)
+    assert pg_errors.ForeignKeyViolation.__bases__ == (pg_errors.IntegrityError,)
+    # And the SQLSTATE mapping the diagnosis rests on.
+    assert pg_errors.lookup("23001") is pg_errors.RestrictViolation
+    assert pg_errors.lookup("23503") is pg_errors.ForeignKeyViolation
+
+
+def test_60_the_live_suite_expects_the_class_its_catalogue_assertion_implies():
+    """`confdeltype = 'r'` and `RestrictViolation` must be asserted together."""
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    # The catalogue side: all three agency FKs are RESTRICT.
+    assert 'set(agency_fks.values()) == {"r"}' in code
+
+    # The behavioural side must agree with it.
+    assert "pytest.raises(pg_errors.RestrictViolation)" in code
+    assert 'error.pgcode == "23001"' in code
+    # The mismatched expectation must not come back, and the generic parent
+    # must not be used to paper over the question.
+    assert "ForeignKeyViolation" not in code, (
+        "a RESTRICT constraint does not raise 23503"
+    )
+    assert "pg_errors.IntegrityError" not in code, (
+        "catching the shared parent would accept either SQLSTATE"
+    )
+
+    # The refusal is attributed to a FLOW constraint by name, not merely to
+    # 'some integrity error on agencies'.
+    for name in ("flow_events_agency_id_fk", "flow_executions_agency_id_fk",
+                 "flow_suppressions_agency_id_fk"):
+        assert name in code, name
+
+    # And the aborted statement is recovered from inside the test, so the
+    # assertions after it run against a usable session.
+    assert 'db.execute("SAVEPOINT restrict_probe")' in code
+    assert 'db.execute("ROLLBACK TO SAVEPOINT restrict_probe")' in code
