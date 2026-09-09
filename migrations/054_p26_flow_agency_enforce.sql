@@ -209,11 +209,11 @@ BEGIN
         IF v_tgtype IS NULL THEN
             RAISE EXCEPTION 'P26-6C 054: % is not installed on %', v_pair[1], v_pair[2];
         END IF;
-        -- bit 0 = ROW, bit 1 = BEFORE(0)/AFTER(1), bit 2 = INSERT, bit 4 = UPDATE
+        -- pg_trigger.tgtype flags: ROW=1, BEFORE=2, INSERT=4, UPDATE=16
         IF (v_tgtype & 1) = 0 THEN
             RAISE EXCEPTION 'P26-6C 054: % must be FOR EACH ROW', v_pair[1];
         END IF;
-        IF (v_tgtype & 2) <> 0 THEN
+        IF (v_tgtype & 2) = 0 THEN
             RAISE EXCEPTION 'P26-6C 054: % must fire BEFORE, not AFTER', v_pair[1];
         END IF;
         IF (v_tgtype & 4) = 0 OR (v_tgtype & 16) = 0 THEN

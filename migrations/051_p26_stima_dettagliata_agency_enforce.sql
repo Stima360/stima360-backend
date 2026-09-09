@@ -129,11 +129,11 @@ BEGIN
     IF v_tgtype IS NULL THEN
         RAISE EXCEPTION 'P26-6C 051: trg_stima_dettagliata_agency_integrity is not installed';
     END IF;
-    -- bit 0 = ROW, bit 1 = BEFORE(0)/AFTER(1), bit 2 = INSERT, bit 4 = UPDATE
+    -- pg_trigger.tgtype flags: ROW=1, BEFORE=2, INSERT=4, UPDATE=16
     IF (v_tgtype & 1) = 0 THEN
         RAISE EXCEPTION 'P26-6C 051: the integrity trigger must be FOR EACH ROW';
     END IF;
-    IF (v_tgtype & 2) <> 0 THEN
+    IF (v_tgtype & 2) = 0 THEN
         RAISE EXCEPTION 'P26-6C 051: the integrity trigger must fire BEFORE, not AFTER';
     END IF;
     IF (v_tgtype & 4) = 0 OR (v_tgtype & 16) = 0 THEN
