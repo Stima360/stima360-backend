@@ -58,6 +58,48 @@
 -- carries no BEGIN/COMMIT. Idempotent by effect: each UPDATE touches only rows
 -- whose agency_id IS NULL.
 
+-- WHY EVERY CALL OF THE HELPER IS ALIASED
+--
+-- `p26_6c_flow_entity_agency` returns SETOF *bigint* - a base type, not a
+-- composite - so the FROM item it produces exposes exactly one column, and
+-- PostgreSQL names that column after the FUNCTION, not after whatever the
+-- function body happened to select. The body's `agency_id` is invisible to the
+-- caller.
+--
+-- So this, which is what the first version of this file wrote:
+--
+--     UPDATE flow_events e
+--        SET agency_id = (SELECT agency_id FROM p26_6c_flow_entity_agency(...))
+--
+-- does NOT read the function's output. The unqualified `agency_id` finds no
+-- match in the subquery's own range table, name resolution walks outward, and
+-- it binds to `e.agency_id` - the very column being written. It is a legal
+-- correlated outer reference, so it parses, plans and runs without a warning,
+-- and it assigns the column to itself: NULL.
+--
+-- The trap is that 052 creates that outer column immediately before this file
+-- runs. Without it these statements would have failed at parse time with
+-- `column "agency_id" does not exist`; with it they silently become no-ops.
+-- The staging that makes the migration safe is exactly what hid the defect.
+--
+-- What it cost, on TEST: PASS 1 wrote NULL into every flow_events row while
+-- reporting success. PASS 2's ambiguity guard then saw one NULL candidate per
+-- execution (its entity branch had the same bug, and its event branch was
+-- filtered out by `e.agency_id IS NOT NULL`, which PASS 1 had just made false
+-- everywhere). COUNT(DISTINCT) of a single NULL is 0, `0 <> 1` is true, and
+-- all 3493 executions were reported as having "sources that disagree" - a
+-- number that is simply the row count of the table, not a count of conflicts.
+-- A read-only diagnostic run straight afterwards found 0 real disagreements.
+--
+-- Every call site below therefore names its output column explicitly:
+--
+--     ... FROM p26_6c_flow_entity_agency(...) AS resolved(agency_id)
+--
+-- and every reference to it is qualified. The sites that project no column at
+-- all (`SELECT 1 FROM ...`, used by the three "unresolved" guards) need no
+-- alias, because they never name the column and so cannot capture an outer
+-- one. tests/test_p26_6c_flow_isolation.py enforces both halves of that rule.
+
 -- ---------------------------------------------------------------------------
 -- The shared resolution. Created for this migration and dropped at the end, so
 -- it cannot be mistaken for runtime API.
@@ -147,8 +189,9 @@ $do$;
 
 UPDATE flow_events e
    SET agency_id = (
-       SELECT agency_id
+       SELECT resolved.agency_id
          FROM p26_6c_flow_entity_agency(e.entity_type, e.entity_id)
+              AS resolved(agency_id)
    )
  WHERE e.agency_id IS NULL;
 
@@ -195,8 +238,9 @@ BEGIN
           SELECT x.id
             FROM flow_executions x,
                  LATERAL (
-                     SELECT agency_id
+                     SELECT resolved.agency_id
                        FROM p26_6c_flow_entity_agency(x.entity_type, x.entity_id)
+                            AS resolved(agency_id)
                      UNION ALL
                      SELECT e.agency_id
                        FROM flow_events e
@@ -216,15 +260,16 @@ $do$;
 
 UPDATE flow_executions x
    SET agency_id = (
-       SELECT DISTINCT agency_id
+       SELECT DISTINCT candidates.agency_id
          FROM (
-             SELECT agency_id
+             SELECT resolved.agency_id
                FROM p26_6c_flow_entity_agency(x.entity_type, x.entity_id)
+                    AS resolved(agency_id)
              UNION ALL
              SELECT e.agency_id
                FROM flow_events e
               WHERE e.id = x.event_id AND e.agency_id IS NOT NULL
-         ) candidates
+         ) AS candidates(agency_id)
    )
  WHERE x.agency_id IS NULL;
 
@@ -279,8 +324,9 @@ $do$;
 
 UPDATE flow_suppressions s
    SET agency_id = (
-       SELECT agency_id
+       SELECT resolved.agency_id
          FROM p26_6c_flow_entity_agency(s.entity_type, s.entity_id)
+              AS resolved(agency_id)
    )
  WHERE s.agency_id IS NULL;
 

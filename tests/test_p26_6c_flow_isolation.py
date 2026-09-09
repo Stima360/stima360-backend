@@ -794,3 +794,259 @@ def test_35_backfill_updates_do_not_reference_the_update_target_from_lateral():
             f"p26_6c_flow_entity_agency({alias}.entity_type, {alias}.entity_id)"
             in statement
         ), statement
+
+
+# ===========================================================================
+# 35-37 - THE NAME-SHADOWING REGRESSION
+#
+# 053 shipped a defect that passed every test in this file and every one of the
+# hundred-odd FLOW tests, and only surfaced against real data on TEST. It is
+# worth stating exactly, because the shape recurs.
+#
+# `p26_6c_flow_entity_agency` returns SETOF *bigint* - a base type, not a
+# composite - so the FROM item it produces exposes exactly one column, and
+# PostgreSQL names that column after the FUNCTION. The function body's own
+# `agency_id` is not visible to the caller.
+#
+# So `SELECT agency_id FROM p26_6c_flow_entity_agency(...)` does not read the
+# function's output. The unqualified name finds nothing in the subquery's range
+# table, resolution walks outward, and it binds to the OUTER relation's
+# `agency_id` - the column being written. That is a legal correlated reference,
+# so it parses, plans and runs silently, and the UPDATE assigns the column to
+# itself: NULL.
+#
+# It was invisible because 052 creates that outer column immediately before.
+# Without it, the statement would have failed at parse time.
+#
+# These three tests encode the rule structurally rather than by matching one
+# bad string, so a differently-spelled reintroduction still fails.
+# ===========================================================================
+
+FLOW_HELPER = "p26_6c_flow_entity_agency"
+
+
+def _call_sites(sql_text):
+    """Every call of the helper in a FROM clause, with what surrounds it.
+
+    Returns (target_list, alias_clause) per site: the target list of the SELECT
+    the call belongs to, and whatever follows the closing parenthesis - which
+    is where an explicit `AS name(agency_id)` would appear.
+    """
+    flat = " ".join(re.sub(r"--[^\n]*", "", sql_text).split())
+    sites = []
+    for match in re.finditer(rf"FROM\s+{FLOW_HELPER}\s*\(", flat, re.IGNORECASE):
+        start = match.end() - 1
+        depth = 0
+        end = None
+        for index in range(start, len(flat)):
+            if flat[index] == "(":
+                depth += 1
+            elif flat[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        assert end is not None, "unbalanced parentheses at a helper call"
+        select = flat.rfind("SELECT", 0, match.start())
+        target_list = flat[select + len("SELECT"):match.start()].strip()
+        sites.append((target_list, flat[end + 1:end + 48]))
+    return sites
+
+
+def test_35_every_helper_call_that_projects_a_column_names_it_explicitly():
+    """The rule, applied to all of 053 rather than to one known-bad line.
+
+    Two forms are admissible and nothing else:
+
+      * the call projects no column at all - `SELECT 1 FROM helper(...)`, which
+        the three "unresolved" guards use. It cannot capture an outer name
+        because it never writes one.
+
+      * the call carries `AS <alias>(agency_id)` and every reference to the
+        column is qualified with that alias.
+    """
+    sites = _call_sites((MIGRATIONS / f"{BACKFILL}.sql").read_text(encoding="utf-8"))
+    assert len(sites) >= 7, f"expected every pass to call the helper, found {len(sites)}"
+
+    offenders = []
+    for target_list, after in sites:
+        projects_column = re.search(r"\bagency_id\b", target_list) is not None
+        alias = re.match(r"\s*AS\s+(\w+)\s*\(\s*agency_id\s*\)", after, re.IGNORECASE)
+        if not projects_column:
+            continue
+        if alias is None:
+            offenders.append(("no alias", target_list))
+            continue
+        # Projected, aliased - now the reference itself must be qualified.
+        if not re.search(rf"\b{alias.group(1)}\.agency_id\b", target_list):
+            offenders.append(("unqualified reference", target_list))
+    assert not offenders, offenders
+
+
+def test_36_the_unqualified_projection_pattern_is_absent():
+    """The literal shape that shipped, spelled out.
+
+    Test 35 is the structural rule; this one names the exact statement that
+    reached TEST, so the diff that reintroduces it fails against something a
+    reader recognises immediately.
+    """
+    flat = " ".join(
+        re.sub(r"--[^\n]*", "", (MIGRATIONS / f"{BACKFILL}.sql").read_text(encoding="utf-8")).split()
+    )
+    assert not re.search(
+        rf"SELECT\s+agency_id\s+FROM\s+{FLOW_HELPER}", flat, re.IGNORECASE
+    ), "an unqualified projection of the helper's output has come back"
+    # And the same shape one level down, inside a UNION branch or a derived table.
+    assert not re.search(
+        rf"SELECT\s+DISTINCT\s+agency_id\s+FROM\s+\(", flat, re.IGNORECASE
+    ), "a derived table projects an unqualified agency_id"
+
+
+def test_37_the_backfill_would_not_be_a_no_op():
+    """Each UPDATE must assign from the helper, not from the row it is writing.
+
+    The defect made all three UPDATEs `SET agency_id = <its own value>`. The
+    tell is that the assigned expression has to mention an alias that is not
+    the table being updated.
+    """
+    flat = " ".join(
+        re.sub(r"--[^\n]*", "", (MIGRATIONS / f"{BACKFILL}.sql").read_text(encoding="utf-8")).split()
+    )
+    updates = re.findall(
+        r"UPDATE\s+(flow_\w+)\s+(\w+)\s+SET agency_id = \((.*?)\)\s+WHERE",
+        flat, re.IGNORECASE,
+    )
+    assert len(updates) == 3, [u[0] for u in updates]
+    for table, table_alias, expression in updates:
+        assert FLOW_HELPER in expression, (table, expression[:120])
+        # The value must come from the helper's own alias, never from the row.
+        assert not re.search(rf"SELECT\s+{table_alias}\.agency_id\b", expression), (
+            table, expression[:120],
+        )
+        assert re.search(r"SELECT\s+(DISTINCT\s+)?\w+\.agency_id\b", expression), (
+            table, expression[:120],
+        )
+
+
+# ===========================================================================
+# 38-40 - THE CRON RECOVERY CONTRACT
+#
+# The second defect this slice shipped, and it reached production: the
+# scheduled job `stima360-flow-automation` failed every run with
+#
+#     phase=recovery status=failed duration_ms=384 reason=invalid_json
+#
+# `run_flow_p2b_cron.py::_post` validates a recovery response before reading
+# it: a string `status`, and non-negative integers for `requested_limit`,
+# `processed`, `ignored`, `failed` and `busy`. Anything else is rejected as
+# `invalid_json` - which is what a *contractually* invalid but syntactically
+# fine JSON body is.
+#
+# P26-6C's first `recover_received_events_for_agency` returned
+# `{"processed": ..., "items": [...]}`. Valid JSON, wrong shape, and its
+# `processed` counted attempts rather than successes.
+#
+# The cron is NOT relaxed to accept the poorer body. These tests pin the
+# contract from the consumer's side, so the service has to satisfy it.
+# ===========================================================================
+
+CRON_RECOVERY_INTEGER_KEYS = ("requested_limit", "processed", "ignored", "failed", "busy")
+
+
+def _cron_required_keys():
+    """The keys the cron actually validates, read from the cron itself.
+
+    Derived rather than restated: if `_post` starts requiring another counter,
+    this test starts requiring it too, instead of quietly falling behind.
+    """
+    source = (ROOT / "run_flow_p2b_cron.py").read_text(encoding="utf-8")
+    block = source[source.index("if phase=='recovery'") - 400:source.index("if phase=='recovery'")]
+    required = re.search(r"\(([^)]*)\)\s*$", block.strip())
+    assert required, block
+    return tuple(re.findall(r"'(\w+)'", required.group(1)))
+
+
+def test_38_the_cron_still_validates_the_full_recovery_contract():
+    """The consumer is unchanged: this slice fixes the producer, not the check."""
+    assert _cron_required_keys() == CRON_RECOVERY_INTEGER_KEYS, _cron_required_keys()
+    source = (ROOT / "run_flow_p2b_cron.py").read_text(encoding="utf-8")
+    assert "raise TechnicalError('invalid_json')" in source
+    assert "isinstance(data.get('status'),str)" in source
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_39_both_recovery_entry_points_answer_the_cron_contract(monkeypatch, scoped):
+    """Same shape from the ctx-less path and the per-agency one.
+
+    Driven through the real service with the event stream faked, so the counts
+    are the ones the classification actually produces - not a canned dict.
+    """
+    from flow import service as flow_service
+
+    outcomes = {
+        1: {"claim_status": "claimed", "event": {"status": "processed"}},
+        2: {"claim_status": "ineligible", "event": {"status": "received"}},
+        3: {"claim_status": "busy", "event": {"status": "received"}},
+        4: {"claim_status": "claimed", "event": {"status": "failed"}},
+    }
+    monkeypatch.setattr(flow_service.repository, "list_received_owner_event_ids",
+                        lambda limit: list(outcomes))
+    monkeypatch.setattr(flow_service.repository, "list_received_owner_event_ids_for_agency",
+                        lambda agency_id, limit: list(outcomes))
+    monkeypatch.setattr(flow_service, "process_saved_event",
+                        lambda event_id, received_only=False: outcomes[event_id])
+
+    if scoped:
+        result = flow_service.recover_received_events_for_agency(A, 10)
+    else:
+        result = flow_service.recover_received_events(10)
+
+    assert isinstance(result.get("status"), str), result
+    for key in CRON_RECOVERY_INTEGER_KEYS:
+        assert type(result.get(key)) is int and result[key] >= 0, (key, result)
+    # The counts are the classification's, not the loop's length.
+    assert result["requested_limit"] == 10
+    assert result["processed"] == 1 and result["ignored"] == 1
+    assert result["busy"] == 1 and result["failed"] == 1
+    assert result["status"] == "partial_failure", result["status"]
+    assert len(result["items"]) == 4
+
+
+def test_40_the_agency_filter_is_in_the_event_query_not_in_the_counting(monkeypatch):
+    """Restoring the contract must not have restored the global sweep.
+
+    The tenant bound is the id query: nothing outside this agency is claimed,
+    so nothing outside it can be processed, counted or reported.
+    """
+    from flow import service as flow_service
+
+    asked = {}
+    monkeypatch.setattr(
+        flow_service.repository, "list_received_owner_event_ids_for_agency",
+        lambda agency_id, limit: asked.setdefault("agency", agency_id) and [] or [],
+    )
+    monkeypatch.setattr(
+        flow_service.repository, "list_received_owner_event_ids",
+        lambda limit: pytest.fail("the scoped path used the global event query"),
+    )
+    result = flow_service.recover_received_events_for_agency(A, 5)
+    assert asked["agency"] == A
+    assert result["status"] == "completed" and result["processed"] == 0
+    assert result["requested_limit"] == 5
+
+
+def test_40b_the_two_recovery_paths_share_one_definition():
+    """The shape is defined once, so it cannot drift again.
+
+    The first version of the scoped function was a second, independent
+    implementation - which is exactly how it came to return a different
+    dictionary from the one the cron reads.
+    """
+    from flow import service as flow_service
+
+    for name in ("recover_received_events", "recover_received_events_for_agency"):
+        source = inspect.getsource(getattr(flow_service, name))
+        assert "_recover_events(" in source, name
+        assert "'status'" not in source and '"status"' not in source, (
+            f"{name} builds its own response shape instead of using _recover_events"
+        )

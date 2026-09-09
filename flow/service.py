@@ -115,10 +115,25 @@ def process_saved_event(event_id,received_only=False):
             raise
 
 
-def recover_received_events(limit):
+def _recover_events(event_ids, limit):
+    """The recovery cycle, over whichever set of event ids it is given.
+
+    Extracted in P26-6C so the ctx-less path and the per-agency one cannot
+    drift: the RESPONSE SHAPE here is a contract, not an implementation detail.
+    run_flow_p2b_cron.py::_post validates that a recovery response carries a
+    string `status` and non-negative integer `requested_limit`, `processed`,
+    `ignored`, `failed` and `busy`, and rejects anything else as `invalid_json`
+    before it can even read the counts.
+
+    The first version of `recover_received_events_for_agency` returned only
+    `{processed, items}` - syntactically valid JSON that the cron could not
+    accept - and the scheduled job failed with
+    `phase=recovery status=failed reason=invalid_json`. Both entry points now
+    build their answer here, so there is one shape and one place that defines it.
+    """
     items=[]
     counts={'processed':0,'ignored':0,'failed':0,'busy':0}
-    for event_id in repository.list_received_owner_event_ids(limit):
+    for event_id in event_ids:
         try:
             result=process_saved_event(event_id,received_only=True)
             claim_status=result.get('claim_status')
@@ -140,6 +155,10 @@ def recover_received_events(limit):
     problems=counts['failed']+counts['busy']
     status='failed' if counts['failed'] and not (counts['processed']+counts['ignored']+counts['busy']) else ('partial_failure' if problems else 'completed')
     return {'status':status,'requested_limit':limit,**counts,'items':items}
+
+
+def recover_received_events(limit):
+    return _recover_events(repository.list_received_owner_event_ids(limit), limit)
 
 
 def _scan_failure(code, stage, error, entity_type=None, entity_id=None, mode="simulation", requested_by=None, *, agency_id=None):
@@ -324,8 +343,13 @@ def delete_suppression_for_agency(agency_id, suppression_id):
 
 
 def recover_received_events_for_agency(agency_id, limit):
-    """Recovery, bounded to one agency's stuck events."""
-    recovered = []
-    for event_id in repository.list_received_owner_event_ids_for_agency(agency_id, limit):
-        recovered.append(process_saved_event(event_id, received_only=True))
-    return {"processed": len(recovered), "items": recovered}
+    """Recovery, bounded to one agency's stuck events.
+
+    Same response contract as the ctx-less twin - see `_recover_events` - and
+    the only difference is which events are eligible to be recovered. The
+    agency filter is in the id query, so nothing outside this tenant is even
+    claimed, let alone processed.
+    """
+    return _recover_events(
+        repository.list_received_owner_event_ids_for_agency(agency_id, limit), limit
+    )
