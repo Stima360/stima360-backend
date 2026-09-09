@@ -27,9 +27,50 @@ def set_account(i,status):
  get_account(i)
  with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_accounts SET status=%s,disabled_at=CASE WHEN %s='disabled' THEN NOW() ELSE NULL END,updated_at=NOW() WHERE id=%s RETURNING *",(status,status,i));return one(c)
 def create_access(d):
+ # P26-6C OWNER: a grant may not join an account and a property of different
+ # agencies. OWNER has two tenancy roots - the account reaches an agency
+ # through its contact, the property carries its own - and nothing in the
+ # schema requires them to agree. Several OWNER tables touch both roots
+ # (owner_publication_reads, owner_document_reads, owner_feedback,
+ # owner_notifications); owner_property_access is the one where an
+ # administrator CREATES the link, and the one require_property and
+ # portal_properties then read as authorisation. That is why the check is
+ # here, in the layer that has the cursor, inside the same transaction as the
+ # INSERT it guards.
+ #
+ # Both agencies come from the database. Nothing in `d` is consulted for them:
+ # `d` is the request body.
+ #
+ # FOR SHARE, not FOR UPDATE: these rows are read, not modified, and two grants
+ # created against the same property should not serialise against each other.
+ # Nor FOR KEY SHARE - but not for the reason it might seem. On two of the
+ # three rows a key-share lock would in fact be enough: owner_accounts.contact_id
+ # is UNIQUE, and 030 gave contacts the composite key
+ # contacts_agency_scope_unq UNIQUE (agency_id, id), so an UPDATE of either
+ # column is a key update. properties.agency_id is the exception: 034 covers it
+ # only with the plain, non-unique index idx_properties_agency_id, so there a
+ # key-share lock would leave UPDATE properties SET agency_id=... unblocked.
+ # FOR SHARE is the weakest level that holds uniformly across all three.
+ #
+ # The lock holds until COMMIT and not one moment longer: it makes the decision
+ # and the INSERT atomic with respect to the parents, and says nothing about a
+ # parent that changes agency afterwards. A grant already written stays behind,
+ # and all three parents are mutable - owner_accounts.contact_id,
+ # contacts.agency_id and properties.agency_id all accept an UPDATE today, none
+ # of them carrying an immutability trigger. Closing that needs an agreement
+ # trigger on this table plus those guards; none of it is in this patch.
  with core_cursor(commit=True) as(_,c):
-  c.execute('SELECT 1 FROM owner_accounts WHERE id=%s',(d['owner_account_id'],));a=c.fetchone();c.execute('SELECT 1 FROM properties WHERE id=%s',(d['property_id'],));p=c.fetchone()
+  c.execute("SELECT ct.agency_id FROM owner_accounts oa JOIN contacts ct ON ct.id=oa.contact_id WHERE oa.id=%s FOR SHARE OF oa,ct",(d['owner_account_id'],));a=c.fetchone()
+  c.execute('SELECT agency_id FROM properties WHERE id=%s FOR SHARE',(d['property_id'],));p=c.fetchone()
   if not a or not p:raise NotFoundError(NF)
+  # Each side is rejected on its own BEFORE the two are compared: NULL is not a
+  # value, and `None != None` is False, so a single equality test would accept
+  # the one case where neither agency is known.
+  account_agency=a['agency_id'];property_agency=p['agency_id']
+  if account_agency is None or property_agency is None:raise NotFoundError(NF)
+  # NotFoundError, which the route already maps to a neutral 404: telling the
+  # caller that the property exists but belongs elsewhere is itself a leak.
+  if account_agency!=property_agency:raise NotFoundError(NF)
   c.execute("INSERT INTO owner_property_access(owner_account_id,property_id,access_role,access_status,is_primary,valid_from,valid_until) VALUES(%s,%s,%s,'active',%s,NOW(),%s) RETURNING *",(d['owner_account_id'],d['property_id'],d.get('access_role','owner'),d.get('is_primary',False),d.get('valid_until')));r=one(c)
  audit('access_granted',r['owner_account_id'],r['property_id'],'owner_access',r['id']);return r
 def list_access():
