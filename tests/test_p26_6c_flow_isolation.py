@@ -770,3 +770,27 @@ def test_34_no_generic_rowtype_trigger_function():
     assert "NEW.event_id" in execution_fn
     event_fn = body[body.index("flow_event_agency_integrity()"):body.index("flow_execution_agency_integrity()")]
     assert "NEW.event_id" not in event_fn, event_fn
+
+
+def test_35_backfill_updates_do_not_reference_the_update_target_from_lateral():
+    """PostgreSQL does not expose the UPDATE target alias inside FROM LATERAL.
+
+    P26-6C live TEST caught this in migration 053. Correlated SET subqueries
+    are valid; target-referencing FROM LATERAL updates are not.
+    """
+    body = _sql(BACKFILL)
+
+    for table, alias in (
+        ("flow_events", "e"),
+        ("flow_executions", "x"),
+        ("flow_suppressions", "s"),
+    ):
+        start = body.index(f"UPDATE {table} {alias}")
+        end = body.index(";", start) + 1
+        statement = body[start:end]
+
+        assert "FROM LATERAL" not in statement, statement
+        assert (
+            f"p26_6c_flow_entity_agency({alias}.entity_type, {alias}.entity_id)"
+            in statement
+        ), statement

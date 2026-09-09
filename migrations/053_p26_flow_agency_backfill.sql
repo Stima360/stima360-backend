@@ -146,10 +146,10 @@ END
 $do$;
 
 UPDATE flow_events e
-   SET agency_id = a.agency_id
-  FROM LATERAL (
-       SELECT agency_id FROM p26_6c_flow_entity_agency(e.entity_type, e.entity_id)
-  ) AS a
+   SET agency_id = (
+       SELECT agency_id
+         FROM p26_6c_flow_entity_agency(e.entity_type, e.entity_id)
+   )
  WHERE e.agency_id IS NULL;
 
 -- ===========================================================================
@@ -215,17 +215,17 @@ END
 $do$;
 
 UPDATE flow_executions x
-   SET agency_id = a.agency_id
-  FROM LATERAL (
-       SELECT DISTINCT agency_id FROM (
-           SELECT agency_id
-             FROM p26_6c_flow_entity_agency(x.entity_type, x.entity_id)
-           UNION ALL
-           SELECT e.agency_id
-             FROM flow_events e
-            WHERE e.id = x.event_id AND e.agency_id IS NOT NULL
-       ) candidates
-  ) AS a
+   SET agency_id = (
+       SELECT DISTINCT agency_id
+         FROM (
+             SELECT agency_id
+               FROM p26_6c_flow_entity_agency(x.entity_type, x.entity_id)
+             UNION ALL
+             SELECT e.agency_id
+               FROM flow_events e
+              WHERE e.id = x.event_id AND e.agency_id IS NOT NULL
+         ) candidates
+   )
  WHERE x.agency_id IS NULL;
 
 -- ===========================================================================
@@ -278,10 +278,10 @@ END
 $do$;
 
 UPDATE flow_suppressions s
-   SET agency_id = a.agency_id
-  FROM LATERAL (
-       SELECT agency_id FROM p26_6c_flow_entity_agency(s.entity_type, s.entity_id)
-  ) AS a
+   SET agency_id = (
+       SELECT agency_id
+         FROM p26_6c_flow_entity_agency(s.entity_type, s.entity_id)
+   )
  WHERE s.agency_id IS NULL;
 
 -- ===========================================================================
