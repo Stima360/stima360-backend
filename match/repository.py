@@ -7,6 +7,7 @@ from psycopg2.extras import Json
 
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
+from core.scope import ProgrammingError
 from .engine import calculate
 from .enums import ALGORITHM_VERSION, MODULE_VERSION, ACTIVE_PROPERTY_STATUSES
 from .readiness import match_readiness, require_ready
@@ -751,3 +752,631 @@ def dashboard_errors(limit=100):
 
 def dashboard_review(limit=100):
     return list_matches(limit=limit, review_required=True)
+
+
+# ---------------------------------------------------------------------------
+# P26-2E scoped HTTP runtime surface.
+#
+# MATCH is CHILD-DERIVED: a match has no agency of its own, it is a statement
+# about a buy request and a property that do. Everything below therefore
+# derives the tenant from `ctx` and requires BOTH roots to sit in it. Filtering
+# on one root alone would still admit a pair whose other half belongs elsewhere.
+#
+# The legacy functions above are untouched. crm/service.py calls list_matches
+# directly, property_watch imports the engine and readiness helpers, and
+# several historical tests call calculate_pair / get_readiness / refresh_for_buy
+# by their existing signatures. P26-2D BUY established the pattern: add scoped
+# functions rather than thread a context through contracts other domains
+# depend on.
+#
+# The agency is taken from ctx.require_agency() and from nowhere else - no
+# Default Agency lookup, no client-supplied value, no numeric literal.
+# ---------------------------------------------------------------------------
+
+# Both roots of a pair must resolve inside the caller's agency. Written once so
+# every read below carries the same predicate.
+_PAIR_JOIN = """
+        JOIN buy_requests b ON b.id=m.buy_request_id
+        JOIN properties p ON p.id=m.property_id
+"""
+_PAIR_SCOPE = "b.agency_id=%s AND p.agency_id=%s"
+
+
+def _agency(ctx) -> int:
+    return ctx.require_agency()
+
+
+def _scoped_buy(cur, request_id, agency_id, *, active=True):
+    """A buy request, visible only inside the caller's agency."""
+    cur.execute(
+        "SELECT * FROM buy_requests WHERE id=%s AND agency_id=%s AND archived_at IS NULL",
+        (request_id, agency_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise NotFoundError(f"buy request {request_id} not found")
+    data = dict(row)
+    if active and data["status"] != "active":
+        raise ValidationError("buy request must be active")
+    for key, table in (
+        ("locations", "buy_request_locations"),
+        ("typologies", "buy_request_typologies"),
+        ("features", "buy_request_features"),
+    ):
+        cur.execute(f"SELECT * FROM {table} WHERE buy_request_id=%s ORDER BY id", (request_id,))
+        data[key] = [dict(x) for x in cur.fetchall()]
+    return data
+
+
+def _scoped_property(cur, property_id, agency_id, *, matchable=True):
+    cur.execute(
+        "SELECT * FROM properties WHERE id=%s AND agency_id=%s AND archived_at IS NULL",
+        (property_id, agency_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise NotFoundError(f"property {property_id} not found")
+    data = dict(row)
+    if matchable and data["commercial_status"] not in ACTIVE_PROPERTY_STATUSES:
+        raise ValidationError("property is not commercially matchable")
+    return data
+
+
+def _ensure_pair(cur, request_id, property_id, agency_id):
+    """Both roots, in the caller's agency. The P26-2E rule, in one place."""
+    buy = _scoped_buy(cur, request_id, agency_id)
+    prop = _scoped_property(cur, property_id, agency_id)
+    return buy, prop
+
+
+def _ensure_match(cur, match_id, agency_id):
+    """A match is reachable only when both of its roots are in the agency."""
+    cur.execute(
+        f"""SELECT m.* FROM matches m {_PAIR_JOIN}
+            WHERE m.id=%s AND {_PAIR_SCOPE}""",
+        (match_id, agency_id, agency_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise NotFoundError(f"match {match_id} not found")
+    return dict(row)
+
+
+# -- readiness --------------------------------------------------------------
+
+def get_readiness_scoped(ctx, buy_request_id=None, property_id=None):
+    agency_id = _agency(ctx)
+    if buy_request_id is None and property_id is None:
+        raise ValidationError("buy_request_id o property_id richiesto")
+    with core_cursor() as (_, cur):
+        buy = None
+        prop = None
+        if buy_request_id is not None:
+            buy = _scoped_buy(cur, buy_request_id, agency_id, active=False)
+        if property_id is not None:
+            prop = _scoped_property(cur, property_id, agency_id, matchable=False)
+    return match_readiness(buy, prop)
+
+
+# -- calculate --------------------------------------------------------------
+
+def calculate_pair_scoped(ctx, buy_request_id, property_id, run_type="single", created_by=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        _ensure_pair(cur, buy_request_id, property_id, agency_id)
+    return calculate_pair(buy_request_id, property_id, run_type, created_by)
+
+
+def calculate_for_buy_scoped(ctx, request_id, created_by=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        buy = _scoped_buy(cur, request_id, agency_id)
+        require_ready(buy=buy)
+        cur.execute(
+            """SELECT id FROM properties
+               WHERE agency_id=%s AND archived_at IS NULL
+                 AND commercial_status=ANY(%s) ORDER BY id""",
+            (agency_id, list(ACTIVE_PROPERTY_STATUSES)),
+        )
+        ids = [x["id"] for x in cur.fetchall()]
+    items, errors = [], []
+    for property_id in ids:
+        try:
+            items.append(calculate_pair(request_id, property_id, "buy_to_all_properties", created_by))
+        except ConflictError:
+            continue
+        except Exception as exc:
+            errors.append({"property_id": property_id, "error": str(exc)})
+    return {"items": items, "errors": errors, "count": len(items)}
+
+
+def calculate_for_property_scoped(ctx, property_id, created_by=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        prop = _scoped_property(cur, property_id, agency_id)
+        require_ready(prop=prop)
+        cur.execute(
+            """SELECT id FROM buy_requests
+               WHERE agency_id=%s AND status='active' AND archived_at IS NULL ORDER BY id""",
+            (agency_id,),
+        )
+        ids = [x["id"] for x in cur.fetchall()]
+    items, errors = [], []
+    for request_id in ids:
+        try:
+            items.append(calculate_pair(request_id, property_id, "property_to_all_buyers", created_by))
+        except ConflictError:
+            continue
+        except Exception as exc:
+            errors.append({"buy_request_id": request_id, "error": str(exc)})
+    return {"items": items, "errors": errors, "count": len(items)}
+
+
+# -- reads ------------------------------------------------------------------
+
+def list_matches_scoped(
+    ctx,
+    limit=100,
+    offset=0,
+    buy_request_id=None,
+    property_id=None,
+    match_class=None,
+    commercial_status=None,
+    compatible_only=False,
+    freshness_status=None,
+    review_required=None,
+):
+    agency_id = _agency(ctx)
+    filters = ["m.archived_at IS NULL", _PAIR_SCOPE]
+    params = [agency_id, agency_id]
+    if buy_request_id:
+        filters.append("m.buy_request_id=%s")
+        params.append(buy_request_id)
+    if property_id:
+        filters.append("m.property_id=%s")
+        params.append(property_id)
+    if match_class:
+        filters.append("m.match_class=%s")
+        params.append(match_class)
+    if commercial_status:
+        filters.append("m.commercial_status=%s")
+        params.append(commercial_status)
+    if compatible_only:
+        filters.append("m.compatibility_status<>'incompatible'")
+    if freshness_status:
+        filters.append("m.freshness_status=%s")
+        params.append(freshness_status)
+    if review_required is not None:
+        filters.append("m.review_required=%s")
+        params.append(review_required)
+    params += [limit, offset]
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+                p.title AS property_title,p.code AS property_code,p.city,p.microzone,
+                p.asking_price,p.classification,
+                COALESCE(m.manual_score,m.score_total) AS effective_score
+                FROM matches m {_PAIR_JOIN}
+                JOIN contacts c ON c.id=b.contact_id
+                WHERE {' AND '.join(filters)}
+                ORDER BY effective_score DESC,m.updated_at DESC LIMIT %s OFFSET %s""",
+            params,
+        )
+        return [dict(x) for x in cur.fetchall()]
+
+
+def get_match_scoped(ctx, match_id):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+                p.title AS property_title,p.code AS property_code,p.city,p.microzone,
+                p.asking_price,p.classification,
+                COALESCE(m.manual_score,m.score_total) AS effective_score
+                FROM matches m {_PAIR_JOIN}
+                JOIN contacts c ON c.id=b.contact_id
+                WHERE m.id=%s AND {_PAIR_SCOPE}""",
+            (match_id, agency_id, agency_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise NotFoundError(f"match {match_id} not found")
+        data = dict(row)
+        cur.execute(
+            "SELECT * FROM match_requirement_results WHERE match_run_id=%s ORDER BY criterion_group,id",
+            (data["latest_run_id"],),
+        )
+        data["criteria"] = [dict(x) for x in cur.fetchall()]
+        return data
+
+
+# -- writes on a match ------------------------------------------------------
+
+def update_match_scoped(ctx, match_id, data):
+    agency_id = _agency(ctx)
+    data = dict(data)
+    if not data:
+        return get_match_scoped(ctx, match_id)
+    allowed = {"commercial_status", "priority", "assigned_to", "review_required"}
+    unknown = set(data) - allowed
+    if unknown:
+        raise ValidationError(f"unsupported match fields: {', '.join(sorted(unknown))}")
+    with core_cursor(commit=True) as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            f"UPDATE matches SET {','.join(f'{k}=%s' for k in data)},"
+            "last_reviewed_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",
+            list(data.values()) + [match_id],
+        )
+        return dict(cur.fetchone())
+
+
+def set_override_scoped(ctx, match_id, score, reason):
+    agency_id = _agency(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            """UPDATE matches SET is_manual_override=TRUE,manual_score=%s,manual_reason=%s,
+               last_reviewed_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *""",
+            (score, reason, match_id),
+        )
+        return dict(cur.fetchone())
+
+
+def clear_override_scoped(ctx, match_id):
+    agency_id = _agency(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            """UPDATE matches SET is_manual_override=FALSE,manual_score=NULL,manual_reason=NULL,
+               updated_at=NOW() WHERE id=%s RETURNING *""",
+            (match_id,),
+        )
+        return dict(cur.fetchone())
+
+
+# -- exclusions -------------------------------------------------------------
+
+def add_exclusion_scoped(ctx, data):
+    agency_id = _agency(ctx)
+    if "agency_id" in data:
+        raise ProgrammingError(
+            "'agency_id' is derived from the agency scope and must not be supplied"
+        )
+    with core_cursor(commit=True) as (_, cur):
+        _ensure_pair(cur, data["buy_request_id"], data["property_id"], agency_id)
+        cur.execute(
+            """INSERT INTO match_exclusions(
+                buy_request_id,property_id,exclusion_type,reason,expires_at,created_by
+            ) VALUES(%s,%s,%s,%s,%s,%s)
+            ON CONFLICT(buy_request_id,property_id) DO UPDATE SET
+                exclusion_type=EXCLUDED.exclusion_type,
+                reason=EXCLUDED.reason,
+                expires_at=EXCLUDED.expires_at,
+                created_by=EXCLUDED.created_by
+            RETURNING *""",
+            (
+                data["buy_request_id"],
+                data["property_id"],
+                data.get("exclusion_type", "agent_decision"),
+                data.get("reason"),
+                data.get("expires_at"),
+                data.get("created_by"),
+            ),
+        )
+        exclusion = dict(cur.fetchone())
+        cur.execute(
+            """UPDATE matches SET commercial_status='archived',archived_at=NOW(),
+               freshness_status='excluded',stale_reason='pair excluded',updated_at=NOW()
+               WHERE buy_request_id=%s AND property_id=%s""",
+            (data["buy_request_id"], data["property_id"]),
+        )
+        return exclusion
+
+
+def list_exclusions_scoped(ctx):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        cur.execute(
+            """SELECT e.*,b.title AS buy_title,p.title AS property_title
+               FROM match_exclusions e
+               JOIN buy_requests b ON b.id=e.buy_request_id
+               JOIN properties p ON p.id=e.property_id
+               WHERE b.agency_id=%s AND p.agency_id=%s
+               ORDER BY e.created_at DESC""",
+            (agency_id, agency_id),
+        )
+        return [dict(x) for x in cur.fetchall()]
+
+
+def delete_exclusion_scoped(ctx, exclusion_id):
+    """The agency is derived through the pair, never from the id alone."""
+    agency_id = _agency(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(
+            """DELETE FROM match_exclusions e
+               USING buy_requests b, properties p
+               WHERE e.id=%s AND b.id=e.buy_request_id AND p.id=e.property_id
+                 AND b.agency_id=%s AND p.agency_id=%s
+               RETURNING e.buy_request_id,e.property_id""",
+            (exclusion_id, agency_id, agency_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise NotFoundError(f"exclusion {exclusion_id} not found")
+        cur.execute(
+            """UPDATE matches SET archived_at=NULL,commercial_status='to_review',
+               freshness_status='stale',stale_reason='exclusion removed',stale_since=NOW(),
+               review_required=TRUE,updated_at=NOW()
+               WHERE buy_request_id=%s AND property_id=%s""",
+            (row["buy_request_id"], row["property_id"]),
+        )
+
+
+# -- stale and refresh ------------------------------------------------------
+
+def detect_stale_scoped(ctx, match_id=None, buy_request_id=None, property_id=None):
+    agency_id = _agency(ctx)
+    filters = [
+        "m.archived_at IS NULL",
+        "m.freshness_status IN ('fresh','stale')",
+        _PAIR_SCOPE,
+    ]
+    params = [agency_id, agency_id]
+    if match_id:
+        filters.append("m.id=%s")
+        params.append(match_id)
+    if buy_request_id:
+        filters.append("m.buy_request_id=%s")
+        params.append(buy_request_id)
+    if property_id:
+        filters.append("m.property_id=%s")
+        params.append(property_id)
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(
+            f"""UPDATE matches m SET
+                freshness_status='stale',
+                stale_reason=CASE
+                    WHEN (m.buy_version_at_calculation IS NULL OR b.updated_at>m.buy_version_at_calculation)
+                     AND (m.property_version_at_calculation IS NULL OR p.updated_at>m.property_version_at_calculation)
+                    THEN 'buy and property updated'
+                    WHEN m.buy_version_at_calculation IS NULL OR b.updated_at>m.buy_version_at_calculation
+                    THEN 'buy updated'
+                    ELSE 'property updated'
+                END,
+                stale_since=COALESCE(m.stale_since,NOW()),
+                updated_at=NOW()
+                FROM buy_requests b,properties p
+                WHERE b.id=m.buy_request_id AND p.id=m.property_id
+                  AND {' AND '.join(filters)}
+                  AND (
+                    m.buy_version_at_calculation IS NULL OR b.updated_at>m.buy_version_at_calculation OR
+                    m.property_version_at_calculation IS NULL OR p.updated_at>m.property_version_at_calculation
+                  )
+                RETURNING m.id,m.buy_request_id,m.property_id,m.stale_reason,m.stale_since""",
+            params,
+        )
+        changed = [dict(x) for x in cur.fetchall()]
+        return {"marked_stale": len(changed), "items": changed}
+
+
+def refresh_match_scoped(ctx, match_id, created_by=None, trigger_source="manual", trigger_reason=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+    return refresh_match(match_id, created_by, trigger_source, trigger_reason)
+
+
+def _refresh_ids_scoped(agency_id, filters, params, trigger_source, created_by=None, trigger_reason=None):
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT m.id FROM matches m {_PAIR_JOIN}
+                WHERE m.archived_at IS NULL AND m.freshness_status<>'excluded'
+                  AND {_PAIR_SCOPE} AND {' AND '.join(filters)}
+                ORDER BY m.id""",
+            [agency_id, agency_id] + list(params),
+        )
+        ids = [x["id"] for x in cur.fetchall()]
+    items, errors = [], []
+    for match_id in ids:
+        try:
+            items.append(refresh_match(match_id, created_by, trigger_source, trigger_reason))
+        except Exception as exc:
+            errors.append({"match_id": match_id, "error": str(exc)})
+    return {"requested": len(ids), "refreshed": len(items), "failed": len(errors), "items": items, "errors": errors}
+
+
+def refresh_for_buy_scoped(ctx, request_id, created_by=None, trigger_reason=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        buy = _scoped_buy(cur, request_id, agency_id)
+        require_ready(buy=buy)
+    detect_stale_scoped(ctx, buy_request_id=request_id)
+    return _refresh_ids_scoped(
+        agency_id,
+        ["m.buy_request_id=%s", "m.freshness_status IN ('stale','failed')"],
+        [request_id], "buy", created_by, trigger_reason,
+    )
+
+
+def refresh_for_property_scoped(ctx, property_id, created_by=None, trigger_reason=None):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        prop = _scoped_property(cur, property_id, agency_id)
+        require_ready(prop=prop)
+    detect_stale_scoped(ctx, property_id=property_id)
+    return _refresh_ids_scoped(
+        agency_id,
+        ["m.property_id=%s", "m.freshness_status IN ('stale','failed')"],
+        [property_id], "property", created_by, trigger_reason,
+    )
+
+
+def refresh_stale_scoped(ctx, limit=50, created_by=None, trigger_reason=None):
+    agency_id = _agency(ctx)
+    started = monotonic()
+    detect_stale_scoped(ctx)
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT m.id FROM matches m {_PAIR_JOIN}
+                WHERE m.archived_at IS NULL AND m.freshness_status='stale'
+                  AND {_PAIR_SCOPE}
+                ORDER BY m.stale_since ASC NULLS FIRST,m.id ASC LIMIT %s""",
+            (agency_id, agency_id, limit),
+        )
+        ids = [x["id"] for x in cur.fetchall()]
+    items, errors = [], []
+    for match_id in ids:
+        try:
+            items.append(refresh_match(match_id, created_by, "system", trigger_reason or "mass stale refresh"))
+        except Exception as exc:
+            errors.append({"match_id": match_id, "error": str(exc)})
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT COUNT(*) AS count FROM matches m {_PAIR_JOIN}
+                WHERE m.archived_at IS NULL AND m.freshness_status='stale'
+                  AND {_PAIR_SCOPE}""",
+            (agency_id, agency_id),
+        )
+        remaining = cur.fetchone()["count"]
+    return {
+        "limit": limit,
+        "requested": len(ids),
+        "processed": len(items) + len(errors),
+        "refreshed": len(items),
+        "failed": len(errors),
+        "remaining_stale": remaining,
+        "duration_seconds": round(monotonic() - started, 3),
+        "items": items,
+        "errors": errors,
+    }
+
+
+# -- children of a match ----------------------------------------------------
+
+def refresh_history_scoped(ctx, match_id):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            "SELECT * FROM match_refresh_history WHERE match_id=%s ORDER BY created_at DESC,id DESC",
+            (match_id,),
+        )
+        return [dict(x) for x in cur.fetchall()]
+
+
+def timeline_scoped(ctx, match_id):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        match = _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            """SELECT 'refresh' AS event_kind,id,created_at,trigger_source AS source,
+                      trigger_reason AS description,changed_fields AS details
+               FROM match_refresh_history WHERE match_id=%s
+               UNION ALL
+               SELECT 'feedback' AS event_kind,id,created_at,source,
+                      COALESCE(notes,feedback_type) AS description,
+                      jsonb_build_object('feedback_type',feedback_type,'reason_code',reason_code) AS details
+               FROM match_feedback WHERE match_id=%s
+               ORDER BY created_at DESC""",
+            (match_id, match_id),
+        )
+        return {"match_id": match["id"], "items": [dict(x) for x in cur.fetchall()]}
+
+
+def add_feedback_scoped(ctx, match_id, data):
+    agency_id = _agency(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            """INSERT INTO match_feedback(match_id,source,feedback_type,reason_code,notes,created_by)
+               VALUES(%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (
+                match_id,
+                data["source"],
+                data["feedback_type"],
+                data.get("reason_code"),
+                data.get("notes"),
+                data.get("created_by"),
+            ),
+        )
+        return dict(cur.fetchone())
+
+
+def list_feedback_scoped(ctx, match_id):
+    agency_id = _agency(ctx)
+    with core_cursor() as (_, cur):
+        _ensure_match(cur, match_id, agency_id)
+        cur.execute(
+            "SELECT * FROM match_feedback WHERE match_id=%s ORDER BY created_at DESC,id DESC",
+            (match_id,),
+        )
+        return [dict(x) for x in cur.fetchall()]
+
+
+def delete_feedback_scoped(ctx, feedback_id):
+    """The agency is derived through the match, never from the id alone."""
+    agency_id = _agency(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(
+            """DELETE FROM match_feedback f
+               USING matches m, buy_requests b, properties p
+               WHERE f.id=%s AND m.id=f.match_id
+                 AND b.id=m.buy_request_id AND p.id=m.property_id
+                 AND b.agency_id=%s AND p.agency_id=%s
+               RETURNING f.id""",
+            (feedback_id, agency_id, agency_id),
+        )
+        if not cur.fetchone():
+            raise NotFoundError(f"feedback {feedback_id} not found")
+
+
+# -- dashboards -------------------------------------------------------------
+
+def dashboard_scoped(ctx):
+    agency_id = _agency(ctx)
+    detect_stale_scoped(ctx)
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER(WHERE m.compatibility_status<>'incompatible') AS compatible,
+                COUNT(*) FILTER(WHERE m.match_class IN ('excellent','strong')) AS strong,
+                COUNT(*) FILTER(WHERE m.commercial_status IN ('to_review','new')) AS to_review,
+                COUNT(*) FILTER(WHERE m.is_manual_override) AS overridden,
+                COUNT(*) FILTER(WHERE m.freshness_status='fresh') AS fresh,
+                COUNT(*) FILTER(WHERE m.freshness_status='stale') AS stale,
+                COUNT(*) FILTER(WHERE m.freshness_status='failed') AS failed,
+                COUNT(*) FILTER(WHERE m.review_required) AS review_required,
+                COUNT(*) FILTER(WHERE m.match_class='excellent') AS excellent,
+                COUNT(*) FILTER(WHERE m.match_class='incompatible') AS incompatible,
+                COALESCE(AVG(m.score_total),0) AS average_score
+                FROM matches m {_PAIR_JOIN}
+                WHERE m.archived_at IS NULL AND {_PAIR_SCOPE}""",
+            (agency_id, agency_id),
+        )
+        result = dict(cur.fetchone())
+        cur.execute(
+            f"""SELECT m.id,b.title AS buy_title,p.title AS property_title,m.score_total,
+                m.manual_score,m.match_class,m.compatibility_status,m.commercial_status,
+                m.freshness_status,m.review_required
+                FROM matches m {_PAIR_JOIN}
+                WHERE m.archived_at IS NULL AND {_PAIR_SCOPE}
+                ORDER BY COALESCE(m.manual_score,m.score_total) DESC LIMIT 10""",
+            (agency_id, agency_id),
+        )
+        result["top"] = [dict(x) for x in cur.fetchall()]
+        return result
+
+
+def dashboard_stale_scoped(ctx, limit=100):
+    detect_stale_scoped(ctx)
+    return list_matches_scoped(ctx, limit=limit, freshness_status="stale")
+
+
+def dashboard_errors_scoped(ctx, limit=100):
+    return list_matches_scoped(ctx, limit=limit, freshness_status="failed")
+
+
+def dashboard_review_scoped(ctx, limit=100):
+    return list_matches_scoped(ctx, limit=limit, review_required=True)

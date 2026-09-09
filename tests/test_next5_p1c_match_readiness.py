@@ -349,14 +349,25 @@ def test_readiness_repository_does_not_execute_scoring(monkeypatch):
 
 
 def test_readiness_endpoint_accepts_one_or_both_positive_ids(monkeypatch):
+    """P26-2E: the endpoint is now agency-scoped and authenticated.
+
+    What this test checks is unchanged - that one or both positive ids are
+    accepted and reach the service - but the route reaches
+    `get_readiness_scoped` through `legacy_basic_agency_context`, so the
+    dependency is overridden and the scoped function is the one patched. The
+    legacy `service.get_readiness` still exists and is asserted below; it is no
+    longer what the HTTP layer calls.
+    """
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import legacy_basic_agency_context
+
     router = importlib.import_module("match.router")
     service = importlib.import_module("match.service")
-    endpoint = getattr(service, "get_readiness", None)
-    assert callable(endpoint), "service.get_readiness mancante"
+    assert callable(getattr(service, "get_readiness", None)), "service.get_readiness mancante"
     monkeypatch.setattr(
         service,
-        "get_readiness",
-        lambda buy_request_id, property_id: {
+        "get_readiness_scoped",
+        lambda ctx, buy_request_id, property_id: {
             "eligible": True,
             "ready": True,
             "can_match": True,
@@ -366,6 +377,10 @@ def test_readiness_endpoint_accepts_one_or_both_positive_ids(monkeypatch):
     )
     app = FastAPI()
     app.include_router(router.router)
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=7, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
     client = TestClient(app)
 
     one = client.get("/api/match/readiness?buy_request_id=1")
