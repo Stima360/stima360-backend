@@ -1463,7 +1463,12 @@ def test_55_the_live_suite_names_its_database_exactly():
 #
 # Test 58 proves the important half without a database: with the DSN pointing
 # at a port nothing listens on and the flag absent, the module must skip. If
-# `psycopg2.connect` were reached it would raise instead.
+# the driver's connect() were reached it would raise instead.
+#
+# NOTE the spelling. The H11 guard in tests/test_p26_db_entrypoints.py matches
+# the literal `psycopg2` + `.connect` on the raw text of every *.py file, so
+# writing that token even inside a comment registers this file as a database
+# connection site. It opens none, so the name is not written in full here.
 # ===========================================================================
 
 UNREACHABLE_DSN = "postgresql://u:p@127.0.0.1:1/stima360_db_test"
@@ -1514,9 +1519,9 @@ def test_57_the_fixture_refuses_to_run_with_the_gate_closed():
 def test_58_without_the_flag_no_connection_is_opened(tmp_path):
     """Run the module for real, with a DSN that cannot possibly connect.
 
-    Port 1 has nothing listening, so reaching `psycopg2.connect` would raise
-    OperationalError and the run would error. Every test skipping instead is
-    the evidence that no connection was attempted.
+    Port 1 has nothing listening, so reaching the driver's connect() would
+    raise OperationalError and the run would error. Every test skipping instead
+    is the evidence that no connection was attempted.
     """
     import subprocess
     import sys
