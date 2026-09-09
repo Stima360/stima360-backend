@@ -63,6 +63,13 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
     "tests/test_core_service_regressions.py": (
         "test stub; replaces psycopg2.connect and opens no connection"
     ),
+    "tests/test_p26_6c_flow_immutability_pg.py": (
+        "TEST-only live isolation proof; opts in through P26_PG_DSN and skips "
+        "entirely without it, asserts current_database() contains 'test' before "
+        "touching anything, writes only negative fixture ids inside a SAVEPOINT "
+        "and rolls the connection back. P26-6C's agency-immutability guards are "
+        "PL/pgSQL triggers, so nothing but a real PostgreSQL can prove them"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

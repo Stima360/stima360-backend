@@ -63,6 +63,7 @@ Nine files may build their own connection. Each is listed with the reason.
 | `scripts/p26_migrate.py` | privileged migration channel | `assert_test_database_name()` twice | The migration runner. See section 4. |
 | `tests/conftest.py` | test stub | n/a | Replaces `psycopg2.connect` with a stub; opens no connection. |
 | `tests/test_core_service_regressions.py` | test stub | n/a | Same. |
+| `tests/test_p26_6c_flow_immutability_pg.py` | TEST-only live proof | `current_database()` must contain `test`; opt-in via `P26_PG_DSN` | Proves P26-6C's FLOW agency-immutability triggers against a real PostgreSQL. Skips without the DSN. Negative fixture ids, SAVEPOINT per test, connection rolled back - nothing committed, no sequence consumed. |
 
 The `run_*_e2e.py` scripts are a **privileged TEST channel**, not application
 traffic. They are permitted to bypass the choke point. They are not permitted

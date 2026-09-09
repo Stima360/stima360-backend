@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -1050,3 +1051,490 @@ def test_40b_the_two_recovery_paths_share_one_definition():
         assert "'status'" not in source and '"status"' not in source, (
             f"{name} builds its own response shape instead of using _recover_events"
         )
+
+
+# ===========================================================================
+# 41-46 - MIGRATION 055: THE TENANT OF A FLOW ROW IS IMMUTABLE
+#
+# 054 validated the CHILD side of every link at write time and nothing
+# validated the PARENT side. A BEFORE trigger on flow_executions fires when a
+# flow_executions row is written, not when the event it points at is rewritten,
+# so
+#
+#     UPDATE flow_events SET agency_id = <other agency> WHERE id = <parent>;
+#
+# was accepted and left the executions attached to it in a different tenant. A
+# live hostile probe on TEST found it: the child-side check passed with
+# SQLSTATE P0001, the parent-side change went through.
+#
+# These are structural assertions on the migration text. They are NOT the
+# proof - the proof is tests/test_p26_6c_flow_immutability_pg.py, which runs
+# the statements against a real PostgreSQL. What these do is stop the guard
+# being removed or weakened by an edit, in a run where no database is
+# reachable.
+# ===========================================================================
+
+IMMUTABILITY = "055_p26_flow_agency_immutability"
+
+
+def test_41_055_is_the_next_migration_and_does_not_touch_the_applied_ones():
+    """Forward-only: 052/053/054 are applied, so 055 replaces, never edits."""
+    versions = sorted(
+        p.stem for p in MIGRATIONS.glob("0*.sql") if not p.stem.endswith("_down")
+    )
+    assert versions[-1] == IMMUTABILITY, versions[-3:]
+    body = _sql(IMMUTABILITY)
+    # It may replace function bodies; it may not alter the columns, the NOT
+    # NULL, or the triggers 054 installed.
+    for banned in ("ADD COLUMN", "DROP COLUMN", "SET NOT NULL", "DROP NOT NULL",
+                   "ALTER TABLE flow_events", "ALTER TABLE flow_executions",
+                   "ALTER TABLE flow_suppressions"):
+        assert banned not in body, banned
+    assert "DELETE FROM schema_migrations" not in body, "an UP must not edit the ledger"
+
+
+@pytest.mark.parametrize("function", [
+    "flow_event_agency_integrity",
+    "flow_execution_agency_integrity",
+    "flow_suppression_agency_integrity",
+])
+def test_42_each_root_guard_refuses_a_tenant_change_on_update(function):
+    body = _sql(IMMUTABILITY)
+    start = body.index(f"FUNCTION {function}()")
+    end = body.index("$fn$;", start)
+    definition = body[start:end]
+    assert "TG_OP = 'UPDATE'" in definition, function
+    assert "NEW.agency_id IS DISTINCT FROM OLD.agency_id" in definition, function
+    assert "is immutable" in definition, function
+
+
+def test_43_the_comparison_is_is_distinct_from_not_plain_inequality():
+    """`<>` is NULL-propagating and, worse here, an UPDATE that rewrites the
+    same agency would not be a change at all - the runtime's own
+    `UPDATE flow_executions SET status='executed' ...` rewrites the row through
+    this trigger on every live execution."""
+    body = _sql(IMMUTABILITY)
+    # Counted inside the three function bodies only: the migration's own
+    # verification block mentions the same text when it reads pg_proc back,
+    # and that occurrence is not a guard.
+    guarded = 0
+    for function in ("flow_event_agency_integrity", "flow_execution_agency_integrity",
+                     "flow_suppression_agency_integrity"):
+        start = body.index(f"FUNCTION {function}()")
+        guarded += body[start:body.index("$fn$;", start)].count(
+            "IS DISTINCT FROM OLD.agency_id"
+        )
+    assert guarded == 3, guarded
+    assert "NEW.agency_id <> OLD.agency_id" not in body
+
+
+def test_44_054s_checks_are_carried_forward_verbatim():
+    """055 adds; it must not quietly drop what 054 established.
+
+    Compared against 054's own text rather than a list retyped here, so a
+    future edit to either file has to keep them in step.
+    """
+    enforce, immutable = _sql(ENFORCE), _sql(IMMUTABILITY)
+    for fragment in (
+        "flow_events.agency_id cannot be NULL",
+        "flow_executions.agency_id cannot be NULL",
+        "flow_suppressions.agency_id cannot be NULL",
+        "does not match event",
+        "does not match retried execution",
+        "does not resolve to an event with an agency",
+        "does not resolve to an execution with an agency",
+    ):
+        assert fragment in enforce, ("054 no longer says this", fragment)
+        assert fragment in immutable, ("055 dropped one of 054's checks", fragment)
+
+
+def test_45_the_derived_table_gets_agreement_not_immutability():
+    """`flow_action_records.execution_id` must stay mutable.
+
+    `execute_live`'s recovery path re-points an existing action record at the
+    new execution. Freezing the column would break recovery, so the guard is
+    that a re-point stays inside one agency.
+    """
+    body = _sql(IMMUTABILITY)
+    assert "FUNCTION flow_action_record_agency_integrity()" in body
+    assert "NEW.execution_id IS DISTINCT FROM OLD.execution_id" in body
+    assert "would move record" in body
+    # Only UPDATE: an INSERT names its execution for the first time.
+    assert re.search(
+        r"CREATE TRIGGER trg_flow_action_record_agency_integrity\s+BEFORE UPDATE ON flow_action_records",
+        body,
+    ), body
+    assert "BEFORE INSERT OR UPDATE ON flow_action_records" not in body
+    # And the runtime's re-point is still expressed.
+    runtime = (ROOT / "flow" / "repository.py").read_text(encoding="utf-8")
+    assert "UPDATE flow_action_records SET execution_id=%s" in runtime, (
+        "the recovery re-point this guard is shaped around has gone"
+    )
+
+
+def test_46_the_down_restores_054_and_removes_only_055s_own_objects():
+    down = _down(IMMUTABILITY)
+    # Puts the three 054 bodies back...
+    for function in ("flow_event_agency_integrity", "flow_execution_agency_integrity",
+                     "flow_suppression_agency_integrity"):
+        assert f"CREATE OR REPLACE FUNCTION {function}()" in down, function
+    assert "IS DISTINCT FROM OLD.agency_id" not in down, "the down still enforces 055"
+    # ...drops only what 055 added...
+    assert "DROP FUNCTION IF EXISTS flow_action_record_agency_integrity()" in down
+    assert "trg_flow_action_record_agency_integrity" in down
+    # ...and touches nothing from 052/053/054.
+    for banned in ("DROP COLUMN", "DROP TRIGGER IF EXISTS trg_flow_event_agency_integrity",
+                   "DROP TRIGGER IF EXISTS trg_flow_execution_agency_integrity",
+                   "DROP TRIGGER IF EXISTS trg_flow_suppression_agency_integrity",
+                   "DROP NOT NULL"):
+        assert banned not in down, banned
+    assert down.count("DELETE FROM schema_migrations") == 1
+
+
+def test_47_the_real_postgresql_proof_exists_and_is_honest_about_skipping():
+    """The structural tests above are not the proof, and must not be read as it.
+
+    This asserts the live suite exists, refuses to run outside a test database,
+    uses negative ids, rolls back, and - critically - skips with a reason that
+    says a skip is not a pass.
+    """
+    live = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    assert "P26_PG_DSN" in live
+    assert "never as PASS" in live, "a skip must not read as a pass"
+    assert "SAVEPOINT" in live and "ROLLBACK TO SAVEPOINT" in live
+    # The database is named exactly, not matched as a substring - test 55
+    # carries the full argument for why.
+    assert "current_database()" in live
+    assert 'REQUIRED_DATABASE = "stima360_db_test"' in live
+    assert "conn.rollback()" in live
+    # Asserted on executable content: the module docstring says the words
+    # "nextval" and "setval" while explaining that it uses neither.
+    executable = live.split('"""', 2)[-1]
+    assert "nextval" not in executable and "setval" not in executable
+    # Negative fixture ids only.
+    for name in ("AGENCY_A", "EVENT", "EXEC_PARENT", "SUPPRESSION", "ACTION"):
+        assert re.search(rf"^{name} = -\d+", live, re.MULTILINE), name
+    # And it attributes every refusal to the guard under test.
+    assert "pgcode == \"P0001\"" in live
+
+
+# ===========================================================================
+# 48-50 - THE VERIFIER ITSELF
+#
+# Review found an inverted bit test in 055's precondition block and in the live
+# suite's trigger assertion: `must fire BEFORE` was written as `tgtype & 2 = 0`
+# and `assert not tgtype & 2`.
+#
+# BEFORE is a bit that is SET (pg_trigger.h: ROW=1, BEFORE=2, INSERT=4,
+# DELETE=8, UPDATE=16, TRUNCATE=32, INSTEAD=64). There is no AFTER bit - AFTER
+# is the absence of both BEFORE and INSTEAD. So the inverted test would have
+# rejected the correct trigger and accepted an AFTER one, and an AFTER trigger
+# cannot refuse a write at all: it would have certified a guard that does
+# nothing.
+#
+# Nine mutations of 055 did not catch it, because every one of them mutated the
+# thing being verified rather than the verifier. A wrong decoder makes all of
+# its own assertions agree with it. These tests check the decoder against the
+# values PostgreSQL actually produces, in both polarities.
+# ===========================================================================
+
+# The tgtype values for the shapes this slice installs, and for the ones it
+# must reject. Computed from the documented flags rather than hardcoded, so the
+# constants and the decoder cannot drift together.
+TGTYPE_BEFORE_INSERT_UPDATE_ROW = 1 | 2 | 4 | 16          # 23 - the ROOT guards
+TGTYPE_BEFORE_UPDATE_ROW = 1 | 2 | 16                     # 19 - the action-record guard
+TGTYPE_AFTER_INSERT_UPDATE_ROW = 1 | 4 | 16               # 21 - must be rejected
+TGTYPE_BEFORE_INSERT_UPDATE_STATEMENT = 2 | 4 | 16        # 22 - not FOR EACH ROW
+TGTYPE_INSTEAD_OF_UPDATE_ROW = 1 | 64 | 16                # 81 - INSTEAD OF
+# PostgreSQL's timing mask is BEFORE|INSTEAD and the two are mutually
+# exclusive, so this value cannot occur in pg_trigger. It is here because the
+# decoder should be conservative rather than rely on that: without the INSTEAD
+# exclusion it would call this "BEFORE", and a mutation that removed the
+# exclusion would otherwise go unnoticed.
+TGTYPE_IMPOSSIBLE_BEFORE_AND_INSTEAD = 1 | 2 | 64 | 16    # 83
+
+
+@pytest.mark.parametrize(
+    "tgtype,row_level,before,insert,update",
+    [
+        (TGTYPE_BEFORE_INSERT_UPDATE_ROW, True, True, True, True),
+        (TGTYPE_BEFORE_UPDATE_ROW, True, True, False, True),
+        (TGTYPE_AFTER_INSERT_UPDATE_ROW, True, False, True, True),
+        (TGTYPE_BEFORE_INSERT_UPDATE_STATEMENT, False, True, True, True),
+        (TGTYPE_INSTEAD_OF_UPDATE_ROW, True, False, False, True),
+        (TGTYPE_IMPOSSIBLE_BEFORE_AND_INSTEAD, True, False, False, True),
+    ],
+)
+def test_48_the_tgtype_decoder_reads_the_real_flag_values(
+    tgtype, row_level, before, insert, update
+):
+    """Imported from the live suite, so the decoder under test is the one it uses."""
+    from tests import test_p26_6c_flow_immutability_pg as live
+
+    assert live._is_row_level(tgtype) is row_level, tgtype
+    assert live._is_before(tgtype) is before, tgtype
+    assert live._covers_insert(tgtype) is insert, tgtype
+    assert live._covers_update(tgtype) is update, tgtype
+
+
+def test_49_the_decoder_accepts_before_and_rejects_after():
+    """The regression for the inverted test, asserted in both directions."""
+    from tests import test_p26_6c_flow_immutability_pg as live
+
+    assert live._is_before(TGTYPE_BEFORE_INSERT_UPDATE_ROW) is True
+    assert live._is_before(TGTYPE_BEFORE_UPDATE_ROW) is True
+    assert live._is_before(TGTYPE_AFTER_INSERT_UPDATE_ROW) is False
+    assert live._is_before(TGTYPE_INSTEAD_OF_UPDATE_ROW) is False
+    assert live._is_before(TGTYPE_IMPOSSIBLE_BEFORE_AND_INSTEAD) is False
+    # And no executable line in the live suite may go back to the inverted
+    # spelling. Comment prose is excluded: the file explains the mistake, and
+    # quoting it is not committing it again.
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert "not tgtype & 2" not in code
+    assert "(tgtype & 2) == 0" not in code
+
+
+def test_50_the_migration_asserts_before_with_the_bit_set():
+    """055's own precondition and verification blocks, in the same polarity.
+
+    `& 2 = 0` means "the BEFORE bit is absent", which is the AFTER case and is
+    what must RAISE. The file must therefore contain `(v_tgtype & 2) = 0` as
+    the *failure* condition - and never `(v_tgtype & 2) <> 0` in that role,
+    which is what shipped for review.
+    """
+    body = _sql(IMMUTABILITY)
+    assert "(v_tgtype & 2) <> 0" not in body, "the inverted BEFORE test is back"
+    checks = re.findall(r"IF \(v_tgtype & 2\) = 0[^;]*?THEN", body)
+    assert len(checks) == 2, checks          # precondition block + verification block
+    for check in checks:
+        assert "& 64" in check, "INSTEAD OF is not excluded alongside BEFORE"
+    # The migration's own commentary must describe the flags correctly too -
+    # the wrong version said "bit 1 = BEFORE(0)/AFTER(1)". Read from the raw
+    # file, since `_sql` strips comments.
+    raw = (MIGRATIONS / f"{IMMUTABILITY}.sql").read_text(encoding="utf-8")
+    assert "BEFORE(0)/AFTER(1)" not in raw
+    assert "BEFORE is a bit that is SET" in raw
+
+
+def test_51_the_catalogue_checks_resolve_functions_precisely():
+    """`proname` alone would match an overload or another schema.
+
+    055 certifies the objects it just wrote, so it has to name them exactly:
+    schema `public`, zero arguments, returning `trigger`. And each trigger is
+    tied to its table AND its function AND checked to be enabled - a guard that
+    someone has disabled with ALTER TABLE ... DISABLE TRIGGER is a guard that
+    is not running.
+    """
+    body = _sql(IMMUTABILITY)
+
+    # Counted, not merely present. 055 has two blocks that resolve these
+    # objects - the precondition block and the final verification block - and
+    # an assertion that only required one occurrence let a mutation delete
+    # either of them unnoticed.
+    assert body.count("p.pronargs = 0") == 2, body.count("p.pronargs = 0")
+    assert body.count("p.prorettype = 'pg_catalog.trigger'::regtype") == 2
+    assert body.count("JOIN pg_proc p ON p.oid = t.tgfoid") == 2, (
+        "both trigger lookups must join through tgfoid to the function"
+    )
+    assert body.count("n.nspname = 'public'") >= 4
+    # Both blocks tie the trigger to its function and require it to be enabled.
+    assert body.count("is not enabled (tgenabled=%)") == 2
+    assert body.count("calls %, expected %") == 2
+    # The action-record guard must be checked NOT to fire on INSERT.
+    assert "must not fire on INSERT" in body
+
+
+def test_52_the_live_suite_covers_the_cases_review_found_missing():
+    """Presence, by name, of the five gaps the review named.
+
+    A weak test - it reads the live suite rather than running it - but the live
+    suite cannot run here, and "the case is absent" is exactly what review
+    caught. This makes a silent removal fail.
+    """
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    for name in (
+        "test_immutability_holds_for_a_row_with_genuinely_no_children",
+        "test_repointing_a_retry_across_agencies_is_refused",
+        "test_inserting_a_null_agency_is_refused",
+        "test_on_delete_set_null_blanks_the_child_link_and_keeps_its_agency",
+        "test_on_delete_cascade_removes_the_action_records",
+    ):
+        assert f"def {name}(" in source, name
+    # The childless case must use rows that are genuinely childless.
+    assert "EVENT_ORPHAN" in source and "EXEC_ORPHAN" in source
+    # And the sequential test must not claim to be a concurrency proof.
+    assert "test_a_child_insert_cannot_race_a_parent_agency_change" not in source
+    assert "SEQUENTIAL, in one transaction. This is NOT a concurrency test." in source
+
+
+# ===========================================================================
+# 53-55 - THE LIVE SUITE MUST BE CONSTRUCTIBLE WITHOUT POSTGRESQL
+#
+# Review found that `test_inserting_a_null_agency_is_refused` built its SQL
+# with `values.format(rule=RULE)`. The flow_events row contains `'{}'::jsonb`,
+# and `str.format` reads `{}` as a positional field, so the call raised
+# IndexError before any statement reached the database.
+#
+# Nothing in this repository could have caught it: the live module skips
+# without a DSN, so the broken expression was never evaluated here, and on a
+# host WITH a database the test would have failed for a reason unrelated to
+# isolation.
+#
+# These tests evaluate the statements the live suite will issue, here, with no
+# database. They do not prove the isolation - only that the proof is runnable.
+# ===========================================================================
+
+def test_53_the_null_agency_inserts_are_constructible_and_parameterised():
+    """Every case must build, and none may go through `.format`."""
+    from tests import test_p26_6c_flow_immutability_pg as live
+
+    cases = live.NULL_AGENCY_INSERTS
+    assert len(cases) == 3, [c[0] for c in cases]
+    assert [c[0] for c in cases] == [
+        "flow_events", "flow_executions", "flow_suppressions",
+    ], [c[0] for c in cases]
+
+    for table, sql, params in cases:
+        # It must be a real statement against the table it claims.
+        assert f"INSERT INTO {table}" in sql, (table, sql[:80])
+        # NULL is written literally; everything variable is bound.
+        assert "agency_id" in sql and "NULL" in sql, table
+        assert sql.count("%s") == len(params), (table, sql.count("%s"), len(params))
+        # And the JSON literal that broke the first version survives untouched.
+        if table == "flow_events":
+            assert "'{}'::jsonb" in sql, sql
+
+    # The regression itself: `.format` on any of these raises. Asserting the
+    # failure mode keeps the reason for the parameters visible.
+    with pytest.raises(IndexError):
+        cases[0][1].format(rule=-9601)
+
+
+def test_54_no_sql_in_the_live_suite_is_built_with_str_format():
+    """The class of error, not just the one instance.
+
+    `.format` on SQL that contains a JSON literal is a landmine, and there is
+    no reason to use it here - psycopg2 binds parameters.
+    """
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert ".format(" not in code, "SQL in the live suite is being built with str.format"
+
+
+def test_55_the_live_suite_names_its_database_exactly():
+    """The runner's marker rule is right for a runner; not for a writer.
+
+    `scripts/p26_migrate.py` accepts any name carrying the TEST marker and
+    refuses the known production names, because it has to serve more than one
+    test database. This module writes fixture rows, so it names the single
+    database it may write to and refuses every other - including another
+    legitimate test database.
+    """
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert 'REQUIRED_DATABASE = "stima360_db_test"' in code
+    assert "database == REQUIRED_DATABASE" in code
+    # The weaker substring form must not come back.
+    assert '"test" in database.lower()' not in code
+
+    # And the connection comes from the application's own DB_* set, so a Render
+    # shell needs nothing exported and no DSN is assumed to exist.
+    for variable in ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"):
+        assert variable in code, variable
+    assert "DATABASE_URL" not in code, "the suite must not assume DATABASE_URL"
+
+
+# ===========================================================================
+# 56-58 - THE LIVE CERTIFICATION IS OPT-IN
+#
+# Gating the live module on database configuration alone was not enough: every
+# application host carries `DB_NAME`, so an ordinary `pytest tests/` on Render
+# would have armed it - opening a connection and writing fixture rows against
+# whatever database happened to be configured. `P26_RUN_FLOW_LIVE_CERT=1` makes
+# running it a decision rather than a side effect.
+#
+# Test 58 proves the important half without a database: with the DSN pointing
+# at a port nothing listens on and the flag absent, the module must skip. If
+# `psycopg2.connect` were reached it would raise instead.
+# ===========================================================================
+
+UNREACHABLE_DSN = "postgresql://u:p@127.0.0.1:1/stima360_db_test"
+
+
+@pytest.mark.parametrize(
+    "flag,dsn,db_name,enabled",
+    [
+        ("1", UNREACHABLE_DSN, None, True),      # flag + DSN
+        ("1", None, "stima360_db_test", True),   # flag + the Render DB_* shape
+        (None, UNREACHABLE_DSN, None, False),    # configured, not asked for
+        (None, None, "stima360_db_test", False), # the Render shape, not asked for
+        ("0", UNREACHABLE_DSN, None, False),     # explicitly off
+        ("1", None, None, False),                # asked for, nothing to connect to
+    ],
+)
+def test_56_the_gate_needs_both_the_flag_and_a_database(
+    monkeypatch, flag, dsn, db_name, enabled
+):
+    from tests import test_p26_6c_flow_immutability_pg as live
+
+    for name, value in (("P26_RUN_FLOW_LIVE_CERT", flag),
+                        ("P26_PG_DSN", dsn),
+                        ("DB_NAME", db_name)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    is_enabled, reason = live._live_cert_gate()
+    assert is_enabled is enabled, (flag, dsn, db_name, reason)
+    if not enabled:
+        assert "BLOCKED" in reason, reason
+
+
+def test_57_the_fixture_refuses_to_run_with_the_gate_closed():
+    """Belt and braces: the skipif is the gate, and the fixture re-checks it.
+
+    A future edit that loosened `pytestmark` would still have to get past this.
+    """
+    source = (ROOT / "tests" / "test_p26_6c_flow_immutability_pg.py").read_text(encoding="utf-8")
+    assert "pytestmark = pytest.mark.skipif(not LIVE_CERT_ENABLED" in source
+    assert "the live certification fixture was reached with the gate closed" in source
+    # And the connection parameters are not even resolved when it is closed.
+    assert "CONNECT_KWARGS = _connect_kwargs() if LIVE_CERT_ENABLED else None" in source
+
+
+def test_58_without_the_flag_no_connection_is_opened(tmp_path):
+    """Run the module for real, with a DSN that cannot possibly connect.
+
+    Port 1 has nothing listening, so reaching `psycopg2.connect` would raise
+    OperationalError and the run would error. Every test skipping instead is
+    the evidence that no connection was attempted.
+    """
+    import subprocess
+    import sys
+
+    environment = {
+        **os.environ,
+        "P26_PG_DSN": UNREACHABLE_DSN,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(tmp_path),
+    }
+    environment.pop("P26_RUN_FLOW_LIVE_CERT", None)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+         "tests/test_p26_6c_flow_immutability_pg.py"],
+        cwd=ROOT, env=environment, capture_output=True, text=True, timeout=180,
+    )
+    assert result.returncode == 0, result.stdout[-2000:]
+    assert "skipped" in result.stdout, result.stdout[-2000:]
+    for symptom in ("OperationalError", "could not connect", "Connection refused"):
+        assert symptom not in result.stdout, (symptom, result.stdout[-2000:])
