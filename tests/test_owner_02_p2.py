@@ -16,6 +16,23 @@ from core.exceptions import ConflictError, NotFoundError
 
 R = Path(__file__).parents[1]
 
+# P26-6C: OWNER Admin is agency-bound. These tests are about lifecycle,
+# storage and DTOs, so the agency is a fixed value and the compatibility
+# dependency is overridden; the scoping itself is proved in
+# tests/test_p26_6c_owner_admin_content.py.
+AGENCY = 901
+
+
+def _bind_agency(app):
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import legacy_basic_agency_context
+
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=AGENCY, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    return app
+
 
 def test_p1_migration_untouched_hash_shape():
     text = (R / "migrations/010_owner_02_p1.sql").read_text()
@@ -92,8 +109,9 @@ def test_admin_http_document_lifecycle(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
     app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
-    monkeypatch.setattr(repo, "create_shared_document", lambda d: {"id": 1, **d, "status": "draft"})
-    monkeypatch.setattr(repo, "publish_shared_document", lambda i: {"id": i, "status": "published"})
+    _bind_agency(app)
+    monkeypatch.setattr(repo, "create_shared_document", lambda a, d: {"id": 1, **d, "status": "draft"})
+    monkeypatch.setattr(repo, "publish_shared_document", lambda a, i: {"id": i, "status": "published"})
     c = TestClient(app)
     payload = {"property_document_id": 9, "public_title": "APE", "public_document_type": "ape"}
     assert c.post("/api/owner/admin/documents", json=payload).status_code == 201
@@ -101,9 +119,9 @@ def test_admin_http_document_lifecycle(monkeypatch):
 
 
 def test_immutable_document_guard(monkeypatch):
-    monkeypatch.setattr(repo, "get_shared_document", lambda i: {"id": i, "status": "published"})
+    monkeypatch.setattr(repo, "get_shared_document", lambda a, i: {"id": i, "status": "published"})
     with pytest.raises(ConflictError):
-        repo.update_shared_document(1, {"public_title": "nuovo"})
+        repo.update_shared_document(AGENCY, 1, {"public_title": "nuovo"})
 
 
 def test_sensitive_source_fields_not_selected_for_portal():

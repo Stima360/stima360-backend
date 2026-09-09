@@ -35,6 +35,23 @@ def _portal_app(account_id: int = 7) -> FastAPI:
     }
     return app
 
+# P26-6C: OWNER Admin is agency-bound. These tests are about lifecycle,
+# storage and DTOs, so the agency is a fixed value and the compatibility
+# dependency is overridden; the scoping itself is proved in
+# tests/test_p26_6c_owner_admin_content.py.
+AGENCY = 901
+
+
+def _bind_agency(app):
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import legacy_basic_agency_context
+
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=AGENCY, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    return app
+
 
 def test_p3_routes_declared():
     app = FastAPI()
@@ -220,7 +237,7 @@ def test_published_and_archived_records_are_immutable(monkeypatch):
             },
         )
         with pytest.raises(ConflictError):
-            repo.update_visit_feedback_publication(1, {"public_summary": SAFE_SUMMARY})
+            repo.update_visit_feedback_publication(AGENCY, 1, {"public_summary": SAFE_SUMMARY})
 
 
 def test_supersede_draft_does_not_hide_previous_until_publish():
@@ -271,9 +288,9 @@ def test_publish_successor_links_previous_atomically(monkeypatch):
         yield object(), cursor
 
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
-    monkeypatch.setattr(repo, "_visit_feedback_for_update", lambda c, i: current)
+    monkeypatch.setattr(repo, "_visit_feedback_for_update", lambda c, a, i: current)
     monkeypatch.setattr(repo, "_validate_target_account", lambda *args: None)
-    result = repo.publish_visit_feedback(2)
+    result = repo.publish_visit_feedback(AGENCY, 2)
     assert result["status"] == "published"
     assert any(
         "SET superseded_by_feedback_publication_id=%s" in query and params == (2, 1)
@@ -310,9 +327,10 @@ def test_supersede_creates_new_draft_without_mutating_previous(monkeypatch):
         yield object(), cursor
 
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
-    monkeypatch.setattr(repo, "_visit_feedback_for_update", lambda c, i: old)
+    monkeypatch.setattr(repo, "_visit_feedback_for_update", lambda c, a, i: old)
     monkeypatch.setattr(repo, "_validate_target_account", lambda *args: None)
     result = repo.supersede_visit_feedback(
+        AGENCY,
         1,
         {
             "category": "price",
@@ -382,7 +400,8 @@ def test_admin_list_filters_and_detail(monkeypatch):
         return [{"id": 1}]
 
     monkeypatch.setattr(repo, "list_visit_feedback_publications", fake_list)
-    monkeypatch.setattr(repo, "get_visit_feedback_publication", lambda item_id: {"id": item_id})
+    monkeypatch.setattr(repo, "get_visit_feedback_publication", lambda a, item_id: {"id": item_id})
+    _bind_agency(app)
     client = TestClient(app)
     response = client.get(
         "/api/owner/admin/visit-feedback",
@@ -398,7 +417,7 @@ def test_admin_list_filters_and_detail(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["items"] == [{"id": 1}]
-    assert captured["args"] == (5, 11, "published", 7, "price", 20, 2)
+    assert captured["args"] == (AGENCY, 5, 11, "published", 7, "price", 20, 2)
     assert client.get("/api/owner/admin/visit-feedback/8").json() == {"id": 8}
 
 

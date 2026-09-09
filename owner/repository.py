@@ -459,40 +459,72 @@ SHARED_DOCUMENT_TYPE_LABELS = {
 }
 
 
-def _property_for_document(c, document_id, *, for_update=False):
-    suffix = " FOR UPDATE" if for_update else ""
+def _property_for_document(c, agency_id, document_id, *, for_update=False):
+    """The source PROPERTY document, inside the caller's agency.
+
+    P26-6C: property_documents is CHILD-DERIVED - it carries no agency_id of
+    its own - so the tenant comes from its property, as a join rather than a
+    value compared afterwards.
+    """
+    suffix = " FOR UPDATE OF pd" if for_update else ""
     c.execute(
-        """SELECT id,property_id,document_type,title,url,storage_key,status,
-                  expires_at,metadata,created_at,updated_at
-           FROM property_documents WHERE id=%s""" + suffix,
-        (document_id,),
+        """SELECT pd.id,pd.property_id,pd.document_type,pd.title,pd.url,pd.storage_key,
+                  pd.status,pd.expires_at,pd.metadata,pd.created_at,pd.updated_at
+           FROM property_documents pd
+           JOIN properties p ON p.id=pd.property_id
+           WHERE pd.id=%s AND p.agency_id=%s""" + suffix,
+        (document_id, agency_id),
     )
     return one(c)
 
 
-def _property_for_visit(c, visit_id):
+def _property_for_visit(c, agency_id, visit_id):
+    """The PROPERTY visit, inside the caller's agency. Same derivation as
+    _property_for_document: property_visits is CHILD-DERIVED too."""
     c.execute(
-        "SELECT id,property_id,scheduled_at,status FROM property_visits WHERE id=%s",
-        (visit_id,),
+        """SELECT pv.id,pv.property_id,pv.scheduled_at,pv.status
+           FROM property_visits pv
+           JOIN properties p ON p.id=pv.property_id
+           WHERE pv.id=%s AND p.agency_id=%s""",
+        (visit_id, agency_id),
     )
     return one(c)
 
 
-def _validate_target_account(c, account_id, property_id):
+def _validate_target_account(c, agency_id, account_id, property_id):
+    """The grant that lets this document or feedback be aimed at one owner.
+
+    P26-6C: both roots. The account reaches an agency through its contact and
+    the property carries its own, so a grant written before create_access
+    started checking - one whose two roots disagree - can no longer be used to
+    target an owner of another agency.
+    """
     if account_id is None:
         return
     c.execute(
-        """SELECT 1 FROM owner_property_access
-           WHERE owner_account_id=%s AND property_id=%s
-             AND access_status='active' AND revoked_at IS NULL
-             AND (valid_until IS NULL OR valid_until>NOW())""",
-        (account_id, property_id),
+        """SELECT 1
+           FROM owner_property_access x
+           JOIN owner_accounts oa ON oa.id=x.owner_account_id
+           JOIN contacts ct ON ct.id=oa.contact_id
+           JOIN properties p ON p.id=x.property_id
+           WHERE x.owner_account_id=%s AND x.property_id=%s
+             AND ct.agency_id=%s AND p.agency_id=%s
+             AND x.access_status='active' AND x.revoked_at IS NULL
+             AND (x.valid_until IS NULL OR x.valid_until>NOW())""",
+        (account_id, property_id, agency_id, agency_id),
     )
     if not c.fetchone():
         raise NotFoundError(NF)
 
 
-def _shared_document_with_source(c, item_id, *, for_update=False):
+def _shared_document_with_source(c, agency_id, item_id, *, for_update=False):
+    """The shared document with its source, inside the caller's agency.
+
+    owner_shared_documents.owner_account_id is nullable, so the account is not
+    a dependable root here: the tenant comes through the source document to its
+    property. Every admin path to a shared document goes through this helper,
+    including the download, so the predicate lives in one place.
+    """
     suffix = " FOR UPDATE OF sd" if for_update else ""
     c.execute(
         """SELECT sd.*,pd.property_id,pd.title AS source_title,
@@ -501,8 +533,9 @@ def _shared_document_with_source(c, item_id, *, for_update=False):
                   pd.metadata AS source_metadata
            FROM owner_shared_documents sd
            JOIN property_documents pd ON pd.id=sd.property_document_id
-           WHERE sd.id=%s""" + suffix,
-        (item_id,),
+           JOIN properties p ON p.id=pd.property_id
+           WHERE sd.id=%s AND p.agency_id=%s""" + suffix,
+        (item_id, agency_id),
     )
     return one(c)
 
@@ -588,12 +621,12 @@ def _validate_source_contract(row, storage, *, verify_provider=True):
     return contract
 
 
-def create_shared_document(d):
+def create_shared_document(agency_id, d):
     with core_cursor(commit=True) as (_, c):
-        src = _property_for_document(c, d["property_document_id"])
+        src = _property_for_document(c, agency_id, d["property_document_id"])
         if src["status"] != "available" or not src.get("storage_key"):
             raise ValidationError("Il documento deve essere disponibile in storage privato")
-        _validate_target_account(c, d.get("owner_account_id"), src["property_id"])
+        _validate_target_account(c, agency_id, d.get("owner_account_id"), src["property_id"])
         c.execute(
             """INSERT INTO owner_shared_documents(
                    property_document_id,owner_account_id,public_title,public_document_type,
@@ -623,7 +656,7 @@ def create_shared_document(d):
     return _admin_shared_document(result)
 
 
-def create_uploaded_shared_document(d, staged, storage=None):
+def create_uploaded_shared_document(agency_id, d, staged, storage=None):
     """Upload a private file, then atomically create PROPERTY and OWNER records."""
     from .document_storage import (
         DocumentStorageError,
@@ -656,7 +689,7 @@ def create_uploaded_shared_document(d, staged, storage=None):
             target_account = d.get("owner_account_id")
             version_number = 1
             if previous_id is not None:
-                previous = _shared_document_with_source(c, previous_id, for_update=True)
+                previous = _shared_document_with_source(c, agency_id, previous_id, for_update=True)
                 if previous["status"] != "published":
                     raise ConflictError("Solo un documento published può essere sostituito")
                 if previous.get("superseded_by_shared_document_id") is not None:
@@ -676,7 +709,7 @@ def create_uploaded_shared_document(d, staged, storage=None):
                 if c.fetchone():
                     raise ConflictError("Esiste già una versione successiva attiva")
 
-            _validate_target_account(c, target_account, d["property_id"])
+            _validate_target_account(c, agency_id, target_account, d["property_id"])
             c.execute(
                 """INSERT INTO property_documents(
                        property_id,document_type,title,storage_key,status,metadata
@@ -769,6 +802,7 @@ def create_uploaded_shared_document(d, staged, storage=None):
 
 
 def list_shared_documents(
+    agency_id,
     property_id=None,
     status=None,
     owner_account_id=None,
@@ -776,8 +810,10 @@ def list_shared_documents(
     limit=100,
     offset=0,
 ):
-    filters = []
-    values = []
+    # The tenant is the first filter and is not optional: the caller-supplied
+    # ones narrow within it and can never widen past it.
+    filters = ["p.agency_id=%s"]
+    values = [agency_id]
     if property_id is not None:
         filters.append("pd.property_id=%s")
         values.append(property_id)
@@ -790,7 +826,7 @@ def list_shared_documents(
     if document_type is not None:
         filters.append("sd.public_document_type=%s")
         values.append(document_type)
-    where = " WHERE " + " AND ".join(filters) if filters else ""
+    where = " WHERE " + " AND ".join(filters)
     values.extend((limit, offset))
     with core_cursor() as (_, c):
         c.execute(
@@ -798,7 +834,8 @@ def list_shared_documents(
                       pd.document_type AS source_document_type,pd.status AS source_status,
                       pd.expires_at AS source_expires_at,pd.storage_key
                FROM owner_shared_documents sd
-               JOIN property_documents pd ON pd.id=sd.property_document_id"""
+               JOIN property_documents pd ON pd.id=sd.property_document_id
+               JOIN properties p ON p.id=pd.property_id"""
             + where
             + " ORDER BY sd.created_at DESC LIMIT %s OFFSET %s",
             values,
@@ -806,13 +843,13 @@ def list_shared_documents(
         return [_admin_shared_document(dict(row)) for row in c.fetchall()]
 
 
-def get_shared_document(i):
+def get_shared_document(agency_id, i):
     with core_cursor() as (_, c):
-        return _admin_shared_document(_shared_document_with_source(c, i))
+        return _admin_shared_document(_shared_document_with_source(c, agency_id, i))
 
 
-def update_shared_document(i, d):
-    old = get_shared_document(i)
+def update_shared_document(agency_id, i, d):
+    old = get_shared_document(agency_id, i)
     if old["status"] != "draft":
         raise ConflictError("Un documento pubblicato, revocato o archiviato è immutabile")
     fields = []
@@ -845,21 +882,21 @@ def update_shared_document(i, d):
     return result
 
 
-def publish_shared_document(i, storage=None):
+def publish_shared_document(agency_id, i, storage=None):
     from .document_storage import get_document_storage
 
     storage = storage or get_document_storage()
     with core_cursor() as (_, c):
-        preflight = _shared_document_with_source(c, i)
+        preflight = _shared_document_with_source(c, agency_id, i)
     if preflight["status"] != "draft":
         raise ConflictError("Solo draft pubblicabile")
     _validate_source_contract(preflight, storage, verify_provider=True)
 
     with core_cursor(commit=True) as (_, c):
-        current = _shared_document_with_source(c, i, for_update=True)
+        current = _shared_document_with_source(c, agency_id, i, for_update=True)
         if current["status"] != "draft":
             raise ConflictError("Solo draft pubblicabile")
-        _validate_target_account(c, current.get("owner_account_id"), current["property_id"])
+        _validate_target_account(c, agency_id, current.get("owner_account_id"), current["property_id"])
         if current.get("expires_at") is not None:
             c.execute("SELECT (%s > NOW()) AS valid", (current["expires_at"],))
             if not c.fetchone()["valid"]:
@@ -874,7 +911,7 @@ def publish_shared_document(i, storage=None):
                 raise ConflictError("La versione precedente è già stata sostituita")
             if previous.get("owner_account_id") != current.get("owner_account_id"):
                 raise ConflictError("Catena versioni non coerente")
-            previous_source = _property_for_document(c, previous["property_document_id"])
+            previous_source = _property_for_document(c, agency_id, previous["property_document_id"])
             if previous_source["property_id"] != current["property_id"]:
                 raise ConflictError("Catena versioni non coerente")
         c.execute(
@@ -919,8 +956,8 @@ def publish_shared_document(i, storage=None):
     return _admin_shared_document(result)
 
 
-def revoke_shared_document(i, actor=None, reason=None):
-    old = get_shared_document(i)
+def revoke_shared_document(agency_id, i, actor=None, reason=None):
+    old = get_shared_document(agency_id, i)
     if old["status"] != "published":
         raise ConflictError("Solo published revocabile")
     with core_cursor(commit=True) as (_, c):
@@ -945,8 +982,8 @@ def revoke_shared_document(i, actor=None, reason=None):
     return result
 
 
-def archive_shared_document(i):
-    old = get_shared_document(i)
+def archive_shared_document(agency_id, i):
+    old = get_shared_document(agency_id, i)
     if old["status"] not in ("published", "revoked"):
         raise ConflictError("Solo published o revoked archiviabile")
     with core_cursor(commit=True) as (_, c):
@@ -971,9 +1008,9 @@ def archive_shared_document(i):
     return result
 
 
-def supersede_shared_document(i, d):
+def supersede_shared_document(agency_id, i, d):
     with core_cursor(commit=True) as (_, c):
-        old = _shared_document_with_source(c, i, for_update=True)
+        old = _shared_document_with_source(c, agency_id, i, for_update=True)
         if old["status"] != "published":
             raise ConflictError("Solo published sostituibile")
         if old.get("superseded_by_shared_document_id") is not None:
@@ -987,12 +1024,12 @@ def supersede_shared_document(i, d):
         if c.fetchone():
             raise ConflictError("Esiste già una versione successiva attiva")
         new_document_id = d.get("property_document_id") or old["property_document_id"]
-        source = _property_for_document(c, new_document_id)
+        source = _property_for_document(c, agency_id, new_document_id)
         if source["property_id"] != old["property_id"]:
             raise ConflictError("Il nuovo documento appartiene a un altro immobile")
         if source["status"] != "available" or not source.get("storage_key"):
             raise ValidationError("Il nuovo documento non è disponibile in storage privato")
-        _validate_target_account(c, old.get("owner_account_id"), old["property_id"])
+        _validate_target_account(c, agency_id, old.get("owner_account_id"), old["property_id"])
         c.execute(
             """SELECT COALESCE(MAX(version_number),0)+1 AS next_version
                FROM owner_shared_documents
@@ -1206,12 +1243,12 @@ def prepare_shared_document_download(a, i, storage=None):
     }
 
 
-def prepare_admin_shared_document_download(i, storage=None):
+def prepare_admin_shared_document_download(agency_id, i, storage=None):
     from .document_storage import get_document_storage
 
     storage = storage or get_document_storage()
     with core_cursor() as (_, c):
-        source = _shared_document_with_source(c, i)
+        source = _shared_document_with_source(c, agency_id, i)
     contract = _validate_source_contract(source, storage, verify_provider=True)
     opened = storage.open_stream(contract["storage_key"])
     if (
@@ -1274,8 +1311,8 @@ def audit_shared_document_access_denied(account, property_id=None, document_id=N
         pass
 
 
-def shared_document_reads(i):
-    doc = get_shared_document(i)
+def shared_document_reads(agency_id, i):
+    doc = get_shared_document(agency_id, i)
     with core_cursor() as (_, c):
         c.execute(
             """SELECT dr.owner_account_id,dr.first_viewed_at,dr.last_viewed_at,
@@ -1283,9 +1320,13 @@ def shared_document_reads(i):
                FROM owner_document_reads dr
                JOIN owner_property_access x
                  ON x.owner_account_id=dr.owner_account_id AND x.property_id=%s
+               JOIN owner_accounts oa ON oa.id=dr.owner_account_id
+               JOIN contacts ct ON ct.id=oa.contact_id
+               JOIN properties p ON p.id=x.property_id
                WHERE dr.shared_document_id=%s
+                 AND ct.agency_id=%s AND p.agency_id=%s
                ORDER BY dr.first_viewed_at""",
-            (doc["property_id"], i),
+            (doc["property_id"], i, agency_id, agency_id),
         )
         return [dict(row) for row in c.fetchall()]
 
@@ -1334,14 +1375,20 @@ def validate_visit_feedback_privacy(public_summary):
     return {"valid": not issues, "issues": issues}
 
 
-def _visit_feedback_for_update(c, i):
+def _visit_feedback_for_update(c, agency_id, i):
+    """The visit-feedback row, inside the caller's agency.
+
+    owner_visit_feedback_publications.owner_account_id is nullable, like the
+    shared documents', so the tenant comes through the visit to its property.
+    """
     c.execute(
         """SELECT vf.*,pv.property_id
            FROM owner_visit_feedback_publications vf
            JOIN property_visits pv ON pv.id=vf.property_visit_id
-           WHERE vf.id=%s
+           JOIN properties p ON p.id=pv.property_id
+           WHERE vf.id=%s AND p.agency_id=%s
            FOR UPDATE OF vf""",
-        (i,),
+        (i, agency_id),
     )
     return one(c)
 
@@ -1363,11 +1410,11 @@ def _public_visit_feedback(row):
     return result
 
 
-def create_visit_feedback_publication(d):
+def create_visit_feedback_publication(agency_id, d):
     summary = _validated_public_summary(d["public_summary"])
     with core_cursor(commit=True) as (_, c):
-        src = _property_for_visit(c, d["property_visit_id"])
-        _validate_target_account(c, d.get("owner_account_id"), src["property_id"])
+        src = _property_for_visit(c, agency_id, d["property_visit_id"])
+        _validate_target_account(c, agency_id, d.get("owner_account_id"), src["property_id"])
         c.execute(
             """INSERT INTO owner_visit_feedback_publications(
                    property_visit_id,owner_account_id,category,public_summary,sentiment,created_by
@@ -1395,6 +1442,7 @@ def create_visit_feedback_publication(d):
 
 
 def list_visit_feedback_publications(
+    agency_id,
     property_visit_id=None,
     property_id=None,
     status=None,
@@ -1403,8 +1451,8 @@ def list_visit_feedback_publications(
     limit=50,
     offset=0,
 ):
-    clauses = []
-    values = []
+    clauses = ["p.agency_id=%s"]
+    values = [agency_id]
     for expression, value in (
         ("vf.property_visit_id=%s", property_visit_id),
         ("pv.property_id=%s", property_id),
@@ -1415,13 +1463,14 @@ def list_visit_feedback_publications(
         if value is not None:
             clauses.append(expression)
             values.append(value)
-    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    where = " WHERE " + " AND ".join(clauses)
     values.extend((limit, offset))
     with core_cursor() as (_, c):
         c.execute(
             """SELECT vf.*,pv.property_id
                FROM owner_visit_feedback_publications vf
-               JOIN property_visits pv ON pv.id=vf.property_visit_id"""
+               JOIN property_visits pv ON pv.id=vf.property_visit_id
+               JOIN properties p ON p.id=pv.property_id"""
             + where
             + " ORDER BY vf.created_at DESC LIMIT %s OFFSET %s",
             values,
@@ -1429,19 +1478,20 @@ def list_visit_feedback_publications(
         return [dict(row) for row in c.fetchall()]
 
 
-def get_visit_feedback_publication(i):
+def get_visit_feedback_publication(agency_id, i):
     with core_cursor() as (_, c):
         c.execute(
             """SELECT vf.*,pv.property_id
                FROM owner_visit_feedback_publications vf
                JOIN property_visits pv ON pv.id=vf.property_visit_id
-               WHERE vf.id=%s""",
-            (i,),
+               JOIN properties p ON p.id=pv.property_id
+               WHERE vf.id=%s AND p.agency_id=%s""",
+            (i, agency_id),
         )
         return one(c)
 
 
-def update_visit_feedback_publication(i, d):
+def update_visit_feedback_publication(agency_id, i, d):
     fields = []
     values = []
     if "public_summary" in d:
@@ -1452,7 +1502,7 @@ def update_visit_feedback_publication(i, d):
             fields.append(key + "=%s")
             values.append(d[key])
     with core_cursor(commit=True) as (_, c):
-        old = _visit_feedback_for_update(c, i)
+        old = _visit_feedback_for_update(c, agency_id, i)
         if old["status"] != "draft":
             raise ConflictError("Un feedback pubblicato o archiviato è immutabile")
         if not fields:
@@ -1477,13 +1527,13 @@ def update_visit_feedback_publication(i, d):
     return result
 
 
-def publish_visit_feedback(i):
+def publish_visit_feedback(agency_id, i):
     with core_cursor(commit=True) as (_, c):
-        current = _visit_feedback_for_update(c, i)
+        current = _visit_feedback_for_update(c, agency_id, i)
         if current["status"] != "draft":
             raise ConflictError("Solo draft pubblicabile")
         _validated_public_summary(current["public_summary"])
-        _validate_target_account(c, current.get("owner_account_id"), current["property_id"])
+        _validate_target_account(c, agency_id, current.get("owner_account_id"), current["property_id"])
 
         previous_id = current.get("supersedes_feedback_publication_id")
         if previous_id is not None:
@@ -1540,9 +1590,9 @@ def publish_visit_feedback(i):
     return result
 
 
-def archive_visit_feedback(i):
+def archive_visit_feedback(agency_id, i):
     with core_cursor(commit=True) as (_, c):
-        old = _visit_feedback_for_update(c, i)
+        old = _visit_feedback_for_update(c, agency_id, i)
         if old["status"] != "published":
             raise ConflictError("Solo published archiviabile")
         c.execute(
@@ -1564,15 +1614,15 @@ def archive_visit_feedback(i):
     return result
 
 
-def supersede_visit_feedback(i, d):
+def supersede_visit_feedback(agency_id, i, d):
     summary = _validated_public_summary(d["public_summary"])
     with core_cursor(commit=True) as (_, c):
-        old = _visit_feedback_for_update(c, i)
+        old = _visit_feedback_for_update(c, agency_id, i)
         if old["status"] != "published":
             raise ConflictError("Solo published sostituibile")
         if old.get("superseded_by_feedback_publication_id") is not None:
             raise ConflictError("Solo la versione corrente può essere sostituita")
-        _validate_target_account(c, old.get("owner_account_id"), old["property_id"])
+        _validate_target_account(c, agency_id, old.get("owner_account_id"), old["property_id"])
         c.execute(
             """SELECT 1 FROM owner_visit_feedback_publications
                WHERE supersedes_feedback_publication_id=%s AND status IN ('draft','published')

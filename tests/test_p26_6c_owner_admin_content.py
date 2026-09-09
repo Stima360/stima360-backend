@@ -62,6 +62,11 @@ PROPERTY_A, PROPERTY_B = 101, 102
 PUB_A_DRAFT, PUB_A_PUBLISHED, PUB_B = 201, 202, 203
 FEEDBACK_A, FEEDBACK_B, FEEDBACK_LEGACY = 301, 302, 303
 AUDIT_BY_ACCOUNT_A, AUDIT_BY_PROPERTY_B, AUDIT_ORPHAN = 401, 402, 403
+SOURCE_DOC_A, SOURCE_DOC_B = 501, 502          # property_documents
+SHARED_A, SHARED_B = 601, 602                  # owner_shared_documents
+VISIT_A, VISIT_B = 701, 702                    # property_visits
+VF_A, VF_B = 801, 802                          # owner_visit_feedback_publications
+READ_A, READ_CROSS = 901001, 901002            # owner_document_reads
 
 MISSING = 999
 
@@ -190,6 +195,74 @@ STORE: dict[str, list[dict]] = {
         {"id": PROPERTY_A, "_agencies": (AGENCY_A,)},
         {"id": PROPERTY_B, "_agencies": (AGENCY_B,)},
     ],
+    # --- blocks B and C -----------------------------------------------------
+    "property_documents": [
+        {"id": SOURCE_DOC_A, "_agencies": (AGENCY_A,), "property_id": PROPERTY_A,
+         "status": "available", "storage_key": "a/1", "url": None, "metadata": {},
+         "document_type": "ape", "title": "APE A", "expires_at": None,
+         "created_at": None, "updated_at": None},
+        {"id": SOURCE_DOC_B, "_agencies": (AGENCY_B,), "property_id": PROPERTY_B,
+         "status": "available", "storage_key": "b/1", "url": None, "metadata": {},
+         "document_type": "ape", "title": "APE B", "expires_at": None,
+         "created_at": None, "updated_at": None},
+    ],
+    "owner_shared_documents": [
+        {"id": SHARED_A, "_agencies": (AGENCY_A,), "property_document_id": SOURCE_DOC_A,
+         "property_id": PROPERTY_A, "owner_account_id": None, "public_title": "A",
+         "public_document_type": "ape", "version_number": 1, "status": "draft",
+         "published_at": None, "expires_at": None, "acknowledgement_required": False,
+         "supersedes_shared_document_id": None, "superseded_by_shared_document_id": None,
+         "revoked_at": None, "revoked_by": None, "created_at": None, "updated_at": None,
+         "created_by": None, "archived_at": None, "source_title": "APE A",
+         "source_document_type": "ape", "source_status": "available",
+         "source_expires_at": None, "storage_key": "a/1", "url": None,
+         "source_metadata": {}},
+        {"id": SHARED_B, "_agencies": (AGENCY_B,), "property_document_id": SOURCE_DOC_B,
+         "property_id": PROPERTY_B, "owner_account_id": None, "public_title": "B",
+         "public_document_type": "ape", "version_number": 1, "status": "published",
+         "published_at": None, "expires_at": None, "acknowledgement_required": False,
+         "supersedes_shared_document_id": None, "superseded_by_shared_document_id": None,
+         "revoked_at": None, "revoked_by": None, "created_at": None, "updated_at": None,
+         "created_by": None, "archived_at": None, "source_title": "APE B",
+         "source_document_type": "ape", "source_status": "available",
+         "source_expires_at": None, "storage_key": "b/1", "url": None,
+         "source_metadata": {}},
+    ],
+    "property_visits": [
+        {"id": VISIT_A, "_agencies": (AGENCY_A,), "property_id": PROPERTY_A,
+         "scheduled_at": None, "status": "done"},
+        {"id": VISIT_B, "_agencies": (AGENCY_B,), "property_id": PROPERTY_B,
+         "scheduled_at": None, "status": "done"},
+    ],
+    "owner_visit_feedback_publications": [
+        {"id": VF_A, "_agencies": (AGENCY_A,), "property_visit_id": VISIT_A,
+         "property_id": PROPERTY_A, "owner_account_id": None, "category": "price",
+         "public_summary": "ok", "sentiment": None, "version_number": 1,
+         "status": "draft", "published_at": None,
+         "supersedes_feedback_publication_id": None,
+         "superseded_by_feedback_publication_id": None, "created_at": None,
+         "updated_at": None, "created_by": None, "archived_at": None},
+        {"id": VF_B, "_agencies": (AGENCY_B,), "property_visit_id": VISIT_B,
+         "property_id": PROPERTY_B, "owner_account_id": None, "category": "price",
+         "public_summary": "ok", "sentiment": None, "version_number": 1,
+         "status": "published", "published_at": None,
+         "supersedes_feedback_publication_id": None,
+         "superseded_by_feedback_publication_id": None, "created_at": None,
+         "updated_at": None, "created_by": None, "archived_at": None},
+    ],
+    "owner_document_reads": [
+        # A read of A's document by A's own owner.
+        {"id": READ_A, "_account_agency": AGENCY_A, "_property_agency": AGENCY_A,
+         "owner_account_id": ACCOUNT_A, "first_viewed_at": None, "last_viewed_at": None,
+         "view_count": 1, "acknowledged_at": None},
+        # A read of the SAME document recorded against an account of B - only
+        # reachable through a legacy grant whose two roots disagree, and exactly
+        # what the second root in the reads query is there to hide. The document
+        # itself is A's, so the guard on the document cannot catch this one.
+        {"id": READ_CROSS, "_account_agency": AGENCY_B, "_property_agency": AGENCY_A,
+         "owner_account_id": ACCOUNT_B, "first_viewed_at": None, "last_viewed_at": None,
+         "view_count": 1, "acknowledged_at": None},
+    ],
 }
 
 ENTITY_AGENCIES = {
@@ -198,6 +271,10 @@ ENTITY_AGENCIES = {
     CONTACT_A: (AGENCY_A,), CONTACT_B: (AGENCY_B,),
     PUB_A_DRAFT: (AGENCY_A,), PUB_A_PUBLISHED: (AGENCY_A,), PUB_B: (AGENCY_B,),
     FEEDBACK_A: (AGENCY_A,), FEEDBACK_B: (AGENCY_B,),
+    SOURCE_DOC_A: (AGENCY_A,), SOURCE_DOC_B: (AGENCY_B,),
+    SHARED_A: (AGENCY_A,), SHARED_B: (AGENCY_B,),
+    VISIT_A: (AGENCY_A,), VISIT_B: (AGENCY_B,),
+    VF_A: (AGENCY_A,), VF_B: (AGENCY_B,),
 }
 
 
@@ -664,9 +741,18 @@ SCOPED_ROUTES = {
     # block A: dashboard, publications, feedback, audit
     "dash", "pubs", "pub", "edit", "publish", "archive", "supersede",
     "feedback", "feedback_status", "audit",
+    # block B: shared documents
+    "documents", "document_create", "document_upload", "document_detail",
+    "document_update", "document_publish", "document_revoke", "document_archive",
+    "document_supersede", "document_reads", "document_download",
+    # block C: visit feedback
+    "visit_feedback", "visit_feedback_detail", "visit_feedback_create",
+    "visit_feedback_update", "visit_feedback_publish", "visit_feedback_archive",
+    "visit_feedback_supersede",
 }
 
-# Deliberately without a context, and why.
+# Deliberately without a context, and why. Both are asserted to touch no
+# tenant table, so "no context" is a property of the route and not an oversight.
 NO_TENANT = {
     "visit_feedback_validate_privacy",   # validates a string, touches no table
     "document_storage_health",           # asks the storage backend, not the DB
@@ -708,12 +794,242 @@ def test_21_the_scoped_and_unscoped_owner_admin_routes_are_both_named():
         "unannounced": sorted(scoped - SCOPED_ROUTES),
     }
     assert NO_TENANT.isdisjoint(scoped), sorted(NO_TENANT & scoped)
-    remaining = sorted(all_routes - scoped - NO_TENANT)
-    assert remaining == [
-        "document_archive", "document_create", "document_detail", "document_download",
-        "document_publish", "document_reads", "document_revoke", "document_supersede",
-        "document_update", "document_upload", "documents",
-        "visit_feedback", "visit_feedback_archive", "visit_feedback_create",
-        "visit_feedback_detail", "visit_feedback_publish", "visit_feedback_supersede",
-        "visit_feedback_update",
-    ], remaining
+    # Nothing left over: every OWNER Admin route is either agency-bound or
+    # named in NO_TENANT with a reason.
+    assert sorted(all_routes - scoped - NO_TENANT) == []
+
+
+# ===========================================================================
+# BLOCKS B AND C - shared documents and visit feedback
+#
+# Both tables have a NULLABLE owner_account_id, so the account is not a
+# dependable root: the tenant comes through the source - a property_document
+# or a property_visit - to its property. Four helpers carry that derivation
+# and every admin path goes through one of them:
+#
+#     _property_for_document      _shared_document_with_source
+#     _property_for_visit         _visit_feedback_for_update
+#
+# _validate_target_account is the fifth, and the only one that requires BOTH
+# roots: it is what decides whether a document may be aimed at one owner, and a
+# grant whose roots disagree must not be usable for that.
+#
+# The download matters most. It streams a private file, so a shared document of
+# another agency must be refused before the storage key is ever read.
+# ===========================================================================
+
+DOCUMENT_OPERATIONS = {
+    "get_shared_document": lambda a, i: repository.get_shared_document(a, i),
+    "update_shared_document": lambda a, i: repository.update_shared_document(a, i, {"public_title": "x"}),
+    "revoke_shared_document": lambda a, i: repository.revoke_shared_document(a, i, "actor", "reason"),
+    "archive_shared_document": lambda a, i: repository.archive_shared_document(a, i),
+    "supersede_shared_document": lambda a, i: repository.supersede_shared_document(
+        a, i, {"property_document_id": SOURCE_DOC_B, "public_title": "x",
+               "public_document_type": "ape"}),
+    "shared_document_reads": lambda a, i: repository.shared_document_reads(a, i),
+    "prepare_admin_shared_document_download": lambda a, i:
+        repository.prepare_admin_shared_document_download(a, i, storage=_RefusingStorage()),
+}
+
+VISIT_FEEDBACK_OPERATIONS = {
+    "get_visit_feedback_publication": lambda a, i: repository.get_visit_feedback_publication(a, i),
+    "update_visit_feedback_publication": lambda a, i:
+        repository.update_visit_feedback_publication(a, i, {"category": "price"}),
+    "publish_visit_feedback": lambda a, i: repository.publish_visit_feedback(a, i),
+    "archive_visit_feedback": lambda a, i: repository.archive_visit_feedback(a, i),
+    "supersede_visit_feedback": lambda a, i: repository.supersede_visit_feedback(
+        a, i, {"category": "price", "public_summary": "Riepilogo pubblico neutro."}),
+}
+
+
+class _RefusingStorage:
+    """Any read of a storage key from a refused document is itself the failure."""
+
+    def open_stream(self, *args, **kwargs):
+        raise AssertionError("the storage was reached for a document of another agency")
+
+    def healthcheck(self):
+        return {"ok": True}
+
+
+@pytest.mark.parametrize("name", sorted(DOCUMENT_OPERATIONS))
+def test_22_no_document_operation_reaches_another_agency(db, name):
+    with pytest.raises(NotFoundError) as excinfo:
+        DOCUMENT_OPERATIONS[name](AGENCY_A, SHARED_B)
+    assert str(excinfo.value) == "Risorsa non trovata", name
+    assert db.writes == [], (name, [s.sql for s in db.writes])
+    assert db.audit == [], (name, db.audit)
+
+
+@pytest.mark.parametrize("name", sorted(VISIT_FEEDBACK_OPERATIONS))
+def test_23_no_visit_feedback_operation_reaches_another_agency(db, name):
+    with pytest.raises(NotFoundError) as excinfo:
+        VISIT_FEEDBACK_OPERATIONS[name](AGENCY_A, VF_B)
+    assert str(excinfo.value) == "Risorsa non trovata", name
+    assert db.writes == [], (name, [s.sql for s in db.writes])
+    assert db.audit == [], (name, db.audit)
+
+
+@pytest.mark.parametrize("name", sorted(DOCUMENT_OPERATIONS) + sorted(VISIT_FEEDBACK_OPERATIONS))
+def test_24_the_deciding_read_names_the_tenant(db, name):
+    """The refusal must come from a predicate, not from a Python comparison
+    after a global read."""
+    operation = {**DOCUMENT_OPERATIONS, **VISIT_FEEDBACK_OPERATIONS}[name]
+    target = SHARED_B if name in DOCUMENT_OPERATIONS else VF_B
+    with pytest.raises(NotFoundError):
+        operation(AGENCY_A, target)
+    assert db.statements, name
+    first = db.statements[0]
+    assert _TENANT.search(first.sql), (name, first.sql)
+    assert AGENCY_A in first.params and AGENCY_B not in first.params, (name, first.params)
+
+
+def test_25_the_download_refuses_before_the_storage_key_is_used(db):
+    """`_RefusingStorage` turns any storage access into a failure of its own, so
+    a pass here means the refusal happened while still in the database."""
+    with pytest.raises(NotFoundError):
+        repository.prepare_admin_shared_document_download(
+            AGENCY_A, SHARED_B, storage=_RefusingStorage()
+        )
+
+
+def test_26_the_document_and_visit_helpers_derive_through_properties(db):
+    """One derivation, four helpers, read from the statements they issue."""
+    for call, expected in (
+        (lambda: repository.get_shared_document(AGENCY_A, SHARED_A), "owner_shared_documents"),
+        (lambda: repository.get_visit_feedback_publication(AGENCY_A, VF_A),
+         "owner_visit_feedback_publications"),
+    ):
+        db.statements.clear()
+        call()
+        sql = db.statements[0].sql.lower()
+        assert expected in sql, sql
+        assert "join properties p" in sql, sql
+        assert "p.agency_id=%s" in sql, sql
+
+
+def test_27_creating_from_a_source_of_another_agency_is_refused(db):
+    for call in (
+        lambda: repository.create_shared_document(AGENCY_A, {
+            "property_document_id": SOURCE_DOC_B, "public_title": "x",
+            "public_document_type": "ape"}),
+        lambda: repository.create_visit_feedback_publication(AGENCY_A, {
+            "property_visit_id": VISIT_B, "category": "price",
+            "public_summary": "Riepilogo pubblico neutro."}),
+    ):
+        db.statements.clear()
+        with pytest.raises(NotFoundError):
+            call()
+        assert db.writes == []
+
+
+def test_28_the_listings_put_the_tenant_first_and_it_is_not_optional(db):
+    repository.list_shared_documents(AGENCY_A)
+    documents = db.statements[0]
+    assert _TENANT.search(documents.sql), documents.sql
+    assert documents.params[0] == AGENCY_A, documents.params
+    db.statements.clear()
+    repository.list_visit_feedback_publications(AGENCY_A)
+    visits = db.statements[0]
+    assert _TENANT.search(visits.sql), visits.sql
+    assert visits.params[0] == AGENCY_A, visits.params
+
+
+def test_29_the_target_account_check_requires_both_roots(db):
+    """`_validate_target_account` is what aims a document at one owner. A grant
+    whose two roots disagree must not be usable for that."""
+    import inspect
+
+    source = inspect.getsource(repository._validate_target_account)
+    assert "ct.agency_id=%s" in source and "p.agency_id=%s" in source, source
+    assert "JOIN contacts ct" in source and "JOIN properties p" in source, source
+    parameters = list(inspect.signature(repository._validate_target_account).parameters)
+    assert parameters[:2] == ["c", "agency_id"], parameters
+
+
+@pytest.mark.parametrize("fn", [
+    "list_shared_documents", "get_shared_document", "create_shared_document",
+    "create_uploaded_shared_document", "update_shared_document",
+    "publish_shared_document", "revoke_shared_document", "archive_shared_document",
+    "supersede_shared_document", "shared_document_reads",
+    "prepare_admin_shared_document_download",
+    "list_visit_feedback_publications", "get_visit_feedback_publication",
+    "create_visit_feedback_publication", "update_visit_feedback_publication",
+    "publish_visit_feedback", "archive_visit_feedback", "supersede_visit_feedback",
+])
+def test_30_every_block_b_and_c_function_takes_the_agency_first(fn):
+    import inspect
+
+    parameters = list(inspect.signature(getattr(repository, fn)).parameters.values())
+    assert parameters[0].name == "agency_id", (fn, parameters[0].name)
+    assert parameters[0].default is inspect.Parameter.empty, fn
+
+
+BLOCK_BC_ROUTES = [
+    ("get", "/api/owner/admin/documents", None),
+    ("get", f"/api/owner/admin/documents/{SHARED_B}", None),
+    ("get", f"/api/owner/admin/documents/{SHARED_B}/reads", None),
+    ("get", "/api/owner/admin/visit-feedback", None),
+    ("get", f"/api/owner/admin/visit-feedback/{VF_B}", None),
+]
+
+
+@pytest.mark.parametrize("method,path,body", BLOCK_BC_ROUTES)
+def test_31_a_context_without_an_agency_is_refused_before_any_query(db, client, method, path, body):
+    response = getattr(client(None), method)(path, auth=AUTH)
+    assert response.status_code == 403, (path, response.status_code, response.text)
+    assert db.statements == []
+
+
+def test_32_another_agencys_document_and_visit_feedback_are_404_over_http(db, client):
+    a = client(AGENCY_A)
+    for path in (f"/api/owner/admin/documents/{SHARED_B}",
+                 f"/api/owner/admin/documents/{SHARED_B}/reads",
+                 f"/api/owner/admin/visit-feedback/{VF_B}"):
+        response = a.get(path, auth=AUTH)
+        assert response.status_code == 404, (path, response.status_code, response.text)
+        assert response.json() == {"detail": "Risorsa non trovata"}
+    assert db.writes == []
+
+
+def test_33_a_read_recorded_against_another_agencys_account_is_hidden(db):
+    """The document is A's, so the guard on the document cannot catch this.
+
+    Only the second root in the reads query can: a legacy grant whose two roots
+    disagree is what makes such a row reachable at all, and hiding it is the
+    same rule list_access applies to the grant itself.
+    """
+    rows = repository.shared_document_reads(AGENCY_A, SHARED_A)
+    assert [row["owner_account_id"] for row in rows] == [ACCOUNT_A], rows
+
+    reads_query = [s for s in db.statements if "owner_document_reads" in s.sql][0]
+    assert constrained_tables(reads_query.sql) >= {"contacts", "properties"}, reads_query.sql
+
+
+def test_34_the_download_route_passes_the_callers_agency(db, client, monkeypatch):
+    """Read from what the route hands the repository, so a hardcoded agency in
+    the route is visible. The storage is never involved."""
+    seen = {}
+
+    def fake_prepare(agency_id, item_id, storage=None):
+        seen["agency_id"] = agency_id
+        seen["item_id"] = item_id
+        raise NotFoundError("Risorsa non trovata")
+
+    monkeypatch.setattr(repository, "prepare_admin_shared_document_download", fake_prepare)
+    response = client(AGENCY_B).get(f"/api/owner/admin/documents/{SHARED_A}/download", auth=AUTH)
+    assert response.status_code == 404
+    assert seen == {"agency_id": AGENCY_B, "item_id": SHARED_A}
+
+
+@pytest.mark.parametrize("path,other", [
+    (f"/api/owner/admin/documents/{SHARED_A}", AGENCY_B),
+    (f"/api/owner/admin/documents/{SHARED_B}", AGENCY_A),
+    (f"/api/owner/admin/visit-feedback/{VF_A}", AGENCY_B),
+    (f"/api/owner/admin/visit-feedback/{VF_B}", AGENCY_A),
+])
+def test_35_every_detail_route_refuses_the_other_agency_in_both_directions(db, client, path, other):
+    """Both directions, so a route that hardcoded one agency would pass in one
+    of them and fail here in the other."""
+    response = client(other).get(path, auth=AUTH)
+    assert response.status_code == 404, (path, other, response.status_code)

@@ -93,6 +93,23 @@ def test_stage_upload_rejects_mime_signature_and_extension_mismatch(payload, fil
         _staged(payload, filename, mime)
     assert error.value.code == code
 
+# P26-6C: OWNER Admin is agency-bound. These tests are about lifecycle,
+# storage and DTOs, so the agency is a fixed value and the compatibility
+# dependency is overridden; the scoping itself is proved in
+# tests/test_p26_6c_owner_admin_content.py.
+AGENCY = 901
+
+
+def _bind_agency(app):
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import legacy_basic_agency_context
+
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=AGENCY, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    return app
+
 
 def test_stage_upload_enforces_streaming_size_limit():
     with pytest.raises(DocumentFileValidationError) as error:
@@ -419,7 +436,8 @@ def test_p4_routes_declared_without_method_path_collisions():
 def test_admin_upload_route_stages_and_passes_safe_metadata(monkeypatch):
     captured = {}
 
-    def fake_create(data, staged):
+    def fake_create(agency_id, data, staged):
+        captured["agency_id"] = agency_id
         captured["data"] = data
         captured["mime"] = staged.mime_detected
         captured["sha256"] = staged.sha256
@@ -430,6 +448,7 @@ def test_admin_upload_route_stages_and_passes_safe_metadata(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
     app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
+    _bind_agency(app)
     client = TestClient(app)
     response = client.post(
         "/api/owner/admin/documents/upload",
@@ -460,6 +479,7 @@ def test_admin_upload_route_rejects_mime_mismatch_before_repository(monkeypatch)
     app = FastAPI()
     app.include_router(admin_router)
     app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
+    _bind_agency(app)
     response = TestClient(app).post(
         "/api/owner/admin/documents/upload",
         files={"file": ("atto.pdf", PNG, "application/pdf")},
@@ -490,6 +510,7 @@ def test_upload_compensates_storage_when_database_fails(monkeypatch):
     try:
         with pytest.raises(RuntimeError, match="db failed"):
             repo.create_uploaded_shared_document(
+                AGENCY,
                 {
                     "property_id": 11,
                     "document_type": "owner_ape",
@@ -534,7 +555,7 @@ def test_publish_is_fail_closed_before_write_when_storage_is_unavailable(monkeyp
     monkeypatch.setattr(repo, "core_cursor", fake_cursor)
     monkeypatch.setattr(repo, "_shared_document_with_source", lambda *_args, **_kwargs: row)
     with pytest.raises(StorageUnavailable):
-        repo.publish_shared_document(1, storage)
+        repo.publish_shared_document(AGENCY, 1, storage)
     assert calls == [False]
 
 
@@ -648,7 +669,7 @@ def test_published_revoked_archived_documents_are_immutable(monkeypatch):
     for status in ("published", "revoked", "archived"):
         monkeypatch.setattr(repo, "get_shared_document", lambda _id, status=status: {"id": 1, "status": status})
         with pytest.raises(ConflictError):
-            repo.update_shared_document(1, {"public_title": "Nuovo"})
+            repo.update_shared_document(AGENCY, 1, {"public_title": "Nuovo"})
 
 
 def test_supersede_keeps_previous_current_until_successor_publish():
