@@ -49,6 +49,13 @@ class FakeCursor:
         return list(self.fetchall_rows)
 
 
+# P26-6C: every lookup is agency-bound and takes the tenant as its first
+# argument. These tests assert the projection and the eligibility rules, so the
+# agency is a fixed value here; the scoping itself is proved in
+# tests/test_p26_6c_owner_admin_scope.py.
+AGENCY = 901
+
+
 def _fake_cursor(monkeypatch, cursor: FakeCursor):
     @contextmanager
     def cm(*, commit=False):
@@ -73,12 +80,13 @@ def test_p81_policy_and_lookup_dtos_are_exact_whitelists():
 def test_contact_lookup_selects_only_whitelist_and_never_crm_dump(monkeypatch):
     cursor = FakeCursor(fetchall_rows=[{"id": 7, "display_name": "Mario Rossi", "email": "mario@example.test"}])
     _fake_cursor(monkeypatch, cursor)
-    result = lookup_repo.lookup_contacts("Mario", 25)
+    result = lookup_repo.lookup_contacts(AGENCY, "Mario", 25)
     assert result == [{"id": 7, "display_name": "Mario Rossi", "email": "mario@example.test"}]
     query, params = cursor.executed[0]
     assert "SELECT id,display_name,email FROM contacts" in query
     assert "SELECT *" not in query.upper()
-    assert params == ("%Mario%", "%Mario%", 25)
+    assert params == (AGENCY, "%Mario%", "%Mario%", 25)
+    assert "agency_id=%s AND (display_name ILIKE %s OR email ILIKE %s)" in query
     for forbidden in ("phone", "notes", "metadata", "lead", "activity", "task"):
         assert forbidden not in query.lower()
 
@@ -89,13 +97,13 @@ def test_property_lookup_is_account_bound_and_role_owner_only(monkeypatch):
         fetchall_rows=[{"id": 9, "code": "P9", "title": "Casa", "address": "Via Roma", "city": "Teramo"}],
     )
     _fake_cursor(monkeypatch, cursor)
-    result = lookup_repo.lookup_account_properties(12)
+    result = lookup_repo.lookup_account_properties(AGENCY, 12)
     assert result[0]["id"] == 9
-    assert cursor.executed[0][1] == (12,)
+    assert cursor.executed[0][1] == (12, AGENCY)
     query, params = cursor.executed[1]
     assert "pc.contact_id=%s" in query
     assert "pc.role=%s" in query
-    assert params == (41, "owner")
+    assert params == (41, "owner", AGENCY)
     assert "seller" not in query and "tenant" not in query and "professional" not in query and "other" not in query
     assert "SELECT DISTINCT p.id,p.code,p.title,p.address,p.city" in query
     assert "p.*" not in query
@@ -107,17 +115,17 @@ def test_child_lookup_rechecks_account_property_owner_eligibility_and_blocks_cro
     _fake_cursor(monkeypatch, denied)
     fn = lookup_repo.lookup_property_documents if kind == "documents" else lookup_repo.lookup_property_visits
     with pytest.raises(NotFoundError):
-        fn(12, 99)
+        fn(AGENCY, 12, 99)
     guard_query, guard_params = denied.executed[0]
     assert "oa.id=%s" in guard_query and "pc.property_id=%s" in guard_query and "pc.role=%s" in guard_query
-    assert guard_params == (12, 99, "owner")
+    assert guard_params == (12, 99, "owner", AGENCY, AGENCY)
     assert len(denied.executed) == 1, "cross-property denial must happen before source data lookup"
 
 
 def test_document_and_visit_queries_are_minimal_and_have_no_internal_fields(monkeypatch):
     doc_cursor = FakeCursor(fetchone_rows=[{"ok": 1}], fetchall_rows=[{"id": 3, "title": "APE", "document_type": "ape", "status": "available", "expires_at": None}])
     _fake_cursor(monkeypatch, doc_cursor)
-    assert lookup_repo.lookup_property_documents(5, 7)[0]["id"] == 3
+    assert lookup_repo.lookup_property_documents(AGENCY, 5, 7)[0]["id"] == 3
     doc_query = doc_cursor.executed[1][0]
     assert "SELECT id,title,document_type,status,expires_at FROM property_documents" in doc_query
     for forbidden in ("storage_key", "metadata", "notes", " url", "SELECT *"):
@@ -125,7 +133,7 @@ def test_document_and_visit_queries_are_minimal_and_have_no_internal_fields(monk
 
     visit_cursor = FakeCursor(fetchone_rows=[{"ok": 1}], fetchall_rows=[{"id": 4, "scheduled_at": "2026-08-18T10:00:00Z", "status": "completed"}])
     _fake_cursor(monkeypatch, visit_cursor)
-    assert lookup_repo.lookup_property_visits(5, 7)[0]["id"] == 4
+    assert lookup_repo.lookup_property_visits(AGENCY, 5, 7)[0]["id"] == 4
     visit_query = visit_cursor.executed[1][0]
     assert "SELECT id,scheduled_at,status FROM property_visits" in visit_query
     for forbidden in ("contact_id", "lead_id", "outcome", "feedback", "rating", "assigned_to", "created_by", "SELECT *"):

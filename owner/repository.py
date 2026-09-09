@@ -19,8 +19,12 @@ def create_account(d):
   if not c.fetchone():raise NotFoundError(NF)
   c.execute("INSERT INTO owner_accounts(contact_id,status,preferred_language) VALUES(%s,'invited',%s) RETURNING *",(d['contact_id'],d.get('preferred_language','it')));r=one(c)
  audit('account_created',r['id'],etype='owner_account',eid=r['id']);return r
-def list_accounts():
- with core_cursor() as(_,c):c.execute('SELECT oa.*,c.display_name,c.email FROM owner_accounts oa JOIN contacts c ON c.id=oa.contact_id ORDER BY oa.created_at DESC');return[dict(x) for x in c.fetchall()]
+def list_accounts(agency_id):
+ # P26-6C OWNER Admin: the account's tenant is its contact's. The join to
+ # contacts was already here for the display name; it now also carries the
+ # predicate. `agency_id` is positional and has no default, so a caller that
+ # forgets it raises a TypeError instead of listing the platform.
+ with core_cursor() as(_,c):c.execute('SELECT oa.*,c.display_name,c.email FROM owner_accounts oa JOIN contacts c ON c.id=oa.contact_id WHERE c.agency_id=%s ORDER BY oa.created_at DESC',(agency_id,));return[dict(x) for x in c.fetchall()]
 def get_account(i):
  with core_cursor() as(_,c):c.execute('SELECT * FROM owner_accounts WHERE id=%s',(i,));return one(c)
 def set_account(i,status):
@@ -73,8 +77,25 @@ def create_access(d):
   if account_agency!=property_agency:raise NotFoundError(NF)
   c.execute("INSERT INTO owner_property_access(owner_account_id,property_id,access_role,access_status,is_primary,valid_from,valid_until) VALUES(%s,%s,%s,'active',%s,NOW(),%s) RETURNING *",(d['owner_account_id'],d['property_id'],d.get('access_role','owner'),d.get('is_primary',False),d.get('valid_until')));r=one(c)
  audit('access_granted',r['owner_account_id'],r['property_id'],'owner_access',r['id']);return r
-def list_access():
- with core_cursor() as(_,c):c.execute('SELECT * FROM owner_property_access ORDER BY created_at DESC');return[dict(x) for x in c.fetchall()]
+def list_access(agency_id):
+ # Both roots, not one. A grant reaches an agency through its account
+ # (-> contact) and through its property, and rows written before the
+ # cross-agency check in create_access can have the two disagree. Requiring
+ # both means such a row belongs to neither listing: an admin of A must not
+ # see a grant pointing at a property of B, and vice versa. This hides them;
+ # it does not repair them.
+ with core_cursor() as(_,c):
+  c.execute(
+      """SELECT x.*
+           FROM owner_property_access x
+           JOIN owner_accounts oa ON oa.id=x.owner_account_id
+           JOIN contacts ct ON ct.id=oa.contact_id
+           JOIN properties p ON p.id=x.property_id
+          WHERE ct.agency_id=%s AND p.agency_id=%s
+          ORDER BY x.created_at DESC""",
+      (agency_id, agency_id),
+  )
+  return[dict(x) for x in c.fetchall()]
 def revoke_access(i):
  with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_property_access SET access_status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
  audit('access_revoked',r['owner_account_id'],r['property_id'],'owner_access',i);return r

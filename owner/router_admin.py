@@ -7,6 +7,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from core.exceptions import ConflictError, NotFoundError, ValidationError
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.exceptions import PlatformAdminAgencyRequired
 from .schemas import (
     AccessCreate,
     AccountCreate,
@@ -86,6 +89,24 @@ router = APIRouter(
 router.include_router(lookup_router)
 
 
+def agency_of(ctx: OperatorContext) -> int:
+    """The caller's agency, resolved server-side, or a refusal.
+
+    `ctx.require_agency()` with its one failure mapped to 403 rather than
+    escaping as a 500. It cannot fire on this channel - the compatibility
+    dependency always resolves the Default Agency - but an unbound platform
+    admin is refused rather than served, the same answer FLOW gives, and 403
+    rather than 404 because the endpoint is not being hidden.
+
+    Called before the repository, so a context with no agency never reaches a
+    query.
+    """
+    try:
+        return ctx.require_agency()
+    except PlatformAdminAgencyRequired as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+
 def x(f, *a, **kw):
     try:
         return f(*a, **kw)
@@ -107,8 +128,8 @@ def dash():
 
 
 @router.get("/accounts")
-def accounts():
-    return {"items": x(r.list_accounts)}
+def accounts(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return {"items": x(r.list_accounts, agency_of(ctx))}
 
 
 @router.post("/accounts", status_code=201)
@@ -127,8 +148,8 @@ def enable(i: int):
 
 
 @router.get("/access")
-def access():
-    return {"items": x(r.list_access)}
+def access(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return {"items": x(r.list_access, agency_of(ctx))}
 
 
 @router.post("/access", status_code=201)

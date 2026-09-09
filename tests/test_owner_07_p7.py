@@ -354,7 +354,13 @@ def test_real_backend_contract_dashboard_accounts_and_access_is_frozen():
     for field in ("active_accounts", "active_access", "published", "new_feedback"):
         assert field in repo_source
     assert "SELECT oa.*,c.display_name,c.email" in repo_source
-    assert "SELECT * FROM owner_property_access ORDER BY created_at DESC" in repo_source
+    # P26-6C: both listings are agency-bound now. The row shape the P7 frontend
+    # consumes is unchanged - `oa.*` and `x.*` project the same columns - but
+    # neither query may go back to reading the whole platform.
+    assert "WHERE c.agency_id=%s ORDER BY oa.created_at DESC" in repo_source
+    assert "SELECT * FROM owner_property_access ORDER BY created_at DESC" not in repo_source
+    assert "SELECT x.*" in repo_source and "FROM owner_property_access x" in repo_source
+    assert "WHERE ct.agency_id=%s AND p.agency_id=%s" in repo_source
 
 
 def test_access_role_options_match_real_backend_enum_exactly():
