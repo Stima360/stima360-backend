@@ -416,10 +416,24 @@ def test_g4_the_operator_auth_router_carries_no_router_level_auth():
 # ---------------------------------------------------------------------------
 
 # Routers that still authenticate with legacy Basic AND transitively read a
-# CORE table. Frozen deliberately: this is the residual GATE-MA1 bounds.
+# CORE table AND have not been migrated to an agency context. Frozen
+# deliberately: this is the residual GATE-MA1 bounds.
 #
 # Shrinking this set is a spec change that should arrive with the migration
 # that shrank it. Growing it is a regression.
+#
+# P26-2D drew a distinction this set originally did not need. "Legacy Basic" had
+# meant two things at once - an authentication *channel*, and the absence of an
+# agency *scope* - because until then every router on that channel lacked one.
+# BUY separated them: it still accepts Basic, so its OS Shell views keep working,
+# but every one of its handlers now derives a Default-Agency context server-side
+# and threads it router -> service -> repository.
+#
+# So membership here is about scope, not about the channel. A router that reads
+# CORE over Basic but proves itself fully scoped is listed in
+# AGENCY_SCOPED_LEGACY_BASIC_ROUTERS below and excluded from this residual - and
+# the exclusion is earned by a static proof on every route, re-run on each
+# execution, not granted by being named.
 FROZEN_LEGACY_BASIC_CORE_READERS = {
     # get_contact_360 -> core.service get_contact/list_leads/list_activities/
     # list_tasks. Scoped since Task 11, so it is Default-Agency-bound on this
@@ -432,6 +446,93 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
     # ctx, agency derived by migration 030's trigger from the row's references.
     "followup_router",
 }
+
+# Routers on the legacy Basic channel that have been fully migrated to an agency
+# context, mapped to (package, expected route count).
+#
+# Being named here grants nothing. `_agency_scoped_routes` re-derives the proof
+# from the router's AST on every run, and a router is excluded from the residual
+# only while every one of its routes still declares the dependency. A regression
+# therefore does not quietly keep its exemption - it falls back into the residual
+# and G5 reports it as added, which is the same failure an unmigrated router
+# would produce.
+#
+# The route count is pinned separately so that *adding* a route is a deliberate
+# act even when the new route is correctly scoped: this file exists to make
+# surface changes visible, not only to catch unsafe ones.
+AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
+    # P26-2D. 23 routes, each taking legacy_basic_agency_context; the CORE read
+    # is core.repository.create_task_with_cursor called *with* that ctx - the
+    # same R-4 helper followup uses ctx-less, which is precisely the difference
+    # between the two entries.
+    "buy_router": ("buy", 23),
+}
+
+AGENCY_CONTEXT_DEPENDENCY = "legacy_basic_agency_context"
+
+_ROUTE_METHODS = ("get", "post", "patch", "put", "delete")
+
+
+def _agency_scoped_routes(package: str) -> tuple[list[str], list[str]]:
+    """Return (route handler names, those declaring the agency dependency).
+
+    Reads the router module's AST rather than counting occurrences of the
+    dependency's name in the file. The difference matters: a text count of 23
+    stays 23 when a 24th route is added without the dependency, so it cannot
+    detect the regression it appears to guard. Matching decorators to parameters
+    can.
+    """
+    path = ROOT / package / "router.py"
+    if not path.is_file():
+        return [], []
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    routes: list[str] = []
+    scoped: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+
+        is_route = False
+        for decorator in node.decorator_list:
+            call = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if (
+                isinstance(call, ast.Attribute)
+                and call.attr in _ROUTE_METHODS
+                and isinstance(call.value, ast.Name)
+                and call.value.id == "router"
+            ):
+                is_route = True
+        if not is_route:
+            continue
+
+        routes.append(node.name)
+
+        defaults = list(node.args.defaults) + list(node.args.kw_defaults)
+        for default in defaults:
+            if not isinstance(default, ast.Call):
+                continue
+            function = default.func
+            if not (isinstance(function, ast.Name) and function.id == "Depends"):
+                continue
+            for argument in default.args:
+                if (
+                    isinstance(argument, ast.Name)
+                    and argument.id == AGENCY_CONTEXT_DEPENDENCY
+                ):
+                    scoped.append(node.name)
+
+    return routes, scoped
+
+
+def _is_fully_agency_scoped(symbol: str) -> bool:
+    entry = AGENCY_SCOPED_LEGACY_BASIC_ROUTERS.get(symbol)
+    if entry is None:
+        return False
+    package, _expected = entry
+    routes, scoped = _agency_scoped_routes(package)
+    return bool(routes) and set(routes) == set(scoped)
 
 # Only these two CORE modules touch a scoped table. core.normalization,
 # core.enums and core.exceptions do not, so importing them is not a CORE read -
@@ -468,6 +569,11 @@ def test_g5_the_legacy_basic_core_reading_surface_is_frozen():
     Asserted against the AST rather than raw text so a docstring that merely
     *mentions* core.repository - followup and database_revival both do - cannot
     put a router on this list.
+
+    P26-2D: a router that reads CORE over Basic is subtracted from the residual
+    only while `_is_fully_agency_scoped` still proves every one of its routes
+    takes an agency context. The exemption is recomputed here, so it cannot
+    outlive the property that justified it.
     """
     basic_mounted = {
         symbol for symbol, dependencies in _include_router_calls().items()
@@ -477,11 +583,118 @@ def test_g5_the_legacy_basic_core_reading_surface_is_frozen():
         symbol for symbol in basic_mounted
         if _reads_a_core_table(symbol.replace("_router", ""))
     }
-    assert core_readers == FROZEN_LEGACY_BASIC_CORE_READERS, (
-        f"the legacy-Basic CORE-reading surface changed.\n"
-        f"added:   {core_readers - FROZEN_LEGACY_BASIC_CORE_READERS}\n"
-        f"removed: {FROZEN_LEGACY_BASIC_CORE_READERS - core_readers}\n"
-        "Shrinking is a deliberate spec change; growing is a regression."
+    residual = {
+        symbol for symbol in core_readers if not _is_fully_agency_scoped(symbol)
+    }
+    assert residual == FROZEN_LEGACY_BASIC_CORE_READERS, (
+        f"the residual legacy-Basic CORE-reading surface changed.\n"
+        f"added:   {residual - FROZEN_LEGACY_BASIC_CORE_READERS}\n"
+        f"removed: {FROZEN_LEGACY_BASIC_CORE_READERS - residual}\n"
+        "Shrinking is a deliberate spec change; growing is a regression. A "
+        "router listed in AGENCY_SCOPED_LEGACY_BASIC_ROUTERS appears here as "
+        "'added' when it stops being fully scoped."
+    )
+
+
+def test_g5_every_agency_scoped_exemption_is_earned():
+    """No blind whitelist: each exemption is re-proved, route by route."""
+    for symbol, (package, expected) in AGENCY_SCOPED_LEGACY_BASIC_ROUTERS.items():
+        routes, scoped = _agency_scoped_routes(package)
+        missing = sorted(set(routes) - set(scoped))
+        assert routes, f"{symbol}: no routes found in {package}/router.py"
+        assert not missing, (
+            f"{symbol} is exempt from the GATE-MA1 residual but these routes "
+            f"take no {AGENCY_CONTEXT_DEPENDENCY}: {missing}"
+        )
+        assert len(routes) == expected, (
+            f"{symbol} now has {len(routes)} routes, not {expected}. Adding a "
+            "route to an exempt router is a deliberate surface change: confirm "
+            "the new route is agency-scoped, then update the expected count."
+        )
+
+
+def test_g5_an_unscoped_route_would_lose_the_exemption(tmp_path):
+    """Negative control for the exemption above.
+
+    Without this, `_is_fully_agency_scoped` could be vacuously true - returning
+    True for anything - and BUY would be exempt for the wrong reason.
+    """
+    import test_p26_1_legacy_basic_surface as module
+
+    package = tmp_path / "pretend"
+    package.mkdir()
+    (package / "router.py").write_text(
+        "from fastapi import Depends\n"
+        "router = APIRouter()\n"
+        "@router.get('/a')\n"
+        "def a(ctx=Depends(legacy_basic_agency_context)): pass\n"
+        "@router.post('/b')\n"
+        "def b(): pass\n",
+        encoding="utf-8",
+    )
+
+    original_root = module.ROOT
+    original_map = module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS
+    module.ROOT = tmp_path
+    module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {"pretend_router": ("pretend", 2)}
+    try:
+        routes, scoped = module._agency_scoped_routes("pretend")
+        assert routes == ["a", "b"], routes
+        assert scoped == ["a"], scoped
+        assert module._is_fully_agency_scoped("pretend_router") is False
+    finally:
+        module.ROOT = original_root
+        module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = original_map
+
+
+def test_g5_a_fully_scoped_router_keeps_the_exemption(tmp_path):
+    """The positive half, so the rule is not merely always-False."""
+    import test_p26_1_legacy_basic_surface as module
+
+    package = tmp_path / "pretend"
+    package.mkdir()
+    (package / "router.py").write_text(
+        "from fastapi import Depends\n"
+        "router = APIRouter()\n"
+        "@router.get('/a')\n"
+        "def a(ctx=Depends(legacy_basic_agency_context)): pass\n"
+        "@router.delete('/b', status_code=204)\n"
+        "def b(i: int, ctx=Depends(legacy_basic_agency_context)): pass\n",
+        encoding="utf-8",
+    )
+
+    original_root = module.ROOT
+    original_map = module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS
+    module.ROOT = tmp_path
+    module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {"pretend_router": ("pretend", 2)}
+    try:
+        assert module._is_fully_agency_scoped("pretend_router") is True
+    finally:
+        module.ROOT = original_root
+        module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = original_map
+
+
+def test_g5_buy_is_still_mounted_on_the_legacy_basic_channel():
+    """The exemption is about scope, not about the channel.
+
+    BUY keeps Basic so its OS Shell views keep working; what changed in P26-2D
+    is that it no longer reads CORE without an agency. If the mount itself
+    changed, the reasoning recorded here would no longer describe reality.
+    """
+    assert _include_router_calls()["buy_router"] == "[Depends(require_admin)]"
+
+
+def test_g5_buys_core_read_carries_the_agency_context():
+    """The distinction from followup, stated on the code rather than in prose.
+
+    Both reach core.repository.create_task_with_cursor - the R-4 helper whose
+    ctx is optional. followup calls it without one and lets migration 030's
+    trigger derive the agency; BUY passes its own scope. That is why one is
+    residual and the other is not.
+    """
+    source = (ROOT / "buy" / "repository.py").read_text(encoding="utf-8")
+    assert "core_create_task_with_cursor(cur, task_data, ctx=ctx)" in source, (
+        "BUY no longer passes its agency context into the CORE task helper"
     )
 
 
