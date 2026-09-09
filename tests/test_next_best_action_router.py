@@ -72,7 +72,7 @@ def test_list_returns_items(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(router_module.service, "list_next_best_actions", _fake_list)
+    monkeypatch.setattr(router_module.service, "list_next_best_actions_scoped", lambda _ctx, limit: _fake_list(limit))
     client = TestClient(build_app(), raise_server_exceptions=False)
     response = client.get("/api/next-best-action", auth=("giorgio", "test-secret"))
 
@@ -86,7 +86,7 @@ def test_list_empty_is_not_an_error(monkeypatch):
     _auth_env(monkeypatch)
     import next_best_action.router as router_module
 
-    monkeypatch.setattr(router_module.service, "list_next_best_actions", lambda limit: [])
+    monkeypatch.setattr(router_module.service, "list_next_best_actions_scoped", lambda _ctx, limit: [])
     client = TestClient(build_app(), raise_server_exceptions=False)
     response = client.get("/api/next-best-action", auth=("giorgio", "test-secret"))
 
@@ -98,7 +98,7 @@ def test_detail_not_found_returns_404(monkeypatch):
     _auth_env(monkeypatch)
     import next_best_action.router as router_module
 
-    monkeypatch.setattr(router_module.service, "get_next_best_action", lambda subject_type, subject_id: None)
+    monkeypatch.setattr(router_module.service, "get_next_best_action_scoped", lambda _ctx, subject_type, subject_id: None)
     client = TestClient(build_app(), raise_server_exceptions=False)
     response = client.get("/api/next-best-action/lead/999", auth=("giorgio", "test-secret"))
 

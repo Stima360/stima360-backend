@@ -15,6 +15,16 @@ from property_watch import router as property_watch_router
 from property_watch.exceptions import ValidationError, WatchNotFoundError
 
 
+
+# P26-6B: the single-watch collector is scoped now. These tests exercise the
+# metric maths and persistence, not the scoping, so they pass a minimal scope.
+class _Scope:
+    def require_agency(self):
+        return 7
+
+
+_SCOPE = _Scope()
+
 def baseline(**changes):
     value = {
         "comune": "Alba Adriatica",
@@ -262,23 +272,27 @@ def test_strict_safe_and_batch_collectors_keep_per_watch_boundary(monkeypatch):
         "collection_time": datetime(2026, 9, 3, tzinfo=timezone.utc),
         "buyers": [],
     }
-    monkeypatch.setattr(repository, "get_buyer_pressure_inputs", lambda _id: inputs)
+    monkeypatch.setattr(
+        repository, "get_buyer_pressure_inputs_for_agency", lambda _id, _agency_id: inputs
+    )
     monkeypatch.setattr(
         repository,
         "store_buyer_pressure_metrics",
         lambda **_kwargs: {"status": "written", "watch_id": 3, "observation": {"id": 11}},
     )
-    assert service.collect_buyer_pressure_for_stima(501)["status"] == "written"
+    assert service.collect_buyer_pressure_for_stima_scoped(_SCOPE, 501)["status"] == "written"
 
     calls = []
-    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
-    def safe(stima_id):
+    monkeypatch.setattr(
+        repository, "list_active_watch_stima_ids_for_agency", lambda _agency_id: [7, 11]
+    )
+    def safe(_ctx, stima_id):
         calls.append(stima_id)
         if stima_id == 7:
             raise service.WatchNotFoundError("gone")
         return {"status": "written", "watch_id": 3, "observation": None}
-    monkeypatch.setattr(service, "safe_collect_buyer_pressure_for_stima", safe)
-    assert service.collect_buyer_pressure_for_active_watches() == {
+    monkeypatch.setattr(service, "safe_collect_buyer_pressure_for_stima_scoped", safe)
+    assert service.collect_buyer_pressure_for_active_watches_for_agency(7) == {
         "processed": 2, "written": 1, "unchanged": 0, "unavailable": 0,
         "superseded": 0, "failed": 1,
         "outcomes": [
@@ -604,13 +618,15 @@ def test_strict_collection_never_persists_unavailable_or_partial_results(
         "collection_time": datetime(2026, 9, 3, tzinfo=timezone.utc),
         "buyers": [],
     }
-    monkeypatch.setattr(repository, "get_buyer_pressure_inputs", lambda _id: inputs)
+    monkeypatch.setattr(
+        repository, "get_buyer_pressure_inputs_for_agency", lambda _id, _agency_id: inputs
+    )
     monkeypatch.setattr(
         repository,
         "store_buyer_pressure_metrics",
         lambda **_kwargs: pytest.fail("unavailable baseline must not persist"),
     )
-    assert service.collect_buyer_pressure_for_stima(501) == {
+    assert service.collect_buyer_pressure_for_stima_scoped(_SCOPE, 501) == {
         "status": "baseline_unavailable",
         "watch_id": 3,
         "observation": None,
@@ -620,7 +636,7 @@ def test_strict_collection_never_persists_unavailable_or_partial_results(
         "calculate_buyer_pressure_metrics",
         lambda *_args: (_ for _ in ()).throw(RuntimeError("private details")),
     )
-    assert service.safe_collect_buyer_pressure_for_stima(501) == {
+    assert service.safe_collect_buyer_pressure_for_stima_scoped(_SCOPE, 501) == {
         "status": "failed",
         "watch_id": None,
         "observation": None,
@@ -628,6 +644,28 @@ def test_strict_collection_never_persists_unavailable_or_partial_results(
     record = caplog.records[-1]
     assert record.args == (501, "RuntimeError")
     assert "private details" not in record.getMessage()
+
+
+
+# P26-6B: the property-watch routes resolve an agency context server-side. These
+# tests exercise the HTTP contract, not the scoping, so the DB-backed resolution
+# is overridden and the scoped service seams are the ones patched. The Basic
+# guard stays real - the auth assertions still mean what they meant.
+#
+# The dependency object comes from the router module, so it is the same function
+# object FastAPI resolved rather than a second import of the same name.
+def _override_pw_agency_context(app):
+    from operator_auth.context import OperatorContext
+
+    from property_watch import router as _pw_router
+
+    app.dependency_overrides[_pw_router.legacy_basic_agency_context] = lambda: (
+        OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
+    return app
 
 
 def test_buyer_pressure_routes_are_protected_body_free_and_serialize(monkeypatch):
@@ -653,8 +691,8 @@ def test_buyer_pressure_routes_are_protected_body_free_and_serialize(monkeypatch
     }
     monkeypatch.setattr(
         service,
-        "safe_collect_buyer_pressure_for_stima",
-        lambda stima_id: {
+        "safe_collect_buyer_pressure_for_stima_scoped",
+        lambda _ctx, stima_id: {
             "status": "written",
             "watch_id": 3,
             "observation": observation,
@@ -666,6 +704,7 @@ def test_buyer_pressure_routes_are_protected_body_free_and_serialize(monkeypatch
     )
     monkeypatch.setenv("ADMIN_USER", "test-admin")
     monkeypatch.setenv("ADMIN_PASS", "test-password")
+    _override_pw_agency_context(app)
     response = TestClient(app).post(
         "/api/property-watch/stime/501/buyer-pressure/refresh",
         auth=("test-admin", "test-password"),
@@ -681,8 +720,8 @@ def test_buyer_pressure_routes_are_protected_body_free_and_serialize(monkeypatch
 def test_buyer_pressure_route_maps_expected_errors(monkeypatch, error, status):
     monkeypatch.setattr(
         service,
-        "safe_collect_buyer_pressure_for_stima",
-        lambda _id: (_ for _ in ()).throw(error),
+        "safe_collect_buyer_pressure_for_stima_scoped",
+        lambda _ctx, _id: (_ for _ in ()).throw(error),
     )
     with pytest.raises(Exception) as raised:
         property_watch_router.refresh_buyer_pressure(501)
@@ -1051,7 +1090,7 @@ def test_collector_sql_writes_only_property_watch_observations(monkeypatch):
                 lambda *_args, **_kwargs: pytest.fail("MATCH persistence is forbidden"),
             )
 
-    result = service.collect_buyer_pressure_for_stima(501)
+    result = service.collect_buyer_pressure_for_stima_scoped(_SCOPE, 501)
 
     assert result == {"status": "written", "watch_id": 3, "observation": observation}
     assert pure_calls == [777]
@@ -1105,8 +1144,12 @@ def test_aggregate_outputs_and_logs_expose_no_personal_buy_data(monkeypatch, cap
         ],
     }
     observations = []
-    monkeypatch.setattr(repository, "get_buyer_pressure_inputs", lambda _id: inputs)
-    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [501])
+    monkeypatch.setattr(
+        repository, "get_buyer_pressure_inputs_for_agency", lambda _id, _agency_id: inputs
+    )
+    monkeypatch.setattr(
+        repository, "list_active_watch_stima_ids_for_agency", lambda _agency_id: [501]
+    )
 
     def store(**kwargs):
         observation = {
@@ -1126,8 +1169,8 @@ def test_aggregate_outputs_and_logs_expose_no_personal_buy_data(monkeypatch, cap
     metrics = buyer_pressure.calculate_buyer_pressure_metrics(
         inputs["buyers"], inputs["baseline_payload"], now
     )
-    single = service.collect_buyer_pressure_for_stima(501)
-    batch = service.collect_buyer_pressure_for_active_watches()
+    single = service.collect_buyer_pressure_for_stima_scoped(_SCOPE, 501)
+    batch = service.collect_buyer_pressure_for_active_watches_for_agency(7)
     monkeypatch.setattr(
         repository,
         "get_watch_for_stima",
@@ -1135,12 +1178,19 @@ def test_aggregate_outputs_and_logs_expose_no_personal_buy_data(monkeypatch, cap
     )
     monkeypatch.setattr(repository, "list_observations", lambda _id: observations)
     state = service.get_current_watch_state(501)
+    # P26-6B: the fault is injected inside the real scoped call chain rather
+    # than by replacing the collector the safe wrapper calls. Patching the
+    # ctx-less collector would leave the scoped wrapper's own boundary
+    # unexercised, and the assertion below would then be reading a log record
+    # nothing in this path emitted.
     monkeypatch.setattr(
-        service,
-        "collect_buyer_pressure_for_stima",
-        lambda _id: (_ for _ in ()).throw(RuntimeError("email=private@example.test")),
+        buyer_pressure,
+        "calculate_buyer_pressure_metrics",
+        lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("email=private@example.test")
+        ),
     )
-    failed = service.safe_collect_buyer_pressure_for_stima(501)
+    failed = service.safe_collect_buyer_pressure_for_stima_scoped(_SCOPE, 501)
     forbidden = {
         "buy_request_id", "buyer_id", "buy_ids", "contact_id", "lead_id",
         "display_name", "name", "email", "phone", "notes", "criteria",

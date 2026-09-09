@@ -178,3 +178,171 @@ def get_current(subject_type: str, subject_id: int) -> dict[str, Any] | None:
             (subject_type, subject_id),
         )
         return _row(cur.fetchone())
+
+
+# ---------------------------------------------------------------------------
+# P26-6B agency scoping.
+#
+# `next_best_actions` carries a physical agency_id (migration 046) because it is
+# a materialised read model whose every reference is nullable ON DELETE SET NULL
+# and whose subject is polymorphic with no foreign key at all. A row can survive
+# every parent it was built from, so it must remember its own tenant.
+#
+# The refresh path is the dangerous one and the reason this slice led with it:
+# `replace_current_actions` above reads *all* existing keys, upserts the winners,
+# and deletes every key not among them. Run by agency A in a multi-tenant
+# database, that last step deletes agency B's rows. The scoped version below
+# reads, writes and prunes inside one agency only.
+#
+# The legacy functions above are untouched; nothing outside this module calls
+# them, but they remain the ctx-less surface the historical tests exercise.
+# ---------------------------------------------------------------------------
+
+_SELECT_WITH_CONTACT_LABEL_SCOPED = """
+    SELECT nba.*,
+           c.contact_type AS _contact_type,
+           c.display_name AS _contact_display_name,
+           c.first_name AS _contact_first_name,
+           c.last_name AS _contact_last_name,
+           c.company_name AS _contact_company_name
+    FROM next_best_actions nba
+    LEFT JOIN contacts c
+           ON c.id = nba.contact_id
+          AND c.agency_id = %s
+    WHERE nba.agency_id = %s
+"""
+
+
+def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:
+    """The OGGI list, restricted to the caller's agency.
+
+    The contact join carries the agency too, not only the outer WHERE. A
+    LEFT JOIN on `c.id = nba.contact_id` alone would enrich a row with another
+    tenant's contact name if the two ever disagreed - the label is the one field
+    here that comes from outside this table, so it is the one that can leak.
+    """
+    agency_id = ctx.require_agency()
+    with next_best_action_cursor() as (_, cur):
+        cur.execute(_SELECT_WITH_CONTACT_LABEL_SCOPED, (agency_id, agency_id))
+        rows = [_row(row) for row in cur.fetchall()]
+    rows.sort(
+        key=lambda r: (
+            rank_for_display(r["priority"]),
+            -r["generated_at"].timestamp(),
+            r["subject_id"],
+        )
+    )
+    return rows[:limit]
+
+
+def get_current_scoped(ctx, subject_type: str, subject_id: int) -> dict[str, Any] | None:
+    agency_id = ctx.require_agency()
+    with next_best_action_cursor() as (_, cur):
+        cur.execute(
+            f"{_SELECT_WITH_CONTACT_LABEL_SCOPED} AND nba.subject_type = %s AND nba.subject_id = %s",
+            (agency_id, agency_id, subject_type, subject_id),
+        )
+        return _row(cur.fetchone())
+
+
+def replace_current_actions_scoped(ctx, rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Replace this agency's materialised set, and only this agency's.
+
+    Three separate places had to become tenant-aware, and missing any one of
+    them would have been a cross-tenant write:
+
+    * the existing-key read, or the prune below would compute its difference
+      against every agency's keys;
+    * the INSERT, which now stamps agency_id from the scope;
+    * the ON CONFLICT DO UPDATE, which carries a WHERE on the stored row's
+      agency. `next_best_actions_subject_unq` is a *global* unique key on
+      (subject_type, subject_id), so without that predicate a conflict with
+      another agency's row would quietly overwrite it. In practice subjects are
+      already partitioned by tenant - a lead id belongs to one agency - and
+      048's trigger would refuse the mismatch anyway, but the upsert must not
+      depend on either of those to be safe.
+
+    A row skipped by that WHERE is counted as neither created nor updated: it is
+    reported separately rather than silently folded into a success count.
+    """
+    agency_id = ctx.require_agency()
+    created = 0
+    updated = 0
+    skipped_foreign = 0
+    with next_best_action_cursor(commit=True) as (_, cur):
+        desired_keys = {(r["subject_type"], r["subject_id"]) for r in rows}
+
+        cur.execute(
+            "SELECT subject_type, subject_id FROM next_best_actions WHERE agency_id = %s",
+            (agency_id,),
+        )
+        existing_keys = {(r["subject_type"], r["subject_id"]) for r in cur.fetchall()}
+
+        for r in rows:
+            cur.execute(
+                """
+                INSERT INTO next_best_actions (
+                    agency_id, subject_type, subject_id, contact_id, lead_id, stima_id,
+                    action_type, priority, reason, source_signal,
+                    cta_route, cta_params, generated_at, valid_until
+                ) VALUES (
+                    %(agency_id)s, %(subject_type)s, %(subject_id)s, %(contact_id)s,
+                    %(lead_id)s, %(stima_id)s,
+                    %(action_type)s, %(priority)s, %(reason)s, %(source_signal)s,
+                    %(cta_route)s, %(cta_params)s, %(generated_at)s, %(valid_until)s
+                )
+                ON CONFLICT (subject_type, subject_id) DO UPDATE SET
+                    contact_id = EXCLUDED.contact_id,
+                    lead_id = EXCLUDED.lead_id,
+                    stima_id = EXCLUDED.stima_id,
+                    action_type = EXCLUDED.action_type,
+                    priority = EXCLUDED.priority,
+                    reason = EXCLUDED.reason,
+                    source_signal = EXCLUDED.source_signal,
+                    cta_route = EXCLUDED.cta_route,
+                    cta_params = EXCLUDED.cta_params,
+                    generated_at = EXCLUDED.generated_at,
+                    valid_until = EXCLUDED.valid_until,
+                    updated_at = NOW()
+                WHERE next_best_actions.agency_id = %(agency_id)s
+                RETURNING id
+                """,
+                {
+                    "agency_id": agency_id,
+                    "subject_type": r["subject_type"],
+                    "subject_id": r["subject_id"],
+                    "contact_id": r.get("contact_id"),
+                    "lead_id": r.get("lead_id"),
+                    "stima_id": r.get("stima_id"),
+                    "action_type": r["action_type"],
+                    "priority": r["priority"],
+                    "reason": r["reason"],
+                    "source_signal": r["source_signal"],
+                    "cta_route": r.get("cta_route"),
+                    "cta_params": Json(r.get("cta_params") or []),
+                    "generated_at": r["generated_at"],
+                    "valid_until": r.get("valid_until"),
+                },
+            )
+            if cur.fetchone() is None:
+                skipped_foreign += 1
+            elif (r["subject_type"], r["subject_id"]) in existing_keys:
+                updated += 1
+            else:
+                created += 1
+
+        removed = 0
+        for subject_type, subject_id in existing_keys - desired_keys:
+            cur.execute(
+                """DELETE FROM next_best_actions
+                   WHERE agency_id = %s AND subject_type = %s AND subject_id = %s""",
+                (agency_id, subject_type, subject_id),
+            )
+            removed += 1
+
+        return {
+            "created": created,
+            "updated": updated,
+            "removed": removed,
+            "skipped_foreign": skipped_foreign,
+        }

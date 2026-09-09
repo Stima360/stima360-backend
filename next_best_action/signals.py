@@ -26,7 +26,7 @@ from flow import engine as flow_engine
 from property_watch import invisible_sale_repository
 from property_watch import invisible_sale_service
 from seller_intent.exceptions import NotFoundError as SellerIntentNotFoundError
-from seller_intent.service import get_seller_intent_score
+from seller_intent.service import get_seller_intent_score, get_seller_intent_score_scoped
 
 from .database import next_best_action_cursor
 
@@ -59,6 +59,63 @@ def _is_overdue(due_at: datetime | None, now: datetime) -> bool:
     if due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=timezone.utc)
     return due_at < now
+
+
+# P26-6B: the shaping of a candidate is extracted so the ctx-less collector and
+# its scoped twin cannot drift. Only the *set of rows read* differs between the
+# two; how a row becomes a candidate is one implementation, here.
+
+def _lead_candidates_from_score(lead: dict[str, Any], score: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
+    lead_id = lead["id"]
+    contact_id = lead.get("contact_id")
+    cta_route = "contatti" if contact_id is not None else None
+    cta_params = [contact_id] if contact_id is not None else []
+    computed_at = score.get("computed_at")
+    base = {
+        "subject_type": "lead",
+        "subject_id": lead_id,
+        "contact_id": contact_id,
+        "lead_id": lead_id,
+        "stima_id": None,
+        "cta_route": cta_route,
+        "cta_params": cta_params,
+    }
+    out: list[dict[str, Any]] = []
+    if any(f.get("code") == "followup_overdue" for f in score.get("operational_flags", [])):
+        out.append({**base, "source_signal": "followup_overdue", "signal_at": computed_at,
+                    "action_type": "contact_overdue_followup", "priority": "urgent",
+                    "reason": "Follow-up scaduto: contattare il venditore"})
+    next_action_at = lead.get("next_action_at")
+    if _is_overdue(next_action_at, now):
+        out.append({**base, "source_signal": "next_action_overdue", "signal_at": next_action_at,
+                    "action_type": "contact_overdue_next_action", "priority": "high",
+                    "reason": "Prossima azione pianificata gia' scaduta"})
+    if score.get("band") == "molto_caldo":
+        out.append({**base, "source_signal": "seller_intent_hot", "signal_at": computed_at,
+                    "action_type": "contact_hot_seller", "priority": "high",
+                    "reason": "Seller intent molto alto: contattare il venditore"})
+    return out
+
+
+def _match_candidate(entity_id: int, entity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "subject_type": "match",
+        "subject_id": entity_id,
+        "contact_id": entity.get("contact_id"),
+        "lead_id": entity.get("lead_id"),
+        "stima_id": None,
+        "source_signal": "match_strong_unproposed",
+        "signal_at": (
+            entity.get("first_matched_at")
+            or entity.get("created_at")
+            or entity.get("last_calculated_at")
+        ),
+        "action_type": "propose_strong_match",
+        "priority": "normal",
+        "reason": "Match forte non ancora proposto all'acquirente",
+        "cta_route": "abbinamenti",
+        "cta_params": [entity_id],
+    }
 
 
 def collect_lead_signals(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
@@ -100,68 +157,7 @@ def collect_lead_signals(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]
             # Lead vanished between the list and the score call (race) -
             # not a data error worth surfacing, just skip this subject.
             continue
-        contact_id = lead.get("contact_id")
-        cta_route = "contatti" if contact_id is not None else None
-        cta_params = [contact_id] if contact_id is not None else []
-        computed_at = score.get("computed_at")
-
-        has_followup_overdue = any(
-            flag.get("code") == "followup_overdue" for flag in score.get("operational_flags", [])
-        )
-        if has_followup_overdue:
-            candidates.append(
-                {
-                    "subject_type": "lead",
-                    "subject_id": lead_id,
-                    "contact_id": contact_id,
-                    "lead_id": lead_id,
-                    "stima_id": None,
-                    "source_signal": "followup_overdue",
-                    "signal_at": computed_at,
-                    "action_type": "contact_overdue_followup",
-                    "priority": "urgent",
-                    "reason": "Follow-up scaduto: contattare il venditore",
-                    "cta_route": cta_route,
-                    "cta_params": cta_params,
-                }
-            )
-
-        next_action_at = lead.get("next_action_at")
-        if _is_overdue(next_action_at, now):
-            candidates.append(
-                {
-                    "subject_type": "lead",
-                    "subject_id": lead_id,
-                    "contact_id": contact_id,
-                    "lead_id": lead_id,
-                    "stima_id": None,
-                    "source_signal": "next_action_overdue",
-                    "signal_at": next_action_at,
-                    "action_type": "contact_overdue_next_action",
-                    "priority": "high",
-                    "reason": "Prossima azione pianificata gia' scaduta",
-                    "cta_route": cta_route,
-                    "cta_params": cta_params,
-                }
-            )
-
-        if score.get("band") == "molto_caldo":
-            candidates.append(
-                {
-                    "subject_type": "lead",
-                    "subject_id": lead_id,
-                    "contact_id": contact_id,
-                    "lead_id": lead_id,
-                    "stima_id": None,
-                    "source_signal": "seller_intent_hot",
-                    "signal_at": computed_at,
-                    "action_type": "contact_hot_seller",
-                    "priority": "high",
-                    "reason": "Seller intent molto alto: contattare il venditore",
-                    "cta_route": cta_route,
-                    "cta_params": cta_params,
-                }
-            )
+        candidates.extend(_lead_candidates_from_score(lead, score, now))
     return candidates
 
 
@@ -300,27 +296,7 @@ def collect_match_signals(limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
         matched, _reasons = flow_engine.evaluate("FLOW-R005", entity, FLOW_R005_PARAMS)
         if not matched:
             continue
-        signal_at = (
-            entity.get("first_matched_at")
-            or entity.get("created_at")
-            or entity.get("last_calculated_at")
-        )
-        candidates.append(
-            {
-                "subject_type": "match",
-                "subject_id": entity_id,
-                "contact_id": entity.get("contact_id"),
-                "lead_id": entity.get("lead_id"),
-                "stima_id": None,
-                "source_signal": "match_strong_unproposed",
-                "signal_at": signal_at,
-                "action_type": "propose_strong_match",
-                "priority": "normal",
-                "reason": "Match forte non ancora proposto all'acquirente",
-                "cta_route": "abbinamenti",
-                "cta_params": [entity_id],
-            }
-        )
+        candidates.append(_match_candidate(entity_id, entity))
     return candidates
 
 
@@ -358,4 +334,172 @@ def collect_all_signals(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]
         + collect_invisible_sale_signals(limit)
         + collect_match_signals(limit)
         + collect_database_revival_signals(limit)
+    )
+
+
+# ---------------------------------------------------------------------------
+# P26-6B: the six collectors, each bounded to one agency.
+#
+# `collect_all_signals` above documents why four of them took no scope: the
+# modules they read through were unscoped, and threading a context into them
+# would have implied an isolation P26-1 did not deliver. P26-6A and this slice
+# delivered it, so the note no longer holds and every collector below reads
+# inside the caller's tenant.
+#
+# No business rule is duplicated here. Each scoped collector calls the scoped
+# entry point of the module that owns the rule - FLOW's own R004/R005 SQL with
+# a tenant predicate, seller intent's scoped score, property watch's scoped
+# state, database revival's per-agency batch - and shapes the result exactly as
+# its ctx-less twin above does.
+# ---------------------------------------------------------------------------
+
+def resolve_stima_contact_lead_scoped(ctx, stima_id: int) -> tuple[int | None, int | None]:
+    """As the documented-exception lookup above, inside one agency.
+
+    The ordering plus LIMIT 1 is kept - it picks the earliest link of a single
+    stima, which is a deterministic choice among that stima's own rows - but the
+    set it chooses from is now bounded. Unscoped, the same LIMIT 1 could return
+    another tenant's lead for a stima this caller cannot even see.
+    """
+    agency_id = ctx.require_agency()
+    with next_best_action_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT l.id AS lead_id, l.contact_id AS contact_id
+            FROM lead_stime ls
+            JOIN leads l ON l.id = ls.lead_id
+            JOIN stime s ON s.id = ls.stima_id
+            WHERE ls.stima_id = %s
+              AND l.agency_id = %s
+              AND s.agency_id = %s
+            ORDER BY ls.created_at, ls.id
+            LIMIT 1
+            """,
+            (stima_id, agency_id, agency_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None, None
+        return row["contact_id"], row["lead_id"]
+
+
+def collect_lead_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signals #1, #2 and #3, with the seller intent score read in scope.
+
+    The lead list was already scoped - `core_repository.list_leads(ctx, ...)`.
+    What was not is the per-lead score: `get_seller_intent_score` reads timeline
+    events, tasks and linked stime through OR branches that leave the lead
+    behind, so an unscoped call could let another tenant's activity raise this
+    lead's intent band. P26-6A's scoped variant closes exactly that.
+    """
+    leads = core_repository.list_leads(
+        ctx, limit=limit, offset=0, contact_id=None, pipeline=None, stage=None, status="open"
+    )
+    now = datetime.now(timezone.utc)
+    candidates: list[dict[str, Any]] = []
+    for lead in leads:
+        lead_id = lead["id"]
+        try:
+            score = get_seller_intent_score_scoped(ctx, lead_id=lead_id)
+        except SellerIntentNotFoundError:
+            continue
+        candidates.extend(_lead_candidates_from_score(lead, score, now))
+    return candidates
+
+
+def collect_next_action_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signal #2 through FLOW-R004, scanned inside one agency."""
+    agency_id = ctx.require_agency()
+    pairs = flow_adapters.scan_candidates_for_agency(
+        agency_id, "FLOW-R004", FLOW_R004_PARAMS, limit
+    )
+    candidates: list[dict[str, Any]] = []
+    for entity_type, entity_id in pairs:
+        entity = flow_adapters.load_entity_for_agency(agency_id, entity_type, entity_id)
+        matched, _reasons = flow_engine.evaluate("FLOW-R004", entity, FLOW_R004_PARAMS)
+        if not matched:
+            continue
+        candidates.append(
+            {
+                "subject_type": "buy_request",
+                "subject_id": entity_id,
+                "contact_id": entity.get("contact_id"),
+                "lead_id": entity.get("lead_id"),
+                "stima_id": None,
+                "source_signal": "next_action_overdue",
+                "signal_at": entity.get("next_action_at"),
+                "action_type": "contact_overdue_next_action",
+                "priority": "high",
+                "reason": "Prossima azione pianificata gia' scaduta",
+                "cta_route": "acquirenti",
+                "cta_params": [entity_id],
+            }
+        )
+    return candidates
+
+
+def collect_match_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signal #5 through FLOW-R005, scanned inside one agency."""
+    agency_id = ctx.require_agency()
+    pairs = flow_adapters.scan_candidates_for_agency(
+        agency_id, "FLOW-R005", FLOW_R005_PARAMS, limit
+    )
+    candidates: list[dict[str, Any]] = []
+    for entity_type, entity_id in pairs:
+        entity = flow_adapters.load_entity_for_agency(agency_id, entity_type, entity_id)
+        matched, _reasons = flow_engine.evaluate("FLOW-R005", entity, FLOW_R005_PARAMS)
+        if not matched:
+            continue
+        candidates.append(_match_candidate(entity_id, entity))
+    return candidates
+
+
+def collect_invisible_sale_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signal #4, over this agency's active watches only."""
+    watch_refs = invisible_sale_repository.list_active_watch_refs_scoped(ctx)[:limit]
+    candidates: list[dict[str, Any]] = []
+    for ref in watch_refs:
+        stima_id = ref["stima_id"]
+        state = invisible_sale_service.get_invisible_sale_for_stima_scoped(ctx, stima_id)
+        if state.get("status") != "ready":
+            continue
+        pending = [c for c in state.get("candidates", []) if c.get("status") == "pending_review"]
+        if not pending:
+            continue
+        contact_id, lead_id = resolve_stima_contact_lead_scoped(ctx, stima_id)
+        last_activity_values = [
+            c.get("last_activity_at") for c in pending if c.get("last_activity_at")
+        ]
+        candidates.append(
+            {
+                "subject_type": "stima",
+                "subject_id": stima_id,
+                "contact_id": contact_id,
+                "lead_id": lead_id,
+                "stima_id": stima_id,
+                "source_signal": "invisible_sale_ready",
+                "signal_at": max(last_activity_values) if last_activity_values else None,
+                "action_type": "review_invisible_sale",
+                "priority": "high",
+                "reason": f"Vendita invisibile pronta: {len(pending)} candidato/i da valutare",
+                "cta_route": "contatti" if contact_id is not None else None,
+                "cta_params": [contact_id] if contact_id is not None else [],
+            }
+        )
+    return candidates
+
+
+def collect_database_revival_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Signal #6, from this agency's own daily batch."""
+    return database_revival_service.collect_today_signals_scoped(ctx)[:limit]
+
+
+def collect_all_signals_scoped(ctx, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """All six signals, every one of them bounded to the caller's agency."""
+    return (
+        collect_lead_signals_scoped(ctx, limit)
+        + collect_next_action_signals_scoped(ctx, limit)
+        + collect_invisible_sale_signals_scoped(ctx, limit)
+        + collect_match_signals_scoped(ctx, limit)
+        + collect_database_revival_signals_scoped(ctx, limit)
     )

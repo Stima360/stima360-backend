@@ -14,7 +14,7 @@ from database_revival import service as database_revival_service
 
 from . import repository as nba_repository
 from .engine import select_winner
-from .signals import DEFAULT_LIMIT, collect_all_signals
+from .signals import DEFAULT_LIMIT, collect_all_signals, collect_all_signals_scoped
 
 OPEN_TASK_STATUSES = {"open", "in_progress"}
 
@@ -71,9 +71,12 @@ def refresh(ctx, limit: int = DEFAULT_LIMIT) -> dict[str, int]:
     safe_ensure_today_batch() wrapper: a P24 failure must never prevent
     the other five P23 signals from refreshing.
     """
-    database_revival_service.safe_ensure_today_batch()
+    # P26-6B: the batch and every signal are now bounded to the caller's
+    # agency. The wrapper stays non-raising - a P24 failure must never stop
+    # the other five signals from refreshing.
+    database_revival_service.safe_ensure_today_batch_scoped(ctx)
 
-    candidates = collect_all_signals(ctx, limit)
+    candidates = collect_all_signals_scoped(ctx, limit)
 
     grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
@@ -97,12 +100,13 @@ def refresh(ctx, limit: int = DEFAULT_LIMIT) -> dict[str, int]:
             }
         )
 
-    result = nba_repository.replace_current_actions(winners)
+    result = nba_repository.replace_current_actions_scoped(ctx, winners)
     return {
         "evaluated_subjects": len(grouped),
         "created": result["created"],
         "updated": result["updated"],
         "removed": result["removed"],
+        "skipped_foreign": result.get("skipped_foreign", 0),
         "suppressed_duplicates": suppressed_duplicates,
         "total_active": len(winners),
     }
@@ -114,3 +118,16 @@ def list_next_best_actions(limit: int) -> list[dict[str, Any]]:
 
 def get_next_best_action(subject_type: str, subject_id: int) -> dict[str, Any] | None:
     return nba_repository.get_current(subject_type, subject_id)
+
+
+# P26-6B: LIST and DETAIL are now scoped too. The router's old comment argued
+# they needed no scope because they read only this module's own table - true
+# before 046, and wrong after it: that table is now multi-tenant, so reading it
+# without a predicate returns every agency's rows.
+
+def list_next_best_actions_scoped(ctx, limit: int) -> list[dict[str, Any]]:
+    return nba_repository.list_current_scoped(ctx, limit)
+
+
+def get_next_best_action_scoped(ctx, subject_type: str, subject_id: int) -> dict[str, Any] | None:
+    return nba_repository.get_current_scoped(ctx, subject_type, subject_id)

@@ -131,3 +131,136 @@ def safe_ensure_today_batch(now: datetime | None = None) -> dict[str, int] | Non
             exc,
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# P26-6B agency scoping.
+#
+# DAILY_CAP is now twenty per agency, not twenty for STIMA360. Counted globally
+# it was a shared resource with no owner: whichever tenant refreshed first that
+# day consumed the slots, and the others silently got fewer revivals with no
+# error and nothing to see. The cap only means anything if the count it compares
+# against is the caller's own.
+#
+# The advisory lock is per-agency for the same reason in reverse: correctness
+# never depended on it being global, but a single fixed key made every tenant's
+# batch wait on every other's.
+# ---------------------------------------------------------------------------
+
+def ensure_today_batch_for_agency(agency_id: int, now: datetime | None = None) -> dict[str, int]:
+    """One agency's daily batch: the same six steps, bounded to one tenant.
+
+    The result carries `agency_id`, which the ctx-less twin does not. That is
+    safe here and deliberately not done in the property-watch batches: this
+    module has no router and its only caller ignores the return value, whereas
+    those results are an asserted contract. The key exists because
+    `ensure_today_batch_for_all_agencies` returns a list of runs, and a run
+    that does not say whose it is cannot be read.
+    """
+    with database_revival_cursor(commit=True) as (_, cur):
+        repository.acquire_daily_batch_lock_for_agency(cur, agency_id)
+
+        batch_count_today = repository.count_batch_today_for_agency(cur, agency_id)
+        remaining_slots = DAILY_CAP - batch_count_today
+        if remaining_slots <= 0:
+            return {
+                "agency_id": agency_id,
+                "added": 0,
+                "batch_size_today": batch_count_today,
+            }
+
+        exclude_contact_ids = repository.get_cooldown_contact_ids_for_agency(cur, agency_id)
+        candidates = eligibility.find_eligible_candidates_for_agency(
+            cur,
+            agency_id=agency_id,
+            exclude_contact_ids=exclude_contact_ids,
+            limit=remaining_slots,
+        )
+
+        added = 0
+        for candidate in candidates:
+            written = repository.upsert_batch_row_for_agency(
+                cur,
+                contact_id=candidate["contact_id"],
+                lead_id=candidate.get("lead_id"),
+                agency_id=agency_id,
+            )
+            if written:
+                added += 1
+
+        return {
+            "agency_id": agency_id,
+            "added": added,
+            "batch_size_today": batch_count_today + added,
+        }
+
+
+def ensure_today_batch_scoped(ctx, now: datetime | None = None) -> dict[str, int]:
+    return ensure_today_batch_for_agency(ctx.require_agency(), now=now)
+
+
+def safe_ensure_today_batch_scoped(ctx, now: datetime | None = None) -> dict[str, int] | None:
+    """Never-raising, like its ctx-less twin: a P24 failure must not stop the
+    other five P23 signals from refreshing."""
+    try:
+        return ensure_today_batch_scoped(ctx, now=now)
+    except Exception as exc:  # noqa: BLE001 - intentional catch-all
+        logger.error(
+            "database_revival_ensure_today_batch_failed error_type=%s error=%s",
+            type(exc).__name__, exc,
+        )
+        return None
+
+
+def ensure_today_batch_for_all_agencies(now: datetime | None = None) -> dict[str, Any]:
+    """Server-only orchestrator: one bounded batch per active agency.
+
+    Deliberately a loop over tenants rather than one global pass, so that no
+    statement in this module ever runs without an agency predicate - and so
+    that each agency gets its own twenty slots and its own lock.
+    """
+    with database_revival_cursor() as (_, cur):
+        agency_ids = repository.list_active_agency_ids(cur)
+    runs = [ensure_today_batch_for_agency(agency_id, now=now) for agency_id in agency_ids]
+    return {
+        "agencies": len(runs),
+        "added": sum(run["added"] for run in runs),
+        "runs": runs,
+    }
+
+
+def collect_today_signals_for_agency(agency_id: int, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Today's batch for one agency, live-revalidated inside that agency."""
+    with database_revival_cursor() as (_, cur):
+        batch_rows = repository.list_batch_today_for_agency(cur, agency_id)
+        candidates: list[dict[str, Any]] = []
+        for row in batch_rows:
+            contact_id = row["contact_id"]
+            lead_id = row.get("lead_id")
+            if lead_id is None:
+                continue
+            if not eligibility.is_still_eligible_for_agency(
+                cur, agency_id=agency_id, contact_id=contact_id, lead_id=lead_id
+            ):
+                continue
+            candidates.append(
+                {
+                    "subject_type": "lead",
+                    "subject_id": lead_id,
+                    "contact_id": contact_id,
+                    "lead_id": lead_id,
+                    "stima_id": None,
+                    "source_signal": "database_revival",
+                    "signal_at": row.get("created_at"),
+                    "action_type": "contact_dormant_seller",
+                    "priority": "normal",
+                    "reason": "Seller dormiente riattivabile",
+                    "cta_route": "contatti",
+                    "cta_params": [contact_id],
+                }
+            )
+        return candidates
+
+
+def collect_today_signals_scoped(ctx, now: datetime | None = None) -> list[dict[str, Any]]:
+    return collect_today_signals_for_agency(ctx.require_agency(), now=now)

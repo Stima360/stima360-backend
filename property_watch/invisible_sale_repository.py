@@ -276,3 +276,226 @@ def close_invisible_sale_for_stima(stima_id: int) -> dict[str, Any]:
             (opportunity["id"], f"invisible_sale:closed:opportunity:{opportunity['id']}:v1", Json({"status": "closed"})),
         )
         return {"status": "closed"}
+
+
+# ---------------------------------------------------------------------------
+# P26-6B agency scoping.
+#
+# An opportunity has no tenant of its own: it hangs off a watch, and the watch
+# carries the agency (migration 046). Every function below therefore reaches the
+# opportunity through its watch with a tenant predicate, rather than by stima_id
+# alone.
+#
+# `list_eligible_buy_snapshot` is the third quiet leak of this slice. It feeds
+# the whole active buyer population into the invisible-sale matcher; nothing
+# foreign is returned to the caller, but agency A's opportunities would be
+# discovered against agency B's demand, and the candidates written under A's
+# opportunity would name B's buy requests.
+#
+# Migration 048's trigger refuses exactly that pairing at the database. These
+# functions are the first line: the trigger is there for writes that never came
+# through here.
+# ---------------------------------------------------------------------------
+
+def _agency(ctx) -> int:
+    return ctx.require_agency()
+
+
+def get_watch_and_baseline_for_stima_scoped(ctx, stima_id: int) -> dict[str, Any] | None:
+    agency_id = _agency(ctx)
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """SELECT * FROM property_watches
+               WHERE stima_id = %s AND status = 'active' AND agency_id = %s""",
+            (stima_id, agency_id),
+        )
+        watch = _row(cur.fetchone())
+        if watch is None:
+            return None
+        cur.execute(
+            """SELECT * FROM property_watch_observations WHERE watch_id = %s
+               AND observation_type = 'watch_started' ORDER BY observed_at, id LIMIT 1""",
+            (watch["id"],),
+        )
+        return {"watch": watch, "baseline": _row(cur.fetchone())}
+
+
+def list_eligible_buy_snapshot_for_agency(agency_id: int) -> list[dict[str, Any]]:
+    """The MATCH-input buyer snapshot, for one agency.
+
+    Only the root query gains a predicate: the three child tables are read per
+    `buy["id"]`, which now comes from an already-scoped set, so they inherit the
+    boundary rather than needing one of their own.
+    """
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """SELECT b.*, GREATEST(b.created_at, b.updated_at, (
+                    SELECT MAX(i.occurred_at) FROM buy_request_interactions i
+                    WHERE i.buy_request_id = b.id
+                )) AS last_activity_at
+               FROM buy_requests b
+               WHERE b.status = 'active' AND b.archived_at IS NULL
+                 AND b.agency_id = %s
+               ORDER BY b.id""",
+            (agency_id,),
+        )
+        buys = [_row(row) for row in cur.fetchall()]
+        for buy in buys:
+            for field, table in (
+                ("locations", "buy_request_locations"),
+                ("typologies", "buy_request_typologies"),
+                ("features", "buy_request_features"),
+            ):
+                cur.execute(
+                    f"SELECT * FROM {table} WHERE buy_request_id = %s ORDER BY id",
+                    (buy["id"],),
+                )
+                buy[field] = [_row(row) for row in cur.fetchall()]
+        return buys
+
+
+def list_active_watch_refs_for_agency(agency_id: int) -> list[dict[str, Any]]:
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """SELECT id AS watch_id, stima_id FROM property_watches
+               WHERE status = 'active' AND stima_id IS NOT NULL AND agency_id = %s
+               ORDER BY id""",
+            (agency_id,),
+        )
+        return [_row(row) for row in cur.fetchall()]
+
+
+def list_active_watch_refs_scoped(ctx) -> list[dict[str, Any]]:
+    return list_active_watch_refs_for_agency(_agency(ctx))
+
+
+def list_active_agency_ids() -> list[int]:
+    """The tenants a server-only batch iterates, one bounded cycle each."""
+    with property_watch_cursor() as (_, cur):
+        cur.execute("SELECT id FROM agencies WHERE status = 'active' ORDER BY id")
+        return [row["id"] for row in cur.fetchall()]
+
+
+def get_invisible_sale_for_stima_scoped(ctx, stima_id: int) -> dict[str, Any]:
+    agency_id = _agency(ctx)
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            "SELECT id FROM property_watches WHERE stima_id = %s AND agency_id = %s",
+            (stima_id, agency_id),
+        )
+        watch = _row(cur.fetchone())
+        if watch is None:
+            raise LookupError("property watch not found")
+        cur.execute(
+            "SELECT * FROM invisible_sale_opportunities WHERE watch_id = %s",
+            (watch["id"],),
+        )
+        opportunity = _row(cur.fetchone())
+        if opportunity is None:
+            return {"status": "not_collected", "current_candidate_count": 0, "candidates": []}
+        cur.execute(
+            """SELECT buy_request_id, score_total, compatibility_status, reason_codes,
+                      last_activity_at, budget_reference, match_algorithm_version, status
+               FROM invisible_sale_candidates WHERE opportunity_id = %s
+               ORDER BY CASE WHEN status = 'stale' THEN 1 ELSE 0 END,
+                        score_total DESC, last_activity_at DESC, buy_request_id ASC""",
+            (opportunity["id"],),
+        )
+        return {
+            "status": opportunity["status"],
+            "current_candidate_count": opportunity["current_candidate_count"],
+            "candidates": [_public_candidate(_row(row)) for row in cur.fetchall()],
+        }
+
+
+def _scoped_opportunity_for_update(cur, stima_id: int, agency_id: int) -> dict[str, Any]:
+    """Lock the opportunity of a watch this agency owns, or refuse.
+
+    Every review path goes through here, so the tenant check happens once and
+    before any write - rather than once per call site, where one omission would
+    be a cross-agency decision on someone else's opportunity.
+    """
+    cur.execute(
+        "SELECT id FROM property_watches WHERE stima_id=%s AND agency_id=%s FOR UPDATE",
+        (stima_id, agency_id),
+    )
+    watch = _row(cur.fetchone())
+    if watch is None:
+        raise LookupError("property watch not found")
+    cur.execute(
+        "SELECT * FROM invisible_sale_opportunities WHERE watch_id=%s FOR UPDATE",
+        (watch["id"],),
+    )
+    opportunity = _row(cur.fetchone())
+    if opportunity is None:
+        raise LookupError("opportunity not found")
+    return opportunity
+
+
+def set_candidate_review_status_scoped(
+    ctx, stima_id: int, buy_request_id: int,
+    target_status: Literal["approved", "rejected"],
+) -> dict[str, Any]:
+    """Approve or reject, with both sides of the decision in one agency.
+
+    The opportunity is reached through a scoped watch, and the buy request is
+    checked in the same agency before the candidate row is touched. Neither
+    check subsumes the other: a candidate id existing is not evidence that its
+    buy request is the caller's, which is exactly the pairing 048 refuses.
+    """
+    agency_id = _agency(ctx)
+    with property_watch_cursor(commit=True) as (_, cur):
+        opportunity = _scoped_opportunity_for_update(cur, stima_id, agency_id)
+        cur.execute(
+            "SELECT id FROM buy_requests WHERE id=%s AND agency_id=%s",
+            (buy_request_id, agency_id),
+        )
+        if cur.fetchone() is None:
+            raise LookupError("candidate not found")
+        cur.execute(
+            """SELECT * FROM invisible_sale_candidates
+               WHERE opportunity_id=%s AND buy_request_id=%s FOR UPDATE""",
+            (opportunity["id"], buy_request_id),
+        )
+        candidate = _row(cur.fetchone())
+        if candidate is None:
+            raise LookupError("candidate not found")
+        if opportunity["status"] == "closed" or candidate["status"] == "stale":
+            raise RuntimeError("candidate cannot be reviewed")
+        if candidate["status"] == target_status:
+            return {"status": target_status, "buy_request_id": buy_request_id}
+        version = candidate["decision_version"] + 1
+        cur.execute(
+            "UPDATE invisible_sale_candidates SET status=%s, decision_version=%s WHERE id=%s",
+            (target_status, version, candidate["id"]),
+        )
+        # The event names this candidate and this opportunity, which 048's
+        # exact-parent trigger requires - same agency would not be enough.
+        cur.execute(
+            """INSERT INTO invisible_sale_events (opportunity_id,candidate_id,event_type,decision_version,idempotency_key,payload)
+               VALUES (%s,%s,%s,%s,%s,%s)""",
+            (opportunity["id"], candidate["id"], target_status, version,
+             f"invisible_sale:{target_status}:candidate:{candidate['id']}:decision:{version}:v1",
+             Json({"status": target_status, "decision_version": version})),
+        )
+        return {"status": target_status, "buy_request_id": buy_request_id}
+
+
+def close_invisible_sale_for_stima_scoped(ctx, stima_id: int) -> dict[str, Any]:
+    agency_id = _agency(ctx)
+    with property_watch_cursor(commit=True) as (_, cur):
+        opportunity = _scoped_opportunity_for_update(cur, stima_id, agency_id)
+        if opportunity["status"] == "closed":
+            return {"status": "closed"}
+        cur.execute(
+            "UPDATE invisible_sale_opportunities SET status='closed' WHERE id=%s",
+            (opportunity["id"],),
+        )
+        cur.execute(
+            """INSERT INTO invisible_sale_events (opportunity_id,event_type,idempotency_key,payload)
+               VALUES (%s,'closed',%s,%s)""",
+            (opportunity["id"],
+             f"invisible_sale:closed:opportunity:{opportunity['id']}:v1",
+             Json({"status": "closed"})),
+        )
+        return {"status": "closed"}

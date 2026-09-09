@@ -69,3 +69,112 @@ def scan_candidates(rule_code: str, parameters: dict, limit: int) -> list[tuple[
         if rule_code == "FLOW-R007":
             cur.execute("SELECT id FROM property_visits WHERE status='completed' AND updated_at<=NOW()-(%s||' hours')::interval ORDER BY updated_at LIMIT %s", (parameters["feedback_wait_hours"],limit)); return [("property_visit",r["id"]) for r in cur.fetchall()]
     return []
+
+
+# ---------------------------------------------------------------------------
+# P26-6B: agency-scoped wrappers, added for Next Best Action.
+#
+# NBA reads FLOW-R004 (overdue buy requests) and FLOW-R005 (fresh high-scoring
+# matches) to build two of its six signals. The functions above scan globally,
+# which was correct while FLOW had a single tenant and is a cross-tenant read
+# now.
+#
+# These wrappers add a tenant predicate and nothing else. They deliberately do
+# NOT migrate FLOW: both rules' roots are already certified - buy_requests
+# carries a physical agency_id (P26-3) and a match's tenancy is its pair, with
+# both sides guaranteed equal by P26-4 - so scoping them needs a predicate, not
+# a schema change. FLOW's own routes, rules and execution records stay exactly
+# as they are; that migration is P26-6C.
+#
+# Only the two rules NBA consumes are implemented. Any other rule code is
+# refused rather than quietly falling through to the global scan: a scoped
+# entry point that silently returns unscoped rows is worse than no scoped entry
+# point at all.
+# ---------------------------------------------------------------------------
+
+AGENCY_SCOPED_RULES = ("FLOW-R004", "FLOW-R005")
+
+
+class UnscopedRuleError(NotImplementedError):
+    """A FLOW rule with no agency-scoped implementation was asked for one."""
+
+
+def scan_candidates_for_agency(
+    agency_id: int, rule_code: str, parameters: dict, limit: int
+) -> list[tuple[str, int]]:
+    if rule_code not in AGENCY_SCOPED_RULES:
+        raise UnscopedRuleError(
+            f"FLOW rule {rule_code!r} has no agency-scoped scan; "
+            f"scoped rules are {', '.join(AGENCY_SCOPED_RULES)}"
+        )
+    with core_cursor() as (_, cur):
+        if rule_code == "FLOW-R004":
+            cur.execute(
+                """SELECT id FROM buy_requests
+                    WHERE agency_id=%s
+                      AND status='active' AND archived_at IS NULL
+                      AND next_action_at IS NOT NULL
+                      AND next_action_at<=NOW()-(%s||' hours')::interval
+                    ORDER BY next_action_at LIMIT %s""",
+                (agency_id, parameters["overdue_hours"], limit),
+            )
+            return [("buy_request", r["id"]) for r in cur.fetchall()]
+
+        # A match has no agency column: its tenancy is its pair, and P26-4
+        # guarantees both roots share one agency. Both sides are still named
+        # here rather than only the buy request - the guarantee is enforced by
+        # a trigger, and a read should not depend on a write-time invariant it
+        # can assert for itself.
+        cur.execute(
+            """SELECT m.id FROM matches m
+                JOIN buy_requests b ON b.id=m.buy_request_id
+                JOIN properties p ON p.id=m.property_id
+                WHERE b.agency_id=%s AND p.agency_id=%s
+                  AND m.archived_at IS NULL AND m.freshness_status='fresh'
+                  AND m.score_total>=%s
+                  AND m.commercial_status IN ('new','to_review')
+                ORDER BY m.score_total DESC LIMIT %s""",
+            (agency_id, agency_id, parameters["minimum_score"], limit),
+        )
+        return [("match", r["id"]) for r in cur.fetchall()]
+
+
+def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> dict:
+    """The two entity types the scoped rules produce, resolved in one agency.
+
+    A foreign id raises the same NotFoundError an absent one would: the caller
+    learns the entity is not available to it, not that it exists elsewhere.
+
+    The entity type is refused before the cursor opens, matching
+    `scan_candidates_for_agency` above: a refusal that has already started a
+    transaction is a refusal that touched the database first, and this module
+    is the one place where an unscoped read would have no predicate to catch
+    it.
+    """
+    if entity_type not in ("buy_request", "match"):
+        raise UnscopedRuleError(
+            f"entity type {entity_type!r} has no agency-scoped loader"
+        )
+    with core_cursor() as (_, cur):
+        if entity_type == "buy_request":
+            x = _one(
+                cur,
+                "SELECT * FROM buy_requests WHERE id=%s AND agency_id=%s",
+                (entity_id, agency_id),
+                f"buy request {entity_id} not found",
+            )
+            x["entity_type"] = "buy_request"
+            x["entity_id"] = entity_id
+            return x
+        x = _one(
+            cur,
+            """SELECT m.* FROM matches m
+                JOIN buy_requests b ON b.id=m.buy_request_id
+                JOIN properties p ON p.id=m.property_id
+                WHERE m.id=%s AND b.agency_id=%s AND p.agency_id=%s""",
+            (entity_id, agency_id, agency_id),
+            f"match {entity_id} not found",
+        )
+        x["entity_type"] = "match"
+        x["entity_id"] = entity_id
+        return x

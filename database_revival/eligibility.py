@@ -192,3 +192,183 @@ def is_still_eligible(cur, *, contact_id: int, lead_id: int) -> bool:
     cur.execute(query, {"lead_id": lead_id, "contact_id": contact_id})
     row = cur.fetchone()
     return bool(row["eligible"]) if row else False
+
+
+# ---------------------------------------------------------------------------
+# P26-6B agency scoping.
+#
+# Scoping the two roots - `leads` and `contacts` - is necessary and nowhere near
+# sufficient. Every NOT EXISTS and every MAX() below reaches other domains'
+# tables through an OR, and an OR is exactly where a tenant predicate goes
+# missing without anything looking wrong:
+#
+#     (t.lead_id = l.id OR t.contact_id = l.contact_id)
+#
+# The lead is this agency's, so the first branch is safe. The second matches on
+# a contact id, and another agency's task naming that same contact would satisfy
+# it - suppressing this lead's revival, or moving its dormancy date, on the
+# strength of activity the caller cannot see. No row is returned either way:
+# these are NOT EXISTS and MAX(), so the leak is a decision, not a disclosure.
+#
+# Each of the nine subqueries below therefore carries its own predicate.
+# ---------------------------------------------------------------------------
+
+_ELIGIBILITY_PREDICATE_SQL_SCOPED = """
+    l.status = 'paused'
+    AND l.pipeline = 'sell'
+    AND l.stage != 'won'
+    AND l.agency_id = %(agency_id)s
+    AND c.agency_id = %(agency_id)s
+    AND c.marketing_consent IS TRUE
+    AND c.status != 'archived'
+    AND (l.next_action_at IS NULL OR l.next_action_at <= NOW())
+    AND last_activity_at(l.id, l.contact_id, l.created_at) <= NOW() - INTERVAL '180 days'
+    AND NOT EXISTS (
+        SELECT 1 FROM property_leads pl
+        JOIN properties p ON p.id = pl.property_id
+        WHERE pl.lead_id = l.id AND p.commercial_status = 'sold'
+          AND p.agency_id = %(agency_id)s
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM property_leads pl
+        JOIN properties p ON p.id = pl.property_id
+        WHERE pl.lead_id = l.id
+          AND p.commercial_status IN ('mandate', 'active', 'reserved', 'under_offer')
+          AND p.agency_id = %(agency_id)s
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM property_leads pl
+        JOIN properties p ON p.id = pl.property_id
+        JOIN property_sales ps ON ps.property_id = pl.property_id
+        WHERE pl.lead_id = l.id AND ps.status = 'pending'
+          AND p.agency_id = %(agency_id)s
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM property_leads pl
+        JOIN properties p ON p.id = pl.property_id
+        JOIN matches m ON m.property_id = pl.property_id
+        JOIN buy_requests b ON b.id = m.buy_request_id
+        JOIN property_proposals pp ON pp.match_id = m.id
+        WHERE pl.lead_id = l.id AND pp.status IN ('draft', 'submitted')
+          AND p.agency_id = %(agency_id)s
+          AND b.agency_id = %(agency_id)s
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM tasks t
+        WHERE (t.lead_id = l.id OR t.contact_id = l.contact_id)
+          AND t.agency_id = %(agency_id)s
+          AND t.status IN ('open', 'in_progress')
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM followup_actions fa
+        WHERE (fa.lead_id = l.id OR fa.contact_id = l.contact_id)
+          AND fa.agency_id = %(agency_id)s
+          AND fa.status = 'pending'
+    )
+"""
+
+_LAST_ACTIVITY_EXPR_SQL_SCOPED = """
+    GREATEST(
+        COALESCE(
+            (SELECT MAX(a.occurred_at) FROM activities a
+             WHERE (a.lead_id = l.id OR a.contact_id = l.contact_id)
+               AND a.agency_id = %(agency_id)s),
+            l.created_at
+        ),
+        COALESCE(
+            (SELECT MAX(ste.occurred_at) FROM seller_timeline_events ste
+             WHERE (ste.lead_id = l.id
+                OR ste.stima_id IN (
+                    SELECT ls.stima_id FROM lead_stime ls
+                    JOIN leads l2 ON l2.id = ls.lead_id
+                    WHERE ls.lead_id = l.id AND l2.agency_id = %(agency_id)s
+                ))
+               AND ste.agency_id = %(agency_id)s),
+            l.created_at
+        ),
+        COALESCE(
+            (SELECT MAX(t.completed_at) FROM tasks t
+             WHERE (t.lead_id = l.id OR t.contact_id = l.contact_id)
+               AND t.agency_id = %(agency_id)s
+               AND t.status = 'completed'),
+            l.created_at
+        )
+    )
+"""
+
+
+def _predicate_sql_scoped() -> str:
+    return _ELIGIBILITY_PREDICATE_SQL_SCOPED.replace(
+        "last_activity_at(l.id, l.contact_id, l.created_at)",
+        _LAST_ACTIVITY_EXPR_SQL_SCOPED,
+    )
+
+
+def find_eligible_candidates_for_agency(
+    cur, *, agency_id: int, exclude_contact_ids: set[int] | list[int], limit: int
+) -> list[dict[str, Any]]:
+    """Batch selection, restricted to one agency's dormant sell leads.
+
+    Same frozen tie-break and same two-step CTE as the ctx-less version: only
+    the set of rows the predicate may consider changes.
+    """
+    query = f"""
+        WITH dormant AS (
+            SELECT
+                l.contact_id AS contact_id,
+                l.id AS lead_id,
+                {_LAST_ACTIVITY_EXPR_SQL_SCOPED} AS last_activity_at
+            FROM leads l
+            JOIN contacts c ON c.id = l.contact_id
+            WHERE
+                {_predicate_sql_scoped()}
+                AND l.contact_id != ALL(%(exclude_contact_ids)s)
+        ),
+        ranked AS (
+            SELECT
+                contact_id,
+                lead_id,
+                last_activity_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY contact_id
+                    ORDER BY last_activity_at ASC, lead_id ASC
+                ) AS rn
+            FROM dormant
+        )
+        SELECT contact_id, lead_id, last_activity_at
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY last_activity_at ASC, lead_id ASC
+        LIMIT %(limit)s
+    """
+    cur.execute(
+        query,
+        {
+            "agency_id": agency_id,
+            "exclude_contact_ids": list(exclude_contact_ids),
+            "limit": limit,
+        },
+    )
+    return list(cur.fetchall())
+
+
+def is_still_eligible_for_agency(
+    cur, *, agency_id: int, contact_id: int, lead_id: int
+) -> bool:
+    """Live re-validation for one pair, inside one agency."""
+    query = f"""
+        SELECT EXISTS (
+            SELECT 1
+            FROM leads l
+            JOIN contacts c ON c.id = l.contact_id
+            WHERE l.id = %(lead_id)s
+              AND l.contact_id = %(contact_id)s
+              AND {_predicate_sql_scoped()}
+        ) AS eligible
+    """
+    cur.execute(
+        query,
+        {"agency_id": agency_id, "lead_id": lead_id, "contact_id": contact_id},
+    )
+    row = cur.fetchone()
+    return bool(row["eligible"]) if row else False

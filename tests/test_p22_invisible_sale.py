@@ -171,6 +171,16 @@ class _FakeInvisibleSaleDatabase:
         self.fail_on = None
         self.close_update_entered = None
         self.release_close_update = None
+        # P26-6B: the fake now has a tenant. `agency_id` is the agency the HTTP
+        # context resolves to (see _override_pw_agency_context), and the two
+        # sets below are what that agency owns. They are kept apart on purpose:
+        # a buy request existing in the agency is not evidence that it is a
+        # candidate on this opportunity, and the repository is written so that
+        # neither check stands in for the other. A fake that answered "yes" to
+        # any agency would make both predicates vacuous here.
+        self.agency_id = 7
+        self.agency_watch_stima_ids = {1, 7, 12, 17}
+        self.agency_buy_request_ids = {7, 8, 9, 99}
 
     @contextmanager
     def cursor(self, *, commit=False):
@@ -221,7 +231,32 @@ class _FakeInvisibleSaleCursor:
             raise RuntimeError("forced SQL failure")
 
         if lowered.startswith("select id from property_watches"):
-            self.result = [{"id": self.database.watch_id}]
+            # Scoped callers pass (stima_id, agency_id); the ctx-less ones pass
+            # (stima_id,). The fake honours whichever predicate the SQL
+            # actually carries rather than assuming one - a cursor that
+            # returned the watch regardless would let an unscoped query pass
+            # this file unnoticed.
+            if "agency_id" in lowered:
+                stima_id, agency_id = params
+                owned = (
+                    agency_id == self.database.agency_id
+                    and stima_id in self.database.agency_watch_stima_ids
+                )
+            else:
+                owned = True
+            self.result = [{"id": self.database.watch_id}] if owned else []
+        elif lowered.startswith("select id from buy_requests"):
+            # Membership of the buy request in the agency, checked on its own
+            # table. Deliberately independent of self.database.candidates:
+            # conflating the two would make the repository's separate candidate
+            # lookup look redundant when it is the check that produces 404.
+            buy_request_id, agency_id = params
+            self.result = (
+                [{"id": buy_request_id}]
+                if agency_id == self.database.agency_id
+                and buy_request_id in self.database.agency_buy_request_ids
+                else []
+            )
         elif lowered.startswith("insert into invisible_sale_opportunities"):
             if self.database.opportunity is None:
                 watch_id, digest, algorithm_version, evaluated_at = params
@@ -521,6 +556,28 @@ def test_review_cycles_version_events_and_repeated_close_are_idempotent(p22_data
     assert p22_database.effective_writes == writes_before_reclose
 
 
+
+# P26-6B: the property-watch routes resolve an agency context server-side. These
+# tests exercise the HTTP contract, not the scoping, so the DB-backed resolution
+# is overridden and the scoped service seams are the ones patched. The Basic
+# guard stays real - the auth assertions still mean what they meant.
+#
+# The dependency object comes from the router module, so it is the same function
+# object FastAPI resolved rather than a second import of the same name.
+def _override_pw_agency_context(app):
+    from operator_auth.context import OperatorContext
+
+    from property_watch import router as _pw_router
+
+    app.dependency_overrides[_pw_router.legacy_basic_agency_context] = lambda: (
+        OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
+    return app
+
+
 def _p22_client(monkeypatch):
     from admin_security import require_admin
     from property_watch.router import router
@@ -529,6 +586,7 @@ def _p22_client(monkeypatch):
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     app = FastAPI()
     app.include_router(router, dependencies=[Depends(require_admin)])
+    _override_pw_agency_context(app)
     return app, TestClient(app, raise_server_exceptions=False)
 
 
@@ -555,8 +613,8 @@ def test_p22_posts_have_no_request_bodies_and_ignore_extraneous_json(monkeypatch
     seen = []
     monkeypatch.setattr(
         router_module.invisible_sale_service,
-        "safe_collect_invisible_sale_for_stima",
-        lambda stima_id: seen.append(stima_id) or {"status": "unchanged", "watch_id": 11},
+        "safe_collect_invisible_sale_for_stima_scoped",
+        lambda _ctx, stima_id: seen.append(stima_id) or {"status": "unchanged", "watch_id": 11},
     )
 
     response = client.post(
@@ -608,8 +666,8 @@ def test_p22_get_is_read_only_for_every_visible_state(monkeypatch, status):
     state = {"status": status, "current_candidate_count": 0, "candidates": []}
     monkeypatch.setattr(
         router_module.invisible_sale_service,
-        "get_invisible_sale_for_stima",
-        lambda stima_id: calls.append(stima_id) or state,
+        "get_invisible_sale_for_stima_scoped",
+        lambda _ctx, stima_id: calls.append(stima_id) or state,
     )
     response = client.get("/api/property-watch/stime/12/invisible-sale", auth=("giorgio", "test-secret"))
     assert response.status_code == 200

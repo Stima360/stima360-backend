@@ -439,9 +439,6 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
     # list_tasks. Scoped since Task 11, so it is Default-Agency-bound on this
     # channel, and unscoped for the non-CORE modules it also reads.
     "crm_router",
-    # signals -> core.repository.list_leads; service -> list_tasks. Carries the
-    # C2 compatibility context since Task 11.
-    "next_best_action_router",
 }
 
 # P26-6A removed `followup_router` from the residual above. That is the
@@ -452,6 +449,26 @@ FROZEN_LEGACY_BASIC_CORE_READERS = {
 # trigger. The exemption is still recomputed on every run - see
 # AGENCY_SCOPED_LEGACY_BASIC_ROUTERS - so if the route ever loses its context,
 # followup reappears here as "added".
+#
+# P26-6B removes `next_best_action_router` on the same terms, and it is worth
+# stating what "earned" means here, because this router reads CORE on its
+# hottest path rather than at one seam:
+#
+#   LIST and DETAIL read only next_best_actions - which migration 046 made
+#   multi-tenant, which is exactly why they now need a predicate rather than
+#   being exempt from one - through list_current_scoped / get_current_scoped.
+#
+#   REFRESH is the whole of P23. Every CORE read under it takes the ctx:
+#   core_repository.list_leads(ctx, ...) in the lead collector,
+#   core_repository.list_tasks(ctx, ...) in the anti-duplication check, and
+#   get_seller_intent_score_scoped(ctx, ...) for the per-lead score. The five
+#   remaining signal collectors are scoped in their own modules, and the
+#   materialisation - replace_current_actions_scoped - reads, upserts and
+#   prunes inside one agency.
+#
+# `crm_router` stays. Its 360 view still reaches non-CORE modules that have no
+# tenant of their own, so it has not met this standard and is not being told
+# that it has.
 
 # Routers on the legacy Basic channel that have been fully migrated to an agency
 # context, mapped to (package, expected route count).
@@ -482,6 +499,13 @@ AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
     # surface this set measures, and it is recorded here so the distinction is
     # visible rather than assumed.
     "followup_router": ("followup", 1),
+    # P26-6B. Three routes - LIST, DETAIL, REFRESH - each taking
+    # legacy_basic_agency_context, and every CORE read beneath them taking the
+    # ctx (see the note above the residual set for the trace). The count is
+    # pinned at 3 because P23's route set is frozen by its own spec: a fourth
+    # route here is a surface change that has to be made deliberately, even if
+    # it is correctly scoped.
+    "next_best_action_router": ("next_best_action", 3),
 }
 
 AGENCY_CONTEXT_DEPENDENCY = "legacy_basic_agency_context"
@@ -827,7 +851,6 @@ def test_g7_clause_c_the_basic_surface_is_frozen_and_acknowledged():
     """
     assert FROZEN_LEGACY_BASIC_CORE_READERS == {
         "crm_router",
-        "next_best_action_router",
     }
 
 

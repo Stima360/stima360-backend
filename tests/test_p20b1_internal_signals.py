@@ -219,6 +219,11 @@ class MemoryCollectionStore:
     def count_internal_supply(self, _cursor, _comune, _microzona):
         return self.supply_count
 
+    def count_internal_supply_for_agency(self, _cursor, _comune, _microzona, _agency_id):
+        # P26-6B: the collector counts competing listings inside the watch's own
+        # agency, so the stub takes the extra argument the real function does.
+        return self.supply_count
+
     def insert(self, _cursor, watch_id, observation_type, source, payload, key):
         if key in self.by_key:
             return self.by_key[key]
@@ -247,7 +252,7 @@ def _wire_microzone_collector(monkeypatch, store):
         repository,
         "get_collection_context_for_update",
         lambda _cursor, _stima_id: {
-            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "watch": {"id": 3, "stima_id": 501, "status": "active", "agency_id": 7},
             "baseline": store.baseline,
         },
     )
@@ -267,12 +272,14 @@ def _wire_supply_collector(monkeypatch, store):
         repository,
         "get_collection_context_for_update",
         lambda _cursor, _stima_id: {
-            "watch": {"id": 3, "stima_id": 501, "status": "active"},
+            "watch": {"id": 3, "stima_id": 501, "status": "active", "agency_id": 7},
             "baseline": store.baseline,
         },
     )
     monkeypatch.setattr(repository, "get_latest_relevant_observation", store.get_latest)
-    monkeypatch.setattr(repository, "count_internal_supply", store.count_internal_supply)
+    monkeypatch.setattr(
+        repository, "count_internal_supply_for_agency", store.count_internal_supply_for_agency
+    )
     monkeypatch.setattr(repository, "_insert_observation_with_cursor", store.insert)
 
 
@@ -737,22 +744,24 @@ def test_batch_is_deterministic_and_continues_after_one_collector_failure(monkey
     from property_watch import service
 
     calls = []
-    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+    monkeypatch.setattr(
+        repository, "list_active_watch_stima_ids_for_agency", lambda _agency_id: [7, 11]
+    )
 
-    def microzone(stima_id):
+    def microzone(_ctx, stima_id):
         calls.append(("microzone", stima_id))
         if stima_id == 7:
             raise RuntimeError("database failure")
         return {"status": "written", "watch_id": 21, "observation": {"id": 31}}
 
-    def supply(stima_id):
+    def supply(_ctx, stima_id):
         calls.append(("internal_supply", stima_id))
         return {"status": "unchanged", "watch_id": stima_id, "observation": None}
 
-    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima", microzone)
-    monkeypatch.setattr(service, "collect_internal_supply_signal_for_stima", supply)
+    monkeypatch.setattr(service, "collect_microzone_market_signal_for_stima_scoped", microzone)
+    monkeypatch.setattr(service, "collect_internal_supply_signal_for_stima_scoped", supply)
 
-    result = service.collect_internal_signals_for_active_watches()
+    result = service.collect_internal_signals_for_active_watches_for_agency(7)
 
     assert calls == [
         ("microzone", 7),
@@ -772,9 +781,11 @@ def test_batch_continues_when_a_listed_watch_disappears(monkeypatch, caplog):
     from property_watch import service
 
     calls = []
-    monkeypatch.setattr(repository, "list_active_watch_stima_ids", lambda: [7, 11])
+    monkeypatch.setattr(
+        repository, "list_active_watch_stima_ids_for_agency", lambda _agency_id: [7, 11]
+    )
 
-    def collect(stima_id):
+    def collect(_ctx, stima_id):
         calls.append(stima_id)
         if stima_id == 7:
             raise WatchNotFoundError("active property watch for stima 7 not found")
@@ -788,9 +799,9 @@ def test_batch_continues_when_a_listed_watch_disappears(monkeypatch, caplog):
             },
         }
 
-    monkeypatch.setattr(service, "safe_collect_internal_signals_for_stima", collect)
+    monkeypatch.setattr(service, "collect_internal_signals_for_stima_scoped", collect)
 
-    result = service.collect_internal_signals_for_active_watches()
+    result = service.collect_internal_signals_for_active_watches_for_agency(7)
 
     assert calls == [7, 11]
     assert result["processed"] == 2
@@ -983,8 +994,8 @@ def test_single_refresh_endpoint_uses_safe_service_without_client_controls(monke
     }
     monkeypatch.setattr(
         service,
-        "safe_collect_internal_signals_for_stima",
-        lambda stima_id: expected if stima_id == 501 else pytest.fail("unexpected id"),
+        "collect_internal_signals_for_stima_scoped",
+        lambda _ctx, stima_id: expected if stima_id == 501 else pytest.fail("unexpected id"),
     )
 
     assert property_watch_router.refresh_internal_signals(501) == expected
@@ -993,8 +1004,8 @@ def test_single_refresh_endpoint_uses_safe_service_without_client_controls(monke
 def test_single_refresh_endpoint_maps_expected_service_errors(monkeypatch):
     monkeypatch.setattr(
         service,
-        "safe_collect_internal_signals_for_stima",
-        lambda _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
+        "collect_internal_signals_for_stima_scoped",
+        lambda _ctx, _stima_id: (_ for _ in ()).throw(WatchNotFoundError("not found")),
     )
 
     with pytest.raises(Exception) as not_found:
@@ -1003,8 +1014,8 @@ def test_single_refresh_endpoint_maps_expected_service_errors(monkeypatch):
 
     monkeypatch.setattr(
         service,
-        "safe_collect_internal_signals_for_stima",
-        lambda _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
+        "collect_internal_signals_for_stima_scoped",
+        lambda _ctx, _stima_id: (_ for _ in ()).throw(ValidationError("invalid")),
     )
     with pytest.raises(Exception) as invalid:
         property_watch_router.refresh_internal_signals(0)
@@ -1022,11 +1033,33 @@ def test_batch_refresh_endpoint_returns_aggregate_service_result(monkeypatch):
     }
     monkeypatch.setattr(
         service,
-        "collect_internal_signals_for_active_watches",
-        lambda: expected,
+        "collect_internal_signals_for_active_watches_scoped",
+        lambda _ctx: expected,
     )
 
     assert property_watch_router.refresh_active_internal_signals() == expected
+
+
+
+# P26-6B: the property-watch routes resolve an agency context server-side. These
+# tests exercise the HTTP contract, not the scoping, so the DB-backed resolution
+# is overridden and the scoped service seams are the ones patched. The Basic
+# guard stays real - the auth assertions still mean what they meant.
+#
+# The dependency object comes from the router module, so it is the same function
+# object FastAPI resolved rather than a second import of the same name.
+def _override_pw_agency_context(app):
+    from operator_auth.context import OperatorContext
+
+    from property_watch import router as _pw_router
+
+    app.dependency_overrides[_pw_router.legacy_basic_agency_context] = lambda: (
+        OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
+    return app
 
 
 def test_batch_refresh_http_serializes_db_observation_watch_id(monkeypatch):
@@ -1049,8 +1082,8 @@ def test_batch_refresh_http_serializes_db_observation_watch_id(monkeypatch):
     }
     monkeypatch.setattr(
         service,
-        "collect_internal_signals_for_active_watches",
-        lambda: {
+        "collect_internal_signals_for_active_watches_scoped",
+        lambda _ctx: {
             "processed": 1,
             "written": 1,
             "unchanged": 1,
@@ -1079,6 +1112,7 @@ def test_batch_refresh_http_serializes_db_observation_watch_id(monkeypatch):
         property_watch_router.router,
         dependencies=[Depends(require_admin)],
     )
+    _override_pw_agency_context(app)
     client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post(
@@ -1092,11 +1126,11 @@ def test_batch_refresh_http_serializes_db_observation_watch_id(monkeypatch):
 
 def test_get_route_only_reads_current_state(monkeypatch):
     expected = {"watch": {"id": 3}, "observations": []}
-    monkeypatch.setattr(service, "get_current_watch_state", lambda _stima_id: expected)
+    monkeypatch.setattr(service, "get_current_watch_state_scoped", lambda _ctx, _stima_id: expected)
     monkeypatch.setattr(
         service,
-        "safe_collect_internal_signals_for_stima",
-        lambda _stima_id: pytest.fail("GET must not collect"),
+        "collect_internal_signals_for_stima_scoped",
+        lambda _ctx, _stima_id: pytest.fail("GET must not collect"),
     )
 
     assert property_watch_router.get_watch_state(501) == expected
