@@ -675,6 +675,35 @@ def test_list_filters_support_only_the_three_read_surfaces(monkeypatch):
     assert repository.get_proposal(501)["contact_name"] == "Mario Rossi"
 
 
+# P26-5: the routes now resolve an agency context server-side. These router
+# tests exercise the HTTP contract, not the scoping, so the DB-backed context
+# resolution is overridden and the scoped service functions are the ones
+# patched. The Basic guard itself is left real - the 401 assertions below still
+# mean what they meant.
+#
+# The dependency object is taken from the router module rather than imported
+# here. `import_main_app()` builds the app inside its own deterministic import
+# graph, and importing operator_auth separately yields a different function
+# object: the override would then be keyed to something FastAPI never resolves,
+# silently doing nothing while perturbing sys.modules for the module helpers
+# the rest of this file relies on.
+#
+# The override is registered on a monkeypatched copy of the mapping so it is
+# undone at teardown - `import_main_app()` returns a shared app, and leaving an
+# override behind leaks into every later test in the session.
+def _override_agency_context(monkeypatch, app):
+    router_module = proposal_module("router")
+    overrides = dict(app.dependency_overrides)
+    overrides[router_module.legacy_basic_agency_context] = lambda: (
+        router_module.OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
+    monkeypatch.setattr(app, "dependency_overrides", overrides)
+    return app
+
+
 def test_router_uses_real_admin_identity_and_returns_409_for_accepted_conflict(monkeypatch):
     service = proposal_module("service")
     captured = {}
@@ -683,10 +712,10 @@ def test_router_uses_real_admin_identity_and_returns_409_for_accepted_conflict(m
         captured.update({"actor": actor, "payload": model})
         return {"id": 1, "status": "draft"}
 
-    monkeypatch.setattr(service, "create_proposal", create)
+    monkeypatch.setattr(service, "create_proposal_scoped", lambda _ctx, model, actor: create(model, actor))
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    app = import_main_app()
+    app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
     body = {**create_payload(), "amount": "185000.00", "expires_at": FUTURE.isoformat(), "idempotency_key": str(create_payload()["idempotency_key"])}
     response = client.post("/api/proposals", json=body, auth=("giorgio", "test-secret"))
@@ -701,7 +730,7 @@ def test_router_uses_real_admin_identity_and_returns_409_for_accepted_conflict(m
     router_module = proposal_module("router")
     monkeypatch.setattr(
         service,
-        "transition_proposal",
+        "transition_proposal_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.ConflictError("accepted proposal already exists")),
     )
     conflict = client.post("/api/proposals/1/transition", json={"target_status": "accepted"}, auth=("giorgio", "test-secret"))

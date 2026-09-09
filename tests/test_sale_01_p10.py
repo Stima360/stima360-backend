@@ -792,6 +792,35 @@ def test_get_sale_returns_the_seller_snapshot(monkeypatch):
 # AUTH
 # ---------------------------------------------------------------------------
 
+# P26-5: the routes now resolve an agency context server-side. These router
+# tests exercise the HTTP contract, not the scoping, so the DB-backed context
+# resolution is overridden and the scoped service functions are the ones
+# patched. The Basic guard itself is left real - the 401 assertions below still
+# mean what they meant.
+#
+# The dependency object is taken from the router module rather than imported
+# here. `import_main_app()` builds the app inside its own deterministic import
+# graph, and importing operator_auth separately yields a different function
+# object: the override would then be keyed to something FastAPI never resolves,
+# silently doing nothing while perturbing sys.modules for the module helpers
+# the rest of this file relies on.
+#
+# The override is registered on a monkeypatched copy of the mapping so it is
+# undone at teardown - `import_main_app()` returns a shared app, and leaving an
+# override behind leaks into every later test in the session.
+def _override_agency_context(monkeypatch, app):
+    router_module = sale_module("router")
+    overrides = dict(app.dependency_overrides)
+    overrides[router_module.legacy_basic_agency_context] = lambda: (
+        router_module.OperatorContext(
+            user_id=None, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        )
+    )
+    monkeypatch.setattr(app, "dependency_overrides", overrides)
+    return app
+
+
 def test_router_requires_admin_identity_for_every_route_including_reads(monkeypatch):
     service = sale_module("service")
     captured = {}
@@ -800,12 +829,12 @@ def test_router_requires_admin_identity_for_every_route_including_reads(monkeypa
         captured.update({"actor": actor})
         return {"id": 1, "status": "pending"}
 
-    monkeypatch.setattr(service, "create_sale", create)
-    monkeypatch.setattr(service, "list_sales", lambda **_: [])
-    monkeypatch.setattr(service, "get_sale", lambda sale_id: {"id": sale_id, "status": "pending"})
+    monkeypatch.setattr(service, "create_sale_scoped", lambda _ctx, model, actor: create(model, actor))
+    monkeypatch.setattr(service, "list_sales_scoped", lambda _ctx, **_: [])
+    monkeypatch.setattr(service, "get_sale_scoped", lambda _ctx, sale_id: {"id": sale_id, "status": "pending"})
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    app = import_main_app()
+    app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
 
     # P10 contract: the whole /api/sales router is registered with
@@ -840,12 +869,12 @@ def test_router_translates_domain_errors_to_the_expected_http_status(monkeypatch
     router_module = sale_module("router")
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    app = import_main_app()
+    app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
 
     monkeypatch.setattr(
         service,
-        "complete_sale",
+        "complete_sale_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.ConflictError("sale is cancelled")),
     )
     conflict = client.post("/api/sales/1/complete", auth=("giorgio", "test-secret"))
@@ -853,7 +882,7 @@ def test_router_translates_domain_errors_to_the_expected_http_status(monkeypatch
 
     monkeypatch.setattr(
         service,
-        "get_sale",
+        "get_sale_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.NotFoundError("sale 1 not found")),
     )
     missing = client.get("/api/sales/1", auth=("giorgio", "test-secret"))

@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from admin_security import require_admin
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.exceptions import PlatformAdminAgencyRequired
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
 from . import service
@@ -19,13 +22,19 @@ def translate(function, *args, **kwargs):
         raise HTTPException(409, str(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except PlatformAdminAgencyRequired as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("", status_code=201)
-def create_sale(payload: SaleCreate, actor: str = Depends(require_admin)):
-    return translate(service.create_sale, payload, actor)
+def create_sale(
+    payload: SaleCreate,
+    actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.create_sale_scoped, ctx, payload, actor)
 
 
 @router.get("")
@@ -35,10 +44,12 @@ def list_sales(
     buy_request_id: int | None = Query(None, gt=0),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return {
         "items": translate(
-            service.list_sales,
+            service.list_sales_scoped,
+            ctx,
             status=status,
             property_id=property_id,
             buy_request_id=buy_request_id,
@@ -49,20 +60,35 @@ def list_sales(
 
 
 @router.get("/{sale_id}")
-def get_sale(sale_id: int):
-    return translate(service.get_sale, sale_id)
+def get_sale(
+    sale_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.get_sale_scoped, ctx, sale_id)
 
 
 @router.patch("/{sale_id}")
-def update_sale(sale_id: int, payload: SaleUpdate):
-    return translate(service.update_sale, sale_id, payload)
+def update_sale(
+    sale_id: int,
+    payload: SaleUpdate,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.update_sale_scoped, ctx, sale_id, payload)
 
 
 @router.post("/{sale_id}/complete")
-def complete_sale(sale_id: int, actor: str = Depends(require_admin)):
-    return translate(service.complete_sale, sale_id, actor)
+def complete_sale(
+    sale_id: int,
+    actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.complete_sale_scoped, ctx, sale_id, actor)
 
 
 @router.post("/{sale_id}/cancel")
-def cancel_sale(sale_id: int, actor: str = Depends(require_admin)):
-    return translate(service.cancel_sale, sale_id, actor)
+def cancel_sale(
+    sale_id: int,
+    actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.cancel_sale_scoped, ctx, sale_id, actor)

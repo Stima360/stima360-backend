@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from admin_security import require_admin
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.exceptions import PlatformAdminAgencyRequired
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
 from . import service
@@ -19,13 +22,19 @@ def translate(function, *args, **kwargs):
         raise HTTPException(409, str(exc)) from exc
     except ValidationError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except PlatformAdminAgencyRequired as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("", status_code=201)
-def create_proposal(payload: ProposalCreate, actor: str = Depends(require_admin)):
-    return translate(service.create_proposal, payload, actor)
+def create_proposal(
+    payload: ProposalCreate,
+    actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.create_proposal_scoped, ctx, payload, actor)
 
 
 @router.get("")
@@ -36,10 +45,12 @@ def list_proposals(
     contact_id: int | None = Query(None, gt=0),
     limit: int = Query(100, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return {
         "items": translate(
-            service.list_proposals,
+            service.list_proposals_scoped,
+            ctx,
             match_id=match_id,
             buy_request_id=buy_request_id,
             property_id=property_id,
@@ -51,8 +62,11 @@ def list_proposals(
 
 
 @router.get("/{proposal_id}")
-def get_proposal(proposal_id: int):
-    return translate(service.get_proposal, proposal_id)
+def get_proposal(
+    proposal_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return translate(service.get_proposal_scoped, ctx, proposal_id)
 
 
 @router.patch("/{proposal_id}")
@@ -60,8 +74,9 @@ def update_proposal(
     proposal_id: int,
     payload: ProposalUpdate,
     actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    return translate(service.update_proposal, proposal_id, payload, actor)
+    return translate(service.update_proposal_scoped, ctx, proposal_id, payload, actor)
 
 
 @router.post("/{proposal_id}/transition")
@@ -69,5 +84,6 @@ def transition_proposal(
     proposal_id: int,
     payload: ProposalTransition,
     actor: str = Depends(require_admin),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    return translate(service.transition_proposal, proposal_id, payload, actor)
+    return translate(service.transition_proposal_scoped, ctx, proposal_id, payload, actor)
