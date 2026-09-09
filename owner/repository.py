@@ -13,9 +13,39 @@ def one(cur):
  return dict(r)
 def audit(action,account=None,prop=None,etype=None,eid=None,result='success',meta=None):
  with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_audit_log(owner_account_id,property_id,action,entity_type,entity_id,result,metadata) VALUES(%s,%s,%s,%s,%s,%s,%s)",(account,prop,action,etype,str(eid) if eid else None,result,Json(meta or {})))
-def create_account(d):
+# P26-6C OWNER Admin: the derivation chain, in one place.
+#
+# An owner account reaches an agency through its contact - owner_accounts ->
+# contacts -> agency_id - and every admin operation on an account has to walk
+# it before touching the row. Written once so the three callers cannot drift
+# into three slightly different predicates.
+#
+# The read is locked for the same reason create_access locks: the decision and
+# the write that follows must be atomic with respect to the parents. FOR UPDATE
+# on the account when the caller is about to modify it, FOR SHARE otherwise;
+# the contact is only read, so it is shared in both cases. The lock ends at
+# COMMIT and says nothing about a parent changed afterwards.
+_ACCOUNT_TENANT="SELECT oa.id FROM owner_accounts oa JOIN contacts ct ON ct.id=oa.contact_id WHERE oa.id=%s AND ct.agency_id=%s "
+
+def _require_account_in_agency(c,agency_id,owner_account_id,*,for_update=False):
+ """Resolve the account inside `agency_id`, or refuse with the neutral 404.
+
+ The tenant is a predicate rather than a value compared afterwards, so the
+ statement itself carries the scope and an audit of what this module executes
+ can see it.
+
+ Absent, tenant-less and belonging-to-another-agency are one answer on
+ purpose: telling the caller which of the three it was would confirm that an
+ account it may not touch exists.
+ """
+ c.execute(_ACCOUNT_TENANT+("FOR UPDATE OF oa FOR SHARE OF ct" if for_update else "FOR SHARE OF oa,ct"),(owner_account_id,agency_id))
+ if not c.fetchone():raise NotFoundError(NF)
+
+def create_account(agency_id,d):
+ # The contact must be one of this agency's. `d` is the request body and is
+ # never consulted for the tenant.
  with core_cursor(commit=True) as(_,c):
-  c.execute('SELECT 1 FROM contacts WHERE id=%s',(d['contact_id'],))
+  c.execute('SELECT id FROM contacts WHERE id=%s AND agency_id=%s FOR SHARE',(d['contact_id'],agency_id))
   if not c.fetchone():raise NotFoundError(NF)
   c.execute("INSERT INTO owner_accounts(contact_id,status,preferred_language) VALUES(%s,'invited',%s) RETURNING *",(d['contact_id'],d.get('preferred_language','it')));r=one(c)
  audit('account_created',r['id'],etype='owner_account',eid=r['id']);return r
@@ -27,10 +57,15 @@ def list_accounts(agency_id):
  with core_cursor() as(_,c):c.execute('SELECT oa.*,c.display_name,c.email FROM owner_accounts oa JOIN contacts c ON c.id=oa.contact_id WHERE c.agency_id=%s ORDER BY oa.created_at DESC',(agency_id,));return[dict(x) for x in c.fetchall()]
 def get_account(i):
  with core_cursor() as(_,c):c.execute('SELECT * FROM owner_accounts WHERE id=%s',(i,));return one(c)
-def set_account(i,status):
- get_account(i)
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_accounts SET status=%s,disabled_at=CASE WHEN %s='disabled' THEN NOW() ELSE NULL END,updated_at=NOW() WHERE id=%s RETURNING *",(status,status,i));return one(c)
-def create_access(d):
+def set_account(agency_id,i,status):
+ # The check moves inside the UPDATE's own transaction. It used to be a
+ # separate `get_account(i)` on its own connection, which left a window in
+ # which the row could change between the two - harmless while the check was
+ # only "does it exist", not harmless now that it decides who may write.
+ with core_cursor(commit=True) as(_,c):
+  _require_account_in_agency(c,agency_id,i,for_update=True)
+  c.execute("UPDATE owner_accounts SET status=%s,disabled_at=CASE WHEN %s='disabled' THEN NOW() ELSE NULL END,updated_at=NOW() WHERE id=%s RETURNING *",(status,status,i));return one(c)
+def create_access(agency_id,d):
  # P26-6C OWNER: a grant may not join an account and a property of different
  # agencies. OWNER has two tenancy roots - the account reaches an agency
  # through its contact, the property carries its own - and nothing in the
@@ -75,6 +110,10 @@ def create_access(d):
   # NotFoundError, which the route already maps to a neutral 404: telling the
   # caller that the property exists but belongs elsewhere is itself a leak.
   if account_agency!=property_agency:raise NotFoundError(NF)
+  # And both must be the CALLER's agency. This is a second, separate rule: an
+  # account of B granted a property of B is perfectly coherent and passes the
+  # check above, but an administrator of A has no business creating it.
+  if account_agency!=agency_id:raise NotFoundError(NF)
   c.execute("INSERT INTO owner_property_access(owner_account_id,property_id,access_role,access_status,is_primary,valid_from,valid_until) VALUES(%s,%s,%s,'active',%s,NOW(),%s) RETURNING *",(d['owner_account_id'],d['property_id'],d.get('access_role','owner'),d.get('is_primary',False),d.get('valid_until')));r=one(c)
  audit('access_granted',r['owner_account_id'],r['property_id'],'owner_access',r['id']);return r
 def list_access(agency_id):
@@ -96,12 +135,35 @@ def list_access(agency_id):
       (agency_id, agency_id),
   )
   return[dict(x) for x in c.fetchall()]
-def revoke_access(i):
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_property_access SET access_status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
+def revoke_access(agency_id,i):
+ # Both roots, as in list_access: a grant reaches an agency through its
+ # account (-> contact) and through its property. Requiring both means a
+ # legacy grant whose two roots disagree cannot be revoked by either agency -
+ # deliberate. Repointing or removing those rows is a data decision, not
+ # something an admin of one side should do by accident.
+ with core_cursor(commit=True) as(_,c):
+  c.execute(
+      """SELECT x.id
+           FROM owner_property_access x
+           JOIN owner_accounts oa ON oa.id=x.owner_account_id
+           JOIN contacts ct ON ct.id=oa.contact_id
+           JOIN properties p ON p.id=x.property_id
+          WHERE x.id=%s AND ct.agency_id=%s AND p.agency_id=%s
+            FOR UPDATE OF x FOR SHARE OF oa,ct,p""",
+      (i,agency_id,agency_id),
+  )
+  if not c.fetchone():raise NotFoundError(NF)
+  c.execute("UPDATE owner_property_access SET access_status='revoked',revoked_at=NOW(),updated_at=NOW() WHERE id=%s RETURNING *",(i,));r=one(c)
  audit('access_revoked',r['owner_account_id'],r['property_id'],'owner_access',i);return r
-def create_token(i,typ='login',minutes=30,by=None):
- get_account(i);raw=generate_secret()
- with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_access_tokens(owner_account_id,token_hash,token_type,expires_at,created_by) VALUES(%s,%s,%s,%s,%s) RETURNING *",(i,hash_secret(raw),typ,utcnow()+timedelta(minutes=minutes),by));r=one(c)
+def create_token(agency_id,i,typ='login',minutes=30,by=None):
+ # This mints the credential the owner logs in with, so it is the operation
+ # where a missing tenant check is worst: it would hand an administrator of one
+ # agency a working session for an owner of another. The check and the INSERT
+ # share one transaction, as everywhere else in this slice.
+ raw=generate_secret()
+ with core_cursor(commit=True) as(_,c):
+  _require_account_in_agency(c,agency_id,i)
+  c.execute("INSERT INTO owner_access_tokens(owner_account_id,token_hash,token_type,expires_at,created_by) VALUES(%s,%s,%s,%s,%s) RETURNING *",(i,hash_secret(raw),typ,utcnow()+timedelta(minutes=minutes),by));r=one(c)
  audit('token_created',i,etype='owner_token',eid=r['id']);return r,raw
 def consume_token(raw):
  with core_cursor(commit=True) as(_,c):

@@ -133,18 +133,18 @@ def accounts(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
 
 
 @router.post("/accounts", status_code=201)
-def account(p: AccountCreate):
-    return x(r.create_account, p.model_dump())
+def account(p: AccountCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.create_account, agency_of(ctx), p.model_dump())
 
 
 @router.post("/accounts/{i}/disable")
-def disable(i: int):
-    return x(r.set_account, i, "disabled")
+def disable(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.set_account, agency_of(ctx), i, "disabled")
 
 
 @router.post("/accounts/{i}/enable")
-def enable(i: int):
-    return x(r.set_account, i, "active")
+def enable(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.set_account, agency_of(ctx), i, "active")
 
 
 @router.get("/access")
@@ -153,18 +153,18 @@ def access(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
 
 
 @router.post("/access", status_code=201)
-def access_create(p: AccessCreate):
-    return x(r.create_access, p.model_dump())
+def access_create(p: AccessCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.create_access, agency_of(ctx), p.model_dump())
 
 
 @router.post("/access/{i}/revoke")
-def revoke(i: int):
-    return x(r.revoke_access, i)
+def revoke(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.revoke_access, agency_of(ctx), i)
 
 
 @router.post("/accounts/{i}/tokens")
-def token(i: int, p: TokenCreate):
-    row, raw = x(r.create_token, i, p.token_type, p.expires_minutes, p.created_by)
+def token(i: int, p: TokenCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    row, raw = x(r.create_token, agency_of(ctx), i, p.token_type, p.expires_minutes, p.created_by)
     return {
         "token_id": row["id"],
         "expires_at": row["expires_at"],

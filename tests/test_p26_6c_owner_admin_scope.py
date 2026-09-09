@@ -670,12 +670,12 @@ def test_18_anonymous_is_still_refused_before_the_agency_is_resolved(monkeypatch
 # 19 - the six routes declare the dependency, and only they
 # ---------------------------------------------------------------------------
 
-def test_19_exactly_the_six_read_routes_take_the_agency_context():
+def test_19_the_six_read_routes_take_the_agency_context():
     """Admission by AST, so the list cannot drift from the code.
 
-    The rest of OWNER Admin is deliberately still unscoped and is the next
-    slice. Naming the six here means adding a seventh is a decision, and
-    forgetting one is a failure.
+    This slice's six. The write slice adds six more and pins the full set in
+    tests/test_p26_6c_owner_admin_writes.py::test_15; here the concern is only
+    that none of these six loses its context.
     """
     import ast
     from pathlib import Path
@@ -696,7 +696,7 @@ def test_19_exactly_the_six_read_routes_take_the_agency_context():
                 if takes_ctx:
                     scoped.add(node.name)
 
-    assert scoped == {
+    assert scoped >= {
         "accounts", "access",                       # router_admin
         "contacts", "account_properties",           # lookups
         "property_documents", "property_visits",

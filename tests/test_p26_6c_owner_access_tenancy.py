@@ -436,10 +436,16 @@ def world(monkeypatch):
     return w
 
 
-def grant(account_id, property_id, **extra):
+def grant(account_id, property_id, *, caller=AGENCY_A, **extra):
+    """`create_access` as an administrator of `caller`.
+
+    P26-6C: the function takes the caller's agency first. It is AGENCY_A by
+    default because that is the agency these cases are written from; the two
+    that speak for agency B pass it explicitly.
+    """
     payload = {"owner_account_id": account_id, "property_id": property_id}
     payload.update(extra)
-    return repository.create_access(payload)
+    return repository.create_access(caller, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +465,7 @@ def test_1_a_grant_inside_agency_a_is_allowed(world):
 
 def test_2_a_grant_inside_agency_b_is_allowed(world):
     """The other direction, so the rule is not "agency A is special"."""
-    row = grant(ACCOUNT_B, PROPERTY_B)
+    row = grant(ACCOUNT_B, PROPERTY_B, caller=AGENCY_B)
     assert row["owner_account_id"] == ACCOUNT_B
     assert row["property_id"] == PROPERTY_B
     assert len(world.granted()) == 1
@@ -478,7 +484,18 @@ def test_3_an_account_of_a_cannot_be_granted_a_property_of_b(world):
 
 def test_4_an_account_of_b_cannot_be_granted_a_property_of_a(world):
     with pytest.raises(NotFoundError):
-        grant(ACCOUNT_B, PROPERTY_A)
+        grant(ACCOUNT_B, PROPERTY_A, caller=AGENCY_B)
+    assert world.granted() == []
+
+
+def test_4b_a_coherent_pair_of_another_agency_is_refused(world):
+    """Added with the write slice, and a different rule from tests 3 and 4.
+
+    Account B and property B agree with each other, so the two-root check
+    passes; what refuses this is that neither belongs to the caller.
+    """
+    with pytest.raises(NotFoundError):
+        grant(ACCOUNT_B, PROPERTY_B, caller=AGENCY_A)
     assert world.granted() == []
 
 
@@ -554,8 +571,9 @@ def test_10_two_unknown_agencies_are_not_a_match(world):
     ],
 )
 def test_11_a_refusal_writes_nothing_at_all(world, account_id, property_id):
+    caller = AGENCY_B if account_id == ACCOUNT_B else AGENCY_A
     with pytest.raises(NotFoundError):
-        grant(account_id, property_id)
+        grant(account_id, property_id, caller=caller)
     assert world.granted() == []
     assert world.audit == [], "a refused grant left an audit row"
     assert world.success_audit() == []
