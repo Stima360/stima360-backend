@@ -840,3 +840,194 @@ def test_mig_the_guard_function_raises_for_every_scenario():
     assert body.count("RAISE EXCEPTION") >= 6, (
         f"only {body.count('RAISE EXCEPTION')} refusals for 6 hostile scenarios"
     )
+
+
+# ---------------------------------------------------------------------------
+# 041 - the trigger record hotfix.
+#
+# 040 guarded four tables with one function and wrote the latest_run check as
+#
+#     IF TG_TABLE_NAME = 'matches' AND NEW.latest_run_id IS NOT NULL THEN
+#
+# which reads as "only when the row is a match" but is not what PL/pgSQL does:
+# a record field is resolved when the expression containing it is prepared, not
+# only when the preceding conjunct is true. On match_runs - no latest_run_id -
+# every INSERT failed with `record "new" has no field "latest_run_id"`. The
+# guard destroyed the writes it existed to protect, and the hostile
+# certification on TEST found it on the first INSERT into match_runs.
+#
+# These tests pin the shape of the mistake, not merely its absence: the rule
+# below would fail on any equivalent conjunction in any future migration.
+# ---------------------------------------------------------------------------
+
+HOTFIX = "041_p26_match_trigger_record_fix"
+HOTFIX_UP = MIGRATIONS / f"{HOTFIX}.sql"
+HOTFIX_DOWN = MIGRATIONS / f"{HOTFIX}_down.sql"
+
+# Columns that exist on some, but not all, of the four guarded tables. Naming a
+# record field in the same expression that decides TG_TABLE_NAME is unsafe for
+# exactly these.
+TABLE_SPECIFIC_FIELDS = (
+    "latest_run_id", "match_id", "previous_run_id", "new_run_id",
+)
+
+
+def _hotfix_up() -> str:
+    return _strip_sql_comments(HOTFIX_UP.read_text(encoding="utf-8"))
+
+
+def _unsafe_conjunctions(sql: str) -> list[str]:
+    """Conditions that decide the table AND read a table-specific field.
+
+    Scoped to `IF`/`ELSIF` conditions, because the same two tokens appear
+    harmlessly in RAISE argument lists inside a branch already entered - and a
+    rule that fired on those would have to be deleted rather than fixed.
+    """
+    body = _strip_sql_comments(sql)
+    offenders = []
+    for match in re.finditer(r"\b(?:ELSIF|IF)\b(.*?)\bTHEN\b", body, re.DOTALL | re.IGNORECASE):
+        condition = " ".join(match.group(1).split())
+        if "TG_TABLE_NAME" not in condition:
+            continue
+        for field in TABLE_SPECIFIC_FIELDS:
+            if re.search(rf"NEW\.{field}\b", condition):
+                offenders.append(condition)
+    return offenders
+
+
+def test_041_exists_and_obeys_the_shared_rules():
+    from test_p26_1_migration_rules import assert_p26_migration_rules
+
+    assert_p26_migration_rules(HOTFIX, expect_reversible=True)
+
+
+def test_041_up_is_runner_owned_and_down_brackets_itself():
+    up = HOTFIX_UP.read_text(encoding="utf-8")
+    down = HOTFIX_DOWN.read_text(encoding="utf-8")
+    assert not re.search(r"^\s*BEGIN\s*;", up, re.IGNORECASE | re.MULTILINE)
+    assert not re.search(r"^\s*COMMIT\s*;", up, re.IGNORECASE | re.MULTILINE)
+    assert re.search(r"^\s*BEGIN\s*;", down, re.IGNORECASE | re.MULTILINE)
+    assert re.search(r"^\s*COMMIT\s*;", down, re.IGNORECASE | re.MULTILINE)
+
+
+def test_041_040_is_not_modified():
+    """040 is applied on TEST; its checksum must stay immutable.
+
+    Pinned by the presence of the original defect: if someone 'fixes' 040 in
+    place, this fails and says so.
+    """
+    original = _strip_sql_comments(UP_PATH.read_text(encoding="utf-8"))
+    assert re.search(
+        r"IF\s+TG_TABLE_NAME\s*=\s*'matches'\s+AND\s+NEW\.latest_run_id", original
+    ), (
+        "040 has been edited. It is applied on TEST and must be corrected "
+        "forward by 041, never rewritten."
+    )
+
+
+def test_041_uses_table_safe_branching():
+    offenders = _unsafe_conjunctions(HOTFIX_UP.read_text(encoding="utf-8"))
+    assert not offenders, (
+        "041 still decides the table and reads a table-specific field in one "
+        f"condition: {offenders}"
+    )
+
+
+def test_041_separates_the_table_test_from_the_field_access():
+    """The positive half: a nested IF, not merely the absence of a conjunction."""
+    up = " ".join(_hotfix_up().split())
+    assert re.search(
+        r"IF TG_TABLE_NAME = 'matches' THEN\s+IF NEW\.latest_run_id IS NOT NULL THEN",
+        up,
+    ), up
+
+
+def test_041_the_defect_probe_would_catch_the_original():
+    """Negative control.
+
+    Run the same rule over 040 - the file that actually broke production - and
+    it must report the offending condition. Without this the rule could be
+    vacuously true and 041 would look correct for the wrong reason.
+    """
+    offenders = _unsafe_conjunctions(UP_PATH.read_text(encoding="utf-8"))
+    assert offenders, "the probe does not detect the defect it was written for"
+    assert any("latest_run_id" in o for o in offenders), offenders
+
+
+@pytest.mark.parametrize(
+    "invariant",
+    [
+        # matches / match_runs / match_exclusions: both roots, same agency
+        r"IF TG_TABLE_NAME IN \('matches', 'match_runs', 'match_exclusions'\)",
+        r"a_buy IS NOT NULL AND a_property IS NOT NULL AND a_buy <> a_property",
+        # latest_run_id: same pair, not merely same agency
+        r"r_buy IS NOT NULL AND r_buy <> NEW\.buy_request_id",
+        r"r_property IS NOT NULL AND r_property <> NEW\.property_id",
+        # refresh history: both run references, same pair
+        r"IF NEW\.previous_run_id IS NOT NULL THEN",
+        r"IF NEW\.new_run_id IS NOT NULL THEN",
+        r"r_buy IS NOT NULL AND r_buy <> m_buy",
+    ],
+)
+def test_041_preserves_every_040_invariant(invariant):
+    assert re.search(invariant, " ".join(_hotfix_up().split())), invariant
+
+
+def test_041_raises_for_every_hostile_scenario_just_as_040_did():
+    up = _hotfix_up()
+    assert up.count("RAISE EXCEPTION") >= 6, up.count("RAISE EXCEPTION")
+
+
+def test_041_changes_no_data_and_creates_no_trigger():
+    """The four triggers reference the function by name and pick up the new
+    body, so recreating them would be churn and would briefly unguard the
+    tables."""
+    flat = " ".join(_strip_sql_strings(_hotfix_up()).split()).lower()
+    assert "create trigger" not in flat, flat
+    assert "drop trigger" not in flat, flat
+    for forbidden in ("insert into", "update ", "delete from", "alter table"):
+        assert forbidden not in flat, f"041 does {forbidden!r}"
+
+
+def test_041_down_restores_the_040_function_verbatim():
+    """Not 'a' function - 040's, including the defect it corrected.
+
+    A rollback that quietly kept 041's body would leave the database in a state
+    that is neither migration.
+    """
+    def _function(text: str) -> str:
+        body = _strip_sql_comments(text)
+        start = body.index("CREATE OR REPLACE FUNCTION match_agency_integrity")
+        end = body.index("$fn$ LANGUAGE plpgsql", start)
+        return " ".join(_strip_sql_strings(body[start:end]).split()).lower()
+
+    original = _function(UP_PATH.read_text(encoding="utf-8"))
+    restored = _function(HOTFIX_DOWN.read_text(encoding="utf-8"))
+    assert restored == original, "the down file is not 040's function"
+    assert restored != _function(HOTFIX_UP.read_text(encoding="utf-8"))
+
+
+def test_041_down_touches_no_trigger_and_no_data():
+    flat = " ".join(_strip_sql_strings(_strip_sql_comments(
+        HOTFIX_DOWN.read_text(encoding="utf-8")
+    )).split()).lower()
+    assert "drop trigger" not in flat, flat
+    for forbidden in ("insert into", "update ", "delete from", "truncate", "cascade"):
+        assert forbidden not in flat, f"the down does {forbidden!r}"
+
+
+def test_041_the_runner_discovers_026_to_041():
+    from test_p26_1_migration_rules import RUNNER, _load
+
+    runner = _load(RUNNER, "p26_migrate_041")
+    present = sorted(m.number for m in runner.discover_migrations(MIGRATIONS))
+    assert present[:16] == list(range(26, 42)), present
+    for migration in runner.discover_migrations(MIGRATIONS):
+        assert runner.validate_migration(migration) == [], migration.version
+
+
+@pytest.mark.parametrize("table", MATCH_TABLES)
+def test_041_adds_no_agency_column(table):
+    """MATCH stays CHILD-DERIVED; the hotfix changes a function, nothing else."""
+    flat = " ".join(_strip_sql_strings(_hotfix_up()).split()).lower()
+    assert f"alter table {table}" not in flat, flat
