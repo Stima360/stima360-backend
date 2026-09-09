@@ -202,10 +202,27 @@ def get_session(raw):
 def revoke_session(raw):
  if raw:
   with core_cursor(commit=True) as(_,c):c.execute('UPDATE owner_sessions SET revoked_at=COALESCE(revoked_at,NOW()) WHERE session_token_hash=%s',(hash_secret(raw),))
+# P26-6C OWNER Portal: the portal follows a grant, so the grant must be
+# coherent. Every portal query that joins owner_property_access adds these
+# three joins and the predicate below, which require the grant's two roots -
+# the account's contact and the property - to name the SAME agency.
+#
+# No agency parameter: the portal is account-scoped by design and its identity
+# is the session, not an operator context. What this rule removes is the ability
+# to follow a grant written before create_access started checking, one whose two
+# roots disagree. Such rows are hidden, never repaired: repointing or deleting
+# them is a data decision.
+_COHERENT_GRANT = """
+           JOIN owner_accounts oa_g ON oa_g.id=x.owner_account_id
+           JOIN contacts ct_g ON ct_g.id=oa_g.contact_id
+           JOIN properties p_g ON p_g.id=x.property_id"""
+_GRANT_ROOTS_AGREE = " AND ct_g.agency_id=p_g.agency_id"
+
+
 def require_property(a,p):
- with core_cursor() as(_,c):c.execute("SELECT x.*,p.title,p.address,p.city FROM owner_property_access x JOIN properties p ON p.id=x.property_id WHERE x.owner_account_id=%s AND x.property_id=%s AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW())",(a,p));return one(c)
+ with core_cursor() as(_,c):c.execute("SELECT x.*,p.title,p.address,p.city FROM owner_property_access x JOIN properties p ON p.id=x.property_id"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s AND x.property_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW())",(a,p));return one(c)
 def portal_properties(a):
- with core_cursor() as(_,c):c.execute("SELECT p.id,p.title,p.address,p.city,x.access_role,x.is_primary FROM owner_property_access x JOIN properties p ON p.id=x.property_id WHERE x.owner_account_id=%s AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW()) ORDER BY x.is_primary DESC",(a,));return[dict(x) for x in c.fetchall()]
+ with core_cursor() as(_,c):c.execute("SELECT p.id,p.title,p.address,p.city,x.access_role,x.is_primary FROM owner_property_access x JOIN properties p ON p.id=x.property_id"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW()) ORDER BY x.is_primary DESC",(a,));return[dict(x) for x in c.fetchall()]
 def create_publication(agency_id,d):
  with core_cursor(commit=True) as(_,c):
   _require_property_in_agency(c,agency_id,d['property_id'])
@@ -268,7 +285,7 @@ def timeline(a,p):
  require_property(a,p)
  with core_cursor() as(_,c):c.execute("SELECT id,property_id,publication_type,title,summary,body,published_at,version_number,acknowledgement_required FROM owner_publications WHERE property_id=%s AND status='published' ORDER BY published_at DESC",(p,));return[dict(x) for x in c.fetchall()]
 def publication(a,i):
- with core_cursor() as(_,c):c.execute("SELECT p.* FROM owner_publications p JOIN owner_property_access x ON x.property_id=p.property_id WHERE p.id=%s AND p.status='published' AND x.owner_account_id=%s AND x.access_status='active' AND x.revoked_at IS NULL",(i,a));return one(c)
+ with core_cursor() as(_,c):c.execute("SELECT p.* FROM owner_publications p JOIN owner_property_access x ON x.property_id=p.property_id"+_COHERENT_GRANT+" WHERE p.id=%s AND p.status='published'"+_GRANT_ROOTS_AGREE+" AND x.owner_account_id=%s AND x.access_status='active' AND x.revoked_at IS NULL",(i,a));return one(c)
 def read(a,i,ack=False):
  p=publication(a,i)
  with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_publication_reads(publication_id,owner_account_id,view_count,acknowledged_at) VALUES(%s,%s,1,CASE WHEN %s THEN NOW() END) ON CONFLICT(publication_id,owner_account_id) DO UPDATE SET last_viewed_at=NOW(),view_count=owner_publication_reads.view_count+1,acknowledged_at=CASE WHEN %s THEN COALESCE(owner_publication_reads.acknowledged_at,NOW()) ELSE owner_publication_reads.acknowledged_at END RETURNING *",(i,a,ack,ack));r=one(c)
@@ -296,10 +313,13 @@ def create_feedback(a,p,d):
       """SELECT oa.contact_id
            FROM owner_accounts oa
            JOIN owner_property_access x ON x.owner_account_id=oa.id
+           JOIN contacts ct_g ON ct_g.id=oa.contact_id
+           JOIN properties p_g ON p_g.id=x.property_id
           WHERE oa.id=%s AND oa.status='active' AND x.property_id=%s
+            AND ct_g.agency_id=p_g.agency_id
             AND x.access_status='active' AND x.revoked_at IS NULL
             AND (x.valid_until IS NULL OR x.valid_until>NOW())
-          FOR UPDATE OF oa,x""",
+          FOR UPDATE OF oa,x FOR SHARE OF ct_g,p_g""",
       (a,p),
   )
   access=c.fetchone()
@@ -1117,11 +1137,15 @@ def _authorized_shared_document_source(account_id, item_id):
                       pd.storage_key,pd.metadata AS source_metadata,pd.title AS source_title
                FROM owner_shared_documents sd
                JOIN property_documents pd ON pd.id=sd.property_document_id
-               JOIN owner_property_access x ON x.property_id=pd.property_id
+               JOIN owner_property_access x ON x.property_id=pd.property_id"""
+            + _COHERENT_GRANT
+            + """
                WHERE sd.id=%s AND sd.status='published'
                  AND sd.superseded_by_shared_document_id IS NULL
                  AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
-                 AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
+                 AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)"""
+            + _GRANT_ROOTS_AGREE
+            + """
                  AND x.owner_account_id=%s AND x.access_status='active'
                  AND x.revoked_at IS NULL
                  AND (x.valid_until IS NULL OR x.valid_until>NOW())""",
@@ -1137,11 +1161,15 @@ def portal_shared_documents(a, p):
             + """FROM owner_shared_documents sd
                JOIN property_documents pd ON pd.id=sd.property_document_id
                JOIN owner_property_access x
-                 ON x.property_id=pd.property_id AND x.owner_account_id=%s
+                 ON x.property_id=pd.property_id AND x.owner_account_id=%s"""
+            + _COHERENT_GRANT
+            + """
                LEFT JOIN owner_document_reads dr
                  ON dr.shared_document_id=sd.id AND dr.owner_account_id=%s
                WHERE pd.property_id=%s AND sd.status='published'
-                 AND sd.superseded_by_shared_document_id IS NULL
+                 AND sd.superseded_by_shared_document_id IS NULL"""
+            + _GRANT_ROOTS_AGREE
+            + """
                  AND pd.status='available'
                  AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
                  AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
@@ -1159,12 +1187,16 @@ def portal_shared_document(a, i):
             _PORTAL_SHARED_DOCUMENT_SELECT
             + """FROM owner_shared_documents sd
                JOIN property_documents pd ON pd.id=sd.property_document_id
-               JOIN owner_property_access x ON x.property_id=pd.property_id
+               JOIN owner_property_access x ON x.property_id=pd.property_id"""
+            + _COHERENT_GRANT
+            + """
                LEFT JOIN owner_document_reads dr
                  ON dr.shared_document_id=sd.id AND dr.owner_account_id=%s
                WHERE sd.id=%s AND sd.status='published'
                  AND sd.superseded_by_shared_document_id IS NULL
-                 AND pd.status='available'
+                 AND pd.status='available'"""
+            + _GRANT_ROOTS_AGREE
+            + """
                  AND (sd.expires_at IS NULL OR sd.expires_at>NOW())
                  AND (sd.owner_account_id IS NULL OR sd.owner_account_id=%s)
                  AND x.owner_account_id=%s AND x.access_status='active'
@@ -1695,11 +1727,15 @@ def portal_visit_feedback_detail(a, i):
                       vf.version_number,vf.published_at
                FROM owner_visit_feedback_publications vf
                JOIN property_visits pv ON pv.id=vf.property_visit_id
-               JOIN owner_property_access x ON x.property_id=pv.property_id
+               JOIN owner_property_access x ON x.property_id=pv.property_id"""
+            + _COHERENT_GRANT
+            + """
                WHERE vf.id=%s
                  AND vf.status='published'
                  AND vf.superseded_by_feedback_publication_id IS NULL
-                 AND (vf.owner_account_id IS NULL OR vf.owner_account_id=%s)
+                 AND (vf.owner_account_id IS NULL OR vf.owner_account_id=%s)"""
+            + _GRANT_ROOTS_AGREE
+            + """
                  AND x.owner_account_id=%s
                  AND x.access_status='active'
                  AND x.revoked_at IS NULL
@@ -1896,6 +1932,10 @@ def portal_notifications(a, limit=50, offset=0, unread_only=False):
     filters = [
         "n.owner_account_id=%s",
         "n.expires_at>NOW()",
+        # The grant's two roots must agree. This one goes in the filter list
+        # rather than being appended to the SQL, because that is where this
+        # query builds its WHERE.
+        "ct_g.agency_id=p_g.agency_id",
         "x.access_status='active'",
         "x.revoked_at IS NULL",
         "(x.valid_until IS NULL OR x.valid_until>NOW())",
@@ -1910,7 +1950,9 @@ def portal_notifications(a, limit=50, offset=0, unread_only=False):
                       n.target_type,n.target_id
                FROM owner_notifications n
                JOIN owner_property_access x
-                 ON x.owner_account_id=n.owner_account_id AND x.property_id=n.property_id
+                 ON x.owner_account_id=n.owner_account_id AND x.property_id=n.property_id"""
+            + _COHERENT_GRANT
+            + """
                WHERE """
             + " AND ".join(filters)
             + " ORDER BY n.created_at DESC,n.id DESC LIMIT %s OFFSET %s",
@@ -1925,7 +1967,11 @@ def mark_notification_read(a, i):
             """UPDATE owner_notifications n
                SET read_at=COALESCE(n.read_at,NOW())
                FROM owner_property_access x
+               JOIN owner_accounts oa_g ON oa_g.id=x.owner_account_id
+               JOIN contacts ct_g ON ct_g.id=oa_g.contact_id
+               JOIN properties p_g ON p_g.id=x.property_id
                WHERE n.id=%s AND n.owner_account_id=%s
+                 AND ct_g.agency_id=p_g.agency_id
                  AND x.owner_account_id=n.owner_account_id
                  AND x.property_id=n.property_id
                  AND n.expires_at>NOW()
