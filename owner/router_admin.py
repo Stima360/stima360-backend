@@ -123,8 +123,8 @@ def x(f, *a, **kw):
 
 
 @router.get("/dashboard")
-def dash():
-    return x(r.dashboard)
+def dash(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.dashboard, agency_of(ctx))
 
 
 @router.get("/accounts")
@@ -174,43 +174,43 @@ def token(i: int, p: TokenCreate, ctx: OperatorContext = Depends(legacy_basic_ag
 
 
 @router.get("/publications")
-def pubs():
-    return {"items": x(r.list_publications)}
+def pubs(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return {"items": x(r.list_publications, agency_of(ctx))}
 
 
 @router.post("/publications", status_code=201)
-def pub(p: PublicationCreate):
-    return x(r.create_publication, p.model_dump())
+def pub(p: PublicationCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.create_publication, agency_of(ctx), p.model_dump())
 
 
 @router.patch("/publications/{i}")
-def edit(i: int, p: PublicationUpdate):
-    return x(r.update_publication, i, p.model_dump(exclude_unset=True))
+def edit(i: int, p: PublicationUpdate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.update_publication, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
 @router.post("/publications/{i}/publish")
-def publish(i: int):
-    return x(r.publish, i)
+def publish(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.publish, agency_of(ctx), i)
 
 
 @router.post("/publications/{i}/archive")
-def archive(i: int):
-    return x(r.archive, i)
+def archive(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.archive, agency_of(ctx), i)
 
 
 @router.post("/publications/{i}/supersede", status_code=201)
-def supersede(i: int, p: PublicationCreate):
-    return x(r.supersede, i, p.model_dump())
+def supersede(i: int, p: PublicationCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.supersede, agency_of(ctx), i, p.model_dump())
 
 
 @router.get("/feedback")
-def feedback():
-    return {"items": x(r.list_feedback)}
+def feedback(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return {"items": x(r.admin_list_feedback, agency_of(ctx))}
 
 
 @router.patch("/feedback/{i}")
-def feedback_status(i: int, p: FeedbackStatus):
-    return x(r.update_feedback_status, i, p.model_dump(exclude_unset=True))
+def feedback_status(i: int, p: FeedbackStatus, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return x(r.update_feedback_status, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
 @router.get("/documents")
@@ -402,5 +402,5 @@ def visit_feedback_supersede(i: int, p: VisitFeedbackSupersede):
 
 
 @router.get("/audit")
-def audit():
-    return {"items": x(r.audits)}
+def audit(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return {"items": x(r.audits, agency_of(ctx))}

@@ -710,8 +710,12 @@ def test_p72_real_backend_contract_publications_and_requests_is_frozen():
     ):
         assert declaration in router
     repo = REPOSITORY.read_text(encoding="utf-8")
-    assert "owner_publications ORDER BY created_at DESC" in repo
-    assert "owner_feedback ORDER BY submitted_at DESC" in repo
+    # P26-6C: both listings are agency-bound now. The rows the P7 frontend
+    # consumes are the same - `pub.*` and `f.*` project the same columns - but
+    # neither may go back to reading the whole platform.
+    assert "owner_publications ORDER BY created_at DESC" not in repo
+    assert "WHERE p.agency_id=%s\n          ORDER BY pub.created_at DESC" in repo
+    assert "WHERE ct.agency_id=%s AND p.agency_id=%s\n          ORDER BY f.submitted_at DESC" in repo
     assert "Solo draft pubblicabile" in repo
     assert "Solo published archiviabile" in repo
     assert "Solo published sostituibile" in repo
@@ -1429,13 +1433,17 @@ def test_p74_real_backend_contract_token_and_audit_is_frozen():
     for response_field in ('"token_id"', '"expires_at"', '"token"', '"one_time_display"'):
         assert response_field in router_source
     assert '@router.get("/audit")' in router_source
-    assert 'return {"items": x(r.audits)}' in router_source
+    assert 'return {"items": x(r.audits, agency_of(ctx))}' in router_source
 
     repo_source = REPOSITORY.read_text(encoding="utf-8")
     assert "def create_token(" in repo_source
     assert "hash_secret(raw)" in repo_source
     assert "returnr,raw" in repo_source.replace(" ", "")
-    assert "SELECT * FROM owner_audit_log ORDER BY created_at DESC LIMIT 200" in repo_source
+    # P26-6C: the audit view is agency-bound. A row reaches an agency through
+    # whichever parent survives; one that has lost both is in no agency's view.
+    assert "SELECT * FROM owner_audit_log ORDER BY created_at DESC LIMIT 200" not in repo_source
+    assert "FROM owner_audit_log al" in repo_source
+    assert "WHERE ct.agency_id=%s OR p.agency_id=%s" in repo_source
 
 
 def test_p74_markup_has_final_navigation_token_form_one_time_result_and_audit_states():

@@ -7,6 +7,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import legacy_basic_agency_context
 from owner import repository as repo
 from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
@@ -64,9 +66,17 @@ def test_owner_admin_other_route_denies_anonymous_before_repository(monkeypatch)
 def test_owner_admin_valid_credentials_allow_access(monkeypatch):
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    monkeypatch.setattr(repo, "dashboard", lambda: {"active_accounts": 2})
+    # P26-6C: the dashboard is per-agency now. Its counters are computed over
+    # this agency's rows, and the agency comes from the compatibility context -
+    # overridden here so this test stays about authentication.
+    monkeypatch.setattr(repo, "dashboard", lambda agency_id: {"active_accounts": 2})
 
-    response = TestClient(_admin_app()).get(
+    app = _admin_app()
+    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+        user_id=None, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+    )
+    response = TestClient(app).get(
         "/api/owner/admin/dashboard",
         headers=_basic("giorgio", "test-secret"),
     )

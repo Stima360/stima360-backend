@@ -587,14 +587,10 @@ def test_14_every_scoped_repository_function_takes_the_agency_first():
         assert parameters[0].default is inspect.Parameter.empty, fn.__name__
 
 
-def test_15_exactly_twelve_owner_admin_routes_take_the_agency_context():
-    """Six reads from the previous slice, six writes from this one.
-
-    Everything else in OWNER Admin - dashboard, audit, publications, feedback,
-    documents, visit feedback - is deliberately still unscoped and is the next
-    slice. Naming the twelve makes both a forgotten route and an unannounced
-    thirteenth a failure.
-    """
+def test_15_the_six_write_routes_take_the_agency_context():
+    """This slice's six. The full OWNER Admin set is pinned in
+    tests/test_p26_6c_owner_admin_content.py, which grows block by block; here
+    the concern is only that none of these six loses its context."""
     import ast
     from pathlib import Path
 
@@ -613,7 +609,7 @@ def test_15_exactly_twelve_owner_admin_routes_take_the_agency_context():
                 ):
                     scoped.add(node.name)
 
-    assert scoped == {
+    assert scoped >= {
         # reads
         "accounts", "access", "contacts", "account_properties",
         "property_documents", "property_visits",

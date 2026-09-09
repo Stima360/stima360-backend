@@ -2515,7 +2515,7 @@ def test_p6_7_precheck_real_backend_feedback_contract_and_routes():
     assert '@router.get("/properties/{p}/feedback", response_model=FeedbackListResponse)' in router
     repository = (ROOT / "owner" / "repository.py").read_text(encoding="utf-8")
     create_start = repository.index("def create_feedback(a,p,d):")
-    create_end = repository.index("def dashboard():", create_start)
+    create_end = repository.index("def dashboard(agency_id):", create_start)
     feedback_block = repository[create_start:create_end]
     assert "d['feedback_type']" in feedback_block
     assert "d['subject']" in feedback_block

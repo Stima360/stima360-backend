@@ -41,6 +41,28 @@ def _require_account_in_agency(c,agency_id,owner_account_id,*,for_update=False):
  c.execute(_ACCOUNT_TENANT+("FOR UPDATE OF oa FOR SHARE OF ct" if for_update else "FOR SHARE OF oa,ct"),(owner_account_id,agency_id))
  if not c.fetchone():raise NotFoundError(NF)
 
+_PROPERTY_TENANT="SELECT id FROM properties WHERE id=%s AND agency_id=%s "
+
+def _require_property_in_agency(c,agency_id,property_id):
+ """The property root, the other half of OWNER's tenancy.
+
+ Publications, shared documents and visit feedback all reach an agency through
+ a property rather than through a contact, so this is the counterpart of
+ _require_account_in_agency for that side of the module.
+ """
+ c.execute(_PROPERTY_TENANT+"FOR SHARE",(property_id,agency_id))
+ if not c.fetchone():raise NotFoundError(NF)
+
+def _publication_in_agency(c,agency_id,publication_id,*,for_update=False):
+ """The publication, resolved through its property. Raises the neutral 404."""
+ c.execute(
+     "SELECT pub.* FROM owner_publications pub JOIN properties p ON p.id=pub.property_id "
+     "WHERE pub.id=%s AND p.agency_id=%s "
+     +("FOR UPDATE OF pub FOR SHARE OF p" if for_update else "FOR SHARE OF pub,p"),
+     (publication_id,agency_id),
+ )
+ return one(c)
+
 def create_account(agency_id,d):
  # The contact must be one of this agency's. `d` is the request body and is
  # never consulted for the tenant.
@@ -184,25 +206,38 @@ def require_property(a,p):
  with core_cursor() as(_,c):c.execute("SELECT x.*,p.title,p.address,p.city FROM owner_property_access x JOIN properties p ON p.id=x.property_id WHERE x.owner_account_id=%s AND x.property_id=%s AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW())",(a,p));return one(c)
 def portal_properties(a):
  with core_cursor() as(_,c):c.execute("SELECT p.id,p.title,p.address,p.city,x.access_role,x.is_primary FROM owner_property_access x JOIN properties p ON p.id=x.property_id WHERE x.owner_account_id=%s AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW()) ORDER BY x.is_primary DESC",(a,));return[dict(x) for x in c.fetchall()]
-def create_publication(d):
- with core_cursor(commit=True) as(_,c):c.execute("INSERT INTO owner_publications(property_id,publication_type,title,summary,body,status,version_number,acknowledgement_required) VALUES(%s,%s,%s,%s,%s,'draft',1,%s) RETURNING *",(d['property_id'],d['publication_type'],d['title'],d.get('summary'),d['body'],d.get('acknowledgement_required',False)));r=one(c)
- audit('publication_created',prop=r['property_id'],etype='owner_publication',eid=r['id']);return r
-def get_publication(i):
- with core_cursor() as(_,c):c.execute('SELECT * FROM owner_publications WHERE id=%s',(i,));return one(c)
-def list_publications():
- with core_cursor() as(_,c):c.execute('SELECT * FROM owner_publications ORDER BY created_at DESC');return[dict(x) for x in c.fetchall()]
-def update_publication(i,d):
- r=get_publication(i)
- if r['status']!='draft':raise ConflictError('Una pubblicazione pubblicata o archiviata è immutabile')
- f=[];v=[]
- for k in('publication_type','title','summary','body','acknowledgement_required'):
-  if d.get(k) is not None:f.append(k+'=%s');v.append(d[k])
- if not f:return r
- v.append(i)
- with core_cursor(commit=True) as(_,c):c.execute('UPDATE owner_publications SET '+','.join(f)+',updated_at=NOW() WHERE id=%s RETURNING *',v);return one(c)
-def publish(i):
+def create_publication(agency_id,d):
  with core_cursor(commit=True) as(_,c):
-  c.execute('SELECT * FROM owner_publications WHERE id=%s FOR UPDATE',(i,));r=one(c)
+  _require_property_in_agency(c,agency_id,d['property_id'])
+  c.execute("INSERT INTO owner_publications(property_id,publication_type,title,summary,body,status,version_number,acknowledgement_required) VALUES(%s,%s,%s,%s,%s,'draft',1,%s) RETURNING *",(d['property_id'],d['publication_type'],d['title'],d.get('summary'),d['body'],d.get('acknowledgement_required',False)));r=one(c)
+ audit('publication_created',prop=r['property_id'],etype='owner_publication',eid=r['id']);return r
+def get_publication(agency_id,i):
+ with core_cursor() as(_,c):return _publication_in_agency(c,agency_id,i)
+def list_publications(agency_id):
+ with core_cursor() as(_,c):
+  c.execute(
+      """SELECT pub.* FROM owner_publications pub
+           JOIN properties p ON p.id=pub.property_id
+          WHERE p.agency_id=%s
+          ORDER BY pub.created_at DESC""",
+      (agency_id,),
+  )
+  return[dict(x) for x in c.fetchall()]
+def update_publication(agency_id,i,d):
+ # The check and the UPDATE share one transaction: it used to resolve the row
+ # on one connection and write on another.
+ with core_cursor(commit=True) as(_,c):
+  r=_publication_in_agency(c,agency_id,i,for_update=True)
+  if r['status']!='draft':raise ConflictError('Una pubblicazione pubblicata o archiviata è immutabile')
+  f=[];v=[]
+  for k in('publication_type','title','summary','body','acknowledgement_required'):
+   if d.get(k) is not None:f.append(k+'=%s');v.append(d[k])
+  if not f:return r
+  v.append(i)
+  c.execute('UPDATE owner_publications SET '+','.join(f)+',updated_at=NOW() WHERE id=%s RETURNING *',v);return one(c)
+def publish(agency_id,i):
+ with core_cursor(commit=True) as(_,c):
+  r=_publication_in_agency(c,agency_id,i,for_update=True)
   if r['status']!='draft':raise ConflictError('Solo draft pubblicabile')
   c.execute("UPDATE owner_publications SET status='published',published_at=NOW() WHERE id=%s RETURNING *",(i,));z=one(c)
   _emit_notification_event(
@@ -217,15 +252,16 @@ def publish(i):
   )
   _audit_with_cursor(c,'publication_published',prop=z['property_id'],etype='owner_publication',eid=i)
  return z
-def archive(i):
- r=get_publication(i)
- if r['status']!='published':raise ConflictError('Solo published archiviabile')
- with core_cursor(commit=True) as(_,c):c.execute("UPDATE owner_publications SET status='archived',archived_at=NOW() WHERE id=%s RETURNING *",(i,));z=one(c)
- audit('publication_archived',prop=z['property_id'],etype='owner_publication',eid=i);return z
-def supersede(i,d):
- old=get_publication(i)
- if old['status']!='published':raise ConflictError('Solo published sostituibile')
+def archive(agency_id,i):
  with core_cursor(commit=True) as(_,c):
+  r=_publication_in_agency(c,agency_id,i,for_update=True)
+  if r['status']!='published':raise ConflictError('Solo published archiviabile')
+  c.execute("UPDATE owner_publications SET status='archived',archived_at=NOW() WHERE id=%s RETURNING *",(i,));z=one(c)
+ audit('publication_archived',prop=z['property_id'],etype='owner_publication',eid=i);return z
+def supersede(agency_id,i,d):
+ with core_cursor(commit=True) as(_,c):
+  old=_publication_in_agency(c,agency_id,i,for_update=True)
+  if old['status']!='published':raise ConflictError('Solo published sostituibile')
   c.execute("INSERT INTO owner_publications(property_id,publication_type,title,summary,body,status,version_number,supersedes_publication_id,acknowledgement_required) VALUES(%s,%s,%s,%s,%s,'draft',%s,%s,%s) RETURNING *",(old['property_id'],d['publication_type'],d['title'],d.get('summary'),d['body'],old['version_number']+1,old['id'],d.get('acknowledgement_required',False)));new=one(c);c.execute('UPDATE owner_publications SET superseded_by_publication_id=%s WHERE id=%s',(new['id'],old['id']))
  audit('publication_version_created',prop=old['property_id'],etype='owner_publication',eid=new['id'],meta={'previous':old['id']});return new
 def timeline(a,p):
@@ -331,8 +367,25 @@ def create_feedback(a,p,d):
  process_saved_owner_request_event(flow_event['id'])
  return result
 
-def list_feedback(a=None,p=None):
- if a is not None:
+def admin_list_feedback(agency_id):
+ """The OWNER Admin listing. Both roots, as everywhere a row touches both."""
+ with core_cursor() as(_,c):
+  c.execute(
+      """SELECT f.* FROM owner_feedback f
+           JOIN owner_accounts oa ON oa.id=f.owner_account_id
+           JOIN contacts ct ON ct.id=oa.contact_id
+           JOIN properties p ON p.id=f.property_id
+          WHERE ct.agency_id=%s AND p.agency_id=%s
+          ORDER BY f.submitted_at DESC""",
+      (agency_id,agency_id),
+  )
+  return[dict(x) for x in c.fetchall()]
+
+def list_feedback(a,p):
+ """The portal path. Both arguments are required now: the admin branch that
+ used to live here read every agency's feedback when called with none, and it
+ has moved to admin_list_feedback with a tenant of its own."""
+ if True:
   # Portal path: revalidate the canonical account-property grant on every read.
   # current_owner separately guarantees that a disabled account has no valid session.
   require_property(a,p)
@@ -346,13 +399,53 @@ def list_feedback(a=None,p=None):
        (a,p),
    )
    return [_public_feedback(dict(x)) for x in c.fetchall()]
+def dashboard(agency_id):
+ # Four counters, four scoped subqueries. The two that touch both roots -
+ # grants and feedback - require both, so a legacy row whose roots disagree is
+ # counted by neither agency, the same answer list_access gives.
  with core_cursor() as(_,c):
-  c.execute('SELECT * FROM owner_feedback ORDER BY submitted_at DESC')
+  c.execute(
+      """SELECT
+           (SELECT COUNT(*) FROM owner_accounts oa
+              JOIN contacts ct ON ct.id=oa.contact_id
+             WHERE oa.status='active' AND ct.agency_id=%s) active_accounts,
+           (SELECT COUNT(*) FROM owner_property_access x
+              JOIN owner_accounts oa ON oa.id=x.owner_account_id
+              JOIN contacts ct ON ct.id=oa.contact_id
+              JOIN properties p ON p.id=x.property_id
+             WHERE x.access_status='active'
+               AND ct.agency_id=%s AND p.agency_id=%s) active_access,
+           (SELECT COUNT(*) FROM owner_publications pub
+              JOIN properties p ON p.id=pub.property_id
+             WHERE pub.status='published' AND p.agency_id=%s) published,
+           (SELECT COUNT(*) FROM owner_feedback f
+              JOIN owner_accounts oa ON oa.id=f.owner_account_id
+              JOIN contacts ct ON ct.id=oa.contact_id
+              JOIN properties p ON p.id=f.property_id
+             WHERE f.status='new'
+               AND ct.agency_id=%s AND p.agency_id=%s) new_feedback""",
+      (agency_id,)*6,
+  )
+  return dict(c.fetchone())
+def audits(agency_id):
+ # owner_audit_log is the one OWNER table with no guaranteed tenant: both its
+ # parents are nullable ON DELETE SET NULL, so a row can outlive them both.
+ # A row is this agency's when EITHER surviving parent says so; a row that has
+ # lost both is in no agency's view. That is a deliberate consequence of the
+ # schema and is why the audit view is not a complete history.
+ with core_cursor() as(_,c):
+  c.execute(
+      """SELECT al.*
+           FROM owner_audit_log al
+           LEFT JOIN owner_accounts oa ON oa.id=al.owner_account_id
+           LEFT JOIN contacts ct ON ct.id=oa.contact_id
+           LEFT JOIN properties p ON p.id=al.property_id
+          WHERE ct.agency_id=%s OR p.agency_id=%s
+          ORDER BY al.created_at DESC
+          LIMIT 200""",
+      (agency_id,agency_id),
+  )
   return[dict(x) for x in c.fetchall()]
-def dashboard():
- with core_cursor() as(_,c):c.execute("SELECT (SELECT COUNT(*) FROM owner_accounts WHERE status='active') active_accounts,(SELECT COUNT(*) FROM owner_property_access WHERE access_status='active') active_access,(SELECT COUNT(*) FROM owner_publications WHERE status='published') published,(SELECT COUNT(*) FROM owner_feedback WHERE status='new') new_feedback");return dict(c.fetchone())
-def audits():
- with core_cursor() as(_,c):c.execute('SELECT * FROM owner_audit_log ORDER BY created_at DESC LIMIT 200');return[dict(x) for x in c.fetchall()]
 
 # OWNER 0.2 P2/P4 ------------------------------------------------------------
 SHARED_DOCUMENT_TYPE_LABELS = {
@@ -1582,9 +1675,18 @@ def audit_visit_feedback_access_denied(account, property_id=None, publication_id
         pass
 
 
-def update_feedback_status(i,d):
+def update_feedback_status(agency_id,i,d):
  with core_cursor(commit=True) as(_,c):
-  c.execute('SELECT * FROM owner_feedback WHERE id=%s FOR UPDATE',(i,));old=one(c)
+  c.execute(
+      """SELECT f.* FROM owner_feedback f
+           JOIN owner_accounts oa ON oa.id=f.owner_account_id
+           JOIN contacts ct ON ct.id=oa.contact_id
+           JOIN properties p ON p.id=f.property_id
+          WHERE f.id=%s AND ct.agency_id=%s AND p.agency_id=%s
+            FOR UPDATE OF f FOR SHARE OF oa,ct,p""",
+      (i,agency_id,agency_id),
+  )
+  old=one(c)
   handled=d['status'] in ('handled','closed')
   first_handling=handled and old.get('handled_at') is None
   c.execute("""UPDATE owner_feedback SET status=%s,handled_at=CASE WHEN %s THEN COALESCE(handled_at,NOW()) ELSE handled_at END,
@@ -1661,9 +1763,18 @@ def _emit_notification_event(
                COALESCE(np.{preference_column}, TRUE) AS category_enabled
         FROM owner_property_access x
         JOIN owner_accounts oa ON oa.id=x.owner_account_id
+        JOIN contacts ct ON ct.id=oa.contact_id
+        JOIN properties p ON p.id=x.property_id
         LEFT JOIN owner_notification_preferences np
           ON np.owner_account_id=x.owner_account_id
         WHERE x.property_id=%s
+          -- P26-6C: the grant's two roots must agree before anyone is told
+          -- anything. A grant written before create_access checked can link an
+          -- account of one agency to a property of another; without this join
+          -- publishing on that property would notify the other agency's owner.
+          -- The agency is not a parameter here: it is the property's own, so
+          -- no caller can widen it.
+          AND ct.agency_id=p.agency_id
           AND (%s::bigint IS NULL OR x.owner_account_id=%s)
           AND x.access_status='active'
           AND x.revoked_at IS NULL
