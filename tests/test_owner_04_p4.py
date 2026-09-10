@@ -102,9 +102,9 @@ AGENCY = 901
 
 def _bind_agency(app):
     from operator_auth.context import OperatorContext
-    from operator_auth.dependencies import legacy_basic_agency_context
+    from operator_auth.dependencies import basic_only_agency_context
 
-    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+    app.dependency_overrides[basic_only_agency_context] = lambda: OperatorContext(
         user_id=None, agency_id=AGENCY, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )

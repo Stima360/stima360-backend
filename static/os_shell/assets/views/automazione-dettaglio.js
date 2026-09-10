@@ -42,7 +42,7 @@
 //    cronologia generale resta consultabile in Automazioni → Cronologia.
 
 import { apiGet, apiPost } from '../core/api-client.js';
-import { getCredentials } from '../core/auth.js';
+import { getSession } from '../core/auth.js';
 import { navigate } from '../core/router.js';
 import { renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
 
@@ -135,7 +135,12 @@ export async function renderAutomazioneDettaglio(container, params = []) {
       activateBtn.addEventListener('click', async () => {
         activateBtn.disabled = true;
         activateBtn.textContent = 'Attivazione…';
-        const activatedBy = getCredentials()?.username || null;
+        // P26-3: chi attiva e' l'operatore della sessione, non lo username
+        // della credenziale condivisa. L'identificativo arriva da /me, che lo
+        // legge dalla sessione lato server; l'email NON e' esposta da /me di
+        // proposito, quindi si registra l'id - stabile e non personale.
+        const operatorId = getSession()?.user_id;
+        const activatedBy = operatorId == null ? null : `operator:${operatorId}`;
         try {
           await apiPost(`/api/flow/rules/${encodeURIComponent(code)}/activate`, { activated_by: activatedBy });
           await reload();

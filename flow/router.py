@@ -27,14 +27,18 @@ read as unscoped to the AST prover that certifies these surfaces: the prover
 matches `Depends(legacy_basic_agency_context)` in the parameter default, and an
 alias is just a Name. Repetition here is what keeps the proof mechanical.
 
-WHY THE COMPATIBILITY CONTEXT AND NOT A SESSION
+WHERE THE SCOPE COMES FROM
 
-This router mounts itself behind `require_owner_admin` rather than being
-included with `require_admin`, so P26-1's D-1 allowlist does not reach it and
-there is no operator session to derive a scope from. The scope therefore comes
-from the same C2 dependency every other legacy-Basic surface uses: the Default
-Agency, resolved server-side from its slug, agency-bound. Never an agency from
-the request - no route here takes one and no schema carries one.
+Until P26-3 this router borrowed OWNER Admin's HTTP Basic guard for its mount,
+which meant there was no operator session to derive a scope from and every
+route fell back to the Default Agency. The OS Shell now calls /api/flow with an
+operator session cookie, so the mount takes `require_authenticated_operator`
+instead: the same legacy credential, verified the same way, plus the cookie.
+
+Each route still takes the shared scope dependency, which since P26-3 prefers a
+live session and falls back to the Default Agency for legacy Basic. Either way
+the agency is decided server-side - never from the request; no route here takes
+one and no schema carries one.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -45,9 +49,21 @@ from operator_auth.exceptions import PlatformAdminAgencyRequired
 from . import service
 from .schemas import *
 from .enums import SCAN_DEFAULT_LIMIT, SCAN_MAX_LIMIT
-from owner.router_admin import require_owner_admin
+from operator_auth.dependencies import require_authenticated_operator
 
-router=APIRouter(prefix="/api/flow",tags=["flow"],dependencies=[Depends(require_owner_admin)])
+# P26-3: the mount is the operator one now.
+#
+# The OS Shell calls /api/flow/rules, /dashboard and /executions, and it now
+# authenticates with the operator session cookie - which OWNER Admin's guard,
+# being HTTP Basic and nothing else, cannot accept.
+# `require_authenticated_operator` verifies the SAME legacy credential through
+# the same admin_security.require_admin, so
+# every existing Basic caller is unaffected; what it adds is the cookie.
+#
+# It also removes FLOW's import of an OWNER symbol. The coupling was historical
+# - FLOW needed a self-authenticating mount and borrowed the nearest one - and
+# it meant a change to OWNER Admin's authentication silently changed FLOW's.
+router=APIRouter(prefix="/api/flow",tags=["flow"],dependencies=[Depends(require_authenticated_operator)])
 
 # The rule registry is one catalogue for the whole platform. These handlers
 # read and write it and touch no tenant row. The reconnaissance test asserts

@@ -493,10 +493,17 @@ def test_21_the_legacy_basic_scope_is_resolved_server_side():
     """
     from operator_auth import dependencies
 
-    source = inspect.getsource(dependencies.legacy_basic_agency_context)
-    assert "resolve_default_agency_id" in source, source
-    assert "is_platform_admin=False" in source.replace(" ", ""), source
-    assert not re.search(r"request\.(query_params|headers|json)", source), source
+    # P26-3 split the choice from the construction: `_default_agency_context`
+    # builds the legacy scope, `legacy_basic_agency_context` picks between it
+    # and a live session. Both halves are asserted.
+    builder = inspect.getsource(dependencies._default_agency_context)
+    assert "resolve_default_agency_id" in builder, builder
+    assert "is_platform_admin=False" in builder.replace(" ", ""), builder
+    assert not re.search(r"request\.(query_params|headers|json)", builder), builder
+
+    chooser = inspect.getsource(dependencies.legacy_basic_agency_context)
+    assert not re.search(r"request\.(query_params|headers|json)", chooser), chooser
+    assert "agency_id" not in chooser.split('"""')[-1], chooser
 
 
 # ---------------------------------------------------------------------------
@@ -781,14 +788,25 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
         for keyword in node.keywords:
             if keyword.arg == "dependencies":
                 dependencies = ast.unparse(keyword.value)
-        if "require_admin" not in dependencies and "require_operator" not in dependencies:
+        if not any(
+            guard in dependencies
+            for guard in ("require_admin", "require_operator", "require_authenticated_operator")
+        ):
             unguarded.add(symbol)
 
-    # operator_auth mounts bare because it *is* the authentication surface;
-    # FLOW and the two OWNER routers mount behind `require_owner_admin` or
-    # their own cookie session. All four are still invisible to G5 - that has
+    # operator_auth mounts bare because it *is* the authentication surface; the
+    # two OWNER routers guard themselves, the admin one with HTTP Basic and the
+    # portal with its own cookie. All three are still invisible to G5 - that has
     # not changed - but none is unsafe any more, so they are excluded by name
     # and the residual set is empty.
+    #
+    # FLOW stays in this list, and for the same structural reason as before:
+    # its guard is declared on its own APIRouter rather than on the mount, so
+    # main.py includes it bare and G5 cannot see it. What P26-3 changed is
+    # WHICH guard - it used to borrow OWNER Admin's Basic-only one and now
+    # declares `require_authenticated_operator`, which also admits the operator
+    # session the OS Shell carries. Same invisibility to G5, different and no
+    # longer borrowed authentication.
     self_authenticating = {
         "operator_auth_router", "flow_router",
         "owner_admin_router", "owner_portal_router",
@@ -1342,7 +1360,7 @@ def test_46_every_owner_admin_route_that_reaches_a_tenant_table_takes_the_contex
             )
             if not reaches_tenant:
                 continue
-            if "legacy_basic_agency_context" not in route_source:
+            if "basic_only_agency_context" not in route_source:
                 unscoped.append((route, sorted(calls)))
     assert unscoped == [], unscoped
 
@@ -1437,17 +1455,36 @@ def test_50_the_two_routers_are_admitted_on_two_different_criteria():
     admin = (ROOT / "owner" / "router_admin.py").read_text(encoding="utf-8")
     portal = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
 
-    assert "legacy_basic_agency_context" in admin
-    assert "legacy_basic_agency_context" not in portal
+    assert "basic_only_agency_context" in admin
+    assert "basic_only_agency_context" not in portal
     assert "current_owner" in portal
     assert "current_owner" not in admin
 
-    # And the mount-level authentication of each is unchanged: FLOW depends on
-    # the admin one, and the portal's cookie is the owner's only credential.
+    # OWNER Admin's own mount is unchanged, and the portal's cookie is still
+    # the owner's only credential.
     assert "dependencies=[Depends(require_owner_admin)]" in admin
     assert 'realm="STIMA360 OWNER Admin"' in admin
+
+    # P26-3 review, and the reason `basic_only_agency_context` exists at all.
+    # This mount admits HTTP Basic and nothing else. If its routes took the
+    # session-first scope dependency, a caller holding both a cookie and Basic
+    # would be ADMITTED by one credential and SCOPED by the other - the mount
+    # would say "the shared admin secret" and the queries would say "whichever
+    # agency the cookie belongs to". Not wider, not narrower: incoherent. One
+    # surface, one channel, and this is the assertion that keeps it that way.
+    lookups = (ROOT / "owner" / "router_admin_lookups.py").read_text(encoding="utf-8")
+    for name, source in (("router_admin.py", admin), ("router_admin_lookups.py", lookups)):
+        assert "legacy_basic_agency_context" not in source, (
+            f"{name} took the session-first scope dependency while its mount "
+            "still accepts only HTTP Basic - that is the cookie+Basic hybrid"
+        )
+
+    # P26-3 removed FLOW's borrowing of that dependency. Asserted here because
+    # this test is where the coupling was recorded: a change to OWNER Admin's
+    # authentication used to change FLOW's silently, and no longer can.
     flow = (ROOT / "flow" / "router.py").read_text(encoding="utf-8")
-    assert "from owner.router_admin import require_owner_admin" in flow
+    assert "require_owner_admin" not in flow
+    assert "dependencies=[Depends(require_authenticated_operator)]" in flow
 
 
 def test_51_the_audit_write_exemption_is_a_shape_and_not_a_list():

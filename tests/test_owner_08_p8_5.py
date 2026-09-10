@@ -350,9 +350,23 @@ def test_process_saved_event_failed_execution_sets_failed_then_recovery_processe
 
 
 def test_flow_router_is_protected_by_existing_owner_admin_dependency():
+    """P26-3 moved FLOW off OWNER's dependency and onto the operator one.
+
+    `require_owner_admin` is HTTP Basic and nothing else, so it could not admit
+    the session cookie the OS Shell now carries - and the OS Shell calls
+    /api/flow. `require_authenticated_operator` verifies the same legacy
+    credential through the same `admin_security.require_admin`, so Basic is
+    unchanged; the cookie is what is added.
+
+    The name of this test is kept so the history stays findable. What it
+    asserts now is that the borrowing is gone and FLOW is still not mountable
+    without a credential.
+    """
     src = inspect.getsource(flow_router_module)
-    assert "from owner.router_admin import require_owner_admin" in src
-    assert "dependencies=[Depends(require_owner_admin)]" in src
+    assert "from owner.router_admin import require_owner_admin" not in src
+    assert "require_owner_admin" not in src
+    assert "from operator_auth.dependencies import require_authenticated_operator" in src
+    assert "dependencies=[Depends(require_authenticated_operator)]" in src
 
 
 def test_flow_router_http_auth_anonymous_bad_and_valid(monkeypatch):

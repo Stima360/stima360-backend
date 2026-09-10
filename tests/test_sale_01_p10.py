@@ -910,4 +910,4 @@ def test_p10_repository_never_calls_into_another_domains_module():
 def test_p10_router_is_registered_with_the_shared_admin_dependency():
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from sale.router import router as sale_router" in main_source
-    assert "app.include_router(sale_router, dependencies=[Depends(require_admin)])" in main_source
+    assert "app.include_router(sale_router, dependencies=[Depends(require_authenticated_operator)])" in main_source

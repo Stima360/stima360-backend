@@ -5,21 +5,28 @@ agency, a role or a user from a query parameter, a header or a body, so an
 `agency_id` arriving from client state is untrusted by construction rather than
 by discipline.
 
-Four functions, and the division between them is the point:
+Six dependencies, and the division between them is the point:
 
 * `optional_session` - the only place the session cookie is read. Returns a
-  live session or None, and never raises, so both callers below can share it
+  live session or None, and never raises, so every caller below shares it
   through FastAPI's per-request dependency cache: one database resolution per
   request however many dependencies a handler declares.
 * `current_session` - session or 401. Cookie only. For endpoints that need the
   session itself rather than a scope, such as /me.
 * `require_operator` - the scope every CORE endpoint declares. Session first,
   then the legacy Basic compatibility channel, then 401.
-* `legacy_basic_agency_context` - the C2 bridge that turns the legacy
-  ADMIN_USER/ADMIN_PASS credential into an agency-*bound* context. Used
-  directly by `require_operator`, and as a dependency by Next Best Action,
-  which sits outside D-1's operator-session allowlist and whose OS Shell view
-  still sends Basic.
+* `require_authenticated_operator` - P26-3. Mount-level admission for the
+  routers the OS Shell calls. Same two channels, no scope, no database. This
+  is the widening of D-1: before P26-3 the operator session reached only
+  `/api/operator-auth` and `/api/core`, and the Shell's other eleven routers
+  were Basic-only. The Shell now holds a cookie, so they admit it too - and
+  the boundary is still explicit, still a list of mounts in `main.py`, and
+  still asserted route by route rather than assumed.
+* `legacy_basic_agency_context` - the scope for every router outside CORE.
+  P26-3 made it session-first; the name is retired in P26-5 with the channel.
+* `basic_only_agency_context` - P26-3. What the one above was before P26-3,
+  for OWNER Admin: a surface whose mount accepts nothing but Basic and whose
+  scope therefore must not come from a cookie.
 
 Task 15 added the legacy branch. Before it, this module accepted the cookie
 alone; the Basic channel is a bounded compatibility path, not a second identity
@@ -124,6 +131,7 @@ def current_session(
 
 
 def require_operator(
+    request: Request,
     session: AuthenticatedSession | None = Depends(optional_session),
     credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> OperatorContext:
@@ -161,19 +169,169 @@ def require_operator(
     as well and silently drops that declaration - which is how CORE briefly
     came to look unauthenticated to anything reading the schema.
     """
+    context = _scope_from_session_or_basic(
+        session, credentials, session_was_presented(request)
+    )
+    if context is None:
+        raise HTTPException(
+            status_code=401,
+            detail=NOT_AUTHENTICATED_MESSAGE,
+            headers=BASIC_CHALLENGE,
+        )
+    return context
+
+
+def require_authenticated_operator(
+    request: Request,
+    session: AuthenticatedSession | None = Depends(optional_session),
+    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
+) -> None:
+    """Mount-level admission for the routers the OS Shell calls. No scope.
+
+    P26-3 needed every one of those routers to accept the session cookie, and
+    the obvious way - mounting them on `require_operator` - would have made
+    each request resolve the Default Agency twice on the legacy channel: once
+    for the mount, once for the route's own `legacy_basic_agency_context`.
+    FastAPI caches per callable, and those are two different callables.
+
+    So this one answers the only question a mount has to answer - may this
+    caller in at all - and answers it without touching the database: a session
+    is resolved once, by the cached `optional_session`, and the legacy branch is
+    a string comparison. The scope still comes from the route's own dependency,
+    which is where it belongs and where tests already override it.
+
+    Returns None on purpose. A mount-level dependency whose value nothing reads
+    should not look like it produces one.
+    """
     if session is not None:
-        return session.context
+        return None
 
-    if credentials is not None:
-        username = _verify_legacy_credentials(credentials)
-        if username is not None:
-            return legacy_basic_agency_context(username)
+    # A refused cookie does not fall through to the shared credential.
+    if not session_was_presented(request) and credentials is not None:
+        if _verify_legacy_credentials(credentials) is not None:
+            return None
 
-    raise HTTPException(
+    # Same refusal `require_admin` gave before P26-3, including its 503 when the
+    # server has no admin credentials configured at all.
+    require_admin(credentials)
+    raise HTTPException(          # pragma: no cover - require_admin always raises
         status_code=401,
         detail=NOT_AUTHENTICATED_MESSAGE,
         headers=BASIC_CHALLENGE,
     )
+
+
+def session_was_presented(request: Request) -> bool:
+    """Did this request carry a session cookie at all?
+
+    P26-3 review. `optional_session` returns None for absent, unknown, revoked,
+    expired, idle-timed-out, disabled and de-membered alike - deliberately, so
+    that nothing downstream can tell them apart and use the difference as an
+    oracle. That is right for the caller and wrong for us: it made "no cookie"
+    and "a cookie the server rejected" the same input, and both fell through to
+    the legacy credential.
+
+    Falling through is correct for the first and not for the second. A revoked
+    session must mean revoked: an operator whose account was disabled must not
+    keep working because their browser also happens to hold ADMIN_USER and
+    ADMIN_PASS. This is the one bit that distinguishes the two, and it is read
+    from the request rather than from the resolution, so no rejection reason
+    leaks with it.
+
+    P26-1 chose the other way round - test_g2_an_invalid_cookie_falls_through
+    _to_valid_basic asserted the fall-through - on the reasoning that a stale
+    cookie should not lock out a legitimate Basic client. It does not: a Basic
+    client sends no cookie. The only caller affected is one presenting both,
+    and the right answer for it is to clear the dead cookie and log in again.
+    """
+    return bool(request.cookies.get(COOKIE_NAME))
+
+
+def _scope_from_session_or_basic(
+    session: AuthenticatedSession | None,
+    credentials: HTTPBasicCredentials | None,
+    cookie_presented: bool = False,
+) -> OperatorContext | None:
+    """The caller's scope from either approved channel, or None.
+
+    P26-3 made this the one place the precedence lives, because two
+    dependencies now need it: `require_operator`, which authenticates, and
+    `legacy_basic_agency_context`, which supplies a scope to every other
+    router. They differ only in how they refuse, and that difference is
+    deliberate - see the note on the latter.
+
+    Never raises for "not authenticated": returning None leaves the refusal,
+    and therefore its wording and its status code, to the caller. It does let a
+    503 through from `_verify_legacy_credentials`, because a server with no
+    admin credentials configured is an operational fault rather than a failed
+    authentication.
+    """
+    if session is not None:
+        return session.context
+
+    # A cookie was presented and the server refused it. Do not quietly serve
+    # the same request through the shared credential instead.
+    if cookie_presented:
+        return None
+
+    if credentials is not None:
+        username = _verify_legacy_credentials(credentials)
+        if username is not None:
+            return _default_agency_context()
+
+    return None
+
+
+def _default_agency_context() -> OperatorContext:
+    """The legacy Basic scope: Default Agency, agency owner, never platform admin.
+
+    Every field is decided here, on the server:
+
+    * `agency_id` is resolved from the Default Agency slug. Not a parameter,
+      not a header, not a numeric constant.
+    * `role` is the agency owner, never platform admin, so the scope is
+      agency-bound and can never reach the cross-agency branch.
+    * `user_id` and `session_id` are None: the credential is a shared secret,
+      not a person, and recording an invented operator would be a lie.
+    """
+    with operator_cursor() as (_, cur):
+        agency_id = resolve_default_agency_id(cur)
+
+    return OperatorContext(
+        user_id=None,
+        agency_id=agency_id,
+        role=LEGACY_BASIC_ROLE,
+        is_platform_admin=False,
+        session_id=None,
+        auth_channel="legacy_basic",
+    )
+
+
+def basic_only_agency_context(
+    _credential: str = Depends(require_admin),
+) -> OperatorContext:
+    """The Default-Agency scope, for a surface that is HTTP Basic and only that.
+
+    P26-3 review, and the reason it exists: OWNER Admin is mounted on
+    `require_owner_admin`, which accepts nothing but Basic, while its routes
+    took the shared scope dependency - which after P26-3 prefers a session. A
+    browser holding both would then have been ADMITTED by Basic and SCOPED by
+    the cookie: two different credentials deciding two different halves of one
+    request. That hybrid is not a widening or a narrowing, it is an incoherence,
+    and this removes it.
+
+    OWNER Admin stays Basic-only deliberately. The OS Shell does not call it,
+    so P26-3 has no reason to touch it - and admitting any operator session
+    would be a real escalation, because `require_authenticated_operator` checks
+    that a caller is authenticated and not what they are allowed to do. Managing
+    owner accounts, minting their login tokens and reading their documents
+    would become reachable by any agent-role session. That decision belongs to a
+    phase that also brings roles with it, not to this one.
+
+    This is what `legacy_basic_agency_context` was before P26-3, kept under a
+    name that says so. Both are retired in P26-5 with the channel itself.
+    """
+    return _default_agency_context()
 
 
 def _verify_legacy_credentials(credentials: HTTPBasicCredentials) -> str | None:
@@ -197,43 +355,62 @@ def _verify_legacy_credentials(credentials: HTTPBasicCredentials) -> str | None:
             raise
         return None
 
+
 def legacy_basic_agency_context(
-    _credential: str = Depends(require_admin),
+    request: Request,
+    session: AuthenticatedSession | None = Depends(optional_session),
+    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> OperatorContext:
-    """An agency-bound scope for a route still authenticated by legacy Basic.
+    """The scope for every router outside CORE. Session first, Basic second.
 
-    P26-1's D-1 allowlist admits operator sessions on `/api/operator-auth/*`
-    and `/api/core/*` only, so a route outside it - Next Best Action, whose
-    OS Shell view still sends Basic - has no session to derive a scope from.
-    Rather than let those routes keep reading CORE unscoped, they receive this
-    context.
+    P26-3 CHANGED WHAT THIS DOES, AND DELIBERATELY NOT ITS NAME.
 
-    Every field is decided here, on the server:
+    Until P26-3 this resolved the Default Agency and nothing else: the OS Shell
+    authenticated with legacy Basic, so there was no session to prefer. The
+    Shell now logs in through `/api/operator-auth/login` and carries an HttpOnly
+    cookie, and this dependency is declared by roughly a hundred and fifty
+    routes across PROPERTY, BUY, MATCH, PROPOSAL, SALE, CRM, FLOW, OWNER Admin,
+    the intelligence routers and six routes in main.py. Renaming it in the same
+    change that altered its behaviour would have put a mechanical edit of every
+    one of those - and of the twenty test files that override it - in the same
+    diff as a security-relevant decision. The name is retired in P26-5, with the
+    legacy channel it describes.
 
-    * `agency_id` is resolved from the Default Agency slug. Not a parameter,
-      not a header, not a numeric constant.
-    * `role` is the agency owner, never platform admin, so the scope is
-      agency-bound and can never reach the cross-agency branch.
-    * `user_id` and `session_id` are None: the credential is a shared secret,
-      not a person, and recording an invented operator would be a lie.
+    So, in order:
 
-    `require_admin` is declared as a dependency rather than assumed: the
-    context and the authentication that justifies it cannot be separated, even
-    if a future router forgets the mount-level guard.
+    1. **A live operator session cookie.** The operator's REAL agency, role and
+       user id - not the Default Agency. This is what makes the OS Shell a
+       multi-agency client.
+    2. **Valid legacy `ADMIN_USER`/`ADMIN_PASS`.** The six legacy admin pages
+       and any script still on that channel keep working, unchanged, bound to
+       the Default Agency exactly as before.
+    3. **Otherwise refuse**, and refuse the way `require_admin` used to: the
+       same status, the same message, and the same 503 when the server has no
+       admin credentials configured at all. That is why the refusal is
+       delegated rather than raised here - a route that answered "Non
+       autorizzato" before P26-3 must not start answering something else.
 
-    This is a compatibility bridge with a known expiry. While it exists,
-    GATE-MA1 blocks the activation of a second real agency: these routes remain
-    bound to the Default Agency, so P26-1 does not certify platform-wide
-    multi-agency isolation.
+    Nothing here reads an agency, a role or a user from the request. A client
+    that sends both a cookie and Basic gets the session, never the shared
+    credential's wider-looking but Default-Agency-bound scope.
+
+    GATE-MA1 is still OPEN. Branch 2 is a compatibility bridge with a known
+    expiry: while a shared secret can still authenticate a tenant route, the
+    platform is not certified for a second real agency. P26-5 confines or
+    removes it; P26-6 certifies what is left.
     """
-    with operator_cursor() as (_, cur):
-        agency_id = resolve_default_agency_id(cur)
+    context = _scope_from_session_or_basic(
+        session, credentials, session_was_presented(request)
+    )
+    if context is not None:
+        return context
 
-    return OperatorContext(
-        user_id=None,
-        agency_id=agency_id,
-        role=LEGACY_BASIC_ROLE,
-        is_platform_admin=False,
-        session_id=None,
-        auth_channel="legacy_basic",
+    # No usable session and no usable Basic. `require_admin` owns this refusal and
+    # always has: it raises 401 with its own message, or 503 when the server is
+    # unconfigured. Calling it keeps both answers byte-identical to P26-1.
+    require_admin(credentials)
+    raise HTTPException(          # pragma: no cover - require_admin always raises
+        status_code=401,
+        detail=NOT_AUTHENTICATED_MESSAGE,
+        headers=BASIC_CHALLENGE,
     )

@@ -46,7 +46,7 @@ from fastapi.testclient import TestClient
 
 from core.exceptions import ConflictError, NotFoundError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import basic_only_agency_context
 from owner import repository
 from owner.router_admin import router as admin_router
 
@@ -475,7 +475,7 @@ def client(monkeypatch):
     app.include_router(admin_router)
 
     def use(agency_id):
-        app.dependency_overrides[legacy_basic_agency_context] = lambda: context(agency_id)
+        app.dependency_overrides[basic_only_agency_context] = lambda: context(agency_id)
         return TestClient(app)
 
     return use
@@ -784,7 +784,7 @@ def test_21_the_scoped_and_unscoped_owner_admin_routes_are_both_named():
                 isinstance(default, ast.Call)
                 and getattr(default.func, "id", None) == "Depends"
                 and default.args
-                and getattr(default.args[0], "id", None) == "legacy_basic_agency_context"
+                and getattr(default.args[0], "id", None) == "basic_only_agency_context"
                 for default in node.args.defaults
             ):
                 scoped.add(node.name)

@@ -134,7 +134,7 @@ def test_main_py_references_seller_intelligence_only_through_the_p17b1_contract(
     main_source = MAIN_PY.read_text(encoding="utf-8")
     assert "from seller_intelligence import service as seller_intelligence_service" in main_source
     assert "from seller_intelligence.router import router as seller_intelligence_router" in main_source
-    assert "app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])" in main_source
+    assert "app.include_router(seller_intelligence_router, dependencies=[Depends(require_authenticated_operator)])" in main_source
     assert "seller_intelligence_service.safe_record_event(" in main_source
     # Nessun accesso diretto a repository/schemas/exceptions del modulo da main.py.
     for forbidden in ("seller_intelligence.repository", "seller_intelligence.schemas", "seller_intelligence.exceptions"):

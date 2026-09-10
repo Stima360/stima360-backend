@@ -154,7 +154,7 @@ def test_main_py_references_followup_only_through_the_p18c_contract():
         assert forbidden not in main_source, f"main.py non deve accedere direttamente a {forbidden}"
     assert "followup_service.run_followup(" not in main_source
     assert "from followup.router import router as followup_router" in main_source
-    assert "app.include_router(followup_router, dependencies=[Depends(require_admin)])" in main_source
+    assert "app.include_router(followup_router, dependencies=[Depends(require_authenticated_operator)])" in main_source
 
 
 def test_core_property_buy_match_proposal_owner_flow_do_not_import_followup():

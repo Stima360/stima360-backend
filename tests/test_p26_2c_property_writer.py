@@ -65,7 +65,12 @@ NEW_PROPERTY_ID = 501
 
 
 def ctx(agency_id=AGENCY) -> OperatorContext:
-    """The context legacy_basic_agency_context produces: agency-bound, no user."""
+    """The context the legacy Basic branch produces: agency-bound, no user.
+
+    P26-3 note: with an operator session the same dependency yields the
+    operator's real agency, role and user id instead. This fixture keeps
+    exercising the legacy shape because that is the one this suite is about.
+    """
     return OperatorContext(
         user_id=None,
         agency_id=agency_id,
@@ -428,7 +433,7 @@ def test_e_the_property_mount_still_requires_admin():
     mount = next(
         line for line in main.splitlines() if "property_router" in line and "include_router" in line
     )
-    assert "Depends(require_admin)" in mount, mount
+    assert "Depends(require_authenticated_operator)" in mount, mount
     assert "require_operator" not in mount, mount
 
 
@@ -451,9 +456,15 @@ def test_e_the_create_dependency_carries_its_own_authentication():
 
 
 def test_e_the_context_is_agency_bound_and_never_platform_admin():
-    from operator_auth.dependencies import legacy_basic_agency_context
+    """P26-3: the legacy scope is built in `_default_agency_context` now.
 
-    source = inspect.getsource(legacy_basic_agency_context)
+    The other branch of the dependency returns a session's own context, which
+    is agency-bound because the session is - proved in the operator-auth suite,
+    not by reading this source.
+    """
+    from operator_auth.dependencies import _default_agency_context
+
+    source = inspect.getsource(_default_agency_context)
     assert "is_platform_admin=False" in source, source
     assert not re.search(r"agency_id\s*=\s*\d", source), source
 

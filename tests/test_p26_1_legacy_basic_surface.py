@@ -76,21 +76,32 @@ def _include_router_calls() -> dict[str, str]:
 
 # The non-CORE mounts, frozen at 05387fa. Task 15 changes the CORE row and
 # adds the operator-auth row; every other row must be byte-identical.
+# P26-3 moved every mount the OS Shell calls from `require_admin` to
+# `require_authenticated_operator`. That dependency verifies the SAME legacy
+# credential, through the same `admin_security.require_admin`, and adds the
+# operator session cookie the Shell now carries. It admits and does not scope:
+# each route still takes its own agency dependency, so the Default Agency is
+# resolved once per legacy request rather than twice.
+#
+# The two OWNER routers keep their own guards and are still mounted bare - the
+# Shell does not call them. FLOW is mounted with a dependency for the first
+# time here: it used to borrow OWNER Admin's, which is Basic-only and could not
+# admit a cookie.
 FROZEN_MOUNTS = {
-    "property_router": "[Depends(require_admin)]",
-    "buy_router": "[Depends(require_admin)]",
-    "match_router": "[Depends(require_admin)]",
-    "crm_router": "[Depends(require_admin)]",
-    "proposal_router": "[Depends(require_admin)]",
-    "sale_router": "[Depends(require_admin)]",
+    "property_router": "[Depends(require_authenticated_operator)]",
+    "buy_router": "[Depends(require_authenticated_operator)]",
+    "match_router": "[Depends(require_authenticated_operator)]",
+    "crm_router": "[Depends(require_authenticated_operator)]",
+    "proposal_router": "[Depends(require_authenticated_operator)]",
+    "sale_router": "[Depends(require_authenticated_operator)]",
     "flow_router": "",
     "owner_admin_router": "",
     "owner_portal_router": "",
-    "seller_intelligence_router": "[Depends(require_admin)]",
-    "followup_router": "[Depends(require_admin)]",
-    "seller_intent_router": "[Depends(require_admin)]",
-    "property_watch_router": "[Depends(require_admin)]",
-    "next_best_action_router": "[Depends(require_admin)]",
+    "seller_intelligence_router": "[Depends(require_authenticated_operator)]",
+    "followup_router": "[Depends(require_authenticated_operator)]",
+    "seller_intent_router": "[Depends(require_authenticated_operator)]",
+    "property_watch_router": "[Depends(require_authenticated_operator)]",
+    "next_best_action_router": "[Depends(require_authenticated_operator)]",
 }
 
 # M5: the credential checkers themselves must not drift.
@@ -291,15 +302,43 @@ def test_g2_wrong_basic_credentials_fail_closed(auth_app):
     assert "ctx" not in state
 
 
-def test_g2_an_invalid_cookie_falls_through_to_valid_basic(auth_app):
-    """A dead cookie must not lock out a caller who also sent Basic."""
+def test_g2_an_invalid_cookie_does_not_fall_through_to_basic(auth_app):
+    """P26-3 REVERSED THIS TEST. It used to assert the fall-through.
+
+    P26-1 reasoned that a dead cookie must not lock out a caller who also sent
+    Basic, and while the OS Shell authenticated with Basic that cost nothing:
+    nobody held both. P26-3 moved the Shell onto the cookie, and the same rule
+    then said something quite different - that revoking an operator's session
+    does not revoke their access, as long as their browser also remembers
+    ADMIN_USER and ADMIN_PASS. A disabled account, a suspended membership, a
+    logout on another device: all of them would have been answered 200 through
+    the shared credential, in the very request that carried the dead cookie.
+
+    The original concern does not actually arise. A Basic-only client sends no
+    cookie, and `test_g2_valid_legacy_basic_authenticates_core` above is the
+    proof that it keeps working. The only caller this refuses is one presenting
+    both, and the correct answer for it is to log in again.
+
+    The refusal is deliberately the same 401 as every other: the caller is told
+    they are not authenticated, not that their cookie in particular was the
+    problem.
+    """
     client, state = auth_app
     state["session"] = None
     client.cookies.set("stima360_operator_session", "revoked")
 
     response = client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 401, response.text
+    assert "ctx" not in state, (
+        "a revoked session was quietly served through the legacy credential"
+    )
+
+    # And the same request without the dead cookie is still served, so what is
+    # refused is the stale session and not the Basic channel.
+    client.cookies.clear()
+    again = client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
+    assert again.status_code == 200, again.text
     assert state["ctx"].auth_channel == "legacy_basic"
 
 
@@ -339,9 +378,11 @@ def test_g3_a_missing_default_agency_fails_the_legacy_branch_closed(auth_app):
 
 
 def test_g3_no_hard_coded_agency_id_in_the_dependency():
+    """P26-3: the legacy scope is now built in `_default_agency_context`; the
+    dependency above it only chooses between that and the session."""
     from operator_auth import dependencies
 
-    source = inspect.getsource(dependencies.legacy_basic_agency_context)
+    source = inspect.getsource(dependencies._default_agency_context)
     tree = ast.parse(source.strip())
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, int):
@@ -734,14 +775,15 @@ def test_g5_a_fully_scoped_router_keeps_the_exemption(tmp_path):
         module.AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = original_map
 
 
-def test_g5_buy_is_still_mounted_on_the_legacy_basic_channel():
+def test_g5_buy_still_accepts_the_legacy_basic_channel():
     """The exemption is about scope, not about the channel.
 
-    BUY keeps Basic so its OS Shell views keep working; what changed in P26-2D
-    is that it no longer reads CORE without an agency. If the mount itself
-    changed, the reasoning recorded here would no longer describe reality.
+    BUY still accepts Basic so the six legacy admin pages keep working; what
+    changed in P26-2D is that it no longer reads CORE without an agency, and
+    what changed in P26-3 is that a session cookie is admitted too. The channel
+    was never what earned the exemption.
     """
-    assert _include_router_calls()["buy_router"] == "[Depends(require_admin)]"
+    assert _include_router_calls()["buy_router"] == "[Depends(require_authenticated_operator)]"
 
 
 def test_g5_buys_core_read_carries_the_agency_context():
@@ -809,8 +851,9 @@ def test_g6_nba_still_uses_the_c2_compatibility_context():
     assert "require_operator" not in source
 
 
-def test_g6_nba_stays_mounted_behind_legacy_basic():
-    assert _include_router_calls()["next_best_action_router"] == "[Depends(require_admin)]"
+def test_g6_nba_accepts_both_channels_after_p26_3():
+    """The `oggi` view calls it, and the Shell now logs in with a cookie."""
+    assert _include_router_calls()["next_best_action_router"] == "[Depends(require_authenticated_operator)]"
 
 
 def test_g6_the_oggi_view_still_calls_the_same_endpoint():
@@ -1058,5 +1101,5 @@ def test_g8_crm_has_left_the_frozen_legacy_basic_surface():
     re-derives from the router's AST on every run.
     """
     assert "crm_router" not in FROZEN_LEGACY_BASIC_CORE_READERS
-    assert _include_router_calls()["crm_router"] == "[Depends(require_admin)]"
+    assert _include_router_calls()["crm_router"] == "[Depends(require_authenticated_operator)]"
     assert _is_fully_agency_scoped("crm_router")

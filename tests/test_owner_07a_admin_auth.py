@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import basic_only_agency_context
 from owner import repository as repo
 from owner.router_admin import require_owner_admin, router as admin_router
 from owner.router_portal import router as portal_router
@@ -72,7 +72,7 @@ def test_owner_admin_valid_credentials_allow_access(monkeypatch):
     monkeypatch.setattr(repo, "dashboard", lambda agency_id: {"active_accounts": 2})
 
     app = _admin_app()
-    app.dependency_overrides[legacy_basic_agency_context] = lambda: OperatorContext(
+    app.dependency_overrides[basic_only_agency_context] = lambda: OperatorContext(
         user_id=None, agency_id=4242, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )

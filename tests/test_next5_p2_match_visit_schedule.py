@@ -538,7 +538,7 @@ def test_existing_consumers_read_the_new_property_visit_and_auth_is_unchanged():
     # would now be pinning the bug.
     assert "list_visits_by_contact(ctx, contact_id)" in crm_service
     assert "api('/api/property/visits?limit=500')" in agenda
-    assert "app.include_router(buy_router, dependencies=[Depends(require_admin)])" in main
+    assert "app.include_router(buy_router, dependencies=[Depends(require_authenticated_operator)])" in main
     assert "@router.post('/requests/{request_id}/matches/{match_id}/decision',status_code=201)" in router
 
 

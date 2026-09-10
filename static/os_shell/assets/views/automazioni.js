@@ -6,7 +6,7 @@
 // ricostruita lato browser (nessuna duplicazione di flow/engine.py in JS).
 //
 // Endpoint reali verificati (flow/router.py, prefix /api/flow, TUTTI protetti
-// da require_owner_admin — stessa auth Basic già usata da tutta la OS Shell,
+// dalla stessa auth usata da tutta la OS Shell (P26-3: sessione operatore),
 // nessun lavoro di autenticazione aggiuntivo):
 //   GET  /api/flow/dashboard                         (router.py:61 — query
 //        singola aggregata, vedi flow/repository.py:dashboard: active_rules,
@@ -74,7 +74,7 @@
 // tab non impedisce la consultazione delle altre.
 
 import { apiGet, apiPost } from '../core/api-client.js';
-import { getCredentials } from '../core/auth.js';
+import { getSession } from '../core/auth.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
 

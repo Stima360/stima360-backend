@@ -13,7 +13,7 @@ Six reads, no writes. `lookup_contacts` was the worst read in the module - free
 text over every agency's contacts, by name and by email - and `list_access`
 exposed every grant on the platform.
 
-The agency is resolved server-side by `legacy_basic_agency_context`, the same
+The agency is resolved server-side by `basic_only_agency_context`, the same
 compatibility dependency CRM and FLOW already use: the Default Agency, from its
 slug, agency-bound, `is_platform_admin=False`. The mount stays on
 `require_owner_admin`, untouched, because FLOW mounts on it too.
@@ -48,7 +48,7 @@ from fastapi.testclient import TestClient
 
 from core.exceptions import NotFoundError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import basic_only_agency_context
 from owner import admin_lookup_repository as lookups
 from owner import repository
 from owner.router_admin import router as admin_router
@@ -405,7 +405,7 @@ def client(monkeypatch):
     app.include_router(admin_router)
 
     def use(agency_id):
-        app.dependency_overrides[legacy_basic_agency_context] = lambda: context(agency_id)
+        app.dependency_overrides[basic_only_agency_context] = lambda: context(agency_id)
         return TestClient(app)
 
     return use
@@ -645,17 +645,29 @@ def test_16_the_mount_still_authenticates_with_require_owner_admin():
     assert 'realm="STIMA360 OWNER Admin"' in source
 
 
-def test_17_flow_still_mounts_on_the_unchanged_owner_admin_dependency():
+def test_17_flow_no_longer_borrows_owners_admin_dependency():
+    """P26-3 decoupled them, and that is what this now asserts.
+
+    FLOW borrowed `require_owner_admin` because it needed a self-authenticating
+    mount and that was the nearest one. It meant a change to OWNER Admin's
+    authentication silently changed FLOW's. P26-3 gave FLOW
+    `require_authenticated_operator` - the same legacy credential, plus the
+    operator session the OS Shell now carries - and the import is gone.
+    """
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "flow" / "router.py").read_text(encoding="utf-8")
-    assert "from owner.router_admin import require_owner_admin" in source
-    assert "dependencies=[Depends(require_owner_admin)]" in source
+    assert "require_owner_admin" not in source
+    assert "dependencies=[Depends(require_authenticated_operator)]" in source
+
+    # OWNER Admin's own mount is untouched by that move.
+    admin = (Path(__file__).resolve().parents[1] / "owner" / "router_admin.py").read_text(encoding="utf-8")
+    assert "dependencies=[Depends(require_owner_admin)]" in admin
 
 
 def test_18_anonymous_is_still_refused_before_the_agency_is_resolved(monkeypatch, db):
     """The mount-level Basic check runs first, so an unauthenticated request
-    never reaches `legacy_basic_agency_context` and never opens a cursor."""
+    never reaches `basic_only_agency_context` and never opens a cursor."""
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     app = FastAPI()
@@ -689,7 +701,7 @@ def test_19_the_six_read_routes_take_the_agency_context():
                 takes_ctx = any(
                     isinstance(default, ast.Call)
                     and getattr(default.func, "id", None) == "Depends"
-                    and getattr(default.args[0], "id", None) == "legacy_basic_agency_context"
+                    and getattr(default.args[0], "id", None) == "basic_only_agency_context"
                     for default in node.args.defaults
                     if isinstance(default, ast.Call) and default.args
                 )

@@ -1125,26 +1125,79 @@ def test_the_session_path_has_no_legacy_basic_fallback(name):
 # C2 - the legacy-Basic compatibility context
 # ---------------------------------------------------------------------------
 
-COMPAT = "legacy_basic_agency_context"
+# P26-3 split the dependency from the scope it builds. The C2 block is about
+# how the LEGACY scope is constructed - no hard-coded agency, never platform
+# admin, an OperatorContext and not a SystemAgencyContext - and that
+# construction now lives in `_default_agency_context`. The dependency that
+# selects between the session and this scope is asserted separately, in
+# test_c2_the_compatibility_context_requires_an_authenticated_channel.
+COMPAT = "_default_agency_context"
+COMPAT_DEPENDENCY = "legacy_basic_agency_context"
 
 
-def test_c2_the_compatibility_context_requires_basic_authentication():
-    """It cannot be obtained without the credential that justifies it."""
+def test_c2_the_compatibility_context_requires_an_authenticated_channel():
+    """It cannot be obtained without one of the two channels that justify it.
+
+    P26-3 added the session, so the parameter that used to be `require_admin`
+    is now the pair the precedence needs, plus the raw request. The property is
+    unchanged: nothing here is reachable unauthenticated, and no parameter is a
+    caller selector - one resolves a cookie, one reads the Basic header, and
+    the third is asserted below to be used for one presence check and nothing
+    else.
+    """
     from operator_auth import dependencies
 
     parameters = inspect.signature(dependencies.legacy_basic_agency_context).parameters
-    assert len(parameters) == 1, parameters
-    default = list(parameters.values())[0].default
-    assert getattr(default, "dependency", None).__name__ == "require_admin"
+    assert list(parameters) == ["request", "session", "credentials"], parameters
+    request_p, session_p, credentials_p = parameters.values()
+    assert request_p.default is inspect.Parameter.empty
+    # `from __future__ import annotations` keeps this a string.
+    assert str(request_p.annotation) == "Request", request_p.annotation
+    assert getattr(session_p.default, "dependency", None).__name__ == "optional_session"
+    # The Basic scheme is FastAPI's own HTTPBasic instance, not a function.
+    assert type(getattr(credentials_p.default, "dependency", None)).__name__ == "HTTPBasic"
+
+    # And the legacy branch still goes through require_admin, unchanged.
+    verifier = inspect.getsource(dependencies._verify_legacy_credentials)
+    assert "require_admin(credentials)" in verifier
 
 
 def test_c2_the_compatibility_context_takes_no_caller_selector():
-    """No agency, slug, header or body parameter anywhere in the signature."""
+    """No agency, slug, header or body parameter anywhere in the signature.
+
+    `request` was on this list until P26-3, and the reason was sound: a scope
+    dependency holding the whole request can read anything out of it, and the
+    cheapest way to keep it from selecting a tenant was not to give it one.
+    P26-3 needs the request for one bit - whether a session cookie was
+    presented at all, so that a refused cookie does not fall through to the
+    legacy credential - so the ban is replaced with something narrower rather
+    than dropped: the parameter exists, and the body may pass it to exactly
+    one call and never touch an attribute of it directly.
+    """
     from operator_auth import dependencies
 
     parameters = inspect.signature(dependencies.legacy_basic_agency_context).parameters
-    for forbidden in ("agency_id", "agency", "slug", "request", "headers", "body", "tenant"):
+    for forbidden in ("agency_id", "agency", "slug", "headers", "body", "tenant"):
         assert forbidden not in parameters, forbidden
+
+    tree = ast.parse(_function_source(PACKAGE / "dependencies.py", COMPAT_DEPENDENCY))
+    uses = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == "request"
+    ]
+    assert len(uses) == 1, f"`request` is used {len(uses)} times, expected 1"
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "session_was_presented"
+        and [getattr(a, "id", None) for a in node.args] == ["request"]
+    ]
+    assert len(calls) == 1, "the only use of `request` must be session_was_presented"
+    for node in ast.walk(tree):
+        assert not (isinstance(node, ast.Attribute)
+                    and getattr(node.value, "id", None) == "request"), (
+            f"the compatibility context reads request.{node.attr} directly"
+        )
 
 
 def test_c2_the_agency_is_resolved_server_side_not_hard_coded():
@@ -1240,13 +1293,27 @@ def test_c2_the_d1_allowlist_is_unchanged():
 
     nba = (ROOT / "next_best_action" / "router.py").read_text(encoding="utf-8")
     assert "require_operator" not in nba, "NBA must stay on the legacy Basic channel"
-    assert COMPAT in nba
+    assert COMPAT_DEPENDENCY in nba
 
 
-def test_c2_the_nba_router_still_authenticates_with_basic():
-    """The OS Shell Oggi view sends Basic; that must keep working."""
+def test_c2_the_nba_router_still_accepts_basic_and_now_a_session_too():
+    """The Oggi view used to send Basic and now sends a cookie; both work.
+
+    P26-3 moved this mount to `require_authenticated_operator`, which verifies
+    the legacy credential through the same `admin_security.require_admin` it
+    always did. Nothing that authenticated before stops authenticating.
+    """
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "app.include_router(next_best_action_router, dependencies=[Depends(require_admin)])" in main_source
+    assert (
+        "app.include_router(next_best_action_router, "
+        "dependencies=[Depends(require_authenticated_operator)])"
+    ) in main_source
+
+    from operator_auth import dependencies
+
+    admitter = inspect.getsource(dependencies.require_authenticated_operator)
+    assert "_verify_legacy_credentials(credentials)" in admitter
+    assert "require_admin(credentials)" in admitter
 
 
 def test_router_carries_no_router_level_auth_dependency():

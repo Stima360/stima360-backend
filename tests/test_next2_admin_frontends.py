@@ -76,4 +76,4 @@ def test_backend_is_protected_in_p3():
         re.MULTILINE,
     ), "require_operator is no longer imported from operator_auth.dependencies"
     for router_name in ("property_router", "buy_router", "match_router", "proposal_router"):
-        assert f"app.include_router({router_name}, dependencies=[Depends(require_admin)])" in main_py
+        assert f"app.include_router({router_name}, dependencies=[Depends(require_authenticated_operator)])" in main_py

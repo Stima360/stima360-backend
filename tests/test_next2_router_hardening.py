@@ -152,7 +152,9 @@ def test_9_owner_and_flow_do_not_receive_new_neutral_dependency():
 
 
 def test_10_domain_routers_remain_decoupled_from_owner():
-    for module in ("core", "property", "buy", "match", "proposal"):
+    # P26-3 added flow: it used to borrow `require_owner_admin` for its mount
+    # and now takes `require_authenticated_operator`, so it is decoupled too.
+    for module in ("core", "property", "buy", "match", "proposal", "flow"):
         source = (ROOT / module / "router.py").read_text(encoding="utf-8")
         assert "from owner" not in source
         assert "import owner" not in source
@@ -160,16 +162,25 @@ def test_10_domain_routers_remain_decoupled_from_owner():
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from admin_security import require_admin" in main_source
     # P26-1 Task 15: core_router moved from require_admin to require_operator.
-    # The protection this test exists to guarantee is unchanged - CORE is still
-    # unreachable without a credential - but the dependency now accepts BOTH
+    # The protection this test exists to guarantee is unchanged - none of these
+    # is reachable without a credential - but the dependency now accepts BOTH
     # approved channels: an operator session cookie, or the same legacy
-    # ADMIN_USER/ADMIN_PASS Basic credential as before, resolved server-side
-    # into a Default-Agency-bound scope (design spec D-2). The other four
-    # routers below are deliberately untouched.
+    # ADMIN_USER/ADMIN_PASS Basic credential as before, verified through the
+    # same `admin_security.require_admin`.
+    #
+    # P26-3 extended that from CORE to the other four. The OS Shell logs in
+    # with the cookie and calls all of them, so leaving them on require_admin
+    # would have meant a Shell that authenticates and is then refused
+    # everywhere but CORE. CORE keeps `require_operator`, which also yields the
+    # scope its routes read; the others take the admission-only dependency and
+    # get their scope from each route.
     assert (
         "app.include_router(core_router, dependencies=[Depends(require_operator)])"
         in main_source
     )
     for router_name in ("property_router", "buy_router", "match_router", "proposal_router"):
-        expected = f"app.include_router({router_name}, dependencies=[Depends(require_admin)])"
+        expected = (
+            f"app.include_router({router_name}, "
+            "dependencies=[Depends(require_authenticated_operator)])"
+        )
         assert expected in main_source

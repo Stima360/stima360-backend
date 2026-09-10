@@ -44,7 +44,7 @@ from fastapi.testclient import TestClient
 
 from core.exceptions import NotFoundError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import basic_only_agency_context
 from owner import repository
 from owner.router_admin import router as admin_router
 
@@ -331,7 +331,7 @@ def client(monkeypatch):
     app.include_router(admin_router)
 
     def use(agency_id):
-        app.dependency_overrides[legacy_basic_agency_context] = lambda: context(agency_id)
+        app.dependency_overrides[basic_only_agency_context] = lambda: context(agency_id)
         return TestClient(app)
 
     return use
@@ -604,7 +604,7 @@ def test_15_the_six_write_routes_take_the_agency_context():
                     isinstance(default, ast.Call)
                     and getattr(default.func, "id", None) == "Depends"
                     and default.args
-                    and getattr(default.args[0], "id", None) == "legacy_basic_agency_context"
+                    and getattr(default.args[0], "id", None) == "basic_only_agency_context"
                     for default in node.args.defaults
                 ):
                     scoped.add(node.name)
@@ -623,15 +623,18 @@ def test_16_the_portal_and_flow_are_untouched():
 
     root = Path(__file__).resolve().parents[1]
     portal = (root / "owner" / "router_portal.py").read_text(encoding="utf-8")
-    assert "legacy_basic_agency_context" not in portal, (
-        "the owner portal keeps its own authentication; it must not acquire an "
-        "operator context"
-    )
+    for name in ("basic_only_agency_context", "legacy_basic_agency_context"):
+        assert name not in portal, (
+            "the owner portal keeps its own authentication; it must not acquire "
+            "an operator context"
+        )
     assert "current_owner" in portal
 
+    # P26-3: FLOW no longer borrows OWNER's dependency. What matters here is
+    # that OWNER Admin's own mount did not move with it.
     flow = (root / "flow" / "router.py").read_text(encoding="utf-8")
-    assert "from owner.router_admin import require_owner_admin" in flow
-    assert "dependencies=[Depends(require_owner_admin)]" in flow
+    assert "require_owner_admin" not in flow
+    assert "dependencies=[Depends(require_authenticated_operator)]" in flow
 
     admin = (root / "owner" / "router_admin.py").read_text(encoding="utf-8")
     assert "dependencies=[Depends(require_owner_admin)]" in admin

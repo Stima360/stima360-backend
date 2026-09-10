@@ -3,7 +3,7 @@ import { mountGlobalSearch } from './components/global-search.js';
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
 
-import { login, logout, isAuthenticated, onAuthChange } from './core/auth.js';
+import { login, logout, onAuthChange, restore } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
@@ -105,12 +105,12 @@ for (const section of SECTIONS) {
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   loginError.textContent = '';
-  const username = document.getElementById('login-username').value;
+  const email = document.getElementById('login-email').value;
   const password = document.getElementById('login-password').value;
   const submitBtn = loginForm.querySelector('button[type="submit"]');
   submitBtn.disabled = true;
   try {
-    await login(username, password);
+    await login(email, password);
   } catch (error) {
     loginError.textContent = error.message || 'Errore di accesso.';
   } finally {
@@ -118,25 +118,43 @@ loginForm.addEventListener('submit', async (event) => {
   }
 });
 
-logoutBtn.addEventListener('click', () => {
-  logout();
-  window.location.hash = '';
+// P26-3: logout vero. La sessione viene revocata sul server e il cookie
+// cancellato; azzerare solo lo stato locale lascerebbe un cookie valido.
+logoutBtn.addEventListener('click', async () => {
+  logoutBtn.disabled = true;
+  try {
+    await logout();
+  } finally {
+    logoutBtn.disabled = false;
+    window.location.hash = '';
+  }
 });
 
-onAuthChange((credentials) => {
-  const authenticated = credentials !== null;
+onAuthChange((session) => {
+  const authenticated = session !== null;
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;
+  // Il form viene svuotato appena la sessione esiste: la password non deve
+  // restare nel DOM piu' del necessario.
+  loginForm.reset();
   if (authenticated) {
-    loginForm.reset();
     loginError.textContent = '';
     renderCurrentRoute();
   }
 });
 
-// Stato iniziale: le credenziali non sono mai persistite, quindi ad ogni
-// caricamento della pagina (incluso un refresh) si riparte da non autenticati
-// e viene mostrato il login.
-const authenticatedAtBoot = isAuthenticated();
-loginView.hidden = authenticatedAtBoot;
-appView.hidden = !authenticatedAtBoot;
+// P26-3 - stato iniziale.
+//
+// Il cookie di sessione e' HttpOnly, quindi questo codice non puo' vederlo: la
+// sola cosa che sa dire se c'e' una sessione viva e' il server. Al boot si
+// parte percio' dalla schermata di login e si chiede /me; se risponde, la UI
+// passa allo stato autenticato senza che l'utente rifaccia il login dopo un
+// refresh - cosa che con Basic in memoria era impossibile.
+//
+// Un 401 qui e' l'esito normale di "non c'e' sessione" e non produce un
+// messaggio di errore.
+loginView.hidden = false;
+appView.hidden = true;
+restore().catch((error) => {
+  loginError.textContent = error.message || '';
+});

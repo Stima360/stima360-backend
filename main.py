@@ -21,7 +21,7 @@ from core import service as core_service
 from core.router import router as core_router
 from core.scope import system_context_for_public_stima
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context, require_operator
+from operator_auth.dependencies import legacy_basic_agency_context, require_authenticated_operator, require_operator
 from operator_auth.router import router as operator_auth_router
 from property.router import router as property_router
 from buy.router import router as buy_router
@@ -59,33 +59,55 @@ app = FastAPI()
 # /login must stay reachable unauthenticated.
 app.include_router(operator_auth_router)
 
-# Additive STIMA360 CORE CRM routes. Legacy routes remain unchanged.
+# P26-3 - THE OPERATOR SESSION REACHES THE OS SHELL'S WHOLE SURFACE.
 #
-# require_operator accepts both approved channels: an operator session cookie
+# `require_operator` accepts both approved channels: an operator session cookie
 # first, else the legacy ADMIN_USER/ADMIN_PASS credential resolved server-side
-# into a Default-Agency-bound scope (design spec D-2). Every other router below
-# keeps require_admin byte for byte - D-1 confines the operator session to
-# /api/operator-auth/* and /api/core/*.
+# into a Default-Agency-bound scope (design spec D-2). Until P26-3 only CORE
+# was mounted on it, and D-1 confined the session to /api/operator-auth/* and
+# /api/core/*. The OS Shell now authenticates with the cookie, and it calls
+# PROPERTY, BUY, MATCH, CRM, PROPOSAL, SALE, FLOW, PROPERTY WATCH and NEXT BEST
+# ACTION - so leaving those on `require_admin` would have meant a Shell that
+# logs in and is then refused everywhere but CORE.
+#
+# This is a WIDENING of D-1 and is meant to be read as one. What it does not do
+# is weaken anything: `require_authenticated_operator` verifies the same legacy
+# credential through the same `admin_security.require_admin`, so every existing
+# Basic caller - the six legacy admin pages, any script - keeps working
+# unchanged. What changes is that a cookie now also authenticates, and that a
+# real operator gets their OWN agency instead of the Default one.
+#
+# The mounts below admit; they do not scope. Each route still takes
+# `legacy_basic_agency_context`, which is where the agency is decided. Mounting
+# them on `require_operator` instead would have resolved the Default Agency
+# twice per legacy request - FastAPI caches per callable, and those are two.
+#
+# OWNER Admin and the OWNER Portal are deliberately NOT here. The OS Shell does
+# not call them; the portal authenticates owners, not operators; and OWNER
+# Admin keeps `require_owner_admin` so P26-6C's admission proof stands.
+#
+# Basic is confined or removed in P26-5. Until then it is a second, equal way in
+# on every router below, and that is why GATE-MA1 stays OPEN.
 app.include_router(core_router, dependencies=[Depends(require_operator)])
 
 # Additive PROPERTY 0.1 routes. CORE and legacy routes remain unchanged.
-app.include_router(property_router, dependencies=[Depends(require_admin)])
-app.include_router(buy_router, dependencies=[Depends(require_admin)])
-app.include_router(match_router, dependencies=[Depends(require_admin)])
-app.include_router(crm_router, dependencies=[Depends(require_admin)])
-app.include_router(proposal_router, dependencies=[Depends(require_admin)])
-app.include_router(sale_router, dependencies=[Depends(require_admin)])
+app.include_router(property_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(buy_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(match_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(crm_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(proposal_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(sale_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(flow_router)
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
 
 # Additive P17 Seller Intelligence routes. CORE and legacy routes remain
-# unchanged; same admin auth pattern as every other domain router above.
-app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])
-app.include_router(followup_router, dependencies=[Depends(require_admin)])
-app.include_router(seller_intent_router, dependencies=[Depends(require_admin)])
-app.include_router(property_watch_router, dependencies=[Depends(require_admin)])
-app.include_router(next_best_action_router, dependencies=[Depends(require_admin)])
+# unchanged; same dual-channel dependency as every other domain router above.
+app.include_router(seller_intelligence_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(followup_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(seller_intent_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(property_watch_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(next_best_action_router, dependencies=[Depends(require_authenticated_operator)])
 
 
 def _public_stima_system_context(conn):

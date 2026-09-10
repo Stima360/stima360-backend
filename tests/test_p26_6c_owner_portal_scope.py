@@ -247,6 +247,7 @@ def test_6_the_portal_router_has_no_operator_context():
     """An owner is not an operator. The portal must not acquire that surface."""
     source = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
     assert "legacy_basic_agency_context" not in source
+    assert "basic_only_agency_context" not in source
     assert "OperatorContext" not in source
     assert "require_owner_admin" not in source
     assert "current_owner" in source

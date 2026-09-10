@@ -8,7 +8,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import basic_only_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from .schemas import (
     AccessCreate,
@@ -123,47 +123,47 @@ def x(f, *a, **kw):
 
 
 @router.get("/dashboard")
-def dash(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def dash(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.dashboard, agency_of(ctx))
 
 
 @router.get("/accounts")
-def accounts(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def accounts(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.list_accounts, agency_of(ctx))}
 
 
 @router.post("/accounts", status_code=201)
-def account(p: AccountCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def account(p: AccountCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.create_account, agency_of(ctx), p.model_dump())
 
 
 @router.post("/accounts/{i}/disable")
-def disable(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def disable(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.set_account, agency_of(ctx), i, "disabled")
 
 
 @router.post("/accounts/{i}/enable")
-def enable(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def enable(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.set_account, agency_of(ctx), i, "active")
 
 
 @router.get("/access")
-def access(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def access(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.list_access, agency_of(ctx))}
 
 
 @router.post("/access", status_code=201)
-def access_create(p: AccessCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def access_create(p: AccessCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.create_access, agency_of(ctx), p.model_dump())
 
 
 @router.post("/access/{i}/revoke")
-def revoke(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def revoke(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.revoke_access, agency_of(ctx), i)
 
 
 @router.post("/accounts/{i}/tokens")
-def token(i: int, p: TokenCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def token(i: int, p: TokenCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     row, raw = x(r.create_token, agency_of(ctx), i, p.token_type, p.expires_minutes, p.created_by)
     return {
         "token_id": row["id"],
@@ -174,42 +174,42 @@ def token(i: int, p: TokenCreate, ctx: OperatorContext = Depends(legacy_basic_ag
 
 
 @router.get("/publications")
-def pubs(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def pubs(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.list_publications, agency_of(ctx))}
 
 
 @router.post("/publications", status_code=201)
-def pub(p: PublicationCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def pub(p: PublicationCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.create_publication, agency_of(ctx), p.model_dump())
 
 
 @router.patch("/publications/{i}")
-def edit(i: int, p: PublicationUpdate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def edit(i: int, p: PublicationUpdate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.update_publication, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
 @router.post("/publications/{i}/publish")
-def publish(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def publish(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.publish, agency_of(ctx), i)
 
 
 @router.post("/publications/{i}/archive")
-def archive(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def archive(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.archive, agency_of(ctx), i)
 
 
 @router.post("/publications/{i}/supersede", status_code=201)
-def supersede(i: int, p: PublicationCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def supersede(i: int, p: PublicationCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.supersede, agency_of(ctx), i, p.model_dump())
 
 
 @router.get("/feedback")
-def feedback(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def feedback(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.admin_list_feedback, agency_of(ctx))}
 
 
 @router.patch("/feedback/{i}")
-def feedback_status(i: int, p: FeedbackStatus, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def feedback_status(i: int, p: FeedbackStatus, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.update_feedback_status, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
@@ -221,7 +221,7 @@ def documents(
     document_type: SharedDocumentType | None = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+    ctx: OperatorContext = Depends(basic_only_agency_context),
 ):
     items = x(
         r.list_shared_documents,
@@ -237,7 +237,7 @@ def documents(
 
 
 @router.post("/documents", status_code=201)
-def document_create(p: SharedDocumentCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_create(p: SharedDocumentCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.create_shared_document, agency_of(ctx), p.model_dump())
 
 
@@ -254,7 +254,7 @@ def document_upload(
     expires_at: datetime | None = Form(None),
     acknowledgement_required: bool = Form(False),
     created_by: str | None = Form(None, max_length=200),
-    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+    ctx: OperatorContext = Depends(basic_only_agency_context),
 ):
     max_bytes, chunk_size = upload_limits_from_env()
     staged = x(
@@ -293,42 +293,42 @@ def document_storage_health():
 
 
 @router.get("/documents/{i}")
-def document_detail(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_detail(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.get_shared_document, agency_of(ctx), i)
 
 
 @router.patch("/documents/{i}")
-def document_update(i: int, p: SharedDocumentUpdate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_update(i: int, p: SharedDocumentUpdate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.update_shared_document, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
 @router.post("/documents/{i}/publish")
-def document_publish(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_publish(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.publish_shared_document, agency_of(ctx), i)
 
 
 @router.post("/documents/{i}/revoke")
-def document_revoke(i: int, p: RevokeRequest, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_revoke(i: int, p: RevokeRequest, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.revoke_shared_document, agency_of(ctx), i, p.actor, p.reason)
 
 
 @router.post("/documents/{i}/archive")
-def document_archive(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_archive(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.archive_shared_document, agency_of(ctx), i)
 
 
 @router.post("/documents/{i}/supersede", status_code=201)
-def document_supersede(i: int, p: SharedDocumentSupersede, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_supersede(i: int, p: SharedDocumentSupersede, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.supersede_shared_document, agency_of(ctx), i, p.model_dump())
 
 
 @router.get("/documents/{i}/reads")
-def document_reads(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_reads(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.shared_document_reads, agency_of(ctx), i)}
 
 
 @router.get("/documents/{i}/download")
-def document_download(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def document_download(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     item = x(r.prepare_admin_shared_document_download, agency_of(ctx), i)
     headers = {
         "Content-Disposition": safe_content_disposition(item["filename"]),
@@ -361,7 +361,7 @@ def visit_feedback(
     category: VisitFeedbackCategory | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+    ctx: OperatorContext = Depends(basic_only_agency_context),
 ):
     items = x(
         r.list_visit_feedback_publications,
@@ -378,35 +378,35 @@ def visit_feedback(
 
 
 @router.get("/visit-feedback/{i}")
-def visit_feedback_detail(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_detail(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.get_visit_feedback_publication, agency_of(ctx), i)
 
 
 @router.post("/visit-feedback", status_code=201)
-def visit_feedback_create(p: VisitFeedbackCreate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_create(p: VisitFeedbackCreate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.create_visit_feedback_publication, agency_of(ctx), p.model_dump())
 
 
 @router.patch("/visit-feedback/{i}")
-def visit_feedback_update(i: int, p: VisitFeedbackUpdate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_update(i: int, p: VisitFeedbackUpdate, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.update_visit_feedback_publication, agency_of(ctx), i, p.model_dump(exclude_unset=True))
 
 
 @router.post("/visit-feedback/{i}/publish")
-def visit_feedback_publish(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_publish(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.publish_visit_feedback, agency_of(ctx), i)
 
 
 @router.post("/visit-feedback/{i}/archive")
-def visit_feedback_archive(i: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_archive(i: int, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.archive_visit_feedback, agency_of(ctx), i)
 
 
 @router.post("/visit-feedback/{i}/supersede", status_code=201)
-def visit_feedback_supersede(i: int, p: VisitFeedbackSupersede, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def visit_feedback_supersede(i: int, p: VisitFeedbackSupersede, ctx: OperatorContext = Depends(basic_only_agency_context)):
     return x(r.supersede_visit_feedback, agency_of(ctx), i, p.model_dump())
 
 
 @router.get("/audit")
-def audit(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+def audit(ctx: OperatorContext = Depends(basic_only_agency_context)):
     return {"items": x(r.audits, agency_of(ctx))}

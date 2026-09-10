@@ -1476,13 +1476,45 @@ def test_session_path_reads_only_the_cookie():
 
 
 def test_the_cookie_is_read_in_exactly_one_place():
-    """One reader means one place to get the session rules wrong."""
+    """One reader of the cookie's VALUE means one place to get the rules wrong.
+
+    P26-3 added a second function that names COOKIE_NAME, and the distinction
+    between the two is exactly what this test now pins. `optional_session`
+    resolves the token: it is the only code that may turn a cookie into a
+    session, and therefore the only place the session rules live.
+    `session_was_presented` answers a strictly poorer question - was there a
+    cookie at all - which it needs so that a REFUSED cookie does not fall
+    through to the legacy credential.
+
+    That second function must stay poor. If it ever did anything with the
+    value, there would be two readers again and one of them unreviewed, so the
+    assertions below are on its shape: a single return of a `bool(...)`, and no
+    binding of the value to a name that could carry it further.
+    """
     tree = ast.parse(DEPS_SOURCE.read_text(encoding="utf-8"))
     readers = [
         node.name for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and "COOKIE_NAME" in ast.unparse(node)
     ]
-    assert readers == ["optional_session"], readers
+    assert readers == ["optional_session", "session_was_presented"], readers
+
+    presence = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "session_was_presented"
+    )
+    statements = [n for n in presence.body if not (
+        isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+    )]
+    assert len(statements) == 1 and isinstance(statements[0], ast.Return), (
+        "session_was_presented must be one return statement and nothing else"
+    )
+    returned = statements[0].value
+    assert (isinstance(returned, ast.Call)
+            and getattr(returned.func, "id", None) == "bool"), (
+        "session_was_presented must return a bool, so the cookie's value "
+        f"cannot escape it: {ast.unparse(returned)}"
+    )
+    assert presence.returns is not None and ast.unparse(presence.returns) == "bool"
 
 
 def test_the_legacy_channel_does_not_parse_the_header_by_hand():
@@ -1582,10 +1614,18 @@ def test_the_compatibility_context_is_the_only_basic_aware_function():
                 node.body = node.body[1:] or [ast.Pass()]
             if "legacy_basic" in ast.unparse(node) or "require_admin" in ast.unparse(node):
                 basic_aware.append(node.name)
+    # P26-3 split the choosing from the building: `require_operator` no longer
+    # names the legacy channel at all - it asks `_scope_from_session_or_basic`
+    # for a scope and refuses if there is none, and that helper names neither
+    # `legacy_basic` nor `require_admin` either. Five functions know about the
+    # channel, each for exactly one reason, and the list is in source order so
+    # that a new one cannot be slipped in unnoticed.
     assert basic_aware == [
-        "require_operator",             # chooses the channel
-        "_verify_legacy_credentials",   # verifies it, via require_admin
-        "legacy_basic_agency_context",  # builds the agency-bound scope
+        "require_authenticated_operator",  # admits either channel, no scope
+        "_default_agency_context",         # builds the legacy scope
+        "basic_only_agency_context",       # the same scope, for a Basic-only mount
+        "_verify_legacy_credentials",      # verifies the credential, via require_admin
+        "legacy_basic_agency_context",     # refuses the way require_admin used to
     ], basic_aware
 
 
@@ -1613,11 +1653,24 @@ def test_require_operator_returns_only_a_context_or_raises():
         n for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "require_operator"
     )
+    # P26-3: the two channels moved into `_scope_from_session_or_basic`, so
+    # this function now has one return - and the property being asserted is
+    # unchanged: it yields a context or raises, never None.
     returns = [ast.unparse(n.value) for n in ast.walk(node) if isinstance(n, ast.Return)]
-    assert returns == ["session.context", "legacy_basic_agency_context(username)"], returns
+    assert returns == ["context"], returns
     raises = [ast.unparse(n) for n in ast.walk(node) if isinstance(n, ast.Raise)]
     assert any("401" in r for r in raises), raises
     assert "None" not in returns
+
+    # And the helper it delegates to is the one that knows both channels.
+    helper = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_scope_from_session_or_basic"
+    )
+    # ast.walk is breadth-first, so compare the set: what matters is that the
+    # only things it can produce are the two scopes and None.
+    helper_returns = {ast.unparse(n.value) for n in ast.walk(helper) if isinstance(n, ast.Return)}
+    assert helper_returns == {"session.context", "_default_agency_context()", "None"}, helper_returns
 
 
 def test_router_is_mounted_in_main():
