@@ -626,16 +626,24 @@ FROZEN_UNSCOPED_APP_ROUTES: set[str] = set()
 # flow_executions and flow_suppressions a physical agency_id with per-table
 # triggers. The proof is tests/test_p26_6c_flow_isolation.py, and it is
 # recomputed from the router's AST rather than granted by this list.
-FROZEN_UNSCOPED_SELF_AUTH_ROUTERS = {
-    # OWNER has no tenant at all: not one owner_* table carries an agency_id,
-    # and `lookup_contacts` reads every agency's contacts by name and email.
-    # Scoping it requires deciding whether an owner account belongs to an
-    # agency or to the platform, and then a migration to record the answer.
-    # P26-6C pass 2 touched OWNER only where FLOW's event write needed a tenant
-    # OWNER already knew - a bridge argument, not a migration.
-    "owner_admin_router",
-    "owner_portal_router",
-}
+# OWNER left this set in P26-6C's OWNER pass. Emptying it is not a deletion: the two
+# routers are admitted on two DIFFERENT criteria, and both are recomputed from
+# the source by tests 46-50 rather than granted here.
+#
+#   owner_admin_router  - every route that reaches a tenant table takes
+#                         `legacy_basic_agency_context`, and every repository
+#                         function it calls takes `agency_id` as its first
+#                         parameter with no default.
+#   owner_portal_router - account-scoped by design and deliberately NOT given
+#                         an operator context. Every route derives its account
+#                         from `current_owner`, no route accepts an account or
+#                         an agency from the client, and every query that
+#                         follows `owner_property_access` requires the grant's
+#                         two roots to name the same agency.
+#
+# The set is empty. What keeps it empty is tests 46-50; what keeps it honest is
+# test 30, which now refuses to call GATE-MA1 closed on this evidence alone.
+FROZEN_UNSCOPED_SELF_AUTH_ROUTERS: set[str] = set()
 
 TENANT_TABLES = (
     "activities", "buy_requests", "contacts", "followup_actions", "leads",
@@ -776,29 +784,65 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
         if "require_admin" not in dependencies and "require_operator" not in dependencies:
             unguarded.add(symbol)
 
-    # operator_auth mounts bare because it *is* the authentication surface.
-    assert unguarded - {"operator_auth_router", "flow_router"} == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, (
-        sorted(unguarded - {"operator_auth_router", "flow_router"})
+    # operator_auth mounts bare because it *is* the authentication surface;
+    # FLOW and the two OWNER routers mount behind `require_owner_admin` or
+    # their own cookie session. All four are still invisible to G5 - that has
+    # not changed - but none is unsafe any more, so they are excluded by name
+    # and the residual set is empty.
+    self_authenticating = {
+        "operator_auth_router", "flow_router",
+        "owner_admin_router", "owner_portal_router",
+    }
+    assert unguarded - self_authenticating == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, (
+        sorted(unguarded - self_authenticating)
+    )
+    # And the four are actually the ones mounting unguarded: if one of them
+    # started going through require_admin, this list would be stale.
+    assert unguarded == self_authenticating, sorted(unguarded)
+
+
+def test_30_category_e_is_empty_and_that_is_necessary_but_not_sufficient():
+    """The gate's own rule, asserted rather than remembered.
+
+    Category E is now empty: every tenant surface this suite can see derives
+    its agency server-side. That is the NECESSARY condition for GATE-MA1, and
+    it is the only one a static suite can establish.
+
+    It is not sufficient, and this test says so in the one place someone will
+    look. What is still missing is evidence no test in this repository can
+    produce:
+
+      * the platform-wide hostile A/B matrix on TEST, with two real agencies
+        and two real operators - that is P26-6 - covering read, write,
+        direct-id and relationship attempts across every domain;
+      * the census of rows already stored: grants, feedback and notifications
+        whose two roots disagree are now HIDDEN by every query, not repaired,
+        and nobody has counted them;
+      * batch and worker isolation; the OS Shell moving to the operator session
+        (P26-4); and legacy Basic being confined or removed (P26-5).
+
+    So: category E empty, GATE-MA1 still OPEN until the P26-6 matrix runs.
+    Anyone who wants to close it has to change this test, and changing it means
+    saying which of the three above has been done.
+    """
+    residual = FROZEN_UNSCOPED_APP_ROUTES | FROZEN_UNSCOPED_SELF_AUTH_ROUTERS
+    assert residual == set(), (
+        "category E is populated again: " + str(sorted(residual))
+    )
+
+    # The rule, stated as code so it cannot be misremembered: an empty residual
+    # is what makes the gate *closable*, not what closes it.
+    gate_may_close = not residual and LIVE_HOSTILE_MATRIX_PASSED
+    assert not gate_may_close, (
+        "GATE-MA1 would be closable - flip LIVE_HOSTILE_MATRIX_PASSED only "
+        "when the P26-6 live A/B run on TEST has actually passed"
     )
 
 
-def test_30_gate_ma1_cannot_be_declared_closed_while_category_e_is_populated():
-    """The gate's own rule, asserted rather than remembered.
-
-    G5's residual going empty is a statement about routers that read CORE over
-    Basic. It is not the same claim as "no unscoped tenant surface remains",
-    and this test exists so the two are never confused in either direction: if
-    someone empties the two frozen sets above without doing the work, this
-    fails; if they do the work, this is the test that has to be updated to say
-    the gate may close.
-    """
-    residual = FROZEN_UNSCOPED_APP_ROUTES | FROZEN_UNSCOPED_SELF_AUTH_ROUTERS
-    assert residual, "category E is empty - GATE-MA1 may now be re-evaluated"
-    # Two OWNER routers remain. Pass 1 emptied FROZEN_UNSCOPED_APP_ROUTES and
-    # pass 2 removed FLOW; these are what is left, and while they are here the
-    # gate stays OPEN.
-    assert residual == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, sorted(residual)
-    assert residual == {"owner_admin_router", "owner_portal_router"}, sorted(residual)
+# The one thing this repository cannot prove about itself. It is a constant
+# rather than a comment so that test 30 can compute the gate's verdict instead
+# of describing it, and so that flipping it is a visible, reviewable diff.
+LIVE_HOSTILE_MATRIX_PASSED = False
 
 
 # ===========================================================================
@@ -1130,3 +1174,311 @@ def test_45_no_admin_route_accepts_a_client_supplied_agency():
 
     for model in (DeleteRequest, LeadUpdate):
         assert "agency_id" not in model.model_fields, model
+
+
+# ===========================================================================
+# OWNER PASS - WHY THE TWO OWNER ROUTERS ARE ADMITTED (tests 46-50)
+#
+# Emptying FROZEN_UNSCOPED_SELF_AUTH_ROUTERS is a claim, and a set with nothing
+# in it makes no claim at all. These five tests are the claim: they recompute,
+# from the source, the property that admits each router - and they do it
+# inter-procedurally, because the tenant predicate usually lives one call down,
+# in a helper, or in a module constant spliced into the SQL.
+#
+# Two routers, two DIFFERENT criteria, deliberately not merged:
+#
+#   owner_admin_router   an operator surface. Every route that reaches a tenant
+#                        table takes `legacy_basic_agency_context`, and every
+#                        repository function it calls takes `agency_id` first,
+#                        with no default, so forgetting the tenant is a
+#                        TypeError rather than an unfiltered query.
+#
+#   owner_portal_router  an owner surface, and NOT an operator one. It has no
+#                        agency context by design; its identity is the session
+#                        cookie. What admits it is that no route accepts an
+#                        account or an agency from the client, and that every
+#                        query following `owner_property_access` requires the
+#                        grant's two roots to name the same agency.
+#
+# Collapsing the two into one rule would be worse than leaving them apart: the
+# portal would then have to grow an operator context it must not have.
+# ===========================================================================
+
+OWNER_REPOSITORY = ROOT / "owner" / "repository.py"
+OWNER_LOOKUPS = ROOT / "owner" / "admin_lookup_repository.py"
+
+OWNER_TENANT_TABLES = frozenset({
+    "contacts", "leads", "activities", "tasks",
+    "properties", "property_contacts", "property_leads",
+    "property_documents", "property_visits",
+    "owner_accounts", "owner_property_access", "owner_access_tokens",
+    "owner_sessions", "owner_publications", "owner_publication_reads",
+    "owner_feedback", "owner_audit_log", "owner_shared_documents",
+    "owner_document_reads", "owner_visit_feedback_publications",
+    "owner_notifications", "owner_notification_preferences",
+})
+
+_SQL_SOURCE = re.compile(r"(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_]+)", re.IGNORECASE)
+_TENANT_PARAMETER = re.compile(r"agency_id\s*=\s*%s", re.IGNORECASE)
+_GRANT_ROOTS_AGREE = re.compile(r"ct_g\.agency_id\s*=\s*p_g\.agency_id", re.IGNORECASE)
+
+
+def _module_index(path):
+    """(function bodies by name, module-level constant text, ast tree)."""
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    bodies = {
+        node.name: (ast.get_source_segment(text, node) or "")
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    constants = "\n".join(
+        ast.get_source_segment(text, node) or ""
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+    )
+    return bodies, constants, tree
+
+
+def _reachable_source(name, bodies, constants, seen=None):
+    """The function's body plus every module function it calls, transitively.
+
+    Also splices in any module-level constant it names, because the OWNER
+    portal builds three of its predicates from `_COHERENT_GRANT` and
+    `_GRANT_ROOTS_AGREE` rather than writing them inline. Without this the
+    analysis would report nine unscoped portal queries that are in fact
+    constrained - which is exactly the mistake a first pass made.
+    """
+    seen = seen if seen is not None else set()
+    if name in seen or name not in bodies:
+        return ""
+    seen.add(name)
+    body = bodies[name]
+    collected = [body]
+    for called in set(re.findall(r"\b(_?[a-z][a-z0-9_]*)\s*\(", body)):
+        if called in bodies and called != name:
+            collected.append(_reachable_source(called, bodies, constants, seen))
+    for constant in set(re.findall(r"\b(_[A-Z][A-Z0-9_]*)\b", body)):
+        found = re.search(rf"^{constant}\s*=.*?(?=^\w|\Z)", constants, re.M | re.S)
+        if found:
+            collected.append(found.group(0))
+    return "\n".join(collected)
+
+
+def _tenant_tables_reached(source):
+    return {t.lower() for t in _SQL_SOURCE.findall(source)} & OWNER_TENANT_TABLES
+
+
+_AUDIT_SELECT = re.compile(r"SELECT(?:.|\n)*?FROM\s+owner_audit_log", re.IGNORECASE)
+
+
+def _writes_only_the_audit_log(source):
+    """True for a helper that appends to owner_audit_log and reads nothing.
+
+    A derived property, not a name: the only tenant table it reaches is the
+    audit log, and it never SELECTs from it. Such a helper cannot return
+    another agency's data, and the account and property it records come from an
+    item the route has already authorised - so requiring an agency it would
+    only pass through would be ceremony, not a control.
+
+    Written as a shape so it covers the four `audit_*_denied` siblings too, and
+    so that widening it - a SELECT appearing, or a second tenant table - takes
+    the exemption away by itself. Test 51 is the regression for that.
+    """
+    return (
+        _tenant_tables_reached(source) == {"owner_audit_log"}
+        and not _AUDIT_SELECT.search(source)
+    )
+
+
+def _routes_with_repository_calls(path):
+    """{route name: (repository functions it calls, its own source)}."""
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    routes = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(
+            isinstance(decorator, ast.Call)
+            and getattr(decorator.func, "attr", None) in {"get", "post", "patch", "put", "delete"}
+            for decorator in node.decorator_list
+        ):
+            continue
+        body = ast.get_source_segment(text, node) or ""
+        routes[node.name] = (set(re.findall(r"\br\.([a-z_]+)", body)), body)
+    return routes
+
+
+def _takes_agency_first(name, tree):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            arguments = node.args.args
+            if not arguments or arguments[0].arg != "agency_id":
+                return False
+            defaults = node.args.defaults
+            # A default on the first parameter would mean it can be omitted.
+            return len(defaults) < len(arguments)
+    return True          # not a repository function; nothing to require
+
+
+def test_46_every_owner_admin_route_that_reaches_a_tenant_table_takes_the_context():
+    """Derived, not listed. The set of routes needing a context is computed
+    from what their repository calls actually touch."""
+    admin_bodies, admin_constants, admin_tree = _module_index(OWNER_REPOSITORY)
+    lookup_bodies, lookup_constants, lookup_tree = _module_index(OWNER_LOOKUPS)
+
+    unscoped = []
+    for path, bodies, constants in (
+        (ROOT / "owner" / "router_admin.py", admin_bodies, admin_constants),
+        (ROOT / "owner" / "router_admin_lookups.py", lookup_bodies, lookup_constants),
+    ):
+        for route, (calls, route_source) in sorted(_routes_with_repository_calls(path).items()):
+            reaches_tenant = any(
+                _tenant_tables_reached(reachable)
+                and not _writes_only_the_audit_log(reachable)
+                for fn in calls
+                for reachable in [_reachable_source(fn, bodies, constants)]
+            )
+            if not reaches_tenant:
+                continue
+            if "legacy_basic_agency_context" not in route_source:
+                unscoped.append((route, sorted(calls)))
+    assert unscoped == [], unscoped
+
+
+def test_47_every_owner_admin_repository_function_requires_the_agency_first():
+    """A default, or a tenant in second place, would let a caller omit it."""
+    admin_bodies, admin_constants, admin_tree = _module_index(OWNER_REPOSITORY)
+    lookup_bodies, lookup_constants, lookup_tree = _module_index(OWNER_LOOKUPS)
+
+    offenders = []
+    for path, bodies, constants, tree in (
+        (ROOT / "owner" / "router_admin.py", admin_bodies, admin_constants, admin_tree),
+        (ROOT / "owner" / "router_admin_lookups.py", lookup_bodies, lookup_constants, lookup_tree),
+    ):
+        for route, (calls, _) in sorted(_routes_with_repository_calls(path).items()):
+            for fn in sorted(calls):
+                if fn not in bodies:
+                    continue
+                reachable = _reachable_source(fn, bodies, constants)
+                if not _tenant_tables_reached(reachable):
+                    continue
+                if _writes_only_the_audit_log(reachable):
+                    continue
+                if not _takes_agency_first(fn, tree):
+                    offenders.append((route, fn))
+    assert offenders == [], offenders
+
+
+def test_48_the_owner_portal_takes_no_agency_and_no_account_from_the_client():
+    """The portal's identity is the cookie. A route parameter named for an
+    account or an agency would be a second, client-controlled identity."""
+    text = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
+    assert "legacy_basic_agency_context" not in text
+    assert "OperatorContext" not in text
+
+    tree = ast.parse(text)
+    routed, session_bound, offenders = set(), set(), []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(
+            isinstance(decorator, ast.Call)
+            and getattr(decorator.func, "attr", None) in {"get", "post", "patch", "put", "delete"}
+            for decorator in node.decorator_list
+        ):
+            continue
+        routed.add(node.name)
+        for argument in node.args.args:
+            if argument.arg in {"agency_id", "agency", "owner_account_id", "account_id", "account"}:
+                offenders.append((node.name, argument.arg))
+        for default in node.args.defaults:
+            if (
+                isinstance(default, ast.Call)
+                and getattr(default.func, "id", None) == "Depends"
+                and default.args
+                and getattr(default.args[0], "id", None) == "current_owner"
+            ):
+                session_bound.add(node.name)
+
+    assert offenders == [], offenders
+    # Only the two routes that cannot have a session yet are exempt.
+    assert routed - session_bound == {"login", "logout"}, sorted(routed - session_bound)
+
+
+def test_49_every_portal_query_that_follows_a_grant_requires_the_two_roots_to_agree():
+    """The portal's whole authorisation model is the grant, so a grant whose
+    two roots disagree must not be followable. Computed through the helpers and
+    the module constants, because that is where the predicate lives."""
+    bodies, constants, _ = _module_index(OWNER_REPOSITORY)
+
+    offenders = []
+    for route, (calls, _) in sorted(_routes_with_repository_calls(ROOT / "owner" / "router_portal.py").items()):
+        for fn in sorted(calls):
+            if fn not in bodies:
+                continue
+            reachable = _reachable_source(fn, bodies, constants)
+            if "owner_property_access" not in reachable:
+                continue
+            if not _GRANT_ROOTS_AGREE.search(reachable):
+                offenders.append((route, fn))
+    assert offenders == [], offenders
+
+
+def test_50_the_two_routers_are_admitted_on_two_different_criteria():
+    """Stated as an assertion so the distinction cannot quietly collapse.
+
+    If the portal ever acquired an operator context it would stop being an
+    owner surface; if the admin router ever lost one it would stop being an
+    operator surface. Both are failures, and neither is caught by the other
+    router's test.
+    """
+    admin = (ROOT / "owner" / "router_admin.py").read_text(encoding="utf-8")
+    portal = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
+
+    assert "legacy_basic_agency_context" in admin
+    assert "legacy_basic_agency_context" not in portal
+    assert "current_owner" in portal
+    assert "current_owner" not in admin
+
+    # And the mount-level authentication of each is unchanged: FLOW depends on
+    # the admin one, and the portal's cookie is the owner's only credential.
+    assert "dependencies=[Depends(require_owner_admin)]" in admin
+    assert 'realm="STIMA360 OWNER Admin"' in admin
+    flow = (ROOT / "flow" / "router.py").read_text(encoding="utf-8")
+    assert "from owner.router_admin import require_owner_admin" in flow
+
+
+def test_51_the_audit_write_exemption_is_a_shape_and_not_a_list():
+    """It must apply to exactly the helpers that append and read nothing.
+
+    Two directions. A helper that only writes the audit log is exempt - and the
+    four that do are found by the shape, never named. A helper that reads any
+    tenant table, including the audit log itself, is not: `audits` reads it and
+    is agency-bound, and would be caught if it ever lost its predicate.
+    """
+    bodies, constants, tree = _module_index(OWNER_REPOSITORY)
+
+    exempt = {
+        name for name in bodies
+        if _writes_only_the_audit_log(_reachable_source(name, bodies, constants))
+    }
+    # Every exempt helper writes the audit log and nothing else.
+    assert exempt, "the exemption matches nothing - the shape is wrong"
+    for name in exempt:
+        reachable = _reachable_source(name, bodies, constants)
+        assert "INSERT INTO owner_audit_log" in reachable, name
+        assert _tenant_tables_reached(reachable) == {"owner_audit_log"}, name
+
+    # The reader of the audit log is NOT exempt, and is agency-bound.
+    assert "audits" not in exempt
+    assert _takes_agency_first("audits", tree)
+    audits_source = _reachable_source("audits", bodies, constants)
+    assert _TENANT_PARAMETER.search(audits_source), audits_source
+
+    # And no function that touches a second tenant table can slip in.
+    for name in exempt:
+        reachable = _reachable_source(name, bodies, constants)
+        assert "owner_property_access" not in reachable, name
+        assert "owner_shared_documents" not in reachable, name
