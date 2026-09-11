@@ -9,6 +9,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import pathlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -711,114 +712,133 @@ def _runner_env(monkeypatch):
     return values
 
 
-def test_runner_requires_base_url_and_never_defaults_to_production(monkeypatch, capsys):
-    runner = _runner_module()
-    monkeypatch.delenv("FLOW_AUTOMATION_BASE_URL", raising=False)
-    called = Mock(side_effect=AssertionError("HTTP must not run without config"))
-    monkeypatch.setattr(runner.requests, "post", called)
-    assert runner.main() == 1
-    assert "configuration" in capsys.readouterr().out.lower()
-    called.assert_not_called()
+# I sette test che seguivano esercitavano il TRASPORTO HTTP: URL, header di
+# autenticazione, timeout, validazione del JSON di risposta. Quel trasporto non
+# esiste piu', quindi non e' rimasto niente da esercitare in quella forma.
+#
+# L'intento pero' sopravvive quasi tutto, e vive qui sotto tradotto: ordine
+# delle fasi, scan in modalita' live senza rule_codes, un guasto applicativo
+# nella recovery che NON ferma lo scan, un guasto tecnico che invece lo ferma,
+# saturazione, configurazione numerica invalida, log sanitizzati.
+#
+# Una sola copertura sparisce davvero: la validazione del contratto JSON della
+# risposta. Era una difesa contro un corpo HTTP malformato, e senza HTTP non
+# c'e' un corpo da validare - le funzioni applicative restituiscono dizionari
+# costruiti da `_recover_events`, la cui forma e' gia' fissata dai test di
+# quel modulo.
 
 
-def test_runner_calls_recovery_then_live_scan_with_auth_timeouts_and_no_rule_codes(monkeypatch):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
-    calls = []
-    responses = iter([
-        FakeResponse({"status": "completed", "requested_limit": 25, "processed": 1, "ignored": 0, "failed": 0, "busy": 0}),
-        FakeResponse({"status": "completed", "requested_limit": 40, "processed": 3, "successes": 3, "failures": 0, "skips": 0}),
-    ])
+def test_runner_scan_e_live_e_non_filtra_per_regola(cron, monkeypatch):
+    """Modalita' live, nessun `rule_codes`: era il contratto del runner HTTP e
+    resta quello, perche' un cron che girasse in simulazione non produrrebbe
+    alcun effetto e nessuno se ne accorgerebbe."""
+    from flow import service as flow_service
 
-    def post(url, **kwargs):
-        calls.append((url, kwargs))
-        return next(responses)
+    visti = []
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1])
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency",
+                        lambda a, l: {"status": "completed", "requested_limit": l,
+                                      "processed": 0, "ignored": 0, "failed": 0,
+                                      "busy": 0, "items": []})
 
-    monkeypatch.setattr(runner.requests, "post", post)
-    assert runner.main() == 0
-    assert [url.rsplit("/api/flow/", 1)[1] for url, _ in calls] == ["events/recover", "scan"]
-    assert calls[0][1]["json"] == {"limit": 25}
-    assert calls[1][1]["json"] == {"simulation": False, "limit": 40}
-    assert "rule_codes" not in calls[1][1]["json"]
-    assert calls[0][1]["auth"] == ("cron-user", "cron-secret")
-    assert calls[0][1]["timeout"] == (2.0, 30.0)
+    def scan(agency_id, payload):
+        visti.append(payload)
+        return {"status": "completed", "requested_limit": payload.limit,
+                "processed": 0, "successes": 0, "failures": 0, "skips": 0}
 
-
-def test_runner_continues_scan_after_application_recovery_failure_and_returns_two(monkeypatch):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
-    calls = []
-    responses = iter([
-        FakeResponse({"status": "partial_failure", "requested_limit": 25, "processed": 1, "ignored": 0, "failed": 1, "busy": 0}),
-        FakeResponse({"status": "completed", "requested_limit": 40, "processed": 1, "successes": 1, "failures": 0, "skips": 0}),
-    ])
-    monkeypatch.setattr(runner.requests, "post", lambda url, **kwargs: calls.append(url) or next(responses))
-    assert runner.main() == 2
-    assert len(calls) == 2
+    monkeypatch.setattr(flow_service, "scan_for_agency", scan)
+    assert cron.main(["--agency-id", "1"]) == 0
+    assert visti[0].simulation is False
+    assert visti[0].rule_codes is None
 
 
-@pytest.mark.parametrize("failure", ["network", "http", "json"])
-def test_runner_technical_recovery_failure_returns_one_without_http_retry_or_scan(monkeypatch, failure):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
-    calls = []
+def test_runner_un_guasto_applicativo_nella_recovery_non_ferma_lo_scan(cron, monkeypatch):
+    """Applicativo non e' tecnico: gli eventi problematici non impediscono di
+    valutare le regole, e l'esito resta 2."""
+    from flow import service as flow_service
 
-    def post(url, **kwargs):
-        calls.append(url)
-        if failure == "network":
-            raise runner.requests.ConnectionError("offline")
-        if failure == "http":
-            return FakeResponse({}, status_code=401, raw="secret response")
-        return FakeResponse(ValueError("invalid json"), raw="raw body")
-
-    monkeypatch.setattr(runner.requests, "post", post)
-    assert runner.main() == 1
-    assert len(calls) == 1
-
-
-def test_runner_saturation_is_exit_two(monkeypatch):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
-    responses = iter([
-        FakeResponse({"status": "completed", "requested_limit": 25, "processed": 0, "ignored": 0, "failed": 0, "busy": 0}),
-        FakeResponse({"status": "completed", "requested_limit": 40, "processed": 40, "successes": 40, "failures": 0, "skips": 0}),
-    ])
-    monkeypatch.setattr(runner.requests, "post", lambda *args, **kwargs: next(responses))
-    assert runner.main() == 2
+    chiamate = []
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1])
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency",
+                        lambda a, l: chiamate.append("recovery") or {
+                            "status": "partial_failure", "requested_limit": l,
+                            "processed": 1, "ignored": 0, "failed": 1, "busy": 0,
+                            "items": []})
+    monkeypatch.setattr(flow_service, "scan_for_agency",
+                        lambda a, p: chiamate.append("scan") or {
+                            "status": "completed", "requested_limit": p.limit,
+                            "processed": 1, "successes": 1, "failures": 0, "skips": 0})
+    assert cron.main(["--agency-id", "1"]) == 2
+    assert chiamate == ["recovery", "scan"]
 
 
-def test_runner_rejects_json_with_invalid_counter_contract(monkeypatch):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
-    calls = []
-    monkeypatch.setattr(runner.requests, "post", lambda url, **kwargs: calls.append(url) or FakeResponse({"status": "completed"}))
-    assert runner.main() == 1
-    assert len(calls) == 1
+def test_runner_un_guasto_tecnico_nella_recovery_ferma_lo_scan(cron, monkeypatch):
+    """Tecnico invece si': se la recovery ha sollevato, lo stato del tenant non
+    e' noto e lo scan lavorerebbe alla cieca."""
+    from flow import service as flow_service
+
+    chiamate = []
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1])
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency",
+                        lambda a, l: (_ for _ in ()).throw(RuntimeError("giu'")))
+    monkeypatch.setattr(flow_service, "scan_for_agency",
+                        lambda a, p: chiamate.append("scan"))
+    assert cron.main(["--agency-id", "1"]) == 1
+    assert chiamate == [], "lo scan e' partito dopo un guasto tecnico"
 
 
-def test_runner_logs_are_sanitized(monkeypatch, capsys):
-    runner = _runner_module()
-    values = _runner_env(monkeypatch)
-    responses = iter([
-        FakeResponse({"status": "completed", "requested_limit": 25, "processed": 0, "ignored": 0, "failed": 0, "busy": 0}, raw="RAW-RECOVERY-BODY"),
-        FakeResponse({"status": "completed", "requested_limit": 40, "processed": 0, "successes": 0, "failures": 0, "skips": 0}, raw="RAW-SCAN-BODY"),
-    ])
-    monkeypatch.setattr(runner.requests, "post", lambda *args, **kwargs: next(responses))
-    assert runner.main() == 0
-    output = capsys.readouterr().out
-    for secret in (values["ADMIN_USER"], values["ADMIN_PASS"], "RAW-RECOVERY-BODY", "RAW-SCAN-BODY", "Authorization"):
-        assert secret not in output
-    assert "phase=recovery" in output and "phase=scan" in output
+def test_runner_saturazione_e_esito_due(cron, monkeypatch, capsys):
+    """Il limite raggiunto significa che potrebbe esserci altro da fare."""
+    from flow import service as flow_service
+
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1])
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency",
+                        lambda a, l: {"status": "completed", "requested_limit": l,
+                                      "processed": 0, "ignored": 0, "failed": 0,
+                                      "busy": 0, "items": []})
+    monkeypatch.setattr(flow_service, "scan_for_agency",
+                        lambda a, p: {"status": "completed",
+                                      "requested_limit": p.limit, "processed": p.limit,
+                                      "successes": p.limit, "failures": 0, "skips": 0})
+    assert cron.main(["--agency-id", "1"]) == 2
+    assert "possible_saturation" in capsys.readouterr().out
 
 
-def test_runner_invalid_numeric_configuration_is_exit_one_without_http(monkeypatch):
-    runner = _runner_module()
-    _runner_env(monkeypatch)
+def test_runner_configurazione_numerica_invalida_e_esito_uno(cron, monkeypatch):
+    from flow import service as flow_service
+
+    chiamate = Mock()
     monkeypatch.setenv("FLOW_SCAN_LIMIT", "zero")
-    post = Mock()
-    monkeypatch.setattr(runner.requests, "post", post)
-    assert runner.main() == 1
-    post.assert_not_called()
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency", chiamate)
+    monkeypatch.setattr(flow_service, "scan_for_agency", chiamate)
+    assert cron.main(["--agency-id", "1"]) == 1
+    chiamate.assert_not_called()
+
+
+def test_runner_i_log_restano_sanitizzati(cron, monkeypatch, capsys):
+    """Nessun segreto nei log. Adesso e' piu' facile - non ci sono credenziali
+    da stampare - ma il controllo resta: i contatori non devono trascinarsi
+    dietro il contenuto degli eventi."""
+    from flow import service as flow_service
+
+    monkeypatch.setenv("ADMIN_USER", "utente-che-non-deve-comparire")
+    monkeypatch.setenv("ADMIN_PASS", "segreto-che-non-deve-comparire")
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1])
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency",
+                        lambda a, l: {"status": "completed", "requested_limit": l,
+                                      "processed": 0, "ignored": 0, "failed": 0,
+                                      "busy": 0,
+                                      "items": [{"event_id": 1, "payload": "CORPO-RISERVATO"}]})
+    monkeypatch.setattr(flow_service, "scan_for_agency",
+                        lambda a, p: {"status": "completed", "requested_limit": p.limit,
+                                      "processed": 0, "successes": 0, "failures": 0,
+                                      "skips": 0, "runs": ["DETTAGLIO-RISERVATO"]})
+    assert cron.main(["--agency-id", "1"]) == 0
+    output = capsys.readouterr().out
+    for segreto in ("utente-che-non-deve-comparire", "segreto-che-non-deve-comparire",
+                    "CORPO-RISERVATO", "DETTAGLIO-RISERVATO"):
+        assert segreto not in output
+    assert "phase=recovery.agency_1" in output and "phase=scan.agency_1" in output
 
 
 def test_runner_file_compiles_and_has_no_render_or_rule_activation_side_effects(tmp_path):
@@ -830,3 +850,221 @@ def test_runner_file_compiles_and_has_no_render_or_rule_activation_side_effects(
     assert "render.com" not in source
     assert "/activate" not in source
     assert "FLOW-R005" not in source
+
+
+# ---------------------------------------------------------------------------
+# CRON FLOW - il runner in-process
+#
+# Il cron autenticava con HTTP Basic su route diventate session-only: 401, exit
+# 1, e un log che diceva `http_or_network` perche' HTTPError e' sottoclasse di
+# RequestException. Invece di dare al cron un'identita' tecnica nuova, e'
+# stato tolto il trasporto: le funzioni applicative sono gia' per-agenzia, e
+# senza rete non c'e' nulla da autenticare.
+#
+# Questi test fissano il contratto di quel runner.
+# ---------------------------------------------------------------------------
+
+import ast
+import importlib
+
+import pytest
+
+
+@pytest.fixture()
+def cron():
+    return importlib.import_module("run_flow_p2b_cron")
+
+
+@pytest.fixture()
+def flow_double(monkeypatch, cron):
+    """Sostituisce le funzioni applicative e registra l'ordine delle chiamate."""
+    from flow import service as flow_service
+
+    chiamate = []
+
+    def recovery(agency_id, limit):
+        chiamate.append(("recovery", agency_id, limit))
+        if agency_id in getattr(recovery, "esplode", ()):
+            raise RuntimeError("recovery rotta")
+        return {"status": "completed", "requested_limit": limit,
+                "processed": 0, "ignored": 0, "failed": 0, "busy": 0, "items": []}
+
+    def scan(agency_id, payload):
+        chiamate.append(("scan", agency_id, payload.limit))
+        return {"status": "completed", "requested_limit": payload.limit,
+                "processed": 0, "successes": 0, "failures": 0, "skips": 0}
+
+    monkeypatch.setattr(flow_service, "recover_received_events_for_agency", recovery)
+    monkeypatch.setattr(flow_service, "scan_for_agency", scan)
+    monkeypatch.setattr(cron, "_active_agency_ids", lambda: [1, 2])
+    return chiamate, recovery
+
+
+def test_cron_modalita_singola_elabora_una_sola_agenzia(cron, flow_double):
+    chiamate, _ = flow_double
+    assert cron.main(["--agency-id", "2"]) == 0
+    assert [(fase, agenzia) for fase, agenzia, _ in chiamate] == [
+        ("recovery", 2), ("scan", 2)]
+
+
+def test_cron_modalita_multipla_elabora_tutte_le_attive(cron, flow_double):
+    chiamate, _ = flow_double
+    assert cron.main(["--all-agencies"]) == 0
+    assert [(fase, agenzia) for fase, agenzia, _ in chiamate] == [
+        ("recovery", 1), ("scan", 1), ("recovery", 2), ("scan", 2)]
+
+
+def test_cron_recovery_precede_sempre_lo_scan(cron, flow_double):
+    """La recovery sblocca gli eventi che lo scan deve poter valutare."""
+    chiamate, _ = flow_double
+    cron.main(["--all-agencies"])
+    for agenzia in (1, 2):
+        fasi = [f for f, a, _ in chiamate if a == agenzia]
+        assert fasi.index("recovery") < fasi.index("scan"), (agenzia, fasi)
+
+
+def test_cron_senza_modalita_non_parte(cron, flow_double, capsys):
+    """Nessun default implicito: il runner HTTP risolveva la Default senza
+    dirlo, e con una seconda agenzia attiva avrebbe continuato a servire solo
+    la prima."""
+    chiamate, _ = flow_double
+    assert cron.main([]) == 1
+    assert chiamate == []
+    assert "phase=config status=failed" in capsys.readouterr().out
+
+
+def test_cron_le_due_modalita_si_escludono(cron, flow_double):
+    chiamate, _ = flow_double
+    assert cron.main(["--agency-id", "1", "--all-agencies"]) == 1
+    assert chiamate == []
+
+
+def test_cron_rifiuta_una_agenzia_non_attiva(cron, flow_double, capsys):
+    """Sospesa non e' "attiva con zero righe": elaborarla la farebbe risultare
+    lavorata con successo."""
+    chiamate, _ = flow_double
+    assert cron.main(["--agency-id", "99"]) == 1
+    assert chiamate == []
+    assert "agenzia_non_attiva" in capsys.readouterr().out
+
+
+def test_cron_un_errore_su_A_non_impedisce_B_ma_esce_non_zero(cron, flow_double):
+    """La regola che rende utile la modalita' multipla: un tenant rotto non
+    sospende la piattaforma. Ma "abbiamo continuato" non e' "e' andato bene"."""
+    chiamate, recovery = flow_double
+    recovery.esplode = (1,)
+    esito = cron.main(["--all-agencies"])
+    agenzie = {a for _f, a, _l in chiamate}
+    assert 2 in agenzie, "B non e' stata elaborata dopo il fallimento di A"
+    assert ("scan", 1) not in [(f, a) for f, a, _ in chiamate], (
+        "lo scan di A e' partito nonostante la recovery di A sia fallita")
+    assert esito == 1, "un fallimento tecnico deve produrre un esito non-zero"
+
+
+def test_cron_rispetta_i_limiti_configurati(cron, flow_double, monkeypatch):
+    monkeypatch.setenv("FLOW_RECOVERY_LIMIT", "7")
+    monkeypatch.setenv("FLOW_SCAN_LIMIT", "9")
+    chiamate, _ = flow_double
+    cron.main(["--agency-id", "1"])
+    assert [(f, l) for f, _a, l in chiamate] == [("recovery", 7), ("scan", 9)]
+
+
+def test_cron_un_problema_applicativo_esce_2(cron, monkeypatch, flow_double):
+    from flow import service as flow_service
+
+    monkeypatch.setattr(flow_service, "scan_for_agency", lambda a, p: {
+        "status": "partial_failure", "requested_limit": p.limit,
+        "processed": 1, "successes": 0, "failures": 1, "skips": 0})
+    assert cron.main(["--agency-id", "1"]) == 2
+
+
+def test_cron_non_usa_ne_http_ne_basic(cron):
+    """LA REGRESSIONE DELL'INCIDENTE.
+
+    Strutturale e non testuale: il modulo non deve IMPORTARE `requests` ne'
+    leggere le credenziali condivise. Un controllo sulla stringa sarebbe
+    soddisfatto anche cancellando il commento che spiega perche' il trasporto
+    e' stato tolto.
+    """
+    albero = ast.parse(pathlib.Path(cron.__file__).read_text(encoding="utf-8"))
+    importati = {a.name.split(".")[0] for n in ast.walk(albero)
+                 if isinstance(n, ast.Import) for a in n.names}
+    importati |= {n.module.split(".")[0] for n in ast.walk(albero)
+                  if isinstance(n, ast.ImportFrom) and n.module}
+    for vietato in ("requests", "httpx", "urllib", "http"):
+        assert vietato not in importati, f"il cron importa {vietato}"
+
+    letture = {n.args[0].value for n in ast.walk(albero)
+               if isinstance(n, ast.Call)
+               and getattr(n.func, "attr", None) == "getenv"
+               and n.args and isinstance(n.args[0], ast.Constant)}
+    assert not (letture & {"ADMIN_USER", "ADMIN_PASS"}), (
+        f"il cron legge ancora le credenziali condivise: {letture}")
+
+
+def test_cron_porta_lo_scope_in_tutta_la_catena(cron):
+    """Chiama solo i gemelli per-agenzia.
+
+    `recover_received_events` e `scan` senza `agency_id` esistono ancora per il
+    router: una chiamata a quelli da qui sarebbe una passata cross-tenant che
+    nessun errore segnalerebbe.
+    """
+    albero = ast.parse(pathlib.Path(cron.__file__).read_text(encoding="utf-8"))
+    invocate = {n.func.attr for n in ast.walk(albero)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert "recover_received_events_for_agency" in invocate
+    assert "scan_for_agency" in invocate
+    for vietata in ("recover_received_events", "scan_for_all_agencies"):
+        assert vietata not in invocate, (
+            f"il cron chiama {vietata}: lo scope non e' piu' esplicito per agenzia")
+
+
+def test_cron_usa_solo_wrapper_db_approvati(cron):
+    """Nessun accesso alternativo: le agenzie attive arrivano dalla funzione
+    gia' certificata, non da una query scritta qui."""
+    albero = ast.parse(pathlib.Path(cron.__file__).read_text(encoding="utf-8"))
+    invocate = {n.func.attr for n in ast.walk(albero)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert "list_active_agency_ids" in invocate
+
+    # Strutturale: un divieto sulla stringa "SELECT" sarebbe violato dal
+    # commento che spiega DOVE vive il predicato di tenant - ed e' proprio il
+    # commento che serve a chi legge.
+    importati = {a.name.split(".")[0] for n in ast.walk(albero)
+                 if isinstance(n, ast.Import) for a in n.names}
+    importati |= {n.module.split(".")[0] for n in ast.walk(albero)
+                  if isinstance(n, ast.ImportFrom) and n.module}
+    assert "psycopg2" not in importati
+    for vietata in ("core_cursor", "execute", "cursor"):
+        assert vietata not in invocate, f"il cron apre un accesso proprio: {vietata}"
+
+
+def test_cron_carica_la_configurazione_in_un_processo_separato(tmp_path):
+    """Il cron e' un processo a se': non deve importare il web server.
+
+    Se `main` finisse nella catena di import, il cron dipenderebbe dall'avvio
+    dell'applicazione web - e un errore la' dentro lo farebbe fallire per una
+    ragione che non lo riguarda.
+    """
+    import subprocess
+    import sys
+
+    codice = (
+        "import sys; import run_flow_p2b_cron as c;"
+        "cfg = c.load_config(['--agency-id','3']);"
+        "print('agency', cfg.agency_id, 'all', cfg.all_agencies,"
+        " 'limits', cfg.recovery_limit, cfg.scan_limit);"
+        "print('main_importato', 'main' in sys.modules);"
+        "print('requests_importato', 'requests' in sys.modules)"
+    )
+    esito = subprocess.run(
+        [sys.executable, "-c", codice], cwd=str(ROOT), capture_output=True, text=True,
+        env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1",
+             "FLOW_RECOVERY_LIMIT": "11", "FLOW_SCAN_LIMIT": "13",
+             "HOME": os.environ.get("HOME", "/tmp")},
+        timeout=60)
+    assert esito.returncode == 0, esito.stderr[-800:]
+    assert "agency 3 all False limits 11 13" in esito.stdout
+    assert "main_importato False" in esito.stdout, (
+        "importare il cron tira dentro il web server")
+    assert "requests_importato False" in esito.stdout

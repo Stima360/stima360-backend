@@ -567,13 +567,31 @@ def test_18_an_unbound_platform_admin_is_refused_before_any_tenant_query():
 # ---------------------------------------------------------------------------
 
 def test_19_the_cron_no_longer_drives_a_global_scan():
-    """`/api/flow/scan` is per-agency now, so the HTTP runner is one tenant's
-    bounded cycle. The platform-wide sweep is the in-process orchestrator, and
-    it is deliberately not an HTTP route."""
+    """La passata su tutti i tenant non e' raggiungibile via HTTP.
+
+    L'intento di questa prova non e' cambiato; e' cambiato il runner. Quando fu
+    scritta, il cron aveva due punti d'ingresso - `main()` via HTTP per una
+    agenzia e `main_all_agencies()` in-process per tutte - e la prova fissava
+    che il secondo non diventasse una route.
+
+    Adesso il cron non esce piu' dal processo affatto: autenticava in HTTP
+    Basic su route diventate session-only, e invece di dargli un'identita'
+    tecnica nuova gli e' stato tolto il trasporto. Le due modalita' sono
+    diventate due argomenti espliciti della riga di comando, e il ciclo per
+    tenant e' `run_cycle`.
+
+    Cio' che deve restare vero e' la stessa cosa di allora, e in piu' una
+    nuova: nessuna route espone una passata multi-agenzia, e la modalita' non
+    si sceglie da sola.
+    """
     source = (ROOT / "run_flow_p2b_cron.py").read_text(encoding="utf-8")
-    assert "main_all_agencies" in source, source
-    assert "scan_for_all_agencies" in source, source
-    # The sweep must not be reachable over HTTP.
+    assert "--all-agencies" in source and "--agency-id" in source
+    assert "run_cycle" in source
+    # Un ciclo per tenant, con l'agenzia esplicita nelle due chiamate.
+    assert "recover_received_events_for_agency" in source
+    assert "scan_for_agency" in source
+
+    # La passata multi-agenzia non deve essere raggiungibile via HTTP.
     routes, _ = _routes()
     assert not any("all_agencies" in name for name in routes), routes
 
@@ -954,25 +972,62 @@ def test_37_the_backfill_would_not_be_a_no_op():
 CRON_RECOVERY_INTEGER_KEYS = ("requested_limit", "processed", "ignored", "failed", "busy")
 
 
-def _cron_required_keys():
-    """The keys the cron actually validates, read from the cron itself.
+def _recovery_contract_keys():
+    """Le chiavi che il PRODUTTORE garantisce, lette da `_recover_events`.
 
-    Derived rather than restated: if `_post` starts requiring another counter,
-    this test starts requiring it too, instead of quietly falling behind.
+    Prima venivano lette dal validatore HTTP del cron. Quel validatore non
+    esiste piu', ma il contratto si': `_recover_events` e' il punto unico in
+    cui la forma della risposta di recovery viene costruita, per entrambi i
+    punti d'ingresso. Ricavarle da li' invece che riscriverle a mano significa
+    che un contatore tolto fa fallire questa prova.
     """
-    source = (ROOT / "run_flow_p2b_cron.py").read_text(encoding="utf-8")
-    block = source[source.index("if phase=='recovery'") - 400:source.index("if phase=='recovery'")]
-    required = re.search(r"\(([^)]*)\)\s*$", block.strip())
-    assert required, block
-    return tuple(re.findall(r"'(\w+)'", required.group(1)))
+    import ast
+
+    source = (ROOT / "flow" / "service.py").read_text(encoding="utf-8")
+    albero = ast.parse(source)
+    funzione = next(n for n in ast.walk(albero)
+                    if isinstance(n, ast.FunctionDef) and n.name == "_recover_events")
+    chiavi = set()
+    for nodo in ast.walk(funzione):
+        if isinstance(nodo, ast.Dict):
+            chiavi |= {k.value for k in nodo.keys
+                       if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return chiavi
 
 
-def test_38_the_cron_still_validates_the_full_recovery_contract():
-    """The consumer is unchanged: this slice fixes the producer, not the check."""
-    assert _cron_required_keys() == CRON_RECOVERY_INTEGER_KEYS, _cron_required_keys()
+def test_38_the_cron_still_consumes_the_full_recovery_contract():
+    """Il consumatore e' cambiato di forma, non di pretese.
+
+    Quando il cron parlava HTTP, validava il JSON della risposta: `status`
+    stringa e cinque contatori interi non negativi. Senza HTTP non c'e' un
+    corpo da validare - `_recover_events` costruisce il dizionario dentro lo
+    stesso processo - ma i contatori devono comunque essere LETTI, e in
+    particolare `failed` e `busy` devono continuare a contare come problemi.
+
+    Era proprio la lezione del difetto precedente: la prima versione di
+    `recover_received_events_for_agency` restituiva solo `{processed, items}`,
+    il cron non sapeva che farsene e il job falliva con `invalid_json`. Se
+    domani `_application_failure` smettesse di guardare `busy`, un tenant con
+    eventi incagliati risulterebbe elaborato con successo.
+    """
+    import ast
+
     source = (ROOT / "run_flow_p2b_cron.py").read_text(encoding="utf-8")
-    assert "raise TechnicalError('invalid_json')" in source
-    assert "isinstance(data.get('status'),str)" in source
+    albero = ast.parse(source)
+    corpo = next(n for n in ast.walk(albero)
+                 if isinstance(n, ast.FunctionDef) and n.name == "_application_failure")
+    letti = {n.args[0].value for n in ast.walk(corpo)
+             if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "get"
+             and n.args and isinstance(n.args[0], ast.Constant)}
+    for chiave in ("status", "failed", "busy", "failures"):
+        assert chiave in letti, (
+            f"il cron non guarda piu' {chiave!r}: un ciclo problematico "
+            f"risulterebbe riuscito. Legge {sorted(letti)}"
+        )
+
+    # E il produttore continua a fornirli tutti: e' il contratto che il difetto
+    # `invalid_json` aveva rotto una volta.
+    assert set(CRON_RECOVERY_INTEGER_KEYS) <= _recovery_contract_keys()
 
 
 @pytest.mark.parametrize("scoped", [False, True])
