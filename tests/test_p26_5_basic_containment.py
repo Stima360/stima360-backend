@@ -411,3 +411,118 @@ def test_10_the_whatsapp_module_defines_a_second_app_that_is_never_served():
     assert "/api/admin/stime" in paths
     security = paths["/api/admin/stime"]["get"].get("security")
     assert security and all("APIKeyCookie" in str(entry) for entry in security)
+
+
+# ---------------------------------------------------------------------------
+# 11 - LA REGRESSIONE DEL DEPLOY FALLITO
+#
+# `tests/test_integration_http_errors_readonly.py::test_invalid_payload_nonpersistent`
+# spediva HTTP Basic a POST /api/owner/admin/accounts con un corpo vuoto e
+# pretendeva 422. Su Render ha ricevuto 401, ed e' stato l'unico rosso di tutta
+# la suite.
+#
+# Il backend aveva ragione. Dopo P26-5 quella superficie e' dietro
+# `require_owner_admin_context`, che e' una dipendenza di router: FastAPI la
+# risolve PRIMA di convalidare il corpo, quindi un chiamante senza sessione
+# riceve 401 e la validazione non viene mai raggiunta. L'header Basic non viene
+# ignorato per distrazione - non esiste piu' nulla che lo legga.
+#
+# E' anche l'ordine giusto: chi non e' autenticato non deve imparare nulla
+# sulla forma del payload. Un 422 a un anonimo racconterebbe quali campi
+# esistono e quali sono obbligatori.
+#
+# Questi tre test esistono perche' quel rosso e' arrivato da Render invece che
+# dalla suite locale: i test di integrazione saltano senza PostgreSQL TEST, e
+# questa verifica non dipende da nessuno dei due.
+# ---------------------------------------------------------------------------
+
+BASIC_HEADER = "Basic " + __import__("base64").b64encode(b"utente:segreto").decode()
+
+
+@pytest.fixture()
+def client():
+    from fastapi.testclient import TestClient
+    import main
+
+    return TestClient(main.app)
+
+
+def test_11_basic_credentials_do_not_open_owner_admin(client):
+    """L'header Basic non apre nulla, e non cambia nulla.
+
+    La prova che conta e' la TERZA riga: con un payload valido lo stato e'
+    identico. Se il 401 dipendesse dal corpo, vorrebbe dire che la validazione
+    viene comunque eseguita prima del rifiuto - e allora il confine non sarebbe
+    dove crediamo.
+    """
+    basic = client.post("/api/owner/admin/accounts", json={},
+                        headers={"Authorization": BASIC_HEADER})
+    anonymous = client.post("/api/owner/admin/accounts", json={})
+    valid_body = client.post("/api/owner/admin/accounts", json={"contact_id": 1},
+                             headers={"Authorization": BASIC_HEADER})
+
+    assert basic.status_code == 401, basic.text
+    assert anonymous.status_code == 401, anonymous.text
+    assert valid_body.status_code == 401, (
+        "con un corpo valido la risposta cambia: il rifiuto NON precede la "
+        "validazione del payload"
+    )
+    # Presentare una credenziale Basic non e' meglio che non presentarne alcuna.
+    assert basic.status_code == anonymous.status_code
+    # E il rifiuto non nomina il canale morto: un 'WWW-Authenticate: Basic'
+    # inviterebbe un client a ritentare con le credenziali condivise.
+    assert "basic" not in basic.headers.get("www-authenticate", "").lower()
+
+
+def test_11b_the_refused_request_writes_nothing(client, monkeypatch):
+    """Punto 4: la richiesta rifiutata non scrive.
+
+    Non dedotto dallo status - un 401 potrebbe in teoria arrivare dopo un
+    effetto - ma osservato: il repository viene sostituito, e se qualcuno lo
+    chiamasse il test fallirebbe.
+
+    IL PAYLOAD E' VALIDO, E NON E' UN DETTAGLIO
+
+    Con un corpo vuoto questa prova sarebbe vacua. Se la guardia
+    di autenticazione sparisse, la richiesta verrebbe comunque respinta dalla
+    validazione - `contact_id` e' obbligatorio - e il repository non sarebbe
+    chiamato lo stesso: `calls == []` resterebbe vero per la ragione sbagliata.
+
+    Con `contact_id` valorizzato non c'e' piu' nulla, a valle
+    dell'autenticazione, che possa fermare la scrittura. Se il repository non
+    viene invocato e' perche' la richiesta e' stata respinta al confine, che e'
+    esattamente cio' che questo test afferma.
+    """
+    import owner.repository
+
+    calls = []
+    monkeypatch.setattr(owner.repository, "create_account",
+                        lambda *a, **k: calls.append(a) or {"id": 1})
+
+    response = client.post("/api/owner/admin/accounts", json={"contact_id": 1},
+                           headers={"Authorization": BASIC_HEADER})
+
+    assert response.status_code == 401
+    assert calls == [], f"il repository e' stato invocato da una richiesta rifiutata: {calls}"
+
+
+def test_11c_an_authorised_session_does_reach_payload_validation(client, monkeypatch):
+    """E il 422 non e' sparito: e' dietro la sessione, dove deve stare.
+
+    Senza questo, la correzione del test di integrazione sarebbe indistinguibile
+    dall'aver smesso di controllare la validazione del payload.
+    """
+    from operator_session_helpers import operator_session
+
+    with operator_session(monkeypatch, client, agency_id=1, role="agency_owner"):
+        invalid = client.post("/api/owner/admin/accounts", json={})
+        assert invalid.status_code == 422, invalid.text
+        # E l'errore non rivela nulla del database.
+        body = invalid.text.lower()
+        for marker in ("psycopg", "postgres", "sqlstate", "traceback"):
+            assert marker not in body
+
+    # Un ruolo insufficiente non e' 401 ne' 422: e' 403. La distinzione e'
+    # l'intera ragione per cui require_owner_admin_context esiste.
+    with operator_session(monkeypatch, client, agency_id=1, role="agent"):
+        assert client.post("/api/owner/admin/accounts", json={}).status_code == 403
