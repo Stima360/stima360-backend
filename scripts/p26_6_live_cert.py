@@ -1193,6 +1193,11 @@ class Certification:
         # Lo stesso vale per `invisible_sale_opportunities.watch_id`, anch'essa
         # RESTRICT. Le azioni vere sono dichiarate in CHILD_FOREIGN_KEYS e
         # verificate contro le migration.
+        # `seller_timeline_events` per PRIMA: la fixture PROPERTY_WATCH vi
+        # inserisce l'evento `stima_completata`, e la sua `agency_id` e'
+        # RESTRICT verso `agencies`. Senza questa riga, `DELETE FROM agencies`
+        # fallirebbe e l'agenzia temporanea resterebbe sul TEST.
+        ("seller_timeline_events", "agency_id"),
         ("next_best_actions", "agency_id"),
         ("flow_executions", "agency_id"),
         ("flow_events", "agency_id"),
@@ -1310,7 +1315,11 @@ class Certification:
         quindi questa istantanea non nomina mai una riga altrui.
         """
         self.effect_rows_before = {}
-        pieno = self._perimeter()
+        # Si parte dalle RADICI e si cresce: `match_requirement_results`
+        # appartiene al run perche' pende da un `match_runs` che appartiene al
+        # run, e quello si scopre in questo stesso giro. L'ordine di
+        # EFFECT_TABLES e' quello delle dipendenze proprio per questo.
+        pieno = self._root_perimeter()
         if not pieno:
             # Niente da cui derivare l'appartenenza: nessun effetto puo'
             # essere nostro. E' una fotografia vuota, non una fallita.
@@ -1319,7 +1328,7 @@ class Certification:
         try:
             with self.db.read() as cur:
                 for table, columns in self.EFFECT_TABLES:
-                    pred = self._ownership_predicate(columns, pieno, "t")
+                    pred = self._effect_predicate(table, columns, pieno, "t")
                     if pred is None:
                         continue
                     frammento, params = pred
@@ -1327,6 +1336,9 @@ class Certification:
                     ids = tuple(int(r["id"]) for r in cur.fetchall())
                     if ids:
                         self.effect_rows_before[table] = ids
+                        # Da adesso questa tabella e' un genitore possibile per
+                        # quelle che seguono.
+                        pieno[table] = tuple(sorted(set(pieno.get(table, ())) | set(ids)))
         except Exception as exc:
             self.effect_rows_before = {}
             self.effect_snapshot_done = False
@@ -1581,7 +1593,7 @@ class Certification:
     #: Non hanno una cancellazione propria: `cleanup_dedicated_agencies` li
     #: rimuove per agency_id. Verificarli prima di quella chiamata segnalerebbe
     #: come residuo una riga che il passo successivo avrebbe portato via.
-    DEDICATED_EFFECT_TABLES = ("flow_events", "stime")
+    DEDICATED_EFFECT_TABLES = ("flow_events", "stime", "seller_timeline_events")
 
     #: Le figlie delle righe create nelle agenzie dedicate, con l'azione VERA.
     #:
@@ -1672,6 +1684,9 @@ class Certification:
         # su una riga altrui sarebbero tre campi azzerati in silenzio.
         "property_status_history", "buy_request_history", "match_runs",
         "property_contacts", "owner_audit_log",
+        # I figli delle fixture raccolti dopo il run 52f6d97b5214.
+        "property_sale_sellers", "owner_property_access", "owner_access_tokens",
+        "owner_sessions", "operator_sessions", "match_requirement_results",
     )
 
     #: Le tabelle delle agenzie dedicate di cui servono gli ID PRIMA del
@@ -1684,6 +1699,35 @@ class Certification:
         "contacts", "property_watches", "tasks",
         "flow_executions", "flow_events", "stime",
     )
+
+    #: Il tipo pubblico dei documenti condivisi, e NON e' una preferenza.
+    #:
+    #: `owner/schemas.py` dichiara `SharedDocumentType` come un Literal chiuso:
+    #: mandate, floor_plan, ape, cadastral_extract, photo_report,
+    #: activity_report, information. "other" NON e' fra questi, ed e' il 422
+    #: del run 52f6d97b5214 - la condivisione non veniva mai creata, quindi la
+    #: lista documenti del portale restava vuota per entrambe le agenzie e il
+    #: confronto "B non vede i documenti di A" non provava niente.
+    #:
+    #: Il tipo del documento dell'IMMOBILE e' un'altra cosa:
+    #: `property/schemas.py` lo dichiara `str(min_length=1, max_length=80)`,
+    #: cioe' testo libero, e "other" li' e' valido. Due campi con nomi simili e
+    #: due contratti diversi: e' il motivo per cui lo stesso valore passava da
+    #: una parte e veniva rifiutato dall'altra.
+    OWNER_PUBLIC_DOCUMENT_TYPE = "information"
+    PROPERTY_DOCUMENT_TYPE = "other"
+
+    #: Il modulo di provenienza dell'evento FLOW. Obbligatorio in
+    #: `flow/schemas.EventCreate`, e senza valore predefinito: ometterlo e' il
+    #: 422 del run 38e341f68f8a.
+    FLOW_SOURCE_MODULE = "core"
+
+    #: Il tipo di evento che `property_watch` esige per poter inizializzare un
+    #: watch. `_baseline_for_stima_scoped` legge la valutazione completata da
+    #: `seller_timeline_events` e, se non la trova, solleva ValidationError -
+    #: che il router traduce in 400. E' l'`initialize -> 400` del run
+    #: 38e341f68f8a: la stima c'era, la sua valutazione no.
+    STIMA_COMPLETATA_EVENT = "stima_completata"
 
     #: Gli effetti che si cancellano per id, in ordine di FK:
     #: `owner_shared_documents.property_document_id` e' RESTRICT verso
@@ -1701,8 +1745,54 @@ class Certification:
         ("property_status_history", ("property_id",)),
         ("buy_request_history", ("buy_request_id", "property_id", "match_id", "task_id")),
         ("match_runs", ("buy_request_id", "property_id")),
+        # `match_requirement_results` DOPO `match_runs`, e non e' un refuso.
+        # Questo elenco e' in ordine di DIPENDENZA - prima il genitore - e
+        # serve all'istantanea, che deve conoscere gli id di `match_runs` per
+        # poter riconoscere le sue figlie. Le CANCELLAZIONI lo percorrono al
+        # contrario, perche' li' il vincolo e' opposto: la figlia per prima,
+        # altrimenti il CASCADE del genitore se la porterebbe via senza
+        # passare dal predicato di appartenenza.
+        ("match_requirement_results", ("match_run_id",)),
         ("owner_audit_log", ("property_id", "owner_account_id")),
+        # I FIGLI DELLE FIXTURE CHE IL RUN NON AVEVA MAI RACCOLTO.
+        #
+        # Il run 52f6d97b5214 si e' fermato qui: nessuna di queste tabelle
+        # compariva nel perimetro, quindi la guardia delle dipendenze le
+        # vedeva referenziare le nostre righe e le dichiarava ESTRANEE -
+        # bloccando l'intero cleanup su righe che il run aveva creato lui
+        # stesso, un passo prima.
+        #
+        # La risposta non e' esentare queste tabelle dal controllo: sarebbe
+        # cieca esattamente dove serve vedere. La risposta e' raccoglierne le
+        # righe per APPARTENENZA, con lo stesso predicato di tutte le altre -
+        # ogni riferimento non nullo dentro il perimetro, almeno uno che ci
+        # punti - cosi' che la riga del run entri nel perimetro e quella di
+        # chiunque altro continui a bloccare.
+        ("property_sale_sellers", ("sale_id", "contact_id")),
+        ("followup_actions", ("contact_id", "lead_id", "stima_id", "task_id")),
+        ("owner_property_access", ("owner_account_id", "property_id")),
+        ("owner_access_tokens", ("owner_account_id",)),
+        ("owner_sessions", ("owner_account_id",)),
+        ("agency_memberships", ("agency_id", "operator_user_id")),
+        ("operator_sessions", ("operator_user_id",)),
     )
+
+    #: Le due tabelle in cui l'appartenenza si decide da UNA SOLA colonna.
+    #:
+    #: La regola generale - ogni riferimento non nullo dentro il perimetro -
+    #: qui direbbe il falso. La membership dell'operatore A punta all'agenzia
+    #: 1, che e' preesistente e non nostra, e verrebbe quindi dichiarata
+    #: estranea: ma quella RIGA l'ha creata questo run, un istante dopo aver
+    #: creato l'operatore.
+    #:
+    #: `operator_user_id` basta da solo perche' `operator_users` contiene
+    #: SOLO identita' di questo run - sono create qui e cancellate qui, per
+    #: id. Una membership di un operatore vero continua a non essere nostra,
+    #: e continua a bloccare: cambia il criterio, non la severita'.
+    EFFECT_OWNING_COLUMNS = {
+        "agency_memberships": "operator_user_id",
+        "operator_sessions": "operator_user_id",
+    }
 
     def _perimeter(self) -> dict:
         """{tabella: ids} di tutto cio' che questo run possiede."""
@@ -1713,8 +1803,53 @@ class Certification:
             out["owner_accounts"] = tuple(self.created_owner_account_ids)
         for table, ids in self.created_effects.items():
             if ids:
-                out[table] = tuple(ids)
+                # UNIONE, non sostituzione.
+                #
+                # `seller_timeline_events` compare in ENTRAMBI: e' la risorsa
+                # del dominio SELLER_INTELLIGENCE (in `created_rows`) ed e'
+                # anche l'evento `stima_completata` che la fixture
+                # PROPERTY_WATCH inserisce (in `created_effects`).
+                # Sovrascrivere faceva sparire dal perimetro gli id del
+                # dominio, e con loro la protezione che il perimetro fornisce.
+                out[table] = tuple(sorted(set(out.get(table, ())) | set(ids)))
         return out
+
+    def _effect_predicate(self, table: str, columns: tuple, perimeter: dict, alias: str):
+        """Il predicato di appartenenza per una tabella di effetti.
+
+        Due criteri, e la differenza e' dichiarata in EFFECT_OWNING_COLUMNS:
+        per quasi tutte vale la regola generale, per le due che pendono da
+        `operator_users` basta quella colonna. Un solo posto in cui si decide,
+        cosi' che l'istantanea, la cancellazione e la guardia non possano
+        applicarne tre versioni diverse.
+        """
+        propria = self.EFFECT_OWNING_COLUMNS.get(table)
+        if propria:
+            ids = perimeter.get("operator_users")
+            if not ids:
+                return None
+            return (f"{alias}.{propria} IN %s", [ids])
+        return self._ownership_predicate(columns, perimeter, alias)
+
+    def _root_perimeter(self) -> dict:
+        """Le RADICI: cio' di cui il run conosce gli id senza cercarli.
+
+        E' il perimetro da cui si DERIVA l'appartenenza degli effetti, e per
+        questo non li contiene: sarebbe circolare.
+        """
+        fuori = {t: tuple(i) for t, i in self._perimeter().items()}
+
+        def aggiungi(tabella, ids):
+            if ids:
+                fuori[tabella] = tuple(sorted(set(fuori.get(tabella, ())) | set(ids)))
+
+        aggiungi("property_sales", self.created_sale_ids)
+        aggiungi("property_proposals", self.created_proposal_ids)
+        aggiungi("agencies", self.created_agency_ids)
+        aggiungi("operator_users", self.created_user_ids)
+        for genitore, ids in self.child_parents.items():
+            aggiungi(genitore, ids)
+        return fuori
 
     def _destructive_perimeter(self) -> dict:
         """{tabella: ids} di OGNI riga che questo run cancellera'.
@@ -1733,26 +1868,18 @@ class Certification:
         contatti e i watch delle agenzie dedicate arrivano dall'istantanea,
         che e' l'unico posto in cui i loro id sono noti.
         """
-        fuori = {t: tuple(i) for t, i in self._perimeter().items()}
+        fuori = self._root_perimeter()
 
         def aggiungi(tabella, ids):
-            if not ids:
-                return
-            fuori[tabella] = tuple(sorted(set(fuori.get(tabella, ())) | set(ids)))
+            if ids:
+                fuori[tabella] = tuple(sorted(set(fuori.get(tabella, ())) | set(ids)))
 
-        aggiungi("property_sales", self.created_sale_ids)
-        aggiungi("property_proposals", self.created_proposal_ids)
-        aggiungi("agencies", self.created_agency_ids)
-        aggiungi("operator_users", self.created_user_ids)
-        # I genitori fotografati nelle agenzie dedicate: `contacts` si unisce
-        # a quelli gia' presenti, `tasks`, `flow_executions` e
-        # `property_watches` arrivano solo di qui - li' si cancella per
-        # `agency_id` e nessun id viene mai registrato.
-        for genitore, ids in self.child_parents.items():
-            aggiungi(genitore, ids)
-        # E le righe degli effetti, che si cancellano per predicato: sono
+        # Le righe degli effetti, che si cancellano per predicato: sono
         # genitori a loro volta. `match_runs` ha tre FK non-CASCADE entranti,
-        # e finche' non compariva qui nessuno le aveva mai interrogate.
+        # e finche' non compariva qui nessuno le aveva mai interrogate. Da qui
+        # passano anche gli otto figli delle fixture che il run 52f6d97b5214
+        # non raccoglieva - senza, la guardia li dichiarava estranei e
+        # bloccava il cleanup su righe create dal run stesso.
         for tabella, ids in self.effect_rows_before.items():
             aggiungi(tabella, ids)
         return fuori
@@ -1761,9 +1888,17 @@ class Certification:
         """"Questa riga e' del run": ogni riferimento non nullo cade nel
         perimetro, e almeno uno ci punta davvero. Ritorna (frammento WHERE,
         parametri) o None se nessuna colonna puo' puntare dentro."""
+        # colonna -> tabella genitore. Ogni colonna delle EFFECT_TABLES deve
+        # comparire qui: una che mancasse solleverebbe KeyError invece di
+        # essere ignorata, ed e' voluto - un riferimento non classificato non
+        # puo' entrare in un predicato di appartenenza.
         genitore = {"property_id": "properties", "contact_id": "contacts",
                     "buy_request_id": "buy_requests", "match_id": "matches",
-                    "task_id": "tasks", "owner_account_id": "owner_accounts"}
+                    "task_id": "tasks", "owner_account_id": "owner_accounts",
+                    "sale_id": "property_sales", "lead_id": "leads",
+                    "stima_id": "stime", "agency_id": "agencies",
+                    "operator_user_id": "operator_users",
+                    "match_run_id": "match_runs"}
         dentro, dentro_p, tutte, tutte_p = [], [], [], []
         for col in columns:
             ids = perimeter.get(genitore[col])
@@ -1883,7 +2018,8 @@ class Certification:
                         if effetto and not esclusi:
                             # Un effetto delle nostre API: sono estranee solo
                             # le righe che puntano FUORI dal perimetro.
-                            pred = self._ownership_predicate(effetto, self._perimeter(), "t")
+                            pred = self._effect_predicate(
+                                nudo, effetto, self._destructive_perimeter(), "t")
                             if pred is None:
                                 cur.execute(f"SELECT COUNT(*) AS n FROM {figlio} t "
                                             f" WHERE t.{colonna} IN %s", (ids,))
@@ -2193,19 +2329,36 @@ class Certification:
                 #
                 # Cancellare per predicato, e poi verificare per id, e' la sola
                 # forma in cui tutte e tre restano sotto controllo.
-                pieno = self._perimeter()
+                pieno = self._destructive_perimeter()
                 # Prima gli effetti noti per id, nell'ordine delle FK.
                 for table in self.EFFECT_BY_ID_TABLES:
                     ids = self.created_effects.get(table)
                     if ids:
                         cur.execute(f"DELETE FROM {table} WHERE id IN %s", (tuple(ids),))
                         rimosse[table] = cur.rowcount
-                for table, columns in self.EFFECT_TABLES:
-                    pred = self._ownership_predicate(columns, pieno, "t")
+                for table, columns in reversed(self.EFFECT_TABLES):
+                    ids = self.effect_rows_before.get(table)
+                    if not ids:
+                        # NIENTE DI NOSTRO QUI DENTRO: nessuna DELETE.
+                        #
+                        # Una cancellazione che non puo' trovare nulla resta
+                        # una scrittura, e su `followup_actions` la garanzia
+                        # e' che il run non ne faccia MAI quando non ha
+                        # creato niente - non che le sue siano circoscritte.
+                        # L'istantanea l'ha gia' stabilito: se non ha trovato
+                        # righe, non c'e' motivo di toccare la tabella.
+                        continue
+                    pred = self._effect_predicate(table, columns, pieno, "t")
                     if pred is None:
                         continue
                     frammento, params_p = pred
-                    cur.execute(f"DELETE FROM {table} t WHERE {frammento}", params_p)
+                    # ID FOTOGRAFATI *E* PREDICATO. Gli id dicono quali righe
+                    # avevamo riconosciuto; il predicato riverifica che lo
+                    # siano ancora adesso. Se una di quelle righe e' cambiata
+                    # nel frattempo, non viene cancellata.
+                    cur.execute(
+                        f"DELETE FROM {table} t WHERE t.id IN %s AND ({frammento})",
+                        [tuple(ids), *params_p])
                     rimosse[table] = cur.rowcount
                 for table in ordine:
                     entries = self.created_rows[table]
@@ -2287,6 +2440,25 @@ class Certification:
                 + " spariscono con le agenzie dedicate, e contarli adesso "
                 "segnalerebbe come residuo cio' che il passo successivo "
                 "rimuove. Il difetto e' nell'ordine delle chiamate, non sul TEST.",
+            )
+            return
+        # UNA CONSEGUENZA NON E' UN SECONDO GUASTO.
+        #
+        # Se il cleanup e' stato BLOCCATO - dipendenze estranee, bucket non
+        # ripulito, istantanea incompleta - le righe sono ancora la' PER
+        # DECISIONE, non per un difetto della cancellazione. Elencarle come
+        # "righe ANCORA PRESENTI" accanto agli altri FAIL produce dieci
+        # fallimenti dove il problema e' uno, e sposta la diagnosi sul
+        # sintomo: e' successo nel run 38e341f68f8a, dove sette FAIL su dieci
+        # erano la stessa riga di preflight ripetuta.
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(
+                "CLEAN-VERIFICA",
+                f"verifica non conclusiva: il cleanup era bloccato ({motivo}) "
+                "e le righe del run sono ancora sul TEST PER DECISIONE, non "
+                "per una cancellazione fallita. Il guasto da correggere e' "
+                "quello segnalato sopra: questa riga ne e' la conseguenza.",
             )
             return
         if self._created_nothing():
@@ -2606,10 +2778,6 @@ def incoherence_census(report: Report, database: Database) -> None:
               JOIN properties p ON p.id = x.property_id
              WHERE ct.agency_id <> p.agency_id
         """),
-        ("audit OWNER senza entrambe le radici", """
-            SELECT COUNT(*) AS n FROM owner_audit_log
-             WHERE owner_account_id IS NULL AND property_id IS NULL
-        """),
         ("lead con agenzia diversa dal contatto", """
             SELECT COUNT(*) AS n
               FROM leads l JOIN contacts c ON c.id = l.contact_id
@@ -2630,8 +2798,60 @@ def incoherence_census(report: Report, database: Database) -> None:
             report.fail("CENSUS", f"{label}: {count} righe incoerenti, non classificate")
         else:
             report.note("CENSUS", f"{label}: 0")
+    total += _audit_without_roots(report, database)
     if total == 0:
         report.note("CENSUS", "nessuna incoerenza rilevata dal censimento")
+
+
+def _audit_without_roots(report: Report, database: Database) -> int:
+    """Gli audit senza radice: CLASSIFICATI, non solo contati.
+
+    Entrambe le colonne NULL significa ORIGINE NON ATTRIBUITA, non "SET NULL
+    gia' avvenuto": dalla riga da sola le due ipotesi non si distinguono, e
+    chiamarle "incoerenti" attribuiva una causa che nessuno ha osservato.
+
+    Cio' che la riga dice davvero e' `entity_type` ed `entity_id`: da li' si
+    capisce di che cosa parlava e se sia collocabile per altra via. Il
+    censimento le raggruppa per quello.
+
+    Resta un FAIL. Una riga che nessuno sa attribuire a un tenant e' un
+    ostacolo alla chiusura del gate, e classificarla non la risolve: la rende
+    esaminabile. Non viene cancellata - non e' un residuo di questo run, e
+    cancellare cio' che non si sa attribuire e' il danno peggiore fra i due.
+    """
+    try:
+        with database.read() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(entity_type, '(nessuno)') AS tipo,
+                       COUNT(*) AS n,
+                       COUNT(entity_id) AS con_entita
+                  FROM owner_audit_log
+                 WHERE owner_account_id IS NULL AND property_id IS NULL
+                 GROUP BY 1
+                 ORDER BY 2 DESC, 1
+                """)
+            righe = [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        report.blocked("CENSUS", "audit OWNER senza radice: non interrogabile "
+                                 f"({type(exc).__name__})")
+        return 0
+
+    totale = sum(int(r["n"]) for r in righe)
+    if totale == 0:
+        report.note("CENSUS", "audit OWNER senza radice: 0")
+        return 0
+    dettaglio = ", ".join(f"{r['tipo']}={r['n']} (con entity_id: {r['con_entita']})"
+                          for r in righe)
+    report.fail(
+        "CENSUS",
+        f"audit OWNER senza radice: {totale} righe con owner_account_id e "
+        f"property_id entrambi NULL, classificate per entita': {dettaglio}. "
+        "ORIGINE NON ATTRIBUITA, non SET NULL gia' avvenuto: dalla riga sola "
+        "le due ipotesi non si distinguono. Non vengono cancellate; restano "
+        "da collocare prima di chiudere il gate.",
+    )
+    return totale
 
 
 # ---------------------------------------------------------------------------
@@ -2831,7 +3051,8 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=No
         risposta = http.request(
             "POST", f"/api/property/properties/{prop}/documents",
             jar=jars[label],
-            payload={"document_type": "other", "title": cert.marker(label),
+            payload={"document_type": cert.PROPERTY_DOCUMENT_TYPE,
+                     "title": cert.marker(label),
                      "url": "https://certification.invalid/" + cert.marker(label),
                      "status": "available"})
         doc = (risposta.json() or {}).get("id")
@@ -2843,7 +3064,8 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=No
         risposta = http.request("POST", "/api/owner/admin/documents", jar=owner_jars[label],
                                 payload={"property_document_id": doc,
                                          "public_title": cert.marker(label),
-                                         "public_document_type": "other"})
+                                         "public_document_type":
+                                             cert.OWNER_PUBLIC_DOCUMENT_TYPE})
         condiviso = (risposta.json() or {}).get("id")
         if risposta.status not in (200, 201) or condiviso is None:
             report.blocked(f"owner-fixture-{label}-documento",
@@ -2869,10 +3091,11 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=No
         contenuto = ("%PDF-1.4 " + cert.marker(label)).encode("utf-8")
         risposta = http.upload(
             "/api/owner/admin/documents/upload", jar=owner_jars[label],
-            campi={"property_id": prop, "document_type": "other",
+            campi={"property_id": prop,
+                   "document_type": cert.PROPERTY_DOCUMENT_TYPE,
                    "source_title": cert.marker(label) + "-file",
                    "public_title": cert.marker(label) + "-file",
-                   "public_document_type": "other"},
+                   "public_document_type": cert.OWNER_PUBLIC_DOCUMENT_TYPE},
             nome_file=cert.marker(label) + ".pdf", contenuto=contenuto)
         caricato = (risposta.json() or {}).get("id")
         if risposta.status not in (200, 201) or caricato is None:
@@ -3171,6 +3394,31 @@ def _error_shape(text) -> str:
     tipo = re.match(r"\s*([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Violation))\b", testo)
     if tipo:
         pezzi.append(f"tipo={tipo.group(1)}")
+    else:
+        # LA CLASSE psycopg, OVUNQUE SIA NEL TESTO.
+        #
+        # `re.match` la trova solo se apre la stringa, e un 500 di FastAPI la
+        # consegna dentro un JSON: `{"detail":"UndefinedColumn: ..."}`. Il run
+        # 38e341f68f8a si e' chiuso con "non classificato (104 caratteri)" su
+        # un messaggio che diceva esattamente qual era il guasto.
+        #
+        # L'elenco e' chiuso e fatto di NOMI DI CLASSE: non possono essere di
+        # una persona, a differenza di un frammento di messaggio.
+        classe = re.search(
+            r"\b(UndefinedColumn|UndefinedTable|UndefinedFunction|UndefinedObject"
+            r"|ForeignKeyViolation|UniqueViolation|NotNullViolation|CheckViolation"
+            r"|InvalidTextRepresentation|DatatypeMismatch|SyntaxError"
+            r"|InsufficientPrivilege|DeadlockDetected|SerializationFailure"
+            r"|LockNotAvailable|QueryCanceled|OperationalError|ProgrammingError"
+            r"|IntegrityError|DataError|InternalError)\b", testo)
+        if classe:
+            pezzi.append(f"tipo={classe.group(1)}")
+    # L'oggetto nominato dall'errore: identificatore di schema, mai un valore.
+    oggetto = re.search(r'column\s+"?([a-z0-9_.]+)"?\s+does not exist', testo, re.I)
+    if not oggetto:
+        oggetto = re.search(r'relation\s+"?([a-z0-9_.]+)"?\s+does not exist', testo, re.I)
+    if oggetto:
+        pezzi.append(f"oggetto={oggetto.group(1)}")
     return ", ".join(pezzi) if pezzi else f"non classificato ({len(testo)} caratteri)"
 
 
@@ -3383,10 +3631,22 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
     # --- FLOW: un evento per agenzia, con il marcatore nel tipo ------------
     eventi = {}
     for label in etichette:
+        # `source_module` E' OBBLIGATORIO, e mancava.
+        #
+        # `flow/schemas.EventCreate` lo dichiara
+        # `Literal["core","property","buy","match","flow","owner"]` senza
+        # valore predefinito: un payload che non lo porta prende 422 prima di
+        # arrivare al servizio. E' il 422 di FLOW-fixture-C/D del run
+        # 38e341f68f8a - nessun evento creato, quindi il confronto fra le due
+        # liste non aveva niente da confrontare.
+        #
+        # "core" e non "flow": l'entita' e' un contatto, e il modulo dichiarato
+        # e' quello da cui l'evento proviene, non quello che lo riceve.
         risposta = http.request("POST", "/api/flow/events", jar=dedicate[label]["jar"],
                                 payload={"event_type": cert.marker(label),
                                          "entity_type": "contact",
                                          "entity_id": dedicate[label]["contact"],
+                                         "source_module": cert.FLOW_SOURCE_MODULE,
                                          "payload": {},
                                          "deduplication_key": cert.marker(label)})
         identificativo = ((risposta.json() or {}).get("event") or {}).get("id") \
@@ -3417,7 +3677,99 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
                      f"la lista di {label} non contiene l'evento {eventi[altro]} di "
                      f"{altro} ({len(risposta.items())} elementi osservati)")
 
+    # --- PROPERTY_WATCH: una stima per agenzia, creata dal run -------------
+    #
+    # Le stime nascono dal funnel pubblico, che risolve la Default: da li' non
+    # se ne ottiene una per un'altra agenzia. Ma il funnel e' UNA strada, non
+    # l'unica: la riga si puo' inserire direttamente nell'agenzia del run, che
+    # e' la stessa cosa che facciamo per agenzie e operatori. Nessun invio,
+    # nessun PDF, nessuna email - quelli stanno in `salva_stima`, non
+    # nell'INSERT - e nessun dato preesistente toccato.
+    stime = {}
+    for label in etichette:
+        try:
+            with cert.db.write() as cur:
+                cur.execute(
+                    "INSERT INTO stime (comune, via, tipologia, mq, prezzo_mq_base, "
+                    "                   agency_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    (cert.marker(label), cert.marker(label), "appartamento",
+                     80, 2000, dedicate[label]["agency"]["id"]))
+                stime[label] = int(cur.fetchone()["id"])
+            cert.created_effects.setdefault("stime", []).append(stime[label])
+
+            # LA STIMA DA SOLA NON BASTA, e il run 38e341f68f8a lo ha
+            # dimostrato con un 400.
+            #
+            # `_baseline_for_stima_scoped` legge DUE cose: gli attributi della
+            # stima e la valutazione completata, che sta in
+            # `seller_timeline_events` con `event_type = 'stima_completata'`.
+            # Senza la seconda solleva ValidationError, e il router la traduce
+            # in 400: `initialize -> 400: nessun watch da osservare`.
+            #
+            # L'evento si inserisce con lo stesso criterio della stima: nessun
+            # invio, nessun PDF, nessuna email - quelli stanno in
+            # `salva_stima`, non in questo INSERT - e dentro l'agenzia del run,
+            # dove ogni riga e' nostra per costruzione.
+            with cert.db.write() as cur:
+                cur.execute(
+                    "INSERT INTO seller_timeline_events "
+                    "  (stima_id, event_type, event_source, payload, agency_id) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s) RETURNING id",
+                    (stime[label], cert.STIMA_COMPLETATA_EVENT, "p26-6-cert",
+                     json.dumps({"price_exact": 160000, "eur_mq_finale": 2000,
+                                 "base_mq": 2000}),
+                     dedicate[label]["agency"]["id"]))
+                cert.created_effects.setdefault(
+                    "seller_timeline_events", []).append(int(cur.fetchone()["id"]))
+        except Exception as exc:
+            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
+                           f"stima non creabile ({type(exc).__name__})")
+            continue
+        risposta = http.request("POST", f"/api/property-watch/stime/{stime[label]}/initialize",
+                                jar=dedicate[label]["jar"])
+        if risposta.status not in (200, 201):
+            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
+                           f"initialize -> {risposta.status}: nessun watch da osservare")
+            stime.pop(label, None)
+            continue
+        report.note(f"PROPERTY_WATCH-fixture-{label}",
+                    f"stima {stime[label]} e watch nell'agenzia dedicata di {label}")
+
+    for label, altro in (("C", "D"), ("D", "C")):
+        if len(stime) < 2:
+            report.blocked(f"PROPERTY_WATCH-ostile-{label}-{altro}",
+                           "manca un watch per agenzia: il confronto non prova nulla")
+            continue
+        propria = http.request("GET", f"/api/property-watch/stime/{stime[label]}",
+                               jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-propria-{label}", propria.status == 200,
+                     f"{label} legge il watch della propria stima {stime[label]} "
+                     f"-> {propria.status}")
+        ostile = http.request("GET", f"/api/property-watch/stime/{stime[altro]}",
+                              jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-ostile-{label}-{altro}",
+                     ostile.status in NEUTRAL_REFUSALS,
+                     f"{label} chiede il watch della stima {stime[altro]} di {altro} "
+                     f"-> {ostile.status}, mentre {altro} sulla stessa riga ottiene 200")
+        scrittura = http.request(
+            "POST", f"/api/property-watch/stime/{stime[altro]}/initialize",
+            jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-ostile-write-{label}-{altro}",
+                     scrittura.status in NEUTRAL_REFUSALS,
+                     f"{label} tenta di inizializzare il watch di {altro} "
+                     f"-> {scrittura.status}")
+
     # --- NEXT_BEST_ACTION: refresh dentro l'agenzia propria ----------------
+    #
+    # DOPO la fixture PROPERTY_WATCH, e non e' un riordino estetico. Il
+    # refresh raccoglie i segnali da P17-P22: in un'agenzia appena creata, con
+    # un contatto e un'attivita', non c'e' NIENTE da cui nascere, e "0 azioni"
+    # e' garantito prima ancora di chiamare la route - una prova che non puo'
+    # fallire non e' una prova. La stima con la sua valutazione completata,
+    # inserita qui sopra, e' un segnale P17 vero: se anche cosi' il refresh
+    # non materializza nulla, il BLOCKED dice qualcosa sulle regole invece che
+    # sull'ordine delle chiamate.
     azioni = {}
     for label in etichette:
         risposta = http.request("POST", "/api/next-best-action/refresh",
@@ -3458,66 +3810,16 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
                          f"tutte le {len(azioni[label])} azioni di {label} "
                          f"appartengono alla sua agenzia")
     else:
+        # La lista vuota NON e' una prova di isolamento, e il messaggio deve
+        # dire che cosa c'era davvero nell'agenzia quando il refresh non ha
+        # prodotto niente: senza, il prossimo run ripete la stessa riga senza
+        # sapere se manchi il segnale o la regola.
         report.blocked("NEXT_BEST_ACTION-disgiunte",
+                       f"con {len(stime)} stime e altrettanti eventi "
+                       f"'{cert.STIMA_COMPLETATA_EVENT}' nelle agenzie "
+                       "dedicate, il refresh non ha materializzato nulla: "
                        "nessuna azione materializzata in nessuna delle due "
                        "agenzie dedicate: il confronto non proverebbe nulla")
-
-    # --- PROPERTY_WATCH: una stima per agenzia, creata dal run -------------
-    #
-    # Le stime nascono dal funnel pubblico, che risolve la Default: da li' non
-    # se ne ottiene una per un'altra agenzia. Ma il funnel e' UNA strada, non
-    # l'unica: la riga si puo' inserire direttamente nell'agenzia del run, che
-    # e' la stessa cosa che facciamo per agenzie e operatori. Nessun invio,
-    # nessun PDF, nessuna email - quelli stanno in `salva_stima`, non
-    # nell'INSERT - e nessun dato preesistente toccato.
-    stime = {}
-    for label in etichette:
-        try:
-            with cert.db.write() as cur:
-                cur.execute(
-                    "INSERT INTO stime (comune, via, tipologia, agency_id) "
-                    "VALUES (%s, %s, %s, %s) RETURNING id",
-                    (cert.marker(label), cert.marker(label), "appartamento",
-                     dedicate[label]["agency"]["id"]))
-                stime[label] = int(cur.fetchone()["id"])
-            cert.created_effects.setdefault("stime", []).append(stime[label])
-        except Exception as exc:
-            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
-                           f"stima non creabile ({type(exc).__name__})")
-            continue
-        risposta = http.request("POST", f"/api/property-watch/stime/{stime[label]}/initialize",
-                                jar=dedicate[label]["jar"])
-        if risposta.status not in (200, 201):
-            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
-                           f"initialize -> {risposta.status}: nessun watch da osservare")
-            stime.pop(label, None)
-            continue
-        report.note(f"PROPERTY_WATCH-fixture-{label}",
-                    f"stima {stime[label]} e watch nell'agenzia dedicata di {label}")
-
-    for label, altro in (("C", "D"), ("D", "C")):
-        if len(stime) < 2:
-            report.blocked(f"PROPERTY_WATCH-ostile-{label}-{altro}",
-                           "manca un watch per agenzia: il confronto non prova nulla")
-            continue
-        propria = http.request("GET", f"/api/property-watch/stime/{stime[label]}",
-                               jar=dedicate[label]["jar"])
-        report.check(f"PROPERTY_WATCH-propria-{label}", propria.status == 200,
-                     f"{label} legge il watch della propria stima {stime[label]} "
-                     f"-> {propria.status}")
-        ostile = http.request("GET", f"/api/property-watch/stime/{stime[altro]}",
-                              jar=dedicate[label]["jar"])
-        report.check(f"PROPERTY_WATCH-ostile-{label}-{altro}",
-                     ostile.status in NEUTRAL_REFUSALS,
-                     f"{label} chiede il watch della stima {stime[altro]} di {altro} "
-                     f"-> {ostile.status}, mentre {altro} sulla stessa riga ottiene 200")
-        scrittura = http.request(
-            "POST", f"/api/property-watch/stime/{stime[altro]}/initialize",
-            jar=dedicate[label]["jar"])
-        report.check(f"PROPERTY_WATCH-ostile-write-{label}-{altro}",
-                     scrittura.status in NEUTRAL_REFUSALS,
-                     f"{label} tenta di inizializzare il watch di {altro} "
-                     f"-> {scrittura.status}")
 
 
 def certify_batch_only(report, http, cert, domain, jars, owned, context) -> None:
@@ -4127,9 +4429,20 @@ def certify_generic(report, http, cert, domain, jars, owned) -> None:
     if domain.listing:
         for label in ("A", "B"):
             response = http.request("GET", domain.listing, jar=jars[label])
+            # UN 5xx NON E' UN FALLIMENTO DI ISOLAMENTO, ed e' inutile
+            # riportarlo come se lo fosse. Il run 38e341f68f8a ha chiuso
+            # LEGACY_ADMIN con `-> 500` e nient'altro: il run successivo
+            # avrebbe rifatto la stessa domanda e ottenuto la stessa riga.
+            # Qui il corpo viene ridotto alla sua FORMA - tipo di eccezione,
+            # SQLSTATE, nome del vincolo, mai il messaggio grezzo - cosi' che
+            # la diagnosi parta da qualcosa.
+            dettaglio = ""
+            if response.status >= 500:
+                dettaglio = (f" [la route e' ROTTA, non isolata male: "
+                             f"{_error_shape(response.text())}]")
             report.check(f"{name}-list-{label}", response.status == 200,
                          f"{label} legge {domain.listing.split('?')[0]} -> "
-                         f"{response.status}")
+                         f"{response.status}{dettaglio}")
 
     # 3-4: nessuna lista mostra il marcatore dell'altra agenzia.
     #
