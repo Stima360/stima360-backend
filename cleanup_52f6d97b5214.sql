@@ -674,10 +674,12 @@ $$;
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE
-    r        record;
-    n        bigint;
-    atteso   bigint;
-    ordine   text[] := ARRAY[
+    r         record;
+    n         bigint;
+    atteso    bigint;
+    mancanti  text[];
+    n_tabelle bigint;
+    ordine    text[] := ARRAY[
         'public.match_requirement_results',
         'public.match_runs',
         'public.buy_request_history',
@@ -715,15 +717,39 @@ DECLARE
     -- chi leggera' senza questo contesto.
     nome_tabella text;
 BEGIN
-    -- Ogni tabella del perimetro compare nell'ordine, e viceversa: una
-    -- dimenticata resterebbe sul TEST senza che nessuno lo noti.
-    SELECT count(*) INTO n FROM (
-        SELECT p.tabella::text FROM perimetro AS p
-        EXCEPT SELECT unnest(ordine)) d;
-    IF n > 0 THEN
-        RAISE EXCEPTION 'tabelle nel perimetro ma non nell''ordine di '
-                        'cancellazione: %', n;
+    -- OGNI TABELLA DEL PERIMETRO COMPARE NELL'ORDINE.
+    --
+    -- I due lati vanno normalizzati allo STESSO tipo, e qui stava il difetto:
+    -- `p.tabella::text` rende un regclass con il nome che PostgreSQL userebbe
+    -- per stamparlo - `contacts`, senza schema, perche' public e' nel
+    -- search_path - mentre l'array contiene `public.contacts`. Il confronto
+    -- non trovava mai una corrispondenza e dichiarava mancanti tutte e 22 le
+    -- tabelle, comprese quelle che c'erano.
+    --
+    -- Adesso entrambi i lati passano per `::regclass::text`: la stessa
+    -- trasformazione, applicata due volte, e il confronto e' fra identita' di
+    -- tabella - non fra due modi di scriverne il nome.
+    SELECT array_agg(d.nome ORDER BY d.nome) INTO mancanti FROM (
+        SELECT p.tabella::regclass::text AS nome FROM perimetro AS p
+        EXCEPT
+        SELECT unnest(ordine)::regclass::text) d;
+    IF mancanti IS NOT NULL THEN
+        RAISE EXCEPTION
+            'tabelle nel perimetro ma non nell''ordine di cancellazione: %. '
+            'Resterebbero sul TEST senza che nessuno lo noti.',
+            array_to_string(mancanti, ', ');
     END IF;
+
+    -- E sono esattamente 22: se il perimetro si restringesse, il controllo
+    -- qui sopra passerebbe lo stesso - non trova mancanti perche' non c'e'
+    -- piu' niente da cercare - e questa e' la verifica che se ne accorge.
+    SELECT count(DISTINCT p.tabella) INTO n_tabelle FROM perimetro AS p;
+    IF n_tabelle <> 22 THEN
+        RAISE EXCEPTION
+            'il perimetro contiene % tabelle distinte invece di 22', n_tabelle;
+    END IF;
+    RAISE NOTICE 'ordine di cancellazione: copre tutte le % tabelle del '
+                 'perimetro', n_tabelle;
 
     FOREACH nome_tabella IN ARRAY ordine LOOP
         SELECT count(*) INTO atteso FROM perimetro AS p
