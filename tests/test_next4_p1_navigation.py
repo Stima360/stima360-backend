@@ -141,14 +141,20 @@ def test_core_contact360_deep_link_and_post_login_order():
     assert re.search(r"contact360", dl)
     assert "openContact360(" in dl
 
-    assert "/api/admin/check" in login
+    # P26-5: `/api/admin/check` era il primo passo del login Basic, e il login
+    # conservava la coppia in `state.credentials` per rimetterla in un header a
+    # ogni richiesta. Entrambe le cose sono sparite: la login parla con
+    # /api/operator-auth/login e non conserva nulla. Cio' che questo test
+    # protegge - che il deep-link avvenga DOPO il login e nell'ordine giusto -
+    # non e' cambiato, ed e' asserito piu' sotto come prima.
+    assert "/api/admin/check" not in login
+    assert "OperatorSession.login(" in login
 
     compact_login = re.sub(r"\s+", "", login)
 
-    assert (
-        "state.credentials={username,password}" in compact_login
-        or "state.credentials={u,p}" in compact_login
-    ), "CORE deve conservare le credenziali esclusivamente nello state runtime"
+    assert "state.credentials" not in compact_login, (
+        "CORE non deve conservare alcuna credenziale, nemmeno nello state runtime"
+    )
 
     assert_in_order(login, "refresh()", "applyDeepLink()")
 
@@ -170,14 +176,18 @@ def test_property_deep_link_and_post_login_order():
     assert "catch" in dl
     assert "toast(" in dl
 
-    assert "/api/admin/check" in login
+    # P26-5: `/api/admin/check` era il primo passo del login Basic, e il login
+    # conservava la coppia in `state.credentials`. Entrambe le cose sono
+    # sparite. L'ordine post-login, che e' cio' che questo test protegge,
+    # resta asserito sotto.
+    assert "/api/admin/check" not in login
+    assert "OperatorSession.login(" in login
 
     compact = re.sub(r"\s+", "", login)
 
-    assert (
-        "state.credentials={username,password}" in compact
-        or "state.credentials={u,p}" in compact
-    ), "PROPERTY deve conservare le credenziali esclusivamente nello state runtime"
+    assert "state.credentials" not in compact, (
+        "PROPERTY non deve conservare alcuna credenziale, nemmeno nello state runtime"
+    )
 
     assert_in_order(login, "refresh()", "applyDeepLink()")
 
@@ -191,14 +201,20 @@ def test_buy_deep_link_and_post_login_order():
     assert "catch" in dl
     assert "toast(" in dl
 
-    assert "/api/admin/check" in login
+    # P26-5: `/api/admin/check` era il primo passo del login Basic, e il login
+    # conservava la coppia in `state.credentials` per rimetterla in un header a
+    # ogni richiesta. Entrambe le cose sono sparite: la login parla con
+    # /api/operator-auth/login e non conserva nulla. Cio' che questo test
+    # protegge - che il deep-link avvenga DOPO il login e nell'ordine giusto -
+    # non e' cambiato, ed e' asserito piu' sotto come prima.
+    assert "/api/admin/check" not in login
+    assert "OperatorSession.login(" in login
 
     compact = re.sub(r"\s+", "", login)
 
-    assert (
-        "credentials={username,password}" in compact
-        or "credentials={u,p}" in compact
-    ), "BUY deve conservare le credenziali esclusivamente nello state runtime"
+    assert "credentials" not in compact.replace("credentials:'include'", ""), (
+        "BUY non deve conservare alcuna credenziale, nemmeno nello state runtime"
+    )
 
     assert_in_order(
         login,
@@ -213,14 +229,20 @@ def test_match_deep_link_owns_detail_or_dashboard_choice():
     dl = function_block(js, "applyDeepLink")
     login = login_handler_block(js)
 
-    assert "/api/admin/check" in login
+    # P26-5: `/api/admin/check` era il primo passo del login Basic, e il login
+    # conservava la coppia in `state.credentials` per rimetterla in un header a
+    # ogni richiesta. Entrambe le cose sono sparite: la login parla con
+    # /api/operator-auth/login e non conserva nulla. Cio' che questo test
+    # protegge - che il deep-link avvenga DOPO il login e nell'ordine giusto -
+    # non e' cambiato, ed e' asserito piu' sotto come prima.
+    assert "/api/admin/check" not in login
+    assert "OperatorSession.login(" in login
 
     compact = re.sub(r"\s+", "", login)
 
-    assert (
-        "credentials={username,password}" in compact
-        or "credentials={u,p}" in compact
-    ), "MATCH deve conservare le credenziali esclusivamente nello state runtime"
+    assert "credentials" not in compact.replace("credentials:'include'", ""), (
+        "MATCH non deve conservare alcuna credenziale, nemmeno nello state runtime"
+    )
 
     assert "applyDeepLink()" in login
 
@@ -372,15 +394,38 @@ def test_next2_frontend_auth_contract_is_preserved(fe):
             f"{forbidden} non ammesso in {fe}"
         )
 
-    assert (
-        "credentials =" in js
-        or "credentials=" in js
-        or "state.credentials" in js
-    ), f"Stato credenziali runtime mancante in {fe}"
+    # P26-5 HA INVERTITO QUESTA META' DEL CONTRATTO.
+    #
+    # NEXT-2 congelava il canale Basic: stato credenziali runtime, encodeBasic,
+    # btoa, header Authorization e il gate `/api/admin/check`. Era la
+    # descrizione corretta di com'era autenticato questo frontend. Adesso
+    # autentica con la sessione operatore, e ognuna di quelle cinque cose e'
+    # diventata un divieto invece di un obbligo.
+    #
+    # Le due righe che NON cambiano sono la gestione del 401 e la presenza del
+    # logout: quelle regole valgono su qualunque canale, e restano identiche.
+    #
+    # I commenti vengono tolti prima di cercare: i commenti di P26-5 nominano
+    # apposta cio' che il codice non fa piu' ("NESSUN header Authorization"), e
+    # una ricerca sul testo grezzo scambierebbe la spiegazione per la cosa
+    # spiegata.
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    code = re.sub(r"(?m)^\s*//.*$|(?<=[;{}\s])//[^\n]*", "", code)
 
-    assert "encodeBasic" in js, f"encodeBasic mancante in {fe}"
-    assert "btoa(" in js, f"Basic encoding mancante in {fe}"
-    assert "Authorization" in js, f"Header Authorization mancante in {fe}"
+    for banned, why in (
+        ("state.credentials", "stato credenziali runtime"),
+        ("encodeBasic", "codifica Basic"),
+        ("btoa(", "codifica Basic"),
+        ("Authorization", "header Authorization"),
+        ("/api/admin/check", "gate di login legacy"),
+    ):
+        assert banned not in code, f"{why} ancora presente in {fe}: {banned}"
+
+    # Il canale nuovo, altrimenti il blocco sopra passerebbe anche su un
+    # frontend che ha semplicemente perso l'autenticazione.
+    for required in ("OperatorSession.login(", "OperatorSession.restore(",
+                     "OperatorSession.logout(", "OperatorSession.authFetch("):
+        assert required in code, f"{required} mancante in {fe}"
 
     assert (
         "=== 401" in js
@@ -388,10 +433,6 @@ def test_next2_frontend_auth_contract_is_preserved(fe):
     ), f"Gestione 401 mancante in {fe}"
 
     assert "logout" in js.lower(), f"Logout mancante in {fe}"
-
-    assert "/api/admin/check" in js, (
-        f"Login gate legacy mancante in {fe}"
-    )
 
 
 def test_next2_wrapper_names_are_not_replaced_by_p1():

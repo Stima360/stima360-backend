@@ -22,7 +22,26 @@
 let session = null;
 const listeners = new Set();
 
+// P26-4: quante volte la sessione e' cambiata da quando la pagina e' aperta.
+//
+// Serve a una cosa sola, e non e' un dettaglio: le view sono asincrone e
+// scrivono nel DOM DOPO l'await. Se fra la richiesta e la risposta la sessione
+// finisce - un 401, un logout, un altro operatore che entra - quella risposta
+// appartiene a una sessione che non esiste piu' e non deve comparire sullo
+// schermo. Chi ha iniziato un lavoro annota questo numero e, quando ha finito,
+// controlla che sia ancora lo stesso.
+//
+// Un intero e non un booleano "autenticato": fra l'inizio e la fine ci puo'
+// stare un logout E un login, e in quel caso `isAuthenticated()` risponderebbe
+// di nuovo true mentre l'operatore, e l'agenzia, sono altri.
+let epoch = 0;
+
+export function sessionEpoch() {
+  return epoch;
+}
+
 function notify() {
+  epoch += 1;
   for (const fn of listeners) fn(session);
 }
 

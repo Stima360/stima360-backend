@@ -8,7 +8,6 @@ const MATCH_INTEGER_FIELDS=['rooms_min','bedrooms_min','bathrooms_min'];
 const CHILD_KINDS=['locations','typologies','features'];
 
 let current=null;
-let credentials=null;
 let actionSubmitPending=false;
 let proposalSubmitPending=false;
 
@@ -251,13 +250,6 @@ function toast(text){
   setTimeout(()=>element.style.display='none',2600);
 }
 
-function encodeBasic(username,password){
-  const bytes=new TextEncoder().encode(`${username}:${password}`);
-  let binary='';
-  for(const byte of bytes)binary+=String.fromCharCode(byte);
-  return `Basic ${btoa(binary)}`;
-}
-
 function setLoginStatus(message=''){
   const node=document.getElementById('login-status');
   if(node)node.textContent=message;
@@ -275,41 +267,76 @@ function showApp(){
   setLoginStatus('');
 }
 
-function logout(message=''){
-  credentials=null;
+// P26-5: logout vero. La sessione viene revocata sul server e il cookie
+// cancellato; azzerare solo lo stato locale lascerebbe un cookie valido.
+async function logout(message=''){
   current=null;
+  await OperatorSession.logout();
   const form=document.getElementById('login-form');
   if(form)form.reset();
   showLogin(message);
 }
 
+// Chiamato quando la sessione muore sotto i piedi (401): NON parla col server -
+// e' gia' un 401 ad aver provocato tutto, e ritentare da qui e' il modo classico
+// di costruire un ciclo login/401/login.
+function sessionEnded(message=''){
+  current=null;
+  OperatorSession.sessionExpired();
+  const form=document.getElementById('login-form');
+  if(form)form.reset();
+  showLogin(message);
+}
+
+// P26-5: la password lascia il browser UNA volta, verso
+// /api/operator-auth/login, e non viene conservata da nessuna parte. Il server
+// risponde 204 e mette il token in un cookie HttpOnly che questo file non puo'
+// leggere. L'identita' si chiede a /me, che e' la sola fonte.
 async function login(event){
   event.preventDefault();
-  const username=document.getElementById('admin-username').value;
+  const email=document.getElementById('admin-username').value;
   const password=document.getElementById('admin-password').value;
   setLoginStatus('Verifica credenziali…');
   try{
-    const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});
-    if(!response.ok){
-      setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');
-      return;
-    }
-    credentials={username,password};
-    showApp();
-    await Promise.all([dashboard(),load()]);
-    await applyDeepLink();
-  }catch(_error){
-    setLoginStatus('Errore di connessione. Riprova.');
+    await OperatorSession.login(email,password);
+  }catch(error){
+    setLoginStatus(error.message||'Errore di connessione. Riprova.');
+    return;
   }
+  showApp();
+  await Promise.all([dashboard(),load()]);
+  await applyDeepLink();
 }
 
+// Ripristino all'avvio: il cookie e' HttpOnly, quindi la sola cosa che sa dire
+// se c'e' una sessione viva e' il server. Un 401 qui e' l'esito normale di
+// "non c'e' sessione" e non produce un messaggio di errore.
+async function boot(){
+  showLogin();
+  let session=null;
+  try{
+    session=await OperatorSession.restore();
+  }catch(error){
+    setLoginStatus(error.message||'');
+    return;
+  }
+  if(!session)return;
+  showApp();
+  await Promise.all([dashboard(),load()]);
+  await applyDeepLink();
+}
+
+// NESSUN header Authorization, in nessuna forma: il cookie viaggia da solo.
 async function req(url,opt={}){
-  const headers={'Content-Type':'application/json',...(opt.headers||{})};
-  if(credentials)headers.Authorization=encodeBasic(credentials.username,credentials.password);
-  const response=await fetch(url,{...opt,headers});
-  if(response.status===401){
-    logout('Credenziali non valide.');
-    throw new Error('Non autorizzato');
+  let response;
+  try{
+    response=await OperatorSession.authFetch(url,opt);
+  }catch(error){
+    if(error.status===401){
+      sessionEnded('Sessione scaduta. Effettua di nuovo il login.');
+      throw new Error('Non autorizzato');
+    }
+    throw error;
   }
   if(!response.ok)throw new Error(await response.text());
   return response.status===204?null:response.json();
@@ -765,7 +792,12 @@ function bindUi(){
   $('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));
   updateFeatureFields();
   updateActionScheduleField();
-  showLogin();
+  // P26-5: non solo showLogin(). Si parte dal login e si chiede al server se
+  // una sessione esiste: dopo un refresh loperatore resta dentro, cosa che con
+  // la password in memoria era impossibile.
+  // (Nessun apostrofo in questo commento: tests/test_buy_next_action_flow_r004.py
+  // estrae bindUi contando le graffe e legge un apostrofo come apice di stringa.)
+  boot();
 }
 
 if(typeof document!=='undefined')bindUi();

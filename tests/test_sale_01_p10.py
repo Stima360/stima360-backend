@@ -811,10 +811,14 @@ def test_get_sale_returns_the_seller_snapshot(monkeypatch):
 def _override_agency_context(monkeypatch, app):
     router_module = sale_module("router")
     overrides = dict(app.dependency_overrides)
+    # P26-5: un operatore vero. Il vecchio contesto aveva `user_id` e
+    # `session_id` a None perche' una credenziale condivisa non e' una persona:
+    # era una bugia necessaria finche' quel canale esisteva, e la sua fine la
+    # toglie. L'audit trail dipende da questo id.
     overrides[router_module.legacy_basic_agency_context] = lambda: (
         router_module.OperatorContext(
-            user_id=None, agency_id=7, role="agency_owner",
-            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+            user_id=42, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=1, auth_channel="operator_session",
         )
     )
     monkeypatch.setattr(app, "dependency_overrides", overrides)
@@ -837,9 +841,15 @@ def test_router_requires_admin_identity_for_every_route_including_reads(monkeypa
     app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
 
-    # P10 contract: the whole /api/sales router is registered with
-    # dependencies=[Depends(require_admin)] in main.py, so EVERY route,
-    # GET included, requires admin credentials -- not only the writes.
+    # P10 contract: ogni route di /api/sales richiede autenticazione, GET
+    # incluse - non solo le scritture. P26-5 ha cambiato la credenziale, non la
+    # regola: la sessione operatore al posto del Basic condiviso.
+    #
+    # E l'attore dell'audit segue: era lo username Basic - la stringa "giorgio"
+    # per chiunque conoscesse la password - e con due agenzie sarebbe stato
+    # attivamente fuorviante, due persone di aziende diverse registrate come lo
+    # stesso attore. Adesso e' `operator:<user_id>`.
+    from tests.operator_session_helpers import authenticate
     body = {**create_payload(), "idempotency_key": str(KEY_1)}
     anonymous_create = client.post("/api/sales", json=body)
     assert anonymous_create.status_code == 401
@@ -850,15 +860,14 @@ def test_router_requires_admin_identity_for_every_route_including_reads(monkeypa
     anonymous_get = client.get("/api/sales/1")
     assert anonymous_get.status_code == 401
 
-    authorized_create = client.post("/api/sales", json=body, auth=("giorgio", "test-secret"))
+    authenticate(monkeypatch, client, user_id=42, agency_id=1, role="agency_owner")
+
+    authorized_create = client.post("/api/sales", json=body)
     assert authorized_create.status_code == 201
-    assert captured["actor"] == "giorgio"
+    assert captured["actor"] == "operator:42"
 
-    authorized_list = client.get("/api/sales", auth=("giorgio", "test-secret"))
-    assert authorized_list.status_code == 200
-
-    authorized_get = client.get("/api/sales/1", auth=("giorgio", "test-secret"))
-    assert authorized_get.status_code == 200
+    assert client.get("/api/sales").status_code == 200
+    assert client.get("/api/sales/1").status_code == 200
 
     operation = app.openapi()["paths"]["/api/sales/{sale_id}/complete"]["post"]
     assert operation.get("security")
@@ -867,17 +876,19 @@ def test_router_requires_admin_identity_for_every_route_including_reads(monkeypa
 def test_router_translates_domain_errors_to_the_expected_http_status(monkeypatch):
     service = sale_module("service")
     router_module = sale_module("router")
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+    # P26-5: sessione operatore al posto del Basic condiviso.
+    from tests.operator_session_helpers import authenticate
+
     app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
+    authenticate(monkeypatch, client, user_id=42, agency_id=7, role="agency_owner")
 
     monkeypatch.setattr(
         service,
         "complete_sale_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.ConflictError("sale is cancelled")),
     )
-    conflict = client.post("/api/sales/1/complete", auth=("giorgio", "test-secret"))
+    conflict = client.post("/api/sales/1/complete")
     assert conflict.status_code == 409
 
     monkeypatch.setattr(
@@ -885,7 +896,7 @@ def test_router_translates_domain_errors_to_the_expected_http_status(monkeypatch
         "get_sale_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.NotFoundError("sale 1 not found")),
     )
-    missing = client.get("/api/sales/1", auth=("giorgio", "test-secret"))
+    missing = client.get("/api/sales/1")
     assert missing.status_code == 404
 
 

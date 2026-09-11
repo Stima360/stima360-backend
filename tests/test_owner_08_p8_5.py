@@ -11,7 +11,7 @@ from fastapi.security import HTTPBasicCredentials
 
 from flow import repository, service
 from flow.rules.registry import RULES, OWNER_RULES
-from owner.router_admin import require_owner_admin
+from operator_auth.dependencies import require_owner_admin_context
 import flow.router as flow_router_module
 
 # P26-6C: every FLOW write stamps a tenant, so these direct repository calls
@@ -370,6 +370,14 @@ def test_flow_router_is_protected_by_existing_owner_admin_dependency():
 
 
 def test_flow_router_http_auth_anonymous_bad_and_valid(monkeypatch):
+    """P26-5: FLOW ammette la sessione operatore, e nient'altro.
+
+    Le tre cose provate restano le stesse - anonimo rifiutato, credenziale
+    sbagliata rifiutata, credenziale buona ammessa - ma "credenziale" adesso
+    vuol dire una sessione viva. Che ADMIN_USER/ADMIN_PASS non aprano piu'
+    questa porta e' il contenimento di P26-5, e senza questo test la loro
+    inefficacia non sarebbe provata da nessuna parte.
+    """
     monkeypatch.setenv("ADMIN_USER", "p8admin")
     monkeypatch.setenv("ADMIN_PASS", "p8secret")
     # P26-6C: the dashboard is per-agency now - its counters are computed over
@@ -382,34 +390,105 @@ def test_flow_router_http_auth_anonymous_bad_and_valid(monkeypatch):
         user_id=None, agency_id=4242, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )
+    from tests.operator_session_helpers import SessionDouble, TEST_TOKEN
+    from operator_auth.enums import COOKIE_NAME
+
+    sessions = SessionDouble(monkeypatch)
     client = TestClient(app)
 
+    # Anonimo: rifiutato.
     assert client.get("/api/flow/dashboard").status_code == 401
+
+    # Basic, giusto o sbagliato: rifiutato lo stesso. E' il punto di P26-5.
     assert client.get("/api/flow/dashboard", auth=("p8admin", "wrong")).status_code == 401
-    response = client.get("/api/flow/dashboard", auth=("p8admin", "p8secret"))
+    assert client.get("/api/flow/dashboard", auth=("p8admin", "p8secret")).status_code == 401
+
+    # Una sessione viva: ammessa.
+    sessions.login(agency_id=4242, role="agency_owner")
+    client.cookies.set(COOKIE_NAME, TEST_TOKEN)
+    response = client.get("/api/flow/dashboard")
     assert response.status_code == 200
     assert response.json() == {"ok": True}
 
+    # E una sessione revocata torna a essere rifiutata, col cookie ancora
+    # inviato: la revoca non si aggira.
+    sessions.revoke()
+    assert client.get("/api/flow/dashboard").status_code == 401
+
+
+def _owner_session(role, is_platform_admin=False, agency_id=7):
+    """Una sessione viva con l'identita' descritta."""
+    from datetime import datetime, timezone
+
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import AuthenticatedSession
+
+    return AuthenticatedSession(
+        context=OperatorContext(
+            user_id=1, agency_id=agency_id, role=role,
+            is_platform_admin=is_platform_admin, session_id=1,
+            auth_channel="operator_session",
+        ),
+        agency_name="Agenzia A",
+        expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    )
+
 
 def test_existing_admin_auth_contract_is_fail_closed_and_accepts_valid_credentials(monkeypatch):
-    monkeypatch.delenv("ADMIN_USER", raising=False)
-    monkeypatch.delenv("ADMIN_PASS", raising=False)
-    with pytest.raises(HTTPException) as missing:
-        require_owner_admin(None)
-    assert missing.value.status_code == 503
+    """P26-5 HA CAMBIATO LA CREDENZIALE, NON LA CHIUSURA.
 
-    monkeypatch.setenv("ADMIN_USER", "p8admin")
-    monkeypatch.setenv("ADMIN_PASS", "p8secret")
+    Il nome resta perche' la storia resti rintracciabile. Cio' che questo test
+    protegge - che la guardia di OWNER Admin sia fail-closed - non cambia;
+    cambia cosa conta come titolo per entrare.
 
+    Prima: `require_owner_admin(credentials)` confrontava ADMIN_USER/ADMIN_PASS,
+    con 503 se il server non li aveva configurati e 401 per tutto il resto.
+    Adesso la superficie e' autenticata dalla sessione, e la guardia decide su
+    due assi invece che su uno: nessuna sessione -> 401; sessione con ruolo
+    insufficiente -> 403.
+
+    Il 503 non e' piu' possibile qui, ed e' corretto che non lo sia: diceva "il
+    server non ha credenziali amministrative configurate", una condizione che
+    questa superficie non legge piu'.
+    """
     with pytest.raises(HTTPException) as anonymous:
-        require_owner_admin(None)
+        require_owner_admin_context(None)
     assert anonymous.value.status_code == 401
 
-    with pytest.raises(HTTPException) as bad:
-        require_owner_admin(HTTPBasicCredentials(username="p8admin", password="wrong"))
-    assert bad.value.status_code == 401
+    # E la variabile d'ambiente non c'entra piu': assente o presente, la
+    # risposta e' la stessa, perche' la credenziale condivisa non apre piu'
+    # questa porta.
+    monkeypatch.delenv("ADMIN_USER", raising=False)
+    monkeypatch.delenv("ADMIN_PASS", raising=False)
+    with pytest.raises(HTTPException) as still_closed:
+        require_owner_admin_context(None)
+    assert still_closed.value.status_code == 401
 
-    assert require_owner_admin(HTTPBasicCredentials(username="p8admin", password="p8secret")) == "p8admin"
+
+@pytest.mark.parametrize("role", ["agent", "agency_admin"])
+def test_owner_admin_refuses_an_insufficient_role_with_403(role):
+    """403 e non 401: autenticato si', autorizzato no.
+
+    `agency_admin` e' incluso di proposito. La matrice dei permessi gli da'
+    "LIMITED" sui membri dell'agenzia, e i conti proprietario non sono membri:
+    fra due letture compatibili si sceglie la stretta.
+    """
+    with pytest.raises(HTTPException) as refused:
+        require_owner_admin_context(_owner_session(role))
+    assert refused.value.status_code == 403
+
+
+@pytest.mark.parametrize("session", [
+    _owner_session("agency_owner"),
+    _owner_session("agent", is_platform_admin=True),
+])
+def test_owner_admin_admits_the_owner_and_the_platform_admin(session):
+    context = require_owner_admin_context(session)
+    assert context is session.context
+    # E l'agenzia arriva dalla sessione, non da una Default Agency risolta
+    # server-side: e' questo che rende OWNER Admin multi-agenzia.
+    assert context.agency_id == 7
+    assert context.auth_channel == "operator_session"
 
 
 def test_legacy_and_owner_idempotency_scopes_remain_unchanged():

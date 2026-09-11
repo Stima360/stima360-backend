@@ -16,7 +16,6 @@ from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
 from valuation import BASE_MQ
 from urllib.parse import urlencode
-from admin_security import require_admin
 from core import service as core_service
 from core.router import router as core_router
 from core.scope import system_context_for_public_stima
@@ -131,6 +130,14 @@ def _public_stima_system_context(conn):
         try: agency_cur.close()
         except: pass
 
+
+# P26-5: l'autenticazione a sessione operatore, condivisa dai cinque frontend
+# amministrativi legacy. Un solo file montato una volta invece di cinque copie
+# della stessa regola di sicurezza - vedi static/shared/operator-session.js.
+# Nessun contenuto sensibile: e' lo stesso codice che il browser scarica gia'
+# oggi dentro ciascun app.js.
+SHARED_ASSETS_DIR = BASE_DIR / "static" / "shared"
+app.mount("/shared", StaticFiles(directory=str(SHARED_ASSETS_DIR)), name="shared-assets")
 
 # Additive CORE admin UI, isolated from legacy frontend flows.
 CORE_ADMIN_DIR = BASE_DIR / "static" / "core_admin"
@@ -272,6 +279,24 @@ def normalizza_comune(v: str | None) -> str | None:
 # ---------------------------------------------------------
 # ADMIN GATE — ACCESSO RISERVATO (HTML)
 # ---------------------------------------------------------    
+# P26-5 (frontend) - QUESTA ROTTA NON HA PIU' ALCUN CHIAMANTE.
+#
+# Era il primo passo del login Basic dei cinque pannelli amministrativi:
+# verificava la coppia, poi il frontend teneva la password in memoria e la
+# rimetteva in un header a ogni richiesta. I cinque adesso passano da
+# /api/operator-auth/login e nessuno la chiama piu'.
+#
+# Resta raggiungibile di proposito: rimuovere un endpoint e' una decisione di
+# prodotto, non un effetto collaterale. Ed e' l'unica delle otto `/api/admin`
+# che non tocca dati di tenant - non apre una connessione, non nomina una
+# tabella, non risolve un'agenzia: confronta due variabili d'ambiente e
+# risponde si' o no.
+#
+# Le altre SETTE leggono o scrivono dati di tenant (whatsapp_incoming, stime,
+# stime_dettagliate) e sono passate alla sessione operatore insieme a tutto il
+# resto: il prefisso `/api/admin` non le rendeva sicure, le rendeva soltanto
+# difficili da notare. L'inventario e la prova che questa e' l'unica rimasta
+# stanno in tests/test_p26_5_basic_containment.py.
 @app.post("/api/admin/check")
 def admin_check(data: dict):
     admin_user = os.getenv("ADMIN_USER")
@@ -294,7 +319,7 @@ def admin_check(data: dict):
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — MESSAGGI (INBOX)
 # ---------------------------------------------------------
-@app.get("/api/admin/whatsapp/messages", dependencies=[Depends(require_admin)])
+@app.get("/api/admin/whatsapp/messages", dependencies=[Depends(require_authenticated_operator)])
 def admin_whatsapp_messages(
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
@@ -388,7 +413,7 @@ def admin_whatsapp_messages(
 # ---------------------------------------------------------
 # ADMIN WHATSAPP — INVIO RISPOSTA
 # ---------------------------------------------------------
-@app.post("/api/admin/whatsapp/reply", dependencies=[Depends(require_admin)])
+@app.post("/api/admin/whatsapp/reply", dependencies=[Depends(require_authenticated_operator)])
 def admin_whatsapp_reply(data: dict):
 
     to = data.get("to")
@@ -427,7 +452,7 @@ def admin_whatsapp_reply(data: dict):
 class DeleteRequest(BaseModel):
     ids: list[int]
 
-@app.post("/api/admin/stime/delete", dependencies=[Depends(require_admin)])
+@app.post("/api/admin/stime/delete", dependencies=[Depends(require_authenticated_operator)])
 def admin_delete_stime(
     payload: DeleteRequest,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
@@ -466,7 +491,7 @@ def admin_delete_stime(
 # ---------------------------------------------------------
 # CANCELLA STIME DETTAGLIATE 
 # ---------------------------------------------------------
-@app.post("/api/admin/stime_dettagliate/delete", dependencies=[Depends(require_admin)])
+@app.post("/api/admin/stime_dettagliate/delete", dependencies=[Depends(require_authenticated_operator)])
 def admin_delete_stime_dettagliate(
     payload: DeleteRequest,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
@@ -1419,7 +1444,7 @@ async def salva_stima_dettagliata(request: Request):
 # ---------------------------------------------------------
 # ADMIN STIME PRO
 # ---------------------------------------------------------
-@app.get("/api/admin/stime_pro", dependencies=[Depends(require_admin)])
+@app.get("/api/admin/stime_pro", dependencies=[Depends(require_authenticated_operator)])
 def admin_lista_stime_pro(
     day: str = "oggi",
     dal: date | None = None,
@@ -1466,7 +1491,7 @@ class LeadUpdate(BaseModel):
     lead_status: str | None = None
     note_internal: str | None = None
 
-@app.get("/api/admin/stime", dependencies=[Depends(require_admin)])
+@app.get("/api/admin/stime", dependencies=[Depends(require_authenticated_operator)])
 def admin_lista_stime(
     day: str = "oggi",
     dal: date | None = None,
@@ -1514,7 +1539,7 @@ def admin_lista_stime(
 # ---------------------------------------------------------
 # UPDATE
 # ---------------------------------------------------------
-@app.post("/api/admin/stime/{stima_id}/update", dependencies=[Depends(require_admin)])
+@app.post("/api/admin/stime/{stima_id}/update", dependencies=[Depends(require_authenticated_operator)])
 def admin_update_stima(
     stima_id: int,
     payload: LeadUpdate,

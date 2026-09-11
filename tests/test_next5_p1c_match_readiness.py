@@ -418,7 +418,25 @@ global.document={
 };
 global.window={location:{search:''}};
 global.setTimeout=()=>0;
-global.btoa=value=>Buffer.from(value,'binary').toString('base64');
+// P26-5: match_admin/app.js dipende ora da `OperatorSession`, lo script
+// condiviso che la pagina carica prima di app.js (vedi
+// static/shared/operator-session.js e static/match_admin/index.html). Il
+// prelude deve fornirlo esattamente come lo fornisce il browser, altrimenti il
+// modulo non si carica nemmeno.
+//
+// Uno stub e non il file vero: qui si prova il preflight di MATCH, non
+// l'autenticazione - quella e' provata, eseguita davvero, in
+// tests/test_p26_5_legacy_frontends_runtime.py.
+global.OperatorSession={
+  login:async()=>null,
+  logout:async()=>undefined,
+  restore:async()=>null,
+  sessionExpired(){},
+  authFetch:(path,options)=>global.fetch(path,{...(options||{}),credentials:'include'}),
+  getSession:()=>null,
+  isAuthenticated:()=>false,
+  onAuthChange:()=>()=>{}
+};
 """
 
 
@@ -470,8 +488,12 @@ document.getElementById('singleProp').value='2';
 def test_match_admin_preserves_auth_and_p1_deep_links():
     source = JS_PATH.read_text(encoding="utf-8")
 
-    assert "headers.Authorization=encodeBasic" in source
-    assert "/api/admin/check" in source
+    # P26-5: MATCH autenticava con Basic; adesso con la sessione operatore.
+    # I deep-link asseriti sotto non cambiano.
+    assert "encodeBasic" not in source
+    assert "/api/admin/check" not in source
+    assert "OperatorSession.login(" in source
+    assert "OperatorSession.authFetch(" in source
     assert "positiveId(params.get('id'))" in source
     assert 'href="/buy-admin/?id=${bid}"' in source
     assert 'href="/property-admin/?id=${pid}"' in source

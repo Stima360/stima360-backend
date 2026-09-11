@@ -652,16 +652,24 @@ def test_recovery_schema_bounds_and_router_auth(monkeypatch):
     app.include_router(flow_router.router)
     # P26-6C: the route resolves an agency server-side, so the DB-backed
     # resolution is overridden the way every other P26 suite overrides it. The
-    # Basic guard stays real - the 401 assertion below still means what it meant.
+    # P26-5: la guardia resta vera, e la credenziale che la apre e' la sessione
+    # operatore. Il 401 sotto significa esattamente quel che significava prima.
     from operator_auth.context import OperatorContext
+    from operator_auth.enums import COOKIE_NAME
+    from tests.operator_session_helpers import SessionDouble, TEST_TOKEN
+
     app.dependency_overrides[flow_router.legacy_basic_agency_context] = lambda: OperatorContext(
-        user_id=None, agency_id=4242, role="agency_owner",
-        is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+        user_id=42, agency_id=4242, role="agency_owner",
+        is_platform_admin=False, session_id=1, auth_channel="operator_session",
     )
+    sessions = SessionDouble(monkeypatch)
     client = TestClient(app)
     assert client.post("/api/flow/events/recover", json={"limit": 10}).status_code == 401
     monkeypatch.setattr(flow_router.service, "recover_received_events_for_agency", lambda agency_id, limit: {"status": "completed", "requested_limit": limit})
-    response = client.post("/api/flow/events/recover", json={"limit": 10}, auth=("admin", "secret"))
+
+    sessions.login(agency_id=4242, role="agency_owner")
+    client.cookies.set(COOKIE_NAME, TEST_TOKEN)
+    response = client.post("/api/flow/events/recover", json={"limit": 10})
     assert response.status_code == 200
     assert response.json()["requested_limit"] == 10
 

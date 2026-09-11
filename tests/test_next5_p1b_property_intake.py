@@ -296,8 +296,14 @@ def test_match_detail_is_complete_and_escapes_api_values():
 
 def test_auth_deep_link_and_existing_non_match_readiness_remain_separate():
     js = read_js()
-    assert "/api/admin/check" in function_block(js, "login")
-    assert "Authorization" in function_block(js, "api")
+    # P26-5: il gate `/api/admin/check` e l'header Authorization erano il canale
+    # Basic. Adesso il login parla con /api/operator-auth/login e il wrapper
+    # non costruisce piu' alcun header. I deep-link, che sono cio' che questo
+    # test protegge, restano asseriti invariati sotto.
+    assert "/api/admin/check" not in function_block(js, "login")
+    assert "OperatorSession.login(" in function_block(js, "login")
+    assert "Authorization" not in function_block(js, "api")
+    assert "OperatorSession.authFetch(" in function_block(js, "api")
     assert "positiveId(" in function_block(js, "applyDeepLink")
     assert "openDetail(id)" in function_block(js, "applyDeepLink")
     assert "readiness_score" not in function_block(js, "renderMatchData")

@@ -160,14 +160,22 @@ def test_click_away_and_logout_cancel_global_search():
 def test_next2_next3_p1_and_p2_contracts_are_preserved():
     compact_js = compact(JS)
 
-    assert "/api/admin/check" in JS
-    assert "state.credentials={username,password}" in compact_js
-    assert (
-        "headers.Authorization="
-        "encodeBasic(state.credentials.username,state.credentials.password)"
-        in compact_js
-    )
-    assert "if(r.status===401)" in compact_js
+    # P26-5: le tre righe qui sotto congelavano il canale Basic - il gate
+    # `/api/admin/check`, la coppia conservata in `state.credentials` e
+    # l'header ricostruito a ogni richiesta. Sono diventate divieti, perche'
+    # questo frontend autentica con la sessione operatore. La riga sul 401
+    # resta identica: quella regola vale su qualunque canale.
+    assert "/api/admin/check" not in JS
+    assert "state.credentials" not in compact_js
+    assert "encodeBasic" not in compact_js
+    assert "OperatorSession.login(" in JS
+    assert "OperatorSession.authFetch(" in JS
+    # Il 401 resta gestito, ma cambia forma: non e' piu' il wrapper a leggere
+    # `r.status`, perche' adesso e' `authFetch` a sollevare. Il frontend lo
+    # cattura e chiude la sessione, che e' la regola vera - e viene asserita
+    # sulla reazione, non sulla riga di codice che la produceva prima.
+    assert "error.status===401" in compact_js
+    assert "sessionEnded(" in JS
 
     for forbidden in ("localStorage", "sessionStorage", "document.cookie", "indexedDB"):
         assert forbidden not in JS

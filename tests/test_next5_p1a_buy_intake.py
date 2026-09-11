@@ -319,8 +319,14 @@ def test_auth_deep_links_tasks_and_matches_remain_in_the_buy_admin():
     detail = function_block(js, "detail")
     apply_deep_link = function_block(js, "applyDeepLink")
 
-    assert "/api/admin/check" in login
-    assert "Authorization" in function_block(js, "req")
+    # P26-5: il gate `/api/admin/check` e l'header Authorization erano il canale
+    # Basic. Adesso il login parla con /api/operator-auth/login e il wrapper
+    # non costruisce piu' alcun header. I deep-link, che sono cio' che questo
+    # test protegge, restano asseriti invariati sotto.
+    assert "/api/admin/check" not in login
+    assert "OperatorSession.login(" in login
+    assert "Authorization" not in function_block(js, "req")
+    assert "OperatorSession.authFetch(" in function_block(js, "req")
     assert "positiveId(" in apply_deep_link
     assert "/core-admin/?view=contact360&id=${cid}" in detail
     assert "/property-admin/?id=${pid}" in detail

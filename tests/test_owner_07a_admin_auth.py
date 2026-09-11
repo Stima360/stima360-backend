@@ -8,9 +8,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import basic_only_agency_context
+from operator_auth.dependencies import require_owner_admin_context
 from owner import repository as repo
-from owner.router_admin import require_owner_admin, router as admin_router
+from operator_auth.dependencies import require_owner_admin_context
+from owner.router_admin import router as admin_router
 from owner.router_portal import router as portal_router
 
 
@@ -41,7 +42,10 @@ def test_owner_admin_dashboard_denies_anonymous_before_repository(monkeypatch):
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Non autorizzato"}
-    assert response.headers["www-authenticate"] == 'Basic realm="STIMA360 OWNER Admin"'
+    # P26-5: niente piu' `WWW-Authenticate`. Chiedeva al browser di aprire il
+    # prompt Basic; su una superficie che il Basic non lo accetta piu' sarebbe
+    # un invito a inserire una credenziale che non apre nulla.
+    assert response.headers.get("www-authenticate") is None
     assert called is False
 
 
@@ -72,7 +76,7 @@ def test_owner_admin_valid_credentials_allow_access(monkeypatch):
     monkeypatch.setattr(repo, "dashboard", lambda agency_id: {"active_accounts": 2})
 
     app = _admin_app()
-    app.dependency_overrides[basic_only_agency_context] = lambda: OperatorContext(
+    app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
         user_id=None, agency_id=4242, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )
@@ -107,6 +111,17 @@ def test_owner_admin_wrong_credentials_are_denied(monkeypatch):
 
 
 def test_owner_admin_missing_server_credentials_fail_closed(monkeypatch):
+    """P26-5: fail-closed resta, ma non dipende piu' da una variabile d'ambiente.
+
+    Il 503 diceva "il server non ha credenziali amministrative configurate", e
+    con OWNER Admin su ADMIN_USER/ADMIN_PASS era la risposta giusta: senza
+    quelle non c'era modo di distinguere un amministratore da chiunque altro, e
+    un 401 avrebbe mandato l'operatore a cercare il problema sbagliato.
+
+    Adesso questa superficie non legge piu' quelle variabili: toglierle non
+    cambia nulla, e il rifiuto per chi non ha una sessione e' 401. Il 503
+    sopravvive dove sopravvive il canale.
+    """
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.delenv("ADMIN_PASS", raising=False)
 
@@ -115,8 +130,8 @@ def test_owner_admin_missing_server_credentials_fail_closed(monkeypatch):
         headers=_basic("anything", "anything"),
     )
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Non autorizzato"}
 
 
 def _declared_routes(relative_path: str, inherited_prefix: str = "") -> list[tuple[str, str]]:
@@ -163,10 +178,20 @@ def _declared_routes(relative_path: str, inherited_prefix: str = "") -> list[tup
 
 
 def test_every_owner_admin_api_route_has_server_side_auth_dependency():
-    """Verify router-wide Basic auth and the complete 42-route P8.1 surface."""
+    """P26-5: la guardia del router e' la sessione operatore piu' un ruolo.
+
+    Cio' che questo test protegge - che TUTTE le 42 route abbiano una guardia
+    dichiarata sul router, e non una per route dimenticabile - non cambia.
+    Cambia quale: `require_owner_admin` confrontava ADMIN_USER/ADMIN_PASS in
+    `owner/router_admin.py`, con una copia della logica di `admin_security`;
+    adesso c'e' `require_owner_admin_context`, che risolve la sessione, impone
+    `agency_owner` e restituisce l'agenzia. Una dipendenza per due decisioni e'
+    deliberato: quando venivano da credenziali diverse, una richiesta poteva
+    essere ammessa da una e scopata dall'altra.
+    """
     assert admin_router.prefix == "/api/owner/admin"
     assert any(
-        getattr(dependency, "dependency", None) is require_owner_admin
+        getattr(dependency, "dependency", None) is require_owner_admin_context
         for dependency in admin_router.dependencies
     )
 
@@ -208,10 +233,15 @@ def test_owner_portal_routes_do_not_inherit_admin_basic_auth(monkeypatch):
 
 def test_auth_hardening_uses_existing_env_credentials_without_browser_session_storage():
     source = Path(__file__).parents[1].joinpath("owner/router_admin.py").read_text()
-    assert 'os.getenv("ADMIN_USER")' in source
-    assert 'os.getenv("ADMIN_PASS")' in source
-    assert "secrets.compare_digest" in source
-    assert "HTTPBasic(auto_error=False)" in source
+    # P26-5: la copia locale della verifica Basic e' sparita. Era una seconda
+    # implementazione della stessa regola gia' in `admin_security`, ed era il
+    # pezzo che rendeva possibile lo stato ibrido "ammesso da una credenziale,
+    # scopato dall'altra". Il divieto sullo storage del browser NON cambia:
+    # vale su qualunque canale, ed e' asserito identico sotto.
+    for retired in ('os.getenv("ADMIN_USER")', 'os.getenv("ADMIN_PASS")',
+                    "HTTPBasic(auto_error=False)", "WWW-Authenticate"):
+        assert retired not in source, f"OWNER Admin verifica ancora Basic: {retired}"
+    assert "require_owner_admin_context" in source
     for forbidden in (
         "localStorage",
         "sessionStorage",

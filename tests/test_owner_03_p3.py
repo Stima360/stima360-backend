@@ -13,7 +13,9 @@ from pydantic import ValidationError as PydanticValidationError
 from core.exceptions import ConflictError
 from owner import repository as repo
 from owner.dependencies import current_owner
-from owner.router_admin import require_owner_admin, router as admin_router
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import require_owner_admin_context
+from owner.router_admin import router as admin_router
 from owner.router_portal import router as portal_router
 from owner.schemas import (
     VisitFeedbackCreate,
@@ -44,9 +46,9 @@ AGENCY = 901
 
 def _bind_agency(app):
     from operator_auth.context import OperatorContext
-    from operator_auth.dependencies import basic_only_agency_context
+    from operator_auth.dependencies import require_owner_admin_context
 
-    app.dependency_overrides[basic_only_agency_context] = lambda: OperatorContext(
+    app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
         user_id=None, agency_id=AGENCY, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )
@@ -119,7 +121,16 @@ def test_update_and_supersede_apply_same_privacy_rules():
 def test_privacy_endpoint_returns_codes_without_echoing_text():
     client = TestClient(FastAPI())
     client.app.include_router(admin_router)
-    client.app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
+    # P26-5: ammissione e scope di OWNER Admin sono ora la STESSA dipendenza.
+    # Erano due - `require_owner_admin` al mount e lo scope sulla route - e
+    # servivano due override. Adesso ne basta uno, ed e' quello che porta il
+    # contesto: installarne un secondo con una stringa sovrascriverebbe lo scope
+    # e le route resterebbero senza agenzia.
+    client.app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
+        user_id=1, agency_id=1, role="agency_owner",
+        is_platform_admin=False, session_id=1,
+        auth_channel="operator_session",
+    )
     sensitive = "mario.rossi@example.com"
     response = client.post(
         "/api/owner/admin/visit-feedback/validate-privacy",
@@ -392,7 +403,16 @@ def test_portal_list_and_detail_are_account_isolated(monkeypatch):
 def test_admin_list_filters_and_detail(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
-    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
+    # P26-5: ammissione e scope di OWNER Admin sono ora la STESSA dipendenza.
+    # Erano due - `require_owner_admin` al mount e lo scope sulla route - e
+    # servivano due override. Adesso ne basta uno, ed e' quello che porta il
+    # contesto: installarne un secondo con una stringa sovrascriverebbe lo scope
+    # e le route resterebbero senza agenzia.
+    app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
+        user_id=1, agency_id=1, role="agency_owner",
+        is_platform_admin=False, session_id=1,
+        auth_channel="operator_session",
+    )
     captured = {}
 
     def fake_list(*args):

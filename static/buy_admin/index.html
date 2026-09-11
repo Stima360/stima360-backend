@@ -11,8 +11,8 @@
     <h1 id="login-title">STIMA360 Admin</h1>
     <p class="muted">Accesso riservato.</p>
     <form id="login-form">
-      <label for="admin-username">Username</label>
-      <input id="admin-username" name="username" type="text" autocomplete="username" required>
+      <label for="admin-username">Email</label>
+      <input id="admin-username" name="email" type="email" autocomplete="username" required>
       <label for="admin-password">Password</label>
       <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
       <button type="submit">Accedi</button>
@@ -218,6 +218,6 @@
   </div>
 
   <div id="toast"></div>
-  <script src="/buy-admin/assets/app.js"></script>
+  <script src="/shared/operator-session.js"></script><script src="/buy-admin/assets/app.js"></script>
 </body>
 </html>

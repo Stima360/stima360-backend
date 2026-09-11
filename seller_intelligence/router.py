@@ -2,7 +2,8 @@
 
 Not registered anywhere in P17-A. Mirrors core/router.py's convention: the
 router itself carries no auth dependency - that is applied at mount time
-(``app.include_router(seller_intelligence_router, dependencies=[Depends(require_admin)])``),
+(``app.include_router(seller_intelligence_router,
+dependencies=[Depends(require_authenticated_operator)])``),
 exactly like every other admin-protected domain router in this repository.
 Wiring that mount into main.py is explicitly out of scope for P17-A (see
 tests/test_seller_intelligence_router.py, which proves the router works
@@ -16,9 +17,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from admin_security import require_admin
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import audit_actor, legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
 from . import service
@@ -40,7 +40,7 @@ def _translate(callable_, *args, **kwargs):
 @router.post("/events", status_code=201)
 def create_event(
     payload: SellerTimelineEventCreate,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     # The request model is not splatted into the service. `created_by` is the

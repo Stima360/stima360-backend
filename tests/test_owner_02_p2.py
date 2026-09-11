@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from owner.dependencies import current_owner
-from owner.router_admin import require_owner_admin, router as admin_router
+from operator_auth.context import OperatorContext
+from operator_auth.dependencies import require_owner_admin_context
+from owner.router_admin import router as admin_router
 from owner.router_portal import router as portal_router
 from owner.schemas import FeedbackCreate, FeedbackPublic, SharedDocumentCreate, VisitFeedbackCreate
 from owner import repository as repo
@@ -25,9 +27,9 @@ AGENCY = 901
 
 def _bind_agency(app):
     from operator_auth.context import OperatorContext
-    from operator_auth.dependencies import basic_only_agency_context
+    from operator_auth.dependencies import require_owner_admin_context
 
-    app.dependency_overrides[basic_only_agency_context] = lambda: OperatorContext(
+    app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
         user_id=None, agency_id=AGENCY, role="agency_owner",
         is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
     )
@@ -108,7 +110,16 @@ def test_portal_http_isolation_and_reads(monkeypatch):
 def test_admin_http_document_lifecycle(monkeypatch):
     app = FastAPI()
     app.include_router(admin_router)
-    app.dependency_overrides[require_owner_admin] = lambda: "test-admin"
+    # P26-5: ammissione e scope di OWNER Admin sono ora la STESSA dipendenza.
+    # Erano due - `require_owner_admin` al mount e lo scope sulla route - e
+    # servivano due override. Adesso ne basta uno, ed e' quello che porta il
+    # contesto: installarne un secondo con una stringa sovrascriverebbe lo scope
+    # e le route resterebbero senza agenzia.
+    app.dependency_overrides[require_owner_admin_context] = lambda: OperatorContext(
+        user_id=1, agency_id=1, role="agency_owner",
+        is_platform_admin=False, session_id=1,
+        auth_channel="operator_session",
+    )
     _bind_agency(app)
     monkeypatch.setattr(repo, "create_shared_document", lambda a, d: {"id": 1, **d, "status": "draft"})
     monkeypatch.setattr(repo, "publish_shared_document", lambda a, i: {"id": i, "status": "published"})

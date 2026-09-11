@@ -1470,8 +1470,16 @@ def test_session_path_reads_only_the_cookie():
     it always belonged. Narrowed in target, unchanged in strength.
     """
     code = _function_source(DEPS_SOURCE, "optional_session")
-    assert "request.cookies.get(COOKIE_NAME)" in code
-    for forbidden in ("query_params", "path_params", "request.headers", "json()"):
+    # P26-5: il cookie arriva da `_cookie_scheme`, non piu' da `request.cookies`.
+    #
+    # E' lo stesso cookie e lo stesso valore. Passando da uno schema di
+    # sicurezza `APIKeyCookie`, pero', la dipendenza si porta dietro la
+    # dichiarazione `security` nell'OpenAPI - che prima veniva dallo schema
+    # Basic e sarebbe sparita con esso, lasciando centotto route protette ma
+    # apparentemente aperte a chiunque legga il documento.
+    assert "Depends(_cookie_scheme)" in code
+    for forbidden in ("query_params", "path_params", "request.headers", "json()",
+                      "request.cookies"):
         assert forbidden not in code, f"optional_session reads {forbidden!r}"
 
 
@@ -1496,25 +1504,40 @@ def test_the_cookie_is_read_in_exactly_one_place():
         node.name for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and "COOKIE_NAME" in ast.unparse(node)
     ]
-    assert readers == ["optional_session", "session_was_presented"], readers
+    # P26-5: NESSUNA funzione nomina piu' COOKIE_NAME, ed e' un rafforzamento.
+    #
+    # Il cookie adesso arriva da `_cookie_scheme`, uno schema `APIKeyCookie`
+    # dichiarato una volta a livello di modulo. Il nome compare li' e in nessun
+    # altro posto: non c'e' piu' nemmeno una funzione che possa leggerlo per
+    # conto proprio, e la regola "un solo lettore" diventa "un solo punto di
+    # dichiarazione", che e' piu' forte.
+    #
+    # `session_was_presented` e' sparita col fallback che la giustificava:
+    # distingueva "nessun cookie" da "cookie rifiutato" perche' i due dovevano
+    # ricadere diversamente sul Basic. Senza un secondo canale non c'e' piu'
+    # nulla da distinguere.
+    assert readers == [], readers
 
-    presence = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "session_was_presented"
+    source = DEPS_SOURCE.read_text(encoding="utf-8")
+    declarations = [
+        line for line in source.splitlines()
+        if "COOKIE_NAME" in line
+        and not line.strip().startswith("#")
+        and not line.startswith("from ")
+    ]
+    assert declarations == ["_cookie_scheme = APIKeyCookie(name=COOKIE_NAME, auto_error=False)"], (
+        declarations
     )
-    statements = [n for n in presence.body if not (
-        isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
-    )]
-    assert len(statements) == 1 and isinstance(statements[0], ast.Return), (
-        "session_was_presented must be one return statement and nothing else"
-    )
-    returned = statements[0].value
-    assert (isinstance(returned, ast.Call)
-            and getattr(returned.func, "id", None) == "bool"), (
-        "session_was_presented must return a bool, so the cookie's value "
-        f"cannot escape it: {ast.unparse(returned)}"
-    )
-    assert presence.returns is not None and ast.unparse(presence.returns) == "bool"
+
+    # P26-3 aveva aggiunto `session_was_presented`, un secondo lettore che
+    # guardava soltanto la PRESENZA del cookie per impedire che uno rifiutato
+    # ricadesse sul Basic. Serviva una forma stretta - un solo return, un bool -
+    # perche' quel lettore non potesse mai far uscire il valore.
+    #
+    # P26-5 l'ha rimosso col fallback che lo giustificava. Non e' una copertura
+    # persa: e' una funzione che non esiste piu', e la sua assenza e' asserita
+    # sopra dal fatto che nessuna funzione nomini COOKIE_NAME.
+    assert "session_was_presented" not in source
 
 
 def test_the_legacy_channel_does_not_parse_the_header_by_hand():
@@ -1536,14 +1559,37 @@ def test_the_legacy_channel_does_not_parse_the_header_by_hand():
     )
 
 
-def test_the_basic_scheme_is_declared_so_openapi_stays_honest():
-    from operator_auth import dependencies
+def test_the_cookie_scheme_is_declared_so_openapi_stays_honest():
+    """P26-5 HA CAMBIATO LO SCHEMA, NON LA RAGIONE PER CUI ESISTE.
+
+    P26-3 dichiarava `HTTPBasic` come `SecurityBase` per una ragione precisa:
+    e' quella dichiarazione a produrre il `security` nell'OpenAPI, e un parse
+    dell'header fatto a mano autentica ugualmente ma lascia la route
+    apparentemente aperta a chiunque legga il documento - client generati,
+    gateway, revisori.
+
+    Tolto il Basic, senza nulla al suo posto CENTOTTO route sarebbero diventate
+    "senza sicurezza" pur essendo protette esattamente come prima.
+    `APIKeyCookie` e' anch'esso un `SecurityBase` e descrive la verita': questa
+    API si autentica con un cookie.
+
+    `auto_error=False` per la stessa ragione di prima: il rifiuto lo formulano
+    le dipendenze, ciascuna col proprio codice - 401 per chi non ha sessione,
+    403 per chi non ha il ruolo su OWNER Admin.
+    """
     from fastapi.security.base import SecurityBase
 
-    assert isinstance(dependencies._basic_scheme, SecurityBase)
-    assert dependencies._basic_scheme.auto_error is False, (
-        "an absent credential is not yet a failure; the cookie branch may win"
-    )
+    from operator_auth import dependencies
+    from operator_auth.enums import COOKIE_NAME
+
+    assert isinstance(dependencies._cookie_scheme, SecurityBase)
+    assert dependencies._cookie_scheme.auto_error is False
+    # E nomina il cookie vero: uno schema che ne dichiarasse un altro
+    # descriverebbe un'API immaginaria.
+    assert dependencies._cookie_scheme.model.name == COOKIE_NAME
+
+    # Lo schema Basic non esiste piu' nemmeno come oggetto inutilizzato.
+    assert not hasattr(dependencies, "_basic_scheme")
 
 
 def test_the_401_matches_the_certified_legacy_contract():
@@ -1620,12 +1666,23 @@ def test_the_compatibility_context_is_the_only_basic_aware_function():
     # `legacy_basic` nor `require_admin` either. Five functions know about the
     # channel, each for exactly one reason, and the list is in source order so
     # that a new one cannot be slipped in unnoticed.
+    # P26-5: la lista si accorcia perche' il canale non e' piu' un modo di
+    # entrare. Restano le due funzioni che lo DESCRIVONO senza usarlo su una
+    # route di tenant: quella che costruisce il vecchio contesto - ancora
+    # raggiungibile per `/api/admin/check` e provata a parte - e il verificatore
+    # che delega a `admin_security.require_admin`, che resta la sola definizione
+    # di cosa sia quella credenziale.
     assert basic_aware == [
-        "require_authenticated_operator",  # admits either channel, no scope
-        "_default_agency_context",         # builds the legacy scope
-        "basic_only_agency_context",       # the same scope, for a Basic-only mount
-        "_verify_legacy_credentials",      # verifies the credential, via require_admin
-        "legacy_basic_agency_context",     # refuses the way require_admin used to
+        "_default_agency_context",         # costruisce lo scope della Default Agency
+        "_verify_legacy_credentials",      # verifica la credenziale, via require_admin
+        # Non usa piu' il canale: e' catturata dal PROPRIO NOME, che P26-5
+        # tiene di proposito. Rinominarla insieme al cambio di comportamento
+        # avrebbe sepolto una decisione di sicurezza dentro un'edit meccanica
+        # su centocinquanta route; il rinomino e' un commit cosmetico separato.
+        "legacy_basic_agency_context",
+        # Anche questa e' catturata di rimbalzo: dichiara quella dipendenza per
+        # ricavarne l'operatore dell'audit trail. Non tocca alcuna credenziale.
+        "audit_actor",
     ], basic_aware
 
 
@@ -1653,9 +1710,10 @@ def test_require_operator_returns_only_a_context_or_raises():
         n for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "require_operator"
     )
-    # P26-3: the two channels moved into `_scope_from_session_or_basic`, so
-    # this function now has one return - and the property being asserted is
-    # unchanged: it yields a context or raises, never None.
+    # P26-3 sposto' i due canali in un helper, quindi qui resto' un solo
+    # return; P26-5 ha tolto il secondo canale del tutto e l'helper si chiama
+    # ora `_scope_from_session`. La proprieta' asserita non e' mai cambiata:
+    # questa funzione produce un contesto oppure solleva, mai None.
     returns = [ast.unparse(n.value) for n in ast.walk(node) if isinstance(n, ast.Return)]
     assert returns == ["context"], returns
     raises = [ast.unparse(n) for n in ast.walk(node) if isinstance(n, ast.Raise)]
@@ -1665,12 +1723,14 @@ def test_require_operator_returns_only_a_context_or_raises():
     # And the helper it delegates to is the one that knows both channels.
     helper = next(
         n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "_scope_from_session_or_basic"
+        if isinstance(n, ast.FunctionDef) and n.name == "_scope_from_session"
     )
-    # ast.walk is breadth-first, so compare the set: what matters is that the
-    # only things it can produce are the two scopes and None.
+    # P26-5: prima poteva produrre tre cose - lo scope della sessione, quello
+    # della credenziale condivisa, oppure None - e la parte delicata era quale
+    # prevalesse. Adesso ne produce una sola, e non c'e' piu' una precedenza da
+    # sbagliare: o c'e' una sessione, o non c'e' niente.
     helper_returns = {ast.unparse(n.value) for n in ast.walk(helper) if isinstance(n, ast.Return)}
-    assert helper_returns == {"session.context", "_default_agency_context()", "None"}, helper_returns
+    assert helper_returns == {"session.context if session is not None else None"}, helper_returns
 
 
 def test_router_is_mounted_in_main():

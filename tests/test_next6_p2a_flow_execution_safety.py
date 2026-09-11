@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -548,9 +549,23 @@ def test_flow_admin_has_explicit_login_and_memory_only_credentials():
     ):
         assert marker in html
     assert "hidden" in html
-    assert "/api/admin/check" in js
-    assert "encodeBasic" in js
-    assert "Authorization" in js
+    # P26-5: FLOW autenticava con Basic - il gate `/api/admin/check`, la coppia
+    # in `credentials` e l'header ricostruito a ogni richiesta. Adesso usa la
+    # sessione operatore, e le tre attese diventano divieti. Le regole sul 401,
+    # sul logout e sull'assenza di storage NON cambiano: valgono su qualunque
+    # canale, e restano identiche qui sotto.
+    #
+    # I commenti vengono tolti prima di cercare: quelli di P26-5 nominano
+    # apposta cio' che il codice non fa piu'.
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    code = re.sub(r"(?m)^\s*//.*$|(?<=[;{}\s])//[^\n]*", "", code)
+    for banned in ("/api/admin/check", "encodeBasic", "Authorization", "btoa("):
+        assert banned not in code, f"FLOW usa ancora il canale Basic: {banned}"
+    # La pagina carica lo script condiviso che porta la sessione operatore.
+    assert "/shared/operator-session.js" in html
+    for required in ("OperatorSession.login(", "OperatorSession.restore(",
+                     "OperatorSession.logout(", "OperatorSession.authFetch("):
+        assert required in code, f"{required} mancante in FLOW"
     assert "status===401" in js or "status === 401" in js
     assert "logout" in js
     assert "localStorage" not in js
@@ -559,8 +574,9 @@ def test_flow_admin_has_explicit_login_and_memory_only_credentials():
     assert "indexedDB" not in js
 
 
-def test_flow_admin_runtime_adds_basic_auth_and_401_returns_to_login():
+def test_flow_admin_runtime_uses_the_session_and_401_returns_to_login():
     source = FLOW_JS.read_text(encoding="utf-8")
+    shared = (ROOT / "static" / "shared" / "operator-session.js").read_text(encoding="utf-8")
     script = f"""
 const vm=require('vm');
 const {{TextEncoder}}=require('util');
@@ -572,26 +588,46 @@ nodes.get('#admin-password').value='secret';
 const document={{querySelector(selector){{if(!nodes.has(selector))nodes.set(selector,element());return nodes.get(selector)}},querySelectorAll(){{return []}}}};
 const calls=[];
 let unauthorized=false;
+let loggedIn=false;
 async function fetch(url,options={{}}){{
   calls.push({{url,options}});
-  if(url==='/api/admin/check')return {{ok:true,status:200,json:async()=>({{ok:true}}),text:async()=>''}};
+  if(url==='/api/operator-auth/login'){{loggedIn=true;return {{ok:true,status:204,json:async()=>null,text:async()=>''}}}}
+  // /me risponde 401 finche' non c'e' stata una login: al boot NON c'e'
+  // sessione, altrimenti il ripristino caricherebbe FLOW e la prova sul
+  // percorso di login non verrebbe esercitata affatto.
+  if(url==='/api/operator-auth/me')return (loggedIn&&!unauthorized)
+    ?{{ok:true,status:200,json:async()=>({{user_id:1,agency_id:7,agency_name:'A',role:'agent',is_platform_admin:false,expires_at:'2030-01-01T00:00:00Z'}}),text:async()=>''}}
+    :{{ok:false,status:401,json:async()=>({{detail:'Non autorizzato'}}),text:async()=>''}};
   if(unauthorized)return {{ok:false,status:401,json:async()=>({{detail:'Non autorizzato'}}),text:async()=>'Non autorizzato'}};
   if(url.endsWith('/rules'))return {{ok:true,status:200,json:async()=>({{items:[]}}),text:async()=>''}};
   return {{ok:true,status:200,json:async()=>({{active_rules:0,total_events:0,executed:0,failed:0,skipped:0,tasks_created:0,active_suppressions:0}}),text:async()=>''}};
 }}
-const context={{document,fetch,TextEncoder,btoa:value=>Buffer.from(value,'binary').toString('base64'),setTimeout(){{}},console}};
+const context={{document,fetch,TextEncoder,setTimeout(){{}},console}};
 context.window=context;
 vm.createContext(context);
-vm.runInContext({json.dumps(source + ";globalThis.__flowTest={login,req,hasCredentials:()=>credentials!==null};")},context);
+// P26-5: lo script condiviso viene caricato prima, esattamente come fa la
+// pagina. E' il file vero, non uno stub: cio' che si prova qui e' che FLOW
+// passi per quel canale e non ne costruisca uno proprio.
+vm.runInContext({json.dumps(shared)},context);
+vm.runInContext({json.dumps(source + ";globalThis.__flowTest={login,req};")},context);
 (async()=>{{
-  if(calls.length!==0)throw new Error('FLOW API called before login');
+  // Il boot chiede /me al caricamento: e' l'unica chiamata ammessa prima del
+  // login, e non deve toccare FLOW.
+  // Il boot chiede /me; con la sessione assente si ferma al login e non
+  // chiama FLOW. Diverse tick perche' la catena e' asincrona.
+  for(let i=0;i<20;i+=1)await new Promise(resolve=>process.nextTick(resolve));
+  if(calls.some(call=>call.url.startsWith('/api/flow')))throw new Error('FLOW API called before login');
+  calls.length=0;
   await context.__flowTest.login({{preventDefault(){{}}}});
+  for(let i=0;i<20;i+=1)await new Promise(resolve=>process.nextTick(resolve));
   const flowCalls=calls.filter(call=>call.url.startsWith('/api/flow'));
   if(flowCalls.length!==2)throw new Error('expected dashboard and rules after login');
-  if(flowCalls.some(call=>!String(call.options.headers.Authorization||'').startsWith('Basic ')))throw new Error('missing Basic authorization');
+  if(!calls.some(call=>call.url==='/api/operator-auth/login'))throw new Error('login did not use the operator session');
+  if(flowCalls.some(call=>call.options.headers&&call.options.headers.Authorization))throw new Error('an Authorization header survived P26-5');
+  if(flowCalls.some(call=>call.options.credentials!=='include'))throw new Error('the session cookie was not sent');
   unauthorized=true;
   try{{await context.__flowTest.req('/api/flow/dashboard')}}catch(error){{}}
-  if(context.__flowTest.hasCredentials())throw new Error('credentials retained after 401');
+  if(context.OperatorSession.isAuthenticated())throw new Error('session retained after 401');
   if(nodes.get('#login-view').hidden!==false||nodes.get('#app-view').hidden!==true)throw new Error('401 did not restore login');
 }})().catch(error=>{{console.error(error);process.exitCode=1}});
 """

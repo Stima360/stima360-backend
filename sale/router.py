@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from admin_security import require_admin
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import audit_actor, legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
@@ -31,7 +30,7 @@ def translate(function, *args, **kwargs):
 @router.post("", status_code=201)
 def create_sale(
     payload: SaleCreate,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.create_sale_scoped, ctx, payload, actor)
@@ -79,7 +78,7 @@ def update_sale(
 @router.post("/{sale_id}/complete")
 def complete_sale(
     sale_id: int,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.complete_sale_scoped, ctx, sale_id, actor)
@@ -88,7 +87,7 @@ def complete_sale(
 @router.post("/{sale_id}/cancel")
 def cancel_sale(
     sale_id: int,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.cancel_sale_scoped, ctx, sale_id, actor)

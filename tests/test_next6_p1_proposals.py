@@ -696,8 +696,8 @@ def _override_agency_context(monkeypatch, app):
     overrides = dict(app.dependency_overrides)
     overrides[router_module.legacy_basic_agency_context] = lambda: (
         router_module.OperatorContext(
-            user_id=None, agency_id=7, role="agency_owner",
-            is_platform_admin=False, session_id=None, auth_channel="legacy_basic",
+            user_id=42, agency_id=7, role="agency_owner",
+            is_platform_admin=False, session_id=1, auth_channel="operator_session",
         )
     )
     monkeypatch.setattr(app, "dependency_overrides", overrides)
@@ -713,17 +713,25 @@ def test_router_uses_real_admin_identity_and_returns_409_for_accepted_conflict(m
         return {"id": 1, "status": "draft"}
 
     monkeypatch.setattr(service, "create_proposal_scoped", lambda _ctx, model, actor: create(model, actor))
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+    # P26-5: sessione operatore invece del Basic condiviso, e l'attore
+    # dell'audit segue - era lo username Basic, uguale per chiunque conoscesse
+    # la password, e con due agenzie sarebbe stato fuorviante.
+    from tests.operator_session_helpers import authenticate
+
     app = _override_agency_context(monkeypatch, import_main_app())
     client = TestClient(app, raise_server_exceptions=False)
+    authenticate(monkeypatch, client, user_id=42, agency_id=7, role="agency_owner")
     body = {**create_payload(), "amount": "185000.00", "expires_at": FUTURE.isoformat(), "idempotency_key": str(create_payload()["idempotency_key"])}
-    response = client.post("/api/proposals", json=body, auth=("giorgio", "test-secret"))
+    response = client.post("/api/proposals", json=body)
 
     assert response.status_code == 201
-    assert captured["actor"] == "giorgio"
+    assert captured["actor"] == "operator:42"
+
+    from operator_auth.enums import COOKIE_NAME
+    client.cookies.delete(COOKIE_NAME)
     anonymous = client.get("/api/proposals")
     assert anonymous.status_code == 401
+    client.cookies.set(COOKIE_NAME, "test-operator-session-token")
     operation = app.openapi()["paths"]["/api/proposals"]["post"]
     assert operation.get("security")
 
@@ -733,7 +741,7 @@ def test_router_uses_real_admin_identity_and_returns_409_for_accepted_conflict(m
         "transition_proposal_scoped",
         lambda *_args: (_ for _ in ()).throw(router_module.ConflictError("accepted proposal already exists")),
     )
-    conflict = client.post("/api/proposals/1/transition", json={"target_status": "accepted"}, auth=("giorgio", "test-secret"))
+    conflict = client.post("/api/proposals/1/transition", json={"target_status": "accepted"})
     assert conflict.status_code == 409
 
 

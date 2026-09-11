@@ -71,7 +71,11 @@ def test_02_crm_anonymous_rejected(monkeypatch):
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     response = CLIENT.get("/api/crm/contacts/999/360")
     assert response.status_code == 401
-    assert response.headers.get("WWW-Authenticate") == 'Basic realm="STIMA360 Admin"'
+    # P26-5: niente piu' `WWW-Authenticate: Basic`. CRM 360 e' una route di
+    # tenant e autentica con la sessione operatore; chiedere al browser di
+    # aprire il prompt Basic sarebbe un invito a inserire una credenziale che
+    # non apre nulla.
+    assert response.headers.get("WWW-Authenticate") is None
 
 
 def test_03_crm_wrong_credentials(monkeypatch):
@@ -84,9 +88,13 @@ def test_03_crm_wrong_credentials(monkeypatch):
 def test_04_crm_missing_env_fails_closed(monkeypatch):
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.delenv("ADMIN_PASS", raising=False)
+    # P26-5: il 503 diceva "il server non ha credenziali amministrative
+    # configurate", ed era corretto finche' questa route viveva su quelle
+    # variabili. Adesso non le legge piu': toglierle non cambia nulla, e il
+    # rifiuto per chi non ha sessione e' 401. Il 503 resta dove resta il canale.
     response = CLIENT.get("/api/crm/contacts/999/360", auth=("giorgio", "test-secret"))
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Non autorizzato"}
 
 
 def test_05_crm_contact_not_found_returns_404(monkeypatch):
@@ -106,9 +114,16 @@ def test_05_crm_contact_not_found_returns_404(monkeypatch):
     # the handler runs. This test is about the 404 mapping, not about that
     # lookup, so the dependency is overridden with the context it would have
     # built. Tests 02-04 above still exercise the real dependency's auth.
+    # P26-5: la route e' montata su `require_authenticated_operator`, quindi
+    # oltre allo scope serve una sessione viva per superare l'ammissione.
+    # L'override sullo scope non basta piu' - ed e' giusto cosi': l'ammissione
+    # e' una decisione separata, e questo test non deve poterla saltare.
+    from tests.operator_session_helpers import operator_session
+
     app.dependency_overrides[legacy_basic_agency_context] = lambda: CTX
     try:
-        response = CLIENT.get("/api/crm/contacts/999/360", auth=("giorgio", "test-secret"))
+        with operator_session(monkeypatch, CLIENT, agency_id=1, role="agency_owner"):
+            response = CLIENT.get("/api/crm/contacts/999/360")
     finally:
         app.dependency_overrides.pop(legacy_basic_agency_context, None)
 

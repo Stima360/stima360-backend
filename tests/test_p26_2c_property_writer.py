@@ -247,24 +247,29 @@ def http(monkeypatch):
 
     The schema assertions above prove the model refuses the field; this proves
     the *endpoint* does, which is the property that actually protects the
-    system. Nothing else is overridden - the Basic guard is the real one.
-    """
-    import base64
+    system. Nothing else is overridden - la guardia di ammissione e' quella
+    vera.
 
+    P26-5: la credenziale che la apre e' la sessione operatore. L'header Basic
+    che questa fixture forniva non apre piu' nulla, quindi il client porta un
+    cookie e la fixture restituisce un dizionario di header vuoto - la firma
+    resta la stessa perche' i test che la usano non hanno motivo di cambiare.
+    """
     from fastapi.testclient import TestClient
 
     from integration_p2_support import import_main_app
     from operator_auth import dependencies
+    from operator_auth.enums import COOKIE_NAME
+    from tests.operator_session_helpers import SessionDouble, TEST_TOKEN
 
-    monkeypatch.setenv("ADMIN_USER", "u")
-    monkeypatch.setenv("ADMIN_PASS", "p")
     app = import_main_app()
     app.dependency_overrides[dependencies.legacy_basic_agency_context] = lambda: ctx()
+    sessions = SessionDouble(monkeypatch)
+    sessions.login(agency_id=ctx().agency_id, role="agency_owner")
+    client = TestClient(app)
+    client.cookies.set(COOKIE_NAME, TEST_TOKEN)
     try:
-        yield (
-            TestClient(app),
-            {"Authorization": "Basic " + base64.b64encode(b"u:p").decode()},
-        )
+        yield (client, {})
     finally:
         app.dependency_overrides.pop(dependencies.legacy_basic_agency_context, None)
 
@@ -285,8 +290,15 @@ def test_b_a_forged_agency_id_over_http_is_422_not_201(http):
 
 
 def test_b_the_create_route_still_refuses_an_unauthenticated_caller(http):
-    """The legacy Basic contract is unchanged by this block."""
+    """La regola non cambia con P26-5: cambia quale credenziale la soddisfa.
+
+    Il cookie va tolto esplicitamente, perche' la fixture lo installa: prima
+    bastava non passare l'header.
+    """
+    from operator_auth.enums import COOKIE_NAME
+
     client, _ = http
+    client.cookies.delete(COOKIE_NAME)
     response = client.post("/api/property/properties", json={"title": "Villa"})
     assert response.status_code == 401, response.text
 
@@ -447,12 +459,24 @@ def test_e_property_is_not_added_to_the_operator_session_allowlist():
 
 
 def test_e_the_create_dependency_carries_its_own_authentication():
-    """legacy_basic_agency_context declares require_admin itself, so the route
-    is authenticated even if a future refactor drops the mount-level guard."""
+    """La dipendenza di scope si autentica da sola.
+
+    La proprieta' non cambia con P26-5: una route che dichiara questo scope e'
+    autenticata anche se un refactoring futuro togliesse la guardia di mount -
+    e le sei route `@app` di main.py sono esattamente in quella condizione,
+    perche' una guardia di mount non ce l'hanno affatto.
+
+    Cambia cosa la autentica: dichiarava `require_admin`, adesso dichiara
+    `optional_session` e rifiuta con 401 se non risolve. Restare su
+    `require_admin` significherebbe che la credenziale condivisa apre ancora
+    una route di tenant, che e' precisamente cio' che P26-5 chiude.
+    """
     from operator_auth.dependencies import legacy_basic_agency_context
 
     source = inspect.getsource(legacy_basic_agency_context)
-    assert "require_admin" in source, source
+    assert "Depends(optional_session)" in source, source
+    assert "require_admin" not in source, source
+    assert "status_code=401" in source, source
 
 
 def test_e_the_context_is_agency_bound_and_never_platform_admin():

@@ -13,7 +13,7 @@ Six reads, no writes. `lookup_contacts` was the worst read in the module - free
 text over every agency's contacts, by name and by email - and `list_access`
 exposed every grant on the platform.
 
-The agency is resolved server-side by `basic_only_agency_context`, the same
+The agency is resolved server-side by `require_owner_admin_context`, the same
 compatibility dependency CRM and FLOW already use: the Default Agency, from its
 slug, agency-bound, `is_platform_admin=False`. The mount stays on
 `require_owner_admin`, untouched, because FLOW mounts on it too.
@@ -48,7 +48,7 @@ from fastapi.testclient import TestClient
 
 from core.exceptions import NotFoundError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import basic_only_agency_context
+from operator_auth.dependencies import require_owner_admin_context
 from owner import admin_lookup_repository as lookups
 from owner import repository
 from owner.router_admin import router as admin_router
@@ -405,7 +405,7 @@ def client(monkeypatch):
     app.include_router(admin_router)
 
     def use(agency_id):
-        app.dependency_overrides[basic_only_agency_context] = lambda: context(agency_id)
+        app.dependency_overrides[require_owner_admin_context] = lambda: context(agency_id)
         return TestClient(app)
 
     return use
@@ -636,13 +636,31 @@ def test_15_the_repository_functions_require_an_agency_positionally(db):
 # 16-18 - what this patch must not have moved
 # ---------------------------------------------------------------------------
 
-def test_16_the_mount_still_authenticates_with_require_owner_admin():
+def test_16_the_mount_authenticates_with_the_operator_session_and_a_role():
+    """P26-5 HA CAMBIATO LA GUARDIA, NON IL FATTO CHE CE NE SIA UNA.
+
+    Cio' che P26-6C congelava qui e' che il mount di OWNER Admin avesse una
+    guardia dichiarata sul router - non una per route, dimenticabile. Resta
+    vero. Cambia quale: `require_owner_admin` confrontava ADMIN_USER/ADMIN_PASS
+    dentro `owner/router_admin.py`, con una copia della logica di
+    `admin_security` e un realm proprio. Adesso c'e'
+    `require_owner_admin_context`, che risolve la sessione, impone il ruolo
+    minimo `agency_owner` e restituisce l'agenzia.
+
+    Una sola dipendenza per due decisioni e' deliberato: quando ammissione e
+    scope venivano da credenziali diverse, una richiesta poteva essere ammessa
+    da una e scopata dall'altra - ed e' esattamente l'ibrido che la revisione
+    di P26-3 aveva dovuto smontare.
+    """
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "owner" / "router_admin.py").read_text(encoding="utf-8")
-    assert "dependencies=[Depends(require_owner_admin)]" in source
-    assert "def require_owner_admin(" in source
-    assert 'realm="STIMA360 OWNER Admin"' in source
+    assert "dependencies=[Depends(require_owner_admin_context)]" in source
+    # La verifica Basic locale e' sparita: era una seconda copia della stessa
+    # regola, ed era il pezzo che rendeva possibile lo stato ibrido.
+    for retired in ("def require_owner_admin(", 'realm="STIMA360 OWNER Admin"',
+                    'os.getenv("ADMIN_USER")', "HTTPBasic("):
+        assert retired not in source, f"OWNER Admin verifica ancora Basic: {retired}"
 
 
 def test_17_flow_no_longer_borrows_owners_admin_dependency():
@@ -662,19 +680,28 @@ def test_17_flow_no_longer_borrows_owners_admin_dependency():
 
     # OWNER Admin's own mount is untouched by that move.
     admin = (Path(__file__).resolve().parents[1] / "owner" / "router_admin.py").read_text(encoding="utf-8")
-    assert "dependencies=[Depends(require_owner_admin)]" in admin
+    # E OWNER Admin ha comunque la propria guardia dichiarata sul router: il
+    # disaccoppiamento e' che FLOW non la prende in prestito, non che OWNER
+    # Admin ne sia rimasto senza. P26-5 l'ha portata alla sessione.
+    assert "dependencies=[Depends(require_owner_admin_context)]" in admin
 
 
 def test_18_anonymous_is_still_refused_before_the_agency_is_resolved(monkeypatch, db):
     """The mount-level Basic check runs first, so an unauthenticated request
-    never reaches `basic_only_agency_context` and never opens a cursor."""
+    never reaches `require_owner_admin_context` and never opens a cursor."""
     monkeypatch.setenv("ADMIN_USER", "giorgio")
     monkeypatch.setenv("ADMIN_PASS", "test-secret")
     app = FastAPI()
     app.include_router(admin_router)
     response = TestClient(app).get("/api/owner/admin/accounts")
     assert response.status_code == 401
-    assert response.headers["www-authenticate"] == 'Basic realm="STIMA360 OWNER Admin"'
+    # P26-5: niente piu' `WWW-Authenticate`. Quell'header chiedeva al browser di
+    # aprire il prompt Basic; su una superficie che il Basic non lo accetta piu'
+    # sarebbe un invito a inserire una credenziale che non apre nulla.
+    assert response.headers.get("www-authenticate") is None
+    # Cio' che questo test protegge davvero non cambia: il rifiuto arriva PRIMA
+    # che si tocchi il database, quindi un anonimo non fa nemmeno partire la
+    # risoluzione dell'agenzia.
     assert db.statements == []
 
 
@@ -701,7 +728,7 @@ def test_19_the_six_read_routes_take_the_agency_context():
                 takes_ctx = any(
                     isinstance(default, ast.Call)
                     and getattr(default.func, "id", None) == "Depends"
-                    and getattr(default.args[0], "id", None) == "basic_only_agency_context"
+                    and getattr(default.args[0], "id", None) == "require_owner_admin_context"
                     for default in node.args.defaults
                     if isinstance(default, ast.Call) and default.args
                 )

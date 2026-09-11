@@ -1,37 +1,58 @@
-"""FastAPI dependencies that turn a credential into a server-side scope.
+"""Le dipendenze FastAPI che trasformano una credenziale in uno scope server-side.
 
-Whatever the channel, the scope is decided here on the server. Nothing reads an
-agency, a role or a user from a query parameter, a header or a body, so an
-`agency_id` arriving from client state is untrusted by construction rather than
-by discipline.
+Qualunque sia il canale, lo scope si decide qui, sul server. Niente legge
+un'agenzia, un ruolo o un utente da un parametro, da un header o da un corpo:
+un `agency_id` che arrivasse dallo stato del client e' inaffidabile per
+costruzione, non per disciplina.
 
-Six dependencies, and the division between them is the point:
+P26-5: DA DUE CANALI A UNO.
 
-* `optional_session` - the only place the session cookie is read. Returns a
-  live session or None, and never raises, so every caller below shares it
-  through FastAPI's per-request dependency cache: one database resolution per
-  request however many dependencies a handler declares.
-* `current_session` - session or 401. Cookie only. For endpoints that need the
-  session itself rather than a scope, such as /me.
-* `require_operator` - the scope every CORE endpoint declares. Session first,
-  then the legacy Basic compatibility channel, then 401.
-* `require_authenticated_operator` - P26-3. Mount-level admission for the
-  routers the OS Shell calls. Same two channels, no scope, no database. This
-  is the widening of D-1: before P26-3 the operator session reached only
-  `/api/operator-auth` and `/api/core`, and the Shell's other eleven routers
-  were Basic-only. The Shell now holds a cookie, so they admit it too - and
-  the boundary is still explicit, still a list of mounts in `main.py`, and
-  still asserted route by route rather than assumed.
-* `legacy_basic_agency_context` - the scope for every router outside CORE.
-  P26-3 made it session-first; the name is retired in P26-5 with the channel.
-* `basic_only_agency_context` - P26-3. What the one above was before P26-3,
-  for OWNER Admin: a surface whose mount accepts nothing but Basic and whose
-  scope therefore must not come from a cookie.
+Fino a P26-4 questo modulo ne conosceva due - il cookie di sessione e la
+credenziale condivisa ADMIN_USER/ADMIN_PASS - e la parte difficile era la loro
+precedenza. P26-3 la scrisse in un posto solo; la sua revisione dovette
+aggiungere una regola perche' un cookie RIFIUTATO non ricadesse sul Basic della
+stessa richiesta; e OWNER Admin ebbe bisogno di uno scope apposta per non
+finire ammessa da una credenziale e scopata dall'altra.
 
-Task 15 added the legacy branch. Before it, this module accepted the cookie
-alone; the Basic channel is a bounded compatibility path, not a second identity
-system, and `admin_security.require_admin` remains the single definition of
-what that credential is.
+Adesso la scelta non esiste: tutti i client sono migrati - la OS Shell in
+P26-3, i cinque frontend amministrativi in P26-5 - quindi un segreto condiviso
+non autentica piu' alcuna route di tenant. Ed e' questo il punto, non
+l'eleganza: finche' una password sola apriva le porte di un'agenzia, la
+piattaforma non poteva ospitarne una seconda.
+
+Le dipendenze, e la divisione fra loro:
+
+* `optional_session` - l'unico punto in cui un cookie diventa uno scope.
+  Restituisce una sessione viva o None, non solleva mai, e passa da uno schema
+  `APIKeyCookie`: quello schema e' un `SecurityBase`, quindi ogni route che
+  dichiara questa dipendenza porta con se' il proprio `security` nell'OpenAPI.
+* `current_session` - sessione o 401. Per gli endpoint che servono la sessione
+  in se' e non uno scope, come `/me`.
+* `require_operator` - lo scope che ogni endpoint CORE dichiara.
+* `require_authenticated_operator` - ammissione al mount, senza scope e senza
+  database. E' la forma dell'allargamento di D-1: prima di P26-3 la sessione
+  raggiungeva solo `/api/operator-auth` e `/api/core`, adesso anche gli undici
+  router che la OS Shell chiama, e il confine resta una lista esplicita di
+  mount in `main.py`.
+* `legacy_basic_agency_context` - lo scope di ogni router fuori da CORE. Il
+  nome e' storico: cambiarlo nello stesso diff che ne cambiava il
+  comportamento avrebbe sepolto una decisione dentro un'edit meccanica su
+  centocinquanta route.
+* `require_owner_admin_context` - OWNER Admin: sessione piu' ruolo minimo
+  `agency_owner`. Ammissione e scope decisi insieme, cosi' non possono
+  divergere.
+
+`_default_agency_context` e `_verify_legacy_credentials` restano per l'unica
+superficie non-tenant ancora sul canale precedente (`/api/admin/check`), e
+`admin_security.require_admin` resta la sola definizione di cosa sia quella
+credenziale.
+
+GATE-MA1 e' ancora APERTO, e adesso per una ragione sola. Il residuo
+strutturale - un segreto condiviso capace di autenticare una route di tenant -
+non c'e' piu': quella meta' del gate l'ha chiusa P26-5. Quel che manca e'
+l'esito della matrice ostile live A/B su TEST, che e' l'unica prova che
+l'isolamento regga sui dati veri e non solo nel codice. Nessuna seconda
+agenzia reale e' autorizzata finche' quella prova non esiste.
 """
 from __future__ import annotations
 
@@ -39,7 +60,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import APIKeyCookie, HTTPBasicCredentials
 
 from admin_security import require_admin
 from core.scope import resolve_default_agency_id
@@ -64,12 +85,27 @@ LEGACY_BASIC_ROLE = "agency_owner"
 # prompt for the legacy credential - a 401 without it simply fails silently in
 # a browser.
 NOT_AUTHENTICATED_MESSAGE = "Non autorizzato"
+
+# P26-5: la soglia di ruolo di OWNER Admin. Vedi `require_owner_admin_context`
+# per le tre fonti concordi da cui e' ricavata.
+OWNER_ADMIN_MIN_ROLE = "agency_owner"
+OWNER_ADMIN_FORBIDDEN_MESSAGE = "Operazione riservata al titolare dell'agenzia"
 BASIC_CHALLENGE = {"WWW-Authenticate": 'Basic realm="STIMA360 Admin"'}
 
-# Declared once, at module level, so FastAPI treats it as the route's security
-# scheme. auto_error=False because an absent credential is not yet a failure -
-# the cookie branch may still succeed.
-_basic_scheme = HTTPBasic(auto_error=False)
+# P26-5: il cookie di sessione dichiarato come SCHEMA DI SICUREZZA, non letto
+# di nascosto dalla richiesta.
+#
+# Fino a P26-4 lo `security` dell'OpenAPI arrivava gratis dallo schema
+# `HTTPBasic`: era un `SecurityBase`, quindi ogni route che dichiarava quella
+# dipendenza si portava dietro la propria dichiarazione. Tolto il Basic, senza
+# nulla al suo posto CENTOTTO route sarebbero diventate "senza sicurezza" agli
+# occhi di chiunque legga il documento - client generati, gateway, revisori -
+# pur essendo protette esattamente come prima.
+#
+# `APIKeyCookie` e' anch'esso un `SecurityBase`, e descrive la verita': questa
+# API si autentica con un cookie. `auto_error=False` perche' il rifiuto lo
+# formulano le dipendenze, ciascuna col proprio codice.
+_cookie_scheme = APIKeyCookie(name=COOKIE_NAME, auto_error=False)
 
 
 @dataclass(frozen=True)
@@ -87,7 +123,9 @@ class AuthenticatedSession:
     expires_at: datetime
 
 
-def optional_session(request: Request) -> AuthenticatedSession | None:
+def optional_session(
+    raw_token: str | None = Depends(_cookie_scheme),
+) -> AuthenticatedSession | None:
     """Resolve the session cookie if there is a live one, else None.
 
     The single point where a cookie becomes a scope, and the only place that
@@ -98,10 +136,15 @@ def optional_session(request: Request) -> AuthenticatedSession | None:
 
     Returns None - never a partial result - for an absent, unknown, revoked,
     expired or idle-timed-out session. Turning that None into a 401 is the
-    caller's decision, because `require_operator` must be able to fall through
-    to the legacy channel instead.
+    caller's decision: `current_session` e `require_operator` rifiutano, mentre
+    `/me` e i router che vogliono distinguere lo usano cosi' com'e'.
+
+    P26-5: il valore arriva da `_cookie_scheme` invece che da `request.cookies`.
+    E' lo stesso cookie e lo stesso valore, ma passando da uno schema di
+    sicurezza la dipendenza si porta dietro la dichiarazione `security`
+    nell'OpenAPI - che prima veniva dallo schema Basic e sarebbe sparita con
+    esso.
     """
-    raw_token = request.cookies.get(COOKIE_NAME)
     if not raw_token:
         return None
 
@@ -131,9 +174,7 @@ def current_session(
 
 
 def require_operator(
-    request: Request,
     session: AuthenticatedSession | None = Depends(optional_session),
-    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> OperatorContext:
     """The authenticated caller's scope, from either approved channel.
 
@@ -169,22 +210,14 @@ def require_operator(
     as well and silently drops that declaration - which is how CORE briefly
     came to look unauthenticated to anything reading the schema.
     """
-    context = _scope_from_session_or_basic(
-        session, credentials, session_was_presented(request)
-    )
+    context = _scope_from_session(session)
     if context is None:
-        raise HTTPException(
-            status_code=401,
-            detail=NOT_AUTHENTICATED_MESSAGE,
-            headers=BASIC_CHALLENGE,
-        )
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_MESSAGE)
     return context
 
 
 def require_authenticated_operator(
-    request: Request,
     session: AuthenticatedSession | None = Depends(optional_session),
-    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> None:
     """Mount-level admission for the routers the OS Shell calls. No scope.
 
@@ -206,80 +239,41 @@ def require_authenticated_operator(
     if session is not None:
         return None
 
-    # A refused cookie does not fall through to the shared credential.
-    if not session_was_presented(request) and credentials is not None:
-        if _verify_legacy_credentials(credentials) is not None:
-            return None
-
-    # Same refusal `require_admin` gave before P26-3, including its 503 when the
-    # server has no admin credentials configured at all.
-    require_admin(credentials)
-    raise HTTPException(          # pragma: no cover - require_admin always raises
-        status_code=401,
-        detail=NOT_AUTHENTICATED_MESSAGE,
-        headers=BASIC_CHALLENGE,
-    )
+    # P26-5: il rifiuto non passa piu' da `require_admin`.
+    #
+    # Fino a P26-4 delegava a `require_admin`, per tenere il 401 byte-identico a
+    # quello di P26-1 e conservarne il 503 quando il server non aveva credenziali
+    # amministrative configurate. Adesso questa superficie non conosce piu'
+    # quella credenziale, e delegarle il rifiuto significherebbe che l'assenza
+    # di ADMIN_PASS puo' ancora cambiare la risposta di una route che con
+    # ADMIN_PASS non c'entra nulla. Il 503 resta dove resta il canale.
+    raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_MESSAGE)
 
 
-def session_was_presented(request: Request) -> bool:
-    """Did this request carry a session cookie at all?
-
-    P26-3 review. `optional_session` returns None for absent, unknown, revoked,
-    expired, idle-timed-out, disabled and de-membered alike - deliberately, so
-    that nothing downstream can tell them apart and use the difference as an
-    oracle. That is right for the caller and wrong for us: it made "no cookie"
-    and "a cookie the server rejected" the same input, and both fell through to
-    the legacy credential.
-
-    Falling through is correct for the first and not for the second. A revoked
-    session must mean revoked: an operator whose account was disabled must not
-    keep working because their browser also happens to hold ADMIN_USER and
-    ADMIN_PASS. This is the one bit that distinguishes the two, and it is read
-    from the request rather than from the resolution, so no rejection reason
-    leaks with it.
-
-    P26-1 chose the other way round - test_g2_an_invalid_cookie_falls_through
-    _to_valid_basic asserted the fall-through - on the reasoning that a stale
-    cookie should not lock out a legitimate Basic client. It does not: a Basic
-    client sends no cookie. The only caller affected is one presenting both,
-    and the right answer for it is to clear the dead cookie and log in again.
-    """
-    return bool(request.cookies.get(COOKIE_NAME))
-
-
-def _scope_from_session_or_basic(
+def _scope_from_session(
     session: AuthenticatedSession | None,
-    credentials: HTTPBasicCredentials | None,
-    cookie_presented: bool = False,
 ) -> OperatorContext | None:
-    """The caller's scope from either approved channel, or None.
+    """Lo scope del chiamante, o None. UNA sola sorgente: la sessione.
 
-    P26-3 made this the one place the precedence lives, because two
-    dependencies now need it: `require_operator`, which authenticates, and
-    `legacy_basic_agency_context`, which supplies a scope to every other
-    router. They differ only in how they refuse, and that difference is
-    deliberate - see the note on the latter.
+    P26-5 HA TOLTO IL SECONDO RAMO.
 
-    Never raises for "not authenticated": returning None leaves the refusal,
-    and therefore its wording and its status code, to the caller. It does let a
-    503 through from `_verify_legacy_credentials`, because a server with no
-    admin credentials configured is an operational fault rather than a failed
-    authentication.
+    Fino a P26-4 questa funzione sceglieva fra due canali - il cookie di
+    sessione e la credenziale condivisa ADMIN_USER/ADMIN_PASS - e la parte
+    difficile era la precedenza: quale vince, cosa succede con un cookie
+    rifiutato, come si evita che una meta' della richiesta sia decisa da una
+    credenziale e l'altra meta' dall'altra.
+
+    Quella difficolta' non esiste piu', perche' non esiste piu' la scelta.
+    Tutti i client sono migrati - la OS Shell in P26-3, i cinque frontend
+    amministrativi in P26-5 - quindi un segreto condiviso non autentica piu'
+    alcuna route di tenant. Ed e' questo il punto, non l'eleganza: finche' una
+    password sola apriva le porte di un'agenzia, la piattaforma non poteva
+    ospitarne una seconda.
+
+    Non solleva mai per "non autenticato": ritorna None e lascia al chiamante
+    la formulazione del rifiuto.
     """
-    if session is not None:
-        return session.context
-
-    # A cookie was presented and the server refused it. Do not quietly serve
-    # the same request through the shared credential instead.
-    if cookie_presented:
-        return None
-
-    if credentials is not None:
-        username = _verify_legacy_credentials(credentials)
-        if username is not None:
-            return _default_agency_context()
-
-    return None
+    return session.context if session is not None else None
 
 
 def _default_agency_context() -> OperatorContext:
@@ -307,31 +301,50 @@ def _default_agency_context() -> OperatorContext:
     )
 
 
-def basic_only_agency_context(
-    _credential: str = Depends(require_admin),
+def require_owner_admin_context(
+    session: AuthenticatedSession | None = Depends(optional_session),
 ) -> OperatorContext:
-    """The Default-Agency scope, for a surface that is HTTP Basic and only that.
+    """Lo scope di OWNER Admin: sessione, con ruolo almeno `agency_owner`.
 
-    P26-3 review, and the reason it exists: OWNER Admin is mounted on
-    `require_owner_admin`, which accepts nothing but Basic, while its routes
-    took the shared scope dependency - which after P26-3 prefers a session. A
-    browser holding both would then have been ADMITTED by Basic and SCOPED by
-    the cookie: two different credentials deciding two different halves of one
-    request. That hybrid is not a widening or a narrowing, it is an incoherence,
-    and this removes it.
+    PERCHE' UN RUOLO, E PERCHE' PROPRIO QUESTO
 
-    OWNER Admin stays Basic-only deliberately. The OS Shell does not call it,
-    so P26-3 has no reason to touch it - and admitting any operator session
-    would be a real escalation, because `require_authenticated_operator` checks
-    that a caller is authenticated and not what they are allowed to do. Managing
-    owner accounts, minting their login tokens and reading their documents
-    would become reachable by any agent-role session. That decision belongs to a
-    phase that also brings roles with it, not to this one.
+    OWNER Admin non e' una superficie operativa qualunque: ci si gestiscono i
+    conti dei proprietari, si emettono i token con cui quei proprietari entrano
+    nel portale, e si leggono i documenti che hanno caricato. Ammetterla a
+    qualunque sessione autenticata sarebbe un'escalation, ed e' il motivo per
+    cui P26-3 la lascio' fuori dall'allargamento di D-1:
+    `require_authenticated_operator` verifica che il chiamante sia autenticato,
+    non cosa gli e' permesso fare.
 
-    This is what `legacy_basic_agency_context` was before P26-3, kept under a
-    name that says so. Both are retired in P26-5 with the channel itself.
+    La soglia non e' inventata. Viene, in quest'ordine:
+
+    1. `operator_auth/permissions.py`, la matrice approvata: "Manage agency
+       users" e' YES per platform_admin e agency_owner, LIMITED per
+       agency_admin e **NO per agent**.
+    2. Il comportamento storico: questa superficie era autenticata dalla
+       credenziale condivisa, che `LEGACY_BASIC_ROLE` mappa esattamente su
+       `agency_owner`. Chi ci entrava prima entrava con quel ruolo, quindi
+       chiedere quel ruolo non toglie accesso a nessuno e non lo allarga.
+    3. Il minimo privilegio, che fra due letture compatibili sceglie la
+       stretta: `agency_admin` ha "LIMITED" sui membri, non pieno, e i conti
+       proprietario non sono membri dell'agenzia.
+
+    Le tre fonti concordano, quindi non c'e' ambiguita' da rimettere a una
+    decisione di prodotto: platform admin oppure `agency_owner`, e chiunque
+    altro riceve 403 - non 401, perche' e' autenticato benissimo: non e'
+    autorizzato.
+
+    Sostituisce `basic_only_agency_context`, che esisteva per evitare uno stato
+    ibrido cookie+Basic. Quello stato adesso e' impossibile per costruzione.
     """
-    return _default_agency_context()
+    context = _scope_from_session(session)
+    if context is None:
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_MESSAGE)
+
+    if context.is_platform_admin or context.role == OWNER_ADMIN_MIN_ROLE:
+        return context
+
+    raise HTTPException(status_code=403, detail=OWNER_ADMIN_FORBIDDEN_MESSAGE)
 
 
 def _verify_legacy_credentials(credentials: HTTPBasicCredentials) -> str | None:
@@ -357,60 +370,48 @@ def _verify_legacy_credentials(credentials: HTTPBasicCredentials) -> str | None:
 
 
 def legacy_basic_agency_context(
-    request: Request,
     session: AuthenticatedSession | None = Depends(optional_session),
-    credentials: HTTPBasicCredentials | None = Depends(_basic_scheme),
 ) -> OperatorContext:
-    """The scope for every router outside CORE. Session first, Basic second.
+    """Lo scope di ogni router fuori da CORE. P26-5: SOLO la sessione.
 
-    P26-3 CHANGED WHAT THIS DOES, AND DELIBERATELY NOT ITS NAME.
+    IL NOME E' STORICO, E RESTA DI PROPOSITO.
 
-    Until P26-3 this resolved the Default Agency and nothing else: the OS Shell
-    authenticated with legacy Basic, so there was no session to prefer. The
-    Shell now logs in through `/api/operator-auth/login` and carries an HttpOnly
-    cookie, and this dependency is declared by roughly a hundred and fifty
-    routes across PROPERTY, BUY, MATCH, PROPOSAL, SALE, CRM, FLOW, OWNER Admin,
-    the intelligence routers and six routes in main.py. Renaming it in the same
-    change that altered its behaviour would have put a mechanical edit of every
-    one of those - and of the twenty test files that override it - in the same
-    diff as a security-relevant decision. The name is retired in P26-5, with the
-    legacy channel it describes.
+    Questa dipendenza e' dichiarata da circa centocinquanta route. P26-3 ne ha
+    cambiato il comportamento tenendone il nome, perche' rinominarla nello
+    stesso diff che ne alterava la sicurezza avrebbe sepolto una decisione
+    dentro una modifica meccanica. P26-5 fa la stessa scelta per la stessa
+    ragione: qui sparisce il canale Basic, che e' il cambiamento da leggere, e
+    il rinomino resta un commit cosmetico separato.
 
-    So, in order:
+    * P26-1 - P26-2: risolveva la Default Agency dalla credenziale condivisa.
+    * P26-3 - P26-4: la sessione se c'era, altrimenti quella credenziale.
+    * P26-5: **la sessione, e nient'altro.** Nessun fallback, nessuna
+      precedenza da spiegare, nessuna combinazione cookie+Basic possibile.
 
-    1. **A live operator session cookie.** The operator's REAL agency, role and
-       user id - not the Default Agency. This is what makes the OS Shell a
-       multi-agency client.
-    2. **Valid legacy `ADMIN_USER`/`ADMIN_PASS`.** The six legacy admin pages
-       and any script still on that channel keep working, unchanged, bound to
-       the Default Agency exactly as before.
-    3. **Otherwise refuse**, and refuse the way `require_admin` used to: the
-       same status, the same message, and the same 503 when the server has no
-       admin credentials configured at all. That is why the refusal is
-       delegated rather than raised here - a route that answered "Non
-       autorizzato" before P26-3 must not start answering something else.
-
-    Nothing here reads an agency, a role or a user from the request. A client
-    that sends both a cookie and Basic gets the session, never the shared
-    credential's wider-looking but Default-Agency-bound scope.
-
-    GATE-MA1 is still OPEN. Branch 2 is a compatibility bridge with a known
-    expiry: while a shared secret can still authenticate a tenant route, the
-    platform is not certified for a second real agency. P26-5 confines or
-    removes it; P26-6 certifies what is left.
+    L'agenzia e' quella dell'operatore che ha fatto login, non piu' la Default
+    Agency di un segreto condiviso - ed e' questo che rende una seconda agenzia
+    reale una possibilita' tecnica invece che un rischio.
     """
-    context = _scope_from_session_or_basic(
-        session, credentials, session_was_presented(request)
-    )
-    if context is not None:
-        return context
+    context = _scope_from_session(session)
+    if context is None:
+        raise HTTPException(status_code=401, detail=NOT_AUTHENTICATED_MESSAGE)
+    return context
 
-    # No usable session and no usable Basic. `require_admin` owns this refusal and
-    # always has: it raises 401 with its own message, or 503 when the server is
-    # unconfigured. Calling it keeps both answers byte-identical to P26-1.
-    require_admin(credentials)
-    raise HTTPException(          # pragma: no cover - require_admin always raises
-        status_code=401,
-        detail=NOT_AUTHENTICATED_MESSAGE,
-        headers=BASIC_CHALLENGE,
-    )
+
+def audit_actor(
+    context: OperatorContext = Depends(legacy_basic_agency_context),
+) -> str:
+    """Chi ha fatto l'operazione, per l'audit trail. P26-5.
+
+    Prima era `actor: str = Depends(require_admin)`: lo username Basic, cioe'
+    la stringa "giorgio" per chiunque conoscesse la password condivisa. Un
+    audit trail che registra sempre lo stesso nome non e' un audit trail, e
+    quando le agenzie diventano due diventa attivamente fuorviante - due
+    persone di due aziende diverse comparirebbero come lo stesso attore.
+
+    Adesso e' l'operatore della sessione, nella stessa forma che la OS Shell
+    gia' usa in P26-3 per `activated_by`: `operator:<user_id>`. L'id e non
+    l'email di proposito, perche' `/me` esclude deliberatamente l'email e un
+    audit trail non e' il posto dove reintrodurre un dato personale.
+    """
+    return f"operator:{context.user_id}"

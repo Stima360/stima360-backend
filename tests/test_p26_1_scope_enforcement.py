@@ -1104,8 +1104,17 @@ def test_the_session_path_never_builds_a_context_from_client_data(name):
 
 
 def test_the_session_path_accepts_only_the_cookie():
+    """P26-5: il cookie arriva da uno schema dichiarato, non da `request.cookies`.
+
+    `APIKeyCookie` legge esattamente lo stesso cookie, e in piu' porta con se'
+    la dichiarazione `security` nell'OpenAPI - che prima veniva dallo schema
+    Basic e sarebbe sparita con esso, lasciando centotto route protette ma
+    apparentemente aperte a chiunque legga il documento.
+    """
     code = _function_source(PACKAGE / "dependencies.py", "optional_session")
-    assert "cookies" in code, "the session channel accepts only the cookie"
+    assert "Depends(_cookie_scheme)" in code, "il canale accetta solo il cookie"
+    module = (PACKAGE / "dependencies.py").read_text(encoding="utf-8")
+    assert "_cookie_scheme = APIKeyCookie(name=COOKIE_NAME, auto_error=False)" in module
 
 
 @pytest.mark.parametrize("name", ["optional_session", "current_session"])
@@ -1147,15 +1156,16 @@ def test_c2_the_compatibility_context_requires_an_authenticated_channel():
     """
     from operator_auth import dependencies
 
+    # P26-5: un parametro solo, e non e' un caso.
+    #
+    # P26-3 ne aveva tre: la sessione, il Basic, e la richiesta - quest'ultima
+    # per distinguere un cookie assente da uno rifiutato, perche' i due
+    # dovevano ricadere diversamente. Tolto il secondo canale, non c'e' piu'
+    # nulla da distinguere e nulla su cui ricadere: resta la sessione.
     parameters = inspect.signature(dependencies.legacy_basic_agency_context).parameters
-    assert list(parameters) == ["request", "session", "credentials"], parameters
-    request_p, session_p, credentials_p = parameters.values()
-    assert request_p.default is inspect.Parameter.empty
-    # `from __future__ import annotations` keeps this a string.
-    assert str(request_p.annotation) == "Request", request_p.annotation
+    assert list(parameters) == ["session"], parameters
+    session_p, = parameters.values()
     assert getattr(session_p.default, "dependency", None).__name__ == "optional_session"
-    # The Basic scheme is FastAPI's own HTTPBasic instance, not a function.
-    assert type(getattr(credentials_p.default, "dependency", None)).__name__ == "HTTPBasic"
 
     # And the legacy branch still goes through require_admin, unchanged.
     verifier = inspect.getsource(dependencies._verify_legacy_credentials)
@@ -1176,8 +1186,15 @@ def test_c2_the_compatibility_context_takes_no_caller_selector():
     """
     from operator_auth import dependencies
 
+    # P26-5: `request` torna nella lista dei divieti.
+    #
+    # P26-3 aveva dovuto ammetterlo per un bit solo - se un cookie fosse stato
+    # presentato - e la regola era diventata "il parametro esiste, ma il corpo
+    # lo passa a una sola chiamata e non ne legge mai un attributo". Senza
+    # fallback quel bit non serve piu', quindi il divieto torna semplice: nessun
+    # accesso alla richiesta, in nessuna forma.
     parameters = inspect.signature(dependencies.legacy_basic_agency_context).parameters
-    for forbidden in ("agency_id", "agency", "slug", "headers", "body", "tenant"):
+    for forbidden in ("agency_id", "agency", "slug", "request", "headers", "body", "tenant"):
         assert forbidden not in parameters, forbidden
 
     tree = ast.parse(_function_source(PACKAGE / "dependencies.py", COMPAT_DEPENDENCY))
@@ -1185,19 +1202,7 @@ def test_c2_the_compatibility_context_takes_no_caller_selector():
         node for node in ast.walk(tree)
         if isinstance(node, ast.Name) and node.id == "request"
     ]
-    assert len(uses) == 1, f"`request` is used {len(uses)} times, expected 1"
-    calls = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", None) == "session_was_presented"
-        and [getattr(a, "id", None) for a in node.args] == ["request"]
-    ]
-    assert len(calls) == 1, "the only use of `request` must be session_was_presented"
-    for node in ast.walk(tree):
-        assert not (isinstance(node, ast.Attribute)
-                    and getattr(node.value, "id", None) == "request"), (
-            f"the compatibility context reads request.{node.attr} directly"
-        )
+    assert uses == [], "la dipendenza di scope tocca ancora la richiesta"
 
 
 def test_c2_the_agency_is_resolved_server_side_not_hard_coded():
@@ -1296,12 +1301,13 @@ def test_c2_the_d1_allowlist_is_unchanged():
     assert COMPAT_DEPENDENCY in nba
 
 
-def test_c2_the_nba_router_still_accepts_basic_and_now_a_session_too():
-    """The Oggi view used to send Basic and now sends a cookie; both work.
+def test_c2_the_nba_router_accepts_the_session_and_no_longer_basic():
+    """La vista Oggi mandava il Basic, poi il cookie, adesso solo il cookie.
 
-    P26-3 moved this mount to `require_authenticated_operator`, which verifies
-    the legacy credential through the same `admin_security.require_admin` it
-    always did. Nothing that authenticated before stops authenticating.
+    P26-3 sposto' questo mount su `require_authenticated_operator` tenendo
+    entrambi i canali, per non spezzare nulla durante la transizione. P26-5 la
+    chiude: nessun client manda piu' quella credenziale su una route di tenant,
+    e l'ammissione la verifica soltanto la sessione.
     """
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert (
@@ -1312,8 +1318,10 @@ def test_c2_the_nba_router_still_accepts_basic_and_now_a_session_too():
     from operator_auth import dependencies
 
     admitter = inspect.getsource(dependencies.require_authenticated_operator)
-    assert "_verify_legacy_credentials(credentials)" in admitter
-    assert "require_admin(credentials)" in admitter
+    assert "optional_session" in admitter
+    for retired in ("_verify_legacy_credentials", "require_admin(credentials)",
+                    "HTTPBasicCredentials"):
+        assert retired not in admitter, f"l'ammissione conosce ancora il Basic: {retired}"
 
 
 def test_router_carries_no_router_level_auth_dependency():

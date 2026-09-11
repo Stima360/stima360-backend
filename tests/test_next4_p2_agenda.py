@@ -110,19 +110,22 @@ def test_agenda_handles_view_change_and_errors_safely():
 def test_next2_auth_and_p1_deeplink_still_present():
     compact = re.sub(r"\s+", "", JS)
 
-    assert "/api/admin/check" in JS
-    assert (
-        "state.credentials={username,password}"
-        in compact
-    )
-    assert (
-        "headers.Authorization="
-        "encodeBasic("
-        "state.credentials.username,"
-        "state.credentials.password)"
-        in compact
-    )
-    assert "if(r.status===401)" in compact
+    # P26-5: le tre righe qui sotto congelavano il canale Basic - il gate
+    # `/api/admin/check`, la coppia conservata in `state.credentials` e
+    # l'header ricostruito a ogni richiesta. Sono diventate divieti, perche'
+    # questo frontend autentica con la sessione operatore. La riga sul 401
+    # resta identica: quella regola vale su qualunque canale.
+    assert "/api/admin/check" not in JS
+    assert "state.credentials" not in compact
+    assert "encodeBasic" not in compact
+    assert "OperatorSession.login(" in JS
+    assert "OperatorSession.authFetch(" in JS
+    # Il 401 resta gestito, ma cambia forma: non e' piu' il wrapper a leggere
+    # `r.status`, perche' adesso e' `authFetch` a sollevare. Il frontend lo
+    # cattura e chiude la sessione, che e' la regola vera - e viene asserita
+    # sulla reazione, non sulla riga di codice che la produceva prima.
+    assert "error.status===401" in compact
+    assert "sessionEnded(" in JS
 
     dl = block("applyDeepLink")
 

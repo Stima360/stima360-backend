@@ -269,12 +269,24 @@ def test_g2_the_session_wins_over_basic_when_both_are_present(auth_app):
     assert state["ctx"].agency_id == 7
 
 
-def test_g2_valid_legacy_basic_authenticates_core(auth_app):
+def test_g2_valid_legacy_basic_no_longer_authenticates_core(auth_app):
+    """P26-5 HA CHIUSO IL CANALE, e questo test lo dice invece di sparire.
+
+    G2 congelava che una credenziale Basic valida autenticasse CORE: era la
+    descrizione corretta del sistema finche' la OS Shell e i cinque pannelli
+    amministrativi la usavano. Adesso nessun client la usa piu' su una route di
+    tenant, e il canale e' chiuso.
+
+    Provare che una credenziale NON apre e' importante quanto provare che ne
+    apre un'altra: e' l'unico posto in cui l'inefficacia della vecchia password
+    e' scritta, ed e' cio' che se ne accorgerebbe se rientrasse.
+    """
     client, state = auth_app
     response = client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
 
-    assert response.status_code == 200, response.text
-    assert state["ctx"].auth_channel == "legacy_basic"
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "Non autorizzato"
+    assert "ctx" not in state, "il Basic ha prodotto uno scope"
 
 
 def test_g2_an_invalid_session_and_no_basic_fails_closed(auth_app):
@@ -303,25 +315,18 @@ def test_g2_wrong_basic_credentials_fail_closed(auth_app):
 
 
 def test_g2_an_invalid_cookie_does_not_fall_through_to_basic(auth_app):
-    """P26-3 REVERSED THIS TEST. It used to assert the fall-through.
+    """La regola sopravvive a P26-5, ed e' diventata piu' semplice da tenere.
 
-    P26-1 reasoned that a dead cookie must not lock out a caller who also sent
-    Basic, and while the OS Shell authenticated with Basic that cost nothing:
-    nobody held both. P26-3 moved the Shell onto the cookie, and the same rule
-    then said something quite different - that revoking an operator's session
-    does not revoke their access, as long as their browser also remembers
-    ADMIN_USER and ADMIN_PASS. A disabled account, a suspended membership, a
-    logout on another device: all of them would have been answered 200 through
-    the shared credential, in the very request that carried the dead cookie.
+    P26-1 ammetteva il fallback: un cookie morto non doveva chiudere fuori chi
+    mandava anche il Basic. La revisione di P26-3 lo tolse, perche' con la OS
+    Shell sul cookie quella regola diceva ormai un'altra cosa - che revocare
+    una sessione non revoca l'accesso, se il browser ricorda anche ADMIN_USER e
+    ADMIN_PASS.
 
-    The original concern does not actually arise. A Basic-only client sends no
-    cookie, and `test_g2_valid_legacy_basic_authenticates_core` above is the
-    proof that it keeps working. The only caller this refuses is one presenting
-    both, and the correct answer for it is to log in again.
-
-    The refusal is deliberately the same 401 as every other: the caller is told
-    they are not authenticated, not that their cookie in particular was the
-    problem.
+    P26-5 chiude il canale del tutto, quindi non c'e' piu' niente su cui
+    ricadere. Il test resta perche' e' cio' che se ne accorgerebbe se il
+    fallback rientrasse, e perche' e' il posto in cui e' scritto che una revoca
+    e' una revoca.
     """
     client, state = auth_app
     state["session"] = None
@@ -331,33 +336,48 @@ def test_g2_an_invalid_cookie_does_not_fall_through_to_basic(auth_app):
 
     assert response.status_code == 401, response.text
     assert "ctx" not in state, (
-        "a revoked session was quietly served through the legacy credential"
+        "una sessione revocata e' stata servita attraverso la credenziale condivisa"
     )
 
-    # And the same request without the dead cookie is still served, so what is
-    # refused is the stale session and not the Basic channel.
+    # E senza il cookie morto il Basic non apre lo stesso: cio' che chiude la
+    # porta non e' il cookie, e' che quella porta non c'e' piu'.
     client.cookies.clear()
-    again = client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
-    assert again.status_code == 200, again.text
-    assert state["ctx"].auth_channel == "legacy_basic"
+    assert client.get("/api/core/contacts", auth=("giorgio", "test-secret")).status_code == 401
 
 
-def test_g3_the_legacy_context_is_agency_bound_and_never_platform_admin(auth_app):
+def test_g3_the_session_context_is_agency_bound_and_never_platform_admin(auth_app):
+    """G3 provava che il contesto del canale legacy fosse legato a un'agenzia e
+    mai cross-agency. La regola resta, la sorgente cambia.
+
+    Il vecchio contesto aveva `user_id` e `session_id` a None, perche' una
+    credenziale condivisa non e' una persona: era una bugia necessaria, e la
+    fine di quel canale la toglie. Adesso c'e' un operatore vero, con la sua
+    agenzia - che e' anche il motivo per cui una seconda agenzia reale diventa
+    possibile.
+    """
     client, state = auth_app
-    client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
+    state["session"] = _session(agency_id=DEFAULT_AGENCY_ID)
+    client.cookies.set("stima360_operator_session", "un-token")
+    client.get("/api/core/contacts")
     ctx = state["ctx"]
 
     assert ctx.agency_id == DEFAULT_AGENCY_ID
-    assert ctx.role == "agency_owner"
     assert ctx.is_platform_admin is False
-    assert ctx.user_id is None
-    assert ctx.session_id is None
-    assert ctx.auth_channel == "legacy_basic"
+    assert ctx.auth_channel == "operator_session"
+    # E l'operatore adesso e' una persona, non un segreto condiviso.
+    assert ctx.user_id is not None
+    assert ctx.session_id is not None
 
 
 def test_g3_the_agency_is_resolved_by_slug_and_active_status(auth_app):
+    """P26-5: la Default Agency si risolve ancora per slug, ma la risolve solo
+    chi ne ha bisogno - e le route di tenant non ne hanno piu' bisogno, perche'
+    l'agenzia arriva dalla sessione. La risoluzione per slug resta provata dove
+    e' ancora usata: `_default_agency_context`, chiamato direttamente."""
+    from operator_auth import dependencies as deps
+
     client, state = auth_app
-    client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
+    deps._default_agency_context()
 
     lookups = [call for call in state["seen"] if "agencies" in call[0]]
     assert lookups, state["seen"]
@@ -390,30 +410,46 @@ def test_g3_no_hard_coded_agency_id_in_the_dependency():
 
 
 def test_g3_a_client_cannot_select_an_agency(auth_app):
-    """No query, header or body value may influence the resolved scope."""
+    """No query, header or body value may influence the resolved scope.
+
+    La regola centrale di P26, e P26-5 non la tocca: l'agenzia la decide il
+    server. Cambia soltanto da dove - non piu' dalla Default Agency di un
+    segreto condiviso, ma dalla sessione dell'operatore - e resta impossibile
+    chiederne un'altra da un parametro o da un header.
+    """
     client, state = auth_app
+    state["session"] = _session(agency_id=7)
+    client.cookies.set("stima360_operator_session", "un-token")
+
     response = client.get(
         "/api/core/contacts?agency_id=999",
-        auth=("giorgio", "test-secret"),
         headers={"X-Agency-Id": "999", "X-Role": "platform_admin"},
     )
     assert response.status_code == 200, response.text
-    assert state["ctx"].agency_id == DEFAULT_AGENCY_ID
+    assert state["ctx"].agency_id == 7
     assert state["ctx"].is_platform_admin is False
 
 
-def test_g3_basic_never_produces_an_unbound_platform_admin(auth_app):
+def test_g3_the_session_never_produces_an_unbound_platform_admin(auth_app):
+    """Un contesto senza agenzia sarebbe cross-agency: e' il caso che P26
+    esiste per impedire, e vale su qualunque canale."""
     client, state = auth_app
-    client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
+    state["session"] = _session(agency_id=7)
+    client.cookies.set("stima360_operator_session", "un-token")
+    client.get("/api/core/contacts")
     assert state["ctx"].agency_id is not None
     assert state["ctx"].is_platform_admin is False
 
 
-def test_g3_basic_never_produces_a_system_context(auth_app):
+def test_g3_the_session_never_produces_a_system_context(auth_app):
+    """`SystemAgencyContext` e' il contesto del funnel pubblico, che non ha un
+    operatore dietro. Un'autenticazione non deve poterlo produrre."""
     from operator_auth.context import OperatorContext, SystemAgencyContext
 
     client, state = auth_app
-    client.get("/api/core/contacts", auth=("giorgio", "test-secret"))
+    state["session"] = _session(agency_id=7)
+    client.cookies.set("stima360_operator_session", "un-token")
+    client.get("/api/core/contacts")
     assert isinstance(state["ctx"], OperatorContext)
     assert not isinstance(state["ctx"], SystemAgencyContext)
 

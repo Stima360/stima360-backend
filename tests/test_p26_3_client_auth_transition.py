@@ -171,32 +171,42 @@ def test_2_the_session_wins_over_basic_when_both_are_present(wired):
     )
 
 
-def test_3_the_legacy_basic_channel_still_works_unchanged(wired):
-    """P26-5 confines or removes it. Until then it must not have moved."""
+def test_3_the_legacy_basic_channel_is_gone(wired):
+    """P26-5 L'HA RIMOSSO, ed e' questo test a dirlo.
+
+    Il nome di prima era `..._still_works_unchanged`, e la docstring diceva
+    "P26-5 lo confina o lo rimuove; fino ad allora non deve essersi mosso".
+    P26-5 e' arrivata: i cinque frontend amministrativi sono passati alla
+    sessione operatore, quindi non resta un solo client che abbia bisogno di
+    quel canale su una route di tenant.
+
+    Il test non sparisce, si gira. Provare che una credenziale NON apre e'
+    almeno importante quanto provare che ne apre un'altra: senza, la sua
+    inefficacia non sarebbe scritta da nessuna parte e potrebbe rientrare in
+    silenzio.
+    """
     client, state = wired
     state["session"] = None
 
     response = client.get("/api/probe/scope", auth=BASIC)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["agency_id"] == DEFAULT_AGENCY_ID
-    assert body["auth_channel"] == "legacy_basic"
-    assert body["user_id"] is None
-    assert body["is_platform_admin"] is False
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "Non autorizzato"
 
 
-def test_4_the_default_agency_is_resolved_once_per_legacy_request(wired):
-    """The reason `require_authenticated_operator` exists.
+def test_4_no_default_agency_is_resolved_for_a_refused_request(wired):
+    """Il rifiuto arriva prima del database.
 
-    Mounting these routers on `require_operator` would have made the mount and
-    the route's scope dependency two separate cache entries, each resolving the
-    Default Agency. One lookup, not two.
+    Il test contava le risoluzioni della Default Agency per provare che
+    `require_authenticated_operator` non ne facesse due. Adesso il conto giusto
+    e' zero, per una ragione piu' forte: senza il canale Basic non esiste piu'
+    una Default Agency da risolvere - l'agenzia arriva dalla sessione, gia'
+    pronta - e un chiamante non autenticato non fa partire alcuna query.
     """
     client, state = wired
     state["session"] = None
 
     client.get("/api/probe/scope", auth=BASIC)
-    assert state["default_agency_lookups"] == 1, state["default_agency_lookups"]
+    assert state["default_agency_lookups"] == 0, state["default_agency_lookups"]
 
 
 # ---------------------------------------------------------------------------
@@ -240,37 +250,40 @@ def test_6_a_dead_cookie_does_not_fall_through_to_valid_basic(wired):
     assert response.json()["detail"] == "Non autorizzato"
 
 
-def test_6b_basic_without_a_cookie_is_untouched(wired):
-    """The other half of test_6, and the reason it costs nothing.
+def test_6b_basic_without_a_cookie_is_refused_too(wired):
+    """L'altra meta' del test 6, e P26-5 la gira insieme a lui.
 
-    P26-1 refused to fail a dead cookie because it feared locking out a
-    legitimate Basic client. A Basic client sends no cookie, so it is not
-    affected - and this is that claim as an executed assertion rather than an
-    argument. The six legacy admin pages and every script on that channel keep
-    working until P26-5 removes it.
+    P26-1 non voleva far fallire un cookie morto per timore di chiudere fuori
+    un client Basic legittimo, e la risposta era: un client Basic non manda
+    cookie, quindi non e' toccato. Vero allora, irrilevante adesso - quel
+    client non esiste piu' su nessuna route di tenant, e il canale e' chiuso in
+    entrambe le forme.
+
+    Restano provate le due cose che contano: che il Basic non apra, e che il
+    messaggio di rifiuto sia sempre lo stesso qualunque sia la causa.
     """
     client, state = wired
     state["session"] = None
 
     response = client.get("/api/probe/scope", auth=BASIC)
-    assert response.status_code == 200
-    assert response.json()["auth_channel"] == "legacy_basic"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Non autorizzato"
 
 
-def test_6c_an_empty_cookie_is_not_a_presented_session(wired):
-    """A cookie header sent with an empty value is no cookie at all.
+def test_6c_an_empty_cookie_is_refused_like_any_other_absent_session(wired):
+    """Il cookie vuoto era un caso delicato finche' esisteva un fallback.
 
-    Worth pinning: had the check been `COOKIE in request.cookies` rather than a
-    truth test on the value, a client that had just been logged out - the
-    server clears the cookie by setting it empty - could have been refused
-    Basic as well, on a cookie the server itself blanked.
+    Il server cancella il cookie impostandolo vuoto: se la presenza fosse stata
+    controllata con `COOKIE in request.cookies` invece che sul valore, un
+    utente appena disconnesso si sarebbe visto negare anche il Basic, per un
+    cookie che il server stesso aveva svuotato. Senza fallback quella trappola
+    non esiste piu', e resta solo la regola semplice: nessuna sessione, 401.
     """
     client, state = wired
     state["session"] = None
 
     response = client.get("/api/probe/scope", cookies={COOKIE: ""}, auth=BASIC)
-    assert response.status_code == 200
-    assert response.json()["auth_channel"] == "legacy_basic"
+    assert response.status_code == 401
 
 
 def test_7_wrong_basic_and_no_session_is_401(wired):
@@ -281,22 +294,29 @@ def test_7_wrong_basic_and_no_session_is_401(wired):
     assert response.status_code == 401
 
 
-def test_8_an_unconfigured_server_still_answers_503_not_401(wired, monkeypatch):
-    """P26-1 answered 503 when ADMIN_USER/ADMIN_PASS were absent, because that
-    is an operational fault rather than a failed login. Both dependencies keep
-    that answer - a route that said 503 must not start saying 401."""
+def test_8_the_admin_env_no_longer_changes_this_answer(wired, monkeypatch):
+    """Il 503 se ne va da qui, e non e' una perdita: e' un cambio di indirizzo.
+
+    Significava "il server non ha credenziali amministrative configurate", ed
+    era la risposta giusta finche' questa superficie viveva su quelle
+    variabili: un 401 avrebbe mandato l'operatore a cercare una password
+    sbagliata invece di una configurazione mancante.
+
+    Adesso questa superficie non le legge piu'. Toglierle non cambia nulla, e
+    l'unica risposta possibile per chi non ha una sessione e' 401. Il 503
+    sopravvive dove sopravvive il canale - `/api/admin/check` e
+    `admin_security.require_admin` che la serve - ed e' provato la'.
+    """
     client, state = wired
     state["session"] = None
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.delenv("ADMIN_PASS", raising=False)
 
-    response = client.get("/api/probe/scope")
-    assert response.status_code == 503, response.text
+    assert client.get("/api/probe/scope").status_code == 401
+    monkeypatch.setenv("ADMIN_USER", BASIC[0])
+    monkeypatch.setenv("ADMIN_PASS", BASIC[1])
+    assert client.get("/api/probe/scope").status_code == 401
 
-
-# ---------------------------------------------------------------------------
-# 9-11 - the client cannot choose an agency
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("params", [
     {"agency_id": AGENCY_B},
@@ -329,7 +349,8 @@ def test_11_neither_dependency_reads_anything_from_the_request(wired):
     for function in (deps.legacy_basic_agency_context,
                      deps.require_authenticated_operator,
                      deps.require_operator,
-                     deps._scope_from_session_or_basic):
+                     deps.require_owner_admin_context,
+                     deps._scope_from_session):
         source = inspect.getsource(function)
         body = source.split('"""')[-1]
         assert not re.search(r"request\.(query_params|headers|json|cookies)", body), function
@@ -507,15 +528,22 @@ def test_21_core_keeps_the_dependency_that_also_yields_its_scope():
     assert _mounts()["core_router"] == "[Depends(require_operator)]"
 
 
-def test_22_the_owner_routers_are_not_part_of_the_widening():
-    """The Shell does not call them; the portal authenticates owners rather
-    than operators; and OWNER Admin keeps `require_owner_admin`, which is what
-    P26-6C's admission proof reads."""
+def test_22_the_owner_routers_keep_their_own_admission():
+    """P26-3 li tenne fuori dall'allargamento di D-1 perche' ammettere
+    qualunque sessione a OWNER Admin sarebbe stata un'escalation. P26-5 non ha
+    cambiato quella conclusione: l'ha resa esplicita con un ruolo.
+
+    OWNER Admin non e' montata su `require_authenticated_operator` - che
+    verifica solo che il chiamante sia autenticato - ma su
+    `require_owner_admin_context`, che in piu' impone `agency_owner`. Il
+    portale resta un principale diverso, con `current_owner`.
+    """
     mounts = _mounts()
     assert mounts["owner_admin_router"] == ""
     assert mounts["owner_portal_router"] == ""
     admin = (ROOT / "owner" / "router_admin.py").read_text(encoding="utf-8")
-    assert "dependencies=[Depends(require_owner_admin)]" in admin
+    assert "dependencies=[Depends(require_owner_admin_context)]" in admin
+    assert "require_authenticated_operator" not in admin
 
 
 def test_23_flow_no_longer_borrows_owners_dependency():
@@ -605,22 +633,34 @@ def test_27_the_mount_alone_refuses_an_anonymous_caller(bare_mount):
     assert state["reached"] == 0, "the handler ran without a credential"
 
 
-def test_28_the_mount_alone_admits_both_channels(bare_mount):
+def test_28_the_mount_alone_admits_the_session_and_only_the_session(bare_mount):
+    """Erano due canali, adesso e' uno.
+
+    Il test si chiamava `..._admits_both_channels` e provava che il mount
+    ammettesse tanto il Basic quanto il cookie. P26-5 chiude il primo: il
+    Basic, da solo, non ammette piu' nulla, e la sessione resta l'unica porta.
+    """
     client, state = bare_mount
 
-    assert client.get("/api/bare/ping", auth=BASIC).status_code == 200
+    assert client.get("/api/bare/ping", auth=BASIC).status_code == 401
+    assert state["reached"] == 0
+
     state["session"] = _session(agency_id=AGENCY_A)
     assert client.get("/api/bare/ping", cookies={COOKIE: "live"}).status_code == 200
-    assert state["reached"] == 2
+    assert state["reached"] == 1
 
 
-def test_29_the_mount_alone_refuses_a_dead_cookie_that_also_sent_basic(bare_mount):
-    """Admission, on its own, must not launder a revoked session into Basic.
+def test_29_a_dead_cookie_plus_basic_is_refused_by_the_mount(bare_mount):
+    """La regola della revisione P26-3 sopravvive a P26-5, in forma piu' forte.
 
-    Test 6 proves this for the scope dependency, and would pass even if the
-    mount had lost the rule, because that route also declares the scope. This
-    route declares nothing: the mount is the only thing deciding, so the
-    assertion is about the mount and not about what happens to sit behind it.
+    Allora il rischio era che un cookie RIFIUTATO ricadesse sul Basic della
+    stessa richiesta: revocare una sessione non avrebbe revocato l'accesso, se
+    il browser ricordava anche ADMIN_USER e ADMIN_PASS. Serviva una regola
+    apposta per distinguere "nessun cookie" da "cookie rifiutato".
+
+    Adesso non serve piu' distinguerli, perche' non c'e' un secondo canale su
+    cui ricadere. La prova resta, ed e' proprio quella che accorgerebbe di un
+    ritorno del fallback.
     """
     client, state = bare_mount
     state["session"] = None
@@ -628,14 +668,13 @@ def test_29_the_mount_alone_refuses_a_dead_cookie_that_also_sent_basic(bare_moun
     response = client.get("/api/bare/ping", cookies={COOKIE: "revoked"}, auth=BASIC)
 
     assert response.status_code == 401, response.text
-    assert state["reached"] == 0, (
-        "a revoked session was admitted through the shared credential"
-    )
+    assert state["reached"] == 0, "una sessione revocata e' passata col Basic"
 
-    # And without the dead cookie the same caller is still admitted.
+    # E senza cookie il Basic non apre lo stesso: non e' il cookie morto a
+    # chiudere la porta, e' che quella porta non esiste piu'.
     client.cookies.clear()
-    assert client.get("/api/bare/ping", auth=BASIC).status_code == 200
-    assert state["reached"] == 1
+    assert client.get("/api/bare/ping", auth=BASIC).status_code == 401
+    assert state["reached"] == 0
 
 
 @pytest.fixture
@@ -661,24 +700,27 @@ def unmounted(monkeypatch, wired):
     return TestClient(app, raise_server_exceptions=False), state
 
 
-def test_29b_the_scope_dependency_refuses_a_dead_cookie_on_its_own(unmounted):
-    """No mount to fall back on: this is the guard being tested by itself."""
+def test_29b_the_scope_dependency_refuses_basic_on_its_own(unmounted):
+    """Le sei route `@app` di main.py non hanno guardia di mount: la
+    dipendenza di scope e' tutta l'autenticazione che hanno.
+
+    E' il posto dove un fallback dimenticato sarebbe piu' pericoloso e meno
+    visibile, quindi la regola va provata qui e non solo dietro un mount che la
+    coprirebbe comunque.
+    """
     client, state = unmounted
     state["session"] = None
     state["ctx"] = None
 
-    response = client.get("/api/unmounted/scope", cookies={COOKIE: "revoked"}, auth=BASIC)
+    # Cookie rifiutato piu' Basic valido: rifiutato.
+    assert client.get("/api/unmounted/scope", cookies={COOKIE: "revoked"},
+                      auth=BASIC).status_code == 401
+    assert state["ctx"] is None
 
-    assert response.status_code == 401, response.text
-    assert state["ctx"] is None, (
-        "a revoked session was scoped through the shared credential on a route "
-        "with no mount-level admission in front of it"
-    )
-
+    # Solo Basic: rifiutato lo stesso.
     client.cookies.clear()
-    again = client.get("/api/unmounted/scope", auth=BASIC)
-    assert again.status_code == 200, again.text
-    assert again.json()["auth_channel"] == "legacy_basic"
+    assert client.get("/api/unmounted/scope", auth=BASIC).status_code == 401
+    assert state["ctx"] is None
 
 
 def test_29c_a_live_session_still_scopes_an_unmounted_route(unmounted):
@@ -693,66 +735,37 @@ def test_29c_a_live_session_still_scopes_an_unmounted_route(unmounted):
 
 
 # ---------------------------------------------------------------------------
-# 30-35 - OWNER Admin: one surface, one channel
+# 30-35 - OWNER Admin: una superficie, una sessione, un ruolo
 # ---------------------------------------------------------------------------
 #
-# P26-3 REVIEW. The Shell does not call OWNER Admin, so P26-3 had no reason to
-# move it - and a good reason not to. `require_authenticated_operator` asks
-# whether a caller is authenticated, not what they may do; admitting any
-# operator session there would put owner-account management, login-token
-# minting and owner documents inside reach of an agent-role session. That is a
-# privilege decision, and it belongs to the phase that brings roles with it.
+# P26-3 lascio' OWNER Admin fuori dall'allargamento di D-1, e aveva ragione:
+# `require_authenticated_operator` chiede se il chiamante e' autenticato, non
+# cosa gli e' permesso, e ammettere qualunque sessione avrebbe messo la gestione
+# dei conti proprietario, l'emissione dei loro token di accesso e i loro
+# documenti alla portata di una sessione con ruolo agent.
 #
-# But leaving the mount alone was not enough. OWNER Admin's routes took the
-# shared scope dependency, and P26-3 made that one session-first - so a browser
-# holding both a cookie and Basic would have been ADMITTED by Basic and SCOPED
-# by the cookie. Not a widening and not a narrowing: two credentials deciding
-# two halves of one request. `basic_only_agency_context` removes it.
+# La conclusione non cambia con P26-5, cambia il modo di ottenerla. Restare
+# Basic-only era un modo indiretto di dire "serve un privilegio piu' alto", e
+# aveva il difetto di legare il privilegio a un segreto condiviso invece che a
+# una persona. Adesso il privilegio e' detto: sessione, piu' ruolo
+# `agency_owner` (o platform admin). Un agent riceve 403 - autenticato, non
+# autorizzato - e l'agenzia arriva dalla sessione, quindi OWNER Admin diventa
+# multi-agenzia insieme a tutto il resto.
 
 OWNER_ADMIN_PROBE = "/api/owner/admin/lookups/contacts"
 
 
 @pytest.fixture
 def owner_admin(monkeypatch):
-    """The REAL OWNER Admin router, mounted the way main.py mounts it.
+    """Il router OWNER Admin REALE, montato come lo monta main.py.
 
-    Not a probe. Every assertion below is about admission, which is decided
-    before any handler runs, so no database is needed and none is reachable:
-    the one cursor these paths could open is the Default-Agency lookup, and it
-    is faked here exactly as in `wired`.
+    Non un probe. Solo la chiamata finale al repository e' finta, cosi' la
+    catena sotto esame - mount, dipendenza di ruolo, `agency_of` - e' il codice
+    spedito, e l'agenzia che si osserva e' quella che la query ha ricevuto.
     """
-    monkeypatch.setenv("ADMIN_USER", BASIC[0])
-    monkeypatch.setenv("ADMIN_PASS", BASIC[1])
-
-    state = {"session": None, "ctx": None, "agency_asked": None, "resolutions": 0}
+    state = {"session": None, "agency_asked": None}
     monkeypatch.setattr(deps.service, "session_from_token", lambda token: state["session"])
 
-    real_default_context = deps._default_agency_context
-
-    def _record(*args, **kwargs):
-        state["resolutions"] += 1
-        state["ctx"] = real_default_context(*args, **kwargs)
-        return state["ctx"]
-
-    monkeypatch.setattr(deps, "_default_agency_context", _record)
-
-    class _Cursor:
-        def execute(self, sql, params=None):
-            pass
-
-        def fetchone(self):
-            return {"id": DEFAULT_AGENCY_ID}
-
-    @contextmanager
-    def _cursor(*args, **kwargs):
-        yield (None, _Cursor())
-
-    monkeypatch.setattr(deps, "operator_cursor", _cursor)
-
-    # The probe route is a real one, and it runs. Only the repository call at
-    # the end is faked, so the whole chain under test - mount, scope
-    # dependency, `agency_of` - is the shipped code, and what it resolved is
-    # read from the agency the query was asked for.
     from owner import router_admin_lookups as lookups
 
     def _lookup_contacts(agency_id, *args, **kwargs):
@@ -768,97 +781,94 @@ def owner_admin(monkeypatch):
     return TestClient(app, raise_server_exceptions=False), state
 
 
-def test_30_an_operator_session_alone_does_not_admit_owner_admin(owner_admin):
-    """The explicit proof that OWNER Admin did not join the D-1 widening."""
-    client, state = owner_admin
-    state["session"] = _session(agency_id=AGENCY_A)
+def _live(agency_id=AGENCY_A, role="agency_owner", is_platform_admin=False):
+    return {
+        "context": OperatorContext(
+            user_id=3, agency_id=agency_id, role=role,
+            is_platform_admin=is_platform_admin, session_id=99,
+            auth_channel="operator_session",
+        ),
+        "agency_name": "Agenzia",
+        "expires_at": datetime(2030, 1, 1, tzinfo=timezone.utc),
+    }
 
-    response = client.get(OWNER_ADMIN_PROBE, cookies={COOKIE: "a-live-token"})
+
+def test_30_an_anonymous_caller_is_refused_before_any_query(owner_admin):
+    client, state = owner_admin
+
+    response = client.get(OWNER_ADMIN_PROBE)
 
     assert response.status_code == 401, response.text
-    assert state["ctx"] is None, "the scope dependency ran on an unadmitted request"
-    assert state["agency_asked"] is None, "an unadmitted request reached a query"
-    assert response.headers["www-authenticate"] == 'Basic realm="STIMA360 OWNER Admin"'
+    assert state["agency_asked"] is None, "un anonimo ha raggiunto una query"
 
 
-def test_31_a_platform_admin_session_does_not_admit_owner_admin_either(owner_admin):
-    """Not even the widest session. The mount does not read roles at all - it
-    reads a credential - and that is the property, not a role check."""
-    client, state = owner_admin
-    state["session"] = _session(agency_id=AGENCY_A, role="platform_admin")
+@pytest.mark.parametrize("role", ["agent", "agency_admin"])
+def test_31_an_insufficient_role_gets_403_not_401(owner_admin, role):
+    """403 perche' e' autenticato benissimo: non e' autorizzato.
 
-    assert client.get(OWNER_ADMIN_PROBE, cookies={COOKIE: "a-live-token"}).status_code == 401
-    assert state["ctx"] is None
-
-
-def test_32_basic_alone_still_admits_owner_admin(owner_admin):
-    """Unchanged by P26-3, and the reason the surface stays Basic-only."""
-    client, state = owner_admin
-
-    response = client.get(OWNER_ADMIN_PROBE, auth=BASIC)
-
-    assert response.status_code == 200, response.text
-    assert state["ctx"] is not None, "Basic no longer admits OWNER Admin"
-    assert state["ctx"].auth_channel == "legacy_basic"
-    assert state["agency_asked"] == DEFAULT_AGENCY_ID
-    # One request, one Default-Agency resolution. OWNER Admin's mount verifies
-    # a credential and opens no cursor, so the scope dependency is the only
-    # thing that resolves - which is the arrangement `require_authenticated_
-    # operator` exists to preserve on the eleven routers that do have a guard.
-    assert state["resolutions"] == 1, state["resolutions"]
-
-
-def test_33_a_cookie_alongside_basic_does_not_change_the_scope(owner_admin):
-    """THE HYBRID, STATED AS A TEST.
-
-    Before this change the same request was admitted by Basic and scoped by the
-    cookie: agency 7, from a credential the mount never even looked at. Now
-    both halves are decided by the one credential the mount accepts.
+    `agency_admin` e' incluso di proposito: la matrice gli da' "LIMITED" sui
+    membri dell'agenzia, e i conti proprietario non sono membri.
     """
     client, state = owner_admin
-    state["session"] = _session(agency_id=AGENCY_A)
+    state["session"] = _live(role=role)
 
-    response = client.get(OWNER_ADMIN_PROBE, cookies={COOKIE: "a-live-token"}, auth=BASIC)
+    response = client.get(OWNER_ADMIN_PROBE, cookies={COOKIE: "live"})
 
-    assert response.status_code == 200, "Basic must still admit the request"
-    assert state["agency_asked"] == DEFAULT_AGENCY_ID, (
-        "the cookie decided which agency OWNER Admin queried, on a request "
-        f"admitted by Basic (asked for {state['agency_asked']}, "
-        f"the session's agency is {AGENCY_A})"
+    assert response.status_code == 403, response.text
+    assert state["agency_asked"] is None, "un ruolo insufficiente ha raggiunto una query"
+
+
+def test_32_basic_no_longer_admits_owner_admin(owner_admin):
+    """Prima si chiamava `..._still_admits_owner_admin`. P26-5 lo gira."""
+    client, state = owner_admin
+
+    assert client.get(OWNER_ADMIN_PROBE, auth=BASIC).status_code == 401
+    assert state["agency_asked"] is None
+
+
+def test_33_the_agency_comes_from_the_session_not_from_a_default(owner_admin):
+    """IL GUADAGNO DI P26-5 SU QUESTA SUPERFICIE.
+
+    Prima l'agenzia era sempre la Default, risolta dal segreto condiviso: OWNER
+    Admin non poteva servire una seconda agenzia nemmeno in linea di principio.
+    Adesso e' quella dell'operatore che ha fatto login, e la query lo dimostra.
+    """
+    client, state = owner_admin
+    state["session"] = _live(agency_id=AGENCY_B, role="agency_owner")
+
+    response = client.get(OWNER_ADMIN_PROBE, cookies={COOKIE: "live"})
+
+    assert response.status_code == 200, response.text
+    assert state["agency_asked"] == AGENCY_B, (
+        f"la query ha chiesto l'agenzia {state['agency_asked']} invece di {AGENCY_B}"
     )
-    assert state["ctx"].auth_channel == "legacy_basic"
-    assert state["ctx"].user_id is None and state["ctx"].session_id is None
 
 
-def test_34_owner_admin_declares_only_the_basic_only_scope():
-    """Structural, and it covers the routes tests 30-33 do not reach.
+def test_34_owner_admin_declares_only_the_role_bearing_scope():
+    """Strutturale, e copre le route che i test sopra non raggiungono.
 
-    Thirty routes and four lookups: an HTTP test per route would prove the same
-    thing thirty-four times, and would still miss the thirty-fifth. The
-    dependency each one names is the property.
+    Trenta route piu' quattro lookup: una prova HTTP per ciascuna proverebbe
+    trentaquattro volte la stessa cosa e mancherebbe comunque la
+    trentacinquesima. La dipendenza che ognuna dichiara e' la proprieta'.
     """
     for module in ("router_admin.py", "router_admin_lookups.py"):
         source = (ROOT / "owner" / module).read_text(encoding="utf-8")
-        assert "basic_only_agency_context" in source, module
-        assert "legacy_basic_agency_context" not in source, (
-            f"owner/{module} takes the session-first scope while its mount "
-            "accepts only Basic - that is the hybrid this section removed"
-        )
+        assert "require_owner_admin_context" in source, module
+        # Nessuna delle due dipendenze piu' deboli: la prima non guarda il
+        # ruolo, la seconda e' lo scope generico degli altri router.
         assert "require_authenticated_operator" not in source, module
+        assert "legacy_basic_agency_context" not in source, module
 
 
-def test_35_the_basic_only_scope_cannot_see_a_session_at_all():
-    """Not "prefers Basic" - cannot do otherwise.
+def test_35_the_owner_admin_scope_cannot_be_reached_without_a_role_check():
+    """Non "preferisce" un ruolo: non puo' restituire un contesto senza averlo
+    verificato. Una precedenza sarebbe a una riga di distanza dal cedere."""
+    parameters = inspect.signature(deps.require_owner_admin_context).parameters
+    assert list(parameters) == ["session"], parameters
 
-    A precedence that merely ordered the two channels would be one edit away
-    from the hybrid returning. This dependency has no session parameter, so
-    there is nothing for a cookie to win.
-    """
-    parameters = inspect.signature(deps.basic_only_agency_context).parameters
-    assert list(parameters) == ["_credential"], parameters
-    assert parameters["_credential"].default.dependency.__name__ == "require_admin"
-
-    source = inspect.getsource(deps.basic_only_agency_context)
+    source = inspect.getsource(deps.require_owner_admin_context)
     body = source[source.index('"""', source.index('"""') + 3) + 3:]
-    for forbidden in ("session", "cookie", "COOKIE_NAME", "optional_session", "request"):
-        assert forbidden not in body, f"basic_only_agency_context mentions {forbidden!r}"
+    # Un solo `return context`, e sta dopo il controllo del ruolo.
+    assert body.count("return context") == 1
+    assert body.index("OWNER_ADMIN_MIN_ROLE") < body.index("return context")
+    assert "403" in body or "OWNER_ADMIN_FORBIDDEN_MESSAGE" in body

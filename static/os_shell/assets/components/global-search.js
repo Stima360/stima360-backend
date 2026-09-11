@@ -71,5 +71,10 @@ export function mountGlobalSearch(container) {
   });
   input.addEventListener('keydown', (event) => { if (event.key === 'Escape') clear(); });
   document.addEventListener('click', (event) => { if (!wrap.contains(event.target)) clear(); });
+  // P26-4: questo pannello vive FUORI dal container delle view, quindi il
+  // router non lo svuota. Si ripulisce da solo a ogni transizione di sessione -
+  // logout, scadenza, cambio di operatore - ed e' gia' cosi' da prima di P26-4.
+  // Provato in tests/test_p26_4_shell_runtime.py: senza questa riga la query
+  // digitata e i risultati dell'agenzia uscita resterebbero sullo schermo.
   onAuthChange(() => { clear(); input.value = ''; });
 }

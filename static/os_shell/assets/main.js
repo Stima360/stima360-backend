@@ -3,8 +3,8 @@ import { mountGlobalSearch } from './components/global-search.js';
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
 
-import { login, logout, onAuthChange, restore } from './core/auth.js';
-import { registerRoute, initRouter, navigate, renderCurrentRoute } from './core/router.js';
+import { login, logout, onAuthChange, restore, sessionEpoch } from './core/auth.js';
+import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
 import { renderContatti } from './views/contatti.js';
@@ -80,6 +80,9 @@ registerRoute('automazioni', (container, params = []) => {
 // interamente assente dall'app, non solo nascosta via CSS.
 
 initRouter(contentEl, {
+  // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
+  // Vedi il commento su `sessionEpoch` in core/auth.js.
+  epoch: sessionEpoch,
   onNavigate(name) {
     const active = SECTIONS.find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
@@ -130,6 +133,27 @@ logoutBtn.addEventListener('click', async () => {
   }
 });
 
+// P26-4: quando la sessione finisce, la superficie applicativa va SVUOTATA,
+// non nascosta.
+//
+// Prima qui si commutava `hidden` e nient'altro. I contatti, gli immobili e
+// gli abbinamenti dell'agenzia appena uscita restavano nel documento: a un
+// `hidden = false` di distanza, o a un devtools aperto. Su una postazione
+// condivisa e' gia' sbagliato; quando il prossimo a entrare appartiene a
+// un'altra agenzia diventa esattamente cio' che P26 esiste per impedire.
+//
+// La ricerca globale non compare qui: vive fuori dal container delle view e si
+// ripulisce da sola su `onAuthChange`, come faceva gia' prima di P26-4. Una
+// seconda chiamata da questo punto sarebbe codice che non fa niente, e i test
+// di P26-4 la coprono dove sta.
+function clearApplicationSurface() {
+  clearRoute();
+  pageTitle.textContent = '';
+  for (const btn of navEl.querySelectorAll('[data-route]')) {
+    btn.classList.remove('active');
+  }
+}
+
 onAuthChange((session) => {
   const authenticated = session !== null;
   loginView.hidden = authenticated;
@@ -140,6 +164,8 @@ onAuthChange((session) => {
   if (authenticated) {
     loginError.textContent = '';
     renderCurrentRoute();
+  } else {
+    clearApplicationSurface();
   }
 });
 

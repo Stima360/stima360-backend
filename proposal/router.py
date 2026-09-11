@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from admin_security import require_admin
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.dependencies import audit_actor, legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
@@ -31,7 +30,7 @@ def translate(function, *args, **kwargs):
 @router.post("", status_code=201)
 def create_proposal(
     payload: ProposalCreate,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.create_proposal_scoped, ctx, payload, actor)
@@ -73,7 +72,7 @@ def get_proposal(
 def update_proposal(
     proposal_id: int,
     payload: ProposalUpdate,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.update_proposal_scoped, ctx, proposal_id, payload, actor)
@@ -83,7 +82,7 @@ def update_proposal(
 def transition_proposal(
     proposal_id: int,
     payload: ProposalTransition,
-    actor: str = Depends(require_admin),
+    actor: str = Depends(audit_actor),
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
     return translate(service.transition_proposal_scoped, ctx, proposal_id, payload, actor)

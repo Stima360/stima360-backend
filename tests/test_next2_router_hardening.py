@@ -100,29 +100,64 @@ def test_4_wrong_credentials_are_rejected(client, path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_5_missing_admin_env_fails_closed(client, path, monkeypatch):
+def test_5_the_admin_env_no_longer_decides_anything_here(client, path, monkeypatch):
+    """P26-5 HA SPOSTATO LA PORTA, E QUESTO TEST DICE DOVE.
+
+    Il 503 significava "il server non ha credenziali amministrative
+    configurate": era la risposta giusta finche' queste route vivevano su
+    ADMIN_USER/ADMIN_PASS, perche' senza quelle non c'era modo di distinguere
+    un amministratore da chiunque altro, e un 401 avrebbe mandato l'operatore a
+    cercare il problema sbagliato.
+
+    Adesso queste route non leggono piu' quelle variabili. Toglierle non cambia
+    nulla, e il Basic non apre - ne' giusto ne' sbagliato. E' esattamente il
+    contenimento che P26-5 doveva ottenere, e senza questo test l'inefficacia
+    di quella credenziale non sarebbe provata da nessuna parte.
+
+    Il 503 sopravvive dove sopravvive il canale: `/api/admin/check`, l'unica
+    route non-tenant rimasta, e `admin_security.require_admin` che la serve.
+    """
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.delenv("ADMIN_PASS", raising=False)
-    response = client.get(path, auth=("giorgio", "test-secret"))
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Servizio amministrativo non disponibile"}
+    assert client.get(path, auth=("giorgio", "test-secret")).status_code == 401
+
+    # E con le variabili impostate la risposta e' identica: il Basic non e' una
+    # credenziale valida su questa superficie, punto.
+    monkeypatch.setenv("ADMIN_USER", "giorgio")
+    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+    refused = client.get(path, auth=("giorgio", "test-secret"))
+    assert refused.status_code == 401
+    assert refused.json() == {"detail": "Non autorizzato"}
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_6_correct_credentials_pass_the_auth_gate(client, path, monkeypatch):
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
-    response = client.get(path, auth=("giorgio", "test-secret"))
-    assert response.status_code not in (401, 503)
+def test_6_a_live_session_passes_the_auth_gate(client, path, monkeypatch):
+    """La controprova del test 5: qualcosa deve pur aprire, altrimenti "il
+    Basic non apre" sarebbe vero anche su un'API rotta.
+
+    L'identita' e' dichiarata - agenzia e ruolo - invece che implicita come lo
+    era in `auth=("giorgio", "test-secret")`, dove entrambe erano decise dal
+    server e sempre le stesse.
+    """
+    from tests.operator_session_helpers import operator_session
+
+    with operator_session(monkeypatch, client, agency_id=1, role="agency_owner"):
+        assert client.get(path).status_code not in (401, 403, 503)
 
 
 @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-def test_7_unauthorized_response_has_basic_challenge(client, path, monkeypatch):
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+def test_7_the_unauthorized_response_no_longer_offers_a_basic_challenge(client, path):
+    """`WWW-Authenticate: Basic` diceva al browser di aprire il prompt.
+
+    Su una superficie che il Basic non lo accetta piu' sarebbe un invito a
+    inserire una credenziale che non apre nulla - e per un umano davanti a un
+    prompt di sistema e' peggio di nessun invito. Il messaggio di rifiuto resta
+    identico: uno solo per ogni causa.
+    """
     response = client.get(path)
     assert response.status_code == 401
-    assert response.headers.get("WWW-Authenticate") == 'Basic realm="STIMA360 Admin"'
+    assert response.json() == {"detail": "Non autorizzato"}
+    assert response.headers.get("WWW-Authenticate") is None
 
 
 def test_8_public_stima_and_legacy_admin_check_are_not_put_behind_new_gate(client, monkeypatch):
@@ -160,7 +195,14 @@ def test_10_domain_routers_remain_decoupled_from_owner():
         assert "import owner" not in source
 
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "from admin_security import require_admin" in main_source
+    # P26-5: `main.py` non importa piu' `require_admin` perche' non lo usa piu'.
+    #
+    # La protezione che questo test esiste per garantire non cambia - nessuna
+    # di queste superfici e' raggiungibile senza una credenziale - ma la
+    # credenziale e' la sessione operatore, e l'import era diventato codice
+    # morto. Un import inutilizzato dentro il modulo che monta l'applicazione
+    # non e' innocuo: e' una porta pronta a una riga di distanza.
+    assert "from admin_security import require_admin" not in main_source
     # P26-1 Task 15: core_router moved from require_admin to require_operator.
     # The protection this test exists to guarantee is unchanged - none of these
     # is reachable without a credential - but the dependency now accepts BOTH

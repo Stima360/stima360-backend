@@ -1,5 +1,5 @@
 const API='/api/core';
-const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],selected:null,selected360:null,credentials:null};
+const state={view:'dashboard',contacts:[],leads:[],activities:[],tasks:[],selected:null,selected360:null};
 // NEXT4_P3_GLOBAL_SEARCH
 let globalSearchTimer=null;
 let globalSearchSequence=0;
@@ -14,12 +14,22 @@ const priorityRank=v=>({urgent:0,high:1,normal:2,low:3}[v]??4);
 const val=id=>qs('#'+id)?.value.trim()||'';
 const opt=v=>v||null;
 function positiveId(value){const n=Number(value);return Number.isInteger(n)&&n>0?n:null;}
-function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${username}:${password}`);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return `Basic ${btoa(binary)}`;}
 function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
 function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
 function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
-function logout(message=''){cancelGlobalSearch();state.credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
-async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}state.credentials={username,password};showApp();await refresh();await applyDeepLink();}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
+// P26-5: logout vero, revocato sul server. `sessionEnded` e' la variante per
+// il 401: azzera lo stato senza parlare col server, perche' e' gia' un 401 ad
+// aver provocato tutto e ritentare da li' costruisce un ciclo.
+async function logout(message=''){cancelGlobalSearch();await OperatorSession.logout();const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+function sessionEnded(message=''){cancelGlobalSearch();OperatorSession.sessionExpired();const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+// P26-5: la password lascia il browser UNA volta, verso /api/operator-auth/login,
+// e non viene conservata da nessuna parte. Il server risponde 204 e mette il
+// token in un cookie HttpOnly che questo file non puo' leggere.
+async function login(event){event.preventDefault();const email=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{await OperatorSession.login(email,password);}catch(error){setLoginStatus(error.message||'Errore di connessione. Riprova.');return;}showApp();await refresh();await applyDeepLink();}
+// P26-5: ripristino all'avvio. Il cookie e' HttpOnly, quindi la sola cosa che
+// sa dire se c'e' una sessione viva e' il server. Un 401 qui e' l'esito normale
+// di "non c'e' sessione" e non produce un messaggio di errore.
+async function boot(){showLogin();let session=null;try{session=await OperatorSession.restore();}catch(error){setLoginStatus(error.message||'');return;}if(!session)return;showApp();await refresh();await applyDeepLink();}
 
 async function applyDeepLink(){
  const params=new URLSearchParams(window.location.search);
@@ -32,7 +42,8 @@ async function applyDeepLink(){
  await openContact360(id);
 }
 
-async function api(path,opts={}){const headers={'Content-Type':'application/json',...(opts.headers||{})};if(state.credentials)headers.Authorization=encodeBasic(state.credentials.username,state.credentials.password);const url=path.startsWith('/api/')?path:API+path;const r=await fetch(url,{...opts,headers});if(r.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);const error=new Error(d||`Errore ${r.status}`);error.status=r.status;throw error}return data}
+// P26-5: NESSUN header Authorization. Il cookie viaggia da solo.
+async function api(path,opts={}){const url=path.startsWith('/api/')?path:API+path;let r;try{r=await OperatorSession.authFetch(url,opts);}catch(error){if(error.status===401){sessionEnded('Sessione scaduta. Effettua di nuovo il login.');throw new Error('Non autorizzato')}throw error}if(r.status===204)return null;let data={};try{data=await r.json()}catch{}if(!r.ok){const d=typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data);const error=new Error(d||`Errore ${r.status}`);error.status=r.status;throw error}return data}
 
 function globalSearchHref(type,itemId){
  const id=positiveId(itemId);
@@ -459,4 +470,4 @@ document.addEventListener('click',event=>{
  const wrap=qs('#global-search-wrap');
  if(wrap&&!wrap.contains(event.target)){cancelGlobalSearch();}
 });
-qs('#nav').onclick=e=>{const b=e.target.closest('[data-view]');if(b)setView(b.dataset.view)};qs('#refresh-btn').onclick=refresh;qs('#quick-add').onclick=()=>openContactForm();qs('#login-form').addEventListener('submit',login);qs('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));window.setView=setView;showLogin();
+qs('#nav').onclick=e=>{const b=e.target.closest('[data-view]');if(b)setView(b.dataset.view)};qs('#refresh-btn').onclick=refresh;qs('#quick-add').onclick=()=>openContactForm();qs('#login-form').addEventListener('submit',login);qs('#logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));window.setView=setView;boot();

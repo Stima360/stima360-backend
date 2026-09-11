@@ -137,12 +137,20 @@ def test_legacy_admin_routes_reject_anonymous_before_business_logic(
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Non autorizzato"}
-    assert response.headers["WWW-Authenticate"] == 'Basic realm="STIMA360 Admin"'
+    # P26-5: niente piu' `WWW-Authenticate: Basic`. Queste sette route toccano
+    # dati di tenant - i messaggi WhatsApp in ingresso, le stime, le stime
+    # dettagliate - e sono passate alla sessione operatore insieme a tutto il
+    # resto. Chiedere al browser di aprire il prompt Basic sarebbe un invito a
+    # inserire una credenziale che non apre nulla.
+    assert response.headers.get("WWW-Authenticate") is None
+    # Cio' che questo test protegge davvero non cambia: il rifiuto arriva prima
+    # della logica applicativa, quindi un anonimo non tocca il database e non
+    # fa partire un messaggio WhatsApp.
     assert calls == {"database": 0, "whatsapp": 0}
 
 
 @pytest.mark.parametrize("method,path,payload", LEGACY_ADMIN_ROUTES)
-def test_legacy_admin_routes_are_reachable_with_valid_credentials(
+def test_legacy_admin_routes_are_reachable_with_a_live_session(
     client,
     main_module,
     admin_env,
@@ -152,6 +160,18 @@ def test_legacy_admin_routes_are_reachable_with_valid_credentials(
     path,
     payload,
 ):
+    """P26-5: "credenziali valide" adesso vuol dire una sessione operatore.
+
+    Il prefisso `/api/admin` non rendeva sicure queste sette route: le rendeva
+    difficili da notare. Analizzate una per una, tutte leggono o scrivono dati
+    di tenant, quindi sono passate alla sessione con tutte le altre. L'unica
+    delle otto rimasta sul canale precedente e' `/api/admin/check`, che non
+    apre una connessione e non ha un tenant da isolare.
+
+    L'identita' e' dichiarata invece che implicita: prima
+    `auth=(ADMIN_USER, ADMIN_PASS)` sottintendeva la Default Agency e il ruolo
+    di titolare, sempre gli stessi, decisi dal server.
+    """
     connection = FakeConnection()
     monkeypatch.setattr(main_module, "get_connection", lambda: connection)
     monkeypatch.setattr(
@@ -160,15 +180,18 @@ def test_legacy_admin_routes_are_reachable_with_valid_credentials(
         lambda *_args, **_kwargs: type("MetaResponse", (), {"status_code": 200, "text": "ok"})(),
     )
 
-    response = _request(
-        client,
-        method,
-        path,
-        payload,
-        auth=(ADMIN_USER, ADMIN_PASS),
-    )
+    from tests.operator_session_helpers import operator_session
+
+    with operator_session(monkeypatch, client, agency_id=1, role="agency_owner"):
+        response = _request(client, method, path, payload)
 
     assert response.status_code == 200
+
+    # E la stessa richiesta col solo Basic non passa piu': senza questa riga
+    # l'inefficacia della vecchia credenziale non sarebbe provata da nessuna
+    # parte, e potrebbe rientrare in silenzio.
+    refused = _request(client, method, path, payload, auth=(ADMIN_USER, ADMIN_PASS))
+    assert refused.status_code == 401
 
 
 def test_all_seven_legacy_admin_operations_publish_the_existing_security_gate(main_module):

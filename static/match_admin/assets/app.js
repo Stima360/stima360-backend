@@ -1,5 +1,4 @@
 const API='/api/match';
-let credentials=null;
 const el=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>v==null?'—':v;
@@ -7,14 +6,20 @@ const dt=v=>v?new Date(v).toLocaleString('it-IT'):'—';
 const score=m=>fmt(m.manual_score??m.score_total);
 function positiveId(value){const n=Number(value);return Number.isInteger(n)&&n>0?n:null;}
 function toast(message){const t=el('toast');t.textContent=message;t.style.display='block';setTimeout(()=>t.style.display='none',2600)}
-function encodeBasic(username,password){const bytes=new TextEncoder().encode(`${username}:${password}`);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return `Basic ${btoa(binary)}`;}
 function setLoginStatus(message=''){const node=document.getElementById('login-status');if(node)node.textContent=message;}
 function showLogin(message=''){document.getElementById('app-view').hidden=true;document.getElementById('login-view').hidden=false;setLoginStatus(message);}
 function showApp(){document.getElementById('login-view').hidden=true;document.getElementById('app-view').hidden=false;setLoginStatus('');}
-function logout(message=''){credentials=null;const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
-async function login(event){event.preventDefault();const username=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{const response=await fetch('/api/admin/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:username,password:password})});if(!response.ok){setLoginStatus(response.status===401?'Credenziali non valide.':'Servizio amministrativo non disponibile.');return;}credentials={username,password};showApp();await applyDeepLink();}catch(_error){setLoginStatus('Errore di connessione. Riprova.');}}
+// P26-5: logout vero, revocato sul server. `sessionEnded` e' la variante per il
+// 401, che non deve parlare col server per non costruire un ciclo.
+async function logout(message=''){await OperatorSession.logout();const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+function sessionEnded(message=''){OperatorSession.sessionExpired();const form=document.getElementById('login-form');if(form)form.reset();showLogin(message);}
+// P26-5: la password lascia il browser una volta sola e non viene conservata.
+async function login(event){event.preventDefault();const email=document.getElementById('admin-username').value;const password=document.getElementById('admin-password').value;setLoginStatus('Verifica credenziali…');try{await OperatorSession.login(email,password);}catch(error){setLoginStatus(error.message||'Errore di connessione. Riprova.');return;}showApp();await applyDeepLink();}
+// Ripristino all'avvio: il cookie e' HttpOnly, solo il server sa se e' vivo.
+async function boot(){showLogin();let session=null;try{session=await OperatorSession.restore();}catch(error){setLoginStatus(error.message||'');return;}if(!session)return;showApp();await applyDeepLink();}
 
-async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(credentials)headers.Authorization=encodeBasic(credentials.username,credentials.password);const response=await fetch(API+path,{...opt,headers});if(response.status===401){logout('Credenziali non valide.');throw new Error('Non autorizzato')}if(!response.ok){let message=response.statusText;try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
+// P26-5: NESSUN header Authorization. Il cookie viaggia da solo.
+async function api(path,opt={}){let response;try{response=await OperatorSession.authFetch(API+path,opt);}catch(error){if(error.status===401){sessionEnded('Sessione scaduta. Effettua di nuovo il login.');throw new Error('Non autorizzato')}throw error}if(!response.ok){let message=response.statusText;try{message=(await response.json()).detail||message}catch{}throw new Error(message)}return response.status===204?null:response.json()}
 
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));el(button.dataset.view).classList.remove('hidden');load(button.dataset.view)});
 
@@ -59,5 +64,5 @@ async function removeExclusion(id){await api('/exclusions/'+id,{method:'DELETE'}
 
 async function applyDeepLink(){const params=new URLSearchParams(window.location.search);const id=positiveId(params.get('id'));if(id===null){load('dashboard');return;}try{document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));el('matches').classList.remove('hidden');await matches();await detail(id)}catch(e){toast('Match non trovato: '+e.message);document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));el('dashboard').classList.remove('hidden');load('dashboard')}}
 function load(view){({dashboard,matches,freshness,calculate,exclusions}[view]||dashboard)()}
-el('login-form').addEventListener('submit',login);el('logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));showLogin();
+el('login-form').addEventListener('submit',login);el('logout-btn').addEventListener('click',()=>logout('Sessione amministrativa chiusa.'));boot();
 if(typeof module!=='undefined'&&module.exports){module.exports={positiveId,renderReadiness,preflightReadiness,calcSingle,calcBuy,calcProp}}

@@ -328,22 +328,31 @@ def test_4_to_11_every_subsystem_receives_the_routers_own_context(recorded, name
 # ---------------------------------------------------------------------------
 
 def _crm_client(monkeypatch):
-    """The real router, real Basic guard, and the DB-backed scope overridden.
+    """The real router, the real guard, and the DB-backed scope overridden.
+
+    P26-5: la guardia di mount e' `require_authenticated_operator`, come in
+    main.py - non piu' `require_admin`. Montarlo qui dietro il vecchio guard
+    proverebbe una configurazione che in produzione non esiste piu'.
 
     The dependency object is taken from the router module, so it is the same
     function object FastAPI resolved rather than a second import of the name.
     """
-    from admin_security import require_admin
+    from operator_auth.dependencies import require_authenticated_operator
+    from operator_auth.enums import COOKIE_NAME
     from crm import router as crm_router_module
+    from tests.operator_session_helpers import SessionDouble, TEST_TOKEN
 
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+    sessions = SessionDouble(monkeypatch)
+    sessions.login(agency_id=A, role="agency_owner")
     app = FastAPI()
-    app.include_router(crm_router_module.router, dependencies=[Depends(require_admin)])
+    app.include_router(crm_router_module.router,
+                       dependencies=[Depends(require_authenticated_operator)])
     app.dependency_overrides[
         crm_router_module.legacy_basic_agency_context
     ] = lambda: ctx(A)
-    return TestClient(app, raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set(COOKIE_NAME, TEST_TOKEN)
+    return client
 
 
 def test_12_a_foreign_contact_is_a_404(monkeypatch):
@@ -357,10 +366,15 @@ def test_12_a_foreign_contact_is_a_404(monkeypatch):
 
     monkeypatch.setattr(crm_service, "get_contact", _refuse)
     response = client.get(
-        f"/api/crm/contacts/{CONTACT_B}/360", auth=("giorgio", "test-secret")
+        f"/api/crm/contacts/{CONTACT_B}/360"
     )
 
     assert response.status_code == 404, response.status_code
+
+    # E senza sessione il rifiuto arriva prima ancora della ricerca: 401, non
+    # 404. P26-5 ha spostato il cookie sul client, quindi qui va tolto - prima
+    # bastava non passare l'header Basic.
+    client.cookies.clear()
     assert client.get(f"/api/crm/contacts/{CONTACT_B}/360").status_code == 401
 
 
@@ -1004,17 +1018,26 @@ def install_main_connection(cursor):
 
 
 def _main_client(monkeypatch):
-    """main.py's real app, with only the agency dependency overridden."""
+    """main.py's real app, with only the agency dependency overridden.
+
+    P26-5: le sette route `/api/admin` che toccano dati di tenant sono passate
+    alla sessione operatore, quindi il client porta un cookie invece di un
+    header Basic. L'override sullo scope resta uno solo, come prima: quello che
+    decide l'agenzia, che e' cio' che questi test osservano.
+    """
     import main as main_module
 
-    monkeypatch.setenv("ADMIN_USER", "giorgio")
-    monkeypatch.setenv("ADMIN_PASS", "test-secret")
+    from operator_auth.enums import COOKIE_NAME
+    from tests.operator_session_helpers import SessionDouble, TEST_TOKEN
+
+    sessions = SessionDouble(monkeypatch)
+    sessions.login(agency_id=A, role="agency_owner")
     main_module.app.dependency_overrides[
         main_module.legacy_basic_agency_context
     ] = lambda: ctx(A)
     client = TestClient(main_module.app, raise_server_exceptions=False)
-    yield_client = client
-    return yield_client
+    client.cookies.set(COOKIE_NAME, TEST_TOKEN)
+    return client
 
 
 ADMIN_ROUTE_HANDLERS = (
@@ -1083,7 +1106,7 @@ def test_33_the_stime_list_shows_only_this_agency(monkeypatch):
     client = _main_client(monkeypatch)
     cursor = MainCursor()
     with install_main_connection(cursor):
-        response = client.get("/api/admin/stime", auth=("giorgio", "test-secret"))
+        response = client.get("/api/admin/stime")
     assert response.status_code == 200, response.text
     body = response.text
     assert "AGENCY A" in body, body[:200]
@@ -1094,7 +1117,7 @@ def test_34_the_detailed_stima_list_shows_only_this_agency(monkeypatch):
     client = _main_client(monkeypatch)
     cursor = MainCursor()
     with install_main_connection(cursor):
-        response = client.get("/api/admin/stime_pro", auth=("giorgio", "test-secret"))
+        response = client.get("/api/admin/stime_pro")
     assert response.status_code == 200, response.text
     assert "AGENCY B" not in response.text, response.text[:400]
 
@@ -1112,7 +1135,6 @@ def test_35_an_update_cannot_reach_another_agencys_stima(monkeypatch):
         response = client.post(
             f"/api/admin/stime/{STIMA_B}/update",
             json={"lead_status": "hijacked"},
-            auth=("giorgio", "test-secret"),
         )
     assert response.status_code in (200, 404), response.text
     assert STIMA_B not in cursor.touched_ids("UPDATE"), cursor.statements
@@ -1125,7 +1147,6 @@ def test_36_a_delete_cannot_reach_another_agencys_stima(monkeypatch):
         response = client.post(
             "/api/admin/stime/delete",
             json={"ids": [STIMA_A, STIMA_B]},
-            auth=("giorgio", "test-secret"),
         )
     assert response.status_code == 200, response.text
     reached = cursor.touched_ids("DELETE")
@@ -1143,7 +1164,6 @@ def test_37_a_detail_delete_cannot_bypass_the_parent_scope(monkeypatch):
         response = client.post(
             "/api/admin/stime_dettagliate/delete",
             json={"ids": [DETAIL_A, DETAIL_B]},
-            auth=("giorgio", "test-secret"),
         )
     assert response.status_code == 200, response.text
     assert DETAIL_B not in cursor.touched_ids("DELETE"), cursor.statements
@@ -1154,7 +1174,7 @@ def test_38_whatsapp_never_names_another_agencys_lead(monkeypatch):
     cursor = MainCursor()
     with install_main_connection(cursor):
         response = client.get(
-            "/api/admin/whatsapp/messages", auth=("giorgio", "test-secret")
+            "/api/admin/whatsapp/messages"
         )
     assert response.status_code == 200, response.text
     assert "AGENCY B" not in response.text, response.text[:400]
@@ -1171,11 +1191,25 @@ def test_38_whatsapp_never_names_another_agencys_lead(monkeypatch):
         ("post", "/api/admin/stime_dettagliate/delete", {"ids": [DETAIL_A]}),
     ],
 )
-def test_39_to_44_the_admin_routes_stay_behind_basic(monkeypatch, method, path, body):
-    """The auth model does not change in this slice: still Basic, still 401."""
+def test_39_to_44_the_admin_routes_refuse_an_anonymous_caller(monkeypatch, method, path, body):
+    """P26-6C diceva "restano dietro il Basic, ancora 401". P26-5 le ha portate
+    alla sessione, e il 401 resta - ma per un motivo diverso.
+
+    Cio' che questa parametrizzazione protegge - che nessuna delle sei sia
+    raggiungibile senza autenticazione - non cambia. Il client di
+    `_main_client` porta un cookie, quindi qui lo si toglie: e' l'anonimo che
+    deve essere rifiutato, e il Basic con lui.
+    """
     client = _main_client(monkeypatch)
-    response = getattr(client, method)(path, **({"json": body} if body else {}))
-    assert response.status_code == 401, (path, response.status_code)
+    client.cookies.clear()
+
+    payload = {"json": body} if body else {}
+    assert getattr(client, method)(path, **payload).status_code == 401, path
+
+    # E il vecchio canale non apre piu': senza questa riga la sua inefficacia
+    # non sarebbe provata da nessuna parte.
+    refused = getattr(client, method)(path, auth=("giorgio", "test-secret"), **payload)
+    assert refused.status_code == 401, (path, refused.status_code)
 
 
 def test_45_no_admin_route_accepts_a_client_supplied_agency():
@@ -1360,7 +1394,7 @@ def test_46_every_owner_admin_route_that_reaches_a_tenant_table_takes_the_contex
             )
             if not reaches_tenant:
                 continue
-            if "basic_only_agency_context" not in route_source:
+            if "require_owner_admin_context" not in route_source:
                 unscoped.append((route, sorted(calls)))
     assert unscoped == [], unscoped
 
@@ -1455,15 +1489,20 @@ def test_50_the_two_routers_are_admitted_on_two_different_criteria():
     admin = (ROOT / "owner" / "router_admin.py").read_text(encoding="utf-8")
     portal = (ROOT / "owner" / "router_portal.py").read_text(encoding="utf-8")
 
-    assert "basic_only_agency_context" in admin
-    assert "basic_only_agency_context" not in portal
+    assert "require_owner_admin_context" in admin
+    assert "require_owner_admin_context" not in portal
     assert "current_owner" in portal
     assert "current_owner" not in admin
 
     # OWNER Admin's own mount is unchanged, and the portal's cookie is still
     # the owner's only credential.
-    assert "dependencies=[Depends(require_owner_admin)]" in admin
-    assert 'realm="STIMA360 OWNER Admin"' in admin
+    assert "dependencies=[Depends(require_owner_admin_context)]" in admin
+    # P26-5: la verifica Basic locale e il suo realm sono spariti. Erano una
+    # seconda copia della regola di `admin_security`, ed erano il pezzo che
+    # rendeva possibile lo stato ibrido "ammesso da una credenziale, scopato
+    # dall'altra".
+    assert 'realm="STIMA360 OWNER Admin"' not in admin
+    assert "def require_owner_admin(" not in admin
 
     # P26-3 review, and the reason `basic_only_agency_context` exists at all.
     # This mount admits HTTP Basic and nothing else. If its routes took the
@@ -1474,10 +1513,14 @@ def test_50_the_two_routers_are_admitted_on_two_different_criteria():
     # surface, one channel, and this is the assertion that keeps it that way.
     lookups = (ROOT / "owner" / "router_admin_lookups.py").read_text(encoding="utf-8")
     for name, source in (("router_admin.py", admin), ("router_admin_lookups.py", lookups)):
+        # P26-5: la dipendenza generica degli altri router non guarda il ruolo.
+        # Su questa superficie sarebbe un'escalation: qualunque sessione, anche
+        # con ruolo agent, gestirebbe conti proprietario ed emetterebbe i loro
+        # token di accesso.
         assert "legacy_basic_agency_context" not in source, (
-            f"{name} took the session-first scope dependency while its mount "
-            "still accepts only HTTP Basic - that is the cookie+Basic hybrid"
+            f"{name} usa lo scope generico invece di quello che impone il ruolo"
         )
+        assert "require_authenticated_operator" not in source, name
 
     # P26-3 removed FLOW's borrowing of that dependency. Asserted here because
     # this test is where the coupling was recorded: a change to OWNER Admin's

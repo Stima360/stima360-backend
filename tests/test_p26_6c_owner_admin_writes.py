@@ -44,7 +44,7 @@ from fastapi.testclient import TestClient
 
 from core.exceptions import NotFoundError
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import basic_only_agency_context
+from operator_auth.dependencies import require_owner_admin_context
 from owner import repository
 from owner.router_admin import router as admin_router
 
@@ -331,7 +331,7 @@ def client(monkeypatch):
     app.include_router(admin_router)
 
     def use(agency_id):
-        app.dependency_overrides[basic_only_agency_context] = lambda: context(agency_id)
+        app.dependency_overrides[require_owner_admin_context] = lambda: context(agency_id)
         return TestClient(app)
 
     return use
@@ -604,7 +604,7 @@ def test_15_the_six_write_routes_take_the_agency_context():
                     isinstance(default, ast.Call)
                     and getattr(default.func, "id", None) == "Depends"
                     and default.args
-                    and getattr(default.args[0], "id", None) == "basic_only_agency_context"
+                    and getattr(default.args[0], "id", None) == "require_owner_admin_context"
                     for default in node.args.defaults
                 ):
                     scoped.add(node.name)
@@ -623,7 +623,7 @@ def test_16_the_portal_and_flow_are_untouched():
 
     root = Path(__file__).resolve().parents[1]
     portal = (root / "owner" / "router_portal.py").read_text(encoding="utf-8")
-    for name in ("basic_only_agency_context", "legacy_basic_agency_context"):
+    for name in ("require_owner_admin_context", "legacy_basic_agency_context"):
         assert name not in portal, (
             "the owner portal keeps its own authentication; it must not acquire "
             "an operator context"
@@ -637,5 +637,8 @@ def test_16_the_portal_and_flow_are_untouched():
     assert "dependencies=[Depends(require_authenticated_operator)]" in flow
 
     admin = (root / "owner" / "router_admin.py").read_text(encoding="utf-8")
-    assert "dependencies=[Depends(require_owner_admin)]" in admin
-    assert 'realm="STIMA360 OWNER Admin"' in admin
+    assert "dependencies=[Depends(require_owner_admin_context)]" in admin
+    # P26-5: il realm Basic locale e' sparito con la verifica che lo emetteva.
+    # OWNER Admin autentica con la sessione e impone il ruolo `agency_owner`.
+    assert 'realm="STIMA360 OWNER Admin"' not in admin
+    assert "require_owner_admin_context" in admin
