@@ -27,6 +27,7 @@ seam invece che con chiamate dirette.
 from __future__ import annotations
 
 import ast
+import functools
 import io
 import py_compile
 import re
@@ -70,7 +71,25 @@ class FakeCursor:
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
             self._row = {"name": self.state.get("database", "stima360_db_test")}
-        elif "FROM AGENCIES" in upper:
+        elif "COUNT(*) AS N FROM AGENCIES" in upper:
+            # Prima del ramo generico: quello imposta `_rows` e lascerebbe
+            # `fetchone()` su un risultato vecchio.
+            #
+            # Il conteggio riflette le cancellazioni davvero eseguite: un
+            # doppio che rispondesse sempre 0 renderebbe la verifica finale
+            # incapace di accorgersi di una DELETE mancante.
+            if "agenzie_residue" in self.state:
+                self._row = {"n": self.state["agenzie_residue"]}
+            else:
+                vive = set(self.state.get("agenzie_vive", ()))
+                ids = set(params[0]) if params else set()
+                self._row = {"n": len(vive & ids)}
+        elif (upper.startswith("SELECT") and "FROM AGENCIES" in upper
+              and "PG_CONSTRAINT" not in upper):
+            # `startswith("SELECT")` e non solo "FROM AGENCIES": senza, questo
+            # ramo inghiottiva anche `DELETE FROM agencies`, che finiva per
+            # restituire un elenco invece di cancellare - e il cleanup delle
+            # agenzie dedicate risultava fallito per un difetto del doppio.
             self._rows = list(self.state.get("agencies", []))
         elif "COUNT(*) AS N FROM OPERATOR_USERS" in upper:
             if "leftovers" in self.state:
@@ -85,6 +104,40 @@ class FakeCursor:
                 ids = set(params[0]) if params else set()
                 self._row = {"users": len([i for i in ids if i in self._users()]),
                              "memberships": 0, "sessions": 0}
+        elif "AS N FROM PUBLIC." in upper:
+            # Le dipendenze fuori perimetro. Prima del ramo generico "AS N":
+            # quello e' il censimento incoerenze e rispondeva 0, facendo
+            # sembrare che nessuno referenziasse le nostre righe.
+            #
+            # Due conteggi distinti, ed e' il punto: senza l'esclusione del
+            # perimetro la query vede ANCHE le righe del run che si
+            # referenziano fra loro - `buy_requests.contact_id` punta ai nostri
+            # contatti - e il cleanup si rifiuterebbe di procedere per sempre.
+            interne = self.state.get("dipendenti_interne", 0)
+            estranee = self.state.get("dipendenti_estranee", 0)
+            self._row = {"n": estranee if "NOT (T.ID IN" in upper
+                         else interne + estranee}
+        elif "AS N" in upper and any(
+                t in upper for t in (" PROPERTY_STATUS_HISTORY", " BUY_REQUEST_HISTORY",
+                                     " MATCH_RUNS", " OWNER_AUDIT_LOG",
+                                     " MATCH_REQUIREMENT_RESULTS")):
+            # Gli effetti delle API: per difetto zero, cosi' un run sano passa.
+            # `effetti_residui` li fa sopravvivere, ed e' il caso in cui il
+            # CASCADE non e' avvenuto e nessuno se ne accorgeva.
+            # La piu' SPECIFICA per prima: la query sui risultati per criterio
+            # nomina anche match_runs, e scegliere la prima corrispondenza
+            # attribuirebbe il conteggio alla tabella sbagliata.
+            chiave = next((t.strip().lower() for t in
+                           (" MATCH_REQUIREMENT_RESULTS", " PROPERTY_STATUS_HISTORY",
+                            " BUY_REQUEST_HISTORY", " OWNER_AUDIT_LOG",
+                            " MATCH_RUNS") if t in upper), None)
+            self._row = {"n": self.state.get("effetti_residui", {}).get(chiave, 0)}
+        elif "AS N" in upper and " FROM " in upper and self.state.get("residue_rows") \
+                and any(t in upper for t in (" CONTACTS", " PROPERTIES", " BUY_REQUESTS", " TASKS")) \
+                and "ID IN" in upper:
+            # Righe ancora presenti: e' cio' che la verifica finale deve vedere
+            # quando una DELETE ha risposto 2xx senza cancellare.
+            self._row = {"n": 2}
         elif "AS N" in upper:                      # il censimento incoerenze
             key = next((k for k in self.state.get("census", {}) if k in statement), None)
             self._row = {"n": self.state.get("census", {}).get(key, 0)}
@@ -95,11 +148,42 @@ class FakeCursor:
             owners = self.state.get("owners", {})
             agency = params[0] if params else None
             self._row = {"id": owners[agency]} if agency in owners else None
+        elif upper.startswith("SELECT 1 FROM AGENCIES"):
+            self._row = {"1": 1} if self.state.get("slug_collide") else None
+        elif upper.startswith("INSERT INTO AGENCIES"):
+            self.state["next_agency"] = self.state.get("next_agency", 500) + 1
+            self.state.setdefault("agenzie_create", []).append(params)
+            self.state.setdefault("agenzie_vive", []).append(self.state["next_agency"])
+            self._row = {"id": self.state["next_agency"]}
+            self.rowcount = 1
+        elif "FROM PG_CONSTRAINT" in upper and "AGENCIES" in upper:
+            self._rows = list(self.state.get("fk_agencies", []))
+        elif "FROM PG_CONSTRAINT" in upper:
+            # Le FK verso una tabella del perimetro. `fk_perimetro` mappa
+            # tabella -> [(figlio, colonna)]: e' cosi' che un test fa comparire
+            # una dipendenza che il censimento non aveva visto.
+            genitore = params[0] if params else None
+            self._rows = [{"figlio": f, "colonna": c}
+                          for f, c in self.state.get("fk_perimetro", {}).get(genitore, [])]
         elif upper.startswith("INSERT INTO OPERATOR_SESSIONS"):
             self.state["next_session"] = self.state.get("next_session", 5000) + 1
             self.state.setdefault("owner_sessions", []).append(params)
             self._row = {"id": self.state["next_session"]}
             self.rowcount = 1
+        elif "FROM TASKS" in upper and "AGENCY_ID" in upper and upper.startswith("SELECT ID"):
+            # L'agenzia reale delle attivita' selezionate. `task_owner` mappa
+            # id -> agenzia; ogni id non elencato e' attribuito all'agenzia 1,
+            # cosi' un test puo' iniettare una riga estranea senza elencarle tutte.
+            # Per difetto un'attivita' appartiene all'agenzia che l'ha
+            # selezionata: e' il caso corretto. `task_owner` lo sovrascrive,
+            # ed e' cosi' che un test inietta una riga che NON appartiene a chi
+            # l'ha vista - il difetto che la disgiunzione non saprebbe cogliere.
+            derivato = {int(riga["id"]): agenzia
+                        for agenzia, righe in self.state.get("stale_followup", {}).items()
+                        for riga in righe}
+            derivato.update(self.state.get("task_owner", {}))
+            ids = list(params[0]) if params else []
+            self._rows = [{"id": i, "agency_id": derivato.get(i)} for i in ids]
         elif upper.startswith("SELECT ID FROM STIME"):
             stime = self.state.get("stime", {})
             agency = params[0] if params else None
@@ -117,6 +201,10 @@ class FakeCursor:
             self.rowcount = 1
         elif upper.startswith("DELETE"):
             self.state.setdefault("deletes", []).append(statement)
+            if "FROM AGENCIES" in upper and params:
+                self.state["agenzie_vive"] = [
+                    a for a in self.state.get("agenzie_vive", [])
+                    if a not in set(params[0])]
             if "delete_rowcount" in self.state:
                 self.rowcount = self.state["delete_rowcount"]
             elif "FROM OPERATOR_USERS" in upper and params:
@@ -157,6 +245,65 @@ AGENCIES = [
 def quiet_report():
     stream = io.StringIO()
     return cert.Report(stream=stream), stream
+
+
+@functools.lru_cache(maxsize=1)
+def real_routes():
+    """La tavola delle route dell'APP VERA, non quella che il doppio immagina.
+
+    PERCHE' ESISTE, E COSA E' COSTATO NON AVERLA
+
+    Il doppio HTTP rispondeva 200/201 a qualunque percorso gli si chiedesse.
+    Era comodo e falso: uno script che invocava route inesistenti passava qui e
+    riceveva 405 su Render. Tre dei difetti del run 22d007af7916 sono
+    esattamente questo -
+
+      GET    /api/property/properties/{id}/visits   non esiste (c'e' la POST)
+      DELETE /api/core/contacts/{id}                non esiste affatto
+
+    - e nessuno dei due poteva essere visto da un doppio permissivo. Peggio:
+    il 405 veniva CONTATO COME PROVA SUPERATA, perche' 405 non e' 200.
+
+    Da qui in avanti il doppio conosce le route vere, lette da `main.app`:
+    percorso sconosciuto -> 404, metodo non previsto -> 405, come farebbe
+    Starlette. Un percorso inventato nello script fa fallire la suite locale
+    invece di arrivare sul TEST.
+
+    LA FONTE E' L'OPENAPI, NON `app.routes`
+
+    Il primo tentativo leggeva `main.app.routes` e trovava 23 route su oltre
+    duecento: questa applicazione non appiattisce `include_router`, tiene i
+    sotto-router in oggetti `_IncludedRouter`, e camminare quell'albero
+    significherebbe dipendere da una classe interna. Il documento OpenAPI
+    elenca ogni percorso con i suoi metodi, prefissi gia' risolti, ed e' la
+    stessa fonte su cui poggia l'inventario di P26-5.
+    """
+    import main
+
+    table = []
+    for path, item in main.app.openapi()["paths"].items():
+        methods = {method.upper() for method, operation in item.items()
+                   if isinstance(operation, dict)}
+        if not methods:
+            continue
+        pattern = re.compile(
+            "^" + re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(path)) + "$")
+        table.append((pattern, methods, path))
+    return tuple(table)
+
+
+def resolve_route(method: str, path: str):
+    """(stato, percorso) come li deciderebbe Starlette: 404, 405 oppure None."""
+    bare = path.split("?")[0]
+    allowed = set()
+    for pattern, methods, template in real_routes():
+        if pattern.match(bare):
+            allowed |= methods
+    if not allowed:
+        return 404, None
+    if method.upper() not in allowed:
+        return 405, None
+    return None, bare
 
 
 def cert_reason() -> str:
@@ -213,6 +360,20 @@ class FakeHttp(cert.HttpProbe):
         # leggibile dal proprietario. `{}` riproduce un TEST senza stime, dove
         # PROPERTY_WATCH deve risultare BLOCKED e non PASS.
         self.stime = dict(stime or {})
+        # Le precondizioni reali della vendita, modellate: senza un legame
+        # proprietario su quell'immobile, create_sale_scoped rifiuta con 409.
+        # Il doppio che non lo sapeva ha lasciato passare uno script che sul
+        # TEST prendeva 409 su entrambe le agenzie.
+        self.owner_links: set = set()          # (property_id, contact_id)
+        # FOLLOWUP: attivita' per agenzia e regola abilitata. La scansione del
+        # doppio escala SOLO le attivita' della propria agenzia - come la
+        # query vera, che porta il predicato sul tenant - e restituisce gli id
+        # elaborati, che e' cio' che la matrice confronta.
+        self.rule_enabled = True
+        # email operatore dedicato -> agency_id, popolata dal test.
+        self.dedicate: dict = {}
+        self.match_property: dict = {}         # match_id  -> property_id
+        self.proposal_property: dict = {}      # proposal_id -> property_id
 
     # -- helper -----------------------------------------------------------
     def _agency_of(self, jar):
@@ -405,6 +566,108 @@ class FakeHttp(cert.HttpProbe):
         return self._reply(method, path, 200,
                            f'{{"stima_id":{identifier},"watch":true}}'.encode())
 
+    def _link_contact(self, method, path, agency, property_id, contact_id):
+        """Il legame proprietario: entrambe le righe devono essere del chiamante.
+
+        Due controlli e non uno. Un isolamento che guardasse solo l'immobile
+        lascerebbe agganciare il contatto di un'altra agenzia al proprio
+        immobile, e da li' `property_sale_sellers` porterebbe il nome di un
+        estraneo dentro una vendita.
+        """
+        prop = self.rows.get(property_id)
+        contact = self.rows.get(contact_id)
+        if prop is None or contact is None:
+            return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+        estranei = prop["agency"] != agency or contact["agency"] != agency
+        if estranei and not self._broken("isolation", "relation"):
+            return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+        self.owner_links.add((property_id, contact_id))
+        return self._reply(method, path, 201,
+                           f'{{"property_id":{property_id},"contact_id":{contact_id},'
+                           f'"role":"owner"}}'.encode())
+
+    def _create_sale(self, method, path, agency, payload):
+        """La vendita, con la precondizione che il run live ha scoperto.
+
+        `create_sale_scoped` cerca in `property_contacts` un ruolo owner/seller
+        per quell'immobile, nella stessa agenzia. Senza nemmeno una riga
+        solleva ConflictError -> 409, ed e' l'ultima delle cinque precondizioni.
+        """
+        import json as _json
+
+        proposal_id = payload.get("proposal_id")
+        proposal = self.rows.get(proposal_id)
+        if proposal is None or proposal["agency"] != agency:
+            return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+        property_id = self.proposal_property.get(proposal_id)
+        venditori = [link for link in self.owner_links if link[0] == property_id]
+        if not venditori:
+            return self._reply(
+                method, path, 409,
+                b'{"detail":"no eligible seller/owner registered for this property"}')
+        self.next_id += 1
+        body = {"id": self.next_id, "notes": payload.get("notes")}
+        self.rows[self.next_id] = {"agency": agency, "prefix": "/api/sales",
+                                   "body": _json.dumps(body)}
+        return self._reply(method, path, 201, _json.dumps(body).encode())
+
+    def _scan_temporal(self, method, path, agency):
+        """La scansione: candidate della PROPRIA agenzia, escalate, restituite.
+
+        Il predicato e' quello di followup/repository.py, ridotto a cio' che
+        le fixture della matrice esercitano: aperta, priorita' bassa, tipo
+        `automated_followup`, sorgente e regola nel metadata. Con
+        `broken={"scan_scope"}` la scansione ignora il tenant: e' il difetto
+        che la matrice deve saper vedere.
+        """
+        import json as _json
+
+        if not self.rule_enabled:
+            return self._reply(method, path, 400,
+                               b'{"detail":"followup rule is not enabled"}')
+        items = []
+        for identifier, row in self.rows.items():
+            if not row.get("task"):
+                continue
+            body = _json.loads(row["body"])
+            foreign = row["agency"] != agency
+            # "scan_mutates_other": modifica la riga altrui SENZA elencarla.
+            # E' il caso che solo l'istantanea puo' vedere: gli id restituiti
+            # sono puliti, il danno c'e' lo stesso.
+            if foreign and self._broken("scan_mutates_other", "followup"):
+                body["priority"], body["status"] = "high", "in_progress"
+                row["body"] = _json.dumps(body)
+                continue
+            if foreign and not self._broken("scan_scope", "followup"):
+                continue
+            # "scan_skips_own": la scansione non elabora nemmeno le proprie.
+            if not foreign and self._broken("scan_skips_own", "followup"):
+                continue
+            eligible = (body.get("status") == "open" and body.get("priority") in ("low", "normal")
+                        and body.get("task_type") == "automated_followup"
+                        and (body.get("metadata") or {}).get("source") == "followup")
+            if not eligible:
+                continue
+            body["priority"], body["status"] = "high", "in_progress"
+            row["body"] = _json.dumps(body)
+            items.append({"task_id": identifier, "status": "completed",
+                          "idempotency_key": f"followup:time:RULE:task:{identifier}:v1"})
+        # "intruso_dopo_preflight": un task ESTRANEO che ha attraversato la
+        # soglia delle 24 ore mentre il run procedeva. Il preflight lo aveva
+        # contato a zero - correttamente, allora non era eleggibile - e nessun
+        # secondo conteggio potrebbe arrivare prima della scansione.
+        #
+        # La scansione lo elabora davvero: e' la riga di qualcun altro portata
+        # a 'high'/'in_progress'. La matrice deve accorgersene guardando QUALI
+        # id sono tornati, non quanti.
+        if self._broken("intruso_dopo_preflight", "followup"):
+            self.next_id += 1
+            items.insert(0, {"task_id": self.next_id, "status": "completed",
+                             "idempotency_key": f"followup:time:RULE:task:{self.next_id}:v1"})
+        out = {"agency_id": agency, "scanned": len(items), "escalated": len(items),
+               "skipped": 0, "failed": 0, "items": items}
+        return self._reply(method, path, 200, _json.dumps(out).encode())
+
     def _calculate(self, method, path, jar, agency, payload):
         """Il calcolo del match: nasce dalla coppia, ed eredita i marcatori."""
         import json as _json
@@ -419,16 +682,31 @@ class FakeHttp(cert.HttpProbe):
                 "property_title": self._marker_of(payload["property_id"])}
         self.rows[self.next_id] = {"agency": agency, "prefix": "/api/match",
                                    "body": _json.dumps(body)}
+        self.match_property[self.next_id] = payload["property_id"]
         return self._reply(method, path, 201, _json.dumps(body).encode())
 
     def request(self, method, path, *, jar=None, payload=None):
         import json as _json
+
+        # PRIMA DI TUTTO: la route esiste, con questo metodo?
+        # Starlette risponde 404 a un percorso sconosciuto e 405 a un metodo
+        # non previsto, e lo fa PRIMA di qualunque dipendenza. Un doppio che
+        # saltasse questo passo accetterebbe route inventate - ed e' cosi' che
+        # tre sonde rotte sono arrivate fino al TEST.
+        refusal, _ = resolve_route(method, path)
+        if refusal is not None:
+            return self._reply(method, path, refusal, b'{"detail":"non disponibile"}')
 
         if path == cert.PUBLIC:
             return self._reply(method, path, 200, b"{}")
 
         if path == cert.LOGIN:
             token = f"token-{payload['email']}"
+            if payload["email"] not in self.logins:
+                # Operatore di un'agenzia dedicata: l'agenzia si ricava dal
+                # suffisso dello slug registrato alla creazione.
+                self.logins[payload["email"]] = self.dedicate.get(
+                    payload["email"], 0) or 0
             self.sessions[token] = self.logins[payload["email"]]
             self._seed(self.logins[payload["email"]])
             self.put_cookie(jar, token)
@@ -472,6 +750,26 @@ class FakeHttp(cert.HttpProbe):
         if path.startswith("/api/property-watch/stime/"):
             return self._property_watch(method, path, agency)
 
+        found = re.match(r"^/api/property/properties/(\d+)/contacts$", path)
+        if found and method == "POST":
+            return self._link_contact(method, path, agency, int(found.group(1)),
+                                      (payload or {}).get("contact_id"))
+
+        if path == cert.FOLLOWUP_SCAN and method == "POST":
+            return self._scan_temporal(method, path, agency)
+
+        if path.startswith("/api/core/tasks") and method == "GET":
+            wanted = re.search(r"contact_id=(\d+)", path)
+            items = [_json.loads(r["body"]) | {"id": i}
+                     for i, r in self.rows.items()
+                     if r["prefix"] == "/api/core" and r.get("task")
+                     and (r["agency"] == agency or self._broken("listing"))
+                     and (not wanted or _json.loads(r["body"]).get("contact_id") == int(wanted.group(1)))]
+            return self._reply(method, path, 200, _json.dumps({"items": items}).encode())
+
+        if path == "/api/sales" and method == "POST":
+            return self._create_sale(method, path, agency, payload or {})
+
         if path.startswith("/api/match/readiness"):
             if self._broken("readiness", "generic"):
                 # Il motore dice perche' non puo' calcolare. Il messaggio e'
@@ -507,6 +805,11 @@ class FakeHttp(cert.HttpProbe):
             # marcatore non prova nulla - non verrebbe mai esercitato.
             self.rows[self.next_id] = {"agency": agency, "prefix": _prefix_of(path),
                                        "body": _json.dumps(payload)}
+            if path == "/api/proposals":
+                self.proposal_property[self.next_id] = self.match_property.get(
+                    payload.get("match_id"))
+            if path == "/api/core/tasks":
+                self.rows[self.next_id]["task"] = True
             return self._reply(method, path, 201,
                                _json.dumps({"id": self.next_id, **payload}).encode())
 
@@ -535,6 +838,11 @@ class FakeHttp(cert.HttpProbe):
             if method in ("PATCH", "PUT", "POST") and payload is not None:
                 row["body"] = _json.dumps(payload)
             if method == "DELETE":
+                # "soft_delete": risponde 2xx e NON rimuove la riga. E' cio' che
+                # fanno `archive_property` e `archive_request`, ed e' il difetto
+                # che ha lasciato quattro righe sul TEST senza segnalarle.
+                if self._broken("soft_delete"):
+                    return self._reply(method, path, 200, row["body"].encode())
                 self.rows.pop(identifier, None)
                 return self._reply(method, path, 204)
             return self._reply(method, path, 200, row["body"].encode())
@@ -558,7 +866,7 @@ STIME = {1: 9001, 2: 9002}
 
 
 def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
-                stime=STIME, **state):
+                stime=STIME, dedicated_agencies=False, **state):
     """Esegue `run()` su doppi che isolano correttamente."""
     report, stream = quiet_report()
     database = database or fake_database(agencies=AGENCIES, owners=owners,
@@ -567,6 +875,7 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
                         lambda *a: "abc123" if a[0] == "rev-parse" else cert.APPROVED_BRANCH)
 
     probe = http or FakeHttp()
+    probe.logins = getattr(probe, "logins", {})
     # Le stime del doppio HTTP sono le stesse che `derive_stime` legge dal
     # doppio del database: se divergessero, la matrice proverebbe l'isolamento
     # su righe che il database non conosce.
@@ -580,6 +889,19 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     # Le sessioni di titolare: il doppio deve sapere che quel token porta il
     # ruolo agency_owner, altrimenti OWNER Admin risponderebbe 403 anche a chi
     # ha il diritto di entrarci e la prova sullo scope non verrebbe mai esercitata.
+    # Le agenzie dedicate: il doppio deve sapere che l'operatore appena
+    # creato appartiene all'agenzia appena creata.
+    original_create_dedicated = cert.Certification.create_dedicated_agency
+
+    def create_dedicated(self, label):
+        agency = original_create_dedicated(self, label)
+        if agency is not None:
+            probe.dedicate[agency["email"]] = agency["id"]
+            probe.logins[agency["email"]] = agency["id"]
+        return agency
+
+    monkeypatch.setattr(cert.Certification, "create_dedicated_agency", create_dedicated)
+
     original_open = cert.OwnerSessions.open
 
     def open_session(self, user_id):
@@ -590,6 +912,12 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
         return raw
 
     monkeypatch.setattr(cert.OwnerSessions, "open", open_session)
+
+    # La guardia read-only di FOLLOWUP interroga il repository vero, che qui
+    # non ha un database: `stale` e' cio' che quella lettura restituirebbe.
+    stale = dict(state.pop("stale_followup", {}))
+    monkeypatch.setattr(cert, "stale_followup_candidates",
+                        lambda agency_id: list(stale.get(agency_id, [])))
 
     # Le due identita' create vanno mappate sulle agenzie del doppio HTTP.
     original_create = cert.Certification.create_operator
@@ -608,7 +936,8 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     env = {"DB_NAME": cert.REQUIRED_DB_NAME, "RENDER_GIT_BRANCH": cert.APPROVED_BRANCH,
            "RENDER_GIT_COMMIT": "abc123",
            "RENDER_EXTERNAL_URL": "https://test.example"}
-    code = cert.run(report, database, env, "abc123", http_factory=factory)
+    code = cert.run(report, database, env, "abc123", http_factory=factory,
+                    dedicated_agencies=dedicated_agencies)
     return code, report, database, probe, stream
 
 
@@ -932,19 +1261,30 @@ def test_13_an_empty_database_yields_INCOMPLETE_and_never_PASS(monkeypatch):
     assert any("PROPERTY_WATCH" in i for i in blocked), blocked
 
 
-def test_13b_with_everything_populated_the_matrix_reaches_PASS(monkeypatch):
-    """L'altra meta': su un TEST con i dati a monte presenti, gli stessi domini
-    portano righe vere e il confronto col marcatore diventa un fatto osservato.
-    Senza questa prova, "INCOMPLETO" sopra potrebbe essere lo stato permanente
-    di una matrice che non sa passare."""
+def test_13b_with_everything_populated_only_the_escalation_stays_BLOCKED(monkeypatch):
+    """L'altra meta' di test_13, e il punto in cui oggi si ferma la matrice.
+
+    Con i dati a monte presenti non resta un solo FAIL e ogni dominio porta
+    righe vere. Il verdetto pero' NON e' PASS, e non per un difetto: la
+    scansione FOLLOWUP modifica attivita' preesistenti e nessuna separazione e'
+    costruibile senza cambiare il backend, quindi quella meta' resta non
+    provata - e una prova non eseguita impedisce il PASS globale.
+
+    Questo test fissa che sia l'UNICA cosa a impedirlo. Se domani comparisse un
+    secondo BLOCKED, sarebbe una regressione mascherata da una condizione nota.
+    """
     code, report, database, probe, _ = working_run(
-        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
 
     failures = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
     assert failures == [], failures
+
     blocked = [i for k, i, _ in report.rows if k == cert.BLOCKED]
-    assert blocked == [], blocked
-    assert code == 0, report.verdict
+    assert blocked == ["FOLLOWUP-escalation"], (
+        f"oltre all'escalation FOLLOWUP resta bloccato altro: {blocked}"
+    )
+    assert code == 2, report.verdict
 
 
 def test_13d_the_chain_is_really_built_and_really_probed(monkeypatch):
@@ -967,7 +1307,9 @@ def test_13d_the_chain_is_really_built_and_really_probed(monkeypatch):
     for step in ("MATCH", "PROPOSAL", "SALE"):
         for direction in (f"{step}-detail-A-B", f"{step}-detail-B-A"):
             assert rows.get(direction) == cert.PASS, f"manca {direction}"
-    assert code == 0, report.verdict
+    # La catena e' completa; il verdetto resta INCOMPLETO per l'escalation
+    # FOLLOWUP, che e' l'unica prova non eseguibile - vedi test_13b.
+    assert code == 2, report.verdict
 
 
 def test_13c_a_populated_list_is_really_observed_not_assumed(monkeypatch):
@@ -1073,10 +1415,20 @@ def test_16_both_directions_are_probed_for_every_domain(monkeypatch):
     # escludeva OWNER_ADMIN per nome e non guardava affatto i domini provati da
     # un certificatore dedicato, che sono esattamente quelli in cui una sola
     # direzione era piu' facile da dimenticare.
+    # FOLLOWUP non ha due direzioni OSTILI: ha due osservazioni della
+    # selezione, A e B, piu' il confronto fra le due. La forma e' diversa
+    # perche' la superficie e' una lettura, non un tentativo di furto.
+    assert "FOLLOWUP-selezione-A" in idents and "FOLLOWUP-selezione-B" in idents
+    assert "FOLLOWUP-selezione-disgiunta" in idents
+
     for domain in cert.DOMAINS:
+        if domain.name == "FOLLOWUP":
+            continue
         own = [i for i in idents if i.startswith(f"{domain.name}-")]
-        forward = [i for i in own if i.endswith("A-B") or i.endswith("-non-vede-B")]
-        backward = [i for i in own if i.endswith("B-A") or i.endswith("-non-vede-A")]
+        # Tre forme per "A verso B": l'id diretto (`...-A-B`), la lista
+        # (`...-non-vede-B`) e la scansione (`...-non-elabora-B`).
+        forward = [i for i in own if i.endswith(("A-B", "-non-vede-B", "-non-elabora-B"))]
+        backward = [i for i in own if i.endswith(("B-A", "-non-vede-A", "-non-elabora-A"))]
         assert forward, f"{domain.name}: manca la direzione A->B fra {own}"
         assert backward, f"{domain.name}: manca la direzione B->A fra {own}"
 
@@ -1716,3 +2068,583 @@ def test_45_the_one_time_token_exemption_is_not_a_blanket_allow(monkeypatch):
         expected=(("POST /api/owner/admin/accounts/1/tokens", "SEGRETO"),),
     )
     assert report2.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# 46-49 - LE REGRESSIONI DEL RUN 22d007af7916
+#
+# Tre sonde dello script invocavano route che l'applicazione non ha. Nessuna
+# poteva essere vista da un doppio che rispondeva 200 a qualunque percorso: e'
+# per questo che il difetto e' arrivato fino al TEST, dove il 405 e' stato
+# perfino contato come prova superata (405 non e' 200).
+# ---------------------------------------------------------------------------
+
+def test_46_every_declared_probe_hits_a_route_that_exists():
+    """LA REGRESSIONE PRINCIPALE: nessun percorso inventato.
+
+    Ogni sonda dichiarata nei domini viene risolta contro la tavola delle route
+    vere. Un percorso inesistente, o un metodo che quella route non accetta,
+    fa fallire qui - dove costa un secondo - invece che sul TEST.
+    """
+    problemi = []
+    for domain in cert.DOMAINS:
+        sonde = [("GET", domain.listing), ("GET", domain.search),
+                 ("GET", domain.detail)]
+        if domain.fixture:
+            sonde.append(("POST", domain.fixture[0]))
+        if domain.update:
+            sonde.append((domain.update[0], domain.update[1]))
+        sonde += [("GET", c) for c in domain.cross_links]
+        # La DELETE di cleanup si registra SOLO dove c'e' una fixture.
+        if domain.fixture and domain.detail and domain.api_delete:
+            sonde.append(("DELETE", domain.detail))
+        for method, template in sonde:
+            if not template:
+                continue
+            path = (template.replace("{id}", "1").replace("{marker}", "x")
+                    .replace("{core_id}", "1"))
+            status, _ = resolve_route(method, path)
+            if status:
+                problemi.append(f"{domain.name}: {status} {method} {path}")
+    assert problemi == [], "sonde verso route inesistenti: " + "; ".join(problemi)
+
+
+def _delete_handler(module: str, path_suffix: str):
+    """Il gestore della route DELETE, e i nomi che invoca. Dal sorgente."""
+    tree = ast.parse((ROOT / module / "router.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for deco in node.decorator_list:
+            if not isinstance(deco, ast.Call):
+                continue
+            attr = getattr(deco.func, "attr", None)
+            args = [a.value for a in deco.args if isinstance(a, ast.Constant)]
+            if attr == "delete" and any(a == path_suffix for a in args):
+                chiamate = {getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+                            for c in ast.walk(node) if isinstance(c, ast.Call)}
+                return node.name, {c for c in chiamate if c}
+    return None, set()
+
+
+def test_47_api_delete_means_physical_removal_not_a_2xx():
+    """LA REGRESSIONE DEL RESIDUO SILENZIOSO.
+
+    `api_delete` non significa "la route DELETE esiste": significa che RIMUOVE
+    FISICAMENTE la riga. Due route di questa API rispondono 200 e archiviano -
+    `archive_property`, `archive_request` - e il run 22d007af7916 ha creduto al
+    codice di stato, lasciando quattro righe sul TEST senza segnalarle.
+
+    Il giudizio e' ricavato dal router: se il gestore della DELETE, o una
+    funzione che invoca, si chiama `archive*`, la cancellazione e' logica e
+    `api_delete` deve essere False. Se un domani diventasse fisica, questo test
+    fallisce e la dichiarazione va rivista - invece di restare pessimista per
+    sempre.
+    """
+    rotte = {  # dominio -> (modulo, percorso dichiarato nel router)
+        "CORE": ("core", "/contacts/{contact_id}"),
+        "PROPERTY": ("property", "/properties/{property_id}"),
+        "BUY": ("buy", "/requests/{request_id}"),
+    }
+    for name, (module, suffix) in rotte.items():
+        domain = _domain(name)
+        handler, chiamate = _delete_handler(module, suffix)
+        archivia = handler is not None and any(
+            "archive" in n for n in {handler} | chiamate)
+        fisica = handler is not None and not archivia
+        assert domain.api_delete == fisica, (
+            f"{name}.api_delete={domain.api_delete} ma la route DELETE "
+            f"{'non esiste' if handler is None else ('archivia (' + handler + ')') if archivia else 'cancella davvero'}"
+        )
+
+    # E cio' che non si cancella via API ha una tabella e un marcatore per il
+    # cleanup SQL: senza, la riga resterebbe e nessuno lo direbbe.
+    for domain in cert.DOMAINS:
+        if domain.fixture and not domain.api_delete:
+            assert domain.table and domain.marker_column, (
+                f"{domain.name} non e' cancellabile via API e non dichiara "
+                "tabella/colonna per il cleanup SQL"
+            )
+
+    # E la cancellazione incrocia TERNE (id, marcatore, agenzia) sulla stessa
+    # riga: tre elenchi indipendenti lascerebbero passare la riga di A con il
+    # marcatore di B.
+    blocco = _function_source("cleanup_orphan_fixtures")
+    assert "t.id = f.id" in blocco and "t.agency_id = f.agency_id" in blocco
+    assert "f.marcatore" in blocco, blocco[-400:]
+    for vietato in ("LIKE", "marker_column}"):
+        assert vietato not in blocco
+
+
+def test_47b_a_2xx_delete_that_leaves_the_row_is_caught_on_the_database(monkeypatch):
+    """LA REGRESSIONE DEL RESIDUO SILENZIOSO.
+
+    Il doppio risponde 2xx alla DELETE e TIENE la riga: e' esattamente cio' che
+    fanno `archive_property` e `archive_request`. Nel run 22d007af7916 questo
+    e' passato inosservato perche' il cleanup si fidava del codice di stato.
+
+    Qui la rete di sicurezza SQL rimuove comunque la riga, e la verifica finale
+    lo conferma leggendo il database - non un 2xx. Se anche quella rete si
+    rompesse, il residuo verrebbe dichiarato: e' il caso sotto.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch,
+        http=FakeHttp(broken={"soft_delete"}, prepopulate=DERIVED, stime=STIME))
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("CLEAN-VERIFICA") == cert.PASS, [r for r in report.rows if "CLEAN" in r[1]]
+
+    # E la verifica ha guardato QUALCOSA. Un run che non tracciasse nulla
+    # passerebbe in silenzio - ed e' il modo esatto in cui il difetto e'
+    # sfuggito dal vivo: nessuna riga dichiarata, nessun residuo dichiarato.
+    testo = next(t for k, i, t in report.rows if i == "CLEAN-VERIFICA")
+    osservate = int(re.search(r"(\d+) righe create", testo).group(1))
+    assert osservate >= 6, (
+        f"la verifica ha considerato solo {osservate} righe: contatti, immobili "
+        "e richieste di entrambe le agenzie devono esserci tutti"
+    )
+    # Le righe sopravvissute alla DELETE HTTP sono state rimosse via SQL, per
+    # terne id+marcatore+agenzia: immobili e richieste, che sono le due
+    # superfici le cui route DELETE archiviano soltanto.
+    cancellazioni = " ".join(database.state.get("deletes", [])).upper()
+    assert "FROM PROPERTIES" in cancellazioni and "FROM BUY_REQUESTS" in cancellazioni, (
+        database.state.get("deletes", []))
+
+
+def test_47c_a_residue_on_the_database_is_a_failure_whatever_http_said(monkeypatch):
+    """E la verifica finale sa fallire.
+
+    Il database dichiara righe ancora presenti: il verdetto e' FAIL anche se
+    ogni DELETE ha risposto 2xx. Senza questo caso, `verify_no_residue`
+    potrebbe essere una nota che dice sempre di si'.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, residue_rows=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "CLEAN-VERIFICA" and "ANCORA PRESENTI" in t
+               for i, t in fallimenti), fallimenti
+
+
+def test_48_the_sale_precondition_is_satisfied_before_the_chain(monkeypatch):
+    """SALE dava 409: mancava il legame proprietario.
+
+    `create_sale_scoped` esige una riga owner/seller in `property_contacts`.
+    Il doppio adesso la esige davvero, quindi se `link_property_owner` sparisse
+    la catena si fermerebbe sulla vendita - come sul TEST.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    rows = {i: k for k, i, _ in report.rows}
+    for label in ("A", "B"):
+        assert rows.get(f"PROPERTY-relazione-{label}") == cert.PASS
+        assert rows.get(f"chain-SALE-{label}") == cert.PASS, (
+            "la vendita non e' stata creata: la precondizione del venditore "
+            "non e' soddisfatta"
+        )
+
+
+def test_48b_without_the_owner_link_the_sale_is_refused_with_409(monkeypatch):
+    """E la precondizione e' reale, non decorativa: senza legame, 409."""
+    import scripts.p26_6_live_cert as module
+
+    monkeypatch.setattr(module, "link_property_owner",
+                        lambda *a, **k: None)
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    testi = [t for k, i, t in report.rows
+             if k == cert.BLOCKED and i.startswith("chain-")]
+    assert any("409" in t for t in testi), (
+        f"senza il legame proprietario la vendita doveva fallire con 409: {testi}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 49-52 - FOLLOWUP: la scansione, provata e non dichiarata
+#
+# L'assenza di GET rende non provabili le letture, non il dominio. La route che
+# c'e' - POST /scan-temporal - e' una scrittura scopata, e una scrittura si
+# prova cosi': ognuno la lancia, e si osserva che tocchi solo le proprie righe.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 49-53 - FOLLOWUP: si osserva la selezione, non si esegue l'escalation
+#
+# Tre difese sono state costruite e scartate prima di arrivare qui, e la
+# ragione e' sempre la stessa: `scan-temporal` seleziona E scrive, e il
+# predicato non ammette una restrizione agli id di questo run.
+#
+#   * contare le candidate prima: dice quante ce ne sono ADESSO. Il predicato
+#     e' `due_at <= NOW() - INTERVAL '24 hours'`, quindi una riga preesistente
+#     diventa eleggibile da sola, col passare del tempo;
+#   * un secondo conteggio: insegue lo stesso istante che non puo' fermare;
+#   * fixture con scadenza remotissima e limite 1: un inserimento concorrente
+#     con scadenza ancora piu' vecchia la scavalca, e accorgersene dopo non e'
+#     isolamento - la riga altrui e' gia' stata modificata.
+#
+# Resta provabile la SELEZIONE, dove l'isolamento fra agenzie vive per intero,
+# ed e' una lettura pura.
+# ---------------------------------------------------------------------------
+
+def test_49_the_matrix_never_runs_the_followup_scan(monkeypatch):
+    """LA GARANZIA: nessuna scrittura su FOLLOWUP, in nessuna direzione.
+
+    Non "la scrittura e' circoscritta": non avviene. E' l'unica separazione
+    costruibile senza cambiare il backend per far passare una prova.
+    """
+    _code, _report, database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+
+    scansioni = [label for label, _s, _b in probe.exchanges if "scan-temporal" in label]
+    assert scansioni == [], f"la matrice ha lanciato la scansione: {scansioni}"
+    creazioni = [label for label, _s, _b in probe.exchanges
+                 if label == "POST /api/core/tasks"]
+    assert creazioni == [], f"la matrice crea fixture FOLLOWUP: {creazioni}"
+    assert not any("FOLLOWUP_ACTIONS" in d.upper()
+                   for d in database.state.get("deletes", []))
+
+
+def test_50_the_selection_is_observed_in_both_agencies(monkeypatch):
+    """La selezione e' una SELECT: si esegue davvero, sui dati reali."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("FOLLOWUP-selezione-A") == cert.PASS
+    assert rows.get("FOLLOWUP-selezione-B") == cert.PASS
+    assert rows.get("FOLLOWUP-selezione-disgiunta") == cert.PASS
+
+
+def test_51_a_task_selected_by_both_agencies_is_a_failure(monkeypatch):
+    """Se la stessa attivita' comparisse in entrambe le selezioni, il predicato
+    di tenant non starebbe facendo il suo lavoro."""
+    # L'attivita' 99 e' vista da entrambe ed e' davvero di A: l'appartenenza
+    # per A passa, quella per B fallirebbe per prima e nasconderebbe la
+    # disgiunzione. `task_owner` la attribuisce a entrambe le richiedenti
+    # tramite un'agenzia che coincide con quella interrogata, cosi' il primo
+    # controllo passa e resta in piedi solo il difetto da osservare.
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}, {"id": 99}], 2: [{"id": 99}]},
+        task_owner={99: None})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    kind, testo = righe.get("FOLLOWUP-selezione-disgiunta", (None, ""))
+    assert kind == cert.FAIL and "99" in testo, righe.get("FOLLOWUP-selezione-disgiunta")
+
+
+def test_52_two_empty_selections_prove_nothing_and_are_BLOCKED(monkeypatch):
+    """La regola di tutta la matrice vale anche qui: su insiemi vuoti la
+    disgiunzione e' vera per costruzione e non dimostra nulla."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("FOLLOWUP-selezione-disgiunta") == cert.BLOCKED
+
+
+def test_53_the_escalation_is_BLOCKED_with_a_reason_taken_from_the_signature():
+    """L'altra meta' della route resta NON PROVATA, e il motivo e' verificabile.
+
+    Non e' un'opinione: la firma della selezione accetta solo `agency_id`,
+    `limit` e `rule_code`. Se un domani accettasse un elenco di id, la
+    separazione diventerebbe costruibile e questo test fallisce - cosi' che il
+    BLOCKED non sopravviva alla ragione che lo giustifica.
+    """
+    import inspect
+
+    from followup import repository
+
+    firma = inspect.signature(
+        repository.list_temporal_escalation_candidates_for_agency)
+    assert set(firma.parameters) == {"agency_id", "limit", "rule_code"}, (
+        f"la firma e' cambiata ({list(firma.parameters)}): la scansione "
+        "potrebbe essere restringibile agli id del run e l'escalation va "
+        "riportata nella matrice"
+    )
+
+    blocco = _function_source("certify_followup")
+    assert "report.blocked(" in blocco and "FOLLOWUP-escalation" in blocco
+    assert "FOLLOWUP_SCAN" not in blocco, "il certificatore lancia ancora la scansione"
+
+    # E la selezione passa dalla funzione applicativa vera, non da una copia
+    # della sua SQL ne' da un elenco vuoto: nei test quella funzione e'
+    # sostituita da un doppio, quindi la sua implementazione non viene mai
+    # esercitata e solo un controllo sul codice puo' dire che c'e' davvero.
+    lettura = _function_source("stale_followup_candidates")
+    albero = ast.parse(lettura)
+    invocate = [n for n in ast.walk(albero) if isinstance(n, ast.Call)]
+    nomi = {getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+            for c in invocate}
+    assert "list_temporal_escalation_candidates_for_agency" in nomi, (
+        f"la selezione non chiama il predicato applicativo: {sorted(n for n in nomi if n)}"
+    )
+    ritorni = [n for n in ast.walk(albero) if isinstance(n, ast.Return)]
+    assert len(ritorni) == 1 and isinstance(ritorni[0].value, ast.Call), (
+        "la selezione ha un'uscita che non passa dal predicato: una scorciatoia "
+        "qui renderebbe la disgiunzione vera per costruzione"
+    )
+
+
+def test_53b_a_task_belonging_to_another_agency_is_caught(monkeypatch):
+    """LA PROVA CHE LA DISGIUNZIONE NON DA'.
+
+    Due selezioni possono essere disgiunte e sbagliate entrambe: basta che la
+    selezione di A restituisca attivita' di un'agenzia terza e quella di B di
+    un'altra ancora. Nessun id in comune, e nessuna delle due appartiene a chi
+    l'ha chiesta.
+
+    Qui l'attivita' 11 e' selezionata da A ma appartiene all'agenzia 99. La
+    disgiunzione resta vera; l'appartenenza no.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]},
+        task_owner={11: 99})
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "FOLLOWUP-appartenenza-A" and "99" in t
+               for i, t in fallimenti), fallimenti
+
+
+def test_53c_an_empty_selection_cannot_prove_ownership(monkeypatch):
+    """Un caso positivo vuoto non e' un caso positivo: senza righe non c'e'
+    nulla di cui verificare l'agenzia, e dichiararlo superato sarebbe la stessa
+    vacuita' che questa matrice combatte ovunque."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}]})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("FOLLOWUP-appartenenza-A") == cert.PASS
+    assert rows.get("FOLLOWUP-appartenenza-B") == cert.BLOCKED
+
+
+# ---------------------------------------------------------------------------
+# 56-60 - FOLLOWUP su agenzie dedicate
+#
+# La separazione che ordinamento, limite e controlli a posteriori non davano:
+# su un'agenzia creata dal run non esiste una riga che non sia nostra, quindi
+# `WHERE t.agency_id = %s` diventa il confine. Il backend non cambia.
+# ---------------------------------------------------------------------------
+
+def test_56_without_the_flag_nothing_is_created_and_the_escalation_stays_BLOCKED(monkeypatch):
+    """Il percorso dedicato non parte da solo.
+
+    Creare agenzie e' l'operazione piu' consequenziale che questo script sappia
+    fare: deve richiedere un'attestazione esplicita, non un default.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("FOLLOWUP-escalation") == cert.BLOCKED
+    assert not any(str(x).upper().startswith("INSERT INTO AGENCIES")
+                   for x in database.state.get("sql", []))
+
+
+def test_57_with_the_flag_the_scan_runs_on_dedicated_agencies(monkeypatch):
+    """Con l'attestazione, la route reale viene esercitata nelle due direzioni."""
+    code, report, database, probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    rows = {i: k for k, i, _ in report.rows}
+    for label, altro in (("C", "D"), ("D", "C")):
+        assert rows.get(f"FOLLOWUP-scan-{label}") == cert.PASS
+        assert rows.get(f"FOLLOWUP-scan-{label}-elabora-la-propria") == cert.PASS
+        assert rows.get(f"FOLLOWUP-scan-{label}-solo-la-propria") == cert.PASS
+        assert rows.get(f"FOLLOWUP-scan-{label}-{altro}-invariata") == cert.PASS
+    # E l'escalation non e' piu' una lacuna dichiarata.
+    assert rows.get("FOLLOWUP-escalation") == cert.PASS
+    # Due agenzie create, due rimosse.
+    assert len([x for x in database.state.get("sql", [])
+                if x.upper().startswith("INSERT INTO AGENCIES")]) == 2
+    assert rows.get("CLEAN-DEDICATA") == cert.PASS
+
+
+@pytest.mark.parametrize("kind,expected", [
+    # La scansione elenca una riga che non e' del run: il confine dell'agenzia
+    # dedicata non ha tenuto.
+    ("intruso_dopo_preflight", "FOLLOWUP-scan-C-solo-la-propria"),
+    # La scansione non elabora nemmeno la propria: la prova positiva e' vuota,
+    # e senza di essa "non ha toccato nulla di altrui" sarebbe vero per la
+    # ragione sbagliata.
+    ("scan_skips_own", "FOLLOWUP-scan-C-elabora-la-propria"),
+    # Peggio: tocca l'attivita' dell'altra agenzia SENZA nominarla. Gli id
+    # tornati sono puliti, e solo il confronto con l'istantanea se ne accorge.
+    ("scan_mutates_other", "FOLLOWUP-scan-C-D-invariata"),
+])
+def test_58_each_dedicated_scan_assertion_fails_on_its_own_defect(
+        monkeypatch, kind, expected):
+    """Due difetti distinti, due asserzioni distinte.
+
+    Un test che si accontentasse di "una prova FOLLOWUP e' fallita" sarebbe
+    soddisfatto da una sonda vicina, e le altre resterebbero indebolibili senza
+    che nulla lo dicesse - e' gia' successo due volte in questo file.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={kind}, only="followup",
+                      prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert expected in fallimenti, f"rompendo {kind!r}: {fallimenti}"
+    assert code == 1
+
+
+def test_59_a_surviving_dedicated_agency_is_a_failure_with_a_recovery_hint(monkeypatch):
+    """Il residuo peggiore possibile: una radice di tenancy.
+
+    Il report deve nominarla con l'id - non con lo slug, non con dati personali
+    - e dire come rimuoverla a mano.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True, agenzie_residue=2,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    testo = next((t for i, t in fallimenti if i == "CLEAN-DEDICATA"), None)
+    assert testo is not None, fallimenti
+    assert "ANCORA PRESENTI" in testo and "RECUPERO:" in testo
+    assert "mai per prefisso" in testo
+
+
+def test_60_the_dedicated_cleanup_deletes_by_id_and_never_by_prefix():
+    """Il catalogo serve a SCOPRIRE, non ad autorizzare.
+
+    L'elenco delle tabelle da cui cancellare e' scritto a mano e in ordine di
+    dipendenza. L'interrogazione del catalogo che segue e' solo una lettura: se
+    trova una dipendenza imprevista la nomina e fa fallire, e non la cancella -
+    cancellare cio' che nessuno aveva considerato e' il modo in cui un cleanup
+    diventa il danno.
+    """
+    blocco = _function_source("cleanup_dedicated_agencies")
+    assert "DEDICATED_TABLES" in blocco
+    assert "IN %s" in blocco
+    for vietato in ("LIKE", "slug", "p26-6-cert-"):
+        assert vietato not in blocco, f"il cleanup usa {vietato} come criterio"
+
+    # Le DELETE dinamiche dal catalogo non devono esistere: solo conteggi.
+    fra_catalogo = blocco[blocco.index("pg_constraint"):]
+    assert "DELETE" not in fra_catalogo, (
+        "il cleanup cancella tabelle scoperte dal catalogo invece di limitarsi "
+        "a segnalarle"
+    )
+    assert "SELECT COUNT(*)" in fra_catalogo
+
+
+def test_61_the_api_side_effects_are_verified_not_assumed(monkeypatch):
+    """Gli effetti delle API entrano nella verifica finale.
+
+    Archiviare scrive history, calcolare scrive match_runs e i risultati per
+    criterio. Sono figli CASCADE e dovrebbero sparire con il genitore - ma il
+    run 22d007af7916 ne ha lasciati 32 sul TEST, perche' il genitore era stato
+    archiviato invece che cancellato e nessuno li contava.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    assert {i: k for k, i, _ in report.rows}.get("CLEAN-VERIFICA") == cert.PASS
+
+    blocco = _function_source("verify_no_residue")
+    for tabella in ("property_status_history", "buy_request_history",
+                    "match_runs", "owner_audit_log", "match_requirement_results"):
+        assert tabella in blocco, f"la verifica finale ignora {tabella}"
+
+
+@pytest.mark.parametrize("tabella", [
+    "property_status_history", "buy_request_history", "match_runs",
+    "owner_audit_log", "match_requirement_results",
+])
+def test_62_a_surviving_side_effect_is_a_residue(monkeypatch, tabella):
+    """Ognuna sa fallire per conto proprio.
+
+    Un test che si accontentasse di "la verifica ha fallito" sarebbe soddisfatto
+    da una tabella vicina, e le altre resterebbero scoperte - lo stesso difetto
+    gia' trovato tre volte in questo file.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        effetti_residui={tabella: 3})
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "CLEAN-VERIFICA" and tabella in t for i, t in fallimenti), (
+        f"{tabella} sopravvive e non viene segnalata: {fallimenti}")
+
+
+def test_63_the_run_audit_trail_is_removed_by_id(monkeypatch):
+    """L'audit del run se ne va, e per id.
+
+    `owner_audit_log` ha entrambe le FK in SET NULL: senza una cancellazione
+    esplicita la riga resterebbe con due colonne azzerate - una traccia che non
+    dice piu' di cosa parlava, e che nessun run successivo saprebbe attribuire.
+    """
+    _code, _report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    cancellazioni = [d for d in database.state.get("deletes", [])
+                     if "OWNER_AUDIT_LOG" in d.upper()]
+    assert cancellazioni, database.state.get("deletes", [])
+    assert "owner_account_id IN %s" in cancellazioni[0], cancellazioni[0]
+    for vietato in ("LIKE", "created_at", "action ="):
+        assert vietato not in cancellazioni[0]
+
+
+def test_64_a_foreign_dependency_appearing_after_the_census_stops_the_cleanup(monkeypatch):
+    """LA CORSA CHE IL CONTEGGIO NON VEDE.
+
+    Il censimento dice che nessuno referenzia le nostre righe. Poi, prima del
+    cleanup, compare una riga di qualcun altro che le punta - un'attivita', una
+    visita, una proposta creata nel frattempo.
+
+    Le quaranta righe del run sono ancora tutte al loro posto, quindi il
+    conteggio "40" torna: non rileva nulla. Ma cancellare adesso avrebbe un
+    effetto collaterale - CASCADE porterebbe via quella riga, SET NULL le
+    azzererebbe un campo - e sono entrambi danni a dati non nostri.
+
+    Il cleanup deve fermarsi, dire dove, e non toccare niente.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"properties": [("public.property_visits", "property_id")]},
+        dipendenti_estranee=1)
+
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    testo = next((t for i, t in fallimenti if i == "CLEAN-ORFANE"), None)
+    assert testo is not None, fallimenti
+    assert "fuori perimetro" in testo and "property_visits" in testo, testo
+    assert "Nessuna cancellazione" in testo
+
+    # E davvero non ha cancellato: nessuna DELETE sulle tabelle del perimetro.
+    cancellazioni = " ".join(database.state.get("deletes", [])).upper()
+    for tabella in ("FROM PROPERTIES", "FROM BUY_REQUESTS", "FROM CONTACTS"):
+        assert tabella not in cancellazioni, (
+            f"ha cancellato {tabella} nonostante la dipendenza estranea")
+    # E non ha nemmeno toccato la riga estranea.
+    assert "PROPERTY_VISITS" not in cancellazioni
+
+
+def test_65_being_unable_to_look_is_not_the_same_as_nothing_found(monkeypatch):
+    """Se la verifica delle dipendenze non e' eseguibile, non si procede.
+
+    Un `except` che restituisse una lista vuota trasformerebbe un errore di
+    lettura in un via libera.
+    """
+    blocco = _function_source("_foreign_dependencies")
+    assert "return [f\"verifica non eseguibile" in blocco or \
+           "verifica non eseguibile" in blocco, blocco[-300:]
+    assert "return []" not in blocco.split("except")[-1], (
+        "in caso di errore la guardia restituisce 'nessuna dipendenza'")
+
+
+def test_66_rows_of_the_run_referencing_each_other_are_not_foreign(monkeypatch):
+    """L'esclusione del perimetro non e' un dettaglio.
+
+    `buy_requests.contact_id` punta ai nostri contatti: senza escludere le
+    righe che sono esse stesse del run, la guardia le conterebbe come estranee
+    e il cleanup si rifiuterebbe di procedere a ogni esecuzione - trasformando
+    una difesa in un blocco permanente.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"contacts": [("public.buy_requests", "contact_id")]},
+        dipendenti_interne=2, dipendenti_estranee=0)
+
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("CLEAN-ORFANE") == cert.PASS, [
+        r for r in report.rows if r[1] == "CLEAN-ORFANE"]
+    # E ha davvero cancellato.
+    cancellazioni = " ".join(database.state.get("deletes", [])).upper()
+    assert "FROM CONTACTS" in cancellazioni

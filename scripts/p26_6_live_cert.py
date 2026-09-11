@@ -138,6 +138,7 @@ NOT_AUTHENTICATED = "Non autorizzato"
 
 PASS, FAIL, BLOCKED = "PASS", "FAIL", "BLOCKED"
 
+
 # Uno stato "l'altra agenzia non esiste per te" e' accettabile in tre forme.
 # 200 non lo e' mai; 500 nemmeno, perche' un errore interno puo' nascondere una
 # query che ha comunque toccato la riga.
@@ -173,7 +174,8 @@ class Domain:
     def __init__(self, name, prefix, *, listing=None, search=None,
                  fixture=None, depends_on=None, detail=None, update=None,
                  delete=None, cross_links=(), chain=None, derive=None,
-                 principal="operator", certifier=None, note=""):
+                 principal="operator", certifier=None, api_delete=True,
+                 table=None, marker_column=None, note=""):
         self.name = name
         self.prefix = prefix
         self.listing = listing            # GET che elenca: deve mostrare solo le proprie
@@ -184,6 +186,29 @@ class Domain:
         self.update = update              # (metodo, "/api/x/{id}", payload) - scrittura
         self.delete = delete              # ("POST"|"DELETE", "/api/x/{id}") - distruttiva
         self.cross_links = cross_links    # percorsi che attraversano una relazione
+
+        # LA DELETE ESISTE DAVVERO?
+        #
+        # Il cleanup dava per scontato che ogni dominio con un `detail` avesse
+        # anche una DELETE sullo stesso percorso. CORE no: il router ha
+        # POST/GET/PATCH sui contatti e nessuna cancellazione. Ogni run
+        # riceveva 405 e lasciava due contatti sul TEST.
+        #
+        # Il prover offline confronta questo valore con il router reale, cosi'
+        # che non sia una dichiarazione da tenere aggiornata a mano.
+        #
+        # ATTENZIONE AL SIGNIFICATO: "la DELETE RIMUOVE FISICAMENTE la riga".
+        # Non "la route DELETE esiste". PROPERTY e BUY ce l'hanno, e i loro
+        # handler si chiamano `archive_property` e `archive_request`: fanno
+        # UPDATE ... SET archived_at=NOW(). Il run 22d007af7916 ha ricevuto
+        # 200, ha creduto al codice di stato e ha lasciato quattro righe sul
+        # TEST senza segnalarle.
+        self.api_delete = api_delete
+
+        # Dove vive la riga, e in quale colonna il marcatore: servono al
+        # cleanup SQL dei domini che l'API non sa cancellare davvero.
+        self.table = table
+        self.marker_column = marker_column
 
         # UNA RISORSA CHE NASCE DA PIU' CHIAMATE.
         #
@@ -225,6 +250,12 @@ DOMAINS = (
         detail="/api/core/contacts/{id}",
         update=("PATCH", "/api/core/contacts/{id}", {"status": "archived"}),
         cross_links=("/api/core/leads?contact_id={id}&limit=50",),
+        # core/router.py non ha `@router.delete("/contacts/{contact_id}")`:
+        # esiste solo la DELETE di un RUOLO. I contatti di questo run si
+        # rimuovono quindi via SQL, per id verificati anche su marcatore e
+        # agenzia - vedi cleanup_orphan_fixtures.
+        api_delete=False,
+        table="contacts", marker_column="display_name",
         note="contatti, lead, attivita' e task: la radice di tutto il resto",
     ),
     Domain(
@@ -239,7 +270,20 @@ DOMAINS = (
                  {"title": "{marker}", "commercial_status": "active"}),
         detail="/api/property/properties/{id}",
         update=("PATCH", "/api/property/properties/{id}", {"title": "{marker}-mod"}),
-        cross_links=("/api/property/properties/{id}/visits?limit=20",),
+        # `cross_links=("/api/property/properties/{id}/visits?limit=20",)` era
+        # sbagliato: quella GET NON ESISTE. Il router ha `POST
+        # /properties/{id}/visits` e `GET /visits` (senza filtro per immobile),
+        # quindi la sonda riceveva 405 - e un 405 non e' isolamento, e' una
+        # route inventata. La matrice lo contava come prova superata.
+        #
+        # La relazione vera che si puo' attraversare da un immobile e' il
+        # legame con un contatto, ed e' una SCRITTURA: vedi certify_property.
+        certifier="property",
+        # `DELETE /properties/{id}` esiste e risponde 200, ma l'handler si
+        # chiama `archive_property` e fa UPDATE ... commercial_status='archived',
+        # archived_at=NOW(). La riga resta.
+        api_delete=False,
+        table="properties", marker_column="title",
     ),
     Domain(
         "BUY", "/api/buy",
@@ -258,6 +302,9 @@ DOMAINS = (
         depends_on="CORE",
         detail="/api/buy/requests/{id}",
         update=("PATCH", "/api/buy/requests/{id}", {"title": "{marker}-mod"}),
+        # Come PROPERTY: l'handler e' `archive_request`, UPDATE status='archived'.
+        api_delete=False,
+        table="buy_requests", marker_column="title",
     ),
     # I TRE DOMINI DELLA CATENA COMMERCIALE.
     #
@@ -319,7 +366,17 @@ DOMAINS = (
         "SELLER_INTELLIGENCE", "/api/seller-intelligence",
         listing="/api/seller-intelligence/timeline?limit=50",
     ),
-    Domain("FOLLOWUP", "/api/followup", listing="/api/followup/pending?limit=50"),
+    Domain(
+        "FOLLOWUP", "/api/followup",
+        # `listing="/api/followup/pending?limit=50"` NON ESISTEVA. Il router
+        # monta una sola route, `POST /scan-temporal`: l'assenza di GET rende
+        # non provabili le LETTURE, non il dominio. La scansione e' una
+        # scrittura scopata per agenzia, e una scrittura si prova cosi': ognuno
+        # la lancia, e si osserva che tocchi solo le proprie righe.
+        certifier="followup",
+        note="POST /scan-temporal: escalation delle attivita' stale, provata con "
+             "fixture proprie e guardia read-only sui dati preesistenti",
+    ),
     Domain(
         "SELLER_INTENT", "/api/seller-intent",
         # Lo score si chiede per lead_id, e questo run non crea lead. La sonda
@@ -764,6 +821,10 @@ class Certification:
         self.created_proposal_ids: list[int] = []
         self.created_match_ids: list[int] = []
         self.created_owner_account_ids: list[int] = []
+        # {tabella: [(id, marcatore, colonna_marcatore)]} - le righe che l'API
+        # non rimuove fisicamente, da cancellare via SQL in ordine di FK.
+        self.created_rows: dict = {}
+        self.created_agency_ids: list[int] = []
 
     def marker(self, agency: str) -> str:
         """Una stringa che compare solo nelle fixture di questo run.
@@ -864,12 +925,18 @@ class Certification:
                                  f"nessuna sessione per {agency}: {path} resta")
                 continue
             response = http.request(method, path, jar=jar)
-            if response.status in (200, 204, 404):
+            if response.status not in (200, 204, 404):
+                self.report.fail(
+                    "CLEAN-FIXTURE",
+                    f"{method} {path} -> {response.status}: la fixture resta",
+                )
                 continue
-            self.report.fail(
-                "CLEAN-FIXTURE",
-                f"{method} {path} -> {response.status}: la fixture POTREBBE restare",
-            )
+            # Un 2xx NON dimostra la cancellazione fisica - su questa API due
+            # route DELETE archiviano e basta - ma nemmeno una rilettura HTTP
+            # lo dimostra: `GET /api/core/tasks/{id}` non esiste, quindi un
+            # 404 li' non distingue "cancellata" da "rotta assente".
+            # La verifica che conta e' sul database, e vale per ogni riga
+            # creata da questo run: vedi `verify_no_residue`.
 
     def _delete_scoped(self, label: str, statements: tuple, residue: tuple) -> None:
         """Cancella per ID e verifica che non resti nulla.
@@ -950,8 +1017,18 @@ class Certification:
                 ("DELETE FROM owner_publication_reads WHERE owner_account_id IN %s", ids),
                 ("DELETE FROM owner_feedback WHERE owner_account_id IN %s", ids),
                 ("DELETE FROM owner_property_access WHERE owner_account_id IN %s", ids),
-                # L'audit log referenzia il conto con ON DELETE SET NULL: la
-                # traccia di cio' che e' successo resta, ed e' giusto che resti.
+                # L'AUDIT DEL RUN VA VIA, E IL PERCHE' E' CAMBIATO.
+                #
+                # `owner_audit_log.owner_account_id` e `.property_id` sono
+                # entrambi ON DELETE SET NULL: cancellare conto e immobile
+                # lascerebbe la riga con due colonne azzerate, cioe' una traccia
+                # che non dice piu' di cosa parlava. Su dati veri conservarla
+                # avrebbe senso; su un conto di certificazione e' rumore che
+                # sopravvive a ogni run e che nessuno sapra' piu' attribuire.
+                #
+                # Il criterio resta l'id: il conto di questo run, oppure uno dei
+                # suoi immobili. Mai un prefisso, mai un intervallo di date.
+                ("DELETE FROM owner_audit_log WHERE owner_account_id IN %s", ids),
                 ("DELETE FROM owner_accounts WHERE id IN %s", ids),
             ),
             (
@@ -959,8 +1036,424 @@ class Certification:
                 ("SELECT COUNT(*) AS n FROM owner_property_access "
                  "WHERE owner_account_id IN %s", ids),
                 ("SELECT COUNT(*) AS n FROM owner_sessions WHERE owner_account_id IN %s", ids),
+                ("SELECT COUNT(*) AS n FROM owner_audit_log WHERE owner_account_id IN %s", ids),
             ),
         )
+
+    # ------------------------------------------------------------------
+    # AGENZIE DEDICATE
+    #
+    # Le uniche righe che questo run puo' creare in un'agenzia sua, e quindi
+    # l'unico modo in cui la scansione FOLLOWUP - che non ammette una
+    # restrizione agli id - puo' toccare soltanto cio' che ci appartiene.
+    # ------------------------------------------------------------------
+
+    #: In ordine di CANCELLAZIONE: figli prima dei genitori. Scritto a mano e
+    #: non ricavato dal catalogo, deliberatamente. Il catalogo serve a
+    #: SCOPRIRE una dipendenza che non prevedevamo, non ad autorizzarne la
+    #: cancellazione: una cancellazione automatica su una tabella che nessuno
+    #: aveva considerato e' esattamente il danno da cui ci si vuole difendere.
+    DEDICATED_TABLES = (
+        ("followup_actions", "agency_id"),
+        ("tasks", "agency_id"),
+        ("contacts", "agency_id"),
+        ("agency_memberships", "agency_id"),
+    )
+
+    def create_dedicated_agency(self, label: str) -> dict | None:
+        """Un'agenzia temporanea con un operatore e nient'altro.
+
+        Lo slug rispetta `agencies_slug_chk` e porta il run_id, cosi' che una
+        riga trovata domani sia attribuibile. Non e' pero' un criterio di
+        cancellazione: quello resta l'id.
+        """
+        from core.normalization import normalize_email
+        from operator_auth.security import hash_password
+
+        slug = f"p26-6-cert-{self.run_id}-{label.lower()}"
+        email = f"{CERT_PREFIX}{self.run_id}-{label.lower()}-ded{CERT_DOMAIN}"
+        password = secrets.token_urlsafe(32)
+        self.secrets.append(password)
+        try:
+            with self.db.write() as cur:
+                cur.execute(
+                    "SELECT 1 FROM agencies WHERE slug = %s", (slug,))
+                if cur.fetchone() is not None:
+                    raise CheckFailed("collisione sullo slug dell'agenzia dedicata")
+                cur.execute(
+                    "INSERT INTO agencies (name, slug, status) "
+                    "VALUES (%s, %s, 'active') RETURNING id",
+                    (f"P26-6 certificazione {self.run_id} {label}", slug),
+                )
+                agency_id = int(cur.fetchone()["id"])
+                self.created_agency_ids.append(agency_id)
+
+                cur.execute(
+                    """
+                    INSERT INTO operator_users (
+                        email, email_normalized, password_hash, status, is_platform_admin
+                    ) VALUES (%s, %s, %s, 'active', FALSE) RETURNING id
+                    """,
+                    (email, normalize_email(email), hash_password(password)),
+                )
+                user_id = int(cur.fetchone()["id"])
+                self.created_user_ids.append(user_id)
+                cur.execute(
+                    "INSERT INTO agency_memberships (agency_id, operator_user_id, "
+                    "role, status) VALUES (%s, %s, %s, 'active')",
+                    (agency_id, user_id, CERT_ROLE),
+                )
+        except CheckFailed:
+            raise
+        except Exception as exc:
+            self.report.fail(
+                f"DEDICATA-{label}",
+                f"creazione non riuscita ({type(exc).__name__}): nessuna prova "
+                "FOLLOWUP su agenzia dedicata",
+            )
+            return None
+        self.report.note(
+            f"DEDICATA-{label}",
+            f"agenzia temporanea {agency_id} creata con un operatore proprio "
+            f"(slug {slug})",
+        )
+        return {"id": agency_id, "slug": slug, "email": email, "password": password}
+
+    def cleanup_dedicated_agencies(self) -> None:
+        """Le agenzie temporanee, e tutto cio' che il run vi ha messo dentro.
+
+        Ordine esplicito, per id. Poi il catalogo, e solo per GUARDARE: se una
+        tabella che non avevamo previsto referenzia ancora l'agenzia, la si
+        nomina e si fallisce - non la si cancella. Cancellare cio' che non era
+        stato considerato e' il modo in cui un cleanup diventa il danno.
+        """
+        if not self.created_agency_ids:
+            return
+        ids = tuple(self.created_agency_ids)
+        try:
+            with self.db.write() as cur:
+                for table, column in self.DEDICATED_TABLES:
+                    cur.execute(
+                        f"DELETE FROM {table} WHERE {column} IN %s", (ids,))
+                cur.execute(
+                    "DELETE FROM operator_users WHERE id IN %s",
+                    (tuple(self.created_user_ids) or (0,),))
+                cur.execute("DELETE FROM agencies WHERE id IN %s", (ids,))
+        except Exception as exc:
+            self.report.fail(
+                "CLEAN-DEDICATA",
+                f"cancellazione non riuscita ({type(exc).__name__}). Agenzie "
+                f"{list(ids)} POTENZIALMENTE PRESENTI. "
+                + self.RECOVERY_HINT,
+            )
+            return
+
+        # Verifica, e ricerca di dipendenze impreviste.
+        try:
+            with self.db.read() as cur:
+                cur.execute("SELECT COUNT(*) AS n FROM agencies WHERE id IN %s", (ids,))
+                rimaste = int(cur.fetchone()["n"])
+                inattese = []
+                if rimaste:
+                    cur.execute(
+                        """
+                        SELECT ns.nspname AS schema, cl.relname AS tabella,
+                               att.attname AS colonna
+                          FROM pg_constraint con
+                          JOIN pg_class cl ON cl.oid = con.conrelid
+                          JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                          CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
+                               AS k(child_attnum, parent_attnum)
+                          JOIN pg_attribute att ON att.attrelid = con.conrelid
+                               AND att.attnum = k.child_attnum
+                          JOIN pg_attribute patt ON patt.attrelid = con.confrelid
+                               AND patt.attnum = k.parent_attnum
+                         WHERE con.contype = 'f'
+                           AND con.confrelid = 'public.agencies'::regclass
+                           AND patt.attname = 'id'
+                        """
+                    )
+                    for riga in cur.fetchall():
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {riga['schema']}.{riga['tabella']} "
+                            f"WHERE {riga['colonna']} IN %s", (ids,))
+                        n = int(cur.fetchone()["n"])
+                        if n:
+                            inattese.append(
+                                f"{riga['schema']}.{riga['tabella']}.{riga['colonna']}={n}")
+        except Exception as exc:
+            self.report.fail("CLEAN-DEDICATA",
+                             f"verifica non eseguibile ({type(exc).__name__}): non si "
+                             f"puo' affermare che le agenzie {list(ids)} siano sparite")
+            return
+
+        if rimaste:
+            self.report.fail(
+                "CLEAN-DEDICATA",
+                f"{rimaste} agenzie temporanee ANCORA PRESENTI: {list(ids)}. "
+                + (f"Dipendenze non previste dal cleanup: {inattese}. "
+                   if inattese else "Nessuna dipendenza residua individuata. ")
+                + self.RECOVERY_HINT,
+            )
+        else:
+            self.report.note(
+                "CLEAN-DEDICATA",
+                f"agenzie temporanee {list(ids)} rimosse, 0 residue")
+
+    #: Cosa fare a mano se il cleanup non riesce. Nessun dato personale: solo
+    #: id numerici e nomi di tabella.
+    RECOVERY_HINT = (
+        "RECUPERO: le righe sono identificate dagli id agenzia sopra. "
+        "Rimuovere nell'ordine followup_actions, tasks, contacts, "
+        "agency_memberships, operator_users, poi agencies, filtrando SEMPRE per "
+        "quegli id e mai per prefisso dello slug. Se una tabella non prevista "
+        "compare fra le dipendenze, va esaminata prima di cancellare."
+    )
+
+    def _foreign_dependencies(self, agency_of: dict) -> list:
+        """Righe che puntano alle nostre e NON sono a loro volta del run.
+
+        Ricavate dal catalogo per OID - `regclass` e non il nome, perche' una
+        tabella omonima in un altro schema ha un OID diverso e confrontare
+        stringhe la confonderebbe con la nostra.
+
+        Non cancella nulla: elenca. Il catalogo serve a scoprire cio' che non
+        avevamo previsto, non ad autorizzarne la rimozione.
+        """
+        perimetro = {}
+        for table, entries in self.created_rows.items():
+            perimetro[table] = tuple(i for i, _m, _c in entries)
+        if not perimetro:
+            return []
+        fuori = []
+        try:
+            with self.db.read() as cur:
+                for table, ids in perimetro.items():
+                    cur.execute(
+                        """
+                        SELECT con.conrelid::regclass::text AS figlio,
+                               att.attname AS colonna
+                          FROM pg_constraint con
+                          CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
+                               AS k(figlio, genitore)
+                          JOIN pg_attribute att ON att.attrelid = con.conrelid
+                               AND att.attnum = k.figlio
+                          JOIN pg_attribute patt ON patt.attrelid = con.confrelid
+                               AND patt.attnum = k.genitore
+                         WHERE con.contype = 'f'
+                           AND con.confrelid = ('public.' || %s)::regclass
+                           AND patt.attname = 'id'
+                        """,
+                        (table,),
+                    )
+                    for riga in cur.fetchall():
+                        figlio, colonna = riga["figlio"], riga["colonna"]
+                        nudo = figlio.split(".")[-1]
+                        esclusi = perimetro.get(nudo)
+                        if esclusi:
+                            cur.execute(
+                                f"SELECT COUNT(*) AS n FROM {figlio} t "
+                                f" WHERE t.{colonna} IN %s AND NOT (t.id IN %s)",
+                                (ids, esclusi))
+                        else:
+                            cur.execute(
+                                f"SELECT COUNT(*) AS n FROM {figlio} t "
+                                f" WHERE t.{colonna} IN %s", (ids,))
+                        n = int(cur.fetchone()["n"])
+                        if n:
+                            fuori.append(f"{figlio}.{colonna}={n}")
+        except Exception as exc:
+            # Non poter guardare non e' "non c'e' niente".
+            return [f"verifica non eseguibile ({type(exc).__name__})"]
+        return fuori
+
+    def cleanup_orphan_fixtures(self, agencies: dict) -> None:
+        """Le righe che l'API NON rimuove fisicamente.
+
+        PERCHE' ESISTE, E COSA E' COSTATA LA SUA ASSENZA
+
+        Il run 22d007af7916 ha lasciato sul TEST due contatti, due immobili e
+        due richieste d'acquisto, e non li ha segnalati come residui. Tre cause
+        sovrapposte:
+
+          * `DELETE /api/core/contacts/{id}` non esiste -> 405, segnalato;
+          * `DELETE /api/property/properties/{id}` e
+            `DELETE /api/buy/requests/{id}` ESISTONO e rispondono 200, ma i
+            loro handler si chiamano `archive_property` e `archive_request` e
+            fanno UPDATE ... archived_at=NOW(). La riga resta;
+          * il cleanup credeva al codice di stato e non guardava.
+
+        Un 2xx non dimostra la cancellazione fisica. Qui si cancella per SQL,
+        con ID + MARCATORE + AGENZIA, e si verifica.
+
+        L'ordine e' quello inverso della dichiarazione dei domini: `DOMAINS`
+        elenca CORE prima di BUY perche' la richiesta d'acquisto NASCE dal
+        contatto, quindi al contrario si cancella prima il figlio - ed e' lo
+        stesso criterio che `cleanup_http_fixtures` applica alle sue.
+        """
+        if not self.created_rows:
+            self.report.note("CLEAN-ORFANE", "nessuna riga da rimuovere via SQL")
+            return
+
+        # marcatore -> agenzia: la corrispondenza che rende verificabili le terne.
+        agency_of = {self.marker(label): agency["id"]
+                     for label, agency in agencies.items()}
+        # L'ordine: prima le tabelle che non appartengono a un dominio - sono
+        # foglie create strada facendo, come `tasks`, figlio di `contacts` -
+        # poi i domini in ordine inverso di dichiarazione, che e' l'ordine
+        # inverso delle dipendenze.
+        domini = [d.table for d in reversed(DOMAINS)
+                  if d.table and d.table in self.created_rows]
+        ordine = [t for t in self.created_rows if t not in domini] + domini
+        # PRIMA DI CANCELLARE: nessuna dipendenza fuori perimetro.
+        #
+        # Il conteggio delle righe non la rileverebbe - le nostre possono
+        # essere tutte al loro posto e una riga di qualcun altro puntarle lo
+        # stesso. Se fra il censimento e questo istante e' comparsa una
+        # dipendenza estranea, si ferma senza cancellare e senza modificarla:
+        # un CASCADE la porterebbe via, un SET NULL le azzererebbe un campo, e
+        # sono entrambi danni a dati non nostri.
+        estranee = self._foreign_dependencies(agency_of)
+        if estranee:
+            self.report.fail(
+                "CLEAN-ORFANE",
+                f"dipendenze fuori perimetro: {estranee}. Nessuna cancellazione "
+                "e nessuna modifica: vanno esaminate prima.",
+            )
+            return
+
+        rimosse, residui = {}, 0
+        try:
+            with self.db.write() as cur:
+                for table in ordine:
+                    entries = self.created_rows[table]
+                    column = entries[0][2]
+                    # La colonna del marcatore viene da una costante del
+                    # modulo, mai da una risposta HTTP: non c'e' un percorso
+                    # per cui un dato remoto finisca in questa query.
+                    if column not in ("display_name", "title", "description"):
+                        raise ValueError(f"colonna marcatore non prevista: {column!r}")
+
+                    # TERNE, non tre elenchi indipendenti. Con
+                    # `id IN (...) AND marcatore IN (...) AND agency_id IN (...)`
+                    # la riga di A passerebbe anche portando il marcatore di B:
+                    # tre condizioni vere separatamente non dicono che i tre
+                    # valori appartengano alla STESSA riga.
+                    terne = [(i, m, agency_of[m]) for i, m, _c in entries
+                             if m in agency_of]
+                    if len(terne) != len(entries):
+                        raise ValueError("marcatore senza agenzia corrispondente")
+                    segnaposti = ",".join(["(%s,%s,%s)"] * len(terne))
+                    cur.execute(
+                        f"DELETE FROM {table} t "
+                        f" USING (VALUES {segnaposti}) AS f(id, marcatore, agency_id) "
+                        f" WHERE t.id = f.id AND t.{column} = f.marcatore "
+                        f"   AND t.agency_id = f.agency_id",
+                        [valore for terna in terne for valore in terna],
+                    )
+                    rimosse[table] = cur.rowcount
+            with self.db.read() as cur:
+                for table in ordine:
+                    ids = tuple(i for i, _m, _c in self.created_rows[table])
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {table} WHERE id IN %s", (ids,))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui += left
+                        self.report.fail(
+                            "CLEAN-ORFANE",
+                            f"{table}: restano {left} righe di questo run "
+                            f"(rimosse {rimosse.get(table, 0)})",
+                        )
+        except Exception as exc:
+            self.report.fail(
+                "CLEAN-ORFANE",
+                f"cleanup fallito ({type(exc).__name__}): le righe del run "
+                f"{self.run_id} sono POTENZIALMENTE PRESENTI sul TEST",
+            )
+            return
+
+        if not residui:
+            dettaglio = ", ".join(f"{t}={n}" for t, n in rimosse.items())
+            self.report.note("CLEAN-ORFANE",
+                             f"rimosse per id+marcatore+agenzia ({dettaglio}), 0 residui")
+
+    def verify_no_residue(self) -> None:
+        """L'ULTIMA PAROLA: nessuna riga creata da questo run e' rimasta.
+
+        Non si fida di nessun codice di stato e non dipende dalla forma delle
+        route. Interroga il database per gli id creati, qualunque sia stato il
+        modo in cui si e' tentato di rimuoverli.
+
+        E' la verifica che mancava al run 22d007af7916: quattro righe
+        archiviate ma presenti, e un report che non le nominava.
+        """
+        if not self.created_rows:
+            return
+        try:
+            with self.db.read() as cur:
+                residui = []
+                for table, entries in self.created_rows.items():
+                    ids = tuple(i for i, _m, _c in entries)
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {table} WHERE id IN %s", (ids,))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui.append(f"{table}={left}")
+
+                # GLI EFFETTI DELLE API, NON SOLO LE RIGHE CHIESTE.
+                #
+                # Archiviare un immobile scrive in `property_status_history`,
+                # archiviare una richiesta in `buy_request_history`, calcolare
+                # un match scrive `match_runs` e i `match_requirement_results`.
+                # Sono figli CASCADE: dovrebbero sparire con il genitore. Il
+                # run 22d007af7916 ne ha lasciati 32 sul TEST perche' il
+                # genitore non era stato cancellato ma solo archiviato - e
+                # nessuno li contava.
+                #
+                # "Dovrebbero" non basta: si verifica che sia successo.
+                proprieta = tuple(i for i, _m, _c in
+                                  self.created_rows.get("properties", [])) or (0,)
+                richieste = tuple(i for i, _m, _c in
+                                  self.created_rows.get("buy_requests", [])) or (0,)
+                effetti = (
+                    ("property_status_history", "property_id", proprieta),
+                    ("buy_request_history", "buy_request_id", richieste),
+                    ("match_runs", "property_id", proprieta),
+                    ("match_runs", "buy_request_id", richieste),
+                    ("owner_audit_log", "property_id", proprieta),
+                )
+                for tabella, colonna, valori in effetti:
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {tabella} WHERE {colonna} IN %s",
+                        (valori,))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui.append(f"{tabella}.{colonna}={left}")
+                if self.created_match_ids:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n FROM match_requirement_results r "
+                        " JOIN match_runs mr ON mr.id = r.match_run_id "
+                        " WHERE mr.property_id IN %s OR mr.buy_request_id IN %s",
+                        (proprieta, richieste))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui.append(f"match_requirement_results={left}")
+        except Exception as exc:
+            self.report.fail("CLEAN-VERIFICA",
+                             f"verifica dei residui non eseguibile ({type(exc).__name__}): "
+                             "non si puo' affermare che il TEST sia pulito")
+            return
+        if residui:
+            self.report.fail(
+                "CLEAN-VERIFICA",
+                f"righe di questo run ANCORA PRESENTI: {', '.join(residui)}. "
+                "Un 2xx sulla DELETE non e' una prova di cancellazione.",
+            )
+        else:
+            totale = sum(len(v) for v in self.created_rows.values())
+            self.report.note("CLEAN-VERIFICA",
+                             f"{totale} righe create, 0 presenti: verificato sul database")
 
     def cleanup_database(self) -> None:
         """Cancella identita' e sessioni di questo run, e lo dimostra.
@@ -1440,6 +1933,398 @@ def build_chain(report, http, cert, jars, owned) -> None:
                     f"SALE creata da {label} sulla propria proposta (id {sale_id})")
 
 
+def link_property_owner(report, http, cert, jars, owned, context) -> None:
+    """Collega il contatto all'immobile come proprietario. Relazione LECITA.
+
+    DUE MOTIVI, ED E' LO STESSO PASSO
+
+    1. E' la relazione che PROPERTY puo' davvero attraversare. Il router non ha
+       nessuna GET che parta da un immobile e arrivi altrove - la sonda
+       precedente ne invocava una inesistente e prendeva 405 - mentre questa
+       POST esiste e crea un legame vero fra due tenant-owned rows.
+    2. `create_sale_scoped` la ESIGE. Cerca in `property_contacts` un ruolo
+       'owner' o 'seller' per quell'immobile, con contatto e immobile nella
+       stessa agenzia, e senza nemmeno una riga rifiuta con 409. E' l'ultima
+       delle cinque precondizioni della vendita, ed e' quella che il run live
+       non soddisfaceva.
+
+    Va eseguita PRIMA della catena: senza, POST /api/sales fallisce sempre.
+    """
+    for label in ("A", "B"):
+        contact = owned[label].get("CORE")
+        prop = owned[label].get("PROPERTY")
+        if contact is None or prop is None:
+            report.blocked(f"PROPERTY-relazione-{label}",
+                           "mancano il contatto o l'immobile di questo run")
+            continue
+        response = http.request(
+            "POST", f"/api/property/properties/{prop}/contacts", jar=jars[label],
+            payload={"contact_id": contact, "role": "owner", "is_primary": True},
+        )
+        if response.status not in (200, 201):
+            report.blocked(
+                f"PROPERTY-relazione-{label}",
+                f"POST /properties/{prop}/contacts -> {response.status}: senza il "
+                "legame proprietario la vendita non e' creabile (409) e la "
+                "relazione lecita non e' osservabile",
+            )
+            continue
+        context["owner_links"][label] = (prop, contact)
+        report.note(f"PROPERTY-relazione-{label}",
+                    f"{label} collega il proprio contatto {contact} al proprio "
+                    f"immobile {prop} come proprietario")
+
+
+def certify_property(report, http, cert, domain, jars, owned, context) -> None:
+    """Le sonde generiche, piu' la relazione nelle due direzioni ostili.
+
+    La relazione lecita e' gia' stata creata da `link_property_owner`: qui si
+    prova che la STESSA operazione, incrociata, sia rifiutata. Due incroci
+    distinti, perche' sono due domande diverse:
+
+      * il contatto e' mio, l'immobile e' dell'altro
+      * l'immobile e' mio, il contatto e' dell'altro
+
+    Un isolamento che controllasse solo l'immobile passerebbe il primo e
+    fallirebbe il secondo, e viceversa.
+    """
+    certify_generic(report, http, cert, domain, jars, owned)
+
+    for label, other in (("A", "B"), ("B", "A")):
+        mine_contact = owned[label].get("CORE")
+        mine_property = owned[label].get("PROPERTY")
+        other_contact = owned[other].get("CORE")
+        other_property = owned[other].get("PROPERTY")
+
+        if context["owner_links"].get(label) is None:
+            report.blocked(
+                f"PROPERTY-relazione-ostile-{label}-{other}",
+                f"la relazione lecita di {label} non e' stata creata: un rifiuto "
+                "sull'incrocio non distinguerebbe l'isolamento dalla rotta assente",
+            )
+            continue
+
+        if other_property is not None and mine_contact is not None:
+            response = http.request(
+                "POST", f"/api/property/properties/{other_property}/contacts",
+                jar=jars[label],
+                payload={"contact_id": mine_contact, "role": "owner"},
+            )
+            report.check(
+                f"PROPERTY-relazione-ostile-{label}-{other}",
+                response.status in NEUTRAL_REFUSALS,
+                f"{label} tenta di collegare il proprio contatto all'immobile "
+                f"{other_property} di {other} -> {response.status}",
+            )
+        if mine_property is not None and other_contact is not None:
+            response = http.request(
+                "POST", f"/api/property/properties/{mine_property}/contacts",
+                jar=jars[label],
+                payload={"contact_id": other_contact, "role": "owner"},
+            )
+            report.check(
+                f"PROPERTY-relazione-estranea-{label}-{other}",
+                response.status in NEUTRAL_REFUSALS,
+                f"{label} tenta di collegare il contatto {other_contact} di "
+                f"{other} al proprio immobile -> {response.status}",
+            )
+
+
+FOLLOWUP_SCAN = "/api/followup/scan-temporal"
+
+
+def stale_followup_candidates(agency_id: int) -> list:
+    """Le attivita' che la scansione SELEZIONEREBBE, col predicato vero.
+
+    Chiama la funzione applicativa, non una copia della sua SQL: una copia
+    divergerebbe in silenzio. E' una SELECT e nient'altro - il modo in cui
+    questa matrice guarda FOLLOWUP senza toccarlo.
+    """
+    from followup import repository
+    from followup.service import TEMPORAL_ESCALATION_RULE_CODE
+
+    return repository.list_temporal_escalation_candidates_for_agency(
+        agency_id, limit=500, rule_code=TEMPORAL_ESCALATION_RULE_CODE)
+
+
+FOLLOWUP_TASK_TITLE = "Contattare proprietario"
+
+
+def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
+    """La scansione ESEGUITA, su due agenzie che contengono solo nostre righe.
+
+    PERCHE' QUESTA E' SEPARAZIONE E LE ALTRE NO
+
+    Il predicato della scansione e' `WHERE t.agency_id = %s` e non ammette una
+    restrizione agli id. Su un'agenzia condivisa questo significa che ogni
+    attivita' stale del tenant e' candidata, e nessun ordinamento, limite o
+    controllo a posteriori lo cambia: quando ce ne accorgiamo, la riga altrui
+    e' gia' modificata.
+
+    Su un'agenzia CREATA DA QUESTO RUN non esiste alcuna riga che non sia
+    nostra. Il predicato diventa la separazione, senza che il backend cambi di
+    una virgola.
+
+    COSA RESTA FUORI DALLE NOSTRE MANI
+
+    Un'agenzia dev'essere attiva perche' una sessione risolva, e attiva
+    significa visibile a ogni processo platform-wide. Che quei processi siano
+    fermi lo attesta l'operatore con `--with-dedicated-agencies`: questo codice
+    non lo rileva e non finge di rilevarlo.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    dedicate, task = {}, {}
+    for label in ("C", "D"):
+        agency = cert.create_dedicated_agency(label)
+        if agency is None:
+            return False
+        jar = http.new_jar()
+        risposta = http.request("POST", LOGIN, jar=jar, payload={
+            "email": agency["email"], "password": agency["password"]})
+        if risposta.status != 204:
+            report.blocked(f"FOLLOWUP-dedicata-{label}",
+                           f"login dell'operatore dedicato -> {risposta.status}")
+            return False
+        token = http.token_in(jar)
+        if token:
+            cert.secrets.append(token)
+        dedicate[label] = {"agency": agency, "jar": jar}
+
+    # Un contatto e un'attivita' stale per agenzia, creati via API dentro
+    # l'agenzia dedicata: nient'altro esiste li' dentro.
+    due = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    for label, dati in dedicate.items():
+        jar = dati["jar"]
+        risposta = http.request("POST", "/api/core/contacts", jar=jar, payload={
+            "display_name": cert.marker(label), "status": "active"})
+        contatto = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or contatto is None:
+            report.blocked(f"FOLLOWUP-dedicata-{label}",
+                           f"contatto non creato ({risposta.status})")
+            return False
+        # NON in `created_rows`: quello cancella per terna id+marcatore+agenzia
+        # contro le due agenzie della matrice, e questo contatto sta in
+        # un'agenzia dedicata. Lo rimuove `cleanup_dedicated_agencies`, che
+        # cancella per agency_id - dove ogni riga e' del run per costruzione.
+
+        risposta = http.request("POST", "/api/core/tasks", jar=jar, payload={
+            "contact_id": contatto,
+            "title": FOLLOWUP_TASK_TITLE,
+            "description": cert.marker(label),
+            "task_type": "automated_followup",
+            "priority": "low",
+            "status": "open",
+            "due_at": due,
+            "metadata": {"source": "followup",
+                         "rule_code": "FOLLOWUP_STIMA_RICHIESTA",
+                         "marker": cert.marker(label)},
+        })
+        identificativo = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or identificativo is None:
+            report.blocked(f"FOLLOWUP-dedicata-{label}",
+                           f"attivita' non creata ({risposta.status})")
+            return False
+        task[label] = int(identificativo)
+        report.note(f"FOLLOWUP-dedicata-{label}",
+                    f"agenzia {dati['agency']['id']}: contatto e attivita' "
+                    f"{identificativo}, unica riga del tenant")
+
+    def stato(label):
+        listing = http.request(
+            "GET", f"/api/core/tasks?limit=50", jar=dedicate[label]["jar"])
+        riga = next((t for t in listing.items() if t.get("id") == task[label]), None)
+        return (riga.get("status"), riga.get("priority")) if riga else None
+
+    for label, altro in (("C", "D"), ("D", "C")):
+        prima = stato(altro)
+        risposta = http.request("POST", FOLLOWUP_SCAN, jar=dedicate[label]["jar"],
+                                payload={"limit": 100})
+        if risposta.status == 400:
+            report.blocked(f"FOLLOWUP-scan-{label}",
+                           f"scansione rifiutata (400): la regola potrebbe non "
+                           "essere abilitata su questo TEST")
+            return False
+        corpo = risposta.json() or {}
+        elaborati = [int(x["task_id"]) for x in corpo.get("items", [])
+                     if x.get("task_id") is not None]
+
+        report.check(f"FOLLOWUP-scan-{label}", risposta.status == 200,
+                     f"{label} esegue la scansione -> {risposta.status}")
+        report.check(
+            f"FOLLOWUP-scan-{label}-elabora-la-propria",
+            task[label] in elaborati,
+            f"la scansione di {label} elabora la propria attivita' {task[label]}",
+        )
+        report.check(
+            f"FOLLOWUP-scan-{label}-solo-la-propria",
+            set(elaborati) <= {task[label]},
+            f"la scansione di {label} ha elaborato {elaborati}: "
+            + ("nient'altro che la propria"
+               if set(elaborati) <= {task[label]}
+               else f"ATTENZIONE, righe non del run: "
+                    f"{sorted(set(elaborati) - {task[label]})}"),
+        )
+        dopo = stato(altro)
+        report.check(
+            f"FOLLOWUP-scan-{label}-{altro}-invariata",
+            prima is not None and dopo == prima,
+            f"l'attivita' {task[altro]} di {altro} e' {dopo} dopo la scansione "
+            f"di {label}, com'era prima ({prima})",
+        )
+
+    report.note("FOLLOWUP-escalation",
+                "escalation eseguita su agenzie dedicate: nessuna riga "
+                "preesistente era candidata, per costruzione")
+    return True
+
+
+def certify_followup(report, http, cert, domain, jars, owned, context) -> None:
+    """FOLLOWUP: si osserva la SELEZIONE, non si esegue l'escalation.
+
+    PERCHE' LA SCANSIONE NON VIENE LANCIATA
+
+    `POST /api/flow/... /scan-temporal` fa due cose: seleziona le attivita'
+    stale dell'agenzia e le ESCALA - `tasks.priority` a 'high', `status` a
+    'in_progress', piu' una riga in `followup_actions`. La seconda meta' e' una
+    scrittura su righe che questo run non possiede.
+
+    Tre difese sono state provate e scartate, e vale la pena dire perche':
+
+      * contare le candidate prima (preflight): dice quante ce ne sono ADESSO,
+        non quante ce ne saranno fra un istante. Il predicato e'
+        `due_at <= NOW() - INTERVAL '24 hours'`, quindi una riga preesistente
+        diventa eleggibile da sola, col passare del tempo;
+      * un secondo conteggio: insegue lo stesso istante che non puo' fermare.
+        Fra il controllo e l'uso c'e' sempre uno spazio;
+      * fixture con scadenza remotissima e `limit=1`, cosi' che la nostra
+        ordini per prima: un INSERIMENTO CONCORRENTE con una scadenza ancora
+        piu' vecchia la scavalca. E accorgersene dopo non e' isolamento: la
+        riga di qualcun altro e' gia' stata modificata.
+
+    La separazione vera non e' costruibile da qui. La firma e'
+    `list_temporal_escalation_candidates_for_agency(agency_id, *, limit,
+    rule_code)` e il predicato non ha alcun aggancio per restringere a un
+    elenco di id: non esiste modo, senza cambiare il backend, di impedire alla
+    scansione di toccare cio' che c'era prima. E cambiare il backend per far
+    passare una prova sarebbe adattare il sistema al suo test.
+
+    COSA SI PUO' PROVARE, E SI PROVA
+
+    L'isolamento fra agenzie vive per intero nella SELEZIONE: il predicato
+    porta `t.agency_id = %s` e lo porta anche l'anti-join su
+    `followup_actions`. Quella selezione e' una lettura pura, quindi la si
+    esegue per A e per B sui dati reali e si verifica che i due insiemi siano
+    disgiunti. Nessuna riga viene scritta.
+
+    Cio' che resta non provato e' l'escalation - la meta' in scrittura - ed e'
+    BLOCKED, con questo motivo. Non "non applicabile": non provata.
+    """
+    # Con la finestra attestata dall'operatore, l'escalation si prova davvero.
+    if context.get("dedicated_agencies"):
+        if certify_followup_dedicated(report, http, cert, jars, context):
+            return
+
+    agencies = context.get("agencies", {})
+    candidate = {}
+
+    for label, agency in agencies.items():
+        try:
+            righe = stale_followup_candidates(agency["id"])
+        except Exception as exc:
+            report.blocked(
+                f"FOLLOWUP-selezione-{label}",
+                f"candidate non interrogabili ({type(exc).__name__}): la "
+                "selezione non e' osservabile su questo TEST",
+            )
+            return
+        candidate[label] = {int(riga["id"]) for riga in righe}
+        report.note(
+            f"FOLLOWUP-selezione-{label}",
+            f"la selezione di {label} propone {len(candidate[label])} attivita' "
+            "(sola lettura, nessuna escalation eseguita)",
+        )
+
+    if len(candidate) < 2:
+        report.blocked("FOLLOWUP-selezione-disgiunta",
+                       "una sola agenzia osservata: il confronto non e' possibile")
+        return
+
+    # 1. DISGIUNZIONE: nessuna attivita' compare in entrambe le selezioni.
+    #
+    # Prima perche' non costa una lettura, e perche' il suo fallimento e' il
+    # piu' leggibile. Su insiemi vuoti e' vera per costruzione e non prova
+    # nulla - e da sola non basta comunque: vedi il punto 2.
+    comune = candidate["A"] & candidate["B"]
+    if not candidate["A"] and not candidate["B"]:
+        report.blocked(
+            "FOLLOWUP-selezione-disgiunta",
+            "entrambe le selezioni sono vuote: la disgiunzione e' vera per "
+            "costruzione e non dimostra l'isolamento",
+        )
+    else:
+        report.check(
+            "FOLLOWUP-selezione-disgiunta",
+            not comune,
+            f"le selezioni di A ({len(candidate['A'])}) e B ({len(candidate['B'])}) "
+            f"non hanno attivita' in comune"
+            + ("" if not comune else f": ATTENZIONE, condivise {sorted(comune)}"),
+        )
+
+
+    # 2. APPARTENENZA: ogni attivita' selezionata e' dell'agenzia richiesta.
+    #
+    # E' la prova che conta. La disgiunzione sopra e' piu' debole di quanto
+    # sembri: due insiemi possono essere disgiunti e sbagliati ENTRAMBI - basta
+    # che la selezione di A restituisca attivita' di una terza agenzia e quella
+    # di B di una quarta. Nessun id in comune, e nessuna delle due appartiene a
+    # chi l'ha chiesta.
+    #
+    # Qui si legge l'agenzia REALE di ogni riga selezionata e la si confronta
+    # con quella richiesta. Su un database vero un'intersezione implica gia' un
+    # difetto di appartenenza, ma il contrario non vale: questa prova copre
+    # casi che la disgiunzione non vede.
+    for label, agency in agencies.items():
+        ids = candidate[label]
+        if not ids:
+            report.blocked(
+                f"FOLLOWUP-appartenenza-{label}",
+                f"la selezione di {label} e' vuota: non c'e' alcuna riga di cui "
+                "verificare l'agenzia",
+            )
+            continue
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT id, agency_id FROM tasks WHERE id IN %s", (tuple(ids),))
+                proprietarie = {int(r["id"]): r["agency_id"] for r in cur.fetchall()}
+        except Exception as exc:
+            report.blocked(f"FOLLOWUP-appartenenza-{label}",
+                           f"agenzia delle attivita' non leggibile ({type(exc).__name__})")
+            continue
+        estranee = {identifier: proprietarie.get(identifier)
+                    for identifier in ids
+                    if proprietarie.get(identifier) != agency["id"]}
+        report.check(
+            f"FOLLOWUP-appartenenza-{label}",
+            not estranee,
+            f"tutte le {len(ids)} attivita' selezionate per {label} appartengono "
+            f"all'agenzia {agency['id']}"
+            + ("" if not estranee
+               else f": ATTENZIONE, estranee {estranee}"),
+        )
+
+    # E l'altra meta' della route resta non provata, con il motivo.
+    report.blocked(
+        "FOLLOWUP-escalation",
+        "l'escalation non viene eseguita: modifica attivita' preesistenti e il "
+        "predicato non ammette una restrizione agli id di questo run "
+        "(list_temporal_escalation_candidates_for_agency accetta solo agency_id, "
+        "limit e rule_code). Provarla richiederebbe un filtro lato backend, che "
+        "e' una decisione di prodotto, non un adattamento per il test",
+    )
+
+
 def certify_chain(report, http, cert, domain, jars, owned, context) -> None:
     """MATCH, PROPOSAL e SALE: le stesse sei domande di ogni altro dominio.
 
@@ -1669,7 +2554,7 @@ def certify_owner_portal(report, http, cert, domain, jars, owned, context) -> No
 
 
 def certify(report, http, cert, operators, jars, owner_sessions=None,
-            agencies=None, database=None) -> None:
+            agencies=None, database=None, dedicated_agencies=False) -> None:
     """La matrice ostile, dominio per dominio, nelle due direzioni.
 
     TRE PRINCIPALI, NON UNO
@@ -1688,7 +2573,9 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
     context = {
         "owner_jars": {}, "owner_accounts": {}, "owner_grants": {},
         "portal_jars": {}, "portal_properties": {}, "owned_properties": {},
-        "stime": {}, "disclosures": [],
+        "stime": {}, "disclosures": [], "owner_links": {},
+        "agencies": dict(agencies or {}),
+        "dedicated_agencies": dedicated_agencies,
     }
 
     # -- le due sessioni sono vive e portano agenzie diverse -----------------
@@ -1743,14 +2630,26 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
                                "la risposta non porta un id")
                 continue
             owned[label][domain.name] = identifier
-            if domain.detail:
+            # Il cleanup via API si registra SOLO dove la DELETE esiste davvero.
+            # Registrarla per CORE produceva 405 a ogni run - l'API sa creare un
+            # contatto e non sa disfarlo - e il contatto restava sul TEST mentre
+            # il report diceva soltanto "la fixture POTREBBE restare".
+            if domain.detail and domain.api_delete:
                 cert.fixtures.append(
                     (label, "DELETE", _fill(domain.detail, id=identifier)))
+            # Tracciata SEMPRE, anche quando l'API dice di saperla cancellare:
+            # e' l'unico modo di scoprire che non l'ha fatto.
+            if domain.table:
+                cert.created_rows.setdefault(domain.table, []).append(
+                    (int(identifier), cert.marker(label), domain.marker_column))
             report.note(f"fixture-{domain.name}-{label}",
                         f"{domain.name}: risorsa di {label} creata (id {identifier})")
 
     context["owned_properties"] = {label: owned[label].get("PROPERTY")
                                    for label in ("A", "B")}
+
+    # -- il legame proprietario: relazione lecita E precondizione della vendita
+    link_property_owner(report, http, cert, jars, owned, context)
 
     # -- la catena commerciale: MATCH -> PROPOSAL -> SALE --------------------
     build_chain(report, http, cert, jars, owned)
@@ -1994,7 +2893,7 @@ def scan_for_leaks(report: Report, http: HttpProbe, secrets_seen: list[str],
 # ---------------------------------------------------------------------------
 
 def run(report: Report, database: Database, env: dict, approved_commit: str,
-        http_factory=HttpProbe) -> int:
+        http_factory=HttpProbe, dedicated_agencies: bool = False) -> int:
     """Esegue la matrice e ritorna l'exit code."""
     try:
         base = preflight(report, database, env, approved_commit)
@@ -2047,7 +2946,8 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
                             f"run {cert.run_id}")
         context = certify(report, http, cert, operators, jars,
                           owner_sessions=owner_sessions, agencies=agencies,
-                          database=database) or {}
+                          database=database,
+                          dedicated_agencies=dedicated_agencies) or {}
         scan_for_leaks(report, http, cert.secrets,
                        tuple(context.get("disclosures", ())))
     except CheckFailed:
@@ -2065,6 +2965,14 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         cert.cleanup_chain_fixtures()
         cert.cleanup_owner_fixtures()
         cert.cleanup_http_fixtures(http, jars)
+        # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
+        # `property_contacts` li referenziano con RESTRICT, quindi finche' le
+        # righe di sopra esistono il contatto non e' cancellabile.
+        cert.cleanup_orphan_fixtures(agencies)
+        cert.cleanup_dedicated_agencies()
+        # Per ultima, e indipendente da come si e' cancellato: l'unica prova
+        # che il TEST sia tornato com'era.
+        cert.verify_no_residue()
         for jar in context.get("portal_jars", {}).values():
             http.request("POST", PORTAL_LOGOUT, jar=jar)
         for label, jar in jars.items():
@@ -2085,6 +2993,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--approved-commit", required=True,
                         help="il commit rivisto, confrontato con git rev-parse HEAD")
+    parser.add_argument(
+        "--with-dedicated-agencies", action="store_true",
+        help=(
+            "esegue la prova FOLLOWUP su due agenzie TEST temporanee. "
+            "ATTESTA che l'operatore ha verificato e sospeso i processi "
+            "platform-wide: lo script NON lo rileva e non puo' rilevarlo"),
+    )
     arguments = parser.parse_args(argv)
 
     report = Report()
@@ -2097,7 +3012,8 @@ def main(argv: list[str] | None = None) -> int:
         report.fail("0.0", f"connessione al database non riuscita ({type(exc).__name__})")
         report.summary()
         return report.exit_code
-    return run(report, database, dict(os.environ), arguments.approved_commit)
+    return run(report, database, dict(os.environ), arguments.approved_commit,
+               dedicated_agencies=arguments.with_dedicated_agencies)
 
 
 if __name__ == "__main__":                          # pragma: no cover
