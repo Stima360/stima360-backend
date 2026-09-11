@@ -556,10 +556,24 @@ def execute_temporal_escalation_for_agency(
             )
             if cur.fetchone() is None:
                 raise ValidationError(f"task {task_id} not found")
+            # `executed_at` NON ESISTE in followup_actions.
+            #
+            # La tabella ha id, rule_code, trigger_type, contact_id, lead_id,
+            # stima_id, idempotency_key, task_id, status, error_message,
+            # created_at - piu' agency_id, aggiunta dalla 043. Nessun
+            # `executed_at`: era una colonna immaginata quando questa copia
+            # scoped e' stata scritta, e faceva fallire OGNI escalation con
+            # UndefinedColumn. Il `except` qui sotto marcava l'azione
+            # 'failed' lasciando `task_id` NULL, che e' esattamente cio' che
+            # si e' visto sul TEST (azione 867, agenzia 18).
+            #
+            # Non si aggiunge la colonna: il momento dell'esecuzione non
+            # serve a nessuno qui, e i due percorsi legacy - che funzionano -
+            # non la scrivono.
             cur.execute(
                 """
                 UPDATE followup_actions
-                   SET status = 'completed', task_id = %s, executed_at = NOW()
+                   SET status = 'completed', task_id = %s
                  WHERE id = %s AND agency_id = %s
                 """,
                 (task_id, action["id"], agency_id),
