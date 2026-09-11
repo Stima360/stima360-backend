@@ -79,6 +79,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import re
 import secrets
 import ssl
 import subprocess
@@ -88,6 +89,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -365,6 +367,21 @@ DOMAINS = (
     Domain(
         "SELLER_INTELLIGENCE", "/api/seller-intelligence",
         listing="/api/seller-intelligence/timeline?limit=50",
+        # Una lista non vuota, da sola, non prova che B non veda A: prova
+        # solo che c'e' qualcosa. Serve una risorsa RICONOSCIBILE dell'altra
+        # agenzia. L'evento nasce sul contatto proprio, con il marcatore in
+        # `event_type` (testo libero, max 50); il timeline si filtra per
+        # contatto, quindi la sonda ostile e' "il timeline del contatto di B",
+        # e la risposta corretta e' non vederne l'evento.
+        fixture=("/api/seller-intelligence/events",
+                 {"contact_id": "{core_id}", "event_type": "{marker}",
+                  "event_source": "p26-6-cert", "payload": {}}),
+        depends_on="CORE",
+        cross_links=("/api/seller-intelligence/timeline?contact_id={id}&limit=50",),
+        # Nessuna DELETE via API: la riga ha agency_id e va nel cleanup per
+        # terna id+marcatore+agenzia.
+        api_delete=False,
+        table="seller_timeline_events", marker_column="event_type",
     ),
     Domain(
         "FOLLOWUP", "/api/followup",
@@ -406,7 +423,15 @@ DOMAINS = (
         note="stime derivate in sola lettura: nessun dato preesistente viene "
              "creato o modificato da questo run",
     ),
-    Domain("NEXT_BEST_ACTION", "/api/next-best-action", listing="/api/next-best-action?limit=50"),
+    Domain(
+        "NEXT_BEST_ACTION", "/api/next-best-action",
+        # La lista si popola solo con `POST /refresh`, che ricalcola E POTA le
+        # azioni dell'intero tenant: su un'agenzia condivisa toccherebbe righe
+        # altrui. Provabile sulle agenzie dedicate, dove ogni riga e' del run.
+        certifier="batch_only",
+        note="materializzato da un refresh che percorre il tenant: provato "
+             "sulle agenzie dedicate",
+    ),
     Domain("FLOW", "/api/flow", listing="/api/flow/executions?limit=50"),
     Domain(
         "OWNER_ADMIN", "/api/owner/admin",
@@ -659,6 +684,36 @@ class HttpProbe:
             handlers.append(urllib.request.HTTPCookieProcessor(jar))
         return urllib.request.build_opener(*handlers)
 
+    def upload(self, path, *, jar, campi: dict, nome_file: str, contenuto: bytes,
+               tipo: str = "application/pdf") -> Response:
+        """Una POST multipart, scritta a mano perche' non ci sono dipendenze.
+
+        Serve a un solo scopo: caricare un documento che abbia davvero uno
+        `storage_key`, cosi' che il download del portale abbia un positivo
+        reale invece di restare BLOCKED per assenza di storage.
+        """
+        confine = "----p26-6-" + secrets.token_hex(8)
+        parti = []
+        for chiave, valore in campi.items():
+            parti.append(
+                f'--{confine}\r\nContent-Disposition: form-data; name="{chiave}"'
+                f"\r\n\r\n{valore}\r\n".encode("utf-8"))
+        parti.append(
+            f'--{confine}\r\nContent-Disposition: form-data; name="file"; '
+            f'filename="{nome_file}"\r\nContent-Type: {tipo}\r\n\r\n'.encode("utf-8")
+            + contenuto + b"\r\n")
+        parti.append(f"--{confine}--\r\n".encode("utf-8"))
+        corpo = b"".join(parti)
+        request = urllib.request.Request(self.base + path, method="POST", data=corpo)
+        request.add_header("Content-Type", f"multipart/form-data; boundary={confine}")
+        try:
+            with self._opener(jar).open(request, timeout=60) as response:
+                risultato = Response(response.status, response.info(), response.read())
+        except urllib.error.HTTPError as exc:
+            risultato = Response(exc.code, exc.headers, exc.read())
+        self.exchanges.append((f"POST {path}", risultato.status, risultato.body))
+        return risultato
+
     def request(self, method, path, *, jar=None, payload=None) -> Response:
         request = urllib.request.Request(self.base + path, method=method)
         if payload is not None:
@@ -794,6 +849,35 @@ class OwnerSessions:
             )
 
 
+class ChildFk(NamedTuple):
+    """Una chiave esterna verso una riga del run, con l'azione DICHIARATA.
+
+    L'azione non e' una nota descrittiva: decide che cosa e' possibile
+    provare, e chiamarla con il nome sbagliato rende falso il report.
+
+      CASCADE  - la figlia DEVE sparire con il genitore. Verificabile per id
+                 del genitore, dopo la cancellazione: se c'e' ancora, il
+                 CASCADE non e' avvenuto.
+      RESTRICT - la figlia IMPEDISCE la cancellazione del genitore. Va contata
+                 PRIMA, perche' dopo non ci sarebbe nulla da cancellare: una
+                 riga qui dentro fa fallire l'intera transazione del cleanup.
+                 Trovarla dopo significa che il genitore e' ancora al suo posto.
+      SET NULL - la figlia SOPRAVVIVE al genitore con la colonna azzerata.
+                 Cercarla per id del genitore, dopo, restituisce 0 qualunque
+                 cosa sia rimasta - come una JOIN a una riga cancellata. Si
+                 verifica solo finche' il genitore esiste, e il report dice
+                 che quello 0 non e' una prova di rimozione.
+    """
+
+    table: str
+    column: str
+    parent: str
+    on_delete: str
+
+    def __str__(self) -> str:
+        return f"{self.table}.{self.column} ({self.on_delete} -> {self.parent})"
+
+
 class Certification:
     """Le due identita' della matrice, e tutto cio' che questo run ha creato.
 
@@ -825,6 +909,34 @@ class Certification:
         # non rimuove fisicamente, da cancellare via SQL in ordine di FK.
         self.created_rows: dict = {}
         self.created_agency_ids: list[int] = []
+        # Effetti di cui conosciamo l'ID perche' l'API ce l'ha restituito
+        # (documenti dell'immobile, documenti condivisi). Non hanno agency_id:
+        # si cancellano per id, in ordine di FK, prima delle radici.
+        self.created_effects: dict = {}
+        # Il motivo per cui il cleanup DISTRUTTIVO non puo' procedere, o None.
+        # Oggi lo scrive solo la pulizia del bucket: se un oggetto resta
+        # nello storage, la sua chiave si legge SOLO da
+        # `property_documents.storage_key`, e cancellare quelle righe
+        # renderebbe falso il messaggio di recupero appena stampato.
+        self.blocking_reason: str | None = None
+        # `cleanup_dedicated_agencies` e' stata invocata. Serve a
+        # `verify_no_residue`: gli effetti elencati in
+        # DEDICATED_EFFECT_TABLES vivono dentro quelle agenzie e spariscono
+        # con loro, quindi contarli PRIMA darebbe un residuo che non e' tale.
+        self.dedicated_cleanup_done = False
+        # {tabella genitore: (id)} fotografati PRIMA di qualunque
+        # cancellazione, e quante figlie avevano allora. Dopo il cleanup il
+        # genitore non c'e' piu': senza questa istantanea le figlie non
+        # sarebbero piu' raggiungibili, e una JOIN al genitore cancellato
+        # risponderebbe 0 qualunque cosa sia rimasta.
+        self.child_parents: dict = {}
+        self.children_before: dict = {}
+        # {tabella effetto: (id)} delle righe del run, fotografate PRIMA delle
+        # DELETE. L'ID e' l'unico riferimento che nessun ON DELETE tocca: dopo
+        # un SET NULL la riga non risponde piu' al genitore, ma risponde
+        # sempre al proprio id.
+        self.effect_rows_before: dict = {}
+        self.effect_snapshot_done = False
 
     def marker(self, agency: str) -> str:
         """Una stringa che compare solo nelle fixture di questo run.
@@ -918,6 +1030,13 @@ class Certification:
         diretta sul database sarebbe piu' comoda e aggirerebbe esattamente cio'
         che questo script esiste per provare.
         """
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            # Anche le DELETE via API sono distruttive: dall'altra parte c'e'
+            # comunque un handler che scrive.
+            self.report.fail("CLEAN-FIXTURE",
+                             f"nessuna cancellazione eseguita: {motivo}")
+            return
         for agency, method, path in reversed(self.fixtures):
             jar = jars.get(agency)
             if jar is None:
@@ -946,6 +1065,10 @@ class Certification:
         un LIKE o un prefisso: il criterio e' sempre e solo l'elenco degli id
         che questo run ha creato.
         """
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(label, f"nessuna cancellazione eseguita: {motivo}")
+            return
         pending = [(sql, ids) for sql, ids in statements if ids]
         if not pending:
             self.report.note(label, "niente creato: niente da rimuovere")
@@ -1054,6 +1177,27 @@ class Certification:
     #: cancellazione: una cancellazione automatica su una tabella che nessuno
     #: aveva considerato e' esattamente il danno da cui ci si vuole difendere.
     DEDICATED_TABLES = (
+        # `property_watch_observations` e `seller_revival_suppressions` non
+        # hanno agency_id e non compaiono qui, ma per ragioni OPPOSTE, e
+        # chiamarle entrambe "figlie CASCADE" - come faceva questo commento -
+        # descriveva il comportamento di una sola delle due:
+        #
+        #   seller_revival_suppressions.contact_id  ON DELETE CASCADE
+        #     se ne va con il contatto. La verifica finale lo conferma.
+        #   property_watch_observations.watch_id    ON DELETE RESTRICT
+        #     NON se ne va: impedisce la cancellazione del watch e fa cadere
+        #     l'intera transazione di questo metodo. Per questo
+        #     `_blocking_children` la conta PRIMA e, se c'e', ci si ferma
+        #     nominandola invece di provare a cancellare.
+        #
+        # Lo stesso vale per `invisible_sale_opportunities.watch_id`, anch'essa
+        # RESTRICT. Le azioni vere sono dichiarate in CHILD_FOREIGN_KEYS e
+        # verificate contro le migration.
+        ("next_best_actions", "agency_id"),
+        ("flow_executions", "agency_id"),
+        ("flow_events", "agency_id"),
+        ("property_watches", "agency_id"),
+        ("stime", "agency_id"),
         ("followup_actions", "agency_id"),
         ("tasks", "agency_id"),
         ("contacts", "agency_id"),
@@ -1119,6 +1263,183 @@ class Certification:
         )
         return {"id": agency_id, "slug": slug, "email": email, "password": password}
 
+    def snapshot_before_cleanup(self) -> None:
+        """Tutto cio' che dopo le DELETE non sarebbe piu' identificabile.
+
+        Due fotografie, per due ragioni diverse ma della stessa forma: un
+        riferimento che sparisce - il genitore cancellato, o la colonna
+        azzerata da un SET NULL - rende la domanda successiva vuota invece che
+        negativa.
+        """
+        guasti = [m for m in (self._snapshot_child_parents(),
+                              self._snapshot_effect_rows()) if m]
+        if not guasti:
+            return
+        # FAIL-CLOSED. Una fotografia incompleta non si scopre dopo: dopo le
+        # DELETE le righe che non sono state fotografate non sono piu'
+        # identificabili, e la verifica finale direbbe "0 presenti" su una
+        # domanda che non ha potuto fare. Segnalare e cancellare lo stesso
+        # significherebbe distruggere cio' che non si sa piu' controllare.
+        self.blocking_reason = (
+            f"istantanea incompleta prima del cleanup: {'; '.join(guasti)}. "
+            "Nessuna cancellazione viene eseguita: dopo, quelle righe non "
+            "sarebbero piu' identificabili. RECUPERO: rieseguire il run quando "
+            "il database e' interrogabile, oppure rimuovere a mano le righe "
+            "degli id gia' riportati sopra."
+        )
+        self.report.fail("CLEAN-ISTANTANEA", self.blocking_reason)
+
+    def _snapshot_effect_rows(self) -> None:
+        """Gli ID delle righe del run nelle tabelle degli effetti.
+
+        PERCHE' NON BASTA CERCARLE PER ID DEL GENITORE
+
+        `owner_audit_log.property_id` e `.owner_account_id` sono ON DELETE SET
+        NULL. Cancellato l'immobile, quella colonna diventa NULL: la riga
+        sopravvive e non risponde piu' al suo genitore. Un conteggio
+        `WHERE property_id IN (...)` eseguito dopo il cleanup restituisce
+        quindi 0 per costruzione - la stessa vacuita' della JOIN a un genitore
+        cancellato - e `CLEAN-VERIFICA` non poteva dire "0 presenti,
+        verificato" mentre `CLEAN-FIGLIE` ammetteva di non poter verificare.
+
+        Qui si prende l'ID della riga, che nessun ON DELETE modifica. Dopo il
+        cleanup la si cerca per quello, e la risposta significa qualcosa.
+
+        Il criterio di appartenenza e' lo stesso delle cancellazioni - ogni
+        riferimento non nullo dentro il perimetro, almeno uno che ci punta -
+        quindi questa istantanea non nomina mai una riga altrui.
+        """
+        self.effect_rows_before = {}
+        pieno = self._perimeter()
+        if not pieno:
+            # Niente da cui derivare l'appartenenza: nessun effetto puo'
+            # essere nostro. E' una fotografia vuota, non una fallita.
+            self.effect_snapshot_done = True
+            return None
+        try:
+            with self.db.read() as cur:
+                for table, columns in self.EFFECT_TABLES:
+                    pred = self._ownership_predicate(columns, pieno, "t")
+                    if pred is None:
+                        continue
+                    frammento, params = pred
+                    cur.execute(f"SELECT t.id FROM {table} t WHERE {frammento}", params)
+                    ids = tuple(int(r["id"]) for r in cur.fetchall())
+                    if ids:
+                        self.effect_rows_before[table] = ids
+        except Exception as exc:
+            self.effect_rows_before = {}
+            self.effect_snapshot_done = False
+            self.report.fail(
+                "CLEAN-EFFETTI",
+                f"righe degli effetti non fotografabili ({type(exc).__name__}): "
+                "dopo il cleanup le relazioni SET NULL non saranno piu' "
+                "verificabili, e la verifica finale non potra' dirsi conclusa",
+            )
+            return f"righe degli effetti non fotografabili ({type(exc).__name__})"
+        self.effect_snapshot_done = True
+        return None
+
+    def _snapshot_child_parents(self) -> None:
+        """Fotografa i genitori PRIMA che qualcuno li cancelli.
+
+        PERCHE' NON SI PUO' GUARDARE DOPO
+
+        La verifica precedente contava le figlie con una JOIN al genitore:
+
+            FROM property_watch_observations o
+            JOIN property_watches w ON w.id = o.watch_id
+            WHERE w.agency_id IN (...)
+
+        Dopo il cleanup quel genitore non esiste piu', quindi la JOIN non ha
+        righe e il conteggio e' 0 - qualunque cosa sia sopravvissuta. La
+        verifica non falliva mai, e non perche' il CASCADE avesse funzionato:
+        perche' non stava piu' guardando niente. Eseguirla PRIMA della
+        cancellazione e' l'errore opposto e altrettanto vuoto: chiede se le
+        figlie esistono ancora prima di aver chiesto loro di sparire.
+
+        L'unica forma che prova qualcosa e' in due tempi: qui si prendono gli
+        id dei genitori e quante figlie avevano; dopo il cleanup le figlie si
+        cercano per quegli id, senza JOIN e senza dipendere da una riga
+        cancellata.
+
+        Va chiamata prima di OGNI cancellazione, comprese quelle via API: e'
+        il motivo per cui sta in testa al `finally` e non accanto al cleanup
+        delle agenzie.
+
+        NON SOLO I GENITORI DELLE FIGLIE DICHIARATE. Nelle agenzie dedicate si
+        cancella per `agency_id`, quindi di quelle righe non si registra mai un
+        id: `tasks` e `flow_executions` sparivano senza che la guardia potesse
+        chiedere chi le referenziasse, e hanno entrambe FK non-CASCADE
+        entranti. Qui si fotografano anche quelle.
+        """
+        if not self.created_agency_ids:
+            return None
+        agenzie = tuple(self.created_agency_ids)
+        genitori = ({fk.parent for fk in self.CHILD_FOREIGN_KEYS}
+                    | set(self.DEDICATED_SNAPSHOT_TABLES))
+        try:
+            with self.db.read() as cur:
+                for genitore in sorted(genitori):
+                    cur.execute(
+                        f"SELECT id FROM {genitore} WHERE agency_id IN %s", (agenzie,))
+                    self.child_parents[genitore] = tuple(
+                        int(r["id"]) for r in cur.fetchall())
+                for fk in self.CHILD_FOREIGN_KEYS:
+                    ids = self.child_parents.get(fk.parent)
+                    if not ids:
+                        self.children_before[fk.table] = 0
+                        continue
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {fk.table} WHERE {fk.column} IN %s",
+                        (ids,))
+                    self.children_before[fk.table] = int(cur.fetchone()["n"])
+        except Exception as exc:
+            # Senza istantanea la verifica successiva sarebbe vuota: meglio
+            # dirlo adesso che dopo, quando non sarebbe piu' distinguibile da
+            # una rimozione riuscita.
+            self.child_parents.clear()
+            self.report.fail(
+                "CLEAN-FIGLIE",
+                f"genitori non fotografabili ({type(exc).__name__}): dopo la "
+                "cancellazione non ci sara' modo di identificare le figlie, e "
+                "la verifica non potra' dire nulla",
+            )
+            return f"genitori non fotografabili ({type(exc).__name__})"
+        return None
+
+    def _blocking_children(self, genitore: str) -> list:
+        """Figlie ON DELETE RESTRICT di un genitore del run, contate per id.
+
+        RESTRICT e' l'unica azione che va guardata PRIMA: una figlia CASCADE
+        se ne andrebbe da sola, una SET NULL sopravvive per progetto, una
+        RESTRICT invece non lascia cancellare il genitore e fa cadere l'intera
+        transazione del cleanup - non una DELETE, tutte.
+
+        Ritorna l'elenco "tabella=n" delle righe che impedirebbero la
+        cancellazione, vuoto se non ce ne sono. Un errore di lettura NON e'
+        "non ce ne sono": si riporta come ostacolo, perche' procedere alla
+        cieca porterebbe esattamente al fallimento che si vuole evitare.
+        """
+        ids = self.child_parents.get(genitore)
+        if not ids:
+            return []
+        bloccanti = []
+        try:
+            with self.db.read() as cur:
+                for fk in self.CHILD_FOREIGN_KEYS:
+                    if fk.parent != genitore or fk.on_delete != "RESTRICT":
+                        continue
+                    cur.execute(
+                        f"SELECT COUNT(*) AS n FROM {fk.table} WHERE {fk.column} IN %s",
+                        (ids,))
+                    n = int(cur.fetchone()["n"])
+                    if n:
+                        bloccanti.append(f"{fk.table}={n}")
+        except Exception as exc:
+            return [f"verifica non eseguibile ({type(exc).__name__})"]
+        return bloccanti
+
     def cleanup_dedicated_agencies(self) -> None:
         """Le agenzie temporanee, e tutto cio' che il run vi ha messo dentro.
 
@@ -1127,9 +1448,42 @@ class Certification:
         nomina e si fallisce - non la si cancella. Cancellare cio' che non era
         stato considerato e' il modo in cui un cleanup diventa il danno.
         """
+        # Invocata: da qui in avanti `verify_no_residue` ha il diritto di
+        # pretendere che gli effetti delle agenzie dedicate siano spariti. Se
+        # questa chiamata si rifiuta di cancellare - o fallisce - il residuo
+        # che la verifica trovera' sara' vero, ed e' giusto che lo dica.
+        self.dedicated_cleanup_done = True
         if not self.created_agency_ids:
             return
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(
+                "CLEAN-DEDICATA",
+                f"agenzie temporanee {list(self.created_agency_ids)} NON rimosse: "
+                f"{motivo}",
+            )
+            return
         ids = tuple(self.created_agency_ids)
+
+        # LE FIGLIE RESTRICT DEL WATCH, PRIMA DI TOCCARE IL WATCH.
+        #
+        # `property_watch_observations.watch_id` e
+        # `invisible_sale_opportunities.watch_id` sono ON DELETE RESTRICT:
+        # finche' una riga esiste, `DELETE FROM property_watches` non fallisce
+        # "in parte", fallisce del tutto e porta con se' l'intera transazione
+        # di questo metodo. Non si cancellano d'ufficio: il run crea il watch
+        # con `initialize` e non fa girare ne' la scansione ne' il motore
+        # invisible-sale, quindi una riga qui dentro e' qualcosa che non
+        # abbiamo messo noi - e si nomina, non si rimuove.
+        bloccanti = self._blocking_children("property_watches")
+        if bloccanti:
+            self.report.fail(
+                "CLEAN-DEDICATA",
+                f"figlie RESTRICT del watch presenti: {bloccanti}. Nessuna "
+                f"cancellazione: le agenzie {list(ids)} restano, e quelle righe "
+                "vanno esaminate prima. " + self.RECOVERY_HINT,
+            )
+            return
         try:
             with self.db.write() as cur:
                 for table, column in self.DEDICATED_TABLES:
@@ -1210,7 +1564,269 @@ class Certification:
         "compare fra le dipendenze, va esaminata prima di cancellare."
     )
 
-    def _foreign_dependencies(self, agency_of: dict) -> list:
+    #: Cosa dire quando il bucket non e' stato ripulito. Nomina la colonna in
+    #: cui la chiave si trova ancora - ed e' un'affermazione che resta vera
+    #: solo perche' `_destructive_db_blocked` impedisce di cancellare quelle
+    #: righe subito dopo.
+    STORAGE_BLOCK_HINT = (
+        "Il cleanup DISTRUTTIVO del database e' SOSPESO per questo motivo: "
+        "property_documents conserva la storage_key degli oggetti rimasti, e "
+        "cancellarla renderebbe l'oggetto irrecuperabile. RECUPERO: leggere "
+        "storage_key per quegli id, rimuovere gli oggetti dal bucket, poi "
+        "cancellare le righe. Le identita' e le sessioni del run sono state "
+        "rimosse comunque: nessuna credenziale resta viva."
+    )
+
+    #: Effetti che vivono DENTRO le agenzie dedicate e se ne vanno con loro.
+    #: Non hanno una cancellazione propria: `cleanup_dedicated_agencies` li
+    #: rimuove per agency_id. Verificarli prima di quella chiamata segnalerebbe
+    #: come residuo una riga che il passo successivo avrebbe portato via.
+    DEDICATED_EFFECT_TABLES = ("flow_events", "stime")
+
+    #: Le figlie delle righe create nelle agenzie dedicate, con l'azione VERA.
+    #:
+    #: Due di queste tre sono RESTRICT, non CASCADE: chiamarle "figli CASCADE"
+    #: - come faceva la versione precedente - descriveva un comportamento che
+    #: non hanno. Una figlia CASCADE se ne va con il genitore; una RESTRICT
+    #: impedisce al genitore di andarsene, e la differenza e' fra un residuo da
+    #: verificare e una transazione di cleanup che fallisce per intero.
+    #:
+    #: La colonna e' quella VERA: `property_watch_observations` si lega al
+    #: watch con `watch_id`, non con `property_watch_id`, e una query sul nome
+    #: sbagliato non risponde "0 figlie" ma solleva UndefinedColumn - un errore
+    #: che il ramo di cattura tradurrebbe in "verifica non eseguibile".
+    CHILD_FOREIGN_KEYS = (
+        ChildFk("property_watch_observations", "watch_id", "property_watches", "RESTRICT"),
+        ChildFk("invisible_sale_opportunities", "watch_id", "property_watches", "RESTRICT"),
+        ChildFk("seller_revival_suppressions", "contact_id", "contacts", "CASCADE"),
+    )
+
+    #: Le figlie degli effetti delle API, con l'azione VERA. Anche qui la
+    #: versione precedente le chiamava tutte CASCADE: `owner_audit_log` e i
+    #: riferimenti secondari di `buy_request_history` sono SET NULL, e per loro
+    #: il conteggio "per id del genitore" dopo la cancellazione e' vuoto per
+    #: costruzione - la colonna a quel punto e' NULL.
+    EFFECT_FOREIGN_KEYS = (
+        ChildFk("property_status_history", "property_id", "properties", "CASCADE"),
+        ChildFk("buy_request_history", "buy_request_id", "buy_requests", "CASCADE"),
+        ChildFk("match_runs", "property_id", "properties", "CASCADE"),
+        ChildFk("match_runs", "buy_request_id", "buy_requests", "CASCADE"),
+        ChildFk("owner_audit_log", "property_id", "properties", "SET NULL"),
+    )
+
+    #: Gli id che il run traccia FUORI da `created_rows`, con la tabella su
+    #: cui vanno verificati. `created_rows` raccoglie solo le fixture di
+    #: dominio: un run puo' non averne nessuna - tutti i domini BLOCKED prima
+    #: della creazione - e avere comunque prodotto documenti, match, proposte,
+    #: vendite, conti proprietario e agenzie temporanee. Legare la pulizia e
+    #: la verifica a `created_rows` significava, in quel caso, dichiarare
+    #: "niente da rimuovere" e "niente da verificare" su un database sporco.
+    TRACKED_ID_TABLES = (
+        ("created_sale_ids", "property_sales"),
+        ("created_proposal_ids", "property_proposals"),
+        ("created_match_ids", "matches"),
+        ("created_owner_account_ids", "owner_accounts"),
+    )
+
+    def _tracked_totals(self) -> dict:
+        """{categoria: quante} per tutto cio' che il run ha creato, senza gli zeri."""
+        totali = {tabella: len(getattr(self, attributo))
+                  for attributo, tabella in self.TRACKED_ID_TABLES}
+        totali["righe di dominio"] = sum(len(v) for v in self.created_rows.values())
+        totali["effetti"] = sum(len(v) for v in self.created_effects.values())
+        totali["agenzie dedicate"] = len(self.created_agency_ids)
+        return {nome: n for nome, n in totali.items() if n}
+
+    def _created_nothing(self) -> bool:
+        """Vero solo se NESSUNA categoria ha id. Non "nessuna riga di dominio"."""
+        return not self._tracked_totals()
+
+    def _destructive_db_blocked(self) -> str | None:
+        """Il motivo per cui nessuna DELETE puo' partire, o None.
+
+        Un solo punto di decisione, chiamato da ogni metodo che cancella: due
+        guardie separate si mutano una alla volta, e la sopravvissuta
+        nasconderebbe l'altra.
+        """
+        return self.blocking_reason
+
+    #: Le tabelle da cui questo cleanup cancella righe. Non e' documentazione:
+    #: e' il perimetro su cui deve girare la guardia delle dipendenze, ed e'
+    #: l'insieme su cui la prova di completezza interroga lo schema. Ogni FK
+    #: NON-CASCADE che punta a una di queste tabelle e' rilevante, perche' o
+    #: impedisce la cancellazione (RESTRICT) o modifica in silenzio una riga
+    #: che sopravvive (SET NULL) - e in entrambi i casi e' una riga che
+    #: potrebbe non essere nostra.
+    CLEANUP_PARENTS = (
+        "contacts", "properties", "buy_requests", "tasks",
+        "seller_timeline_events",
+        "matches", "property_proposals", "property_sales",
+        "owner_accounts", "property_documents", "owner_shared_documents",
+        "property_watches", "stime", "flow_events", "flow_executions",
+        "next_best_actions", "followup_actions",
+        "agencies", "agency_memberships", "operator_users",
+        # Anche le tabelle degli EFFETTI: le si cancella per predicato, quindi
+        # sono genitori tanto quanto le altre. Lasciarle fuori significava che
+        # nessuno aveva mai guardato le FK entranti - e `match_runs` ne ha tre
+        # non-CASCADE (`match_refresh_history` e `matches.latest_run_id`), che
+        # su una riga altrui sarebbero tre campi azzerati in silenzio.
+        "property_status_history", "buy_request_history", "match_runs",
+        "property_contacts", "owner_audit_log",
+    )
+
+    #: Le tabelle delle agenzie dedicate di cui servono gli ID PRIMA del
+    #: cleanup. Li' si cancella per `agency_id`, quindi nessun id viene mai
+    #: registrato: senza istantanea quelle righe non entrerebbero nel
+    #: perimetro della guardia, e `tasks` e `flow_executions` - che hanno FK
+    #: non-CASCADE entranti - sarebbero cancellate senza che nessuno abbia
+    #: guardato chi le referenzia.
+    DEDICATED_SNAPSHOT_TABLES = (
+        "contacts", "property_watches", "tasks",
+        "flow_executions", "flow_events", "stime",
+    )
+
+    #: Gli effetti che si cancellano per id, in ordine di FK:
+    #: `owner_shared_documents.property_document_id` e' RESTRICT verso
+    #: `property_documents`, quindi la condivisione va rimossa per prima.
+    EFFECT_BY_ID_TABLES = ("owner_shared_documents", "property_documents")
+
+    #: Tabelle che le NOSTRE operazioni popolano, e le colonne con cui puntano
+    #: altrove. Una riga e' del run solo se OGNI riferimento non nullo cade nel
+    #: perimetro: e' la condizione che distingue lo storico scritto dal nostro
+    #: archive_property da una visita fissata da un operatore vero sullo stesso
+    #: immobile. Nessuna di queste cancellazioni e' per prefisso o per data.
+    EFFECT_TABLES = (
+        ("property_documents", ("property_id",)),
+        ("property_contacts", ("property_id", "contact_id")),
+        ("property_status_history", ("property_id",)),
+        ("buy_request_history", ("buy_request_id", "property_id", "match_id", "task_id")),
+        ("match_runs", ("buy_request_id", "property_id")),
+        ("owner_audit_log", ("property_id", "owner_account_id")),
+    )
+
+    def _perimeter(self) -> dict:
+        """{tabella: ids} di tutto cio' che questo run possiede."""
+        out = {t: tuple(i for i, _m, _c in e) for t, e in self.created_rows.items()}
+        if self.created_match_ids:
+            out["matches"] = tuple(self.created_match_ids)
+        if self.created_owner_account_ids:
+            out["owner_accounts"] = tuple(self.created_owner_account_ids)
+        for table, ids in self.created_effects.items():
+            if ids:
+                out[table] = tuple(ids)
+        return out
+
+    def _destructive_perimeter(self) -> dict:
+        """{tabella: ids} di OGNI riga che questo run cancellera'.
+
+        NON e' `_perimeter()`, e la differenza e' costata una guardia
+        incompleta. `_perimeter()` serve al predicato di appartenenza: contiene
+        le tabelle che gli EFFETTI referenziano, perche' e' quello che il
+        predicato deve sapere. Ma il cleanup cancella anche vendite, proposte,
+        identita' e agenzie temporanee, che non sono genitori di nessun
+        effetto e quindi da quella struttura non compaiono - restando fuori dal
+        controllo delle dipendenze soltanto perche' un'altra struttura, scritta
+        per un altro scopo, non le nominava.
+
+        `property_sales` e `property_proposals` hanno figlie RESTRICT
+        (`property_sale_sellers`, e la vendita stessa verso la proposta); i
+        contatti e i watch delle agenzie dedicate arrivano dall'istantanea,
+        che e' l'unico posto in cui i loro id sono noti.
+        """
+        fuori = {t: tuple(i) for t, i in self._perimeter().items()}
+
+        def aggiungi(tabella, ids):
+            if not ids:
+                return
+            fuori[tabella] = tuple(sorted(set(fuori.get(tabella, ())) | set(ids)))
+
+        aggiungi("property_sales", self.created_sale_ids)
+        aggiungi("property_proposals", self.created_proposal_ids)
+        aggiungi("agencies", self.created_agency_ids)
+        aggiungi("operator_users", self.created_user_ids)
+        # I genitori fotografati nelle agenzie dedicate: `contacts` si unisce
+        # a quelli gia' presenti, `tasks`, `flow_executions` e
+        # `property_watches` arrivano solo di qui - li' si cancella per
+        # `agency_id` e nessun id viene mai registrato.
+        for genitore, ids in self.child_parents.items():
+            aggiungi(genitore, ids)
+        # E le righe degli effetti, che si cancellano per predicato: sono
+        # genitori a loro volta. `match_runs` ha tre FK non-CASCADE entranti,
+        # e finche' non compariva qui nessuno le aveva mai interrogate.
+        for tabella, ids in self.effect_rows_before.items():
+            aggiungi(tabella, ids)
+        return fuori
+
+    def _ownership_predicate(self, columns: tuple, perimeter: dict, alias: str):
+        """"Questa riga e' del run": ogni riferimento non nullo cade nel
+        perimetro, e almeno uno ci punta davvero. Ritorna (frammento WHERE,
+        parametri) o None se nessuna colonna puo' puntare dentro."""
+        genitore = {"property_id": "properties", "contact_id": "contacts",
+                    "buy_request_id": "buy_requests", "match_id": "matches",
+                    "task_id": "tasks", "owner_account_id": "owner_accounts"}
+        dentro, dentro_p, tutte, tutte_p = [], [], [], []
+        for col in columns:
+            ids = perimeter.get(genitore[col])
+            if ids:
+                dentro.append(f"{alias}.{col} IN %s"); dentro_p.append(ids)
+                tutte.append(f"({alias}.{col} IS NULL OR {alias}.{col} IN %s)"); tutte_p.append(ids)
+            else:
+                tutte.append(f"{alias}.{col} IS NULL")
+        if not dentro:
+            return None
+        return ("(" + " OR ".join(dentro) + ") AND " + " AND ".join(tutte),
+                dentro_p + tutte_p)
+
+    def preflight_dependencies(self) -> None:
+        """La guardia PRIMA della prima DELETE, non a meta' strada.
+
+        `_foreign_dependencies` viveva dentro `cleanup_orphan_fixtures`, che
+        nel `finally` arriva TERZA: vendite, proposte, match, conti
+        proprietario e il loro audit erano gia' stati cancellati da
+        `cleanup_chain_fixtures` e `cleanup_owner_fixtures` quando qualcuno si
+        chiedeva per la prima volta se qualcosa li referenziasse. Su quelle
+        tabelle la guardia non arrivava mai in tempo: una dipendenza estranea
+        si sarebbe manifestata come transazione caduta - o come una riga
+        altrui azzerata da un SET NULL, che non fa cadere niente.
+
+        Qui la si esegue per prima. Se trova qualcosa, scrive il motivo di
+        blocco: da quel momento nessuna cancellazione parte, per lo stesso
+        unico punto di decisione che usa il fallimento del bucket.
+
+        `cleanup_orphan_fixtures` la ripete, e non e' ridondanza: fra questo
+        istante e quello possono passare secondi in cui un operatore vero
+        scrive una riga che punta alle nostre.
+        """
+        # UN BLOCCO GIA' DECISO NON SI CANCELLA QUI.
+        #
+        # Se l'istantanea e' fallita, il preflight non ha nulla da aggiungere
+        # e soprattutto non deve stampare "nessuna dipendenza fuori
+        # perimetro": su un perimetro incompleto quella frase sarebbe vera e
+        # priva di significato, e letta di seguito al FAIL precedente
+        # suonerebbe come una smentita.
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(
+                "CLEAN-PREFLIGHT",
+                f"controllo non eseguito: {motivo}",
+            )
+            return
+        estranee = self._foreign_dependencies()
+        if not estranee:
+            self.report.note(
+                "CLEAN-PREFLIGHT",
+                f"nessuna dipendenza fuori perimetro su "
+                f"{len(self._destructive_perimeter())} tabelle da cancellare")
+            return
+        self.blocking_reason = (
+            f"dipendenze fuori perimetro rilevate PRIMA di cancellare: "
+            f"{estranee}. Nessuna DELETE viene eseguita: un CASCADE le "
+            "porterebbe via, un SET NULL azzererebbe un campo, e sono "
+            "entrambi danni a dati non nostri."
+        )
+        self.report.fail("CLEAN-PREFLIGHT", self.blocking_reason)
+
+    def _foreign_dependencies(self) -> list:
         """Righe che puntano alle nostre e NON sono a loro volta del run.
 
         Ricavate dal catalogo per OID - `regclass` e non il nome, perche' una
@@ -1220,12 +1836,25 @@ class Certification:
         Non cancella nulla: elenca. Il catalogo serve a scoprire cio' che non
         avevamo previsto, non ad autorizzarne la rimozione.
         """
-        perimetro = {}
-        for table, entries in self.created_rows.items():
-            perimetro[table] = tuple(i for i, _m, _c in entries)
+        # TUTTO cio' che si cancella, non solo le fixture di dominio.
+        #
+        # Fermarsi a `created_rows` lasciava senza guardia proprio le tabelle
+        # con le FK piu' scomode: `property_documents` ha una figlia RESTRICT
+        # (`owner_shared_documents`), `matches` ne ha una (`property_proposals`)
+        # e `owner_accounts` una SET NULL (`owner_audit_log`). Cancellare la'
+        # dentro senza guardare significava scoprire il problema dalla
+        # transazione che cade, o non scoprirlo affatto.
+        perimetro = self._destructive_perimeter()
+        fuori = []
+        non_dichiarate = [t for t in perimetro if t not in self.CLEANUP_PARENTS]
+        if non_dichiarate:
+            # Una tabella che il cleanup cancella ma che nessuno ha dichiarato
+            # non e' coperta dalla prova di completezza sullo schema: le sue
+            # FK non sono mai state esaminate.
+            return [f"tabella cancellata ma non dichiarata in CLEANUP_PARENTS: "
+                    f"{sorted(non_dichiarate)}"]
         if not perimetro:
             return []
-        fuori = []
         try:
             with self.db.read() as cur:
                 for table, ids in perimetro.items():
@@ -1250,6 +1879,24 @@ class Certification:
                         figlio, colonna = riga["figlio"], riga["colonna"]
                         nudo = figlio.split(".")[-1]
                         esclusi = perimetro.get(nudo)
+                        effetto = next((c for t, c in self.EFFECT_TABLES if t == nudo), None)
+                        if effetto and not esclusi:
+                            # Un effetto delle nostre API: sono estranee solo
+                            # le righe che puntano FUORI dal perimetro.
+                            pred = self._ownership_predicate(effetto, self._perimeter(), "t")
+                            if pred is None:
+                                cur.execute(f"SELECT COUNT(*) AS n FROM {figlio} t "
+                                            f" WHERE t.{colonna} IN %s", (ids,))
+                            else:
+                                frammento, params_p = pred
+                                cur.execute(
+                                    f"SELECT COUNT(*) AS n FROM {figlio} t "
+                                    f" WHERE t.{colonna} IN %s AND NOT ({frammento})",
+                                    (ids, *params_p))
+                            n = int(cur.fetchone()["n"])
+                            if n:
+                                fuori.append(f"{figlio}.{colonna}={n}")
+                            continue
                         if esclusi:
                             cur.execute(
                                 f"SELECT COUNT(*) AS n FROM {figlio} t "
@@ -1266,6 +1913,190 @@ class Certification:
             # Non poter guardare non e' "non c'e' niente".
             return [f"verifica non eseguibile ({type(exc).__name__})"]
         return fuori
+
+    def register_uploaded_document(self, shared_id: int, origin_http) -> None:
+        """Lega l'oggetto caricato alla riga che ne conserva la chiave.
+
+        `POST /owner/admin/documents/upload` crea DUE righe: il documento
+        dell'immobile, che porta `storage_key`, e la condivisione che lo
+        espone. La risposta restituisce l'id della condivisione, e oggi anche
+        `property_document_id`.
+
+        QUELL'ID NON E' LA FONTE. Il valore su cui si cancella arriva SEMPRE
+        da `owner_shared_documents.property_document_id`, letto per
+        `shared_id`: e' la colonna che la FK lega davvero all'oggetto, e' NOT
+        NULL, ed e' l'unica che un DELETE dovrebbe poter seguire. Un campo
+        della risposta e' un'affermazione del servizio su se stesso: se fosse
+        sbagliato - un id di un altro documento, magari di un'altra agenzia -
+        cancellare quello significherebbe rimuovere una riga che non e'
+        nostra, e lasciare nel bucket l'oggetto che era nostro.
+
+        Fidarsi di un id non nullo solo perche' e' non nullo era la versione
+        precedente: leggeva il database solo quando il campo mancava, cioe'
+        proprio nel caso in cui il campo non poteva mentire.
+
+        Se i due divergono si dichiara il disallineamento e si procede SOLO
+        con l'id del database. Se il database non e' interrogabile, o non
+        restituisce l'origine, l'oggetto non e' piu' associabile ad alcun id
+        noto - nessun censimento SQL lo vedrebbe mai, perche' non e' sul
+        database - e il cleanup distruttivo si ferma, cosi' che le righe che
+        lo localizzano restino leggibili.
+        """
+        motivo = "owner_shared_documents non ha restituito l'origine"
+        try:
+            with self.db.read() as cur:
+                cur.execute(
+                    "SELECT property_document_id FROM owner_shared_documents "
+                    " WHERE id = %s", (int(shared_id),))
+                riga = cur.fetchone()
+        except Exception as exc:
+            riga, motivo = None, f"lettura fallita ({type(exc).__name__})"
+        canonico = riga.get("property_document_id") if riga else None
+
+        if canonico is None:
+            self.blocking_reason = (
+                f"il documento caricato {shared_id} non ha un property_documents "
+                f"associabile ({motivo}): l'oggetto nel bucket non e' "
+                "localizzabile per id. " + self.STORAGE_BLOCK_HINT)
+            self.report.fail("CLEAN-STORAGE-ORIGINE", self.blocking_reason)
+            return
+
+        # REGISTRATO SUBITO, prima di guardare la risposta.
+        #
+        # L'ordine non e' estetico. Se la validazione dell'id HTTP sollevasse
+        # - `property_document_id: "abc"` e un `int()` che esplode - l'id
+        # canonico, gia' noto e valido, non verrebbe mai registrato: il
+        # cleanup del bucket non saprebbe piu' dove cercare la chiave, e
+        # l'oggetto resterebbe nello store per un difetto nella diagnostica di
+        # un altro difetto. Prima si mette al sicuro cio' che si sa; poi si
+        # esamina cio' che qualcun altro afferma.
+        canonico = int(canonico)
+        self.created_effects.setdefault("property_documents", []).append(canonico)
+
+        if origin_http is None:
+            self.report.note(
+                "CLEAN-STORAGE-ORIGINE",
+                f"documento condiviso {shared_id}: origine {canonico} risolta "
+                "dal database, la risposta non la portava")
+            return
+        try:
+            dichiarato = int(origin_http)
+        except (TypeError, ValueError):
+            # Non e' un numero: non e' confrontabile e non e' cancellabile. Si
+            # dice cosa e' arrivato - il tipo e la lunghezza, non il valore,
+            # che viene da una risposta remota - e si prosegue sul canonico.
+            self.report.fail(
+                "CLEAN-STORAGE-ORIGINE",
+                f"documento condiviso {shared_id}: la risposta dichiara un "
+                f"property_document_id non numerico ({type(origin_http).__name__}, "
+                f"{len(str(origin_http))} caratteri). Non confrontabile: il "
+                f"cleanup prosegue sul valore del database, {canonico}.",
+            )
+            return
+        if dichiarato != canonico:
+            # Non si blocca, e non si cancella l'id della risposta: si
+            # cancella quello vero e si dice che i due non coincidono. Un id
+            # sbagliato nella risposta e' un difetto del backend, non del
+            # database, e il cleanup ha gia' il valore giusto.
+            self.report.fail(
+                "CLEAN-STORAGE-ORIGINE",
+                f"documento condiviso {shared_id}: la risposta dichiara "
+                f"property_document_id={dichiarato}, il database dice "
+                f"{canonico}. Si procede sul valore del database; l'id della "
+                "risposta NON viene cancellato, perche' potrebbe essere di un "
+                "documento che non appartiene a questo run.",
+            )
+
+    def cleanup_storage_objects(self) -> None:
+        """Gli oggetti caricati nello store, prima delle righe che li localizzano.
+
+        PERCHE' NON BASTA CANCELLARE LE RIGHE
+
+        `storage.delete_object` esiste, ma nel codice applicativo e' invocata
+        SOLO sul rollback di un caricamento fallito: nessuna route rimuove
+        l'oggetto quando il documento viene revocato o archiviato. Cancellare
+        `property_documents` lascerebbe quindi un file nel bucket che nessuno
+        sa piu' a cosa apparteneva - un residuo che nessun censimento SQL
+        vedrebbe mai, perche' non e' sul database.
+
+        La chiave si legge dalla riga, per id: la risposta dell'API non la
+        restituisce (`_admin_shared_document` la esclude di proposito), ed e'
+        giusto cosi'. Si cancella solo la chiave delle righe create da questo
+        run, e un fallimento e' FAIL con l'id del documento - mai con la
+        chiave, che e' un localizzatore.
+        """
+        # IL BLOCCO GLOBALE VALE ANCHE QUI, e prima di ogni altra cosa.
+        #
+        # `delete_object` e' l'unica cancellazione di questo script che non
+        # passa dal database, e per questo era rimasta fuori dalla guardia. Ma
+        # e' anche la sola irreversibile: una riga cancellata per errore si
+        # ritrova in un dump, un oggetto rimosso dal bucket no.
+        #
+        # Sotto blocco il resto del cleanup si ferma proprio per CONSERVARE le
+        # righe - la `storage_key` che localizza il file, gli id che nessuno
+        # ha potuto fotografare. Svuotare il bucket mentre si conservano le
+        # righe che lo indicizzano e' l'immagine speculare del difetto per cui
+        # questo blocco esiste: resterebbero i puntatori, e sparirebbe cio' a
+        # cui puntano.
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(
+                "CLEAN-STORAGE",
+                f"nessun oggetto rimosso dal bucket: {motivo}",
+            )
+            return
+        ids = self.created_effects.get("property_documents")
+        if not ids:
+            return
+
+        def irrecuperabile(motivo: str) -> None:
+            """FAIL, e il cleanup distruttivo si ferma.
+
+            Segnalare e proseguire era il difetto: `cleanup_orphan_fixtures`
+            cancella `property_documents`, e con quelle righe se ne va
+            `storage_key` - l'unico posto dove la chiave dell'oggetto rimasto
+            e' scritta. Il messaggio "la chiave e' in
+            property_documents.storage_key" diventerebbe falso un istante
+            dopo averlo stampato, e l'oggetto resterebbe nel bucket senza che
+            nessuno possa piu' dire a cosa apparteneva.
+            """
+            self.blocking_reason = motivo
+            self.report.fail("CLEAN-STORAGE", motivo + " " + self.STORAGE_BLOCK_HINT)
+
+        try:
+            with self.db.read() as cur:
+                cur.execute(
+                    "SELECT id, storage_key FROM property_documents "
+                    " WHERE id IN %s AND storage_key IS NOT NULL", (tuple(ids),))
+                chiavi = [(int(r["id"]), r["storage_key"]) for r in cur.fetchall()]
+        except Exception as exc:
+            irrecuperabile(f"chiavi non leggibili ({type(exc).__name__}): non si "
+                           "puo' affermare che il bucket sia pulito.")
+            return
+        if not chiavi:
+            self.report.note("CLEAN-STORAGE",
+                             "nessun oggetto caricato: niente da rimuovere dal bucket")
+            return
+        try:
+            from owner.document_storage import get_document_storage
+
+            storage = get_document_storage()
+        except Exception as exc:
+            irrecuperabile(
+                f"storage non raggiungibile ({type(exc).__name__}): {len(chiavi)} "
+                f"oggetti dei documenti {[i for i, _k in chiavi]} RESTANO nel bucket.")
+            return
+        falliti = []
+        for identificativo, chiave in chiavi:
+            try:
+                storage.delete_object(chiave)
+            except Exception as exc:
+                falliti.append(f"documento {identificativo} ({type(exc).__name__})")
+        if falliti:
+            irrecuperabile(f"oggetti NON rimossi dal bucket: {falliti}.")
+        else:
+            self.report.note("CLEAN-STORAGE",
+                             f"{len(chiavi)} oggetti rimossi dal bucket")
 
     def cleanup_orphan_fixtures(self, agencies: dict) -> None:
         """Le righe che l'API NON rimuove fisicamente.
@@ -1291,8 +2122,23 @@ class Certification:
         contatto, quindi al contrario si cancella prima il figlio - ed e' lo
         stesso criterio che `cleanup_http_fixtures` applica alle sue.
         """
-        if not self.created_rows:
-            self.report.note("CLEAN-ORFANE", "nessuna riga da rimuovere via SQL")
+        # PRIMA DI TUTTO, prima ancora di guardare se c'e' qualcosa da
+        # cancellare: se un passo precedente ha lasciato un residuo che solo
+        # queste righe permettono di ritrovare, qui non si cancella nulla.
+        motivo = self._destructive_db_blocked()
+        if motivo:
+            self.report.fail(
+                "CLEAN-ORFANE",
+                f"nessuna cancellazione eseguita: {motivo}",
+            )
+            return
+        # NON "se non ci sono righe di dominio": gli effetti si cancellano qui
+        # dentro, e un run che avesse creato solo documenti - tutti i domini
+        # BLOCKED, il portale no - usciva di qui dicendo "niente da rimuovere"
+        # e lasciava le righe sul TEST.
+        if not self.created_rows and not self.created_effects:
+            self.report.note("CLEAN-ORFANE",
+                             "nessuna riga di dominio e nessun effetto da rimuovere via SQL")
             return
 
         # marcatore -> agenzia: la corrispondenza che rende verificabili le terne.
@@ -1313,7 +2159,7 @@ class Certification:
         # dipendenza estranea, si ferma senza cancellare e senza modificarla:
         # un CASCADE la porterebbe via, un SET NULL le azzererebbe un campo, e
         # sono entrambi danni a dati non nostri.
-        estranee = self._foreign_dependencies(agency_of)
+        estranee = self._foreign_dependencies()
         if estranee:
             self.report.fail(
                 "CLEAN-ORFANE",
@@ -1325,13 +2171,49 @@ class Certification:
         rimosse, residui = {}, 0
         try:
             with self.db.write() as cur:
+                # GLI EFFETTI PER PRIMI, e solo quelli di nostra proprieta'.
+                #
+                # Tre azioni diverse, e nessuna rende superflua questa DELETE:
+                #
+                #   property_contacts.contact_id        RESTRICT
+                #     senza rimuoverlo, il contatto non si cancella affatto.
+                #   property_status_history, match_runs,
+                #   property_documents, buy_request_history.buy_request_id
+                #                                       CASCADE
+                #     se ne andrebbero da soli - ma "da soli" vuol dire senza
+                #     il predicato di appartenenza, e quello e' cio' che separa
+                #     il nostro storico da una riga altrui sullo stesso
+                #     immobile.
+                #   owner_audit_log, e i riferimenti secondari di
+                #   buy_request_history                 SET NULL
+                #     NON se ne andrebbero: sopravvivrebbero con la colonna
+                #     azzerata, cioe' come righe che nessuno sa piu' attribuire.
+                #     Qui e' l'unico posto in cui si possono ancora cancellare
+                #     per appartenenza, perche' il riferimento esiste ancora.
+                #
+                # Cancellare per predicato, e poi verificare per id, e' la sola
+                # forma in cui tutte e tre restano sotto controllo.
+                pieno = self._perimeter()
+                # Prima gli effetti noti per id, nell'ordine delle FK.
+                for table in self.EFFECT_BY_ID_TABLES:
+                    ids = self.created_effects.get(table)
+                    if ids:
+                        cur.execute(f"DELETE FROM {table} WHERE id IN %s", (tuple(ids),))
+                        rimosse[table] = cur.rowcount
+                for table, columns in self.EFFECT_TABLES:
+                    pred = self._ownership_predicate(columns, pieno, "t")
+                    if pred is None:
+                        continue
+                    frammento, params_p = pred
+                    cur.execute(f"DELETE FROM {table} t WHERE {frammento}", params_p)
+                    rimosse[table] = cur.rowcount
                 for table in ordine:
                     entries = self.created_rows[table]
                     column = entries[0][2]
                     # La colonna del marcatore viene da una costante del
                     # modulo, mai da una risposta HTTP: non c'e' un percorso
                     # per cui un dato remoto finisca in questa query.
-                    if column not in ("display_name", "title", "description"):
+                    if column not in ("display_name", "title", "description", "event_type"):
                         raise ValueError(f"colonna marcatore non prevista: {column!r}")
 
                     # TERNE, non tre elenchi indipendenti. Con
@@ -1388,8 +2270,30 @@ class Certification:
         E' la verifica che mancava al run 22d007af7916: quattro righe
         archiviate ma presenti, e un report che non le nominava.
         """
-        if not self.created_rows:
+        # L'ORDINE, PRIMA DI CONTARE.
+        #
+        # `flow_events` e `stime` sono registrati fra gli effetti del run, ma
+        # vivono DENTRO le agenzie dedicate e se ne vanno con loro. Contarli
+        # prima che `cleanup_dedicated_agencies` sia passata li troverebbe -
+        # tutti - e il report direbbe "righe ancora presenti" di righe che il
+        # passo successivo avrebbe rimosso. Sui doppi non si vedrebbe, perche'
+        # un doppio che risponde sempre 0 non materializza niente; sul TEST
+        # sarebbe un FAIL che dice il falso.
+        if self.created_agency_ids and not self.dedicated_cleanup_done:
+            self.report.fail(
+                "CLEAN-VERIFICA",
+                "verifica invocata PRIMA di cleanup_dedicated_agencies: "
+                + ", ".join(self.DEDICATED_EFFECT_TABLES)
+                + " spariscono con le agenzie dedicate, e contarli adesso "
+                "segnalerebbe come residuo cio' che il passo successivo "
+                "rimuove. Il difetto e' nell'ordine delle chiamate, non sul TEST.",
+            )
             return
+        if self._created_nothing():
+            self.report.note("CLEAN-VERIFICA",
+                             "il run non ha creato nulla: niente da verificare")
+            return
+        figlie = []
         try:
             with self.db.read() as cur:
                 residui = []
@@ -1406,36 +2310,134 @@ class Certification:
                 # Archiviare un immobile scrive in `property_status_history`,
                 # archiviare una richiesta in `buy_request_history`, calcolare
                 # un match scrive `match_runs` e i `match_requirement_results`.
-                # Sono figli CASCADE: dovrebbero sparire con il genitore. Il
-                # run 22d007af7916 ne ha lasciati 32 sul TEST perche' il
+                # Il run 22d007af7916 ne ha lasciati 32 sul TEST perche' il
                 # genitore non era stato cancellato ma solo archiviato - e
                 # nessuno li contava.
                 #
-                # "Dovrebbero" non basta: si verifica che sia successo.
-                proprieta = tuple(i for i, _m, _c in
-                                  self.created_rows.get("properties", [])) or (0,)
-                richieste = tuple(i for i, _m, _c in
-                                  self.created_rows.get("buy_requests", [])) or (0,)
-                effetti = (
-                    ("property_status_history", "property_id", proprieta),
-                    ("buy_request_history", "buy_request_id", richieste),
-                    ("match_runs", "property_id", proprieta),
-                    ("match_runs", "buy_request_id", richieste),
-                    ("owner_audit_log", "property_id", proprieta),
-                )
-                for tabella, colonna, valori in effetti:
+                # Ciascuno con la sua azione DICHIARATA, perche' non tutte
+                # sono CASCADE: per un SET NULL questo conteggio non dimostra
+                # la rimozione della riga - se il genitore e' sparito la
+                # colonna e' NULL e la riga non risponde piu' al suo id. Puo'
+                # solo dimostrare il contrario, cioe' che il genitore c'e'
+                # ancora, e il report lo dice con queste parole.
+                genitori_id = {
+                    "properties": tuple(i for i, _m, _c in
+                                        self.created_rows.get("properties", [])) or (0,),
+                    "buy_requests": tuple(i for i, _m, _c in
+                                          self.created_rows.get("buy_requests", [])) or (0,),
+                }
+                for fk in self.EFFECT_FOREIGN_KEYS:
+                    tabella, colonna = fk.table, fk.column
+                    valori = genitori_id[fk.parent]
                     cur.execute(
                         f"SELECT COUNT(*) AS n FROM {tabella} WHERE {colonna} IN %s",
                         (valori,))
                     left = int(cur.fetchone()["n"])
                     if left:
-                        residui.append(f"{tabella}.{colonna}={left}")
+                        residui.append(
+                            f"{tabella}.{colonna}={left}"
+                            + (" (SET NULL: il genitore e' ancora presente)"
+                               if fk.on_delete == "SET NULL" else ""))
+                    elif fk.on_delete == "SET NULL":
+                        # Zero qui non e' "rimossa": e' "non piu' raggiungibile
+                        # per id del genitore", perche' la colonna e' NULL. La
+                        # prova sta nell'istantanea degli id, poco piu' sotto;
+                        # questa riga dice soltanto quale delle due domande e'
+                        # stata fatta.
+                        figlie.append(
+                            f"{tabella}.{colonna} (SET NULL): 0 per id del genitore, "
+                            "che non prova la rimozione della riga"
+                            + (f"; verificata per id ({len(self.effect_rows_before.get(tabella, ()))} "
+                               "righe fotografate prima)"
+                               if self.effect_snapshot_done
+                               else "; NESSUNA istantanea degli id: non verificabile"))
+                for table, ids in self.created_effects.items():
+                    if not ids:
+                        continue
+                    cur.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE id IN %s",
+                                (tuple(ids),))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui.append(f"{table}={left}")
+                # LE RIGHE DEGLI EFFETTI, PER ID.
+                #
+                # E' l'unica domanda che un SET NULL non puo' svuotare: la
+                # colonna verso il genitore sara' anche NULL, ma l'id della
+                # riga e' rimasto quello di prima. Senza questa istantanea la
+                # verifica finale diceva "0 presenti" mentre CLEAN-FIGLIE
+                # ammetteva che quella relazione non era verificabile - due
+                # affermazioni che non possono stare insieme.
+                if self.created_rows or self.created_effects:
+                    if not self.effect_snapshot_done:
+                        residui.append(
+                            "effetti non verificabili per id (nessuna istantanea: "
+                            "vedi CLEAN-EFFETTI)")
+                    for tabella, ids in self.effect_rows_before.items():
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {tabella} WHERE id IN %s",
+                            (ids,))
+                        left = int(cur.fetchone()["n"])
+                        if left:
+                            residui.append(
+                                f"{tabella}={left} di {len(ids)} righe fotografate "
+                                "prima del cleanup (verificate per id)")
+
+                # GLI ID TRACCIATI FUORI DA `created_rows`.
+                #
+                # Vendite, proposte, match e conti proprietario li cancellano
+                # `cleanup_chain_fixtures` e `cleanup_owner_fixtures`, che
+                # verificano il proprio lavoro. Questa e' l'ultima parola e non
+                # deve fidarsi di loro: se una di quelle verifiche fosse
+                # sbagliata, nessun altro se ne accorgerebbe.
+                for attributo, tabella in self.TRACKED_ID_TABLES:
+                    ids = getattr(self, attributo)
+                    if not ids:
+                        continue
+                    cur.execute(f"SELECT COUNT(*) AS n FROM {tabella} WHERE id IN %s",
+                                (tuple(ids),))
+                    left = int(cur.fetchone()["n"])
+                    if left:
+                        residui.append(f"{tabella}={left}")
+                if self.created_agency_ids:
+                    # LE FIGLIE DEI GENITORI CANCELLATI, per gli id presi
+                    # PRIMA. Nessuna JOIN: il genitore non c'e' piu', e
+                    # chiedere di lui risponderebbe 0 comunque sia andata.
+                    if not self.child_parents:
+                        residui.append(
+                            "figlie non verificabili (nessuna istantanea dei "
+                            "genitori: vedi CLEAN-FIGLIE)")
+                    for fk in self.CHILD_FOREIGN_KEYS:
+                        ids = self.child_parents.get(fk.parent)
+                        prima = self.children_before.get(fk.table, 0)
+                        if fk.on_delete not in ("CASCADE", "RESTRICT"):
+                            # Nessuna azione oltre queste due e' verificabile
+                            # qui: dirlo e' meglio che contare e tacere.
+                            figlie.append(f"{fk.table} ({fk.on_delete}): non "
+                                          "verificabile per id del genitore")
+                            continue
+                        if not ids:
+                            figlie.append(
+                                f"{fk.table}: nessun {fk.parent} del run, niente da "
+                                "verificare")
+                            continue
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {fk.table} WHERE {fk.column} IN %s",
+                            (ids,))
+                        left = int(cur.fetchone()["n"])
+                        if left:
+                            residui.append(
+                                f"{fk.table}={left}"
+                                + (f" (RESTRICT: {fk.parent} non e' stata cancellata)"
+                                   if fk.on_delete == "RESTRICT"
+                                   else f" (CASCADE non avvenuto da {fk.parent})"))
+                        figlie.append(
+                            f"{fk.table} ({fk.on_delete}): {prima} prima, {left} dopo")
                 if self.created_match_ids:
                     cur.execute(
                         "SELECT COUNT(*) AS n FROM match_requirement_results r "
                         " JOIN match_runs mr ON mr.id = r.match_run_id "
                         " WHERE mr.property_id IN %s OR mr.buy_request_id IN %s",
-                        (proprieta, richieste))
+                        (genitori_id["properties"], genitori_id["buy_requests"]))
                     left = int(cur.fetchone()["n"])
                     if left:
                         residui.append(f"match_requirement_results={left}")
@@ -1444,6 +2446,13 @@ class Certification:
                              f"verifica dei residui non eseguibile ({type(exc).__name__}): "
                              "non si puo' affermare che il TEST sia pulito")
             return
+        if figlie:
+            # Il "prima" e' cio' che distingue una verifica da una formalita':
+            # "0 prima, 0 dopo" non prova che la rimozione funzioni, e il
+            # report deve permettere di vederlo invece di dire "pulito".
+            # Ogni riga porta l'azione dichiarata, perche' "0 dopo" significa
+            # cose diverse per un CASCADE, un RESTRICT e un SET NULL.
+            self.report.note("CLEAN-FIGLIE", "; ".join(figlie))
         if residui:
             self.report.fail(
                 "CLEAN-VERIFICA",
@@ -1451,9 +2460,12 @@ class Certification:
                 "Un 2xx sulla DELETE non e' una prova di cancellazione.",
             )
         else:
-            totale = sum(len(v) for v in self.created_rows.values())
+            # Il conteggio nomina OGNI categoria: "12 righe create" quando il
+            # run aveva creato anche match, conti e documenti diceva meno del
+            # vero proprio nel punto in cui il report afferma di piu'.
+            dettaglio = ", ".join(f"{nome}={n}" for nome, n in self._tracked_totals().items())
             self.report.note("CLEAN-VERIFICA",
-                             f"{totale} righe create, 0 presenti: verificato sul database")
+                             f"creati {dettaglio}; 0 presenti: verificato sul database")
 
     def cleanup_database(self) -> None:
         """Cancella identita' e sessioni di questo run, e lo dimostra.
@@ -1729,7 +2741,7 @@ def certify_property_watch(report, http, cert, domain, jars, owned, context) -> 
         )
 
 
-def build_owner_fixtures(report, http, cert, owner_jars, owned, context) -> None:
+def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=None) -> None:
     """Un proprietario per agenzia, con un immobile concesso e una sessione.
 
     LA CATENA, TUTTA ATTRAVERSO L'API DI OWNER ADMIN
@@ -1810,6 +2822,85 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context) -> None
         report.note(f"owner-fixture-{label}",
                     f"proprietario di {label}: conto {account}, immobile {prop} "
                     "concesso, sessione del portale aperta")
+
+        # UN DOCUMENTO VERO, VISIBILE AL PROPRIETARIO. Tre passi via API:
+        # documento dell'immobile (via URL: nessuno storage necessario per
+        # ESISTERE), condivisione, pubblicazione. Senza, la lista documenti
+        # del portale e' vuota per tutti e "B non vede i documenti di A" e'
+        # vero perche' non ce ne sono.
+        risposta = http.request(
+            "POST", f"/api/property/properties/{prop}/documents",
+            jar=jars[label],
+            payload={"document_type": "other", "title": cert.marker(label),
+                     "url": "https://certification.invalid/" + cert.marker(label),
+                     "status": "available"})
+        doc = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or doc is None:
+            report.blocked(f"owner-fixture-{label}-documento",
+                           f"documento dell'immobile -> {risposta.status}")
+            continue
+        cert.created_effects.setdefault("property_documents", []).append(int(doc))
+        risposta = http.request("POST", "/api/owner/admin/documents", jar=owner_jars[label],
+                                payload={"property_document_id": doc,
+                                         "public_title": cert.marker(label),
+                                         "public_document_type": "other"})
+        condiviso = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or condiviso is None:
+            report.blocked(f"owner-fixture-{label}-documento",
+                           f"condivisione -> {risposta.status}")
+            continue
+        cert.created_effects.setdefault("owner_shared_documents", []).append(int(condiviso))
+        risposta = http.request("POST", f"/api/owner/admin/documents/{condiviso}/publish",
+                                jar=owner_jars[label])
+        if risposta.status not in (200, 201):
+            report.blocked(f"owner-fixture-{label}-documento",
+                           f"pubblicazione -> {risposta.status}")
+            continue
+        context["portal_documents"][label] = int(condiviso)
+        report.note(f"owner-fixture-{label}-documento",
+                    f"documento condiviso {condiviso} pubblicato per {label}")
+
+        # UN SECONDO DOCUMENTO, QUESTA VOLTA CON UN OGGETTO NELLO STORAGE.
+        #
+        # Quello sopra nasce da un URL e non ha `storage_key`: esiste, si
+        # elenca, ma `prepare_shared_document_download` non ha nulla da aprire.
+        # Senza un file vero il download resterebbe BLOCKED per sempre, e la
+        # prova ostile su quella route non si farebbe mai.
+        contenuto = ("%PDF-1.4 " + cert.marker(label)).encode("utf-8")
+        risposta = http.upload(
+            "/api/owner/admin/documents/upload", jar=owner_jars[label],
+            campi={"property_id": prop, "document_type": "other",
+                   "source_title": cert.marker(label) + "-file",
+                   "public_title": cert.marker(label) + "-file",
+                   "public_document_type": "other"},
+            nome_file=cert.marker(label) + ".pdf", contenuto=contenuto)
+        caricato = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or caricato is None:
+            report.blocked(
+                f"owner-fixture-{label}-scaricabile",
+                f"caricamento -> {risposta.status}: lo storage documenti non e' "
+                "configurato su questo TEST (OWNER_DOCUMENT_STORAGE_ENABLED), "
+                "quindi il download non sara' esercitabile",
+            )
+        else:
+            cert.created_effects.setdefault("owner_shared_documents", []).append(
+                int(caricato))
+            # `property_document_id` arriva nella risposta; `storage_key` no -
+            # `_admin_shared_document` lo esclude di proposito. L'id su cui si
+            # cancella viene SEMPRE dal database: quello della risposta si
+            # passa solo perche' venga confrontato.
+            cert.register_uploaded_document(
+                int(caricato), (risposta.json() or {}).get("property_document_id"))
+            risposta = http.request(
+                "POST", f"/api/owner/admin/documents/{caricato}/publish",
+                jar=owner_jars[label])
+            if risposta.status not in (200, 201):
+                report.blocked(f"owner-fixture-{label}-scaricabile",
+                               f"pubblicazione del caricato -> {risposta.status}")
+            else:
+                context["portal_downloadable"][label] = int(caricato)
+                report.note(f"owner-fixture-{label}-scaricabile",
+                            f"documento scaricabile {caricato} pubblicato per {label}")
 
 
 def build_chain(report, http, cert, jars, owned) -> None:
@@ -2050,6 +3141,39 @@ def stale_followup_candidates(agency_id: int) -> list:
 FOLLOWUP_TASK_TITLE = "Contattare proprietario"
 
 
+def _error_shape(text) -> str:
+    """La FORMA di un errore, non il suo testo.
+
+    Un messaggio grezzo puo' contenere valori di riga - psycopg2 mette nel
+    DETAIL la chiave che ha violato un vincolo - e ripulirlo da email e cifre
+    non basta: resterebbero nomi, indirizzi, titoli. Qui si estrae solo cio'
+    che serve a diagnosticare e che non puo' essere di una persona:
+
+      * lo SQLSTATE, se c'e' (cinque caratteri alfanumerici, es. 23503);
+      * il nome del vincolo violato, se nominato (identificatore dello schema);
+      * il tipo di eccezione, se il testo lo porta in testa.
+
+    Se non si riconosce nulla, si dichiara la sola lunghezza: "presente ma non
+    classificato" e' un'informazione onesta, il testo integrale no.
+    """
+    if not text:
+        return "(vuoto)"
+    testo = str(text)
+    pezzi = []
+    sqlstate = re.search(r"\b(?:SQLSTATE|sqlstate)[ :=]*([0-9A-Z]{5})\b", testo)
+    if not sqlstate:
+        sqlstate = re.search(r"\((?:pgcode|code)=([0-9A-Z]{5})\)", testo)
+    if sqlstate:
+        pezzi.append(f"sqlstate={sqlstate.group(1)}")
+    vincolo = re.search(r'(?:constraint|vincolo)\s+"?([a-z0-9_]+)"?', testo, re.I)
+    if vincolo:
+        pezzi.append(f"vincolo={vincolo.group(1)}")
+    tipo = re.match(r"\s*([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Violation))\b", testo)
+    if tipo:
+        pezzi.append(f"tipo={tipo.group(1)}")
+    return ", ".join(pezzi) if pezzi else f"non classificato ({len(testo)} caratteri)"
+
+
 def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
     """La scansione ESEGUITA, su due agenzie che contengono solo nostre righe.
 
@@ -2089,7 +3213,7 @@ def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
         token = http.token_in(jar)
         if token:
             cert.secrets.append(token)
-        dedicate[label] = {"agency": agency, "jar": jar}
+        dedicate[label] = {"agency": agency, "jar": jar, "contact": None}
 
     # Un contatto e un'attivita' stale per agenzia, creati via API dentro
     # l'agenzia dedicata: nient'altro esiste li' dentro.
@@ -2126,6 +3250,7 @@ def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
                            f"attivita' non creata ({risposta.status})")
             return False
         task[label] = int(identificativo)
+        dedicate[label]["contact"] = contatto
         report.note(f"FOLLOWUP-dedicata-{label}",
                     f"agenzia {dati['agency']['id']}: contatto e attivita' "
                     f"{identificativo}, unica riga del tenant")
@@ -2151,11 +3276,67 @@ def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
 
         report.check(f"FOLLOWUP-scan-{label}", risposta.status == 200,
                      f"{label} esegue la scansione -> {risposta.status}")
+        # ESSERE NELL'ELENCO NON E' ESCALATION.
+        #
+        # `execute_temporal_escalation_for_agency` restituisce l'elemento anche
+        # quando non tocca il task: se l'azione esisteva gia' (`_created`
+        # False) o se l'UPDATE ha sollevato, l'elemento c'e' con uno stato
+        # diverso da 'completed'. Il run 9b95b3ee215e ha lasciato la fixture C
+        # open/low con la prova segnata PASS proprio per questo.
+        #
+        # Tre cose, tutte e tre: lo stato dell'elemento, lo stato del task
+        # riletto, l'azione persistita.
+        proprio = next((x for x in corpo.get("items", [])
+                        if x.get("task_id") is not None and int(x["task_id"]) == task[label]),
+                       None)
         report.check(
             f"FOLLOWUP-scan-{label}-elabora-la-propria",
-            task[label] in elaborati,
-            f"la scansione di {label} elabora la propria attivita' {task[label]}",
+            proprio is not None and proprio.get("status") == "completed",
+            f"l'attivita' {task[label]} di {label} risulta "
+            + ("completata" if proprio and proprio.get("status") == "completed"
+               else f"'{(proprio or {}).get('status', 'assente')}'"
+                    + (f" - errore: {_error_shape(proprio.get('error'))}"
+                       if proprio and proprio.get("error") else "")),
         )
+        dopo_propria = stato(label)
+        report.check(
+            f"FOLLOWUP-scan-{label}-task-escalato",
+            dopo_propria == ("in_progress", "high"),
+            f"l'attivita' {task[label]} di {label} e' {dopo_propria} "
+            "(attesa in_progress/high)",
+        )
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM followup_actions "
+                    " WHERE task_id = %s AND agency_id = %s AND status = 'completed'",
+                    (task[label], dedicate[label]["agency"]["id"]))
+                persistite = int(cur.fetchone()["n"])
+                # L'EVIDENZA, prima che il cleanup la porti via: se un'azione
+                # e' 'failed', `error_message` dice perche' - ed e' l'unica
+                # traccia sul database, perche' la risposta HTTP porta lo
+                # stesso testo ma nessuno la conserva.
+                cur.execute(
+                    "SELECT status, error_message FROM followup_actions "
+                    " WHERE idempotency_key LIKE %s AND agency_id = %s AND status <> 'completed'",
+                    (f"followup:time:%:task:{task[label]}:v1", dedicate[label]["agency"]["id"]))
+                for riga in cur.fetchall():
+                    report.note(
+                        f"FOLLOWUP-scan-{label}-evidenza",
+                        f"azione '{riga['status']}' per l'attivita' {task[label]}, "
+                        f"errore: {_error_shape(riga.get('error_message'))}",
+                    )
+        except Exception as exc:
+            persistite = None
+            report.blocked(f"FOLLOWUP-scan-{label}-azione-persistita",
+                           f"azione non leggibile ({type(exc).__name__})")
+        if persistite is not None:
+            report.check(
+                f"FOLLOWUP-scan-{label}-azione-persistita",
+                persistite == 1,
+                f"{persistite} azioni completate persistite per l'attivita' "
+                f"{task[label]} (attesa 1)",
+            )
         report.check(
             f"FOLLOWUP-scan-{label}-solo-la-propria",
             set(elaborati) <= {task[label]},
@@ -2176,7 +3357,184 @@ def certify_followup_dedicated(report, http, cert, jars, context) -> bool:
     report.note("FOLLOWUP-escalation",
                 "escalation eseguita su agenzie dedicate: nessuna riga "
                 "preesistente era candidata, per costruzione")
+
+    # Le stesse due agenzie servono ai tre domini che hanno solo operazioni
+    # batch: la' dentro ogni riga e' del run, quindi una passata su tutto il
+    # tenant non puo' toccare nulla di altrui.
+    certify_batch_domains(report, http, cert, dedicate, context)
     return True
+
+
+def certify_batch_domains(report, http, cert, dedicate, context) -> None:
+    """FLOW, NEXT_BEST_ACTION e PROPERTY_WATCH sulle agenzie dedicate.
+
+    Tutti e tre hanno lo stesso problema: la risorsa riconoscibile nasce da
+    un'operazione che percorre l'intero tenant - `POST /flow/events` valuta le
+    regole, `POST /next-best-action/refresh` ricalcola e POTA le azioni
+    esistenti, la stima serve un watch. Su un'agenzia condivisa nessuna delle
+    tre e' eseguibile senza toccare righe altrui; su un'agenzia del run tutte e
+    tre lo sono, senza che il backend cambi.
+
+    Una lista non vuota non basta: si esige che ciascuno veda la PROPRIA
+    risorsa e non quella dell'altro, e le risorse portano il marcatore.
+    """
+    etichette = tuple(dedicate)
+
+    # --- FLOW: un evento per agenzia, con il marcatore nel tipo ------------
+    eventi = {}
+    for label in etichette:
+        risposta = http.request("POST", "/api/flow/events", jar=dedicate[label]["jar"],
+                                payload={"event_type": cert.marker(label),
+                                         "entity_type": "contact",
+                                         "entity_id": dedicate[label]["contact"],
+                                         "payload": {},
+                                         "deduplication_key": cert.marker(label)})
+        identificativo = ((risposta.json() or {}).get("event") or {}).get("id") \
+            or (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or identificativo is None:
+            report.blocked(f"FLOW-fixture-{label}",
+                           f"POST /api/flow/events -> {risposta.status}")
+            continue
+        eventi[label] = int(identificativo)
+        cert.created_effects.setdefault("flow_events", []).append(int(identificativo))
+        report.note(f"FLOW-fixture-{label}",
+                    f"evento {identificativo} nell'agenzia dedicata di {label}")
+
+    for label, altro in (("C", "D"), ("D", "C")):
+        if len(eventi) < 2:
+            report.blocked(f"FLOW-list-{label}-non-vede-{altro}",
+                           "manca un evento per agenzia: il confronto non prova nulla")
+            continue
+        risposta = http.request("GET", "/api/flow/events?limit=100",
+                                jar=dedicate[label]["jar"])
+        report.check(f"FLOW-list-{label}", risposta.status == 200,
+                     f"{label} legge i propri eventi -> {risposta.status}")
+        report.check(f"FLOW-list-{label}-vede-la-propria",
+                     cert.marker(label) in risposta.text(),
+                     f"la lista di {label} contiene il proprio evento {eventi[label]}")
+        report.check(f"FLOW-list-{label}-non-vede-{altro}",
+                     cert.marker(altro) not in risposta.text(),
+                     f"la lista di {label} non contiene l'evento {eventi[altro]} di "
+                     f"{altro} ({len(risposta.items())} elementi osservati)")
+
+    # --- NEXT_BEST_ACTION: refresh dentro l'agenzia propria ----------------
+    azioni = {}
+    for label in etichette:
+        risposta = http.request("POST", "/api/next-best-action/refresh",
+                                jar=dedicate[label]["jar"], payload={})
+        if risposta.status != 200:
+            report.blocked(f"NEXT_BEST_ACTION-fixture-{label}",
+                           f"refresh -> {risposta.status}")
+            continue
+        lista = http.request("GET", "/api/next-best-action?limit=100",
+                             jar=dedicate[label]["jar"])
+        voci = lista.items()
+        azioni[label] = {int(v["id"]) for v in voci if v.get("id") is not None}
+        report.note(f"NEXT_BEST_ACTION-fixture-{label}",
+                    f"{len(voci)} azioni materializzate nell'agenzia di {label}")
+
+    if len(azioni) == 2 and (azioni["C"] or azioni["D"]):
+        comuni = azioni["C"] & azioni["D"]
+        report.check("NEXT_BEST_ACTION-disgiunte", not comuni,
+                     f"le azioni di C ({len(azioni['C'])}) e D ({len(azioni['D'])}) "
+                     f"non hanno id in comune")
+        for label in etichette:
+            if not azioni[label]:
+                report.blocked(f"NEXT_BEST_ACTION-appartenenza-{label}",
+                               "nessuna azione materializzata: niente di cui "
+                               "verificare l'agenzia")
+                continue
+            try:
+                with cert.db.read() as cur:
+                    cur.execute("SELECT COUNT(*) AS n FROM next_best_actions "
+                                " WHERE id IN %s AND agency_id <> %s",
+                                (tuple(azioni[label]), dedicate[label]["agency"]["id"]))
+                    estranee = int(cur.fetchone()["n"])
+            except Exception as exc:
+                report.blocked(f"NEXT_BEST_ACTION-appartenenza-{label}",
+                               f"agenzia non leggibile ({type(exc).__name__})")
+                continue
+            report.check(f"NEXT_BEST_ACTION-appartenenza-{label}", estranee == 0,
+                         f"tutte le {len(azioni[label])} azioni di {label} "
+                         f"appartengono alla sua agenzia")
+    else:
+        report.blocked("NEXT_BEST_ACTION-disgiunte",
+                       "nessuna azione materializzata in nessuna delle due "
+                       "agenzie dedicate: il confronto non proverebbe nulla")
+
+    # --- PROPERTY_WATCH: una stima per agenzia, creata dal run -------------
+    #
+    # Le stime nascono dal funnel pubblico, che risolve la Default: da li' non
+    # se ne ottiene una per un'altra agenzia. Ma il funnel e' UNA strada, non
+    # l'unica: la riga si puo' inserire direttamente nell'agenzia del run, che
+    # e' la stessa cosa che facciamo per agenzie e operatori. Nessun invio,
+    # nessun PDF, nessuna email - quelli stanno in `salva_stima`, non
+    # nell'INSERT - e nessun dato preesistente toccato.
+    stime = {}
+    for label in etichette:
+        try:
+            with cert.db.write() as cur:
+                cur.execute(
+                    "INSERT INTO stime (comune, via, tipologia, agency_id) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    (cert.marker(label), cert.marker(label), "appartamento",
+                     dedicate[label]["agency"]["id"]))
+                stime[label] = int(cur.fetchone()["id"])
+            cert.created_effects.setdefault("stime", []).append(stime[label])
+        except Exception as exc:
+            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
+                           f"stima non creabile ({type(exc).__name__})")
+            continue
+        risposta = http.request("POST", f"/api/property-watch/stime/{stime[label]}/initialize",
+                                jar=dedicate[label]["jar"])
+        if risposta.status not in (200, 201):
+            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
+                           f"initialize -> {risposta.status}: nessun watch da osservare")
+            stime.pop(label, None)
+            continue
+        report.note(f"PROPERTY_WATCH-fixture-{label}",
+                    f"stima {stime[label]} e watch nell'agenzia dedicata di {label}")
+
+    for label, altro in (("C", "D"), ("D", "C")):
+        if len(stime) < 2:
+            report.blocked(f"PROPERTY_WATCH-ostile-{label}-{altro}",
+                           "manca un watch per agenzia: il confronto non prova nulla")
+            continue
+        propria = http.request("GET", f"/api/property-watch/stime/{stime[label]}",
+                               jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-propria-{label}", propria.status == 200,
+                     f"{label} legge il watch della propria stima {stime[label]} "
+                     f"-> {propria.status}")
+        ostile = http.request("GET", f"/api/property-watch/stime/{stime[altro]}",
+                              jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-ostile-{label}-{altro}",
+                     ostile.status in NEUTRAL_REFUSALS,
+                     f"{label} chiede il watch della stima {stime[altro]} di {altro} "
+                     f"-> {ostile.status}, mentre {altro} sulla stessa riga ottiene 200")
+        scrittura = http.request(
+            "POST", f"/api/property-watch/stime/{stime[altro]}/initialize",
+            jar=dedicate[label]["jar"])
+        report.check(f"PROPERTY_WATCH-ostile-write-{label}-{altro}",
+                     scrittura.status in NEUTRAL_REFUSALS,
+                     f"{label} tenta di inizializzare il watch di {altro} "
+                     f"-> {scrittura.status}")
+
+
+def certify_batch_only(report, http, cert, domain, jars, owned, context) -> None:
+    """Domini la cui risorsa nasce solo da un'operazione sull'intero tenant.
+
+    Senza agenzie dedicate non c'e' modo di crearne una senza toccare righe di
+    altri, e una lista vuota non prova nulla: BLOCKED, con il motivo. Con le
+    agenzie dedicate la prova la fa `certify_batch_domains`.
+    """
+    if context.get("dedicated_agencies"):
+        return
+    report.blocked(
+        f"{domain.name}-batch",
+        "la risorsa nasce da un'operazione che percorre l'intero tenant: su "
+        "un'agenzia condivisa la creerebbe toccando righe altrui. Eseguire con "
+        "--with-dedicated-agencies",
+    )
 
 
 def certify_followup(report, http, cert, domain, jars, owned, context) -> None:
@@ -2511,16 +3869,74 @@ def certify_owner_portal(report, http, cert, domain, jars, owned, context) -> No
             f"il proprietario di {label} chiede l'immobile {target} di {other} -> "
             f"{response.status}, senza vederne il contenuto",
         )
-        # 3. I documenti: la superficie da cui esce un file, quindi quella dove
-        #    una fuga non sarebbe un dato ma un allegato.
-        response = http.request(
-            "GET", _fill(domain.detail, id=target) + "/documents", jar=portal_jars[label])
-        report.check(
-            f"OWNER_PORTAL-documenti-{label}-{other}",
-            response.status in NEUTRAL_REFUSALS,
-            f"il proprietario di {label} chiede i documenti dell'immobile "
-            f"{target} di {other} -> {response.status}",
-        )
+        # 3. I DOCUMENTI, CON IL LORO CONTRATTO.
+        #
+        # `portal_shared_documents` e' una SELECT filtrata per conto nella
+        # JOIN: su un immobile non concesso risponde 200 con lista VUOTA - e
+        # risponde cosi' anche per un id inesistente, quindi non e' un oracolo
+        # di esistenza. Il run 9b95b3ee215e ha segnato quel 200 come FAIL
+        # perche' la sonda pretendeva 403/404 dove il contratto dice "niente
+        # da vedere". Un 200 e' accettabile SOLO vuoto e senza marcatore
+        # altrui; ed e' una prova solo se il proprietario legittimo, sullo
+        # stesso immobile, ne vede uno.
+        documenti = context.get("portal_documents", {})
+        mio = http.request("GET", _fill(domain.detail, id=properties.get(label)) + "/documents",
+                           jar=portal_jars[label]) if properties.get(label) else None
+        if documenti.get(label) is None or mio is None:
+            report.blocked(f"OWNER_PORTAL-documenti-{label}",
+                           "nessun documento pubblicato per questo run: la lista "
+                           "vuota altrui non proverebbe nulla")
+        else:
+            report.check(
+                f"OWNER_PORTAL-documenti-{label}",
+                mio.status == 200 and cert.marker(label) in mio.text(),
+                f"il proprietario di {label} vede il proprio documento "
+                f"({mio.status}, {len(mio.items())} elementi)",
+            )
+            response = http.request(
+                "GET", _fill(domain.detail, id=target) + "/documents", jar=portal_jars[label])
+            vuota = response.status == 200 and response.items() == []
+            report.check(
+                f"OWNER_PORTAL-documenti-{label}-{other}",
+                (response.status in NEUTRAL_REFUSALS or vuota)
+                and cert.marker(other) not in response.text(),
+                f"il proprietario di {label} chiede i documenti dell'immobile "
+                f"{target} di {other} -> {response.status}"
+                + (" con lista vuota" if vuota else ""),
+            )
+            # 3b. IL DOWNLOAD. `prepare_shared_document_download` apre lo
+            #     storage: un documento via URL non ha storage_key, quindi il
+            #     proprietario legittimo puo' ricevere 404 anche se e' suo. La
+            #     prova ostile e' decisiva solo se quella positiva risponde
+            #     200; altrimenti e' BLOCKED, non PASS.
+            scaricabili = context.get("portal_downloadable", {})
+            proprio_doc = scaricabili.get(label)
+            scarico = (http.request("GET",
+                                    f"/api/owner/portal/documents/{proprio_doc}/download",
+                                    jar=portal_jars[label])
+                       if proprio_doc is not None else None)
+            if proprio_doc is None or scarico.status != 200:
+                report.blocked(
+                    f"OWNER_PORTAL-download-{label}",
+                    "nessun documento con oggetto nello storage per questo run"
+                    if proprio_doc is None else
+                    f"il proprietario legittimo riceve {scarico.status} sul proprio "
+                    f"documento {proprio_doc}: il rifiuto verso l'altro sarebbe ambiguo",
+                )
+            else:
+                report.note(f"OWNER_PORTAL-download-{label}",
+                            f"download del proprio documento {proprio_doc} -> 200")
+                altrui = scaricabili.get(other)
+                if altrui is not None:
+                    ostile = http.request(
+                        "GET", f"/api/owner/portal/documents/{altrui}/download",
+                        jar=portal_jars[label])
+                    report.check(
+                        f"OWNER_PORTAL-download-{label}-{other}",
+                        ostile.status in NEUTRAL_REFUSALS,
+                        f"il proprietario di {label} scarica il documento {altrui} "
+                        f"di {other} -> {ostile.status}",
+                    )
 
     # 4. IL GRANT INCOERENTE.
     #
@@ -2573,7 +3989,7 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
     context = {
         "owner_jars": {}, "owner_accounts": {}, "owner_grants": {},
         "portal_jars": {}, "portal_properties": {}, "owned_properties": {},
-        "stime": {}, "disclosures": [], "owner_links": {},
+        "stime": {}, "disclosures": [], "owner_links": {}, "portal_documents": {}, "portal_downloadable": {},
         "agencies": dict(agencies or {}),
         "dedicated_agencies": dedicated_agencies,
     }
@@ -2684,7 +4100,7 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
                         f"il titolare di {agency['slug']} (nessuna credenziale "
                         "letta o modificata)")
 
-    build_owner_fixtures(report, http, cert, context["owner_jars"], owned, context)
+    build_owner_fixtures(report, http, cert, context["owner_jars"], owned, context, jars=jars)
 
     if database is not None:
         context["stime"] = derive_stime(database, agencies or {})
@@ -2962,13 +4378,30 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         # fixture HTTP se ne andassero per prime, ogni DELETE fallirebbe e il
         # run riporterebbe un cleanup incompleto - un FAIL vero, per una ragione
         # che non ha nulla a che vedere con l'isolamento.
+        # PRIMA DI OGNI CANCELLAZIONE, comprese quelle via API: gli id dei
+        # genitori le cui figlie andranno verificate dopo. Presa piu' tardi,
+        # l'istantanea fotograferebbe un database gia' potato.
+        cert.snapshot_before_cleanup()
+        # La guardia PRIMA della prima DELETE. Vendite, proposte e conti
+        # proprietario se ne vanno nelle due chiamate qui sotto: chiedersi
+        # dopo se qualcosa li referenziava sarebbe chiederselo quando non
+        # esistono piu'.
+        cert.preflight_dependencies()
         cert.cleanup_chain_fixtures()
         cert.cleanup_owner_fixtures()
         cert.cleanup_http_fixtures(http, jars)
         # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
         # `property_contacts` li referenziano con RESTRICT, quindi finche' le
         # righe di sopra esistono il contatto non e' cancellabile.
+        # Il bucket PRIMA delle righe: la chiave si legge da property_documents,
+        # e cancellata quella riga la chiave non e' piu' recuperabile.
+        cert.cleanup_storage_objects()
         cert.cleanup_orphan_fixtures(agencies)
+        # Le agenzie dedicate PRIMA della verifica, e non e' una preferenza:
+        # `flow_events` e `stime` sono effetti del run che stanno dentro
+        # quelle agenzie, e verificarli prima li conterebbe tutti.
+        # `verify_no_residue` non si fida dell'ordine scritto qui: se la
+        # chiamata sotto finisse sopra, se ne accorge e fallisce dicendolo.
         cert.cleanup_dedicated_agencies()
         # Per ultima, e indipendente da come si e' cancellato: l'unica prova
         # che il TEST sia tornato com'era.

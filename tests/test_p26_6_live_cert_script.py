@@ -61,9 +61,26 @@ class FakeCursor:
     def _users(self) -> dict:
         return self.state.setdefault("users", {})
 
+    def _effetti_vive(self) -> dict:
+        """{tabella: set(id)} delle righe degli effetti ancora presenti.
+
+        Materializzate davvero: e' cio' che rende non vuota la verifica per id
+        introdotta per le relazioni SET NULL. Un doppio che rispondesse 0 a
+        ogni conteggio renderebbe quella verifica soddisfatta anche da un
+        cleanup che non cancella niente.
+        """
+        if "_effetti_vive" not in self.state:
+            self.state["_effetti_vive"] = {
+                t: set(ids) for t, ids in self.state.get("effetti_righe", {}).items()}
+        return self.state["_effetti_vive"]
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
+        # Query E parametri: per le interrogazioni sul catalogo la tabella sta
+        # nel parametro, e senza registrarlo non si puo' verificare SU QUALI
+        # tabelle la guardia delle dipendenze abbia davvero girato.
+        self.state.setdefault("interrogazioni", []).append((statement, params))
         upper = statement.upper()
 
         if self.state.get("explode_on") and self.state["explode_on"] in statement:
@@ -104,6 +121,11 @@ class FakeCursor:
                 ids = set(params[0]) if params else set()
                 self._row = {"users": len([i for i in ids if i in self._users()]),
                              "memberships": 0, "sessions": 0}
+        elif "FROM FOLLOWUP_ACTIONS" in upper and "TASK_ID = %S" in upper:
+            # L'azione persistita dalla scansione: 1 per difetto, cosi' un run
+            # sano passa. `azioni_persistite` = 0 modella l'escalation che
+            # risponde 'completed' senza aver scritto nulla.
+            self._row = {"n": self.state.get("azioni_persistite", 1)}
         elif "AS N FROM PUBLIC." in upper:
             # Le dipendenze fuori perimetro. Prima del ramo generico "AS N":
             # quello e' il censimento incoerenze e rispondeva 0, facendo
@@ -117,6 +139,92 @@ class FakeCursor:
             estranee = self.state.get("dipendenti_estranee", 0)
             self._row = {"n": estranee if "NOT (T.ID IN" in upper
                          else interne + estranee}
+        elif upper.startswith("SELECT ID, STORAGE_KEY FROM PROPERTY_DOCUMENTS"):
+            # Le chiavi degli oggetti caricati. `senza_chiave` modella i
+            # documenti nati da un URL, che non hanno nulla nel bucket.
+            # Solo i documenti CARICATI hanno una chiave: quelli nati da un
+            # URL hanno storage_key NULL, e la query li esclude gia' con
+            # `WHERE storage_key IS NOT NULL`. Un doppio che desse una chiave
+            # a tutti farebbe sembrare pulito un bucket mai toccato.
+            ids = list(params[0]) if params else []
+            caricati = set(self.state.get("documenti_caricati", []))
+            if self.state.get("senza_chiave"):
+                self._rows = []
+            else:
+                self._rows = [{"id": i, "storage_key": f"k/{i}"}
+                              for i in ids if i in caricati]
+        elif upper.startswith("SELECT PROPERTY_DOCUMENT_ID FROM OWNER_SHARED_DOCUMENTS"):
+            # Il recupero dell'origine quando la risposta non la porta.
+            # `origine_perduta` modella il caso in cui nemmeno il database
+            # risponde: allora l'oggetto nel bucket non e' piu' raggiungibile
+            # per id, ed e' li' che il cleanup deve fermarsi.
+            condiviso = params[0] if params else None
+            origine = self.state.get("origine_condivisa", {}).get(condiviso)
+            self._row = (None if self.state.get("origine_perduta")
+                         else {"property_document_id": origine})
+        elif upper.startswith("SELECT ID FROM PROPERTY_WATCHES"):
+            # I watch delle agenzie dedicate, fotografati PRIMA del cleanup.
+            # Un doppio che non li restituisse renderebbe vuota l'istantanea,
+            # e la verifica delle figlie salterebbe in silenzio.
+            agenzie = set(params[0]) if params else set()
+            # `senza_watch` modella l'initialize che non ha creato nulla: e' il
+            # caso in cui la verifica delle figlie non ha genitori da cui
+            # partire, e deve dirlo invece di dichiararsi superata.
+            self._rows = [] if self.state.get("senza_watch") else [
+                {"id": i} for i, a in
+                self.state.get("watch_vivi", {}).items() if a in agenzie]
+        elif upper.startswith("SELECT ID FROM CONTACTS"):
+            agenzie = set(params[0]) if params else set()
+            self._rows = [{"id": i} for i, a in
+                          self.state.get("contatti_dedicati", {}).items()
+                          if a in agenzie]
+        elif any(f" {f.upper()} " in f" {upper} "
+                 for f, _c, _g, _a in cert.Certification.CHILD_FOREIGN_KEYS):
+            # Le figlie: DUE conteggi, prima e dopo la cancellazione del
+            # genitore. Un doppio con un solo numero non distingue "il CASCADE
+            # ha funzionato" da "non stavo guardando": e' esattamente il
+            # difetto che questa correzione rimuove dallo script.
+            tabella = next(f for f, _c, _g, _a in cert.Certification.CHILD_FOREIGN_KEYS
+                           if f" {f.upper()} " in f" {upper} ")
+            prima, dopo = self.state.get("figli_cascata", {}).get(tabella, (0, 0))
+            self._row = {"n": dopo if self.state.get("genitori_cancellati") else prima}
+        elif "COUNT(*) AS N FROM FLOW_EVENTS" in upper:
+            # MATERIALIZZATI DAVVERO. Prima questo ramo non esisteva e il
+            # censimento generico rispondeva 0 sempre: i test passavano
+            # qualunque fosse l'ordine delle cancellazioni, che e' il motivo
+            # per cui l'ordine sbagliato non si vedeva.
+            ids = set(params[0]) if params else set()
+            self._row = {"n": len(ids & set(self.state.get("flow_events_vivi", {})))}
+        elif "COUNT(*) AS N FROM STIME" in upper:
+            ids = set(params[0]) if params else set()
+            self._row = {"n": len(ids & set(self.state.get("stime_create", {})))}
+        elif re.match(r"^SELECT T\.ID FROM ([A-Z_]+) T WHERE", upper):
+            # L'istantanea degli id delle righe del run negli effetti, presa
+            # prima delle DELETE.
+            tabella = re.match(r"^SELECT T\.ID FROM ([A-Z_]+) T ",
+                               upper).group(1).lower()
+            self._rows = [{"id": i} for i in sorted(self._effetti_vive().get(tabella, ()))]
+        elif re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) WHERE ID IN", upper) \
+                and re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) ",
+                             upper).group(1).lower() in self._effetti_vive():
+            # Le righe degli effetti dopo il cleanup: quante di quelle
+            # fotografate sono ancora la'.
+            tabella = re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) ",
+                               upper).group(1).lower()
+            ids = set(params[0]) if params else set()
+            self._row = {"n": len(ids & self._effetti_vive()[tabella])}
+        elif re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) WHERE ID IN", upper) \
+                and "effetti_vivi" in self.state:
+            # Righe sopravvissute alla cancellazione, per tabella. Serve a
+            # esercitare la verifica finale su cio' che NON sta in
+            # `created_rows`: documenti, match, conti, vendite.
+            tabella = re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) ",
+                               upper).group(1).lower()
+            self._row = {"n": self.state["effetti_vivi"].get(tabella, 0)}
+        elif "COUNT(*) AS N FROM NEXT_BEST_ACTIONS" in upper:
+            # Prima dei rami generici "AS N", che la intercettavano e
+            # rispondevano 0 rendendo l'appartenenza sempre soddisfatta.
+            self._row = {"n": self.state.get("nba_estranee", 0)}
         elif "AS N" in upper and any(
                 t in upper for t in (" PROPERTY_STATUS_HISTORY", " BUY_REQUEST_HISTORY",
                                      " MATCH_RUNS", " OWNER_AUDIT_LOG",
@@ -184,6 +292,13 @@ class FakeCursor:
             derivato.update(self.state.get("task_owner", {}))
             ids = list(params[0]) if params else []
             self._rows = [{"id": i, "agency_id": derivato.get(i)} for i in ids]
+        elif upper.startswith("INSERT INTO STIME"):
+            self.state["next_stima"] = self.state.get("next_stima", 9500) + 1
+            # id -> agenzia: e' cosi' che la riga puo' essere davvero
+            # cancellata dal DELETE per agency_id, invece che ignorata.
+            self.state.setdefault("stime_create", {})[self.state["next_stima"]] = params[3]
+            self._row = {"id": self.state["next_stima"]}
+            self.rowcount = 1
         elif upper.startswith("SELECT ID FROM STIME"):
             stime = self.state.get("stime", {})
             agency = params[0] if params else None
@@ -201,6 +316,39 @@ class FakeCursor:
             self.rowcount = 1
         elif upper.startswith("DELETE"):
             self.state.setdefault("deletes", []).append(statement)
+            # Solo le DELETE per agenzia portano una tupla di id: quella delle
+            # fixture orfane passa una lista piatta di terne, e leggerla come
+            # insieme di agenzie sarebbe un errore del doppio.
+            agenzie = (set(params[0]) if params and isinstance(params[0], (tuple, list, set))
+                       else set())
+            if "FROM FLOW_EVENTS" in upper:
+                vivi = self.state.get("flow_events_vivi", {})
+                for i in [i for i, a in vivi.items() if a in agenzie]:
+                    del vivi[i]
+            if "FROM STIME" in upper:
+                # In posto, non riassegnando: `probe.stime_dedicate` e'
+                # un alias di questo dizionario.
+                vive = self.state.get("stime_create", {})
+                for i in [i for i, a in vive.items() if a in agenzie]:
+                    del vive[i]
+            # La DELETE per predicato di appartenenza - quella con l'alias `t`
+            # - e' l'unica che il doppio modella per gli effetti. E'
+            # un'approssimazione conservativa: la cancellazione per conto
+            # proprietario, in cleanup_owner_fixtures, non e' rappresentata,
+            # quindi il doppio puo' segnalare un residuo che il database vero
+            # non avrebbe, mai nasconderne uno.
+            per_predicato = re.match(r"^DELETE FROM ([A-Z_]+) T WHERE", upper)
+            if per_predicato:
+                tabella = per_predicato.group(1).lower()
+                if (tabella in self._effetti_vive()
+                        and tabella not in self.state.get("delete_inefficace", ())):
+                    self._effetti_vive()[tabella] = set()
+            if agenzie and ("FROM PROPERTY_WATCHES" in upper or "FROM CONTACTS" in upper):
+                # I genitori delle agenzie dedicate se ne sono andati: da qui
+                # in poi le figlie rispondono con il conteggio "dopo". La
+                # DELETE delle fixture orfane non conta: cancella contatti
+                # delle agenzie condivise, e non e' il genitore in questione.
+                self.state["genitori_cancellati"] = True
             if "FROM AGENCIES" in upper and params:
                 self.state["agenzie_vive"] = [
                     a for a in self.state.get("agenzie_vive", [])
@@ -372,6 +520,18 @@ class FakeHttp(cert.HttpProbe):
         self.rule_enabled = True
         # email operatore dedicato -> agency_id, popolata dal test.
         self.dedicate: dict = {}
+        # id dei property_documents nati da un CARICAMENTO: solo questi hanno
+        # un oggetto nel bucket.
+        self.caricati: list = []
+        # Righe che il doppio del database deve poter contare e cancellare.
+        # `working_run` le aggancia allo stato del database: finche' restavano
+        # qui e basta, ogni conteggio rispondeva 0 e nessun ordine di
+        # cancellazione poteva risultare sbagliato.
+        self.flow_events_vivi: dict = {}       # id evento -> agenzia
+        self.watch_vivi: dict = {}             # id watch  -> agenzia
+        # id condivisione -> id property_documents. Nello schema la colonna e'
+        # NOT NULL: la riga c'e' anche quando la risposta HTTP tace.
+        self.origine_condivisa: dict = {}
         self.match_property: dict = {}         # match_id  -> property_id
         self.proposal_property: dict = {}      # proposal_id -> property_id
 
@@ -433,6 +593,17 @@ class FakeHttp(cert.HttpProbe):
                 "agency": agency, "prefix": prefix,
                 "body": _json.dumps({"id": self.next_id, "pre": "esistente"}),
             }
+
+    def upload(self, path, *, jar, campi, nome_file, contenuto, tipo="application/pdf"):
+        """Il doppio del caricamento multipart: registra i campi e delega."""
+        self.upload_property = int(campi["property_id"])
+        self.upload_title = campi["public_title"]
+        agency = self._agency_of(jar)
+        if agency is None:
+            return self._reply("POST", path, 401, b'{"detail":"Non autorizzato"}')
+        if self._role_of(jar) != cert.OWNER_ADMIN_MIN_ROLE:
+            return self._reply("POST", path, 403, b'{"detail":"riservato"}')
+        return self._owner_admin("POST", path, jar, agency, None)
 
     def _reply(self, method, path, status, body=b""):
         self.exchanges.append((f"{method} {path.split('?')[0]}", status, body))
@@ -501,6 +672,62 @@ class FakeHttp(cert.HttpProbe):
             row["body"] = _json.dumps(body)
             return self._reply(method, path, 200, row["body"].encode())
 
+        if tail == "/documents/upload" and method == "POST":
+            # Il caricamento richiede lo storage oggetti. "no_storage_backend"
+            # modella un TEST in cui OWNER_DOCUMENT_STORAGE_ENABLED e' falso.
+            if self._broken("no_storage_backend", "portal"):
+                return self._reply(method, path, 503, b'{"detail":"storage non attivo"}')
+            self.next_id += 1
+            self.shared = getattr(self, "shared", {})
+            self.shared[self.next_id] = {"agency": agency, "property": self.upload_property,
+                                         "title": self.upload_title,
+                                         "published": False, "storage": True}
+            # La risposta porta l'id del documento di origine, che e' l'unico
+            # modo per risalire allo storage_key: senza, il bucket non si
+            # ripulisce e nessuno se ne accorge.
+            self.next_id += 1
+            origine = self.next_id
+            self.caricati.append(origine)
+            condiviso = self.next_id - 1
+            # La riga esiste comunque nel database: e' NOT NULL nello schema.
+            # Che la RISPOSTA la porti o no e' un'altra questione, ed e'
+            # esattamente cio' che `upload_senza_origine` mette alla prova.
+            self.origine_condivisa[condiviso] = origine
+            corpo = {"id": condiviso}
+            if self._broken("upload_origine_non_numerica", "portal"):
+                # 201, campo presente, valore non convertibile: se la
+                # diagnostica lo tocca prima di aver messo al sicuro il
+                # canonico, il canonico non viene registrato affatto.
+                corpo["property_document_id"] = "abc"
+            elif self._broken("upload_origine_sbagliata", "portal"):
+                # 201, campo presente, valore di un ALTRO documento: il caso
+                # che un controllo "se manca, leggi il database" non vede.
+                corpo["property_document_id"] = origine + 7000
+            elif not self._broken("upload_senza_origine", "portal"):
+                corpo["property_document_id"] = origine
+            return self._reply(method, path, 201, _json.dumps(corpo).encode())
+
+        if tail == "/documents" and method == "POST":
+            base = self.rows.get((payload or {}).get("property_document_id"))
+            if base is None or base["agency"] != agency:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            self.next_id += 1
+            self.shared = getattr(self, "shared", {})
+            # documento condiviso -> (agenzia, immobile, titolo, pubblicato)
+            import json as _j
+            self.shared[self.next_id] = {"agency": agency,
+                                         "property": _j.loads(base["body"]).get("_property"),
+                                         "title": payload["public_title"], "published": False}
+            return self._reply(method, path, 201, _json.dumps({"id": self.next_id}).encode())
+
+        if tail.endswith("/publish") and "/documents/" in tail and method == "POST":
+            ident = int(tail.split("/")[2])
+            doc = getattr(self, "shared", {}).get(ident)
+            if doc is None or doc["agency"] != agency:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            doc["published"] = True
+            return self._reply(method, path, 200, b'{"status":"published"}')
+
         if tail.startswith("/accounts") and method == "GET":
             if self._broken("owner_own_list", "owner_admin"):
                 # Il titolare non riesce a leggere la PROPRIA lista: la prova
@@ -536,13 +763,52 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200,
                                _json.dumps({"items": items}).encode())
 
+        # /documents/{i}/download e /documents/{i}: 404 se non concesso.
+        # "no_storage": anche il proprietario legittimo riceve 404, come su un
+        # TEST senza storage - il download ostile deve allora restare BLOCKED.
+        found_dl = re.match(r"^/documents/(\d+)(/download)?$", tail)
+        if found_dl:
+            doc = getattr(self, "shared", {}).get(int(found_dl.group(1)))
+            if doc is None or doc["property"] not in granted or not doc["published"]:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            if found_dl.group(2) and (self._broken("no_storage", "portal")
+                                      or not doc.get("storage")):
+                # Senza oggetto nello storage non c'e' nulla da aprire: e'
+                # cosi' che si comporta prepare_shared_document_download su un
+                # documento nato da un URL.
+                return self._reply(method, path, 404, b'{"detail":"Risorsa non trovata"}')
+            return self._reply(method, path, 200, _json.dumps({"id": doc["title"]}).encode())
+
+        found_docs = re.match(r"^/properties/(\d+)/documents$", tail)
+        if found_docs:
+            # IL CONTRATTO REALE: SELECT filtrata per conto -> 200 con lista
+            # vuota su un immobile non concesso (e su uno inesistente).
+            pid = int(found_docs.group(1))
+            items = [{"id": i, "public_title": d["title"]}
+                     for i, d in getattr(self, "shared", {}).items()
+                     if d["property"] == pid and d["published"]
+                     and (pid in granted or self._broken("portal_documents", "portal"))]
+            corpo = {"items": items}
+            if pid not in granted:
+                # "docs_anon_leak": lista non vuota MA senza il marcatore -
+                # un documento altrui con titolo neutro. Solo il controllo
+                # "vuota" lo vede.
+                if self._broken("docs_anon_leak", "portal"):
+                    corpo["items"] = [{"id": 0, "public_title": "documento"}]
+                # "docs_marker_leak": items vuoto MA il marcatore altrui
+                # compare altrove nel corpo. Solo il controllo sul marcatore lo vede.
+                if self._broken("docs_marker_leak", "portal"):
+                    corpo["debug"] = [d["title"] for d in getattr(self, "shared", {}).values()
+                                      if d["property"] == pid]
+            elif self._broken("docs_hide_own", "portal"):
+                corpo["items"] = []
+            return self._reply(method, path, 200, _json.dumps(corpo).encode())
+
         found = re.search(r"/properties/(\d+)", tail)
         if found:
             identifier = int(found.group(1))
-            leaky = ("portal_documents" if tail.endswith("/documents")
-                     else "portal_detail")
             if identifier not in granted and not (
-                    self._broken("isolation", "portal") or self._broken(leaky, "portal")):
+                    self._broken("isolation", "portal") or self._broken("portal_detail", "portal")):
                 return self._reply(method, path, 404, b'{"detail":"non trovata"}')
             row = self.rows.get(identifier)
             if row is None:
@@ -552,6 +818,29 @@ class FakeHttp(cert.HttpProbe):
         return self._reply(method, path, 200, b'{"items":[]}')
 
     def _property_watch(self, method, path, agency):
+        # Le stime create dal run nelle agenzie dedicate: la proprieta' viene
+        # dal doppio del database, non da `self.stime`.
+        creata = getattr(self, "stime_dedicate", {})
+        found_d = re.search(r"/stime/(\d+)", path)
+        if found_d and int(found_d.group(1)) in creata:
+            identifier = int(found_d.group(1))
+            estraneo = creata[identifier] != agency
+            if estraneo and method == "POST" and self._broken("watch_write_leak", "watch"):
+                return self._reply(method, path, 200, b'{"initialized":true}')
+            if estraneo and not self._broken("isolation", "watch"):
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            if method == "POST" and path.endswith("/initialize"):
+                # Il watch nasce qui, ed e' il genitore che l'istantanea deve
+                # poter fotografare: senza questa riga il doppio del database
+                # non saprebbe che esiste, e la verifica delle figlie
+                # salterebbe per assenza di genitori invece che per merito.
+                self.watch_id = getattr(self, "watch_id", 7700) + 1
+                self.watch_vivi[self.watch_id] = agency
+            return self._reply(method, path, 200,
+                               f'{{"stima_id":{identifier},"watch":true}}'.encode())
+        return self._property_watch_preesistenti(method, path, agency)
+
+    def _property_watch_preesistenti(self, method, path, agency):
         """Le stime: esistono gia', e appartengono a un'agenzia."""
         found = re.search(r"/stime/(\d+)", path)
         identifier = int(found.group(1))
@@ -648,9 +937,15 @@ class FakeHttp(cert.HttpProbe):
                         and (body.get("metadata") or {}).get("source") == "followup")
             if not eligible:
                 continue
-            body["priority"], body["status"] = "high", "in_progress"
-            row["body"] = _json.dumps(body)
-            items.append({"task_id": identifier, "status": "completed",
+            # "scan_lies": nell'elenco come 'completed', ma il task non viene
+            # toccato. E' il caso del run 9b95b3ee215e: fixture C rimasta
+            # open/low con la prova segnata PASS.
+            if not self._broken("scan_lies", "followup"):
+                body["priority"], body["status"] = "high", "in_progress"
+                row["body"] = _json.dumps(body)
+            stato_elemento = ("failed" if self._broken("scan_item_fails", "followup")
+                              else "completed")
+            items.append({"task_id": identifier, "status": stato_elemento,
                           "idempotency_key": f"followup:time:RULE:task:{identifier}:v1"})
         # "intruso_dopo_preflight": un task ESTRANEO che ha attraversato la
         # soglia delle 24 ore mentre il run procedeva. Il preflight lo aveva
@@ -770,6 +1065,45 @@ class FakeHttp(cert.HttpProbe):
         if path == "/api/sales" and method == "POST":
             return self._create_sale(method, path, agency, payload or {})
 
+        if path == "/api/flow/events" and method == "POST":
+            self.next_id += 1
+            # Registrata anche nel doppio del database: e' cio' che rende la
+            # riga cancellabile - e quindi contabile - invece di un id che
+            # nessuna query conosce.
+            self.flow_events_vivi[self.next_id] = agency
+            self.rows[self.next_id] = {"agency": agency, "prefix": "/api/flow",
+                                       "body": _json.dumps({"id": self.next_id,
+                                                            "event_type": payload["event_type"]})}
+            return self._reply(method, path, 201,
+                               _json.dumps({"id": self.next_id}).encode())
+
+        if path.startswith("/api/flow/events") and method == "GET":
+            visibili = [_json.loads(r["body"]) for r in self.rows.values()
+                        if r["prefix"] == "/api/flow"
+                        and (r["agency"] == agency or self._broken("flow_leak", "batch"))]
+            if self._broken("flow_hide_own", "batch"):
+                # La lista nasconde i propri: il confronto col marcatore
+                # altrui sarebbe vero per la ragione sbagliata.
+                visibili = [v for v in visibili if v["agency_marker"] != agency] \
+                    if visibili and "agency_marker" in visibili[0] else []
+            return self._reply(method, path, 200,
+                               _json.dumps({"items": visibili}).encode())
+
+        if path == "/api/next-best-action/refresh" and method == "POST":
+            if self._broken("nba_vuoto", "batch"):
+                return self._reply(method, path, 200, b'{"created":0}')
+            self.next_id += 1
+            self.nba = getattr(self, "nba", {})
+            self.nba.setdefault(agency, []).append(self.next_id)
+            return self._reply(method, path, 200, b'{"created":1}')
+
+        if path.startswith("/api/next-best-action?") and method == "GET":
+            miei = getattr(self, "nba", {}).get(agency, [])
+            if self._broken("nba_leak", "batch"):
+                miei = [i for lista in getattr(self, "nba", {}).values() for i in lista]
+            return self._reply(method, path, 200,
+                               _json.dumps({"items": [{"id": i} for i in miei]}).encode())
+
         if path.startswith("/api/match/readiness"):
             if self._broken("readiness", "generic"):
                 # Il motore dice perche' non puo' calcolare. Il messaggio e'
@@ -810,6 +1144,15 @@ class FakeHttp(cert.HttpProbe):
                     payload.get("match_id"))
             if path == "/api/core/tasks":
                 self.rows[self.next_id]["task"] = True
+            if path == "/api/core/contacts":
+                # Genitore di seller_revival_suppressions: il doppio del
+                # database deve saperlo per poterlo fotografare.
+                self.contatti_vivi[self.next_id] = agency
+            found_doc = re.match(r"^/api/property/properties/(\d+)/documents$", path)
+            if found_doc:
+                body = _json.loads(self.rows[self.next_id]["body"])
+                body["_property"] = int(found_doc.group(1))
+                self.rows[self.next_id]["body"] = _json.dumps(body)
             return self._reply(method, path, 201,
                                _json.dumps({"id": self.next_id, **payload}).encode())
 
@@ -891,6 +1234,10 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     # ha il diritto di entrarci e la prova sullo scope non verrebbe mai esercitata.
     # Le agenzie dedicate: il doppio deve sapere che l'operatore appena
     # creato appartiene all'agenzia appena creata.
+    # Le stime inserite via SQL nelle agenzie dedicate: il doppio HTTP deve
+    # sapere a chi appartengono.
+    original_cursor_write = cert.Database.write
+
     original_create_dedicated = cert.Certification.create_dedicated_agency
 
     def create_dedicated(self, label):
@@ -901,6 +1248,36 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
         return agency
 
     monkeypatch.setattr(cert.Certification, "create_dedicated_agency", create_dedicated)
+
+    probe.stime_dedicate = database.state.setdefault("stime_create", {})
+    database.state["documenti_caricati"] = probe.caricati
+    # Un solo dizionario per i due doppi: cio' che l'HTTP crea, l'SQL lo
+    # conta e lo cancella. Con due copie separate il cleanup avrebbe potuto
+    # dimenticarsi una tabella senza che nessun test se ne accorgesse.
+    probe.flow_events_vivi = database.state.setdefault("flow_events_vivi", {})
+    probe.watch_vivi = database.state.setdefault("watch_vivi", {})
+    probe.origine_condivisa = database.state.setdefault("origine_condivisa", {})
+    # I contatti, genitori di seller_revival_suppressions. Registrati tutti,
+    # con la loro agenzia: e' la query a filtrare quelli delle dedicate.
+    probe.contatti_vivi = database.state.setdefault("contatti_dedicati", {})
+
+    # Lo storage oggetti: un doppio che registra le chiavi cancellate, cosi'
+    # un test puo' verificare che il bucket venga davvero ripulito.
+    class StorageDoppio:
+        def __init__(self, stato):
+            self.stato = stato
+        def delete_object(self, chiave):
+            if self.stato.get("storage_rotto"):
+                raise RuntimeError("bucket irraggiungibile")
+            self.stato.setdefault("chiavi_cancellate", []).append(chiave)
+
+    stato = database.state
+    if stato.get("storage_assente"):
+        monkeypatch.setattr("owner.document_storage.get_document_storage",
+                            lambda: (_ for _ in ()).throw(RuntimeError("non configurato")))
+    else:
+        monkeypatch.setattr("owner.document_storage.get_document_storage",
+                            lambda: StorageDoppio(stato))
 
     original_open = cert.OwnerSessions.open
 
@@ -1084,7 +1461,12 @@ def test_7_the_direct_id_and_write_probes_exist_where_a_resource_can_be_made():
     da dimenticare e il piu' importante da avere."""
     for domain in cert.DOMAINS:
         if domain.fixture:
-            assert domain.detail, f"{domain.name} crea una fixture ma non prova l'ID diretto"
+            # L'ID diretto quando la route esiste; altrimenti un percorso che
+            # attraversa la relazione verso la risorsa altrui. SELLER_INTELLIGENCE
+            # non ha GET /events/{id}: il furto si tenta sul timeline del
+            # contatto dell'altra agenzia, che e' l'unica lettura per id.
+            assert domain.detail or domain.cross_links, (
+                f"{domain.name} crea una fixture ma non tenta mai di rubarla")
 
     # E l'inverso: una sonda sull'ID e' forte solo se il run POSSIEDE quell'id.
     # Un dominio che la dichiarasse senza avere ne' una fixture propria, ne' una
@@ -1228,7 +1610,7 @@ def test_12_a_non_https_base_stops_the_run(monkeypatch):
 # I domini che questo run non sa costruire e la cui lista, su un TEST poco
 # popolato, e' semplicemente vuota. MATCH, PROPOSAL e SALE NON sono piu' qui:
 # la catena li produce.
-DERIVED = ("/api/seller-intelligence", "/api/followup",
+DERIVED = ("/api/followup",
            "/api/next-best-action", "/api/flow", "/api/admin")
 
 
@@ -1253,7 +1635,7 @@ def test_13_an_empty_database_yields_INCOMPLETE_and_never_PASS(monkeypatch):
     assert not report.verdict.startswith("PASS")
 
     blocked = [i for k, i, _ in report.rows if k == cert.BLOCKED]
-    assert any("SELLER_INTELLIGENCE" in i for i in blocked), blocked
+    assert any("NEXT_BEST_ACTION" in i for i in blocked), blocked
     assert any("FLOW" in i for i in blocked), blocked
     # E soprattutto: PROPERTY_WATCH non passa per assenza di dati. E' il
     # dominio che prima veniva dichiarato "coperto" da un altro e non produceva
@@ -1281,10 +1663,38 @@ def test_13b_with_everything_populated_only_the_escalation_stays_BLOCKED(monkeyp
     assert failures == [], failures
 
     blocked = [i for k, i, _ in report.rows if k == cert.BLOCKED]
-    assert blocked == ["FOLLOWUP-escalation"], (
-        f"oltre all'escalation FOLLOWUP resta bloccato altro: {blocked}"
+    # SENZA le agenzie dedicate restano non provabili esattamente le superfici
+    # la cui risorsa nasce da un'operazione sull'intero tenant. Elencarle una
+    # per una - invece di tollerare "qualche BLOCKED" - fa si' che un terzo
+    # dominio che diventasse improvabile venga notato.
+    assert sorted(blocked) == ["FOLLOWUP-escalation", "NEXT_BEST_ACTION-batch"], (
+        f"l'insieme delle prove non eseguibili e' cambiato: {blocked}"
     )
     assert code == 2, report.verdict
+
+
+def test_13b_bis_with_dedicated_agencies_nothing_stays_BLOCKED(monkeypatch):
+    """E con la finestra attestata non resta niente di non provato.
+
+    E' la contropartita del test sopra: se il percorso dedicato smettesse di
+    coprire uno di quei domini, il BLOCKED ricomparirebbe qui.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    blocked = [i for k, i, _ in report.rows if k == cert.BLOCKED]
+    assert blocked == [], blocked
+    rows = {i: k for k, i, _ in report.rows}
+    for label, altro in (("C", "D"), ("D", "C")):
+        assert rows.get(f"FLOW-list-{label}-vede-la-propria") == cert.PASS
+        assert rows.get(f"FLOW-list-{label}-non-vede-{altro}") == cert.PASS
+        assert rows.get(f"NEXT_BEST_ACTION-appartenenza-{label}") == cert.PASS
+        assert rows.get(f"PROPERTY_WATCH-propria-{label}") == cert.PASS
+        assert rows.get(f"PROPERTY_WATCH-ostile-{label}-{altro}") == cert.PASS
+        assert rows.get(f"PROPERTY_WATCH-ostile-write-{label}-{altro}") == cert.PASS
+    assert rows.get("NEXT_BEST_ACTION-disgiunte") == cert.PASS
+    assert code == 0, report.verdict
 
 
 def test_13d_the_chain_is_really_built_and_really_probed(monkeypatch):
@@ -1421,8 +1831,13 @@ def test_16_both_directions_are_probed_for_every_domain(monkeypatch):
     assert "FOLLOWUP-selezione-A" in idents and "FOLLOWUP-selezione-B" in idents
     assert "FOLLOWUP-selezione-disgiunta" in idents
 
+    # NEXT_BEST_ACTION non ha due direzioni ostili sulle agenzie condivise: la
+    # sua risorsa nasce da un refresh sull'intero tenant, e la prova sta sulle
+    # dedicate (test_13b_bis). Nominarlo qui, invece di tollerare i domini
+    # senza direzioni, fa si' che un secondo caso venga notato.
+    assert "NEXT_BEST_ACTION-batch" in idents
     for domain in cert.DOMAINS:
-        if domain.name == "FOLLOWUP":
+        if domain.name in ("FOLLOWUP", "NEXT_BEST_ACTION"):
             continue
         own = [i for i in idents if i.startswith(f"{domain.name}-")]
         # Tre forme per "A verso B": l'id diretto (`...-A-B`), la lista
@@ -2197,11 +2612,14 @@ def test_47b_a_2xx_delete_that_leaves_the_row_is_caught_on_the_database(monkeypa
     # passerebbe in silenzio - ed e' il modo esatto in cui il difetto e'
     # sfuggito dal vivo: nessuna riga dichiarata, nessun residuo dichiarato.
     testo = next(t for k, i, t in report.rows if i == "CLEAN-VERIFICA")
-    osservate = int(re.search(r"(\d+) righe create", testo).group(1))
+    osservate = int(re.search(r"righe di dominio=(\d+)", testo).group(1))
     assert osservate >= 6, (
         f"la verifica ha considerato solo {osservate} righe: contatti, immobili "
         "e richieste di entrambe le agenzie devono esserci tutti"
     )
+    # E le altre categorie sono nominate: un conteggio delle sole righe di
+    # dominio direbbe meno del vero proprio dove il report afferma di piu'.
+    assert "effetti=" in testo and "matches=" in testo, testo
     # Le righe sopravvissute alla DELETE HTTP sono state rimosse via SQL, per
     # terne id+marcatore+agenzia: immobili e richieste, che sono le due
     # superfici le cui route DELETE archiviano soltanto.
@@ -2541,9 +2959,14 @@ def test_61_the_api_side_effects_are_verified_not_assumed(monkeypatch):
     assert {i: k for k, i, _ in report.rows}.get("CLEAN-VERIFICA") == cert.PASS
 
     blocco = _function_source("verify_no_residue")
+    dichiarate = {fk.table for fk in cert.Certification.EFFECT_FOREIGN_KEYS}
     for tabella in ("property_status_history", "buy_request_history",
-                    "match_runs", "owner_audit_log", "match_requirement_results"):
-        assert tabella in blocco, f"la verifica finale ignora {tabella}"
+                    "match_runs", "owner_audit_log"):
+        assert tabella in dichiarate, f"la verifica finale ignora {tabella}"
+    # E la verifica le percorre davvero: un elenco dichiarato e mai letto
+    # sarebbe una descrizione, non un controllo.
+    assert "EFFECT_FOREIGN_KEYS" in blocco, blocco[:200]
+    assert "match_requirement_results" in blocco, "la verifica finale ignora i risultati"
 
 
 @pytest.mark.parametrize("tabella", [
@@ -2602,10 +3025,12 @@ def test_64_a_foreign_dependency_appearing_after_the_census_stops_the_cleanup(mo
         dipendenti_estranee=1)
 
     fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
-    testo = next((t for i, t in fallimenti if i == "CLEAN-ORFANE"), None)
+    # Il preflight la trova PRIMA della prima DELETE: e' li' che il cleanup si
+    # ferma, non piu' a meta' strada quando vendite e conti sono gia' spariti.
+    testo = next((t for i, t in fallimenti if i == "CLEAN-PREFLIGHT"), None)
     assert testo is not None, fallimenti
     assert "fuori perimetro" in testo and "property_visits" in testo, testo
-    assert "Nessuna cancellazione" in testo
+    assert "Nessuna DELETE" in testo
 
     # E davvero non ha cancellato: nessuna DELETE sulle tabelle del perimetro.
     cancellazioni = " ".join(database.state.get("deletes", [])).upper()
@@ -2648,3 +3073,1480 @@ def test_66_rows_of_the_run_referencing_each_other_are_not_foreign(monkeypatch):
     # E ha davvero cancellato.
     cancellazioni = " ".join(database.state.get("deletes", [])).upper()
     assert "FROM CONTACTS" in cancellazioni
+
+
+# ---------------------------------------------------------------------------
+# 67-69 - RUN 9b95b3ee215e: le due cause dei residui e del falso PASS
+# ---------------------------------------------------------------------------
+
+def test_67_the_runs_own_effects_are_not_foreign_and_get_cleaned(monkeypatch):
+    """IL CASO LIVE: property_contacts, history, match_runs, risultati.
+
+    La guardia sulle dipendenze vedeva `property_contacts` - il legame che il
+    run stesso crea - come riga estranea, rifiutava tutto e non cancellava
+    nulla: sei radici e i loro effetti sono rimasti sul TEST, di nuovo.
+
+    La guardia aveva ragione a rifiutare cio' che non riconosceva. Il difetto
+    era il perimetro: gli effetti delle nostre API non vi erano dichiarati.
+    Adesso una riga di quelle tabelle e' del run se OGNI suo riferimento non
+    nullo cade nel perimetro - e allora si cancella, prima delle radici.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"properties": [("public.property_contacts", "property_id"),
+                                     ("public.property_status_history", "property_id"),
+                                     ("public.match_runs", "property_id")],
+                      "buy_requests": [("public.buy_request_history", "buy_request_id")]},
+        dipendenti_interne=0, dipendenti_estranee=0)
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("CLEAN-ORFANE") == cert.PASS, [r for r in report.rows if r[1] == "CLEAN-ORFANE"]
+    cancellazioni = " ".join(database.state.get("deletes", [])).upper()
+    for tabella in ("PROPERTY_CONTACTS", "PROPERTY_STATUS_HISTORY", "BUY_REQUEST_HISTORY",
+                    "MATCH_RUNS", "OWNER_AUDIT_LOG"):
+        assert f"FROM {tabella} T WHERE" in cancellazioni, (
+            f"{tabella} non viene rimossa: {database.state.get('deletes')}")
+    # E le radici DOPO gli effetti: property_contacts e' RESTRICT su contacts.
+    ordine = database.state.get("deletes", [])
+    i_effetto = next(i for i, d in enumerate(ordine) if "FROM property_contacts" in d)
+    i_radice = next(i for i, d in enumerate(ordine) if "FROM contacts t USING" in d)
+    assert i_effetto < i_radice
+
+
+def test_67b_an_effect_row_pointing_outside_the_perimeter_is_still_foreign(monkeypatch):
+    """Il predicato di appartenenza non e' un lasciapassare per tabella.
+
+    Una riga di `property_contacts` che lega il NOSTRO immobile a un contatto
+    che non e' nostro non e' del run: e' qualcuno che ha agganciato una
+    persona vera alla fixture. La guardia deve fermarsi, come prima.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"properties": [("public.property_contacts", "property_id")]},
+        dipendenti_estranee=1)
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "CLEAN-ORFANE" and "property_contacts" in t for i, t in fallimenti), fallimenti
+    assert "FROM PROPERTIES T USING" not in " ".join(database.state.get("deletes", [])).upper()
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("scan_lies", "FOLLOWUP-scan-C-task-escalato"),
+    ("scan_item_fails", "FOLLOWUP-scan-C-elabora-la-propria"),
+])
+def test_68_being_listed_is_not_escalation(monkeypatch, kind, expected):
+    """Tre verifiche distinte per un solo 'elaborato'.
+
+    `scan_lies`: l'elemento dice 'completed' ma il task resta open/low - e'
+    esattamente cio' che e' successo alla fixture C. `scan_item_fails`:
+    l'elemento c'e', con stato 'failed'. Prima entrambe passavano, perche' la
+    prova guardava solo la presenza nell'elenco.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={kind}, only="followup", prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert expected in fallimenti, f"rompendo {kind!r}: {fallimenti}"
+    assert code == 1
+
+
+def test_69_a_completed_item_without_a_persisted_action_is_caught(monkeypatch):
+    """La terza gamba: l'azione deve esistere sul database.
+
+    Un elemento 'completed' e un task escalato senza una riga in
+    followup_actions vorrebbero dire che l'idempotenza non ha memoria - la
+    prossima scansione lo escalerebbe di nuovo.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True, azioni_persistite=0,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert "FOLLOWUP-scan-C-azione-persistita" in fallimenti, fallimenti
+
+
+def test_70_the_ownership_predicate_is_never_vacuously_true():
+    """Il predicato "questa riga e' del run" non puo' degenerare in TRUE.
+
+    Se nessuna colonna puo' puntare dentro il perimetro, non esiste una riga
+    che sia nostra: la risposta e' None, non un predicato sempre vero che
+    farebbe cancellare l'intera tabella.
+    """
+    report, _ = quiet_report()
+    c = cert.Certification(fake_database(agencies=AGENCIES), report)
+
+    # Perimetro senza immobili: property_status_history non puo' essere nostra.
+    assert c._ownership_predicate(("property_id",), {"contacts": (1,)}, "t") is None
+
+    frammento, params = c._ownership_predicate(
+        ("property_id", "contact_id"), {"properties": (42, 43), "contacts": (82,)}, "t")
+    # Almeno un riferimento DENTRO, e ogni riferimento non nullo dentro.
+    assert frammento.startswith("(t.property_id IN %s OR t.contact_id IN %s) AND")
+    assert "(t.property_id IS NULL OR t.property_id IN %s)" in frammento
+    assert "(t.contact_id IS NULL OR t.contact_id IN %s)" in frammento
+    assert params == [(42, 43), (82,), (42, 43), (82,)]
+    assert "TRUE" not in frammento
+
+    # Una colonna il cui genitore non e' nel perimetro DEVE essere NULL.
+    frammento, _ = c._ownership_predicate(
+        ("buy_request_id", "match_id"), {"buy_requests": (28,)}, "t")
+    assert "t.match_id IS NULL" in frammento and "t.match_id IN" not in frammento
+
+
+def test_70b_the_guard_counts_only_effect_rows_outside_the_perimeter():
+    """La query della guardia sugli effetti nega il predicato di appartenenza.
+
+    Il doppio non esegue SQL: una mutazione che aggiungesse `WHERE FALSE` alla
+    query non verrebbe vista da nessun run simulato. Si legge il codice.
+    """
+    blocco = _function_source("_foreign_dependencies")
+    assert 'WHERE t.{colonna} IN %s AND NOT ({frammento})' in blocco
+    assert "WHERE FALSE" not in blocco
+    # E gli effetti si cancellano CON il predicato, non per genitore.
+    cleanup = _function_source("cleanup_orphan_fixtures")
+    assert 'DELETE FROM {table} t WHERE {frammento}' in cleanup
+
+
+# ---------------------------------------------------------------------------
+# 71-73 - OWNER Portal, documenti: il contratto reale
+# ---------------------------------------------------------------------------
+
+def test_71_a_published_document_is_seen_by_its_owner_and_not_by_the_other(monkeypatch):
+    """Il 200 sull'immobile altrui NON e' una fuga: `portal_shared_documents`
+    filtra per conto nella JOIN e risponde lista vuota. Il run 9b95b3ee215e lo
+    aveva segnato FAIL perche' la sonda pretendeva 403/404.
+
+    La prova regge solo con un documento vero: il proprietario legittimo lo
+    vede, l'altro riceve 200 vuoto senza marcatore."""
+    _code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    rows = {i: (k, t) for k, i, t in report.rows}
+    for label, other in (("A", "B"), ("B", "A")):
+        assert rows[f"owner-fixture-{label}-documento"][0] == cert.PASS
+        assert rows[f"OWNER_PORTAL-documenti-{label}"][0] == cert.PASS
+        k, t = rows[f"OWNER_PORTAL-documenti-{label}-{other}"]
+        assert k == cert.PASS and "con lista vuota" in t, (k, t)
+        assert rows[f"OWNER_PORTAL-download-{label}"][0] == cert.PASS
+        assert rows[f"OWNER_PORTAL-download-{label}-{other}"][0] == cert.PASS
+
+
+def test_72_a_document_list_that_leaks_is_still_caught(monkeypatch):
+    """Il 200 e' accettabile SOLO vuoto: se la lista altrui portasse il
+    documento dell'altra agenzia, e' FAIL."""
+    code, failures, _r = _first_failure(monkeypatch, "portal_documents", "portal")
+    assert "OWNER_PORTAL-documenti-A-B" in failures, failures
+    assert code == 1
+
+
+def test_73_without_storage_the_download_stays_BLOCKED_not_PASS(monkeypatch):
+    """Il download apre lo storage. Su un TEST senza storage anche il
+    proprietario legittimo riceve 404: il rifiuto verso l'altro sarebbe
+    ambiguo, e la prova resta BLOCKED."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"no_storage"}, only="portal",
+                                   prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("OWNER_PORTAL-download-A") == cert.BLOCKED
+    assert "OWNER_PORTAL-download-A-B" not in rows, "download ostile eseguito senza positivo"
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("docs_anon_leak", "OWNER_PORTAL-documenti-A-B"),
+    ("docs_marker_leak", "OWNER_PORTAL-documenti-A-B"),
+    ("docs_hide_own", "OWNER_PORTAL-documenti-A"),
+])
+def test_74_each_document_defence_is_load_bearing(monkeypatch, kind, expected):
+    """Le due difese sulla lista altrui - "vuota" e "senza marcatore" - si
+    coprono a vicenda: ciascuna sopravvive se l'altra e' sana. Qui ogni rottura
+    ne aggira una sola. E la prova positiva deve vedere IL documento, non un 200."""
+    code, failures, _r = _first_failure(monkeypatch, kind, "portal")
+    assert expected in failures, f"rompendo {kind!r}: {failures}"
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("flow_leak", "FLOW-list-C-non-vede-D"),
+    ("nba_leak", "NEXT_BEST_ACTION-disgiunte"),
+])
+def test_75_each_batch_domain_fails_on_its_own_defect(monkeypatch, kind, expected):
+    """FLOW e NEXT_BEST_ACTION, rotti uno alla volta.
+
+    Una lista non vuota non basta: se quella di C contenesse l'evento di D, o
+    se le due liste NBA condividessero un id, la prova deve fallire nominando
+    la propria sonda - non una vicina.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={kind}, only="batch", prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert expected in fallimenti, f"rompendo {kind!r}: {fallimenti}"
+    assert code == 1
+
+
+def test_76_an_empty_nba_refresh_is_BLOCKED_not_PASS(monkeypatch):
+    """Zero azioni materializzate: la disgiunzione sarebbe vera per
+    costruzione e non direbbe nulla sull'isolamento."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={"nba_vuoto"}, only="batch", prepopulate=DERIVED, stime=STIME))
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("NEXT_BEST_ACTION-disgiunte") == cert.BLOCKED
+
+
+def test_77_a_watch_that_crosses_the_dedicated_agency_is_caught(monkeypatch):
+    """La stima e' del run, l'agenzia e' del run: se il watch dell'altra
+    fosse leggibile, il predicato di tenant non terrebbe."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={"isolation"}, only="watch", prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("PROPERTY_WATCH-ostile-C") for i in fallimenti), fallimenti
+    assert code == 1
+
+
+def test_78_the_stima_is_created_by_the_run_and_removed_with_the_agency(monkeypatch):
+    """La stima non nasce dal funnel: viene inserita nell'agenzia del run.
+
+    Nessun invio, nessun PDF, nessuna email - quelli stanno in `salva_stima`,
+    non nell'INSERT - e nessun dato preesistente toccato. Sparisce con
+    l'agenzia dedicata, che e' cancellata per id.
+    """
+    _code, _report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    sql = " ".join(database.state.get("sql", [])).upper()
+    assert "INSERT INTO STIME" in sql
+    cancellazioni = " ".join(database.state.get("deletes", [])).upper()
+    for tabella in ("STIME", "PROPERTY_WATCHES", "FLOW_EVENTS", "NEXT_BEST_ACTIONS"):
+        assert f"FROM {tabella} WHERE AGENCY_ID IN" in cancellazioni, (
+            f"{tabella} non viene rimossa con l'agenzia dedicata")
+
+
+def test_79_the_error_shape_never_carries_the_raw_message():
+    """Un messaggio grezzo puo' contenere valori di riga: psycopg2 mette nel
+    DETAIL la chiave che ha violato il vincolo. Ripulirlo da email e cifre non
+    basta - resterebbero nomi, indirizzi, titoli. Si estrae la FORMA."""
+    grezzo = ('duplicate key value violates unique constraint '
+              '"followup_actions_idempotency_key_key"\n'
+              'DETAIL:  Key (idempotency_key)=(followup:time:X:task:501:v1) '
+              'already exists. SQLSTATE 23505')
+    forma = cert._error_shape(grezzo)
+    assert "sqlstate=23505" in forma
+    assert "vincolo=followup_actions_idempotency_key_key" in forma
+    for perso in ("DETAIL", "Key (", "task:501", "already exists"):
+        assert perso not in forma, f"la forma porta ancora {perso!r}: {forma}"
+
+    assert cert._error_shape(None) == "(vuoto)"
+    ignoto = cert._error_shape("Mario Rossi via Roma 3 non trovato")
+    assert "non classificato" in ignoto and "Mario" not in ignoto
+
+
+@pytest.mark.parametrize("kind,surface,expected", [
+    ("flow_hide_own", "batch", "FLOW-list-C-vede-la-propria"),
+    ("watch_write_leak", "watch", "PROPERTY_WATCH-ostile-write-C-D"),
+])
+def test_80_the_remaining_dedicated_probes_fail_on_their_own_defect(
+        monkeypatch, kind, surface, expected):
+    """Le due sonde che restavano coperte da una vicina.
+
+    `flow_hide_own`: la lista nasconde i propri eventi, quindi "non vede quelli
+    di D" e' vero perche' non vede niente. `watch_write_leak`: l'inizializzazione
+    sulla stima altrui riesce - la lettura e' ancora rifiutata, quindi solo la
+    sonda in scrittura lo vede.
+    """
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(broken={kind}, only=surface, prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert expected in fallimenti, f"rompendo {kind!r}: {fallimenti}"
+    assert code == 1
+
+
+def test_81_an_nba_row_of_another_agency_is_caught(monkeypatch):
+    """La disgiunzione non dice l'appartenenza: due insiemi possono essere
+    disgiunti e materializzati entrambi nell'agenzia sbagliata."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True, nba_estranee=1,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert "NEXT_BEST_ACTION-appartenenza-C" in fallimenti, fallimenti
+    assert code == 1
+
+
+def test_82_without_the_storage_backend_the_download_is_BLOCKED(monkeypatch):
+    """Nessun oggetto nello storage: il caricamento fallisce e il download
+    resta non provato, con il nome della variabile che lo governa."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"no_storage_backend"}, only="portal",
+                                   prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    k, t = righe["owner-fixture-A-scaricabile"]
+    assert k == cert.BLOCKED and "OWNER_DOCUMENT_STORAGE_ENABLED" in t, (k, t)
+    assert righe["OWNER_PORTAL-download-A"][0] == cert.BLOCKED
+    # E la lista documenti resta provata: il documento via URL basta per quella.
+    assert righe["OWNER_PORTAL-documenti-A"][0] == cert.PASS
+
+
+def test_83_uploaded_objects_are_removed_from_the_bucket(monkeypatch):
+    """Il file caricato non resta nel bucket.
+
+    `storage.delete_object` esiste ma nel codice applicativo e' invocata solo
+    sul rollback di un caricamento fallito: nessuna route la chiama quando un
+    documento viene revocato o archiviato. Cancellare le righe lascerebbe un
+    file che nessun censimento SQL vedrebbe mai - non e' sul database.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    rows = {i: k for k, i, _ in report.rows}
+    assert rows.get("CLEAN-STORAGE") == cert.PASS, [r for r in report.rows if "STORAGE" in r[1]]
+    assert database.state.get("chiavi_cancellate"), "nessun oggetto rimosso dal bucket"
+    # Due documenti caricati, due oggetti rimossi: se l'id di origine non
+    # venisse registrato, la chiave non sarebbe recuperabile e il bucket
+    # resterebbe sporco in silenzio.
+    assert len(database.state["chiavi_cancellate"]) == 2, database.state["chiavi_cancellate"]
+
+    # E la chiave si legge PRIMA di cancellare la riga che la contiene.
+    sql = database.state.get("sql", [])
+    i_lettura = next(i for i, q in enumerate(sql)
+                     if q.upper().startswith("SELECT ID, STORAGE_KEY"))
+    i_delete = next((i for i, q in enumerate(sql)
+                     if "DELETE FROM property_documents" in q), len(sql))
+    assert i_lettura < i_delete
+
+
+@pytest.mark.parametrize("guasto,atteso", [
+    ("storage_assente", "RESTANO nel bucket"),
+    ("storage_rotto", "NON rimossi dal bucket"),
+])
+def test_84_a_bucket_that_cannot_be_cleaned_is_a_failure(monkeypatch, guasto, atteso):
+    """Non poter pulire non e' "pulito": e' FAIL, con gli id dei documenti e
+    dove ritrovare la chiave. Mai la chiave stessa, che e' un localizzatore."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]}, **{guasto: True})
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    testo = next((t for i, t in fallimenti if i == "CLEAN-STORAGE"), None)
+    assert testo is not None, fallimenti
+    assert atteso in testo
+    assert "k/" not in testo, f"il report stampa la chiave dell'oggetto: {testo}"
+
+
+def test_85_a_url_only_document_needs_no_bucket_cleanup(monkeypatch):
+    """Un documento nato da un URL non ha nulla nel bucket: la pulizia lo dice,
+    invece di fallire per un oggetto che non e' mai esistito."""
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]}, senza_chiave=True)
+    righe = {i: (k, t) for k, i, t in report.rows}
+    k, t = righe["CLEAN-STORAGE"]
+    assert k == cert.PASS and "niente da rimuovere" in t
+    assert not database.state.get("chiavi_cancellate")
+
+
+def _dedicato(monkeypatch, **stato):
+    """Un run con le agenzie dedicate e i doppi che materializzano le righe."""
+    return working_run(monkeypatch, dedicated_agencies=True,
+                       http=FakeHttp(prepopulate=DERIVED, stime=STIME), **stato)
+
+
+def test_86_a_surviving_child_is_caught_after_the_parent_is_gone(monkeypatch):
+    """La figlia che sopravvive al genitore.
+
+    `seller_revival_suppressions` e' ON DELETE CASCADE verso `contacts`:
+    cancellando il contatto dovrebbe sparire. "Dovrebbe" non e' "l'ha fatto",
+    ed e' proprio questo che la verifica precedente non poteva vedere - la sua
+    JOIN passava dal contatto, che a quel punto non c'era piu'.
+    """
+    _code, report, _db, _probe, _ = _dedicato(
+        monkeypatch, figli_cascata={"seller_revival_suppressions": (3, 3)})
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "CLEAN-VERIFICA" and "seller_revival_suppressions=3" in t
+               for i, t in fallimenti), fallimenti
+
+
+def test_86b_a_child_that_really_disappears_is_reported_before_and_after(monkeypatch):
+    """3 prima, 0 dopo: la sola forma in cui "il CASCADE ha funzionato" e'
+    un'affermazione e non una formalita'. Senza il "prima" il report direbbe
+    0 anche su un database in cui non e' mai esistito nulla."""
+    _code, report, _db, _probe, _ = _dedicato(
+        monkeypatch, figli_cascata={"seller_revival_suppressions": (3, 0)})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    assert "CLEAN-FIGLIE" in righe, [r[1] for r in report.rows]
+    k, t = righe["CLEAN-FIGLIE"]
+    assert k == cert.PASS
+    assert "seller_revival_suppressions (CASCADE): 3 prima, 0 dopo" in t, t
+    assert righe["CLEAN-VERIFICA"][0] == cert.PASS
+
+
+def test_86c_the_verification_does_not_join_the_deleted_parent(monkeypatch):
+    """La query finale sulle figlie non nomina il genitore.
+
+    Una JOIN a una riga appena cancellata restituisce 0 qualunque cosa sia
+    rimasta: e' il modo in cui una verifica smette di verificare senza che il
+    report cambi di una riga.
+    """
+    _code, _report, database, _probe, _ = _dedicato(
+        monkeypatch, figli_cascata={"seller_revival_suppressions": (1, 0)})
+    finali = [q for q in database.state["sql"]
+              if "FROM seller_revival_suppressions" in q]
+    assert finali, database.state["sql"]
+    assert not any("JOIN" in q.upper() for q in finali), finali
+    # E l'ultima interrogazione arriva DOPO la cancellazione del genitore.
+    sql = database.state["sql"]
+    i_delete = max(i for i, q in enumerate(sql)
+                   if q.startswith("DELETE FROM contacts WHERE agency_id"))
+    i_check = max(i for i, q in enumerate(sql)
+                  if "FROM seller_revival_suppressions" in q)
+    assert i_check > i_delete, (i_check, i_delete)
+
+
+def test_86d_a_restrict_child_stops_the_deletion_instead_of_crashing_it(monkeypatch):
+    """`property_watch_observations.watch_id` e
+    `invisible_sale_opportunities.watch_id` sono ON DELETE **RESTRICT**: una
+    riga la' dentro non viene portata via dal DELETE, lo fa fallire - e con
+    esso l'intera transazione del cleanup. Si nomina e ci si ferma, invece di
+    cancellare righe che il run non ha creato."""
+    _code, report, database, _probe, _ = _dedicato(
+        monkeypatch, figli_cascata={"property_watch_observations": (2, 2)})
+    fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
+    assert any(i == "CLEAN-DEDICATA" and "property_watch_observations=2" in t
+               for i, t in fallimenti), fallimenti
+    assert not any(q.startswith("DELETE FROM property_watches")
+                   for q in database.state["sql"]), "il watch e' stato cancellato lo stesso"
+
+
+def test_86e_without_parents_the_report_says_so_instead_of_passing(monkeypatch):
+    """Nessun watch nelle agenzie dedicate: la verifica non prova nulla, e
+    deve dirlo. "0 figlie" su 0 genitori non e' una prova, e un report che
+    tacesse la differenza renderebbe indistinguibile un CASCADE riuscito da
+    una verifica mai eseguita."""
+    _code, report, _db, _probe, _ = _dedicato(monkeypatch, senza_watch=True)
+    righe = {i: (k, t) for k, i, t in report.rows}
+    testo = righe["CLEAN-FIGLIE"][1]
+    assert "property_watch_observations: nessun property_watches del run" in testo, testo
+    # E il contatto, che invece esiste, resta verificato: la reticenza e'
+    # circoscritta al genitore mancante.
+    assert "seller_revival_suppressions (CASCADE): 0 prima, 0 dopo" in testo, testo
+
+
+@functools.lru_cache(maxsize=1)
+def _fk_delle_migrazioni():
+    """{(figlia, colonna, genitore, azione)} letto dalle migration.
+
+    Il corpo di ogni CREATE TABLE si delimita CONTANDO LE PARENTESI, non
+    cercando `\\n);`: `owner_accounts` e altre tabelle sono dichiarate su una
+    riga sola, e una regex ancorata all'a capo inghiottiva le tabelle
+    successive attribuendo loro colonne che non hanno.
+
+    Si leggono anche le `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`:
+    quasi tutte le colonne `agency_id` sono state aggiunte cosi', e fermarsi
+    alle CREATE TABLE avrebbe dichiarato completa un'analisi che non vedeva
+    meta' delle chiavi.
+    """
+    testo = "\n".join(p.read_text(encoding="utf-8")
+                      for p in sorted((ROOT / "migrations").glob("*.sql")))
+    dentro = re.compile(
+        r"[\s,(]([a-z_][a-z0-9_]*)\s+[A-Za-z][^,]*?REFERENCES\s+([a-z_]+)\s*\(\s*id\s*\)"
+        r"(?:\s+ON DELETE\s+(CASCADE|RESTRICT|SET NULL|NO ACTION))?", re.I)
+    alterata = re.compile(
+        r"ALTER TABLE\s+(?:IF EXISTS\s+)?(?:ONLY\s+)?([a-z_]+)[^;]*?FOREIGN KEY\s*"
+        r"\(\s*([a-z_]+)\s*\)\s*REFERENCES\s+([a-z_]+)\s*\(\s*id\s*\)"
+        r"(?:[^;]*?ON DELETE\s+(CASCADE|RESTRICT|SET NULL|NO ACTION))?", re.I | re.S)
+    trovate = set()
+    for testa in re.finditer(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)\s*\(", testo):
+        i, livello = testa.end(), 1
+        while i < len(testo) and livello:
+            livello += 1 if testo[i] == "(" else -1 if testo[i] == ")" else 0
+            i += 1
+        for f in dentro.finditer(testo[testa.end():i - 1]):
+            trovate.add((testa.group(1), f.group(1), f.group(2),
+                         (f.group(3) or "NO ACTION").upper()))
+    for a in alterata.finditer(testo):
+        trovate.add((a.group(1), a.group(2), a.group(3),
+                     (a.group(4) or "NO ACTION").upper()))
+    return frozenset(trovate)
+
+
+def _fk_reale(figlia, colonna):
+    """(genitore, azione) letti dalle migration, o (None, motivo)."""
+    trovate = [f for f in _fk_delle_migrazioni()
+               if f[0] == figlia and f[1] == colonna]
+    if not trovate:
+        colonne = sorted(f[1] for f in _fk_delle_migrazioni() if f[0] == figlia)
+        if not colonne:
+            return None, f"{figlia} non ha chiavi esterne in nessuna migration"
+        return None, f"{figlia}.{colonna} non e' una FK: le FK di {figlia} sono {colonne}"
+    # PostgreSQL senza ON DELETE esplicito applica NO ACTION, che blocca come
+    # RESTRICT ma solo a fine istruzione: sono azioni diverse e si dichiarano
+    # con nomi diversi.
+    return trovate[0][2], trovate[0][3]
+
+
+#: OGNI chiave esterna NON-CASCADE che punta a una tabella da cui il cleanup
+#: cancella righe. Non e' l'elenco di quelle che lo script dichiara: e'
+#: l'elenco di quelle che lo SCHEMA ha, riletto e rivisto. Serve a far
+#: fallire la suite quando una migration ne aggiunge una, perche' una FK
+#: nuova verso una di quelle tabelle o blocca una cancellazione (RESTRICT) o
+#: modifica in silenzio una riga che sopravvive (SET NULL), e in entrambi i
+#: casi va esaminata prima del prossimo run live - non dopo.
+#:
+#: Le CASCADE non sono elencate: se ne vanno con il genitore, e il loro
+#: numero e' comunque confrontato perche' passare da CASCADE a SET NULL e'
+#: proprio il cambiamento che questa prova deve intercettare.
+FK_NON_CASCADE_ATTESE = frozenset({
+    ("activities", "contact_id", "contacts", "SET NULL"),
+    ("agency_memberships", "agency_id", "agencies", "RESTRICT"),
+    ("buy_request_history", "match_id", "matches", "SET NULL"),
+    ("buy_request_history", "property_id", "properties", "SET NULL"),
+    ("buy_request_history", "task_id", "tasks", "SET NULL"),
+    ("buy_request_interactions", "match_id", "matches", "SET NULL"),
+    ("buy_request_interactions", "property_id", "properties", "SET NULL"),
+    ("buy_requests", "agency_id", "agencies", "RESTRICT"),
+    ("buy_requests", "contact_id", "contacts", "RESTRICT"),
+    ("flow_executions", "event_id", "flow_events", "SET NULL"),
+    ("flow_executions", "retry_of_execution_id", "flow_executions", "SET NULL"),
+    ("followup_actions", "agency_id", "agencies", "RESTRICT"),
+    ("followup_actions", "contact_id", "contacts", "SET NULL"),
+    ("followup_actions", "stima_id", "stime", "SET NULL"),
+    ("followup_actions", "task_id", "tasks", "SET NULL"),
+    ("invisible_sale_candidates", "buy_request_id", "buy_requests", "RESTRICT"),
+    ("invisible_sale_opportunities", "watch_id", "property_watches", "RESTRICT"),
+    ("leads", "contact_id", "contacts", "RESTRICT"),
+    # Verso `match_runs`, che il cleanup cancella per predicato. Comparse
+    # quando `match_runs` e' entrata fra i genitori dichiarati: prima nessuno
+    # aveva mai guardato chi la referenziasse, e sono tre campi che un SET
+    # NULL azzererebbe su righe potenzialmente non nostre.
+    ("match_refresh_history", "new_run_id", "match_runs", "SET NULL"),
+    ("match_refresh_history", "previous_run_id", "match_runs", "SET NULL"),
+    ("matches", "latest_run_id", "match_runs", "SET NULL"),
+    ("next_best_actions", "agency_id", "agencies", "RESTRICT"),
+    ("next_best_actions", "contact_id", "contacts", "SET NULL"),
+    ("next_best_actions", "stima_id", "stime", "SET NULL"),
+    ("owner_accounts", "contact_id", "contacts", "RESTRICT"),
+    ("owner_audit_log", "owner_account_id", "owner_accounts", "SET NULL"),
+    ("owner_audit_log", "property_id", "properties", "SET NULL"),
+    ("owner_shared_documents", "property_document_id", "property_documents", "RESTRICT"),
+    ("owner_shared_documents", "superseded_by_shared_document_id",
+     "owner_shared_documents", "RESTRICT"),
+    ("owner_shared_documents", "supersedes_shared_document_id",
+     "owner_shared_documents", "RESTRICT"),
+    ("properties", "agency_id", "agencies", "RESTRICT"),
+    ("property_contacts", "contact_id", "contacts", "RESTRICT"),
+    ("property_proposals", "match_id", "matches", "RESTRICT"),
+    ("property_sale_sellers", "contact_id", "contacts", "RESTRICT"),
+    ("property_sales", "buy_request_id", "buy_requests", "RESTRICT"),
+    ("property_sales", "property_id", "properties", "RESTRICT"),
+    ("property_sales", "proposal_id", "property_proposals", "RESTRICT"),
+    ("property_visits", "contact_id", "contacts", "SET NULL"),
+    ("property_watch_observations", "watch_id", "property_watches", "RESTRICT"),
+    ("property_watches", "agency_id", "agencies", "RESTRICT"),
+    ("property_watches", "stima_id", "stime", "SET NULL"),
+    ("seller_timeline_events", "agency_id", "agencies", "RESTRICT"),
+    ("seller_timeline_events", "contact_id", "contacts", "SET NULL"),
+    ("seller_timeline_events", "property_id", "properties", "SET NULL"),
+    ("seller_timeline_events", "stima_id", "stime", "SET NULL"),
+    ("stime", "agency_id", "agencies", "RESTRICT"),
+    ("stime_dettagliate", "agency_id", "agencies", "RESTRICT"),
+    ("tasks", "contact_id", "contacts", "SET NULL"),
+})
+
+
+@pytest.mark.parametrize("fk", list(cert.Certification.CHILD_FOREIGN_KEYS)
+                         + list(cert.Certification.EFFECT_FOREIGN_KEYS),
+                         ids=lambda f: f"{f.table}.{f.column}")
+def test_86f_every_declared_foreign_key_matches_the_schema(fk):
+    """Colonna, genitore E AZIONE, letti dalle migration.
+
+    Due difetti diversi, e nessun doppio poteva vedere l'uno o l'altro:
+
+    * la colonna. La versione precedente interrogava
+      `property_watch_observations.property_watch_id`, che non esiste - si
+      chiama `watch_id`. Sul TEST quella query non avrebbe risposto "0
+      figlie": avrebbe sollevato UndefinedColumn, e il ramo di cattura
+      l'avrebbe tradotta in "verifica non eseguibile", cioe' in un guasto
+      attribuito al database invece che alla query.
+    * l'azione. Le stesse righe erano chiamate "figli CASCADE" mentre due su
+      tre sono RESTRICT: un CASCADE se ne va con il genitore, un RESTRICT
+      impedisce al genitore di andarsene. Un report che le confonde descrive
+      un comportamento che quelle FK non hanno.
+    """
+    genitore, azione = _fk_reale(fk.table, fk.column)
+    assert genitore is not None, azione
+    assert genitore == fk.parent, (
+        f"{fk.table}.{fk.column} punta a {genitore}, non a {fk.parent}")
+    assert azione == fk.on_delete, (
+        f"{fk.table}.{fk.column} e' ON DELETE {azione}, dichiarata {fk.on_delete}")
+
+
+def test_86g_the_report_never_calls_a_restrict_relation_a_cascade(monkeypatch):
+    """Nessuna riga di report chiama CASCADE una relazione che non lo e'.
+
+    Il vincolo e' sul testo che l'operatore legge: e' li' che una RESTRICT
+    travestita da CASCADE diventa una diagnosi sbagliata - "il CASCADE non e'
+    avvenuto" manda a cercare un guasto, quando il fatto e' che quella riga
+    impedisce la cancellazione e va esaminata.
+    """
+    _code, report, _db, _probe, _ = _dedicato(
+        monkeypatch, figli_cascata={"seller_revival_suppressions": (2, 0),
+                                    "property_watch_observations": (0, 0)})
+    azione_di = {fk.table: fk.on_delete for fk in cert.Certification.CHILD_FOREIGN_KEYS}
+    visti = set()
+    # Segmento per segmento: una riga di report ne concatena molti, e cercare
+    # la parola nell'intera riga confonderebbe la figlia CASCADE accanto.
+    segmenti = [s for _k, _i, testo in report.rows for s in testo.split(";")]
+    for segmento in segmenti:
+        for tabella, azione in azione_di.items():
+            if tabella not in segmento:
+                continue
+            visti.add(tabella)
+            if azione != "CASCADE":
+                assert "CASCADE" not in segmento, (tabella, segmento)
+            assert f"{tabella} ({azione})" in segmento or "nessun" in segmento, (
+                tabella, segmento)
+    assert visti == set(azione_di), (visti, set(azione_di))
+
+
+def test_86i_no_relevant_foreign_key_is_unaccounted_for():
+    """COMPLETEZZA, non solo correttezza.
+
+    I test qui sopra verificano che le FK DICHIARATE dallo script siano vere.
+    Non dicono nulla sulle FK che lo script non ha dichiarato - ed e' proprio
+    una di quelle a essersi fatta scoprire dal vivo: nessuno aveva guardato
+    che `property_watch_observations` fosse RESTRICT finche' non ha rischiato
+    di far cadere la transazione di cleanup.
+
+    Qui si parte dallo schema, non dallo script: ogni FK non-CASCADE che punta
+    a una tabella da cui il cleanup cancella righe deve comparire
+    nell'inventario rivisto. Una migration che ne aggiunge una fa fallire
+    questa prova finche' qualcuno non l'ha esaminata.
+
+    NON e' una prova sullo schema vivo: legge le migration del repository. Le
+    dipendenze che comparissero altrove le trova la guardia a run time, che
+    interroga `pg_constraint` - e che il test seguente verifica giri su tutto
+    il perimetro.
+    """
+    genitori = set(cert.Certification.CLEANUP_PARENTS)
+    osservate = {f for f in _fk_delle_migrazioni()
+                 if f[2] in genitori and f[3] != "CASCADE"}
+    comparse = osservate - FK_NON_CASCADE_ATTESE
+    sparite = FK_NON_CASCADE_ATTESE - osservate
+    assert not comparse, (
+        "chiavi esterne non-CASCADE nuove verso una tabella che il cleanup "
+        f"cancella, mai esaminate: {sorted(comparse)}")
+    assert not sparite, (
+        f"chiavi esterne sparite dallo schema: {sorted(sparite)}. "
+        "Se la migration e' voluta, va aggiornato l'inventario.")
+
+
+def _tabelle_cancellate():
+    """Cio' che il cleanup cancella, DEDOTTO dalle strutture dello script.
+
+    Non un elenco scritto a mano: un elenco a mano si aggiorna quando qualcuno
+    si ricorda, e la lacuna che ha fatto passare `tasks` e `flow_executions`
+    era esattamente questa - erano cancellate per `agency_id` e non comparivano
+    in nessuna struttura che qualcuno stesse guardando.
+    """
+    C = cert.Certification
+    tabelle = {d.table for d in cert.DOMAINS if d.table}
+    tabelle |= {t for t, _colonne in C.EFFECT_TABLES}
+    tabelle |= set(C.EFFECT_BY_ID_TABLES)
+    tabelle |= set(C.DEDICATED_EFFECT_TABLES)
+    tabelle |= {t for _attributo, t in C.TRACKED_ID_TABLES}
+    tabelle |= {t for t, _colonna in C.DEDICATED_TABLES}
+    tabelle |= {"agencies", "operator_users"}
+    return tabelle
+
+
+def _parent_da_sorvegliare():
+    """Cio' che si cancella E ha almeno una FK non-CASCADE entrante.
+
+    L'intersezione e' il minimo indiscutibile: una FK CASCADE porta via la
+    figlia con il genitore, una RESTRICT fa cadere la transazione, una SET
+    NULL azzera in silenzio un campo di una riga che sopravvive. Le ultime due
+    su una riga non nostra sono un danno, e nessuna delle due si vede se la
+    guardia non ha mai interrogato quel genitore.
+    """
+    con_fk = {fk[2] for fk in _fk_delle_migrazioni() if fk[3] != "CASCADE"}
+    return _tabelle_cancellate() & con_fk
+
+
+def _run_tracciato(database, report):
+    """Un run che ha creato qualcosa in OGNI categoria distruttiva."""
+    c = cert.Certification(database, report)
+    c.created_rows = {
+        "contacts": [(11, "M", "display_name")],
+        "properties": [(21, "M", "title")],
+        "buy_requests": [(31, "M", "title")],
+        "seller_timeline_events": [(41, "M", "description")],
+    }
+    c.created_effects = {"property_documents": [51], "owner_shared_documents": [61],
+                         "flow_events": [71], "stime": [81]}
+    c.created_match_ids = [901]
+    c.created_owner_account_ids = [801]
+    c.created_sale_ids = [701]
+    c.created_proposal_ids = [601]
+    c.created_agency_ids = [501]
+    c.created_user_ids = [401]
+    # Cio' che nelle agenzie dedicate si cancella per agency_id: senza
+    # istantanea non avrebbe id, e resterebbe fuori dal perimetro.
+    c.child_parents = {"property_watches": (301,), "contacts": (12,),
+                       "tasks": (201,), "flow_executions": (101,),
+                       "flow_events": (71,), "stime": (81,)}
+    c.effect_rows_before = {"match_runs": (1001,), "owner_audit_log": (1101,)}
+    return c
+
+
+def test_86j_the_guard_walks_every_parent_that_needs_watching():
+    """L'insieme da sorvegliare e' DEDOTTO, non elencato.
+
+    Si interseca cio' che il cleanup cancella - ricavato dalle strutture dello
+    script - con i genitori che hanno una FK non-CASCADE entrante, ricavati
+    dalle migration. Ogni tabella di quell'intersezione deve essere passata a
+    `pg_constraint`.
+
+    Un elenco scritto a mano avrebbe certificato la propria stessa lacuna:
+    `tasks` e `flow_executions` si cancellano per `agency_id` nelle agenzie
+    dedicate, non comparivano in nessuna struttura tracciata per id, e hanno
+    entrambe FK non-CASCADE entranti - sparivano senza che nessuno avesse
+    chiesto chi le referenziasse.
+    """
+    database = fake_database(agencies=AGENCIES)
+    report, _stream = quiet_report()
+    c = _run_tracciato(database, report)
+
+    assert c._foreign_dependencies() == []
+    # La tabella sta nel PARAMETRO, non nel testo della query: e' la stessa
+    # query per tutte, con `('public.' || %s)::regclass`.
+    interrogate = {p[0] for q, p in database.state["interrogazioni"]
+                   if "pg_constraint" in q and p}
+    attesi = _parent_da_sorvegliare()
+    assert {"tasks", "flow_executions", "match_runs"} <= attesi, sorted(attesi)
+    mancanti = attesi - interrogate
+    assert not mancanti, f"la guardia non ha mai guardato: {sorted(mancanti)}"
+    # E nessuna tabella e' interrogata senza essere dichiarata: la prova di
+    # completezza sullo schema copre solo CLEANUP_PARENTS.
+    assert interrogate <= set(cert.Certification.CLEANUP_PARENTS), \
+        sorted(interrogate - set(cert.Certification.CLEANUP_PARENTS))
+
+
+def test_86t_the_snapshot_really_asks_for_every_dedicated_table():
+    """L'istantanea INTERROGA davvero ogni tabella dichiarata.
+
+    Il test precedente costruisce `child_parents` a mano: verifica cosa fa la
+    guardia con gli id, non che qualcuno sia andato a prenderli. Qui si guida
+    la fotografia vera e si controlla la query, tabella per tabella - perche'
+    e' li' che `tasks` e `flow_executions` mancavano.
+    """
+    database = fake_database(agencies=AGENCIES, stime={})
+    report, _stream = quiet_report()
+    c = cert.Certification(database, report)
+    c.created_agency_ids = [501]
+
+    assert c._snapshot_child_parents() is None, report.rows
+    interrogate = {q.split(" FROM ")[1].split(" ")[0]
+                   for q in database.state["sql"]
+                   if q.startswith("SELECT id FROM ") and "agency_id IN" in q}
+    attese = ({fk.parent for fk in cert.Certification.CHILD_FOREIGN_KEYS}
+              | set(cert.Certification.DEDICATED_SNAPSHOT_TABLES))
+    assert attese <= interrogate, sorted(attese - interrogate)
+    assert {"tasks", "flow_executions"} <= interrogate, sorted(interrogate)
+
+
+def test_86p_every_table_the_cleanup_deletes_is_a_declared_parent():
+    """E l'insieme dedotto sta tutto dentro `CLEANUP_PARENTS`.
+
+    E' il legame fra le due prove: la completezza sullo schema interroga solo
+    le tabelle dichiarate, quindi una tabella cancellata e non dichiarata
+    sarebbe una tabella le cui FK nessuno ha mai letto.
+    """
+    fuori = _tabelle_cancellate() - set(cert.Certification.CLEANUP_PARENTS)
+    assert not fuori, f"cancellate ma non dichiarate: {sorted(fuori)}"
+
+
+def test_86q_the_dedicated_snapshot_covers_every_table_that_needs_it():
+    """Ogni `DEDICATED_TABLES` con FK non-CASCADE entranti e' fotografata.
+
+    Li' si cancella per `agency_id`: senza istantanea quelle righe non hanno
+    un id, e senza id non entrano nel perimetro della guardia. Il criterio e'
+    derivato dallo schema, cosi' che una migration che aggiunga una FK a una
+    di quelle tabelle faccia fallire questa prova.
+    """
+    C = cert.Certification
+    dedicate = {t for t, _c in C.DEDICATED_TABLES}
+    con_fk = {fk[2] for fk in _fk_delle_migrazioni() if fk[3] != "CASCADE"}
+    servono = dedicate & con_fk
+    assert {"tasks", "flow_executions"} <= servono, sorted(servono)
+    mancanti = servono - set(C.DEDICATED_SNAPSHOT_TABLES)
+    assert not mancanti, f"cancellate per agency_id e mai fotografate: {sorted(mancanti)}"
+
+
+def test_86m_the_guard_runs_before_the_first_delete(monkeypatch):
+    """Il preflight precede la prima DELETE, e una dipendenza estranea le
+    ferma tutte.
+
+    `cleanup_chain_fixtures` e `cleanup_owner_fixtures` arrivano prima di
+    `cleanup_orphan_fixtures`: vendite, proposte, match e conti proprietario
+    erano gia' spariti quando la guardia veniva eseguita per la prima volta.
+    Su quelle tabelle non arrivava mai in tempo.
+    """
+    _code, report, database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]},
+        fk_perimetro={"property_sales": [("public.property_sale_sellers", "sale_id")]},
+        dipendenti_estranee=1)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-PREFLIGHT" in fallimenti, [r[1] for r in report.rows]
+    assert "PRIMA di cancellare" in fallimenti["CLEAN-PREFLIGHT"]
+    assert "property_sale_sellers" in fallimenti["CLEAN-PREFLIGHT"], \
+        "la dipendenza e' stata trovata su una tabella che la guardia vecchia " \
+        "non avrebbe mai interrogato"
+    # Nessuna cancellazione sui dati, ne' via SQL ne' via API.
+    dati = ("contacts", "properties", "buy_requests", "seller_timeline_events",
+            "property_documents", "owner_shared_documents", "matches",
+            "property_sales", "property_proposals", "owner_accounts",
+            "owner_audit_log", "property_status_history", "buy_request_history",
+            "property_contacts", "match_runs", "agencies", "stime", "flow_events")
+    eseguite = database.state.get("deletes", [])
+    assert not [q for q in eseguite if any(f"FROM {t} " in q + " " for t in dati)], \
+        eseguite
+    assert not [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")], \
+        [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")]
+
+    # Le IDENTITA' invece se ne vanno, ed e' voluto: i soli figli di
+    # `operator_users` sono `agency_memberships` e `operator_sessions`, in
+    # CASCADE e create da questo run - nessuna riga altrui puo' risentirne, e
+    # lasciare vive delle credenziali sul TEST sarebbe il danno peggiore fra i
+    # due. Se un giorno comparisse un terzo figlio, la prova di completezza
+    # sulle FK lo segnalerebbe prima di qui.
+    assert any("FROM operator_users" in q for q in eseguite), eseguite
+
+
+def test_86o_a_block_also_stops_the_deletions_made_through_the_api():
+    """Il blocco vale anche per le DELETE via HTTP.
+
+    Dall'altra parte di quelle chiamate c'e' comunque un handler che scrive:
+    archivia un immobile, chiude una proposta, tocca lo storico. Se una
+    dipendenza estranea e' comparsa, quelle scritture sono lo stesso danno
+    delle DELETE dirette - solo con un intermediario.
+
+    Si esercita direttamente, perche' nello scenario completo la matrice
+    registra poche fixture cancellabili via API e la guardia non verrebbe mai
+    raggiunta: una prova che non arriva al punto e' una prova che non c'e'.
+    """
+    class HttpSpia:
+        def __init__(self):
+            self.chiamate = []
+
+        def request(self, method, path, jar=None, payload=None):
+            self.chiamate.append((method, path))
+            return cert.Response(200, {}, b"{}")
+
+    database = fake_database(agencies=AGENCIES)
+    report, _stream = quiet_report()
+    c = cert.Certification(database, report)
+    c.fixtures = [("A", "DELETE", "/api/match/matches/9")]
+    spia = HttpSpia()
+
+    c.blocking_reason = "una dipendenza estranea"
+    c.cleanup_http_fixtures(spia, {"A": object()})
+    assert spia.chiamate == [], spia.chiamate
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-FIXTURE" in fallimenti, report.rows
+    assert "una dipendenza estranea" in fallimenti["CLEAN-FIXTURE"]
+
+    # E senza blocco la stessa chiamata parte: la guardia non e' un rifiuto
+    # permanente travestito.
+    c.blocking_reason = None
+    c.cleanup_http_fixtures(spia, {"A": object()})
+    assert spia.chiamate == [("DELETE", "/api/match/matches/9")], spia.chiamate
+
+
+@pytest.mark.parametrize("rotta,atteso", [
+    ("SELECT id FROM property_watches", "genitori non fotografabili"),
+    ("SELECT t.id FROM owner_audit_log", "righe degli effetti non fotografabili"),
+])
+def test_86r_an_incomplete_snapshot_stops_every_data_deletion(monkeypatch, rotta, atteso):
+    """FAIL-CLOSED: una fotografia incompleta ferma tutto.
+
+    Non e' prudenza generica. Dopo le DELETE le righe che non sono state
+    fotografate non sono piu' identificabili: il genitore non c'e', la
+    colonna SET NULL e' azzerata, e la verifica finale risponderebbe "0
+    presenti" a una domanda che non ha potuto fare. Cancellare dopo aver
+    segnalato significherebbe distruggere proprio cio' che non si sa piu'
+    controllare - e il report direbbe che e' andato tutto bene.
+    """
+    _code, report, database, probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        explode_on=rotta)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-ISTANTANEA" in fallimenti, [r[1] for r in report.rows]
+    assert atteso in fallimenti["CLEAN-ISTANTANEA"], fallimenti["CLEAN-ISTANTANEA"]
+    assert "Nessuna cancellazione" in fallimenti["CLEAN-ISTANTANEA"]
+
+    # Il preflight riconosce il blocco e NON dichiara il perimetro pulito.
+    assert "CLEAN-PREFLIGHT" in fallimenti, [r[1] for r in report.rows]
+    assert "controllo non eseguito" in fallimenti["CLEAN-PREFLIGHT"]
+    assert not [t for k, i, t in report.rows
+                if i == "CLEAN-PREFLIGHT" and k == cert.PASS], report.rows
+
+    # Zero cancellazioni sui dati, SQL o HTTP.
+    dati = ("contacts", "properties", "buy_requests", "seller_timeline_events",
+            "property_documents", "owner_shared_documents", "matches",
+            "property_sales", "property_proposals", "owner_accounts",
+            "owner_audit_log", "property_status_history", "buy_request_history",
+            "property_contacts", "match_runs", "agencies", "stime", "flow_events",
+            "tasks", "flow_executions", "next_best_actions", "followup_actions")
+    eseguite = database.state.get("deletes", [])
+    assert not [q for q in eseguite if any(f"FROM {t} " in q + " " for t in dati)], \
+        eseguite
+    assert not [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")], \
+        [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")]
+
+
+def test_86s_a_healthy_snapshot_does_not_block_anything(monkeypatch):
+    """E senza guasto le cancellazioni partono: la guardia non e' un rifiuto
+    permanente travestito. Senza questo caso, un blocco sempre attivo
+    supererebbe la prova qui sopra."""
+    _code, report, database, _probe, _ = _dedicato(monkeypatch)
+    assert not any(i == "CLEAN-ISTANTANEA" for _k, i, _t in report.rows), report.rows
+    assert any("FROM agencies" in q for q in database.state.get("deletes", [])), \
+        database.state.get("deletes")
+
+
+@pytest.mark.parametrize("guasto,chiavi_attese", [
+    ({"explode_on": "SELECT t.id FROM owner_audit_log"}, 0),
+    ({"fk_perimetro": {"properties": [("public.property_visits", "property_id")]},
+      "dipendenti_estranee": 1}, 0),
+    ({}, 2),
+])
+def test_86u_a_block_stops_the_bucket_too(monkeypatch, guasto, chiavi_attese):
+    """Sotto blocco non si tocca nemmeno lo storage.
+
+    `delete_object` e' l'unica cancellazione che non passa dal database, ed e'
+    la sola davvero irreversibile: una riga rimossa per errore si ritrova in
+    un dump, un oggetto no.
+
+    Il blocco esiste per CONSERVARE le righe - la `storage_key` che localizza
+    il file, gli id che l'istantanea non ha potuto prendere. Svuotare il
+    bucket mentre si conservano quelle righe sarebbe l'immagine speculare del
+    difetto per cui il blocco e' stato scritto: resterebbero i puntatori e
+    sparirebbe cio' a cui puntano.
+
+    Il terzo caso e' senza guasto, e serve a rendere non vacui i primi due:
+    senza, un `cleanup_storage_objects` che non cancellasse mai niente li
+    supererebbe entrambi.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]}, **guasto)
+
+    assert len(database.state.get("chiavi_cancellate", [])) == chiavi_attese, \
+        database.state.get("chiavi_cancellate")
+    if chiavi_attese:
+        return
+
+    # Sotto blocco: il FAIL lo dice, e le righe che localizzano i file restano.
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-STORAGE" in fallimenti, [r[1] for r in report.rows]
+    assert "nessun oggetto rimosso dal bucket" in fallimenti["CLEAN-STORAGE"]
+    eseguite = database.state.get("deletes", [])
+    assert not [q for q in eseguite
+                if "property_documents" in q or "owner_shared_documents" in q], eseguite
+    # E le chiavi non sono state nemmeno LETTE: il blocco precede ogni cosa.
+    assert not [q for q in database.state["sql"]
+                if q.startswith("SELECT id, storage_key")], database.state["sql"]
+
+
+def test_86n_the_preflight_precedes_every_cleanup_in_the_finally():
+    """E l'ordine e' nel codice: il preflight prima di ogni `cleanup_*`."""
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    run = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "run")
+    finale = next(t for t in ast.walk(run) if isinstance(t, ast.Try) and t.finalbody)
+    chiamate = [n.func.attr for n in ast.walk(
+        ast.Module(body=finale.finalbody, type_ignores=[]))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    preflight = chiamate.index("preflight_dependencies")
+    puliture = [i for i, nome in enumerate(chiamate) if nome.startswith("cleanup_")]
+    assert puliture and preflight < min(puliture), chiamate
+
+
+def test_86k_a_perimeter_table_outside_the_declaration_stops_the_cleanup():
+    """Una tabella cancellata ma non dichiarata ferma tutto.
+
+    E' il legame fra le due prove: la completezza sullo schema copre solo le
+    tabelle di `CLEANUP_PARENTS`, quindi cancellare altrove significherebbe
+    cancellare dove nessuno ha guardato le chiavi esterne.
+    """
+    database = fake_database(agencies=AGENCIES)
+    report, _stream = quiet_report()
+    c = cert.Certification(database, report)
+    c.created_rows = {"contacts": [(11, "M", "display_name")]}
+    c.created_effects = {"una_tabella_non_dichiarata": [7]}
+    c.cleanup_orphan_fixtures({"A": {"id": 1}})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-ORFANE" in fallimenti, report.rows
+    assert "non dichiarata in CLEANUP_PARENTS" in fallimenti["CLEAN-ORFANE"]
+    assert "una_tabella_non_dichiarata" in fallimenti["CLEAN-ORFANE"]
+    assert not database.state.get("deletes"), database.state.get("deletes")
+
+
+def test_86l_every_on_delete_claim_in_the_source_is_true():
+    """Anche i COMMENTI dicono qualcosa di verificabile.
+
+    Il commento su `DEDICATED_TABLES` affermava che
+    `property_watch_observations` fosse una figlia CASCADE e se ne andasse con
+    il watch. E' RESTRICT: non se ne va, impedisce al watch di andarsene. Una
+    frase del genere non rompe niente finche' qualcuno non la legge per
+    decidere, ed e' esattamente cosi' che si prendono le decisioni sbagliate
+    in un cleanup.
+
+    Nessuna prova di comportamento puo' cogliere un commento falso: si legge
+    quello che il sorgente AFFERMA e lo si confronta con lo schema.
+    """
+    sorgente = SCRIPT.read_text(encoding="utf-8")
+    dichiarazione = re.compile(
+        r"`?([a-z_]+)\.([a-z_]+)`?(?:\s+(?:e'|sono))?\s+ON DELETE\s+"
+        r"(CASCADE|RESTRICT|SET NULL|NO ACTION)")
+    affermazioni = {(m.group(1), m.group(2), m.group(3))
+                    for m in dichiarazione.finditer(sorgente)}
+    assert affermazioni, "nessuna affermazione sulle FK nel sorgente: la prova e' vuota"
+    for figlia, colonna, azione in sorted(affermazioni):
+        _genitore, vera = _fk_reale(figlia, colonna)
+        assert vera == azione, (
+            f"il sorgente afferma {figlia}.{colonna} ON DELETE {azione}, "
+            f"lo schema dice {vera}")
+
+
+def test_86h_a_set_null_relation_is_declared_unprovable_not_clean(monkeypatch):
+    """Per un SET NULL, "0 per id del genitore" non e' "rimossa".
+
+    `owner_audit_log.property_id` e' ON DELETE SET NULL: cancellato
+    l'immobile, la colonna e' NULL e la riga non risponde piu' al suo id. Il
+    conteggio dopo la cancellazione e' quindi 0 per costruzione - come una
+    JOIN a una riga cancellata - e presentarlo accanto ai CASCADE lo
+    farebbe leggere come una prova di pulizia. La riga se ne va per il
+    predicato di appartenenza, in `cleanup_orphan_fixtures`; questo conteggio
+    puo' solo dimostrare il contrario, cioe' che il genitore c'e' ancora.
+    """
+    _code, report, _db, _probe, _ = _dedicato(monkeypatch)
+    riga = next(t for _k, i, t in report.rows if i == "CLEAN-FIGLIE")
+    set_null = [fk for fk in cert.Certification.EFFECT_FOREIGN_KEYS
+                if fk.on_delete == "SET NULL"]
+    assert set_null, "nessuna FK SET NULL dichiarata: il caso non e' esercitato"
+    for fk in set_null:
+        assert f"{fk.table}.{fk.column} (SET NULL)" in riga, riga
+    assert "non prova la rimozione" in riga, riga
+
+
+# ---------------------------------------------------------------------------
+# 87-89 - l'ordine delle cancellazioni
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("guasto", ["storage_assente", "storage_rotto"])
+def test_87_a_failed_bucket_cleanup_stops_the_destructive_db_cleanup(monkeypatch, guasto):
+    """Se un oggetto resta nel bucket, le righe che lo localizzano NON si
+    cancellano.
+
+    La chiave sta in `property_documents.storage_key` e da nessun'altra parte:
+    l'API non la restituisce. Cancellare quelle righe subito dopo aver
+    stampato "la chiave e' li'" renderebbe falsa quella frase nell'istante
+    stesso in cui viene letta, e l'oggetto resterebbe nel bucket senza che
+    nessuno possa piu' dire a cosa apparteneva.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]}, **{guasto: True})
+    eseguite = database.state.get("deletes", [])
+    assert not any("property_documents" in q for q in eseguite), eseguite
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-STORAGE" in fallimenti
+    assert "SOSPESO" in fallimenti["CLEAN-STORAGE"], fallimenti["CLEAN-STORAGE"]
+    assert "CLEAN-ORFANE" in fallimenti, list(fallimenti)
+    assert "nessuna cancellazione eseguita" in fallimenti["CLEAN-ORFANE"]
+
+
+def test_87b_the_block_also_holds_the_dedicated_agencies(monkeypatch):
+    """Il blocco vale per ogni cancellazione, non solo per quella che
+    tocca i documenti: una sola decisione, in un solo posto, cosi' che non
+    resti una seconda strada per arrivare alle stesse righe."""
+    _code, report, database, _probe, _ = _dedicato(monkeypatch, storage_rotto=True)
+    eseguite = database.state.get("deletes", [])
+    assert not any("FROM agencies" in q for q in eseguite), eseguite
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-DEDICATA" in fallimenti
+    assert "NON rimosse" in fallimenti["CLEAN-DEDICATA"]
+    # Le identita' invece se ne vanno: nessuna credenziale resta viva per
+    # colpa di un file rimasto in un bucket.
+    assert any("FROM operator_users" in q for q in eseguite), eseguite
+
+
+def test_87c_with_a_clean_bucket_the_rows_are_removed_as_usual(monkeypatch):
+    """La guardia non e' un blocco permanente travestito: senza guasto le
+    stesse cancellazioni partono. Senza questo caso, una guardia sempre vera
+    supererebbe i due test qui sopra."""
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    eseguite = database.state.get("deletes", [])
+    assert any("property_documents" in q for q in eseguite), eseguite
+    assert not any(i in ("CLEAN-ORFANE", "CLEAN-STORAGE")
+                   for k, i, _t in report.rows if k == cert.FAIL)
+
+
+def test_88_effects_living_in_the_dedicated_agencies_are_really_counted(monkeypatch):
+    """`flow_events` e `stime` esistono davvero nel doppio, e spariscono solo
+    se qualcuno li cancella.
+
+    Finche' il doppio rispondeva 0 a ogni conteggio, questa verifica era
+    soddisfatta da qualunque ordine di cancellazione - compreso quello che sul
+    TEST avrebbe prodotto un CLEAN-VERIFICA FAIL su righe ancora legittimamente
+    presenti. Qui si tolgono le due tabelle dall'elenco delle cancellazioni
+    dedicate: se il doppio le materializza, restano, e la verifica lo dice.
+    """
+    ridotto = tuple((t, c) for t, c in cert.Certification.DEDICATED_TABLES
+                    if t not in cert.Certification.DEDICATED_EFFECT_TABLES)
+    monkeypatch.setattr(cert.Certification, "DEDICATED_TABLES", ridotto)
+    _code, report, _db, _probe, _ = _dedicato(monkeypatch)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-VERIFICA" in fallimenti, [r[1] for r in report.rows]
+    for tabella in cert.Certification.DEDICATED_EFFECT_TABLES:
+        assert tabella in fallimenti["CLEAN-VERIFICA"], (tabella, fallimenti["CLEAN-VERIFICA"])
+
+
+def test_88b_verifying_before_the_dedicated_cleanup_is_refused(monkeypatch):
+    """Chiamare la verifica troppo presto non produce un residuo: produce un
+    FAIL che dice che il difetto e' nell'ordine.
+
+    Senza questa guardia il report avrebbe nominato `flow_events` e `stime`
+    come righe "ancora presenti" - vere solo per qualche riga di codice
+    ancora - e la diagnosi sarebbe partita dal TEST invece che da qui.
+    """
+    def non_invocata(self):
+        # Il metodo non viene MAI eseguito: e' il `finally` scritto al
+        # contrario, senza doverlo riscrivere. La bandiera non viene toccata
+        # da qui, cosi' che il test osservi il suo valore iniziale invece di
+        # imporglielo - un test che la azzerasse da se' passerebbe anche con
+        # una bandiera nata vera.
+        return None
+
+    monkeypatch.setattr(cert.Certification, "cleanup_dedicated_agencies", non_invocata)
+    _code, report, _db, _probe, _ = _dedicato(monkeypatch)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-VERIFICA" in fallimenti
+    assert "PRIMA di cleanup_dedicated_agencies" in fallimenti["CLEAN-VERIFICA"]
+
+
+def test_89_the_finally_orders_snapshot_cleanup_and_verification(monkeypatch):
+    """L'ordine e' nel codice, non nella memoria di chi l'ha scritto.
+
+    Tre vincoli, e ciascuno e' un difetto gia' visto: l'istantanea prima di
+    ogni cancellazione, il bucket prima delle righe che lo localizzano, le
+    agenzie dedicate prima della verifica dei residui.
+    """
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    run = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "run")
+    finale = next(t for t in ast.walk(run) if isinstance(t, ast.Try) and t.finalbody)
+    chiamate = [n.func.attr for n in ast.walk(ast.Module(body=finale.finalbody, type_ignores=[]))
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    posizione = {nome: chiamate.index(nome) for nome in set(chiamate)}
+    for prima, dopo in (("snapshot_before_cleanup", "cleanup_chain_fixtures"),
+                        ("snapshot_before_cleanup", "cleanup_orphan_fixtures"),
+                        ("cleanup_storage_objects", "cleanup_orphan_fixtures"),
+                        ("cleanup_orphan_fixtures", "cleanup_dedicated_agencies"),
+                        ("cleanup_dedicated_agencies", "verify_no_residue")):
+        assert posizione[prima] < posizione[dopo], (
+            f"{prima} deve precedere {dopo}: {chiamate}")
+
+
+# ---------------------------------------------------------------------------
+# 90-92 - cio' che il run ha creato NON e' solo `created_rows`
+# ---------------------------------------------------------------------------
+
+def test_90_a_run_with_only_effects_is_cleaned_and_verified():
+    """Nessuna fixture di dominio, due documenti: si cancella e si verifica.
+
+    `created_rows` raccoglie solo le risorse dei domini della matrice. Un run
+    in cui quei domini restano BLOCKED - una route che cambia forma, una
+    sessione che non si apre - puo' avere creato lo stesso documenti,
+    condivisioni, eventi e stime. Legare la pulizia a `created_rows`
+    significava, in quel caso, stampare "nessuna riga da rimuovere" e
+    "verificato" su righe che erano ancora la'.
+    """
+    database = fake_database(agencies=AGENCIES)
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.created_effects = {"owner_shared_documents": [61],
+                                      "property_documents": [51]}
+
+    certificazione.snapshot_before_cleanup()
+    certificazione.cleanup_orphan_fixtures({})
+    certificazione.verify_no_residue()
+
+    cancellazioni = " ".join(database.state.get("deletes", []))
+    assert "DELETE FROM property_documents WHERE id IN" in cancellazioni, cancellazioni
+    assert "DELETE FROM owner_shared_documents WHERE id IN" in cancellazioni, cancellazioni
+    esiti = {i: k for k, i, _t in report.rows}
+    assert esiti["CLEAN-ORFANE"] == cert.PASS, report.rows
+    assert esiti["CLEAN-VERIFICA"] == cert.PASS, report.rows
+    testo = next(t for _k, i, t in report.rows if i == "CLEAN-VERIFICA")
+    assert "effetti=2" in testo, testo
+
+
+def test_90b_an_effects_only_run_that_leaves_a_row_fails():
+    """E la verifica non e' compiacente: se il documento resta, lo dice. Senza
+    questo caso, un `verify_no_residue` che non guardasse nulla passerebbe il
+    test qui sopra."""
+    database = fake_database(agencies=AGENCIES, effetti_vivi={"property_documents": 1})
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.created_effects = {"property_documents": [51]}
+    certificazione.verify_no_residue()
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "property_documents=1" in fallimenti.get("CLEAN-VERIFICA", ""), report.rows
+
+
+def test_91_the_tracked_ids_outside_created_rows_are_verified_too():
+    """Vendite, proposte, match e conti proprietario hanno un cleanup che
+    verifica se stesso. Questa e' l'ultima parola e non deve fidarsene: se
+    quella verifica fosse sbagliata, nessun altro se ne accorgerebbe."""
+    database = fake_database(agencies=AGENCIES,
+                             effetti_vivi={"matches": 1, "owner_accounts": 2})
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.created_match_ids = [901]
+    certificazione.created_owner_account_ids = [801, 802]
+    certificazione.verify_no_residue()
+    testo = next(t for k, i, t in report.rows if i == "CLEAN-VERIFICA" and k == cert.FAIL)
+    assert "matches=1" in testo and "owner_accounts=2" in testo, testo
+
+
+def test_93_an_upload_without_the_origin_recovers_it_from_the_database(monkeypatch):
+    """201 senza `property_document_id`: l'origine si recupera dal database.
+
+    La risposta dell'API e' un contratto piu' fragile dello schema. Il
+    documento dell'immobile e' l'unica riga che porta `storage_key`: se il run
+    non ne conosce l'id, l'oggetto caricato resta nel bucket e nessun
+    censimento SQL lo vedra' mai - non e' sul database.
+
+    `owner_shared_documents.property_document_id` e' NOT NULL: per una
+    condivisione che esiste, l'origine esiste.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch,
+        http=FakeHttp(broken={"upload_senza_origine"}, only="portal",
+                      prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    assert righe["CLEAN-STORAGE-ORIGINE"][0] == cert.PASS, report.rows
+    assert "risolta dal database" in righe["CLEAN-STORAGE-ORIGINE"][1]
+    # E gli oggetti sono stati davvero rimossi: due caricamenti, due chiavi.
+    assert len(database.state.get("chiavi_cancellate", [])) == 2, \
+        database.state.get("chiavi_cancellate")
+
+
+def test_93b_an_unrecoverable_origin_stops_the_cleanup_instead_of_leaking(monkeypatch):
+    """Ne' la risposta ne' il database danno l'origine: si blocca.
+
+    E' il solo esito che non produce un orfano. Proseguire cancellerebbe
+    `owner_shared_documents` e `property_documents` - l'unica traccia da cui
+    un operatore potrebbe risalire alla chiave - lasciando nel bucket un file
+    che nessuno sa piu' a cosa apparteneva.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch,
+        http=FakeHttp(broken={"upload_senza_origine"}, only="portal",
+                      prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]}, origine_perduta=True)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-STORAGE-ORIGINE" in fallimenti, report.rows
+    assert "non ha un property_documents associabile" in fallimenti["CLEAN-STORAGE-ORIGINE"]
+    assert "SOSPESO" in fallimenti["CLEAN-STORAGE-ORIGINE"]
+    # Nessuna riga cancellata: la traccia resta leggibile.
+    eseguite = database.state.get("deletes", [])
+    assert not any("property_documents" in q or "owner_shared_documents" in q
+                   for q in eseguite), eseguite
+    assert "CLEAN-ORFANE" in fallimenti, list(fallimenti)
+
+
+def test_94_a_set_null_effect_row_is_verified_by_its_own_id(monkeypatch):
+    """La riga che sopravvive a un SET NULL viene trovata lo stesso.
+
+    `owner_audit_log.property_id` e' ON DELETE SET NULL: cancellato
+    l'immobile, la colonna e' NULL e il conteggio per id del genitore
+    restituisce 0 anche se la riga e' ancora la'. L'id della riga, invece,
+    nessun ON DELETE lo tocca.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]},
+        effetti_righe={"owner_audit_log": [561, 565]},
+        delete_inefficace=("owner_audit_log",))
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-VERIFICA" in fallimenti, [r[1] for r in report.rows]
+    assert "owner_audit_log=2 di 2 righe fotografate" in fallimenti["CLEAN-VERIFICA"], \
+        fallimenti["CLEAN-VERIFICA"]
+
+
+def test_94b_when_the_delete_works_the_id_check_confirms_it(monkeypatch):
+    """E se la cancellazione funziona, le stesse due righe non ci sono piu':
+    senza questo caso la verifica potrebbe essere sempre vera."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]},
+        effetti_righe={"owner_audit_log": [561, 565]})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    assert righe["CLEAN-VERIFICA"][0] == cert.PASS, [r for r in report.rows if "CLEAN" in r[1]]
+    assert "verificata per id (2 righe fotografate prima)" in righe["CLEAN-FIGLIE"][1], \
+        righe["CLEAN-FIGLIE"][1]
+
+
+def test_94c_without_the_snapshot_the_verification_cannot_call_itself_done(monkeypatch):
+    """Nessuna istantanea degli id: `CLEAN-VERIFICA` non puo' dire "0
+    presenti, verificato" mentre `CLEAN-FIGLIE` ammette di non poter
+    verificare una relazione SET NULL. Le due affermazioni non stanno
+    insieme, e prima ci stavano."""
+    def niente_istantanea(self):
+        self._snapshot_child_parents()
+
+    monkeypatch.setattr(cert.Certification, "snapshot_before_cleanup", niente_istantanea)
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-VERIFICA" in fallimenti, [r[1] for r in report.rows]
+    assert "effetti non verificabili per id" in fallimenti["CLEAN-VERIFICA"]
+    righe = {i: t for _k, i, t in report.rows}
+    assert "NESSUNA istantanea degli id" in righe["CLEAN-FIGLIE"], righe["CLEAN-FIGLIE"]
+
+
+def _valori_dei_parametri(stato, filtro=lambda _q: True):
+    """Ogni valore scalare finito nei PARAMETRI delle query scelte.
+
+    Le query sono tutte uguali nel testo - `WHERE id IN %s` - quindi cercare
+    un id nel SQL non dimostra niente: l'id viaggia nei parametri, e li' va
+    cercato. Le tuple annidate si appiattiscono, perche' psycopg riceve
+    `(tuple_di_id,)`.
+    """
+    def piatti(valore):
+        if isinstance(valore, (list, tuple, set, frozenset)):
+            for singolo in valore:
+                yield from piatti(singolo)
+        elif isinstance(valore, dict):
+            for singolo in valore.values():
+                yield from piatti(singolo)
+        else:
+            yield valore
+
+    trovati = set()
+    for query, parametri in stato.get("interrogazioni", []):
+        if parametri is not None and filtro(query):
+            trovati.update(piatti(parametri))
+    return trovati
+
+
+def test_93c_a_wrong_origin_in_the_response_is_caught_and_not_deleted(monkeypatch):
+    """201 con `property_document_id` SBAGLIATO.
+
+    E' il caso che un controllo "se manca, leggilo dal database" non vede: il
+    campo c'e', non e' nullo, e indica un altro documento. Cancellare quello
+    rimuoverebbe una riga che non appartiene a questo run - potenzialmente di
+    un'altra agenzia - e lascerebbe nel bucket proprio l'oggetto che era
+    nostro, cioe' entrambi i danni insieme.
+
+    La fonte e' `owner_shared_documents.property_document_id`, che e' la
+    colonna legata all'oggetto da una FK ed e' NOT NULL. La risposta si
+    confronta, non si segue.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch,
+        http=FakeHttp(broken={"upload_origine_sbagliata"}, only="portal",
+                      prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-STORAGE-ORIGINE" in fallimenti, report.rows
+    assert "il database dice" in fallimenti["CLEAN-STORAGE-ORIGINE"]
+
+    canonici = set(database.state["origine_condivisa"].values())
+    assert len(canonici) == 2, canonici
+    inventati = {c + 7000 for c in canonici}
+
+    # 1. L'id inventato non compare in NESSUN parametro, di nessuna query:
+    #    ne' in una DELETE, ne' nella lettura delle chiavi dello storage, ne'
+    #    nella verifica finale. Non e' mai entrato nel perimetro.
+    ovunque = _valori_dei_parametri(database.state)
+    assert not (inventati & ovunque), sorted(inventati & ovunque)
+
+    # 2. I canonici invece SONO entrati, e proprio in una DELETE su
+    #    property_documents: senza questo, il punto 1 sarebbe soddisfatto anche
+    #    da un cleanup che non ha cancellato niente.
+    su_documenti = _valori_dei_parametri(
+        database.state,
+        lambda q: q.upper().startswith("DELETE FROM PROPERTY_DOCUMENTS"))
+    assert canonici <= su_documenti, (sorted(canonici), sorted(su_documenti))
+
+    # 3. E il bucket e' stato ripulito sugli id veri: due caricamenti, due chiavi.
+    assert sorted(database.state.get("chiavi_cancellate", [])) == \
+        sorted(f"k/{c}" for c in canonici), database.state.get("chiavi_cancellate")
+
+
+def test_93e_a_non_numeric_origin_is_diagnosed_without_losing_the_canonical(monkeypatch):
+    """201 con `property_document_id` NON NUMERICO.
+
+    Il canonico viene registrato PRIMA di guardare la risposta. Se l'ordine
+    fosse l'inverso, la conversione che esplode porterebbe via anche l'id
+    valido che il database aveva gia' dato: il bucket non verrebbe ripulito -
+    e per un difetto nella diagnostica di un altro difetto, che e' il modo
+    peggiore di perdere un file.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch,
+        http=FakeHttp(broken={"upload_origine_non_numerica"}, only="portal",
+                      prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-STORAGE-ORIGINE" in fallimenti, report.rows
+    testo = fallimenti["CLEAN-STORAGE-ORIGINE"]
+    assert "non numerico" in testo and "str" in testo, testo
+    # Il valore remoto non viene stampato: solo tipo e lunghezza.
+    assert "abc" not in testo, testo
+
+    canonici = set(database.state["origine_condivisa"].values())
+    su_documenti = _valori_dei_parametri(
+        database.state,
+        lambda q: q.upper().startswith("DELETE FROM PROPERTY_DOCUMENTS"))
+    assert canonici <= su_documenti, (sorted(canonici), sorted(su_documenti))
+    assert sorted(database.state.get("chiavi_cancellate", [])) == \
+        sorted(f"k/{c}" for c in canonici), database.state.get("chiavi_cancellate")
+    # E il cleanup non e' stato bloccato: il canonico c'era.
+    assert not any(i == "CLEAN-ORFANE" for k, i, _t in report.rows if k == cert.FAIL), \
+        report.rows
+
+
+def test_93d_the_database_is_read_even_when_the_response_carries_the_id(monkeypatch):
+    """La lettura canonica avviene SEMPRE, non solo quando il campo manca.
+
+    Senza questo vincolo, un id sbagliato ma non nullo salterebbe ogni
+    controllo: e' esattamente la forma che aveva il difetto.
+    """
+    _code, _report, database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    letture = [q for q in database.state["sql"]
+               if q.startswith("SELECT property_document_id FROM owner_shared_documents")]
+    assert len(letture) == 2, letture
+
+
+def test_92_a_run_that_created_nothing_says_so_instead_of_passing_silently():
+    """Zero id in ogni categoria: si dichiara, non si tace. Il silenzio era
+    indistinguibile da una verifica riuscita."""
+    database = fake_database(agencies=AGENCIES)
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.verify_no_residue()
+    righe = {i: (k, t) for k, i, t in report.rows}
+    assert righe["CLEAN-VERIFICA"][0] == cert.PASS
+    assert "non ha creato nulla" in righe["CLEAN-VERIFICA"][1]
+    assert not database.state.get("sql"), database.state.get("sql")
