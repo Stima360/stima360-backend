@@ -17,9 +17,10 @@
 --
 -- IL PERIMETRO: 71 RIGHE, IN DUE MODI DIVERSI
 --
--- 49 righe arrivano dal censimento, dichiarate una per una:
+-- 61 righe arrivano dal censimento, dichiarate una per una:
 --
---   contacts                   2   86, 87
+--   contacts                   4   86, 87 (agenzie condivise)
+--                                  88, 89 (agenzie dedicate 18/19)
 --   properties                 2   44, 45
 --   buy_requests               2   30, 31
 --   matches                    2   28, 29
@@ -34,10 +35,32 @@
 --   match_requirement_results 16   201..216
 --   property_contacts          2   24, 25
 --   property_status_history    2   87, 88
+--   seller_timeline_events     2   106, 107
+--   owner_audit_log            8   585..592
 --
--- Le altre 22 NON hanno id nel censimento che mi e' stato passato, e non li
--- invento. Si RICAVANO dalle radici, con una condizione di appartenenza
--- esplicita per ciascuna tabella:
+-- COSA MANCAVA AL PRIMO DRY-RUN, E PERCHE'
+--
+-- Il primo giro si e' fermato a 59 righe su 71, ed e' andata come doveva: il
+-- conteggio non era un'etichetta, era un'asserzione, e ha fermato tutto prima
+-- di qualsiasi DELETE. Mancavano dodici righe, di tre specie diverse:
+--
+--   contacts 88, 89          i contatti creati DENTRO le agenzie dedicate
+--                            dalla fixture FOLLOWUP. Il censimento elencava
+--                            solo 86/87, quelli delle agenzie condivise.
+--   seller_timeline_events   la risorsa del dominio SELLER_INTENT, che porta
+--   106, 107                 il marcatore in `event_type`.
+--   owner_audit_log 585..592 lo storico scritto dalle azioni OWNER Admin.
+--
+-- Sono dichiarate, non ricavate: il censimento live adesso ne da' gli id.
+--
+-- `owner_shared_documents` compare a ZERO, e non e' una dimenticanza: le
+-- condivisioni non sono mai state create, perche' la POST rispondeva 422 su
+-- `public_document_type`. E' lo stesso guasto per cui esiste la correzione
+-- del payload; qui si limita a non lasciare residui.
+--
+-- Le altre 10 righe NON hanno id nel censimento, e non li invento. Si
+-- RICAVANO dalle radici, con una condizione di appartenenza esplicita per
+-- ciascuna tabella:
 --
 --   owner_property_access    owner_account_id in (8,9) E property_id in (44,45)
 --   owner_access_tokens      owner_account_id in (8,9)
@@ -87,7 +110,7 @@ $$;
 
 
 -- ---------------------------------------------------------------------------
--- 2. IL PERIMETRO DICHIARATO: 49 righe, una per una.
+-- 2. IL PERIMETRO DICHIARATO: 61 righe, una per una.
 --
 -- `ON COMMIT PRESERVE ROWS` e creazione FUORI dalla transazione: gli id
 -- servono anche dopo il COMMIT o il ROLLBACK, per la verifica finale.
@@ -102,6 +125,10 @@ CREATE TEMP TABLE perimetro (
 INSERT INTO perimetro (tabella, id) VALUES
     ('public.contacts'::regclass, 86),
     ('public.contacts'::regclass, 87),
+    -- I contatti creati DENTRO le agenzie dedicate, dalla fixture FOLLOWUP.
+    -- Mancavano al primo dry-run: il censimento elencava solo 86/87.
+    ('public.contacts'::regclass, 88),
+    ('public.contacts'::regclass, 89),
     ('public.properties'::regclass, 44),
     ('public.properties'::regclass, 45),
     ('public.buy_requests'::regclass, 30),
@@ -148,7 +175,20 @@ INSERT INTO perimetro (tabella, id) VALUES
     ('public.property_contacts'::regclass, 24),
     ('public.property_contacts'::regclass, 25),
     ('public.property_status_history'::regclass, 87),
-    ('public.property_status_history'::regclass, 88);
+    ('public.property_status_history'::regclass, 88),
+    -- La risorsa del dominio SELLER_INTENT: marcatore in `event_type`.
+    ('public.seller_timeline_events'::regclass, 106),
+    ('public.seller_timeline_events'::regclass, 107),
+    -- Lo storico scritto dalle azioni OWNER Admin. NON sono i sei audit
+    -- senza riferimenti: quelli hanno entrambe le colonne NULL e restano.
+    ('public.owner_audit_log'::regclass, 585),
+    ('public.owner_audit_log'::regclass, 586),
+    ('public.owner_audit_log'::regclass, 587),
+    ('public.owner_audit_log'::regclass, 588),
+    ('public.owner_audit_log'::regclass, 589),
+    ('public.owner_audit_log'::regclass, 590),
+    ('public.owner_audit_log'::regclass, 591),
+    ('public.owner_audit_log'::regclass, 592);
 
 
 -- ---------------------------------------------------------------------------
@@ -207,8 +247,8 @@ DECLARE
 BEGIN
     SELECT count(*), count(*) FILTER (WHERE NOT ricavata)
       INTO n_totale, n_dichiarate FROM perimetro;
-    IF n_dichiarate <> 49 THEN
-        RAISE EXCEPTION 'righe dichiarate: % invece di 49', n_dichiarate;
+    IF n_dichiarate <> 61 THEN
+        RAISE EXCEPTION 'righe dichiarate: % invece di 61', n_dichiarate;
     END IF;
     IF n_totale <> 71 THEN
         RAISE EXCEPTION
@@ -217,7 +257,7 @@ BEGIN
             'va capita prima di cancellare qualsiasi cosa.',
             n_totale, n_dichiarate, n_totale - n_dichiarate;
     END IF;
-    RAISE NOTICE 'perimetro: 71 righe (49 dichiarate, 22 ricavate)';
+    RAISE NOTICE 'perimetro: 71 righe (61 dichiarate, 10 ricavate)';
 END
 $$;
 
@@ -249,7 +289,20 @@ BEGIN
         RAISE EXCEPTION '% dei sei audit hanno un riferimento non nullo: non '
                         'sono quelli attesi', n;
     END IF;
-    RAISE NOTICE 'sei audit senza riferimenti registrati: non verranno toccati';
+
+    -- E NON SONO NEL PERIMETRO. Adesso che `owner_audit_log` compare fra le
+    -- tabelle da cancellare, questa e' la guardia che tiene separate le due
+    -- cose: gli otto del run (585..592) e i sei da conservare.
+    SELECT count(*) INTO n FROM perimetro
+     WHERE tabella = 'public.owner_audit_log'::regclass
+       AND id IN (SELECT id FROM audit_intatti);
+    IF n <> 0 THEN
+        RAISE EXCEPTION
+            'IL PERIMETRO CONTIENE % dei sei audit da conservare: non si '
+            'cancella niente.', n;
+    END IF;
+    RAISE NOTICE 'sei audit senza riferimenti registrati e fuori dal '
+                 'perimetro: non verranno toccati';
 
     SELECT esegui INTO e FROM modalita;
     IF e THEN
@@ -287,7 +340,7 @@ SET LOCAL idle_in_transaction_session_timeout = '300s';
 -- scrive: prenderli al contrario sarebbe un invito al deadlock.
 -- ---------------------------------------------------------------------------
 SELECT id FROM agencies                 WHERE id IN (18, 19) ORDER BY id FOR UPDATE NOWAIT;
-SELECT id FROM contacts                 WHERE id IN (86, 87) ORDER BY id FOR UPDATE NOWAIT;
+SELECT id FROM contacts                 WHERE id IN (86, 87, 88, 89) ORDER BY id FOR UPDATE NOWAIT;
 SELECT id FROM properties               WHERE id IN (44, 45) ORDER BY id FOR UPDATE NOWAIT;
 SELECT id FROM buy_requests             WHERE id IN (30, 31) ORDER BY id FOR UPDATE NOWAIT;
 SELECT id FROM tasks                    WHERE id IN (40, 41) ORDER BY id FOR UPDATE NOWAIT;
@@ -301,6 +354,8 @@ SELECT id FROM match_requirement_results WHERE id BETWEEN 201 AND 216 ORDER BY i
 SELECT id FROM buy_request_history      WHERE id BETWEEN 121 AND 128 ORDER BY id FOR UPDATE NOWAIT;
 SELECT id FROM property_contacts        WHERE id IN (24, 25) ORDER BY id FOR UPDATE NOWAIT;
 SELECT id FROM property_status_history  WHERE id IN (87, 88) ORDER BY id FOR UPDATE NOWAIT;
+SELECT id FROM seller_timeline_events   WHERE id IN (106, 107) ORDER BY id FOR UPDATE NOWAIT;
+SELECT id FROM owner_audit_log          WHERE id BETWEEN 585 AND 592 ORDER BY id FOR UPDATE NOWAIT;
 
 SELECT d.id FROM property_documents d
  WHERE d.id IN (SELECT id FROM perimetro WHERE tabella = 'public.property_documents'::regclass)
@@ -413,8 +468,42 @@ BEGIN
 
     -- 8b. Il marcatore, dove esiste una colonna che lo porta.
     SELECT count(*) INTO n FROM contacts
-     WHERE id IN (86, 87) AND display_name LIKE 'P26-6-52f6d97b5214-%';
-    IF n <> 2 THEN RAISE EXCEPTION 'contacts: % con il marcatore, attese 2', n; END IF;
+     WHERE id IN (86, 87, 88, 89) AND display_name LIKE 'P26-6-52f6d97b5214-%';
+    IF n <> 4 THEN RAISE EXCEPTION 'contacts: % con il marcatore, attese 4', n; END IF;
+    -- 88 e 89 stanno DENTRO le agenzie dedicate: e' cio' che li distingue da
+    -- 86/87, che vivono nelle agenzie condivise e non vanno confusi con loro.
+    SELECT count(*) INTO n FROM contacts
+     WHERE id IN (88, 89) AND agency_id IN (18, 19);
+    IF n <> 2 THEN
+        RAISE EXCEPTION 'contacts 88/89: % nelle agenzie 18/19, attese 2', n;
+    END IF;
+    SELECT count(*) INTO n FROM contacts
+     WHERE id IN (86, 87) AND agency_id IN (18, 19);
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'contacts 86/87: % risultano nelle agenzie dedicate, '
+                        'attese 0', n;
+    END IF;
+
+    SELECT count(*) INTO n FROM seller_timeline_events
+     WHERE id IN (106, 107) AND event_type LIKE 'P26-6-52f6d97b5214-%';
+    IF n <> 2 THEN
+        RAISE EXCEPTION 'seller_timeline_events: % con il marcatore, attese 2', n;
+    END IF;
+
+    -- Gli otto audit del run: ogni riferimento non nullo dentro il perimetro,
+    -- e almeno uno che ci punti. E' la condizione che li separa dai sei da
+    -- conservare, che hanno entrambe le colonne NULL.
+    SELECT count(*) INTO n FROM owner_audit_log
+     WHERE id BETWEEN 585 AND 592
+       AND (owner_account_id IS NOT NULL OR property_id IS NOT NULL)
+       AND (owner_account_id IS NULL OR owner_account_id IN (8, 9))
+       AND (property_id IS NULL OR property_id IN (44, 45));
+    IF n <> 8 THEN
+        RAISE EXCEPTION
+            'owner_audit_log 585..592: % righe appartengono al run, attese 8. '
+            'Le altre hanno un riferimento fuori perimetro, o non ne hanno '
+            'nessuno - e in quel caso non sono residui di questo run.', n;
+    END IF;
     SELECT count(*) INTO n FROM properties
      WHERE id IN (44, 45) AND title LIKE 'P26-6-52f6d97b5214-%';
     IF n <> 2 THEN RAISE EXCEPTION 'properties: % con il marcatore, attese 2', n; END IF;
@@ -592,6 +681,11 @@ DECLARE
         'public.match_requirement_results',
         'public.match_runs',
         'public.buy_request_history',
+        -- `owner_audit_log` PRIMA di owner_accounts e properties: le sue due
+        -- colonne sono ON DELETE SET NULL, quindi cancellare i genitori per
+        -- primi le azzererebbe - e la riga sopravviverebbe senza piu' un
+        -- riferimento che dica di chi era. Si cancella finche' il legame c'e'.
+        'public.owner_audit_log',
         'public.owner_shared_documents',
         'public.property_documents',
         'public.owner_property_access',
@@ -604,6 +698,9 @@ DECLARE
         'public.owner_accounts',
         'public.property_status_history',
         'public.property_contacts',
+        -- `seller_timeline_events` referenzia contatti, immobili e stime in
+        -- SET NULL, e l'agenzia in RESTRICT: va prima di tutti e quattro.
+        'public.seller_timeline_events',
         'public.followup_actions',
         'public.tasks',
         'public.buy_requests',
@@ -639,7 +736,8 @@ BEGIN
         END IF;
         RAISE NOTICE '  % : % righe', tabella, n;
     END LOOP;
-    RAISE NOTICE 'cancellate 71 righe, nell''ordine delle chiavi esterne';
+    SELECT count(*) INTO n FROM perimetro;
+    RAISE NOTICE 'cancellate % righe, nell''ordine delle chiavi esterne', n;
 END
 $$;
 
