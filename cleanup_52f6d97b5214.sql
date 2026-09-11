@@ -707,34 +707,40 @@ DECLARE
         'public.properties',
         'public.contacts',
         'public.agencies'];
-    tabella  text;
+    -- `nome_tabella`, NON `tabella`: la tabella temporanea ha una colonna con
+    -- quel nome, e una variabile PL/pgSQL omonima rende ambiguo ogni
+    -- riferimento nudo - `column reference "tabella" is ambiguous`, che e'
+    -- esattamente dove si e' fermato il dry-run. Il nome diverso toglie
+    -- l'ambiguita' alla radice; l'alias esplicito qui sotto la toglie anche a
+    -- chi leggera' senza questo contesto.
+    nome_tabella text;
 BEGIN
     -- Ogni tabella del perimetro compare nell'ordine, e viceversa: una
     -- dimenticata resterebbe sul TEST senza che nessuno lo noti.
     SELECT count(*) INTO n FROM (
-        SELECT tabella::text FROM perimetro
+        SELECT p.tabella::text FROM perimetro AS p
         EXCEPT SELECT unnest(ordine)) d;
     IF n > 0 THEN
         RAISE EXCEPTION 'tabelle nel perimetro ma non nell''ordine di '
                         'cancellazione: %', n;
     END IF;
 
-    FOREACH tabella IN ARRAY ordine LOOP
-        SELECT count(*) INTO atteso FROM perimetro
-         WHERE perimetro.tabella = tabella::regclass;
+    FOREACH nome_tabella IN ARRAY ordine LOOP
+        SELECT count(*) INTO atteso FROM perimetro AS p
+         WHERE p.tabella = nome_tabella::regclass;
         IF atteso = 0 THEN
             CONTINUE;
         END IF;
         EXECUTE format(
             'DELETE FROM %s WHERE id IN '
             '(SELECT id FROM perimetro WHERE tabella = %L::regclass)',
-            tabella, tabella);
+            nome_tabella, nome_tabella);
         GET DIAGNOSTICS n = ROW_COUNT;
         IF n <> atteso THEN
             RAISE EXCEPTION '%: cancellate % righe su % del perimetro',
-                tabella, n, atteso;
+                nome_tabella, n, atteso;
         END IF;
-        RAISE NOTICE '  % : % righe', tabella, n;
+        RAISE NOTICE '  % : % righe', nome_tabella, n;
     END LOOP;
     SELECT count(*) INTO n FROM perimetro;
     RAISE NOTICE 'cancellate % righe, nell''ordine delle chiavi esterne', n;
