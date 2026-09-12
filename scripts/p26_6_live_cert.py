@@ -1042,6 +1042,12 @@ class Certification:
         # `_snapshot_owned_children`. Serve a tre posti: il perimetro
         # distruttivo, la guardia RESTRICT e la cancellazione per id.
         self.owned_child_ids: dict = {}
+        # Le righe che la fixture PROPERTY_WATCH crea nelle agenzie CONDIVISE.
+        # Li' non esiste una cancellazione per `agency_id`: l'unico criterio
+        # ammesso e' l'id, e questi sono gli id.
+        self.shared_stima_ids: list = []
+        self.shared_event_ids: list = []
+        self.shared_observation_ids: list = []
 
     def marker(self, agency: str) -> str:
         """Una stringa che compare solo nelle fixture di questo run.
@@ -1229,6 +1235,52 @@ class Certification:
             ),
         )
 
+    def cleanup_shared_watch_fixtures(self) -> None:
+        """Stima, evento, watch e osservazione creati nelle agenzie CONDIVISE.
+
+        PERCHE' UN METODO A PARTE.
+
+        Le stesse quattro righe, nelle agenzie dedicate, se ne vanno con
+        `DELETE ... WHERE agency_id IN (...)`. Nelle condivise no: li' vivono
+        accanto ai dati veri di TEST, e l'unico criterio ammesso e' l'id.
+
+        L'ORDINE E' OBBLIGATO da un solo vincolo vero:
+        `property_watch_observations.watch_id` e' ON DELETE RESTRICT, quindi
+        l'osservazione che `initialize` ha scritto va tolta PRIMA del watch,
+        altrimenti la cancellazione del watch non fallisce "in parte" -
+        fallisce del tutto. `property_watches.stima_id` e
+        `seller_timeline_events.stima_id` sono SET NULL: non impongono niente,
+        e infatti la stima resta per ultima solo per leggibilita'.
+
+        Le osservazioni si cancellano per gli id gia' RICONOSCIUTI nostri da
+        `_snapshot_owned_children` - chiave derivata - non per `watch_id`: una
+        riga scritta dalla scansione periodica sullo stesso watch non e'
+        nostra e deve continuare a bloccare.
+        """
+        watch = tuple(self.created_effects.get("property_watches", ()))
+        stime = tuple(self.shared_stima_ids)
+        eventi = tuple(self.shared_event_ids)
+        if not (watch or stime or eventi):
+            return
+        nostre = set(self.owned_child_ids.get("property_watch_observations", ()))
+        osservazioni = tuple(sorted(nostre & set(self.shared_observation_ids)))
+        self._delete_scoped(
+            "CLEAN-CONDIVISE",
+            (
+                ("DELETE FROM property_watch_observations WHERE id IN %s", osservazioni),
+                ("DELETE FROM property_watches WHERE id IN %s", watch),
+                ("DELETE FROM seller_timeline_events WHERE id IN %s", eventi),
+                ("DELETE FROM stime WHERE id IN %s", stime),
+            ),
+            (
+                ("SELECT COUNT(*) AS n FROM property_watch_observations WHERE id IN %s",
+                 osservazioni),
+                ("SELECT COUNT(*) AS n FROM property_watches WHERE id IN %s", watch),
+                ("SELECT COUNT(*) AS n FROM seller_timeline_events WHERE id IN %s", eventi),
+                ("SELECT COUNT(*) AS n FROM stime WHERE id IN %s", stime),
+            ),
+        )
+
     def cleanup_owner_fixtures(self) -> None:
         """Conti proprietario, concessioni, token e sessioni del portale.
 
@@ -1237,9 +1289,23 @@ class Certification:
         cancella.
         """
         ids = self.created_owner_account_ids
+        # LE DUE TABELLE DEL PERCORSO DOCUMENTALE, PER ID E NON PER GENITORE.
+        #
+        # `owner_notifications` e `owner_document_reads` sono CASCADE verso
+        # `owner_accounts`: la DELETE in fondo a questo elenco se le porterebbe
+        # via da sola, in silenzio, senza che il predicato di appartenenza le
+        # abbia mai viste. Vanno quindi rimosse PRIMA, e per gli id che
+        # l'istantanea ha gia' riconosciuto come nostri - non per
+        # `owner_account_id IN (...)`, che prenderebbe anche una riga che lega
+        # il nostro conto a un documento di qualcun altro. Quella riga non e'
+        # nostra: deve restare, e deve continuare a bloccare.
+        notifiche = self.effect_rows_before.get("owner_notifications", ())
+        letture = self.effect_rows_before.get("owner_document_reads", ())
         self._delete_scoped(
             "CLEAN-OWNER",
             (
+                ("DELETE FROM owner_document_reads WHERE id IN %s", letture),
+                ("DELETE FROM owner_notifications WHERE id IN %s", notifiche),
                 ("DELETE FROM owner_sessions WHERE owner_account_id IN %s", ids),
                 ("DELETE FROM owner_access_tokens WHERE owner_account_id IN %s", ids),
                 ("DELETE FROM owner_publication_reads WHERE owner_account_id IN %s", ids),
@@ -1265,6 +1331,11 @@ class Certification:
                  "WHERE owner_account_id IN %s", ids),
                 ("SELECT COUNT(*) AS n FROM owner_sessions WHERE owner_account_id IN %s", ids),
                 ("SELECT COUNT(*) AS n FROM owner_audit_log WHERE owner_account_id IN %s", ids),
+                # Per ID: dopo la cancellazione del conto, un conteggio per
+                # `owner_account_id` risponderebbe 0 per costruzione - la
+                # stessa vacuita' della JOIN a un genitore cancellato.
+                ("SELECT COUNT(*) AS n FROM owner_document_reads WHERE id IN %s", letture),
+                ("SELECT COUNT(*) AS n FROM owner_notifications WHERE id IN %s", notifiche),
             ),
         )
 
@@ -1306,12 +1377,27 @@ class Certification:
         # fallirebbe e l'agenzia temporanea resterebbe sul TEST.
         ("seller_timeline_events", "agency_id"),
         ("next_best_actions", "agency_id"),
+        # `flow_suppressions` PRIMA delle esecuzioni, e trovata cercandola.
+        #
+        # Ha `agency_id` NOT NULL (054) e la sua FK verso `agencies` e' ON
+        # DELETE RESTRICT (052): una sola riga di soppressione in un'agenzia
+        # dedicata avrebbe fatto fallire `DELETE FROM agencies` e con essa
+        # l'intera transazione di questo metodo. La scrive la valutazione delle
+        # regole, cioe' lo stesso `POST /api/flow/events` che la fixture FLOW
+        # chiama: nessun run l'ha ancora incontrata solo perche' nessuna regola
+        # ha trovato corrispondenza nelle agenzie temporanee.
+        ("flow_suppressions", "agency_id"),
         ("flow_executions", "agency_id"),
         ("flow_events", "agency_id"),
         ("property_watches", "agency_id"),
         ("stime", "agency_id"),
         ("followup_actions", "agency_id"),
         ("tasks", "agency_id"),
+        # `leads` PRIMA di `contacts`: `leads.contact_id` e' RESTRICT, quindi
+        # finche' il lead esiste il contatto non si cancella. Il lead lo crea
+        # la fixture NEXT_BEST_ACTION, che senza di esso non avrebbe alcun
+        # segnale da cui far nascere un'azione.
+        ("leads", "agency_id"),
         ("contacts", "agency_id"),
         ("agency_memberships", "agency_id"),
     )
@@ -1495,18 +1581,33 @@ class Certification:
         chiedere chi le referenziasse, e hanno entrambe FK non-CASCADE
         entranti. Qui si fotografano anche quelle.
         """
-        if not self.created_agency_ids:
+        # SENZA AGENZIE DEDICATE C'E' COMUNQUE QUALCOSA DA FOTOGRAFARE.
+        #
+        # La fixture PROPERTY_WATCH crea un watch anche nelle agenzie
+        # CONDIVISE, e la sua osservazione e' RESTRICT: uscire qui
+        # lascerebbe quell'osservazione fuori dal riconoscimento e la
+        # cancellazione del watch fallirebbe per intero.
+        watch_condivisi_presenti = bool(self.created_effects.get("property_watches"))
+        if not self.created_agency_ids and not watch_condivisi_presenti:
             return None
-        agenzie = tuple(self.created_agency_ids)
+        agenzie = tuple(self.created_agency_ids) or (0,)
         genitori = ({fk.parent for fk in self.CHILD_FOREIGN_KEYS}
                     | set(self.DEDICATED_SNAPSHOT_TABLES))
+        # I WATCH DELLE AGENZIE CONDIVISE non hanno un `agency_id` fra quelle
+        # dedicate, quindi la query qui sotto non li troverebbe: senza questa
+        # unione le loro osservazioni resterebbero fuori dal riconoscimento e
+        # il preflight le dichiarerebbe estranee - lo stesso difetto del run
+        # 58aa0e189aaa, un'agenzia piu' in la'.
+        watch_condivisi = tuple(self.created_effects.get("property_watches", ()))
         try:
             with self.db.read() as cur:
                 for genitore in sorted(genitori):
                     cur.execute(
                         f"SELECT id FROM {genitore} WHERE agency_id IN %s", (agenzie,))
-                    self.child_parents[genitore] = tuple(
-                        int(r["id"]) for r in cur.fetchall())
+                    trovati = {int(r["id"]) for r in cur.fetchall()}
+                    if genitore == "property_watches":
+                        trovati |= set(watch_condivisi)
+                    self.child_parents[genitore] = tuple(sorted(trovati))
                 for fk in self.CHILD_FOREIGN_KEYS:
                     ids = self.child_parents.get(fk.parent)
                     if not ids:
@@ -1542,6 +1643,249 @@ class Certification:
                        if fk.table == tabella), "azione non dichiarata")
         return f"{tabella} ({azione})"
 
+    #: Figlie SENZA `agency_id` il cui genitore vive in un'agenzia dedicata.
+    #:
+    #: (tabella, colonna, genitore). Il genitore deve comparire in
+    #: `DEDICATED_SNAPSHOT_TABLES`, altrimenti `child_parents` non ne conosce
+    #: gli id e questa dichiarazione sarebbe muta: `_snapshot_owned_by_parent`
+    #: lo pretende invece di fidarsi.
+    #:
+    #: `flow_action_records` E' IL CASO CHE HA FATTO NASCERE QUESTA STRUTTURA,
+    #: e non e' stato trovato da un run fallito ma cercandolo. `POST
+    #: /api/flow/events` non si limita a registrare l'evento: `process_event`
+    #: chiama `process_saved_event`, che valuta le regole attive e puo'
+    #: scrivere una esecuzione e i suoi record di azione. Quei record non hanno
+    #: `agency_id` - la loro appartenenza e' la JOIN all'esecuzione, come dice
+    #: 055 - quindi non entravano nel perimetro per nessuna via, e il giorno in
+    #: cui una regola avesse trovato corrispondenza in un'agenzia dedicata il
+    #: preflight li avrebbe dichiarati estranei bloccando tutto: la stessa
+    #: forma di `property_watch_observations`, un run piu' avanti.
+    OWNED_BY_PARENT = (
+        ("flow_action_records", "execution_id", "flow_executions"),
+    )
+
+    #: I riferimenti che il CATALOGO NON VEDE.
+    #:
+    #: {tabella: (colonna del tipo, colonna dell'id, {valore: tabella})}
+    #:
+    #: `flow_action_records` ha una sola chiave esterna vera - `execution_id` -
+    #: ma punta anche altrove, e senza vincolo: l'azione `create_core_task`
+    #: scrive `target_entity_type='task'` e `target_entity_id=<id del task>`
+    #: (flow/repository.py, UPDATE dopo l'esecuzione dell'azione). Nessuna FK
+    #: lega quelle due colonne, quindi `_altre_chiavi_esterne` non le trova e
+    #: una verifica basata sul solo catalogo direbbe "nessun altro
+    #: riferimento" su una riga che ne ha uno.
+    #:
+    #: Un valore del tipo non elencato qui NON viene ignorato: BLOCCA. Una
+    #: forma non prevista e' esattamente il caso in cui non si puo' decidere.
+    RIFERIMENTI_LOGICI = {
+        "flow_action_records": (
+            "target_entity_type", "target_entity_id", {"task": "tasks"}),
+    }
+
+    def _riferimento_logico_estraneo(self, tabella: str, riga, perimetro) -> list:
+        """Il riferimento che nessun vincolo dichiara, controllato lo stesso.
+
+        `flow_action_records.target_entity_id` punta a un task, ma senza FK:
+        il catalogo non lo vede e una verifica che si fermasse li' direbbe
+        "nessun altro riferimento" su una riga che ne ha uno.
+
+        Un tipo non elencato in RIFERIMENTI_LOGICI non viene ignorato: e'
+        segnalato come estraneo, perche' "non so a cosa punti" e "punta dentro
+        il perimetro" non sono la stessa cosa.
+        """
+        logico = self.RIFERIMENTI_LOGICI.get(tabella)
+        if not logico:
+            return []
+        colonna_tipo, colonna_id, mappa = logico
+        tipo, valore = riga[colonna_tipo], riga[colonna_id]
+        if valore is None:
+            return []
+        genitore = mappa.get(tipo)
+        if genitore is None:
+            return [f"{colonna_tipo}={tipo!r} non classificato ({colonna_id}={valore})"]
+        if int(valore) not in set(perimetro.get(genitore, ())):
+            return [f"{colonna_id}={valore} ({genitore}) fuori perimetro"]
+        return []
+
+    def _altre_chiavi_esterne(self, cur, tabella: str, esclusa: str) -> list:
+        """Le FK di `tabella` diverse da `esclusa`, con la relazione INTERA.
+
+        [(colonna, tabella genitore)], con TRE forme rifiutate prima di
+        arrivare qui.
+
+        LA VERSIONE PRECEDENTE PROMETTEVA L'IDENTITA' E LA BUTTAVA VIA. Leggeva
+        `confrelid::regclass::text` - che porta lo schema solo quando non e'
+        nel search_path - e poi faceva `split(".")[-1]`: due tabelle omonime in
+        schemi diversi diventavano la stessa, in silenzio.
+
+        Qui lo schema arriva da `pg_namespace` e serve a RIFIUTARE, non a
+        decorare: un genitore fuori da `public` solleva. Per questo la tupla
+        restituita non lo porta - a valle sarebbe sempre "public" e un campo
+        che nessuno legge e' un campo che nessuno puo' sbagliare.
+
+        E IGNORAVA `confkey`. Confrontava il valore della colonna figlia con
+        gli id del perimetro comunque, anche se la FK puntasse a un'altra
+        colonna: su `REFERENCES t(codice)` avrebbe confrontato un codice con
+        degli id e dichiarato "fuori perimetro" qualunque riga. Adesso la
+        colonna riferita si legge, e:
+
+          * FK COMPOSITA (piu' di una colonna): si BLOCCA. Il perimetro e' un
+            insieme di id singoli e non sa rispondere a una chiave a due
+            colonne; fingere di saperlo sarebbe la risposta peggiore.
+          * FK VERSO UNA COLONNA DIVERSA DA `id`: si BLOCCA, per la stessa
+            ragione.
+          * GENITORE FUORI DA `public`: si BLOCCA. Il perimetro e' tutto in
+            public, quindi su un altro schema non ha nulla da dire.
+
+        Bloccare vuol dire sollevare: `_snapshot_owned_by_parent` traduce
+        l'eccezione in un FAIL fail-closed, e nessuna DELETE parte.
+        """
+        cur.execute(
+            """
+            SELECT con.conname                       AS vincolo,
+                   ns.nspname                        AS genitore_schema,
+                   cl.relname                        AS genitore_tabella,
+                   att.attname                       AS colonna,
+                   patt.attname                      AS colonna_riferita,
+                   array_length(con.conkey, 1)       AS quante_colonne
+              FROM pg_constraint con
+              JOIN pg_class cl ON cl.oid = con.confrelid
+              JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+              CROSS JOIN LATERAL unnest(con.conkey, con.confkey) AS k(figlio, genitore)
+              JOIN pg_attribute att ON att.attrelid = con.conrelid
+                   AND att.attnum = k.figlio
+              JOIN pg_attribute patt ON patt.attrelid = con.confrelid
+                   AND patt.attnum = k.genitore
+             WHERE con.contype = 'f'
+               AND con.conrelid = ('public.' || %s)::regclass
+            """,
+            (tabella,),
+        )
+        fuori = []
+        for riga in cur.fetchall():
+            if riga["colonna"] == esclusa:
+                if int(riga["quante_colonne"] or 1) != 1:
+                    raise AssertionError(
+                        f"{tabella}: il legame col genitore ({riga['vincolo']}) e' "
+                        "una FK composita: l'appartenenza per id non e' definita")
+                continue
+            if int(riga["quante_colonne"] or 1) != 1:
+                raise AssertionError(
+                    f"{tabella}.{riga['colonna']} appartiene alla FK composita "
+                    f"{riga['vincolo']}: forma non supportata, non si decide")
+            if riga["colonna_riferita"] != "id":
+                raise AssertionError(
+                    f"{tabella}.{riga['colonna']} -> "
+                    f"{riga['genitore_tabella']}.{riga['colonna_riferita']}: il "
+                    "perimetro conosce solo gli id, forma non supportata")
+            if riga["genitore_schema"] != "public":
+                raise AssertionError(
+                    f"{tabella}.{riga['colonna']} punta a "
+                    f"{riga['genitore_schema']}.{riga['genitore_tabella']}: il "
+                    "perimetro e' tutto in public, forma non supportata")
+            fuori.append((riga["colonna"], riga["genitore_tabella"]))
+        return fuori
+
+    def _snapshot_owned_by_parent(self) -> None:
+        """Le figlie dichiarate in OWNED_BY_PARENT, con TRE condizioni.
+
+        "IL GENITORE STA IN UN'AGENZIA NOSTRA" NON BASTA, E LA VERSIONE
+        PRECEDENTE DI QUESTO COMMENTO DICEVA CHE BASTAVA.
+
+        Diceva: "non c'e' nessun altro che possa averla scritta". E' falso
+        come affermazione generale. Un processo platform-wide - il cron FLOW,
+        una ripresa degli eventi, un motore batch - puo' scrivere una figlia su
+        una NOSTRA esecuzione mentre il run e' in corso: l'agenzia e' nostra,
+        la riga no. Cancellarla sarebbe esattamente il danno da cui tutto
+        questo meccanismo difende.
+
+        Le condizioni sono tre, e sono tutte necessarie:
+
+        1. IL GENITORE E' FOTOGRAFATO fra le tabelle delle agenzie dedicate.
+           Senza, non c'e' nemmeno l'insieme di partenza.
+
+        2. I PROCESSI PLATFORM-WIDE SONO SOSPESI. Non e' una verifica che
+           questo script possa fare - lo dichiara `--with-dedicated-agencies`,
+           la cui guida dice esattamente questo: "ATTESTA che l'operatore ha
+           verificato e sospeso i processi platform-wide: lo script NON lo
+           rileva e non puo' rilevarlo". E' una condizione OPERATIVA, e va
+           scritta qui accanto al criterio che ne dipende.
+
+        3. LA RIGA NON PUNTA ALTROVE. Se la figlia ha altre chiavi esterne
+           oltre a quella dichiarata, ogni riferimento non nullo deve cadere
+           nel perimetro: una riga che lega la nostra esecuzione a qualcosa di
+           estraneo e' MISTA, e una relazione mista non diventa cancellabile
+           per effetto di questa generalizzazione. Le altre FK si leggono dal
+           catalogo, non da un elenco scritto a mano: una colonna aggiunta
+           domani viene esaminata senza che nessuno se ne ricordi.
+        """
+        if not self.created_agency_ids:
+            return None
+        perimetro = self._perimeter()
+        try:
+            with self.db.read() as cur:
+                for tabella, colonna, genitore in self.OWNED_BY_PARENT:
+                    if genitore not in self.DEDICATED_SNAPSHOT_TABLES:
+                        raise AssertionError(
+                            f"{tabella}.{colonna} pende da {genitore}, che non e' "
+                            "fotografato: l'appartenenza non sarebbe dimostrabile")
+                    ids = self.child_parents.get(genitore)
+                    if not ids:
+                        continue
+                    altre = self._altre_chiavi_esterne(cur, tabella, colonna)
+                    logico = self.RIFERIMENTI_LOGICI.get(tabella)
+                    lette = ["id"] + [c for c, _genitore in altre]
+                    if logico:
+                        lette += [logico[0], logico[1]]
+                    cur.execute(
+                        f"SELECT {', '.join(lette)} FROM {tabella} "
+                        f"WHERE {colonna} IN %s",
+                        (tuple(ids),))
+                    nostre, miste = [], []
+                    for riga in cur.fetchall():
+                        estranei = [
+                            f"{c}={riga[c]}" for c, genitore in altre
+                            if riga[c] is not None
+                            and int(riga[c]) not in set(perimetro.get(genitore, ()))
+                        ]
+                        estranei += self._riferimento_logico_estraneo(
+                            tabella, riga, perimetro)
+                        (miste if estranei else nostre).append(
+                            (int(riga["id"]), estranei))
+                    if nostre:
+                        self.owned_child_ids[tabella] = tuple(sorted(
+                            set(self.owned_child_ids.get(tabella, ()))
+                            | {i for i, _e in nostre}))
+                    if miste:
+                        # NON entrano nel perimetro: restano estranee, e il
+                        # preflight si fermera' su di loro come su qualunque
+                        # altra dipendenza non nostra.
+                        self.report.fail(
+                            "CLEAN-FIGLIE-DERIVATE",
+                            f"{tabella}: {len(miste)} righe pendono da un "
+                            f"{genitore} nostro ma puntano ANCHE fuori dal "
+                            f"perimetro ({miste[0][1]}). Restano dove sono: "
+                            "una relazione mista non e' del run.")
+                    self.report.note(
+                        "CLEAN-FIGLIE-DERIVATE",
+                        f"{tabella}: {len(nostre)} righe pendono da "
+                        f"{len(ids)} {genitore} delle agenzie dedicate "
+                        f"(altre FK esaminate: {len(altre)}; "
+                        f"{len(miste)} miste escluse). Vale solo con i "
+                        "processi platform-wide sospesi, come attesta "
+                        "--with-dedicated-agencies")
+        except Exception as exc:
+            self.owned_child_ids = {}
+            self.report.fail(
+                "CLEAN-FIGLIE-DERIVATE",
+                f"figlie derivate non fotografabili ({type(exc).__name__}): "
+                "senza i loro id non si possono ne' cancellare ne' verificare, "
+                "e un CASCADE del genitore le porterebbe via senza prova",
+            )
+            return f"figlie derivate non fotografabili ({type(exc).__name__})"
+        return None
+
     def _snapshot_owned_children(self) -> None:
         """Le figlie che il RUN ha creato senza mai vederne l'id.
 
@@ -1567,10 +1911,33 @@ class Certification:
         ESTRANEA e continua a bloccare: la guardia non viene indebolita, viene
         resa capace di distinguere.
 
+        DUE CRITERI, E LA DIFFERENZA E' NELLA PROVA CHE OFFRONO.
+
+        * CHIAVE DERIVATA, per `property_watch_observations`. Il watch vive in
+          un'agenzia dedicata, ma la sua tabella la scrivono anche la scansione
+          periodica e il motore invisible-sale: "figlia di una riga nostra" non
+          basterebbe, e il criterio e' la chiave che il repository deriva.
+
+        * GENITORE IN UN'AGENZIA CHE ABBIAMO CREATO NOI, per le figlie
+          dichiarate in `OWNED_BY_PARENT`. **Non basta da solo**, e una
+          versione precedente di questa frase diceva il contrario: sosteneva
+          che ogni riga pendente da una nostra fosse del run "per costruzione,
+          non c'e' nessun altro che possa averla scritta". E' falso - un
+          processo platform-wide scrive nelle nostre agenzie come in ogni
+          altra. Le condizioni sono tre e stanno tutte in
+          `_snapshot_owned_by_parent`: genitore fotografato, processi
+          platform-wide sospesi (condizione OPERATIVA, attestata da
+          `--with-dedicated-agencies` e non rilevabile da qui), e nessun altro
+          riferimento della riga fuori dal perimetro - chiavi esterne del
+          catalogo e riferimenti logici compresi.
+
         Fail-closed come le altre due istantanee: non poter leggere non e'
         "non ce n'erano".
         """
         self.owned_child_ids = {}
+        guasto = self._snapshot_owned_by_parent()
+        if guasto:
+            return guasto
         watch_ids = self.child_parents.get("property_watches")
         if not watch_ids:
             return None
@@ -1875,6 +2242,16 @@ class Certification:
         ChildFk("match_runs", "property_id", "properties", "CASCADE"),
         ChildFk("match_runs", "buy_request_id", "buy_requests", "CASCADE"),
         ChildFk("owner_audit_log", "property_id", "properties", "SET NULL"),
+        # Il percorso documentale. Tutte e quattro CASCADE, ed e' il motivo
+        # per cui non bastava lasciarle fuori dal perimetro e fidarsi: un
+        # CASCADE non fallisce, porta via in silenzio: `DELETE FROM
+        # owner_accounts` avrebbe cancellato notifiche e letture senza che
+        # nessun predicato di appartenenza le avesse mai guardate.
+        ChildFk("owner_notifications", "owner_account_id", "owner_accounts", "CASCADE"),
+        ChildFk("owner_notifications", "property_id", "properties", "CASCADE"),
+        ChildFk("owner_document_reads", "owner_account_id", "owner_accounts", "CASCADE"),
+        ChildFk("owner_document_reads", "shared_document_id",
+                "owner_shared_documents", "CASCADE"),
     )
 
     #: Gli id che il run traccia FUORI da `created_rows`, con la tabella su
@@ -1942,6 +2319,14 @@ class Certification:
         # verso `property_watches`: finche' resta, la cancellazione del watch
         # non fallisce "in parte", fallisce del tutto.
         "property_watch_observations",
+        # Il percorso documentale: notifica alla pubblicazione, lettura allo
+        # scaricamento. Run 42e32975ccd6.
+        "owner_notifications", "owner_document_reads",
+        # Il lead che la fixture NEXT_BEST_ACTION crea per avere un segnale.
+        "leads",
+        # Trovate cercandole, non da un run fallito: la valutazione delle
+        # regole FLOW puo' scrivere entrambe dentro un'agenzia dedicata.
+        "flow_suppressions", "flow_action_records",
     )
 
     #: Le tabelle delle agenzie dedicate di cui servono gli ID PRIMA del
@@ -1953,6 +2338,10 @@ class Certification:
     DEDICATED_SNAPSHOT_TABLES = (
         "contacts", "property_watches", "tasks",
         "flow_executions", "flow_events", "stime",
+        # `leads` si cancella per `agency_id` come le altre, quindi dei suoi
+        # id non resta traccia: senza istantanea le sue otto figlie SET NULL
+        # non verrebbero mai interrogate dalla guardia.
+        "leads",
     )
 
     #: Il tipo pubblico dei documenti condivisi, e NON e' una preferenza.
@@ -2033,6 +2422,28 @@ class Certification:
         ("owner_sessions", ("owner_account_id",)),
         ("agency_memberships", ("agency_id", "operator_user_id")),
         ("operator_sessions", ("operator_user_id",)),
+        # IL PERCORSO DOCUMENTALE SCRIVE DUE VOLTE PIU' DI QUANTO SEMBRI.
+        #
+        # Il run 42e32975ccd6 si e' fermato qui, e la forma dell'errore e'
+        # ormai riconoscibile: la fixture documenti ha ricominciato a
+        # funzionare - pubblicazione, elenco e scaricamento passano tutti - e
+        # proprio per questo ha prodotto righe che nessuno raccoglieva.
+        #
+        #   publish_shared_document -> _emit_notification_event
+        #       INSERT owner_notifications, uno per titolare con concessione
+        #       attiva, piu' la riga di audit `notification_created`.
+        #   prepare_shared_document_download -> read_shared_document
+        #       UPSERT owner_document_reads, piu' l'audit
+        #       `shared_document_viewed`.
+        #
+        # Nessuna delle due e' una figlia "nascosta": sono scritture dirette
+        # del percorso che la matrice esercita apposta. Entrano qui con lo
+        # stesso predicato di tutte le altre - ogni riferimento non nullo
+        # dentro il perimetro, almeno uno che ci punti - quindi una lettura
+        # che legasse il NOSTRO documento a un conto altrui resterebbe fuori e
+        # continuerebbe a bloccare.
+        ("owner_notifications", ("owner_account_id", "property_id")),
+        ("owner_document_reads", ("owner_account_id", "shared_document_id")),
     )
 
     #: Le due tabelle in cui l'appartenenza si decide da UNA SOLA colonna.
@@ -2164,7 +2575,8 @@ class Certification:
                     "sale_id": "property_sales", "lead_id": "leads",
                     "stima_id": "stime", "agency_id": "agencies",
                     "operator_user_id": "operator_users",
-                    "match_run_id": "match_runs"}
+                    "match_run_id": "match_runs",
+                    "shared_document_id": "owner_shared_documents"}
         dentro, dentro_p, tutte, tutte_p = [], [], [], []
         for col in columns:
             ids = perimeter.get(genitore[col])
@@ -2763,9 +3175,25 @@ class Certification:
                                         self.created_rows.get("properties", [])) or (0,),
                     "buy_requests": tuple(i for i, _m, _c in
                                           self.created_rows.get("buy_requests", [])) or (0,),
+                    # I genitori del percorso documentale. `(0,)` quando il run
+                    # non ne ha creati: la query resta legale e conta zero,
+                    # invece di sollevare e trasformare l'intera verifica in
+                    # "non eseguibile" - che e' esattamente cosa succedeva
+                    # quando questa mappa non conosceva un genitore dichiarato.
+                    "owner_accounts": tuple(self.created_owner_account_ids) or (0,),
+                    "owner_shared_documents": tuple(
+                        self.created_effects.get("owner_shared_documents", ())) or (0,),
                 }
                 for fk in self.EFFECT_FOREIGN_KEYS:
                     tabella, colonna = fk.table, fk.column
+                    if fk.parent not in genitori_id:
+                        # Un genitore dichiarato che nessuno sa enumerare non
+                        # si salta in silenzio: il report dice che quella
+                        # relazione non e' stata verificata.
+                        figlie.append(
+                            f"{tabella}.{colonna} ({fk.on_delete}): genitore "
+                            f"{fk.parent} non enumerabile, relazione non verificata")
+                        continue
                     valori = genitori_id[fk.parent]
                     cur.execute(
                         f"SELECT COUNT(*) AS n FROM {tabella} WHERE {colonna} IN %s",
@@ -3150,6 +3578,116 @@ def _fill(template: str, **values) -> str:
     for key, value in values.items():
         template = template.replace("{" + key + "}", str(value))
     return template
+
+
+def build_shared_watch_fixtures(report, http, cert, jars, agencies) -> dict:
+    """Una stima OSSERVABILE per ciascuna agenzia condivisa. {label: id}
+
+    CHIUDE TRE BLOCKED DEL RUN 42e32975ccd6, e nessuno per caso.
+
+    * `PROPERTY_WATCH-propria-B` e `ostile-A-B`: B non possiede alcuna stima su
+      TEST. E UNA STIMA DA SOLA NON BASTEREBBE:
+      `GET /api/property-watch/stime/{id}` chiama
+      `get_watch_for_stima_scoped`, che solleva `WatchNotFoundError` - cioe'
+      404 - quando il watch non esiste. Servono quindi tre cose, nell'ordine:
+      la stima, la valutazione completata che `_baseline_for_stima_scoped`
+      pretende (`seller_timeline_events` con `stima_completata` e il payload
+      dei prezzi), e `POST .../initialize` che crea watch e osservazione.
+      E' la stessa sequenza delle agenzie dedicate, che infatti passa.
+
+    * `LEGACY_ADMIN-list-A/B-non-vede-*`: `/api/admin/stime?day=oggi` filtra
+      `s.agency_id = <chiamante>` e `s.data >= oggi`. La stima nasce con
+      `data DEFAULT CURRENT_TIMESTAMP` e porta il marcatore in `comune`, che
+      la proiezione della route restituisce: da liste vuote - su cui il
+      confronto col marcatore altrui non prova niente - si passa a liste che
+      contengono la propria riga e non quella dell'altro.
+
+    TRACCIAMENTO E CANCELLAZIONE NASCONO QUI, NON DOPO. Ogni id finisce in
+    `created_effects` (perimetro, preflight, verifica) e negli elenchi
+    `shared_*` che `cleanup_shared_watch_fixtures` cancella per id - le
+    agenzie condivise non hanno una cancellazione per `agency_id`, e non
+    devono averla. L'osservazione che `initialize` scrive viene riconosciuta
+    da `_snapshot_owned_children` per chiave derivata.
+    """
+    creati = {}
+    for label, agency in sorted(agencies.items()):
+        try:
+            with cert.db.write() as cur:
+                cur.execute(
+                    "INSERT INTO stime (comune, via, tipologia, mq, prezzo_mq_base, "
+                    "                   agency_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    (cert.marker(label), cert.marker(label), "appartamento",
+                     80, 2000, agency["id"]))
+                stima = int(cur.fetchone()["id"])
+            cert.created_effects.setdefault("stime", []).append(stima)
+            cert.shared_stima_ids.append(stima)
+
+            with cert.db.write() as cur:
+                cur.execute(
+                    "INSERT INTO seller_timeline_events "
+                    "  (stima_id, event_type, event_source, payload, agency_id) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s) RETURNING id",
+                    (stima, cert.STIMA_COMPLETATA_EVENT, "p26-6-cert",
+                     json.dumps({"price_exact": 160000, "eur_mq_finale": 2000,
+                                 "base_mq": 2000}),
+                     agency["id"]))
+                evento = int(cur.fetchone()["id"])
+            cert.created_effects.setdefault(
+                "seller_timeline_events", []).append(evento)
+            cert.shared_event_ids.append(evento)
+        except Exception as exc:
+            report.blocked(f"PROPERTY_WATCH-fixture-{label}",
+                           f"stima condivisa non creabile ({type(exc).__name__})")
+            continue
+
+        risposta = http.request("POST",
+                                f"/api/property-watch/stime/{stima}/initialize",
+                                jar=jars[label])
+        if risposta.status not in (200, 201):
+            report.blocked(
+                f"PROPERTY_WATCH-fixture-{label}",
+                f"initialize -> {risposta.status}{_corpo(risposta)}: senza watch "
+                "la lettura propria risponderebbe 404 e il confronto sarebbe vuoto")
+            continue
+
+        # L'ID DEL WATCH SI LEGGE DAL DATABASE, non dalla risposta: e' quello
+        # su cui si cancella, e un campo della risposta e' un'affermazione del
+        # servizio su se stesso. Stessa regola di `register_uploaded_document`.
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT id FROM property_watches "
+                    " WHERE stima_id = %s AND agency_id = %s",
+                    (stima, agency["id"]))
+                riga = cur.fetchone()
+                watch = int(riga["id"]) if riga else None
+                if watch is not None:
+                    cur.execute(
+                        "SELECT id FROM property_watch_observations WHERE watch_id = %s",
+                        (watch,))
+                    osservazioni = [int(r["id"]) for r in cur.fetchall()]
+                else:
+                    osservazioni = []
+        except Exception as exc:
+            report.fail(
+                f"PROPERTY_WATCH-fixture-{label}",
+                f"watch creato ma non rileggibile ({type(exc).__name__}): la riga "
+                "esiste e non sarebbe piu' cancellabile per id")
+            continue
+        if watch is None:
+            report.fail(f"PROPERTY_WATCH-fixture-{label}",
+                        "initialize ha risposto 2xx ma nessun watch risulta sulla "
+                        "stima: nulla da osservare e nulla da cancellare")
+            continue
+
+        cert.created_effects.setdefault("property_watches", []).append(watch)
+        cert.shared_observation_ids.extend(osservazioni)
+        creati[label] = stima
+        report.note(f"PROPERTY_WATCH-fixture-{label}",
+                    f"stima {stima} con valutazione e watch {watch} "
+                    f"nell'agenzia di {label} ({len(osservazioni)} osservazioni)")
+    return creati
 
 
 def derive_stime(database: Database, agencies: dict) -> dict:
@@ -4093,6 +4631,48 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
     # inserita qui sopra, e' un segnale P17 vero: se anche cosi' il refresh
     # non materializza nulla, il BLOCKED dice qualcosa sulle regole invece che
     # sull'ordine delle chiamate.
+    #
+    # E COSI' E' ANDATA: il run 42e32975ccd6 ha materializzato ZERO azioni in
+    # entrambe le agenzie, con le stime e le valutazioni gia' al loro posto.
+    # I segnali sono cinque (`collect_all_signals_scoped`) e nessuno di essi
+    # nasce da una stima: quattro partono da un lead, da un match, da una
+    # opportunita' invisible-sale o dal motore di revival, e il quinto da
+    # FLOW-R004. In un'agenzia con un contatto, un'attivita' e una stima non
+    # c'e' nulla che li soddisfi.
+    #
+    # Il piu' semplice e DETERMINISTICO e' `next_action_overdue`, in
+    # `_lead_candidates_from_score`: basta un lead APERTO con `next_action_at`
+    # nel passato. `LeadCreate` esige il solo `contact_id` e accetta
+    # `next_action_at`, e il contatto dell'agenzia dedicata esiste gia'.
+    # Nessuna regola applicativa viene toccata: si crea il dato che la regola
+    # esistente prevede.
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    for label in etichette:
+        contatto = dedicate[label].get("contact")
+        if contatto is None:
+            report.blocked(f"NEXT_BEST_ACTION-fixture-{label}",
+                           "nessun contatto nell'agenzia dedicata: senza un lead "
+                           "il refresh non ha segnali da raccogliere")
+            continue
+        scaduto = (_dt.now(_tz.utc) - _td(days=3)).isoformat()
+        risposta = http.request(
+            "POST", "/api/core/leads", jar=dedicate[label]["jar"],
+            payload={"contact_id": contatto, "status": "open",
+                     "next_action_at": scaduto, "notes": cert.marker(label)})
+        lead = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or lead is None:
+            report.blocked(
+                f"NEXT_BEST_ACTION-fixture-{label}",
+                f"lead non creabile -> {risposta.status}{_corpo(risposta)}: senza "
+                "segnale il refresh non puo' materializzare nulla")
+            continue
+        # Tracciato PRIMA di qualunque altra cosa: `leads` si cancella per
+        # `agency_id` insieme all'agenzia dedicata, ma il perimetro deve
+        # conoscerlo comunque - il preflight guarda anche le sue figlie.
+        cert.created_effects.setdefault("leads", []).append(int(lead))
+        report.note(f"NEXT_BEST_ACTION-segnale-{label}",
+                    f"lead {lead} aperto con azione scaduta nell'agenzia di {label}")
+
     azioni = {}
     for label in etichette:
         risposta = http.request("POST", "/api/next-best-action/refresh",
@@ -4732,8 +5312,21 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
 
     build_owner_fixtures(report, http, cert, context["owner_jars"], owned, context, jars=jars)
 
+    # LE STIME SI CREANO, E SOLO DOVE NON SI RIESCE SI DERIVANO.
+    #
+    # `derive_stime` legge cio' che l'agenzia gia' possiede: su TEST l'agenzia
+    # B non possiede nulla, e da li' nascevano tre BLOCKED - la lettura
+    # propria di B, il confronto ostile A/B e le due liste LEGACY_ADMIN vuote.
+    # Una riga creata dal run e' migliore di una derivata anche quando la
+    # derivata esiste: e' del run, si cancella per id, e porta il marcatore
+    # che le prove di isolamento cercano. La derivazione resta come ripiego
+    # per l'agenzia in cui la creazione non riesce.
+    proprie = build_shared_watch_fixtures(report, http, cert, jars, agencies or {})
     if database is not None:
-        context["stime"] = derive_stime(database, agencies or {})
+        derivate = derive_stime(database, agencies or {})
+        context["stime"] = {**derivate, **proprie}
+    else:
+        context["stime"] = dict(proprie)
 
     # -- la matrice, dominio per dominio ------------------------------------
     for domain in DOMAINS:
@@ -5030,6 +5623,13 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         cert.preflight_dependencies()
         cert.cleanup_chain_fixtures()
         cert.cleanup_owner_fixtures()
+        # Le righe create nelle agenzie CONDIVISE: si cancellano per id,
+        # perche' li' non esiste - e non deve esistere - una cancellazione per
+        # agenzia. Prima di `cleanup_orphan_fixtures`, che tocca i contatti e
+        # gli immobili da cui quelle righe non dipendono, ma dopo il conto
+        # proprietario, per tenere i passi nell'ordine in cui il report li
+        # legge.
+        cert.cleanup_shared_watch_fixtures()
         cert.cleanup_http_fixtures(http, jars)
         # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
         # `property_contacts` li referenziano con RESTRICT, quindi finche' le

@@ -1,11 +1,58 @@
 # P26-6C 055 — live certification on Render TEST
 
-Prepared for review. **Not executed in the session that wrote it.**
+> ## STATUS: **CERTIFIED — closed 2026-09-09**
+>
+> The 055 FLOW agency-immutability guards are proved against a real
+> PostgreSQL. The BLOCKED rows below are resolved to PASS.
+>
+> This certificate covers **055 on TEST and nothing else.** It does not close
+> P26-6C, and it does not close P26. See *Scope of this certificate* at the end
+> of the document for what remains open.
 
 This is the run that turns the BLOCKED rows in the 055 report into PASS or
 FAIL. Everything else about 055 has been proved statically; the guards
 themselves are PL/pgSQL triggers, and nothing but a real PostgreSQL can
 exercise them.
+
+## Result — run of 2026-09-09
+
+Executed by Giorgio on the Render TEST service. Recorded here from the shell
+output he provided; this session had no live access and did not re-run it.
+
+| | |
+|---|---|
+| Branch | `core-0.1-test` |
+| Commit | `de6dd0e3df42f0fe53051a6cdd2f77a4f74c7b69` |
+| Database | `stima360_db_test` |
+| Ledger | 30 migrations, 026–055, all APPLIED; nothing pending |
+| Live suite | `tests/test_p26_6c_flow_immutability_pg.py` — **29 passed in 1.42s** |
+| Failed | 0 |
+| Skipped | 0 |
+
+29 passed with zero skipped is the whole collection: the count and the
+`--collect-only` figure agree, so every case in the module ran. The rule that a
+skip is BLOCKED and never a pass was not exercised — there were none.
+
+### How it got here
+
+Two live runs were needed.
+
+1. **First run** — 055 applied cleanly, then the suite reported 28 passed /
+   1 failed. `test_the_existing_foreign_keys_and_on_delete_semantics_survive`
+   expected `ForeignKeyViolation` (SQLSTATE 23503) from a `DELETE FROM
+   agencies`, and PostgreSQL raised `RestrictViolation` (23001).
+2. **Diagnosis** — the schema was right and the test was wrong. `ON DELETE
+   RESTRICT` refuses immediately and reports 23001; only `ON DELETE NO ACTION`
+   reports 23503. 052 declares RESTRICT, and the same test asserts
+   `confdeltype = 'r'` a few lines earlier — it asserted one ON DELETE mode
+   from the catalogue and expected the error class of the other. psycopg2 maps
+   the two SQLSTATEs to sibling classes, so the expectation could never have
+   passed against a correctly built schema.
+3. **Second run** — after commit `de6dd0e`, 29 passed, 0 failed, 0 skipped.
+
+No migration was changed at any point. The correction was confined to the test,
+and `tests/test_p26_6c_flow_isolation.py::test_59`/`test_60` now catch the same
+class of mistake offline, without a database.
 
 ## Credentials
 
@@ -432,3 +479,97 @@ All six must be `0`.
 | 10 | Neither the NOT NULL nor the trigger is refusing a NULL tenant. |
 | 11, 12, 13 | These must **succeed**. A failure means the guard fires on any UPDATE, which would break live FLOW execution and the recovery path. |
 | 14, 15 | These must **succeed**. A failure means the guard broke foreign-key cascade semantics. |
+
+## Scope of this certificate
+
+### Where the roadmap should be recorded — and is not
+
+There is **no P26 roadmap document in this repository.** Searched: `docs/`,
+`docs/superpowers/plans/`, `docs/superpowers/specs/`, the repository root, and
+every tracked `*.md` / `*.txt`. What exists is per-phase material —
+`docs/superpowers/specs/2026-09-05-p26-0-baseline-design.md`, the P26-1 design
+and plan, `docs/P26_1_CERTIFICATION_TEST.md`, `docs/P26_1_MIGRATION_RUNBOOK_TEST.md`,
+`docs/P26_DB_ENTRYPOINTS.md`, and this file. The P26-1 design refers forward to
+"P26-2+" but never enumerates 6A / 6B / 6C or the OWNER phase.
+
+This outcome is therefore recorded here and nowhere else. No substitute roadmap
+has been invented. The de-facto machine-readable status for P26-6C is
+`tests/test_p26_6c_backend_gate_closure.py`, whose frozen sets and
+`test_30_gate_ma1_cannot_be_declared_closed_while_category_e_is_populated`
+carry the gate's own rule; it is a test, not a plan, and it says what is
+*proved*, not what is *scheduled*.
+
+### What this certificate closes — stated precisely
+
+**The PostgreSQL invariants that `tests/test_p26_6c_flow_immutability_pg.py`
+actually exercises, on TEST, and nothing wider.** The four guards are
+installed, armed, BEFORE, row-level, on the right tables and functions; they
+refuse every cross-agency move the module probes; they permit the runtime's own
+updates and the FK cascade semantics. That is a database-level claim, proved by
+statements issued against a real database.
+
+It is **not** an HTTP claim. The 29 cases open a connection and run SQL — they
+do not call a route, do not authenticate, and do not exercise FastAPI. Nothing
+here says that FLOW's routes behave correctly on TEST.
+
+FLOW's route-level and scan-level scoping has its own, separate evidence:
+`tests/test_p26_6c_flow_isolation.py` (94 cases) run **locally**, with
+agency-aware fakes and AST admission. That is the right instrument for routing
+and predicate questions and it is genuine evidence — but it is local and
+structural. The sixteen tenant routes have **not** been exercised over HTTP
+against `stima360_db_test`, and must not be described as if they had.
+
+### What it does not close
+
+| Item | State | Evidence |
+|---|---|---|
+| P26-6C as a phase | **OPEN** | category E is non-empty |
+| GATE-MA1 | **OPEN** | `test_30` asserts the residual is `{owner_admin_router, owner_portal_router}` |
+| P26 overall | **OPEN** | follows from the two above |
+
+### Residual, classified
+
+**FLOW — two layers, two different strengths of evidence.**
+
+| Layer | Claim | Evidence | Where it ran |
+|---|---|---|---|
+| Database invariants | 052–055 gave `flow_events` / `flow_executions` / `flow_suppressions` a physical `agency_id`; the four guards refuse cross-agency moves | this certificate, 29/29 | **live, TEST** |
+| Routes and scans | 16 tenant routes take the agency context; 12 rules scan from one bounded definition | `tests/test_p26_6c_flow_isolation.py`, 94 | **local, structural** |
+
+Only the first row is certified against PostgreSQL. The second is implemented
+and proved by fakes and AST, not by HTTP calls to TEST.
+
+**Implemented, not certified against a live database** — CRM 360 scoping and
+the six `main.py` admin routes (`tests/test_p26_6c_backend_gate_closure.py`,
+48). Both are proved with agency-aware fakes and AST admission, which is the
+right instrument for routing and predicate questions; neither has been run
+against PostgreSQL, and no such certification has been requested. Their SQL is
+ordinary scoped SQL, not PL/pgSQL guards, so the FLOW argument for needing a
+live run does not automatically transfer — but "not certified live" is the
+accurate description, not "certified".
+
+**Still to do** — OWNER multi-agency. Not one of the thirteen `owner_*` tables
+carries an `agency_id`; `lookup_contacts` reads every agency's contacts by name
+and email. `owner_admin_router` and `owner_portal_router` authenticate
+themselves, so GATE-MA1's G5 cannot see them, and they are the entire content
+of category E.
+
+**Known limits of the live proof** — not defects, but not covered either:
+
+- **No concurrency.** `test_a_parent_agency_change_is_refused_after_a_child_insert`
+  is sequential, in one transaction, and says so in its own docstring. Two
+  concurrent sessions racing a parent agency change against a child insert are
+  not proved by it, and nothing else proves them.
+- **No row-level security.** No migration declares `ROW LEVEL SECURITY`.
+  Isolation is enforced in the application predicate and by these triggers, not
+  by the database refusing the read.
+- **TEST only.** Nothing here says anything about PROD.
+
+### Suite skips at the time of certification
+
+The local full suite reports 3779 passed / 52 skipped. Of those 52, 29 are this
+module skipping without `P26_RUN_FLOW_LIVE_CERT=1` — which is the gate working,
+and they are the 29 that passed on Render. The other 23 are pre-existing
+integration and E2E skips that need a live TEST database or explicit E2E
+authorization, and are unrelated to P26-6C. None of the 52 is counted as a PASS
+anywhere in this document.

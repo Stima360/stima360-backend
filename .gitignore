@@ -1,0 +1,13 @@
+
+
+# P26-6: i manifest delle chiavi di storage prodotti dal censimento del
+# recupero. Contengono chiavi che localizzano oggetti nel bucket: un file
+# committato e' pubblicato per sempre nella storia di git.
+manifest_storage_*.csv
+manifest_storage_*.csv.parziale
+manifest_storage_*.csv.sha256
+censimento_42e32975ccd6_*/
+manifest.csv
+manifest.csv.parziale
+manifest.csv.sha256
+controllo_manifest.tsv
