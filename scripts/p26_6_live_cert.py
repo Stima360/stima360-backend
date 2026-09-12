@@ -113,6 +113,22 @@ CERT_PREFIX = "p26-6-cert-"
 CERT_DOMAIN = "@certification.invalid"
 CERT_EMAIL_LIKE = CERT_PREFIX + "%" + CERT_DOMAIN
 
+# property_watch/repository.py - `ensure_watch_with_baseline_scoped`, cioe' la
+# funzione dietro `POST /api/property-watch/stime/{id}/initialize`, scrive UNA
+# osservazione insieme al watch, nella stessa transazione. Tipo, sorgente e
+# chiave sono costanti nel repository, e la chiave si DERIVA dallo stima_id:
+#
+#     INSERT INTO property_watch_observations (
+#         watch_id, observation_type, source, payload, idempotency_key
+#     ) VALUES (%s, 'watch_started', 'internal', %s, %s)
+#
+# Sono qui, e non dentro Cert, perche' il test di regressione li confronta con
+# il sorgente del repository: se un giorno la chiave cambia forma, il confronto
+# fallisce invece di lasciare il cleanup a cercare righe che non riconosce piu'.
+WATCH_BASELINE_TYPE = "watch_started"
+WATCH_BASELINE_SOURCE = "internal"
+WATCH_BASELINE_KEY = "property_watch:watch_started:stima:{stima_id}:v1"
+
 # operator_auth/dependencies.py: la soglia di OWNER Admin. `agency_admin` non
 # la raggiunge, e questo e' il motivo per cui la matrice non puo' provare quella
 # superficie con le proprie identita' - vedi OwnerSessions.
@@ -630,6 +646,89 @@ class Response:
         return self.body.decode("utf-8", "replace")
 
 
+#: Quanto corpo si riporta. Un motivo di validazione di FastAPI sta in poche
+#: centinaia di byte; il tetto esiste perche' una pagina di errore HTML non
+#: allaghi il report, non per nascondere qualcosa.
+CORPO_MAX = 600
+
+
+#: Cio' che nel corpo di una risposta non puo' finire in un report, con la
+#: sostituzione che ne prende il posto. L'ordine CONTA: gli URL per primi,
+#: cosi' che una firma nella query sparisca prima che la regola sulle stringhe
+#: opache abbia occasione di guardarla.
+#:
+#: Ogni marcatore dice CHE COSA e' stato tolto. Una redazione muta - o peggio,
+#: un troncamento silenzioso - riprodurrebbe il difetto che `_corpo` esiste per
+#: chiudere: un report che non permette di ricostruire cosa e' successo.
+_REDAZIONI = (
+    # Un URL: restano schema e host, che dicono DOVE senza dire altro. Una URL
+    # firmata porta la firma nella query, e una chiave di storage nel percorso:
+    # nessuno dei due serve a diagnosticare uno stato HTTP.
+    (re.compile(r"(https?://[^/\s\"'<>]+)[^\s\"'<>]*"), r"\1[percorso rimosso]"),
+    # Valori di campi che portano un segreto per definizione.
+    (re.compile(r'("(?:[\w-]*(?:token|secret|password|signature|authorization'
+                r'|cookie|session|storage_key|presigned)[\w-]*)"\s*:\s*)"[^"]*"',
+                re.I), r'\1"[segreto rimosso]"'),
+    # Valori di campi personali. I nomi sono quelli che questo dominio usa
+    # davvero - `stime`, `contacts`, `owner_accounts` - non un elenco generico.
+    (re.compile(r'("(?:email|telefono|phone|nome|cognome|name|surname'
+                r'|indirizzo|address|via|civico)"\s*:\s*)"[^"]*"', re.I),
+     r'\1"[dato personale rimosso]"'),
+    # Un indirizzo email ovunque si trovi, anche in mezzo a una frase.
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[email rimossa]"),
+    # Una stringa opaca lunga: token, chiave, hash. Un messaggio di
+    # validazione ha spazi e non finisce mai qui.
+    (re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"), "[stringa opaca rimossa]"),
+)
+
+
+def _redigi(testo: str) -> str:
+    """Toglie dal corpo cio' che un report non deve portare.
+
+    NON E' UN TRONCAMENTO PRUDENZIALE. Le regole sono mirate: tolgono firme,
+    token, chiavi e dati personali e lasciano intatto il resto - cioe' proprio
+    la parte diagnostica, che e' il motivo per cui il corpo viene stampato.
+    "Il documento deve essere disponibile in storage privato" passa per intero;
+    una URL firmata no.
+
+    Non pretende di essere una garanzia formale su qualunque corpo un server
+    possa produrre: e' una difesa per categoria, e il tetto `CORPO_MAX` resta
+    il secondo argine.
+    """
+    for schema, sostituto in _REDAZIONI:
+        testo = schema.sub(sostituto, testo)
+    return testo
+
+
+def _corpo(risposta) -> str:
+    """Il corpo della risposta - redatto, non riassunto - per il report.
+
+    IL RUN 58aa0e189aaa NON HA POTUTO DIRE PERCHE'.
+
+    `owner-fixture-A-documento` si e' fermato su "condivisione -> 422" e basta:
+    lo stato senza il motivo. Il motivo c'era, nel corpo, e nessuno lo
+    stampava - due run interi sono stati spesi a indovinarlo, e la prima
+    ipotesi era sbagliata.
+
+    Quindi il corpo si stampa. Le credenziali non passano di qui - viaggiano
+    negli header, che questo client non stampa in nessun caso - ma il CORPO di
+    una risposta del dominio documenti puo' portare una URL firmata, una
+    chiave di storage o i dati di un contatto, e nessuna delle tre serve a
+    capire perche' una richiesta e' stata rifiutata. `_redigi` le toglie e
+    lascia il messaggio.
+    """
+    try:
+        testo = " ".join(risposta.text().split())
+    except Exception as exc:                       # pragma: no cover - difensivo
+        return f" [corpo illeggibile: {type(exc).__name__}]"
+    if not testo:
+        return " [corpo vuoto]"
+    testo = _redigi(testo)
+    if len(testo) > CORPO_MAX:
+        testo = testo[:CORPO_MAX] + f"... (+{len(testo) - CORPO_MAX} caratteri)"
+    return f" [corpo: {testo}]"
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Ogni stato va osservato esattamente: nessun redirect seguito."""
 
@@ -937,6 +1036,12 @@ class Certification:
         # sempre al proprio id.
         self.effect_rows_before: dict = {}
         self.effect_snapshot_done = False
+        # {tabella figlia: (id)} delle righe che il run ha creato SENZA mai
+        # riceverne l'id - le scrive il backend dentro la stessa transazione
+        # di una fixture. Oggi soltanto `property_watch_observations`, vedi
+        # `_snapshot_owned_children`. Serve a tre posti: il perimetro
+        # distruttivo, la guardia RESTRICT e la cancellazione per id.
+        self.owned_child_ids: dict = {}
 
     def marker(self, agency: str) -> str:
         """Una stringa che compare solo nelle fixture di questo run.
@@ -1186,9 +1291,11 @@ class Certification:
         #     se ne va con il contatto. La verifica finale lo conferma.
         #   property_watch_observations.watch_id    ON DELETE RESTRICT
         #     NON se ne va: impedisce la cancellazione del watch e fa cadere
-        #     l'intera transazione di questo metodo. Per questo
-        #     `_blocking_children` la conta PRIMA e, se c'e', ci si ferma
-        #     nominandola invece di provare a cancellare.
+        #     l'intera transazione di questo metodo. Le righe che `initialize`
+        #     ha scritto per noi si cancellano per ID, sotto lock, prima del
+        #     watch (vedi `_snapshot_owned_children`); tutte le altre restano
+        #     ostacoli che `_blocking_children` conta PRIMA e che fanno
+        #     fermare, non cancellare.
         #
         # Lo stesso vale per `invisible_sale_opportunities.watch_id`, anch'essa
         # RESTRICT. Le azioni vere sono dichiarate in CHILD_FOREIGN_KEYS e
@@ -1276,7 +1383,10 @@ class Certification:
         azzerata da un SET NULL - rende la domanda successiva vuota invece che
         negativa.
         """
+        # L'ORDINE NON E' CASUALE: `_snapshot_owned_children` parte dagli id
+        # dei watch, che solo `_snapshot_child_parents` conosce.
         guasti = [m for m in (self._snapshot_child_parents(),
+                              self._snapshot_owned_children(),
                               self._snapshot_effect_rows()) if m]
         if not guasti:
             return
@@ -1420,6 +1530,92 @@ class Certification:
             return f"genitori non fotografabili ({type(exc).__name__})"
         return None
 
+    def _etichetta_figlia(self, tabella: str) -> str:
+        """"tabella (AZIONE)" - il nome con l'ON DELETE dichiarato.
+
+        Ogni riga di report che nomina una figlia deve portarne l'azione: "0
+        dopo" significa cose diverse per un CASCADE e per una RESTRICT, e una
+        relazione RESTRICT descritta come CASCADE manda l'operatore a cercare
+        un guasto che non esiste. `test_86g` lo pretende sul testo.
+        """
+        azione = next((fk.on_delete for fk in self.CHILD_FOREIGN_KEYS
+                       if fk.table == tabella), "azione non dichiarata")
+        return f"{tabella} ({azione})"
+
+    def _snapshot_owned_children(self) -> None:
+        """Le figlie che il RUN ha creato senza mai vederne l'id.
+
+        IL RUN 58aa0e189aaa HA DIMOSTRATO CHE QUESTA CATEGORIA ESISTE.
+
+        Il preflight si e' fermato su `property_watch_observations.watch_id=2`
+        e ha bloccato l'intero cleanup. Non era una riga altrui: e' comparsa
+        PROPRIO PERCHE' la fixture PROPERTY_WATCH ha ricominciato a funzionare.
+        `ensure_watch_with_baseline_scoped` - cioe' `POST .../initialize` -
+        scrive il watch E una osservazione `watch_started` nella stessa
+        transazione, una per agenzia dedicata. Il commento che diceva "una riga
+        qui dentro e' qualcosa che non abbiamo messo noi" descriveva un
+        backend che non fa piu' quello che si pensava facesse.
+
+        L'APPARTENENZA E' ESPLICITA, NON "FIGLIA DI UNA RIGA NOSTRA".
+
+        Prendere tutte le osservazioni del nostro watch sarebbe comodo e
+        sbagliato: la scansione periodica e il motore invisible-sale scrivono
+        nella stessa tabella e sullo stesso watch, e quelle righe non sono del
+        run. Il criterio e' la chiave di idempotenza che il repository DERIVA
+        dallo stima_id del watch - `property_watch:watch_started:stima:N:v1` -
+        insieme al tipo e alla sorgente. Una riga che non corrisponde resta
+        ESTRANEA e continua a bloccare: la guardia non viene indebolita, viene
+        resa capace di distinguere.
+
+        Fail-closed come le altre due istantanee: non poter leggere non e'
+        "non ce n'erano".
+        """
+        self.owned_child_ids = {}
+        watch_ids = self.child_parents.get("property_watches")
+        if not watch_ids:
+            return None
+        try:
+            with self.db.read() as cur:
+                cur.execute(
+                    "SELECT id, stima_id FROM property_watches WHERE id IN %s",
+                    (tuple(watch_ids),))
+                attese = {
+                    WATCH_BASELINE_KEY.format(stima_id=int(r["stima_id"]))
+                    for r in cur.fetchall() if r["stima_id"] is not None
+                }
+                cur.execute(
+                    "SELECT id, idempotency_key, observation_type, source "
+                    "  FROM property_watch_observations WHERE watch_id IN %s",
+                    (tuple(watch_ids),))
+                nostre, estranee = [], []
+                for riga in cur.fetchall():
+                    e_nostra = (
+                        riga["idempotency_key"] in attese
+                        and riga["observation_type"] == WATCH_BASELINE_TYPE
+                        and riga["source"] == WATCH_BASELINE_SOURCE
+                    )
+                    (nostre if e_nostra else estranee).append(int(riga["id"]))
+                if nostre:
+                    self.owned_child_ids["property_watch_observations"] = tuple(
+                        sorted(nostre))
+                self.report.note(
+                    "CLEAN-OSSERVAZIONI",
+                    f"{self._etichetta_figlia('property_watch_observations')} sui "
+                    f"{len(watch_ids)} watch del run: {len(nostre)} riconosciute "
+                    f"come create da initialize (chiave derivata), "
+                    f"{len(estranee)} estranee")
+        except Exception as exc:
+            self.owned_child_ids = {}
+            self.report.fail(
+                "CLEAN-OSSERVAZIONI",
+                f"osservazioni del watch non fotografabili ({type(exc).__name__}): "
+                "senza questa distinzione le righe create dal run e quelle "
+                "altrui sarebbero indistinguibili, e cancellare le une "
+                "significherebbe rischiare le altre",
+            )
+            return f"osservazioni del watch non fotografabili ({type(exc).__name__})"
+        return None
+
     def _blocking_children(self, genitore: str) -> list:
         """Figlie ON DELETE RESTRICT di un genitore del run, contate per id.
 
@@ -1442,9 +1638,21 @@ class Certification:
                 for fk in self.CHILD_FOREIGN_KEYS:
                     if fk.parent != genitore or fk.on_delete != "RESTRICT":
                         continue
-                    cur.execute(
-                        f"SELECT COUNT(*) AS n FROM {fk.table} WHERE {fk.column} IN %s",
-                        (ids,))
+                    # LE NOSTRE NON BLOCCANO NOI. Vengono cancellate per id
+                    # poche righe piu' sotto, nella stessa transazione e prima
+                    # del genitore: contarle come ostacolo significherebbe
+                    # fermare il cleanup a causa di cio' che il cleanup stesso
+                    # sta per rimuovere. Tutto il resto blocca ancora.
+                    nostre = self.owned_child_ids.get(fk.table)
+                    if nostre:
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {fk.table} "
+                            f" WHERE {fk.column} IN %s AND NOT (id IN %s)",
+                            (ids, nostre))
+                    else:
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {fk.table} WHERE {fk.column} IN %s",
+                            (ids,))
                     n = int(cur.fetchone()["n"])
                     if n:
                         bloccanti.append(f"{fk.table}={n}")
@@ -1483,10 +1691,20 @@ class Certification:
         # `invisible_sale_opportunities.watch_id` sono ON DELETE RESTRICT:
         # finche' una riga esiste, `DELETE FROM property_watches` non fallisce
         # "in parte", fallisce del tutto e porta con se' l'intera transazione
-        # di questo metodo. Non si cancellano d'ufficio: il run crea il watch
-        # con `initialize` e non fa girare ne' la scansione ne' il motore
-        # invisible-sale, quindi una riga qui dentro e' qualcosa che non
-        # abbiamo messo noi - e si nomina, non si rimuove.
+        # di questo metodo.
+        #
+        # LA VERSIONE PRECEDENTE DI QUESTO COMMENTO ERA SMENTITA DAI FATTI.
+        # Diceva: "il run crea il watch con `initialize` e non fa girare ne' la
+        # scansione ne' il motore invisible-sale, quindi una riga qui dentro e'
+        # qualcosa che non abbiamo messo noi". Il run 58aa0e189aaa lo ha
+        # contraddetto: `initialize` scrive ANCHE l'osservazione di baseline,
+        # nella stessa transazione del watch, e il preflight si e' fermato su
+        # due righe create da noi bloccando l'intero cleanup.
+        #
+        # La distinzione ora la fa `_snapshot_owned_children`, per chiave
+        # derivata. Le nostre vengono cancellate qui sotto; quelle di chiunque
+        # altro - la scansione, il motore invisible-sale - continuano a
+        # bloccare e si nominano, non si rimuovono.
         bloccanti = self._blocking_children("property_watches")
         if bloccanti:
             self.report.fail(
@@ -1498,6 +1716,39 @@ class Certification:
             return
         try:
             with self.db.write() as cur:
+                # LE FIGLIE RICONOSCIUTE, PER ID E SOTTO LOCK, PRIMA DEL
+                # GENITORE.
+                #
+                # `property_watch_observations` non ha `agency_id`, quindi non
+                # puo' stare in DEDICATED_TABLES: si cancella per gli id
+                # fotografati, mai per `watch_id` - che porterebbe via anche
+                # una riga scritta da una scansione fra l'istantanea e adesso.
+                #
+                # `FOR UPDATE NOWAIT` e' la differenza fra cancellare cio' che
+                # si e' guardato e cancellare cio' che nel frattempo e'
+                # cambiato: se un'altra transazione tiene una di quelle righe,
+                # qui si solleva subito invece di attendere, e il ramo di
+                # cattura lascia tutto dov'e'.
+                for tabella, figlie in sorted(self.owned_child_ids.items()):
+                    cur.execute(
+                        f"SELECT id FROM {tabella} WHERE id IN %s FOR UPDATE NOWAIT",
+                        (figlie,))
+                    bloccate = {int(r["id"]) for r in cur.fetchall()}
+                    mancanti = set(figlie) - bloccate
+                    if mancanti:
+                        # Sparite fra l'istantanea e adesso: non e' un errore
+                        # da nascondere, ma nemmeno una ragione per fermarsi -
+                        # le righe che restano si cancellano, e il report lo
+                        # dice.
+                        self.report.note(
+                            "CLEAN-OSSERVAZIONI",
+                            f"{self._etichetta_figlia(tabella)}: {len(mancanti)} "
+                            "righe fotografate non sono piu' presenti al "
+                            "momento del lock")
+                    if bloccate:
+                        cur.execute(
+                            f"DELETE FROM {tabella} WHERE id IN %s",
+                            (tuple(sorted(bloccate)),))
                 for table, column in self.DEDICATED_TABLES:
                     cur.execute(
                         f"DELETE FROM {table} WHERE {column} IN %s", (ids,))
@@ -1687,6 +1938,10 @@ class Certification:
         # I figli delle fixture raccolti dopo il run 52f6d97b5214.
         "property_sale_sellers", "owner_property_access", "owner_access_tokens",
         "owner_sessions", "operator_sessions", "match_requirement_results",
+        # La baseline che `initialize` scrive insieme al watch. E' RESTRICT
+        # verso `property_watches`: finche' resta, la cancellazione del watch
+        # non fallisce "in parte", fallisce del tutto.
+        "property_watch_observations",
     )
 
     #: Le tabelle delle agenzie dedicate di cui servono gli ID PRIMA del
@@ -1730,6 +1985,9 @@ class Certification:
     STIMA_COMPLETATA_EVENT = "stima_completata"
 
     #: Gli effetti che si cancellano per id, in ordine di FK:
+    #: (la baseline del watch e' definita a livello di modulo, vedi
+    #: WATCH_BASELINE_KEY: la usa anche il test che la confronta con il
+    #: repository reale.)
     #: `owner_shared_documents.property_document_id` e' RESTRICT verso
     #: `property_documents`, quindi la condivisione va rimossa per prima.
     EFFECT_BY_ID_TABLES = ("owner_shared_documents", "property_documents")
@@ -1881,6 +2139,14 @@ class Certification:
         # non raccoglieva - senza, la guardia li dichiarava estranei e
         # bloccava il cleanup su righe create dal run stesso.
         for tabella, ids in self.effect_rows_before.items():
+            aggiungi(tabella, ids)
+        # Le figlie che il backend ha scritto per conto nostro. Senza questa
+        # riga il preflight del run 58aa0e189aaa dichiarava estranea
+        # `property_watch_observations` - una riga creata dalla nostra stessa
+        # `initialize` - e bloccava ogni cancellazione. Entrano per ID: sono
+        # esattamente quelle riconosciute in `_snapshot_owned_children`, mai la
+        # tabella intera.
+        for tabella, ids in self.owned_child_ids.items():
             aggiungi(tabella, ids)
         return fuori
 
@@ -2554,6 +2820,28 @@ class Certification:
                                 f"{tabella}={left} di {len(ids)} righe fotografate "
                                 "prima del cleanup (verificate per id)")
 
+                # LE FIGLIE RICONOSCIUTE, PER ID.
+                #
+                # Il giro su CHILD_FOREIGN_KEYS piu' sotto le cerca per
+                # `watch_id`, e dopo il cleanup quel watch non esiste piu':
+                # risponderebbe 0 sia che siano state cancellate sia che siano
+                # rimaste con il genitore. L'id invece non lo tocca nessun ON
+                # DELETE, ed e' l'unica domanda la cui risposta significhi
+                # qualcosa.
+                if self.dedicated_cleanup_done:
+                    # `nostre` e non `figlie`: quel nome e' gia' la lista dei
+                    # messaggi su CHILD_FOREIGN_KEYS, poche righe piu' sotto.
+                    for tabella, nostre in sorted(self.owned_child_ids.items()):
+                        cur.execute(
+                            f"SELECT COUNT(*) AS n FROM {tabella} WHERE id IN %s",
+                            (nostre,))
+                        left = int(cur.fetchone()["n"])
+                        if left:
+                            residui.append(
+                                f"{self._etichetta_figlia(tabella)}={left} di "
+                                f"{len(nostre)} righe create dal run "
+                                "(verificate per id, non per genitore)")
+
                 # GLI ID TRACCIATI FUORI DA `created_rows`.
                 #
                 # Vendite, proposte, match e conti proprietario li cancellano
@@ -3043,51 +3331,33 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=No
                     f"proprietario di {label}: conto {account}, immobile {prop} "
                     "concesso, sessione del portale aperta")
 
-        # UN DOCUMENTO VERO, VISIBILE AL PROPRIETARIO. Tre passi via API:
-        # documento dell'immobile (via URL: nessuno storage necessario per
-        # ESISTERE), condivisione, pubblicazione. Senza, la lista documenti
-        # del portale e' vuota per tutti e "B non vede i documenti di A" e'
-        # vero perche' non ce ne sono.
-        risposta = http.request(
-            "POST", f"/api/property/properties/{prop}/documents",
-            jar=jars[label],
-            payload={"document_type": cert.PROPERTY_DOCUMENT_TYPE,
-                     "title": cert.marker(label),
-                     "url": "https://certification.invalid/" + cert.marker(label),
-                     "status": "available"})
-        doc = (risposta.json() or {}).get("id")
-        if risposta.status not in (200, 201) or doc is None:
-            report.blocked(f"owner-fixture-{label}-documento",
-                           f"documento dell'immobile -> {risposta.status}")
-            continue
-        cert.created_effects.setdefault("property_documents", []).append(int(doc))
-        risposta = http.request("POST", "/api/owner/admin/documents", jar=owner_jars[label],
-                                payload={"property_document_id": doc,
-                                         "public_title": cert.marker(label),
-                                         "public_document_type":
-                                             cert.OWNER_PUBLIC_DOCUMENT_TYPE})
-        condiviso = (risposta.json() or {}).get("id")
-        if risposta.status not in (200, 201) or condiviso is None:
-            report.blocked(f"owner-fixture-{label}-documento",
-                           f"condivisione -> {risposta.status}")
-            continue
-        cert.created_effects.setdefault("owner_shared_documents", []).append(int(condiviso))
-        risposta = http.request("POST", f"/api/owner/admin/documents/{condiviso}/publish",
-                                jar=owner_jars[label])
-        if risposta.status not in (200, 201):
-            report.blocked(f"owner-fixture-{label}-documento",
-                           f"pubblicazione -> {risposta.status}")
-            continue
-        context["portal_documents"][label] = int(condiviso)
-        report.note(f"owner-fixture-{label}-documento",
-                    f"documento condiviso {condiviso} pubblicato per {label}")
-
-        # UN SECONDO DOCUMENTO, QUESTA VOLTA CON UN OGGETTO NELLO STORAGE.
+        # IL DOCUMENTO DEL PORTALE NASCE DA UN CARICAMENTO, NON DA UN URL.
         #
-        # Quello sopra nasce da un URL e non ha `storage_key`: esiste, si
-        # elenca, ma `prepare_shared_document_download` non ha nulla da aprire.
-        # Senza un file vero il download resterebbe BLOCKED per sempre, e la
-        # prova ostile su quella route non si farebbe mai.
+        # IL 422 DEI RUN 52f6d97b5214 E 58aa0e189aaa, finalmente attribuito.
+        #
+        # La fixture precedente faceva tre passi: creava il documento
+        # dell'immobile con un `url`, lo condivideva, lo pubblicava. Il secondo
+        # passo rispondeva 422 e la diagnosi precedente - "manca
+        # public_document_type" - era sbagliata: quel campo c'era, e infatti
+        # correggerlo non ha cambiato nulla nel run successivo.
+        #
+        # La causa e' una REGOLA DI DOMINIO, non lo schema. In
+        # `owner/repository.create_shared_document`:
+        #
+        #     if src["status"] != "available" or not src.get("storage_key"):
+        #         raise ValidationError("Il documento deve essere disponibile
+        #                                in storage privato")
+        #
+        # e il wrapper `x()` di `owner/router_admin.py` traduce ValidationError
+        # in 422. Un documento nato da un `url` ha `storage_key` NULL -
+        # `property/schemas.DocumentCreate` accetta l'uno O l'altro - quindi
+        # non e' condivisibile, per progetto: il portale serve file che il
+        # sistema custodisce, non link che qualcun altro puo' cambiare.
+        #
+        # Il backend ha ragione. La fixture no. Quindi il documento del portale
+        # e' quello CARICATO, che nasce con la sua chiave, e il caricamento si
+        # fa per primo perche' ora e' lui a reggere sia l'elenco sia lo
+        # scaricamento.
         contenuto = ("%PDF-1.4 " + cert.marker(label)).encode("utf-8")
         risposta = http.upload(
             "/api/owner/admin/documents/upload", jar=owner_jars[label],
@@ -3100,30 +3370,83 @@ def build_owner_fixtures(report, http, cert, owner_jars, owned, context, jars=No
         caricato = (risposta.json() or {}).get("id")
         if risposta.status not in (200, 201) or caricato is None:
             report.blocked(
-                f"owner-fixture-{label}-scaricabile",
-                f"caricamento -> {risposta.status}: lo storage documenti non e' "
-                "configurato su questo TEST (OWNER_DOCUMENT_STORAGE_ENABLED), "
-                "quindi il download non sara' esercitabile",
+                f"owner-fixture-{label}-documento",
+                f"caricamento -> {risposta.status}{_corpo(risposta)}. Se lo "
+                "storage documenti non e' configurato su questo TEST "
+                "(OWNER_DOCUMENT_STORAGE_ENABLED) il portale non avra' nulla "
+                "da elencare ne' da scaricare",
             )
-        else:
+            continue
+        cert.created_effects.setdefault("owner_shared_documents", []).append(
+            int(caricato))
+        # `property_document_id` arriva nella risposta; `storage_key` no -
+        # `_admin_shared_document` lo esclude di proposito. L'id su cui si
+        # cancella viene SEMPRE dal database: quello della risposta si passa
+        # solo perche' venga confrontato.
+        cert.register_uploaded_document(
+            int(caricato), (risposta.json() or {}).get("property_document_id"))
+        risposta = http.request(
+            "POST", f"/api/owner/admin/documents/{caricato}/publish",
+            jar=owner_jars[label])
+        if risposta.status not in (200, 201):
+            report.blocked(f"owner-fixture-{label}-documento",
+                           f"pubblicazione -> {risposta.status}{_corpo(risposta)}")
+            continue
+        context["portal_documents"][label] = int(caricato)
+        context["portal_downloadable"][label] = int(caricato)
+        report.note(f"owner-fixture-{label}-documento",
+                    f"documento {caricato} caricato e pubblicato per {label}: "
+                    "elencabile e scaricabile")
+
+        # E IL DOCUMENTO DA URL RESTA, MA COME PROVA DEL RIFIUTO.
+        #
+        # Non si butta via: e' una riga vera di `property_documents` che il
+        # cleanup deve saper rimuovere, ed e' l'occasione per certificare la
+        # regola invece di subirla. La richiesta si fa lo stesso, e il 422 -
+        # con il suo motivo - diventa un PASS. Se un domani la condivisione di
+        # un documento senza `storage_key` venisse ammessa, questa riga
+        # diventerebbe rossa e qualcuno dovrebbe decidere, che e' esattamente
+        # cio' che un BLOCKED permanente non faceva succedere.
+        risposta = http.request(
+            "POST", f"/api/property/properties/{prop}/documents",
+            jar=jars[label],
+            payload={"document_type": cert.PROPERTY_DOCUMENT_TYPE,
+                     "title": cert.marker(label),
+                     "url": "https://certification.invalid/" + cert.marker(label),
+                     "status": "available"})
+        doc = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or doc is None:
+            report.blocked(f"owner-fixture-{label}-url-non-condivisibile",
+                           f"documento dell'immobile -> {risposta.status}"
+                           f"{_corpo(risposta)}")
+            continue
+        cert.created_effects.setdefault("property_documents", []).append(int(doc))
+        risposta = http.request("POST", "/api/owner/admin/documents", jar=owner_jars[label],
+                                payload={"property_document_id": doc,
+                                         "public_title": cert.marker(label),
+                                         "public_document_type":
+                                             cert.OWNER_PUBLIC_DOCUMENT_TYPE})
+        condiviso = (risposta.json() or {}).get("id")
+        if risposta.status == 422 and condiviso is None:
+            report.note(f"owner-fixture-{label}-url-non-condivisibile",
+                        "un documento senza storage_key non e' condivisibile: "
+                        f"422 come da regola{_corpo(risposta)}")
+        elif condiviso is not None:
+            # Condiviso davvero: la riga esiste e il cleanup deve saperlo,
+            # qualunque cosa se ne pensi della regola.
             cert.created_effects.setdefault("owner_shared_documents", []).append(
-                int(caricato))
-            # `property_document_id` arriva nella risposta; `storage_key` no -
-            # `_admin_shared_document` lo esclude di proposito. L'id su cui si
-            # cancella viene SEMPRE dal database: quello della risposta si
-            # passa solo perche' venga confrontato.
-            cert.register_uploaded_document(
-                int(caricato), (risposta.json() or {}).get("property_document_id"))
-            risposta = http.request(
-                "POST", f"/api/owner/admin/documents/{caricato}/publish",
-                jar=owner_jars[label])
-            if risposta.status not in (200, 201):
-                report.blocked(f"owner-fixture-{label}-scaricabile",
-                               f"pubblicazione del caricato -> {risposta.status}")
-            else:
-                context["portal_downloadable"][label] = int(caricato)
-                report.note(f"owner-fixture-{label}-scaricabile",
-                            f"documento scaricabile {caricato} pubblicato per {label}")
+                int(condiviso))
+            report.fail(
+                f"owner-fixture-{label}-url-non-condivisibile",
+                f"la condivisione di un documento senza storage_key e' stata "
+                f"ACCETTATA (id {condiviso}): "
+                "`create_shared_document` dichiara di rifiutarla, e il portale "
+                "finirebbe per esporre un link che il sistema non custodisce")
+        else:
+            report.fail(
+                f"owner-fixture-{label}-url-non-condivisibile",
+                f"rifiuto atteso 422, ottenuto {risposta.status}"
+                f"{_corpo(risposta)}")
 
 
 def build_chain(report, http, cert, jars, owned) -> None:
@@ -4206,39 +4529,44 @@ def certify_owner_portal(report, http, cert, domain, jars, owned, context) -> No
                 f"{target} di {other} -> {response.status}"
                 + (" con lista vuota" if vuota else ""),
             )
-            # 3b. IL DOWNLOAD. `prepare_shared_document_download` apre lo
-            #     storage: un documento via URL non ha storage_key, quindi il
-            #     proprietario legittimo puo' ricevere 404 anche se e' suo. La
-            #     prova ostile e' decisiva solo se quella positiva risponde
-            #     200; altrimenti e' BLOCKED, non PASS.
-            scaricabili = context.get("portal_downloadable", {})
-            proprio_doc = scaricabili.get(label)
-            scarico = (http.request("GET",
-                                    f"/api/owner/portal/documents/{proprio_doc}/download",
-                                    jar=portal_jars[label])
-                       if proprio_doc is not None else None)
-            if proprio_doc is None or scarico.status != 200:
-                report.blocked(
-                    f"OWNER_PORTAL-download-{label}",
-                    "nessun documento con oggetto nello storage per questo run"
-                    if proprio_doc is None else
-                    f"il proprietario legittimo riceve {scarico.status} sul proprio "
-                    f"documento {proprio_doc}: il rifiuto verso l'altro sarebbe ambiguo",
+        # 3b. IL DOWNLOAD. `prepare_shared_document_download` apre lo storage.
+        #
+        #     FUORI DAL RAMO PRECEDENTE, E NON E' UN DETTAGLIO DI STILE. Stava
+        #     dentro l'`else`: quando la lista non era provabile, questa riga
+        #     non compariva affatto nel report - un dominio non provato che non
+        #     si vedeva nemmeno. Adesso, se non c'e' nulla da scaricare, lo
+        #     dice.
+        #
+        #     La prova ostile e' decisiva solo se quella positiva risponde 200;
+        #     altrimenti e' BLOCKED, non PASS.
+        scaricabili = context.get("portal_downloadable", {})
+        proprio_doc = scaricabili.get(label)
+        scarico = (http.request("GET",
+                                f"/api/owner/portal/documents/{proprio_doc}/download",
+                                jar=portal_jars[label])
+                   if proprio_doc is not None else None)
+        if proprio_doc is None or scarico.status != 200:
+            report.blocked(
+                f"OWNER_PORTAL-download-{label}",
+                "nessun documento con oggetto nello storage per questo run"
+                if proprio_doc is None else
+                f"il proprietario legittimo riceve {scarico.status} sul proprio "
+                f"documento {proprio_doc}: il rifiuto verso l'altro sarebbe ambiguo",
+            )
+        else:
+            report.note(f"OWNER_PORTAL-download-{label}",
+                        f"download del proprio documento {proprio_doc} -> 200")
+            altrui = scaricabili.get(other)
+            if altrui is not None:
+                ostile = http.request(
+                    "GET", f"/api/owner/portal/documents/{altrui}/download",
+                    jar=portal_jars[label])
+                report.check(
+                    f"OWNER_PORTAL-download-{label}-{other}",
+                    ostile.status in NEUTRAL_REFUSALS,
+                    f"il proprietario di {label} scarica il documento {altrui} "
+                    f"di {other} -> {ostile.status}",
                 )
-            else:
-                report.note(f"OWNER_PORTAL-download-{label}",
-                            f"download del proprio documento {proprio_doc} -> 200")
-                altrui = scaricabili.get(other)
-                if altrui is not None:
-                    ostile = http.request(
-                        "GET", f"/api/owner/portal/documents/{altrui}/download",
-                        jar=portal_jars[label])
-                    report.check(
-                        f"OWNER_PORTAL-download-{label}-{other}",
-                        ostile.status in NEUTRAL_REFUSALS,
-                        f"il proprietario di {label} scarica il documento {altrui} "
-                        f"di {other} -> {ostile.status}",
-                    )
 
     # 4. IL GRANT INCOERENTE.
     #

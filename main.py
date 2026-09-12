@@ -21,6 +21,7 @@ from core.router import router as core_router
 from core.scope import system_context_for_public_stima
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context, require_authenticated_operator, require_operator
+from operator_auth.exceptions import PlatformAdminAgencyRequired
 from operator_auth.router import router as operator_auth_router
 from property.router import router as property_router
 from buy.router import router as buy_router
@@ -107,6 +108,36 @@ app.include_router(followup_router, dependencies=[Depends(require_authenticated_
 app.include_router(seller_intent_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(property_watch_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(next_best_action_router, dependencies=[Depends(require_authenticated_operator)])
+
+
+def agency_of(ctx: OperatorContext) -> int:
+    """L'agenzia del chiamante, risolta lato server, oppure un rifiuto.
+
+    P26-6: LE SEI ROUTE ADMIN ERANO LE UNICHE SENZA QUESTA TRADUZIONE.
+
+    Ogni altro router - CORE, MATCH, SALE, FOLLOWUP, SELLER INTENT, PROPERTY,
+    OWNER Admin - avvolge `ctx.require_agency()` e mappa
+    `PlatformAdminAgencyRequired` su 403. Qui la chiamata era nuda: un
+    amministratore di piattaforma senza membership - `agency_id` None per
+    costruzione, vedi `OperatorContext` - avrebbe fatto uscire l'eccezione
+    fino a Starlette, che risponde `Internal Server Error`. La stessa domanda
+    riceveva 403 su centocinquanta route e 500 su sei.
+
+    Un 500 non e' solo brutto: nasconde la risposta. Chi lo riceve non sa se
+    gli manca un permesso o se il server e' rotto, e un errore non gestito su
+    una route che proietta nome, cognome, email e telefono e' esattamente il
+    punto in cui si vuole una risposta studiata.
+
+    403 e non 404, come in `owner/router_admin.agency_of`: la route non viene
+    nascosta, viene rifiutata. E l'isolamento non si allenta di un passo -
+    questa funzione non SCEGLIE un'agenzia, si limita a tradurre l'assenza di
+    una scelta: senza `agency_id` non si arriva mai a una query, e con
+    `agency_id` il predicato resta quello di prima, nella WHERE.
+    """
+    try:
+        return ctx.require_agency()
+    except PlatformAdminAgencyRequired as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _public_stima_system_context(conn):
@@ -343,7 +374,7 @@ def admin_whatsapp_messages(
     message body. `owned_elsewhere` exists to catch it, and it projects nothing
     - it is an existence check on a normalised phone, never a source of rows.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
 
     conn = get_connection()
     cur = conn.cursor()
@@ -466,7 +497,7 @@ def admin_delete_stime(
     Reporting `len(ids)` would have told a caller its cross-agency delete
     succeeded.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
 
     ids = payload.ids
     if not ids:
@@ -503,7 +534,7 @@ def admin_delete_stime_dettagliate(
     NULL still has an agency, which is exactly the case a JOIN-based scope
     would have made permanently unreachable.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
 
     ids = payload.ids
     if not ids:
@@ -1459,7 +1490,7 @@ def admin_lista_stime_pro(
     born with no parent at all, and a row with no parent cannot inherit a
     tenant. That is the same test 046 applied to `next_best_actions`.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
 
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
@@ -1508,8 +1539,36 @@ def admin_lista_stime(
     This list projects `nome`, `cognome`, `email` and `telefono`, so an
     unscoped read here was not an abstract isolation gap: it handed one
     agency's operator another agency's leads with their contact details.
+
+    P26-6: `lead_status` E `note_internal` NON SONO COLONNE CERTE.
+
+    Il run live 38e341f68f8a e poi 58aa0e189aaa hanno chiuso questa route con
+    `-> 500` e un corpo di ventun caratteri - "Internal Server Error", cioe'
+    un'eccezione non gestita - e la causa non era l'isolamento: le due colonne
+    del gestionale nascono SOLO da `migrazione_gestionale_stime()`, una
+    funzione che vive nel blocco `__main__` di `database.py` e che nessuna
+    migration esegue. `docs/P26_BASELINE_CERTIFICATE_TEST.md` §3.0.2 le elenca
+    fra le trenta "dichiarate ma assenti" su TEST, e avverte di NON eseguire
+    `database.py` come script per aggiungerle, perche' invaliderebbe
+    l'impronta certificata in §2.
+
+    Quindi su qualunque database costruito dalle migration questa SELECT
+    riferisce due colonne inesistenti e muore: `UndefinedColumn`. Stessa
+    forma del difetto `executed_at` in `followup/repository.py`.
+
+    Non si aggiunge una migration per far esistere le colonne - non e' una
+    decisione che una correzione di route possa prendere al posto della
+    baseline - e non si toglie il campo dalla risposta, che sarebbe un cambio
+    di contratto per gli ambienti dove le colonne CI SONO.
+
+    `to_jsonb(s) ->> 'x'` risolve la chiave sulla riga invece che sul catalogo:
+    dove la colonna esiste restituisce il suo valore, dove non esiste
+    restituisce NULL invece di abortire. Le due colonne sono VARCHAR(32) e
+    TEXT, quindi `->>` (che rende `text`) non cambia il tipo di nulla. La
+    risposta ha le stesse chiavi nei due ambienti; cambia solo se il valore
+    puo' essere valorizzato.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
     if dal and al:
         start = datetime.combine(dal, datetime.min.time())
         end   = datetime.combine(al + timedelta(days=1), datetime.min.time())
@@ -1522,7 +1581,9 @@ def admin_lista_stime(
     cur.execute("""
         SELECT s.id, s.data, s.comune, s.microzona, s.via, s.civico, s.tipologia,
                s.mq, s.piano, s.locali, s.bagni, s.pertinenze, s.ascensore,
-               s.nome, s.cognome, s.email, s.telefono,s.consenso_marketing, s.lead_status, s.note_internal,
+               s.nome, s.cognome, s.email, s.telefono, s.consenso_marketing,
+               to_jsonb(s) ->> 'lead_status'   AS lead_status,
+               to_jsonb(s) ->> 'note_internal' AS note_internal,
             sd.data AS data_dettaglio
             FROM stime s
             LEFT JOIN stime_dettagliate sd ON sd.stima_id = s.id
@@ -1552,7 +1613,7 @@ def admin_update_stima(
     the WHERE rather than checked first: one statement, no window between the
     check and the write, and `rowcount` tells us whether it matched.
     """
-    agency_id = ctx.require_agency()
+    agency_id = agency_of(ctx)
 
     updates = []
     values = []

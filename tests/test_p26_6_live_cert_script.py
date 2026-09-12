@@ -74,6 +74,75 @@ class FakeCursor:
                 t: set(ids) for t, ids in self.state.get("effetti_righe", {}).items()}
         return self.state["_effetti_vive"]
 
+    def _osservazioni(self) -> dict:
+        return self.state.setdefault("osservazioni", {})
+
+    def _osservazioni_materializzate(self) -> bool:
+        """Vero quando le osservazioni sono righe e non un numero.
+
+        `figli_cascata` resta un'uscita esplicita: i test che vogliono una
+        figlia RESTRICT ESTRANEA - una riga che il run NON ha creato - la
+        dichiarano di la', e questo ramo risponde con righe sintetiche che
+        portano una chiave di idempotenza diversa da quella derivata. Cosi' i
+        due casi restano distinguibili invece di sommarsi in un conteggio solo,
+        che e' esattamente l'ambiguita' che la correzione elimina.
+        """
+        return ("property_watch_observations"
+                not in self.state.get("figli_cascata", {}))
+
+    def _osservazioni_execute(self, upper, params):
+        """Le quattro domande che il cleanup pone su questa tabella."""
+        righe = self._osservazioni()
+        if upper.startswith("DELETE"):
+            for i in set(params[0]) if params else set():
+                righe.pop(i, None)
+            self.state.setdefault("deletes", []).append(upper)
+            return
+        if "FOR UPDATE NOWAIT" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i} for i in sorted(ids & set(righe))]
+            return
+        if "IDEMPOTENCY_KEY" in upper:
+            watch = set(params[0]) if params else set()
+            self._rows = [dict(r, id=i) for i, r in sorted(righe.items())
+                          if r["watch_id"] in watch]
+            return
+        # Un conteggio: per id (verifica dei residui) oppure per watch_id con
+        # l'eventuale esclusione delle nostre (guardia RESTRICT e preflight).
+        if " ID IN " in f" {upper} " and "WATCH_ID" not in upper:
+            ids = set(params[0]) if params else set()
+            self._row = {"n": len(ids & set(righe))}
+            return
+        watch = set(params[0]) if params else set()
+        esclusi = set(params[1]) if params and len(params) > 1 else set()
+        self._row = {"n": len([i for i, r in righe.items()
+                               if r["watch_id"] in watch and i not in esclusi])}
+
+    def _osservazioni_sintetiche(self, upper, params):
+        """Il caso `figli_cascata`: figlie RESTRICT che il run non ha creato.
+
+        Il conteggio resta quello dichiarato dal test - prima e dopo la
+        cancellazione del genitore - ma l'istantanea riceve righe VERE, con una
+        chiave che non e' quella derivata: e' cosi' che restano estranee, e la
+        guardia deve continuare a fermarsi su di loro.
+        """
+        prima, dopo = self.state.get("figli_cascata", {}).get(
+            "property_watch_observations", (0, 0))
+        quante = dopo if self.state.get("genitori_cancellati") else prima
+        if "IDEMPOTENCY_KEY" in upper:
+            watch = list(params[0]) if params else [0]
+            self._rows = [
+                {"id": 990000 + k, "watch_id": watch[0],
+                 "idempotency_key": f"scansione-periodica-{k}",
+                 "observation_type": "price_change", "source": "scan"}
+                for k in range(prima)
+            ]
+            return
+        if "FOR UPDATE NOWAIT" in upper:
+            self._rows = []
+            return
+        self._row = {"n": quante}
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
@@ -131,6 +200,19 @@ class FakeCursor:
             # sano passa. `azioni_persistite` = 0 modella l'escalation che
             # risponde 'completed' senza aver scritto nulla.
             self._row = {"n": self.state.get("azioni_persistite", 1)}
+        elif "PROPERTY_WATCH_OBSERVATIONS" in upper and not self._osservazioni_materializzate():
+            self._osservazioni_sintetiche(upper, params)
+        elif "PROPERTY_WATCH_OBSERVATIONS" in upper:
+            # LE OSSERVAZIONI, MATERIALIZZATE - E PRIMA DI "AS N FROM PUBLIC.".
+            #
+            # Quel ramo risponde a OGNI conteggio di dipendenze con il numero
+            # che il test ha dichiarato, tabella per tabella indistinguibili.
+            # Su questa tabella non basta piu': la domanda del preflight e'
+            # "quante di queste righe NON sono del run", e la risposta deve
+            # venire dalle righe vere, con la loro chiave, altrimenti la
+            # distinzione che tutta la correzione introduce non viene mai
+            # esercitata e il mutante che la rimuove sopravvive.
+            self._osservazioni_execute(upper, params)
         elif "AS N FROM PUBLIC." in upper:
             # Le dipendenze fuori perimetro. Prima del ramo generico "AS N":
             # quello e' il censimento incoerenze e rispondeva 0, facendo
@@ -167,6 +249,14 @@ class FakeCursor:
             origine = self.state.get("origine_condivisa", {}).get(condiviso)
             self._row = (None if self.state.get("origine_perduta")
                          else {"property_document_id": origine})
+        elif upper.startswith("SELECT ID, STIMA_ID FROM PROPERTY_WATCHES"):
+            # La stima di ciascun watch: e' da li' che si deriva la chiave di
+            # idempotenza attesa. Un doppio che non la desse renderebbe
+            # l'insieme atteso vuoto, e OGNI osservazione sembrerebbe estranea.
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i, "stima_id": s}
+                          for i, s in self.state.get("watch_stima", {}).items()
+                          if i in ids]
         elif upper.startswith("SELECT ID FROM PROPERTY_WATCHES"):
             # I watch delle agenzie dedicate, fotografati PRIMA del cleanup.
             # Un doppio che non li restituisse renderebbe vuota l'istantanea,
@@ -557,6 +647,11 @@ class FakeHttp(cert.HttpProbe):
         # cancellazione poteva risultare sbagliato.
         self.flow_events_vivi: dict = {}       # id evento -> agenzia
         self.watch_vivi: dict = {}             # id watch  -> agenzia
+        self.watch_stima: dict = {}            # id watch  -> stima_id
+        # id osservazione -> riga. La baseline che `initialize` scrive insieme
+        # al watch: e' RESTRICT verso property_watches, quindi finche' c'e' il
+        # watch non si cancella.
+        self.osservazioni: dict = {}
         # stime per cui esiste un evento `stima_completata`.
         self.stime_valutate: set = set()
         # id condivisione -> id property_documents. Nello schema la colonna e'
@@ -741,6 +836,25 @@ class FakeHttp(cert.HttpProbe):
             base = self.rows.get((payload or {}).get("property_document_id"))
             if base is None or base["agency"] != agency:
                 return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            # LA REGOLA DEL REPOSITORY, MODELLATA.
+            #
+            # `owner/repository.create_shared_document` rifiuta un documento
+            # che non sia `available` E in storage privato:
+            #
+            #     if src["status"] != "available" or not src.get("storage_key"):
+            #         raise ValidationError(...)
+            #
+            # e `x()` traduce quella ValidationError in 422. Il doppio
+            # accettava tutto, e per questo la fixture che condivideva un
+            # documento nato da un `url` era verde qui e 422 sul TEST - due run
+            # interi spesi a cercare la causa altrove.
+            import json as _j
+            origine = _j.loads(base["body"])
+            if not origine.get("storage_key"):
+                return self._reply(
+                    method, path, 422,
+                    _j.dumps({"detail": "Il documento deve essere disponibile "
+                                        "in storage privato"}).encode())
             self.next_id += 1
             self.shared = getattr(self, "shared", {})
             # documento condiviso -> (agenzia, immobile, titolo, pubblicato)
@@ -872,6 +986,24 @@ class FakeHttp(cert.HttpProbe):
                                    f"{identifier}"}).encode())
                 self.watch_id = getattr(self, "watch_id", 7700) + 1
                 self.watch_vivi[self.watch_id] = agency
+                # IL WATCH NON NASCE DA SOLO.
+                #
+                # `ensure_watch_with_baseline_scoped` scrive, nella STESSA
+                # transazione, il watch e una osservazione `watch_started` la
+                # cui chiave di idempotenza si deriva dallo stima_id. Il doppio
+                # non la creava, e per questo la matrice poteva dichiararsi
+                # verde mentre sul TEST il preflight si fermava proprio li':
+                # il run 58aa0e189aaa ha bloccato l'intero cleanup su due righe
+                # che questo ramo non sapeva di produrre.
+                self.watch_stima[self.watch_id] = identifier
+                self.osservazione_id = getattr(self, "osservazione_id", 8800) + 1
+                self.osservazioni[self.osservazione_id] = {
+                    "watch_id": self.watch_id,
+                    "idempotency_key":
+                        cert.WATCH_BASELINE_KEY.format(stima_id=identifier),
+                    "observation_type": cert.WATCH_BASELINE_TYPE,
+                    "source": cert.WATCH_BASELINE_SOURCE,
+                }
             return self._reply(method, path, 200,
                                f'{{"stima_id":{identifier},"watch":true}}'.encode())
         return self._property_watch_preesistenti(method, path, agency)
@@ -1313,6 +1445,8 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     # dimenticarsi una tabella senza che nessun test se ne accorgesse.
     probe.flow_events_vivi = database.state.setdefault("flow_events_vivi", {})
     probe.watch_vivi = database.state.setdefault("watch_vivi", {})
+    probe.watch_stima = database.state.setdefault("watch_stima", {})
+    probe.osservazioni = database.state.setdefault("osservazioni", {})
     probe.stime_valutate = database.state.setdefault("stime_valutate", set())
     probe.origine_condivisa = database.state.setdefault("origine_condivisa", {})
     # LE RIGHE DEGLI EFFETTI, materializzate come il run le crea davvero.
@@ -3457,19 +3591,30 @@ def test_81_an_nba_row_of_another_agency_is_caught(monkeypatch):
     assert code == 1
 
 
-def test_82_without_the_storage_backend_the_download_is_BLOCKED(monkeypatch):
-    """Nessun oggetto nello storage: il caricamento fallisce e il download
-    resta non provato, con il nome della variabile che lo governa."""
+def test_82_without_the_storage_backend_the_portal_has_nothing_to_show(monkeypatch):
+    """Nessun oggetto nello storage: niente elenco e niente scaricamento.
+
+    L'ULTIMA RIGA DI QUESTO TEST DICEVA IL CONTRARIO, ED ERA FALSA.
+
+    Affermava che "il documento via URL basta" per la lista del portale. Non
+    basta: `create_shared_document` rifiuta con 422 un documento senza
+    `storage_key`, quindi quella condivisione non nasceva mai e la lista era
+    vuota per entrambe le agenzie - il 422 dei run 52f6d97b5214 e
+    58aa0e189aaa. Adesso il documento del portale e' quello CARICATO, e senza
+    storage non c'e' nulla da elencare: e' una perdita di copertura reale, e
+    va dichiarata BLOCKED invece di essere simulata da un URL che il backend
+    non accetterebbe.
+    """
     _code, report, _db, _probe, _ = working_run(
         monkeypatch, http=FakeHttp(broken={"no_storage_backend"}, only="portal",
                                    prepopulate=DERIVED, stime=STIME),
         stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
     righe = {i: (k, t) for k, i, t in report.rows}
-    k, t = righe["owner-fixture-A-scaricabile"]
+    k, t = righe["owner-fixture-A-documento"]
     assert k == cert.BLOCKED and "OWNER_DOCUMENT_STORAGE_ENABLED" in t, (k, t)
     assert righe["OWNER_PORTAL-download-A"][0] == cert.BLOCKED
-    # E la lista documenti resta provata: il documento via URL basta per quella.
-    assert righe["OWNER_PORTAL-documenti-A"][0] == cert.PASS
+    assert righe["OWNER_PORTAL-documenti-A"][0] == cert.BLOCKED, \
+        righe["OWNER_PORTAL-documenti-A"]
 
 
 def test_83_uploaded_objects_are_removed_from_the_bucket(monkeypatch):
@@ -5089,3 +5234,618 @@ def test_92_a_run_that_created_nothing_says_so_instead_of_passing_silently():
     assert righe["CLEAN-VERIFICA"][0] == cert.PASS
     assert "non ha creato nulla" in righe["CLEAN-VERIFICA"][1]
     assert not database.state.get("sql"), database.state.get("sql")
+
+
+# ===========================================================================
+# 98 - property_watch_observations nel perimetro distruttivo
+#
+# IL FAIL DEL RUN 58aa0e189aaa, e perche' era nostro.
+#
+# `CLEAN-PREFLIGHT` si e' fermato su `property_watch_observations.watch_id=2`
+# e ha bloccato l'intero cleanup: sei dei dieci FAIL erano quella stessa riga
+# ripetuta dai metodi a valle. Le due righe non erano di qualcun altro - le
+# aveva scritte `POST .../initialize`, cioe' la fixture PROPERTY_WATCH del run
+# stesso, nella stessa transazione del watch.
+#
+# Questi test pretendono le due cose insieme, ed e' la coppia che conta: le
+# NOSTRE entrano nel perimetro, si cancellano per id e si verificano per id;
+# quelle di chiunque altro continuano a fermare tutto.
+# ===========================================================================
+
+def _osservazione_estranea(database, watch_id=None, **campi):
+    """Una riga scritta da qualcun altro sullo stesso watch."""
+    osservazioni = database.state.setdefault("osservazioni", {})
+    if watch_id is None:
+        watch_id = next(iter(database.state.get("watch_vivi", {})), 7701)
+    riga = {"watch_id": watch_id, "idempotency_key": "scansione:2026-09-12",
+            "observation_type": "price_change", "source": "scan"}
+    riga.update(campi)
+    osservazioni[990001] = riga
+    return 990001
+
+
+def test_98a_the_derived_key_is_the_one_the_repository_really_writes():
+    """La chiave non e' inventata qui: e' letta dal repository.
+
+    Tutto il criterio di appartenenza pende da tre costanti. Se un giorno il
+    repository cambiasse la forma della chiave, o il tipo, o la sorgente, il
+    cleanup smetterebbe di riconoscere le proprie righe e tornerebbe a
+    bloccarsi - senza che nulla, nel frattempo, fosse diventato rosso. Questo
+    test e' il legame che manca a quel silenzio.
+    """
+    sorgente = (ROOT / "property_watch" / "repository.py").read_text(encoding="utf-8")
+    corpo = re.search(
+        r"def ensure_watch_with_baseline_scoped\(.*?\n(?=\ndef )", sorgente, re.S)
+    assert corpo, "ensure_watch_with_baseline_scoped non trovata"
+    testo = corpo.group(0)
+
+    # La chiave, con il segnaposto al posto dello stima_id.
+    chiavi = re.findall(r'f"(property_watch:[^"]+)"', testo)
+    assert chiavi, testo[:400]
+    normalizzata = chiavi[0].replace("{stima_id}", "{stima_id}")
+    assert normalizzata == cert.WATCH_BASELINE_KEY, (normalizzata,
+                                                     cert.WATCH_BASELINE_KEY)
+    # Tipo e sorgente sono letterali dentro la INSERT.
+    inserimento = re.search(
+        r"INSERT INTO property_watch_observations.*?VALUES \(([^)]*)\)", testo, re.S)
+    assert inserimento, testo[:400]
+    letterali = re.findall(r"'([a-z_]+)'", inserimento.group(1))
+    assert cert.WATCH_BASELINE_TYPE in letterali, letterali
+    assert cert.WATCH_BASELINE_SOURCE in letterali, letterali
+
+
+def test_98b_the_baseline_observation_is_recognised_and_does_not_block(monkeypatch):
+    """IL CASO LIVE 58aa0e189aaa: la riga e' nostra, e il cleanup prosegue."""
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"property_watches": [
+            ("public.property_watch_observations", "watch_id")]},
+        dipendenti_estranee=0)
+
+    # Il doppio ha davvero prodotto le osservazioni: senza, questo test
+    # sarebbe soddisfatto dal vuoto.
+    assert database.state["watch_stima"], database.state
+    esiti = {i: k for k, i, _t in report.rows}
+    assert esiti.get("CLEAN-OSSERVAZIONI") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-OSSERVAZIONI"]
+    assert esiti.get("CLEAN-PREFLIGHT") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-PREFLIGHT"]
+    assert esiti.get("CLEAN-DEDICATA") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-DEDICATA"]
+    assert esiti.get("CLEAN-VERIFICA") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-VERIFICA"]
+    riga = next(t for k, i, t in report.rows if i == "CLEAN-OSSERVAZIONI")
+    assert "2 riconosciute" in riga, riga
+    assert "0 estranee" in riga, riga
+    # E l'azione dichiarata accompagna il nome, come per ogni altra figlia.
+    assert "property_watch_observations (RESTRICT)" in riga, riga
+
+
+def test_98c_they_are_locked_and_deleted_by_id_before_the_watch(monkeypatch):
+    """Lock, poi DELETE per id, poi il genitore. In quest'ordine.
+
+    Senza il lock si cancellerebbe cio' che si e' guardato un istante prima;
+    per `watch_id` si porterebbe via anche una riga scritta da una scansione
+    nel frattempo; e dopo il watch la DELETE non arriverebbe mai, perche' la
+    RESTRICT avrebbe gia' fatto cadere la transazione.
+    """
+    _code, _report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    sql = database.state["sql"]
+
+    lock = [i for i, q in enumerate(sql)
+            if q.startswith("SELECT id FROM property_watch_observations")
+            and "FOR UPDATE NOWAIT" in q]
+    cancella = [i for i, q in enumerate(sql)
+                if q.startswith("DELETE FROM property_watch_observations")]
+    watch = [i for i, q in enumerate(sql)
+             if q.startswith("DELETE FROM property_watches")]
+    assert lock, [q for q in sql if "property_watch_observations" in q]
+    assert cancella, [q for q in sql if "property_watch_observations" in q]
+    assert watch, sql
+    assert max(lock) < min(cancella) < min(watch), (lock, cancella, watch)
+    # MAI per watch_id: quello e' il criterio che prenderebbe righe altrui.
+    for q in (sql[i] for i in cancella):
+        assert "WHERE id IN" in q, q
+        assert "watch_id" not in q, q
+
+
+def test_98d_the_residue_is_verified_by_id_after_the_parent_is_gone(monkeypatch):
+    """La verifica finale le cerca per ID, dopo la cancellazione del watch.
+
+    Cercarle per `watch_id` risponderebbe 0 comunque: quel watch non esiste
+    piu'. E' la stessa vacuita' della JOIN al genitore cancellato.
+    """
+    _code, _report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    sql = database.state["sql"]
+    verifiche = [i for i, q in enumerate(sql)
+                 if q.startswith("SELECT COUNT(*) AS n FROM property_watch_observations")
+                 and "WHERE id IN" in q]
+    watch = max(i for i, q in enumerate(sql)
+                if q.startswith("DELETE FROM property_watches"))
+    assert verifiche, [q for q in sql if "property_watch_observations" in q]
+    assert max(verifiche) > watch, (verifiche, watch)
+
+
+def test_98e_a_delete_that_does_nothing_is_reported_as_a_residue(monkeypatch):
+    """Se la DELETE non cancella, la verifica se ne accorge.
+
+    La mutazione e' sul DOPPIO, non sul test: la riga resta nel database
+    simulato dopo la cancellazione. Se la verifica finale non la cercasse per
+    id, questo run risulterebbe pulito.
+    """
+    originale = FakeCursor._osservazioni_execute
+
+    def sorda(self, upper, params):
+        if upper.startswith("DELETE"):
+            self.state.setdefault("deletes", []).append(upper)
+            return
+        return originale(self, upper, params)
+
+    monkeypatch.setattr(FakeCursor, "_osservazioni_execute", sorda)
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-VERIFICA" in fallimenti, [r[1] for r in report.rows]
+    assert "property_watch_observations (RESTRICT)=2" in fallimenti["CLEAN-VERIFICA"], \
+        fallimenti["CLEAN-VERIFICA"]
+    assert "verificate per id" in fallimenti["CLEAN-VERIFICA"]
+
+
+def test_98f_a_foreign_observation_on_our_watch_still_blocks_everything(monkeypatch):
+    """LA GUARDIA NON E' STATA INDEBOLITA.
+
+    Stessa tabella, stesso watch, chiave diversa: la riga non e' del run - una
+    scansione periodica, il motore invisible-sale - e deve fermare tutto come
+    prima. Se la correzione avesse escluso la TABELLA invece delle RIGHE
+    RICONOSCIUTE, questo test sarebbe verde per il motivo sbagliato.
+    """
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        figli_cascata={"property_watch_observations": (1, 1)})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-DEDICATA" in fallimenti, [r[1] for r in report.rows]
+    assert "property_watch_observations=1" in fallimenti["CLEAN-DEDICATA"], \
+        fallimenti["CLEAN-DEDICATA"]
+    assert "vanno esaminate prima" in fallimenti["CLEAN-DEDICATA"]
+
+
+def test_98g_a_row_with_the_right_key_but_another_source_is_foreign(monkeypatch):
+    """Tre condizioni, non una. La chiave da sola non basta.
+
+    Un'osservazione che portasse la chiave attesa ma fosse stata scritta da
+    un'altra sorgente non e' quella che `initialize` ha creato, e trattarla
+    come propria significherebbe cancellare una riga altrui per somiglianza.
+    """
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME)
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.created_agency_ids = [20]
+    certificazione.child_parents = {"property_watches": (7701,)}
+    database.state["watch_stima"] = {7701: 501}
+    database.state["osservazioni"] = {
+        1: {"watch_id": 7701,
+            "idempotency_key": cert.WATCH_BASELINE_KEY.format(stima_id=501),
+            "observation_type": cert.WATCH_BASELINE_TYPE,
+            "source": cert.WATCH_BASELINE_SOURCE},
+        2: {"watch_id": 7701,
+            "idempotency_key": cert.WATCH_BASELINE_KEY.format(stima_id=501),
+            "observation_type": cert.WATCH_BASELINE_TYPE,
+            "source": "scan"},
+    }
+    certificazione._snapshot_owned_children()
+    assert certificazione.owned_child_ids == {
+        "property_watch_observations": (1,)}, certificazione.owned_child_ids
+
+
+def test_98h_an_unreadable_snapshot_blocks_every_deletion(monkeypatch):
+    """FAIL-CLOSED. Non poter distinguere non e' "erano tutte nostre".
+
+    Senza questa istantanea le righe del run e quelle altrui sono
+    indistinguibili: cancellare le prime significherebbe rischiare le seconde.
+    Il mutante da uccidere e' "segnala e prosegui".
+    """
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME,
+                             explode_on="idempotency_key")
+    report, _stream = quiet_report()
+    certificazione = cert.Certification(database, report)
+    certificazione.created_agency_ids = [20]
+    # Il watch esiste davvero nel doppio: senza, l'istantanea non avrebbe
+    # genitori da cui partire, uscirebbe subito e il mutante da uccidere non
+    # verrebbe mai raggiunto.
+    database.state["watch_vivi"] = {7701: 20}
+    database.state["watch_stima"] = {7701: 501}
+    certificazione.snapshot_before_cleanup()
+    assert certificazione._destructive_db_blocked(), report.rows
+    assert any(i == "CLEAN-OSSERVAZIONI" and k == cert.FAIL
+               for k, i, _t in report.rows), report.rows
+
+    certificazione.cleanup_dedicated_agencies()
+    assert not [q for q in database.state.get("sql", []) if q.startswith("DELETE")], \
+        [q for q in database.state["sql"] if q.startswith("DELETE")]
+
+
+def test_98i_removing_the_table_from_CLEANUP_PARENTS_is_caught(monkeypatch):
+    """MUTAZIONE: la tabella si cancella ma nessuno l'ha dichiarata.
+
+    Una tabella fuori da CLEANUP_PARENTS non passa dalla prova di completezza
+    sulle FK: le sue dipendenze entranti non sono mai state esaminate. Il
+    preflight deve rifiutarsi di procedere, non ignorare la cosa.
+    """
+    monkeypatch.setattr(
+        cert.Certification, "CLEANUP_PARENTS",
+        tuple(t for t in cert.Certification.CLEANUP_PARENTS
+              if t != "property_watch_observations"))
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-PREFLIGHT" in fallimenti, [r[1] for r in report.rows]
+    assert "non dichiarata in CLEANUP_PARENTS" in fallimenti["CLEAN-PREFLIGHT"], \
+        fallimenti["CLEAN-PREFLIGHT"]
+    assert "property_watch_observations" in fallimenti["CLEAN-PREFLIGHT"]
+
+
+def test_98j_without_the_perimeter_entry_the_preflight_blocks_again(monkeypatch):
+    """MUTAZIONE: le nostre righe fuori dal perimetro distruttivo.
+
+    E' esattamente lo stato in cui girava il run 58aa0e189aaa. Il mutante
+    svuota `owned_child_ids` dopo l'istantanea: la guardia torna a chiamare
+    estranea una riga creata da noi, e il cleanup si ferma. Se questo test
+    passasse anche con la correzione attiva, la correzione non servirebbe a
+    niente.
+    """
+    originale = cert.Certification._snapshot_owned_children
+
+    def poi_dimentica(self):
+        esito = originale(self)
+        self.owned_child_ids = {}
+        return esito
+
+    monkeypatch.setattr(cert.Certification, "_snapshot_owned_children", poi_dimentica)
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"property_watches": [
+            ("public.property_watch_observations", "watch_id")]},
+        dipendenti_estranee=0)
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-PREFLIGHT" in fallimenti, [r[1] for r in report.rows]
+    assert "property_watch_observations.watch_id=2" in fallimenti["CLEAN-PREFLIGHT"], \
+        fallimenti["CLEAN-PREFLIGHT"]
+
+
+def test_98k_without_the_exclusion_the_restrict_guard_blocks_its_own_rows(monkeypatch):
+    """MUTAZIONE: la guardia RESTRICT senza l'esclusione delle nostre.
+
+    `_blocking_children` conterebbe di nuovo anche le righe che la stessa
+    transazione sta per rimuovere, e CLEAN-DEDICATA si fermerebbe su di esse.
+    """
+    originale = cert.Certification._blocking_children
+
+    def senza_esclusione(self, genitore):
+        salvate, self.owned_child_ids = self.owned_child_ids, {}
+        try:
+            return originale(self, genitore)
+        finally:
+            self.owned_child_ids = salvate
+
+    monkeypatch.setattr(cert.Certification, "_blocking_children", senza_esclusione)
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "CLEAN-DEDICATA" in fallimenti, [r[1] for r in report.rows]
+    assert "property_watch_observations=2" in fallimenti["CLEAN-DEDICATA"], \
+        fallimenti["CLEAN-DEDICATA"]
+
+
+# ===========================================================================
+# 99 - il 422 dei documenti OWNER: causa, corpo, e fixture corretta
+#
+# Due run - 52f6d97b5214 e 58aa0e189aaa - hanno chiuso
+# `owner-fixture-A/B-documento` con "condivisione -> 422" e nient'altro. La
+# prima diagnosi (`public_document_type` fuori dal Literal) era plausibile,
+# veniva da una lettura dello schema, ed era SBAGLIATA: corretta quella, il run
+# successivo ha ripreso lo stesso 422.
+#
+# La causa vera non e' nello schema ma nel repository, ed e' una regola di
+# dominio: un documento nato da un `url` non ha `storage_key`, e il portale
+# condivide solo file che il sistema custodisce. Il backend ha ragione.
+#
+# Il motivo era nel corpo della risposta, che nessuno stampava. Per questo i
+# test qui sotto sono tre cose insieme: la regola, il corpo, e la fixture.
+# ===========================================================================
+
+def test_99a_the_rule_that_returns_422_is_where_this_says_it_is():
+    """Il 422 nasce in `create_shared_document`, non nello schema.
+
+    Se un giorno la regola sparisse o cambiasse eccezione, la fixture qui
+    sotto starebbe provando una cosa che non succede piu'.
+    """
+    repo = (ROOT / "owner" / "repository.py").read_text(encoding="utf-8")
+    corpo = re.search(r"def create_shared_document\(.*?\n(?=\ndef )", repo, re.S)
+    assert corpo, "create_shared_document non trovata"
+    testo = corpo.group(0)
+    guardia = re.search(
+        r"if src\[.status.\] != .available. or not src\.get\(.storage_key.\):\s*"
+        r"\n\s*raise ValidationError", testo)
+    assert guardia, testo[:600]
+
+    # E il wrapper della route traduce ValidationError in 422: senza questo
+    # anello, la regola ci sarebbe ma lo stato osservato sarebbe un altro.
+    router = (ROOT / "owner" / "router_admin.py").read_text(encoding="utf-8")
+    assert re.search(r"except ValidationError as exc:\s*\n\s*raise HTTPException\(422",
+                     router), router[:400]
+
+
+def test_99b_a_url_only_document_cannot_be_shared_and_the_schema_is_not_why():
+    """Lo schema ACCETTA il payload: il rifiuto arriva dopo.
+
+    E' questa la distinzione che e' costata due run. `SharedDocumentCreate`
+    valida senza obiezioni quello che la fixture manda - `public_document_type`
+    compreso - quindi cercare la causa nello schema non poteva che fallire.
+    """
+    from owner.schemas import SharedDocumentCreate
+
+    modello = SharedDocumentCreate(
+        property_document_id=51,
+        public_title="P26-6-xxxx-A",
+        public_document_type=cert.Certification.OWNER_PUBLIC_DOCUMENT_TYPE)
+    assert modello.public_document_type == \
+        cert.Certification.OWNER_PUBLIC_DOCUMENT_TYPE
+
+    # E il documento di origine, come la fixture lo creava, e' valido come
+    # documento e inservibile come sorgente di condivisione: `url` senza
+    # `storage_key`.
+    from property.schemas import DocumentCreate
+
+    origine = DocumentCreate(
+        document_type=cert.Certification.PROPERTY_DOCUMENT_TYPE,
+        title="P26-6-xxxx-A", url="https://certification.invalid/x",
+        status="available")
+    assert origine.url and not origine.storage_key
+
+
+def test_99c_the_portal_document_now_comes_from_the_upload(monkeypatch):
+    """La lista del portale si regge sul documento CARICATO.
+
+    Con la fixture precedente `portal_documents` veniva dalla condivisione di
+    un documento via URL, che il backend non crea mai: la lista restava vuota
+    e i due `OWNER_PORTAL-documenti-*` erano BLOCKED a ogni run.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    assert righe["owner-fixture-A-documento"][0] == cert.PASS, \
+        righe["owner-fixture-A-documento"]
+    assert "caricato e pubblicato" in righe["owner-fixture-A-documento"][1]
+    assert righe["OWNER_PORTAL-documenti-A"][0] == cert.PASS, \
+        righe["OWNER_PORTAL-documenti-A"]
+    assert righe["OWNER_PORTAL-download-A"][0] == cert.PASS, \
+        righe["OWNER_PORTAL-download-A"]
+    # UN SOLO DOCUMENTO REGGE ENTRAMBE LE PROVE: elencabile perche'
+    # pubblicato, scaricabile perche' ha un oggetto nello storage. L'id lo
+    # dicono le due righe di report, che e' l'unico posto in cui un lettore
+    # del run puo' verificarlo.
+    caricato = re.search(r"documento (\d+) caricato",
+                         righe["owner-fixture-A-documento"][1])
+    assert caricato, righe["owner-fixture-A-documento"][1]
+    assert f"documento {caricato.group(1)} -> 200" in righe["OWNER_PORTAL-download-A"][1], \
+        righe["OWNER_PORTAL-download-A"]
+
+
+def test_99d_the_refusal_of_the_url_document_is_certified_not_suffered(monkeypatch):
+    """Il 422 diventa una prova, invece di un BLOCKED perpetuo.
+
+    La richiesta si fa lo stesso - il documento via URL e' una riga vera che il
+    cleanup deve rimuovere - e il rifiuto atteso viene verificato.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = {i: (k, t) for k, i, t in report.rows}
+    k, t = righe["owner-fixture-A-url-non-condivisibile"]
+    assert k == cert.PASS, (k, t)
+    assert "422 come da regola" in t, t
+    # E IL CORPO C'E'. E' cio' che ai due run e' mancato.
+    assert "storage privato" in t, t
+
+
+def test_99e_a_double_that_accepted_it_would_be_caught(monkeypatch):
+    """MUTAZIONE SUL DOPPIO: se il backend accettasse, il run lo direbbe.
+
+    Un doppio permissivo e' esattamente cio' che ha reso verde, in locale, una
+    fixture che sul TEST prendeva 422. Qui si rimette quella permissivita' e si
+    pretende che la matrice se ne accorga.
+    """
+    originale = FakeHttp._owner_admin
+
+    def permissivo(self, method, path, jar, agency, payload):
+        risposta = originale(self, method, path, jar, agency, payload)
+        tail = path[len("/api/owner/admin"):].split("?")[0]
+        if tail == "/documents" and method == "POST" and risposta.status == 422:
+            import json as _j
+            self.next_id += 1
+            return self._reply(method, path, 201,
+                               _j.dumps({"id": self.next_id}).encode())
+        return risposta
+
+    monkeypatch.setattr(FakeHttp, "_owner_admin", permissivo)
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    assert "owner-fixture-A-url-non-condivisibile" in fallimenti, \
+        [r[1] for r in report.rows]
+    assert "ACCETTATA" in fallimenti["owner-fixture-A-url-non-condivisibile"]
+
+
+def test_99f_an_unexpected_status_is_a_failure_with_the_body(monkeypatch):
+    """Ne' 422 ne' 201: si fallisce, e si stampa cosa ha risposto il server."""
+    originale = FakeHttp._owner_admin
+
+    def rotto(self, method, path, jar, agency, payload):
+        tail = path[len("/api/owner/admin"):].split("?")[0]
+        if tail == "/documents" and method == "POST":
+            return self._reply(method, path, 500, b'{"detail":"boom interno"}')
+        return originale(self, method, path, jar, agency, payload)
+
+    monkeypatch.setattr(FakeHttp, "_owner_admin", rotto)
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
+    testo = fallimenti["owner-fixture-A-url-non-condivisibile"]
+    assert "rifiuto atteso 422, ottenuto 500" in testo, testo
+    assert "boom interno" in testo, testo
+
+
+def test_99g_the_body_is_reported_whole_then_trimmed():
+    """`_corpo` riporta il corpo per intero, e lo tronca dicendo quanto manca.
+
+    Un corpo vuoto viene dichiarato tale: "nessun corpo" e "non ho guardato"
+    sono due cose diverse, e il run 58aa0e189aaa non permetteva di
+    distinguerle.
+    """
+    class R:
+        def __init__(self, t): self._t = t
+        def text(self): return self._t
+
+    assert "corpo vuoto" in cert._corpo(R(""))
+    assert cert._corpo(R('{"detail":"x"}')) == ' [corpo: {"detail":"x"}]'
+    # Gli a-capo non spezzano la riga di report.
+    assert "\n" not in cert._corpo(R("a\nb"))
+    # Riempitivo fatto di PAROLE, non di una stringa unica: un blocco di
+    # seicento caratteri senza spazi e' una stringa opaca, la redazione lo
+    # toglie per intero e il troncamento non avrebbe nulla da troncare -
+    # provando il tetto su un corpo che non gli arriva mai.
+    testo = ("motivo " * 200).strip()
+    assert len(testo) > cert.CORPO_MAX
+    lungo = cert._corpo(R(testo))
+    assert f"+{len(testo) - cert.CORPO_MAX} caratteri" in lungo, lungo
+    assert len(lungo) < cert.CORPO_MAX + 80
+
+    class Rotto:
+        def text(self): raise UnicodeError("bang")
+
+    assert "illeggibile" in cert._corpo(Rotto())
+
+
+def test_99h_the_url_document_is_still_created_and_still_cleaned(monkeypatch):
+    """Il documento via URL resta una riga del run, e il cleanup la rimuove.
+
+    Trasformare il passo in una prova del rifiuto non deve far sparire la
+    riga dal perimetro: sarebbe un residuo in piu' a ogni run.
+    """
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    esiti = {i: k for k, i, _t in report.rows}
+    assert esiti.get("CLEAN-ORFANE") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-ORFANE"]
+    orfane = next(t for k, i, t in report.rows if i == "CLEAN-ORFANE")
+    assert "property_documents=" in orfane, orfane
+    assert esiti.get("CLEAN-VERIFICA") == cert.PASS, \
+        [r for r in report.rows if r[1] == "CLEAN-VERIFICA"]
+
+
+def test_99i_the_body_keeps_the_diagnosis_and_drops_the_secrets():
+    """La redazione e' mirata: toglie i segreti, lascia il motivo.
+
+    `_corpo` esiste perche' due run non hanno potuto dire PERCHE'. Una
+    redazione troppo larga - troncare, o riassumere per prudenza - ricreerebbe
+    quel difetto invece di curarlo, quindi la prova chiede le due cose
+    insieme: il messaggio per intero, e niente di cio' che non deve uscire.
+    """
+    class R:
+        def __init__(self, t): self._t = t
+        def text(self): return self._t
+
+    # IL MOTIVO PASSA INTATTO: e' il caso reale del 422.
+    motivo = '{"detail":"Il documento deve essere disponibile in storage privato"}'
+    assert cert._corpo(R(motivo)) == f" [corpo: {motivo}]"
+    # E anche la forma strutturata di FastAPI, che nomina il campo.
+    validazione = ('{"detail":[{"loc":["body","public_document_type"],'
+                   '"msg":"unexpected value"}]}')
+    assert "public_document_type" in cert._corpo(R(validazione))
+
+    casi = {
+        # URL firmata: restano schema e host, sparisce tutto il resto.
+        '{"url":"https://bucket.s3.amazonaws.com/docs/k?X-Amz-Signature=abc"}': (
+            ["https://bucket.s3.amazonaws.com", "percorso rimosso"],
+            ["X-Amz-Signature", "/docs/", "abc"]),
+        # Token di sessione.
+        '{"session_token":"eyJhbGciOiJIUzI1NiJ9.payload.firma"}': (
+            ["session_token", "segreto rimosso"], ["eyJhbGciOiJIUzI1NiJ9"]),
+        # Chiave di storage: identifica un oggetto nel bucket.
+        '{"storage_key":"owner/2026/09/9f8e7d6c5b4a39281706fedcba098765"}': (
+            ["storage_key", "segreto rimosso"], ["9f8e7d6c5b4a39281706fedcba098765"]),
+        # Dati personali di un contatto.
+        '{"nome":"Mario","cognome":"Rossi","telefono":"+39 333 1234567"}': (
+            ["dato personale rimosso"], ["Mario", "Rossi", "333 1234567"]),
+        # Un indirizzo email in mezzo a una frase, fuori da ogni JSON.
+        'scrivere a mario.rossi@example.com': (
+            ["email rimossa", "scrivere a"], ["mario.rossi", "example.com"]),
+        # Una stringa opaca senza un campo che la nomini.
+        '{"x":"9f8e7d6c5b4a39281706fedcba0987654321abcd"}': (
+            ["stringa opaca rimossa"], ["9f8e7d6c5b4a39281706fedcba0987654321abcd"]),
+    }
+    for corpo, (attesi, vietati) in casi.items():
+        reso = cert._corpo(R(corpo))
+        for frammento in attesi:
+            assert frammento in reso, (corpo, frammento, reso)
+        for frammento in vietati:
+            assert frammento not in reso, (corpo, frammento, reso)
+
+
+def test_99j_the_redaction_runs_before_the_length_cap():
+    """Il tetto non deve poter fare da redazione, ne' la redazione da tetto.
+
+    Se il taglio venisse prima, un segreto oltre il seicentesimo carattere
+    sarebbe "protetto" solo dalla lunghezza - cioe' non protetto - e un corpo
+    corto lo stamperebbe per intero.
+    """
+    class R:
+        def __init__(self, t): self._t = t
+        def text(self): return self._t
+
+    # IL SEGRETO STA A CAVALLO DEL TETTO, e non e' un dettaglio: e' l'unica
+    # posizione in cui i due ordini danno risultati diversi.
+    #
+    # Un primo tentativo metteva il segreto DOPO il seicentesimo carattere, e
+    # il test passava con la redazione spostata dopo il taglio - cioe' non
+    # provava niente: il segreto spariva perche' troncato, non perche' redatto.
+    # Qui invece il taglio cadrebbe DENTRO il valore, lasciando un frammento
+    # che nessuna regola riconosce piu': la coppia `"token": "..."` non ha piu'
+    # la virgoletta di chiusura, e dieci caratteri non bastano alla regola
+    # sulle stringhe opache. Tagliare prima significa stampare quel frammento.
+    segreto = "S" * 40
+    prefisso = ("motivo " * 200)[:cert.CORPO_MAX - 40]
+    lungo = prefisso + '{"token":"' + segreto + '"}'
+    # Sopra il tetto PRIMA della redazione: e' questo che manda in funzione il
+    # taglio nell'ordine sbagliato.
+    assert len(lungo) > cert.CORPO_MAX
+
+    reso = cert._corpo(R(lungo))
+    assert segreto not in reso, reso
+    assert "S" * 8 not in reso, reso          # nemmeno un frammento
+    assert "segreto rimosso" in reso, reso
+    assert "motivo" in reso, reso             # e il resto del corpo c'e' ancora
+    # E sotto il tetto DOPO: la redazione lo ha accorciato abbastanza che il
+    # troncamento non serva piu'. Se questa riga fosse falsa, il marcatore
+    # stesso sarebbe tagliato a meta' e il report direbbe meno di quanto puo'.
+    assert "caratteri)" not in reso, reso
+
+    # E l'ordine e' quello dichiarato: la firma dentro la query sparisce con
+    # l'URL, prima che la regola sulle stringhe opache la incontri.
+    firmato = ('{"u":"https://h/p?sig=' + "b" * 40 + '"}')
+    assert "percorso rimosso" in cert._corpo(R(firmato))
+    assert "b" * 40 not in cert._corpo(R(firmato))
