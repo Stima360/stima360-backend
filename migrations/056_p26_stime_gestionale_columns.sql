@@ -42,22 +42,11 @@
 -- un chiamante - il contrario di cio' che una migration dovrebbe fare. Restano
 -- assenti, e §3.0.2 continua a descriverle correttamente.
 --
--- LA FORMA E' QUELLA DICHIARATA DA `database.py`, NON UNA NUOVA
---
---     ADD COLUMN IF NOT EXISTS lead_status   VARCHAR(32) DEFAULT 'nuovo',
---     ADD COLUMN IF NOT EXISTS note_internal TEXT;
---
--- Copiata alla lettera. Se un ambiente ha gia' eseguito quella funzione - PROD
--- non e' certificato e non si sa - questa migration e' un non-fare, e il
--- controllo qui sotto lo verifica invece di presumerlo.
---
--- IL DEFAULT NON E' UN'ASSUNZIONE SUI DATI. 031 rifiuta un default su
--- `agency_id` perche' farebbe sembrare corretta ogni riga e distruggerebbe la
--- prova che il NOT NULL esiste per dare. Qui e' il caso opposto: `lead_status`
--- descrive quanto un lead e' stato lavorato, la colonna non e' mai esistita,
--- quindi NESSUNA stima e' mai stata lavorata e 'nuovo' e' l'unico valore vero
--- che le righe esistenti possano avere. `note_internal` non ha default: una
--- nota che nessuno ha scritto e' assente, non vuota.
+-- Colonne nullable: varchar(32) e text.
+-- Le stime preesistenti ricevono NULL quando le colonne vengono aggiunte.
+-- Eventuali valori gia' presenti vengono conservati.
+-- Il default 'nuovo' viene impostato dopo la verifica delle colonne:
+-- riguarda i nuovi inserimenti, senza riclassificare le righe esistenti.
 --
 -- NIENTE INDICE. `migrazione_gestionale_stime` crea anche `idx_stime_data`.
 -- Non serve a questa route - il filtro su `data` c'era gia' prima e nessuno ha
@@ -65,9 +54,8 @@
 -- piu' da giustificare nella prossima classificazione. Se servira', avra' la
 -- sua migration e la sua ragione.
 --
--- NIENTE NOT NULL, nessun backfill, nessun vincolo: additiva e basta.
--- Applicabile a caldo, non cambia il comportamento di nulla finche' qualcuno
--- non scrive.
+-- Nessun NOT NULL, indice o UPDATE dei dati esistenti.
+-- L'ALTER TABLE richiede un lock sulla tabella.
 --
 -- Transaction ownership: il runner possiede la transazione UP, quindi questo
 -- file non porta BEGIN/COMMIT.
@@ -76,7 +64,7 @@
 -- 1. Le due colonne.
 -- ---------------------------------------------------------------------------
 ALTER TABLE stime
-    ADD COLUMN IF NOT EXISTS lead_status   VARCHAR(32) DEFAULT 'nuovo',
+    ADD COLUMN IF NOT EXISTS lead_status   VARCHAR(32),
     ADD COLUMN IF NOT EXISTS note_internal TEXT;
 
 -- ---------------------------------------------------------------------------
@@ -123,7 +111,7 @@ BEGIN
             'P26-6 056: stime.lead_status deve restare nullable: la route scrive solo cio'' che il chiamante manda';
     END IF;
 
-    IF v_default IS NOT NULL AND v_default NOT LIKE '%nuovo%' THEN
+    IF v_default IS NOT NULL AND v_default <> '''nuovo''::character varying' THEN
         RAISE EXCEPTION
             'P26-6 056: stime.lead_status ha un default diverso da ''nuovo'': %',
             v_default;
@@ -158,3 +146,6 @@ BEGIN
     END IF;
 END
 $do$;
+
+-- Default per i nuovi inserimenti; le righe esistenti restano invariate.
+ALTER TABLE public.stime ALTER COLUMN lead_status SET DEFAULT 'nuovo';
