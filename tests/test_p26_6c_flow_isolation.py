@@ -1132,20 +1132,64 @@ def test_40b_the_two_recovery_paths_share_one_definition():
 IMMUTABILITY = "055_p26_flow_agency_immutability"
 
 
-def test_41_055_is_the_next_migration_and_does_not_touch_the_applied_ones():
-    """Forward-only: 052/053/054 are applied, so 055 replaces, never edits."""
+FLOW_VIETATE = ("ADD COLUMN", "DROP COLUMN", "SET NOT NULL", "DROP NOT NULL",
+                "ALTER TABLE flow_events", "ALTER TABLE flow_executions",
+                "ALTER TABLE flow_suppressions")
+
+
+def test_41_055_follows_054_and_does_not_touch_the_applied_ones():
+    """Forward-only: 052/053/054 are applied, so 055 replaces, never edits.
+
+    P26-6: THIS TEST USED TO ASSERT 055 WAS THE LAST MIGRATION IN THE TREE.
+    That was never the invariant - it was a convenient way of saying "055 is
+    the newest FLOW work" - and it made the file fail the day an unrelated
+    migration was written (056, which adds two columns to `stime`). Asserting
+    that no one may ever add a migration is not a FLOW guarantee; it is a lock
+    on the whole project, held by a FLOW test.
+
+    What is asserted instead is the thing that actually matters, and it is
+    stricter: 055 comes straight after 054, and NO migration from 055 onward
+    touches what 052/053/054 installed.
+    """
     versions = sorted(
         p.stem for p in MIGRATIONS.glob("0*.sql") if not p.stem.endswith("_down")
     )
-    assert versions[-1] == IMMUTABILITY, versions[-3:]
+    assert IMMUTABILITY in versions, versions[-3:]
+    numero = int(IMMUTABILITY[:3])
+    precedente = next(v for v in versions if v.startswith(f"{numero - 1:03d}_"))
+    assert precedente == "054_p26_flow_agency_enforce", precedente
+
     body = _sql(IMMUTABILITY)
     # It may replace function bodies; it may not alter the columns, the NOT
     # NULL, or the triggers 054 installed.
-    for banned in ("ADD COLUMN", "DROP COLUMN", "SET NOT NULL", "DROP NOT NULL",
-                   "ALTER TABLE flow_events", "ALTER TABLE flow_executions",
-                   "ALTER TABLE flow_suppressions"):
+    for banned in FLOW_VIETATE:
         assert banned not in body, banned
     assert "DELETE FROM schema_migrations" not in body, "an UP must not edit the ledger"
+
+
+def test_41b_no_later_migration_edits_what_the_flow_slice_installed():
+    """La stessa regola, per tutto cio' che verra' dopo.
+
+    E' la generalizzazione di 41: il vincolo forward-only non scade con 055.
+    Una migration successiva che togliesse il NOT NULL di 054, o aggiungesse
+    una colonna alle tre tabelle FLOW, disferebbe l'isolamento senza che
+    nessun test FLOW se ne accorgesse.
+    """
+    numero = int(IMMUTABILITY[:3])
+    successive = sorted(
+        p.stem for p in MIGRATIONS.glob("0*.sql")
+        if not p.stem.endswith("_down") and p.stem[:3].isdigit()
+        and int(p.stem[:3]) > numero
+    )
+    for versione in successive:
+        body = _sql(versione)
+        for banned in FLOW_VIETATE:
+            if banned.startswith("ALTER TABLE"):
+                assert banned not in body, (versione, banned)
+        # Le tre tabelle FLOW non compaiono proprio: nemmeno una DROP, un
+        # trigger o un rename le puo' toccare senza passare da qui.
+        for tabella in ("flow_events", "flow_executions", "flow_suppressions"):
+            assert tabella not in body, (versione, tabella)
 
 
 @pytest.mark.parametrize("function", [
