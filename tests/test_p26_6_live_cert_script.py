@@ -59,6 +59,55 @@ class FakeCursor:
         self._row = None
         self._rows: list[dict] = []
 
+    def _nba_execute(self, statement, params):
+        # Esegue la SELECT reale su SQLite, incluse JOIN e tutte le coppie
+        # di riferimenti: nessun conteggio NBA preimpostato nel preflight.
+        import sqlite3
+        db = sqlite3.connect(":memory:")
+        try:
+            db.execute("CREATE TABLE contacts(id INTEGER, agency_id INTEGER)")
+            db.execute("CREATE TABLE leads(id INTEGER, agency_id INTEGER, contact_id INTEGER)")
+            db.execute("CREATE TABLE next_best_actions(id INTEGER, agency_id INTEGER, "
+                       "subject_type TEXT, subject_id INTEGER, contact_id INTEGER, "
+                       "lead_id INTEGER, stima_id INTEGER, source_signal TEXT)")
+            db.executemany("INSERT INTO contacts VALUES (?,?)",
+                           list(self.state.get("contatti_dedicati", {}).items()))
+            db.executemany("INSERT INTO leads VALUES (?,?,?)", [
+                (i, r["agency_id"], r["contact_id"])
+                for i, r in self.state.get("nba_leads", {}).items()])
+            cols = ("id", "agency_id", "subject_type", "subject_id", "contact_id",
+                    "lead_id", "stima_id", "source_signal")
+            db.executemany("INSERT INTO next_best_actions VALUES (?,?,?,?,?,?,?,?)", [
+                tuple(r.get(k) for k in cols)
+                for r in self.state.get("nba_rows", {}).values()])
+            query = statement.replace("public.", "").replace("PUBLIC.", "")
+            bound = []
+            for param in params or ():
+                if isinstance(param, (tuple, list, set)):
+                    values = list(param)
+                    query = query.replace("%s", "(" + ",".join("?" for _ in values) + ")", 1)
+                    bound.extend(values)
+                else:
+                    query = query.replace("%s", "?", 1)
+                    bound.append(param)
+            result = db.execute(query, bound)
+            if statement.lstrip().upper().startswith("DELETE"):
+                self.state.setdefault("deletes", []).append(statement)
+                self.rowcount = result.rowcount
+                alive = {r[0] for r in db.execute("SELECT id FROM next_best_actions")}
+                rows = self.state.setdefault("nba_rows", {})
+                for i in list(rows):
+                    if i not in alive:
+                        del rows[i]
+            else:
+                names = [x[0] for x in result.description]
+                self._rows = [dict(zip(names, row)) for row in result.fetchall()]
+                self._row = self._rows[0] if self._rows else None
+                if "agency_id <>" in statement and self.state.get("nba_estranee"):
+                    self._row = {"n": self.state["nba_estranee"]}
+        finally:
+            db.close()
+
     def _users(self) -> dict:
         return self.state.setdefault("users", {})
 
@@ -191,6 +240,8 @@ class FakeCursor:
             # restituire un elenco invece di cancellare - e il cleanup delle
             # agenzie dedicate risultava fallito per un difetto del doppio.
             self._rows = list(self.state.get("agencies", []))
+        elif re.search(r"FROM (?:PUBLIC\.)?NEXT_BEST_ACTIONS(?: |$)", upper):
+            self._nba_execute(statement, params)
         elif "COUNT(*) AS N FROM OPERATOR_USERS" in upper:
             if "leftovers" in self.state:
                 self._row = {"n": self.state["leftovers"]}
@@ -426,10 +477,6 @@ class FakeCursor:
             tabella = re.match(r"^SELECT COUNT\(\*\) AS N FROM ([A-Z_]+) ",
                                upper).group(1).lower()
             self._row = {"n": self.state["effetti_vivi"].get(tabella, 0)}
-        elif "COUNT(*) AS N FROM NEXT_BEST_ACTIONS" in upper:
-            # Prima dei rami generici "AS N", che la intercettavano e
-            # rispondevano 0 rendendo l'appartenenza sempre soddisfatta.
-            self._row = {"n": self.state.get("nba_estranee", 0)}
         elif "AS N" in upper and any(
                 t in upper for t in (" PROPERTY_STATUS_HISTORY", " BUY_REQUEST_HISTORY",
                                      " MATCH_RUNS", " OWNER_AUDIT_LOG",
@@ -1603,6 +1650,24 @@ class FakeHttp(cert.HttpProbe):
             self.next_id += 1
             self.nba = getattr(self, "nba", {})
             self.nba.setdefault(agency, []).append(self.next_id)
+            lead = next(i for i, r in self.nba_leads.items() if r["agency_id"] == agency)
+            row = dict(id=self.next_id, agency_id=agency, subject_type="lead",
+                       subject_id=lead, contact_id=self.nba_leads[lead]["contact_id"],
+                       lead_id=lead, stima_id=None, source_signal="next_action_overdue")
+            if self._broken("nba_mixed_contact", "batch"):
+                row["contact_id"] = 999999
+            if self._broken("nba_mixed_subject", "batch"):
+                row["subject_id"] = 999999
+            if self._broken("nba_mixed_stima", "batch"):
+                row["stima_id"] = 999999
+            if self._broken("nba_contact_wrong_agency", "batch"):
+                self.contatti_vivi[row["contact_id"]] = 1
+            if self._broken("nba_lead_wrong_agency", "batch"):
+                self.nba_leads[lead]["agency_id"] = 1
+            if self._broken("nba_unknown_subject", "batch"):
+                row["subject_type"] = "buy_request"
+            self.nba_rows[self.next_id] = row
+            self.stato_db.setdefault("nba_created", []).append(dict(row))
             return self._reply(method, path, 200, b'{"created":1}')
 
         if path.startswith("/api/next-best-action?") and method == "GET":
@@ -1658,6 +1723,8 @@ class FakeHttp(cert.HttpProbe):
                 # agenzie dedicate non lo vede e la guardia non interroga mai
                 # le sue otto figlie SET NULL.
                 self.lead_vivi[self.next_id] = agency
+                self.nba_leads[self.next_id] = {"agency_id": agency,
+                                               "contact_id": payload["contact_id"]}
             if path == "/api/core/contacts":
                 # Genitore di seller_revival_suppressions: il doppio del
                 # database deve saperlo per poterlo fotografare.
@@ -1774,6 +1841,8 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     probe.watch_vivi = database.state.setdefault("watch_vivi", {})
     probe.watch_stima = database.state.setdefault("watch_stima", {})
     probe.lead_vivi = database.state.setdefault("lead_dedicati", {})
+    probe.nba_rows = database.state.setdefault("nba_rows", {})
+    probe.nba_leads = database.state.setdefault("nba_leads", {})
     probe.osservazioni = database.state.setdefault("osservazioni", {})
     probe.stime_valutate = database.state.setdefault("stime_valutate", set())
     probe.origine_condivisa = database.state.setdefault("origine_condivisa", {})
@@ -7539,3 +7608,77 @@ def test_106i_flow_non_maschera_errori_http_o_esecuzioni(monkeypatch, guasto, at
     assert _esiti(report)[atteso][0] == cert.FAIL, _esiti(report).get(atteso)
     # I guasti simulati non devono impedire di rintracciare e ripulire le righe.
     assert _esiti(report)["CLEAN-VERIFICA"][0] == cert.PASS
+
+
+# 107: riproduzione run 0c90e70367c3: NBA reali anche nel doppio DB.
+def test_107_nba_materializzate_entrano_nel_cleanup_completo(monkeypatch):
+    code, report, db, probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True, fk_perimetro={
+            "agencies": [("public.next_best_actions", "agency_id")],
+            "contacts": [("public.next_best_actions", "contact_id")],
+            "leads": [("public.next_best_actions", "lead_id")]},
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    rows = {i: k for k, i, text in report.rows}
+    assert code == 0, report.rows
+    assert len(db.state.get("nba_created", [])) == 2
+    assert rows["NEXT_BEST_ACTION-disgiunte"] == cert.PASS
+    assert rows["CLEAN-PREFLIGHT"] == cert.PASS, report.rows
+    assert rows["CLEAN-DEDICATA"] == cert.PASS, report.rows
+    assert rows["CLEAN-VERIFICA"] == cert.PASS, report.rows
+    assert db.state["nba_rows"] == {}
+    deletes = db.state["deletes"]
+    n = next(i for i, q in enumerate(deletes) if q.startswith("DELETE FROM next_best_actions"))
+    for parent in ("leads", "contacts", "agencies"):
+        p = next(i for i, q in enumerate(deletes)
+                 if q.startswith(f"DELETE FROM {parent} WHERE agency_id")
+                 or (parent == "agencies" and q.startswith("DELETE FROM agencies WHERE id")))
+        assert n < p
+
+
+@pytest.mark.parametrize("fault", ["nba_mixed_contact", "nba_mixed_subject", "nba_mixed_stima",
+                                    "nba_contact_wrong_agency", "nba_lead_wrong_agency",
+                                    "nba_unknown_subject"])
+def test_107b_nba_con_riferimento_estraneo_blocca_prima_di_cancellare(monkeypatch, fault):
+    code, report, db, probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True, fk_perimetro={
+            "agencies": [("public.next_best_actions", "agency_id")],
+            "contacts": [("public.next_best_actions", "contact_id")],
+            "leads": [("public.next_best_actions", "lead_id")]},
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME, broken={fault}, only="batch"))
+    rows = {i: k for k, i, text in report.rows}
+    assert code != 0
+    assert len(db.state["nba_rows"]) == 2
+    assert rows["CLEAN-PREFLIGHT"] == cert.FAIL
+    assert rows["CLEAN-DEDICATA"] == cert.FAIL
+    assert not db.state.get("chiavi_cancellate")
+    assert not any("DELETE FROM next_best_actions" in q or "DELETE FROM leads" in q
+                   or "DELETE FROM contacts" in q for q in db.state.get("deletes", []))
+
+
+def test_107c_senza_istantanea_nba_ritorna_il_blocco_live(monkeypatch):
+    C = cert.Certification
+    monkeypatch.setattr(C, "DEDICATED_SNAPSHOT_TABLES",
+                        tuple(t for t in C.DEDICATED_SNAPSHOT_TABLES if t != "next_best_actions"))
+    _, report, db, _, _ = working_run(
+        monkeypatch, dedicated_agencies=True, fk_perimetro={
+            "agencies": [("public.next_best_actions", "agency_id")],
+            "contacts": [("public.next_best_actions", "contact_id")],
+            "leads": [("public.next_best_actions", "lead_id")]},
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    assert any(k == cert.FAIL and i == "CLEAN-PREFLIGHT" and "next_best_actions" in text
+               for k, i, text in report.rows)
+    assert len(db.state["nba_rows"]) == 2
+
+
+def test_107d_nba_pre_esistente_in_altra_agenzia_sopravvive(monkeypatch):
+    foreign = dict(id=990001, agency_id=777, subject_type="lead", subject_id=990002,
+                   contact_id=990003, lead_id=990002, stima_id=None,
+                   source_signal="next_action_overdue")
+    _, report, db, _, _ = working_run(
+        monkeypatch, dedicated_agencies=True, nba_rows={990001: dict(foreign)},
+        fk_perimetro={"agencies": [("public.next_best_actions", "agency_id")],
+                      "contacts": [("public.next_best_actions", "contact_id")],
+                      "leads": [("public.next_best_actions", "lead_id")]},
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    assert {i:k for k,i,_ in report.rows}["CLEAN-PREFLIGHT"] == cert.PASS
+    assert db.state["nba_rows"] == {990001: foreign}

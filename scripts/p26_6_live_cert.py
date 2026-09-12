@@ -1666,8 +1666,26 @@ class Certification:
         try:
             with self.db.read() as cur:
                 for genitore in sorted(genitori):
-                    cur.execute(
-                        f"SELECT id FROM {genitore} WHERE agency_id IN %s", (agenzie,))
+                    if genitore == "next_best_actions":
+                        # La fixture NBA nasce dal lead scaduto. L'agenzia da
+                        # sola non basta: una riga mista deve restare fuori e
+                        # bloccare il preflight tramite la FK agency_id.
+                        cur.execute(
+                            "SELECT id FROM next_best_actions AS n "
+                            "WHERE n.agency_id IN %s "
+                            "AND n.subject_type = 'lead' "
+                            "AND n.subject_id = n.lead_id "
+                            "AND n.stima_id IS NULL "
+                            "AND n.source_signal = 'next_action_overdue' "
+                            "AND EXISTS (SELECT 1 FROM leads AS l "
+                            "JOIN contacts AS c ON c.id = l.contact_id "
+                            "WHERE l.id = n.lead_id "
+                            "AND l.contact_id = n.contact_id "
+                            "AND l.agency_id = n.agency_id "
+                            "AND c.agency_id = n.agency_id)", (agenzie,))
+                    else:
+                        cur.execute(
+                            f"SELECT id FROM {genitore} WHERE agency_id IN %s", (agenzie,))
                     trovati = {int(r["id"]) for r in cur.fetchall()}
                     if genitore == "property_watches":
                         trovati |= set(watch_condivisi)
@@ -2450,6 +2468,10 @@ class Certification:
     DEDICATED_SNAPSHOT_TABLES = (
         "contacts", "property_watches", "tasks",
         "flow_executions", "flow_events", "stime",
+        # Materializzate dal refresh: senza ID il preflight le chiamerebbe
+        # estranee pur essendo gia' in DEDICATED_TABLES. Riconosciute sopra
+        # soltanto se soggetto, lead, contatto e agenzia sono coerenti.
+        "next_best_actions",
         # `leads` si cancella per `agency_id` come le altre, quindi dei suoi
         # id non resta traccia: senza istantanea le sue otto figlie SET NULL
         # non verrebbero mai interrogate dalla guardia.
