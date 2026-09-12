@@ -386,7 +386,20 @@ SELECT a.id, a.entity_type, a.entity_id,
 -- all''evento. Quali siano attive su questo TEST e' configurazione, non
 -- codice: senza questo elenco una fixture deterministica sulle esecuzioni non
 -- si puo' scrivere.
-SELECT code, is_active, scope, version
+--
+-- DUE COLONNE, E NON PER BREVITA'. La versione precedente chiedeva anche
+-- `scope` e `version`: NESSUNA DELLE DUE ESISTE. 008_flow_01.sql dichiara
+-- `code_version`, non `version`, e non dichiara `scope` affatto - le regole
+-- sono un catalogo di piattaforma, senza un ambito da portare in colonna. Su
+-- una sola SELECT sbagliata psql con ON_ERROR_STOP=1 si ferma, e il
+-- censimento live si e' fermato qui: i punti 11b e 12 non sono mai stati
+-- eseguiti.
+--
+-- Il resto della configurazione non serve chiederlo al database: `event_type`
+-- e `entity_type` di ogni regola stanno in flow/rules/registry.py, che e'
+-- codice versionato. L'unica cosa che il repository non puo' sapere e' QUALI
+-- siano attive su questa istanza, ed e' esattamente `is_active`.
+SELECT code, is_active
   FROM flow_rules
  ORDER BY code;
 

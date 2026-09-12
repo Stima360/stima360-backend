@@ -448,7 +448,27 @@ DOMAINS = (
         note="materializzato da un refresh che percorre il tenant: provato "
              "sulle agenzie dedicate",
     ),
-    Domain("FLOW", "/api/flow", listing="/api/flow/executions?limit=50"),
+    Domain(
+        "FLOW", "/api/flow",
+        listing="/api/flow/executions?limit=50",
+        # IL MARCATORE NON PUO' COMPARIRE IN UN'ESECUZIONE, e per un giro
+        # intero questo ha reso la riga BLOCKED senza che si capisse perche'.
+        #
+        # `flow_executions` proietta `rule_code`, `entity_type`, `entity_id`,
+        # `status` e gli snapshot dei parametri: nessuno di questi campi
+        # contiene testo scelto da chi crea la risorsa. Le sei domande
+        # generiche cercano `cert.marker(other)` nel corpo, e qui quella
+        # ricerca sarebbe vera SEMPRE - anche a isolamento rotto. Un PASS
+        # ottenuto cosi' e' peggio del BLOCKED che sostituirebbe.
+        #
+        # `certify_flow` fa le stesse domande con gli ID delle esecuzioni, che
+        # in questo dominio sono il riconoscimento giusto e piu' severo di una
+        # sottostringa.
+        certifier="flow",
+        note="l'esecuzione nasce da un evento su una risorsa del run; il "
+             "riconoscimento e' per id, perche' un'esecuzione non porta testo "
+             "scelto da chi la crea",
+    ),
     Domain(
         "OWNER_ADMIN", "/api/owner/admin",
         # LA SOGLIA NON E' LA PROVA.
@@ -1048,6 +1068,13 @@ class Certification:
         self.shared_stima_ids: list = []
         self.shared_event_ids: list = []
         self.shared_observation_ids: list = []
+        # E le righe che la fixture FLOW crea nelle agenzie CONDIVISE, per la
+        # stessa ragione: `created_effects["flow_events"]` contiene anche gli
+        # eventi delle agenzie dedicate, che se ne vanno per `agency_id` e non
+        # vanno cancellati per id - cancellarli entrambi allo stesso modo
+        # nasconderebbe un buco in `DEDICATED_TABLES`.
+        self.shared_flow_event_ids: list = []
+        self.shared_flow_execution_ids: list = []
 
     def marker(self, agency: str) -> str:
         """Una stringa che compare solo nelle fixture di questo run.
@@ -1278,6 +1305,43 @@ class Certification:
                 ("SELECT COUNT(*) AS n FROM property_watches WHERE id IN %s", watch),
                 ("SELECT COUNT(*) AS n FROM seller_timeline_events WHERE id IN %s", eventi),
                 ("SELECT COUNT(*) AS n FROM stime WHERE id IN %s", stime),
+            ),
+        )
+
+    def cleanup_shared_flow_fixtures(self) -> None:
+        """Evento ed esecuzione FLOW creati nelle agenzie CONDIVISE.
+
+        Stessa ragione di `cleanup_shared_watch_fixtures`: nelle agenzie
+        dedicate queste righe se ne vanno con
+        `DELETE ... WHERE agency_id IN (...)`, nelle condivise vivono accanto
+        ai dati veri di TEST e l'unico criterio ammesso e' l'id.
+
+        L'ORDINE E' OBBLIGATO, e non dal fallimento di una DELETE.
+        `flow_executions.event_id` e' ON DELETE SET NULL (008_flow_01.sql):
+        cancellare l'evento per primo NON fallirebbe, azzererebbe la colonna, e
+        l'esecuzione resterebbe sul TEST come una riga che nessuno sa piu'
+        attribuire a questo run. E' il danno silenzioso che il SET NULL produce
+        ogni volta che lo si ignora - qui si evita cancellando la figlia
+        finche' il legame e' ancora leggibile.
+
+        `flow_action_records` non compare: sull'esecuzione e' CASCADE, e le sue
+        righe - se mai ne nascessero - sono gia' fotografate per id da
+        `_snapshot_owned_by_parent`, che e' l'unico modo di verificarne la
+        rimozione dopo che il genitore e' sparito.
+        """
+        esecuzioni = tuple(self.shared_flow_execution_ids)
+        eventi = tuple(self.shared_flow_event_ids)
+        if not (esecuzioni or eventi):
+            return
+        self._delete_scoped(
+            "CLEAN-FLOW",
+            (
+                ("DELETE FROM flow_executions WHERE id IN %s", esecuzioni),
+                ("DELETE FROM flow_events WHERE id IN %s", eventi),
+            ),
+            (
+                ("SELECT COUNT(*) AS n FROM flow_executions WHERE id IN %s", esecuzioni),
+                ("SELECT COUNT(*) AS n FROM flow_events WHERE id IN %s", eventi),
             ),
         )
 
@@ -2281,6 +2345,54 @@ class Certification:
         """Vero solo se NESSUNA categoria ha id. Non "nessuna riga di dominio"."""
         return not self._tracked_totals()
 
+    def registra_identita_owner(self) -> None:
+        """Scrive nel report gli id OWNER che questo run ha creato.
+
+        PERCHE' UNA RIGA DI REPORT E' UNA PROVA, E LA SUA ASSENZA UN BUCO
+
+        I sei audit `560, 562, 563, 564, 566, 567` hanno `owner_account_id`
+        NULL e nominano conti 4/5, token 6/7 e sessioni 6/7 che non esistono
+        piu'. Il codice dimostra che quel NULL viene da un `ON DELETE SET NULL`
+        - i tre soli autori di quelle righe passano sempre un conto - quindi il
+        conto c'era ed e' stato cancellato.
+
+        Chi lo avesse creato pero' NON si puo' dimostrare, e non per mancanza
+        di dati sul TEST: perche' nessun run precedente ha lasciato scritti i
+        propri id OWNER. Non esiste l'elenco con cui confrontare 4 e 5.
+
+        Questa riga non serve a quei sei - e' troppo tardi - ma chiude il buco
+        in avanti: il prossimo audit senza radice sara' attribuibile con un
+        confronto invece che con un ragionamento. Gli id di conti, token e
+        sessioni sono numeri, non segreti: nessun hash e nessun token grezzo
+        passa di qui.
+        """
+        conti = self.created_owner_account_ids
+        if not conti:
+            self.report.note("OWNER-identita",
+                             "nessun conto proprietario creato da questo run")
+            return
+        try:
+            with self.db.read() as cur:
+                cur.execute("SELECT id FROM owner_access_tokens "
+                            " WHERE owner_account_id IN %s ORDER BY id",
+                            (tuple(conti),))
+                token = [int(r["id"]) for r in cur.fetchall()]
+                cur.execute("SELECT id FROM owner_sessions "
+                            " WHERE owner_account_id IN %s ORDER BY id",
+                            (tuple(conti),))
+                sessioni = [int(r["id"]) for r in cur.fetchall()]
+        except Exception as exc:                       # pragma: no cover - difensivo
+            self.report.fail(
+                "OWNER-identita",
+                f"id OWNER non leggibili ({type(exc).__name__}): un audit senza "
+                "radice trovato in futuro non sara' attribuibile a questo run")
+            return
+        self.report.note(
+            "OWNER-identita",
+            f"conti {sorted(conti)}, token {token}, sessioni {sessioni}: "
+            "registrati perche' un audit senza radice trovato domani sia "
+            "confrontabile con questo run")
+
     def _destructive_db_blocked(self) -> str | None:
         """Il motivo per cui nessuna DELETE puo' partire, o None.
 
@@ -2366,6 +2478,54 @@ class Certification:
     #: 422 del run 38e341f68f8a.
     FLOW_SOURCE_MODULE = "core"
 
+    # ------------------------------------------------------------------
+    # L'ESECUZIONE FLOW: QUALE REGOLA, E PERCHE' PROPRIO QUELLA
+    #
+    # `/api/flow/executions` elenca `flow_executions`, e una riga li' dentro
+    # nasce in un solo modo che non percorra l'intero tenant: `POST
+    # /api/flow/events` con un evento il cui `event_type` e `entity_type`
+    # corrispondono a una regola ATTIVA. Il servizio carica QUELL'entita' e
+    # nessun'altra (`flow/service.py::_process_saved_event`), quindi la
+    # scrittura resta confinata a una riga che questo run possiede.
+    #
+    # Su TEST sono attive R001, R004 e le cinque OWNER (R008-R012). Delle tre
+    # famiglie:
+    #
+    #   R008-R012  esigono un'entita' `owner_feedback`, che questo run non
+    #              crea e che porterebbe una tabella nuova nel perimetro
+    #              distruttivo. Il costo non e' il codice: e' il perimetro.
+    #   R001       esige un `lead`. Il run ne crea uno, ma solo nelle agenzie
+    #              DEDICATE, e li' `/api/flow/executions` non e' la riga
+    #              BLOCKED da chiudere.
+    #   R004       esige una `buy_request`, ed e' esattamente la fixture che
+    #              ogni operatore della matrice crea nella PROPRIA agenzia
+    #              condivisa. Nessuna riga nuova, nessuna tabella nuova.
+    #
+    # LA CORRISPONDENZA NON E' L'OBIETTIVO, E VA DETTO CHIARO. `execute_live`
+    # inserisce l'esecuzione PRIMA di sapere se la regola corrisponde, e la
+    # chiude con `status='not_matched'` quando non corrisponde: la riga esiste
+    # in entrambi i casi, ed e' la riga di cui si prova l'isolamento. La
+    # fixture sceglie deliberatamente il ramo NON corrispondente, perche' e'
+    # l'unico i cui effetti siano UNO: l'esecuzione. Il ramo corrispondente
+    # aggiungerebbe un `flow_action_records` e un `tasks` in un'agenzia
+    # CONDIVISA, dove nulla si cancella per `agency_id`.
+    #
+    # E la non corrispondenza e' DETERMINISTICA, non fortunata:
+    # `flow/engine.py` per R004 esige `next_action_at IS NOT NULL`, la fixture
+    # BUY non lo valorizza (`buy/schemas.py` lo dichiara opzionale e nessuna
+    # chiamata della matrice lo scrive), e il parametro `overdue_hours` non
+    # entra nemmeno nel confronto quando il valore e' NULL. Qualunque sia la
+    # configurazione di questo TEST, l'esito e' lo stesso.
+    #
+    # Non e' pero' un'assunzione lasciata implicita: `certify_flow` LEGGE
+    # `next_action_at` dal database prima di inviare l'evento e, se non fosse
+    # NULL, non invia niente e riporta BLOCKED. Una fixture BUY cambiata in
+    # futuro produce un BLOCKED spiegato, non una riga imprevista sul TEST.
+    FLOW_EXECUTION_TRIGGER = "buy.next_action_due"
+    FLOW_EXECUTION_ENTITY = "buy_request"
+    FLOW_EXECUTION_RULE = "FLOW-R004"
+    FLOW_EXECUTION_SOURCE_MODULE = "buy"
+
     #: Il tipo di evento che `property_watch` esige per poter inizializzare un
     #: watch. `_baseline_for_stima_scoped` legge la valutazione completata da
     #: `seller_timeline_events` e, se non la trova, solleva ValidationError -
@@ -2379,6 +2539,15 @@ class Certification:
     #: repository reale.)
     #: `owner_shared_documents.property_document_id` e' RESTRICT verso
     #: `property_documents`, quindi la condivisione va rimossa per prima.
+    #:
+    #: GLI EFFETTI FLOW NON STANNO QUI, ed e' una decisione. Gli eventi delle
+    #: agenzie DEDICATE sono registrati nella stessa chiave
+    #: `created_effects["flow_events"]` di quelli condivisi, e una
+    #: cancellazione per id li prenderebbe tutti: `DEDICATED_TABLES` potrebbe
+    #: perdere `flow_events` senza che nessun test se ne accorga, perche' le
+    #: righe sarebbero gia' sparite per un'altra strada. I condivisi si
+    #: cancellano in `cleanup_shared_flow_fixtures`, sui loro id e solo su
+    #: quelli - com'e' gia' per stime, eventi e watch condivisi.
     EFFECT_BY_ID_TABLES = ("owner_shared_documents", "property_documents")
 
     #: Tabelle che le NOSTRE operazioni popolano, e le colonne con cui puntano
@@ -5342,6 +5511,317 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
     return context
 
 
+def certify_flow(report, http, cert, domain, jars, owned, context) -> None:
+    """FLOW: un'esecuzione per agenzia condivisa, riconosciuta per ID.
+
+    LA RIGA CHE QUESTA FUNZIONE CHIUDE
+
+    `FLOW-list-B-non-vede-A`, BLOCKED in ogni run fino a `42e32975ccd6`. Il
+    motivo scritto nel report era esatto: la matrice creava EVENTI e mai
+    esecuzioni, quindi la lista di entrambe le agenzie era vuota e il
+    confronto non provava niente. La causa vera stava un passo prima: un
+    evento nasce con `event_type` qualunque, ma un'ESECUZIONE nasce solo se
+    quell'`event_type` e quell'`entity_type` corrispondono a una regola
+    ATTIVA, e il marcatore del run - che la fixture metteva nel tipo - impedisce
+    per costruzione ogni corrispondenza.
+
+    PERCHE' NON SI DELEGA A `certify_generic`
+
+    Le sei domande generiche riconoscono una risorsa cercando
+    `cert.marker(label)` nel corpo della lista. Un'esecuzione non porta testo
+    scelto da chi la crea: `rule_code`, `entity_type`, `entity_id`, `status`,
+    gli snapshot dei parametri. `marker(other) not in body` sarebbe vero
+    SEMPRE, anche se la lista di B contenesse per intero le esecuzioni di A -
+    cioe' un PASS che non puo' fallire, che e' la definizione di prova vacua.
+    Qui le stesse domande si fanno con gli id, che l'esecuzione ha e che sono
+    un riconoscimento piu' severo di una sottostringa.
+
+    COSA PROVA, E COSA NO
+
+    Prova che `/api/flow/executions` e `/api/flow/executions/{id}` rispondono
+    solo per l'agenzia della sessione, su righe vere, create dal run, con
+    l'appartenenza riletta dal database. NON prova nulla sul ramo in cui la
+    regola corrisponde - `flow_action_records` e il task che ne seguono - che
+    resta esercitato solo dai test offline. La ragione della scelta sta accanto
+    a `FLOW_EXECUTION_TRIGGER`: il ramo corrispondente scriverebbe in
+    un'agenzia condivisa due righe che nessun `DELETE ... WHERE agency_id`
+    rimuove.
+    """
+    agenzie = context.get("agencies") or {}
+    eventi: dict[str, int] = {}
+    esecuzioni: dict[str, int] = {}
+
+    # 1-2: la lista risponde, e un 5xx non e' un difetto di isolamento.
+    for label in ("A", "B"):
+        risposta = http.request("GET", domain.listing, jar=jars[label])
+        dettaglio = ""
+        if risposta.status >= 500:
+            dettaglio = (f" [la route e' ROTTA, non isolata male: "
+                         f"{_error_shape(risposta.text())}]")
+        report.check(f"FLOW-list-{label}", risposta.status == 200,
+                     f"{label} legge {domain.listing.split('?')[0]} -> "
+                     f"{risposta.status}{dettaglio}")
+
+    for label in ("A", "B"):
+        richiesta = owned[label].get("BUY")
+        if richiesta is None:
+            report.blocked(
+                f"FLOW-fixture-{label}",
+                "manca la richiesta d'acquisto di questo run: un evento su "
+                "un'entita' non nostra farebbe valutare una regola su una riga "
+                "altrui, che e' esattamente cio' che la matrice non fa",
+            )
+            continue
+
+        # LA PRECONDIZIONE SI LEGGE, NON SI SUPPONE.
+        #
+        # La fixture BUY non valorizza `next_action_at`, quindi R004 non
+        # corrisponde e l'esecuzione si chiude `not_matched` senza altri
+        # effetti. E' un'affermazione su un'ALTRA parte di questo file, che
+        # qualcuno potrebbe cambiare per una ragione che non c'entra: qui la
+        # si verifica sul dato reale, e se non regge non si invia l'evento.
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT status, next_action_at FROM buy_requests WHERE id = %s",
+                    (richiesta,))
+                riga = cur.fetchone()
+        except Exception as exc:                       # pragma: no cover - difensivo
+            report.blocked(f"FLOW-fixture-{label}",
+                           f"richiesta {richiesta} non leggibile ({type(exc).__name__})")
+            continue
+        if riga is None:
+            report.blocked(f"FLOW-fixture-{label}",
+                           f"la richiesta {richiesta} non e' sul database")
+            continue
+        if riga["next_action_at"] is not None:
+            report.blocked(
+                f"FLOW-fixture-{label}",
+                f"la richiesta {richiesta} ha gia' una prossima azione: "
+                f"{cert.FLOW_EXECUTION_RULE} corrisponderebbe e creerebbe un "
+                "record d'azione e un task in un'agenzia CONDIVISA, dove nulla "
+                "si cancella per agenzia. Nessun evento inviato.",
+            )
+            continue
+
+        chiave = f"{cert.marker(label)}-esecuzione"
+        risposta = http.request(
+            "POST", "/api/flow/events", jar=jars[label],
+            payload={"event_type": cert.FLOW_EXECUTION_TRIGGER,
+                     "entity_type": cert.FLOW_EXECUTION_ENTITY,
+                     "entity_id": richiesta,
+                     "source_module": cert.FLOW_EXECUTION_SOURCE_MODULE,
+                     "payload": {},
+                     "deduplication_key": chiave})
+
+        report.check(f"FLOW-post-{label}", risposta.status in (200, 201),
+                     f"POST /api/flow/events per {label} -> {risposta.status}"
+                     + _corpo(risposta))
+
+        # L'ORIGINE CANONICA E' IL DATABASE, E SI LEGGE ANCHE SE L'HTTP HA
+        # FALLITO.
+        #
+        # `process_event` salva l'evento PRIMA di valutare le regole: una
+        # risposta 500 non significa "niente e' stato scritto". La chiave di
+        # deduplicazione e' nostra - porta il marcatore del run - quindi la
+        # riga si ritrova comunque, e tracciarla e' cio' che la rende
+        # cancellabile. Il codice di stato si giudica dopo.
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT id, agency_id FROM flow_events "
+                    " WHERE deduplication_key = %s ORDER BY id", (chiave,))
+                righe_evento = [dict(r) for r in cur.fetchall()]
+        except Exception as exc:                       # pragma: no cover - difensivo
+            report.blocked(f"FLOW-fixture-{label}",
+                           f"evento non rileggibile ({type(exc).__name__})")
+            continue
+        for riga_evento in righe_evento:
+            # DUE REGISTRI, DUE MESTIERI. `created_effects` e' il perimetro e
+            # la verifica finale; `shared_flow_event_ids` e' l'elenco di cio'
+            # che si cancella PER ID, che nelle agenzie dedicate sarebbe
+            # sbagliato - la' se ne va con l'agenzia, ed e' quella
+            # cancellazione che i test devono poter vedere fallire.
+            cert.created_effects.setdefault(
+                "flow_events", []).append(int(riga_evento["id"]))
+            cert.shared_flow_event_ids.append(int(riga_evento["id"]))
+
+        if len(righe_evento) != 1:
+            report.blocked(
+                f"FLOW-fixture-{label}",
+                f"POST /api/flow/events -> {risposta.status}{_corpo(risposta)}: "
+                f"{len(righe_evento)} eventi con la chiave di questo run invece "
+                "di uno",
+            )
+            continue
+        evento = int(righe_evento[0]["id"])
+        eventi[label] = evento
+
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT e.id, e.agency_id, e.status, r.code AS rule_code "
+                    "  FROM flow_executions e "
+                    "  JOIN flow_rules r ON r.id = e.rule_id "
+                    " WHERE e.event_id = %s ORDER BY e.id", (evento,))
+                righe_esecuzione = [dict(r) for r in cur.fetchall()]
+        except Exception as exc:                       # pragma: no cover - difensivo
+            report.blocked(f"FLOW-fixture-{label}",
+                           f"esecuzioni non rileggibili ({type(exc).__name__})")
+            continue
+        for riga_esecuzione in righe_esecuzione:
+            cert.created_effects.setdefault(
+                "flow_executions", []).append(int(riga_esecuzione["id"]))
+            cert.shared_flow_execution_ids.append(int(riga_esecuzione["id"]))
+
+        if len(righe_esecuzione) != 1:
+            report.blocked(
+                f"FLOW-fixture-{label}",
+                f"POST /api/flow/events -> {risposta.status}{_corpo(risposta)}: "
+                f"{len(righe_esecuzione)} esecuzioni invece di una. Una sola "
+                f"regola attiva ha trigger {cert.FLOW_EXECUTION_TRIGGER} su "
+                f"{cert.FLOW_EXECUTION_ENTITY}: un numero diverso e' una "
+                "configurazione di TEST diversa da quella censita",
+            )
+            continue
+        esecuzione = righe_esecuzione[0]
+        esecuzioni[label] = int(esecuzione["id"])
+        report.note(f"FLOW-fixture-{label}",
+                    f"esecuzione {esecuzione['id']} da {esecuzione['rule_code']} "
+                    f"su {cert.FLOW_EXECUTION_ENTITY} {richiesta}, "
+                    f"stato {esecuzione['status']}")
+
+        atteso = agenzie.get(label, {}).get("id")
+        report.check(f"FLOW-appartenenza-{label}",
+                     atteso is not None and esecuzione["agency_id"] == atteso,
+                     f"l'esecuzione {esecuzione['id']} di {label} porta "
+                     f"l'agenzia {esecuzione['agency_id']}, attesa {atteso}")
+        report.check(f"FLOW-stato-{label}",
+                     esecuzione["status"] == "not_matched",
+                     f"esecuzione {esecuzione['id']}: stato {esecuzione['status']}, "
+                     "atteso not_matched")
+        report.check(f"FLOW-regola-{label}",
+                     esecuzione["rule_code"] == cert.FLOW_EXECUTION_RULE,
+                     f"ha risposto {esecuzione['rule_code']}, atteso "
+                     f"{cert.FLOW_EXECUTION_RULE}")
+
+    _flow_effetti_imprevisti(report, cert, esecuzioni)
+
+    # 3-4: ciascuno vede la propria esecuzione e non quella dell'altro.
+    for label, altro in (("A", "B"), ("B", "A")):
+        if len(esecuzioni) < 2:
+            report.blocked(
+                f"FLOW-list-{label}-non-vede-{altro}",
+                "manca un'esecuzione per agenzia: una lista vuota, o con una "
+                "sola riga, non e' una prova di isolamento",
+            )
+            continue
+        risposta = http.request("GET", domain.listing, jar=jars[label])
+        report.check(f"FLOW-list-fixture-{label}", risposta.status == 200,
+                     f"lista con fixture di {label} -> {risposta.status}")
+        visti = {int(v["id"]) for v in risposta.items() if v.get("id") is not None}
+        report.check(f"FLOW-list-{label}-vede-la-propria",
+                     esecuzioni[label] in visti,
+                     f"la lista di {label} contiene l'esecuzione "
+                     f"{esecuzioni[label]} che {label} ha fatto nascere")
+        report.check(f"FLOW-list-{label}-non-vede-{altro}",
+                     esecuzioni[altro] not in visti,
+                     f"la lista di {label} NON contiene l'esecuzione "
+                     f"{esecuzioni[altro]} di {altro} ({len(visti)} righe osservate)")
+
+        proprio = http.request("GET", f"/api/flow/executions/{esecuzioni[label]}",
+                               jar=jars[label])
+        report.check(f"FLOW-dettaglio-proprio-{label}", proprio.status == 200,
+                     f"{label} legge la propria esecuzione {esecuzioni[label]} "
+                     f"-> {proprio.status}")
+
+        # 5: l'id diretto dell'altra agenzia.
+        diretto = http.request("GET", f"/api/flow/executions/{esecuzioni[altro]}",
+                               jar=jars[label])
+        report.check(f"FLOW-dettaglio-{label}-{altro}",
+                     diretto.status in NEUTRAL_REFUSALS,
+                     f"{label} chiede l'esecuzione {esecuzioni[altro]} di {altro} "
+                     f"-> {diretto.status}, mentre {altro} sulla stessa riga la legge")
+
+        # 6: la scrittura. Un retry riuscito RIESEGUE l'automazione di un altro
+        # tenant, ed e' la sonda ostile che conta davvero su questa superficie.
+        scrittura = http.request(
+            "POST", f"/api/flow/executions/{esecuzioni[altro]}/retry",
+            jar=jars[label], payload={})
+        report.check(f"FLOW-retry-ostile-{label}-{altro}",
+                     scrittura.status in NEUTRAL_REFUSALS,
+                     f"{label} tenta il retry dell'esecuzione {esecuzioni[altro]} "
+                     f"di {altro} -> {scrittura.status}")
+
+    # Un retry riuscito avrebbe creato un'esecuzione nuova. La si cerca
+    # comunque - per la colonna che la legherebbe alla nostra, non per il
+    # codice di stato - cosi' che una riga scritta da una sonda respinta solo
+    # in apparenza sia tracciata e non resti sul TEST.
+    if esecuzioni:
+        try:
+            with cert.db.read() as cur:
+                cur.execute(
+                    "SELECT id FROM flow_executions "
+                    " WHERE retry_of_execution_id IN %s ORDER BY id",
+                    (tuple(sorted(esecuzioni.values())),))
+                nate = [int(r["id"]) for r in cur.fetchall()]
+        except Exception as exc:                       # pragma: no cover - difensivo
+            report.fail("FLOW-retry-effetti",
+                        f"esecuzioni derivate non leggibili ({type(exc).__name__}): "
+                        "una riga nata da un retry potrebbe essere rimasta")
+            return
+        for identificativo in nate:
+            cert.created_effects.setdefault(
+                "flow_executions", []).append(identificativo)
+            cert.shared_flow_execution_ids.append(identificativo)
+        if nate:
+            report.fail("FLOW-retry-effetti",
+                        f"{len(nate)} esecuzioni nate da un retry: tracciate per "
+                        "id, ma la sonda ostile doveva essere respinta")
+
+
+def _flow_effetti_imprevisti(report, cert, esecuzioni: dict) -> None:
+    """Il ramo corrispondente non doveva accadere: se e' accaduto, si nomina.
+
+    `not_matched` non scrive ne' record d'azione ne' task. Se ce ne fossero,
+    la precondizione letta poco sopra si sarebbe rivelata insufficiente: le
+    righe stanno in tabelle che, in un'agenzia CONDIVISA, questo cleanup non
+    percorre. Tracciarle non le cancella - `tasks` e `flow_action_records` non
+    sono in `EFFECT_BY_ID_TABLES` - ma le fa comparire nella verifica finale
+    per id, che e' la differenza fra un residuo segnalato e uno silenzioso.
+    """
+    if not esecuzioni:
+        return
+    ids = tuple(sorted(esecuzioni.values()))
+    try:
+        with cert.db.read() as cur:
+            cur.execute("SELECT id FROM flow_action_records "
+                        " WHERE execution_id IN %s ORDER BY id", (ids,))
+            record = [int(r["id"]) for r in cur.fetchall()]
+            cur.execute("SELECT id FROM tasks "
+                        " WHERE (metadata ->> 'flow_execution_id')::bigint IN %s "
+                        " ORDER BY id", (ids,))
+            compiti = [int(r["id"]) for r in cur.fetchall()]
+    except Exception as exc:                           # pragma: no cover - difensivo
+        report.fail("FLOW-effetti",
+                    f"effetti dell'esecuzione non leggibili ({type(exc).__name__}): "
+                    "non si puo' affermare che non ne siano nati")
+        return
+    for identificativo in record:
+        cert.created_effects.setdefault(
+            "flow_action_records", []).append(identificativo)
+    for identificativo in compiti:
+        cert.created_effects.setdefault("tasks", []).append(identificativo)
+    report.check(
+        "FLOW-effetti", not record and not compiti,
+        f"l'esecuzione non corrispondente non ha scritto altro "
+        f"(record d'azione {len(record)}, task {len(compiti)})"
+        + ("" if not (record or compiti) else
+           ": righe TRACCIATE per id ma NON cancellabili in un'agenzia "
+           "condivisa, vanno rimosse a mano"),
+    )
+
+
 def certify_generic(report, http, cert, domain, jars, owned) -> None:
     """Le sei domande, piu' i modi obliqui, su un dominio."""
     name = domain.name
@@ -5615,6 +6095,10 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         # PRIMA DI OGNI CANCELLAZIONE, comprese quelle via API: gli id dei
         # genitori le cui figlie andranno verificate dopo. Presa piu' tardi,
         # l'istantanea fotograferebbe un database gia' potato.
+        # PRIMA dell'istantanea e di ogni cancellazione: token e sessioni si
+        # leggono finche' il conto esiste. Dopo `cleanup_owner_fixtures` la
+        # stessa query risponderebbe zero, e il report direbbe il falso.
+        cert.registra_identita_owner()
         cert.snapshot_before_cleanup()
         # La guardia PRIMA della prima DELETE. Vendite, proposte e conti
         # proprietario se ne vanno nelle due chiamate qui sotto: chiedersi
@@ -5630,6 +6114,13 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         # proprietario, per tenere i passi nell'ordine in cui il report li
         # legge.
         cert.cleanup_shared_watch_fixtures()
+        # Evento ed esecuzione FLOW, per la stessa ragione e con lo stesso
+        # criterio. Prima di `cleanup_orphan_fixtures`: la richiesta d'acquisto
+        # che l'esecuzione NOMINA se ne va di la', e benche' `entity_id` non
+        # sia una chiave esterna - il catalogo non lo vedrebbe - lasciare
+        # l'esecuzione dopo la sparizione della sua entita' significherebbe
+        # tenere sul TEST una riga che punta a un id che non esiste piu'.
+        cert.cleanup_shared_flow_fixtures()
         cert.cleanup_http_fixtures(http, jars)
         # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
         # `property_contacts` li referenziano con RESTRICT, quindi finche' le

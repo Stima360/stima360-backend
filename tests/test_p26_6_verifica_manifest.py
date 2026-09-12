@@ -478,3 +478,147 @@ def test_16_un_tab_dentro_un_valore_non_confonde_i_campi(tmp_path):
     riga = "\t".join(_campo_formato_testo(v) for v in (2, "a\tb"))
     assert riga.count("\t") == 1, repr(riga)
     assert riga.split("\t")[1] == "a\\tb", repr(riga)
+
+
+# ---------------------------------------------------------------------------
+# 7. Il censimento non puo' chiedere colonne che non esistono
+#
+# IL DIFETTO CHE QUESTO PROVA, E QUANTO E' COSTATO.
+#
+# Il punto 11 chiedeva `SELECT code, is_active, scope, version FROM flow_rules`.
+# Ne' `scope` ne' `version` esistono: 008_flow_01.sql dichiara `code_version`,
+# e nessuna colonna `scope`. Con `ON_ERROR_STOP=1` psql si ferma alla prima
+# istruzione fallita, quindi il censimento live e' morto li': i punti 11b e 12
+# - i lead aperti delle agenzie dedicate e il totale delle radici - non sono
+# mai stati eseguiti, e l'esecuzione e' andata rifatta.
+#
+# Una revisione a occhio non lo avrebbe visto: `scope` e `version` sono nomi
+# plausibili per un catalogo di regole. Qui la domanda si fa alla MIGRATION,
+# che e' l'unica fonte che il repository possiede sullo schema reale.
+#
+# COSA QUESTO NON PROVA: che il TEST abbia esattamente lo schema della
+# migration. Se una colonna fosse stata aggiunta a mano sull'istanza, questo
+# test non la conoscerebbe. Prova la cosa piu' debole e piu' utile: che il
+# censimento non chieda nulla che il repository non sappia giustificare.
+# ---------------------------------------------------------------------------
+
+MIGRAZIONE_FLOW = ROOT / "migrations" / "008_flow_01.sql"
+
+
+def _colonne_dichiarate(percorso: Path, tabella: str) -> set[str]:
+    """I nomi di colonna della CREATE TABLE, dalla migration.
+
+    Il taglio e' grezzo di proposito - la prima parola di ogni riga del corpo,
+    saltando i vincoli di tabella - perche' l'alternativa (un parser SQL su un
+    file di migration intero) fallirebbe per ragioni che non c'entrano con cio'
+    che si vuole sapere.
+    """
+    testo = percorso.read_text(encoding="utf-8")
+    # `CREATE TABLE IF NOT EXISTS x (` e `CREATE TABLE x (` sono la stessa
+    # dichiarazione: 001 usa la prima forma, 008 la seconda.
+    for apertura in (f"CREATE TABLE {tabella} (",
+                     f"CREATE TABLE IF NOT EXISTS {tabella} ("):
+        if apertura in testo:
+            break
+    else:
+        raise AssertionError(f"nessuna CREATE TABLE per {tabella} in {percorso.name}")
+    inizio = testo.index(apertura)
+    corpo = testo[inizio + len(apertura):]
+    profondita, fine = 0, None
+    for posizione, carattere in enumerate(corpo):
+        if carattere == "(":
+            profondita += 1
+        elif carattere == ")":
+            if profondita == 0:
+                fine = posizione
+                break
+            profondita -= 1
+    assert fine is not None, f"CREATE TABLE {tabella} non chiusa"
+    colonne = set()
+    for riga in corpo[:fine].split("\n"):
+        riga = riga.strip()
+        if not riga or riga.startswith("--"):
+            continue
+        prima = riga.split()[0].strip(",").lower()
+        if prima in {"constraint", "primary", "unique", "foreign", "check", "exclude"}:
+            continue
+        colonne.add(prima)
+    return colonne
+
+
+def _select_dal_censimento(tabella: str) -> set[str]:
+    """Le colonne che il censimento chiede a `tabella`.
+
+    L'istruzione si trova dalla TABELLA, non dalla proiezione: cercare la
+    proiezione esatta proverebbe che la riga non e' cambiata, che e' una
+    domanda diversa - e un `SELECT code, is_active, scope` semplicemente non
+    verrebbe trovato, facendo fallire il test senza dire perche'.
+    """
+    import sqlglot
+
+    testo = CENSIMENTO.read_text(encoding="utf-8")
+    istruzioni = "\n".join(r for r in testo.split("\n")
+                           if not r.strip().startswith("--"))
+    riferimento = istruzioni.index(f"FROM {tabella}\n")
+    inizio = istruzioni.rindex("SELECT", 0, riferimento)
+    fine = istruzioni.index(";", riferimento)
+    espressione = sqlglot.parse_one(istruzioni[inizio:fine], dialect="postgres")
+    trovata = espressione.find(sqlglot.exp.Table)
+    assert trovata is not None and trovata.name.lower() == tabella, trovata
+    return {c.name.lower() for c in espressione.find_all(sqlglot.exp.Column)}
+
+
+def test_17_il_punto_11_chiede_solo_colonne_che_la_migration_dichiara():
+    """`scope` e `version` non esistono: la migration e' la prova."""
+    dichiarate = _colonne_dichiarate(MIGRAZIONE_FLOW, "flow_rules")
+    # La migration e' quella giusta: se un giorno non lo fosse, il confronto
+    # sotto passerebbe per l'insieme sbagliato.
+    assert {"code", "is_active", "code_version", "event_type"} <= dichiarate
+    assert "scope" not in dichiarate
+    assert "version" not in dichiarate
+
+    chieste = _select_dal_censimento("flow_rules")
+    assert chieste <= dichiarate, sorted(chieste - dichiarate)
+    # E non e' vuota: un `SELECT 1` passerebbe l'inclusione senza chiedere
+    # niente, e il punto 11 esiste per sapere quali regole sono attive.
+    assert "is_active" in chieste
+
+
+def test_18_il_punto_11b_chiede_solo_colonne_che_la_migration_dichiara():
+    """La stessa domanda sul punto che il fallimento del punto 11 ha saltato.
+
+    `leads` e' il punto 11b: non e' mai stato eseguito live, quindi e' la
+    prossima istruzione che potrebbe fermare il censimento allo stesso modo.
+    """
+    dichiarate = set()
+    for migrazione in sorted((ROOT / "migrations").glob("*.sql")):
+        if migrazione.name.endswith("_down.sql"):
+            continue
+        testo = migrazione.read_text(encoding="utf-8")
+        if ("CREATE TABLE leads (" in testo
+                or "CREATE TABLE IF NOT EXISTS leads (" in testo):
+            dichiarate |= _colonne_dichiarate(migrazione, "leads")
+        # `ALTER TABLE leads` apre uno statement che continua sulle righe
+        # successive fino al `;`: le ADD COLUMN stanno li' dentro, non sulla
+        # riga dell'ALTER.
+        dentro = False
+        for riga in testo.split("\n"):
+            spoglia = riga.strip().lower()
+            if spoglia.startswith("alter table leads"):
+                dentro = True
+                spoglia = spoglia[len("alter table leads"):].strip()
+            if not dentro:
+                continue
+            if spoglia.startswith("add column"):
+                pezzi = spoglia.split()
+                indice = 2
+                if pezzi[indice:indice + 3] == ["if", "not", "exists"]:
+                    indice += 3
+                dichiarate.add(pezzi[indice].strip(","))
+            if ";" in riga:
+                dentro = False
+    assert {"agency_id", "status", "next_action_at"} <= dichiarate, sorted(dichiarate)
+
+    chieste = _select_dal_censimento("leads")
+    assert chieste <= dichiarate, sorted(chieste - dichiarate)
+    assert "next_action_at" in chieste

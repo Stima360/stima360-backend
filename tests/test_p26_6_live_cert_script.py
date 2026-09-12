@@ -31,6 +31,7 @@ import functools
 import io
 import py_compile
 import re
+import textwrap
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -345,6 +346,46 @@ class FakeCursor:
                            if f" {f.upper()} " in f" {upper} ")
             prima, dopo = self.state.get("figli_cascata", {}).get(tabella, (0, 0))
             self._row = {"n": dopo if self.state.get("genitori_cancellati") else prima}
+        elif "FROM BUY_REQUESTS WHERE ID = %S" in upper:
+            # LA PRECONDIZIONE DELLA FIXTURE FLOW, letta sul dato.
+            #
+            # `next_action_at` NULL e' cio' che rende R004 non corrispondente e
+            # quindi l'esecuzione priva di altri effetti. Il valore arriva dallo
+            # stato, cosi' un test puo' modellare la fixture BUY cambiata e
+            # verificare che la matrice si fermi invece di scrivere.
+            self._row = {"status": "active",
+                         "next_action_at": self.state.get("buy_next_action")}
+        elif "FROM FLOW_EVENTS WHERE DEDUPLICATION_KEY" in upper:
+            chiave = params[0] if params else None
+            chiavi = self.state.get("flow_chiavi", {})
+            trovati = chiavi.get(chiave, [])
+            vivi = self.state.get("flow_events_vivi", {})
+            self._rows = [{"id": i, "agency_id": vivi.get(i)} for i in trovati]
+        elif "FROM FLOW_EXECUTIONS E" in upper and "WHERE E.EVENT_ID" in upper:
+            evento = params[0] if params else None
+            self._rows = [
+                {"id": i, "agency_id": e["agency"], "status": e["status"],
+                 "rule_code": e["rule_code"]}
+                for i, e in sorted(self.state.get("flow_esecuzioni", {}).items())
+                if e.get("event_id") == evento]
+        elif "FROM FLOW_EXECUTIONS WHERE RETRY_OF_EXECUTION_ID IN" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i} for i, e in
+                          sorted(self.state.get("flow_esecuzioni", {}).items())
+                          if e.get("retry_of") in ids]
+        elif "FROM FLOW_ACTION_RECORDS WHERE EXECUTION_ID IN" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i} for i, e in
+                          sorted(self.state.get("flow_record_azione", {}).items())
+                          if e in ids]
+        elif "FROM TASKS WHERE (METADATA ->> 'FLOW_EXECUTION_ID')" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i} for i, e in
+                          sorted(self.state.get("flow_task_generati", {}).items())
+                          if e in ids]
+        elif "COUNT(*) AS N FROM FLOW_EXECUTIONS" in upper and "ID IN" in upper:
+            ids = set(params[0]) if params else set()
+            self._row = {"n": len(ids & set(self.state.get("flow_esecuzioni", {})))}
         elif "COUNT(*) AS N FROM FLOW_EVENTS" in upper:
             # MATERIALIZZATI DAVVERO. Prima questo ramo non esisteva e il
             # censimento generico rispondeva 0 sempre: i test passavano
@@ -528,10 +569,25 @@ class FakeCursor:
             # insieme di agenzie sarebbe un errore del doppio.
             agenzie = (set(params[0]) if params and isinstance(params[0], (tuple, list, set))
                        else set())
+            # PER ID E PER AGENZIA SONO DUE CANCELLAZIONI DIVERSE, e il doppio
+            # deve distinguerle: le esecuzioni e gli eventi delle agenzie
+            # CONDIVISE se ne vanno per id (EFFECT_BY_ID_TABLES), quelli delle
+            # DEDICATE per `agency_id`. Un ramo solo leggerebbe gli id come se
+            # fossero agenzie e non cancellerebbe nulla, lasciando credere al
+            # test che il cleanup funzioni perche' il doppio non guarda.
+            per_agenzia = "WHERE AGENCY_ID IN" in upper
             if "FROM FLOW_EVENTS" in upper:
                 vivi = self.state.get("flow_events_vivi", {})
-                for i in [i for i, a in vivi.items() if a in agenzie]:
+                bersagli = ([i for i, a in vivi.items() if a in agenzie]
+                            if per_agenzia else [i for i in vivi if i in agenzie])
+                for i in bersagli:
                     del vivi[i]
+            if "FROM FLOW_EXECUTIONS" in upper:
+                vive = self.state.get("flow_esecuzioni", {})
+                bersagli = ([i for i, e in vive.items() if e["agency"] in agenzie]
+                            if per_agenzia else [i for i in vive if i in agenzie])
+                for i in bersagli:
+                    del vive[i]
             if "FROM STIME" in upper:
                 # In posto, non riassegnando: `probe.stime_dedicate` e'
                 # un alias di questo dizionario.
@@ -770,6 +826,12 @@ class FakeHttp(cert.HttpProbe):
         # qui e basta, ogni conteggio rispondeva 0 e nessun ordine di
         # cancellazione poteva risultare sbagliato.
         self.flow_events_vivi: dict = {}       # id evento -> agenzia
+        # chiave di deduplicazione -> [id evento]. E' una LISTA: la fixture
+        # esige di trovarne esattamente uno, e senza poterne rappresentare due
+        # quella verifica non sarebbe esercitabile.
+        self.flow_chiavi: dict = {}
+        # id esecuzione -> {agency, event_id, status, rule_code, retry_of}
+        self.flow_esecuzioni: dict = {}
         self.watch_vivi: dict = {}             # id watch  -> agenzia
         self.watch_stima: dict = {}            # id watch  -> stima_id
         self.lead_vivi: dict = {}              # id lead   -> agenzia
@@ -1457,11 +1519,71 @@ class FakeHttp(cert.HttpProbe):
             # riga cancellabile - e quindi contabile - invece di un id che
             # nessuna query conosce.
             self.flow_events_vivi[self.next_id] = agency
-            self.rows[self.next_id] = {"agency": agency, "prefix": "/api/flow",
-                                       "body": _json.dumps({"id": self.next_id,
-                                                            "event_type": payload["event_type"]})}
+            evento = self.next_id
+            if payload.get("deduplication_key"):
+                self.flow_chiavi.setdefault(
+                    payload["deduplication_key"], []).append(evento)
+            self.rows[evento] = {"agency": agency, "prefix": "/api/flow",
+                                 "body": _json.dumps({"id": evento,
+                                                      "event_type": payload["event_type"]})}
+            # L'ESECUZIONE NASCE QUI, ALLE CONDIZIONI DEL BACKEND VERO.
+            #
+            # `_process_saved_event` crea una riga per ogni regola ATTIVA il cui
+            # `event_type` E `entity_type` corrispondano - e la crea PRIMA di
+            # sapere se la regola corrisponde nel merito, chiudendola
+            # `not_matched` quando non corrisponde. Un doppio che creasse
+            # un'esecuzione per qualunque evento avrebbe fatto passare la
+            # fixture col marcatore nel tipo, che sul TEST non ne produce
+            # nessuna: e' il BLOCKED di ogni run fino a 42e32975ccd6.
+            if (payload.get("event_type") == cert.Certification.FLOW_EXECUTION_TRIGGER
+                    and payload.get("entity_type") == cert.Certification.FLOW_EXECUTION_ENTITY):
+                self.next_id += 1
+                self.flow_esecuzioni[self.next_id] = {
+                    "agency": agency, "event_id": evento, "retry_of": None,
+                    # `not_matched` perche' `next_action_at` e' NULL: e' la
+                    # semantica di flow/engine.py per R004, non una scelta del
+                    # doppio.
+                    "status": ("matched" if self.stato_db.get("buy_next_action")
+                               else "not_matched"),
+                    "rule_code": cert.Certification.FLOW_EXECUTION_RULE,
+                }
             return self._reply(method, path, 201,
-                               _json.dumps({"id": self.next_id}).encode())
+                               _json.dumps({"id": evento}).encode())
+
+        trovata = re.match(r"^/api/flow/executions/(\d+)(/retry)?$", path)
+        if trovata:
+            identificativo = int(trovata.group(1))
+            esecuzione = self.flow_esecuzioni.get(identificativo)
+            if esecuzione is None:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            mia = esecuzione["agency"] == agency or self._broken("flow_leak", "generic")
+            if not mia:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+            if trovata.group(2):
+                # Un retry riuscito RIESEGUE l'automazione: crea una riga nuova
+                # che porta il legame con l'originale. Il doppio la
+                # materializza, cosi' la sonda che la cerca non guarda nel
+                # vuoto.
+                self.next_id += 1
+                self.flow_esecuzioni[self.next_id] = {
+                    **esecuzione, "retry_of": identificativo}
+                return self._reply(method, path, 200,
+                                   _json.dumps({"id": self.next_id}).encode())
+            return self._reply(method, path, 200, _json.dumps(
+                {"id": identificativo, "status": esecuzione["status"],
+                 "rule_code": esecuzione["rule_code"]}).encode())
+
+        if path.startswith("/api/flow/executions") and method == "GET":
+            visibili = [
+                {"id": i, "status": e["status"], "rule_code": e["rule_code"],
+                 "entity_type": cert.Certification.FLOW_EXECUTION_ENTITY}
+                for i, e in sorted(self.flow_esecuzioni.items())
+                if e["agency"] == agency or self._broken("flow_leak", "generic")]
+            if self._broken("flow_hide_own", "generic"):
+                visibili = [v for v in visibili
+                            if self.flow_esecuzioni[v["id"]]["agency"] != agency]
+            return self._reply(method, path, 200,
+                               _json.dumps({"items": visibili}).encode())
 
         if path.startswith("/api/flow/events") and method == "GET":
             visibili = [_json.loads(r["body"]) for r in self.rows.values()
@@ -1647,6 +1769,8 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     # conta e lo cancella. Con due copie separate il cleanup avrebbe potuto
     # dimenticarsi una tabella senza che nessun test se ne accorgesse.
     probe.flow_events_vivi = database.state.setdefault("flow_events_vivi", {})
+    probe.flow_chiavi = database.state.setdefault("flow_chiavi", {})
+    probe.flow_esecuzioni = database.state.setdefault("flow_esecuzioni", {})
     probe.watch_vivi = database.state.setdefault("watch_vivi", {})
     probe.watch_stima = database.state.setdefault("watch_stima", {})
     probe.lead_vivi = database.state.setdefault("lead_dedicati", {})
@@ -2067,7 +2191,17 @@ def test_13_an_empty_database_yields_INCOMPLETE_and_never_PASS(monkeypatch):
 
     blocked = [i for k, i, _ in report.rows if k == cert.BLOCKED]
     assert any("NEXT_BEST_ACTION" in i for i in blocked), blocked
-    assert any("FLOW" in i for i in blocked), blocked
+    # FLOW NON E' PIU' FRA I BLOCCATI, per la stessa ragione di
+    # PROPERTY_WATCH: la fixture fa nascere un'esecuzione dalla richiesta
+    # d'acquisto che ogni operatore crea nella propria agenzia condivisa,
+    # quindi il dominio si prova su righe del run e non su cio' che il TEST
+    # si trova addosso. E le sue prove devono esserci DAVVERO.
+    assert not any(i.startswith("FLOW-") for i in blocked), blocked
+    identificatori_flow = [i for _k, i, _t in report.rows if i.startswith("FLOW-")]
+    for atteso in ("FLOW-list-A-non-vede-B", "FLOW-list-B-non-vede-A",
+                   "FLOW-dettaglio-A-B", "FLOW-retry-ostile-B-A",
+                   "FLOW-appartenenza-A", "FLOW-effetti"):
+        assert atteso in identificatori_flow, (atteso, identificatori_flow)
     # E PROPERTY_WATCH non e' piu' fra i bloccati: la fixture crea la stima,
     # la valutazione e il watch, quindi il dominio si prova su righe del run
     # invece che su cio' che il TEST si trova addosso. Le sue prove pero'
@@ -7164,3 +7298,244 @@ def test_105g_senza_initialize_la_fixture_condivisa_si_dichiara_bloccata(monkeyp
                for q in database.state["sql"]), \
         [q for q in database.state["sql"] if "stime" in q]
     assert righe["CLEAN-VERIFICA"][0] == cert.PASS, righe["CLEAN-VERIFICA"]
+
+
+# ---------------------------------------------------------------------------
+# 106 - LA FIXTURE FLOW: l'esecuzione esiste, e' propria, e se ne va
+#
+# `FLOW-list-B-non-vede-A` e' stata BLOCKED in ogni run fino a `42e32975ccd6`
+# compreso. Il motivo scritto nel report - "il run crea solo eventi" - era
+# esatto ma incompleto: un evento col MARCATORE nel tipo non corrisponde a
+# nessuna regola, quindi non fa nascere alcuna esecuzione, e la lista di
+# entrambe le agenzie resta vuota.
+#
+# Questa serie prova tre cose distinte, e nessuna delle tre implica le altre:
+#
+#   a) l'esecuzione nasce, appartiene all'agenzia giusta, ed e' UNA;
+#   b) le prove di isolamento la usano davvero - ogni rottura del doppio le
+#      fa fallire, che e' l'unico modo di sapere che non passano per il vuoto;
+#   c) le righe create se ne vanno, per id e nell'ordine imposto dal SET NULL.
+#
+# E una quarta, offline, che regge tutte le altre: che l'esito della regola
+# sia DETERMINATO, chiesto al motore vero e non a un doppio.
+# ---------------------------------------------------------------------------
+
+def _esiti(report) -> dict:
+    return {i: (k, t) for k, i, t in report.rows}
+
+
+def test_106a_r004_su_una_richiesta_senza_prossima_azione_non_corrisponde():
+    """IL FONDAMENTO, chiesto a `flow/engine.py` e non a un doppio.
+
+    La fixture sceglie il ramo non corrispondente perche' e' l'unico i cui
+    effetti siano uno solo. Se `evaluate` un giorno facesse corrispondere una
+    richiesta senza `next_action_at`, la fixture scriverebbe in un'agenzia
+    CONDIVISA un record d'azione e un task che nessun `DELETE ... WHERE
+    agency_id` rimuove - e nessun altro test qui dentro se ne accorgerebbe.
+
+    Il parametro non entra nel confronto: si prova su TUTTI gli estremi che lo
+    schema della regola ammette, cosi' l'affermazione "qualunque sia la
+    configurazione di TEST" e' verificata e non asserita.
+    """
+    from flow.engine import evaluate
+    from flow.rules.registry import RULES
+
+    regola = RULES[cert.Certification.FLOW_EXECUTION_RULE]
+    assert regola.event_type == cert.Certification.FLOW_EXECUTION_TRIGGER
+    assert regola.entity_type == cert.Certification.FLOW_EXECUTION_ENTITY
+
+    limiti = regola.allowed_parameters["overdue_hours"]
+    for ore in (limiti["min"], limiti["max"], regola.default_parameters["overdue_hours"]):
+        parametri = dict(regola.default_parameters) | {"overdue_hours": ore}
+        corrisponde, _motivi = evaluate(
+            cert.Certification.FLOW_EXECUTION_RULE,
+            {"entity_type": "buy_request", "entity_id": 1,
+             "status": "active", "next_action_at": None},
+            parametri)
+        assert corrisponde is False, ore
+
+
+def test_106b_la_fixture_buy_non_valorizza_la_prossima_azione():
+    """La precondizione che rende vero il test precedente, sul payload reale.
+
+    Se qualcuno aggiungesse `next_action_at` alla fixture BUY - per una
+    ragione che con FLOW non c'entra - la regola comincerebbe a corrispondere.
+    La matrice non scriverebbe comunque nulla, perche' `certify_flow` rilegge
+    il valore dal database e si ferma; questo test fa notare il cambiamento
+    prima, invece di lasciarlo scoprire da un BLOCKED sul TEST.
+    """
+    buy = next(d for d in cert.DOMAINS if d.name == "BUY")
+    _percorso, modello = buy.fixture
+    assert "next_action_at" not in modello, modello
+    assert modello["status"] == "active"
+
+
+def test_106c_flow_non_passa_dal_certificatore_generico():
+    """Il marcatore non puo' comparire in un'esecuzione: la prova sarebbe vacua.
+
+    `certify_generic` conclude "la lista di A non contiene il marcatore di B".
+    Su `flow_executions` quella frase e' vera anche se la lista di A contiene
+    per intero le esecuzioni di B - nessun campo proiettato porta testo scelto
+    da chi crea la risorsa. Un dominio che usasse quella prova comparirebbe
+    fra i PASS senza che una sola riga sia stata confrontata.
+    """
+    flow = next(d for d in cert.DOMAINS if d.name == "FLOW")
+    assert flow.certifier == "flow"
+    assert callable(getattr(cert, "certify_flow"))
+    # E il certificatore non delega le domande 3-4 a quello generico. Il
+    # confronto e' sul CODICE, non sul sorgente: la docstring qui sopra nomina
+    # `certify_generic` per spiegare perche' non lo usa, e un controllo sul
+    # testo grezzo fallirebbe proprio per averlo spiegato.
+    import inspect
+    albero = ast.parse(textwrap.dedent(inspect.getsource(cert.certify_flow)))
+    chiamate = {n.func.id for n in ast.walk(albero)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "certify_generic" not in chiamate, sorted(chiamate)
+
+
+def test_106d_la_fixture_crea_una_esecuzione_per_agenzia_condivisa(monkeypatch):
+    """Nasce, e' una, ed e' dell'agenzia di chi ha inviato l'evento."""
+    _code, report, database, probe, _ = working_run(monkeypatch)
+    esiti = _esiti(report)
+
+    for label in ("A", "B"):
+        # `report.note` registra un PASS: la riga esiste e non e' un BLOCKED.
+        assert esiti[f"FLOW-fixture-{label}"][0] == cert.PASS, esiti[f"FLOW-fixture-{label}"]
+        assert esiti[f"FLOW-appartenenza-{label}"][0] == cert.PASS
+        assert esiti[f"FLOW-regola-{label}"][0] == cert.PASS
+        assert esiti[f"FLOW-list-{label}-vede-la-propria"][0] == cert.PASS
+    for label, altro in (("A", "B"), ("B", "A")):
+        assert esiti[f"FLOW-list-{label}-non-vede-{altro}"][0] == cert.PASS
+        assert esiti[f"FLOW-dettaglio-{label}-{altro}"][0] == cert.PASS
+        assert esiti[f"FLOW-retry-ostile-{label}-{altro}"][0] == cert.PASS
+    assert esiti["FLOW-effetti"][0] == cert.PASS, esiti["FLOW-effetti"]
+
+    # DUE esecuzioni in tutto, una per agenzia: non una per evento inviato.
+    # Si contano sugli id che la cancellazione ha ricevuto, perche' a fine run
+    # le righe non ci sono piu' - ed e' proprio cio' che si vuole.
+    cancellate = [p for q, p in database.state["interrogazioni"]
+                  if q.startswith("DELETE FROM flow_executions WHERE id IN")]
+    assert len(cancellate) == 1, cancellate
+    assert len(set(cancellate[0][0])) == 2, cancellate
+
+
+@pytest.mark.parametrize("guasto,rotto", [
+    ("flow_leak", "FLOW-list-A-non-vede-B"),
+    ("flow_hide_own", "FLOW-list-A-vede-la-propria"),
+])
+def test_106e_ogni_rottura_del_doppio_fa_fallire_la_prova(monkeypatch, guasto, rotto):
+    """LE PROVE NON PASSANO PER IL VUOTO.
+
+    `flow_leak` fa vedere a ciascuno le esecuzioni dell'altro; `flow_hide_own`
+    nasconde le proprie, che e' il modo in cui "non vedo il tuo" diventa vero
+    per la ragione sbagliata. La matrice deve fallire in entrambi i casi, e
+    sulla riga giusta.
+    """
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={guasto}, only="generic"))
+    fallite = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert rotto in fallite, fallite
+
+
+def test_106f_una_prossima_azione_gia_valorizzata_blocca_invece_di_scrivere(monkeypatch):
+    """La precondizione letta sul dato: se non regge, non si invia l'evento.
+
+    E' il caso in cui la fixture BUY cambiasse: R004 corrisponderebbe e
+    scriverebbe in un'agenzia condivisa righe che questo cleanup non rimuove.
+    Il risultato dev'essere un BLOCKED spiegato e ZERO eventi inviati.
+    """
+    import datetime
+    _code, report, database, probe, _ = working_run(
+        monkeypatch,
+        buy_next_action=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc))
+    esiti = _esiti(report)
+    for label in ("A", "B"):
+        assert esiti[f"FLOW-fixture-{label}"][0] == cert.BLOCKED
+        assert "prossima azione" in esiti[f"FLOW-fixture-{label}"][1]
+    assert esiti["FLOW-list-A-non-vede-B"][0] == cert.BLOCKED
+    # Nessuna esecuzione creata: la fixture non ha inviato nulla.
+    assert database.state["flow_esecuzioni"] == {}, database.state["flow_esecuzioni"]
+
+
+def test_106g_le_righe_condivise_se_ne_vanno_per_id_e_nell_ordine(monkeypatch):
+    """Cancellate, verificate, e l'esecuzione PRIMA dell'evento.
+
+    `flow_executions.event_id` e' SET NULL: cancellare l'evento per primo non
+    fallirebbe, azzererebbe la colonna e lascerebbe l'esecuzione sul TEST come
+    riga non piu' attribuibile. L'ordine e' quindi parte della correttezza, non
+    dello stile.
+    """
+    _code, report, database, _probe, _ = working_run(monkeypatch)
+    esiti = _esiti(report)
+    assert esiti["CLEAN-FLOW"][0] == cert.PASS, esiti["CLEAN-FLOW"]
+    assert esiti["CLEAN-VERIFICA"][0] == cert.PASS, esiti["CLEAN-VERIFICA"]
+
+    cancellazioni = [q for q in database.state["sql"] if q.startswith("DELETE FROM flow_")]
+    esecuzioni = next(i for i, q in enumerate(cancellazioni)
+                      if q.startswith("DELETE FROM flow_executions WHERE id IN"))
+    eventi = next(i for i, q in enumerate(cancellazioni)
+                  if q.startswith("DELETE FROM flow_events WHERE id IN"))
+    assert esecuzioni < eventi, cancellazioni
+    # E davvero non resta niente.
+    assert database.state["flow_esecuzioni"] == {}
+    assert database.state["flow_events_vivi"] == {}
+
+
+def test_106h_gli_eventi_delle_agenzie_dedicate_non_si_cancellano_per_id(monkeypatch):
+    """La distinzione che tiene in piedi il test 88.
+
+    Se gli eventi FLOW delle agenzie DEDICATE finissero nella cancellazione
+    per id, un buco in `DEDICATED_TABLES` sarebbe mascherato: le righe
+    sparirebbero per un'altra strada e nessuno se ne accorgerebbe. Qui si
+    verifica che `shared_flow_event_ids` contenga SOLO i due eventi delle
+    agenzie condivise, mentre `created_effects` - perimetro e verifica - li
+    contiene tutti.
+    """
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+
+    # Le due cancellazioni esistono ENTRAMBE e non si sovrappongono: quella
+    # per id porta due soli eventi - uno per agenzia condivisa - e quella per
+    # agenzia porta le agenzie dedicate.
+    per_id = [p for q, p in database.state["interrogazioni"]
+              if q.startswith("DELETE FROM flow_events WHERE id IN")]
+    per_agenzia = [p for q, p in database.state["interrogazioni"]
+                   if q.startswith("DELETE FROM flow_events WHERE agency_id IN")]
+    assert len(per_id) == 1, per_id
+    assert len(per_agenzia) == 1, per_agenzia
+    assert len(per_id[0][0]) == 2, per_id
+    assert not (set(per_id[0][0]) & set(per_agenzia[0][0])), (per_id, per_agenzia)
+    # E la verifica finale non trova residui: i quattro eventi se ne sono
+    # andati per le due strade giuste.
+    assert _esiti(report)["CLEAN-VERIFICA"][0] == cert.PASS
+
+
+# La persistenza non rende riuscita una risposta HTTP fallita.
+@pytest.mark.parametrize("guasto,atteso", [
+    ("post_500", "FLOW-post-A"),
+    ("stato_failed", "FLOW-stato-A"),
+    ("dettaglio_404", "FLOW-dettaglio-proprio-A"),
+])
+def test_106i_flow_non_maschera_errori_http_o_esecuzioni(monkeypatch, guasto, atteso):
+    class Probe(FakeHttp):
+        def request(self, method, path, **kwargs):
+            risposta = super().request(method, path, **kwargs)
+            if (method == "POST" and path == "/api/flow/events"
+                    and (kwargs.get("payload") or {}).get("event_type")
+                    == cert.Certification.FLOW_EXECUTION_TRIGGER):
+                if guasto == "post_500":
+                    return self._reply(method, path, 500, b'{"detail":"synthetic error"}')
+                if guasto == "stato_failed":
+                    for riga in self.flow_esecuzioni.values():
+                        riga["status"] = "failed"
+            if (guasto == "dettaglio_404" and method == "GET"
+                    and re.fullmatch(r"/api/flow/executions/[0-9]+", path)):
+                return self._reply(method, path, 404, b'{"detail":"not found"}')
+            return risposta
+
+    _code, report, _database, _probe, _ = working_run(
+        monkeypatch, http=Probe(only="generic"))
+    assert _esiti(report)[atteso][0] == cert.FAIL, _esiti(report).get(atteso)
+    # I guasti simulati non devono impedire di rintracciare e ripulire le righe.
+    assert _esiti(report)["CLEAN-VERIFICA"][0] == cert.PASS
