@@ -4809,20 +4809,25 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
     # FLOW-R004. In un'agenzia con un contatto, un'attivita' e una stima non
     # c'e' nulla che li soddisfi.
     #
-    # Il piu' semplice e DETERMINISTICO e' `next_action_overdue`, in
-    # `_lead_candidates_from_score`: basta un lead APERTO con `next_action_at`
-    # nel passato. `LeadCreate` esige il solo `contact_id` e accetta
-    # `next_action_at`, e il contatto dell'agenzia dedicata esiste gia'.
-    # Nessuna regola applicativa viene toccata: si crea il dato che la regola
-    # esistente prevede.
+    # Il lead scaduto deve avere un contatto distinto da FOLLOWUP: quel
+    # contatto ha un task in_progress e service._has_open_equivalent_task
+    # sopprime correttamente ogni NBA che lo riguarda. La regola resta intatta.
+    # I contatti nuovi vivono nelle agenzie dedicate, gia' fotografate e
+    # cancellate dal cleanup (leads prima di contacts).
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     for label in etichette:
-        contatto = dedicate[label].get("contact")
-        if contatto is None:
+        risposta = http.request(
+            "POST", "/api/core/contacts", jar=dedicate[label]["jar"],
+            payload={"display_name": cert.marker(label) + "-NBA",
+                     "status": "active"})
+        contatto = (risposta.json() or {}).get("id")
+        if risposta.status not in (200, 201) or contatto is None:
             report.blocked(f"NEXT_BEST_ACTION-fixture-{label}",
-                           "nessun contatto nell'agenzia dedicata: senza un lead "
-                           "il refresh non ha segnali da raccogliere")
+                           f"contatto NBA non creato -> {risposta.status}")
             continue
+        # Registrare il contatto prima della POST lead: anche un errore in
+        # quella chiamata deve lasciare il contatto nel perimetro verificato.
+        cert.created_effects.setdefault("contacts", []).append(int(contatto))
         scaduto = (_dt.now(_tz.utc) - _td(days=3)).isoformat()
         risposta = http.request(
             "POST", "/api/core/leads", jar=dedicate[label]["jar"],
@@ -4850,8 +4855,18 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
             report.blocked(f"NEXT_BEST_ACTION-fixture-{label}",
                            f"refresh -> {risposta.status}")
             continue
+        conteggi = risposta.json() or {}
+        report.note(f"NEXT_BEST_ACTION-refresh-{label}",
+                    "; ".join(f"{k}={conteggi.get(k, 'assente')}" for k in (
+                        "evaluated_subjects", "suppressed_duplicates",
+                        "created", "updated", "removed", "skipped_foreign",
+                        "total_active")))
         lista = http.request("GET", "/api/next-best-action?limit=100",
                              jar=dedicate[label]["jar"])
+        if lista.status != 200:
+            report.blocked(f"NEXT_BEST_ACTION-fixture-{label}",
+                           f"lista -> {lista.status}")
+            continue
         voci = lista.items()
         azioni[label] = {int(v["id"]) for v in voci if v.get("id") is not None}
         report.note(f"NEXT_BEST_ACTION-fixture-{label}",
@@ -4887,11 +4902,9 @@ def certify_batch_domains(report, http, cert, dedicate, context) -> None:
         # prodotto niente: senza, il prossimo run ripete la stessa riga senza
         # sapere se manchi il segnale o la regola.
         report.blocked("NEXT_BEST_ACTION-disgiunte",
-                       f"con {len(stime)} stime e altrettanti eventi "
-                       f"'{cert.STIMA_COMPLETATA_EVENT}' nelle agenzie "
-                       "dedicate, il refresh non ha materializzato nulla: "
-                       "nessuna azione materializzata in nessuna delle due "
-                       "agenzie dedicate: il confronto non proverebbe nulla")
+                       "azioni mancanti o liste non disponibili nelle agenzie "
+                       "dedicate: consultare fixture e conteggi refresh; "
+                       "il confronto non proverebbe nulla")
 
 
 def certify_batch_only(report, http, cert, domain, jars, owned, context) -> None:
