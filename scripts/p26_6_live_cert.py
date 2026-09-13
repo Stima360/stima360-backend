@@ -3711,32 +3711,87 @@ def incoherence_census(report: Report, database: Database) -> None:
 
 
 def _audit_without_roots(report: Report, database: Database) -> int:
-    """Gli audit senza radice: CLASSIFICATI, non solo contati.
+    """Gli audit senza radice: SEPARATI in due categorie, non declassati in blocco.
 
-    Entrambe le colonne NULL significa ORIGINE NON ATTRIBUITA, non "SET NULL
-    gia' avvenuto": dalla riga da sola le due ipotesi non si distinguono, e
-    chiamarle "incoerenti" attribuiva una causa che nessuno ha osservato.
+    UN TOMBSTONE DIMOSTRABILE non e' un'incoerenza; un rootless SCONOSCIUTO lo
+    resta. La differenza e' tutta qui, e prima non c'era: la riga falliva su
+    "entrambe le colonne NULL", che e' una condizione troppo larga.
 
-    Cio' che la riga dice davvero e' `entity_type` ed `entity_id`: da li' si
-    capisce di che cosa parlava e se sia collocabile per altra via. Il
-    censimento le raggruppa per quello.
+    TOMBSTONE DIMOSTRABILE - tutte e quattro le condizioni, nessuna esclusa:
 
-    Resta un FAIL. Una riga che nessuno sa attribuire a un tenant e' un
-    ostacolo alla chiusura del gate, e classificarla non la risolve: la rende
-    esaminabile. Non viene cancellata - non e' un residuo di questo run, e
-    cancellare cio' che non si sa attribuire e' il danno peggiore fra i due.
+      1. la coppia `entity_type`/`action` e' fra quelle i cui writer sono stati
+         letti, e che passano SEMPRE un conto non nullo:
+
+            owner_account + account_created   owner/repository.py:73
+            owner_token   + token_created     owner/repository.py:189
+            owner_session + login_succeeded   owner/repository.py:195
+
+         Una riga di quelle coppie NON PUO' essere nata con `owner_account_id`
+         NULL: il NULL viene quindi dalla clausola `SET NULL` che
+         `009_owner_01.sql` dichiara sulla colonna.
+      2. `entity_id` c'e'. Senza, la riga non dice nemmeno di che cosa parlava
+         e nulla e' verificabile.
+      3. l'entita' nominata NON esiste piu'. E' l'osservazione che rende la
+         condizione 1 una constatazione invece di una deduzione: il genitore e'
+         sparito davvero.
+      4. la radice e' assente in modo compatibile con lo schema - entrambe le
+         colonne sono `SET NULL` e nessuno di quei tre writer passa un immobile,
+         quindi `property_id` NULL e' atteso per costruzione.
+
+    Qualunque altra combinazione e' UNKNOWN ROOTLESS e resta un FAIL: tipo
+    sconosciuto, azione sconosciuta, coppia non prevista, `entity_id` assente,
+    entita' ancora presente. Nessun id viene nominato: la regola e' sulle
+    COPPIE e sull'esistenza dell'entita', mai su 560/562/563/564/566/567.
+
+    PERCHE' UN TOMBSTONE NON E' UN OSTACOLO ALLA TENANCY. `owner_audit_log` ha
+    un solo lettore applicativo, `repository.audits(agency_id)`, che filtra su
+    `ct.agency_id=%s OR p.agency_id=%s`: con entrambi i genitori NULL
+    l'espressione e' NULL e la riga non e' nella vista di NESSUNA agenzia - il
+    repository lo dichiara come conseguenza deliberata dello schema. E una
+    riga cosi' non si ripara e non si cancella: un FAIL su di essa non era
+    soddisfacibile da nessun sistema corretto.
     """
     try:
         with database.read() as cur:
             cur.execute(
                 """
+                WITH rootless AS (
+                    SELECT entity_type, action, entity_id
+                      FROM owner_audit_log
+                     WHERE owner_account_id IS NULL AND property_id IS NULL
+                ), classificate AS (
+                    SELECT r.entity_type, r.action,
+                           COALESCE(
+                               (r.entity_type = 'owner_account'
+                                AND r.action = 'account_created')
+                            OR (r.entity_type = 'owner_token'
+                                AND r.action = 'token_created')
+                            OR (r.entity_type = 'owner_session'
+                                AND r.action = 'login_succeeded'),
+                           FALSE) AS coppia_dimostrata,
+                           r.entity_id IS NOT NULL AS ha_entita,
+                           CASE r.entity_type
+                               WHEN 'owner_account' THEN NOT EXISTS (
+                                   SELECT 1 FROM owner_accounts o
+                                    WHERE o.id::text = r.entity_id)
+                               WHEN 'owner_token' THEN NOT EXISTS (
+                                   SELECT 1 FROM owner_access_tokens t
+                                    WHERE t.id::text = r.entity_id)
+                               WHEN 'owner_session' THEN NOT EXISTS (
+                                   SELECT 1 FROM owner_sessions s
+                                    WHERE s.id::text = r.entity_id)
+                               ELSE FALSE
+                           END AS entita_sparita
+                      FROM rootless r
+                )
                 SELECT COALESCE(entity_type, '(nessuno)') AS tipo,
-                       COUNT(*) AS n,
-                       COUNT(entity_id) AS con_entita
-                  FROM owner_audit_log
-                 WHERE owner_account_id IS NULL AND property_id IS NULL
-                 GROUP BY 1
-                 ORDER BY 2 DESC, 1
+                       COALESCE(action, '(nessuna)') AS azione,
+                       (coppia_dimostrata AND ha_entita AND entita_sparita)
+                           AS tombstone,
+                       COUNT(*) AS n
+                  FROM classificate
+                 GROUP BY 1, 2, 3
+                 ORDER BY 3, 1, 2
                 """)
             righe = [dict(r) for r in cur.fetchall()]
     except Exception as exc:
@@ -3744,19 +3799,37 @@ def _audit_without_roots(report: Report, database: Database) -> int:
                                  f"({type(exc).__name__})")
         return 0
 
-    totale = sum(int(r["n"]) for r in righe)
-    if totale == 0:
+    def _dettaglio(selezione):
+        return ", ".join(f"{r['tipo']}/{r['azione']}={r['n']}" for r in selezione)
+
+    tombstone = [r for r in righe if r["tombstone"]]
+    sconosciuti = [r for r in righe if not r["tombstone"]]
+
+    if tombstone:
+        report.note(
+            "CENSUS",
+            f"audit OWNER tombstone: {sum(int(r['n']) for r in tombstone)} righe "
+            f"({_dettaglio(tombstone)}). Coppia con writer letto, entity_id "
+            "presente, entita' non piu' esistente: la radice e' stata rimossa, "
+            "non e' mai mancata. Nessun tenant le vede - `repository.audits` "
+            "filtra su `ct.agency_id=%s OR p.agency_id=%s` - quindi non sono un "
+            "ostacolo alla tenancy. Non vengono cancellate.",
+        )
+    if not righe:
         report.note("CENSUS", "audit OWNER senza radice: 0")
         return 0
-    dettaglio = ", ".join(f"{r['tipo']}={r['n']} (con entity_id: {r['con_entita']})"
-                          for r in righe)
+    if not sconosciuti:
+        return 0
+
+    totale = sum(int(r["n"]) for r in sconosciuti)
     report.fail(
         "CENSUS",
-        f"audit OWNER senza radice: {totale} righe con owner_account_id e "
-        f"property_id entrambi NULL, classificate per entita': {dettaglio}. "
-        "ORIGINE NON ATTRIBUITA, non SET NULL gia' avvenuto: dalla riga sola "
-        "le due ipotesi non si distinguono. Non vengono cancellate; restano "
-        "da collocare prima di chiudere il gate.",
+        f"audit OWNER senza radice NON spiegati: {totale} righe "
+        f"({_dettaglio(sconosciuti)}). Non soddisfano le condizioni del "
+        "tombstone dimostrabile - coppia entity_type/action con writer letto, "
+        "entity_id presente, entita' non piu' esistente - quindi l'origine "
+        "resta ignota. Non vengono cancellate; restano da collocare prima di "
+        "chiudere il gate.",
     )
     return totale
 

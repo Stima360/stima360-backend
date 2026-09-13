@@ -124,6 +124,38 @@ class FakeCursor:
                 t: set(ids) for t, ids in self.state.get("effetti_righe", {}).items()}
         return self.state["_effetti_vive"]
 
+    #: Le tre coppie i cui writer sono stati letti in owner/repository.py.
+    COPPIE_DIMOSTRATE = {
+        ("owner_account", "account_created"),
+        ("owner_token", "token_created"),
+        ("owner_session", "login_succeeded"),
+    }
+
+    def _classifica_rootless(self) -> list:
+        """Le quattro condizioni del tombstone, applicate qui come nella query.
+
+        Il test dichiara le righe grezze (`audit_senza_radice`) e quali entita'
+        OWNER esistono ancora (`entita_owner_vive`); la classificazione la
+        deriva questo metodo. E' l'unico modo di provare che "entita' ancora
+        presente" produce un FAIL: se il verdetto arrivasse dal test, quel caso
+        sarebbe vero per dichiarazione.
+        """
+        vive = self.state.get("entita_owner_vive", {})
+        gruppi: dict = {}
+        for riga in self.state.get("audit_senza_radice", []):
+            tipo, azione = riga.get("entity_type"), riga.get("action")
+            identificativo = riga.get("entity_id")
+            tombstone = (
+                (tipo, azione) in self.COPPIE_DIMOSTRATE
+                and identificativo is not None
+                and identificativo not in set(vive.get(tipo, ()))
+            )
+            chiave = (tipo or "(nessuno)", azione or "(nessuna)", tombstone)
+            gruppi[chiave] = gruppi.get(chiave, 0) + int(riga.get("n", 1))
+        return [{"tipo": t, "azione": a, "tombstone": s, "n": n}
+                for (t, a, s), n in sorted(gruppi.items(),
+                                           key=lambda x: (x[0][2], x[0][0], x[0][1]))]
+
     def _osservazioni(self) -> dict:
         return self.state.setdefault("osservazioni", {})
 
@@ -219,7 +251,13 @@ class FakeCursor:
             # La classificazione degli audit senza radice: righe, non un
             # conteggio. Un doppio che rispondesse con un numero solo non
             # potrebbe distinguere "classificati" da "contati".
-            self._rows = list(self.state.get("audit_senza_radice", []))
+            #
+            # LE RIGHE ARRIVANO GREZZE e la classificazione la fa QUESTO
+            # doppio, con le stesse quattro condizioni della query. Un doppio
+            # a cui il test passasse gia' `tombstone: True/False` proverebbe
+            # soltanto il ramo Python, e il caso "entita' ancora presente"
+            # sarebbe una dichiarazione invece di una deduzione.
+            self._rows = self._classifica_rootless()
         elif "COUNT(*) AS N FROM AGENCIES" in upper:
             # Prima del ramo generico: quello imposta `_rows` e lascerebbe
             # `fetchone()` su un risultato vecchio.
@@ -5438,32 +5476,221 @@ def test_97e_the_perimeter_unions_instead_of_overwriting():
     assert set(c._perimeter()["seller_timeline_events"]) == {108, 10601}
 
 
-def test_97f_the_audit_without_roots_is_classified_and_still_fails():
-    """I sei audit senza radice: classificati, e ancora un FAIL.
+#: Le sei righe del run live, nella forma grezza che la tabella contiene.
+#: Nessun id di `owner_audit_log` compare qui: cio' che conta e' la COPPIA
+#: entity_type/action e l'entita' nominata, mai la riga per identificativo.
+SEI_TOMBSTONE = [
+    {"entity_type": "owner_account", "action": "account_created", "entity_id": "4"},
+    {"entity_type": "owner_token", "action": "token_created", "entity_id": "6"},
+    {"entity_type": "owner_session", "action": "login_succeeded", "entity_id": "6"},
+    {"entity_type": "owner_account", "action": "account_created", "entity_id": "5"},
+    {"entity_type": "owner_token", "action": "token_created", "entity_id": "7"},
+    {"entity_type": "owner_session", "action": "login_succeeded", "entity_id": "7"},
+]
 
-    "Non classificate" era la descrizione di cio' che il censimento NON
-    faceva. Adesso li raggruppa per `entity_type`, che e' quel che la riga
-    dice davvero di se stessa, e dichiara che l'origine non e' attribuita -
-    non che un SET NULL sia gia' avvenuto, cosa che dalla riga sola non si
-    distingue. Restano un FAIL e restano sul database.
-    """
-    database = fake_database(agencies=AGENCIES,
-                             audit_senza_radice=[{"tipo": "shared_document",
-                                                  "n": 4, "con_entita": 4},
-                                                 {"tipo": "(nessuno)",
-                                                  "n": 2, "con_entita": 0}])
+
+def _censimento(**stato):
+    """Esegue il censimento sui doppi e ritorna (report, database)."""
+    database = fake_database(agencies=AGENCIES, **stato)
     report, _stream = quiet_report()
     cert.incoherence_census(report, database)
+    return report, database
 
-    fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
-    assert "CENSUS" in fallimenti, report.rows
-    testo = fallimenti["CENSUS"]
-    assert "6 righe" in testo, testo
-    assert "shared_document=4" in testo and "(nessuno)=2" in testo, testo
-    assert "ORIGINE NON ATTRIBUITA" in testo, testo
-    assert "non classificate" not in testo, testo
-    # Nessuna cancellazione: il censimento e' in sola lettura.
+
+def _fallimenti(report):
+    return [t for k, i, t in report.rows if k == cert.FAIL and i == "CENSUS"]
+
+
+def _note(report):
+    return [t for k, i, t in report.rows if k == cert.PASS and i == "CENSUS"]
+
+
+def test_97f_the_six_live_rows_are_tombstones_and_do_not_fail():
+    """1. Le sei righe equivalenti al caso live non causano FAIL.
+
+    QUESTO TEST PRIMA ESIGEVA UN FAIL, e non e' stato cambiato perche' il FAIL
+    desse fastidio: la sua motivazione era falsa. Diceva "dalla riga sola le
+    due ipotesi non si distinguono" - vero della riga, falso del sistema. I
+    tre writer di quelle coppie passano sempre un conto non nullo
+    (owner/repository.py:73, 189, 195), quindi quelle righe non possono essere
+    nate NULL: il NULL viene dalla clausola SET NULL dello schema.
+    """
+    report, database = _censimento(audit_senza_radice=SEI_TOMBSTONE)
+
+    assert _fallimenti(report) == [], report.rows
+    nota = next((t for t in _note(report) if "tombstone" in t), None)
+    assert nota is not None, report.rows
+    assert "6 righe" in nota, nota
+    # La classificazione non si perde: un declassamento che cancellasse
+    # l'informazione sarebbe un mascheramento, non una correzione.
+    for coppia in ("owner_account/account_created=2", "owner_token/token_created=2",
+                   "owner_session/login_succeeded=2"):
+        assert coppia in nota, nota
+    # Censimento in sola lettura.
     assert not database.state.get("deletes"), database.state.get("deletes")
+
+
+def test_97f_b_an_unknown_rootless_still_fails():
+    """2. Un rootless sconosciuto causa FAIL."""
+    report, _db = _censimento(audit_senza_radice=[
+        {"entity_type": "misteriosa", "action": "qualcosa", "entity_id": "1"}])
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "NON spiegati: 1 righe" in fallimenti[0], fallimenti[0]
+    assert "misteriosa/qualcosa=1" in fallimenti[0], fallimenti[0]
+
+
+def test_97f_c_a_known_type_with_the_wrong_action_fails():
+    """3. entity_type valido + action sbagliata causa FAIL.
+
+    La condizione e' sulla COPPIA: un `owner_account` scritto da un'azione di
+    cui nessuno ha letto il writer non e' dimostrabile.
+    """
+    report, _db = _censimento(audit_senza_radice=[
+        {"entity_type": "owner_account", "action": "account_disabled",
+         "entity_id": "4"}])
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "owner_account/account_disabled=1" in fallimenti[0], fallimenti[0]
+
+
+def test_97f_d_a_known_action_with_the_wrong_type_fails():
+    """4. action valida + entity_type sbagliato causa FAIL."""
+    report, _db = _censimento(audit_senza_radice=[
+        {"entity_type": "owner_publication", "action": "account_created",
+         "entity_id": "4"}])
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "owner_publication/account_created=1" in fallimenti[0], fallimenti[0]
+
+
+def test_97f_e_a_null_entity_id_fails():
+    """5. entity_id NULL causa FAIL.
+
+    Senza, la riga non dice nemmeno di che cosa parlava: la terza condizione
+    non e' verificabile, e non verificabile non vuol dire soddisfatta.
+    """
+    report, _db = _censimento(audit_senza_radice=[
+        {"entity_type": "owner_account", "action": "account_created",
+         "entity_id": None}])
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "owner_account/account_created=1" in fallimenti[0], fallimenti[0]
+
+
+def test_97f_f_an_entity_that_still_exists_fails():
+    """6. Entita' ancora presente ma owner_account_id NULL causa FAIL.
+
+    E' il caso piu' importante dei sette: il conto c'e' ANCORA e la riga di
+    audit ha perso il riferimento. Nessun SET NULL puo' spiegarlo - il
+    genitore non e' stato rimosso - quindi l'origine resta ignota e il FAIL
+    resta. Il verdetto lo deriva il doppio dalle entita' dichiarate vive, non
+    il test.
+    """
+    report, _db = _censimento(
+        audit_senza_radice=[{"entity_type": "owner_account",
+                             "action": "account_created", "entity_id": "4"}],
+        entita_owner_vive={"owner_account": ["4"]})
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "owner_account/account_created=1" in fallimenti[0], fallimenti[0]
+    # E la stessa riga, con l'entita' sparita, non fallirebbe: e' la prova che
+    # a discriminare e' l'esistenza dell'entita' e non altro.
+    report2, _db2 = _censimento(
+        audit_senza_radice=[{"entity_type": "owner_account",
+                             "action": "account_created", "entity_id": "4"}])
+    assert _fallimenti(report2) == [], report2.rows
+
+
+def test_97f_g_tombstones_and_unknowns_together_keep_the_fail():
+    """Le due categorie convivono, e la presenza di tombstone non copre l'altra.
+
+    E' il modo in cui il declassamento potrebbe rientrare dalla finestra: se
+    bastasse un tombstone per far tacere il resto, un rootless sconosciuto
+    passerebbe inosservato ogni volta che ce n'e' uno accanto.
+    """
+    report, _db = _censimento(audit_senza_radice=SEI_TOMBSTONE + [
+        {"entity_type": "misteriosa", "action": "qualcosa", "entity_id": "9"}])
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 1, report.rows
+    assert "NON spiegati: 1 righe" in fallimenti[0], fallimenti[0]
+    assert any("tombstone" in t and "6 righe" in t for t in _note(report)), report.rows
+
+
+def test_97f_h_the_real_incoherences_still_fail(monkeypatch):
+    """7. Le incoerenze multi-tenant gia' esistenti continuano a fallire.
+
+    Cercano una CONTRADDIZIONE - due radici che si contraddicono - ed e' un
+    fenomeno diverso da un'assenza prodotta per progetto. Con soli tombstone
+    accanto, devono fallire lo stesso, e il conteggio delle incoerenze non
+    deve includerli.
+    """
+    originale = FakeCursor.execute
+
+    def discordi(self, sql, params=None):
+        compatta = " ".join(sql.split())
+        originale(self, sql, params)
+        if "ct.agency_id <> p.agency_id" in compatta:
+            self._row = {"n": 3}
+        elif "l.agency_id <> c.agency_id" in compatta:
+            self._row = {"n": 1}
+
+    monkeypatch.setattr(FakeCursor, "execute", discordi)
+    report, _db = _censimento(audit_senza_radice=SEI_TOMBSTONE)
+
+    fallimenti = _fallimenti(report)
+    assert len(fallimenti) == 2, report.rows
+    assert any("grant OWNER" in t for t in fallimenti), fallimenti
+    assert any("lead con agenzia" in t for t in fallimenti), fallimenti
+    assert not any("nessuna incoerenza" in t for t in _note(report)), report.rows
+
+
+def test_97f_i_the_query_encodes_the_four_conditions():
+    """LA REGOLA STA NELLA QUERY, e qui non c'e' PostgreSQL per eseguirla.
+
+    I test sopra provano il ramo Python attraverso un doppio che applica le
+    stesse quattro condizioni. Questo prova l'altra meta': che la QUERY le
+    porti davvero, e che le coppie dimostrate siano esattamente tre - non una
+    di piu', perche' ogni coppia in piu' e' un writer che nessuno ha letto.
+
+    Contro il server vero resta da verificare che i due percorsi coincidano:
+    e' l'unica cosa che questo ambiente non puo' chiudere.
+    """
+    sorgente = SCRIPT.read_text(encoding="utf-8")
+    blocco = sorgente[sorgente.index("def _audit_without_roots"):
+                      sorgente.index("# La matrice")]
+
+    # 1. le tre coppie, e nessun'altra
+    for tipo, azione in FakeCursor.COPPIE_DIMOSTRATE:
+        assert f"r.entity_type = '{tipo}'" in blocco, tipo
+        assert f"r.action = '{azione}'" in blocco, azione
+    assert blocco.count("r.entity_type = '") == 3, blocco.count("r.entity_type = '")
+    # 2. entity_id presente
+    assert "r.entity_id IS NOT NULL AS ha_entita" in blocco
+    # 3. entita' non piu' esistente, una per tipo
+    for tabella in ("owner_accounts", "owner_access_tokens", "owner_sessions"):
+        assert f"NOT EXISTS (\n                                   SELECT 1 FROM {tabella}" \
+            in blocco, tabella
+    # 4. il tombstone esige TUTTE e tre le condizioni
+    assert "(coppia_dimostrata AND ha_entita AND entita_sparita)" in blocco
+    # E il ramo predefinito di `entita_sparita` e' FALSE, non TRUE.
+    #
+    # Dentro la congiunzione e' irraggiungibile - un tipo che finisce
+    # nell'ELSE non e' fra i tre, quindi `coppia_dimostrata` e' gia' FALSE - ed
+    # e' proprio per questo che va bloccato qui: un mutante che lo rovesciasse
+    # non farebbe fallire nessuno dei test sul comportamento, e la difesa in
+    # profondita' sparirebbe in silenzio il giorno in cui una quarta coppia
+    # rendesse quel ramo raggiungibile.
+    assert "ELSE FALSE\n                           END AS entita_sparita" in blocco
+    # e il filtro di partenza non e' cambiato
+    assert "WHERE owner_account_id IS NULL AND property_id IS NULL" in blocco
+    # NESSUN id di audit nella REGOLA. Il controllo e' sulla query, non sul
+    # blocco intero: la docstring nomina i sei id proprio per dire che non li
+    # usa, e cercarli nel testo grezzo vieterebbe la spiegazione insieme alla
+    # cosa spiegata.
+    query = blocco[blocco.index("WITH rootless AS"):blocco.index('""")')]
+    for identificativo in ("560", "562", "563", "564", "566", "567"):
+        assert identificativo not in query, identificativo
 
 
 def test_97g_a_broken_route_is_reported_as_broken_not_as_bad_isolation(monkeypatch):
