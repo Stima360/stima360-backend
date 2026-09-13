@@ -231,11 +231,20 @@ def assert_scoped(recorder: RecordingCursor, ctx) -> None:
 
     This is the whole point of the file. It is written as a reusable auditor
     so the negative control below can prove it actually rejects.
+
+    P27-1 D1: L'AUDITOR AVEVA UNA CLAUSOLA PERMISSIVA, ED E' STATA TOLTA.
+
+    Conteneva un ramo per il platform admin sbilanciato - "una lettura
+    cross-agency e' legittima per questa sola forma di contesto" - che
+    accettava un `WHERE TRUE`. Con D1 quel contesto non produce piu' alcuna
+    istruzione, quindi il ramo era diventato irraggiungibile; ma un revisore di
+    sicurezza con dentro una clausola che assolve la cosa da cui difende non e'
+    codice morto innocuo: e' la clausola che accetterebbe in silenzio il ramo
+    se qualcuno lo rimettesse. Adesso ogni istruzione registrata deve portare
+    il predicato, senza eccezioni.
     """
     statements = recorder.scoped_statements
     assert statements, "no statement touched a scoped table - nothing was proved"
-
-    unbound_admin = ctx.is_platform_admin is True and ctx.agency_id is None
 
     for statement in statements:
         insert = INSERT_INTO_SCOPED.search(statement.sql)
@@ -246,11 +255,6 @@ def assert_scoped(recorder: RecordingCursor, ctx) -> None:
             assert ctx.agency_id in statement.bound, (
                 f"INSERT does not bind ctx.agency_id: {statement}"
             )
-            continue
-
-        if unbound_admin:
-            # A cross-agency read is legitimate for this one context shape.
-            assert "TRUE" in statement.sql or "agency_id" in statement.sql, statement
             continue
 
         assert "agency_id" in statement.sql, (
@@ -692,10 +696,19 @@ def test_d6_owner_and_admin_get_no_assignment_filter(role, cur):
         lambda ctx: repository.list_tasks(ctx, 50, 0, None, None, None, None),
     ],
 )
-def test_d7_unbound_platform_admin_reads_cross_agency(call, cur):
-    call(unbound_platform_admin_ctx())
-    statement = cur.scoped_statements[0]
-    assert "WHERE TRUE" in statement.sql, statement
+def test_d7_unbound_platform_admin_is_refused_before_any_statement(call, cur):
+    """Era: `assert "WHERE TRUE" in statement.sql`.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    Asserito anche che il cursore resti intatto: "rifiutato" e "eseguito e
+    filtrato" darebbero entrambi zero righe, e solo il primo e' l'isolamento.
+    """
+    with pytest.raises(PlatformAdminAgencyRequired):
+        call(unbound_platform_admin_ctx())
+    assert cur.calls == [], f"un'istruzione e' sfuggita: {cur.calls}"
 
 
 def test_d7_bound_platform_admin_is_scoped_like_anyone_else(cur):
@@ -1072,34 +1085,52 @@ def test_d12_null_unassigns_and_skips_the_membership_probe(table, monkeypatch):
 
 
 @pytest.mark.parametrize("table", sorted(ASSIGN_FUNCTIONS))
-def test_d12_an_unbound_platform_admin_assigns_without_binding_an_agency(table, monkeypatch):
-    """The approved exception: no ctx.require_agency() on this path."""
+def test_d12_an_unbound_platform_admin_no_longer_assigns_at_all(table, monkeypatch):
+    """Era: l'eccezione approvata di P26-1 - nessun `require_agency()` qui.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    L'eccezione era coerente solo finche' il record veniva letto con
+    `WHERE TRUE`, cioe' scegliendo fra i record di TUTTE le agenzie: e'
+    l'accesso globale implicito che D1 chiude, e l'eccezione cade con il ramo
+    su cui si reggeva. Un platform admin CON membership assegna dentro la
+    propria agenzia come prima (D4) - controllo positivo nel file P27.
+    """
     recorder = install(monkeypatch, _assignment_cursor())
-    ctx = unbound_platform_admin_ctx()
-    result = getattr(repository, ASSIGN_FUNCTIONS[table])(ctx, 7, TARGET_AGENT)
-
-    assert result["assigned_agent_id"] == TARGET_AGENT
-    lookup = recorder.calls[0]
-    assert "WHERE TRUE" in lookup.sql, lookup
-    probe = [c for c in recorder.calls if "agency_memberships" in c.sql][0]
-    assert RECORD_AGENCY in probe.bound, "the record's agency must govern"
+    with pytest.raises(PlatformAdminAgencyRequired):
+        getattr(repository, ASSIGN_FUNCTIONS[table])(
+            unbound_platform_admin_ctx(), 7, TARGET_AGENT
+        )
+    assert recorder.calls == [], f"un'istruzione e' sfuggita: {recorder.calls}"
 
 
-def test_d12_the_assignment_path_never_calls_require_agency(monkeypatch):
-    """An unbound platform admin must not be forced to infer a default."""
-    class _Tripwire(OperatorContext):
-        pass
+def test_d12_the_assignment_path_now_goes_through_require_agency(monkeypatch):
+    """Era: `assert calls == []` - questo percorso NON doveva chiamarlo.
 
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    L'assertion si inverte perche' si inverte la regola, e la nuova e' quella
+    che si vuole: l'assegnazione non ha piu' un modo suo di risolvere
+    l'agenzia, passa dalla stessa porta di tutto il resto. Nessuna riga di
+    `_set_assignment` e' cambiata - e' `scoped_source` che adesso rifiuta.
+    """
     ctx = unbound_platform_admin_ctx()
     calls = []
-    monkeypatch.setattr(
-        type(ctx), "require_agency",
-        lambda self: calls.append(1) or (_ for _ in ()).throw(AssertionError("require_agency called")),
-        raising=False,
-    )
+    original = type(ctx).require_agency
+
+    def _counting(self):
+        calls.append(1)
+        return original(self)
+
+    monkeypatch.setattr(type(ctx), "require_agency", _counting, raising=False)
     install(monkeypatch, _assignment_cursor())
-    repository.set_contact_assignment(ctx, 7, TARGET_AGENT)
-    assert calls == []
+    with pytest.raises(PlatformAdminAgencyRequired):
+        repository.set_contact_assignment(ctx, 7, TARGET_AGENT)
+    assert calls, "il rifiuto non e' passato da require_agency()"
 
 
 @pytest.mark.parametrize("name", sorted(ASSIGN_FUNCTIONS.values()))
@@ -1216,11 +1247,39 @@ def test_d13_owner_and_admin_may_assign(path, role_name, assignment_client):
 
 
 @pytest.mark.parametrize("path", sorted(ASSIGNMENT_ROUTES.values()))
-def test_d13_an_unbound_platform_admin_may_assign(path, assignment_client):
+def test_d13_the_assignment_routes_translate_the_unbound_refusal_to_403(
+    path, assignment_client
+):
+    """Era: `test_d13_an_unbound_platform_admin_may_assign`, che asseriva 200.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu', quindi il repository vero rifiuta adesso
+    un platform admin sbilanciato anche su questo percorso.
+
+    ATTENZIONE A COSA PROVA QUESTO TEST, E A COSA NO.
+
+    Questa fixture sostituisce le funzioni di assegnazione del REPOSITORY, che
+    e' esattamente il punto in cui il rifiuto nasce: con il repository finto,
+    `scoped_source` non viene mai chiamato e nessun rifiuto puo' avvenire da
+    solo. Fingere il contrario - asserire 403 sperando che arrivi - darebbe un
+    test verde che non tocca la regola.
+
+    Quindi qui si fa sollevare al finto repository la stessa eccezione che
+    quello vero solleva adesso, e si asserisce l'unica cosa che questa fixture
+    possiede davvero: che le due route di assegnazione TRADUCONO quel rifiuto
+    in 403, e non in un 500 o in un 404.
+
+    Che il rifiuto avvenga per davvero e' provato contro il repository vero in
+    tests/test_p27_1_d1_tenant_isolation.py.
+    """
     client, state = assignment_client
     state["ctx"] = unbound_platform_admin_ctx()
+    state["raises"] = PlatformAdminAgencyRequired(
+        "this operation requires an agency-bound context"
+    )
     response = client.patch(path, json={"assigned_agent_id": TARGET_AGENT})
-    assert response.status_code == 200, response.text
+    assert response.status_code == 403, response.text
+    assert state["calls"], "il rifiuto non e' arrivato fino al repository"
 
 
 @pytest.mark.parametrize("path", sorted(ASSIGNMENT_ROUTES.values()))
@@ -1410,10 +1469,13 @@ class AgencyStore:
         self.next_id = 5000
 
     def visible(self, ctx, table: str) -> list[dict]:
+        # P27-1 D1: la scorciatoia `if predicate == "TRUE": return list(rows)`
+        # e' stata tolta insieme al ramo che la produceva. Se `scoped_predicate`
+        # tornasse di nuovo "TRUE", questo store adesso sbaglierebbe rumorosamente
+        # (params vuoto -> IndexError) invece di restituire ogni agenzia in
+        # silenzio, che e' il modo giusto di fallire per una fixture ostile.
         predicate, params = scoped_predicate(ctx, table, "x")
         rows = self.rows[table]
-        if predicate == "TRUE":
-            return list(rows)
         rows = [row for row in rows if row["agency_id"] == params[0]]
         if len(params) == 2:  # the agent narrowing
             rows = [row for row in rows if row.get("assigned_agent_id") == params[1]]
@@ -1867,10 +1929,19 @@ def test_d15_42_an_agency_admin_may_assign(hostile):
 
 # -- 44: the platform admin ------------------------------------------------
 
-def test_d15_44_an_unbound_platform_admin_reads_both_agencies(hostile):
-    body = hostile.as_operator("platform_admin").get("/api/core/contacts").json()
-    ids = {row["id"] for row in body["items"]}
-    assert {CONTACT_A, CONTACT_B} <= ids, ids
+def test_d15_44_an_unbound_platform_admin_reads_neither_agency(hostile):
+    """Era: `assert {CONTACT_A, CONTACT_B} <= ids` - le leggeva entrambe.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    E' il test piu' esplicito dei quattro: la fixture ostile ha due agenzie
+    con dati veri dietro il router vero, e la risposta passa da "tutte e due"
+    a "nessuna delle due".
+    """
+    response = hostile.as_operator("platform_admin").get("/api/core/contacts")
+    assert response.status_code == 403, response.text
 
 
 def test_d15_44_an_unbound_platform_admin_is_refused_a_generic_create(hostile):
@@ -1881,21 +1952,40 @@ def test_d15_44_an_unbound_platform_admin_is_refused_a_generic_create(hostile):
     assert response.status_code == 403, response.text
 
 
-def test_d15_44_a_platform_admin_may_assign_within_the_records_agency(hostile):
-    """The agency comes from the record, so no binding is needed."""
+def test_d15_44_an_unbound_platform_admin_may_no_longer_assign(hostile):
+    """Era: 200, "l'agenzia viene dal record, non serve un legame".
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    Asserito anche che il record NON sia stato toccato: un 403 restituito dopo
+    aver scritto sarebbe la peggiore delle risposte.
+    """
+    prima = hostile.store.raw("contacts", CONTACT_B)["assigned_agent_id"]
     response = hostile.as_operator("platform_admin").patch(
         f"/api/core/contacts/{CONTACT_B}/assignment", json={"assigned_agent_id": OWNER_B}
     )
-    assert response.status_code == 200, response.text
-    assert hostile.store.raw("contacts", CONTACT_B)["assigned_agent_id"] == OWNER_B
+    assert response.status_code == 403, response.text
+    assert hostile.store.raw("contacts", CONTACT_B)["assigned_agent_id"] == prima
 
 
-def test_d15_44_a_platform_admin_cannot_assign_across_the_records_agency(hostile):
-    """B's record, A's operator: rejected, because the record governs."""
+def test_d15_44_the_cross_agency_assignment_is_refused_earlier_than_before(hostile):
+    """Era: 400 - il record di B con un operatore di A veniva letto e poi
+    rifiutato dalla validazione del destinatario.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO. Il ramo cross-agency di
+    `core/scope.py` non esiste piu'. La regola nuova e i suoi controlli
+    positivi stanno in tests/test_p27_1_d1_tenant_isolation.py.
+
+    Adesso e' 403 e non 400, ed e' un miglioramento anche se sembra solo un
+    numero diverso: il rifiuto arriva PRIMA di leggere il record di B, quindi
+    la richiesta non e' piu' un modo di sapere che quel record esiste.
+    """
     response = hostile.as_operator("platform_admin").patch(
         f"/api/core/contacts/{CONTACT_B}/assignment", json={"assigned_agent_id": AGENT_A}
     )
-    assert response.status_code == 400, response.text
+    assert response.status_code == 403, response.text
 
 
 # -- 45: the cross-agency 404 body is byte-identical to an absent one -------

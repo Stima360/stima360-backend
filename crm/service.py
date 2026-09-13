@@ -27,14 +27,19 @@ def get_contact_360(ctx, contact_id: int) -> dict:
     own: an agency arrives here only because the caller already had one.
 
     The agency is required up front rather than at the first read that happens
-    to need it. Without this, an unbound platform admin would be served by
-    CORE, whose `scoped_predicate` answers such a context with a deliberate
-    platform-wide `TRUE`, and refused a few statements later by PROPERTY, whose
-    `require_agency()` does not - so the request would have read across every
-    tenant before failing. P26-1 grants that cross-agency branch to CORE's own
-    endpoints; an aggregator that also reads five tenant-owned subsystems is
-    not the place to exercise it. It cannot fire on this route in any case:
-    `legacy_basic_agency_context` always resolves the Default Agency.
+    to need it. When this was written the reason was sharp: an unbound platform
+    admin would be served by CORE, whose `scoped_predicate` answered such a
+    context with a deliberate platform-wide `TRUE`, and refused a few
+    statements later by PROPERTY, whose `require_agency()` did not - so the
+    request would have read across every tenant before failing.
+
+    P27-1, decision D1, removed that branch: CORE now refuses an unbound
+    context exactly as PROPERTY always did, so the divergence this guard was
+    written to absorb no longer exists. The guard STAYS - it is one comparison,
+    it keeps the refusal on this route at the first statement rather than the
+    second, and an aggregator that reads six subsystems should state the scope
+    it needs rather than discover it. What it no longer does is compensate for
+    a disagreement between two subsystems.
 
     MATCHES ARE A PAIR, NOT A LIST
 

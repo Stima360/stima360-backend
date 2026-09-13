@@ -89,17 +89,50 @@ def scoped_predicate(ctx: AgencyScope, table: str, alias: str) -> tuple[str, lis
     if table not in SCOPED_TABLES:
         raise ProgrammingError(f"{table!r} is not a scoped CORE table")
 
-    # The only cross-agency branch in P26-1, and the only bare TRUE. It needs
-    # both conditions: the flag alone is not enough, because a platform admin
-    # who holds a membership is acting inside that agency and is scoped like
-    # anyone else. Compared with `is True` rather than for truthiness so a
-    # non-boolean value cannot widen the query.
-    if ctx.is_platform_admin is True and ctx.agency_id is None:
-        return "TRUE", []
-
-    # Everyone else: agency_owner, agency_admin, agent, a platform admin bound
-    # to an agency, and SystemAgencyContext. require_agency() refuses an
-    # unbound scope rather than returning an unfiltered predicate.
+    # P27-1, decision D1: THERE IS NO CROSS-AGENCY BRANCH HERE ANY MORE.
+    #
+    # Until P27-1 this function had one, and exactly one, bare `TRUE`: an
+    # operator carrying `is_platform_admin` and holding no membership read
+    # every agency's rows through CORE's ordinary endpoints. That was a
+    # deliberate P26-1 decision, and it was defensible then for one reason -
+    # platform administration had no surface of its own, so the tenant surface
+    # was the only place it could act at all.
+    #
+    # P27-1 gives it that surface (`platform_admin/`, mounted at
+    # `/api/platform`), and with it the rule the Network model rests on:
+    #
+    #     the Platform surface administers the NETWORK;
+    #     the tenant surface serves ONE agency;
+    #     no implicit global access to tenant data exists in between.
+    #
+    # So the branch is REMOVED rather than guarded more tightly. An unbound
+    # platform admin now falls through to `require_agency()` exactly like any
+    # other unbound context and is refused before a statement is built - which
+    # every router already translates into 403 through
+    # `PlatformAdminAgencyRequired`. Removing it, rather than adding a third
+    # condition to its guard, is the point: a branch that still exists is a
+    # branch a later phase can re-open by widening that guard.
+    #
+    # WHAT DID NOT CHANGE
+    #
+    # A platform admin who DOES hold a membership - decision D4 deliberately
+    # permits one identity to be both - is scoped to that membership's agency,
+    # precisely as before. The flag never widened a bound scope and still does
+    # not: the `is True` comparison it used to need has gone with the branch
+    # that needed it, because there is no longer anything a truthy non-boolean
+    # value could open.
+    #
+    # WHAT THIS IS NOT
+    #
+    # It is not a decision that the platform may never read an agency's data.
+    # It is a decision that it will never do so IMPLICITLY. An explicit, named,
+    # audited way for the platform to act inside one chosen agency is P27's to
+    # design when a phase actually needs it; it will arrive as a decision with
+    # a name on it, never as the absence of a predicate in this function.
+    #
+    # Everyone, now without exception: agency_owner, agency_admin, agent, a
+    # platform admin bound to an agency, an unbound platform admin (refused by
+    # require_agency), and SystemAgencyContext.
     parts = [f"{alias}.agency_id = %s"]
     params = [ctx.require_agency()]
 

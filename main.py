@@ -39,6 +39,8 @@ from seller_intent.router import router as seller_intent_router
 from property_watch import service as property_watch_service
 from property_watch.router import router as property_watch_router
 from next_best_action.router import router as next_best_action_router
+from platform_admin.dependencies import require_platform_admin
+from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------
@@ -108,6 +110,32 @@ app.include_router(followup_router, dependencies=[Depends(require_authenticated_
 app.include_router(seller_intent_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(property_watch_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(next_best_action_router, dependencies=[Depends(require_authenticated_operator)])
+
+# P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
+#
+# Tutti i mount qui sopra servono UN'AGENZIA: ammettono un operatore e le loro
+# route ricavano lo scope dalla sua membership. Questo mount serve la RETE, e
+# per questo non riusa nessuna delle loro dipendenze.
+#
+# `require_platform_admin` non e' `require_authenticated_operator` con una
+# condizione in piu'. E' una dipendenza sua, in un package suo, che:
+#
+#   * ammette solo `is_platform_admin` (401 senza sessione, 403 per un
+#     operatore autenticato qualunque);
+#   * scrive in `platform_audit_log` sia l'ammissione sia il rifiuto;
+#   * ferma la richiesta con 503 se l'ammissione non si riesce a registrare.
+#
+# E non porta con se' alcun accesso ai dati di un'agenzia: la decisione D1 ha
+# tolto da `core/scope.py` l'unico ramo cross-agency che esisteva, quindi un
+# platform admin senza membership non legge piu' nulla dalla superficie tenant.
+# Un eventuale accesso della piattaforma ai dati di UNA agenzia scelta sara'
+# una superficie progettata ed esplicita, non un effetto collaterale di questo
+# mount.
+#
+# Nessun CRUD, nessun territorio, nessun routing: P27-1 consegna la fondazione
+# e un solo endpoint, `/api/platform/me`, che esiste per dimostrare che la
+# porta e' aperta a chi deve e chiusa a tutti gli altri.
+app.include_router(platform_router, dependencies=[Depends(require_platform_admin)])
 
 
 def agency_of(ctx: OperatorContext) -> int:

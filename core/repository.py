@@ -233,12 +233,26 @@ def _set_assignment(
     """Set or clear a record's assigned agent. The shared half of Task 12.
 
     The governing agency is derived from the *record*, never from `ctx` and
-    never from the target operator. That single rule serves every role: for an
-    agency owner or admin the record was fetched under their own scope, so the
-    record's agency is necessarily theirs; for a platform admin holding no
-    membership it is the record's agency that governs, which is the only
-    coherent answer. `ctx.require_agency()` is deliberately not called on this
-    path, so an unbound platform admin is never forced to infer a default.
+    never from the target operator. The record was fetched under the caller's
+    own scope, so the record's agency is necessarily the caller's - which is
+    what makes deriving it from the record safe rather than merely convenient.
+
+    P27-1, decision D1, CLOSED THE ONE CASE WHERE THAT WAS NOT TRUE.
+
+    Until P27-1 this paragraph ended differently: `ctx.require_agency()` was
+    deliberately not called here, so that a platform admin holding no
+    membership was never forced to infer a default agency. That was coherent
+    only because `scoped_source` answered such a context with `WHERE TRUE`: the
+    record was fetched from EVERY agency, and the record's agency then governed
+    the write.
+
+    D1 removed that widening branch, and this exception falls with it. An
+    unbound platform admin is now refused by `scoped_source` on the first
+    statement, before any record is read - the assignment path is no longer
+    special, and nothing here had to change to make it so.
+
+    A platform admin who holds a membership assigns inside that agency exactly
+    as before (decision D4). See tests/test_p27_1_d1_tenant_isolation.py.
 
     Order: resolve the record in scope (404), validate the target against the
     record's agency (400), then update by id *and* scope predicate. The final

@@ -4333,6 +4333,23 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("next_best_actions", "contact_id", "contacts", "SET NULL"),
     ("next_best_actions", "stima_id", "stime", "SET NULL"),
     ("owner_accounts", "contact_id", "contacts", "RESTRICT"),
+    # P27-1: `platform_audit_log` NON COMPARE IN QUESTO ELENCO, ED E' UNA
+    # DECISIONE, NON UNA DIMENTICANZA.
+    #
+    # La migration 057 crea un registro di piattaforma append-only (decisione
+    # D3: un trigger rifiuta UPDATE, DELETE e TRUNCATE) che nomina un operatore
+    # e un'agenzia. Una prima stesura lo legava con due FK, e nessuna azione
+    # referenziale funzionava:
+    #
+    #   SET NULL e' una UPDATE su una tabella che rifiuta UPDATE, quindi la
+    #   cancellazione del genitore falliva citando il trigger;
+    #   RESTRICT toglieva la contraddizione ma dava al registro un VETO sulla
+    #   cancellazione di ogni operatore e ogni agenzia che avesse mai nominato -
+    #   e questo cleanup cancella proprio quelli di prova.
+    #
+    # La 057 non ha quindi alcuna FK: i due id sono istantanee storiche. Il
+    # cleanup del cert non incontra questo registro in nessun modo, e non
+    # servono passi nuovi, esenzioni o ordini di cancellazione particolari.
     ("owner_audit_log", "owner_account_id", "owner_accounts", "SET NULL"),
     ("owner_audit_log", "property_id", "properties", "SET NULL"),
     ("owner_shared_documents", "property_document_id", "property_documents", "RESTRICT"),
@@ -7252,6 +7269,22 @@ def test_103d_i_limiti_del_controllo_statico_sono_dichiarati_e_veri():
 
     # 2. Nessun trigger applicativo che scriva in una tabella di tenant.
     #    026 scrive `schema_baseline`, che e' la riga della baseline stessa.
+    #
+    #    P27-1: `platform_audit_log` si aggiunge alla stessa riga di esenzione,
+    #    per DUE ragioni indipendenti, entrambe sufficienti.
+    #
+    #    (a) Non e' un trigger a scriverla. Il rilevatore lavora sul FILE: se
+    #        una migration contiene "CREATE TRIGGER", ogni `INSERT INTO` del
+    #        file viene attribuito a un trigger. Nella 057 l'unico INSERT e' la
+    #        sonda di autoverifica - che per giunta si annulla - e i due corpi
+    #        di trigger non scrivono nulla: sollevano soltanto.
+    #    (b) Non e' una tabella di tenant. Non ha `agency_id`, non appartiene a
+    #        un'agenzia e nessun cleanup di agenzia la tocca: e' il registro
+    #        della PIATTAFORMA, append-only per costruzione (D3).
+    #
+    #    Il controllo che questo blocco esegue - nessuna scrittura invisibile
+    #    alla serie 100 dentro una tabella di tenant - resta identico.
+    scritture_non_di_tenant = {"schema_baseline", "platform_audit_log"}
     trigger_che_scrivono = []
     for percorso in sorted((ROOT / "migrations").glob("*.sql")):
         if percorso.name.endswith("_down.sql"):
@@ -7261,7 +7294,7 @@ def test_103d_i_limiti_del_controllo_statico_sono_dichiarati_e_veri():
             continue
         for trovato in re.finditer(r"INSERT\s+INTO\s+([a-z_]+)", testo, re.I):
             tabella = trovato.group(1).lower()
-            if tabella != "schema_baseline":
+            if tabella not in scritture_non_di_tenant:
                 trigger_che_scrivono.append((percorso.name, tabella))
     assert not trigger_che_scrivono, (
         "una migration con trigger scrive in una tabella di tenant: nessun "

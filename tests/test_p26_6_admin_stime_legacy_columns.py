@@ -508,8 +508,17 @@ def test_02c_la_numerazione_resta_contigua():
         and int(p.name[:3]) >= 26
     )
     assert numeri == list(range(26, 26 + len(numeri))), numeri
-    assert numeri[-1] == int(MIGRAZIONE_056[:3]), numeri[-3:]
     assert len(numeri) == len(set(numeri))
+    # P27-1: era `assert numeri[-1] == int(MIGRAZIONE_056[:3])`, cioe' "056 e'
+    # l'ultima". Era vero quando P26-6 l'ha scritta e ha smesso di esserlo con
+    # la 057, come smettera' di esserlo a ogni fase successiva: un perno sul
+    # numero piu' alto, in un file di P26-6, genera lavoro falso per sempre.
+    #
+    # Cio' che questo test possiede davvero - la sequenza e' contigua, non ha
+    # doppioni, e la migration di P26-6 e' ancora li' con il suo numero - resta
+    # asserito qui. "Qual e' l'ultima" lo asserisce la fase che la aggiunge:
+    # tests/test_p27_1_migration_057.py::test_m1_057_is_the_highest_version_and_follows_056.
+    assert int(MIGRAZIONE_056[:3]) in numeri, numeri[-3:]
 
 
 # ---------------------------------------------------------------------------

@@ -1565,17 +1565,29 @@ def test_c8_the_table_guard_error_is_not_a_client_facing_domain_error():
 
 
 def test_c8_every_accepted_table_produces_a_predicate_for_every_context():
-    """The exhaustive sweep: no (context, table) pair escapes the WHERE."""
-    contexts = [
-        _owner(), _admin(), _agent(),
-        _bound_platform_admin(), _unbound_platform_admin(), _system(),
-    ]
-    for ctx in contexts:
+    """The exhaustive sweep: no (context, table) pair escapes the WHERE.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO.
+    Il ramo cross-agency di `scoped_predicate` non esiste piu': un platform
+    admin senza membership e' rifiutato come qualunque altro contesto senza
+    agenzia. La regola nuova ha il suo file, tests/test_p27_1_d1_tenant_isolation.py;
+    qui resta la meta' che questo file possiede - che nessun contesto sfugga al
+    WHERE - con il rifiuto al posto del `TRUE`.
+    """
+    scoped = [_owner(), _admin(), _agent(), _bound_platform_admin(), _system()]
+    for ctx in scoped:
         for table in ALL_TABLES:
             source, params = scoped_source(ctx, table, "z")
             assert " WHERE " in source, (ctx, table, source)
             assert source != f"{table} z", (ctx, table)
             assert source.count("%s") == len(params), (ctx, table, source, params)
+
+    # The sixth context does not produce a source at all any more. Kept in the
+    # sweep rather than dropped from it: "it is refused" is a stronger
+    # statement than "it is absent", and an absent case proves nothing.
+    for table in ALL_TABLES:
+        with pytest.raises(PlatformAdminAgencyRequired):
+            scoped_source(_unbound_platform_admin(), table, "z")
 
 
 # ---------------------------------------------------------------------------
@@ -1648,10 +1660,18 @@ def test_c9_an_unbound_non_platform_admin_is_refused_rather_than_widened():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("table", ALL_TABLES)
-def test_c9_an_unbound_platform_admin_sees_every_agency(table):
-    source, params = scoped_source(_unbound_platform_admin(), table, "c")
-    assert source == f"{table} c WHERE TRUE"
-    assert params == []
+def test_c9_an_unbound_platform_admin_is_refused_on_every_table(table):
+    """Era: `assert source == f"{table} c WHERE TRUE"`.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO.
+    Il ramo cross-agency di `scoped_predicate` non esiste piu': un platform
+    admin senza membership e' rifiutato come qualunque altro contesto senza
+    agenzia. La regola nuova ha il suo file, tests/test_p27_1_d1_tenant_isolation.py;
+    qui resta la meta' che questo file possiede - che nessun contesto sfugga al
+    WHERE - con il rifiuto al posto del `TRUE`.
+    """
+    with pytest.raises(PlatformAdminAgencyRequired):
+        scoped_source(_unbound_platform_admin(), table, "c")
 
 
 @pytest.mark.parametrize("role", [None, "agency_owner", "agency_admin", "agent"])
@@ -1758,8 +1778,16 @@ def test_c10_no_branch_returns_a_bare_table_source():
 
 
 def test_c10_the_where_keyword_is_emitted_by_the_builder_itself():
-    """Callers append ' AND ...'; none of them may have to add the WHERE."""
-    for ctx in (_owner(), _agent(), _unbound_platform_admin(), _system()):
+    """Callers append ' AND ...'; none of them may have to add the WHERE.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO.
+    Il ramo cross-agency di `scoped_predicate` non esiste piu': un platform
+    admin senza membership e' rifiutato come qualunque altro contesto senza
+    agenzia. La regola nuova ha il suo file, tests/test_p27_1_d1_tenant_isolation.py;
+    qui resta la meta' che questo file possiede - che nessun contesto sfugga al
+    WHERE - con il rifiuto al posto del `TRUE`.
+    """
+    for ctx in (_owner(), _agent(), _bound_platform_admin(), _system()):
         for table in ALL_TABLES:
             source, _ = scoped_source(ctx, table, "c")
             head, _, tail = source.partition(" WHERE ")
@@ -1789,24 +1817,46 @@ def test_c10_every_predicate_return_path_is_non_empty():
         assert normalised.strip(), f"empty predicate branch: {expression}"
 
 
-def test_c10_there_is_exactly_one_where_true_branch():
+def test_c10_there_is_no_widening_branch_at_all():
+    """Era: `assert len(widening) == 1`.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO.
+    Il ramo cross-agency di `scoped_predicate` non esiste piu': un platform
+    admin senza membership e' rifiutato come qualunque altro contesto senza
+    agenzia. La regola nuova ha il suo file, tests/test_p27_1_d1_tenant_isolation.py;
+    qui resta la meta' che questo file possiede - che nessun contesto sfugga al
+    WHERE - con il rifiuto al posto del `TRUE`.
+
+    Zero, non uno ristretto: un ramo che esiste e' un ramo che una fase
+    successiva puo' riaprire allargandone la guardia.
+    """
     expressions = _returned_sql_expressions(_scope_function("scoped_predicate"))
     widening = [e for e in expressions if "TRUE" in e.upper()]
-    assert len(widening) == 1, f"expected one widening branch, found {widening}"
+    assert widening == [], f"a widening branch is back: {widening}"
 
 
-def test_c10_the_where_true_branch_is_guarded_by_both_conditions():
-    """The guard must be a conjunction of the flag and the missing agency."""
+def test_c10_the_builder_does_not_branch_on_the_platform_flag_at_all():
+    """Era: il test che il ramo `WHERE TRUE` fosse guardato da due condizioni.
+
+    P27-1 D1: RI-PUNTATO, NON RILASSATO.
+    Il ramo cross-agency di `scoped_predicate` non esiste piu': un platform
+    admin senza membership e' rifiutato come qualunque altro contesto senza
+    agenzia. La regola nuova ha il suo file, tests/test_p27_1_d1_tenant_isolation.py;
+    qui resta la meta' che questo file possiede - che nessun contesto sfugga al
+    WHERE - con il rifiuto al posto del `TRUE`.
+
+    Non c'e' piu' una guardia da verificare, quindi la verifica diventa che
+    non ci sia nulla da guardare: nessun `if` di questa funzione legge
+    `is_platform_admin`.
+    """
     fn = _scope_function("scoped_predicate")
-    test_node = _guard_of_return_containing(fn, "TRUE")
-    assert test_node is not None, "the WHERE TRUE return is not inside an if"
-    assert isinstance(test_node, ast.BoolOp) and isinstance(test_node.op, ast.And), (
-        f"the widening guard must be a conjunction; found {ast.unparse(test_node)}"
+    assert _guard_of_return_containing(fn, "TRUE") is None, (
+        "esiste ancora un ritorno con TRUE dentro un if"
     )
-    guard = ast.unparse(test_node)
-    assert "is_platform_admin" in guard, guard
-    assert "agency_id is None" in guard, guard
-    assert len(test_node.values) == 2, guard
+    for node in ast.walk(fn):
+        if isinstance(node, ast.If):
+            guard = ast.unparse(node.test)
+            assert "is_platform_admin" not in guard, guard
 
 
 def test_c10_the_table_guard_is_the_first_statement():
@@ -1830,7 +1880,9 @@ def test_c10_the_builder_interpolates_no_caller_value_into_sql():
 
 def test_c10_scoped_source_returns_a_list_of_params_not_a_tuple():
     """Callers concatenate their own filters onto it (spec 9.2)."""
-    for ctx in (_owner(), _agent(), _unbound_platform_admin(), _system()):
+    # P27-1 D1: `_unbound_platform_admin()` non produce piu' un source, quindi
+    # esce dalla lista e resta in tests/test_p27_1_d1_tenant_isolation.py.
+    for ctx in (_owner(), _agent(), _bound_platform_admin(), _system()):
         _, params = scoped_source(ctx, "contacts", "c")
         assert isinstance(params, list), type(params)
 

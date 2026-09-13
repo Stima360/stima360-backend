@@ -804,7 +804,15 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
                 dependencies = ast.unparse(keyword.value)
         if not any(
             guard in dependencies
-            for guard in ("require_admin", "require_operator", "require_authenticated_operator")
+            # P27-1 ha aggiunto `require_platform_admin`. Non e' un
+            # allentamento: questo rilevatore risponde alla domanda "questo
+            # mount e' protetto", e quella dipendenza e' una protezione piu'
+            # STRETTA delle tre che c'erano - richiede una sessione viva E il
+            # flag di piattaforma, mentre `require_authenticated_operator`
+            # ammette qualunque operatore autenticato. Senza questa riga il
+            # mount piu' protetto dell'applicazione risulterebbe non protetto.
+            for guard in ("require_admin", "require_operator",
+                          "require_authenticated_operator", "require_platform_admin")
         ):
             unguarded.add(symbol)
 
