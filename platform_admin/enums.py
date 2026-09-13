@@ -303,3 +303,178 @@ CONFIGURATION_EMPTY_PATCH_MESSAGE = (
 CONFIGURATION_CORRUPTED_MESSAGE = (
     "Configurazione dell'agenzia non leggibile."
 )
+
+
+# ---------------------------------------------------------------------------
+# P27-5 - TERRITORI
+#
+# L'audit geografico del repository ha trovato TESTO LIBERO e nessuna chiave
+# canonica: `properties.city/province/postal_code/microzone` sono campi
+# digitati a mano; `stime.comune` e' scritto dal funnel pubblico attraverso
+# `main.normalizza_comune`, che e' una allowlist HARDCODED di tre nomi e
+# restituisce una stringa di DISPLAY in Title Case; `zone_valori` indicizza
+# prezzi su quelle stesse stringhe; `buy_location_criteria` (migration 004) e'
+# la lista dei desideri di un acquirente, confrontata da `match.engine._norm`
+# con strip+lower. Nessun codice ISTAT, da nessuna parte, e nessuna mappa
+# comune -> provincia.
+#
+# P27-5 introduce quindi una chiave canonica propria - la terza opzione
+# nell'ordine di preferenza, e l'unica disponibile.
+# ---------------------------------------------------------------------------
+
+TARGET_TYPE_TERRITORY = "territory"
+
+# L'assegnazione e' un oggetto suo, non un attributo del territorio: e' la riga
+# che nasce quando un'agenzia comincia a presidiare un posto, e ne nasce una
+# nuova ogni volta che quel presidio ricomincia. Registrarla come `territory`
+# renderebbe indistinguibili nel registro "ho dichiarato un posto" e "ho dato
+# un posto a qualcuno".
+TARGET_TYPE_TERRITORY_ASSIGNMENT = "territory_assignment"
+
+ACTION_TERRITORY_CREATE = "platform.territory.create"
+ACTION_TERRITORY_ASSIGNMENT_CREATE = "platform.territory.assignment.create"
+ACTION_TERRITORY_ASSIGNMENT_UPDATE = "platform.territory.assignment.update"
+ACTION_TERRITORY_TRANSFER = "platform.territory.transfer"
+
+# I livelli territoriali, IDENTICI al CHECK `network_territories_kind_chk`
+# della migration 058. Stessa disciplina di sorveglianza degli stati di P27-2:
+# tests/test_p27_5_territories.py confronta questa tupla con quel CHECK.
+#
+# TRE, E I DUE ASSENTI SONO UNA DECISIONE.
+#
+# Ciascuno dei tre ha un corrispettivo reale nei dati che il prodotto gia'
+# tiene: `properties.province`, `stime.comune`/`properties.city`,
+# `properties.postal_code`.
+#
+# `region` non c'e': esiste solo dentro `buy_location_criteria`, che sono
+# criteri di ricerca, e nessuna tabella registra la regione di un immobile o
+# di una stima.
+#
+# `microzone` non c'e': `zone_valori` indicizza prezzi su (comune, microzona)
+# come stringhe libere senza nessuna autorita' dietro, e
+# `properties.microzone` lo digita un operatore. Un livello territoriale ha
+# bisogno di un elenco su cui qualcuno possa essere d'accordo; una tabella di
+# prezzi non lo e'.
+TERRITORY_KIND_PROVINCE = "province"
+TERRITORY_KIND_MUNICIPALITY = "municipality"
+TERRITORY_KIND_POSTAL_CODE = "postal_code"
+TERRITORY_KINDS = (
+    TERRITORY_KIND_PROVINCE,
+    TERRITORY_KIND_MUNICIPALITY,
+    TERRITORY_KIND_POSTAL_CODE,
+)
+
+# LA FORMA DELLA CHIAVE CANONICA, IDENTICA al CHECK
+# `network_territories_canonical_key_chk` della 058.
+#
+# Minuscole, cifre e trattini singoli. Non e' estetica: e' cio' che rende
+# significativo il vincolo di unicita'. Senza una forma imposta,
+# 'Alba Adriatica' e 'alba-adriatica' sarebbero due stringhe genuinamente
+# diverse, e UNIQUE non avrebbe niente da ridire su due righe che descrivono lo
+# stesso posto.
+#
+# Validarla qui non e' ridondante rispetto al CHECK: il database risponderebbe
+# con un errore di vincolo - cioe' un 500 con dentro il nome del vincolo -
+# mentre la richiesta e' semplicemente malformata e merita un 422 che dice
+# quale campo.
+TERRITORY_CANONICAL_KEY_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+
+# Le lunghezze delle colonne in 058.
+TERRITORY_CANONICAL_KEY_MAX = 120
+TERRITORY_LABEL_MAX = 200
+
+# Gli stati di un'assegnazione, IDENTICI a
+# `agency_territory_assignments_status_chk`.
+#
+#   active    l'agenzia presidia il territorio adesso
+#   suspended conservata, non operativa - l'affiliato e' in pausa, non
+#             sostituito. Il territorio resta libero per il vincolo, quindi
+#             sospendere NON blocca un'altra assegnazione
+#   revoked   finita. Storica, e mai cancellata.
+ASSIGNMENT_ACTIVE = "active"
+ASSIGNMENT_SUSPENDED = "suspended"
+ASSIGNMENT_REVOKED = "revoked"
+ASSIGNMENT_STATUSES = (
+    ASSIGNMENT_ACTIVE,
+    ASSIGNMENT_SUSPENDED,
+    ASSIGNMENT_REVOKED,
+)
+
+# La paginazione, con gli stessi numeri che `sale/router.py` usa gia' nel
+# progetto: 50 di default, 200 al massimo. I territori di una rete nazionale
+# sono migliaia, e una lista senza limite e' il difetto R6 gia' visto una
+# volta. Il limite massimo e' imposto dallo schema, non dal chiamante.
+TERRITORY_PAGE_DEFAULT = 50
+TERRITORY_PAGE_MAX = 200
+
+TERRITORY_NOT_FOUND_MESSAGE = "Territorio non trovato."
+ASSIGNMENT_NOT_FOUND_MESSAGE = (
+    "Assegnazione non trovata per questa agenzia."
+)
+
+# 409. Ogni messaggio nomina il conflitto e mai il vincolo di database che lo
+# ha prodotto: il nome di un constraint racconta a un chiamante com'e' fatto
+# lo schema.
+TERRITORY_EXISTS_MESSAGE = (
+    "Esiste gia' un territorio con questa chiave canonica per questo livello."
+)
+
+# I DUE CONFLITTI DI ASSEGNAZIONE SONO DISTINTI, E LA DIFFERENZA CONTA.
+#
+# "lo hai gia' tu" e "ce l'ha un altro" portano chi legge a due azioni diverse:
+# nel primo caso non c'e' niente da fare, nel secondo c'e' un trasferimento da
+# valutare. Un messaggio solo per entrambi costringerebbe a interrogare
+# l'elenco per capire quale dei due sia.
+TERRITORY_ALREADY_ASSIGNED_HERE_MESSAGE = (
+    "Il territorio e' gia' assegnato attivamente a questa agenzia."
+)
+TERRITORY_PROTECTED_MESSAGE = (
+    "Il territorio e' gia' assegnato attivamente a un'altra agenzia: "
+    "usare il trasferimento."
+)
+
+# 409 sulla corsa. Il vincolo ha rifiutato la scrittura fra il controllo e la
+# INSERT: il territorio e' stato preso da qualcun altro in quella finestra, e
+# chi legge non sa - ne' deve sapere - da chi.
+TERRITORY_ASSIGNMENT_RACE_MESSAGE = (
+    "Il territorio ha gia' un'assegnazione attiva."
+)
+
+# 409. Trasferire un territorio che nessuno presidia non e' un trasferimento:
+# e' un'assegnazione, e ha il suo endpoint. Farla comunque qui renderebbe le
+# due operazioni sovrapposte, e il registro non direbbe piu' quale delle due
+# e' avvenuta.
+TRANSFER_NOTHING_TO_TRANSFER_MESSAGE = (
+    "Il territorio non ha un'assegnazione attiva: usare l'assegnazione."
+)
+
+# 409. Trasferire a chi ce l'ha gia' non e' un trasferimento. Rifiutato invece
+# che trattato come no-op: un 200 che non ha scritto nulla afferma di aver
+# fatto qualcosa.
+TRANSFER_SAME_AGENCY_MESSAGE = (
+    "Il territorio e' gia' assegnato attivamente a questa agenzia."
+)
+
+ASSIGNMENT_EMPTY_PATCH_MESSAGE = "Indicare almeno un campo da aggiornare."
+
+# 409. `revoked` E' TERMINALE.
+#
+# Una riga revocata descrive un periodo di presidio FINITO. Riportarla `active`
+# o `suspended` riscriverebbe quel periodo: la riga direbbe di essere in corso,
+# e quando quel presidio sia cominciato e finito resterebbe ricostruibile solo
+# da `platform_audit_log` - cioe' da un registro che e' fatto per raccontare
+# gli ATTI, non per essere l'unica fonte dello STATO.
+#
+# La strada per rimettere un'agenzia su un territorio che le e' stato revocato
+# esiste ed e' un'altra: una NUOVA assegnazione. La vecchia resta revocata, la
+# nuova nasce attiva, e i due periodi restano due righe distinte e leggibili
+# senza aprire il registro. Vale anche quando l'agenzia e' la stessa di prima:
+# `uq_agency_territory_single_active` e' su `territory_id` soltanto, quindi due
+# righe della stessa coppia sono ammesse ed e' esattamente cio' che serve.
+#
+# `suspended` resta invece reversibile, ed e' la differenza fra i due stati:
+# sospendere significa "in pausa, torna", revocare significa "finito".
+ASSIGNMENT_REVOKED_IS_FINAL_MESSAGE = (
+    "L'assegnazione e' revocata: uno stato terminale. Per rimettere "
+    "l'agenzia su questo territorio, creare una nuova assegnazione."
+)

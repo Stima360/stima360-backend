@@ -1771,10 +1771,21 @@ def test_h2_the_two_partial_unique_indexes_are_untouched():
     assert "uq_agency_memberships_single_active" in sql
     assert "uq_agency_memberships_single_owner" in sql
 
+    # P27-5: SUL SQL ESEGUIBILE, NON SUL TESTO DEL FILE.
+    #
+    # La 058 di P27-5 NOMINA `uq_agency_memberships_single_active` in un
+    # commento, per dire che il suo indice parziale segue quel precedente. Un
+    # confronto sul testo grezzo lo trovava e falliva - provando che un file
+    # PARLA di quell'indice, non che lo tocca. E' lo stesso errore che P27-1,
+    # P27-2 e P27-4 hanno gia' fatto ciascuna una volta, in senso inverso.
+    from scripts import p26_migrate
+
     for path in sorted((ROOT / "migrations").glob("*.sql")):
         if path.name.startswith("027_"):
             continue
-        text = path.read_text(encoding="utf-8").lower()
+        text = p26_migrate.strip_sql_comments(
+            path.read_text(encoding="utf-8")
+        ).lower()
         for index in ("uq_agency_memberships_single_active",
                       "uq_agency_memberships_single_owner"):
             assert index not in text, (path.name, index)
@@ -1783,11 +1794,22 @@ def test_h2_the_two_partial_unique_indexes_are_untouched():
 def test_h3_p27_3_added_no_migration():
     """Lo schema 027 basta: le due tabelle, i loro CHECK e i quattro vincoli
     unici esistono gia'. Nessuna colonna "per comodita'"."""
-    versions = sorted(
-        int(path.name[:3]) for path in (ROOT / "migrations").glob("*.sql")
-        if not path.name.endswith("_down.sql") and path.name[:3].isdigit()
-    )
-    assert versions[-1] == 57, versions[-3:]
+    # P27-5: IL PERNO SI E' SPOSTATO DAL SOFFITTO AL NOME.
+    #
+    # Questo test asseriva che la migration piu' alta fosse la 057. Era vero
+    # finche' nessuna fase successiva ne aggiungeva una, e ha smesso di esserlo
+    # con la 058 di P27-5, che una migration ce l'ha e deve averla. Un perno sul
+    # SOFFITTO dentro il file di una fase vecchia fallisce a ogni fase che
+    # aggiunge legittimamente uno schema: rumore, non sorveglianza.
+    #
+    # Cio' che P27-3 deve davvero garantire e' che non ne abbia aggiunta una
+    # SUA, ed e' quello che si asserisce adesso - una proprieta' che resta vera
+    # per sempre, qualunque cosa facciano le fasi dopo.
+    nomi = [
+        path.name for path in (ROOT / "migrations").glob("*.sql")
+        if "p27_3" in path.name
+    ]
+    assert nomi == [], nomi
 
 
 def test_h4_operator_auth_was_not_modified_by_p27_3():

@@ -1302,11 +1302,22 @@ def test_d1_the_column_lengths_match_migration_027():
 def test_d2_p27_2_added_no_migration():
     """`agencies` esiste dalla 027 con i suoi CHECK. P27-2 non ha nessuna
     ragione tecnica di aggiungerne una, e non averla aggiunta e' verificabile."""
-    versions = sorted(
-        int(path.name[:3]) for path in (ROOT / "migrations").glob("*.sql")
-        if not path.name.endswith("_down.sql") and path.name[:3].isdigit()
-    )
-    assert versions[-1] == 57, versions[-3:]
+    # P27-5: IL PERNO SI E' SPOSTATO DAL SOFFITTO AL NOME.
+    #
+    # Questo test asseriva che la migration piu' alta fosse la 057. Era vero
+    # finche' nessuna fase successiva ne aggiungeva una, e ha smesso di esserlo
+    # con la 058 di P27-5, che una migration ce l'ha e deve averla. Un perno sul
+    # SOFFITTO dentro il file di una fase vecchia fallisce a ogni fase che
+    # aggiunge legittimamente uno schema: rumore, non sorveglianza.
+    #
+    # Cio' che P27-2 deve davvero garantire e' che non ne abbia aggiunta una
+    # SUA, ed e' quello che si asserisce adesso - una proprieta' che resta vera
+    # per sempre, qualunque cosa facciano le fasi dopo.
+    nomi = [
+        path.name for path in (ROOT / "migrations").glob("*.sql")
+        if "p27_2" in path.name
+    ]
+    assert nomi == [], nomi
 
 
 def test_d3_the_audit_repository_is_still_only_the_audit_writer():

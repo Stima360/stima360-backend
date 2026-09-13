@@ -16,6 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .enums import (
     AGENCY_EMPTY_PATCH_MESSAGE,
     AGENCY_LOCALES,
+    ASSIGNMENT_EMPTY_PATCH_MESSAGE,
+    ASSIGNMENT_STATUSES,
+    TERRITORY_CANONICAL_KEY_MAX,
+    TERRITORY_CANONICAL_KEY_PATTERN,
+    TERRITORY_KINDS,
+    TERRITORY_LABEL_MAX,
     CONFIGURATION_EMPTY_PATCH_MESSAGE,
     EMPTY_PATCH_MESSAGE,
     MEMBERSHIP_ROLES,
@@ -683,3 +689,257 @@ class OwnerTransferRequest(PlatformModel):
     """
 
     operator_user_id: int
+
+
+# ---------------------------------------------------------------------------
+# P27-5 - TERRITORI
+# ---------------------------------------------------------------------------
+
+
+def _validate_canonical_key(value: str) -> str:
+    """La chiave canonica, nella sua forma e non in una qualunque.
+
+    Restituita GIA' ripulita ai lati, ma non "aggiustata": non si abbassano le
+    maiuscole e non si sostituiscono gli spazi con trattini. Correggere in
+    silenzio 'Alba Adriatica' in 'alba-adriatica' accetterebbe una chiave che
+    il chiamante non ha scritto - e la prossima volta che la scrive con un
+    doppio spazio, o con un apostrofo, la normalizzazione darebbe un'altra
+    chiave ancora e nascerebbe un secondo territorio. Una forma imposta e un
+    422 sono un'informazione; una normalizzazione implicita e' un secondo
+    algoritmo di identita' che nessuno ha deciso.
+
+    Il CHECK della 058 impone la stessa forma. Non e' ridondante: il database
+    risponderebbe con un errore di vincolo, cioe' un 500 che nomina l'oggetto
+    interno, mentre la richiesta e' semplicemente malformata e merita un 422
+    che dice quale campo.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("canonical_key non puo' essere vuoto")
+    if len(value) > TERRITORY_CANONICAL_KEY_MAX:
+        raise ValueError(
+            f"canonical_key supera {TERRITORY_CANONICAL_KEY_MAX} caratteri"
+        )
+    if not re.match(TERRITORY_CANONICAL_KEY_PATTERN, value):
+        raise ValueError(
+            "canonical_key ammette solo minuscole, cifre e trattini singoli "
+            "(esempio: alba-adriatica)"
+        )
+    return value
+
+
+def _validate_label(value: str) -> str:
+    """L'etichetta: testo libero non vuoto, entro la lunghezza di colonna.
+
+    Restituita ripulita, come `_validate_name` per le agenzie: il CHECK del
+    database accetterebbe gli spazi ai lati, e due territori potrebbero
+    apparire identici sullo schermo ed essere diversi nella riga.
+
+    Nessun altro vincolo, e nessun rapporto con la chiave. Un'etichetta si
+    corregge; un'identita' no.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("label non puo' essere vuota")
+    if len(value) > TERRITORY_LABEL_MAX:
+        raise ValueError(f"label supera {TERRITORY_LABEL_MAX} caratteri")
+    return value
+
+
+class TerritoryResponse(BaseModel):
+    """Un territorio, proiettato campo per campo.
+
+    Sei campi, gli stessi che `territories_repository.TERRITORY_COLUMNS` legge.
+    Non e' una eco della riga.
+    """
+
+    id: int
+    kind: str
+    canonical_key: str
+    label: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssignmentResponse(BaseModel):
+    """Un'assegnazione, proiettata campo per campo.
+
+    Non c'e' `ended_at` perche' non c'e' la colonna: `updated_at` porta
+    l'istante in cui l'assegnazione ha cambiato stato, e una seconda colonna
+    con lo stesso istante sarebbe una seconda verita' sullo stesso fatto.
+    """
+
+    id: int
+    territory_id: int
+    agency_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class TerritoryDetailResponse(TerritoryResponse):
+    """Un territorio e chi lo presidia ADESSO, o `null`.
+
+    Le due meta' della stessa domanda. `active_assignment` e' `null` per un
+    territorio libero, ed e' una distinzione che serve leggere: i territori
+    liberi sono quelli da dare a un affiliato nuovo.
+    """
+
+    active_assignment: AssignmentResponse | None = None
+
+
+class TerritoryListItem(TerritoryResponse):
+    """Una riga dell'elenco: il territorio e, in forma piatta, chi lo presidia.
+
+    Piatta e non annidata come `TerritoryDetailResponse`, perche' e' cio' che
+    la query di elenco produce con una JOIN sola: annidarla richiederebbe o una
+    seconda query per territorio, o una ricostruzione che non aggiunge nulla a
+    una lista.
+
+    Entrambi i campi sono `null` insieme - un territorio libero non ha ne'
+    agenzia ne' assegnazione - e insieme valorizzati altrimenti.
+    """
+
+    active_agency_id: int | None = None
+    active_assignment_id: int | None = None
+
+
+class AgencyAssignmentResponse(AssignmentResponse):
+    """Una riga dell'elenco per agenzia: l'assegnazione e il suo territorio.
+
+    Il territorio arriva in forma piatta e prefissata (`territory_*`) per la
+    stessa ragione di sopra: e' una JOIN sola, e chi guarda l'organico
+    territoriale di un affiliato vuole leggere il nome del posto, non il suo
+    id.
+    """
+
+    territory_kind: str
+    territory_canonical_key: str
+    territory_label: str
+
+
+class TransferResponse(BaseModel):
+    """Le due meta' del trasferimento, entrambe.
+
+    `revoked` non e' facoltativo e non e' mai `null`: un trasferimento senza
+    assegnazione da chiudere e' rifiutato con 409 prima di arrivare qui. Chi
+    riceve questa risposta puo' quindi leggere in un colpo solo chi ha perso il
+    territorio e chi lo ha preso, che e' l'unica domanda che si fa dopo un
+    trasferimento.
+    """
+
+    assignment: AssignmentResponse
+    revoked: AssignmentResponse
+
+
+class TerritoryCreateRequest(PlatformModel):
+    """Il corpo della POST che dichiara un territorio.
+
+    `canonical_key` E' UN CAMPO, NON UNA DERIVAZIONE DI `label`.
+
+    Ricavarla dall'etichetta sarebbe stato meno da scrivere e avrebbe fatto
+    dipendere l'identita' da una stringa di display: correggere
+    'Alba adriatica' in 'Alba Adriatica' avrebbe creato in silenzio un secondo
+    territorio, e l'assegnazione sul primo sarebbe rimasta li', invisibile.
+
+    Sono quindi due campi obbligatori e distinti, e il vincolo di unicita'
+    della 058 e' su `(kind, canonical_key)` e non nomina `label` da nessuna
+    parte: due territori possono avere la stessa etichetta e chiavi diverse,
+    ed e' proprio la prova che l'etichetta non e' l'identita'.
+    """
+
+    kind: str
+    canonical_key: str
+    label: str
+
+    @field_validator("kind")
+    @classmethod
+    def _check_kind(cls, value):
+        if value not in TERRITORY_KINDS:
+            raise ValueError(f"kind deve essere uno fra {list(TERRITORY_KINDS)}")
+        return value
+
+    @field_validator("canonical_key")
+    @classmethod
+    def _check_canonical_key(cls, value):
+        return _validate_canonical_key(value)
+
+    @field_validator("label")
+    @classmethod
+    def _check_label(cls, value):
+        return _validate_label(value)
+
+    def created_fields(self) -> list[str]:
+        """I nomi dei campi indicati dal chiamante. Mai i valori.
+
+        Qui sono sempre tutti e tre - nessuno ha un default - e l'elenco e'
+        quindi costante. Resta nella stessa forma delle altre fasi perche' la
+        forma della riga di audit non deve dipendere da quali campi capitino
+        di essere obbligatori in questo momento.
+        """
+        return sorted(self.model_fields_set)
+
+
+class TerritoryAssignRequest(PlatformModel):
+    """Il corpo della POST che assegna un territorio a un'agenzia.
+
+    Un campo solo: QUALE territorio. L'agenzia e' nel percorso, e lo stato
+    iniziale non e' scegliibile - un'assegnazione nasce attiva, perche' creare
+    direttamente una riga `revoked` significherebbe scrivere una storia che non
+    e' successa.
+    """
+
+    territory_id: int
+
+    def created_fields(self) -> list[str]:
+        return sorted(self.model_fields_set)
+
+
+class AssignmentUpdateRequest(PlatformModel):
+    """Il corpo della PATCH su un'assegnazione. Un campo, e uno solo.
+
+    `agency_id` e `territory_id` NON SONO CAMPI DI QUESTO SCHEMA, e
+    `extra="forbid"` li respinge con 422 prima che il gestore parta. Cambiare
+    `agency_id` da qui sarebbe un trasferimento eseguito da una route che dice
+    di aggiornare uno stato, con una riga di registro che direbbe
+    `assignment.update`: il momento in cui un territorio ha cambiato mano
+    sarebbe irrecuperabile.
+    """
+
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value):
+        if value not in ASSIGNMENT_STATUSES:
+            raise ValueError(
+                f"status deve essere uno fra {list(ASSIGNMENT_STATUSES)}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _reject_empty(self):
+        if not self.model_fields_set:
+            raise ValueError(ASSIGNMENT_EMPTY_PATCH_MESSAGE)
+        return self
+
+    def changed_fields(self) -> dict[str, Any]:
+        """I soli campi indicati, con i loro valori.
+
+        `exclude_unset` in forma esplicita, come le altre PATCH del package: il
+        service non completa i mancanti con i valori attuali, perche'
+        riscrivere una colonna con cio' che gia' contiene la farebbe comparire
+        fra i `changed_fields` di una PATCH che non la nominava.
+        """
+        return {name: getattr(self, name) for name in sorted(self.model_fields_set)}
+
+
+class TerritoryTransferRequest(PlatformModel):
+    """Il corpo del trasferimento: a CHI va il territorio.
+
+    Chi lo perde non e' un campo. E' l'agenzia che lo presidia adesso, il
+    server la conosce, e chiederla al chiamante creerebbe un modo di sbagliarla
+    - e un dubbio su cosa fare quando i due non coincidono.
+    """
+
+    agency_id: int

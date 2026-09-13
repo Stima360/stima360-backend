@@ -23,17 +23,24 @@ per cui la dichiarazione sul mount non e' ridondante.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
 
-from . import agencies_service, configuration_service, operators_service
+from . import (
+    agencies_service,
+    configuration_service,
+    operators_service,
+    territories_service,
+)
 from .dependencies import require_platform_admin
 from .enums import (
     AUDIT_UNAVAILABLE_MESSAGE,
     CONFIGURATION_CORRUPTED_MESSAGE,
     ROUTER_PREFIX,
+    TERRITORY_PAGE_DEFAULT,
+    TERRITORY_PAGE_MAX,
 )
 from .exceptions import (
     AgencyConfigurationCorrupted,
@@ -44,6 +51,8 @@ from .exceptions import (
     PasswordRequired,
     PlatformAuditUnavailable,
     PlatformConflict,
+    TerritoryAssignmentNotFound,
+    TerritoryNotFound,
 )
 from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
@@ -62,6 +71,15 @@ from .schemas import (
     OwnerTransferRequest,
     OwnerTransferResponse,
     PlatformMeResponse,
+    AgencyAssignmentResponse,
+    AssignmentResponse,
+    AssignmentUpdateRequest,
+    TerritoryAssignRequest,
+    TerritoryCreateRequest,
+    TerritoryDetailResponse,
+    TerritoryListItem,
+    TerritoryTransferRequest,
+    TransferResponse,
 )
 
 router = APIRouter(prefix=ROUTER_PREFIX, tags=["platform"])
@@ -459,3 +477,237 @@ def update_agency_configuration(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
         ) from exc
     return AgencyConfigurationResponse(**configuration)
+
+
+# ---------------------------------------------------------------------------
+# P27-5 - TERRITORI
+#
+# Sette route, e nessuna DELETE. Un territorio revocato e' un fatto storico, e
+# `suspended`/`revoked` sono il modo in cui la rete smette di usarlo senza
+# togliere la differenza fra "non lo ha mai avuto" e "non lo ha piu'".
+#
+# TRE OGGETTI SEPARATI, E LA SEPARAZIONE E' IL PUNTO.
+#
+#   identita'       POST /territories                  cosa E' un posto
+#   assegnazione    POST /agencies/{id}/territories     chi lo presidia
+#   trasferimento   POST /territories/{id}/transfer     chi smette e chi inizia
+#
+# Fonderne due significherebbe una riga di registro per due atti diversi, e
+# nessun modo di sapere fra un anno quale dei due e' avvenuto.
+#
+# LE LISTE SONO PAGINATE, E IL MASSIMO NON LO SCEGLIE IL CHIAMANTE.
+#
+# `le=TERRITORY_PAGE_MAX` sta nella dichiarazione della route: un `limit` fuori
+# scala e' 422 prima che il gestore parta, non una query che prova a
+# restituire la rete intera. Gli stessi numeri che `sale/router.py` usa gia'.
+#
+# P27-5 NON DECIDE A CHI VA UN LEAD. Nessuna di queste route legge una stima,
+# un contatto o un lead: quello e' P27-6.
+#
+# Il router traduce e non decide: le eccezioni di dominio arrivano dal service
+# gia' formate e qui diventano uno status.
+# ---------------------------------------------------------------------------
+
+@router.get("/territories", response_model=list[TerritoryListItem])
+def list_territories(
+    kind: str | None = Query(None),
+    agency_id: int | None = Query(None),
+    assignment_status: str | None = Query(None),
+    limit: int = Query(TERRITORY_PAGE_DEFAULT, ge=1, le=TERRITORY_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+) -> list[TerritoryListItem]:
+    """I territori della rete, con chi presidia ciascuno.
+
+    I tre filtri sono facoltativi e si combinano. `kind` e `assignment_status`
+    non sono validati contro le rispettive tuple e non e' una svista: un valore
+    fuori elenco non trova nulla, che e' la risposta giusta a "dammi i
+    territori di tipo X" quando X non esiste. Rifiutarlo con 422 sarebbe
+    difendere una query che non puo' fare danno.
+
+    Nessuna riga di audit operativa: l'ammissione di P27-1 ha gia' registrato
+    chi e' entrato e su quale route.
+    """
+    return [
+        TerritoryListItem(**row)
+        for row in territories_service.list_territories(
+            kind=kind,
+            agency_id=agency_id,
+            assignment_status=assignment_status,
+            limit=limit,
+            offset=offset,
+        )
+    ]
+
+
+@router.get("/territories/{territory_id}", response_model=TerritoryDetailResponse)
+def get_territory(
+    territory_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> TerritoryDetailResponse:
+    try:
+        found = territories_service.get_territory(territory_id)
+    except TerritoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    active = found["active_assignment"]
+    return TerritoryDetailResponse(
+        **{key: found[key] for key in found if key != "active_assignment"},
+        active_assignment=AssignmentResponse(**active) if active else None,
+    )
+
+
+@router.post("/territories", response_model=TerritoryDetailResponse, status_code=201)
+def create_territory(
+    payload: TerritoryCreateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> TerritoryDetailResponse:
+    """Dichiara un territorio. NON lo assegna.
+
+    201, e `active_assignment` e' `null`: cio' che nasce e' l'identita' di un
+    posto, e nessuno lo presidia ancora.
+    """
+    try:
+        created = territories_service.create_territory(
+            context,
+            kind=payload.kind,
+            canonical_key=payload.canonical_key,
+            label=payload.label,
+            created_fields=payload.created_fields(),
+        )
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return TerritoryDetailResponse(
+        **{key: created[key] for key in created if key != "active_assignment"},
+        active_assignment=None,
+    )
+
+
+@router.get(
+    "/agencies/{agency_id}/territories",
+    response_model=list[AgencyAssignmentResponse],
+)
+def list_agency_territories(
+    agency_id: int,
+    status: str | None = Query(None),
+    limit: int = Query(TERRITORY_PAGE_DEFAULT, ge=1, le=TERRITORY_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+) -> list[AgencyAssignmentResponse]:
+    """La copertura territoriale di un'agenzia, in ogni stato salvo filtro.
+
+    Non solo le attive: un affiliato ha una storia territoriale, e mostrargli
+    solo il presente renderebbe invisibile cio' che gli e' stato revocato.
+    """
+    try:
+        rows = territories_service.list_agency_territories(
+            agency_id, status=status, limit=limit, offset=offset
+        )
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [AgencyAssignmentResponse(**row) for row in rows]
+
+
+@router.post(
+    "/agencies/{agency_id}/territories",
+    response_model=AssignmentResponse,
+    status_code=201,
+)
+def assign_territory(
+    agency_id: int,
+    payload: TerritoryAssignRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> AssignmentResponse:
+    """Assegna un territorio LIBERO a questa agenzia.
+
+    409 se lo presidia gia' qualcuno - questa agenzia o un'altra, con due
+    messaggi distinti. Nessun trasferimento implicito: togliere un territorio a
+    un affiliato non deve poter accadere come effetto collaterale di una
+    richiesta che nomina soltanto l'affiliato che lo riceve.
+    """
+    try:
+        assignment = territories_service.assign_territory(
+            context,
+            agency_id,
+            territory_id=payload.territory_id,
+            created_fields=payload.created_fields(),
+        )
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TerritoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return AssignmentResponse(**assignment)
+
+
+@router.patch(
+    "/agencies/{agency_id}/territories/{assignment_id}",
+    response_model=AssignmentResponse,
+)
+def update_assignment(
+    agency_id: int,
+    assignment_id: int,
+    payload: AssignmentUpdateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> AssignmentResponse:
+    """Lo stato dell'assegnazione: sospendere, revocare, riattivare.
+
+    Non l'agenzia e non il territorio: non sono campi di questo schema, e
+    `extra="forbid"` li respinge con 422. Il trasferimento ha il suo endpoint.
+    """
+    try:
+        assignment = territories_service.update_assignment(
+            context, agency_id, assignment_id, payload.changed_fields()
+        )
+    except (AgencyNotFound, TerritoryAssignmentNotFound) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return AssignmentResponse(**assignment)
+
+
+@router.post("/territories/{territory_id}/transfer", response_model=TransferResponse)
+def transfer_territory(
+    territory_id: int,
+    payload: TerritoryTransferRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> TransferResponse:
+    """Sposta il territorio all'agenzia indicata, revocando la precedente.
+
+    POST e non PUT: ripetere la richiesta NON e' innocuo e non e' idempotente.
+    La seconda volta il territorio e' gia' dell'agenzia indicata, e la risposta
+    e' 409 - non un 200 che non ha scritto nulla e afferma comunque che il
+    territorio ha cambiato mano.
+
+    Le due scritture sono nella stessa transazione e in quest'ordine: revoca,
+    poi crea. Non esiste uno stato committato con due assegnazioni attive, e se
+    una delle due o l'audit falliscono il territorio resta dov'era.
+    """
+    try:
+        result = territories_service.transfer_territory(
+            context, territory_id, payload.agency_id
+        )
+    except (AgencyNotFound, TerritoryNotFound) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return TransferResponse(
+        assignment=AssignmentResponse(**result["assignment"]),
+        revoked=AssignmentResponse(**result["revoked"]),
+    )

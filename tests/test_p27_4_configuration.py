@@ -690,11 +690,22 @@ def test_f8_the_real_application_exposes_the_two_configuration_routes():
 def test_g1_p27_4_added_no_migration():
     """`agencies.settings` esiste dalla 027. P27-4 le da' un contratto, non una
     colonna."""
-    versions = sorted(
-        int(path.name[:3]) for path in (ROOT / "migrations").glob("*.sql")
-        if not path.name.endswith("_down.sql") and path.name[:3].isdigit()
-    )
-    assert versions[-1] == 57, versions[-3:]
+    # P27-5: IL PERNO SI E' SPOSTATO DAL SOFFITTO AL NOME.
+    #
+    # Questo test asseriva che la migration piu' alta fosse la 057. Era vero
+    # finche' nessuna fase successiva ne aggiungeva una, e ha smesso di esserlo
+    # con la 058 di P27-5, che una migration ce l'ha e deve averla. Un perno sul
+    # SOFFITTO dentro il file di una fase vecchia fallisce a ogni fase che
+    # aggiunge legittimamente uno schema: rumore, non sorveglianza.
+    #
+    # Cio' che P27-4 deve davvero garantire e' che non ne abbia aggiunta una
+    # SUA, ed e' quello che si asserisce adesso - una proprieta' che resta vera
+    # per sempre, qualunque cosa facciano le fasi dopo.
+    nomi = [
+        path.name for path in (ROOT / "migrations").glob("*.sql")
+        if "p27_4" in path.name
+    ]
+    assert nomi == [], nomi
 
 
 def test_g2_there_is_only_one_route_to_the_settings_column():
@@ -802,12 +813,19 @@ def test_g6_the_service_reuses_the_existing_repository():
     assert not (ROOT / "platform_admin" / "configuration_repository.py").exists()
 
 
-def test_g7_the_real_application_exposes_exactly_the_platform_surface():
-    """L'elenco ESAUSTIVO, che appartiene sempre alla fase piu' recente.
+def test_g7_the_real_application_exposes_the_p27_4_routes():
+    """P27-5: L'ELENCO ESAUSTIVO SI E' SPOSTATO, NON E' STATO TOLTO.
 
-    Tenuto in un file solo e spostato a ogni fase: un perno sulla dimensione
-    totale dentro il file di una fase vecchia si romperebbe a ogni fase che la
-    allarga, e diventerebbe rumore invece che sorveglianza.
+    Questo test asseriva l'uguaglianza esatta. Era giusto quando P27-4 era la
+    fase piu' recente, e ha smesso di esserlo con le sette route di P27-5 -
+    come smettera' di esserlo a ogni fase successiva. Un perno sulla DIMENSIONE
+    totale dentro il file di una fase vecchia genera un fallimento a ogni fase
+    che la allarga: rumore, non sorveglianza.
+
+    Cio' che questo file possiede resta asserito qui, come SOTTOINSIEME: le due
+    route di configurazione ci sono, e ci sono ancora quelle su cui P27-4 si
+    appoggia. L'elenco esaustivo appartiene alla fase piu' recente, ed e'
+    tests/test_p27_5_territories.py::test_k1_the_real_application_exposes_exactly_the_platform_surface.
     """
     import main
 
@@ -818,7 +836,7 @@ def test_g7_the_real_application_exposes_exactly_the_platform_surface():
         if path.startswith(ROUTER_PREFIX)
         for method in operations
     }
-    assert found == {
+    assert found >= {
         ("GET", f"{ROUTER_PREFIX}/me"),
         # P27-2
         ("GET", f"{ROUTER_PREFIX}/agencies"),
@@ -840,11 +858,19 @@ def test_g7_the_real_application_exposes_exactly_the_platform_surface():
 
 
 def test_g8_every_mutation_in_the_package_goes_through_the_shared_order():
-    """UNA copia dell'ordine, e SETTE mutazioni che ci passano tutte.
+    """UNA copia dell'ordine. Il conteggio dei commit resta esatto QUI.
 
-    L'uguaglianza esatta e' il perno: un `>=` lascerebbe passare una mutazione
-    nuova che committa per conto suo, che e' precisamente il difetto che questo
-    test esiste per intercettare. Anche questo si sposta con la fase.
+    Le due meta' di questo test hanno avuto sorti diverse con P27-5, e la
+    differenza e' sostanziale:
+
+    * `sum(commits) == 1` resta un'uguaglianza esatta anche qui. Non e' un
+      perno sulla dimensione della superficie - non cresce con le fasi - ed e'
+      precisamente il difetto da intercettare: una mutazione nuova che committa
+      per conto suo. Vale in ogni file di ogni fase, e non si sposta;
+    * l'elenco dei chiamanti e' invece un perno sulla dimensione, e cresce a
+      ogni fase. Qui diventa un sottoinsieme; l'uguaglianza esatta appartiene
+      alla fase piu' recente, ed e'
+      tests/test_p27_5_territories.py::test_k2_every_mutation_in_the_package_goes_through_the_shared_order.
     """
     package = ROOT / "platform_admin"
 
@@ -869,7 +895,7 @@ def test_g8_every_mutation_in_the_package_goes_through_the_shared_order():
                 for inner in ast.walk(node)
             )
         ]
-    assert set(callers) == {
+    assert set(callers) >= {
         "create_agency", "update_agency",                       # P27-2
         "create_agency_operator", "update_operator",            # P27-3
         "update_membership", "transfer_owner",                  # P27-3

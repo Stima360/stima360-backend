@@ -115,3 +115,25 @@ class PlatformConflict(Exception):
     in enums.py, mai da psycopg2: il nome di un vincolo racconta al chiamante
     com'e' fatto lo schema.
     """
+
+
+class TerritoryNotFound(Exception):
+    """Il territorio richiesto non esiste. 404.
+
+    Come `AgencyNotFound`, qui il 404 e' letterale: un platform admin vede
+    tutta la rete, quindi non sta nascondendo a nessuno un territorio di
+    qualcun altro.
+    """
+
+
+class TerritoryAssignmentNotFound(Exception):
+    """Quell'assegnazione non esiste, o non e' di quell'agenzia. 404.
+
+    I due casi danno la stessa risposta di proposito. La route e'
+    `/agencies/{agency_id}/territories/{assignment_id}`, e un'assegnazione che
+    esiste ma appartiene a un'altra agenzia non e' amministrabile DA LI':
+    distinguerla con un messaggio diverso significherebbe rispondere "esiste,
+    ma non qui" a chi ha sbagliato agenzia, il che e' vero e inutile - e, su
+    una superficie che un giorno potrebbe non essere solo platform, sarebbe il
+    modo di enumerare le assegnazioni altrui un id alla volta.
+    """

@@ -4306,6 +4306,21 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("tasks", "lead_id", "leads", "SET NULL"),
     ("activities", "contact_id", "contacts", "SET NULL"),
     ("agency_memberships", "agency_id", "agencies", "RESTRICT"),
+    # P27-5, migration 058. Stessa forma e stesso effetto di
+    # `agency_memberships.agency_id` qui sopra: un'agenzia che ha tenuto un
+    # territorio non si cancella finche' quelle righe esistono.
+    #
+    # ESAMINATA, che e' cio' che questo inventario chiede. La conseguenza per
+    # il cleanup e' identica a quella gia' accettata per le membership: il
+    # preflight la incontra come rifiuto e non come cancellazione silenziosa,
+    # ed e' il verso giusto - le assegnazioni territoriali sono la storia di
+    # chi ha presidiato cosa, e un CASCADE la porterebbe via insieme
+    # all'agenzia di prova senza che nessuno lo veda.
+    #
+    # `agency_territory_assignments.territory_id` non compare in questo
+    # inventario e non deve: punta a `network_territories`, che non e' fra i
+    # genitori da cui il cleanup cancella righe.
+    ("agency_territory_assignments", "agency_id", "agencies", "RESTRICT"),
     ("buy_request_history", "match_id", "matches", "SET NULL"),
     ("buy_request_history", "property_id", "properties", "SET NULL"),
     ("buy_request_history", "task_id", "tasks", "SET NULL"),
