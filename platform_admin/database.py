@@ -49,3 +49,54 @@ def platform_audit_cursor():
     finally:
         cur.close()
         conn.close()
+
+
+@contextmanager
+def platform_operation_cursor():
+    """Cede ``(connection, cursor)`` per UNA mutazione amministrativa.
+
+    NON COMMITTA. E' l'unica ragione per cui esiste accanto a
+    `platform_audit_cursor`, e la differenza e' tutto il punto della regola
+    che P27-2 deve far rispettare:
+
+        nessuna modifica amministrativa viene committata se il suo audit non
+        e' stato scritto.
+
+    Il commit appartiene quindi al service, DOPO che `audit.record()` e'
+    tornato. Un `commit=True` qui - o un commit automatico in uscita come fa
+    il cursore di audit - toglierebbe al chiamante l'unica leva con cui puo'
+    ordinare le due cose, e la regola tornerebbe a essere una speranza.
+
+    Il rollback invece resta qui: e' la reazione a un'eccezione, non una
+    decisione, e ripeterlo in ogni chiamante e' il modo di dimenticarlo in uno.
+
+    PERCHE' DUE CONNESSIONI, E PERCHE' NON SI CERCA DI RENDERLE ATOMICHE
+
+    L'audit vive su una connessione sua per la decisione D2: deve registrare il
+    TENTATIVO, quindi deve poter sopravvivere al rollback dell'operazione che
+    descrive. Due connessioni non si possono committare atomicamente senza un
+    coordinatore di transazioni distribuite, e non se ne introduce uno per
+    questo.
+
+    Cio' che si sceglie e' l'ORDINE, che decide quale delle due incoerenze
+    possibili si accetta:
+
+        audit scritto, operazione non committata  -> ACCETTATA, e registrata
+                                                     con una riga compensativa
+                                                     result='error'.
+        operazione committata, audit non scritto  -> MAI.
+
+    E' l'asimmetria giusta per un registro: una riga che descrive un tentativo
+    fallito e' leggibile e vera; una modifica senza traccia non e' recuperabile
+    in nessun modo.
+    """
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        yield conn, cur
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()

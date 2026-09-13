@@ -355,10 +355,29 @@ def test_a12_main_mounts_the_platform_router_behind_require_platform_admin():
 
 
 def test_a13_the_platform_prefix_is_its_own_and_is_not_a_core_subpath():
+    """P27-2: IL PERNO SUL NUMERO DI ROUTE SI E' SPOSTATO, NON E' STATO TOLTO.
+
+    Questo test asseriva `paths == {"/api/platform/me"}`. Era vero quando P27-1
+    era tutta la superficie, e ha smesso di esserlo con le quattro route di
+    P27-2 - come smettera' di esserlo a ogni fase successiva. Un perno sulla
+    DIMENSIONE della superficie, dentro il file della prima fase, genera un
+    fallimento a ogni fase che la allarga: rumore, non sorveglianza.
+
+    Cio' che questo file possiede resta asserito qui: il prefisso e' suo, non
+    e' un sotto-percorso di CORE, e `/me` c'e'. L'elenco esaustivo di cosa la
+    superficie espone appartiene alla fase che ce lo mette, ed e'
+    tests/test_p27_2_agencies.py::test_c8_the_real_application_exposes_exactly_the_four_p27_2_routes.
+    """
     assert platform_router.prefix == "/api/platform"
     assert not platform_router.prefix.startswith("/api/core")
+
     paths = {route.path for route in platform_router.routes}
-    assert paths == {"/api/platform/me"}, paths
+    assert "/api/platform/me" in paths, paths
+    # Nessuna route di questo router puo' finire fuori dal proprio prefisso:
+    # e' questa la separazione fra le due superfici, e vale per una route come
+    # per venti.
+    for path in paths:
+        assert path.startswith("/api/platform/"), path
 
 
 # ---------------------------------------------------------------------------
@@ -490,11 +509,25 @@ def real_app(monkeypatch):
     return client, state
 
 
-def test_a17_the_real_application_exposes_exactly_one_platform_path():
+def test_a17_the_real_application_exposes_the_platform_surface():
+    """P27-2: IL PERNO SUL NUMERO DI ROUTE SI E' SPOSTATO, NON E' STATO TOLTO.
+
+    Questo test asseriva `paths == {"/api/platform/me"}`. Era vero quando P27-1
+    era tutta la superficie, e ha smesso di esserlo con le quattro route di
+    P27-2 - come smettera' di esserlo a ogni fase successiva. Un perno sulla
+    DIMENSIONE della superficie, dentro il file della prima fase, genera un
+    fallimento a ogni fase che la allarga: rumore, non sorveglianza.
+
+    Cio' che questo file possiede resta asserito qui: il prefisso e' suo, non
+    e' un sotto-percorso di CORE, e `/me` c'e'. L'elenco esaustivo di cosa la
+    superficie espone appartiene alla fase che ce lo mette, ed e'
+    tests/test_p27_2_agencies.py::test_c8_the_real_application_exposes_exactly_the_four_p27_2_routes.
+    """
     from main import app
 
     paths = sorted(p for p in app.openapi()["paths"] if p.startswith("/api/platform"))
-    assert paths == ["/api/platform/me"], paths
+    assert "/api/platform/me" in paths, paths
+    assert paths, "la superficie platform non e' montata"
 
 
 def test_a17_the_real_application_refuses_an_agency_owner_with_403(real_app):

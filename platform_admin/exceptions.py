@@ -23,3 +23,30 @@ class PlatformAuditUnavailable(Exception):
 
     Un writer che loggasse e basta renderebbe impossibile la prima delle due.
     """
+
+
+class AgencyNotFound(Exception):
+    """L'agenzia richiesta non esiste. Il router la traduce in 404.
+
+    Su questa superficie il 404 e' letterale. Nelle superfici di tenant un 404
+    e' anche uno schermo - il record di un'altra agenzia e' byte-identico a uno
+    inesistente, per non farne dedurre l'esistenza - ma un platform admin vede
+    tutta la rete, quindi qui non c'e' nulla da nascondere a nessuno: se dice
+    "non trovata", non c'e'.
+    """
+
+
+class AgencySlugConflict(Exception):
+    """Lo slug e' gia' di un'altra agenzia. Il router la traduce in 409.
+
+    Sollevata da due punti diversi del service, di proposito:
+
+    * dal controllo esplicito prima della scrittura, che e' quello che produce
+      il messaggio buono nel caso normale;
+    * dalla cattura di `UniqueViolation`, che e' l'unico modo di coprire la
+      corsa fra due creazioni simultanee dello stesso slug - il controllo e la
+      INSERT non sono un'operazione sola, e fra i due c'e' una finestra.
+
+    Il secondo non e' ridondante: senza, una corsa persa diventerebbe un 500
+    con dentro il nome del vincolo.
+    """

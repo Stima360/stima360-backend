@@ -48,3 +48,68 @@ FORBIDDEN_MESSAGE = "Superficie riservata all'amministrazione di piattaforma."
 AUDIT_UNAVAILABLE_MESSAGE = (
     "Audit di piattaforma non disponibile: operazione non eseguita."
 )
+
+
+# ---------------------------------------------------------------------------
+# P27-2 - GESTIONE AGENZIE
+# ---------------------------------------------------------------------------
+
+# Il tipo di oggetto amministrato, come compare in platform_audit_log.target_type.
+# Una costante e non il letterale "agency" sparso fra service e test: e' il
+# valore con cui si ritrovano le righe di questo registro fra dieci mesi.
+TARGET_TYPE_AGENCY = "agency"
+
+ACTION_AGENCY_CREATE = "platform.agency.create"
+ACTION_AGENCY_UPDATE = "platform.agency.update"
+
+# Gli stati di un'agenzia, IDENTICI al CHECK `agencies_status_chk` della
+# migration 027. Non e' una duplicazione da tollerare, e' una duplicazione da
+# sorvegliare: tests/test_p27_2_agencies.py confronta questa tupla con quel
+# CHECK, cosi' un quarto stato aggiunto da una parte sola fallisce qui invece
+# che in produzione alla prima scrittura.
+#
+# La semantica e' gia' decisa da operator_auth, e P27-2 non la tocca: una
+# sessione e' utilizzabile solo con membership_status='active' E
+# agency_status='active'. Quindi `suspended` e `archived` rendono entrambi il
+# tenant inutilizzabile, e la differenza fra i due e' amministrativa - un
+# affiliato sospeso torna, uno archiviato no - non tecnica.
+AGENCY_STATUS_ACTIVE = "active"
+AGENCY_STATUS_SUSPENDED = "suspended"
+AGENCY_STATUS_ARCHIVED = "archived"
+AGENCY_STATUSES = (
+    AGENCY_STATUS_ACTIVE,
+    AGENCY_STATUS_SUSPENDED,
+    AGENCY_STATUS_ARCHIVED,
+)
+
+# Lo slug, IDENTICO al CHECK `agencies_slug_chk` della 027. Stessa regola di
+# sorveglianza degli stati: il test confronta questa stringa con quella nel
+# file di migration.
+#
+# Validarlo qui non e' ridondante rispetto al CHECK. Il database risponderebbe
+# con un errore di vincolo - cioe' un 500, o un messaggio che nomina oggetti
+# interni - mentre la richiesta e' semplicemente malformata e merita un 422 che
+# dice quale campo.
+AGENCY_SLUG_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+
+# Le lunghezze delle colonne in 027. Superarle e' un 422, non un troncamento
+# silenzioso e non un errore del driver.
+AGENCY_NAME_MAX = 200
+AGENCY_SLUG_MAX = 100
+
+# 404. Un'agenzia inesistente e una che non si puo' vedere non esistono su
+# questa superficie: il platform admin vede tutta la rete, quindi qui il 404
+# significa davvero "non c'e'" e non nasconde nulla a nessuno.
+AGENCY_NOT_FOUND_MESSAGE = "Agenzia non trovata."
+
+# 409. Il messaggio nomina il campo e NON riporta l'errore del database: un
+# messaggio di psycopg2 porta il nome del vincolo, quello della tabella e il
+# valore in conflitto.
+AGENCY_SLUG_CONFLICT_MESSAGE = "Slug gia' assegnato a un'altra agenzia."
+
+# 422. Una PATCH senza campi non e' un aggiornamento vuoto riuscito: e' una
+# richiesta che non dice cosa fare, e rispondere 200 la farebbe sembrare
+# applicata.
+AGENCY_EMPTY_PATCH_MESSAGE = (
+    "Indicare almeno un campo da aggiornare."
+)
