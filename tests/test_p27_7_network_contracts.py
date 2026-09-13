@@ -110,15 +110,47 @@ def test_a3_no_new_backend_file_was_added_for_the_ui():
 
     Le rotte usate esistono tutte da P27-1..P27-6, e il test A1 lo dimostra
     confrontandole con l'applicazione reale.
+
+    GUARDA IL COMMIT, NON IL WORKING TREE, e la differenza conta.
+
+    La prima stesura interrogava `git status`: mentre P27-7 era in lavorazione i
+    due coincidevano, perche' il working tree conteneva soltanto P27-7. A fase
+    chiusa non coincidono piu' - il working tree contiene il lavoro SUCCESSIVO -
+    e infatti P27-8, correggendo `TerritoryAliasResponse` in
+    `platform_admin/schemas.py`, faceva fallire questo test senza aver toccato
+    una riga della Rete.
+
+    Misurava la cosa sbagliata: non "P27-7 ha toccato il backend" ma "qualcuno,
+    prima o poi, ha toccato il backend". Adesso guarda il commit che ha
+    introdotto la sezione Rete, che e' esattamente l'affermazione da difendere e
+    resta vera per sempre.
     """
     import subprocess
 
-    modificati = subprocess.run(
-        ["git", "status", "--porcelain", "--", "migrations/", "platform_admin/",
-         "network_routing/", "core/", "operator_auth/"],
-        cwd=ROOT, capture_output=True, text=True,
-    ).stdout.splitlines()
-    assert not modificati, f"P27-7 ha toccato il backend: {modificati}"
+    def _git(*argomenti: str) -> str:
+        return subprocess.run(
+            ["git", *argomenti], cwd=ROOT, capture_output=True, text=True,
+        ).stdout.strip()
+
+    commit = _git("log", "--format=%H", "-1", "--",
+                  "static/os_shell/assets/views/rete.js")
+    if not commit:
+        # La Rete non e' ancora committata: siamo dentro la fase che la crea, e
+        # l'affermazione si verifica dove il lavoro sta, cioe' nel working tree.
+        toccati = _git("status", "--porcelain", "--", "migrations/",
+                       "platform_admin/", "network_routing/", "core/",
+                       "operator_auth/").splitlines()
+        assert not toccati, f"la UI Rete sta toccando il backend: {toccati}"
+        return
+
+    file_del_commit = _git("show", "--name-only", "--format=", commit).splitlines()
+    assert file_del_commit, commit
+    backend = [
+        percorso for percorso in file_del_commit
+        if percorso.startswith(("migrations/", "platform_admin/",
+                                "network_routing/", "core/", "operator_auth/"))
+    ]
+    assert not backend, f"il commit della UI Rete ha toccato il backend: {backend}"
 
 
 # ---------------------------------------------------------------------------

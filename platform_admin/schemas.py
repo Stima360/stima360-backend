@@ -1026,8 +1026,27 @@ class TerritoryAliasUpdateRequest(PlatformModel):
         return self
 
 
-class TerritoryAliasResponse(PlatformModel):
-    """Un alias, come le route lo restituiscono."""
+class TerritoryAliasResponse(BaseModel):
+    """Un alias, come le route lo restituiscono.
+
+    `BaseModel` e NON `PlatformModel`, come ogni altra risposta di questa
+    superficie. La differenza non e' stilistica: `PlatformModel` vieta i campi
+    extra, ed e' giusto che lo faccia sui CORPI DI RICHIESTA - senza, un client
+    potrebbe nominare `id` o `created_at` e credere di averli impostati.
+
+    Su una RISPOSTA la stessa regola fa il danno opposto. Il repository legge
+    `ALIAS_FIELDS`, che comprende `created_at` e `updated_at`; il service
+    restituisce quella riga intera; FastAPI la valida contro questo schema. Con
+    `extra="forbid"` le due colonne in piu' diventavano `ValidationError`, cioe'
+    un 500 su una riga perfettamente valida - e la riga era gia' stata scritta,
+    quindi l'operazione riusciva e la risposta mentiva.
+
+    Trovato in P27-8 sul TEST reale: la POST rispondeva 500 e il tentativo
+    duplicato subito dopo rispondeva 409, il che dimostrava che l'alias era
+    nato. I test di P27-6 non potevano vederlo perche' esercitano il service, e
+    il service la riga la restituisce e basta: e' il passaggio successivo -
+    quello che FastAPI fa da solo - che rompeva.
+    """
 
     id: int
     territory_id: int

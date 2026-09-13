@@ -578,3 +578,171 @@ def test_f7_the_patch_cannot_change_the_value(service):
 def test_f8_the_patch_cannot_set_an_arbitrary_status():
     with pytest.raises(ValueError):
         TerritoryAliasUpdateRequest(status="sospeso")
+
+
+# ---------------------------------------------------------------------------
+# G - LA RISPOSTA, NON SOLO LA DECISIONE
+#
+# P27-8 ha trovato su TEST un 500 che nessuno dei test qui sopra poteva vedere:
+# l'alias veniva CREATO - il tentativo duplicato subito dopo rispondeva 409 -
+# ma la risposta HTTP falliva. Tutti i test di questo file chiamano il SERVICE,
+# e il service restituisce la riga; nessuno faceva passare quella riga per lo
+# schema di risposta, che e' il pezzo che FastAPI esegue subito dopo.
+#
+# La causa era una sola parola: `TerritoryAliasResponse` ereditava da
+# `PlatformModel`, la base dei CORPI DI RICHIESTA, che vieta i campi extra
+# apposta - cosi' un client non puo' fingere di impostare `id` o `created_at`.
+# Applicata a una RISPOSTA, quella stessa regola rifiuta le colonne che il
+# repository legge davvero (`created_at`, `updated_at`) e trasforma una riga
+# valida in un 500.
+#
+# Le altre risposte della superficie - AgencyResponse, TerritoryResponse,
+# OperatorResponse, AssignmentResponse - ereditano tutte da `BaseModel`. Questa
+# era l'unica fuori riga.
+# ---------------------------------------------------------------------------
+
+def test_g1_the_alias_response_accepts_the_row_the_repository_returns():
+    """La riga vera, con tutte le sue colonne, deve poter essere serializzata.
+
+    E' esattamente cio' che il router fa: `TerritoryAliasResponse(**row)` su
+    quel che il service ha restituito.
+    """
+    from platform_admin.aliases_repository import ALIAS_FIELDS
+    from platform_admin.schemas import TerritoryAliasResponse
+
+    riga = {
+        "id": 900, "territory_id": 30, "source": ALIAS_SOURCE_PUBLIC_STIMA_COMUNE,
+        "match_value": "P27E2E Borgo", "status": ALIAS_ACTIVE,
+        "created_at": CREATO, "updated_at": DOPO,
+    }
+    # Tutte le colonne che il repository dichiara di leggere sono qui dentro:
+    # se un domani ne aggiungesse una, questo test la pretende nella riga e la
+    # risposta la deve accettare.
+    assert set(ALIAS_FIELDS) <= set(riga), set(ALIAS_FIELDS) - set(riga)
+
+    risposta = TerritoryAliasResponse(**riga)
+    assert risposta.id == 900
+    assert risposta.match_value == "P27E2E Borgo"
+
+
+def test_g2_no_response_model_of_the_platform_surface_forbids_extra_fields():
+    """`PlatformModel` e' per le RICHIESTE. Nessuna risposta deve ereditarla.
+
+    Il divieto di campi extra protegge l'ingresso - un client non deve poter
+    nominare `id` o `agency_id` - e sull'uscita fa il danno opposto: rifiuta le
+    colonne che il database ha davvero.
+    """
+    import inspect
+
+    from platform_admin import schemas
+
+    colpevoli = [
+        nome for nome, cls in vars(schemas).items()
+        if inspect.isclass(cls) and nome.endswith(("Response", "Item"))
+        and issubclass(cls, schemas.PlatformModel)
+    ]
+    assert not colpevoli, colpevoli
+
+
+# ---------------------------------------------------------------------------
+# H - LE ROUTE VERE, ATTRAVERSO FastAPI
+#
+# I test G provano lo schema; questi provano il PASSAGGIO che rompeva davvero:
+# la risposta che FastAPI costruisce dal valore restituito dal gestore. E' il
+# solo modo di vedere un 500 che nasce dopo la scrittura - la riga c'e', il
+# service ha fatto il suo, e la richiesta fallisce lo stesso.
+#
+# Il router e' quello vero, montato come in `main.py` con
+# `require_platform_admin` sul mount: cosi' 401/403 sono quelli veri e il
+# `response_model` viene applicato come in produzione.
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from fastapi import Depends, FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from platform_admin import dependencies as platform_deps  # noqa: E402
+from platform_admin.router import router as platform_router  # noqa: E402
+
+SCADENZA = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def http(service, monkeypatch):
+    from operator_auth import dependencies as operator_deps
+
+    def _sessione(_token):
+        return {"context": service["sessione"], "agency_name": None,
+                "expires_at": SCADENZA}
+
+    monkeypatch.setattr(operator_deps.service, "session_from_token", _sessione)
+
+    app = FastAPI()
+    app.include_router(
+        platform_router,
+        dependencies=[Depends(platform_deps.require_platform_admin)],
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    client.cookies.set("stima360_operator_session", "un-token")
+    return client
+
+
+def test_h1_creating_an_alias_answers_201_and_not_500(http, service):
+    """IL BUG DI P27-8, come test HTTP.
+
+    Prima del fix questa POST rispondeva 500 pur avendo scritto la riga: lo
+    schema di risposta rifiutava `created_at` e `updated_at`.
+    """
+    risposta = http.post(
+        f"/api/platform/territories/{COMUNE}/aliases",
+        json={"source": ALIAS_SOURCE_PUBLIC_STIMA_COMUNE,
+              "match_value": "P27E2E Borgo"},
+    )
+    assert risposta.status_code == 201, risposta.text
+    corpo = risposta.json()
+    assert corpo["match_value"] == "P27E2E Borgo"
+    assert corpo["status"] == ALIAS_ACTIVE
+    assert corpo["source"] == ALIAS_SOURCE_PUBLIC_STIMA_COMUNE
+    # La riga esiste davvero nello store: la risposta non e' una finzione.
+    assert len(service["store"].alias) == 1
+
+
+def test_h2_listing_aliases_answers_200_and_not_500(http, service):
+    service["store"].semina(valore="P27E2E Borgo")
+    risposta = http.get(f"/api/platform/territories/{COMUNE}/aliases")
+    assert risposta.status_code == 200, risposta.text
+    elenco = risposta.json()
+    assert len(elenco) == 1
+    assert elenco[0]["match_value"] == "P27E2E Borgo"
+
+
+def test_h3_revoking_an_alias_answers_200_and_not_500(http, service):
+    alias = service["store"].semina(valore="P27E2E Borgo")
+    risposta = http.patch(
+        f"/api/platform/aliases/{alias['id']}", json={"status": ALIAS_REVOKED},
+    )
+    assert risposta.status_code == 200, risposta.text
+    assert risposta.json()["status"] == ALIAS_REVOKED
+
+
+def test_h4_a_duplicate_is_still_a_409_through_the_route(http, service):
+    """Il 409 funzionava anche prima del fix - e' cio' che ha svelato il bug.
+
+    Su TEST la POST rispondeva 500 e il duplicato subito dopo rispondeva 409:
+    due risposte incompatibili, a meno che la riga non fosse stata scritta.
+    """
+    service["store"].semina(valore="P27E2E Borgo")
+    risposta = http.post(
+        f"/api/platform/territories/{COMUNE}/aliases",
+        json={"source": ALIAS_SOURCE_PUBLIC_STIMA_COMUNE,
+              "match_value": "  p27e2e   borgo "},
+    )
+    assert risposta.status_code == 409, risposta.text
+    assert "gia'" in risposta.json()["detail"]
+
+
+def test_h5_the_response_never_carries_a_password_hash(http, service):
+    service["store"].semina(valore="P27E2E Borgo")
+    risposta = http.get(f"/api/platform/territories/{COMUNE}/aliases")
+    assert "password" not in risposta.text.lower()
