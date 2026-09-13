@@ -84,10 +84,24 @@ def test_m1_the_whole_migration_set_is_still_valid_and_contiguous(runner):
     assert [v for m in migrations for v in runner.validate_migration(m)] == []
 
 
-def test_m1_057_is_the_highest_version_and_follows_056(runner):
+def test_m1_057_exists_and_follows_056(runner):
+    """P27-5: IL PERNO SUL SOFFITTO SI E' SPOSTATO, NON E' STATO TOLTO.
+
+    Questo test asseriva `numbers[-1] == 57`. Era vero finche' 057 era l'ultima
+    migration, e ha smesso di esserlo con la 058 di P27-5 - come smettera' di
+    esserlo a ogni fase che aggiunge legittimamente uno schema. Un perno sul
+    SOFFITTO dentro il file della prima fase produce un fallimento a ogni fase
+    successiva: rumore, non sorveglianza.
+
+    Cio' che questo file possiede resta asserito qui: la 057 c'e', segue la
+    056, e non ci sono buchi. L'affermazione su quale sia la piu' alta
+    appartiene alla fase che ce la mette, ed e'
+    tests/test_p27_5_territories.py::test_b1_058_is_the_highest_version_and_follows_057.
+    """
     numbers = sorted(m.number for m in runner.discover_migrations())
-    assert numbers[-1] == 57
-    assert 56 in numbers
+    assert 57 in numbers, numbers[-3:]
+    assert 56 in numbers, numbers[-3:]
+    runner.verify_contiguous(runner.discover_migrations())
 
 
 def test_m1_057_is_above_the_runner_owned_transaction_gate(runner):
