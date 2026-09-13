@@ -34,6 +34,7 @@ from psycopg2 import errors
 
 from operator_auth.context import OperatorContext
 from platform_admin import agencies_repository, agencies_service
+from platform_admin import audit as platform_audit
 from platform_admin import dependencies as platform_deps
 from platform_admin.enums import (
     ACTION_AGENCY_CREATE,
@@ -570,7 +571,11 @@ def service(monkeypatch):
         state["audit"].append(kwargs)
         return len(state["audit"])
 
-    monkeypatch.setattr(agencies_service.audit, "record", _record)
+    # Sostituito sul MODULO `platform_admin.audit`, non attraverso un
+    # riferimento che un service tiene: e' lo stesso oggetto per chiunque lo
+    # importi, quindi la sostituzione vale anche per `transaction.py`, che dopo
+    # P27-3 e' chi lo chiama davvero.
+    monkeypatch.setattr(platform_audit, "record", _record)
     return state
 
 
@@ -1076,7 +1081,19 @@ def test_c8_a_delete_request_is_405_and_not_a_silent_success(client):
     assert client.delete(f"{AGENCIES}/{created['id']}").status_code == 405
 
 
-def test_c8_the_real_application_exposes_exactly_the_four_p27_2_routes():
+def test_c8_the_real_application_exposes_the_four_p27_2_routes():
+    """Era: `found == {...}`, cioe' l'elenco ESAUSTIVO della superficie.
+
+    P27-3 ha aggiunto sei route su operatori, membership e titolarita', e un
+    perno sulla dimensione totale dentro il file di P27-2 si romperebbe a ogni
+    fase che la allarga: rumore, non sorveglianza. E' lo stesso passaggio di
+    consegne gia' fatto per il perno sul numero di migration in P27-1.
+
+    Cio' che questo file possiede resta asserito qui - le quattro route delle
+    agenzie ci sono, con i metodi giusti, e nessuna DELETE. L'elenco esaustivo
+    appartiene alla fase piu' recente:
+    tests/test_p27_3_operators.py::test_g8_the_real_application_exposes_exactly_the_p27_3_routes.
+    """
     import main
 
     spec = main.app.openapi()
@@ -1086,13 +1103,16 @@ def test_c8_the_real_application_exposes_exactly_the_four_p27_2_routes():
         if path.startswith(ROUTER_PREFIX)
         for method in operations
     }
-    assert found == {
-        ("GET", f"{ROUTER_PREFIX}/me"),
+    assert {
         ("GET", AGENCIES),
         ("POST", AGENCIES),
         ("GET", f"{AGENCIES}/{{agency_id}}"),
         ("PATCH", f"{AGENCIES}/{{agency_id}}"),
-    }, sorted(found)
+    } <= found, sorted(found)
+
+    # E niente DELETE, su nessuna route della superficie: la meta' del perno
+    # che non dipende da quante route esistano.
+    assert not [pair for pair in found if pair[0] == "DELETE"], sorted(found)
 
 
 # --- C9: l'audit che non si scrive ------------------------------------------
@@ -1275,26 +1295,58 @@ def test_d4_operator_auth_was_not_touched_by_p27_2():
     assert 'row.get("membership_status") == "active"' in source
 
 
-def test_d5_the_service_is_the_only_place_that_orders_audit_and_commit():
-    """UNA copia dell'ordine.
+def test_d5_the_whole_package_has_exactly_one_copy_of_the_order():
+    """UNA copia dell'ordine, adesso per tutto il package.
 
-    Due copie sono due posti in cui invertirlo, e l'inversione non produce un
-    errore: produce una modifica senza traccia.
+    Era: la stessa prova ristretta a `agencies_service`, dove la sequenza viveva
+    quando P27-2 era l'unica fase a mutare qualcosa. P27-3 ne ha portate altre
+    quattro, e ha spostato la sequenza in `platform_admin/transaction.py`
+    perche' due copie sono due posti in cui invertirla - e invertirla non
+    produce un errore, produce una modifica senza traccia.
+
+    Il perno si e' quindi allargato invece di essere tolto: `conn.commit()`
+    deve comparire una volta sola in TUTTO il package, non in un file solo.
     """
-    source = (ROOT / "platform_admin" / "agencies_service.py").read_text(encoding="utf-8")
-    assert source.count("conn.commit()") == 1, "il commit compare piu' di una volta"
-    tree = ast.parse(source)
-    callers = [
-        node.name for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(inner, ast.Call)
-            and isinstance(inner.func, ast.Name)
-            and inner.func.id == "_audit_then_commit"
-            for inner in ast.walk(node)
-        )
-    ]
-    assert sorted(callers) == ["create_agency", "update_agency"], callers
+    package = ROOT / "platform_admin"
+    # `database.py` e' escluso, e la ragione e' proprio la decisione D2: li'
+    # dentro c'e' il commit della connessione DELL'AUDIT, che e' una
+    # transazione diversa e deve committare da sola. Contarlo insieme
+    # all'altro confonderebbe le due meta' della regola invece di
+    # sorvegliarle.
+    commits = {
+        path.name: path.read_text(encoding="utf-8").count("conn.commit()")
+        for path in sorted(package.glob("*.py"))
+        if path.name != "database.py"
+    }
+    assert sum(commits.values()) == 1, commits
+    assert commits["transaction.py"] == 1, commits
+
+    # E il commit escluso e' davvero quello dell'audit, non un secondo commit
+    # operativo nascosto nel modulo sbagliato.
+    database_source = (package / "database.py").read_text(encoding="utf-8")
+    audit_cursor = database_source.split("def platform_audit_cursor")[1].split("def ")[0]
+    operation_cursor = database_source.split("def platform_operation_cursor")[1]
+    assert "conn.commit()" in audit_cursor
+    assert "conn.commit()" not in operation_cursor, (
+        "il cursore operativo committa da solo: la regola non e' piu' "
+        "esprimibile dal chiamante"
+    )
+
+    # E ogni mutazione passa di li'.
+    callers = []
+    for path in sorted(package.glob("*_service.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        callers += [
+            node.name for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and any(
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "audit_then_commit"
+                for inner in ast.walk(node)
+            )
+        ]
+    assert {"create_agency", "update_agency"} <= set(callers), callers
 
 
 def test_d5_the_router_writes_no_audit_row_of_its_own():

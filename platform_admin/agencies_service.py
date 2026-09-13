@@ -1,7 +1,9 @@
 """Le operazioni di rete su `agencies`. P27-2.
 
-Questo modulo possiede UNA cosa che nessun altro livello puo' possedere:
-l'ORDINE fra la scrittura e il suo audit.
+Questo modulo possiede il PERCHE' di ogni operazione sulle agenzie. L'ORDINE
+fra la scrittura, il suo audit e il commit vive in `platform_admin/transaction.py`,
+dove P27-3 lo ha spostato per averne una copia sola invece di due: il
+comportamento e' quello certificato in P27-2, invariato.
 
     nessuna modifica amministrativa viene committata
     se il suo audit non e' stato scritto.
@@ -58,27 +60,23 @@ update la riga operativa e' invece obbligatoria: li' e' cambiato qualcosa.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from psycopg2 import errors
 
 from operator_auth.context import OperatorContext
 
-from . import agencies_repository, audit
+from . import agencies_repository
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_AGENCY_CREATE,
     ACTION_AGENCY_UPDATE,
     AGENCY_NOT_FOUND_MESSAGE,
     AGENCY_SLUG_CONFLICT_MESSAGE,
-    RESULT_ERROR,
-    RESULT_SUCCESS,
     TARGET_TYPE_AGENCY,
 )
-from .exceptions import AgencyNotFound, AgencySlugConflict, PlatformAuditUnavailable
-
-logger = logging.getLogger(__name__)
+from .exceptions import AgencyNotFound, AgencySlugConflict
+from .transaction import audit_then_commit
 
 
 # ---------------------------------------------------------------------------
@@ -104,83 +102,6 @@ def get_agency(agency_id: int) -> dict[str, Any]:
     if row is None:
         raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
     return row
-
-
-# ---------------------------------------------------------------------------
-# Il passo condiviso: audita, poi committa
-# ---------------------------------------------------------------------------
-
-def _audit_then_commit(
-    conn,
-    actor: OperatorContext,
-    *,
-    action: str,
-    agency_id: int,
-    metadata: dict[str, Any],
-) -> None:
-    """Passi 3-6. L'unico posto in cui questo ordine e' scritto.
-
-    Condiviso fra create e update di proposito: due copie dello stesso ordine
-    sono due posti in cui invertirlo, e l'inversione non produce un errore -
-    produce una modifica senza traccia, che nessun test noterebbe se non
-    andandola a cercare.
-
-    Non cattura `PlatformAuditUnavailable`: lasciandola uscire, il `with` del
-    chiamante annulla la transazione operativa. Catturarla qui per rilanciare
-    qualcos'altro significherebbe decidere qui il rollback, che e' proprio la
-    cosa che il context manager gia' garantisce.
-    """
-    audit.record(
-        action=action,
-        actor=actor,
-        result=RESULT_SUCCESS,
-        target_type=TARGET_TYPE_AGENCY,
-        target_id=agency_id,
-        target_agency_id=agency_id,
-        metadata=metadata,
-    )
-
-    try:
-        conn.commit()
-    except Exception:
-        # Passo 6. Esiste una riga 'success' che descrive qualcosa che non e'
-        # andato in porto: la si corregge come si corregge sempre un registro
-        # append-only, con una riga nuova.
-        _record_commit_failure(actor, action=action, agency_id=agency_id)
-        raise
-
-
-def _record_commit_failure(
-    actor: OperatorContext, *, action: str, agency_id: int
-) -> None:
-    """La riga compensativa. Best effort, e il best effort e' dichiarato.
-
-    Se il commit dell'operazione e' fallito, il database e' probabilmente in
-    uno stato in cui non scrivera' nemmeno questa. Si prova, si registra un
-    log se non riesce, e si lascia proseguire l'eccezione vera - che e' il
-    fallimento del commit, non il fallimento di annotarlo.
-
-    Sollevare qui sostituirebbe l'errore originale con uno peggiore: chi legge
-    il 500 vedrebbe "audit non disponibile" e andrebbe a cercare il problema
-    nel posto sbagliato.
-    """
-    try:
-        audit.record(
-            action=action,
-            actor=actor,
-            result=RESULT_ERROR,
-            target_type=TARGET_TYPE_AGENCY,
-            target_id=agency_id,
-            target_agency_id=agency_id,
-            metadata={"commit_failed": True},
-        )
-    except PlatformAuditUnavailable:
-        logger.error(
-            "commit fallito per %s su agenzia %s, e la riga compensativa "
-            "non e' stata scritta",
-            action,
-            agency_id,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +141,13 @@ def create_agency(
             # vincolo e il valore in conflitto.
             raise AgencySlugConflict(AGENCY_SLUG_CONFLICT_MESSAGE) from exc
 
-        _audit_then_commit(
+        audit_then_commit(
             conn,
             actor,
             action=ACTION_AGENCY_CREATE,
-            agency_id=row["id"],
+            target_type=TARGET_TYPE_AGENCY,
+            target_id=row["id"],
+            target_agency_id=row["id"],
             metadata={"created_fields": sorted(created_fields)},
         )
         return row
@@ -273,11 +196,13 @@ def update_agency(
             # inventata.
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
 
-        _audit_then_commit(
+        audit_then_commit(
             conn,
             actor,
             action=ACTION_AGENCY_UPDATE,
-            agency_id=agency_id,
+            target_type=TARGET_TYPE_AGENCY,
+            target_id=agency_id,
+            target_agency_id=agency_id,
             metadata={"changed_fields": sorted(fields)},
         )
         return row

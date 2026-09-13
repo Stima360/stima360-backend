@@ -50,3 +50,47 @@ class AgencySlugConflict(Exception):
     Il secondo non e' ridondante: senza, una corsa persa diventerebbe un 500
     con dentro il nome del vincolo.
     """
+
+
+class OperatorNotFound(Exception):
+    """L'operatore richiesto non esiste. 404."""
+
+
+class MembershipNotFound(Exception):
+    """L'operatore non ha una membership in quell'agenzia. 404.
+
+    Distinta da `OperatorNotFound`: l'operatore puo' esistere benissimo e
+    lavorare altrove. E' la RELAZIONE con questa agenzia a non esserci, ed e'
+    l'unica cosa che le route sotto `/agencies/{id}/operators/...` possono
+    amministrare.
+    """
+
+
+class PasswordRequired(Exception):
+    """Manca la credenziale per creare una persona nuova. 422.
+
+    Tipo suo e non `PlatformConflict`, perche' lo status e' diverso e la
+    differenza e' sostanziale: un 409 dice "lo stato del sistema impedisce
+    questa richiesta", e qui non c'e' nessuno stato con cui confliggere -
+    manca un dato, e chi ha chiamato deve aggiungerlo.
+
+    Non e' un 422 che lo schema possa produrre: `password` e' obbligatoria solo
+    quando l'email identifica una persona nuova, e quale dei due percorsi si
+    prenda lo si sa dopo aver interrogato `operator_users`.
+    """
+
+
+class PlatformConflict(Exception):
+    """Un conflitto di stato del dominio Network. 409.
+
+    Un tipo solo per sei conflitti diversi - email gia' presa, membership gia'
+    esistente, membership attiva altrove, secondo titolare, riattivazione
+    incompatibile, titolare non membro - perche' la differenza fra loro sta nel
+    MESSAGGIO, che e' quello che il chiamante legge, non nel modo in cui il
+    router deve reagire: sono tutti 409.
+
+    Sei classi produrrebbero sei `except` identici in ogni route, e la prima
+    dimenticata diventerebbe un 500. Il messaggio arriva sempre dalle costanti
+    in enums.py, mai da psycopg2: il nome di un vincolo racconta al chiamante
+    com'e' fatto lo schema.
+    """

@@ -28,18 +28,32 @@ from fastapi import APIRouter, Depends, HTTPException
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
 
-from . import agencies_service
+from . import agencies_service, operators_service
 from .dependencies import require_platform_admin
 from .enums import AUDIT_UNAVAILABLE_MESSAGE, ROUTER_PREFIX
 from .exceptions import (
     AgencyNotFound,
     AgencySlugConflict,
+    MembershipNotFound,
+    OperatorNotFound,
+    PasswordRequired,
     PlatformAuditUnavailable,
+    PlatformConflict,
 )
+from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
     AgencyCreateRequest,
+    AgencyOperatorResponse,
     AgencyResponse,
     AgencyUpdateRequest,
+    MembershipResponse,
+    MembershipUpdateRequest,
+    OperatorCreateRequest,
+    OperatorDetailResponse,
+    OperatorResponse,
+    OperatorUpdateRequest,
+    OwnerTransferRequest,
+    OwnerTransferResponse,
     PlatformMeResponse,
 )
 
@@ -173,3 +187,200 @@ def update_agency(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
         ) from exc
     return AgencyResponse(**row)
+
+
+# ---------------------------------------------------------------------------
+# P27-3 - OPERATORI, TITOLARI E RUOLI
+#
+# Sei route, e nessuna DELETE. `revoked` e `disabled` sono stati: la relazione
+# fra una persona e un'agenzia e' un fatto storico, e cancellarla toglierebbe
+# la differenza fra "non c'e' mai stato" e "non c'e' piu'".
+#
+# LA SESTA ROUTE E' IL TRASFERIMENTO DI TITOLARITA', E NON E' UN AMPLIAMENTO.
+#
+# La struttura suggerita ne elencava cinque, con il cambio titolare da far
+# passare per la PATCH della membership. Non e' esprimibile li' senza un
+# effetto collaterale: assegnare `agency_owner` richiede di degradare il
+# titolare in carica, cioe' di cambiare lo stato di una persona che la
+# richiesta non nomina. `PUT .../owner` fa le due cose insieme, le audita come
+# una, e lascia alla PATCH il compito che le compete.
+#
+# Il router traduce e non decide: le eccezioni di dominio arrivano dal service
+# gia' formate e qui diventano uno status.
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/agencies/{agency_id}/operators",
+    response_model=list[AgencyOperatorResponse],
+)
+def list_agency_operators(
+    agency_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> list[AgencyOperatorResponse]:
+    """L'organico di un'agenzia: identita' e membership, in ogni stato."""
+    try:
+        rows = operators_service.list_agency_operators(agency_id)
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [_agency_operator(row) for row in rows]
+
+
+@router.get("/operators/{operator_user_id}", response_model=OperatorDetailResponse)
+def get_operator(
+    operator_user_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> OperatorDetailResponse:
+    try:
+        found = operators_service.get_operator(operator_user_id)
+    except OperatorNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return OperatorDetailResponse(
+        operator=OperatorResponse(**found["operator"]),
+        memberships=[MembershipResponse(**m) for m in found["memberships"]],
+    )
+
+
+@router.post(
+    "/agencies/{agency_id}/operators",
+    response_model=AgencyOperatorResponse,
+    status_code=201,
+)
+def create_agency_operator(
+    agency_id: int,
+    payload: OperatorCreateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> AgencyOperatorResponse:
+    """Crea o riusa l'operatore, e lo lega all'agenzia.
+
+    201 anche quando l'operatore esisteva gia': cio' che nasce e' la
+    membership, che prima non c'era, e il corpo riporta un `membership.id` che
+    non esisteva.
+    """
+    try:
+        created = operators_service.create_agency_operator(
+            context,
+            agency_id,
+            email=payload.email,
+            password=payload.password,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            operator_status=payload.status,
+            role=payload.role,
+            created_fields=payload.created_fields(),
+        )
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PasswordRequired as exc:
+        # 422 e non 409: non c'e' nulla con cui confliggere, manca un dato per
+        # il percorso che questa richiesta ha imboccato. Non e' un 422 che lo
+        # schema possa produrre - se la password serva dipende da chi sia
+        # quell'email, e lo si sa dopo aver letto `operator_users`.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return AgencyOperatorResponse(
+        operator=OperatorResponse(**created["operator"]),
+        membership=MembershipResponse(**created["membership"]),
+    )
+
+
+@router.patch("/operators/{operator_user_id}", response_model=OperatorResponse)
+def update_operator(
+    operator_user_id: int,
+    payload: OperatorUpdateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> OperatorResponse:
+    """Aggiorna nome, cognome e stato. Non email, non password, non il flag
+    di piattaforma: non sono campi di questo schema."""
+    try:
+        operator = operators_service.update_operator(
+            context, operator_user_id, payload.changed_fields()
+        )
+    except OperatorNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return OperatorResponse(**operator)
+
+
+@router.patch(
+    "/agencies/{agency_id}/operators/{operator_user_id}/membership",
+    response_model=MembershipResponse,
+)
+def update_membership(
+    agency_id: int,
+    operator_user_id: int,
+    payload: MembershipUpdateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> MembershipResponse:
+    """Ruolo e stato della membership. Sospendere, revocare, riattivare.
+
+    `role='agency_owner'` e' 409: vedi `PUT .../owner`.
+    """
+    try:
+        membership = operators_service.update_membership(
+            context, agency_id, operator_user_id, payload.changed_fields()
+        )
+    except (AgencyNotFound, MembershipNotFound) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return MembershipResponse(**membership)
+
+
+@router.put("/agencies/{agency_id}/owner", response_model=OwnerTransferResponse)
+def transfer_owner(
+    agency_id: int,
+    payload: OwnerTransferRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> OwnerTransferResponse:
+    """Rende l'operatore indicato il titolare, degradando il precedente.
+
+    PUT e non POST: indicare due volte lo stesso titolare lascia l'agenzia
+    nello stesso stato, e la seconda volta non scrive nulla.
+    """
+    try:
+        result = operators_service.transfer_owner(
+            context, agency_id, payload.operator_user_id
+        )
+    except (AgencyNotFound, OperatorNotFound, MembershipNotFound) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    demoted = result["demoted"]
+    return OwnerTransferResponse(
+        membership=MembershipResponse(**result["membership"]),
+        demoted=MembershipResponse(**demoted) if demoted else None,
+    )
+
+
+def _agency_operator(row: dict) -> AgencyOperatorResponse:
+    """Separa la riga piatta della JOIN nelle due proiezioni.
+
+    `list_agency_operators` restituisce identita' e membership sulla stessa
+    riga, e i nomi di colonna non collidono se non su `id`: il RealDictCursor
+    tiene l'ultimo, che e' quello della membership. Le due proiezioni si
+    ricostruiscono quindi per nome, e `operator.id` si prende da
+    `operator_user_id`, che la membership porta con se'.
+    """
+    operator = {key: row[key] for key in OPERATOR_COLUMNS if key != "id"}
+    operator["id"] = row["operator_user_id"]
+    membership = {key: row[key] for key in MEMBERSHIP_COLUMNS}
+    return AgencyOperatorResponse(
+        operator=OperatorResponse(**operator),
+        membership=MembershipResponse(**membership),
+    )

@@ -113,3 +113,137 @@ AGENCY_SLUG_CONFLICT_MESSAGE = "Slug gia' assegnato a un'altra agenzia."
 AGENCY_EMPTY_PATCH_MESSAGE = (
     "Indicare almeno un campo da aggiornare."
 )
+
+
+# ---------------------------------------------------------------------------
+# P27-3 - OPERATORI, TITOLARI E RUOLI
+# ---------------------------------------------------------------------------
+
+TARGET_TYPE_OPERATOR = "operator"
+
+# La membership e' un oggetto suo, non un attributo della persona: e' la riga
+# che nasce quando un'identita' gia' esistente entra in un'agenzia, ed e'
+# l'unica cosa creata su quel percorso. Registrarla come `operator` renderebbe
+# la riga di audit incoerente con se stessa - l'azione direbbe
+# "membership.create" e il target indicherebbe un oggetto preesistente che
+# nessuno ha creato.
+TARGET_TYPE_MEMBERSHIP = "agency_membership"
+
+# DUE AZIONI PER IL POST, NON UNA CON UN METADATO CHE LA CORREGGE.
+#
+# `POST /agencies/{id}/operators` fa due cose diverse a seconda che l'email sia
+# nuova o gia' nota, e l'azione deve dire QUALE delle due e' accaduta. Una sola
+# azione `platform.operator.create` con `operator_created=false` nei metadata
+# significherebbe che meta' delle righe del registro affermano una cosa falsa
+# nel campo che si legge per primo, e che vanno rilette insieme a un metadato
+# per capire cosa dicono davvero. In una tabella append-only non c'e' un
+# secondo momento in cui correggerla.
+ACTION_OPERATOR_CREATE = "platform.operator.create"
+ACTION_MEMBERSHIP_CREATE = "platform.membership.create"
+ACTION_OPERATOR_UPDATE = "platform.operator.update"
+ACTION_MEMBERSHIP_UPDATE = "platform.membership.update"
+ACTION_OWNER_TRANSFER = "platform.owner.transfer"
+
+# I tre ruoli di membership, IDENTICI al CHECK `agency_memberships_role_chk`
+# della 027. `platform_admin` non c'e' e non deve esserci: e' un flag su
+# operator_users, non un ruolo di agenzia, e un platform admin non tiene alcuna
+# riga di membership per esserlo (P27-1 D4 permette che ne tenga una, ma in
+# quanto operatore di quell'agenzia, non in quanto platform admin).
+ROLE_AGENCY_OWNER = "agency_owner"
+ROLE_AGENCY_ADMIN = "agency_admin"
+ROLE_AGENT = "agent"
+MEMBERSHIP_ROLES = (ROLE_AGENCY_OWNER, ROLE_AGENCY_ADMIN, ROLE_AGENT)
+
+# Gli stati di membership, IDENTICI a `agency_memberships_status_chk`.
+#   active    membership utilizzabile, compatibilmente con utente e agenzia
+#   suspended accesso tenant bloccato, relazione conservata
+#   revoked   relazione revocata storicamente - mai una DELETE
+MEMBERSHIP_ACTIVE = "active"
+MEMBERSHIP_SUSPENDED = "suspended"
+MEMBERSHIP_REVOKED = "revoked"
+MEMBERSHIP_STATUSES = (MEMBERSHIP_ACTIVE, MEMBERSHIP_SUSPENDED, MEMBERSHIP_REVOKED)
+
+# Gli stati dell'operatore, IDENTICI a `operator_users_status_chk`.
+# Nessuno stato nuovo: `invited` esiste nello schema dalla 027 e resta
+# selezionabile, ma senza un flusso di invito approvato significa soltanto
+# "creato e non ancora utilizzabile" - vedi OPERATOR_DEFAULT_STATUS.
+OPERATOR_INVITED = "invited"
+OPERATOR_ACTIVE = "active"
+OPERATOR_DISABLED = "disabled"
+OPERATOR_STATUSES = (OPERATOR_INVITED, OPERATOR_ACTIVE, OPERATOR_DISABLED)
+
+# Lo stato con cui nasce un operatore creato dalla superficie Platform.
+#
+# `active` e non `invited`, e la ragione e' che non esiste un flusso di invito:
+# nessuna email, nessun token di primo accesso, nessuna pagina di scelta
+# password. Un operatore creato `invited` sarebbe quindi un conto che nessuno
+# puo' completare, e il platform admin dovrebbe attivarlo con una seconda
+# chiamata - attrito senza contropartita.
+#
+# `invited` resta comunque scegliibile esplicitamente, per chi vuole preparare
+# un conto e attivarlo dopo. E' una scelta, non il comportamento predefinito.
+OPERATOR_DEFAULT_STATUS = OPERATOR_ACTIVE
+
+# Le lunghezze delle colonne in 027.
+OPERATOR_EMAIL_MAX = 320
+OPERATOR_NAME_MAX = 100
+
+# LA PASSWORD NON HA REGOLE DI FORMA IN P27-3, E NON NE HA NESSUNA ALTROVE.
+#
+# Una prima stesura imponeva qui una lunghezza minima e una massima. Sono state
+# tolte: `operator_auth` non ne ha - `LoginRequest.password` e' un `str` senza
+# vincoli, `hash_password` accetta qualunque stringa, e il solo CHECK della 027
+# riguarda il formato dell'HASH, non della password. Un limite introdotto qui
+# sarebbe quindi stata la politica password dell'intero prodotto, decisa da
+# dentro una fase che non se ne occupa e applicata alla sola superficie
+# Platform.
+#
+# Il gap resta aperto ed e' dichiarato come rischio: non esiste oggi nessuna
+# regola condivisa, quindi nemmeno la stringa vuota e' rifiutata da qualcosa.
+# Va deciso insieme al flusso di invito, prima che si aprano affiliati veri.
+#
+# Cio' che P27-3 garantisce comunque, e che non e' una politica: nessun
+# plaintext persistito, hashing esclusivamente con
+# `operator_auth.security.hash_password`, e password mai in audit, log o
+# risposta.
+
+OPERATOR_NOT_FOUND_MESSAGE = "Operatore non trovato."
+MEMBERSHIP_NOT_FOUND_MESSAGE = "Membership non trovata per questa agenzia."
+
+# 409. Ogni messaggio nomina il conflitto e mai il vincolo di database che lo
+# ha prodotto: il nome di un constraint dice a un chiamante come e' fatto lo
+# schema.
+EMAIL_TAKEN_MESSAGE = "Email gia' registrata per un altro operatore."
+MEMBERSHIP_EXISTS_MESSAGE = (
+    "Esiste gia' una membership fra questo operatore e questa agenzia: "
+    "modificarne ruolo o stato invece di crearne una seconda."
+)
+ACTIVE_MEMBERSHIP_ELSEWHERE_MESSAGE = (
+    "L'operatore ha gia' una membership attiva in un'altra agenzia."
+)
+OWNER_ALREADY_EXISTS_MESSAGE = "L'agenzia ha gia' un titolare attivo."
+OWNER_ROLE_NEEDS_TRANSFER_MESSAGE = (
+    "Il ruolo di titolare si assegna dall'endpoint di trasferimento titolare."
+)
+OWNER_MUST_BE_ACTIVE_MEMBER_MESSAGE = (
+    "Il nuovo titolare deve avere una membership attiva in questa agenzia."
+)
+EMPTY_PATCH_MESSAGE = "Indicare almeno un campo da aggiornare."
+
+# 409. Una password inviata insieme a un'email che identifica gia' una persona
+# e' un payload di creazione credenziale in conflitto con un'identita' globale
+# esistente. Rifiutata esplicitamente e non ignorata: ignorarla lascerebbe
+# credere di aver impostato una credenziale che non e' stata toccata, e
+# applicarla trasformerebbe questa route in un reimposta-password implicito.
+PASSWORD_ON_EXISTING_IDENTITY_MESSAGE = (
+    "L'email identifica un operatore gia' esistente: la sua credenziale non "
+    "si imposta da qui. Ripetere la richiesta senza il campo."
+)
+
+# 422. Una persona nuova non puo' esistere senza credenziale: `password_hash`
+# e' NOT NULL con un CHECK sul formato. Non e' un conflitto di stato - non c'e'
+# nulla con cui confliggere - e' un dato mancante per il percorso che la
+# richiesta ha imboccato.
+PASSWORD_REQUIRED_MESSAGE = (
+    "L'email identifica una persona nuova: indicare una password per crearla."
+)

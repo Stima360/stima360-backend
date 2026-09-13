@@ -14,6 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .enums import (
     AGENCY_EMPTY_PATCH_MESSAGE,
+    EMPTY_PATCH_MESSAGE,
+    MEMBERSHIP_ROLES,
+    MEMBERSHIP_STATUSES,
+    OPERATOR_DEFAULT_STATUS,
+    OPERATOR_EMAIL_MAX,
+    OPERATOR_NAME_MAX,
+    OPERATOR_STATUSES,
     AGENCY_NAME_MAX,
     AGENCY_SLUG_MAX,
     AGENCY_SLUG_PATTERN,
@@ -241,3 +248,292 @@ class AgencyUpdateRequest(PlatformModel):
         non entrano mai nel registro.
         """
         return {name: getattr(self, name) for name in sorted(self.model_fields_set)}
+
+
+# ---------------------------------------------------------------------------
+# P27-3 - OPERATORI, TITOLARI E RUOLI
+# ---------------------------------------------------------------------------
+
+def _validate_optional_name(value):
+    """Nome o cognome: possono mancare, non possono essere spazi.
+
+    `None` e' legittimo - la 027 li dichiara nullable - ma `"   "` no: sarebbe
+    un valore che sembra esserci e non c'e'. Viene restituito ripulito.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > OPERATOR_NAME_MAX:
+        raise ValueError(f"supera {OPERATOR_NAME_MAX} caratteri")
+    return cleaned
+
+
+class OperatorResponse(BaseModel):
+    """L'IDENTITA' di un operatore. Nove campi, e `password_hash` non c'e'.
+
+    Non e' un'omissione da correggere: e' la ragione per cui questa classe
+    esiste invece di restituire la riga. La stessa disciplina vale per il token
+    di sessione e per il suo hash, che non sono su questa tabella e non devono
+    arrivarci per nessuna strada.
+    """
+
+    id: int
+    email: str
+    first_name: str | None
+    last_name: str | None
+    status: str
+    is_platform_admin: bool
+    last_login_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MembershipResponse(BaseModel):
+    """L'APPARTENENZA a un'agenzia. Separata dall'identita', di proposito.
+
+    Una persona e' una cosa, il suo rapporto con un'agenzia un'altra: la stessa
+    identita' puo' avere una membership attiva qui e due revocate altrove, e
+    appiattirle in un oggetto solo renderebbe impossibile dire di quale
+    agenzia si stia parlando.
+    """
+
+    id: int
+    agency_id: int
+    operator_user_id: int
+    role: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgencyOperatorResponse(BaseModel):
+    """Una persona e la sua membership IN QUELLA agenzia."""
+
+    operator: OperatorResponse
+    membership: MembershipResponse
+
+
+class OperatorDetailResponse(BaseModel):
+    """Una persona e TUTTE le sue membership, in ogni agenzia e in ogni stato.
+
+    Comprese le revocate: sono la sua storia nella rete, ed e' esattamente
+    quello che un amministratore guarda prima di riassegnarla.
+    """
+
+    operator: OperatorResponse
+    memberships: list[MembershipResponse]
+
+
+class OwnerTransferResponse(BaseModel):
+    """L'esito di un trasferimento di titolarita'.
+
+    `demoted` e' la membership di chi era titolare prima, degradata ad
+    `agency_admin`, oppure None se l'agenzia non ne aveva uno. Restituirla e'
+    cio' che rende visibile l'altra meta' dell'operazione: un trasferimento
+    cambia DUE righe, e una risposta che ne mostrasse una sola lascerebbe
+    credere che l'altra persona sia rimasta titolare.
+    """
+
+    membership: MembershipResponse
+    demoted: MembershipResponse | None
+
+
+class OperatorCreateRequest(PlatformModel):
+    """Il corpo di POST /api/platform/agencies/{agency_id}/operators.
+
+    LA PASSWORD E' FACOLTATIVA QUI, E OBBLIGATORIA IN UNO DEI DUE CASI.
+
+    Lo schema non puo' deciderlo: se serva o meno dipende da chi sia quella
+    email, e lo si sa solo dopo aver interrogato `operator_users`. Il campo e'
+    quindi `None` per difetto e il contratto lo fa rispettare il service:
+
+        email nuova       -> la password SERVE (senza, 422). Una persona nuova
+                             non puo' esistere senza credenziale:
+                             `password_hash` e' NOT NULL con un CHECK sul
+                             formato PBKDF2.
+        email gia' nota   -> la password NON deve essere inviata (se c'e', 409).
+                             Si crea solo la membership, e la credenziale di
+                             quella persona non viene toccata. Ignorarla
+                             lascerebbe credere di averla impostata; applicarla
+                             renderebbe questa route un reimposta-password
+                             implicito.
+
+    Non esiste un flusso di invito - nessuna email, nessun token di primo
+    accesso, nessuna pagina di scelta password - quindi la strada coerente con
+    l'infrastruttura attuale e' quella che gli script TEST gia' usano: il
+    chiamante fornisce una password e il server la trasforma con
+    `operator_auth.security.hash_password`, la stessa funzione del login.
+
+    NESSUN VINCOLO DI LUNGHEZZA. Una prima stesura ne aveva due; sono stati
+    tolti perche' `operator_auth` non ne ha nessuno e imporli qui avrebbe
+    voluto dire decidere la politica password del prodotto da dentro questa
+    fase. Vedi il commento in enums.py: il gap e' dichiarato come rischio.
+
+    La password non viene loggata, non entra nell'audit, non torna nella
+    risposta e non e' aggiornabile da questa superficie.
+
+    `role` e' obbligatorio: assegnare un ruolo predefinito significherebbe
+    sceglierlo per chi apre l'agenzia, ed e' la cosa piu' importante della
+    richiesta.
+    """
+
+    email: str = Field(max_length=OPERATOR_EMAIL_MAX)
+    password: str | None = None
+    role: str
+    first_name: str | None = None
+    last_name: str | None = None
+    status: str = OPERATOR_DEFAULT_STATUS
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or "@" not in cleaned:
+            raise ValueError("email non valida")
+        return cleaned
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, value: str) -> str:
+        if value not in MEMBERSHIP_ROLES:
+            raise ValueError(f"role deve essere uno fra {list(MEMBERSHIP_ROLES)}")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value: str) -> str:
+        if value not in OPERATOR_STATUSES:
+            raise ValueError(f"status deve essere uno fra {list(OPERATOR_STATUSES)}")
+        return value
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def _check_names(cls, value):
+        return _validate_optional_name(value)
+
+    def supplies_password(self) -> bool:
+        """True quando il chiamante ha davvero mandato una credenziale.
+
+        `None` e campo assente sono la stessa cosa - `{"password": null}` e'
+        un modo di non mandarla - cosi' la regola e' una sola e non dipende da
+        quale delle due forme il client abbia scelto.
+        """
+        return self.password is not None
+
+    def created_fields(self) -> list[str]:
+        """I nomi dei campi indicati dal chiamante. MAI `password`.
+
+        L'esclusione e' esplicita e non affidata al fatto che il campo si
+        chiami cosi': e' l'unico valore di questa richiesta che non deve poter
+        comparire nemmeno come NOME in una tabella append-only, perche' la sua
+        presenza nell'elenco direbbe comunque qualcosa su come e' stato creato
+        quel conto.
+        """
+        return sorted(self.model_fields_set - {"password"})
+
+
+class OperatorUpdateRequest(PlatformModel):
+    """Il corpo di PATCH /api/platform/operators/{operator_user_id}.
+
+    Tre campi. `email` non c'e' perche' e' la chiave di identita' globale su
+    cui il login risolve la persona - stessa ragione per cui P27-2 ha reso
+    immutabile lo slug dell'agenzia. `is_platform_admin` non c'e' perche'
+    concedere l'amministrazione della rete da una route che si chiama
+    "aggiorna operatore" sarebbe un'escalation nascosta in una modifica di
+    routine. `password` non c'e' perche' cambiarla e' un'operazione di
+    credenziale, non anagrafica.
+
+    Con `extra="forbid"`, ognuno dei tre e' un 422 che nomina il campo.
+    """
+
+    first_name: str | None = None
+    last_name: str | None = None
+    status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value):
+        if value is None:
+            return None
+        if value not in OPERATOR_STATUSES:
+            raise ValueError(f"status deve essere uno fra {list(OPERATOR_STATUSES)}")
+        return value
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def _check_names(cls, value):
+        return _validate_optional_name(value)
+
+    @model_validator(mode="after")
+    def _reject_empty(self):
+        if not self.model_fields_set:
+            raise ValueError(EMPTY_PATCH_MESSAGE)
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("status non ammette null")
+        return self
+
+    def changed_fields(self) -> dict[str, Any]:
+        """I soli campi presenti. `first_name`/`last_name` ammettono null:
+        sono nullable nello schema, e azzerarli e' un'operazione legittima."""
+        return {name: getattr(self, name) for name in sorted(self.model_fields_set)}
+
+
+class MembershipUpdateRequest(PlatformModel):
+    """Il corpo della PATCH sulla membership.
+
+    `role='agency_owner'` passa la validazione e viene rifiutato dal service
+    con 409, non qui con 422. La distinzione e' voluta: il ruolo esiste e la
+    richiesta e' ben formata - cio' che non va e' lo STATO del sistema, perche'
+    assegnare quel ruolo richiede di degradare qualcun altro. E' un conflitto,
+    e il 409 rimanda all'operazione che fa entrambe le cose insieme.
+    """
+
+    role: str | None = None
+    status: str | None = None
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, value):
+        if value is None:
+            return None
+        if value not in MEMBERSHIP_ROLES:
+            raise ValueError(f"role deve essere uno fra {list(MEMBERSHIP_ROLES)}")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value):
+        if value is None:
+            return None
+        if value not in MEMBERSHIP_STATUSES:
+            raise ValueError(
+                f"status deve essere uno fra {list(MEMBERSHIP_STATUSES)}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _reject_empty_and_null(self):
+        provided = self.model_fields_set
+        if not provided:
+            raise ValueError(EMPTY_PATCH_MESSAGE)
+        nulls = sorted(name for name in provided if getattr(self, name) is None)
+        if nulls:
+            raise ValueError(f"questi campi non ammettono null: {nulls}")
+        return self
+
+    def changed_fields(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in sorted(self.model_fields_set)}
+
+
+class OwnerTransferRequest(PlatformModel):
+    """Chi diventa titolare. Un campo, e nessun altro.
+
+    Niente ruolo da assegnare a chi lascia, niente stato: entrambe le cose
+    sono decise dall'operazione e non dal chiamante, perche' sono cio' che
+    rende il trasferimento una cosa sola invece di due modifiche coordinate a
+    mano.
+    """
+
+    operator_user_id: int
