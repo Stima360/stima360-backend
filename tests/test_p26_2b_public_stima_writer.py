@@ -71,7 +71,24 @@ class RecordingCursor:
             else:
                 self._row = (self.connection.agency_row,)
         elif "insert into stime" in lowered:
+            # P27-6: il doppio RICORDA l'agenzia incisa sulla riga. E' l'ultimo
+            # parametro della INSERT, cioe' il valore che `agency_id` riceve.
+            self.connection.stima_agency_id = params[-1] if params else None
             self._row = (NEW_STIMA_ID,)
+        elif "from stime where id" in lowered:
+            # ...e la rilegge da li'. Il contesto che il bridge riceve viene da
+            # questa riga, quindi restituire una costante renderebbe vacui i
+            # test B4 e B7: direbbero che due numeri scritti nel doppio
+            # coincidono, invece che "il bridge riceve cio' che la stima porta
+            # scritto". Una stima mai inserita resta senza riga, come nel
+            # database.
+            agenzia = getattr(self.connection, "stima_agency_id", None)
+            if agenzia is None:
+                self._row = None
+            elif self.dict_rows:
+                self._row = {"agency_id": agenzia}
+            else:
+                self._row = (agenzia,)
         else:
             self._row = None
 

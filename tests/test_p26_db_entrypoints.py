@@ -70,6 +70,17 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "and rolls the connection back. P26-6C's agency-immutability guards are "
         "PL/pgSQL triggers, so nothing but a real PostgreSQL can prove them"
     ),
+    "tests/test_p27_6_postgres_real.py": (
+        "TEST-only throwaway cluster; it does not connect to any deployed "
+        "database at all. It runs initdb in a temporary directory, starts a "
+        "server on a unix socket with listen_addresses='', creates its own "
+        "database, applies four migrations and deletes the whole directory at "
+        "teardown. It reads no connection environment variable, so it cannot "
+        "reach TEST or PROD even by accident, and it skips entirely when the "
+        "PostgreSQL binaries are absent. A unique index on an expression, a "
+        "RESTRICT foreign key and COUNT(*) OVER () are things only a real "
+        "PostgreSQL can prove"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

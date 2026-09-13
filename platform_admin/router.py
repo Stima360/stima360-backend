@@ -29,6 +29,7 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
 
 from . import (
+    aliases_service,
     agencies_service,
     configuration_service,
     operators_service,
@@ -52,10 +53,15 @@ from .exceptions import (
     PlatformAuditUnavailable,
     PlatformConflict,
     TerritoryAssignmentNotFound,
+    AliasKindRefused,
+    AliasNotFound,
     TerritoryNotFound,
 )
 from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
+    TerritoryAliasCreateRequest,
+    TerritoryAliasResponse,
+    TerritoryAliasUpdateRequest,
     AgencyConfigurationResponse,
     AgencyConfigurationUpdateRequest,
     AgencyCreateRequest,
@@ -711,3 +717,84 @@ def transfer_territory(
         assignment=AssignmentResponse(**result["assignment"]),
         revoked=AssignmentResponse(**result["revoked"]),
     )
+
+
+# ---------------------------------------------------------------------------
+# P27-6 - ALIAS DEL FUNNEL PUBBLICO
+#
+# Tre route e non di piu': elencare, dichiarare, ripuntare/revocare. Nessuna
+# DELETE - un alias revocato resta e dice fino a quando quel nome ha contato -
+# e nessuna route che crei un territorio: quella e' P27-5 e non va toccata.
+#
+# Nessuna di queste route instrada un lead. Il routing legge questa tabella e
+# non la scrive mai: e' la stessa separazione fra chi dichiara e chi consuma
+# che P27-5 ha stabilito per i territori.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/territories/{territory_id}/aliases",
+    response_model=list[TerritoryAliasResponse],
+)
+def list_territory_aliases(
+    territory_id: int,
+    actor: OperatorContext = Depends(require_platform_admin),
+):
+    try:
+        return aliases_service.list_territory_aliases(actor, territory_id)
+    except TerritoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AliasKindRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/territories/{territory_id}/aliases",
+    response_model=TerritoryAliasResponse,
+    status_code=201,
+)
+def create_territory_alias(
+    territory_id: int,
+    payload: TerritoryAliasCreateRequest,
+    actor: OperatorContext = Depends(require_platform_admin),
+):
+    try:
+        return aliases_service.create_alias(
+            actor,
+            territory_id,
+            source=payload.source,
+            match_value=payload.match_value,
+            created_fields=sorted(payload.model_dump(exclude_unset=True)),
+        )
+    except TerritoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AliasKindRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.patch("/aliases/{alias_id}", response_model=TerritoryAliasResponse)
+def update_territory_alias(
+    alias_id: int,
+    payload: TerritoryAliasUpdateRequest,
+    actor: OperatorContext = Depends(require_platform_admin),
+):
+    try:
+        return aliases_service.update_alias(
+            actor,
+            alias_id,
+            territory_id=payload.territory_id,
+            status=payload.status,
+            updated_fields=sorted(payload.model_dump(exclude_unset=True)),
+        )
+    except (AliasNotFound, TerritoryNotFound) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AliasKindRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

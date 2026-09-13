@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import (
+    ALIAS_MATCH_VALUE_MAX,
+    ALIAS_SOURCES,
+    ALIAS_STATUSES,
     AGENCY_EMPTY_PATCH_MESSAGE,
     AGENCY_LOCALES,
     ASSIGNMENT_EMPTY_PATCH_MESSAGE,
@@ -943,3 +946,91 @@ class TerritoryTransferRequest(PlatformModel):
     """
 
     agency_id: int
+
+
+# ---------------------------------------------------------------------------
+# P27-6 - ALIAS DEL FUNNEL PUBBLICO
+# ---------------------------------------------------------------------------
+
+
+def _validate_match_value(value: str) -> str:
+    """Il valore in ingresso, ripulito ai lati e con gli spazi interni collassati.
+
+    LE STESSE TRE PIEGHE DELLA 059, E NESSUNA DI PIU'. Qui se ne applicano due
+    - trim e collasso - mentre la terza, il case, resta al confronto: si
+    conserva il valore COME l'amministratore lo scrive, perche' e' la forma che
+    poi riconosce in un elenco, e si confronta normalizzato.
+
+    NON E' UNA CANONICALIZZAZIONE. Non abbassa le maiuscole, non sostituisce
+    spazi con trattini, non toglie accenti: 'Citta` Sant`Angelo' resta
+    esattamente quello. E' il difetto che P27-6 ha corretto - un secondo
+    algoritmo di identita' - e non va reintrodotto da questa parte.
+    """
+    value = " ".join(str(value).split())
+    if not value:
+        raise ValueError("match_value non puo' essere vuoto")
+    if len(value) > ALIAS_MATCH_VALUE_MAX:
+        raise ValueError(f"match_value supera {ALIAS_MATCH_VALUE_MAX} caratteri")
+    return value
+
+
+class TerritoryAliasCreateRequest(PlatformModel):
+    """Il corpo della POST che dichiara un alias.
+
+    `source` e' esplicito benche' oggi ne esista una sola: un valore
+    predefinito renderebbe invisibile la scelta il giorno in cui ne arrivasse
+    una seconda, e due sorgenti diverse che portano lo stesso testo sono due
+    alias diversi.
+    """
+
+    source: str
+    match_value: str
+
+    @field_validator("source")
+    @classmethod
+    def _check_source(cls, value):
+        if value not in ALIAS_SOURCES:
+            raise ValueError(f"source deve essere uno fra {list(ALIAS_SOURCES)}")
+        return value
+
+    @field_validator("match_value")
+    @classmethod
+    def _check_match_value(cls, value):
+        return _validate_match_value(value)
+
+
+class TerritoryAliasUpdateRequest(PlatformModel):
+    """Ripunta un alias, lo revoca, o entrambi.
+
+    Entrambi i campi opzionali, ma non entrambi assenti: una PATCH vuota non e'
+    una richiesta, e rifiutarla qui da' un 422 che nomina il campo invece di un
+    errore di dominio piu' in la'.
+    """
+
+    territory_id: int | None = None
+    status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _check_status(cls, value):
+        if value is not None and value not in ALIAS_STATUSES:
+            raise ValueError(f"status deve essere uno fra {list(ALIAS_STATUSES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _check_something_to_do(self):
+        if self.territory_id is None and self.status is None:
+            raise ValueError(
+                "indicare almeno un campo fra territory_id e status"
+            )
+        return self
+
+
+class TerritoryAliasResponse(PlatformModel):
+    """Un alias, come le route lo restituiscono."""
+
+    id: int
+    territory_id: int
+    source: str
+    match_value: str
+    status: str

@@ -137,3 +137,23 @@ class TerritoryAssignmentNotFound(Exception):
     una superficie che un giorno potrebbe non essere solo platform, sarebbe il
     modo di enumerare le assegnazioni altrui un id alla volta.
     """
+
+
+class AliasNotFound(Exception):
+    """P27-6: l'alias richiesto non esiste. 404, come TerritoryNotFound.
+
+    Classe propria e non riuso di TerritoryNotFound: le due assenze portano a
+    due azioni diverse - un territorio che manca va creato, un alias che manca
+    va dichiarato - e un router che le confondesse restituirebbe il messaggio
+    sbagliato a meta' dei casi.
+    """
+
+
+class AliasKindRefused(Exception):
+    """P27-6: l'alias punterebbe a un territorio che non e' un comune. 422.
+
+    Non 409: non c'e' nulla con cui confliggere. La richiesta nomina un
+    territorio che esiste ed e' valido, ma di un livello che il funnel pubblico
+    non puo' produrre - `stime.comune` e' un comune. E' un dato sbagliato nella
+    richiesta, e il 422 dice quale.
+    """

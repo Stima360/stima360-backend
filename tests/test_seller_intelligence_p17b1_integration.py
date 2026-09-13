@@ -55,7 +55,19 @@ class LegacyCursor:
     def execute(self, query, params=None):
         self.connection.executions.append((" ".join(query.split()), params))
         if "INSERT INTO stime" in query:
+            self.connection.stima_agency_id = params[-1] if params else None
             self.current = (self.connection.stima_id,)
+        elif "FROM stime WHERE id" in query:
+        # P27-6: dopo il commit, il contesto che va al bridge viene RILETTO
+        # dalla riga `stime`. Il doppio ricorda l'agenzia incisa dalla INSERT
+        # (l'ultimo parametro) e risponde con quella: una costante direbbe che
+        # due numeri scritti nel test coincidono, invece che "il bridge riceve
+        # cio' che la stima porta scritto".
+            incisa = getattr(self.connection, "stima_agency_id", None)
+            if incisa is None:
+                self.current = None
+            else:
+                self.current = {"agency_id": incisa} if self.dict_rows else (incisa,)
         elif "FROM agencies" in query:
             agency_id = self.connection.agency_id
             if agency_id is None:

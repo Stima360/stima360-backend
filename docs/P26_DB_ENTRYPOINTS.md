@@ -64,6 +64,7 @@ Nine files may build their own connection. Each is listed with the reason.
 | `tests/conftest.py` | test stub | n/a | Replaces `psycopg2.connect` with a stub; opens no connection. |
 | `tests/test_core_service_regressions.py` | test stub | n/a | Same. |
 | `tests/test_p26_6c_flow_immutability_pg.py` | TEST-only live proof | `current_database()` must contain `test`; opt-in via `P26_PG_DSN` | Proves P26-6C's FLOW agency-immutability triggers against a real PostgreSQL. Skips without the DSN. Negative fixture ids, SAVEPOINT per test, connection rolled back - nothing committed, no sequence consumed. |
+| `tests/test_p27_6_postgres_real.py` | TEST-only throwaway cluster | n/a - connects to no deployed database | Boots its own PostgreSQL with `initdb` in a temporary directory (unix socket, `listen_addresses=''`), applies migrations 027/057/058/059 and deletes everything at teardown. Reads no connection environment variable, so it cannot reach TEST or PROD; skips when the binaries are absent. Proves P27-6's unique index on the normalised alias value, the RESTRICT foreign key and the routing query itself. |
 
 The `run_*_e2e.py` scripts are a **privileged TEST channel**, not application
 traffic. They are permitted to bypass the choke point. They are not permitted

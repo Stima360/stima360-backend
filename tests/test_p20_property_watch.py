@@ -274,13 +274,48 @@ def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypat
     class Cursor:
         # P26-2B2B: honours cursor_factory the way psycopg2 does, so the
         # Default Agency lookup salva_stima now performs gets a dict row.
-        def __init__(self, dict_rows=False):
+        #
+        # P27-6: la INSERT e la rilettura avvengono su DUE cursori diversi
+        # della stessa connessione, quindi cio' che la stima porta scritto sta
+        # sulla connessione. Tenerlo sul cursore lo avrebbe perso fra i due, e
+        # la rilettura avrebbe risposto un valore predefinito qualunque cosa
+        # fosse stata incisa.
+        def __init__(self, connessione, dict_rows=False):
+            self.connessione = connessione
             self.dict_rows = dict_rows
 
-        def execute(self, _query, _params=None):
-            pass
+        def execute(self, query, _params=None):
+            # P27-6: il funnel pubblico interroga PRIMA gli alias di territorio
+            # e solo dopo l'agenzia predefinita. Questo doppio non ha una rete,
+            # quindi nessun alias dichiara il comune e la risposta e' `None`: il
+            # routing ricade sul ripiego, che e' la riga che questo test si
+            # aspetta da sempre.
+            #
+            # Rispondere `{"id": 1}` anche alla prima query direbbe che un
+            # territorio c'e' ed e' presidiato dall'agenzia 1, che qui non e'
+            # vero e renderebbe il test verde per un'altra ragione.
+            #
+            # La tabella si chiama `network_territory_aliases` e la riga da cui
+            # la query parte e' quella: cercare `network_territories`, come
+            # faceva la prima stesura, non corrisponderebbe piu' e il doppio
+            # risponderebbe `{"id": 1}` fingendo un territorio instradato.
+            self.senza_righe = "network_territory_aliases" in query
+
+            # P27-6: dopo il commit, il contesto del bridge viene RILETTO dalla
+            # riga `stime` appena scritta. Il doppio risponde con l'agenzia che
+            # la INSERT ha inciso - l'ultimo parametro - invece che con una
+            # costante: cosi' la lettura dice davvero cio' che la stima porta
+            # scritto, e non due numeri che si somigliano.
+            if "insert into stime" in query.lower():
+                self.connessione.agenzia_incisa = _params[-1] if _params else None
+            self.legge_la_stima = "FROM stime WHERE id" in query
 
         def fetchone(self):
+            if getattr(self, "senza_righe", False):
+                return None
+            if getattr(self, "legge_la_stima", False):
+                incisa = getattr(self.connessione, "agenzia_incisa", None)
+                return None if incisa is None else {"agency_id": incisa}
             return {"id": 1} if self.dict_rows else (501,)
 
         def close(self):
@@ -288,7 +323,7 @@ def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypat
 
     class Connection:
         def cursor(self, **kwargs):
-            return Cursor(dict_rows="cursor_factory" in kwargs)
+            return Cursor(self, dict_rows="cursor_factory" in kwargs)
 
         def commit(self):
             pass

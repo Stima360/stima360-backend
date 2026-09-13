@@ -622,10 +622,23 @@ def test_b1_the_whole_migration_set_is_still_valid_and_contiguous(runner):
     assert [v for m in migrations for v in runner.validate_migration(m)] == []
 
 
-def test_b1_058_is_the_highest_version_and_follows_057(runner):
+def test_b1_058_follows_057(runner):
+    """058 esiste e segue immediatamente 057.
+
+    Questo test diceva anche "e' la piu' alta". Non poteva restare: P27-6 ha
+    aggiunto la 059, e un perno sulla cima della sequenza dentro il file di una
+    fase chiusa si rompe a ogni fase successiva - esattamente quel che dice il
+    commento della sezione K poco piu' sotto, che l'elenco esaustivo appartiene
+    SEMPRE alla fase piu' recente. La cima e' ora affermata in
+    `tests/test_p27_6_lead_routing.py`, dove si rompera' quando arrivera' la
+    060, che e' il posto giusto in cui accorgersene.
+
+    Quel che P27-5 deve continuare a garantire e' la sua posizione: 058 c'e',
+    e fra lei e 057 non si e' infilato niente.
+    """
     numbers = sorted(m.number for m in runner.discover_migrations())
-    assert numbers[-1] == 58, numbers[-3:]
-    assert 57 in numbers, numbers[-3:]
+    assert 58 in numbers, numbers[-4:]
+    assert max(n for n in numbers if n < 58) == 57, numbers[-4:]
 
 
 def test_b1_058_is_above_the_runner_owned_transaction_gate(runner):
@@ -2232,18 +2245,78 @@ def test_j4_no_territory_query_is_scoped_by_agency_context():
         assert "scoped_source" not in code, modulo
 
 
-def test_j5_the_public_funnel_still_routes_to_the_literal_default_agency():
-    """P27-5 NON TOCCA L'INGRESSO PUBBLICO.
+def test_j5_p27_5_hands_the_public_funnel_over_to_p27_6_intact():
+    """IL CONSEGNAMENTO REALE P27-5 -> P27-6, non una ricerca testuale.
 
-    La stima pubblica continua a risolvere l'agenzia per lo slug costante, come
-    P26-1 l'ha congelata. Cambiare quel percorso e' P27-6, e farlo qui
-    significherebbe spostare il routing dei lead dentro la fase che dichiara di
-    non occuparsene.
+    La versione precedente di questo test cercava la stringa 'territor' in
+    `main.py` e chiedeva che non ci fosse. Non provava niente: P27-6 instrada
+    davvero i lead per territorio e questo test resta verde lo stesso, perche'
+    la parola vive in `network_routing` e non in `main.py`. Un test che non puo'
+    fallire quando la cosa che sorveglia accade e' peggio di nessun test - dice
+    "controllato" e non ha controllato.
+
+    Quel che P27-5 deve davvero garantire e' che la fabbrica congelata da P26-1
+    sia ancora li', intatta, e che sia LEI il ripiego di P27-6. Il territorio
+    non e' piu' estraneo all'ingresso pubblico - e' il punto di P27-6 - ma il
+    comportamento di P26-1 deve restare raggiungibile per intero quando nessun
+    alias dichiara il comune.
     """
-    source = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "_public_stima_system_context" in source
-    assert "territor" not in _code_of(source).lower(), \
-        "main.py nomina i territori: l'ingresso pubblico e' stato toccato"
+    import inspect
+
+    from core.scope import system_context_for_public_stima
+    from network_routing.service import (
+        RoutingDecision,
+        resolve_agency_for_public_stima,
+        system_context_for_routed_public_stima,
+    )
+
+    # 1. La fabbrica P26-1 e' intatta: risolve ancora per SLUG costante, e non
+    #    sa niente di territori ne' di alias.
+    congelata = inspect.getsource(system_context_for_public_stima)
+    assert "resolve_default_agency_id(cur)" in congelata
+    assert "territor" not in congelata.lower()
+    assert "alias" not in congelata.lower()
+
+    # 2. P27-6 non la sostituisce: la affianca, e le sue due strade finiscono
+    #    nello stesso tipo di contesto con la stessa origine.
+    assert inspect.isfunction(system_context_for_routed_public_stima)
+
+    # 3. Il ripiego di P27-6 E' il comportamento di P26-1: stesso slug.
+    from operator_auth.enums import DEFAULT_AGENCY_SLUG
+
+    instradato = inspect.getsource(system_context_for_routed_public_stima)
+    assert "DEFAULT_AGENCY_SLUG" in instradato
+
+    class _CursoreSenzaRete:
+        """Nessun alias, nessun territorio: solo l'agenzia di ripiego."""
+
+        def __init__(self):
+            self.viste = []
+
+        def execute(self, query, params=None):
+            self.viste.append(" ".join(query.split()))
+            self._riga = (
+                {"id": 1}
+                if "FROM agencies WHERE slug" in self.viste[-1]
+                else None
+            )
+
+        def fetchone(self):
+            return self._riga
+
+    cur = _CursoreSenzaRete()
+    decisione = resolve_agency_for_public_stima(
+        cur, comune="Un Comune Non Dichiarato", fallback_slug=DEFAULT_AGENCY_SLUG
+    )
+    assert decisione.source == RoutingDecision.FALLBACK
+    assert decisione.agency_id == 1
+    assert any("network_territory_aliases" in q for q in cur.viste), cur.viste
+
+    # 4. E P27-5 stessa resta fuori dall'ingresso pubblico: `main.py` non
+    #    importa il pacchetto amministrativo dei territori.
+    codice = _code_of((ROOT / "main.py").read_text(encoding="utf-8"))
+    assert "territories_service" not in codice
+    assert "aliases_service" not in codice
 
 
 def test_j6_no_pre_existing_migration_was_modified(runner):
@@ -2260,8 +2333,15 @@ def test_j6_no_pre_existing_migration_was_modified(runner):
     ).stdout.splitlines()
     for line in changed:
         stato, path = line[:2].strip(), line[3:]
-        assert path.startswith(f"migrations/{VERSION}"), line
+        # `??` = non tracciato, cioe' NUOVO. Una migration gia' applicata che
+        # cambia comparirebbe come ` M` ed e' esattamente quel che questo test
+        # vieta. Il perno era sul numero 058; ora il numero deve solo essere
+        # >= 058, perche' P27-6 aggiunge la 059 e le fasi seguenti ne
+        # aggiungeranno altre - mentre "nessuna PRE-ESISTENTE e' stata
+        # modificata" e' la garanzia che non deve mai indebolirsi.
         assert stato == "??", line
+        numero = int(Path(path).name.split("_", 1)[0])
+        assert numero >= int(VERSION.split("_", 1)[0]), line
 
 
 # ===========================================================================
@@ -2272,85 +2352,14 @@ def test_j6_no_pre_existing_migration_was_modified(runner):
 # e diventerebbe rumore invece che sorveglianza.
 # ===========================================================================
 
-def test_k1_the_real_application_exposes_exactly_the_platform_surface():
-    import main
-
-    spec = main.app.openapi()
-    found = {
-        (method.upper(), path)
-        for path, operations in spec["paths"].items()
-        if path.startswith(ROUTER_PREFIX)
-        for method in operations
-    }
-    assert found == {
-        ("GET", f"{ROUTER_PREFIX}/me"),
-        # P27-2
-        ("GET", f"{ROUTER_PREFIX}/agencies"),
-        ("POST", f"{ROUTER_PREFIX}/agencies"),
-        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}"),
-        ("PATCH", f"{ROUTER_PREFIX}/agencies/{{agency_id}}"),
-        # P27-3
-        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/operators"),
-        ("POST", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/operators"),
-        ("GET", f"{ROUTER_PREFIX}/operators/{{operator_user_id}}"),
-        ("PATCH", f"{ROUTER_PREFIX}/operators/{{operator_user_id}}"),
-        ("PATCH", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/operators"
-                  "/{operator_user_id}/membership"),
-        ("PUT", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/owner"),
-        # P27-4
-        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/configuration"),
-        ("PATCH", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/configuration"),
-        # P27-5
-        ("GET", f"{ROUTER_PREFIX}/territories"),
-        ("POST", f"{ROUTER_PREFIX}/territories"),
-        ("GET", f"{ROUTER_PREFIX}/territories/{{territory_id}}"),
-        ("POST", f"{ROUTER_PREFIX}/territories/{{territory_id}}/transfer"),
-        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/territories"),
-        ("POST", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/territories"),
-        ("PATCH", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/territories"
-                  "/{assignment_id}"),
-    }, sorted(found)
-
-
-def test_k2_every_mutation_in_the_package_goes_through_the_shared_order():
-    """UNA copia dell'ordine, e UNDICI mutazioni che ci passano tutte.
-
-    L'uguaglianza esatta e' il perno: un `>=` lascerebbe passare una mutazione
-    nuova che committa per conto suo, che e' precisamente il difetto che questo
-    test esiste per intercettare.
-    """
-    package = ROOT / "platform_admin"
-
-    commits = {
-        path.name: path.read_text(encoding="utf-8").count("conn.commit()")
-        for path in sorted(package.glob("*.py"))
-        if path.name != "database.py"
-    }
-    assert sum(commits.values()) == 1, commits
-    assert commits["transaction.py"] == 1, commits
-
-    callers = []
-    for path in sorted(package.glob("*_service.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        callers += [
-            node.name for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
-            and any(
-                isinstance(inner, ast.Call)
-                and isinstance(inner.func, ast.Name)
-                and inner.func.id == "audit_then_commit"
-                for inner in ast.walk(node)
-            )
-        ]
-    assert set(callers) == {
-        "create_agency", "update_agency",                       # P27-2
-        "create_agency_operator", "update_operator",            # P27-3
-        "update_membership", "transfer_owner",                  # P27-3
-        "update_configuration",                                 # P27-4
-        "create_territory", "assign_territory",                 # P27-5
-        "update_assignment", "transfer_territory",              # P27-5
-    }, sorted(callers)
-
+# k1 (la superficie completa di /api/platform) e k2 (l'elenco esaustivo delle
+# mutazioni) SONO STATI SPOSTATI in tests/test_p27_6_lead_routing.py, aggiornati
+# con le tre route e le due mutazioni degli alias.
+#
+# Non e' una rimozione: e' la regola scritta qui sopra applicata. Un elenco
+# esaustivo appartiene alla fase piu' recente, altrimenti ogni fase successiva
+# lo fa fallire e chi lo ripara finisce per allentarlo - da uguaglianza a
+# sottoinsieme - che e' il modo in cui una sorveglianza smette di sorvegliare.
 
 def test_k3_no_p27_5_module_declares_a_tenant_dependency():
     """La superficie Platform non e' una route di tenant con piu' privilegi."""

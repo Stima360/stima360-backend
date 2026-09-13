@@ -478,3 +478,58 @@ ASSIGNMENT_REVOKED_IS_FINAL_MESSAGE = (
     "L'assegnazione e' revocata: uno stato terminale. Per rimettere "
     "l'agenzia su questo territorio, creare una nuova assegnazione."
 )
+
+
+# ---------------------------------------------------------------------------
+# P27-6 - ALIAS DEL FUNNEL PUBBLICO
+#
+# Un alias dichiara che un VALORE proveniente da una sorgente esterna appartiene
+# a un territorio. Esiste perche' P27-5 ha separato `label` e `canonical_key` di
+# proposito: nessun vincolo obbliga la chiave di un comune a essere lo slug
+# della sua etichetta, quindi la corrispondenza fra 'Alba Adriatica' in ingresso
+# e il territorio va DICHIARATA, non calcolata.
+# ---------------------------------------------------------------------------
+
+# UNA SOLA SORGENTE, e la colonna esiste comunque. Identica al CHECK
+# `network_territory_aliases_source_chk` della 059: il test confronta i due
+# elenchi, cosi' una seconda sorgente aggiunta da un lato fallisce li' invece di
+# essere rifiutata dal database alla prima scrittura.
+#
+# Non e' un sistema universale di alias, ed e' la colonna che gli impedisce di
+# diventarlo per sbaglio: senza, 'Alba Adriatica' del funnel e 'Alba Adriatica'
+# di una futura sorgente sarebbero lo stesso alias.
+ALIAS_SOURCE_PUBLIC_STIMA_COMUNE = "public_stima_comune"
+ALIAS_SOURCES = (ALIAS_SOURCE_PUBLIC_STIMA_COMUNE,)
+
+# Due stati, non tre. `agency_territory_assignments` ne ha anche uno
+# 'suspended' perche' un affiliato in pausa non e' un affiliato sostituito; un
+# alias in pausa non significa niente - o quel nome appartiene a quel
+# territorio, o non gli appartiene.
+ALIAS_ACTIVE = "active"
+ALIAS_REVOKED = "revoked"
+ALIAS_STATUSES = (ALIAS_ACTIVE, ALIAS_REVOKED)
+
+# Il livello territoriale che il funnel pubblico puo' nominare. `stime.comune`
+# e' un comune: un alias appeso a una provincia instraderebbe l'intera provincia
+# a chi presidia un paese.
+ALIAS_TERRITORY_KIND = TERRITORY_KIND_MUNICIPALITY
+
+# La lunghezza della colonna in 059.
+ALIAS_MATCH_VALUE_MAX = 200
+
+TARGET_TYPE_TERRITORY_ALIAS = "territory_alias"
+ACTION_TERRITORY_ALIAS_CREATE = "platform.territory.alias.create"
+ACTION_TERRITORY_ALIAS_UPDATE = "platform.territory.alias.update"
+
+ALIAS_NOT_FOUND_MESSAGE = "Alias non trovato."
+ALIAS_EXISTS_MESSAGE = (
+    "Questo valore e' gia' dichiarato per un territorio: revocare l'alias "
+    "esistente prima di dichiararlo altrove."
+)
+ALIAS_REVOKED_IS_FINAL_MESSAGE = (
+    "Un alias revocato non torna attivo: dichiararne uno nuovo."
+)
+ALIAS_KIND_MESSAGE = (
+    "Un alias del funnel pubblico puo' puntare solo a un territorio "
+    "'municipality'."
+)

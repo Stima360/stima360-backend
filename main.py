@@ -19,6 +19,10 @@ from urllib.parse import urlencode
 from core import service as core_service
 from core.router import router as core_router
 from core.scope import system_context_for_public_stima
+from network_routing.service import (
+    system_context_for_persisted_public_stima,
+    system_context_for_routed_public_stima,
+)
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context, require_authenticated_operator, require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -187,6 +191,67 @@ def _public_stima_system_context(conn):
         return system_context_for_public_stima(agency_cur)
     finally:
         try: agency_cur.close()
+        except: pass
+
+
+def _routed_public_stima_system_context(conn, *, comune):
+    """P27-6: lo stesso contesto, scelto dal TERRITORIO invece che dallo slug.
+
+    Perche' accanto alla funzione qui sopra e non al suo posto: i due flussi
+    pubblici hanno due domande diverse. `salva_stima` fa nascere un lead e ha un
+    comune, quindi puo' e deve essere instradata; `salva_stima_dettagliata`
+    completa una stima che l'agenzia ce l'ha gia', e nel caso orfano non ha un
+    comune proprio su cui decidere. Instradare anche quella significherebbe
+    inventare un territorio per una riga che non ne ha uno.
+
+    Stesso cursore, stessa connessione, stessa transazione della INSERT: la
+    decisione e la scrittura non possono divergere, ed e' la ragione per cui
+    questa funzione riceve `conn` e non ne apre una propria.
+
+    Ritorna la coppia `(contesto, decisione)`. La decisione non entra nel
+    contesto - `SystemAgencyContext` e' congelato e il bridge lo controlla per
+    tipo - ma serve al log: senza, "questo lead e' andato ad Alba Adriatica"
+    e "questo lead e' andato al ripiego" sarebbero la stessa riga.
+    """
+    agency_cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        return system_context_for_routed_public_stima(agency_cur, comune=comune)
+    finally:
+        try: agency_cur.close()
+        except: pass
+
+
+def _persisted_public_stima_system_context(conn, *, stima_id):
+    """Il contesto che va al bridge: letto dalla stima, non dalla decisione.
+
+    PERCHE' NON SI RIUSA L'OGGETTO DELLA DECISIONE, che pure e' li' e sarebbe
+    gratis.
+
+    Sul primo passaggio i due contesti sono identici - la decisione e' appena
+    stata scritta nella colonna che questa funzione rilegge. La differenza
+    riguarda il SECONDO passaggio: chi riprende il bridge su uno `stima_id` che
+    esiste gia' deve ottenere l'agenzia che quella stima porta scritta, non
+    quella che il routing sceglierebbe oggi. Facendo passare il bridge di
+    qui SEMPRE, l'unica strada che esiste e' quella giusta, e non c'e' un
+    secondo percorso da ricordarsi di usare al momento del retry.
+
+    Il costo e' una `SELECT agency_id FROM stime WHERE id = %s` per stima. Il
+    ricavo e' che `stime.agency_id` diventa la fonte di verita' nei fatti e non
+    solo nelle intenzioni - e che il trigger della 033 torna a essere quel che
+    deve essere: una difesa che non scatta mai, invece del modo in cui un retry
+    normale si comporta bene.
+
+    Stessa connessione della INSERT, dopo il `COMMIT`: la riga c'e' e si legge
+    da li'. Aprirne un'altra rimetterebbe in mezzo la finestra che l'ordine
+    serve a chiudere.
+    """
+    stima_cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        return system_context_for_persisted_public_stima(
+            stima_cur, stima_id=stima_id
+        )
+    finally:
+        try: stima_cur.close()
         except: pass
 
 
@@ -718,11 +783,26 @@ async def salva_stima(request: Request):
         # INSERT below commits: the agency is proven to exist and to be active
         # at the moment the row is written, not merely at some earlier point.
         #
-        # Through the module's single call site - see
-        # _public_stima_system_context for why there is exactly one.
-        system_ctx = _public_stima_system_context(conn)
-
+        # P27-6: l'agenzia non e' piu' sempre quella predefinita.
+        #
+        # Si cerca prima chi presidia il comune (`network_territories` +
+        # `agency_territory_assignments`, entrambi attivi); solo se nessuno lo
+        # presidia si ricade sullo slug costante, che e' esattamente il
+        # comportamento congelato da P26-1. Il ripiego non e' un ramo di
+        # cortesia: e' la stessa risoluzione di prima, spostata dopo la domanda
+        # sul territorio.
+        #
+        # `comune_db` e NON `data["comune"]`: si instrada sullo stesso valore
+        # che finisce nella riga. Instradare sul grezzo e scrivere il
+        # normalizzato vorrebbe dire che la stima dice di stare in un posto e
+        # il lead e' stato deciso da un altro.
         comune_db = normalizza_comune(data["comune"]) or data["comune"]
+
+        # Through the module's single call site - see
+        # _routed_public_stima_system_context for why there is exactly one.
+        system_ctx, routing_decision = _routed_public_stima_system_context(
+            conn, comune=comune_db
+        )
 
         cur.execute("""
              INSERT INTO stime
@@ -742,6 +822,29 @@ async def salva_stima(request: Request):
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
+
+        # DA QUI IN POI LA DECISIONE E' QUELLA SCRITTA, non quella in memoria.
+        # Il contesto che andra' al bridge viene riletto dalla stima appena
+        # committata: e' la stessa agenzia, ma per la strada che vale anche al
+        # secondo passaggio. Vedi _persisted_public_stima_system_context.
+        bridge_ctx = _persisted_public_stima_system_context(conn, stima_id=new_id)
+        # P27-6: la decisione di routing nel log applicativo, e NON in
+        # `platform_audit_log`. Quella tabella registra gli atti amministrativi
+        # di chi governa la rete - creare un'agenzia, assegnare un territorio -
+        # ed e' append-only: scriverci una riga per ogni stima pubblica la
+        # trasformerebbe in un registro di traffico in cui gli atti
+        # amministrativi diventano introvabili.
+        #
+        # Nessun dato personale: id della stima, agenzia scelta, come. Il
+        # comune compare solo nella forma canonica gia' cercata, che e' un
+        # nome di luogo e non un indirizzo.
+        logger.info(
+            "public_stima_routing stima_id=%s agency_id=%s source=%s valore=%s",
+            new_id,
+            routing_decision.agency_id,
+            routing_decision.source,
+            routing_decision.matched_value,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -760,9 +863,14 @@ async def salva_stima(request: Request):
             phone=data["telefono"],
             marketing_consent=consenso_marketing,
             marketing_consent_at=consenso_marketing_at,
-            # The context resolved above, not a fresh lookup: the contact and
-            # the lead must land in the agency this stima already carries.
-            system_ctx=system_ctx,
+            # Il contesto LETTO dalla riga `stime`, non quello della decisione:
+            # il contatto e il lead devono finire nell'agenzia che questa stima
+            # porta scritta, e cosi' vale anche se qualcuno ripassa di qui dopo
+            # che la rete e' cambiata. (Il nome della colonna non compare in
+            # questo commento di proposito: `test_j5` di P26-1 legge questa
+            # chiamata come testo grezzo per accertarsi che nessun selettore di
+            # agenzia vi transiti, e non distingue codice da prosa.)
+            system_ctx=bridge_ctx,
         )
         bridge_log = logger.warning if bridge_result["status"] in {"conflict", "skipped"} else logger.info
         bridge_log(
