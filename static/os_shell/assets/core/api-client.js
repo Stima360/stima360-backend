@@ -69,6 +69,15 @@ export function apiPatch(path, body) {
   return request(path, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
+// P27-7: il trasferimento del titolare di un'agenzia e' una PUT
+// (`PUT /api/platform/agencies/{id}/owner`), e il verbo e' una scelta del
+// backend che il client non deve reinterpretare: quella route SOSTITUISCE
+// il titolare, non ne aggiorna dei campi. Senza questa funzione la UI avrebbe
+// dovuto usare POST o PATCH su una route che non li accetta.
+export function apiPut(path, body) {
+  return request(path, { method: 'PUT', body: JSON.stringify(body) });
+}
+
 export function apiDelete(path) {
   return request(path, { method: 'DELETE' });
 }

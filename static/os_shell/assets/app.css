@@ -468,3 +468,30 @@ dialog.modal.modal-wide { max-width: 680px; }
 }
 .readiness-side { margin-top: 8px; }
 
+
+/* P27-7 - sezione Rete (amministrazione di piattaforma).
+   Poche regole, tutte additive: nessuna classe esistente viene ridefinita,
+   quindi nessuna pagina fuori dalla Rete cambia aspetto. */
+
+/* Le azioni distruttive - revocare un territorio, sospendere un'agenzia - si
+   distinguono a colpo d'occhio dalle altre. Il colore non e' la conferma: il
+   dialogo che spiega cosa cambia lo e'. */
+.btn.danger { border-color: #b3261e; color: #b3261e; }
+.btn.danger:hover { background: #b3261e; color: #fff; }
+
+/* La chiave canonica e lo slug sono identificativi: si leggono come tali e non
+   si confondono con l'etichetta accanto. Primitiva condivisa come `.badge`,
+   oggi usata solo dalla Rete: nessun'altra vista del CRM emette <code>. */
+.content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(23, 35, 58, .06);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* NOTA: qui c'era una seconda `.list-toolbar { flex-wrap: wrap; gap: 8px }`.
+   E' stata tolta perche' sbagliata due volte: la regola a riga 210 gia'
+   dichiara `flex-wrap: wrap`, quindi non aggiungeva niente, e riduceva il
+   `gap` da 10px a 8px su OGNI barra di lista del CRM - Contatti, Immobili,
+   Acquirenti - cioe' esattamente le pagine che P27-7 non deve toccare. */

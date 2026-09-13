@@ -18,6 +18,9 @@ import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
 import { renderAttivita } from './views/attivita.js';
 import { renderAutomazioni } from './views/automazioni.js';
 import { renderAutomazioneDettaglio } from './views/automazione-dettaglio.js';
+import { renderRete } from './views/rete.js';
+import { renderReteAgenzia } from './views/rete-agenzia.js';
+import { renderReteTerritorio } from './views/rete-territorio.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -28,6 +31,22 @@ const SECTIONS = [
   { name: 'attivita', label: 'Attività' },
   { name: 'automazioni', label: 'Automazioni' },
 ];
+
+// P27-7 - la sezione RETE, che NON sta in SECTIONS.
+//
+// SECTIONS e' la sidebar di ogni operatore: quelle voci le vede chiunque abbia
+// una sessione. "Rete" amministra la piattaforma - agenzie, operatori,
+// territori - e deve comparire solo a chi e' `is_platform_admin`, quindi il
+// suo bottone viene aggiunto e RIMOSSO al cambio di sessione (vedi
+// `aggiornaVoceRete` in fondo) invece di essere disegnato una volta all'avvio.
+//
+// La rotta, invece, e' registrata sempre: nasconderla non e' una difesa -
+// `#/rete` si scrive a mano - e la difesa vera e' altrove, in due posti veri.
+// La view chiede `GET /api/platform/me` prima di ogni altra cosa e si ferma
+// sul 403; e ogni route di `/api/platform` e' protetta da
+// `require_platform_admin` (P27-1), che e' l'unica autorita' in materia. Un
+// tenant normale che arrivi qui non vede dati: vede un avviso.
+const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
 
 const loginView = document.getElementById('login-view');
 const appView = document.getElementById('app-view');
@@ -79,12 +98,21 @@ registerRoute('automazioni', (container, params = []) => {
 // quindi non ha ne' un bottone in sidebar ne' un registerRoute: e'
 // interamente assente dall'app, non solo nascosta via CSS.
 
+// "rete" copre l'elenco (#/rete), la scheda agenzia (#/rete/agenzie/{id}) e la
+// scheda territorio (#/rete/territori/{id}): stesso pattern dispatcher gia'
+// usato dalle altre sezioni con lista+dettaglio.
+registerRoute('rete', (container, params = []) => {
+  if (params[0] === 'agenzie' && params[1]) return renderReteAgenzia(container, params[1]);
+  if (params[0] === 'territori' && params[1]) return renderReteTerritorio(container, params[1]);
+  return renderRete(container);
+});
+
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
   // Vedi il commento su `sessionEpoch` in core/auth.js.
   epoch: sessionEpoch,
   onNavigate(name) {
-    const active = SECTIONS.find((s) => s.name === name);
+    const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === name);
@@ -102,6 +130,26 @@ for (const section of SECTIONS) {
   btn.dataset.route = section.name;
   btn.textContent = section.label;
   btn.addEventListener('click', () => navigate(section.name));
+  navEl.appendChild(btn);
+}
+
+// P27-7. Il bottone "Rete" esiste nel DOM solo mentre la sessione corrente e'
+// di un amministratore di piattaforma. Non `hidden`: RIMOSSO - e' la stessa
+// lezione di P26-4, dove nascondere invece di togliere lasciava la superficie
+// della sessione precedente a un `hidden = false` di distanza.
+function aggiornaVoceRete(session) {
+  const esistente = navEl.querySelector('[data-route="rete"]');
+  if (!session || session.is_platform_admin !== true) {
+    if (esistente) esistente.remove();
+    return;
+  }
+  if (esistente) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'nav-item';
+  btn.dataset.route = SEZIONE_RETE.name;
+  btn.textContent = SEZIONE_RETE.label;
+  btn.addEventListener('click', () => navigate(SEZIONE_RETE.name));
   navEl.appendChild(btn);
 }
 
@@ -156,6 +204,7 @@ function clearApplicationSurface() {
 
 onAuthChange((session) => {
   const authenticated = session !== null;
+  aggiornaVoceRete(session);
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;
   // Il form viene svuotato appena la sessione esiste: la password non deve
