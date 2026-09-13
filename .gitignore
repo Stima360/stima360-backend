@@ -11,3 +11,8 @@ manifest.csv
 manifest.csv.parziale
 manifest.csv.sha256
 controllo_manifest.tsv
+
+# Local/generated artifacts
+.DS_Store
+__pycache__/
+*.py[cod]
