@@ -28,10 +28,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
 
-from . import agencies_service, operators_service
+from . import agencies_service, configuration_service, operators_service
 from .dependencies import require_platform_admin
-from .enums import AUDIT_UNAVAILABLE_MESSAGE, ROUTER_PREFIX
+from .enums import (
+    AUDIT_UNAVAILABLE_MESSAGE,
+    CONFIGURATION_CORRUPTED_MESSAGE,
+    ROUTER_PREFIX,
+)
 from .exceptions import (
+    AgencyConfigurationCorrupted,
     AgencyNotFound,
     AgencySlugConflict,
     MembershipNotFound,
@@ -42,6 +47,8 @@ from .exceptions import (
 )
 from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
+    AgencyConfigurationResponse,
+    AgencyConfigurationUpdateRequest,
     AgencyCreateRequest,
     AgencyOperatorResponse,
     AgencyResponse,
@@ -143,7 +150,10 @@ def create_agency(
             name=payload.name,
             slug=payload.slug,
             status=payload.status,
-            settings=payload.settings,
+            # `supplied()` da' i soli campi che il chiamante ha indicato: una
+            # POST senza `settings` scrive `{}`, e i default si applicano in
+            # lettura.
+            settings=payload.settings.supplied(),
             created_fields=payload.created_fields(),
         )
     except AgencySlugConflict as exc:
@@ -161,7 +171,7 @@ def update_agency(
     payload: AgencyUpdateRequest,
     context: OperatorContext = Depends(require_platform_admin),
 ) -> AgencyResponse:
-    """Aggiorna i soli campi presenti nel corpo: name, status, settings.
+    """Aggiorna i soli campi presenti nel corpo: name e status.
 
     Un corpo vuoto non arriva qui: lo schema lo rifiuta con 422, che e' il
     posto giusto - e' la richiesta a essere malformata, non lo stato del
@@ -384,3 +394,68 @@ def _agency_operator(row: dict) -> AgencyOperatorResponse:
         operator=OperatorResponse(**operator),
         membership=MembershipResponse(**membership),
     )
+
+
+# ---------------------------------------------------------------------------
+# P27-4 - CONFIGURAZIONE AGENZIA
+#
+# Due route, nessuna DELETE: una configurazione non si cancella, si riporta ai
+# valori che si vogliono. Non duplicano `name`, `slug` e `status`, che restano
+# proprieta' dell'agenzia e appartengono a P27-2.
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/agencies/{agency_id}/configuration",
+    response_model=AgencyConfigurationResponse,
+)
+def get_agency_configuration(
+    agency_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> AgencyConfigurationResponse:
+    """La configurazione, con i default gia' applicati.
+
+    Nessuna riga di audit operativa: l'ammissione di P27-1 ha gia' registrato
+    chi e' entrato e su quale route.
+    """
+    try:
+        return AgencyConfigurationResponse(
+            **configuration_service.get_configuration(agency_id)
+        )
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AgencyConfigurationCorrupted as exc:
+        # 500 con un messaggio COSTANTE: `str(exc)` nomina i campi corrotti,
+        # che serve nel log del server e non a chi ha chiamato. Chi riceve
+        # questo 500 non ha sbagliato nulla e non puo' farci niente.
+        raise HTTPException(
+            status_code=500, detail=CONFIGURATION_CORRUPTED_MESSAGE
+        ) from exc
+
+
+@router.patch(
+    "/agencies/{agency_id}/configuration",
+    response_model=AgencyConfigurationResponse,
+)
+def update_agency_configuration(
+    agency_id: int,
+    payload: AgencyConfigurationUpdateRequest,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> AgencyConfigurationResponse:
+    """Scrive i soli campi indicati. Merge, mai sostituzione."""
+    try:
+        configuration = configuration_service.update_configuration(
+            context, agency_id, payload.supplied()
+        )
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AgencyConfigurationCorrupted as exc:
+        # Una PATCH che non sostituisce il campo corrotto: scriverebbe una riga
+        # ancora illeggibile. Si ferma prima di scrivere.
+        raise HTTPException(
+            status_code=500, detail=CONFIGURATION_CORRUPTED_MESSAGE
+        ) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return AgencyConfigurationResponse(**configuration)

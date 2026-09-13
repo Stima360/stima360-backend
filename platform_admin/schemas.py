@@ -9,11 +9,14 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import (
     AGENCY_EMPTY_PATCH_MESSAGE,
+    AGENCY_LOCALES,
+    CONFIGURATION_EMPTY_PATCH_MESSAGE,
     EMPTY_PATCH_MESSAGE,
     MEMBERSHIP_ROLES,
     MEMBERSHIP_STATUSES,
@@ -120,6 +123,132 @@ def _validate_status(value: str) -> str:
     return value
 
 
+# ---------------------------------------------------------------------------
+# P27-4 - CONFIGURAZIONE AGENZIA
+#
+# Definita QUI, prima di `AgencyCreateRequest`, e non in fondo al file dove il
+# resto di P27-4 sarebbe finito naturalmente: quel modello la usa come tipo del
+# campo `settings`, e un'annotazione a un nome definito piu' sotto resta un
+# `ForwardRef` finche' qualcuno non la risolve. Pydantic la risolve al primo
+# uso, quindi la validazione funziona - ma `model_fields[...].annotation`
+# resterebbe un riferimento non risolto, e in un ordine di import diverso lo
+# resterebbe anche a runtime. Definirla prima toglie il problema invece di
+# rattopparlo con un `model_rebuild()`.
+# ---------------------------------------------------------------------------
+
+def _validate_timezone(value: str) -> str:
+    """Un identificatore IANA che `zoneinfo` sa risolvere davvero.
+
+    Nessun elenco mantenuto a mano: il database dei fusi cambia piu' volte
+    l'anno - l'Egitto ha reintrodotto l'ora legale nel 2023, il Messico l'ha
+    abolita nel 2022 - e una lista nel codice sarebbe sbagliata entro pochi
+    mesi senza che nessuno se ne accorga. `ZoneInfo` interroga il database di
+    sistema, che si aggiorna con il sistema.
+
+    `ZoneInfoNotFoundError` e' la risposta per un fuso inesistente, `ValueError`
+    per una chiave malformata (percorso assoluto, risalita di directory): sono
+    entrambe richieste sbagliate e diventano entrambe un 422 che nomina il
+    campo.
+    """
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise ValueError(
+            f"timezone {value!r} non e' un identificatore IANA valido"
+        ) from exc
+    return value
+
+
+def _validate_locale(value: str) -> str:
+    if value not in AGENCY_LOCALES:
+        raise ValueError(f"locale deve essere uno fra {list(AGENCY_LOCALES)}")
+    return value
+
+
+class AgencyConfigurationResponse(BaseModel):
+    """La configurazione di un'agenzia, con i default gia' applicati.
+
+    Ogni campo e' sempre presente: chi legge non deve sapere se la riga nel
+    database contenga `{}`, una configurazione parziale o una completa. E' cio'
+    che permette di non fare un backfill - la 027 ha messo `DEFAULT '{}'` su
+    ogni agenzia, e i default vivono nell'applicazione.
+
+    Eventuali chiavi legacy sconosciute presenti nel JSONB non compaiono qui:
+    la risposta e' il contratto, non un'eco della riga.
+    """
+
+    timezone: str
+    locale: str
+
+
+class AgencyConfigurationInput(PlatformModel):
+    """La configurazione come la si puo' SCRIVERE. Campi facoltativi.
+
+    Usato in due posti, ed e' il motivo per cui esiste invece di due modelli
+    quasi uguali:
+
+    * il corpo della PATCH su `/configuration`;
+    * il campo `settings` della POST che crea un'agenzia (P27-2).
+
+    Due modelli avrebbero significato due idee di cosa sia una configurazione
+    valida, e la piu' permissiva delle due sarebbe diventata la vera - cioe' la
+    strada per scrivere in `settings` qualunque cosa.
+    """
+
+    timezone: str | None = None
+    locale: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_timezone(cls, value):
+        return value if value is None else _validate_timezone(value)
+
+    @field_validator("locale")
+    @classmethod
+    def _check_locale(cls, value):
+        return value if value is None else _validate_locale(value)
+
+    @model_validator(mode="after")
+    def _reject_null_fields(self):
+        nulls = sorted(
+            name for name in self.model_fields_set if getattr(self, name) is None
+        )
+        if nulls:
+            raise ValueError(f"questi campi non ammettono null: {nulls}")
+        return self
+
+    def supplied(self) -> dict[str, Any]:
+        """I soli campi indicati, con i loro valori.
+
+        E' quello che finisce nel merge, e da cui si ricavano i nomi per
+        `metadata.changed_fields`. I valori restano qui e non entrano mai nel
+        registro.
+        """
+        return {name: getattr(self, name) for name in sorted(self.model_fields_set)}
+
+
+class AgencyConfigurationUpdateRequest(AgencyConfigurationInput):
+    """Il corpo della PATCH su `/configuration`.
+
+    Identico a `AgencyConfigurationInput` tranne che per una cosa: un corpo
+    vuoto e' un 422. Su una POST `settings: {}` significa legittimamente "nessuna
+    configurazione, usa i default"; su una PATCH significa una richiesta che
+    non dice cosa fare, e rispondere 200 con la riga invariata la farebbe
+    sembrare applicata.
+    """
+
+    @model_validator(mode="after")
+    def _reject_empty(self):
+        if not self.model_fields_set:
+            raise ValueError(CONFIGURATION_EMPTY_PATCH_MESSAGE)
+        return self
+
+
+# ---------------------------------------------------------------------------
+# P27-2 - AGENZIE (continua)
+# ---------------------------------------------------------------------------
+
+
 class AgencyResponse(BaseModel):
     """Una agenzia, proiettata campo per campo.
 
@@ -152,7 +281,17 @@ class AgencyCreateRequest(PlatformModel):
     name: str
     slug: str
     status: str = AGENCY_STATUS_ACTIVE
-    settings: dict[str, Any] = Field(default_factory=dict)
+    # P27-4: era `dict[str, Any]`, cioe' qualunque cosa. Adesso e' il modello
+    # della configurazione, lo STESSO che valida la PATCH su `/configuration`.
+    # Due strade verso lo stesso JSONB, una validata e una libera, significano
+    # che quella libera e' il contratto vero.
+    #
+    # Omettendolo si scrive `{}` e i default si applicano in lettura: non si
+    # scrivono nella riga, per non avere due sorgenti di verita' su cosa
+    # significhi "non configurato".
+    settings: AgencyConfigurationInput = Field(
+        default_factory=lambda: AgencyConfigurationInput()
+    )
 
     @field_validator("name")
     @classmethod
@@ -183,9 +322,18 @@ class AgencyCreateRequest(PlatformModel):
 class AgencyUpdateRequest(PlatformModel):
     """Il corpo di PATCH /api/platform/agencies/{id}.
 
-    Tre campi, tutti facoltativi, e vengono aggiornati SOLO quelli presenti:
+    Due campi, tutti facoltativi, e vengono aggiornati SOLO quelli presenti:
     e' cosa distingue una PATCH da una PUT, e il motivo per cui
     `model_fields_set` - non il valore dei campi - decide cosa viene scritto.
+
+    `settings` NON E' PIU' QUI, ED E' LA CHIUSURA DI UNA SUPERFICIE LIBERA.
+
+    P27-2 lo accettava come `dict[str, Any]`: qualunque struttura, nessuna
+    validazione, direttamente nel JSONB. P27-4 da' un contratto a quella
+    colonna, e lasciare aperta anche questa strada avrebbe significato che il
+    contratto valeva solo per chi sceglieva di rispettarlo. La configurazione
+    si aggiorna da `PATCH /agencies/{id}/configuration`, dove ogni campo e'
+    dichiarato e validato.
 
     `slug` NON E' FRA QUESTI, ED E' LA RAGIONE PER CUI SONO TRE E NON QUATTRO.
 
@@ -207,16 +355,14 @@ class AgencyUpdateRequest(PlatformModel):
       la farebbe sembrare applicata. Una PATCH che non cambia nulla e ottiene
       200 e' esattamente il modo in cui un errore di un client resta invisibile.
     * Un campo esplicitamente `null` e' un 422. Nessuna delle quattro colonne
-      e' annullabile: `name`, `slug` e `status` sono NOT NULL e `settings` ha
-      NOT NULL DEFAULT '{}'. Accettare `{"settings": null}` significherebbe
-      scrivere NULL e farsi rifiutare dal database con un 500 - o, peggio,
-      lasciare intendere che ci sia un modo di svuotare un campo. Per svuotare
-      `settings` si scrive `{}`.
+      e' annullabile: `name`, `slug` e `status` sono tutti NOT NULL. Accettare
+      `{"status": null}` significherebbe scrivere NULL e farsi rifiutare dal
+      database con un 500 - o, peggio, lasciare intendere che ci sia un modo di
+      svuotare un campo.
     """
 
     name: str | None = None
     status: str | None = None
-    settings: dict[str, Any] | None = None
 
     @field_validator("name")
     @classmethod

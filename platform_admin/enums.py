@@ -247,3 +247,59 @@ PASSWORD_ON_EXISTING_IDENTITY_MESSAGE = (
 PASSWORD_REQUIRED_MESSAGE = (
     "L'email identifica una persona nuova: indicare una password per crearla."
 )
+
+
+# ---------------------------------------------------------------------------
+# P27-4 - CONFIGURAZIONE AGENZIA
+#
+# `agencies.settings` esiste dalla 027 come JSONB libero, e la 027 stessa lo
+# dichiarava un contenitore in attesa: "P26-1 defines no key in it and reads it
+# nowhere". L'audit di P27-4 lo conferma - nessun modulo legge una chiave la'
+# dentro, e le uniche che comparivano erano valori di prova nei test di P27-2.
+#
+# P27-4 non aggiunge quindi una colonna: da' un CONTRATTO a quella che c'e'.
+# ---------------------------------------------------------------------------
+
+ACTION_AGENCY_CONFIGURATION_UPDATE = "platform.agency.configuration.update"
+
+# I campi che la configurazione possiede. Tutto cio' che sta in `settings` e
+# non e' qui dentro e' roba legacy: non viene esposta, non viene cancellata.
+CONFIGURATION_FIELDS = ("timezone", "locale")
+
+# Il fuso orario, come identificatore IANA. Validato con `zoneinfo`, che e'
+# nella standard library: nessun elenco mantenuto a mano, che invecchierebbe a
+# ogni revisione del database dei fusi.
+CONFIGURATION_DEFAULT_TIMEZONE = "Europe/Rome"
+
+# I locale ammessi. UNO SOLO OGGI, ed e' una scelta e non una svista: il
+# prodotto e' italiano e nel repository non esiste evidenza di un secondo
+# locale servito da qualcuno. Una tupla chiusa con un valore dice esattamente
+# questo, e allargarla e' una riga - ma una riga che qualcuno deve decidere di
+# scrivere, invece di un campo libero in cui finisce quel che capita.
+CONFIGURATION_DEFAULT_LOCALE = "it-IT"
+AGENCY_LOCALES = (CONFIGURATION_DEFAULT_LOCALE,)
+
+# I valori applicativi quando la riga non dice nulla. Vivono qui e NON nel
+# database: la 027 ha messo `DEFAULT '{}'` e ogni agenzia esistente ha quel
+# valore, quindi applicare i default in lettura evita un backfill e lascia una
+# sola sorgente di verita' per cosa significhi "non configurato".
+CONFIGURATION_DEFAULTS = {
+    "timezone": CONFIGURATION_DEFAULT_TIMEZONE,
+    "locale": CONFIGURATION_DEFAULT_LOCALE,
+}
+
+CONFIGURATION_EMPTY_PATCH_MESSAGE = (
+    "Indicare almeno un campo di configurazione da aggiornare."
+)
+
+# 500. Una chiave conosciuta e' presente nel JSONB con un valore che il
+# contratto non accetta: la configurazione persistita e' corrotta, e non e' un
+# errore del chiamante.
+#
+# Il messaggio non nomina il campo e non riporta il valore. Chi riceve questo
+# 500 non ha fatto nulla di sbagliato e non puo' farci niente; chi puo' e' un
+# amministratore che guardera' la riga, e a lui il valore lo dice il database,
+# non una risposta HTTP.
+CONFIGURATION_CORRUPTED_MESSAGE = (
+    "Configurazione dell'agenzia non leggibile."
+)

@@ -1622,7 +1622,15 @@ def test_g8_a_delete_request_is_405(client):
     ).status_code == 405
 
 
-def test_g8_the_real_application_exposes_exactly_the_p27_3_routes():
+def test_g8_the_real_application_exposes_the_p27_3_routes():
+    """Era: `found == {...}`, l'elenco ESAUSTIVO della superficie.
+
+    P27-4 ha aggiunto le due route della configurazione, e un perno sulla
+    dimensione totale dentro il file di P27-3 si romperebbe a ogni fase che la
+    allarga. Le route di P27-3 restano asserite qui; l'elenco completo
+    appartiene alla fase piu' recente:
+    tests/test_p27_4_configuration.py::test_g7_the_real_application_exposes_exactly_the_platform_surface.
+    """
     import main
 
     spec = main.app.openapi()
@@ -1632,7 +1640,7 @@ def test_g8_the_real_application_exposes_exactly_the_p27_3_routes():
         if path.startswith(ROUTER_PREFIX)
         for method in operations
     }
-    assert found == {
+    assert found >= {
         ("GET", f"{ROUTER_PREFIX}/me"),
         ("GET", f"{ROUTER_PREFIX}/agencies"),
         ("POST", f"{ROUTER_PREFIX}/agencies"),
@@ -1646,6 +1654,9 @@ def test_g8_the_real_application_exposes_exactly_the_p27_3_routes():
                   "/{operator_user_id}/membership"),
         ("PUT", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/owner"),
     }, sorted(found)
+    # E niente DELETE, la meta' del perno che non dipende da quante route
+    # esistano.
+    assert not [pair for pair in found if pair[0] == "DELETE"], sorted(found)
 
 
 ALL_P27_3_CALLS = [
@@ -1832,7 +1843,11 @@ def test_h6_the_order_of_audit_and_commit_still_has_one_implementation():
                 for inner in ast.walk(node)
             )
         ]
-    assert set(callers) == {
+    # Le quattro mutazioni di P27-3 passano tutte di li'. L'elenco COMPLETO
+    # dei chiamanti - che e' il perno che impedisce a una mutazione nuova di
+    # aggirare l'ordine - sta nella fase piu' recente:
+    # tests/test_p27_4_configuration.py::test_g8_every_mutation_in_the_package_goes_through_the_shared_order.
+    assert set(callers) >= {
         "create_agency", "update_agency",
         "create_agency_operator", "update_operator", "update_membership",
         "transfer_owner",

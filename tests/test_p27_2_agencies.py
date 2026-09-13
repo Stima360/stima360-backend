@@ -918,10 +918,35 @@ def test_c3_post_creates_with_201_and_the_defaults(client):
 
 
 def test_c3_post_accepts_an_explicit_status_and_settings(client):
-    response = _post(client, status="suspended", settings={"citta": "Alba"})
+    """P27-4: `settings` NON E' PIU' UN JSONB LIBERO.
+
+    Questo test usava una chiave inventata (`citta`), che era legittima finche'
+    il contenitore non aveva un contratto. P27-4 gliene ha dato uno - timezone
+    e locale, validati - quindi una chiave sconosciuta e' adesso un 422, e il
+    test usa un campo reale.
+    """
+    response = _post(
+        client, status="suspended", settings={"timezone": "Europe/Paris"}
+    )
     assert response.status_code == 201, response.text
     assert response.json()["status"] == "suspended"
-    assert response.json()["settings"] == {"citta": "Alba"}
+    assert response.json()["settings"] == {"timezone": "Europe/Paris"}
+
+
+def test_c3_post_refuses_an_unknown_settings_key(client):
+    """La chiusura della superficie libera, provata dal lato POST."""
+    assert _post(client, settings={"citta": "Alba"}).status_code == 422
+
+
+def test_c3_post_refuses_an_invalid_timezone(client):
+    assert _post(client, settings={"timezone": "Mars/Olympus"}).status_code == 422
+
+
+def test_c3_post_without_settings_writes_an_empty_object(client):
+    """I default non si scrivono nella riga: vivono nell'applicazione e si
+    applicano in lettura, cosi' non ci sono due sorgenti di verita' su cosa
+    significhi "non configurato"."""
+    assert _post(client).json()["settings"] == {}
 
 
 def test_c3_the_name_is_stored_trimmed(client):
@@ -966,14 +991,18 @@ def test_c5_patch_of_an_absent_agency_is_404(client):
 
 
 def test_c6_patch_touches_only_the_fields_it_names(client):
-    created = _post(client, status="active", settings={"citta": "Alba"}).json()
+    created = _post(
+        client, status="active", settings={"timezone": "Europe/Paris"}
+    ).json()
     updated = client.patch(
         f"{AGENCIES}/{created['id']}", json={"status": "suspended"}
     ).json()
     assert updated["status"] == "suspended"
     assert updated["name"] == created["name"]
     assert updated["slug"] == created["slug"]
-    assert updated["settings"] == {"citta": "Alba"}
+    # La PATCH generica non nomina `settings` e non lo tocca - adesso non
+    # potrebbe nemmeno nominarlo.
+    assert updated["settings"] == {"timezone": "Europe/Paris"}
 
 
 def test_c6_patch_bumps_updated_at_and_leaves_created_at_alone(client):
@@ -1013,6 +1042,10 @@ def test_c6_patch_can_move_an_agency_through_every_status(client):
     ({"name": "A", "slug": "a" * (AGENCY_SLUG_MAX + 1)}, "slug troppo lungo"),
     ({"name": "A", "slug": "agenzia-a", "settings": []}, "settings non e' un oggetto"),
     ({"name": "A", "slug": "agenzia-a", "settings": "x"}, "settings e' una stringa"),
+    ({"name": "A", "slug": "agenzia-a", "settings": {"citta": "Alba"}},
+     "chiave di configurazione sconosciuta"),
+    ({"name": "A", "slug": "agenzia-a", "settings": {"timezone": "Mars/Olympus"}},
+     "timezone inesistente"),
     ({"slug": "agenzia-a"}, "nome mancante"),
     ({"name": "A"}, "slug mancante"),
     ({"name": "A", "slug": "agenzia-a", "id": 9}, "id introdotto di contrabbando"),
@@ -1031,7 +1064,7 @@ def test_c7_post_refuses_a_malformed_body_with_422(client, body, perche):
     ({"settings": None}, "settings esplicitamente null"),
     ({"status": "attiva"}, "stato inventato"),
     ({"name": "  "}, "nome di soli spazi"),
-    ({"settings": []}, "settings non e' un oggetto"),
+    ({"settings": {}}, "settings: ha la sua route dalla P27-4"),
     ({"id": 9}, "id introdotto di contrabbando"),
     ({"updated_at": "2026-01-01T00:00:00Z"}, "updated_at introdotto di contrabbando"),
 ], ids=lambda v: v if isinstance(v, str) else "")
@@ -1052,11 +1085,32 @@ def test_c7_an_empty_patch_changes_nothing_and_writes_no_audit(client, service):
     assert client.get(f"{AGENCIES}/{created['id']}").json() == created
 
 
-def test_c7_settings_can_be_emptied_with_an_object_not_with_null(client):
-    created = _post(client, settings={"citta": "Alba"}).json()
-    response = client.patch(f"{AGENCIES}/{created['id']}", json={"settings": {}})
-    assert response.status_code == 200, response.text
-    assert response.json()["settings"] == {}
+def test_c7_the_generic_patch_no_longer_accepts_settings_at_all(client):
+    """Era: `settings` si svuotava con `{}` da questa PATCH.
+
+    P27-4: `settings` NON E' PIU' UN JSONB LIBERO.
+
+    Questo test usava una chiave inventata (`citta`), che era legittima finche'
+    il contenitore non aveva un contratto. P27-4 gliene ha dato uno - timezone
+    e locale, validati - quindi una chiave sconosciuta e' adesso un 422, e il
+    test usa un campo reale.
+
+    E soprattutto: la PATCH generica non e' piu' una strada verso quel JSONB.
+    Due strade verso la stessa colonna, una validata e una libera, avrebbero
+    significato che quella libera era il contratto vero. La configurazione si
+    aggiorna da `PATCH /agencies/{id}/configuration`.
+    """
+    created = _post(client, settings={"timezone": "Europe/Paris"}).json()
+    for body in ({"settings": {}},
+                 {"settings": {"timezone": "Europe/Rome"}},
+                 {"settings": {"citta": "Alba"}}):
+        response = client.patch(f"{AGENCIES}/{created['id']}", json=body)
+        assert response.status_code == 422, (body, response.text)
+
+    # E la riga non e' stata toccata da nessuno dei tre tentativi.
+    assert client.get(f"{AGENCIES}/{created['id']}").json()["settings"] == {
+        "timezone": "Europe/Paris"
+    }
 
 
 # --- C8: nessuna DELETE ------------------------------------------------------
@@ -1420,22 +1474,22 @@ def test_e1_a_patch_mixing_the_slug_with_valid_fields_is_refused_whole(client):
 
 def test_e2_the_slug_is_unchanged_after_every_permitted_update(client):
     """Il controllo positivo: tutto il resto si aggiorna, lo slug no."""
-    created = _post(client, settings={"citta": "Alba"}).json()
+    created = _post(client, settings={"timezone": "Europe/Paris"}).json()
     for body in (
         {"name": "Agenzia Alba Adriatica"},
         {"status": "suspended"},
-        {"settings": {"citta": "Tortoreto"}},
-        {"name": "Terzo nome", "status": "archived", "settings": {}},
+        {"name": "Terzo nome", "status": "archived"},
     ):
         response = client.patch(f"{AGENCIES}/{created['id']}", json=body)
         assert response.status_code == 200, response.text
         assert response.json()["slug"] == created["slug"], body
 
 
-def test_e3_the_patch_schema_declares_three_fields_and_the_slug_is_not_one(client):
+def test_e3_the_patch_schema_declares_two_fields_and_the_slug_is_not_one(client):
+    """Erano tre: P27-4 ha tolto anche `settings`, che ora ha la sua route."""
     from platform_admin.schemas import AgencyCreateRequest, AgencyUpdateRequest
 
-    assert set(AgencyUpdateRequest.model_fields) == {"name", "status", "settings"}
+    assert set(AgencyUpdateRequest.model_fields) == {"name", "status"}
     # Alla creazione resta obbligatorio: non modificabile non vuol dire sparito.
     assert "slug" in AgencyCreateRequest.model_fields
     assert AgencyCreateRequest.model_fields["slug"].is_required()
@@ -1449,7 +1503,7 @@ def test_e4_changed_fields_can_never_contain_the_slug(service):
     """
     from platform_admin.schemas import AgencyUpdateRequest
 
-    payload = AgencyUpdateRequest(name="N", status="active", settings={})
+    payload = AgencyUpdateRequest(name="N", status="active")
     assert "slug" not in payload.changed_fields()
 
     _create(service)

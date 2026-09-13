@@ -66,6 +66,27 @@ class MembershipNotFound(Exception):
     """
 
 
+class AgencyConfigurationCorrupted(Exception):
+    """Una chiave conosciuta e' persistita con un valore fuori contratto. 500.
+
+    NON 422 e non un default silenzioso.
+
+    Non 422 perche' non e' la richiesta a essere sbagliata: il chiamante puo'
+    aver mandato una GET impeccabile, o non aver mandato nulla. E' lo stato
+    persistito a non essere leggibile, e attribuirlo a chi chiama lo manderebbe
+    a correggere una richiesta che non ha problemi.
+
+    Non un default perche' sostituire in silenzio un valore corrotto con
+    `Europe/Rome` significherebbe rispondere che la configurazione e' una cosa
+    mentre nel database ce n'e' un'altra. L'agenzia lavorerebbe su un fuso e la
+    riga ne direbbe un altro, e nessuno se ne accorgerebbe - che e' la forma
+    peggiore che questo problema possa prendere.
+
+    Il messaggio che raggiunge il chiamante e' costante e non nomina il campo
+    ne' il valore: vedi `CONFIGURATION_CORRUPTED_MESSAGE`.
+    """
+
+
 class PasswordRequired(Exception):
     """Manca la credenziale per creare una persona nuova. 422.
 
