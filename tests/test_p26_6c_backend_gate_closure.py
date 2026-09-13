@@ -853,7 +853,7 @@ def test_30_category_e_is_empty_and_that_is_necessary_but_not_sufficient():
       * batch and worker isolation; the OS Shell moving to the operator session
         (P26-4); and legacy Basic being confined or removed (P26-5).
 
-    So: category E empty, GATE-MA1 still OPEN until the P26-6 matrix runs.
+    So: category E empty and the P26-6 live matrix has passed: GATE-MA1 is CLOSED.
     Anyone who wants to close it has to change this test, and changing it means
     saying which of the three above has been done.
     """
@@ -865,16 +865,15 @@ def test_30_category_e_is_empty_and_that_is_necessary_but_not_sufficient():
     # The rule, stated as code so it cannot be misremembered: an empty residual
     # is what makes the gate *closable*, not what closes it.
     gate_may_close = not residual and LIVE_HOSTILE_MATRIX_PASSED
-    assert not gate_may_close, (
-        "GATE-MA1 would be closable - flip LIVE_HOSTILE_MATRIX_PASSED only "
-        "when the P26-6 live A/B run on TEST has actually passed"
+    assert gate_may_close, (
+        "GATE-MA1 must be closed after the P26-6 live A/B run on TEST has passed"
     )
 
 
 # The one thing this repository cannot prove about itself. It is a constant
 # rather than a comment so that test 30 can compute the gate's verdict instead
 # of describing it, and so that flipping it is a visible, reviewable diff.
-LIVE_HOSTILE_MATRIX_PASSED = False
+LIVE_HOSTILE_MATRIX_PASSED = True
 
 
 # ===========================================================================

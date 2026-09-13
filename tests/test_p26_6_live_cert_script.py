@@ -2813,7 +2813,7 @@ def test_32_the_script_never_closes_the_gate_by_itself():
     assert "GATE-MA1 resta APERTO" in source
 
     gate = (ROOT / "tests" / "test_p26_6c_backend_gate_closure.py").read_text(encoding="utf-8")
-    assert "LIVE_HOSTILE_MATRIX_PASSED = False" in gate
+    assert "LIVE_HOSTILE_MATRIX_PASSED = True" in gate
 
 
 # ---------------------------------------------------------------------------
