@@ -105,52 +105,29 @@ def test_a2_the_network_ui_only_talks_to_the_platform_surface():
         assert percorso.startswith("/api/platform"), (metodo, percorso)
 
 
-def test_a3_no_new_backend_file_was_added_for_the_ui():
-    """P27-7 e' solo UI: nessun router, servizio o migration nuovo.
-
-    Le rotte usate esistono tutte da P27-1..P27-6, e il test A1 lo dimostra
-    confrontandole con l'applicazione reale.
-
-    GUARDA IL COMMIT, NON IL WORKING TREE, e la differenza conta.
-
-    La prima stesura interrogava `git status`: mentre P27-7 era in lavorazione i
-    due coincidevano, perche' il working tree conteneva soltanto P27-7. A fase
-    chiusa non coincidono piu' - il working tree contiene il lavoro SUCCESSIVO -
-    e infatti P27-8, correggendo `TerritoryAliasResponse` in
-    `platform_admin/schemas.py`, faceva fallire questo test senza aver toccato
-    una riga della Rete.
-
-    Misurava la cosa sbagliata: non "P27-7 ha toccato il backend" ma "qualcuno,
-    prima o poi, ha toccato il backend". Adesso guarda il commit che ha
-    introdotto la sezione Rete, che e' esattamente l'affermazione da difendere e
-    resta vera per sempre.
-    """
-    import subprocess
-
-    def _git(*argomenti: str) -> str:
-        return subprocess.run(
-            ["git", *argomenti], cwd=ROOT, capture_output=True, text=True,
-        ).stdout.strip()
-
-    commit = _git("log", "--format=%H", "-1", "--",
-                  "static/os_shell/assets/views/rete.js")
-    if not commit:
-        # La Rete non e' ancora committata: siamo dentro la fase che la crea, e
-        # l'affermazione si verifica dove il lavoro sta, cioe' nel working tree.
-        toccati = _git("status", "--porcelain", "--", "migrations/",
-                       "platform_admin/", "network_routing/", "core/",
-                       "operator_auth/").splitlines()
-        assert not toccati, f"la UI Rete sta toccando il backend: {toccati}"
-        return
-
-    file_del_commit = _git("show", "--name-only", "--format=", commit).splitlines()
-    assert file_del_commit, commit
-    backend = [
-        percorso for percorso in file_del_commit
-        if percorso.startswith(("migrations/", "platform_admin/",
-                                "network_routing/", "core/", "operator_auth/"))
-    ]
-    assert not backend, f"il commit della UI Rete ha toccato il backend: {backend}"
+# A3 NON ESISTE PIU', ED E' UNA DECISIONE.
+#
+# C'era un `test_a3_no_new_backend_file_was_added_for_the_ui` che interrogava
+# git - prima `git status`, poi il commit che aveva introdotto `rete.js` - per
+# affermare che P27-7 non avesse toccato il backend.
+#
+# Quell'affermazione era vera ed e' stata certificata a suo tempo, ma non e'
+# un'INVARIANTE DEL PRODOTTO: le fasi successive possono e devono poter
+# modificare il backend - P27-8 lo ha fatto, correggendo il response model
+# degli alias. Un test permanente che vieta una cosa legittima non protegge
+# niente: si limita a fallire, e il primo a pagarne il prezzo e' stato il
+# deploy su Render.
+#
+# In piu' leggeva la storia di git, che dipende da come il repository e' stato
+# clonato: un checkout superficiale su un runner di build puo' rispondere
+# diversamente dalla copia locale, e un test che cambia risposta secondo il
+# clone non e' un test.
+#
+# Cio' che resta e vale per sempre e' sopra: A1 verifica che ogni rotta chiamata
+# dalla Rete esista davvero nell'OpenAPI dell'applicazione, A2 che si parli solo
+# a `/api/platform`, e la sezione B che le assenze di dominio - nessuna DELETE,
+# nessuno slug modificabile, nessun `settings` nella PATCH generica, nessuna
+# canonicalizzazione lato client - siano nel codice e non nelle intenzioni.
 
 
 # ---------------------------------------------------------------------------
