@@ -172,6 +172,13 @@ class El {
   append(...nodes) { for (const n of nodes) this.appendChild(n); }
   prepend(...nodes) { for (const n of nodes.reverse()) { n.parentNode = this; this.children.unshift(n); } }
   replaceChildren(...nodes) { this.children = []; this._html = ''; this._text = ''; this.append(...nodes); }
+  insertBefore(node, riferimento) {
+    node.parentNode = this;
+    const i = this.children.indexOf(riferimento);
+    if (riferimento === null || i < 0) this.children.push(node);
+    else this.children.splice(i, 0, node);
+    return node;
+  }
   remove() {
     if (!this.parentNode) return;
     this.parentNode.children = this.parentNode.children.filter((c) => c !== this);

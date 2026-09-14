@@ -3,7 +3,17 @@ import { mountGlobalSearch } from './components/global-search.js';
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
 
-import { exitAgency, login, logout, onAuthChange, restore, sessionEpoch } from './core/auth.js';
+import {
+  canUsePlatformSurface,
+  exitAgency,
+  getSession,
+  isPlatformOnly,
+  login,
+  logout,
+  onAuthChange,
+  restore,
+  sessionEpoch,
+} from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
@@ -47,6 +57,13 @@ const SECTIONS = [
 // `require_platform_admin` (P27-1), che e' l'unica autorita' in materia. Un
 // tenant normale che arrivi qui non vede dati: vede un avviso.
 const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
+
+// P28 - dove finisce un tenant rimandato indietro dalla Rete.
+//
+// La prima voce di SECTIONS e non un letterale: se un giorno la sidebar
+// cominciasse da un'altra parte, la home tenant la seguirebbe invece di
+// restare indietro puntando a una sezione che nessuno apre piu'.
+const ROTTA_TENANT_INIZIALE = SECTIONS[0].name;
 
 const loginView = document.getElementById('login-view');
 const appView = document.getElementById('app-view');
@@ -114,6 +131,32 @@ initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
   // Vedi il commento su `sessionEpoch` in core/auth.js.
   epoch: sessionEpoch,
+  // P28 - DOVE SI PUO' STARE, deciso in un posto solo.
+  //
+  // Il router chiede, prima di cercare la vista e quindi prima che parta
+  // qualunque richiesta. Qui si risponde guardando SOLO cio' che `/me` ha
+  // restituito: nessuna memoria di dove si era, nessun dato locale.
+  //
+  // DUE SUPERFICI, DUE PORTE, ED ENTRAMBE SI CHIUDONO.
+  //
+  //   Rete        e' della piattaforma. Un tenant che ci arriva a mano viene
+  //               rimandato al suo lavoro: il 403 arriverebbe comunque - ed e'
+  //               la difesa vera, in `require_platform_admin` - ma una
+  //               richiesta che si sa gia' rifiutata non si manda.
+  //   il resto    e' del tenant. Chi non ha una superficie di tenant - un
+  //               amministratore che non sta operando dentro nessuna agenzia -
+  //               viene rimandato alla Rete.
+  //
+  // Senza sessione non si decide niente: si e' sulla schermata di accesso, e
+  // la superficie applicativa e' nascosta.
+  guard(name) {
+    const session = getSession();
+    if (session === null) return null;
+    if (name === SEZIONE_RETE.name) {
+      return canUsePlatformSurface(session) ? null : ROTTA_TENANT_INIZIALE;
+    }
+    return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
+  },
   onNavigate(name) {
     const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
@@ -126,14 +169,47 @@ initRouter(contentEl, {
 mountEnvBadge(envBadgeEl);
 mountGlobalSearch(contentEl.parentElement);
 
-for (const section of SECTIONS) {
+function creaVoceNav(section) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'nav-item';
   btn.dataset.route = section.name;
   btn.textContent = section.label;
   btn.addEventListener('click', () => navigate(section.name));
-  navEl.appendChild(btn);
+  return btn;
+}
+
+for (const section of SECTIONS) {
+  navEl.appendChild(creaVoceNav(section));
+}
+
+// P28 - LA NAVIGAZIONE DI TENANT ESISTE SOLO PER CHI HA UN'AGENZIA.
+//
+// Un amministratore di piattaforma che non sta operando dentro nessuna agenzia
+// non ha niente da vedere in "Contatti": il backend gli risponderebbe 403, ed
+// e' giusto cosi'. Offrirgli il bottone significa offrirgli un errore.
+//
+// RIMOSSE, non disabilitate. Un bottone disabilitato invita a insistere e
+// resta nel documento; uno che non c'e' racconta lo stato. E' la stessa
+// lezione di P26-4 e della voce "Rete" di P27-7.
+//
+// Con una sessione assente le voci restano: si e' sulla schermata di accesso,
+// dove la sidebar non e' raggiungibile, e toglierle li' significherebbe
+// rimontarle a ogni login senza motivo.
+function aggiornaNavTenant(session) {
+  const soloPlatform = isPlatformOnly(session);
+  for (const section of SECTIONS) {
+    const esistente = navEl.querySelector(`[data-route="${section.name}"]`);
+    if (soloPlatform) {
+      if (esistente) esistente.remove();
+      continue;
+    }
+    if (esistente) continue;
+    // Reinserite nell'ordine di SECTIONS, davanti a "Rete" se c'e': la
+    // sidebar non deve riordinarsi da sola quando si entra e si esce.
+    const rete = navEl.querySelector('[data-route="rete"]');
+    navEl.insertBefore(creaVoceNav(section), rete);
+  }
 }
 
 // P27-7. Il bottone "Rete" esiste nel DOM solo mentre la sessione corrente e'
@@ -245,6 +321,7 @@ function clearApplicationSurface() {
 onAuthChange((session) => {
   const authenticated = session !== null;
   aggiornaVoceRete(session);
+  aggiornaNavTenant(session);
   aggiornaBarraActing(session);
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;

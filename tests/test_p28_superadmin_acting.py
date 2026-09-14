@@ -321,7 +321,14 @@ def sessione(monkeypatch):
 
 
 def test_c1_without_acting_the_scope_is_the_membership(sessione):
+    """Per chi NON e' amministratore di piattaforma, e cioe' per quasi tutti.
+
+    La riga di default di questo file descrive un platform admin, e per lui la
+    regola e' diversa: la membership e' identita' di casa e non contesto di
+    tenant (sezione J). Qui si fissa il caso ordinario, che P28 non tocca.
+    """
     sessione["riga"] = _riga(
+        is_platform_admin=False,
         agency_id=CASA, role="agency_owner", membership_status="active",
         agency_name="Casa", agency_status="active",
     )
@@ -1345,3 +1352,190 @@ def test_i5_the_acting_repository_only_touches_operator_sessions():
     sorgente = inspect.getsource(acting_repository)
     tabelle = set(re.findall(r"(?:FROM|UPDATE|INTO)\s+([a-z_]+)", sorgente))
     assert tabelle <= {"operator_sessions"}, tabelle
+
+
+# ---------------------------------------------------------------------------
+# J - LA MEMBERSHIP DI UN PLATFORM ADMIN NON E' UN CONTESTO DI TENANT
+#
+# P27-1 decisione D4 permette che una stessa identita' sia amministratore di
+# piattaforma E membro di un'agenzia. Fin qui la risoluzione di sessione ne
+# faceva discendere una cosa che D4 non dice: che quella membership gli
+# concedesse il CRM.
+#
+# Non e' un problema di permessi - quella membership e' vera, e i dati sono
+# davvero della sua agenzia - e' un problema di TRACCIA. Entrando dal CRM senza
+# passare da `/enter`, il registro non contiene la riga che dice quando ha
+# cominciato a lavorarci: `platform_audit_log` direbbe che non e' mai entrato,
+# mentre ci sta dentro.
+#
+# La regola definitiva:
+#
+#   platform admin, acting presente  -> agenzia effettiva = quella visitata
+#   platform admin, acting assente   -> agenzia effettiva = NESSUNA
+#   chiunque altro                   -> agenzia effettiva = la sua membership
+#
+# La membership di un amministratore resta la sua IDENTITA' DI CASA - `/me` la
+# riporta in `home_agency_*` - e non gli apre niente.
+#
+# Sta qui, in `session_from_token`, e non nei singoli endpoint: e' il punto in
+# cui l'agenzia effettiva viene decisa una volta per tutte, e da cui
+# centocinquanta route la ricevono senza sapere come ci sia finita.
+# ---------------------------------------------------------------------------
+
+def _admin_con_membership(**sovrascritture):
+    """Platform admin CON membership attiva in agenzia A."""
+    base = dict(
+        is_platform_admin=True,
+        agency_id=CASA, role="agency_owner", membership_status="active",
+        agency_name="Casa", agency_status="active",
+    )
+    base.update(sovrascritture)
+    return _riga(**base)
+
+
+def test_j1_a_platform_admin_with_a_membership_and_no_acting_has_no_agency(sessione):
+    """TEST 1 - il caso del bug, al punto in cui viene deciso."""
+    sessione["riga"] = _admin_con_membership()
+    risolta = auth_service.session_from_token("token")
+    assert risolta["context"].agency_id is None
+
+
+def test_j2_and_a_tenant_query_is_refused_for_it(sessione):
+    """TEST 1, effetto osservabile: 403.
+
+    `PlatformAdminAgencyRequired` e' l'eccezione che CORE, OWNER Admin e
+    `main.agency_of` traducono gia' in 403 - vedi
+    tests/test_p27_1_d1_tenant_isolation.py. Nessun endpoint e' stato toccato:
+    ricevono un contesto senza agenzia e rifiutano come hanno sempre fatto.
+    """
+    sessione["riga"] = _admin_con_membership()
+    contesto = auth_service.session_from_token("token")["context"]
+    for tabella in sorted(core_scope.SCOPED_TABLES):
+        with pytest.raises(PlatformAdminAgencyRequired):
+            scoped_predicate(contesto, tabella, "c")
+
+
+def test_j3_entering_an_agency_gives_it_that_agency_and_only_that_one(sessione):
+    """TEST 2 - con l'acting il CRM si apre, sull'agenzia VISITATA."""
+    sessione["riga"] = _admin_con_membership(
+        acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
+        acting_agency_name="Ospite", acting_agency_status="active",
+    )
+    contesto = auth_service.session_from_token("token")["context"]
+    assert contesto.agency_id == OSPITE
+    predicato, parametri = scoped_predicate(contesto, "contacts", "c")
+    assert predicato == "c.agency_id = %s"
+    assert parametri == [OSPITE]
+
+
+def test_j4_entering_its_own_home_agency_works_the_same_way(sessione):
+    """Anche quando l'agenzia visitata E' la sua: l'ingresso va comunque
+    dichiarato, ed e' l'ingresso - non la membership - a concedere il CRM."""
+    sessione["riga"] = _admin_con_membership(
+        acting_agency_id=CASA, acting_entered_at=ENTRATO,
+        acting_agency_name="Casa", acting_agency_status="active",
+    )
+    contesto = auth_service.session_from_token("token")["context"]
+    assert contesto.agency_id == CASA
+
+
+def test_j5_after_the_exit_it_is_refused_again(sessione):
+    """TEST 3 - uscito, torna 403 anche se la membership in A esiste ancora."""
+    sessione["riga"] = _admin_con_membership(
+        acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
+        acting_agency_name="Ospite", acting_agency_status="active",
+    )
+    assert auth_service.session_from_token("token")["context"].agency_id == OSPITE
+
+    # L'uscita azzera le due colonne: la riga successiva e' quella che il
+    # server rilegge alla richiesta dopo.
+    sessione["riga"] = _admin_con_membership()
+    contesto = auth_service.session_from_token("token")["context"]
+    assert contesto.agency_id is None
+    with pytest.raises(PlatformAdminAgencyRequired):
+        scoped_predicate(contesto, "contacts", "c")
+
+
+def test_j6_me_keeps_the_home_agency_and_reports_no_effective_one(sessione):
+    """TEST 4 - `home_agency_id = A`, `agency_id = None`. Due campi, due fatti."""
+    sessione["riga"] = _admin_con_membership()
+    risolta = auth_service.session_from_token("token")
+    assert risolta["home_agency_id"] == CASA
+    assert risolta["home_agency_name"] == "Casa"
+    assert risolta["context"].agency_id is None
+    assert risolta["acting_agency_id"] is None
+    # Il nome dell'agenzia EFFETTIVA e' assente perche' l'agenzia effettiva non
+    # c'e': la barra della Shell non deve avere niente da scrivere.
+    assert risolta["agency_name"] is None
+
+
+def test_j7_no_tenant_role_without_a_tenant_context(sessione):
+    """Un ruolo e' un ruolo DENTRO un'agenzia. Senza agenzia non c'e' ruolo.
+
+    Lasciarlo valorizzato darebbe a `permissions` e a `scoped_predicate` un
+    dato che descrive un posto in cui il chiamante non si trova.
+    """
+    sessione["riga"] = _admin_con_membership()
+    assert auth_service.session_from_token("token")["context"].role is None
+
+
+def test_j8_an_ordinary_owner_still_gets_its_agency_from_the_membership(sessione):
+    """TEST 5 - nessuna regressione per chi non e' amministratore.
+
+    La membership continua a fornire il contesto, con il suo ruolo, come
+    sempre. La regola nuova riguarda una condizione sola, e la nomina.
+    """
+    sessione["riga"] = _riga(
+        is_platform_admin=False,
+        agency_id=CASA, role="agency_owner", membership_status="active",
+        agency_name="Casa", agency_status="active",
+    )
+    risolta = auth_service.session_from_token("token")
+    assert risolta["context"].agency_id == CASA
+    assert risolta["context"].role == "agency_owner"
+    assert risolta["agency_name"] == "Casa"
+    _, parametri = scoped_predicate(risolta["context"], "contacts", "c")
+    assert parametri == [CASA]
+
+
+def test_j9_an_ordinary_agent_keeps_its_narrowing(sessione):
+    """TEST 5 - e l'agente resta ristretto ai propri record, come prima."""
+    sessione["riga"] = _riga(
+        is_platform_admin=False,
+        agency_id=CASA, role="agent", membership_status="active",
+        agency_name="Casa", agency_status="active",
+    )
+    contesto = auth_service.session_from_token("token")["context"]
+    predicato, parametri = scoped_predicate(contesto, "contacts", "c")
+    assert predicato == "c.agency_id = %s AND c.assigned_agent_id = %s"
+    assert parametri == [CASA, GIORGIO]
+
+
+def test_j10_d4_still_holds_the_membership_is_not_taken_away(sessione):
+    """TEST 6 - nessuna regressione su D4.
+
+    Un platform admin PUO' ancora avere una membership: non viene cancellata,
+    non viene rifiutata, e `/me` la riporta. Semplicemente non gli apre il CRM
+    da sola. La differenza fra "non ce l'ha" e "non la usa implicitamente" e'
+    tutta qui, ed e' osservabile.
+    """
+    sessione["riga"] = _admin_con_membership()
+    risolta = auth_service.session_from_token("token")
+    assert risolta["home_agency_id"] == CASA
+    assert risolta["context"].is_platform_admin is True
+    # E la sessione resta viva e utilizzabile: non e' stato tolto niente.
+    assert risolta["context"].user_id == GIORGIO
+    assert risolta["expires_at"] == SCADENZA
+
+
+def test_j11_the_rule_lives_in_the_session_resolution_and_nowhere_else(sessione):
+    """UN posto solo.
+
+    Se la condizione fosse in un endpoint, sarebbero centocinquanta endpoint
+    da insegnare - e il centocinquantunesimo arriverebbe senza. `core/scope.py`
+    resta intatto: non sa niente di acting, e continua ad applicare lo stesso
+    predicate a chiunque.
+    """
+    import inspect
+    sorgente = inspect.getsource(core_scope)
+    assert "acting" not in sorgente.lower()

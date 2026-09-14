@@ -324,15 +324,31 @@ def test_a4_the_entry_disappears_when_the_session_changes(staged):
     assert "rete" not in out["navRoutes"], out["navRoutes"]
 
 
-def test_a5_a_tenant_reaching_the_route_by_hand_gets_a_refusal_and_no_data(staged):
-    """La rotta si scrive a mano: il 403 del backend e' quello che la ferma.
+def test_a5_a_tenant_reaching_the_route_by_hand_is_sent_back_and_sees_no_data(staged):
+    """La rotta si scrive a mano, e adesso la Shell non la apre nemmeno.
 
-    Nessun elenco viene richiesto dopo il rifiuto - la view si ferma alla
-    prima chiamata - e sullo schermo compare una frase, non dei dati.
+    CAMBIATO DA P28, E LA DIFFERENZA E' DICHIARATA.
+
+    Fino a P28 questo test asseriva che la view chiedesse `/api/platform/me`,
+    ricevesse 403 e mostrasse un avviso. Il 403 e' ancora li' e non e' stato
+    toccato - `require_platform_admin` resta l'unica autorita' in materia, e
+    che ogni route della superficie lo dichiari lo prova
+    `test_a2_every_platform_route_is_declared_platform_only` in
+    tests/test_p27_7_network_contracts.py, insieme al test di ammissione di
+    P27-1.
+
+    Cio' che e' cambiato e' che la Shell non va piu' a cercarselo. Una
+    richiesta che si sa gia' rifiutata non si manda, e un avviso di rifiuto
+    non e' la pagina che un agente deve trovarsi davanti al posto del suo
+    lavoro: viene rimandato alla sua home.
+
+    Cio' che questo test difendeva - "nessun dato di rete raggiunge uno
+    schermo che non ne ha diritto" - e' difeso piu' strettamente di prima:
+    l'elenco non viene richiesto perche' la vista non viene nemmeno aperta.
     """
-    out = run(staged, apri_rete(), script(ok(TENANT), VIETATO))
-    assert out["urls"] == ["/api/operator-auth/me", "/api/platform/me"]
-    assert "riservata all" in out["content"]
+    out = run(staged, apri_rete(), script(ok(TENANT), ok({"items": [], "total": 0})))
+    assert "/api/platform/me" not in out["urls"], out["urls"]
+    assert [u for u in out["urls"] if u.startswith("/api/platform")] == [], out["urls"]
     assert "Nuova agenzia" not in out["content"]
 
 

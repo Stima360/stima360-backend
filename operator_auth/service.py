@@ -163,36 +163,30 @@ def session_from_token(raw_token: str | None) -> dict | None:
         if not usabile:
             return None
 
+        agenzia_effettiva, ruolo_effettivo = _effective_agency(row, acting)
+
         repository.touch_session(cur, row["session_id"])
         return {
             "context": OperatorContext(
                 user_id=row["user_id"],
-                # L'agenzia EFFETTIVA: quella visitata se c'e', altrimenti la
-                # propria. Non c'e' un terzo caso, e non c'e' nessun punto in
-                # cui le due siano vere insieme.
-                agency_id=(
-                    acting["agency_id"] if acting else row["agency_id"]
-                ),
-                # IL RUOLO DI CASA NON SEGUE CHI VIAGGIA.
-                #
-                # Dentro un'agenzia visitata non si ha un ruolo: non c'e' una
-                # membership da cui prenderlo. Lasciare quello di casa sarebbe
-                # un difetto vero e non una sbavatura - `scoped_predicate`
-                # restringe le letture di un `agent` ai record assegnati a lui,
-                # e un platform admin che a casa sua e' agente vedrebbe
-                # dell'agenzia ospite esattamente nulla, senza che niente lo
-                # segnali. L'autorita' qui viene da `is_platform_admin`, che la
-                # matrice dei permessi legge per primo.
-                role=None if acting else row["role"],
+                # L'agenzia EFFETTIVA e il ruolo che le corrisponde. Vedi
+                # `_effective_agency`: e' li' che la regola sta scritta, in un
+                # posto solo.
+                agency_id=agenzia_effettiva,
+                role=ruolo_effettivo,
                 is_platform_admin=bool(row["is_platform_admin"]),
                 session_id=row["session_id"],
                 auth_channel="operator_session",
             ),
-            # Il nome dell'agenzia in cui si sta operando: e' quello che la
-            # Shell scrive nella barra, e deve essere l'ospite quando si e'
-            # ospiti, altrimenti la barra direbbe il posto sbagliato.
+            # Il nome dell'agenzia EFFETTIVA: quello che la Shell scrive
+            # nella barra. `None` quando non ce n'e' una - un amministratore
+            # che non sta operando da nessuna parte non ha un posto da
+            # nominare, e scriverci la sua agenzia di casa direbbe che ci sta
+            # lavorando dentro.
             "agency_name": (
-                acting["agency_name"] if acting else row.get("agency_name")
+                acting["agency_name"] if acting
+                else (row.get("agency_name") if agenzia_effettiva is not None
+                      else None)
             ),
             "expires_at": row["expires_at"],
             "acting_agency_id": acting["agency_id"] if acting else None,
@@ -204,6 +198,63 @@ def session_from_token(raw_token: str | None) -> dict | None:
             "home_agency_id": row.get("agency_id"),
             "home_agency_name": row.get("agency_name"),
         }
+
+
+def _effective_agency(row: dict, acting: dict | None) -> tuple[int | None, str | None]:
+    """L'agenzia su cui questa sessione lavora, e il ruolo che ci ha dentro.
+
+    LA REGOLA, PER INTERO, IN UN POSTO SOLO
+
+        platform admin, acting presente  -> l'agenzia VISITATA, senza ruolo
+        platform admin, acting assente   -> NESSUNA agenzia, nessun ruolo
+        chiunque altro                   -> la propria membership, col suo ruolo
+
+    LA SECONDA RIGA E' LA CORREZIONE, E NON RIGUARDA I PERMESSI.
+
+    P27-1 decisione D4 permette che un amministratore di piattaforma sia anche
+    membro di un'agenzia. Fin qui da quella membership discendeva anche il
+    contesto di tenant: `agency_id` era valorizzato, e `/api/core/contacts`
+    rispondeva 200.
+
+    Non era un problema di autorizzazione - quella membership e' vera, e quei
+    dati sono davvero i suoi - era un problema di TRACCIA. Entrando dal CRM
+    senza passare da `/api/platform/agencies/{id}/enter`, in
+    `platform_audit_log` non esiste la riga che dice quando ha cominciato a
+    lavorarci. Il registro direbbe che non e' mai entrato, mentre ci sta
+    dentro; e l'unico modo di sapere dove ha operato sarebbe dedurlo dai dati
+    che ha toccato.
+
+    Quindi per un amministratore il CRM si apre SOLO con un ingresso
+    dichiarato. La sua membership resta - non viene cancellata, non viene
+    rifiutata, `/me` la riporta in `home_agency_*` - ed e' la sua identita' di
+    casa, non un lasciapassare implicito.
+
+    IL RUOLO SEGUE L'AGENZIA, SEMPRE.
+
+    Un ruolo e' un ruolo DENTRO un posto. Dentro un'agenzia visitata non se ne
+    ha uno: non c'e' una membership da cui prenderlo, e l'autorita' viene da
+    `is_platform_admin`, che la matrice dei permessi legge per prima. Lasciare
+    quello di casa sarebbe un difetto vero e non una sbavatura -
+    `scoped_predicate` restringe le letture di un `agent` ai record assegnati a
+    lui, e un amministratore che a casa sua e' agente vedrebbe dell'agenzia
+    ospite esattamente nulla, senza che niente lo segnali. Senza agenzia, a
+    maggior ragione, il ruolo e' assente: descriverebbe un posto in cui il
+    chiamante non si trova.
+
+    QUESTA FUNZIONE NON DIFENDE NIENTE, E NON DEVE.
+
+    La difesa e' `scoped_predicate`, che rifiuta un contesto senza agenzia con
+    `PlatformAdminAgencyRequired` - l'eccezione che CORE, OWNER Admin e
+    `main.agency_of` traducono gia' in 403. Qui si DECIDE, li' si applica, e i
+    centocinquanta endpoint in mezzo non sanno nulla di acting.
+    """
+    if acting is not None:
+        return acting["agency_id"], None
+
+    if row.get("is_platform_admin"):
+        return None, None
+
+    return row.get("agency_id"), row.get("role")
 
 
 def _acting_or_cleared(cur, row: dict, *, usabile: bool) -> dict | None:

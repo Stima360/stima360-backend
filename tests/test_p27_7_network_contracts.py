@@ -307,6 +307,14 @@ def test_d3_no_page_outside_the_network_was_touched():
         # esistenti (la lezione di `.list-toolbar`, vedi il fondo del file).
         "static/os_shell/index.html",
         "static/os_shell/assets/core/auth.js",
+        # P28 - LA GUARDIA DI ROTTA, che per definizione non appartiene a una
+        # pagina: decide QUALE pagina si puo' aprire, quindi vive nel router.
+        #
+        # Cio' che questo test difende resta intatto: nessuna VISTA e' stata
+        # toccata - `contatti.js`, `immobili.js` e le altre sono identiche - e
+        # la guardia non aggiunge un `if` dentro nessuna di loro. E' l'opposto:
+        # esiste perche' quel controllo NON sia sparso li' dentro.
+        "static/os_shell/assets/core/router.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

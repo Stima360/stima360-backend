@@ -58,6 +58,94 @@ export function isAuthenticated() {
   return session !== null;
 }
 
+/**
+ * P28 — questa sessione può usare la superficie di tenant?
+ *
+ * LA DOMANDA E' UNA SOLA, E LA RISPOSTA STA IN UN POSTO SOLO.
+ *
+ * Il CRM, gli immobili, gli acquirenti, gli abbinamenti - tutto cio' che sta
+ * sotto `/api/core` e compagnia - esiste dentro UN'AGENZIA. Chi non ne ha una
+ * non ha niente da vedere li' dentro, e il backend infatti risponde 403: e' la
+ * decisione D1 di P27-1, che ha tolto il ramo cross-agency da `core/scope.py`.
+ *
+ * Fino a questo punto la Shell non lo sapeva. Un platform admin senza
+ * membership restava su "Contatti", la richiesta partiva, e l'operatore
+ * riceveva "Questa operazione richiede un contesto di agenzia" - un messaggio
+ * che descrive uno stato NORMALE come se fosse un guasto.
+ *
+ * LA REGOLA E' ASIMMETRICA, E LO E' DI PROPOSITO.
+ *
+ *   operatore normale   basta la sua agenzia. E' la sua, ci lavora dentro, e
+ *                       non deve dichiarare niente per farlo.
+ *
+ *   platform admin      serve un ACTING esplicito. Anche se possiede una
+ *                       membership - P27-1 decisione D4 lo permette - il CRM
+ *                       gli si apre solo dopo un ingresso dichiarato.
+ *
+ * Perche' quella seconda riga esiste: `agency_id` da solo non distingue "sono
+ * un membro di questa agenzia" da "sto amministrando la rete e per caso ho una
+ * membership". Accettarlo significherebbe che un amministratore con membership
+ * entra nel CRM senza passare da `/enter` - cioe' senza la riga di audit che
+ * P28 esiste per produrre. Il registro direbbe che non e' mai entrato, mentre
+ * ci sta lavorando.
+ *
+ * Non e' una difesa: il backend continua a servirgli i dati della sua agenzia,
+ * ed e' giusto - quella membership e' vera. E' una regola di PRODOTTO, e vive
+ * qui perche' e' l'unico posto in cui viene posta la domanda.
+ *
+ * Legge SOLO cio' che `/me` ha restituito. Nessuno stato locale, nessuna
+ * memoria di cosa si stava facendo prima: sarebbe un secondo posto in cui si
+ * decide l'agenzia, cioe' cio' che P26-1 ha eliminato.
+ */
+export function canUseTenantSurface(sessione = session) {
+  if (sessione === null || sessione === undefined) return false;
+  if (sessione.is_platform_admin === true) {
+    // Non `agency_id`: quello e' valorizzato anche dalla sua membership.
+    // Quello che conta e' se ha DICHIARATO di stare operando dentro
+    // un'agenzia, ed e' `acting` a dirlo - un campo che esiste solo quando
+    // quell'ingresso e' avvenuto ed e' stato registrato.
+    return sessione.acting !== null && sessione.acting !== undefined;
+  }
+  return sessione.agency_id !== null && sessione.agency_id !== undefined;
+}
+
+/**
+ * P28 — questa sessione puo' usare la superficie di PIATTAFORMA?
+ *
+ * La Rete amministra la rete: agenzie, operatori, territori. Non e' una pagina
+ * del CRM con piu' permessi, e' un'altra superficie.
+ *
+ * Un tenant che ci arriva a mano riceverebbe 403 da `require_platform_admin` -
+ * quella e' la difesa, non e' cambiata, e resta l'unica autorita' in materia.
+ * Cio' che cambia qui e' che la Shell non va piu' a cercarselo: una richiesta
+ * che si sa gia' rifiutata non si manda, e un avviso di rifiuto non e' una
+ * pagina che qualcuno debba vedere al posto del suo lavoro.
+ */
+export function canUsePlatformSurface(sessione = session) {
+  return sessione !== null
+    && sessione !== undefined
+    && sessione.is_platform_admin === true;
+}
+
+/**
+ * P28 — questa sessione vede SOLO la Platform?
+ *
+ * Vero per un amministratore di piattaforma che non sta operando dentro
+ * nessuna agenzia. E' lo stato in cui la Shell non deve offrire, ne' tentare,
+ * niente di tenant.
+ *
+ * Deliberatamente NON vero per una sessione assente: senza sessione si e'
+ * sulla schermata di accesso, dove non c'e' nessuna navigazione da governare,
+ * e rispondere `true` qui significherebbe spegnere la nav di chiunque prima
+ * ancora che abbia fatto login.
+ */
+export function isPlatformOnly(sessione = session) {
+  return sessione !== null
+    && sessione !== undefined
+    && sessione.is_platform_admin === true
+    && !canUseTenantSurface(sessione);
+}
+
 // P28 - LE ALTRE SCHEDE DELLO STESSO BROWSER.
 //
 // Due schede aperte NON sono due sessioni: condividono il cookie, quindi
