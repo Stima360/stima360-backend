@@ -1404,9 +1404,21 @@ def test_me_response_declares_exactly_the_approved_projection():
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "MeResponse":
             fields = [n.target.id for n in node.body if isinstance(n, ast.AnnAssign)]
+            # I SEI DI P26-1, NELL'ORDINE, PIU' I TRE DI P28 IN CODA.
+            #
+            # I primi sei sono il contratto approvato e restano intoccati, con
+            # lo stesso significato: `agency_id` e' l'agenzia EFFETTIVA, che
+            # per chiunque non stia impersonando e' la sua, come prima.
+            #
+            # I tre in coda sono l'estensione deliberata di P28: `acting` dice
+            # SE si sta operando dentro un'agenzia visitata, `home_agency_*`
+            # da dove viene chi lo fa. Non allargano la divulgazione - nessuno
+            # dei tre e' un dato personale o un segreto - e servono alla barra
+            # della Shell, che senza non potrebbe dire la verita'.
             assert fields == [
                 "user_id", "agency_id", "agency_name", "role",
                 "is_platform_admin", "expires_at",
+                "acting", "home_agency_id", "home_agency_name",
             ], fields
             for banned in ("email", "password_hash", "session_id", "token_hash"):
                 assert banned not in fields
@@ -1905,7 +1917,12 @@ def test_http_me_returns_the_approved_projection(http_client, db):
     assert set(body) == {
         "user_id", "agency_id", "agency_name", "role",
         "is_platform_admin", "expires_at",
+        # P28. Vedi test_me_response_declares_exactly_the_approved_projection.
+        "acting", "home_agency_id", "home_agency_name",
     }
+    # Per un operatore normale i tre campi nuovi non cambiano niente: non sta
+    # impersonando nessuno, e la sua agenzia e' la sua.
+    assert body["acting"] is None
     assert body["user_id"] == 1
     assert body["agency_id"] == 10
     assert body["agency_name"] == "STIMA360"

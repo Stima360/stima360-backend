@@ -32,6 +32,22 @@ class LoginRequest(OperatorAuthModel):
     password: str
 
 
+class ActingContextResponse(OperatorAuthModel):
+    """L'agenzia dentro cui il Superadmin sta operando adesso. P28.
+
+    Un oggetto annidato e non tre campi in cima, perche' i tre valgono insieme
+    o non valgono: `null` significa "nessuna impersonazione in corso" in un
+    posto solo, invece di tre campi che potrebbero contraddirsi.
+
+    Non c'e' un `is_acting` booleano: la presenza dell'oggetto E' la risposta, e
+    un flag accanto sarebbe una seconda risposta alla stessa domanda.
+    """
+
+    agency_id: int
+    agency_name: str | None
+    entered_at: datetime | None
+
+
 class MeResponse(OperatorAuthModel):
     """The authenticated caller's own view of their session.
 
@@ -41,6 +57,27 @@ class MeResponse(OperatorAuthModel):
 
     agency_id and agency_name are None for a platform admin holding no
     membership, which is a legitimate unbound scope rather than an error.
+
+    P28 - QUATTRO NOMI PER TRE COSE DIVERSE, E NON SONO SINONIMI.
+
+    * `user_id`                   CHI e': l'identita' reale, sempre. Non cambia
+                                  mai per effetto di un'impersonazione, ed e'
+                                  l'attore che compare negli audit.
+    * `agency_id` / `agency_name` DOVE sta operando: l'agenzia EFFETTIVA. E'
+                                  l'ospite mentre e' ospite. Restano i campi
+                                  storici, con lo stesso significato di prima
+                                  per chiunque non stia impersonando - cioe'
+                                  per tutti tranne il Superadmin dentro
+                                  un'agenzia.
+    * `acting`                    SE sta visitando, e da quando. `null` quando
+                                  non lo sta facendo.
+    * `home_agency_*`             DA DOVE viene: la sua membership vera, che
+                                  resta leggibile anche mentre e' altrove.
+
+    La Shell disegna la barra "SUPERADMIN - stai operando dentro X" da
+    `acting`, e non da un confronto fra `agency_id` e `home_agency_id`: due
+    campi che si confrontano sono due campi che un giorno qualcuno confronta
+    male.
     """
 
     user_id: int | None
@@ -49,3 +86,6 @@ class MeResponse(OperatorAuthModel):
     role: str | None
     is_platform_admin: bool
     expires_at: datetime
+    acting: ActingContextResponse | None = None
+    home_agency_id: int | None = None
+    home_agency_name: str | None = None

@@ -43,6 +43,7 @@
 // in nessuna risposta di P27 e non compare qui.
 
 import { apiGet, apiPatch, apiPost, apiPut } from '../core/api-client.js';
+import { enterAgency } from '../core/auth.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, formatDateTime } from '../components/st-table.js';
 import {
@@ -75,8 +76,13 @@ const TABS = [
 export async function renderReteAgenzia(container, agencyId) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
 
+  // P28. La stessa risposta dice due cose: che il chiamante e' ammesso, e se
+  // sta gia' operando dentro un'agenzia. La seconda decide se il pulsante
+  // "Entra" ha senso: chi e' gia' dentro da qualche parte deve prima uscire, e
+  // mostrargli un pulsante che riceverebbe 409 e' peggio che non mostrarlo.
+  let platformMe;
   try {
-    await apiGet(`${PLATFORM}/me`);
+    platformMe = await apiGet(`${PLATFORM}/me`);
   } catch (error) {
     container.innerHTML = errorBox(error);
     return;
@@ -93,6 +99,7 @@ export async function renderReteAgenzia(container, agencyId) {
   container.innerHTML = `
     <div class="action-bar">
       <a href="#/rete" id="torna-rete">← Rete</a>
+      ${bottoneEntra()}
     </div>
     <h2 id="agenzia-nome">${escapeHtml(agenzia.name)}</h2>
     <p class="muted">Identificativo <code>${escapeHtml(agenzia.slug)}</code> · ${escapeHtml(labelOf(AGENCY_STATUS_LABELS, agenzia.status))}</p>
@@ -106,10 +113,57 @@ export async function renderReteAgenzia(container, agencyId) {
   const tabsEl = container.querySelector('#agenzia-tabs');
   const contentEl = container.querySelector('#agenzia-tab-content');
   const hostEl = container.querySelector('#agenzia-dialog-host');
+  collegaEntra();
 
   tabsEl.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => mostraTab(btn.dataset.tab));
   });
+
+  // --- P28: entrare nell'agenzia --------------------------------------------
+  //
+  // Il pulsante c'e' solo quando entrare e' davvero possibile. Le due assenze
+  // sono altrettanto deliberate quanto la presenza:
+  //
+  //   * agenzia non `active`  -> entrare sarebbe 409. Sospendere un'agenzia la
+  //     spegne per i suoi operatori, e un visitatore non e' un'eccezione.
+  //   * gia' dentro altrove   -> entrare sarebbe 409. La via e' uscire prima,
+  //     e la barra in cima alla Shell porta gia' quel pulsante.
+  //
+  // Non nascosto ma ASSENTE, come la voce "Rete" in P27-7: un pulsante
+  // disabilitato invita a insistere, uno che non c'e' racconta lo stato.
+  function bottoneEntra() {
+    if (agenzia.status !== 'active') return '';
+    if (platformMe && platformMe.acting_agency_id) return '';
+    return '<button type="button" class="btn primary" id="entra-agenzia">'
+      + 'Entra nell’agenzia</button>';
+  }
+
+  function collegaEntra() {
+    const btn = container.querySelector('#entra-agenzia');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const confermato = await confirmAction(hostEl, {
+        titolo: 'Entrare nell’agenzia?',
+        testo: `Opererai dentro “${agenzia.name}” come Superadmin, con privilegi `
+          + 'amministrativi sui suoi dati. Ingresso, uscita e operazioni '
+          + 'restano registrati a tuo nome. Finche’ sei dentro non puoi '
+          + 'entrare in un’altra agenzia.',
+        conferma: 'Entra',
+      });
+      if (!confermato) return;
+      btn.disabled = true;
+      try {
+        await enterAgency(agenzia.id);
+        // Nessun redirect esplicito: `enterAgency` rilegge /me, l'epoch
+        // avanza, la Shell ridisegna e la barra compare. Mandare l'utente da
+        // qualche parte da qui sarebbe una seconda decisione su dove si trova.
+      } catch (error) {
+        contentEl.innerHTML = errorBox(error);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 
   async function ricaricaAgenzia() {
     agenzia = await apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`);

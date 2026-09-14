@@ -29,6 +29,7 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
 
 from . import (
+    acting_service,
     aliases_service,
     agencies_service,
     configuration_service,
@@ -59,6 +60,7 @@ from .exceptions import (
 )
 from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
+    ActingEnterResponse,
     TerritoryAliasCreateRequest,
     TerritoryAliasResponse,
     TerritoryAliasUpdateRequest,
@@ -110,7 +112,75 @@ def me(
         is_platform_admin=context.is_platform_admin,
         agency_id=context.agency_id,
         session_expires_at=session.expires_at,
+        acting_agency_id=session.acting_agency_id,
+        acting_entered_at=session.acting_entered_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# P28 - ENTRARE IN UN'AGENZIA, E USCIRNE
+#
+# Due route, e nessuna DELETE. Si esce con una POST dichiarata e non
+# cancellando una risorsa: non c'e' nessuna risorsa da cancellare - c'e' una
+# sessione che smette di visitare un posto.
+#
+# Il router traduce e non decide, come tutto il resto di questo file: le regole
+# - una agenzia alla volta, solo se attiva, mai una membership - stanno nel
+# service, e qui diventano uno status.
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/agencies/{agency_id}/enter",
+    response_model=ActingEnterResponse,
+)
+def enter_agency(
+    agency_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+) -> ActingEnterResponse:
+    """Entra nel CRM dell'agenzia indicata, come Superadmin.
+
+    200 e non 201: non nasce nessuna risorsa nuova con un id proprio. Cambia lo
+    stato della sessione che il chiamante ha gia'.
+
+    `agency_id` arriva dal path, come nelle altre ventidue route di questa
+    superficie, e NON diventa uno scope: viene verificato qui e persistito
+    lato server. Cio' che scopera' le query e' il valore che
+    `resolve_session` rilegge dalla riga alla richiesta successiva.
+    """
+    try:
+        risultato = acting_service.enter_agency(context, agency_id)
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return ActingEnterResponse(**risultato)
+
+
+@router.post("/agency-context/exit", status_code=204)
+def exit_agency_context(
+    context: OperatorContext = Depends(require_platform_admin),
+) -> None:
+    """Torna alla Platform. Idempotente, e senza corpo.
+
+    204 e non 200: non c'e' niente da restituire, e restituire il contesto
+    appena rimosso sarebbe una risposta che descrive cio' che non c'e' piu'.
+
+    Non dichiara `PlatformAuditUnavailable` fra le eccezioni tradotte, e non e'
+    una dimenticanza: `acting_service.exit_agency` non la lascia uscire. Un
+    registro non scrivibile non deve poter tenere un Superadmin dentro
+    un'agenzia - vedi il docstring di quel modulo.
+
+    Non dichiara `AgencyNotFound`: uscire da un'agenzia che non esiste piu' e'
+    comunque uscire, e il servizio non la cerca.
+    """
+    try:
+        acting_service.exit_agency(context)
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

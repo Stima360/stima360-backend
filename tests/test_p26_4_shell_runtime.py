@@ -230,10 +230,18 @@ class El {
   }
 }
 
+// Gli id che `static/os_shell/index.html` porta davvero. Lo stub li rispecchia:
+// un id presente nel documento e assente qui farebbe trovare `null` a main.js e
+// fallire il boot - cioe' farebbe fallire ogni test di questo file per un
+// motivo che non e' quello sotto esame.
+//
+// P28 ha aggiunto i tre della barra Superadmin ('acting-bar', 'acting-text',
+// 'acting-exit-btn'), che stanno fuori da #app-view.
 const byId = {};
 for (const id of ['login-view', 'app-view', 'login-form', 'login-error', 'logout-btn',
                   'page-title', 'content', 'nav', 'env-badge',
-                  'login-email', 'login-password']) {
+                  'login-email', 'login-password',
+                  'acting-bar', 'acting-text', 'acting-exit-btn']) {
   byId[id] = new El('div');
   byId[id].id = id;
 }
@@ -274,6 +282,35 @@ globalThis.indexedDB = trap('indexedDB');
 Object.defineProperty(globalThis.document, 'cookie', {
   get() { throw new Error('FORBIDDEN: la Shell ha letto document.cookie'); },
 });
+
+// P28 - BroadcastChannel, quel tanto che basta.
+//
+// La Shell lo usa per avvisare le ALTRE schede dello stesso browser che il
+// contesto di agenzia e' cambiato. Node non ce l'ha, e senza uno stub
+// `auth.js` cadrebbe nel suo `catch` e il canale resterebbe `null` - cioe' i
+// test non proverebbero nulla della sincronizzazione, passando lo stesso.
+//
+// Un solo processo non puo' avere due schede vere, quindi lo stub NON
+// consegna a se' stesso: `__broadcast(nome)` invoca i gestori registrati, ed
+// e' il modo in cui un test recita la parte dell'ALTRA scheda che ha appena
+// cambiato agenzia. E' esattamente il verso che conta: quello che riceve.
+const canali = [];
+globalThis.BroadcastChannel = class {
+  constructor(name) {
+    this.name = name;
+    this.onmessage = null;
+    canali.push(this);
+  }
+  postMessage(data) { this.inviati = [...(this.inviati || []), data]; }
+  close() { this.chiuso = true; }
+};
+globalThis.__broadcast = (name, data = { tipo: 'acting-changed' }) => {
+  for (const c of canali) {
+    if (c.name === name && typeof c.onmessage === 'function') c.onmessage({ data });
+  }
+};
+globalThis.__inviati = (name) =>
+  canali.filter((c) => c.name === name).flatMap((c) => c.inviati || []);
 
 globalThis.__dom = { byId, main, submit, El };
 """

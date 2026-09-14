@@ -3,7 +3,7 @@ import { mountGlobalSearch } from './components/global-search.js';
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
 
-import { login, logout, onAuthChange, restore, sessionEpoch } from './core/auth.js';
+import { exitAgency, login, logout, onAuthChange, restore, sessionEpoch } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
@@ -57,6 +57,9 @@ const pageTitle = document.getElementById('page-title');
 const contentEl = document.getElementById('content');
 const navEl = document.getElementById('nav');
 const envBadgeEl = document.getElementById('env-badge');
+const actingBar = document.getElementById('acting-bar');
+const actingText = document.getElementById('acting-text');
+const actingExitBtn = document.getElementById('acting-exit-btn');
 
 registerRoute('oggi', renderOggi);
 // "contatti" copre sia la lista (#/contatti) sia il dettaglio (#/contatti/{id}):
@@ -153,6 +156,43 @@ function aggiornaVoceRete(session) {
   navEl.appendChild(btn);
 }
 
+// P28 - LA BARRA DEL SUPERADMIN.
+//
+// Disegnata da `session.acting`, che /me restituisce, e da nient'altro. In
+// particolare NON da un confronto fra `agency_id` e `home_agency_id`: due campi
+// che si confrontano sono due campi che un giorno qualcuno confronta male, e
+// chi ha una membership nella stessa agenzia che sta visitando non vedrebbe la
+// barra proprio nel caso in cui serve di piu'.
+//
+// La barra non ha un pulsante di chiusura. L'unico modo di farla sparire e'
+// uscire dall'agenzia, ed e' il punto: non deve essere possibile dimenticare
+// dove si sta operando.
+function aggiornaBarraActing(session) {
+  const acting = session && session.acting ? session.acting : null;
+  if (!acting) {
+    actingBar.hidden = true;
+    actingText.textContent = '';
+    return;
+  }
+  const nome = acting.agency_name || `agenzia ${acting.agency_id}`;
+  actingText.textContent = `Stai operando dentro: ${nome}`;
+  actingBar.hidden = false;
+}
+
+actingExitBtn.addEventListener('click', async () => {
+  actingExitBtn.disabled = true;
+  try {
+    await exitAgency();
+  } catch (error) {
+    // La barra resta finche' il server dice che il contesto c'e' ancora:
+    // `exitAgency` rilegge /me anche quando fallisce, quindi cio' che si vede
+    // e' sempre lo stato vero, mai un'ipotesi ottimistica.
+    actingText.textContent = error.message || 'Uscita non riuscita.';
+  } finally {
+    actingExitBtn.disabled = false;
+  }
+});
+
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   loginError.textContent = '';
@@ -205,16 +245,24 @@ function clearApplicationSurface() {
 onAuthChange((session) => {
   const authenticated = session !== null;
   aggiornaVoceRete(session);
+  aggiornaBarraActing(session);
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;
   // Il form viene svuotato appena la sessione esiste: la password non deve
   // restare nel DOM piu' del necessario.
   loginForm.reset();
+  // P28 - SI SVUOTA SEMPRE, anche restando autenticati.
+  //
+  // Prima di P28 un cambio di sessione significava sempre un login o un
+  // logout, e la superficie si svuotava solo uscendo. Adesso l'agenzia
+  // effettiva puo' cambiare SENZA che la sessione finisca - si entra in
+  // un'agenzia, si esce - e le view gia' disegnate appartengono a quella
+  // precedente. Svuotare qui, prima di ridisegnare, e' cio' che impedisce ai
+  // contatti dell'agenzia A di restare nel documento mentre la barra dice B.
+  clearApplicationSurface();
   if (authenticated) {
     loginError.textContent = '';
     renderCurrentRoute();
-  } else {
-    clearApplicationSurface();
   }
 });
 

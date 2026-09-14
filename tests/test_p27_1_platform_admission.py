@@ -184,6 +184,10 @@ def test_a4_an_unbound_platform_admin_is_admitted_and_recorded(platform_app):
         "is_platform_admin": True,
         "agency_id": None,
         "session_expires_at": EXPIRES.isoformat().replace("+00:00", "Z"),
+        # P28. Questo amministratore non sta operando dentro nessuna agenzia,
+        # ed e' cosi' che lo dice: due `None`, non l'assenza dei campi.
+        "acting_agency_id": None,
+        "acting_entered_at": None,
     }
     assert len(state["audit"]) == 1
     assert state["audit"][0]["result"] == RESULT_SUCCESS
@@ -318,7 +322,14 @@ def test_a10_metadata_carries_the_path_and_method_and_not_the_query_string(
 # A11-A13 - contratto e montaggio
 # ---------------------------------------------------------------------------
 
-def test_a11_the_response_projects_four_fields_and_no_personal_datum():
+def test_a11_the_response_projects_six_fields_and_no_personal_datum():
+    """I quattro di P27-1, piu' i due di P28. Nessun dato personale, ancora.
+
+    P28 aggiunge SE si sta operando dentro un'agenzia e da quando. Non
+    aggiunge il nome di quell'agenzia: la proiezione non ha mai portato un
+    `agency_name`, e chi deve scriverlo sullo schermo lo prende da
+    `/api/operator-auth/me`.
+    """
     from platform_admin.schemas import PlatformMeResponse
 
     fields = set(PlatformMeResponse.model_fields)
@@ -327,6 +338,8 @@ def test_a11_the_response_projects_four_fields_and_no_personal_datum():
         "is_platform_admin",
         "agency_id",
         "session_expires_at",
+        "acting_agency_id",
+        "acting_entered_at",
     }, fields
     # Ne' l'email ne' il nome dell'agenzia: /me di operator-auth esclude gia'
     # deliberatamente l'email, e questa superficie non la reintroduce.

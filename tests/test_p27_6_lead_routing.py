@@ -650,7 +650,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     from scripts import p26_migrate as runner
 
     numeri = sorted(m.number for m in runner.discover_migrations())
-    assert numeri[-1] == 59, numeri[-4:]
+    # 60 e' la 060 di P28 (contesto di agenzia del Superadmin). Il perno resta
+    # quello che era - la 059 e' l'ULTIMA di P27 e segue la 058 - e sale di
+    # una fase per volta, deliberatamente.
+    assert numeri[-1] == 60, numeri[-4:]
+    assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]
     runner.verify_contiguous(runner.discover_migrations())
 
@@ -706,6 +710,10 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         ("GET", f"{ROUTER_PREFIX}/territories/{{territory_id}}/aliases"),
         ("POST", f"{ROUTER_PREFIX}/territories/{{territory_id}}/aliases"),
         ("PATCH", f"{ROUTER_PREFIX}/aliases/{{alias_id}}"),
+        # P28 - il contesto di agenzia del Superadmin. Due route, e nessuna
+        # DELETE: si esce con una POST dichiarata, non cancellando una risorsa.
+        ("POST", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/enter"),
+        ("POST", f"{ROUTER_PREFIX}/agency-context/exit"),
     }, sorted(trovate)
 
 
@@ -735,8 +743,13 @@ def test_i4_every_mutation_in_the_package_goes_through_the_shared_order():
         for p in sorted(pacchetto.glob("*.py"))
         if p.name != "database.py"
     }
-    assert sum(commit.values()) == 1, commit
-    assert commit["transaction.py"] == 1, commit
+    # P28 - DUE, ed entrambi in `transaction.py`. Il perno non e' mai stato
+    # "un commit": e' "l'ordine fra scrittura e audit sta in un posto solo".
+    # `commit_then_audit` e' la deroga per le operazioni che TOLGONO un
+    # accesso - senza, un registro non scrivibile terrebbe il Superadmin
+    # DENTRO un'agenzia - e vive accanto alla regola che deroga.
+    assert sum(commit.values()) == 2, commit
+    assert commit["transaction.py"] == 2, commit
 
     chiamanti = []
     for p in sorted(pacchetto.glob("*_service.py")):
@@ -758,6 +771,11 @@ def test_i4_every_mutation_in_the_package_goes_through_the_shared_order():
         "create_territory", "assign_territory",                 # P27-5
         "update_assignment", "transfer_territory",              # P27-5
         "create_alias", "update_alias",                         # P27-6
+        # P28. `exit_agency` NON compare, e l'assenza e' la decisione: passa da
+        # `commit_then_audit`, la deroga per le operazioni che TOLGONO un
+        # accesso. Vive nello stesso file della regola - `transaction.py` -
+        # quindi resta sorvegliata esattamente come le altre.
+        "enter_agency",                                         # P28
     }, sorted(chiamanti)
 
 

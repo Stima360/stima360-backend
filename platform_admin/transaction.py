@@ -99,6 +99,81 @@ def audit_then_commit(
         raise
 
 
+def commit_then_audit(
+    conn,
+    actor: OperatorContext,
+    *,
+    action: str,
+    target_type: str,
+    target_id: Any,
+    target_agency_id: int | None,
+    metadata: dict[str, Any],
+) -> None:
+    """L'ordine INVERSO, per le sole operazioni che TOLGONO un accesso. P28.
+
+    PERCHE' ESISTE, E PERCHE' STA QUI DENTRO E NON ALTROVE
+
+    `audit_then_commit` sopra e' la regola: nessuna modifica amministrativa
+    viene committata se il suo audit non e' stato scritto. Vale per tutto cio'
+    che CONCEDE - creare un'agenzia, aggiungere un operatore, assegnare un
+    territorio - perche' un accesso concesso senza traccia non e'
+    ricostruibile da niente.
+
+    C'e' una famiglia di operazioni per cui quella regola produce il danno che
+    dovrebbe impedire: quelle che tolgono un accesso. L'uscita del Superadmin
+    da un'agenzia (P28) e' la prima. Applicarle l'ordine normale significa che
+    un `platform_audit_log` non scrivibile TIENE una persona dentro
+    un'agenzia - un guasto del registro che allarga l'accesso invece di
+    negarlo.
+
+    Le due incoerenze possibili non pesano uguale:
+
+        accesso tolto, uscita non registrata   il registro dice che e' ancora
+                                               dentro mentre e' fuori.
+                                               Leggibile, correggibile, e
+                                               nessun dato in piu' e'
+                                               raggiungibile da nessuno.
+        accesso mantenuto da un guasto         qualcuno resta dentro
+                                               un'agenzia per un motivo che
+                                               con quell'agenzia non c'entra.
+
+    E' la stessa asimmetria per cui `require_platform_admin` tiene il suo 403
+    anche quando non riesce a registrarlo: un rifiuto non sta concedendo
+    niente.
+
+    STA IN QUESTO FILE DI PROPOSITO. I due ordini sono uno la deroga
+    dell'altro, e vanno letti insieme: chi apre questo modulo per capire quale
+    regola valga li trova entrambi, con scritto quando si usa quale. Metterlo
+    dentro `acting_service` lo renderebbe una scelta locale di quel file,
+    invisibile a chiunque non lo aprisse - ed e' esattamente il motivo per cui
+    P27-3 porto' qui la sequenza originale.
+
+    L'audit e' best effort e non risolleva: il chiamante ha gia' committato, e
+    trasformare un registro non scrivibile in un errore HTTP direbbe che
+    l'operazione non e' avvenuta quando invece e' avvenuta.
+    """
+    conn.commit()
+
+    try:
+        audit.record(
+            action=action,
+            actor=actor,
+            result=RESULT_SUCCESS,
+            target_type=target_type,
+            target_id=target_id,
+            target_agency_id=target_agency_id,
+            metadata=metadata,
+        )
+    except PlatformAuditUnavailable:
+        logger.error(
+            "platform_audit_log non scrivibile: %s su %s %s e' AVVENUTA e non "
+            "e' stata registrata",
+            action,
+            target_type,
+            target_id,
+        )
+
+
 def _record_commit_failure(
     actor: OperatorContext,
     *,

@@ -116,11 +116,39 @@ class AuthenticatedSession:
     because a scope is an authorisation decision. Adding presentation fields to
     it would mean every scoped repository call carried data it must never use,
     and would invite exactly the kind of drift the frozen field list prevents.
+
+    P28 - E' QUI CHE VIVE LA DISTINZIONE FRA CHI SEI E DOVE STAI OPERANDO.
+
+    `context.agency_id` porta l'agenzia EFFETTIVA, perche' e' quella che scopa
+    le query e il resto del prodotto non deve sapere altro. La distinzione -
+    "Giorgio, di Casa, dentro Ospite da stamattina" - sta nei cinque campi
+    sotto, che sono presentazione e non autorizzazione: `/me` li proietta, la
+    barra della Shell li legge, e nessun costruttore di query li vede mai.
+
+    Tutti e cinque hanno un default. Non e' pigrizia: `optional_session` li
+    legge con `.get()` da un dizionario che venti doppi di test costruiscono a
+    mano, e un campo obbligatorio in piu' li romperebbe tutti senza che nessuno
+    di quei test riguardi l'acting.
     """
 
     context: OperatorContext
     agency_name: str | None
     expires_at: datetime
+    acting_agency_id: int | None = None
+    acting_agency_name: str | None = None
+    acting_entered_at: datetime | None = None
+    home_agency_id: int | None = None
+    home_agency_name: str | None = None
+
+    @property
+    def is_acting(self) -> bool:
+        """True quando il chiamante sta operando dentro un'agenzia visitata.
+
+        Derivata e non memorizzata: un secondo campo booleano potrebbe
+        contraddire `acting_agency_id`, e allora ci sarebbero due risposte alla
+        stessa domanda.
+        """
+        return self.acting_agency_id is not None
 
 
 def optional_session(
@@ -156,6 +184,14 @@ def optional_session(
         context=resolved["context"],
         agency_name=resolved["agency_name"],
         expires_at=resolved["expires_at"],
+        # `.get()` e non `[...]`: il servizio li restituisce sempre, ma i doppi
+        # dei test che precedono P28 costruiscono questo dizionario con tre
+        # chiavi sole, e nessuno di quei test parla di acting.
+        acting_agency_id=resolved.get("acting_agency_id"),
+        acting_agency_name=resolved.get("acting_agency_name"),
+        acting_entered_at=resolved.get("acting_entered_at"),
+        home_agency_id=resolved.get("home_agency_id"),
+        home_agency_name=resolved.get("home_agency_name"),
     )
 
 

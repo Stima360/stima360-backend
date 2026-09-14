@@ -88,6 +88,22 @@ def resolve_session(cur, token_hash: str, idle_minutes: int) -> dict[str, Any] |
     columns, which is a legitimate unbound scope rather than a failure. The
     partial unique index uq_agency_memberships_single_active guarantees at most
     one such row, so the join cannot multiply.
+
+    P28 - L'AGENZIA VISITATA SI LEGGE QUI, INSIEME A TUTTO IL RESTO.
+
+    `acting_agency_id` e il suo stato arrivano dalla STESSA query, e non da una
+    seconda lettura fatta dopo. E' cio' che tiene l'acting sotto la regola che
+    questa funzione gia' applica a membership e agenzia: si rilegge a ogni
+    richiesta, quindi un'agenzia sospesa mentre qualcuno ci sta dentro smette di
+    valere alla chiamata successiva, senza che nessuno debba andare a cercare le
+    sessioni da invalidare.
+
+    Questa funzione LEGGE e non giudica: decidere se l'acting sia ancora
+    legittimo - e cancellarlo quando non lo e' - e' compito del service, che e'
+    l'unico a poterlo fare dentro la transazione che gia' possiede.
+
+    Il secondo LEFT JOIN su `agencies` non puo' moltiplicare le righe:
+    `acting_agency_id` e' una colonna sola con una FK verso la chiave primaria.
     """
     cur.execute(
         """
@@ -101,12 +117,17 @@ def resolve_session(cur, token_hash: str, idle_minutes: int) -> dict[str, Any] |
                m.role,
                m.status        AS membership_status,
                a.name          AS agency_name,
-               a.status        AS agency_status
+               a.status        AS agency_status,
+               s.acting_agency_id,
+               s.acting_entered_at,
+               aa.name         AS acting_agency_name,
+               aa.status       AS acting_agency_status
           FROM operator_sessions s
           JOIN operator_users u ON u.id = s.operator_user_id
           LEFT JOIN agency_memberships m
                  ON m.operator_user_id = u.id AND m.status = 'active'
           LEFT JOIN agencies a ON a.id = m.agency_id
+          LEFT JOIN agencies aa ON aa.id = s.acting_agency_id
          WHERE s.token_hash = %s
            AND s.revoked_at IS NULL
            AND s.expires_at > NOW()
@@ -124,6 +145,65 @@ def touch_session(cur, session_id: int) -> None:
         "UPDATE operator_sessions SET last_seen_at = NOW() WHERE id = %s",
         (session_id,),
     )
+
+
+def set_acting_context(cur, session_id: int, agency_id: int) -> int:
+    """Segna che questa sessione sta operando dentro quell'agenzia. P28.
+
+    Le due colonne si scrivono INSIEME, in una istruzione sola, perche' il
+    CHECK della migration 060 le vuole appaiate: scriverne una e poi l'altra
+    fallirebbe a meta' strada, e non c'e' nessuna ragione per cui debbano essere
+    due scritture.
+
+    `acting_entered_at` e' `NOW()` del database e non un'ora calcolata da
+    Python: e' lo stesso orologio che timbra `platform_audit_log.created_at`, e
+    due istanti che raccontano lo stesso ingresso devono venire dallo stesso
+    orologio o non si possono confrontare.
+
+    Restituisce quante righe ha toccato. Zero significa che la sessione non
+    esiste piu' - e' scaduta o e' stata revocata fra l'ammissione e questa
+    scrittura - e il chiamante deve trattarlo come un ingresso non avvenuto,
+    mai come un successo silenzioso.
+    """
+    cur.execute(
+        """
+        UPDATE operator_sessions
+           SET acting_agency_id = %s,
+               acting_entered_at = NOW()
+         WHERE id = %s
+        """,
+        (agency_id, session_id),
+    )
+    return cur.rowcount
+
+
+def clear_acting_context(cur, session_id: int) -> int:
+    """Toglie il contesto di acting da questa sessione. P28.
+
+    Chiamata da due posti, e la differenza fra i due conta:
+
+    * l'uscita esplicita, quando il Superadmin preme "Torna alla Platform";
+    * la risoluzione di sessione, quando l'acting ha smesso di essere
+      legittimo - il flag `is_platform_admin` e' stato tolto, o l'agenzia non e'
+      piu' `active`.
+
+    Nel secondo caso si CANCELLA e non si ignora. Ignorare lascerebbe due
+    colonne che affermano una cosa non piu' vera, e un'agenzia riattivata
+    rimetterebbe dentro qualcuno che non aveva chiesto di rientrare.
+
+    Idempotente per costruzione: su una sessione che non sta impersonando
+    niente scrive gli stessi NULL che ci sono gia'.
+    """
+    cur.execute(
+        """
+        UPDATE operator_sessions
+           SET acting_agency_id = NULL,
+               acting_entered_at = NULL
+         WHERE id = %s
+        """,
+        (session_id,),
+    )
+    return cur.rowcount
 
 
 def revoke_session(cur, token_hash: str) -> int:

@@ -81,6 +81,17 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "RESTRICT foreign key and COUNT(*) OVER () are things only a real "
         "PostgreSQL can prove"
     ),
+    "tests/test_p28_acting_postgres_real.py": (
+        "TEST-only throwaway cluster, identical in shape to "
+        "tests/test_p27_6_postgres_real.py: initdb in a temporary directory, a "
+        "server on a unix socket with listen_addresses='', its own database, "
+        "and the whole directory deleted at teardown. It reads no connection "
+        "environment variable, so it cannot reach TEST or PROD even by "
+        "accident, and it skips entirely when the PostgreSQL binaries are "
+        "absent. A CHECK across two columns, a RESTRICT foreign key proven by "
+        "actually deleting the parent, and an idempotent ALTER TABLE are "
+        "things only a real PostgreSQL can prove"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

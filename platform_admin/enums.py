@@ -533,3 +533,55 @@ ALIAS_KIND_MESSAGE = (
     "Un alias del funnel pubblico puo' puntare solo a un territorio "
     "'municipality'."
 )
+
+
+# ---------------------------------------------------------------------------
+# P28 - IL CONTESTO DI AGENZIA DEL SUPERADMIN
+#
+# Il Platform Superadmin entra nel CRM di un'agenzia dichiarandolo, e cio' che
+# dichiara vive nella sua riga di sessione (migration 060). Non diventa membro
+# dell'agenzia, non scavalca i filtri tenant, e non puo' stare in due posti:
+# entra, opera, esce.
+#
+# LE DUE AZIONI SONO DUE, E NON UNA CON UN METADATO CHE LA CORREGGE. La stessa
+# disciplina di P27-3: chi rilegge il registro deve capire dal campo `action`
+# se qualcuno e' entrato o uscito, senza incrociarlo con altro.
+# ---------------------------------------------------------------------------
+
+ACTION_ACTING_ENTER = "platform.acting.enter"
+ACTION_ACTING_EXIT = "platform.acting.exit"
+
+# 409, non 422. L'agenzia esiste e la richiesta e' ben formata: e' lo STATO a
+# rifiutare. Sospendere o archiviare un'agenzia la spegne per i suoi stessi
+# operatori - `operator_auth` non ammette una sessione su un tenant che non sia
+# 'active' - quindi lasciarla aperta a un visitatore significherebbe che
+# sospenderla non la sospende.
+ACTING_AGENCY_NOT_ACTIVE_MESSAGE = (
+    "Solo un'agenzia attiva puo' essere operata: questa non lo e'."
+)
+
+# 409. UNA ALLA VOLTA, E IL CAMBIO E' ESPLICITO.
+#
+# La sostituzione automatica - entro in B mentre sono in A, e il sistema mi
+# sposta - era l'alternativa, ed e' stata scartata: renderebbe possibile
+# cambiare agenzia senza accorgersene, che e' esattamente il modo in cui si
+# scrive un dato nel posto sbagliato. Uscire e' una riga di audit in piu' e un
+# clic in piu'; entrambi sono il prezzo di sapere sempre dove si sta.
+ACTING_ALREADY_ACTIVE_MESSAGE = (
+    "Stai gia' operando dentro un'agenzia: esci prima di entrare in un'altra."
+)
+
+# 409. Il contesto di acting sta in una RIGA DI SESSIONE: senza sessione non ha
+# dove stare. Non e' un caso raggiungibile da un browser - la superficie
+# Platform si apre solo con un cookie - ma il service e' una funzione pubblica e
+# deve avere una risposta per ogni input, non un `None` che si propaga.
+ACTING_NEEDS_SESSION_MESSAGE = (
+    "Questa operazione richiede una sessione operatore."
+)
+
+# 409. La sessione e' sparita fra l'ammissione e la scrittura: scaduta, revocata
+# o chiusa da un'altra finestra. L'ingresso non e' avvenuto, e dirlo e' meglio
+# che rispondere 200 a un contesto che nessuno rileggera' mai.
+ACTING_SESSION_GONE_MESSAGE = (
+    "La sessione non e' piu' valida: rifare l'accesso."
+)

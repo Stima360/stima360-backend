@@ -17,7 +17,7 @@ from .context import OperatorContext
 from .dependencies import AuthenticatedSession, current_session, require_operator
 from .enums import COOKIE_NAME
 from .exceptions import AUTHENTICATION_FAILED_MESSAGE, AuthenticationFailed
-from .schemas import LoginRequest, MeResponse
+from .schemas import ActingContextResponse, LoginRequest, MeResponse
 from .security import clear_cookie, set_cookie
 
 router = APIRouter(prefix="/api/operator-auth", tags=["operator-auth"])
@@ -78,4 +78,17 @@ def me(
         role=operator.role,
         is_platform_admin=operator.is_platform_admin,
         expires_at=session.expires_at,
+        # P28. L'oggetto c'e' solo quando c'e' qualcosa da dire: `None`
+        # significa "nessuna impersonazione", in un campo solo.
+        acting=(
+            ActingContextResponse(
+                agency_id=session.acting_agency_id,
+                agency_name=session.acting_agency_name,
+                entered_at=session.acting_entered_at,
+            )
+            if session.is_acting
+            else None
+        ),
+        home_agency_id=session.home_agency_id,
+        home_agency_name=session.home_agency_name,
     )

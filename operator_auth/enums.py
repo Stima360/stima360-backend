@@ -31,6 +31,14 @@ AGENCY_ROLES = (
     "agent",
 )
 
+# The one agency status that permits work. Identical to the 'active' value of
+# `agencies_status_chk` (migration 027) and to
+# platform_admin.enums.AGENCY_STATUS_ACTIVE; it is repeated here rather than
+# imported because platform_admin imports operator_auth, and the reverse import
+# would close a cycle. `_scope_is_usable` and P28's acting resolution both
+# compare against it, and both must mean the same thing.
+AGENCY_STATUS_ACTIVE = "active"
+
 # The Default Agency, resolved by slug rather than by id. Every legacy record
 # is backfilled to it and every public estimation routes to it.
 DEFAULT_AGENCY_SLUG = "stima360"

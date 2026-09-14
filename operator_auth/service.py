@@ -19,7 +19,7 @@ from core.normalization import normalize_email
 from . import repository, security
 from .context import OperatorContext
 from .database import operator_cursor
-from .enums import SESSION_IDLE_MINUTES, SESSION_MAX_HOURS
+from .enums import AGENCY_STATUS_ACTIVE, SESSION_IDLE_MINUTES, SESSION_MAX_HOURS
 from .exceptions import AuthenticationFailed
 
 
@@ -113,12 +113,25 @@ def session_from_token(raw_token: str | None) -> dict | None:
     The idle window is advanced only after the session has fully validated, so
     a rejected request cannot keep a dead session alive.
 
-    The returned mapping carries the scope under "context" plus the two values
-    /me needs that are not part of the scope itself: the agency's display name
-    and the session's expiry. They are returned separately, rather than added to
-    OperatorContext, because a scope is an authorisation decision and must not
-    accumulate presentation fields. A plain dict keeps this module free of any
-    dependency on the HTTP layer that consumes it.
+    The returned mapping carries the scope under "context" plus the values /me
+    needs that are not part of the scope itself: the agency's display name, the
+    session's expiry and - since P28 - the acting and home agencies. They are
+    returned separately, rather than added to OperatorContext, because a scope
+    is an authorisation decision and must not accumulate presentation fields. A
+    plain dict keeps this module free of any dependency on the HTTP layer that
+    consumes it.
+
+    P28 - DOVE SI DECIDE L'AGENZIA EFFETTIVA.
+
+    Un platform admin puo' avere DICHIARATO di stare operando dentro
+    un'agenzia. Se quella dichiarazione e' ancora legittima, l'agenzia effettiva
+    e' quella: `context.agency_id` la porta, e da li' in poi tutto il prodotto -
+    centocinquanta route, un solo predicate - la usa senza sapere come ci sia
+    finita. Se non lo e' piu', viene CANCELLATA qui, dentro la transazione che
+    questa funzione gia' possiede.
+
+    L'attore non cambia mai: `user_id` resta la persona vera, ed e' quello che
+    finisce negli audit.
     """
     if not raw_token:
         return None
@@ -127,22 +140,122 @@ def session_from_token(raw_token: str | None) -> dict | None:
         row = repository.resolve_session(
             cur, security.hash_session_token(raw_token), SESSION_IDLE_MINUTES
         )
-        if row is None or not _scope_is_usable(row):
+        if row is None:
+            return None
+
+        # L'ORDINE FRA QUESTE DUE RIGHE E' UNA CORREZIONE, NON UNO STILE.
+        #
+        # Prima erano invertite: una sessione non piu' utilizzabile usciva
+        # subito, e l'acting restava scritto in riga. Sembra innocuo - quella
+        # sessione non risolve piu' - ma non lo e': togliere
+        # `is_platform_admin` a chi non ha membership rende la sessione
+        # inutilizzabile PRIMA che qualcuno guardi l'acting, quindi il
+        # contesto non veniva cancellato; e il giorno in cui quel flag
+        # tornasse, la sessione tornerebbe valida CON DENTRO l'agenzia di
+        # prima - senza un nuovo ingresso e senza una riga di audit che lo
+        # racconti.
+        #
+        # Adesso l'acting viene giudicato per primo, e la sua legittimita'
+        # include l'utilizzabilita' della sessione: un contesto di
+        # impersonazione non sopravvive a cio' che lo reggeva.
+        usabile = _scope_is_usable(row)
+        acting = _acting_or_cleared(cur, row, usabile=usabile)
+        if not usabile:
             return None
 
         repository.touch_session(cur, row["session_id"])
         return {
             "context": OperatorContext(
                 user_id=row["user_id"],
-                agency_id=row["agency_id"],
-                role=row["role"],
+                # L'agenzia EFFETTIVA: quella visitata se c'e', altrimenti la
+                # propria. Non c'e' un terzo caso, e non c'e' nessun punto in
+                # cui le due siano vere insieme.
+                agency_id=(
+                    acting["agency_id"] if acting else row["agency_id"]
+                ),
+                # IL RUOLO DI CASA NON SEGUE CHI VIAGGIA.
+                #
+                # Dentro un'agenzia visitata non si ha un ruolo: non c'e' una
+                # membership da cui prenderlo. Lasciare quello di casa sarebbe
+                # un difetto vero e non una sbavatura - `scoped_predicate`
+                # restringe le letture di un `agent` ai record assegnati a lui,
+                # e un platform admin che a casa sua e' agente vedrebbe
+                # dell'agenzia ospite esattamente nulla, senza che niente lo
+                # segnali. L'autorita' qui viene da `is_platform_admin`, che la
+                # matrice dei permessi legge per primo.
+                role=None if acting else row["role"],
                 is_platform_admin=bool(row["is_platform_admin"]),
                 session_id=row["session_id"],
                 auth_channel="operator_session",
             ),
-            "agency_name": row.get("agency_name"),
+            # Il nome dell'agenzia in cui si sta operando: e' quello che la
+            # Shell scrive nella barra, e deve essere l'ospite quando si e'
+            # ospiti, altrimenti la barra direbbe il posto sbagliato.
+            "agency_name": (
+                acting["agency_name"] if acting else row.get("agency_name")
+            ),
             "expires_at": row["expires_at"],
+            "acting_agency_id": acting["agency_id"] if acting else None,
+            "acting_agency_name": acting["agency_name"] if acting else None,
+            "acting_entered_at": acting["entered_at"] if acting else None,
+            # L'appartenenza vera, sempre, anche mentre si e' altrove: e' come
+            # la UI puo' dire "sei Giorgio di Casa, dentro Ospite" invece di
+            # far sparire meta' della frase.
+            "home_agency_id": row.get("agency_id"),
+            "home_agency_name": row.get("agency_name"),
         }
+
+
+def _acting_or_cleared(cur, row: dict, *, usabile: bool) -> dict | None:
+    """L'agenzia visitata se la dichiarazione regge ancora, altrimenti None.
+
+    E QUANDO NON REGGE, LA CANCELLA.
+
+    E' la differenza fra "ignorato" e "revocato", ed e' una differenza che si
+    vede il giorno dopo: un acting ignorato resta scritto nella riga, e
+    riattivare l'agenzia rimetterebbe dentro qualcuno che non ha chiesto di
+    rientrare. Cancellarlo significa che per tornarci serve un nuovo ingresso,
+    con la sua riga di audit.
+
+    Le tre condizioni sono rilette a ogni richiesta perche' stanno nella stessa
+    query che rilegge membership e stato agenzia:
+
+    * la SESSIONE deve essere ancora utilizzabile (`usabile`). Un contesto di
+      impersonazione non sopravvive a cio' che lo reggeva: se l'account e'
+      disabilitato, o se togliere `is_platform_admin` a chi non ha membership
+      rende la sessione inservibile, l'acting sparisce insieme. Senza questa
+      condizione resterebbe scritto in riga e tornerebbe in vita il giorno in
+      cui la sessione tornasse valida - senza un nuovo ingresso e senza una
+      riga di audit che lo racconti.
+    * chi impersona deve ESSERE ANCORA platform admin. Tolto il flag, l'acting
+      non e' piu' di nessuno.
+    * l'agenzia visitata deve essere ANCORA `active`. Sospenderla la spegne per
+      i suoi stessi operatori: lasciarla aperta a un visitatore sarebbe il
+      contrario di cio' che sospenderla significa.
+
+    Fail-closed: qualunque dubbio produce None, cioe' il ritorno alla
+    membership - che per un platform admin che non ne ha e' 403 sul tenant.
+    """
+    if row.get("acting_agency_id") is None:
+        return None
+
+    if not usabile:
+        repository.clear_acting_context(cur, row["session_id"])
+        return None
+
+    if not row.get("is_platform_admin"):
+        repository.clear_acting_context(cur, row["session_id"])
+        return None
+
+    if row.get("acting_agency_status") != AGENCY_STATUS_ACTIVE:
+        repository.clear_acting_context(cur, row["session_id"])
+        return None
+
+    return {
+        "agency_id": int(row["acting_agency_id"]),
+        "agency_name": row.get("acting_agency_name"),
+        "entered_at": row.get("acting_entered_at"),
+    }
 
 
 def context_from_token(raw_token: str | None) -> OperatorContext | None:

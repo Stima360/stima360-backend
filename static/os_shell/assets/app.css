@@ -495,3 +495,51 @@ dialog.modal.modal-wide { max-width: 680px; }
    dichiara `flex-wrap: wrap`, quindi non aggiungeva niente, e riduceva il
    `gap` da 10px a 8px su OGNI barra di lista del CRM - Contatti, Immobili,
    Acquirenti - cioe' esattamente le pagine che P27-7 non deve toccare. */
+
+/* ---------------------------------------------------------------------------
+   P28 - LA BARRA DEL SUPERADMIN.
+
+   Regole nuove e basta: nessuna regola esistente viene ridefinita, cosi' il
+   CRM resta esattamente com'era. La lezione di P27-7, dove una
+   `.list-toolbar` aggiunta in coda cambio' il `gap` di tutte le liste del
+   prodotto senza che nessuno lo chiedesse.
+
+   Non e' `position: fixed`. Sta nel flusso, in cima al documento, e SPOSTA
+   tutto il resto in giu': e' cio' che la rende impossibile da confondere con
+   una notifica passeggera. Un badge fisso nell'angolo si smette di vedere;
+   qualcosa che ha cambiato la forma della pagina no.
+
+   Il rosso non e' un allarme: e' un promemoria. Il tono e' quello di
+   `.btn.danger` gia' in uso, cosi' la Shell non guadagna un secondo rosso.
+   --------------------------------------------------------------------------- */
+.acting-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: #b3261e;
+  color: #fff;
+  font-size: 13px;
+}
+
+.acting-bar .acting-label {
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-size: 11px;
+  border: 1px solid rgba(255, 255, 255, .6);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+/* Prende lo spazio residuo, cosi' il pulsante resta a destra e il nome
+   dell'agenzia puo' andare a capo senza spingerlo fuori schermo. */
+.acting-bar .acting-text { flex: 1 1 auto; }
+
+.acting-bar .acting-exit {
+  border-color: #fff;
+  color: #fff;
+  background: transparent;
+}
+.acting-bar .acting-exit:hover { background: #fff; color: #b3261e; }

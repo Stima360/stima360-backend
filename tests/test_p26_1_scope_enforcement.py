@@ -1099,8 +1099,27 @@ def test_the_session_path_never_builds_a_context_from_client_data(name):
     do so. What remains is the cookie path, checked exactly as before.
     """
     code = _function_source(PACKAGE / "dependencies.py", name)
-    for forbidden in ("query_params", "headers.get", "agency_id", "OperatorContext("):
+    for forbidden in ("query_params", "headers.get", "OperatorContext("):
         assert forbidden not in code, f"{name} references {forbidden!r}"
+
+    # P28 - `agency_id` NON E' PIU' UNA PAROLA VIETATA, MA LA SUA SORGENTE SI'.
+    #
+    # Fino a P28 la regola si esprimeva vietando la stringa: la funzione non
+    # nominava nessuna agenzia, quindi non poteva prenderne una da nessuna
+    # parte. Adesso `optional_session` trasporta l'agenzia visitata e quella di
+    # appartenenza verso `/me`, e il divieto letterale vieterebbe il trasporto
+    # insieme alla lettura.
+    #
+    # La regola vera non e' mai stata "non nominare un'agenzia": e' "non
+    # prenderne una dal client". Quindi si controlla la SORGENTE - ogni
+    # occorrenza deve venire da `resolved`, che e' il valore restituito dal
+    # service dopo aver letto la riga di sessione, e mai dalla richiesta.
+    for riga in code.splitlines():
+        if "agency_id" not in riga:
+            continue
+        assert "resolved" in riga, (
+            f"{name} nomina un'agenzia che non viene da `resolved`: {riga.strip()!r}"
+        )
 
 
 def test_the_session_path_accepts_only_the_cookie():

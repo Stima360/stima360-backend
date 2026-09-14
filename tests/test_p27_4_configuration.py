@@ -879,8 +879,25 @@ def test_g8_every_mutation_in_the_package_goes_through_the_shared_order():
         for path in sorted(package.glob("*.py"))
         if path.name != "database.py"
     }
-    assert sum(commits.values()) == 1, commits
-    assert commits["transaction.py"] == 1, commits
+    # P28 - DUE COMMIT, ENTRAMBI IN `transaction.py`, E LA RAGIONE.
+    #
+    # Il perno non e' mai stato "un commit": e' "l'ordine fra scrittura e audit
+    # sta in un posto solo". P28 ha aggiunto una DEROGA a quell'ordine -
+    # `commit_then_audit`, per le sole operazioni che TOLGONO un accesso -
+    # perche' applicare la regola normale all'uscita del Superadmin da
+    # un'agenzia significherebbe che un registro non scrivibile lo TIENE
+    # dentro: un guasto che allarga l'accesso invece di negarlo.
+    #
+    # La deroga vive accanto alla regola, nello stesso file, cosi' chi apre
+    # `transaction.py` per capire quale valga le trova entrambe con scritto
+    # quando si usa quale. Metterla dentro `acting_service` avrebbe rispettato
+    # la lettera di questo test e violato cio' che il test difende: sarebbe
+    # stata una scelta locale invisibile a chiunque non aprisse quel file.
+    #
+    # Il numero resta quindi ESATTO e sorvegliato - un terzo commit, o uno
+    # fuori da `transaction.py`, fa fallire questa prova come prima.
+    assert sum(commits.values()) == 2, commits
+    assert commits["transaction.py"] == 2, commits
 
     callers = []
     for path in sorted(package.glob("*_service.py")):

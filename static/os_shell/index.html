@@ -23,6 +23,26 @@
     </div>
   </div>
 
+  <!--
+    P28 - la barra del Superadmin.
+
+    Sta FUORI da #app-view e prima di esso, non dentro la topbar, per una
+    ragione sola: deve occupare la larghezza intera e spostare in giu' tutto il
+    resto. Un badge nell'angolo della topbar si smette di vedere dopo dieci
+    minuti; una barra che sposta la pagina no.
+
+    Nasce `hidden` e viene scoperta da `main.js` quando /me dichiara un
+    contesto di acting. Non ha un pulsante di chiusura, e non e' una svista:
+    l'unico modo di farla sparire e' uscire dall'agenzia.
+  -->
+  <div id="acting-bar" class="acting-bar" role="status" hidden>
+    <span class="acting-label">SUPERADMIN</span>
+    <span id="acting-text" class="acting-text"></span>
+    <button id="acting-exit-btn" type="button" class="btn acting-exit">
+      Torna alla Platform
+    </button>
+  </div>
+
   <div id="app-view" hidden>
     <aside class="sidebar">
       <div class="brand">STIMA360 OS</div>

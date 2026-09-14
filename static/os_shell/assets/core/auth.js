@@ -58,6 +58,70 @@ export function isAuthenticated() {
   return session !== null;
 }
 
+// P28 - LE ALTRE SCHEDE DELLO STESSO BROWSER.
+//
+// Due schede aperte NON sono due sessioni: condividono il cookie, quindi
+// condividono la stessa riga di `operator_sessions` e quindi lo stesso contesto
+// di agenzia. Quando una entra in un'agenzia o ne esce, le altre stanno
+// mostrando una barra sbagliata e - molto peggio - i dati dell'agenzia
+// precedente, che il server non servirebbe piu'.
+//
+// Non e' una svista che si corregge da sola al prossimo clic: una scheda ferma
+// su un elenco resta ferma, e quell'elenco e' esattamente la cosa che P26
+// esiste per non far vedere a chi non deve.
+//
+// `BroadcastChannel` e' il minimo che risolve: nessuna libreria, nessun
+// polling, nessuno stato condiviso da tenere allineato. Chi riceve il
+// messaggio non si fida del suo contenuto - che infatti non porta dati - e
+// RILEGGE `/me`. Il server resta l'unico a decidere in quale agenzia si sta;
+// il messaggio dice soltanto "e' cambiato qualcosa, richiedilo".
+//
+// `try/catch` perche' l'API puo' mancare (browser vecchi, contesti non
+// sicuri): senza canale la Shell funziona esattamente come prima di P28, e una
+// scheda dimenticata si riallinea al primo caricamento. Degradare in silenzio
+// e' giusto qui - non stiamo perdendo una difesa, stiamo perdendo una
+// comodita' - ma la difesa vera resta il server, che a quella scheda non
+// risponderebbe comunque con i dati dell'altra agenzia.
+const CANALE_ACTING = 'stima360-acting';
+
+let canale = null;
+try {
+  canale = new BroadcastChannel(CANALE_ACTING);
+  // `unref()` NON esiste nel browser, ed e' proprio per questo che c'e'.
+  //
+  // Un canale aperto e' una risorsa attiva: in un browser non cambia niente -
+  // la pagina vive finche' la scheda e' aperta - ma in node TIENE VIVO
+  // L'EVENT LOOP, e un processo che importa questo modulo non termina mai.
+  // Non e' un'ipotesi: e' come si e' fatto scoprire, appendendo a tempo
+  // indeterminato un test che esegue `components/timeline.js`, che da
+  // `api-client.js` arriva fin qui.
+  //
+  // Il canale resta pienamente funzionante: `unref` dice solo "non sei tu a
+  // dover tenere in piedi il processo".
+  if (typeof canale.unref === 'function') canale.unref();
+  canale.onmessage = () => {
+    // Nessun `annuncia()` qui: sarebbe un anello fra schede che si rimbalzano
+    // lo stesso messaggio all'infinito. Chi riceve rilegge e basta.
+    restore().catch(() => {
+      // Un errore qui e' gia' stato tradotto in `session = null` da `restore`,
+      // e i listener hanno gia' svuotato la superficie. Non c'e' nessuno a cui
+      // mostrare un messaggio: questa non e' un'azione dell'utente.
+    });
+  };
+} catch (_senzaCanale) {
+  canale = null;
+}
+
+function annuncia() {
+  if (canale === null) return;
+  try {
+    canale.postMessage({ tipo: 'acting-changed' });
+  } catch (_ignorato) {
+    // Un canale chiuso non deve far fallire l'operazione che lo ha usato:
+    // l'ingresso o l'uscita sono gia' avvenuti sul server.
+  }
+}
+
 // `credentials: 'include'` su OGNI chiamata di questo modulo: senza, il browser
 // non manda il cookie e non accetta il Set-Cookie della login.
 const withCookie = (options = {}) => ({ ...options, credentials: 'include' });
@@ -135,6 +199,80 @@ export async function logout() {
   }
   session = null;
   notify();
+}
+
+/**
+ * P28 — entra nel CRM di un'agenzia come Superadmin.
+ *
+ * Non aggiorna lo stato locale e non prova a indovinare cosa sia cambiato:
+ * chiama la route e poi RILEGGE /me. L'agenzia effettiva la decide il server
+ * leggendo la riga di sessione, e questo file non deve poterla scrivere - se
+ * potesse, esisterebbe un secondo posto che decide in quale agenzia si sta,
+ * ed e' esattamente cio' che P26-1 ha eliminato.
+ *
+ * `restore()` fa scattare `notify()`, quindi l'epoch avanza e le view gia'
+ * disegnate vengono buttate: i contatti dell'agenzia precedente non devono
+ * restare nel documento mentre la barra dice un altro nome.
+ */
+export async function enterAgency(agencyId) {
+  const response = await call(`/api/platform/agencies/${agencyId}/enter`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(await describeActingError(response));
+  }
+  // Prima si rilegge, poi si avvisa: cosi' questa scheda e' gia' allineata
+  // quando le altre cominciano a rileggere, e nessuna mostra un momento in cui
+  // le due meta' dello schermo si contraddicono.
+  const aggiornata = await restore();
+  annuncia();
+  return aggiornata;
+}
+
+/**
+ * P28 — torna alla Platform.
+ *
+ * Rilegge /me anche quando la chiamata fallisce. E' deliberato: se il server
+ * ha gia' tolto il contesto e la risposta si e' persa per strada, lo stato
+ * locale deve comunque riallinearsi al server invece di restare a mostrare una
+ * barra per un'agenzia da cui si e' gia' usciti.
+ */
+export async function exitAgency() {
+  let errore = null;
+  try {
+    const response = await call('/api/platform/agency-context/exit', {
+      method: 'POST',
+    });
+    if (!response.ok) errore = await describeActingError(response);
+  } catch (networkError) {
+    errore = networkError.message;
+  }
+  await restore();
+  // Si avvisa ANCHE quando la chiamata e' fallita: se il server ha tolto il
+  // contesto e la risposta si e' persa per strada, le altre schede devono
+  // riallinearsi comunque. Il messaggio non afferma niente - dice solo
+  // "richiedilo" - quindi avvisare di troppo non puo' mentire a nessuno.
+  annuncia();
+  if (errore) throw new Error(errore);
+  return getSession();
+}
+
+/**
+ * Il messaggio da mostrare, scelto per stato HTTP.
+ *
+ * Il `detail` del server non viene mai interpolato: e' scritto per chi legge i
+ * log, puo' contenere nomi di vincoli, e non e' una frase che un operatore
+ * debba trovarsi davanti. Stessa regola di `components/network.js`.
+ */
+async function describeActingError(response) {
+  if (response.status === 401) return 'Sessione scaduta. Rifai l’accesso.';
+  if (response.status === 403) return 'Operazione riservata all’amministrazione di piattaforma.';
+  if (response.status === 404) return 'Agenzia non trovata.';
+  if (response.status === 409) {
+    return 'Operazione non possibile: esci dall’agenzia in cui sei, oppure l’agenzia non è attiva.';
+  }
+  if (response.status === 503) return 'Audit di piattaforma non disponibile: operazione non eseguita.';
+  return 'Operazione non riuscita.';
 }
 
 /**

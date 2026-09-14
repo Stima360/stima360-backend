@@ -297,6 +297,16 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/views/rete.js",
         "static/os_shell/assets/views/rete-agenzia.js",
         "static/os_shell/assets/views/rete-territorio.js",
+        # P28 - LA BARRA DEL SUPERADMIN, che per sua natura non e' una pagina
+        # della Rete: deve comparire sopra QUALUNQUE pagina mentre si sta
+        # operando dentro un'agenzia, quindi vive nello scheletro della Shell.
+        #
+        # Cio' che questo test difende resta intatto: nessuna VISTA del CRM e'
+        # stata toccata - non contatti.js, non immobili.js, non nessun'altra -
+        # e `app.css` ha solo regole nuove, mai una ridefinizione di regole
+        # esistenti (la lezione di `.list-toolbar`, vedi il fondo del file).
+        "static/os_shell/index.html",
+        "static/os_shell/assets/core/auth.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

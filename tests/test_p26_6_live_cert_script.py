@@ -4321,6 +4321,28 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # inventario e non deve: punta a `network_territories`, che non e' fra i
     # genitori da cui il cleanup cancella righe.
     ("agency_territory_assignments", "agency_id", "agencies", "RESTRICT"),
+    # P28, migration 060. La sessione di un Superadmin che sta operando dentro
+    # un'agenzia la nomina, e quel riferimento e' RESTRICT.
+    #
+    # ESAMINATA. Le tre alternative e perche' questa:
+    #
+    #   CASCADE   cancellare un'agenzia porterebbe via delle SESSIONI, cioe' il
+    #             diritto di stare collegati di persone che con quell'agenzia
+    #             non c'entrano. Inaccettabile.
+    #   SET NULL  azzererebbe `acting_agency_id` lasciando `acting_entered_at`
+    #             valorizzato, e il CHECK `operator_sessions_acting_chk` -
+    #             che le vuole appaiate - rifiuterebbe la scrittura. La FK
+    #             farebbe fallire la DELETE comunque, ma per un motivo
+    #             incomprensibile invece che per quello vero.
+    #   RESTRICT  l'agenzia non si cancella finche' c'e' dentro qualcuno. E' la
+    #             sola delle tre che dice la verita'.
+    #
+    # Conseguenza per il cleanup, identica a quella gia' accettata per le
+    # membership e per le assegnazioni territoriali: il preflight la incontra
+    # come RIFIUTO e non come cancellazione silenziosa. In pratica non mordera'
+    # quasi mai - una sessione dura al massimo dodici ore e nessuna superficie
+    # cancella agenzie - ma quando morde, morde nel verso giusto.
+    ("operator_sessions", "acting_agency_id", "agencies", "RESTRICT"),
     ("buy_request_history", "match_id", "matches", "SET NULL"),
     ("buy_request_history", "property_id", "properties", "SET NULL"),
     ("buy_request_history", "task_id", "tasks", "SET NULL"),

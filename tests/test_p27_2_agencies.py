@@ -1383,8 +1383,25 @@ def test_d5_the_whole_package_has_exactly_one_copy_of_the_order():
         for path in sorted(package.glob("*.py"))
         if path.name != "database.py"
     }
-    assert sum(commits.values()) == 1, commits
-    assert commits["transaction.py"] == 1, commits
+    # P28 - DUE COMMIT, ENTRAMBI IN `transaction.py`, E LA RAGIONE.
+    #
+    # Il perno non e' mai stato "un commit": e' "l'ordine fra scrittura e audit
+    # sta in un posto solo". P28 ha aggiunto una DEROGA a quell'ordine -
+    # `commit_then_audit`, per le sole operazioni che TOLGONO un accesso -
+    # perche' applicare la regola normale all'uscita del Superadmin da
+    # un'agenzia significherebbe che un registro non scrivibile lo TIENE
+    # dentro: un guasto che allarga l'accesso invece di negarlo.
+    #
+    # La deroga vive accanto alla regola, nello stesso file, cosi' chi apre
+    # `transaction.py` per capire quale valga le trova entrambe con scritto
+    # quando si usa quale. Metterla dentro `acting_service` avrebbe rispettato
+    # la lettera di questo test e violato cio' che il test difende: sarebbe
+    # stata una scelta locale invisibile a chiunque non aprisse quel file.
+    #
+    # Il numero resta quindi ESATTO e sorvegliato - un terzo commit, o uno
+    # fuori da `transaction.py`, fa fallire questa prova come prima.
+    assert sum(commits.values()) == 2, commits
+    assert commits["transaction.py"] == 2, commits
 
     # E il commit escluso e' davvero quello dell'audit, non un secondo commit
     # operativo nascosto nel modulo sbagliato.
@@ -1425,14 +1442,21 @@ def test_d5_the_router_writes_no_audit_row_of_its_own():
             assert node.module != ".audit", node.module
 
 
-def test_d6_p27_1_me_is_unchanged():
+def test_d6_p27_1_me_is_unchanged_by_p27_2():
     """La superficie di P27-1 resta quella che era: P27-2 aggiunge route, non
-    ne modifica."""
+    ne modifica.
+
+    P28 ha poi aggiunto due campi - se si sta operando dentro un'agenzia e da
+    quando - e quella e' un'estensione dichiarata, verificata dove vive:
+    tests/test_p27_1_platform_admission.py::test_a11_the_response_projects_six_fields_and_no_personal_datum.
+    Qui resta cio' che questo test sapeva dire: nessuno dei quattro campi di
+    P27-1 e' sparito o ha cambiato nome.
+    """
     from platform_admin.schemas import PlatformMeResponse
 
-    assert set(PlatformMeResponse.model_fields) == {
+    assert {
         "user_id", "is_platform_admin", "agency_id", "session_expires_at"
-    }
+    } <= set(PlatformMeResponse.model_fields)
 
 
 # ===========================================================================

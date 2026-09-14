@@ -44,8 +44,8 @@ from .enums import (
 class PlatformMeResponse(BaseModel):
     """Chi e' il chiamante sulla superficie Platform.
 
-    Quattro campi, e nessuno di essi appartiene a un'agenzia diversa da quella
-    del chiamante:
+    Quattro campi in P27-1, sei da P28, e nessuno di essi appartiene a
+    un'agenzia che il chiamante non abbia scelto di visitare:
 
     * `user_id`            - la sua identita'.
     * `is_platform_admin`  - sempre True qui: se fosse False la dipendenza
@@ -67,6 +67,38 @@ class PlatformMeResponse(BaseModel):
     is_platform_admin: bool
     agency_id: int | None
     session_expires_at: datetime
+    # P28. DUE campi, e il nome dell'agenzia NON e' fra questi.
+    #
+    # La Rete deve sapere se il pulsante da mostrare e' "Entra nell'agenzia" o
+    # niente: senza `acting_agency_id` lo dedurrebbe dal confronto fra
+    # `agency_id` e l'agenzia che sta guardando, che e' una deduzione sbagliata
+    # per chiunque abbia una membership.
+    #
+    # Il NOME no: questa proiezione non ha mai portato un `agency_name` - vedi
+    # il docstring sopra - e chi ha bisogno di scrivere il nome da qualche
+    # parte e' la Shell, che lo prende da `/api/operator-auth/me`. Aggiungerlo
+    # qui sarebbe un secondo posto da cui leggere la stessa cosa.
+    acting_agency_id: int | None = None
+    acting_entered_at: datetime | None = None
+
+
+class ActingEnterResponse(BaseModel):
+    """Il contesto che risulta da un ingresso riuscito. P28.
+
+    Risponde alla sola domanda che il chiamante si pone dopo aver premuto
+    "Entra": dove sono adesso. Non riporta la riga di sessione, non riporta
+    l'id di sessione, e non riporta niente dell'agenzia oltre a come si chiama
+    - chi vuole il resto ha gia' l'endpoint dell'agenzia.
+
+    `BaseModel` e non `PlatformModel`: `extra='forbid'` appartiene ai corpi di
+    RICHIESTA. Su una risposta rifiuterebbe i campi che il service aggiunge e
+    trasformerebbe una riga valida in un 500 DOPO averla scritta - che e'
+    esattamente il difetto trovato in P27-8 su `TerritoryAliasResponse`.
+    """
+
+    acting_agency_id: int
+    acting_agency_name: str
+    acting_agency_slug: str
 
 
 # ---------------------------------------------------------------------------
