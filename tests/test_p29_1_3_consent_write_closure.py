@@ -290,13 +290,21 @@ SORGENTI_APPLICATIVE = [
 # Gli unici file autorizzati a NOMINARE una colonna di consenso in scrittura.
 #
 #   consent/*                  il dominio: e' il suo mestiere
-#   core/repository.py         la guardia che le vieta, e la INSERT che le
-#                              azzera esplicitamente
-#   core/service.py            il dizionario del bridge pubblico (vedi sotto)
+#   core/repository.py         la guardia che le vieta (CONSENT_OWNED_COLUMNS,
+#                              _reject_consent_owned) e la INSERT generica che
+#                              le azzera esplicitamente
 #   database_revival/*         SOLE LETTURE (`marketing_consent IS TRUE`)
+#
+# P29-1.4: `core/service.py` NON E' PIU' IN QUESTO ELENCO.
+#
+# Fino a P29-1.3 c'era, perche' `bridge_public_stima` costruiva un
+# `contact_data` che portava `marketing_consent` e `marketing_consent_at` fino
+# alla INSERT del bridge: era l'ultima scrittura di consenso fuori dal dominio,
+# dichiarata e rimandata. P29-1.4 l'ha chiusa - il bridge riceve una decisione
+# e la consegna a `consent/` nella propria transazione - quindi l'eccezione e'
+# sparita invece di essere riscritta piu' gentilmente.
 SCRITTORI_AUTORIZZATI = {
     "core/repository.py",
-    "core/service.py",
 }
 
 
@@ -330,33 +338,53 @@ def test_m6_le_letture_di_p24_restano_letture():
         assert not re.search(r"UPDATE\s+contacts", testo, re.I), nome
 
 
-def test_m6_il_bridge_pubblico_e_l_unica_eccezione_e_lo_dice():
-    """L'eccezione dichiarata, e rimandata a P29-1.4.
+def test_m6_il_bridge_pubblico_non_e_piu_un_eccezione():
+    """P29-1.4: l'ultimo write-site fuori dal dominio e' chiuso.
 
-    Il bridge scrive ancora il consenso nella propria INSERT. Non e' una
-    dimenticanza: spostarlo sul dominio senza il resto di P29-1.4 romperebbe la
-    creazione dei lead da stima360.it. Questo test pretende che l'eccezione
-    resti UNA, e che il codice la dichiari invece di lasciarla intendere.
+    Questo test ha sostituito quello che TOLLERAVA il bridge. Non e' stato
+    ammorbidito: e' stato rovesciato. Prima pretendeva che l'eccezione fosse
+    unica e dichiarata; ora pretende che non ci sia.
     """
-    sorgente = (ROOT / "core" / "repository.py").read_text(encoding="utf-8")
-    assert "bridge_public_stima" in sorgente
-    assert "P29-1.4" in sorgente, (
-        "l'eccezione del bridge va dichiarata nel file che la contiene"
-    )
-
-    # Nel repository ci sono esattamente due INSERT INTO contacts eseguibili:
-    # quella generica (azzerata da P29-1.3) e quella del bridge. Si contano le
-    # istruzioni - la parentesi che apre l'elenco delle colonne - e non le
-    # occorrenze del testo, che compare anche nel docstring del modulo.
-    assert len(re.findall(r"INSERT INTO contacts\s*\(", sorgente)) == 2
-
     servizio = (ROOT / "core" / "service.py").read_text(encoding="utf-8")
-    inizio = servizio.index("def bridge_public_stima")
-    assert '"marketing_consent"' in servizio[inizio:], (
-        "il solo dizionario di core/service.py che nomina il consenso deve "
-        "essere quello del bridge"
+    for colonna in CONSENT_COLUMNS:
+        assert f'"{colonna}"' not in servizio, (
+            f"core/service.py nomina ancora {colonna}: il bridge non deve piu' "
+            "portare il consenso dentro contact_data"
+        )
+
+    repository_src = (ROOT / "core" / "repository.py").read_text(encoding="utf-8")
+    inizio = repository_src.index("def bridge_public_stima")
+    bridge = repository_src[inizio:]
+
+    # La INSERT del bridge non nomina piu' le colonne di consenso...
+    insert_inizio = bridge.index("INSERT INTO contacts(")
+    insert = bridge[insert_inizio: bridge.index("RETURNING *", insert_inizio)]
+    for colonna in CONSENT_COLUMNS:
+        assert colonna not in insert, f"la INSERT del bridge scrive ancora {colonna}"
+
+    # ...e al suo posto c'e' una chiamata al dominio, sullo stesso cursore.
+    assert "consent_service.record_optional_grant(" in bridge
+    assert "cur=cur," in bridge, (
+        "il consenso deve entrare nella transazione del bridge, non aprirne una seconda"
     )
-    assert '"marketing_consent"' not in servizio[:inizio]
+
+
+def test_m6_il_bridge_non_ingoia_gli_errori_del_consenso():
+    """Nessun try/except attorno alla registrazione del consenso.
+
+    Un errore che diventasse un successo silenzioso lascerebbe una persona che
+    ha detto si' e un CRM che non lo sa - ed e' proprio il caso in cui nessuno
+    andrebbe a controllare.
+    """
+    repository_src = (ROOT / "core" / "repository.py").read_text(encoding="utf-8")
+    inizio = repository_src.index("consent_service.record_optional_grant(")
+    fine = repository_src.index(")", repository_src.index("cur=cur,", inizio))
+    chiamata = repository_src[inizio:fine]
+    assert "try" not in chiamata and "except" not in chiamata
+
+    # E nemmeno un safe_* che faccia la stessa cosa con un nome piu' gentile.
+    assert "safe_record_optional_grant" not in repository_src
+    assert "safe_record_grant" not in repository_src
 
 
 # ===========================================================================

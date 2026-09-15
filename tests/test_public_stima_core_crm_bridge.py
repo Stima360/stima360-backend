@@ -132,6 +132,52 @@ class BridgeCursor:
             self.rows = [copy.deepcopy(existing)]
             return
 
+        # ------------------------------------------------------------------
+        # P29-1.4: le istruzioni del dominio dei consensi.
+        #
+        # Da P29-1.4 il bridge registra il consenso NELLA PROPRIA transazione,
+        # quindi sul cursore passa anche l'SQL di `consent/`. Questo falso lo
+        # modella al minimo perche' il bridge possa proseguire: qui si provano
+        # routing, tenancy e dedup, non il dominio dei consensi - che ha la
+        # propria suite in tests/test_p29_1_4_public_stima_consent.py.
+        # ------------------------------------------------------------------
+        if "from contacts c where c.id" in sql and "for update" in sql:
+            match = next(
+                (c for c in self.database.contacts if c.get("id") == params[0]), None
+            )
+            self.rows = [copy.deepcopy(match)] if match else []
+            return
+
+        if "insert into consent_events" in sql:
+            item = {**copy.deepcopy(params), "id": self.database.next_consent_event_id}
+            self.database.next_consent_event_id += 1
+            self.database.consent_events.append(item)
+            self.rows = [copy.deepcopy(item)]
+            self.rowcount = 1
+            return
+
+        if "from consent_events ce" in sql:
+            trovati = [
+                e for e in self.database.consent_events
+                if e.get("contact_id") == params[1] and e.get("purpose") == params[2]
+            ]
+            self.rows = [copy.deepcopy(trovati[-1])] if trovati else []
+            return
+
+        if sql.startswith("update contacts c set"):
+            match = next(
+                (c for c in self.database.contacts if c.get("id") == params[-2]), None
+            )
+            if match is None:
+                self.rows = []
+                return
+            match["marketing_consent"] = True
+            match["marketing_consent_at"] = params[0]
+            match["marketing_consent_source"] = params[1]
+            self.rows = [copy.deepcopy(match)]
+            self.rowcount = 1
+            return
+
         raise AssertionError(f"unexpected bridge SQL: {sql}")
 
     def fetchone(self):
@@ -154,6 +200,9 @@ class BridgeDatabase:
         self.next_contact_id = 1
         self.next_lead_id = 1
         self.next_link_id = 1
+        # P29-1.4: lo storico dei consensi, scritto nella stessa transazione.
+        self.consent_events = []
+        self.next_consent_event_id = 1
         self.fail_on = None
         self.sql = []
         self.commits = 0

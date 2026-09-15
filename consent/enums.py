@@ -96,7 +96,19 @@ REVOKING_ACTOR_TYPES = frozenset({ACTOR_SUBJECT, ACTOR_OPERATOR})
 # P29-1.0). Nessun evento viene creato per loro e nessun timestamp viene
 # inventato.
 # ---------------------------------------------------------------------------
-SOURCE_PUBLIC_FUNNEL = "stima360.it"
+# La DENOMINAZIONE APPLICATIVA del flusso, non l'hostname del sito.
+#
+# La prima stesura diceva "stima360.it". E' stata cambiata in P29-1.4 perche'
+# un hostname dice DOVE stava la persona, non COSA ha fatto: lo stesso sito
+# potrebbe un giorno ospitare un secondo form, e due consensi diversi
+# porterebbero la stessa provenienza. `public_stima` e' invece il nome che
+# l'origine STIMA -> CORE ha gia' in tutto il repository - `contacts.source`,
+# `leads.source` e `SystemAgencyContext.origin` scrivono esattamente questo -
+# quindi un lettore che incrocia le due tabelle trova la stessa parola.
+#
+# Nessuna migration: la colonna e' un VARCHAR libero (solo BTRIM <> '' la
+# vincola) e nessun evento e' ancora stato scritto con il valore precedente.
+SOURCE_PUBLIC_STIMA = "public_stima"
 SOURCE_CRM = "crm"
 SOURCE_UNSUBSCRIBE_LINK = "unsubscribe_link"
 SOURCE_WHATSAPP_OPTOUT = "whatsapp_optout"
@@ -104,7 +116,7 @@ SOURCE_IMPORT = "import"
 SOURCE_LEGACY = "legacy"
 
 WRITABLE_SOURCES = frozenset({
-    SOURCE_PUBLIC_FUNNEL,
+    SOURCE_PUBLIC_STIMA,
     SOURCE_CRM,
     SOURCE_UNSUBSCRIBE_LINK,
     SOURCE_WHATSAPP_OPTOUT,

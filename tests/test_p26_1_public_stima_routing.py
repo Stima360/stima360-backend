@@ -75,6 +75,39 @@ class BridgeCursor:
             self._rows = [{"locked": True}]
         elif "from lead_stime ls" in lowered:
             self._rows = [self.existing_link] if self.existing_link else []
+        # ------------------------------------------------------------------
+        # P29-1.4: le istruzioni del dominio dei consensi.
+        #
+        # Da P29-1.4 il bridge registra il consenso NELLA PROPRIA transazione,
+        # quindi sul cursore passa anche l'SQL di `consent/`. Questo falso lo
+        # modella al minimo perche' il bridge possa proseguire: qui si provano
+        # routing, tenancy e dedup, non il dominio dei consensi - che ha la
+        # propria suite in tests/test_p29_1_4_public_stima_consent.py.
+        # ------------------------------------------------------------------
+        elif "from contacts c where c.id" in lowered and "for update" in lowered:
+            self._rows = [
+                row for row in self.contacts + self.inserted["contacts"]
+                if row.get("id") == params[0]
+            ][:1]
+        elif "insert into consent_events" in lowered:
+            self._next_id += 1
+            row = {**params, "id": self._next_id}
+            self.inserted.setdefault("consent_events", []).append(row)
+            self._rows = [row]
+        elif "from consent_events ce" in lowered:
+            eventi = self.inserted.get("consent_events", [])
+            self._rows = eventi[-1:] if eventi else []
+        elif lowered.startswith("update contacts c set"):
+            row = next(
+                (
+                    r for r in self.contacts + self.inserted["contacts"]
+                    if r.get("id") == params[-2]
+                ),
+                None,
+            )
+            if row is not None:
+                row["marketing_consent"] = True
+            self._rows = [row] if row else []
         elif "from contacts" in lowered:
             agency_id = params[0]
             value = params[-1]
@@ -133,8 +166,12 @@ def bridge(monkeypatch):
             "contact_type": "person", "first_name": "Mario", "last_name": "Rossi",
             "company_name": None, "display_name": display_name, "email": email,
             "email_normalized": email, "phone": phone, "phone_normalized": phone,
+            # P29-1.4: il consenso non e' piu' un campo del contatto. Il
+            # bridge lo riceve come decisione separata e lo consegna al
+            # dominio `consent/`, quindi `contact_data` non lo nomina piu'
+            # - e `_reject_consent_owned` rifiuta chi ci prova.
             "secondary_phone": None, "source": "public_stima", "status": "active",
-            "marketing_consent": False, "marketing_consent_at": None, "notes": None,
+            "notes": None,
         }
         lead_data = {
             "source": "public_stima", "pipeline": "sell", "stage": "new",

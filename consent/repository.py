@@ -249,6 +249,45 @@ def project(cur, ctx, contact_id: int, event: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def record_decision_with_cursor(cur, ctx, data: dict[str, Any]) -> dict[str, Any]:
+    """I quattro passi della decisione, sul cursore del CHIAMANTE.
+
+    Nessuna connessione aperta qui, nessun commit, nessun rollback: la
+    transazione appartiene a chi passa il cursore, e con lei la scelta di cosa
+    salvare insieme.
+
+    Esiste per P29-1.4. Il bridge pubblico deve scrivere contatto, lead,
+    collegamento alla stima E consenso in UN SOLO atto: se il consenso fallisse
+    dopo che il lead e' gia' stato committato, resterebbe una persona che ha
+    detto si' e un CRM che non lo sa. Aprire una seconda connessione sarebbe
+    stato il modo semplice per ottenere esattamente quella finestra.
+
+    La forma - una funzione `_with_cursor` accanto a quella che apre la propria
+    transazione - e' quella che `core.repository.create_task_with_cursor` ha
+    gia' stabilito in questo repository, e che `followup/repository.py` usa per
+    la stessa ragione.
+    """
+    lock_contact(cur, ctx, data["contact_id"])
+    event, created = insert_event(cur, ctx, data)
+    current = latest_event(cur, ctx, data["contact_id"], data["purpose"])
+    if current is None:
+        # Irraggiungibile: l'evento e' appena stato scritto o letto nella
+        # stessa transazione e nello stesso scope. Se accade, qualcosa e'
+        # cambiato sotto - meglio fallire e far rollback che proiettare
+        # uno stato dedotto da niente.
+        raise ConflictError(
+            f"no consent event visible for contact {data['contact_id']} "
+            f"and purpose {data['purpose']!r} after writing one"
+        )
+    contact = project(cur, ctx, data["contact_id"], current)
+    return {
+        "event": event,
+        "created": created,
+        "effective_event": current,
+        "contact": contact,
+    }
+
+
 def record_decision(ctx, data: dict[str, Any]) -> dict[str, Any]:
     """L'unico percorso di scrittura del consenso. Una transazione.
 
@@ -259,27 +298,13 @@ def record_decision(ctx, data: dict[str, Any]) -> dict[str, Any]:
     viene scritto niente: ne' l'evento senza la proiezione, ne' la proiezione
     senza l'evento. E' l'intero requisito di atomicita', e non e' ottenuto per
     disciplina ma perche' non esiste un secondo commit in questo file.
+
+    E' il guscio transazionale di `record_decision_with_cursor`: i passi sono
+    gli stessi, scritti una volta sola. Un chiamante che ha gia' una
+    transazione aperta - il bridge pubblico - usa quella e non questa.
     """
     with consent_cursor(commit=True) as (_, cur):
-        lock_contact(cur, ctx, data["contact_id"])
-        event, created = insert_event(cur, ctx, data)
-        current = latest_event(cur, ctx, data["contact_id"], data["purpose"])
-        if current is None:
-            # Irraggiungibile: l'evento e' appena stato scritto o letto nella
-            # stessa transazione e nello stesso scope. Se accade, qualcosa e'
-            # cambiato sotto - meglio fallire e far rollback che proiettare
-            # uno stato dedotto da niente.
-            raise ConflictError(
-                f"no consent event visible for contact {data['contact_id']} "
-                f"and purpose {data['purpose']!r} after writing one"
-            )
-        contact = project(cur, ctx, data["contact_id"], current)
-        return {
-            "event": event,
-            "created": created,
-            "effective_event": current,
-            "contact": contact,
-        }
+        return record_decision_with_cursor(cur, ctx, data)
 
 
 def read_projection(ctx, contact_id: int) -> dict[str, Any]:

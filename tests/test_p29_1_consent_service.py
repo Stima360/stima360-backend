@@ -37,7 +37,7 @@ from consent.enums import (
     PURPOSE_MARKETING,
     PURPOSE_PRIVACY_TERMS,
     SOURCE_CRM,
-    SOURCE_PUBLIC_FUNNEL,
+    SOURCE_PUBLIC_STIMA,
     SOURCE_UNSUBSCRIBE_LINK,
     STATUS_GRANTED,
     STATUS_NEVER_GIVEN,
@@ -309,7 +309,7 @@ def grant(ctx, contact_id=1, purpose=PURPOSE_MARKETING, **kwargs):
     payload = {
         "contact_id": contact_id,
         "purpose": purpose,
-        "source": SOURCE_PUBLIC_FUNNEL,
+        "source": SOURCE_PUBLIC_STIMA,
         "actor_type": "subject",
     }
     payload.update(kwargs)
@@ -383,7 +383,7 @@ def test_m1_current_state_legge_la_proiezione(db, ctx):
 
     stato = service.current_state(ctx, 1, PURPOSE_MARKETING)
     assert stato["status"] == STATUS_GRANTED
-    assert stato["source"] == SOURCE_PUBLIC_FUNNEL
+    assert stato["source"] == SOURCE_PUBLIC_STIMA
 
     with pytest.raises(NotFoundError):
         service.current_state(Ctx(agency_id=2, role="agency_owner"), 1, PURPOSE_MARKETING)
@@ -412,7 +412,7 @@ def test_m2_grant_da_never_given(db, ctx):
     assert contatto["marketing_consent"] is True
     assert contatto["marketing_consent_at"] == NOW
     assert contatto["marketing_revoked_at"] is None
-    assert contatto["marketing_consent_source"] == SOURCE_PUBLIC_FUNNEL
+    assert contatto["marketing_consent_source"] == SOURCE_PUBLIC_STIMA
 
 
 def test_m2_grant_da_false_preesistente(db, ctx):
@@ -542,7 +542,7 @@ def test_m4_optional_grant_false_non_scrive_niente(db, ctx):
         granted=False,
         contact_id=1,
         purpose=PURPOSE_MARKETING,
-        source=SOURCE_PUBLIC_FUNNEL,
+        source=SOURCE_PUBLIC_STIMA,
         actor_type="subject",
     )
 
@@ -563,7 +563,7 @@ def test_m4_optional_grant_true_si_comporta_come_grant(db, ctx):
         granted=True,
         contact_id=1,
         purpose=PURPOSE_MARKETING,
-        source=SOURCE_PUBLIC_FUNNEL,
+        source=SOURCE_PUBLIC_STIMA,
         actor_type="subject",
     )
     assert esito["recorded"] is True
@@ -768,7 +768,7 @@ def test_m8_un_consenso_registrato_non_e_legacy(db, ctx):
     db.state.add_contact(1, agency_id=1)
     esito = grant(ctx)
     assert esito["state"]["legacy"] is False
-    assert esito["state"]["source"] == SOURCE_PUBLIC_FUNNEL
+    assert esito["state"]["source"] == SOURCE_PUBLIC_STIMA
 
 
 def test_m8_il_legacy_non_viene_riscritto_dal_modulo(db, ctx):

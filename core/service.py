@@ -139,6 +139,19 @@ def bridge_public_stima(
     resolved and stamped on the stima. It is threaded straight through to the
     repository, unread and unmodified: this layer decides what the records
     look like, never which agency they belong to (P26-2B2B-R1).
+
+    P29-1.4: IL CONSENSO NON E' PIU' UN CAMPO DEL CONTATTO.
+
+    Fino a P29-1.3 `contact_data` portava `marketing_consent` e
+    `marketing_consent_at`, e la INSERT del bridge li scriveva: era l'ultimo
+    punto dell'applicazione in cui la proiezione veniva toccata senza un evento
+    dietro. Ora i due valori viaggiano come una DECISIONE separata - concessa o
+    no, e quando - che il repository consegna al dominio `consent/` dentro la
+    propria transazione.
+
+    La firma non cambia: `main.py` continua a passare `marketing_consent` e
+    `marketing_consent_at` come li ha letti dal form, e non sa nulla di eventi.
+    Cambia dove quei due valori finiscono.
     """
 
     def clean(value):
@@ -165,8 +178,6 @@ def bridge_public_stima(
         "secondary_phone": None,
         "source": "public_stima",
         "status": "active",
-        "marketing_consent": bool(marketing_consent),
-        "marketing_consent_at": marketing_consent_at,
         "notes": None,
     }
     lead_data = {
@@ -187,6 +198,11 @@ def bridge_public_stima(
         lead_data,
         "related",
         system_ctx=system_ctx,
+        # La casella spuntata, e il momento in cui lo e' stata. `bool()` e'
+        # deliberato: dal form arriva gia' un booleano, ma None e 0 devono
+        # diventare "non concesso", non "concesso in modo strano".
+        marketing_granted=bool(marketing_consent),
+        marketing_decided_at=marketing_consent_at,
     )
 
 

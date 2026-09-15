@@ -918,8 +918,12 @@ def esegui_bridge(monkeypatch):
             "company_name": None, "display_name": "Mario Rossi",
             "email": "mario@example.test", "email_normalized": "mario@example.test",
             "phone": None, "phone_normalized": None, "secondary_phone": None,
+            # P29-1.4: il consenso non e' piu' un campo del contatto. Il
+            # bridge lo riceve come decisione separata e lo consegna al
+            # dominio `consent/`, quindi `contact_data` non lo nomina piu'
+            # - e `_reject_consent_owned` rifiuta chi ci prova.
             "source": "public_stima", "status": "active",
-            "marketing_consent": False, "marketing_consent_at": None, "notes": None,
+            "notes": None,
         }
         lead = {
             "source": "public_stima", "pipeline": "sell", "stage": "new",

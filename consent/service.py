@@ -113,6 +113,7 @@ def _record(
     evidence_ref: str | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    cur=None,
 ) -> dict[str, Any]:
     _validated(
         purpose=purpose,
@@ -123,23 +124,28 @@ def _record(
         evidence_type=evidence_type,
         evidence_ref=evidence_ref,
     )
-    outcome = repository.record_decision(
-        ctx,
-        {
-            "contact_id": contact_id,
-            "purpose": purpose,
-            "decision": decision,
-            "decided_at": decided_at or repository.utcnow(),
-            "source": source,
-            "notice_id": notice_id,
-            "actor_type": actor_type,
-            "actor_ref": actor_ref,
-            "evidence_type": evidence_type,
-            "evidence_ref": evidence_ref,
-            "note": note,
-            "idempotency_key": idempotency_key,
-        },
-    )
+    decisione = {
+        "contact_id": contact_id,
+        "purpose": purpose,
+        "decision": decision,
+        "decided_at": decided_at or repository.utcnow(),
+        "source": source,
+        "notice_id": notice_id,
+        "actor_type": actor_type,
+        "actor_ref": actor_ref,
+        "evidence_type": evidence_type,
+        "evidence_ref": evidence_ref,
+        "note": note,
+        "idempotency_key": idempotency_key,
+    }
+    # Con un cursore la decisione entra nella transazione del chiamante; senza,
+    # il repository apre e chiude la propria. In entrambi i casi evento e
+    # proiezione stanno insieme o non stanno: cambia CHI possiede il commit,
+    # mai quanti atti separati ci sono.
+    if cur is not None:
+        outcome = repository.record_decision_with_cursor(cur, ctx, decisione)
+    else:
+        outcome = repository.record_decision(ctx, decisione)
     return {
         "recorded": True,
         "created": outcome["created"],
@@ -185,6 +191,11 @@ def record_optional_grant(ctx, *, granted: bool, **kwargs) -> dict[str, Any]:
     """
     if granted:
         return record_grant(ctx, **kwargs)
+    # Il cursore, se c'era, non viene usato: non c'e' niente da scrivere. Il
+    # chiamante resta padrone della propria transazione e non si accorge di
+    # nulla - che e' esattamente cosa deve succedere quando una casella non e'
+    # stata spuntata.
+    kwargs.pop("cur", None)
     return {
         "recorded": False,
         "created": False,

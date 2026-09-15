@@ -133,7 +133,7 @@ def scenario(conn):
         cur.execute(
             """INSERT INTO consent_events
                (agency_id, contact_id, purpose, decision, decided_at, source, actor_type)
-               VALUES (%s, %s, 'marketing', 'granted', NOW(), 'stima360.it', 'subject')
+               VALUES (%s, %s, 'marketing', 'granted', NOW(), 'public_stima', 'subject')
                RETURNING id""",
             (agency_id, contact_id),
         )

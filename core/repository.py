@@ -39,6 +39,20 @@ from psycopg2.extras import Json
 
 from operator_auth.repository import membership_exists
 
+# P29-1.4: CORE chiama il dominio dei consensi, e non il contrario.
+#
+# La direzione non e' casuale. `consent/` importa `core.scope` per il predicato
+# di agenzia e nient'altro di CORE: non c'e' ciclo, e il dominio resta
+# indipendente da chi lo usa. E' la stessa forma - rovesciata - con cui il
+# modulo P18 chiama `create_task_with_cursor` qui sotto: un dominio presta al
+# chiamante una funzione che lavora sul cursore di chi la invoca.
+from consent import service as consent_service
+from consent.enums import (
+    ACTOR_SUBJECT as CONSENT_ACTOR_SUBJECT,
+    PURPOSE_MARKETING as CONSENT_PURPOSE_MARKETING,
+    SOURCE_PUBLIC_STIMA as CONSENT_SOURCE_PUBLIC_STIMA,
+)
+
 from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, ValidationError
 from operator_auth.context import SystemAgencyContext
@@ -67,12 +81,14 @@ SERVER_OWNED_COLUMNS = ("agency_id", "created_by_user_id")
 # legge, e resta letta normalmente da tutto il resto del CRM: cio' che cambia
 # e' CHI la scrive, non cosa significa.
 #
-# NOTA SUL PERIMETRO: `bridge_public_stima` piu' sotto NON passa da questa
-# guardia. E' deliberato e temporaneo - il flusso pubblico e' P29-1.4, e
-# spostarlo qui senza il servizio di consenso dietro romperebbe la creazione
-# dei lead da stima360.it. Finche' quella fase non arriva, il bridge resta
-# l'unica scrittura di consenso fuori dal dominio, dichiarata qui e coperta da
-# un test che ne pretende l'unicita'.
+# NOTA SUL PERIMETRO: NON C'E' PIU' UN'ECCEZIONE.
+#
+# Fino a P29-1.3 `bridge_public_stima` piu' sotto era esentato da questa
+# guardia, perche' il flusso pubblico doveva ancora essere spostato sul
+# dominio. P29-1.4 lo ha spostato: il bridge riceve una DECISIONE
+# (`marketing_granted`, `marketing_decided_at`) invece di due colonne, la
+# consegna a `consent/` sul proprio cursore, e la sua INSERT passa da questa
+# stessa guardia come tutte le altre.
 CONSENT_OWNED_COLUMNS = (
     "marketing_consent",
     "marketing_consent_at",
@@ -493,6 +509,8 @@ def bridge_public_stima(
     relation_type: str,
     *,
     system_ctx: SystemAgencyContext,
+    marketing_granted: bool = False,
+    marketing_decided_at=None,
 ) -> dict[str, Any]:
     """Atomically reconcile one public stima with its dedicated CORE lead.
 
@@ -514,6 +532,19 @@ def bridge_public_stima(
     context built for some other system flow. The guard runs before the cursor
     opens: nothing unscoped executes, and nothing executes at all under a scope
     this function did not accept.
+
+    P29-1.4: IL CONSENSO ENTRA IN QUESTA STESSA TRANSAZIONE.
+
+    `marketing_granted` e `marketing_decided_at` sono la decisione presa sul
+    form pubblico, non due colonne da scrivere. Quando la casella era spuntata
+    il dominio `consent/` registra l'evento e aggiorna la proiezione SUL
+    CURSORE DI QUESTA FUNZIONE: contatto, lead, collegamento alla stima e
+    consenso vivono o cadono insieme.
+
+    Quando non era spuntata non succede niente: nessun evento, nessuna revoca,
+    nessuna riga toccata. Una nuova stima senza casella non puo' portare via un
+    consenso dato prima - e non perche' qualcuno si ricordi di controllarlo: il
+    dominio non espone alcuna funzione che lo permetta.
     """
     if type(system_ctx) is not SystemAgencyContext:
         raise ProgrammingError(
@@ -613,22 +644,64 @@ def bridge_public_stima(
         if contact is None:
             if not contact_data.get("display_name"):
                 return result("skipped", reason="insufficient_contact_identity")
+            # P29-1.4: le colonne di consenso non compaiono piu' in questa
+            # INSERT. Un contatto nasce senza consenso - `never_given` - e la
+            # concessione, se c'e' stata, arriva subito dopo come evento.
+            # `_reject_consent_owned` e' la stessa guardia di `create_contact`:
+            # da qui in poi nessuna scrittura di contatto puo' nominarle, il
+            # bridge compreso.
+            _reject_consent_owned(contact_data)
             cur.execute(
                 """INSERT INTO contacts(
                     contact_type,first_name,last_name,company_name,display_name,
                     email,email_normalized,phone,phone_normalized,secondary_phone,
-                    source,status,marketing_consent,marketing_consent_at,notes,
+                    source,status,notes,
                     agency_id,created_by_user_id
                 ) VALUES(
                     %(contact_type)s,%(first_name)s,%(last_name)s,%(company_name)s,%(display_name)s,
                     %(email)s,%(email_normalized)s,%(phone)s,%(phone_normalized)s,%(secondary_phone)s,
-                    %(source)s,%(status)s,%(marketing_consent)s,%(marketing_consent_at)s,%(notes)s,
+                    %(source)s,%(status)s,%(notes)s,
                     %(agency_id)s,%(created_by_user_id)s
                 ) RETURNING *""",
                 _stamp(ctx, contact_data),
             )
             contact = _row(cur.fetchone())
             contact_created = True
+
+        # ------------------------------------------------------------------
+        # P29-1.4: LA DECISIONE SUL CONSENSO, QUI E NON ALTROVE.
+        #
+        # Il contatto esiste ed e' bloccato - o riusato con FOR UPDATE sopra, o
+        # appena inserito. Questo e' il punto in cui e' risolto e in cui la
+        # transazione e' ancora aperta.
+        #
+        # `record_optional_grant` non ha un ramo che revochi: con
+        # `granted=False` non scrive nulla e lo dichiara nel valore di ritorno.
+        # Il caso "nuova stima con casella vuota su un contatto che aveva gia'
+        # detto si'" e' quindi impossibile da sbagliare, non improbabile.
+        #
+        # La chiave di idempotenza e' derivata dalla STIMA, mai dall'orologio:
+        # riprocessare la stessa stima non crea un secondo evento. E' la
+        # convenzione che questo repository usa gia' altrove per le chiavi di
+        # idempotenza: derivarle dall'entita', mai dall'istante.
+        #
+        # NESSUN try/except qui. Se il consenso non si scrive non si scrive
+        # nemmeno il lead: un errore che diventasse un successo silenzioso
+        # lascerebbe una persona che ha detto si' e un CRM che non lo sa.
+        # ------------------------------------------------------------------
+        consent_service.record_optional_grant(
+            ctx,
+            granted=bool(marketing_granted),
+            contact_id=contact["id"],
+            purpose=CONSENT_PURPOSE_MARKETING,
+            source=CONSENT_SOURCE_PUBLIC_STIMA,
+            actor_type=CONSENT_ACTOR_SUBJECT,
+            decided_at=marketing_decided_at,
+            evidence_type="stima",
+            evidence_ref=str(stima_id),
+            idempotency_key=f"public_stima:{stima_id}:marketing",
+            cur=cur,
+        )
 
         prepared_lead = _stamp(ctx, {**lead_data, "contact_id": contact["id"]})
         cur.execute(
