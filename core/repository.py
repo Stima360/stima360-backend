@@ -54,6 +54,38 @@ from .scope import (
 # attribute it to another operator.
 SERVER_OWNED_COLUMNS = ("agency_id", "created_by_user_id")
 
+# P29-1.3: LE COLONNE DI CONSENSO NON SI SCRIVONO DA QUI.
+#
+# Sono la proiezione di `consent_events`, e l'unico percorso che ha il diritto
+# di toccarle e' `consent/repository.py::record_decision`, che scrive l'evento e
+# la proiezione nella STESSA transazione. Un UPDATE da questa parte
+# produrrebbe uno stato senza storia: nessun evento, nessuna provenienza,
+# nessun attore, e - fino a P29-1.2 - nemmeno una data, perche' il validatore
+# di `ContactUpdate` non derivava `marketing_consent_at`.
+#
+# `contacts.marketing_consent` resta la colonna che P24 `database_revival`
+# legge, e resta letta normalmente da tutto il resto del CRM: cio' che cambia
+# e' CHI la scrive, non cosa significa.
+#
+# NOTA SUL PERIMETRO: `bridge_public_stima` piu' sotto NON passa da questa
+# guardia. E' deliberato e temporaneo - il flusso pubblico e' P29-1.4, e
+# spostarlo qui senza il servizio di consenso dietro romperebbe la creazione
+# dei lead da stima360.it. Finche' quella fase non arriva, il bridge resta
+# l'unica scrittura di consenso fuori dal dominio, dichiarata qui e coperta da
+# un test che ne pretende l'unicita'.
+CONSENT_OWNED_COLUMNS = (
+    "marketing_consent",
+    "marketing_consent_at",
+    "marketing_revoked_at",
+    "marketing_consent_source",
+    "marketing_consent_notice_id",
+    "privacy_terms_accepted",
+    "privacy_terms_accepted_at",
+    "privacy_terms_revoked_at",
+    "privacy_terms_source",
+    "privacy_terms_notice_id",
+)
+
 # The only origin `bridge_public_stima` will act under. Declared here rather
 # than imported so core/scope.py keeps the origin literal it was certified with;
 # a test pins this to what the factory actually produces, so the two cannot
@@ -77,6 +109,29 @@ def _reject_server_owned(data: dict[str, Any]) -> None:
             raise ProgrammingError(
                 f"{column!r} is derived from the agency scope and must not be supplied"
             )
+
+
+def _reject_consent_owned(data: dict[str, Any]) -> None:
+    """Refuse a payload that tries to write consent from a generic contact write.
+
+    Le CORE request schemas non dichiarano piu' questi campi, quindi via HTTP
+    questa funzione non si raggiunge: `extra = "forbid"` li ferma prima, con un
+    422 che li nomina. E' la riformulazione della stessa regola al livello del
+    repository, per i chiamanti che non passano da HTTP - esattamente il ruolo
+    che `_reject_server_owned` ha per l'agency scope.
+
+    ProgrammingError, e non ValidationError: arrivare qui significa che del
+    codice sta scrivendo il consenso dalla porta sbagliata, ed e' un difetto da
+    far emergere come guasto, non un errore del chiamante da tradurre in 4xx.
+    """
+    supplied = [column for column in CONSENT_OWNED_COLUMNS if column in data]
+    if supplied:
+        raise ProgrammingError(
+            f"{', '.join(supplied)} belong to the consent domain and must not be "
+            "written through a generic contact write; use consent.service "
+            "record_grant() / record_revocation(), which write the event and the "
+            "projection in one transaction"
+        )
 
 
 def _stamp(ctx, data: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +172,15 @@ def _ensure_exists_scoped(ctx, cur, table: str, entity_id: int, label: str) -> N
 def create_contact(ctx, data: dict[str, Any]) -> dict[str, Any]:
     # Resolved before the cursor opens: an unbound platform admin is refused
     # without a statement ever reaching the database.
+    _reject_consent_owned(data)
     prepared = _stamp(ctx, data)
+    # P29-1.3: un contatto nasce SENZA consenso, sempre. Le due colonne restano
+    # nella INSERT perche' sono colonne della tabella e la statement le nomina;
+    # il loro valore non arriva piu' dal chiamante ma e' NULL, che e' lo stato
+    # `never_given` - il solo stato onesto per una persona che non ha ancora
+    # deciso niente. Concederlo e' un atto separato, e passa da consent.service.
+    prepared["marketing_consent"] = None
+    prepared["marketing_consent_at"] = None
     with core_cursor(commit=True) as (_, cur):
         cur.execute(
             """
@@ -177,6 +240,7 @@ def get_contact(ctx, contact_id: int) -> dict[str, Any]:
 
 def update_contact(ctx, contact_id: int, data: dict[str, Any]) -> dict[str, Any]:
     _reject_server_owned(data)
+    _reject_consent_owned(data)
     if not data:
         return get_contact(ctx, contact_id)
     predicate, scope_params = scoped_predicate(ctx, "contacts", "c")

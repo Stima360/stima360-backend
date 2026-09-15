@@ -312,6 +312,19 @@ export async function renderContattoDettaglio(container, params = []) {
   //    qui (core/service.py::update_contact non la deriva automaticamente
   //    come fa create_contact, ma esporla per la scrittura manuale
   //    introdurrebbe uno stato incoerente non richiesto).
+  //  - marketing_consent: da P29-1.3 NON e' piu' modificabile da qui. Il campo
+  //    resta VISIBILE e mostra lo stato corrente - toglierlo sarebbe togliere
+  //    informazione all'operatore - ma e' `disabled`, quindi il browser non lo
+  //    include in FormData e nessuna PATCH generica puo' piu' portarlo.
+  //    Il motivo sta nel backend: `core/schemas.py::ContactUpdate` non dichiara
+  //    piu' quel campo e `core/repository.py::update_contact` lo rifiuta,
+  //    perche' un consenso cambiato con un UPDATE cieco e' un consenso senza
+  //    evento, senza provenienza e senza attore. Ogni GRANT e ogni REVOKE
+  //    passano da `consent/service.py`, che scrive evento e proiezione nella
+  //    stessa transazione.
+  //    Il controllo che lo rendera' di nuovo modificabile - collegato al
+  //    dominio, non alla PATCH generica - e' P29-1.6/1.7. Fino ad allora
+  //    questo select e' una vetrina, e lo dice.
   // Solo i campi realmente modificati entrano nel payload (PATCH usa
   // exclude_unset lato backend, core/service.py::update_contact), stesso
   // principio di bindIncaricoSection in immobile-dettaglio.js.
@@ -340,11 +353,12 @@ export async function renderContattoDettaglio(container, params = []) {
               </select>
             </div>
             <div class="form-field"><label>Consenso marketing</label>
-              <select name="marketing_consent" class="input">
+              <select name="marketing_consent" class="input" disabled aria-disabled="true" title="Sola lettura: il consenso marketing si registra come evento, non come campo di questo modulo.">
                 <option value="" ${currentConsent === '' ? 'selected' : ''}>Non specificato</option>
                 <option value="true" ${currentConsent === 'true' ? 'selected' : ''}>Sì</option>
                 <option value="false" ${currentConsent === 'false' ? 'selected' : ''}>No</option>
               </select>
+              <small class="muted">Sola lettura: si registra come evento di consenso.</small>
             </div>
           </div>
           <div class="form-grid-3" id="contact-edit-person-fields" ${contact.contact_type === 'company' ? 'hidden' : ''}>
@@ -409,9 +423,10 @@ export async function renderContattoDettaglio(container, params = []) {
       textField('secondary_phone', contact.secondary_phone);
       textField('source', contact.source);
       textField('notes', contact.notes);
-      const consentRaw = formData.get('marketing_consent');
-      const consentTarget = consentRaw === '' ? null : consentRaw === 'true';
-      if (consentTarget !== (contact.marketing_consent ?? null)) payload.marketing_consent = consentTarget;
+      // marketing_consent NON entra nel payload, e non basta che il select sia
+      // `disabled` a garantirlo: quello lo esclude da FormData, questa assenza
+      // lo esclude dal codice. Due ragioni indipendenti perche' una PATCH
+      // generica non porti mai un consenso.
 
       if (!Object.keys(payload).length) {
         dialog.close();

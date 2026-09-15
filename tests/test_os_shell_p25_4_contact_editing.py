@@ -115,9 +115,16 @@ def test_edit_payload_only_includes_changed_fields():
 
 
 def test_marketing_consent_is_tristate_not_plain_boolean():
-    """marketing_consent e' bool|None lato backend (core/schemas.py): il
-    dialog deve offrire tre opzioni (Non specificato/Si/No), non un semplice
-    checkbox a due stati."""
+    """marketing_consent ha tre stati, e il dialog continua a mostrarli tutti.
+
+    P29-1.3 ha cambiato UNA cosa sola in questa prova: il campo non e' piu'
+    MODIFICABILE da qui. Le tre opzioni restano, perche' collassare
+    NULL/true/false in un checkbox toglierebbe informazione all'operatore -
+    che era ed e' il punto di questo test. La scrittura del consenso e' ora un
+    evento nel dominio `consent/` (vedi tests/test_p29_1_3_consent_write_closure.py),
+    e l'assertion su `consentTarget` - la variabile che costruiva il payload -
+    e' stata sostituita da quella che ne pretende l'assenza.
+    """
     text = _read(CONTATTO_JS)
     start = text.index("function openEditContactDialog")
     end = text.index("// --- P25.2: Lead SELL")
@@ -126,7 +133,10 @@ def test_marketing_consent_is_tristate_not_plain_boolean():
     assert '<option value=""' in dialog_fn
     assert '<option value="true"' in dialog_fn
     assert '<option value="false"' in dialog_fn
-    assert "consentTarget" in dialog_fn
+    assert "currentConsent" in dialog_fn, "lo stato corrente deve restare visibile"
+    assert "consentTarget" not in dialog_fn, (
+        "P29-1.3: il dialog non costruisce piu' un valore di consenso da inviare"
+    )
 
 
 def test_contact_type_toggles_person_vs_company_fields():

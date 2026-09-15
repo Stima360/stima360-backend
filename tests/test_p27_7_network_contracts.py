@@ -315,6 +315,20 @@ def test_d3_no_page_outside_the_network_was_touched():
         # la guardia non aggiunge un `if` dentro nessuna di loro. E' l'opposto:
         # esiste perche' quel controllo NON sia sparso li' dentro.
         "static/os_shell/assets/core/router.js",
+        # P29-1.3 - IL CONSENSO MARKETING DIVENTA SOLA LETTURA.
+        #
+        # L'unica vista del CRM toccata, e per sottrazione: il consenso resta
+        # VISIBILE e continua a mostrare lo stato corrente con i suoi tre
+        # valori, ma il select e' `disabled` e non entra piu' nel payload della
+        # PATCH generica. Il backend lo rifiuta gia' (core/schemas.py
+        # ::ContactUpdate non lo dichiara piu', core/repository.py
+        # ::update_contact lo respinge): senza questa riga l'operatore lo
+        # scoprirebbe con un 422 dopo aver salvato.
+        #
+        # Nessuna logica di Rete e nessun contratto P27 e' modificato: non un
+        # endpoint, non una rotta, non un componente della Rete. La vista
+        # guadagna un attributo e perde tre righe.
+        "static/os_shell/assets/views/contatto-dettaglio.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

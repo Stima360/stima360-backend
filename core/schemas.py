@@ -58,8 +58,6 @@ class ContactCreate(CoreModel):
     secondary_phone: str | None = Field(default=None, max_length=50)
     source: str | None = Field(default=None, max_length=100)
     status: str = "active"
-    marketing_consent: bool | None = None
-    marketing_consent_at: datetime | None = None
     notes: str | None = None
 
     @root_validator(skip_on_failure=True)
@@ -75,12 +73,32 @@ class ContactCreate(CoreModel):
             [values.get("first_name"), values.get("last_name"), values.get("display_name")]
         ):
             raise ValueError("a person contact requires first_name, last_name or display_name")
-        if values.get("marketing_consent") and values.get("marketing_consent_at") is None:
-            values["marketing_consent_at"] = datetime.utcnow()
         return values
 
 
 class ContactUpdate(CoreModel):
+    """P29-1.3: NON dichiara alcun campo di consenso, e non e' una svista.
+
+    Fino a P29-1.2 questo modello portava `marketing_consent` e
+    `marketing_consent_at`, e `core/repository.py::update_contact` li scriveva
+    con un UPDATE cieco: il consenso cambiava senza un evento in
+    `consent_events`, senza provenienza, senza attore e - poiche' il validatore
+    derivava il timestamp solo in creazione - spesso senza nemmeno una data.
+    Era il rischio R2 dichiarato in P29-1.1.
+
+    La chiusura segue il precedente che questo stesso file ha gia' stabilito
+    per `assigned_agent_id` (vedi AssignmentUpdate): un atto che deve essere
+    esplicito non viaggia come campo qualunque dentro un update qualunque. Con
+    `extra = "forbid"` ereditato da CoreModel, un client che lo mandi comunque
+    riceve un 422 che NOMINA il campo, invece di vederselo ignorare in
+    silenzio.
+
+    Da qui in poi ogni GRANT e ogni REVOKE passano da `consent.service`, che
+    scrive evento e proiezione nella stessa transazione. L'endpoint dedicato
+    che li espone via HTTP e' P29-1.6/1.7; finche' non esiste, il consenso si
+    cambia solo dal dominio.
+    """
+
     contact_type: str | None = None
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
@@ -91,8 +109,6 @@ class ContactUpdate(CoreModel):
     secondary_phone: str | None = Field(default=None, max_length=50)
     source: str | None = Field(default=None, max_length=100)
     status: str | None = None
-    marketing_consent: bool | None = None
-    marketing_consent_at: datetime | None = None
     notes: str | None = None
     archived_at: datetime | None = None
 
