@@ -307,18 +307,120 @@ def record_decision(ctx, data: dict[str, Any]) -> dict[str, Any]:
         return record_decision_with_cursor(cur, ctx, data)
 
 
-def read_projection(ctx, contact_id: int) -> dict[str, Any]:
-    """Lo stato corrente, dalla proiezione. Sola lettura, nessun commit."""
+def select_contact(cur, ctx, contact_id: int) -> dict[str, Any]:
+    """La riga del contatto, nello scope, SENZA lock.
+
+    Gemella di `lock_contact` e diversa in una cosa sola: niente FOR UPDATE.
+    Chi legge per decidere - `can_send_marketing` - non deve serializzare gli
+    invii fra loro ne' bloccare chi sta registrando una revoca proprio in
+    quell'istante.
+
+    Un contatto di un'altra agenzia e' un contatto che non esiste, qui come in
+    `lock_contact`: dire "esiste ma non e' tuo" direbbe a un'agenzia qualcosa
+    sui contatti di un'altra.
+    """
     predicate, params = core_scoped_predicate(ctx, "contacts", "c")
-    with consent_cursor() as (_, cur):
-        cur.execute(
-            f"SELECT c.* FROM contacts c WHERE c.id = %s AND {predicate}",
-            [contact_id] + params,
-        )
-        row = _row(cur.fetchone())
+    cur.execute(
+        f"SELECT c.* FROM contacts c WHERE c.id = %s AND {predicate}",
+        [contact_id] + params,
+    )
+    row = _row(cur.fetchone())
     if row is None:
         raise NotFoundError(f"contact {contact_id} not found")
     return row
+
+
+def read_projection(ctx, contact_id: int) -> dict[str, Any]:
+    """Lo stato corrente, dalla proiezione. Sola lettura, nessun commit."""
+    with consent_cursor() as (_, cur):
+        return select_contact(cur, ctx, contact_id)
+
+
+def read_send_decision_inputs(ctx, contact_id: int, purpose: str):
+    """I due ingressi della guardia, in UN SOLO statement. Sola lettura.
+
+    Restituisce `(contatto, evento_corrente_o_None)`.
+
+    PERCHE' UNA QUERY SOLA, E NON DUE SULLA STESSA CONNESSIONE
+
+    La prima stesura leggeva il contatto e poi l'evento con due SELECT sullo
+    stesso cursore, dando per scontato che vedessero lo stesso istante del
+    database. E' FALSO sotto READ COMMITTED, che e' l'isolamento predefinito di
+    PostgreSQL: li' lo snapshot e' per STATEMENT, non per transazione, e due
+    SELECT consecutive possono vedere due commit diversi. Una revoca che
+    atterrasse fra le due avrebbe prodotto una proiezione "di prima" e un
+    evento "di dopo", cioe' `deny_inconsistent_state` su uno stato che
+    incoerente non e' mai stato.
+
+    Le alternative erano alzare l'isolamento (REPEATABLE READ, che cambia il
+    comportamento di chi ci sta attorno) o prendere un lock (che serializza gli
+    invii fra loro). Una sola query non costa niente a nessuno e ottiene la
+    stessa garanzia: uno statement, uno snapshot.
+
+    LEFT JOIN LATERAL, e non una JOIN ordinaria: serve l'ULTIMO evento, cioe'
+    un `ORDER BY ... LIMIT 1` correlato alla riga del contatto. LEFT perche' un
+    contatto senza eventi deve comunque tornare - e' il caso legacy, che e'
+    permesso.
+
+    I DUE SCOPE RESTANO DUE. Il contatto passa dal predicato di CORE - ramo
+    dell'agente compreso - e l'evento da quello del dominio: la query e' una,
+    le autorita' sulla tenancy restano quelle di sempre.
+
+    Nessun commit, nessun lock, nessuna scrittura: e' una decisione, non un
+    atto.
+    """
+    if purpose not in PURPOSES:
+        raise ProgrammingError(f"unsupported consent purpose {purpose!r}")
+
+    contact_predicate, contact_params = core_scoped_predicate(ctx, "contacts", "c")
+    event_source, event_params = consent_scoped_source(ctx, "consent_events", "ce")
+
+    sql = f"""
+        SELECT c.*,
+               ev.id         AS consent_event_id,
+               ev.decision   AS consent_event_decision,
+               ev.decided_at AS consent_event_decided_at,
+               ev.source     AS consent_event_source,
+               ev.notice_id  AS consent_event_notice_id
+          FROM contacts c
+          LEFT JOIN LATERAL (
+              SELECT ce.id, ce.decision, ce.decided_at, ce.source, ce.notice_id
+                FROM {event_source}
+                 AND ce.contact_id = c.id
+                 AND ce.purpose = %s
+               ORDER BY ce.decided_at DESC, ce.id DESC
+               LIMIT 1
+          ) ev ON TRUE
+         WHERE c.id = %s AND {contact_predicate}
+    """
+    # L'ordine dei parametri segue l'ordine dei segnaposto NEL TESTO: prima la
+    # LATERAL (agenzia dell'evento, purpose), poi la WHERE esterna (id del
+    # contatto, scope del contatto).
+    params = list(event_params) + [purpose, contact_id] + list(contact_params)
+
+    with consent_cursor() as (_, cur):
+        cur.execute(sql, params)
+        row = _row(cur.fetchone())
+
+    if row is None:
+        raise NotFoundError(f"contact {contact_id} not found")
+
+    # Si separa quello che la query ha unito: il contatto torna a essere una
+    # riga di `contacts`, l'evento una riga di `consent_events` o None.
+    event = None
+    if row.get("consent_event_id") is not None:
+        event = {
+            "id": row["consent_event_id"],
+            "decision": row["consent_event_decision"],
+            "decided_at": row["consent_event_decided_at"],
+            "source": row["consent_event_source"],
+            "notice_id": row["consent_event_notice_id"],
+        }
+    contact = {
+        chiave: valore for chiave, valore in row.items()
+        if not chiave.startswith("consent_event_")
+    }
+    return contact, event
 
 
 def utcnow() -> datetime:

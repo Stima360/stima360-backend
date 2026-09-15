@@ -124,6 +124,37 @@ WRITABLE_SOURCES = frozenset({
 })
 
 # ---------------------------------------------------------------------------
+# I MOTIVI DELLA GUARDIA DI INVIO (P29-1.5)
+#
+# `can_send_marketing` non restituisce un booleano nudo: un "no" senza motivo
+# non si puo' ne' spiegare a un operatore ne' diagnosticare sei mesi dopo. I
+# valori sono stabili - finiranno in log e, un giorno, sulla riga di un
+# messaggio non partito - quindi si aggiungono, non si rinominano.
+#
+# Due permessi e tre rifiuti, e nessun sesto caso: lo stato del consenso ha
+# tre forme (granted, revoked, never_given), il permesso si distingue fra
+# esplicito e legacy, e tutto cio' che non torna e' un rifiuto.
+# ---------------------------------------------------------------------------
+REASON_ALLOW_EXPLICIT_GRANT = "allow_explicit_grant"
+REASON_ALLOW_LEGACY_GRANT = "allow_legacy_grant"
+REASON_DENY_REVOKED = "deny_revoked"
+REASON_DENY_NEVER_GIVEN = "deny_never_given"
+REASON_DENY_INCONSISTENT_STATE = "deny_inconsistent_state"
+
+SEND_DECISION_REASONS = frozenset({
+    REASON_ALLOW_EXPLICIT_GRANT,
+    REASON_ALLOW_LEGACY_GRANT,
+    REASON_DENY_REVOKED,
+    REASON_DENY_NEVER_GIVEN,
+    REASON_DENY_INCONSISTENT_STATE,
+})
+
+ALLOWING_REASONS = frozenset({
+    REASON_ALLOW_EXPLICIT_GRANT,
+    REASON_ALLOW_LEGACY_GRANT,
+})
+
+# ---------------------------------------------------------------------------
 # LE COLONNE DI PROIEZIONE, PER SCOPO
 #
 # Nomi di colonna, cioe' letterali di sviluppatore: non arrivano mai da una
