@@ -92,6 +92,19 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "actually deleting the parent, and an idempotent ALTER TABLE are "
         "things only a real PostgreSQL can prove"
     ),
+    "tests/test_p29_1_consent_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied. Connects only to a disposable PostgreSQL used to "
+        "verify P29 migrations and database invariants; it is not an "
+        "application/RLS database entrypoint. It creates and drops its own "
+        "database on that server and touches nothing else, and it must not go "
+        "through database.get_connection(): that is the application choke "
+        "point and must stay uncoupled from a throwaway test database. What "
+        "only a real PostgreSQL can prove here is that a BEFORE DELETE row "
+        "trigger also fires on an ON DELETE CASCADE, that the purge exception "
+        "in 062 tells the two cases apart, and that ENABLE ALWAYS survives "
+        "session_replication_role"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

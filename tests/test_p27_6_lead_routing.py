@@ -650,10 +650,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     from scripts import p26_migrate as runner
 
     numeri = sorted(m.number for m in runner.discover_migrations())
-    # 60 e' la 060 di P28 (contesto di agenzia del Superadmin). Il perno resta
-    # quello che era - la 059 e' l'ULTIMA di P27 e segue la 058 - e sale di
-    # una fase per volta, deliberatamente.
-    assert numeri[-1] == 60, numeri[-4:]
+    # 63 e' la 063 di P29-1.1 (fondazione dei consensi: 061 registro delle
+    # notice, 062 storico degli eventi, 063 proiezione su contacts). Il perno
+    # resta quello che era - la 059 e' l'ULTIMA di P27 e segue la 058 - e sale
+    # di una fase per volta, deliberatamente.
+    assert numeri[-1] == 63, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]
     runner.verify_contiguous(runner.discover_migrations())

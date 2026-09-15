@@ -7321,7 +7321,33 @@ def test_103d_i_limiti_del_controllo_statico_sono_dichiarati_e_veri():
     #
     #    Il controllo che questo blocco esegue - nessuna scrittura invisibile
     #    alla serie 100 dentro una tabella di tenant - resta identico.
-    scritture_non_di_tenant = {"schema_baseline", "platform_audit_log"}
+    #    P29-1.1: `consent_notices` e `consent_events` si aggiungono alla
+    #    stessa riga di esenzione. Il rilevatore lavora sul FILE: se una
+    #    migration contiene "CREATE TRIGGER", ogni suo `INSERT INTO` viene
+    #    attribuito a un trigger. In 061 e in 062 gli INSERT rilevati sono
+    #    ESCLUSIVAMENTE le sonde di autoverifica della migration - quelle che
+    #    scrivono una riga vera, provano che i vincoli mordano e si annullano
+    #    con il sentinel del proprio blocco DO ... EXCEPTION. I corpi dei
+    #    trigger non scrivono nulla: sollevano, oppure restituiscono OLD.
+    #
+    #    Per `consent_notices` vale anche la seconda ragione della 057: non e'
+    #    una tabella di tenant, non ha `agency_id`, nessun cleanup di agenzia
+    #    la tocca.
+    #
+    #    Per `consent_events` quella seconda ragione NON vale - e' tenant, ha
+    #    `agency_id` - e va detto invece di lasciarlo intendere. Vale solo la
+    #    prima, che pero' e' sufficiente: la serie 100 cerca scritture
+    #    INVISIBILI, e qui non ce ne sono. Le scritture applicative in
+    #    `consent_events` passano tutte da `consent/repository.py`, che la
+    #    nomina in chiaro; la sua cancellazione durante il cleanup e' coperta
+    #    dalle FK ON DELETE CASCADE verso `contacts` e `agencies`, esaminate
+    #    dal test 86i qui sopra.
+    scritture_non_di_tenant = {
+        "schema_baseline",
+        "platform_audit_log",
+        "consent_notices",
+        "consent_events",
+    }
     trigger_che_scrivono = []
     for percorso in sorted((ROOT / "migrations").glob("*.sql")):
         if percorso.name.endswith("_down.sql"):
