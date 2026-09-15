@@ -580,20 +580,125 @@ def test_n3_nessuna_tabella_extra():
         assert vietata not in eseguibile
 
 
-def test_n4_nessun_runtime_e_nessun_provider():
-    """P29-2.1 e' schema. Nessun modulo `communication/`, nessun sender, nessun
-    adapter, e nulla che chiami un provider."""
-    assert not (ROOT / "communication").exists(), (
-        "P29-2.1 non introduce il modulo communication/: quello e' P29-2.2"
-    )
+#: I sorgenti applicativi del pacchetto `communication/`, senza i loro commenti
+#: e le loro docstring. Cio' che una sentinella di confine deve giudicare e' il
+#: CODICE: un commento che spiega perche' il claim NON e' qui nomina il claim, e
+#: una ricerca ingenua lo scambierebbe per il claim.
+def sorgenti_communication() -> dict[str, str]:
+    pacchetto = ROOT / "communication"
+    if not pacchetto.exists():
+        return {}
+    sorgenti = {}
+    for percorso in sorted(pacchetto.rglob("*.py")):
+        if "__pycache__" in percorso.parts:
+            continue
+        testo = percorso.read_text(encoding="utf-8")
+        senza_docstring = re.sub(r'""".*?"""', "", testo, flags=re.DOTALL)
+        sorgenti[percorso.name] = re.sub(r"#[^\n]*", "", senza_docstring)
+    return sorgenti
+
+
+def test_n4_il_confine_fra_le_fasi_del_dominio():
+    """IL PERNO SI E' SPOSTATO, NON E' STATO TOLTO.
+
+    Questa sentinella asseriva `not (ROOT / "communication").exists()`: era vera
+    finche' P29-2.1 era schema puro, e ha smesso di esserlo con P29-2.2, che
+    introduce legittimamente repository e service. Toglierla del tutto avrebbe
+    lasciato il confine fra le fasi senza nessun guardiano; lasciarla com'era
+    avrebbe prodotto un fallimento a ogni fase successiva.
+
+    Il confine che protegge adesso e' quello vero:
+
+        P29-2.2  repository e service, SENZA RETE
+        P29-2.3  claim, fencing, stale recovery
+
+    Il modulo puo' esistere. Cio' che non puo' esistere e' un pezzo di P29-2.3
+    dentro P29-2.2 - perche' un claim che nessun dispatcher chiama e' codice non
+    esercitato nel punto in cui un difetto costa un doppio invio a una persona
+    reale.
+    """
+    pacchetto = ROOT / "communication"
+    if not pacchetto.exists():
+        # P29-2.2 non e' ancora stata implementata: nulla da sorvegliare, e il
+        # confine e' banalmente rispettato.
+        return
+
+    # 1. I file che appartengono alle fasi successive non esistono.
+    for assente in ("dispatcher.py", "templates.py", "providers"):
+        assert not (pacchetto / assente).exists(), (
+            f"communication/{assente} non appartiene a P29-2.2"
+        )
+
+    sorgenti = sorgenti_communication()
+    assert sorgenti, "il pacchetto communication/ non ha sorgenti leggibili"
+
+    # 2. Il claim, il fencing e la stale recovery non sono nel CODICE.
+    #
+    #    `claim_token` e `claimed_at` sono colonne della 064 e restano tali: qui
+    #    si vieta che il runtime le USI, non che la migration le dichiari.
+    for nome, codice in sorgenti.items():
+        for anticipato in (
+            "claim_due", "SKIP LOCKED", "FOR UPDATE",
+            "claim_token", "claimed_at", "attempt_count",
+            "last_attempt_at", "recovered_at", "late_result",
+            "communication_attempts",
+        ):
+            assert anticipato not in codice, (
+                f"communication/{nome} usa {anticipato!r}: appartiene a P29-2.3"
+            )
+
+    # 3. Nessuna finalizzazione: gli stati del dispatch non si scrivono da qui.
+    for nome, codice in sorgenti.items():
+        for stato in ("'sending'", "'sent'", "'failed'", "'indeterminate'", "'suppressed'"):
+            assert stato not in codice, (
+                f"communication/{nome} scrive lo stato {stato}: le transizioni "
+                "del dispatch sono P29-2.3"
+            )
+
+    # 4. Nessuna rete. E' il primo dei cinque confini del design, ed e' cio' che
+    #    rende IMPOSSIBILE - non solo vietato - che P29-2.2 mandi un messaggio.
+    for nome, codice in sorgenti.items():
+        for rete in ("requests", "smtplib", "httpx", "urllib", "http.client",
+                     "socket", "aiohttp"):
+            assert rete not in codice, (
+                f"communication/{nome} nomina {rete!r}: P29-2.2 non ha rete"
+            )
+
+    # 5. Nessun provider, nessun sender, nessuno scheduler.
+    for nome, codice in sorgenti.items():
+        # `scheduled_at` NON e' uno scheduler: e' la colonna "non prima di"
+        # della 064, che `enqueue` scrive legittimamente. Si vietano i
+        # costrutti di pianificazione, non la parola.
+        for vietato in ("invia_mail", "invia_whatsapp", "send_template",
+                        "ProviderResult", "ProviderCapabilities",
+                        "graph.facebook", "WHATSAPP_", "SMTP_",
+                        "APScheduler", "BackgroundScheduler", "Celery",
+                        "crontab", "schedule.every"):
+            assert vietato not in codice, (
+                f"communication/{nome} nomina {vietato!r}: P29-2.2 non manda e "
+                "non pianifica niente"
+            )
+
+    # 6. Il consenso non si interroga qui: il gate sta immediatamente prima del
+    #    dispatch, che e' P29-2.4.
+    for nome, codice in sorgenti.items():
+        assert "can_send_marketing" not in codice, nome
+        assert "marketing_consent" not in codice, nome
+
+    # 7. FUORI dal pacchetto, nessun sorgente applicativo nomina le due tabelle.
+    #    E' la meta' di questa sentinella che non e' cambiata: il ledger ha una
+    #    via di scrittura sola, e quella via e' `communication/`.
     for percorso in ROOT.rglob("*.py"):
         parti = percorso.parts
         if any(p in parti for p in (".venv", "__pycache__", "tests", "scripts")):
             continue
+        if "communication" in parti:
+            continue
         testo = percorso.read_text(encoding="utf-8")
         for tabella in (MESSAGES, ATTEMPTS):
             assert tabella not in testo, (
-                f"{percorso.relative_to(ROOT)} nomina {tabella}: P29-2.1 non ha runtime"
+                f"{percorso.relative_to(ROOT)} nomina {tabella} fuori dal "
+                "dominio: il ledger ha una via di scrittura sola"
             )
 
 

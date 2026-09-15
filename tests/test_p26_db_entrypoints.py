@@ -121,6 +121,24 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "three-column UNIQUE on the attempts admits exactly one regular and "
         "one late row per attempt"
     ),
+    "tests/test_p29_2_2_communication_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied, exactly like the two P29 modules above: without "
+        "that variable the whole module is skipped, so it never reaches TEST "
+        "or PROD from a development machine. Connects only to a disposable "
+        "PostgreSQL where it applies 064 to verify the P29-2.2 repository and "
+        "service against a real database; it is not an application/RLS "
+        "database entrypoint. It creates and drops its own database on that "
+        "server and touches nothing else, and it must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database. What only a real "
+        "PostgreSQL can prove here is that enqueue composes into the caller's "
+        "transaction - a rollback takes the message with it - and that ON "
+        "CONFLICT on the per-tenant unique index gives one message for a "
+        "repeated key and two for the same key in two agencies. The companion "
+        "module tests/test_p29_2_2_communication_service.py opens no "
+        "connection and is deliberately NOT listed here"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor
