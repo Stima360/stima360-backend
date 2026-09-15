@@ -4350,6 +4350,33 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("buy_request_interactions", "property_id", "properties", "SET NULL"),
     ("buy_requests", "agency_id", "agencies", "RESTRICT"),
     ("buy_requests", "contact_id", "contacts", "RESTRICT"),
+    # P29-2.1, migration 064. Le tre FK di contesto commerciale del ledger delle
+    # comunicazioni, tutte SET NULL.
+    #
+    # ESAMINATE, che e' cio' che questo inventario chiede, e la scelta e'
+    # deliberata: eliminare il contesto commerciale non deve cancellare il
+    # messaggio scambiato con la persona. Il contesto si svuota, la
+    # comunicazione resta - e resta leggibile, perche' `rendered_body` e
+    # `destination_snapshot` sono immutabili per trigger.
+    #
+    # Conseguenza per il cleanup: NESSUNA cancellazione bloccata e nessun
+    # residuo. Il preflight le incontra come azzeramento di colonna, non come
+    # rifiuto; sulle righe del run e' cio' che si vuole, ed e' la stessa forma
+    # gia' accettata per le otto figlie di `leads` in cima a questo inventario.
+    #
+    # `communication_messages` e `communication_attempts` NON vanno aggiunte a
+    # DEDICATED_TABLES, e per la stessa ragione per cui non ci compare
+    # `consent_events`: se ne vanno da sole con il contatto, attraverso la FK
+    # composita (agency_id, contact_id) -> contacts(agency_id, id) ON DELETE
+    # CASCADE, e i tentativi le seguono per la loro composita verso il
+    # messaggio. Verificato su PostgreSQL reale in
+    # tests/test_p29_2_1_communication_postgres.py.
+    #
+    # La composita verso `contacts` non compare in questo inventario perche' e'
+    # CASCADE, e questo inventario elenca le non-CASCADE.
+    ("communication_messages", "lead_id", "leads", "SET NULL"),
+    ("communication_messages", "property_id", "properties", "SET NULL"),
+    ("communication_messages", "stima_id", "stime", "SET NULL"),
     ("flow_executions", "event_id", "flow_events", "SET NULL"),
     ("flow_executions", "retry_of_execution_id", "flow_executions", "SET NULL"),
     ("followup_actions", "agency_id", "agencies", "RESTRICT"),
@@ -7342,11 +7369,33 @@ def test_103d_i_limiti_del_controllo_statico_sono_dichiarati_e_veri():
     #    nomina in chiaro; la sua cancellazione durante il cleanup e' coperta
     #    dalle FK ON DELETE CASCADE verso `contacts` e `agencies`, esaminate
     #    dal test 86i qui sopra.
+    #
+    #    P29-2.1: `communication_messages` e `communication_attempts` si
+    #    aggiungono per la PRIMA ragione soltanto, ed e' la stessa di
+    #    `consent_events`. In 064 gli INSERT rilevati sono ESCLUSIVAMENTE le
+    #    sonde di autoverifica della migration - quelle che scrivono righe vere,
+    #    provano che i vincoli mordano e si annullano con il sentinel
+    #    `P29_064_PROBE_ROLLBACK` del proprio blocco DO ... EXCEPTION. I quattro
+    #    corpi di trigger non scrivono nulla: sollevano, restituiscono OLD o
+    #    restituiscono NEW.
+    #
+    #    La seconda ragione della 057 NON vale per nessuna delle due - sono
+    #    entrambe tenant, hanno entrambe `agency_id` - e va detto invece di
+    #    lasciarlo intendere. Vale solo la prima, che pero' e' sufficiente: la
+    #    serie 100 cerca scritture INVISIBILI, e qui non ce ne sono. In P29-2.1
+    #    non esiste ancora alcuna scrittura applicativa (nessun modulo
+    #    `communication/`: lo afferma
+    #    tests/test_p29_2_1_communication_foundation.py::test_n4), e quando
+    #    arrivera' in P29-2.2 passera' da un repository che le nomina in chiaro.
+    #    La loro cancellazione durante il cleanup e' coperta dalla FK composita
+    #    ON DELETE CASCADE verso `contacts`, esaminata dal test 86i qui sopra.
     scritture_non_di_tenant = {
         "schema_baseline",
         "platform_audit_log",
         "consent_notices",
         "consent_events",
+        "communication_messages",
+        "communication_attempts",
     }
     trigger_che_scrivono = []
     for percorso in sorted((ROOT / "migrations").glob("*.sql")):

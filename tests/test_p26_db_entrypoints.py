@@ -105,6 +105,22 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "in 062 tells the two cases apart, and that ENABLE ALWAYS survives "
         "session_replication_role"
     ),
+    "tests/test_p29_2_1_communication_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied, exactly like the P29-1.1 module above: without "
+        "that variable the whole module is skipped, so it never reaches TEST "
+        "or PROD from a development machine. Connects only to a disposable "
+        "PostgreSQL used to verify migration 064 and its database invariants; "
+        "it is not an application/RLS database entrypoint. It creates and "
+        "drops its own database on that server and touches nothing else, and "
+        "it must not go through database.get_connection(): that is the "
+        "application choke point and must stay uncoupled from a throwaway test "
+        "database. What only a real PostgreSQL can prove here is that the "
+        "purge cascade crosses TWO BEFORE DELETE guards in a row - contacts to "
+        "communication_messages to communication_attempts - and that the "
+        "three-column UNIQUE on the attempts admits exactly one regular and "
+        "one late row per attempt"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

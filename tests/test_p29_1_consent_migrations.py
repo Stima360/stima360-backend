@@ -117,7 +117,7 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     assert numeri == sorted(numeri)
     assert len(numeri) == len(set(numeri)), "due migration con lo stesso numero"
     assert {61, 62, 63} <= set(numeri)
-    assert max(numeri) == 63, "P29-1.1 e' in coda alla serie, non in mezzo"
+    assert max(numeri) == 64, "P29-1.1 e' in coda alla serie, non in mezzo"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):
