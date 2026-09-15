@@ -553,13 +553,78 @@ def test_il_delete_diretto_e_rifiutato_su_entrambe(conn, scenario):
     assert exc is not None and "DELETE is refused" in str(exc)
 
 
+def trigger_del_dominio(conn):
+    """(nome, tgenabled) dei quattro guardiani, letti dal catalogo."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT t.tgname, t.tgenabled
+              FROM pg_trigger t
+             WHERE t.tgrelid IN ('public.communication_messages'::regclass,
+                                 'public.communication_attempts'::regclass)
+               AND NOT t.tgisinternal
+             ORDER BY t.tgname
+        """)
+        return cur.fetchall()
+
+
 def test_session_replication_role_non_apre_i_guardiani(conn, scenario):
     """ENABLE ALWAYS. Un trigger ordinario sarebbe stato spento da questo
-    parametro, e la riga sarebbe sparita senza che nulla si lamentasse."""
+    parametro, e la riga sarebbe sparita senza che nulla si lamentasse.
+
+    DUE AMBIENTI, DUE PROVE - E NESSUNO DEI DUE E' UN PASS REGALATO.
+
+    Su un cluster dove il ruolo puo' impostare `session_replication_role` si
+    prova la cosa vera: si spegne l'interruttore e si verifica che la DELETE
+    resti rifiutata lo stesso.
+
+    Su un PostgreSQL gestito - Render, RDS, Cloud SQL - il ruolo
+    dell'applicazione NON e' superuser e quel SET solleva InsufficientPrivilege.
+    Li' la prova per esecuzione e' impossibile, e fingerla sarebbe peggio che
+    saltarla. Si prova allora la CAUSA invece dell'effetto: `tgenabled = 'A'`
+    su tutti e quattro i guardiani, letto da `pg_trigger`. E' esattamente la
+    proprieta' che rende il bypass impossibile, ed e' verificata sul database
+    vero - non sul testo della migration, che e' gia' compito di
+    test_p29_2_1_communication_foundation.py.
+
+    Il ramo gestito e' uno SKIP e non un PASS perche' la prova per esecuzione
+    non e' stata fatta, e il motivo dello skip lo dice.
+    """
+    import psycopg2
+
     m = messaggio(conn, scenario, chiave="replica")
+
     try:
         with conn.cursor() as cur:
             cur.execute("SET session_replication_role = 'replica'")
+    except psycopg2.errors.InsufficientPrivilege:
+        # La connessione non deve restare in transazione abortita: il modulo
+        # gira in autocommit, quindi qui non c'e' nulla di aperto, ma il
+        # rollback e' esplicito lo stesso perche' la salute della connessione
+        # non deve dipendere da un dettaglio di configurazione del fixture.
+        conn.rollback()
+
+        guardiani = trigger_del_dominio(conn)
+        assert len(guardiani) == 4, guardiani
+        for nome, abilitato in guardiani:
+            assert abilitato == "A", (
+                f"{nome} ha tgenabled={abilitato!r}, atteso 'A' (ENABLE ALWAYS): "
+                "con 'O' un SET session_replication_role lo spegnerebbe"
+            )
+
+        # La connessione e' sana: il test successivo la riceve utilizzabile.
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM communication_messages WHERE id = %s", (m,))
+            assert cur.fetchone()[0] == 1
+
+        pytest.skip(
+            "DB role cannot SET session_replication_role; "
+            "ENABLE ALWAYS verified from pg_trigger (tgenabled='A' on all four guards)"
+        )
+
+    try:
         exc = errore(conn, "DELETE FROM communication_messages WHERE id = %s", (m,))
         assert exc is not None, "la riga e' stata cancellata con il trigger disattivato"
         assert "DELETE is refused" in str(exc)
@@ -596,10 +661,43 @@ def test_lagenzia_con_contatti_vivi_non_si_cancella(conn, scenario):
     """RESTRICT su contacts.agency_id, certificato dal gate R4. E' il motivo per
     cui l'ordine del cleanup P26-6 - contatti prima, agenzie poi - non e' un
     dettaglio."""
+    import psycopg2
+
     messaggio(conn, scenario, chiave="restrict")
     exc = errore(conn, "DELETE FROM agencies WHERE id = %s", (scenario["agenzia"],))
-    assert exc is not None
-    assert "violates foreign key constraint" in str(exc)
+
+    # NON si cerca una frase. Il testo di questo errore e' cambiato fra le
+    # versioni di PostgreSQL - "violates foreign key constraint" fino alla 16,
+    # "violates RESTRICT setting of foreign key constraint" dalla 17 - e un
+    # assert testuale trasformerebbe un aggiornamento del cluster in un
+    # fallimento di P29-2.1.
+    #
+    # Si verifica invece cio' che l'errore SIGNIFICA, su tre livelli:
+    #
+    #   1. la classe. RestrictViolation (23001) e ForeignKeyViolation (23503)
+    #      sono classi SORELLE, non una sottoclasse dell'altra - lo afferma gia'
+    #      tests/test_p26_6c_flow_isolation.py::test_59 - e quale delle due
+    #      arrivi dipende dalla versione: misurato su PostgreSQL 16.13, una FK
+    #      con confdeltype='r' solleva ForeignKeyViolation, non
+    #      RestrictViolation. Accettarle entrambe ESPLICITAMENTE e' preciso;
+    #      nominarne una sola sarebbe un'affermazione falsa su meta' dei
+    #      cluster.
+    #   2. il vincolo. Deve essere QUELLO: se domani la DELETE fallisse per
+    #      un'altra chiave esterna, questo test continuerebbe a passare senza
+    #      provare piu' niente.
+    #   3. l'effetto. L'agenzia e' ancora li'. E' la sola prova che il rifiuto
+    #      sia davvero avvenuto invece di essere stato solo annunciato.
+    assert exc is not None, "l'agenzia e' stata cancellata pur avendo contatti vivi"
+    assert isinstance(exc, (psycopg2.errors.RestrictViolation,
+                            psycopg2.errors.ForeignKeyViolation)), (
+        f"classe inattesa {type(exc).__name__} (SQLSTATE {exc.pgcode})"
+    )
+    assert exc.pgcode in ("23001", "23503"), exc.pgcode
+    assert "contacts_agency_id_fkey" in str(exc), str(exc)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM agencies WHERE id = %s", (scenario["agenzia"],))
+        assert cur.fetchone()[0] == 1, "il rifiuto non ha impedito la cancellazione"
 
 
 def test_lordine_del_cleanup_p26_6_non_lascia_orfani(conn, scenario):
