@@ -41,9 +41,43 @@ def codice(percorso: Path) -> str:
     return re.sub(r"#[^\n]*", "", testo)
 
 
+#: I file del NUCLEO DB-safe: quelli che P29-2.3 possiede e sui quali i suoi
+#: divieti continuano a valere parola per parola. Il confine si e' spostato con
+#: P29-2.4, che introduce legittimamente `dispatcher.py` e `providers/`: quei
+#: file NON sono di questa fase e non vanno giudicati con le sue regole -
+#: giudicarli significherebbe vietare la fase che li possiede. Cio' che questa
+#: sentinella protegge resta intero: il nucleo che parla col database non
+#: conosce provider, non interroga il consenso, non manda niente.
+NUCLEO = frozenset({
+    "__init__.py", "database.py", "enums.py", "exceptions.py",
+    "repository.py", "scope.py", "service.py",
+})
+
+#: I file che appartengono alle fasi successive e che il nucleo non include.
+FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py")
+
+
 def sorgenti() -> dict[str, str]:
-    return {p.name: codice(p) for p in sorted(PACCHETTO.rglob("*.py"))
-            if "__pycache__" not in p.parts}
+    return {p.name: codice(p) for p in sorted(PACCHETTO.glob("*.py"))
+            if p.name in NUCLEO}
+
+
+def test_N0_il_nucleo_sorvegliato_e_quello_che_esiste():
+    """La sentinella si sorveglia da sola.
+
+    Se un file del nucleo sparisce o cambia nome, `sorgenti()` lo salta in
+    silenzio e ogni divieto qui sotto passerebbe esaminando un insieme piu'
+    piccolo. E se un file nuovo comparisse nel pacchetto senza essere ne' nel
+    nucleo ne' fra quelli noti delle fasi successive, nessuno lo guarderebbe.
+    """
+    visti = set(sorgenti())
+    assert visti == set(NUCLEO), f"il nucleo sorvegliato non e' quello atteso: {visti}"
+    noti = set(NUCLEO) | set(FUORI_DAL_NUCLEO)
+    presenti = {p.name for p in PACCHETTO.glob("*.py")}
+    assert presenti <= noti, (
+        f"file non classificati in communication/: {sorted(presenti - noti)}. "
+        "Un file nuovo va messo nel nucleo o dichiarato di una fase successiva."
+    )
 
 
 def sql_eseguito() -> list[str]:
@@ -357,8 +391,13 @@ def test_N2_provider_e_una_etichetta_non_un_modulo():
         assert not re.search(r"(?m)^\s*(from|import)\s+.*provider", corpo), nome
         for tipo in ("ProviderResult", "ProviderCapabilities"):
             assert tipo not in corpo, f"{nome} nomina {tipo}"
-    assert not (PACCHETTO / "providers").exists()
-    assert not (PACCHETTO / "dispatcher.py").exists()
+    # Le due asserzioni di esistenza che stavano qui - `providers/` e
+    # `dispatcher.py` non esistono - erano vere finche' P29-2.4 non era
+    # implementata. P29-2.4 li introduce legittimamente, e il divieto si e'
+    # spostato: non "non esistono", ma "il nucleo non li conosce", che e'
+    # esattamente cio' che il ciclo qui sopra continua a provare. Che
+    # `providers/` sia importabile SOLO dal dispatcher e' la sentinella S1 di
+    # `tests/test_p29_2_4_dispatch_sentinels.py`.
 
 
 def test_N3_nessun_sender_esistente_e_richiamato():

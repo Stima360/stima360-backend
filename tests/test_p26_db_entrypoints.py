@@ -157,6 +157,26 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "tests/test_p29_2_3_claim_sentinels.py opens no connection and is "
         "deliberately NOT listed here"
     ),
+    "tests/test_p29_2_4_dispatch_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied, exactly like the P29 modules above: without that "
+        "variable the whole module is skipped, so it never reaches TEST or PROD "
+        "from a development machine. Connects only to a disposable PostgreSQL "
+        "where it applies 061-064 to verify the P29-2.4 consent gate: the "
+        "closure criterion of the design - a revocation between enqueue and "
+        "dispatch suppresses the message, with the exact reason and through its "
+        "own compare-and-set - can only be proved against a real database, "
+        "because it is the consent projection and the CAS rowcount that decide "
+        "it. It is not an application/RLS database entrypoint. It creates and "
+        "drops its own database on that server and touches nothing else, and it "
+        "must not go through database.get_connection(): that is the application "
+        "choke point and must stay uncoupled from a throwaway test database. It "
+        "monkeypatches communication_cursor and consent_cursor onto its own "
+        "connection precisely so that no domain module opens a second one "
+        "towards a real environment. Its companion "
+        "tests/test_p29_2_4_dispatch_sentinels.py opens no connection and is "
+        "deliberately NOT listed here"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

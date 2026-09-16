@@ -584,16 +584,33 @@ def test_n3_nessuna_tabella_extra():
 #: e le loro docstring. Cio' che una sentinella di confine deve giudicare e' il
 #: CODICE: un commento che spiega perche' il claim NON e' qui nomina il claim, e
 #: una ricerca ingenua lo scambierebbe per il claim.
+NUCLEO = frozenset({
+    "__init__.py", "database.py", "enums.py", "exceptions.py",
+    "repository.py", "scope.py", "service.py",
+})
+
+
 def sorgenti_communication() -> dict[str, str]:
+    """Il NUCLEO DB-safe del pacchetto, senza commenti e senza docstring.
+
+    Si guardano i file del nucleo e SOLO quelli. Il confine si e' spostato una
+    terza volta con P29-2.4, che introduce legittimamente `dispatcher.py`,
+    `providers/`, `schemas.py` e `router.py`: applicare a quei file i divieti
+    delle fasi precedenti vieterebbe la fase che li possiede. Si noti anche che
+    indicizzare per `percorso.name` su un `rglob` faceva collidere
+    `communication/__init__.py` con `communication/providers/__init__.py`: uno
+    dei due sarebbe sparito dall'esame. Il nucleo e' piatto, e la collisione non
+    puo' piu' avvenire.
+    """
     pacchetto = ROOT / "communication"
     if not pacchetto.exists():
         return {}
     sorgenti = {}
-    for percorso in sorted(pacchetto.rglob("*.py")):
-        if "__pycache__" in percorso.parts:
+    for percorso in sorted(pacchetto.glob("*.py")):
+        if percorso.name not in NUCLEO:
             continue
         testo = percorso.read_text(encoding="utf-8")
-        senza_docstring = re.sub(r'""".*?"""', "", testo, flags=re.DOTALL)
+        senza_docstring = re.sub(r'"""(.*?)"""', "", testo, flags=re.DOTALL)
         sorgenti[percorso.name] = re.sub(r"#[^\n]*", "", senza_docstring)
     return sorgenti
 
@@ -626,11 +643,17 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
         # confine e' banalmente rispettato.
         return
 
-    # 1. I file che appartengono alle fasi successive non esistono.
-    for assente in ("dispatcher.py", "templates.py", "providers"):
-        assert not (pacchetto / assente).exists(), (
-            f"communication/{assente} non appartiene a P29-2.2"
-        )
+    # 1. `templates.py` appartiene a P29-2.5 e non esiste ancora. `dispatcher.py`
+    #    e `providers/` stavano in questa lista finche' P29-2.4 non era
+    #    implementata: adesso esistono per progetto, e il divieto si e' spostato
+    #    sul nucleo, che non li conosce.
+    assert not (pacchetto / "templates.py").exists(), (
+        "communication/templates.py non appartiene a nessuna fase gia' chiusa"
+    )
+    assert set(sorgenti_communication()) == set(NUCLEO), (
+        "il nucleo DB-safe non e' intero: la sentinella esaminerebbe meno di "
+        "quanto crede"
+    )
 
     sorgenti = sorgenti_communication()
     assert sorgenti, "il pacchetto communication/ non ha sorgenti leggibili"

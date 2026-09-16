@@ -30,9 +30,21 @@ from .exceptions import PlatformAdminAgencyRequired
 # on /api/core and never granting platform-admin rights.
 AUTH_CHANNELS = ("operator_session", "legacy_basic")
 
-# Flows entitled to a SystemAgencyContext. Closed set: adding a second value is
-# a deliberate edit, not an accident.
-SYSTEM_CONTEXT_ORIGINS = ("public_stima",)
+# Flows entitled to a SystemAgencyContext. Closed set: adding a value is a
+# deliberate edit, not an accident.
+#
+# `communication_dispatch` (P29-2.4, decisione D1 del design P29-2.0) e' il
+# dispatcher delle comunicazioni. Ha bisogno di uno scope DI SISTEMA e non
+# dell'OperatorContext di chi lo invoca per una ragione precisa: un operatore
+# con ruolo `agent` restringe le letture per `assigned_agent_id`
+# (core/scope.py, AGENT_ASSIGNABLE), e un dispatcher che girasse su quel
+# contesto salterebbe SILENZIOSAMENTE i messaggi dei contatti non assegnati a
+# quell'agente. Non un errore: un buco.
+#
+# L'agenzia resta quella della sessione autenticata che invoca il dispatcher -
+# non arriva mai dal payload - quindi questo secondo origin non allarga nulla:
+# esprime "questa agenzia", come il primo.
+SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch")
 
 
 @runtime_checkable

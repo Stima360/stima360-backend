@@ -406,20 +406,49 @@ def test_n2_le_scritture_di_p29_2_2_restano_quelle_di_p29_2_2():
             )
 
 
+#: Il NUCLEO DB-safe: i file che P29-2.2 possiede. Il confine si e' spostato
+#: con P29-2.4, che introduce legittimamente `dispatcher.py` e `providers/`:
+#: applicare a quei file i divieti di P29-2.2 vieterebbe la fase che li
+#: possiede. Cio' che resta protetto e' il nucleo.
+NUCLEO = frozenset({
+    "__init__.py", "database.py", "enums.py", "exceptions.py",
+    "repository.py", "scope.py", "service.py",
+})
+
+
+def file_del_nucleo():
+    return [p for p in sorted(PACCHETTO.glob("*.py")) if p.name in NUCLEO]
+
+
 def test_n3_nessun_dispatcher_nessun_provider_nessun_template():
-    for assente in ("dispatcher.py", "templates.py", "providers"):
-        assert not (PACCHETTO / assente).exists(), f"{assente} non e' di P29-2.2"
+    """`templates.py` non esiste ancora: appartiene a P29-2.5.
+
+    `dispatcher.py` e `providers/` esistevano in questa lista finche' P29-2.4
+    non era implementata. Adesso ci sono per progetto, e il divieto si e'
+    spostato dove conta: il nucleo non li importa.
+    """
+    assert not (PACCHETTO / "templates.py").exists(), "templates.py non e' di P29-2.2"
+    assert set(p.name for p in file_del_nucleo()) == set(NUCLEO), "il nucleo non e' intero"
+    for percorso in file_del_nucleo():
+        # Si giudica il CODICE, non la prosa: un commento che spiega che il
+        # dispatcher NON e' qui lo nomina, e una ricerca ingenua lo scambierebbe
+        # per il dispatcher. Via le docstring e via i commenti.
+        testo = percorso.read_text(encoding="utf-8")
+        corpo = re.sub(r'""".*?"""', "", testo, flags=re.DOTALL)
+        corpo = re.sub(r"#[^\n]*", "", corpo)
+        for vietato in ("dispatcher", "providers", "templates"):
+            assert vietato not in corpo, f"{percorso.name} nomina {vietato}"
 
 
 def test_n4_il_consenso_non_e_interrogato_qui():
     """Il gate sta immediatamente prima del dispatch, che e' P29-2.4: una
     decisione presa adesso su un messaggio che partira' domani sarebbe una
     decisione su ieri."""
-    for percorso in sorted(PACCHETTO.rglob("*.py")):
+    for percorso in file_del_nucleo():
         testo = percorso.read_text(encoding="utf-8")
         corpo = re.sub(r'""".*?"""', "", testo, flags=re.DOTALL)
-        assert "can_send_marketing" not in corpo
-        assert "marketing_consent" not in corpo
+        assert "can_send_marketing" not in corpo, percorso.name
+        assert "marketing_consent" not in corpo, percorso.name
 
 
 def test_n5_nessun_sender_esistente_e_stato_toccato():

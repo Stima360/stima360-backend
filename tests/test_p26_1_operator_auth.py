@@ -547,8 +547,14 @@ def test_system_context_origin_public_stima_is_accepted():
     assert ctx.origin in context.SYSTEM_CONTEXT_ORIGINS
 
 
-def test_system_context_origin_set_is_closed_to_one_value_in_p26_1():
-    assert context.SYSTEM_CONTEXT_ORIGINS == ("public_stima",)
+def test_system_context_origin_set_is_closed_and_declared():
+    """P26-1 ne entitolava uno. P29-2.4 ne aggiunge un secondo, approvato dal
+    design come decisione D1.
+
+    L'asserzione resta per UGUAGLIANZA, ed e' il punto: un terzo origin aggiunto
+    per distrazione fa fallire questo test, che e' esattamente cio' per cui
+    l'insieme e' chiuso. Ampliarlo e' un atto deliberato, e passa da qui."""
+    assert context.SYSTEM_CONTEXT_ORIGINS == ("public_stima", "communication_dispatch")
 
 
 def test_system_context_rejects_an_unapproved_origin():
