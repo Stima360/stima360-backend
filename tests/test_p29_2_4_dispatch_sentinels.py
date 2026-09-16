@@ -212,14 +212,45 @@ def test_P1_il_provider_di_questa_fase_non_ha_rete():
             assert rete not in corpo, f"{nome} nomina {rete}"
 
 
-def test_P2_non_esiste_nessun_adapter_reale():
-    """SMTP e WhatsApp sono P29-2.5, e avvolgeranno le funzioni esistenti."""
-    for assente in ("email_smtp.py", "whatsapp_meta.py"):
-        assert not (PACCHETTO / "providers" / assente).exists(), assente
+def test_P2_lunico_adapter_reale_e_quello_email_e_sta_al_suo_posto():
+    """IL CONFINE SI E' SPOSTATO, E SOLO DI MEZZO PASSO.
+
+    Questa sentinella vietava entrambi gli adapter reali: era vera finche'
+    P29-2.5 era una fase sola. Lo split di §23.4 l'ha divisa in due -
+    **P29-2.5E** email, che procede, e **P29-2.5W** WhatsApp, deferita e ancora
+    bloccata da **R3, che resta OPEN**.
+
+    Quindi `email_smtp.py` adesso esiste per progetto, e `invia_mail` compare -
+    ma SOLO li'. Tutto cio' che riguarda WhatsApp resta vietato ovunque, parola
+    per parola, ed e' la meta' di questo test che non deve cedere: il giorno in
+    cui `whatsapp_meta.py` comparira' senza che R3 sia chiuso, e' qui che si
+    deve rompere.
+    """
+    # 1. WhatsApp: nessun adapter, in nessuna forma. R3 e' OPEN.
+    assert not (PACCHETTO / "providers" / "whatsapp_meta.py").exists(), (
+        "whatsapp_meta.py e' P29-2.5W, che R3 blocca"
+    )
     for nome, corpo in sorgenti().items():
-        for sender in ("invia_mail", "invia_whatsapp", "graph.facebook",
-                       "WHATSAPP_", "SMTP_"):
-            assert sender not in corpo, f"{nome} nomina {sender}"
+        for whatsapp in ("invia_whatsapp", "whatsapp_meta", "graph.facebook",
+                         "WHATSAPP_SERVICE_URL", "WHATSAPP_PHONE_ID",
+                         "WHATSAPP_TOKEN", "WHATSAPP_"):
+            assert whatsapp not in corpo, (
+                f"{nome} nomina {whatsapp}: il canale WhatsApp e' fuori da "
+                "P29-2.5E e resta bloccato da R3"
+            )
+
+    # 2. Email: l'adapter esiste, e `invia_mail` vive SOLO dentro di lui.
+    for nome, corpo in sorgenti().items():
+        if nome == "providers/email_smtp.py":
+            continue
+        assert "invia_mail" not in corpo, (
+            f"{nome} nomina invia_mail: il trasporto email ha un file solo"
+        )
+
+    # 3. La configurazione SMTP resta di `database.invia_mail`: l'adapter
+    #    AVVOLGE, non riscrive, quindi non legge nessuna di quelle variabili.
+    for nome, corpo in sorgenti().items():
+        assert "SMTP_" not in corpo, f"{nome} legge la configurazione SMTP"
 
 
 def test_P3_il_provider_non_tocca_il_database():

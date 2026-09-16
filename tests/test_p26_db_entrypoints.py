@@ -177,6 +177,27 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "tests/test_p29_2_4_dispatch_sentinels.py opens no connection and is "
         "deliberately NOT listed here"
     ),
+    "tests/test_p29_2_5e_email_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied, exactly like the P29 modules above: without that "
+        "variable the whole module is skipped, so it never reaches TEST or PROD "
+        "from a development machine. It is registered in its own right rather "
+        "than reusing the P29-2.4 entry: P29-2.4 is closed, and an allow-list "
+        "shared between phases would let a new entrypoint arrive unannounced. "
+        "Connects only to a disposable PostgreSQL where it applies 061-064 to "
+        "verify the P29-2.5E email adapter end to end: that the arguments handed "
+        "to database.invia_mail are exactly the three columns of a real claimed "
+        "row, and that an unsuccessful send lands as indeterminate and never as "
+        "failed. It is not an application/RLS database entrypoint. It creates and "
+        "drops its own database on that server and touches nothing else, and it "
+        "must not go through database.get_connection(): that is the application "
+        "choke point and must stay uncoupled from a throwaway test database. It "
+        "monkeypatches communication_cursor and consent_cursor onto its own "
+        "connection so that no domain module opens a second one, and it always "
+        "replaces database.invia_mail with a spy, so no email is ever sent. Its "
+        "companion tests/test_p29_2_5e_email_adapter.py opens no connection and "
+        "is deliberately NOT listed here"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor
