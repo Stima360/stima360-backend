@@ -44,6 +44,8 @@ from . import repository
 from .database import communication_cursor
 from .enums import (
     ACTOR_OPERATOR,
+    ERROR_CODES,
+    ERROR_OUTCOME_UNKNOWN,
     ACTOR_SYSTEM,
     CHANNELS,
     CHANNELS_WITH_SUBJECT,
@@ -308,3 +310,226 @@ def list_for_contact(ctx, contact_id: int, *, limit: int = DEFAULT_LIST_LIMIT, c
 #: Riesportato perche' un test possa affermare lo stato iniziale senza conoscere
 #: il nome della colonna.
 INITIAL_STATUS = INITIAL_STATUS
+
+
+# ===========================================================================
+# P29-2.3 - claim, fencing, tentativi, recovery.
+#
+# Il runtime DB-safe che un dispatcher usera'. Qui non c'e' ancora nessun
+# dispatcher, nessun provider e nessun gate del consenso: si costruiscono le
+# transizioni e le si rende sicure PRIMA che esista qualcuno che le chiami.
+#
+# `provider` in queste firme e' una ETICHETTA che finisce in una colonna, non un
+# oggetto e non un modulo: dice CHI e' stato chiamato, e questa fase non chiama
+# nessuno.
+# ===========================================================================
+
+import uuid as _uuid
+
+from .enums import (
+    DEFAULT_STALE_AFTER_SECONDS,
+    OUTCOME_ACCEPTED,
+    OUTCOME_INDETERMINATE,
+    OUTCOME_REJECTED,
+    STATUS_FAILED,
+    STATUS_INDETERMINATE,
+    STATUS_SENT,
+    STATUS_SUPPRESSED,
+)
+
+#: Quanti messaggi per giro. Ogni invio e' una chiamata di rete da secondi: un
+#: batch grande allunga la finestra fra il claim e l'ultimo invio, e con essa la
+#: finestra degli stale.
+DEFAULT_CLAIM_BATCH = 10
+MAX_CLAIM_BATCH = 50
+
+
+def _token() -> str:
+    """Un token per messaggio. uuid4: non deve essere indovinabile, perche' chi
+    lo indovina puo' finalizzare un messaggio che non ha reclamato."""
+    return str(_uuid.uuid4())
+
+
+def claim_due(ctx, *, provider: str, limit: int = DEFAULT_CLAIM_BATCH, cur=None,
+              token_factory=_token) -> list[dict[str, Any]]:
+    """Reclama i messaggi dovuti. Messaggio e tentativo nello stesso commit.
+
+    La transazione deve restare BREVE: nessuna chiamata di rete puo' starci
+    dentro, e il provider si chiama DOPO il commit. Passando `cur` il chiamante
+    decide lui quando committare - che e' cio' che un dispatcher fara'; senza,
+    questa funzione apre la propria e la committa subito.
+    """
+    if not isinstance(limit, int) or limit < 1 or limit > MAX_CLAIM_BATCH:
+        raise ValidationError(f"limit must be between 1 and {MAX_CLAIM_BATCH}")
+    provider = _testo(provider, "provider", obbligatorio=True, massimo=40)
+
+    def _lavora(c):
+        return repository.claim_due(c, ctx, limit=limit, provider=provider,
+                                    token_factory=token_factory)
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor(commit=True) as (_conn, proprio):
+        return _lavora(proprio)
+
+
+#: Cosa dichiara il risultato tardivo, quando la finalizzazione arriva tardi.
+#: E' cio' che il worker STAVA per dire: l'osservazione resta, l'autorita' no.
+ESITO_TARDIVO = {
+    STATUS_SENT: OUTCOME_ACCEPTED,
+    STATUS_FAILED: OUTCOME_REJECTED,
+    STATUS_INDETERMINATE: OUTCOME_INDETERMINATE,
+    STATUS_SUPPRESSED: OUTCOME_REJECTED,
+}
+
+
+def _record_late_result(c, ctx, message_id, claim_token, *, status,
+                        provider_message_id=None, error_code=None, error_detail=None):
+    """C18: NON e' un ingresso pubblico.
+
+    Una riga `late_result` nasce come CONSEGUENZA di una finalizzazione che ha
+    trovato l'ownership persa, mai come atto di un chiamante. Esposta, avrebbe
+    permesso di fabbricare a mano righe di audit che raccontano invii mai
+    tentati - e l'audit dei tentativi vale esattamente quanto e' difficile
+    scriverci dentro una cosa falsa.
+
+    Quando un webhook o un provider asincrono avranno bisogno di un ingresso
+    proprio, lo si aprira' nella loro fase, con i loro controlli.
+    """
+    return repository.record_late_result(
+        c, ctx, message_id, claim_token, outcome=ESITO_TARDIVO[status],
+        provider_message_id=provider_message_id, error_code=error_code,
+        error_detail=error_detail)
+
+
+def _finalizza(ctx, message_id, claim_token, *, cur, status, **campi):
+    """La finalizzazione, e cio' che succede quando arriva tardi.
+
+    Restituisce l'esito se l'ownership era valida, `None` se era persa. `None`
+    non e' un errore: e' la risposta alla domanda "sono ancora io il
+    proprietario", e il batch continua.
+
+    Sul percorso tardivo si registra cio' che il worker ha osservato - con il
+    provider e il numero di tentativo letti dal claim vero, mai ricevuti - e non
+    si tocca il messaggio. Se quel token non ha mai posseduto il messaggio non
+    si scrive niente: un CAS mancato non e' una licenza a scrivere nell'audit.
+    """
+    def _lavora(c):
+        esito = repository.finalize(c, ctx, message_id, claim_token,
+                                    status=status, **campi)
+        if esito is not None:
+            return esito
+        _record_late_result(
+            c, ctx, message_id, claim_token, status=status,
+            provider_message_id=campi.get("provider_message_id"),
+            error_code=campi.get("error_code"),
+            error_detail=campi.get("error_detail"))
+        return None
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor(commit=True) as (_conn, proprio):
+        return _lavora(proprio)
+
+
+def finalize_sent(ctx, message_id: int, claim_token: str, *,
+                  provider_message_id: str | None = None, cur=None):
+    """Il provider ha preso in carico il messaggio.
+
+    Non prende un `provider`: quello lo ha gia' registrato il claim, e riceverlo
+    di nuovo permetterebbe di attribuire il tentativo a un sistema diverso da
+    quello che lo ha reclamato - con il suo `provider_message_id` al seguito.
+
+    Restituisce `None` se l'ownership era persa. NON e' un errore: e' la
+    risposta alla domanda "sono ancora io il proprietario", e in quel caso il
+    risultato osservato viene registrato come tardivo, da solo.
+    """
+    return _finalizza(ctx, message_id, claim_token, cur=cur, status=STATUS_SENT,
+                      provider_message_id=provider_message_id)
+
+
+def finalize_failed(ctx, message_id: int, claim_token: str, *,
+                    error_code: str, error_detail: str | None = None, cur=None):
+    """Insuccesso CERTO: sappiamo che il provider non ha preso in carico nulla.
+
+    Non si usa quando l'esito e' ignoto - per quello c'e'
+    `finalize_indeterminate`, ed e' la distinzione su cui poggia tutto C1.
+    """
+    _in_insieme(error_code, ERROR_CODES, "error_code")
+    return _finalizza(ctx, message_id, claim_token, cur=cur, status=STATUS_FAILED,
+                      error_code=error_code, error_detail=error_detail)
+
+
+def finalize_indeterminate(ctx, message_id: int, claim_token: str, *,
+                           error_code: str = ERROR_OUTCOME_UNKNOWN,
+                           error_detail: str | None = None, cur=None):
+    """Non sappiamo se il messaggio sia partito.
+
+    Timeout, connessione caduta, risposta illeggibile. E' terminale per
+    l'automazione: da qui non si rientra in coda, con nessun `attempt_count` e a
+    nessuna condizione.
+    """
+    _in_insieme(error_code, ERROR_CODES, "error_code")
+    return _finalizza(ctx, message_id, claim_token, cur=cur, status=STATUS_INDETERMINATE,
+                      error_code=error_code, error_detail=error_detail)
+
+
+def finalize_suppressed(ctx, message_id: int, claim_token: str, *, reason: str, cur=None):
+    """Il messaggio non parte, e la ragione non e' del provider.
+
+    Il gate del consenso - P29-2.4 - nega DOPO il claim, quindi il tentativo e'
+    gia' aperto e va chiuso. Qui non si e' chiamato nessuno, e infatti non c'e'
+    un `provider`: il tentativo si chiude `rejected`/`definite`, perche' l'invio
+    non e' avvenuto e lo sappiamo con certezza, e il PERCHE' finisce su
+    `suppressed_reason`.
+    """
+    reason = _testo(reason, "reason", obbligatorio=True, massimo=60)
+    return _finalizza(ctx, message_id, claim_token, cur=cur, status=STATUS_SUPPRESSED,
+                      suppressed_reason=reason)
+
+
+def recover_stale(ctx, *, stale_after_seconds: int = DEFAULT_STALE_AFTER_SECONDS,
+                  limit: int = DEFAULT_CLAIM_BATCH, cur=None) -> list[dict[str, Any]]:
+    """Chiude i claim rimasti senza esito. Uno per uno, e condizionalmente.
+
+    Non si distingue - e non si puo' distinguere - uno stale morto PRIMA della
+    chiamata al provider da uno morto DOPO: il claim committa prima del
+    dispatch, quindi da fuori le due situazioni sono identiche. La policy e'
+    quindi fail safe: `indeterminate`, mai un reinvio automatico cieco.
+
+    I candidati che nel frattempo sono stati finalizzati dal loro worker
+    vengono semplicemente saltati - il compare-and-set restituisce `None` - e
+    non compaiono nel risultato.
+    """
+    if not isinstance(stale_after_seconds, int) or stale_after_seconds < 60:
+        raise ValidationError("stale_after_seconds must be an integer of at least 60")
+    if not isinstance(limit, int) or limit < 1 or limit > MAX_CLAIM_BATCH:
+        raise ValidationError(f"limit must be between 1 and {MAX_CLAIM_BATCH}")
+
+    def _lavora(c):
+        recuperati = []
+        for candidato in repository.stale_candidates(
+                c, ctx, stale_after_seconds=stale_after_seconds, limit=limit):
+            esito = repository.recover_stale_message(
+                c, ctx, candidato["id"], candidato["claim_token"],
+                stale_after_seconds=stale_after_seconds)
+            if esito is not None:
+                recuperati.append(esito)
+        return recuperati
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor(commit=True) as (_conn, proprio):
+        return _lavora(proprio)
+
+
+def list_attempts(ctx, message_id: int, *, cur=None) -> list[dict[str, Any]]:
+    """I tentativi di un messaggio, in ordine di storia."""
+    def _lavora(c):
+        repository.select_message(c, ctx, message_id)
+        return repository.list_attempts(c, ctx, message_id)
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor() as (_conn, proprio):
+        return _lavora(proprio)

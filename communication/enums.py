@@ -161,6 +161,37 @@ ERROR_CODES = frozenset({
     ERROR_OUTCOME_UNKNOWN, ERROR_UNKNOWN,
 })
 
+# --------------------------------------------------------------------------
+# Esito di un TENTATIVO di dispatch. Quattro, e non sono gli stati del
+# messaggio: un tentativo racconta una chiamata, un messaggio racconta una
+# comunicazione.
+#
+#   in_progress   reclamato, la chiamata non e' ancora finita
+#   accepted      il provider l'ha preso in carico
+#   rejected      il provider ha rifiutato, o l'invio non e' avvenuto per una
+#                 ragione che conosciamo con certezza
+#   indeterminate non sappiamo cosa abbia fatto il provider
+# --------------------------------------------------------------------------
+OUTCOME_IN_PROGRESS = "in_progress"
+OUTCOME_ACCEPTED = "accepted"
+OUTCOME_REJECTED = "rejected"
+OUTCOME_INDETERMINATE = "indeterminate"
+ATTEMPT_OUTCOMES = frozenset({
+    OUTCOME_IN_PROGRESS, OUTCOME_ACCEPTED, OUTCOME_REJECTED, OUTCOME_INDETERMINATE,
+})
+
+#: L'unico esito con cui un tentativo nasce, al claim.
+INITIAL_OUTCOME = OUTCOME_IN_PROGRESS
+
+#: Gli stati in cui un messaggio e' di qualcuno. Solo da qui si finalizza, e
+#: solo con il token di quel claim.
+CLAIMED_STATUS = STATUS_SENDING
+
+#: Dopo quanto un claim senza esito e' considerato orfano. Largamente superiore
+#: a qualunque timeout di provider - 10-30 secondi - perche' un falso stale
+#: dichiarerebbe ignoto un invio che stava solo andando piano.
+DEFAULT_STALE_AFTER_SECONDS = 15 * 60
+
 #: Il canale per cui l'oggetto esiste. WhatsApp non ha un subject, e il CHECK
 #: `communication_messages_subject_chk` lo impone: qui si dichiara una volta
 #: sola, cosi' il service non ripete il letterale.

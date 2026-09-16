@@ -162,14 +162,23 @@ def test_e7_admin_lead_alert_non_e_un_motivo():
 # S  Scope
 # ---------------------------------------------------------------------------
 
-def test_s1_una_sola_tabella_scopata():
-    assert scope.COMMUNICATION_SCOPED_TABLES == frozenset({"communication_messages"})
+def test_s1_le_tabelle_scopate_sono_quelle_che_il_modulo_legge():
+    """In P29-2.2 era una sola: i tentativi non avevano un lettore, e una
+    sorgente scopata che nessuno chiama non e' protezione - e' codice non
+    esercitato che sembra protezione. P29-2.3 li legge, quindi ci sono.
+
+    L'insieme resta affermato per UGUAGLIANZA: una terza tabella aggiunta per
+    distrazione e' precisamente cio' che questo test esiste per vedere."""
+    assert scope.COMMUNICATION_SCOPED_TABLES == frozenset({
+        "communication_messages", "communication_attempts",
+    })
 
 
-def test_s2_i_tentativi_non_sono_scopati_in_questa_fase():
-    """Non hanno un lettore in P29-2.2: una sorgente scopata che nessuno chiama
-    non e' protezione, e' codice non esercitato che sembra protezione."""
-    assert "communication_attempts" not in scope.COMMUNICATION_SCOPED_TABLES
+def test_s2_nessuna_tabella_fuori_dal_dominio_e_scopata_qui():
+    """`contacts` passa da core.scope, non da qui: una seconda risposta alla
+    stessa domanda divergerebbe il giorno in cui una delle due cambia."""
+    for estranea in ("contacts", "leads", "stime", "properties", "consent_events"):
+        assert estranea not in scope.COMMUNICATION_SCOPED_TABLES
 
 
 def test_s3_la_sorgente_porta_sempre_il_predicato():
@@ -376,17 +385,25 @@ def test_n1_nessuna_rete_nel_pacchetto():
             assert vietato not in testo, f"{percorso.name} importa {vietato}"
 
 
-def test_n2_nessun_claim_nessun_fencing_nessuna_stale_recovery():
-    """P29-2.3. Anticiparli qui significherebbe avere un claim che nessun
-    dispatcher chiama - codice non esercitato dove un difetto costa un doppio
-    invio."""
-    for percorso in sorted(PACCHETTO.rglob("*.py")):
-        testo = percorso.read_text(encoding="utf-8")
-        corpo = re.sub(r'""".*?"""', "", testo, flags=re.DOTALL)
+def test_n2_le_scritture_di_p29_2_2_restano_quelle_di_p29_2_2():
+    """Il claim, il fencing e la recovery sono arrivati con P29-2.3 e vivono
+    nelle loro funzioni. Cio' che questo test continua a proteggere e' che NON
+    siano entrati nelle due scritture di questa fase: `enqueue` accoda un
+    messaggio in coda, `cancel` lo ritira, e nessuna delle due sa cosa sia un
+    token.
+
+    La sorveglianza si e' spostata dal FILE alla FUNZIONE, che e' il livello a
+    cui il confine e' ancora vero."""
+    for funzione in (repository.insert_message, repository.cancel_queued,
+                     service.enqueue, service.cancel):
+        sorgente = inspect.getsource(funzione)
+        corpo = re.sub(r'"{3}[\s\S]*?"{3}', "", sorgente)
         corpo = re.sub(r"#[^\n]*", "", corpo)
         for anticipato in ("SKIP LOCKED", "FOR UPDATE", "claim_token",
-                           "claimed_at", "attempt_count"):
-            assert anticipato not in corpo, f"{percorso.name} anticipa {anticipato}"
+                           "claimed_at", "attempt_count", "communication_attempts"):
+            assert anticipato not in corpo, (
+                f"{funzione.__name__} usa {anticipato!r}: non appartiene a questa scrittura"
+            )
 
 
 def test_n3_nessun_dispatcher_nessun_provider_nessun_template():
@@ -432,11 +449,20 @@ def test_n8_le_eccezioni_sono_del_dominio():
     assert not issubclass(NotFoundError, ConflictError)
 
 
-def test_n9_la_superficie_pubblica_del_service_e_piccola():
-    """Quattro funzioni: due scritture e due letture. Una quinta in questa fase
-    sarebbe qualcosa che appartiene a un'altra."""
+def test_n9_la_superficie_pubblica_del_service_e_dichiarata():
+    """Per UGUAGLIANZA, non per inclusione: una funzione aggiunta per sbaglio -
+    o lasciata in piedi da un esperimento - e' precisamente cio' che questo test
+    esiste per vedere.
+
+    Le quattro di P29-2.2 sono due scritture e due letture. Le otto di P29-2.3
+    sono il claim, le quattro finalizzazioni, il risultato tardivo, la recovery
+    e la lettura dei tentativi."""
     pubbliche = {
         n for n, v in vars(service).items()
         if callable(v) and not n.startswith("_") and getattr(v, "__module__", "") == service.__name__
     }
-    assert pubbliche == {"enqueue", "cancel", "get_message", "list_for_contact"}, pubbliche
+    assert pubbliche == {
+        "enqueue", "cancel", "get_message", "list_for_contact",
+        "claim_due", "finalize_sent", "finalize_failed", "finalize_indeterminate",
+        "finalize_suppressed", "recover_stale", "list_attempts",
+    }, sorted(pubbliche)

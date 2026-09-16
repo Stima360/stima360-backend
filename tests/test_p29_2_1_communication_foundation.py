@@ -607,15 +607,18 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
     lasciato il confine fra le fasi senza nessun guardiano; lasciarla com'era
     avrebbe prodotto un fallimento a ogni fase successiva.
 
-    Il confine che protegge adesso e' quello vero:
+    Il confine si e' poi spostato una seconda volta, con P29-2.3, che introduce
+    legittimamente claim, fencing, tentativi e recovery. Quello che protegge
+    adesso e':
 
-        P29-2.2  repository e service, SENZA RETE
-        P29-2.3  claim, fencing, stale recovery
+        P29-2.2  repository e service
+        P29-2.3  claim, fencing, tentativi, recovery - tutto dentro il database
+        P29-2.4  il gate del consenso e il dispatcher
+        P29-2.5  i provider reali
 
-    Il modulo puo' esistere. Cio' che non puo' esistere e' un pezzo di P29-2.3
-    dentro P29-2.2 - perche' un claim che nessun dispatcher chiama e' codice non
-    esercitato nel punto in cui un difetto costa un doppio invio a una persona
-    reale.
+    Il modulo puo' esistere e puo' reclamare. Cio' che non puo' esistere qui e'
+    qualcosa che DECIDA se mandare o che MANDI: il confine non e' piu' fra due
+    fasi di codice, e' fra il database e il mondo.
     """
     pacchetto = ROOT / "communication"
     if not pacchetto.exists():
@@ -632,27 +635,28 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
     sorgenti = sorgenti_communication()
     assert sorgenti, "il pacchetto communication/ non ha sorgenti leggibili"
 
-    # 2. Il claim, il fencing e la stale recovery non sono nel CODICE.
+    # 2. IL CONFINE SI E' SPOSTATO DI NUOVO, E QUESTA E' LA SECONDA VOLTA.
     #
-    #    `claim_token` e `claimed_at` sono colonne della 064 e restano tali: qui
-    #    si vieta che il runtime le USI, non che la migration le dichiari.
-    for nome, codice in sorgenti.items():
-        for anticipato in (
-            "claim_due", "SKIP LOCKED", "FOR UPDATE",
-            "claim_token", "claimed_at", "attempt_count",
-            "last_attempt_at", "recovered_at", "late_result",
-            "communication_attempts",
-        ):
-            assert anticipato not in codice, (
-                f"communication/{nome} usa {anticipato!r}: appartiene a P29-2.3"
-            )
+    #    P29-2.2 vietava qui claim, fencing, tentativi e stale recovery. P29-2.3
+    #    li introduce legittimamente: sono il runtime DB-safe, e vietarli adesso
+    #    vieterebbe la fase che li possiede.
+    #
+    #    Il confine nuovo:
+    #
+    #        P29-2.3  claim, fencing, tentativi, recovery - SENZA RETE
+    #        P29-2.4  il gate del consenso e il dispatcher
+    #        P29-2.5  i provider reali
+    #
+    #    Cio' che resta vietato e' quindi tutto cio' che sta OLTRE il database:
+    #    chi decide se mandare, e chi manda.
 
-    # 3. Nessuna finalizzazione: gli stati del dispatch non si scrivono da qui.
+    # 3. Nessun dispatcher: nessuna funzione orchestra claim -> gate -> provider.
     for nome, codice in sorgenti.items():
-        for stato in ("'sending'", "'sent'", "'failed'", "'indeterminate'", "'suppressed'"):
-            assert stato not in codice, (
-                f"communication/{nome} scrive lo stato {stato}: le transizioni "
-                "del dispatch sono P29-2.3"
+        for orchestrazione in ("def dispatch", "def run_dispatch", "def send_",
+                               "def deliver"):
+            assert orchestrazione not in codice, (
+                f"communication/{nome} contiene {orchestrazione!r}: il dispatcher "
+                "e' P29-2.4"
             )
 
     # 4. Nessuna rete. E' il primo dei cinque confini del design, ed e' cio' che
@@ -665,6 +669,8 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
             )
 
     # 5. Nessun provider, nessun sender, nessuno scheduler.
+    #    `provider` resta una ETICHETTA che finisce in una colonna: dice CHI
+    #    e' stato chiamato, e in questa fase non si chiama nessuno.
     for nome, codice in sorgenti.items():
         # `scheduled_at` NON e' uno scheduler: e' la colonna "non prima di"
         # della 064, che `enqueue` scrive legittimamente. Si vietano i

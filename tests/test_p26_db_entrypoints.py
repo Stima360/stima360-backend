@@ -139,6 +139,24 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "module tests/test_p29_2_2_communication_service.py opens no "
         "connection and is deliberately NOT listed here"
     ),
+    "tests/test_p29_2_3_claim_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied, exactly like the P29 modules above: without that "
+        "variable the whole module is skipped, so it never reaches TEST or PROD "
+        "from a development machine. Connects only to a disposable PostgreSQL "
+        "where it applies 064 to verify the P29-2.3 claim, fencing and stale "
+        "recovery; it is not an application/RLS database entrypoint. It creates "
+        "and drops its own database on that server and touches nothing else, "
+        "and it must not go through database.get_connection(): that is the "
+        "application choke point and must stay uncoupled from a throwaway test "
+        "database. It opens SEVERAL connections to that database on purpose - "
+        "two concurrent workers cannot be simulated on one connection, because "
+        "a lock never blocks itself - which is the only way to prove FOR UPDATE "
+        "SKIP LOCKED, the compare-and-set rowcount and the trigger that refuses "
+        "to reopen a closed attempt. Its companion "
+        "tests/test_p29_2_3_claim_sentinels.py opens no connection and is "
+        "deliberately NOT listed here"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

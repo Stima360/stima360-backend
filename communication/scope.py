@@ -31,21 +31,31 @@ stessa domanda.
 `communication_messages` non ha `assigned_agent_id` e non deve averlo: un
 messaggio e' della persona e dell'agenzia, non dell'agente di turno.
 
-PERCHE' `communication_attempts` NON E' QUI
+PERCHE' `communication_attempts` E' ARRIVATA IN P29-2.3
 
-Non ha un lettore in P29-2.2. I tentativi nascono al claim, che e' P29-2.3, e
-una sorgente scopata che nessuno chiama non e' protezione: e' codice non
-esercitato che sembra protezione. Si aggiunge nella fase che li legge.
+In P29-2.2 non c'era: non aveva un lettore, e una sorgente scopata che nessuno
+chiama non e' protezione - e' codice non esercitato che sembra protezione. Era
+scritto qui che si sarebbe aggiunta nella fase che li legge, ed e' questa: il
+claim li crea, la finalizzazione li chiude, la recovery li recupera.
+
+Porta `agency_id` NOT NULL come i messaggi, e la FK composita verso
+`communication_messages (agency_id, id)` garantisce gia' che un tentativo non
+possa appartenere a un'agenzia diversa dal proprio messaggio. Il predicato qui
+non e' quindi ridondante: e' cio' che impedisce di LEGGERE i tentativi di
+un'altra agenzia partendo da un id indovinato.
 """
 
 from __future__ import annotations
 
 from operator_auth.context import AgencyScope
 
-# L'unica tabella che questo modulo scopa oggi. frozenset, non set: un insieme
+# Le due tabelle che questo modulo scopa. frozenset, non set: un insieme
 # mutabile potrebbe essere allargato a runtime da qualunque modulo che lo
 # importi (stessa ragione dichiarata in core/scope.py e in consent/scope.py).
-COMMUNICATION_SCOPED_TABLES = frozenset({"communication_messages"})
+COMMUNICATION_SCOPED_TABLES = frozenset({
+    "communication_messages",
+    "communication_attempts",
+})
 
 
 class ProgrammingError(Exception):
