@@ -1492,7 +1492,7 @@ class FakeHttp(cert.HttpProbe):
         self.match_property[self.next_id] = payload["property_id"]
         return self._reply(method, path, 201, _json.dumps(body).encode())
 
-    def request(self, method, path, *, jar=None, payload=None):
+    def request(self, method, path, *, jar=None, payload=None, headers=None):
         import json as _json
 
         # PRIMA DI TUTTO: la route esiste, con questo metodo?
@@ -1571,6 +1571,33 @@ class FakeHttp(cert.HttpProbe):
 
         if path == cert.FOLLOWUP_SCAN and method == "POST":
             return self._scan_temporal(method, path, agency)
+
+        if path == "/api/communication/dispatch" and method == "POST":
+            # P29-2.6E. Il doppio riproduce il CONTRATTO REALE della rotta, non
+            # quello che la matrice immagina: lo schema Pydantic vero decide i
+            # 422, e la mappa degli adapter vera decide il 501. Un doppio che
+            # accettasse qualunque corpo direbbe che la matrice passa su un
+            # contratto che non esiste.
+            import pydantic
+
+            from communication import dispatcher as comunicazione
+            from communication.schemas import DispatchRequest
+
+            try:
+                corpo = DispatchRequest(**(payload or {}))
+            except pydantic.ValidationError:
+                return self._reply(method, path, 422,
+                                   b'{"detail":"corpo non valido"}')
+            if corpo.channel not in comunicazione.ADAPTER_PER_CANALE:
+                return self._reply(method, path, 501, _json.dumps(
+                    {"detail": f"no real transport for channel "
+                               f"{corpo.channel!r}"}).encode())
+            # L'agenzia dedicata e' vuota: nessun messaggio da reclamare, e
+            # quindi nessun invio possibile. E' la ragione per cui la matrice
+            # ostile puo' interrogare questa rotta su un TEST vivo.
+            return self._reply(method, path, 200, _json.dumps(
+                {"claimed": 0, "sent": 0, "suppressed": 0, "failed": 0,
+                 "indeterminate": 0, "lost": 0}).encode())
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)

@@ -41,7 +41,15 @@ AGENZIA_A = 11
 AGENZIA_B = 22
 
 
-def operatore(agency_id: int, role: str = "admin") -> OperatorContext:
+def operatore(agency_id: int, role: str = "agency_admin") -> OperatorContext:
+    """Il ruolo predefinito e' `agency_admin`, e dev'essere un ruolo VERO.
+
+    Fino a P29-2.6E era la stringa "admin", che non esiste in
+    `AGENCY_ROLES`: non importava a nessuno finche' la rotta guardava solo
+    l'autenticazione. Adesso la rotta legge la matrice P26-1, e un ruolo
+    inventato non vede niente - come dev'essere, perche' quella matrice
+    fallisce chiusa.
+    """
     return OperatorContext(
         user_id=1, agency_id=agency_id, role=role, is_platform_admin=False,
         session_id=1, auth_channel="session",
@@ -57,6 +65,9 @@ def app_autenticata(ctx: OperatorContext) -> FastAPI:
     """
     app = FastAPI()
     app.include_router(communication_router.router)
+    # Si sostituisce la dipendenza INTERNA, quella di autenticazione: cosi'
+    # `require_dispatch_context` continua a girare davvero e l'autorizzazione
+    # resta sotto prova anche in queste app autonome.
     app.dependency_overrides[legacy_basic_agency_context] = lambda: ctx
     return app
 
@@ -139,10 +150,29 @@ def test_C19_1_la_rotta_richiede_autenticazione():
 def test_C19_1b_la_dipendenza_dichiarata_e_quella_del_repository():
     """Letta dalla firma, non dal comportamento: se domani qualcuno sostituisse
     la dipendenza con una piu' larga, il 401 qui sopra potrebbe continuare a
-    passare mentre lo scope non viene piu' dalla sessione."""
+    passare mentre lo scope non viene piu' dalla sessione.
+
+    P29-2.6E: la dipendenza dichiarata e' `require_dispatch_context`, che E'
+    `legacy_basic_agency_context` piu' la riga di matrice "See all agency
+    records". L'autenticazione non e' cambiata - si controlla che sia ancora
+    quella, dentro.
+    """
+    from communication.dependencies import require_dispatch_context
+
     firma = inspect.signature(communication_router.dispatch)
     dipendenza = firma.parameters["ctx"].default.dependency
-    assert dipendenza is legacy_basic_agency_context
+    assert dipendenza is require_dispatch_context
+
+    interna = inspect.signature(require_dispatch_context)
+    assert interna.parameters["ctx"].default.dependency is legacy_basic_agency_context
+
+
+def test_C19_1c_un_agent_e_autenticato_e_rifiutato():
+    """La soglia della rotta, sull'app autonoma: 403, e nessun giro."""
+    with TestClient(app_autenticata(operatore(AGENZIA_A, role="agent"))) as client:
+        risposta = client.post("/api/communication/dispatch",
+                               json={"channel": "email", "limit": 5})
+    assert risposta.status_code == 403, risposta.text
 
 
 def test_C19_2_agency_id_nel_corpo_e_un_422():
@@ -228,12 +258,19 @@ def test_C19_7_un_contesto_senza_agenzia_e_un_403(tracciato):
     assert risposta.status_code == 403, risposta.text
 
 
-def test_C19_8_main_py_resta_intatto():
-    """La rotta resta DICHIARATA e non montata: `main.py` non la nomina in
-    nessuna forma - ne' l'import del modulo, ne' un `include_router`."""
+def test_C19_8_main_py_monta_la_rotta_e_nientaltro_di_communication():
+    """P29-2.6E monta la rotta, e `main.py` nomina `communication` per questo e
+    per nient'altro: due righe, l'import e il mount. Nessuna logica del dominio
+    e' passata di la'."""
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "communication" not in main_py
-    assert "/api/communication" not in main_py
+    assert "from communication.router import router as communication_router" in main_py
+    assert ("app.include_router(communication_router, "
+            "dependencies=[Depends(require_authenticated_operator)])") in main_py
+    # Il dominio resta dietro la sua rotta: nessun enqueue, nessun dispatch,
+    # nessun provider in `main.py`.
+    for vietato in ("communication.service", "communication_service", "dispatch_batch",
+                    "email_smtp", "communication.dispatcher"):
+        assert vietato not in main_py, f"main.py nomina {vietato}"
 
 
 # ===========================================================================
@@ -293,11 +330,22 @@ def test_C20_2_non_esiste_un_percorso_per_reclamare_A_e_chiamare_B():
 
 
 def test_C20_3_il_chiamante_http_non_puo_scegliere_il_provider():
-    """La rotta passa `limit` e nient'altro: l'adapter e' il default del
-    dispatcher, e nessun campo del corpo lo raggiunge."""
+    """LA ROTTA ADESSO NOMINA IL PROVIDER, E IL CHIAMANTE ANCORA NO.
+
+    Con la rotta montata (P29-2.6E) l'adapter non puo' piu' essere il default
+    del dispatcher - quel default e' il provider finto. La rotta lo risolve dal
+    CANALE, quindi `provider` compare nel suo codice; cio' che non compare, e
+    che questa sentinella protegge, e' un modo per il chiamante di SCEGLIERLO.
+    """
     assert set(communication_router.DispatchRequest.model_fields) == {"channel", "limit"}
+
     corpo = inspect.getsource(communication_router.dispatch)
-    assert "provider" not in corpo
+    assert "provider=dispatcher.adapter_per(payload.channel)" in corpo
+    # Nessun campo del corpo raggiunge il provider: l'unica cosa che lo decide
+    # e' il canale, che e' un insieme chiuso.
+    assert "payload.provider" not in corpo
+    for letterale in ('provider="', "provider='"):
+        assert letterale not in corpo
 
 
 def test_C20_4_il_default_e_un_adapter_non_una_stringa():

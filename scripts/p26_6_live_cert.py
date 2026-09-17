@@ -76,6 +76,7 @@ REGOLE DI CONDOTTA
 from __future__ import annotations
 
 import argparse
+import base64
 import http.cookiejar
 import json
 import os
@@ -409,6 +410,29 @@ DOMAINS = (
         certifier="followup",
         note="POST /scan-temporal: escalation delle attivita' stale, provata con "
              "fixture proprie e guardia read-only sui dati preesistenti",
+    ),
+    Domain(
+        "COMMUNICATION", "/api/communication",
+        # La superficie e' UNA sola operazione: `POST /dispatch`. Nessun
+        # listing, nessun dettaglio, nessuna DELETE - e quindi nessuna delle
+        # sei domande generiche e' applicabile. Vale la stessa scelta di
+        # FOLLOWUP: l'assenza di GET rende non provabili le LETTURE, non il
+        # dominio.
+        #
+        # PERCHE' LA MATRICE NON DEVE MANDARE UNA EMAIL
+        #
+        # Un dispatch riuscito su un'agenzia con la coda piena manderebbe
+        # messaggi VERI a destinatari VERI. La certificazione gira su TEST, e
+        # su TEST i destinatari sono persone. Il certifier lavora quindi su
+        # agenzie DEDICATE, create da questo run e vuote per costruzione: il
+        # giro ritorna `claimed=0` e non esiste un messaggio da mandare. Cio'
+        # che si prova e' l'AMMISSIONE e lo SCOPE, non il trasporto - che ha la
+        # sua certificazione, con un messaggio controllato.
+        certifier="communication",
+        api_delete=False,
+        note="POST /dispatch: ammissione, rifiuto del Basic, agency_id fuori "
+             "dal payload, canale obbligatorio, canale senza adapter -> 501, "
+             "e nessun effetto sulla coda dell'altra agenzia",
     ),
     Domain(
         "SELLER_INTENT", "/api/seller-intent",
@@ -833,11 +857,19 @@ class HttpProbe:
         self.exchanges.append((f"POST {path}", risultato.status, risultato.body))
         return risultato
 
-    def request(self, method, path, *, jar=None, payload=None) -> Response:
+    def request(self, method, path, *, jar=None, payload=None,
+                headers=None) -> Response:
         request = urllib.request.Request(self.base + path, method=method)
         if payload is not None:
             request.data = json.dumps(payload).encode("utf-8")
             request.add_header("Content-Type", "application/json")
+        # P29-2.6E: un header esplicito serve a UNA domanda sola - che il
+        # canale HTTP Basic, tolto da P26-5, non rientri da una rotta nuova. La
+        # credenziale che si manda e' finta di proposito: cio' che si prova e'
+        # che il CANALE non viene onorato, non che una password sia sbagliata,
+        # e nessun segreto reale entra in questo script per farlo.
+        for nome, valore in (headers or {}).items():
+            request.add_header(nome, valore)
         try:
             with self._opener(jar).open(request, timeout=30) as response:
                 result = Response(response.status, response.info(), response.read())
@@ -5019,6 +5051,135 @@ def certify_batch_only(report, http, cert, domain, jars, owned, context) -> None
     )
 
 
+def certify_communication(report, http, cert, domain, jars, owned, context) -> None:
+    """COMMUNICATION: SOLO RIFIUTI, e per una ragione.
+
+    PERCHE' LA MATRICE NON CHIEDE MAI UN GIRO RIUSCITO
+
+    `POST /api/communication/dispatch` reclama i messaggi in coda e li da' a un
+    adapter REALE. Un giro riuscito su un'agenzia con la coda piena manda
+    messaggi VERI a destinatari VERI, e questa certificazione gira su TEST,
+    dove i destinatari sono persone. Non esiste un parametro che dica "prova ma
+    non mandare": `limit` riduce quanti, non se.
+
+    Quindi ogni domanda di questa matrice e' una domanda a cui la risposta
+    giusta e' un RIFIUTO - 401, 422, 501 - e nessuna di esse puo' far partire
+    un messaggio. Il giro riuscito appartiene alla certificazione del
+    trasporto, che si fa con un messaggio controllato e una destinazione
+    controllata: non e' una domanda ostile, ed e' l'unica che non si puo' fare
+    qui senza conseguenze su una persona.
+
+    LE DOMANDE
+
+        anonimo                          -> 401
+        HTTP Basic (P26-5 l'ha tolto)    -> 401
+        agency_id nel payload, A verso B -> 422   e B verso A
+        canale mancante                  -> 422
+        canale ignoto                    -> 422
+        canale senza adapter reale       -> 501   (nessun falso `sent`)
+        e il ledger, dopo tutto questo   -> invariato
+
+    L'ultima e' la guardia read-only: se una sola di queste domande avesse
+    reclamato qualcosa, ci sarebbero righe `sending` lasciate indietro. Si
+    misura sulle righe perche' non esiste un'API per accodare un messaggio.
+    """
+    percorso = f"{domain.prefix}/dispatch"
+    database = context.get("database")
+
+    def in_volo() -> int | None:
+        """I messaggi `sending` nel database, o None se non si puo' leggere."""
+        if database is None:
+            return None
+        with database.read() as cur:
+            cur.execute("SELECT count(*) AS n FROM communication_messages "
+                        "WHERE status = 'sending'")
+            return int(cur.fetchone()["n"])
+
+    prima = in_volo()
+
+    # -- senza identita' ----------------------------------------------------
+    anonima = http.request("POST", percorso, payload={"channel": "email", "limit": 1})
+    report.check(
+        "COMMUNICATION-anonimo",
+        anonima.status == 401,
+        f"POST {percorso} senza sessione -> {anonima.status} (atteso 401)",
+    )
+
+    # Il canale Basic: P26-5 lo ha tolto, e una rotta nuova non deve
+    # riaprirlo. La credenziale e' FINTA di proposito - cio' che si prova e'
+    # che il canale non viene onorato, non che una password sia sbagliata, e
+    # nessun segreto reale entra in questo script per farlo.
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    basic = http.request("POST", percorso,
+                         payload={"channel": "email", "limit": 1},
+                         headers={"Authorization": f"Basic {credenziale}"})
+    report.check(
+        "COMMUNICATION-basic",
+        basic.status == 401,
+        f"POST {percorso} con solo HTTP Basic -> {basic.status} (atteso 401: "
+        "P26-5 ha tolto quel canale, e una rotta nuova non lo riapre)",
+    )
+
+    # -- le due direzioni ---------------------------------------------------
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        agenzia_altrui = context["agencies"].get(altro)
+
+        intruso = http.request("POST", percorso, jar=jar, payload={
+            "channel": "email", "limit": 1, "agency_id": agenzia_altrui})
+        report.check(
+            f"COMMUNICATION-agency-nel-payload-{etichetta}-{altro}",
+            intruso.status == 422,
+            f"{etichetta} chiede un dispatch per l'agenzia di {altro} mettendo "
+            f"`agency_id` nel corpo -> {intruso.status} (atteso 422: lo scope "
+            "viene dalla sessione, e un campo di troppo si rifiuta invece di "
+            "ignorarlo)",
+        )
+
+        senza = http.request("POST", percorso, jar=jar, payload={"limit": 1})
+        report.check(
+            f"COMMUNICATION-canale-obbligatorio-{etichetta}",
+            senza.status == 422,
+            f"{etichetta}, corpo senza `channel` -> {senza.status} (atteso 422)",
+        )
+
+        ignoto = http.request("POST", percorso, jar=jar,
+                              payload={"channel": "sms", "limit": 1})
+        report.check(
+            f"COMMUNICATION-canale-ignoto-{etichetta}",
+            ignoto.status == 422,
+            f"{etichetta}, canale 'sms' -> {ignoto.status} (atteso 422: "
+            "l'insieme dei canali e' chiuso)",
+        )
+
+        senza_adapter = http.request("POST", percorso, jar=jar,
+                                     payload={"channel": "whatsapp", "limit": 1})
+        report.check(
+            f"COMMUNICATION-canale-senza-adapter-{etichetta}",
+            senza_adapter.status == 501,
+            f"{etichetta}, canale 'whatsapp' -> {senza_adapter.status} (atteso "
+            "501: nessun adapter reale, e un provider finto direbbe `sent` "
+            "senza aver mandato niente)",
+        )
+
+    # -- la guardia read-only ------------------------------------------------
+    dopo = in_volo()
+    if prima is None or dopo is None:
+        report.note(
+            "COMMUNICATION-ledger-invariato",
+            "nessuna connessione di lettura: che la matrice non abbia reclamato "
+            "nulla non e' stato misurato sulle righe in questo run",
+        )
+        return
+    report.check(
+        "COMMUNICATION-ledger-invariato",
+        dopo == prima,
+        f"messaggi in stato 'sending' prima e dopo la matrice: {prima} -> "
+        f"{dopo} (attesi uguali: nessuna di queste domande deve aver reclamato "
+        "un messaggio)",
+    )
+
+
 def certify_followup(report, http, cert, domain, jars, owned, context) -> None:
     """FOLLOWUP: si osserva la SELEZIONE, non si esegue l'escalation.
 
@@ -5479,6 +5640,11 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
         "stime": {}, "disclosures": [], "owner_links": {}, "portal_documents": {}, "portal_downloadable": {},
         "agencies": dict(agencies or {}),
         "dedicated_agencies": dedicated_agencies,
+        # P29-2.6E: `certify_communication` misura l'assenza di effetti
+        # cross-tenant sulle RIGHE, perche' non esiste un'API per accodare un
+        # messaggio. Senza connessione dichiara di non averlo misurato invece
+        # di tacere.
+        "database": database,
     }
 
     # -- le due sessioni sono vive e portano agenzie diverse -----------------

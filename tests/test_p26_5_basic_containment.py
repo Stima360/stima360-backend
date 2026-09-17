@@ -254,6 +254,10 @@ TENANT_PREFIXES = (
     "/api/sales", "/api/crm", "/api/seller-intelligence", "/api/followup",
     "/api/seller-intent", "/api/property-watch", "/api/next-best-action",
     "/api/flow", "/api/owner/admin", "/api/admin/stime", "/api/admin/whatsapp",
+    # P29-2.6E: il dispatch delle comunicazioni. E' una rotta di tenant come le
+    # altre - l'agenzia viene dalla sessione - e quindi deve dichiarare il
+    # cookie e SOLO il cookie, come verifica il test 6 qui sopra.
+    "/api/communication",
 )
 
 

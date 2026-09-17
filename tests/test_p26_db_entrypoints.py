@@ -242,6 +242,27 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "tests/test_p29_2_6e_lifecycle_parent.py opens no connection and is "
         "deliberately NOT listed here"
     ),
+    "tests/test_p29_2_6e_dispatch_ops_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing an earlier P29 entry: "
+        "an allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. It is the only P29 module that drives the REAL "
+        "application - main.app with its routers mounted - over HTTP, because "
+        "what it certifies is the operational chain that no unit test can "
+        "reach: a least-privilege agent operator logs in, the session cookie "
+        "carries the agency, the dispatch route claims one channel and the "
+        "email adapter sends, then the session is revoked. It applies 061-065 "
+        "to a disposable PostgreSQL it creates and drops itself, touching "
+        "nothing else, and it must not go through database.get_connection(): "
+        "that is the application choke point and must stay uncoupled from a "
+        "throwaway test database. It monkeypatches the communication, consent "
+        "and operator_auth cursors onto its own connection - operator_cursor in "
+        "all four modules that import it by name, or the login would open a "
+        "second connection towards a real environment - and always replaces "
+        "database.invia_mail with a spy, so no email is ever sent"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

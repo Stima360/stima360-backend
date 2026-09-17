@@ -456,7 +456,11 @@ def test_n5_nessun_sender_esistente_e_stato_toccato():
         (ROOT / "database.py").read_text(encoding="utf-8")
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):" in main_py
-    assert "communication" not in main_py
+    # P29-2.6E monta la rotta, quindi `main.py` nomina `communication` in due
+    # righe. Cio' che questa sentinella protegge non e' quella parola: e' che i
+    # sender legacy siano ancora li', intatti.
+    assert "from communication.router import router as communication_router" in main_py
+    assert "communication.service" not in main_py
 
 
 def test_n6_il_dominio_consenso_e_intatto():

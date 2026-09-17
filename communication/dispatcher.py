@@ -43,8 +43,10 @@ from consent.guard import can_send_marketing
 from operator_auth.context import SystemAgencyContext
 
 from . import service
-from .enums import (ERROR_OUTCOME_UNKNOWN, ERROR_PROVIDER_REJECTED, ERROR_UNKNOWN,
-                    TYPE_MARKETING)
+from .enums import (CHANNEL_EMAIL, ERROR_OUTCOME_UNKNOWN, ERROR_PROVIDER_REJECTED,
+                    ERROR_UNKNOWN, TYPE_MARKETING)
+from .exceptions import ValidationError
+from .providers import email_smtp as provider_email
 from .providers import null as provider_finto
 from .providers.base import OUTCOME_ACCEPTED, OUTCOME_REJECTED
 
@@ -57,6 +59,36 @@ DISPATCH_ORIGIN = "communication_dispatch"
 #: La ragione con cui si sopprime un messaggio il cui contatto non esiste piu'
 #: nello scope. Appartiene all'insieme chiuso delle ragioni della guardia.
 REASON_CONTATTO_ASSENTE = "deny_never_given"
+
+
+#: Il trasporto REALE di ogni canale. Una mappa di una voce sola, e non e' un
+#: registry: e' il cavo fra la rotta e l'adapter.
+#:
+#: PERCHE' NON BASTAVA IL DEFAULT DI `dispatch_batch`
+#:
+#: Quel default e' il provider FINTO, ed e' giusto che lo sia: i test di
+#: P29-2.4 provano il percorso senza mandare niente. Ma con la rotta montata
+#: (P29-2.6E) un chiamante che non passasse l'adapter otterrebbe un giro che
+#: dichiara `sent` senza aver mandato una sola email - una bugia che nessun
+#: errore segnala. La rotta risolve quindi il trasporto DAL CANALE, qui.
+#:
+#: `whatsapp` non c'e', e la sua assenza e' il punto: P29-2.5W e' deferita e R3
+#: e' OPEN. Un giro su quel canale deve essere RIFIUTATO, non servito da un
+#: provider finto che finge di aver mandato.
+ADAPTER_PER_CANALE = {
+    CHANNEL_EMAIL: provider_email,
+}
+
+
+def adapter_per(channel: str):
+    """Il trasporto reale di quel canale, o un rifiuto esplicito."""
+    try:
+        return ADAPTER_PER_CANALE[channel]
+    except KeyError:
+        raise ValidationError(
+            f"no real transport for channel {channel!r}: the adapter for that "
+            "channel has not been built yet"
+        ) from None
 
 
 def contesto_di_sistema(ctx_operatore) -> SystemAgencyContext:

@@ -332,18 +332,32 @@ def test_N1_invia_mail_e_invariata():
     assert "return False" in database_py and "return True" in database_py
 
 
-def test_N2_main_py_non_e_stato_toccato():
+def test_N2_main_py_non_e_stato_toccato_da_QUESTA_fase():
+    """P29-2.5E non ha toccato `main.py`, e non lo tocca adesso.
+
+    Il mount della rotta e' arrivato con P29-2.6E, la fase successiva, e vive
+    in due righe: l'import e l'`include_router`. Cio' che questa sentinella
+    protegge resta intero - il dominio non e' entrato in `main.py`.
+    """
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "communication" not in main_py
+    assert "from communication.router import router as communication_router" in main_py
+    for vietato in ("communication.service", "communication.dispatcher",
+                    "email_smtp", "dispatch_batch", "enqueue("):
+        assert vietato not in main_py, f"main.py nomina {vietato}"
     assert "def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):" in main_py
     assert "invia_mail(data[\"email\"], oggetto_mail, corpo)" in main_py
 
 
 def test_N3_nessun_flusso_reale_e_stato_migrato():
-    """P29-2.5E costruisce e certifica l'ADAPTER. Il cutover e' P29-2.6, e si
-    vede da qui: `main.py` chiama ancora `invia_mail` direttamente."""
+    """P29-2.5E costruisce e certifica l'ADAPTER, e il cutover e' P29-2.6E.
+
+    Montare la rotta NON e' migrare un flusso: `main.py` chiama ancora
+    `invia_mail` direttamente per l'email del cliente, ed e' esattamente questo
+    che si continua a misurare. Il giorno del cutover questa asserzione cambia,
+    e deve cambiare deliberatamente.
+    """
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "from communication" not in main_py
+    assert 'mail_sent = invia_mail(data["email"], oggetto_mail, corpo)' in main_py
     assert "email_smtp" not in main_py
 
 

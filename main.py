@@ -43,6 +43,7 @@ from seller_intent.router import router as seller_intent_router
 from property_watch import service as property_watch_service
 from property_watch.router import router as property_watch_router
 from next_best_action.router import router as next_best_action_router
+from communication.router import router as communication_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -114,6 +115,19 @@ app.include_router(followup_router, dependencies=[Depends(require_authenticated_
 app.include_router(seller_intent_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(property_watch_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(next_best_action_router, dependencies=[Depends(require_authenticated_operator)])
+
+# P29-2.6E - IL DISPATCH DELLE COMUNICAZIONI. LA ROTTA CHE MANCAVA.
+#
+# Dichiarata in P29-2.4 e deliberatamente NON montata: con un provider finto
+# sarebbe stata una rotta viva che non fa nulla. Adesso l'adapter email e'
+# reale (P29-2.5E) e la coda ha chi la svuota, quindi la ragione per tenerla
+# fuori e' venuta meno.
+#
+# Un giro di dispatch riguarda UN'AGENZIA e UN CANALE: l'agenzia viene dalla
+# sessione (mai dal payload, che la rifiuta con 422), il canale dal corpo. Con
+# N agenzie servono N cron, come gia' oggi per P18-D2 - vedi
+# `run_communication_dispatch_cron.py`.
+app.include_router(communication_router, dependencies=[Depends(require_authenticated_operator)])
 
 # P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
 #

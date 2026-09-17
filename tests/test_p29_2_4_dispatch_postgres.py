@@ -79,6 +79,19 @@ class Operatore:
     def require_agency(self):
         return self.agency_id
 
+    @property
+    def sees_all_agency_records(self):
+        """Letta DALLA MATRICE, non decisa qui.
+
+        P29-2.6E: la rotta chiede questa capacita'. Un doppio di prova che la
+        rispondesse a modo suo potrebbe far passare la rotta a un ruolo che in
+        produzione prende 403, ed e' esattamente il genere di finta che rende
+        inutile un test di confine.
+        """
+        from operator_auth import permissions
+
+        return permissions.sees_all_agency_records(self.role, self.is_platform_admin)
+
 
 def _dsn_per(nome: str) -> str:
     if "?" in DSN:
@@ -476,7 +489,13 @@ def test_agency_id_nel_payload_e_un_422():
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[legacy_basic_agency_context] = lambda: Operatore(1)
+    # `agency_admin` e non `agent`: da P29-2.6E la rotta chiede la riga "See
+    # all agency records" della matrice, e un agente prende 403 prima ancora
+    # che il corpo venga validato - il 422 che questi due test misurano non
+    # arriverebbe mai. Il ruolo `agent` resta il default della classe, dove
+    # serve davvero: nei test del DISPATCHER, che non passano dalla rotta.
+    app.dependency_overrides[legacy_basic_agency_context] = (
+        lambda: Operatore(1, role="agency_admin"))
 
     with TestClient(app, raise_server_exceptions=False) as client:
         risposta = client.post("/api/communication/dispatch",
@@ -494,7 +513,13 @@ def test_un_limite_fuori_scala_e_un_422():
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[legacy_basic_agency_context] = lambda: Operatore(1)
+    # `agency_admin` e non `agent`: da P29-2.6E la rotta chiede la riga "See
+    # all agency records" della matrice, e un agente prende 403 prima ancora
+    # che il corpo venga validato - il 422 che questi due test misurano non
+    # arriverebbe mai. Il ruolo `agent` resta il default della classe, dove
+    # serve davvero: nei test del DISPATCHER, che non passano dalla rotta.
+    app.dependency_overrides[legacy_basic_agency_context] = (
+        lambda: Operatore(1, role="agency_admin"))
 
     with TestClient(app, raise_server_exceptions=False) as client:
         for cattivo in (0, -1, 51):

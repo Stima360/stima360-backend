@@ -151,3 +151,86 @@ def test_10_nessun_provider_registry_e_stato_anticipato():
         for vietato in ("PROVIDERS = {", "PROVIDER_REGISTRY", "registry",
                         "whatsapp_meta"):
             assert vietato not in corpo, f"{percorso.name} nomina {vietato}"
+
+
+# ---------------------------------------------------------------------------
+# P29-2.6E OPS - il provider finto non deve poter servire una rotta viva
+# ---------------------------------------------------------------------------
+#
+# Il difetto che queste sentinelle chiudono e' stato trovato eseguendo, non
+# leggendo: la rotta montata chiamava `dispatch_batch` senza `provider`, quindi
+# cadeva sul default - il provider FINTO - e restituiva `sent=1` senza che una
+# sola email partisse. Nessun errore, nessun log, un ledger che dice di aver
+# mandato.
+
+def test_11_la_rotta_risolve_sempre_il_provider_dal_canale():
+    from communication import router as router_comunicazione
+
+    corpo = inspect.getsource(router_comunicazione.dispatch)
+    assert "provider=dispatcher.adapter_per(payload.channel)" in corpo, (
+        "la rotta non risolve il trasporto dal canale: cadrebbe sul provider "
+        "finto e direbbe `sent` senza aver mandato niente"
+    )
+
+
+def test_12_adapter_per_non_conosce_il_provider_finto():
+    """La mappa porta SOLO trasporti reali.
+
+    Se `null` finisse li' dentro, un canale servito dal provider finto sarebbe
+    indistinguibile da uno servito davvero - e la rotta e' viva.
+    """
+    from communication.providers import null as provider_finto
+
+    assert dispatcher.ADAPTER_PER_CANALE, "la mappa e' vuota: nessun canale parte"
+    assert provider_finto not in dispatcher.ADAPTER_PER_CANALE.values()
+    for canale, adapter in dispatcher.ADAPTER_PER_CANALE.items():
+        assert canale in CHANNELS, canale
+        assert adapter.NAME != provider_finto.NAME
+
+
+def test_13_un_canale_senza_trasporto_reale_viene_rifiutato():
+    """E non servito dal finto. `whatsapp` e' il caso di oggi: P29-2.5W e'
+    deferita e R3 e' OPEN."""
+    from communication.exceptions import ValidationError
+
+    assert "whatsapp" not in dispatcher.ADAPTER_PER_CANALE
+    with pytest.raises(ValidationError) as exc:
+        dispatcher.adapter_per("whatsapp")
+    assert "no real transport" in str(exc.value)
+
+
+def test_14_nessun_caller_applicativo_vivo_usa_il_provider_finto():
+    """La sentinella che generalizza il difetto.
+
+    Si guardano TUTTI i sorgenti applicativi - non solo la rotta - e si esige
+    che ogni chiamata a `dispatch_batch` porti un `provider` esplicito. Il
+    default resta, perche' i test di P29-2.4 provano il percorso senza mandare
+    niente, ma nessun percorso VIVO puo' caderci sopra.
+    """
+    sorgenti = [p for p in ROOT.rglob("*.py")
+                if "__pycache__" not in p.parts
+                and "tests" not in p.parts
+                and not p.name.startswith("run_")]
+    chiamanti = []
+    for percorso in sorgenti:
+        corpo = codice(percorso)
+        for chiamata in re.finditer(r"(?<!def )dispatch_batch\(([^)]*)\)", corpo,
+                                    re.DOTALL):
+            chiamanti.append((percorso.name, chiamata.group(1)))
+            assert "provider=" in chiamata.group(1), (
+                f"{percorso.name}: dispatch_batch senza provider esplicito - "
+                "cadrebbe sul provider finto"
+            )
+    assert chiamanti, "nessun chiamante applicativo trovato: la rotta e' sparita?"
+
+
+def test_15_il_provider_finto_resta_solo_una_utility_di_prova():
+    """Fuori dal dominio e dai test, `null` non e' importato da nessuno."""
+    for percorso in sorted(ROOT.rglob("*.py")):
+        if "__pycache__" in percorso.parts or "tests" in percorso.parts:
+            continue
+        if percorso.parent.name == "providers" or percorso.name == "dispatcher.py":
+            continue
+        corpo = codice(percorso)
+        assert "providers import null" not in corpo, percorso.name
+        assert "provider_finto" not in corpo, percorso.name

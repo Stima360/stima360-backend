@@ -321,16 +321,41 @@ def test_N2_nessun_template_e_nessun_M1_M5():
         assert "render_template" not in corpo, nome
 
 
-def test_N3_la_rotta_non_e_montata():
-    """Concordato: con un provider finto la rotta non manderebbe niente, e una
-    rotta viva che non fa nulla e' una rotta che qualcuno un giorno chiama
-    credendo che faccia qualcosa. Il mount arriva con l'adapter reale."""
+def test_N3_la_rotta_e_montata_e_non_e_aperta():
+    """IL MOUNT E' ARRIVATO CON L'ADAPTER REALE, COME SCRITTO.
+
+    Questa sentinella asseriva che la rotta NON fosse montata, e la ragione era
+    scritta accanto: "con un provider finto la rotta non manderebbe niente, e
+    una rotta viva che non fa nulla e' una rotta che qualcuno un giorno chiama
+    credendo che faccia qualcosa. Il mount arriva con l'adapter reale."
+
+    L'adapter reale e' arrivato con P29-2.5E, e P29-2.6E monta la rotta. La
+    condizione che giustificava il divieto non esiste piu', quindi il divieto
+    si e' spostato: non "non esiste", ma "esiste e non e' aperta". Una rotta di
+    dispatch senza autenticazione sarebbe molto peggio di una rotta che non fa
+    nulla.
+    """
     import main
 
-    assert not any("communication" in p for p in main.app.openapi()["paths"]), (
-        "la rotta di dispatch e' montata: P29-2.4 la dichiara soltanto"
-    )
-    assert "communication" not in (ROOT / "main.py").read_text(encoding="utf-8")
+    percorsi = [p for p in main.app.openapi()["paths"] if "communication" in p]
+    assert percorsi == ["/api/communication/dispatch"], percorsi
+
+    # Montata con l'ammissione di livello mount degli altri router di tenant.
+    testo = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert ("app.include_router(communication_router, "
+            "dependencies=[Depends(require_authenticated_operator)])") in testo
+    # E la rotta porta la propria dipendenza di scope, che e' dove l'agenzia
+    # viene decisa - e, da P29-2.6E, anche dove si decide CHI puo' chiedere un
+    # giro: l'ammissione di livello mount verifica che il chiamante sia
+    # autenticato, non cosa gli e' permesso fare.
+    import communication.router as router_comunicazione
+    from communication.dependencies import require_dispatch_context
+    from operator_auth.dependencies import legacy_basic_agency_context
+
+    firma = inspect.signature(router_comunicazione.dispatch)
+    assert firma.parameters["ctx"].default.dependency is require_dispatch_context
+    interna = inspect.signature(require_dispatch_context)
+    assert interna.parameters["ctx"].default.dependency is legacy_basic_agency_context
 
 
 def test_N4_nessuna_migration_nuova():
@@ -357,7 +382,13 @@ def test_N6_la_superficie_del_dispatcher_e_minima():
         if callable(v) and not n.startswith("_")
         and getattr(v, "__module__", "") == dispatcher.__name__
     }
-    assert pubbliche == {"dispatch_batch", "contesto_di_sistema"}, sorted(pubbliche)
+    # `adapter_per` e' arrivata con P29-2.6E: la rotta montata deve risolvere il
+    # trasporto DAL CANALE, perche' il default di `dispatch_batch` e' il
+    # provider finto e un giro che ci cadesse sopra direbbe `sent` senza aver
+    # mandato niente. Resta un'UGUAGLIANZA: una funzione pubblica in piu'
+    # aggiunta per sbaglio e' precisamente cio' che deve far fallire.
+    assert pubbliche == {"dispatch_batch", "contesto_di_sistema", "adapter_per"}, \
+        sorted(pubbliche)
 
 
 def test_N7_il_runtime_p29_2_3_non_e_stato_riscritto():
