@@ -236,7 +236,8 @@ from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per 
 ERROR_OUTCOME_UNKNOWN = "outcome_unknown"
 
 
-def claim_due(cur, ctx, *, limit: int, provider: str, token_factory) -> list[dict[str, Any]]:
+def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
+              token_factory) -> list[dict[str, Any]]:
     """Reclama fino a `limit` messaggi dovuti. Messaggio e tentativo nello stesso commit.
 
     Non apre e non chiude una transazione: quella e' del chiamante, e deve
@@ -262,6 +263,19 @@ def claim_due(cur, ctx, *, limit: int, provider: str, token_factory) -> list[dic
     muore subito dopo il commit ha comunque consumato un tentativo, e non puo'
     esistere un ciclo infinito di claim-e-morte. L'`attempt_no` del tentativo e'
     il valore restituito dal RETURNING, quindi i due non possono divergere.
+
+    IL CANALE FILTRA PRIMA DEL LOCK, E NON DOPO
+
+    `channel` entra nel WHERE della SELECT dei candidati, quindi **prima** di
+    `FOR UPDATE SKIP LOCKED`: un worker email non blocca nemmeno per un istante
+    una riga WhatsApp. Filtrare dopo il claim sarebbe tutt'altra cosa - il
+    messaggio incompatibile sarebbe gia' `sending`, con un token e un tentativo
+    aperto, e ogni uscita da quello stato sarebbe una bugia: `indeterminate`
+    direbbe che abbiamo provato, `failed` lo autorizzerebbe a rientrare in coda
+    per essere riscartato, e `sending -> queued` non esiste nella macchina a
+    stati (§7.2). Qui il messaggio sbagliato non viene toccato: resta `queued`,
+    con il suo `attempt_count` intatto e senza nessun tentativo che racconti un
+    invio mai tentato.
     """
     agency = ctx.require_agency()
 
@@ -273,12 +287,13 @@ def claim_due(cur, ctx, *, limit: int, provider: str, token_factory) -> list[dic
         SELECT m.id
           FROM {source}
            AND m.status = %s
+           AND m.channel = %s
            AND m.scheduled_at <= NOW()
          ORDER BY m.scheduled_at ASC, m.id ASC
          LIMIT %s
            FOR UPDATE SKIP LOCKED
         """,
-        scope_params + [INITIAL_STATUS, limit],
+        scope_params + [INITIAL_STATUS, channel, limit],
     )
     candidati = [r["id"] for r in cur.fetchall()]
 

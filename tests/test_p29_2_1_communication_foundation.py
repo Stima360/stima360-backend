@@ -82,12 +82,16 @@ def test_l2_il_runner_la_scopre_e_la_valida():
     assert runner.validate_migration(migrazioni[VERSIONE]) == []
 
 
-def test_l3_064_e_la_piu_alta_e_segue_063():
+def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
+    """La 064 e' e resta la migration di P29-2.1, ma la serie e' andata avanti:
+    P29-2.6E ha aggiunto la 065. Cio' che questa sentinella protegge non e' che
+    064 sia l'ultima - lo era quando e' stata scritta - ma che esista, che segua
+    la 063 e che nessuno si sia infilato fra le due."""
     from scripts import p26_migrate as runner
 
     numeri = sorted(m.number for m in runner.discover_migrations())
-    assert numeri[-1] == 64, numeri[-4:]
-    assert 63 in numeri, numeri[-4:]
+    assert 64 in numeri and 63 in numeri, numeri[-4:]
+    assert numeri[-1] == 65, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
@@ -96,16 +100,29 @@ def test_l4_il_ledger_resta_contiguo():
     runner.verify_contiguous(runner.discover_migrations())
 
 
-def test_l5_non_esiste_una_065():
-    """P29-2.1 e' schema foundation e basta.
+def test_l5_la_065_esiste_ma_non_e_di_questa_fase():
+    """IL DIVIETO SI E' SPOSTATO, NON E' STATO TOLTO.
 
-    `delivered_at` e i thread sono pianificati per 065 e 066 nel design, ma
-    pianificato non significa scritto: una migration che esistesse senza la fase
-    che la giustifica sarebbe applicata da qualcuno prima che qualcuno la
-    revisioni.
+    Questa sentinella asseriva che NESSUNA 065 esistesse: era vera finche'
+    P29-2.1 era schema foundation e basta, e serviva a impedire che una
+    migration pianificata - `delivered_at`, i thread - comparisse prima della
+    fase che la giustifica. Quel rischio non e' cambiato: una migration
+    applicata prima di essere revisionata resta il difetto da evitare.
+
+    La 065 adesso esiste, e ha una fase che la giustifica: P29-2.6E, che rende
+    `contact_id` nullable per le comunicazioni SERVICE senza contatto e da'
+    loro la stima come genitore di lifecycle. Cio' che si verifica qui e'
+    quindi che sia QUELLA 065 - non `delivered_at`, non i thread, che restano
+    non scritti - e che la 066 continui a non esistere.
     """
     trovate = sorted(p.name for p in MIGRATIONS.glob("065*.sql"))
-    assert trovate == [], f"P29-2.1 non deve produrre una 065: {trovate}"
+    assert trovate == ["065_p29_service_lifecycle_parent.sql",
+                       "065_p29_service_lifecycle_parent_down.sql"], trovate
+    assert sorted(p.name for p in MIGRATIONS.glob("066*.sql")) == [], (
+        "una 066 e' comparsa senza la fase che la giustifica"
+    )
+    up = (MIGRATIONS / "065_p29_service_lifecycle_parent.sql").read_text(encoding="utf-8")
+    assert "delivered_at" not in up, "la 065 anticipa D3, che il design mette DOPO"
 
 
 def test_l6_il_runner_possiede_la_transazione():

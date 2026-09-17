@@ -425,7 +425,12 @@ def test_N6_nessuna_migration_nuova():
     numeri = sorted(
         int(p.name[:3]) for p in (ROOT / "migrations").glob("*.sql")
         if not p.name.endswith("_down.sql") and p.name[:3].isdigit())
-    assert numeri[-1] == 64, "P29-2.3 non introduce migration: la 064 basta"
+    # P29-2.3 non ha introdotto migration, e non lo fa adesso: la 065 e'
+    # di P29-2.6E (`contact_id` nullable per le SERVICE senza contatto).
+    # Cio' che resta vietato qui e' che una migration nasca DA QUESTA fase,
+    # e la 065 non le appartiene.
+    assert numeri[-1] == 65, "la serie si e' fermata o e' andata oltre la 065"
+    assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 
 def test_N7_il_claim_non_chiama_nulla_fra_il_lock_e_il_commit():

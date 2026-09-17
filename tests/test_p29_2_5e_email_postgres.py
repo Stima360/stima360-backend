@@ -219,7 +219,7 @@ def test_C23B_gli_argomenti_vengono_dalla_riga_e_non_da_altro(mondo, spia):
     m = accoda(mondo, chiave="c23b", destinatario="mario.rossi@example.it",
                oggetto="La tua stima e' pronta", corpo="<h1>ciao</h1>")
 
-    dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)
+    dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)
 
     assert len(chiamate) == 1
     destinatario, oggetto, corpo, allegato = chiamate[0]
@@ -241,7 +241,7 @@ def test_C23B_il_ledger_porta_davvero_i_tre_campi(mondo):
     accoda(mondo, chiave="c23b-campi")
     ctx = dispatcher.contesto_di_sistema(mondo["op1"])
 
-    reclamati = service.claim_due(ctx, provider=email_smtp.NAME, limit=1)
+    reclamati = service.claim_due(ctx, provider=email_smtp.NAME, channel="email", limit=1)
     message = reclamati[0]["message"]
 
     for campo in ("destination_snapshot", "subject_snapshot", "rendered_body"):
@@ -258,7 +258,7 @@ def test_ladapter_email_percorre_il_dispatcher(mondo, spia):
     comportamento["ritorna"] = True
     m = accoda(mondo, chiave="p295e-ok")
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)
 
     assert conteggi["sent"] == 1
     riga_m = riga(mondo, m["id"])
@@ -279,7 +279,7 @@ def test_un_insuccesso_email_non_diventa_mai_failed(mondo, spia):
     comportamento["ritorna"] = False
     m = accoda(mondo, chiave="p295e-ko")
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)
 
     assert conteggi == {"claimed": 1, "sent": 0, "suppressed": 0, "failed": 0,
                         "indeterminate": 1, "lost": 0}
@@ -292,7 +292,7 @@ def test_un_insuccesso_email_non_diventa_mai_failed(mondo, spia):
     assert riga_m["claim_token"] is None, "il compare-and-set non ha chiuso il claim"
     assert riga_m["sent_at"] is None and riga_m["provider_message_id"] is None
 
-    assert dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)["claimed"] == 0
+    assert dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)["claimed"] == 0
     assert len(tentativi(mondo, m["id"])) == 1
 
 
@@ -305,7 +305,7 @@ def test_una_eccezione_della_primitiva_finisce_in_indeterminate(mondo, spia):
     comportamento["solleva"] = ConnectionResetError("connessione caduta")
     m = accoda(mondo, chiave="p295e-boom")
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)
 
     assert conteggi["indeterminate"] == 1 and conteggi["sent"] == 0
     riga_m = riga(mondo, m["id"])
@@ -328,7 +328,7 @@ def test_un_batch_email_misto_non_si_ferma_al_primo_insuccesso(mondo, spia, monk
 
     monkeypatch.setattr(email_smtp, "invia_mail", a_fasi)
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=email_smtp)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=email_smtp)
 
     assert len(chiamate) == 2, "il secondo messaggio non e' stato provato"
     assert conteggi["sent"] == 1 and conteggi["indeterminate"] == 1

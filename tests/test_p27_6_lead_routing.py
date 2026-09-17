@@ -655,7 +655,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # 63, la proiezione dei consensi di P29-1.1. Il perno resta quello che era -
     # la 059 e' l'ULTIMA di P27 e segue la 058 - e sale di una fase per volta,
     # deliberatamente.
-    assert numeri[-1] == 64, numeri[-4:]
+    # P29-2.6E ha aggiunto la 065 (`contact_id` nullable per le comunicazioni
+    # SERVICE senza contatto, con la stima come genitore di lifecycle). Il perno
+    # sale di una fase per volta, deliberatamente, ed e' questa la fase.
+    assert numeri[-1] == 65, numeri[-4:]
+    assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]
     runner.verify_contiguous(runner.discover_migrations())

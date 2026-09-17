@@ -40,13 +40,14 @@ def dispatch(
     payload: DispatchRequest,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    """Un giro di dispatch per l'agenzia della sessione.
+    """Un giro di dispatch per l'agenzia della sessione, su UN canale.
 
     403 se il contesto non e' vincolato a un'agenzia: un platform admin senza
     membership non ha un'agenzia per cui dispacciare, e indovinarne una sarebbe
     esattamente il dispatcher cross-tenant che il design vieta.
     """
     try:
-        return dispatcher.dispatch_batch(ctx, limit=payload.limit)
+        return dispatcher.dispatch_batch(ctx, channel=payload.channel,
+                                         limit=payload.limit)
     except PlatformAdminAgencyRequired as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

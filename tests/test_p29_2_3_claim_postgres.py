@@ -171,7 +171,8 @@ def accoda(mondo, *, chiave, ctx=None, contact_id=None, **override):
 
 def reclama(mondo, *, limit=10, ctx=None):
     with mondo["cur"]() as cur:
-        r = service.claim_due(ctx or mondo["ctx1"], provider="probe", limit=limit, cur=cur)
+        r = service.claim_due(ctx or mondo["ctx1"], provider="probe", channel="email",
+                              limit=limit, cur=cur)
     mondo["conn"].commit()
     return r
 
@@ -219,10 +220,10 @@ def test_A_due_worker_concorrenti_non_reclamano_lo_stesso_messaggio(mondo):
     conn_b = mondo["connessione"]()
     try:
         with conn_a.cursor(cursor_factory=RealDictCursor) as ca:
-            presi_a = service.claim_due(mondo["ctx1"], provider="A", limit=3, cur=ca)
+            presi_a = service.claim_due(mondo["ctx1"], provider="A", channel="email", limit=3, cur=ca)
             # A NON ha ancora committato: i suoi tre sono bloccati.
             with conn_b.cursor(cursor_factory=RealDictCursor) as cb:
-                presi_b = service.claim_due(mondo["ctx1"], provider="B", limit=3, cur=cb)
+                presi_b = service.claim_due(mondo["ctx1"], provider="B", channel="email", limit=3, cur=cb)
             conn_b.commit()
         conn_a.commit()
     finally:
@@ -444,7 +445,7 @@ def test_messaggio_e_tentativo_nascono_nello_stesso_commit(mondo):
     conn_b = mondo["connessione"]()
     try:
         with mondo["cur"]() as cur:
-            service.claim_due(mondo["ctx1"], provider="p", cur=cur)
+            service.claim_due(mondo["ctx1"], provider="p", channel="email", cur=cur)
             # Da FUORI, prima del commit, il messaggio e' ancora in coda.
             with conn_b.cursor() as cb:
                 cb.execute("SELECT status FROM communication_messages WHERE id = %s", (m["id"],))
@@ -637,7 +638,7 @@ def test_C17b_lo_unique_a_tre_colonne_e_ancora_nel_catalogo(mondo):
 def test_C15_il_provider_viene_dal_claim_non_dal_chiamante(mondo):
     m = accoda(mondo, chiave="C15")
     with mondo["cur"]() as cur:
-        preso = service.claim_due(mondo["ctx1"], provider="smtp", cur=cur)[0]
+        preso = service.claim_due(mondo["ctx1"], provider="smtp", channel="email", cur=cur)[0]
     mondo["conn"].commit()
     token = preso["message"]["claim_token"]
     assert preso["attempt"]["provider"] == "smtp"

@@ -165,7 +165,8 @@ def _esito_di_una_eccezione(exc: BaseException) -> tuple[str, dict[str, Any]]:
     }
 
 
-def dispatch_batch(ctx_operatore, *, limit: int = service.DEFAULT_CLAIM_BATCH,
+def dispatch_batch(ctx_operatore, *, channel: str,
+                   limit: int = service.DEFAULT_CLAIM_BATCH,
                    provider=provider_finto) -> dict[str, Any]:
     """Un giro di dispatch. Restituisce il conteggio di cio' che e' successo.
 
@@ -177,13 +178,21 @@ def dispatch_batch(ctx_operatore, *, limit: int = service.DEFAULT_CLAIM_BATCH,
              b. il provider                  (fuori da ogni transazione)
              c. la finalizzazione            (compare-and-set con il token)
 
+    `channel` E' OBBLIGATORIO: un giro di dispatch riguarda UN canale, quello
+    che l'adapter passato sa mandare. Senza il filtro, un worker email
+    reclamerebbe anche i messaggi WhatsApp e li darebbe a un adapter che non
+    puo' mandarli - e li avrebbe gia' portati a `sending` prima di
+    accorgersene. Il canale non ha default per la stessa ragione per cui non ce
+    l'ha in `service.claim_due`.
+
     Una soppressione non chiama il provider e non lo chiamera' mai: e'
     terminale. Una finalizzazione che trova l'ownership persa non solleva -
     registra il risultato tardivo e il batch continua con gli altri messaggi,
     che e' il comportamento che il design chiede esplicitamente.
     """
     ctx = contesto_di_sistema(ctx_operatore)
-    reclamati = service.claim_due(ctx, provider=provider.NAME, limit=limit)
+    reclamati = service.claim_due(ctx, provider=provider.NAME, channel=channel,
+                                  limit=limit)
 
     conteggi = {"claimed": len(reclamati), "sent": 0, "suppressed": 0,
                 "failed": 0, "indeterminate": 0, "lost": 0}

@@ -158,7 +158,12 @@ def test_D3_un_contesto_senza_agenzia_non_produce_uno_scope():
 def test_D4_lagenzia_non_puo_venire_dal_payload():
     from communication.schemas import DispatchRequest
 
-    assert set(DispatchRequest.model_fields) == {"limit"}
+    # P29-2.6E ha aggiunto `channel`, obbligatorio: un giro di dispatch
+    # riguarda un canale solo. Cio' che questa sentinella protegge non e' il
+    # numero dei campi ma il fatto che `agency_id` non sia fra loro - lo scope
+    # viene dalla sessione - e resta un'UGUAGLIANZA proprio perche' un campo in
+    # piu' aggiunto per sbaglio e' precisamente cio' che deve far fallire.
+    assert set(DispatchRequest.model_fields) == {"channel", "limit"}
     with pytest.raises(Exception):
         DispatchRequest(limit=5, agency_id=99)
 
@@ -332,7 +337,12 @@ def test_N4_nessuna_migration_nuova():
     numeri = sorted(
         int(p.name[:3]) for p in (ROOT / "migrations").glob("*.sql")
         if not p.name.endswith("_down.sql") and p.name[:3].isdigit())
-    assert numeri[-1] == 64, "P29-2.4 non introduce migration: la 064 basta"
+    # P29-2.4 non ha introdotto migration, e non lo fa adesso: la 065 e'
+    # di P29-2.6E (`contact_id` nullable per le SERVICE senza contatto).
+    # Cio' che resta vietato qui e' che una migration nasca DA QUESTA fase,
+    # e la 065 non le appartiene.
+    assert numeri[-1] == 65, "la serie si e' fermata o e' andata oltre la 065"
+    assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 
 def test_N5_nessun_retry_automatico():

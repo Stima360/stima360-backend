@@ -15,13 +15,28 @@ mandato.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .enums import CHANNELS
 
 
 class DispatchRequest(BaseModel):
-    """Quanti messaggi provare in questo giro."""
+    """Quale canale, e quanti messaggi provare in questo giro.
 
+    `channel` non ha default: un giro di dispatch riguarda un canale solo, e
+    con N canali servono N cron - esattamente come con N agenzie servono N
+    cron. Un default qui sceglierebbe al posto di chi chiama.
+    """
+
+    channel: str
     limit: int = Field(default=10, ge=1, le=50)
+
+    @field_validator("channel")
+    @classmethod
+    def _canale_noto(cls, valore: str) -> str:
+        if valore not in CHANNELS:
+            raise ValueError(f"channel must be one of {', '.join(sorted(CHANNELS))}")
+        return valore
 
     class Config:
         extra = "forbid"

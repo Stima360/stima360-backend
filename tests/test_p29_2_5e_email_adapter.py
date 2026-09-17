@@ -351,7 +351,11 @@ def test_N4_nessuna_migration_nuova():
     numeri = sorted(
         int(p.name[:3]) for p in (ROOT / "migrations").glob("*.sql")
         if not p.name.endswith("_down.sql") and p.name[:3].isdigit())
-    assert numeri[-1] == 64, "P29-2.5E non introduce migration"
+    # P29-2.5E non ha introdotto migration: la 065 e' di P29-2.6E, la fase
+    # successiva, e riguarda il genitore di lifecycle delle SERVICE senza
+    # contatto - non il trasporto email.
+    assert numeri[-1] == 65, "la serie si e' fermata o e' andata oltre la 065"
+    assert 64 in numeri
 
 
 def test_N5_nessun_template_nessuno_scheduler_nessuna_ui():

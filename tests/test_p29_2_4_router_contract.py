@@ -78,10 +78,11 @@ def tracciato(monkeypatch):
     quindi la sequenza che il codice di produzione esegue.
     """
     eventi: list[tuple] = []
-    stato = {"reclamati": [], "consenso": None, "ctx": None}
+    stato = {"reclamati": [], "consenso": None, "ctx": None, "channel": None}
 
-    def finto_claim(ctx, *, provider, limit):
+    def finto_claim(ctx, *, provider, channel, limit):
         stato["ctx"] = ctx
+        stato["channel"] = channel
         eventi.append(("claim", provider, limit, ctx.agency_id, ctx.origin))
         return stato["reclamati"]
 
@@ -131,7 +132,7 @@ def test_C19_1_la_rotta_richiede_autenticazione():
     arriva prima. E' lo stesso rifiuto di circa centocinquanta rotte esistenti.
     """
     with TestClient(app_nuda()) as client:
-        risposta = client.post("/api/communication/dispatch", json={"limit": 5})
+        risposta = client.post("/api/communication/dispatch", json={"channel": "email", "limit": 5})
     assert risposta.status_code == 401, risposta.text
 
 
@@ -147,14 +148,17 @@ def test_C19_1b_la_dipendenza_dichiarata_e_quella_del_repository():
 def test_C19_2_agency_id_nel_corpo_e_un_422():
     with TestClient(app_autenticata(operatore(AGENZIA_A))) as client:
         risposta = client.post("/api/communication/dispatch",
-                               json={"limit": 5, "agency_id": AGENZIA_B})
+                               json={"channel": "email", "limit": 5, "agency_id": AGENZIA_B})
     assert risposta.status_code == 422, risposta.text
     assert "agency_id" in risposta.text
 
 
-def test_C19_2b_il_corpo_dichiara_un_campo_solo():
+def test_C19_2b_il_corpo_dichiara_solo_canale_e_limite():
+    """`agency_id` non c'e', e non e' una dimenticanza. `channel` c'e' ed e'
+    obbligatorio: un giro di dispatch riguarda un canale solo."""
     campi = set(communication_router.DispatchRequest.model_fields)
-    assert campi == {"limit"}, campi
+    assert campi == {"channel", "limit"}, campi
+    assert communication_router.DispatchRequest.model_fields["channel"].is_required()
 
 
 def test_C19_2c_la_firma_della_rotta_non_prende_ne_query_ne_path(tracciato):
@@ -170,7 +174,7 @@ def test_C19_2c_la_firma_della_rotta_non_prende_ne_query_ne_path(tracciato):
 
     with TestClient(app_autenticata(operatore(AGENZIA_A))) as client:
         risposta = client.post(
-            f"/api/communication/dispatch?agency_id={AGENZIA_B}", json={"limit": 5})
+            f"/api/communication/dispatch?agency_id={AGENZIA_B}", json={"channel": "email", "limit": 5})
     assert risposta.status_code == 200, risposta.text
     assert [e for e in eventi if e[0] == "claim"][0][3] == AGENZIA_A
 
@@ -180,7 +184,7 @@ def test_C19_3_e_4_lagenzia_e_lorigin_vengono_dalla_sessione(tracciato):
     un contesto di sistema e con l'origin esatto del design."""
     eventi, stato = tracciato
     with TestClient(app_autenticata(operatore(AGENZIA_A))) as client:
-        risposta = client.post("/api/communication/dispatch", json={"limit": 7})
+        risposta = client.post("/api/communication/dispatch", json={"channel": "email", "limit": 7})
     assert risposta.status_code == 200, risposta.text
 
     ctx = stato["ctx"]
@@ -196,10 +200,10 @@ def test_C19_5_un_operatore_di_A_non_puo_dispacciare_per_B(tracciato):
     eventi, _ = tracciato
     with TestClient(app_autenticata(operatore(AGENZIA_A))) as client:
         assert client.post("/api/communication/dispatch",
-                           json={"limit": 5, "agency_id": AGENZIA_B}).status_code == 422
+                           json={"channel": "email", "limit": 5, "agency_id": AGENZIA_B}).status_code == 422
         assert client.post(f"/api/communication/dispatch?agency_id={AGENZIA_B}",
-                           json={"limit": 5}).status_code == 200
-        assert client.post("/api/communication/dispatch", json={"limit": 5},
+                           json={"channel": "email", "limit": 5}).status_code == 200
+        assert client.post("/api/communication/dispatch", json={"channel": "email", "limit": 5},
                            headers={"X-Agency-Id": str(AGENZIA_B)}).status_code == 200
 
     agenzie = {e[3] for e in eventi if e[0] == "claim"}
@@ -209,9 +213,9 @@ def test_C19_5_un_operatore_di_A_non_puo_dispacciare_per_B(tracciato):
 def test_C19_6_un_limite_fuori_scala_e_un_422():
     with TestClient(app_autenticata(operatore(AGENZIA_A))) as client:
         assert client.post("/api/communication/dispatch",
-                           json={"limit": 0}).status_code == 422
+                           json={"channel": "email", "limit": 0}).status_code == 422
         assert client.post("/api/communication/dispatch",
-                           json={"limit": 51}).status_code == 422
+                           json={"channel": "email", "limit": 51}).status_code == 422
 
 
 def test_C19_7_un_contesto_senza_agenzia_e_un_403(tracciato):
@@ -220,7 +224,7 @@ def test_C19_7_un_contesto_senza_agenzia_e_un_403(tracciato):
     ctx = OperatorContext(user_id=1, agency_id=None, role="platform_admin",
                           is_platform_admin=True, session_id=1, auth_channel="session")
     with TestClient(app_autenticata(ctx)) as client:
-        risposta = client.post("/api/communication/dispatch", json={"limit": 5})
+        risposta = client.post("/api/communication/dispatch", json={"channel": "email", "limit": 5})
     assert risposta.status_code == 403, risposta.text
 
 
@@ -261,7 +265,7 @@ def test_C20_1_il_nome_reclamato_e_quello_delladapter_invocato(tracciato):
     stato["reclamati"] = [reclamato("service")]
     finto = ProviderFinto()
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     claim = [e for e in eventi if e[0] == "claim"][0]
     assert claim[1] == ProviderFinto.NAME, "il claim non ha registrato l'adapter reale"
@@ -277,7 +281,7 @@ def test_C20_2_non_esiste_un_percorso_per_reclamare_A_e_chiamare_B():
     scriverli.
     """
     parametri = inspect.signature(dispatcher.dispatch_batch).parameters
-    assert set(parametri) == {"ctx_operatore", "limit", "provider"}
+    assert set(parametri) == {"ctx_operatore", "channel", "limit", "provider"}
     assert "provider_name" not in parametri and "provider_key" not in parametri
 
     corpo = inspect.getsource(dispatcher.dispatch_batch)
@@ -291,7 +295,7 @@ def test_C20_2_non_esiste_un_percorso_per_reclamare_A_e_chiamare_B():
 def test_C20_3_il_chiamante_http_non_puo_scegliere_il_provider():
     """La rotta passa `limit` e nient'altro: l'adapter e' il default del
     dispatcher, e nessun campo del corpo lo raggiunge."""
-    assert set(communication_router.DispatchRequest.model_fields) == {"limit"}
+    assert set(communication_router.DispatchRequest.model_fields) == {"channel", "limit"}
     corpo = inspect.getsource(communication_router.dispatch)
     assert "provider" not in corpo
 
@@ -341,7 +345,7 @@ def test_C21_1_marketing_allow_gate_poi_provider(tracciato):
     stato["consenso"] = Decisione(True)
     finto = ProviderFinto()
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     nomi = [e[0] for e in eventi]
     assert nomi == ["claim", "gate", "finalize_sent"], nomi
@@ -358,7 +362,7 @@ def test_C21_2_marketing_deny_gate_poi_soppressione_e_nessun_provider(tracciato)
     stato["consenso"] = Decisione(False, reason="deny_revoked")
     finto = ProviderFinto()
 
-    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     assert [e[0] for e in eventi] == ["claim", "gate", "finalize_suppressed"]
     assert finto.chiamate == [], "il provider e' stato chiamato su una soppressione"
@@ -370,7 +374,7 @@ def test_C21_3_il_servizio_non_passa_dal_gate(tracciato):
     stato["reclamati"] = [reclamato("service")]
     finto = ProviderFinto()
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     assert [e[0] for e in eventi] == ["claim", "finalize_sent"]
     assert "gate" not in [e[0] for e in eventi], "il servizio ha interrogato il consenso"
@@ -383,10 +387,10 @@ def test_C21_4_il_gate_e_interrogato_a_ogni_giro_mai_memorizzato(tracciato):
     eventi, stato = tracciato
     stato["reclamati"] = [reclamato("marketing")]
     stato["consenso"] = Decisione(True)
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=ProviderFinto())
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=ProviderFinto())
 
     stato["consenso"] = Decisione(False, reason="deny_revoked")
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=ProviderFinto())
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=ProviderFinto())
 
     assert [e[0] for e in eventi].count("gate") == 2
     assert [e[0] for e in eventi][-1] == "finalize_suppressed", (
@@ -400,7 +404,7 @@ def test_C21_5_il_gate_e_per_messaggio_non_per_batch(tracciato):
     stato["reclamati"] = [reclamato("marketing", id=i) for i in (1, 2, 3)]
     stato["consenso"] = Decisione(True)
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=ProviderFinto())
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=ProviderFinto())
 
     contatti = [e[1] for e in eventi if e[0] == "gate"]
     assert contatti == [101, 102, 103], contatti
@@ -410,7 +414,7 @@ def test_C21_6_il_gate_e_dopo_il_claim_non_prima(tracciato):
     eventi, stato = tracciato
     stato["reclamati"] = [reclamato("marketing")]
     stato["consenso"] = Decisione(True)
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=ProviderFinto())
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=ProviderFinto())
     nomi = [e[0] for e in eventi]
     assert nomi.index("claim") < nomi.index("gate")
 
@@ -457,7 +461,7 @@ def test_C22_B1_una_eccezione_non_ferma_il_batch(tracciato):
     stato["reclamati"] = [reclamato("service", id=1), reclamato("service", id=2)]
     finto = ProviderCheSolleva(guasto_su=1)
 
-    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     assert [m["id"] for m in finto.chiamate] == [1, 2], (
         "il secondo messaggio non e' stato nemmeno provato"
@@ -493,7 +497,7 @@ def test_C22_B4_la_finalizzazione_passa_dalla_api_fenced_di_p29_2_3(tracciato):
     eventi, stato = tracciato
     stato["reclamati"] = [reclamato("service", id=1)]
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A),
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email",
                               provider=ProviderCheSolleva(guasto_su=1))
 
     finalizzazioni = [e for e in eventi if e[0].startswith("finalize")]
@@ -512,7 +516,7 @@ def test_C22_B5_non_si_cattura_BaseException(tracciato):
     finto = ProviderCheSolleva(guasto_su=1, eccezione=KeyboardInterrupt())
 
     with pytest.raises(KeyboardInterrupt):
-        dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+        dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     corpo = inspect.getsource(dispatcher.dispatch_batch)
     assert "except Exception" in corpo and "except BaseException" not in corpo
@@ -535,7 +539,7 @@ def test_C22_B7_nessun_retry_e_nessun_tentativo_in_piu(tracciato):
     stato["reclamati"] = [reclamato("service", id=1)]
     finto = ProviderCheSolleva(guasto_su=1)
 
-    dispatcher.dispatch_batch(operatore(AGENZIA_A), provider=finto)
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     assert len(finto.chiamate) == 1, "il provider e' stato richiamato: e' un retry"
     assert [e[0] for e in eventi].count("finalize_indeterminate") == 1
@@ -555,13 +559,13 @@ def test_C22_B8_unknown_ed_eccezione_condividono_la_finalizzazione(tracciato):
 
     stato["reclamati"] = [reclamato("service", id=1)]
     dispatcher.dispatch_batch(
-        operatore(AGENZIA_A),
+        operatore(AGENZIA_A), channel="email",
         provider=ProviderFinto(outcome=provider_base.OUTCOME_UNKNOWN))
     da_unknown = [e[0] for e in eventi if e[0].startswith("finalize")]
 
     eventi.clear()
     stato["reclamati"] = [reclamato("service", id=1)]
-    dispatcher.dispatch_batch(operatore(AGENZIA_A),
+    dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email",
                               provider=ProviderCheSolleva(guasto_su=1))
     da_eccezione = [e[0] for e in eventi if e[0].startswith("finalize")]
 
@@ -581,7 +585,7 @@ def test_C22_B9_leccezione_viene_loggata_con_il_contesto(tracciato, caplog):
     stato["reclamati"] = [reclamato("service", id=7)]
 
     with caplog.at_level(logging.ERROR, logger="communication.dispatcher"):
-        dispatcher.dispatch_batch(operatore(AGENZIA_A),
+        dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email",
                                   provider=ProviderCheSolleva(guasto_su=7))
 
     assert len(caplog.records) == 1
@@ -596,7 +600,7 @@ def test_C22_B10_una_eccezione_non_diventa_mai_un_successo(tracciato):
     eventi, stato = tracciato
     stato["reclamati"] = [reclamato("service", id=1)]
 
-    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A),
+    conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email",
                                          provider=ProviderCheSolleva(guasto_su=1))
 
     assert conteggi["sent"] == 0 and conteggi["failed"] == 0

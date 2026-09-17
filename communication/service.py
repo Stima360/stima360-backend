@@ -54,6 +54,7 @@ from .enums import (
     MODES,
     OPERATOR_MODES,
     REASON_CODES,
+    TYPE_MARKETING,
     WRITABLE_DIRECTIONS,
 )
 from .exceptions import ValidationError
@@ -158,6 +159,26 @@ def _validated(ctx, dati: dict[str, Any]) -> dict[str, Any]:
             "template_key and template_version go together or neither is given"
         )
 
+    # P29-2.6E: il genitore di lifecycle, validato qui e non solo dal CHECK
+    # della 065.
+    #
+    # Il database rifiuterebbe comunque entrambi i casi, ma un ValidationError
+    # dice al chiamante COSA ha sbagliato, mentre una CheckViolation gli dice
+    # solo il nome di un vincolo - e arriva dentro la sua transazione, che
+    # potrebbe contenere altro. La regola e' la stessa in tutti e due i posti,
+    # e il test la confronta con il testo della migration.
+    if dati["communication_type"] == TYPE_MARKETING and dati.get("contact_id") is None:
+        raise ValidationError(
+            "contact_id is required for marketing: consent is read on a CRM "
+            "contact, and a marketing message whose consent cannot be checked "
+            "must not exist"
+        )
+    if dati.get("contact_id") is None and dati.get("stima_id") is None:
+        raise ValidationError(
+            "a message without contact_id needs a stima_id: it would otherwise "
+            "have no lifecycle parent to be purged with"
+        )
+
     actor_type, actor_user_id = _attore(ctx, mode)
 
     metadata = dati.get("metadata")
@@ -168,7 +189,7 @@ def _validated(ctx, dati: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "agency_id": ctx.require_agency(),
-        "contact_id": int(dati["contact_id"]),
+        "contact_id": None if dati["contact_id"] is None else int(dati["contact_id"]),
         "lead_id": dati.get("lead_id"),
         "stima_id": dati.get("stima_id"),
         "property_id": dati.get("property_id"),
@@ -197,7 +218,7 @@ def _validated(ctx, dati: dict[str, Any]) -> dict[str, Any]:
 def enqueue(
     ctx,
     *,
-    contact_id: int,
+    contact_id: int | None,
     channel: str,
     communication_type: str,
     mode: str,
@@ -260,7 +281,8 @@ def _enqueue_with_cursor(cur, ctx, prepared: dict[str, Any]) -> dict[str, Any]:
     non gli e' assegnato. Quella regola vive in `core.scope`, e qui la si
     interroga invece di riscriverla.
     """
-    repository.contact_in_scope(cur, ctx, prepared["contact_id"])
+    if prepared["contact_id"] is not None:
+        repository.contact_in_scope(cur, ctx, prepared["contact_id"])
     message, created = repository.insert_message(cur, ctx, prepared)
     return {"message": message, "created": created}
 
@@ -350,22 +372,32 @@ def _token() -> str:
     return str(_uuid.uuid4())
 
 
-def claim_due(ctx, *, provider: str, limit: int = DEFAULT_CLAIM_BATCH, cur=None,
-              token_factory=_token) -> list[dict[str, Any]]:
+def claim_due(ctx, *, provider: str, channel: str, limit: int = DEFAULT_CLAIM_BATCH,
+              cur=None, token_factory=_token) -> list[dict[str, Any]]:
     """Reclama i messaggi dovuti. Messaggio e tentativo nello stesso commit.
 
     La transazione deve restare BREVE: nessuna chiamata di rete puo' starci
     dentro, e il provider si chiama DOPO il commit. Passando `cur` il chiamante
     decide lui quando committare - che e' cio' che un dispatcher fara'; senza,
     questa funzione apre la propria e la committa subito.
+
+    `channel` E' OBBLIGATORIO, E NON HA UN DEFAULT
+
+    Non `channel=None` che significherebbe "tutti": un default permissivo e' la
+    porta da cui un worker futuro torna, per distrazione, a reclamare messaggi
+    che non sa mandare. Chi volesse davvero tutti i canali deve scriverlo a
+    mano, canale per canale, e allora e' una scelta e non un incidente.
     """
     if not isinstance(limit, int) or limit < 1 or limit > MAX_CLAIM_BATCH:
         raise ValidationError(f"limit must be between 1 and {MAX_CLAIM_BATCH}")
     provider = _testo(provider, "provider", obbligatorio=True, massimo=40)
+    channel = _testo(channel, "channel", obbligatorio=True, massimo=20)
+    if channel not in CHANNELS:
+        raise ValidationError(f"channel must be one of {', '.join(sorted(CHANNELS))}")
 
     def _lavora(c):
         return repository.claim_due(c, ctx, limit=limit, provider=provider,
-                                    token_factory=token_factory)
+                                    channel=channel, token_factory=token_factory)
 
     if cur is not None:
         return _lavora(cur)

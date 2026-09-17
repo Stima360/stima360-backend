@@ -252,7 +252,7 @@ def test_chiusura_la_revoca_fra_enqueue_e_dispatch_sopprime(mondo):
 
     revoca(mondo, mondo["c1"])
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["claimed"] == 1
     assert conteggi["suppressed"] == 1
     assert conteggi["sent"] == 0
@@ -274,7 +274,7 @@ def test_chiusura_la_soppressione_passa_dal_compare_and_set(mondo):
     m = accoda(mondo, chiave="cas")
     revoca(mondo, mondo["c1"])
 
-    dispatcher.dispatch_batch(mondo["op1"])
+    dispatcher.dispatch_batch(mondo["op1"], channel="email")
 
     righe = tentativi(mondo, m["id"])
     assert len(righe) == 1
@@ -294,7 +294,7 @@ def test_un_marketing_con_consenso_vivo_viene_inviato(mondo):
     concedi(mondo, mondo["c1"])
     m = accoda(mondo, chiave="ok")
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["sent"] == 1 and conteggi["suppressed"] == 0
 
     dopo = riga(mondo, m["id"])
@@ -307,7 +307,7 @@ def test_un_marketing_con_consenso_vivo_viene_inviato(mondo):
 
 def test_un_marketing_senza_alcun_consenso_e_soppresso(mondo):
     m = accoda(mondo, chiave="mai")
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["suppressed"] == 1
     assert riga(mondo, m["id"])["suppressed_reason"] == "deny_never_given"
 
@@ -316,7 +316,7 @@ def test_il_servizio_non_passa_dal_gate(mondo):
     """La mail con il PDF della stima esegue una richiesta dell'interessato:
     bloccarla per mancanza di consenso marketing sarebbe assurdo."""
     m = accoda(mondo, chiave="servizio", tipo="service")
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["sent"] == 1 and conteggi["suppressed"] == 0
     assert riga(mondo, m["id"])["status"] == "sent"
 
@@ -358,7 +358,7 @@ def test_un_contatto_sparito_non_puo_esistere_sotto_un_messaggio(mondo):
     mondo["conn"].rollback()
 
     # 3. Dopo il rollback il mondo e' intatto e il messaggio parte normalmente.
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["sent"] == 1
     assert riga(mondo, m["id"])["status"] == "sent"
 
@@ -372,7 +372,7 @@ def test_il_dispatcher_non_attraversa_le_agenzie(mondo):
     mio = accoda(mondo, chiave="mio")
     suo = accoda(mondo, chiave="suo", contact_id=mondo["c2"], op=mondo["op2"])
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["claimed"] == 1
     assert riga(mondo, mio["id"])["status"] == "sent"
     assert riga(mondo, suo["id"])["status"] == "queued", "reclamato da un'altra agenzia"
@@ -388,7 +388,7 @@ def test_un_agente_non_perde_i_messaggi_dei_contatti_altrui(mondo):
                     (mondo["c1"],))
     mondo["conn"].commit()
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["claimed"] == 1, "il dispatcher ha ereditato il restringimento dell'agente"
     assert riga(mondo, m["id"])["status"] == "sent"
 
@@ -403,7 +403,7 @@ def test_una_soppressione_non_ferma_il_resto_del_batch(mondo):
     revoca(mondo, mondo["c1"])
     servizio = accoda(mondo, chiave="b2", tipo="service")
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"])
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email")
     assert conteggi["claimed"] == 2
     assert conteggi["suppressed"] == 1 and conteggi["sent"] == 1
     assert riga(mondo, soppresso["id"])["status"] == "suppressed"
@@ -413,7 +413,7 @@ def test_una_soppressione_non_ferma_il_resto_del_batch(mondo):
 def test_il_limite_del_batch_e_rispettato(mondo):
     for i in range(5):
         accoda(mondo, chiave=f"lim-{i}", tipo="service")
-    assert dispatcher.dispatch_batch(mondo["op1"], limit=2)["claimed"] == 2
+    assert dispatcher.dispatch_batch(mondo["op1"], channel="email", limit=2)["claimed"] == 2
 
 
 def test_un_provider_che_non_sa_produce_indeterminate(mondo):
@@ -430,7 +430,7 @@ def test_un_provider_che_non_sa_produce_indeterminate(mondo):
                                                 error_detail="ha detto no, ma non sa dirlo")
 
     m = accoda(mondo, chiave="ignoto", tipo="service")
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=Ignoto)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=Ignoto)
     assert conteggi["indeterminate"] == 1 and conteggi["failed"] == 0
 
     dopo = riga(mondo, m["id"])
@@ -452,7 +452,7 @@ def test_un_provider_che_sa_produce_failed(mondo):
                 outcome="rejected", error_code="invalid_destination")
 
     m = accoda(mondo, chiave="sicuro", tipo="service")
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=Sicuro)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=Sicuro)
     assert conteggi["failed"] == 1
 
     dopo = riga(mondo, m["id"])
@@ -533,7 +533,7 @@ def test_C20_il_provider_del_tentativo_e_quello_delladapter_invocato(mondo):
     m = accoda(mondo, chiave="identita-provider")
     finto = ProviderConNome()
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=finto)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=finto)
 
     assert conteggi["sent"] == 1
     assert finto.chiamate == [m["id"]], "non e' stato invocato quell'oggetto"
@@ -584,7 +584,7 @@ def test_C22_una_eccezione_del_provider_non_ferma_il_batch(mondo):
     m2 = accoda(mondo, chiave="c22-secondo", tipo="service")
     finto = ProviderCheSolleva(guasto_su=m1["id"])
 
-    conteggi = dispatcher.dispatch_batch(mondo["op1"], provider=finto)
+    conteggi = dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=finto)
 
     # 8. l'eccezione dopo il claim non interrompe il batch
     assert finto.chiamate == [m1["id"], m2["id"]], (
@@ -616,7 +616,7 @@ def test_C22_una_eccezione_del_provider_non_ferma_il_batch(mondo):
     assert len(tentativi(mondo, m2["id"])) == 1
 
     # 6-7. nessun retry: un secondo giro non ha piu' niente da reclamare
-    assert dispatcher.dispatch_batch(mondo["op1"])["claimed"] == 0
+    assert dispatcher.dispatch_batch(mondo["op1"], channel="email")["claimed"] == 0
     assert len(tentativi(mondo, m1["id"])) == 1
 
 
@@ -634,10 +634,10 @@ def test_C22_unknown_ed_eccezione_finiscono_nello_stesso_stato(mondo):
                 outcome=provider_base.OUTCOME_UNKNOWN, error_code="timeout")
 
     da_unknown = accoda(mondo, chiave="c22-unknown", tipo="service")
-    dispatcher.dispatch_batch(mondo["op1"], provider=ProviderCheNonSa())
+    dispatcher.dispatch_batch(mondo["op1"], channel="email", provider=ProviderCheNonSa())
 
     da_eccezione = accoda(mondo, chiave="c22-eccezione", tipo="service")
-    dispatcher.dispatch_batch(mondo["op1"],
+    dispatcher.dispatch_batch(mondo["op1"], channel="email",
                               provider=ProviderCheSolleva(guasto_su=da_eccezione["id"]))
 
     a, b = riga(mondo, da_unknown["id"]), riga(mondo, da_eccezione["id"])
@@ -658,7 +658,7 @@ def test_C22_il_fencing_governa_ancora_il_token_perso(mondo):
     m = accoda(mondo, chiave="c22-fencing", tipo="service")
     ctx = dispatcher.contesto_di_sistema(mondo["op1"])
 
-    reclamati = service.claim_due(ctx, provider="adapter-che-solleva", limit=1)
+    reclamati = service.claim_due(ctx, provider="adapter-che-solleva", channel="email", limit=1)
     token_vero = reclamati[0]["message"]["claim_token"]
 
     # Un UUID valido ma estraneo: la colonna e' tipizzata, e un token malformato
