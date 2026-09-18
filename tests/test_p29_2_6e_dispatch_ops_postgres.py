@@ -88,6 +88,31 @@ CREATE TABLE stime (
     agency_id BIGINT NOT NULL REFERENCES agencies(id) ON DELETE RESTRICT,
     nome VARCHAR(50), cognome VARCHAR(50), email VARCHAR(100), telefono VARCHAR(30));
 CREATE TABLE properties (id BIGSERIAL PRIMARY KEY, agency_id BIGINT);
+-- P29 cutover: la finalizzazione `sent` di una mail di stima scrive QUI, nella
+-- sua stessa transazione. Senza questa tabella il giro completo non e' il giro
+-- completo - e la prima stesura, che non la aveva, lo ha scoperto con un
+-- UndefinedTable proprio dentro il commit finale.
+--
+-- Fedele a 017 + 044: chiavi, indice parziale di idempotenza, `agency_id` NOT
+-- NULL. Le FK sono ON DELETE SET NULL come in 017, perche' Seller Intelligence
+-- non deve mai poter bloccare una cancellazione che CORE permetterebbe.
+CREATE TABLE seller_timeline_events (
+    id BIGSERIAL PRIMARY KEY,
+    agency_id BIGINT NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+    contact_id BIGINT REFERENCES contacts(id) ON DELETE SET NULL,
+    lead_id BIGINT REFERENCES leads(id) ON DELETE SET NULL,
+    stima_id INTEGER REFERENCES stime(id) ON DELETE SET NULL,
+    property_id BIGINT REFERENCES properties(id) ON DELETE SET NULL,
+    event_type VARCHAR(50) NOT NULL,
+    event_source VARCHAR(30),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    idempotency_key VARCHAR(255),
+    created_by VARCHAR(200),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE UNIQUE INDEX idx_seller_timeline_events_idempotency_key
+    ON seller_timeline_events (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 """
 
 VERSIONI = ("061_p29_consent_notices", "062_p29_consent_events",
@@ -155,6 +180,7 @@ def mondo(db, monkeypatch):
     from operator_auth import service as operator_service
     from operator_auth.security import hash_password
     from communication import database as communication_database
+    from communication import dispatcher as communication_dispatcher
     from communication import repository as communication_repository
     from communication import service as communication_service
     from consent import database as consent_database
@@ -190,6 +216,7 @@ def mondo(db, monkeypatch):
                 ("communication_attempts", "trg_communication_attempts_guard"),
                 ("communication_attempts", "trg_communication_attempts_no_truncate")):
             cur.execute(f"ALTER TABLE {tabella} ENABLE ALWAYS TRIGGER {guardiano}")
+        cur.execute("DELETE FROM seller_timeline_events")
         cur.execute("DELETE FROM operator_sessions")
         cur.execute("DELETE FROM agency_memberships")
         cur.execute("DELETE FROM operator_users")
@@ -248,8 +275,12 @@ def mondo(db, monkeypatch):
         finally:
             cur.close()
 
+    # `dispatcher` e' nell'elenco perche' dal cutover P29 e' LUI ad aprire la
+    # transazione del ramo `sent`: il compare-and-set e il seguito devono stare
+    # nello stesso commit. Lasciarlo fuori manderebbe quel solo commit al DSN di
+    # default, e il messaggio non arriverebbe mai a `sent`.
     for modulo in (communication_database, communication_service,
-                   communication_repository):
+                   communication_repository, communication_dispatcher):
         monkeypatch.setattr(modulo, "communication_cursor", cursore, raising=False)
     for modulo in (consent_database, consent_repository):
         monkeypatch.setattr(modulo, "consent_cursor", cursore, raising=False)

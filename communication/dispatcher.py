@@ -42,7 +42,8 @@ from consent.exceptions import NotFoundError as ConsentNotFoundError
 from consent.guard import can_send_marketing
 from operator_auth.context import SystemAgencyContext
 
-from . import service
+from . import integrations, service
+from .database import communication_cursor
 from .enums import (CHANNEL_EMAIL, ERROR_OUTCOME_UNKNOWN, ERROR_PROVIDER_REJECTED,
                     ERROR_UNKNOWN, TYPE_MARKETING)
 from .exceptions import ValidationError
@@ -204,6 +205,7 @@ def dispatch_batch(ctx_operatore, *, channel: str,
 
     L'ordine e' quello del design, e ogni passo ha il suo confine:
 
+        0. gli stale si chiudono `indeterminate`  (nessuna rete, nessun tentativo)
         1. il claim committa                 (transazione breve, nessuna rete)
         2. per ogni messaggio reclamato:
              a. il gate del consenso         (solo marketing)
@@ -223,11 +225,44 @@ def dispatch_batch(ctx_operatore, *, channel: str,
     che e' il comportamento che il design chiede esplicitamente.
     """
     ctx = contesto_di_sistema(ctx_operatore)
+
+    # ZERO. GLI STALE, PRIMA DI TUTTO IL RESTO.
+    #
+    # Un claim che non ha mai ricevuto un esito lascia il messaggio `sending`
+    # con il suo token, e da li' nessuno lo guarda piu': `claim_due` cerca solo
+    # cio' che e' ancora in coda, e quel messaggio non lo e' piu'.
+    # `service.recover_stale` esiste da P29-2.3 per chiuderlo - e fino a questo
+    # momento NESSUN percorso operativo la chiamava. Il cron faceva un giro,
+    # svuotava la coda e tornava a casa; un messaggio rimasto indietro ci
+    # restava per sempre.
+    #
+    # Il cutover della mail cliente lo ha reso una cosa che succede: se la
+    # finalizzazione o il suo seguito non committano dopo che il provider ha
+    # accettato, il messaggio resta esattamente in quello stato. Il fail-safe
+    # del cutover E' questa chiamata, quindi deve stare su questo percorso e non
+    # in un secondo cron che nessuno ha.
+    #
+    # La policy e' quella che P29-2.3 ha gia' scelto e che non si cambia qui:
+    # `indeterminate`, perche' da fuori non si distingue - e non si puo'
+    # distinguere - uno stale morto PRIMA della chiamata al provider da uno
+    # morto DOPO. Nessun provider viene interpellato, nessun tentativo nasce,
+    # `attempt_count` non si muove, e nessuno stato nuovo entra in gioco.
+    #
+    # Un `sending` recente NON e' uno stale: la soglia di `recover_stale` -
+    # quindici minuti - e' cio' che distingue un worker vivo che sta mandando da
+    # uno che non tornera'. Un worker al lavoro non viene disturbato.
+    recuperati = service.recover_stale(ctx, limit=limit)
+
     reclamati = service.claim_due(ctx, provider=provider.NAME, channel=channel,
                                   limit=limit)
 
+    # Gli stale recuperati entrano in `indeterminate`, che e' lo stato in cui
+    # sono finiti, e NON in `claimed`: non sono stati reclamati adesso - il loro
+    # claim e' accaduto in un giro precedente, e la storia deve dirlo una volta
+    # sola. Contarli e' cio' che fa uscire il runner del cron con 2 invece di
+    # mostrare un verde che non c'e'.
     conteggi = {"claimed": len(reclamati), "sent": 0, "suppressed": 0,
-                "failed": 0, "indeterminate": 0, "lost": 0}
+                "failed": 0, "indeterminate": len(recuperati), "lost": 0}
 
     for preso in reclamati:
         message = preso["message"]
@@ -259,12 +294,53 @@ def dispatch_batch(ctx_operatore, *, channel: str,
         else:
             stato, campi = _esito_del_provider(risultato, provider.CAPABILITIES)
 
-        finalizza = {
-            "sent": service.finalize_sent,
-            "failed": service.finalize_failed,
-            "indeterminate": service.finalize_indeterminate,
-        }[stato]
-        esito = finalizza(ctx, message["id"], token, **campi)
+        if stato == "sent":
+            # UNA TRANSAZIONE PER IL `sent` E PER CIO' CHE NE CONSEGUE.
+            #
+            # Il ramo `sent` - e solo lui - apre il cursore e lo passa a
+            # `finalize_sent`, che scrive dove gli si dice e non committa: a
+            # committare e' questo `with`. Il compare-and-set e il seguito
+            # stanno quindi insieme o non stanno, e fra i due non esiste
+            # nessuna finestra in cui il messaggio risulti `sent` e l'evento
+            # dell'altro registro non ci sia ancora.
+            #
+            # Il nucleo resta ignaro: `service.finalize_sent` non ha imparato
+            # niente di Seller Intelligence, non riceve callback e la sua firma
+            # e' quella di P29-2.3 con il `cur` che aveva gia'. Cio' che sa di
+            # due domini e' `integrations`, che e' il file scritto per saperlo.
+            #
+            # Se la finalizzazione o il seguito sollevano dopo che il provider
+            # ha accettato: rollback, il messaggio resta `sending` col suo
+            # token, `recover_stale` lo porta a `indeterminate` e non lo rimette
+            # in fila - nessun reinvio cieco, nessun doppio invio.
+            #
+            # L'errore NON diventa un esito del provider. Il provider ha
+            # accettato, e quel fatto non si riscrive: cio' che non e' successo
+            # e' la REGISTRAZIONE dell'esito, che e' esattamente cio' che
+            # `lost` significa gia' in questo conteggio - "il messaggio esiste,
+            # il suo esito no". Non si conta `failed`, che direbbe una cosa
+            # falsa sul trasporto, e non si propaga, perche' un guasto su un
+            # messaggio fermerebbe il batch e ne lascerebbe altri nove
+            # `sending` senza che nessuno abbia nemmeno provato a mandarli.
+            try:
+                with communication_cursor(commit=True) as (_conn, cur_finale):
+                    esito = service.finalize_sent(ctx, message["id"], token,
+                                                  cur=cur_finale, **campi)
+                    if esito is not None:
+                        integrations.dopo_invio(cur_finale, esito["message"])
+            except Exception:  # noqa: BLE001 - vedi sopra: isolamento del batch
+                logger.exception(
+                    "finalization rolled back after a successful send: "
+                    "message_id=%s agency_id=%s provider=%s",
+                    message["id"], ctx.agency_id, provider.NAME,
+                )
+                esito = None
+        else:
+            finalizza = {
+                "failed": service.finalize_failed,
+                "indeterminate": service.finalize_indeterminate,
+            }[stato]
+            esito = finalizza(ctx, message["id"], token, **campi)
         conteggi[stato if esito is not None else "lost"] += 1
 
     return conteggi

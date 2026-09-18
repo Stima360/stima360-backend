@@ -223,13 +223,28 @@ class SIDatabase:
         yield self, SICursor(self)
 
 
-def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, emails, whatsapp, mail_result=True):
-    """mail_result controls what the CLIENT invia_mail() call returns (P17-B2:
-    main.py now captures this as `mail_sent` to gate email_stima_inviata).
-    Both the client and the admin email go through the same mocked
-    invia_mail, so both calls return mail_result - this only matters for
-    email_stima_inviata, which is keyed off the client call specifically
-    (the first one main.py makes) and never off the admin one."""
+def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, emails,
+                                     whatsapp, mail_result=True, accodate=None):
+    """P29 cutover: `emails` raccoglie ora SOLO l'alert amministratore.
+
+    La mail al cliente non passa piu' da `invia_mail`. Viene accodata nel ledger
+    delle comunicazioni, e `accodate` e' la spia di quell'accodamento.
+
+    `mail_result` resta perche' l'alert amministratore passa ancora da
+    `invia_mail`, ma non governa piu' nessun evento: `email_stima_inviata` non
+    nasce piu' qui. Nasce alla finalizzazione `sent` del messaggio accodato, che
+    e' il momento in cui la mail e' davvero partita - vedi
+    `communication/integrations.py` e
+    `tests/test_p29_cutover_email_cliente.py`.
+    """
+    accodate = [] if accodate is None else accodate
+
+    def finto_enqueue(ctx, **kwargs):
+        accodate.append((ctx, kwargs))
+        return {"message": {"id": 900 + len(accodate), "status": "queued"},
+                "created": True}
+
+    monkeypatch.setattr(main_module.communication_service, "enqueue", finto_enqueue)
     monkeypatch.setattr(
         main_module,
         "compute_from_payload",
@@ -326,7 +341,7 @@ def test_salva_stima_continues_when_seller_intelligence_fails_completely(monkeyp
     )
     assert bridge_calls and bridge_calls[0][0] == 501, "il bridge CORE deve essere eseguito normalmente"
     assert len(pdf_calls) == 1, "la generazione PDF non deve essere impedita"
-    assert len(emails) == 2, "gli invii email (cliente + admin) non devono essere impediti"
+    assert len(emails) == 1, "l'alert amministratore non deve essere impedito"
     assert len(whatsapp) == 1, "l'invio WhatsApp non deve essere impedito"
 
 
@@ -337,17 +352,16 @@ def test_salva_stima_continues_when_seller_intelligence_fails_even_if_bridge_als
     verifica che le integrazioni P17-B1/P17-B2 non introducano un nuovo modo
     di rompere questo invariante).
 
-    Dopo P17-B2 il funnel tenta TRE eventi Seller Intelligence indipendenti
-    per ogni stima completata con successo: stima_richiesta, stima_completata
-    ed email_stima_inviata (l'ultimo perche' install_pdf_email_whatsapp_mocks
-    di default simula un invio email cliente riuscito, mail_result=True).
-    Qui record_event() e' forzato a fallire sempre: ognuno dei tre tentativi
-    deve avvenire comunque, in modo indipendente (nessuno dei tre deve
-    impedire i successivi - vedi safe_record_event), tutti con contact_id/
-    lead_id None (bridge_result e' rimasto None perche' il bridge CORE e'
-    stato forzato a fallire), e nessuna delle tre eccezioni deve raggiungere
-    l'endpoint: risposta, PDF, email e WhatsApp devono comportarsi come nel
-    flusso legacy."""
+    Dopo il cutover P29 il funnel tenta DUE eventi Seller Intelligence
+    indipendenti per ogni stima completata: stima_richiesta e stima_completata.
+    Il terzo, email_stima_inviata, non e' scomparso: si e' spostato dove il suo
+    significato e' vero, cioe' alla finalizzazione `sent` del messaggio.
+    Qui record_event() e' forzato a fallire sempre: entrambi i tentativi devono
+    avvenire comunque, in modo indipendente (nessuno dei due deve impedire
+    l'altro - vedi safe_record_event), tutti con contact_id/lead_id None
+    (bridge_result e' rimasto None perche' il bridge CORE e' stato forzato a
+    fallire), e nessuna delle eccezioni deve raggiungere l'endpoint: risposta,
+    PDF, email e WhatsApp devono comportarsi come nel flusso legacy."""
     main_module = import_project_module("main")
 
     connection = LegacyConnection(stima_id=501)
@@ -371,20 +385,19 @@ def test_salva_stima_continues_when_seller_intelligence_fails_even_if_bridge_als
 
     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    # Il funnel pubblico e' invariato: risposta, PDF, email (cliente + admin)
-    # e WhatsApp proseguono esattamente come nel comportamento legacy,
-    # nonostante Seller Intelligence sia completamente KO.
+    # Il funnel pubblico e' invariato: risposta, PDF, alert amministratore e
+    # WhatsApp proseguono esattamente come nel comportamento legacy, nonostante
+    # Seller Intelligence sia completamente KO.
     assert response == expected_success_response(main_module)
     assert len(pdf_calls) == 1
-    assert len(emails) == 2  # cliente + admin
+    assert len(emails) == 1  # solo l'alert amministratore
     assert len(whatsapp) == 1
 
-    # I tre tentativi Seller Intelligence sono avvenuti tutti, in ordine,
-    # ognuno indipendentemente dal fallimento dei precedenti.
+    # I due tentativi Seller Intelligence sono avvenuti entrambi, in ordine,
+    # ognuno indipendentemente dal fallimento dell'altro.
     assert [call["event_type"] for call in seller_intelligence_calls] == [
         "stima_richiesta",
         "stima_completata",
-        "email_stima_inviata",
     ]
     for call in seller_intelligence_calls:
         assert call["stima_id"] == 501
@@ -417,12 +430,12 @@ def test_salva_stima_records_exactly_one_stima_richiesta_event_on_success(monkey
     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload(comune="Alba Adriatica", tipologia="Appartamento", mq=90))))
 
     assert response == expected_success_response(main_module)
-    # Dal P17-B2 una richiesta di successo produce anche stima_completata ed
-    # email_stima_inviata (test dedicati piu' sotto per il dettaglio
-    # completo) - qui verifichiamo solo che continui a esistere esattamente
-    # una riga stima_richiesta con i campi corretti, invariata rispetto a
-    # P17-B1.
-    assert len(si_db.rows) == 3, "P17-B2: una richiesta di successo produce 3 eventi (richiesta+completata+email)"
+    # P29 cutover: dal producer nascono DUE eventi, stima_richiesta e
+    # stima_completata. `email_stima_inviata` non nasce piu' qui perche' qui la
+    # mail non e' ancora partita - e' in coda. Qui si verifica, come in P17-B1,
+    # che esista esattamente una riga stima_richiesta con i campi corretti.
+    assert len(si_db.rows) == 2, (
+        "P29 cutover: il producer produce 2 eventi (richiesta + completata)")
     stima_richiesta_rows = [r for r in si_db.rows if r["event_type"] == "stima_richiesta"]
     assert len(stima_richiesta_rows) == 1, "deve esistere esattamente una riga stima_richiesta"
     row = stima_richiesta_rows[0]
@@ -459,22 +472,29 @@ def test_salva_stima_retry_with_same_stima_id_does_not_duplicate_the_event(monke
     second_response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
     assert first_response == second_response == expected_success_response(main_module)
-    # P17-B2: 2 richieste identiche devono produrre 3 righe totali (una per
-    # ciascuno dei 3 event_type), non 6 - l'idempotency_key deterministica
-    # deduplica ciascun tipo di evento indipendentemente.
-    assert len(si_db.rows) == 3, "un retry con la stessa stima_id non deve duplicare NESSUNO dei 3 eventi"
+    # P29 cutover: 2 richieste identiche devono produrre 2 righe totali (una per
+    # ciascuno dei 2 event_type del producer), non 4 - l'idempotency_key
+    # deterministica deduplica ciascun tipo di evento indipendentemente.
+    assert len(si_db.rows) == 2, "un retry con la stessa stima_id non deve duplicare NESSUNO dei 2 eventi"
     event_types = sorted(r["event_type"] for r in si_db.rows)
-    assert event_types == ["email_stima_inviata", "stima_completata", "stima_richiesta"]
+    assert event_types == ["stima_completata", "stima_richiesta"]
 
 
 # =========================================================================
-# P17-B2: stima_completata + email_stima_inviata
+# P17-B2: stima_completata (+ email_stima_inviata, fino al cutover P29)
+#
+# `email_stima_inviata` non nasce piu' in questo endpoint. Il suo significato -
+# "la mail al cliente e' partita" - non e' cambiato di una virgola; e' cambiato
+# il punto in cui quel fatto accade, che ora e' la finalizzazione `sent` del
+# messaggio accodato. Cio' che era provato qui (l'evento non esiste se la mail
+# non e' partita; un guasto Seller Intelligence non blocca il funnel) e' provato
+# la', su PostgreSQL, in `tests/test_p29_cutover_email_cliente.py`.
 # =========================================================================
 
 def _selective_failure(real_record_event, failing_event_type):
     """Wraps the REAL record_event: raises only for one event_type, delegates
-    everything else to the real function untouched. Used for test D/E to
-    prove the three events are independent of one another - a failure in
+    everything else to the real function untouched. Used for test D to
+    prove the producer's events are independent of one another - a failure in
     one must never affect whether the others are attempted or recorded."""
     def wrapper(**kwargs):
         if kwargs.get("event_type") == failing_event_type:
@@ -501,17 +521,19 @@ def _setup_happy_path(monkeypatch, *, mail_result=True):
     return main_module, si_db, pdf_calls, emails, whatsapp
 
 
-# --- A. Happy path: 1+1+1, nessun duplicato -----------------------------
+# --- A. Happy path: 1+1, nessun duplicato -------------------------------
 
-def test_p17b2_happy_path_produces_exactly_one_of_each_of_the_three_events(monkeypatch):
+def test_p17b2_happy_path_produces_exactly_one_of_each_producer_event(monkeypatch):
     main_module, si_db, pdf_calls, emails, whatsapp = _setup_happy_path(monkeypatch)
 
     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
     assert response == expected_success_response(main_module)
-    assert len(si_db.rows) == 3
+    assert len(si_db.rows) == 2
     by_type = {r["event_type"]: r for r in si_db.rows}
-    assert set(by_type) == {"stima_richiesta", "stima_completata", "email_stima_inviata"}
+    assert set(by_type) == {"stima_richiesta", "stima_completata"}
+    assert "email_stima_inviata" not in by_type, (
+        "l'evento e' tornato nel producer: accodare non e' aver mandato")
     for row in si_db.rows:
         assert row["stima_id"] == 501
         assert row["event_source"] == "stima360_it"
@@ -519,7 +541,6 @@ def test_p17b2_happy_path_produces_exactly_one_of_each_of_the_three_events(monke
         assert row["lead_id"] == 99
     assert by_type["stima_richiesta"]["idempotency_key"] == "stima_richiesta:501"
     assert by_type["stima_completata"]["idempotency_key"] == "stima_completata:501"
-    assert by_type["email_stima_inviata"]["idempotency_key"] == "email_stima_inviata:501"
 
 
 # --- B. Payload esatto di stima_completata -------------------------------
@@ -538,42 +559,133 @@ def test_p17b2_stima_completata_payload_contains_only_the_three_specified_fields
     assert row["payload"] == {"price_exact": 180000, "eur_mq_finale": 2000, "base_mq": 1500}
 
 
-def test_p17b2_email_stima_inviata_payload_contains_only_pdf_url(monkeypatch):
-    main_module, si_db, *_ = _setup_happy_path(monkeypatch)
+def test_p29_il_pdf_url_dellevento_viaggia_nei_metadata_del_messaggio(monkeypatch):
+    """Il `pdf_url` che finiva nel payload dell'evento non e' andato perduto.
+
+    Adesso viaggia nei metadata del messaggio accodato, ed e' da li' che la
+    finalizzazione `sent` lo rimette nel payload dell'evento - identico. Se il
+    producer smettesse di scriverlo, l'evento nascerebbe con un payload vuoto e
+    nessuno se ne accorgerebbe fino a leggere una timeline.
+    """
+    main_module = import_project_module("main")
+    monkeypatch.setattr(main_module, "get_connection", lambda: LegacyConnection(stima_id=501))
+    monkeypatch.setattr(
+        main_module.core_service, "bridge_public_stima",
+        lambda stima_id, **data: {"status": "linked", "stima_id": stima_id,
+                                  "contact_id": 42, "lead_id": 99,
+                                  "contact_created": True, "lead_created": True})
+    accodate = []
+    install_pdf_email_whatsapp_mocks(monkeypatch, main_module, pdf_calls=[], emails=[],
+                                    whatsapp=[], accodate=accodate)
+    si_db = SIDatabase()
+    monkeypatch.setattr(main_module.seller_intelligence_service.repository,
+                        "si_cursor", si_db.cursor)
 
     asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    row = next(r for r in si_db.rows if r["event_type"] == "email_stima_inviata")
-    assert row["payload"] == {"pdf_url": f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf"}
+    assert len(accodate) == 1
+    _ctx, accodato = accodate[0]
+    assert accodato["metadata"] == {
+        "pdf_url": f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf"}
 
 
-# --- C. Email fallita: email_stima_inviata assente, funnel invariato ----
+# --- C. Il cliente non riceve piu' un invio diretto: si accoda ----------
 
-def test_p17b2_failed_client_email_skips_email_stima_inviata_but_not_the_rest(monkeypatch):
-    main_module, si_db, pdf_calls, emails, whatsapp = _setup_happy_path(monkeypatch, mail_result=False)
+def test_p29_la_mail_cliente_e_accodata_e_non_spedita_dallendpoint(monkeypatch):
+    """IL test del cutover, dal lato del producer.
+
+    Prima c'era `invia_mail(data["email"], ...)` e, subito sotto, l'evento se
+    quella funzione ritornava True. Adesso l'endpoint accoda e non spedisce: il
+    solo invio diretto che resta e' l'alert amministratore, e l'evento non
+    nasce qui perche' qui la mail non e' partita.
+
+    `mail_result=False` e' rimasto nella firma dell'helper e ora non cambia
+    niente per il cliente - e' il modo piu' diretto di provare che quel bool
+    non governa piu' nessun evento.
+    """
+    main_module = import_project_module("main")
+    monkeypatch.setattr(main_module, "get_connection", lambda: LegacyConnection(stima_id=501))
+    monkeypatch.setattr(
+        main_module.core_service, "bridge_public_stima",
+        lambda stima_id, **data: {"status": "linked", "stima_id": stima_id,
+                                  "contact_id": 42, "lead_id": 99,
+                                  "contact_created": True, "lead_created": True})
+    pdf_calls, emails, whatsapp, accodate = [], [], [], []
+    install_pdf_email_whatsapp_mocks(monkeypatch, main_module, pdf_calls=pdf_calls,
+                                    emails=emails, whatsapp=whatsapp,
+                                    mail_result=False, accodate=accodate)
+    si_db = SIDatabase()
+    monkeypatch.setattr(main_module.seller_intelligence_service.repository,
+                        "si_cursor", si_db.cursor)
 
     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    # Il funnel esistente non cambia comportamento: risposta identica,
-    # tentativi di invio email (2: cliente + admin) e WhatsApp comunque
-    # eseguiti come sempre - invia_mail() che ritorna False e' un esito
-    # normale gia' gestito dal codice esistente, P17 non lo altera.
     assert response == expected_success_response(main_module)
-    assert len(emails) == 2
     assert len(whatsapp) == 1
 
+    # UN solo invio diretto, e non e' al cliente.
+    assert len(emails) == 1
+    destinatario, oggetto, _corpo = emails[0][0], emails[0][1], emails[0][2]
+    assert destinatario == "info@stima360.it"
+    assert "NUOVO LEAD" in oggetto
+    assert destinatario != base_payload()["email"]
+
+    # La mail al cliente e' UNA riga accodata, con i campi che il dominio chiede.
+    assert len(accodate) == 1
+    ctx, accodato = accodate[0]
+    assert accodato["channel"] == "email"
+    assert accodato["communication_type"] == "service"
+    assert accodato["mode"] == "automatic"
+    assert accodato["reason_code"] == "stima_pdf"
+    assert accodato["destination_snapshot"] == base_payload()["email"]
+    assert accodato["stima_id"] == 501
+    assert accodato["contact_id"] == 42 and accodato["lead_id"] == 99
+    assert accodato["idempotency_key"] == "stima_email_cliente:501"
+    assert accodato["subject_snapshot"] and accodato["rendered_body"]
+    # L'agenzia viene dal contesto LETTO dalla stima, non dal payload.
+    assert ctx.agency_id is not None
+    assert getattr(ctx, "origin", None) == "public_stima"
+
+    # E l'evento NON esiste: la mail e' in coda, non partita.
     event_types = {r["event_type"] for r in si_db.rows}
-    assert "stima_richiesta" in event_types
-    assert "stima_completata" in event_types
-    assert "email_stima_inviata" not in event_types, (
-        "invia_mail(cliente) ha ritornato False: l'evento non deve essere scritto"
-    )
-    assert len(si_db.rows) == 2
+    assert event_types == {"stima_richiesta", "stima_completata"}
+    assert "email_stima_inviata" not in event_types
+
+
+def test_p29_un_replay_non_accoda_due_mail(monkeypatch):
+    """La chiave e' deterministica sulla stima: due giri, una mail.
+
+    L'helper qui e' quello vero - `enqueue` non e' sostituito - perche' cio' che
+    si prova e' la CHIAVE che il producer costruisce, e la dedup vera e' del
+    dominio (provata su PostgreSQL). Due salvataggi che finiscono sulla stessa
+    `stima_id` devono chiedere la stessa chiave, non due chiavi diverse.
+    """
+    main_module = import_project_module("main")
+    monkeypatch.setattr(
+        main_module.core_service, "bridge_public_stima",
+        lambda stima_id, **data: {"status": "linked", "stima_id": stima_id,
+                                  "contact_id": 42, "lead_id": 99,
+                                  "contact_created": False, "lead_created": True})
+    accodate = []
+    install_pdf_email_whatsapp_mocks(monkeypatch, main_module, pdf_calls=[], emails=[],
+                                    whatsapp=[], accodate=accodate)
+    si_db = SIDatabase()
+    monkeypatch.setattr(main_module.seller_intelligence_service.repository,
+                        "si_cursor", si_db.cursor)
+
+    for _ in range(2):
+        monkeypatch.setattr(main_module, "get_connection",
+                            lambda: LegacyConnection(stima_id=501))
+        asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+
+    chiavi = {accodato["idempotency_key"] for _ctx, accodato in accodate}
+    assert chiavi == {"stima_email_cliente:501"}, (
+        "due giri sulla stessa stima hanno chiesto due chiavi diverse")
 
 
 # --- D. Seller Intelligence KO su stima_completata -----------------------
 
-def test_p17b2_stima_completata_failure_does_not_block_funnel_or_email_event(monkeypatch):
+def test_p17b2_stima_completata_failure_does_not_block_funnel(monkeypatch):
     main_module, si_db, pdf_calls, emails, whatsapp = _setup_happy_path(monkeypatch)
 
     real_record_event = main_module.seller_intelligence_service.record_event
@@ -586,39 +698,45 @@ def test_p17b2_stima_completata_failure_does_not_block_funnel_or_email_event(mon
 
     assert response == expected_success_response(main_module), "nessun HTTP 500, response invariata"
     assert len(pdf_calls) == 1, "il PDF continua"
-    assert len(emails) == 2, "le email continuano"
+    assert len(emails) == 1, "l'alert amministratore continua"
     assert len(whatsapp) == 1, "il WhatsApp continua"
 
     event_types = {r["event_type"] for r in si_db.rows}
     assert "stima_completata" not in event_types, "l'evento fallito non deve comparire"
     assert "stima_richiesta" in event_types, "l'evento precedente non e' influenzato"
-    assert "email_stima_inviata" in event_types, (
-        "email_stima_inviata deve essere comunque tentato indipendentemente dal fallimento di stima_completata"
-    )
 
 
-# --- E. Seller Intelligence KO su email_stima_inviata --------------------
+# --- E. Il producer non chiede MAI quell'evento --------------------------
 
-def test_p17b2_email_stima_inviata_failure_does_not_block_funnel(monkeypatch):
+def test_p29_il_producer_non_chiede_mai_email_stima_inviata(monkeypatch):
+    """Piu' forte di "la riga non c'e'": la CHIAMATA non avviene.
+
+    Il test che stava qui provava che un guasto Seller Intelligence su
+    `email_stima_inviata` non bloccasse il funnel. Dopo il cutover quel guasto
+    non e' raggiungibile da questo endpoint, e provare che un percorso morto non
+    faccia danni non prova niente. Si prova invece cio' che deve restare vero:
+    fra tutti gli eventi che `/api/salva_stima` chiede, quello non c'e'.
+
+    Si guarda ogni `record_event`, non le righe scritte: un `event_type`
+    richiesto e poi rifiutato dall'idempotenza sarebbe invisibile nelle righe e
+    sarebbe comunque un producer che dice "e' partita" troppo presto.
+    """
     main_module, si_db, pdf_calls, emails, whatsapp = _setup_happy_path(monkeypatch)
 
+    richiesti = []
     real_record_event = main_module.seller_intelligence_service.record_event
-    monkeypatch.setattr(
-        main_module.seller_intelligence_service, "record_event",
-        _selective_failure(real_record_event, "email_stima_inviata"),
-    )
+
+    def spia(**kwargs):
+        richiesti.append(kwargs.get("event_type"))
+        return real_record_event(**kwargs)
+
+    monkeypatch.setattr(main_module.seller_intelligence_service, "record_event", spia)
 
     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    assert response == expected_success_response(main_module), "nessun HTTP 500, response invariata"
-    assert len(pdf_calls) == 1
-    assert len(emails) == 2
-    assert len(whatsapp) == 1
-
-    event_types = {r["event_type"] for r in si_db.rows}
-    assert event_types == {"stima_richiesta", "stima_completata"}, (
-        "stima_richiesta e stima_completata devono essere gia' stati scritti correttamente prima del fallimento"
-    )
+    assert response == expected_success_response(main_module)
+    assert richiesti == ["stima_richiesta", "stima_completata"], richiesti
+    assert "email_stima_inviata" not in richiesti
 
 
 # --- Semantica: stima_completata esiste anche se il PDF fallisce ---------
@@ -631,9 +749,9 @@ def test_p17b2_stima_completata_exists_even_if_pdf_generation_fails(monkeypatch)
     ma genera_pdf_stima() viene forzata a fallire: il comportamento legacy
     esistente (HTTPException 500 "Errore PDF: ...") non deve cambiare -
     verifichiamo che sia ancora quello, E che stima_completata sia
-    comunque gia' stata scritta PRIMA che il PDF fallisse, mentre
-    email_stima_inviata non puo' esistere perche' il flusso non arriva mai
-    all'invio email."""
+    comunque gia' stata scritta PRIMA che il PDF fallisse, mentre la mail al
+    cliente non puo' nemmeno essere accodata perche' il flusso non arriva mai
+    fino la'."""
     main_module, si_db, pdf_calls, emails, whatsapp = _setup_happy_path(monkeypatch)
 
     def failing_pdf(payload, nome_file):

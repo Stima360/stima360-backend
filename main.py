@@ -43,6 +43,7 @@ from seller_intent.router import router as seller_intent_router
 from property_watch import service as property_watch_service
 from property_watch.router import router as property_watch_router
 from next_best_action.router import router as next_best_action_router
+from communication import service as communication_service
 from communication.router import router as communication_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
@@ -1294,23 +1295,58 @@ async def salva_stima(request: Request):
             </div>
             """
 
-        # 1. Invia la mail al cliente
-        mail_sent = invia_mail(data["email"], oggetto_mail, corpo)
-
-        # --- P17 Seller Intelligence: email_stima_inviata (additive,
-        # non-blocking). Significa ESATTAMENTE "invia_mail() per il cliente
-        # ha ritornato True" - non un tentativo, non l'email admin (sotto),
-        # non la generazione PDF. invia_mail() non solleva mai eccezioni
-        # (ritorna sempre bool), quindi mail_sent e' sempre definito qui.
-        if mail_sent:
-            seller_intelligence_service.safe_record_event(
-                event_type="email_stima_inviata",
-                event_source="stima360_it",
+        # =========================================================
+        # 1. LA MAIL AL CLIENTE: SI ACCODA, NON SI MANDA
+        # =========================================================
+        # P29 cutover. Oggetto e corpo sono quelli di prima, costruiti qui
+        # sopra e non toccati: cambia CHI li spedisce e QUANDO.
+        #
+        # Questo endpoint non parla piu' con SMTP. Un handshake SMTP dentro la
+        # richiesta significa che la risposta al cliente dipende dalla salute di
+        # un server di posta: se quello e' lento, la pagina e' lenta; se e'
+        # giu', qualcuno vede un errore per una mail. Ora la richiesta scrive
+        # una riga e finisce; la manda il dispatcher (P29-2.6E), con tentativi,
+        # esiti e storia nel ledger.
+        #
+        # L'agenzia viene dal contesto LETTO dalla stima appena committata - lo
+        # stesso che e' andato al bridge - e non da un nuovo giro di routing:
+        # ricalcolarlo qui sarebbe una seconda decisione, e due decisioni
+        # possono divergere.
+        #
+        # La chiave di idempotenza e' deterministica sulla stima: un replay
+        # dello stesso salvataggio ritrova lo stesso messaggio con
+        # `created=False` e non ne accoda un secondo.
+        #
+        # L'evento P17 `email_stima_inviata` NON si scrive qui. Significava
+        # "invia_mail ha ritornato True", e l'equivalente esatto adesso e' la
+        # finalizzazione `sent` che vince il compare-and-set: lo scrive
+        # `communication/integrations.py`, nella stessa transazione di quel
+        # `sent`. Accodare non e' aver mandato.
+        try:
+            communication_service.enqueue(
+                bridge_ctx,
+                channel="email",
+                communication_type="service",
+                mode="automatic",
+                reason_code="stima_pdf",
+                destination_snapshot=data["email"],
+                subject_snapshot=oggetto_mail,
+                rendered_body=corpo,
                 stima_id=new_id,
                 contact_id=(bridge_result or {}).get("contact_id"),
                 lead_id=(bridge_result or {}).get("lead_id"),
-                payload={"pdf_url": pdf_url_finale},
-                idempotency_key=f"email_stima_inviata:{new_id}",
+                idempotency_key=f"stima_email_cliente:{new_id}",
+                metadata={"pdf_url": pdf_url_finale},
+            )
+        except Exception as exc:
+            # Il suo `except`, e non quello grande la' sotto: un accodamento che
+            # fallisce non deve saltare l'alert all'amministratore, che prima
+            # partiva comunque perche' `invia_mail` non solleva mai. La stima e'
+            # salvata e il PDF c'e': questo non e' un errore da mostrare a chi
+            # ha compilato il modulo.
+            logger.error(
+                "public_stima_email_enqueue_failed stima_id=%s error_type=%s error=%s",
+                new_id, type(exc).__name__, exc,
             )
 
         # =========================================================

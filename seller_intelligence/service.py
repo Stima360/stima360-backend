@@ -43,7 +43,7 @@ def _require_at_least_one_reference(values: dict[str, Any]) -> None:
         )
 
 
-def record_event(
+def _event_data(
     *,
     contact_id: int | None = None,
     lead_id: int | None = None,
@@ -56,6 +56,12 @@ def record_event(
     idempotency_key: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, Any]:
+    """The validated row, shared by every write entry point.
+
+    Extracted in the P29 cutover so that `record_event_on_cursor` cannot drift
+    from `record_event`: one place decides what a valid event is, and adding a
+    second caller does not add a second definition of "valid".
+    """
     values = {
         "contact_id": contact_id,
         "lead_id": lead_id,
@@ -67,7 +73,7 @@ def record_event(
     if not event_type or not event_type.strip():
         raise ValidationError("event_type is required")
 
-    data = {
+    return {
         **values,
         "event_type": event_type,
         "event_source": event_source,
@@ -76,7 +82,26 @@ def record_event(
         "idempotency_key": idempotency_key,
         "created_by": created_by,
     }
-    return repository.insert_event(data)
+
+
+def record_event(**kwargs: Any) -> dict[str, Any]:
+    return repository.insert_event(_event_data(**kwargs))
+
+
+def record_event_on_cursor(cur, **kwargs: Any) -> dict[str, Any]:
+    """`record_event`, inside the caller's transaction. Does not commit.
+
+    Added for the P29 cutover of the customer estimate email: the
+    `email_stima_inviata` event must be written in the SAME transaction that
+    moves the communication message to `sent`, so the two registers can never
+    disagree. Same validation, same SQL, same idempotency contract - only the
+    transaction boundary differs, and it belongs to whoever owns the cursor.
+
+    NOT wrapped in a never-raising helper on purpose: the whole point is that a
+    failure here rolls the `sent` back. `safe_record_event` stays the entry
+    point for the public funnel, where swallowing is the correct behaviour.
+    """
+    return repository.insert_event_on_cursor(cur, _event_data(**kwargs))
 
 
 def list_timeline(

@@ -478,6 +478,7 @@ def dominio(db, monkeypatch, mondo):
     from psycopg2.extras import RealDictCursor
 
     from communication import database as communication_database
+    from communication import dispatcher as communication_dispatcher
     from communication import repository as communication_repository
     from communication import service as communication_service
 
@@ -494,8 +495,12 @@ def dominio(db, monkeypatch, mondo):
         finally:
             cur.close()
 
+    # `dispatcher` e' nell'elenco perche' dal cutover P29 e' LUI ad aprire la
+    # transazione del ramo `sent`: il compare-and-set e il seguito devono stare
+    # nello stesso commit. Lasciarlo fuori manderebbe quel solo commit al DSN di
+    # default, e nessun messaggio arriverebbe mai a `sent`.
     for modulo in (communication_database, communication_service,
-                   communication_repository):
+                   communication_repository, communication_dispatcher):
         monkeypatch.setattr(modulo, "communication_cursor", cursore, raising=False)
     return communication_service
 

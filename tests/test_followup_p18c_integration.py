@@ -122,7 +122,23 @@ def base_payload(**overrides):
     return payload
 
 
-def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, emails, whatsapp, mail_result=True):
+def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, emails,
+                                     whatsapp, mail_result=True, accodate=None):
+    """P29 cutover: `emails` raccoglie ormai SOLO l'alert amministratore.
+
+    La mail al cliente non passa piu' da `invia_mail` - viene accodata nel
+    ledger delle comunicazioni e la manda il dispatcher. `accodate` e' la spia
+    di quell'accodamento; senza, va in una lista che nessuno guarda, cosi' i
+    test che non se ne occupano non devono nominarla.
+    """
+    accodate = [] if accodate is None else accodate
+
+    def finto_enqueue(ctx, **kwargs):
+        accodate.append((ctx, kwargs))
+        return {"message": {"id": 900 + len(accodate), "status": "queued"},
+                "created": True}
+
+    monkeypatch.setattr(main_module.communication_service, "enqueue", finto_enqueue)
     monkeypatch.setattr(
         main_module,
         "compute_from_payload",
@@ -347,7 +363,8 @@ def test_salva_stima_continues_when_followup_fails_completely(monkeypatch):
     assert len(followup_calls) == 1, "il tentativo deve comunque avvenire"
     assert bridge_calls and bridge_calls[0][0] == 501
     assert len(pdf_calls) == 1
-    assert len(emails) == 2
+    # P29 cutover: UN solo invio diretto, ed e' l'alert amministratore.
+    assert len(emails) == 1
     assert len(whatsapp) == 1
 
 
@@ -382,7 +399,7 @@ def test_salva_stima_continues_when_repository_task_creation_fails(monkeypatch):
 
     assert response == expected_success_response(main_module)
     assert len(pdf_calls) == 1
-    assert len(emails) == 2
+    assert len(emails) == 1  # P29 cutover: solo l'alert amministratore
     assert len(whatsapp) == 1
     event_types = [row["event_type"] for row in si_db.rows]
     assert "stima_richiesta" in event_types
@@ -419,11 +436,18 @@ def test_followup_is_never_called_for_stima_completata_or_email_stima_inviata(mo
 
     asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    # I tre eventi P17 devono comunque essere tutti registrati (comportamento
-    # P17-B2 invariato)...
+    # P29 cutover: dal producer nascono DUE eventi, non tre.
+    #
+    # `email_stima_inviata` non e' scomparso e non ha cambiato significato -
+    # significa ancora "la mail al cliente e' partita" - ma quel fatto adesso
+    # accade altrove e piu' tardi, alla finalizzazione `sent` del messaggio.
+    # Vederlo qui vorrebbe dire che qualcuno lo scrive all'accodamento, cioe'
+    # che dice "e' partita" quando e' solo in coda.
     event_types = [row["event_type"] for row in si_db.rows]
-    assert event_types == ["stima_richiesta", "stima_completata", "email_stima_inviata"]
-    # ...ma il motore di follow-up viene invocato una sola volta in totale.
+    assert event_types == ["stima_richiesta", "stima_completata"]
+    assert "email_stima_inviata" not in event_types, (
+        "l'evento e' tornato nel producer: accodare non e' aver mandato")
+    # ...e il motore di follow-up viene invocato una sola volta in totale.
     assert len(followup_calls) == 1
     assert followup_calls[0]["rule_code"] == "FOLLOWUP_STIMA_RICHIESTA"
 
@@ -436,10 +460,12 @@ def test_followup_adds_no_customer_outbound(monkeypatch):
 
     asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
 
-    # Stessa baseline di prima di P18: 2 email (cliente + admin) e 1
-    # WhatsApp, esattamente come nei test P17-B1/B2 - nessun invio extra
-    # generato dal follow-up engine.
-    assert len(emails) == 2
+    # Stessa baseline dei test P17-B1/B2, aggiornata al cutover P29: UN invio
+    # diretto (l'alert amministratore) e 1 WhatsApp. Cio' che questo test prova
+    # resta identico - il follow-up engine non genera invii extra - e il
+    # conteggio piu' basso lo rende anzi piu' stretto: se il cutover tornasse
+    # indietro, o se il motore mandasse qualcosa, il numero cambierebbe.
+    assert len(emails) == 1
     assert len(whatsapp) == 1
 
 

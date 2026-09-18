@@ -263,6 +263,24 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "second connection towards a real environment - and always replaces "
         "database.invia_mail with a spy, so no email is ever sent"
     ),
+    "tests/test_p29_cutover_email_cliente.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing the P29-2.6E OPS entry "
+        "whose fixtures it borrows: an allow-list shared between modules would "
+        "let a new entrypoint arrive unannounced. It opens exactly ONE extra "
+        "connection, and the reason is the whole point of the module: the "
+        "P29 cutover requires the `sent` of the customer email and the Seller "
+        "Intelligence event to share ONE transaction, and a second connection "
+        "is the only honest way to prove it - from inside the hook, that "
+        "observer must see NEITHER row, because neither is committed yet. "
+        "Proving atomicity from the writing connection would prove nothing, "
+        "since it sees its own uncommitted work. The observer is read-only, "
+        "autocommit, opened on the DSN of the disposable database the borrowed "
+        "fixture created, and closed in a finally. It must not go through "
+        "database.get_connection() for the same reason as the module above"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

@@ -332,32 +332,52 @@ def test_N1_invia_mail_e_invariata():
     assert "return False" in database_py and "return True" in database_py
 
 
-def test_N2_main_py_non_e_stato_toccato_da_QUESTA_fase():
-    """P29-2.5E non ha toccato `main.py`, e non lo tocca adesso.
+def test_N2_di_main_py_il_dominio_conosce_solo_laccodamento():
+    """Cio' che `main.py` puo' fare del dominio, e cio' che non puo'.
 
-    Il mount della rotta e' arrivato con P29-2.6E, la fase successiva, e vive
-    in due righe: l'import e l'`include_router`. Cio' che questa sentinella
-    protegge resta intero - il dominio non e' entrato in `main.py`.
+    Fino al cutover P29 questa sentinella diceva "`main.py` non e' stato
+    toccato". Il cutover lo tocca - e' cio' che un cutover E' - quindi la
+    sentinella dice adesso la cosa piu' stretta che resti vera: l'endpoint monta
+    la rotta e ACCODA, e non conosce nient'altro. Non un provider, non il
+    dispatcher, non una finalizzazione. Un produttore che potesse anche spedire
+    riporterebbe dentro la richiesta la latenza e i guasti che il ledger esiste
+    per portare fuori.
+
+    Il giorno in cui questa asserzione dovesse cambiare di nuovo, dovra'
+    cambiare deliberatamente - come e' cambiata oggi.
     """
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from communication.router import router as communication_router" in main_py
-    for vietato in ("communication.service", "communication.dispatcher",
-                    "email_smtp", "dispatch_batch", "enqueue("):
+    assert "from communication import service as communication_service" in main_py
+    for vietato in ("communication.dispatcher", "email_smtp", "dispatch_batch",
+                    "communication.providers", "finalize_sent", "invia_mail(data["):
         assert vietato not in main_py, f"main.py nomina {vietato}"
     assert "def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):" in main_py
-    assert "invia_mail(data[\"email\"], oggetto_mail, corpo)" in main_py
 
 
-def test_N3_nessun_flusso_reale_e_stato_migrato():
-    """P29-2.5E costruisce e certifica l'ADAPTER, e il cutover e' P29-2.6E.
+def test_N3_il_flusso_cliente_e_migrato_e_gli_altri_due_no():
+    """IL test del cutover, letto come testo.
 
-    Montare la rotta NON e' migrare un flusso: `main.py` chiama ancora
-    `invia_mail` direttamente per l'email del cliente, ed e' esattamente questo
-    che si continua a misurare. Il giorno del cutover questa asserzione cambia,
-    e deve cambiare deliberatamente.
+    Tre invii partivano da `/api/salva_stima`: la mail al cliente, l'alert
+    amministratore, il WhatsApp. Il cutover ne migra UNO. Gli altri due devono
+    restare dove erano, e questa e' la riga che lo pretende: se un giorno
+    qualcuno migrasse anche l'alert "per coerenza", o toccasse il WhatsApp, lo
+    si scoprirebbe qui e non in produzione.
     """
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert 'mail_sent = invia_mail(data["email"], oggetto_mail, corpo)' in main_py
+
+    # MIGRATO: la mail al cliente si accoda, e non c'e' piu' nessun invio
+    # diretto che la riguardi.
+    assert "communication_service.enqueue(" in main_py
+    assert 'invia_mail(data["email"]' not in main_py
+    assert "mail_sent" not in main_py, (
+        "il bool dell'invio diretto al cliente non esiste piu': non c'e' invio")
+
+    # NON MIGRATI, letterali: l'alert amministratore e il WhatsApp.
+    assert "invia_mail(admin_email, oggetto_admin, corpo_admin)" in main_py
+    assert "invia_whatsapp(" in main_py
+
+    # E il trasporto resta dietro l'adapter: `main.py` non lo nomina.
     assert "email_smtp" not in main_py
 
 

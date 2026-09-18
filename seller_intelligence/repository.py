@@ -42,6 +42,26 @@ def insert_event(data: dict[str, Any]) -> dict[str, Any]:
         return _insert_event_with_agency(cur, data, agency_id)
 
 
+def insert_event_on_cursor(cur, data: dict[str, Any]) -> dict[str, Any]:
+    """`insert_event`, ma nella transazione di chi chiama. Non committa.
+
+    PERCHE' ESISTE (P29 cutover della mail cliente)
+
+    L'evento `email_stima_inviata` deve nascere nella STESSA transazione che
+    porta il `communication_message` a `sent`. Con `insert_event` sarebbe una
+    seconda transazione, aperta dopo: fra le due c'e' una finestra in cui il
+    messaggio e' `sent` e l'evento non esiste, e un processo che muore li'
+    dentro lascia i due registri in disaccordo per sempre.
+
+    Sono le stesse due righe di `insert_event` senza il `with`: la derivazione
+    dell'agenzia e l'INSERT sono le funzioni di prima, quindi non c'e' SQL
+    duplicato e non c'e' una seconda connessione. Il contratto di idempotenza e'
+    quello di `_insert_event_with_agency`, identico.
+    """
+    agency_id = derive_agency_id(cur, data)
+    return _insert_event_with_agency(cur, data, agency_id)
+
+
 def list_timeline(
     *,
     contact_id: int | None = None,

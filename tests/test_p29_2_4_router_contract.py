@@ -20,6 +20,8 @@ compare-and-set - resta dove puo' essere provato davvero, cioe' su PostgreSQL.
 from __future__ import annotations
 
 import inspect
+import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -89,7 +91,15 @@ def tracciato(monkeypatch):
     quindi la sequenza che il codice di produzione esegue.
     """
     eventi: list[tuple] = []
-    stato = {"reclamati": [], "consenso": None, "ctx": None, "channel": None}
+    stato = {"reclamati": [], "consenso": None, "ctx": None, "channel": None,
+             # P29 cutover: il dispatcher chiude gli stale PRIMA di reclamare.
+             # Di norma non ce ne sono, e questa lista vuota e' il caso normale;
+             # un test che voglia misurare la recovery la riempie.
+             "recuperati": []}
+
+    def finta_recovery(ctx, *, limit=None, **kwargs):
+        eventi.append(("recover_stale", limit))
+        return stato["recuperati"]
 
     def finto_claim(ctx, *, provider, channel, limit):
         stato["ctx"] = ctx
@@ -106,11 +116,29 @@ def tracciato(monkeypatch):
     def finalizzatore(nome):
         def finalizza(ctx, message_id, token, **campi):
             eventi.append((nome, message_id, token))
-            return {"id": message_id}
+            # La forma vera del ritorno di `finalize`: `{'message', 'attempt'}`.
+            # Restituire una riga nuda era un doppio piu' comodo e meno fedele,
+            # e il ramo `sent` del cutover legge `esito["message"]`.
+            return {"message": {"id": message_id}, "attempt": {"id": message_id}}
         return finalizza
 
+    monkeypatch.setattr(service, "recover_stale", finta_recovery)
     monkeypatch.setattr(service, "claim_due", finto_claim)
     monkeypatch.setattr(dispatcher, "can_send_marketing", finto_gate)
+    # P29 cutover: il ramo `sent` del dispatcher apre una transazione propria,
+    # perche' il compare-and-set e il seguito devono stare nello stesso commit.
+    # Qui non c'e' database e non serve: si sostituisce con un cursore finto, e
+    # cio' che resta sotto prova e' la SEQUENZA - claim, gate, provider,
+    # finalizzazione - che e' l'unica cosa che questo modulo misura.
+    @contextmanager
+    def cursore_finto(commit=False):
+        yield None, None
+
+    monkeypatch.setattr(dispatcher, "communication_cursor", cursore_finto)
+    # E il seguito di un `sent` non ha niente da scrivere senza un database:
+    # lo si annota, cosi' se un giorno smettesse di essere invocato si vede.
+    monkeypatch.setattr(dispatcher.integrations, "dopo_invio",
+                        lambda cur, message: eventi.append(("dopo_invio", message["id"])))
     for nome in ("finalize_sent", "finalize_failed", "finalize_indeterminate",
                  "finalize_suppressed"):
         monkeypatch.setattr(service, nome, finalizzatore(nome))
@@ -258,19 +286,37 @@ def test_C19_7_un_contesto_senza_agenzia_e_un_403(tracciato):
     assert risposta.status_code == 403, risposta.text
 
 
-def test_C19_8_main_py_monta_la_rotta_e_nientaltro_di_communication():
-    """P29-2.6E monta la rotta, e `main.py` nomina `communication` per questo e
-    per nient'altro: due righe, l'import e il mount. Nessuna logica del dominio
-    e' passata di la'."""
+def test_C19_8_main_py_monta_la_rotta_e_accoda_e_nientaltro():
+    """`main.py` fa DUE cose con `communication`, e sono nominate una per una.
+
+    Fino al cutover P29 erano una sola - montare la rotta - e questo test
+    vietava ogni altra menzione del dominio. Il cutover della mail cliente
+    aggiunge la seconda: `/api/salva_stima` e' un PRODUCER e chiama `enqueue`.
+    E' cio' che il cutover E', quindi il divieto si sposta invece di cadere.
+
+    Cio' che resta vietato e' la parte che manda: `main.py` non dispaccia, non
+    conosce un provider, non chiama SMTP per il cliente. Un produttore che
+    potesse anche spedire riporterebbe nell'endpoint la latenza e i guasti che
+    il ledger esiste per portare fuori.
+    """
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "from communication.router import router as communication_router" in main_py
     assert ("app.include_router(communication_router, "
             "dependencies=[Depends(require_authenticated_operator)])") in main_py
-    # Il dominio resta dietro la sua rotta: nessun enqueue, nessun dispatch,
-    # nessun provider in `main.py`.
-    for vietato in ("communication.service", "communication_service", "dispatch_batch",
-                    "email_smtp", "communication.dispatcher"):
+
+    # Il produttore: uno solo, e accoda.
+    assert "from communication import service as communication_service" in main_py
+    assert main_py.count("communication_service.enqueue(") == 1, (
+        "l'accodamento della mail cliente deve avere UN solo punto in main.py")
+
+    # Cio' che manda resta fuori.
+    for vietato in ("dispatch_batch", "email_smtp", "communication.dispatcher",
+                    "communication.providers", "finalize_sent"):
         assert vietato not in main_py, f"main.py nomina {vietato}"
+
+    # E nessuna funzione del dominio oltre a `enqueue`.
+    altre = re.findall(r"communication_service\.(\w+)", main_py)
+    assert set(altre) == {"enqueue"}, sorted(set(altre))
 
 
 # ===========================================================================
@@ -396,7 +442,13 @@ def test_C21_1_marketing_allow_gate_poi_provider(tracciato):
     dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
     nomi = [e[0] for e in eventi]
-    assert nomi == ["claim", "gate", "finalize_sent"], nomi
+    # `dopo_invio` chiude la sequenza: dal cutover P29 il ramo `sent` scrive
+    # anche cio' che consegue all'invio, nella stessa transazione. E' DOPO la
+    # finalizzazione, e questo test lo fissa - se un giorno risalisse prima del
+    # provider, si vedrebbe qui.
+    # `recover_stale` apre il giro: e' il passo 0, prima di ogni claim nuovo.
+    assert nomi == ["recover_stale", "claim", "gate", "finalize_sent",
+                    "dopo_invio"], nomi
     assert len(finto.chiamate) == 1
     # Fra ALLOW e send: nessuna decisione, nessun UPDATE, nessuna lettura.
     assert nomi.index("gate") + 1 == nomi.index("finalize_sent"), (
@@ -412,7 +464,8 @@ def test_C21_2_marketing_deny_gate_poi_soppressione_e_nessun_provider(tracciato)
 
     conteggi = dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
-    assert [e[0] for e in eventi] == ["claim", "gate", "finalize_suppressed"]
+    assert [e[0] for e in eventi] == ["recover_stale", "claim", "gate",
+                                      "finalize_suppressed"]
     assert finto.chiamate == [], "il provider e' stato chiamato su una soppressione"
     assert conteggi["suppressed"] == 1 and conteggi["sent"] == 0
 
@@ -424,7 +477,8 @@ def test_C21_3_il_servizio_non_passa_dal_gate(tracciato):
 
     dispatcher.dispatch_batch(operatore(AGENZIA_A), channel="email", provider=finto)
 
-    assert [e[0] for e in eventi] == ["claim", "finalize_sent"]
+    assert [e[0] for e in eventi] == ["recover_stale", "claim", "finalize_sent",
+                                      "dopo_invio"]
     assert "gate" not in [e[0] for e in eventi], "il servizio ha interrogato il consenso"
     assert len(finto.chiamate) == 1
 
@@ -514,8 +568,9 @@ def test_C22_B1_una_eccezione_non_ferma_il_batch(tracciato):
     assert [m["id"] for m in finto.chiamate] == [1, 2], (
         "il secondo messaggio non e' stato nemmeno provato"
     )
-    assert [e[0] for e in eventi] == ["claim", "finalize_indeterminate",
-                                      "finalize_sent"]
+    assert [e[0] for e in eventi] == ["recover_stale", "claim",
+                                      "finalize_indeterminate",
+                                      "finalize_sent", "dopo_invio"]
     assert conteggi == {"claimed": 2, "sent": 1, "suppressed": 0, "failed": 0,
                         "indeterminate": 1, "lost": 0}
 

@@ -563,6 +563,17 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
     monkeypatch.setattr(main_module, "invia_mail", lambda *args: emails.append(args))
     monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: whatsapp.append(args))
 
+    # P29 cutover: la mail al cliente si accoda, e va accodata ANCHE quando il
+    # bridge fallisce. Senza contatto e senza lead - il bridge non li ha
+    # prodotti - ma con la stima, che e' il riferimento che esiste sempre.
+    accodate = []
+
+    def finto_enqueue(ctx, **kwargs):
+        accodate.append((ctx, kwargs))
+        return {"message": {"id": 901, "status": "queued"}, "created": True}
+
+    monkeypatch.setattr(main_module.communication_service, "enqueue", finto_enqueue)
+
     response = asyncio.run(
         main_module.salva_stima(
             JsonRequest(
@@ -592,8 +603,21 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
     assert bridge_calls[0][0] == 501
     assert bridge_calls[0][1]["first_name"] == "Mario"
     assert len(pdf_calls) == 1
-    assert len(emails) == 2
+    # UN solo invio diretto, ed e' l'alert amministratore: la mail al cliente e'
+    # nella coda, non nel socket.
+    assert len(emails) == 1
+    assert emails[0][0] == "info@stima360.it"
     assert len(whatsapp) == 1
+
+    # E la mail al cliente e' stata accodata comunque, con i riferimenti che il
+    # bridge fallito NON ha potuto dare lasciati vuoti invece che inventati.
+    assert len(accodate) == 1
+    _ctx, accodato = accodate[0]
+    assert accodato["destination_snapshot"] == "mario@example.com"
+    assert accodato["stima_id"] == 501
+    assert accodato["contact_id"] is None and accodato["lead_id"] is None
+    assert accodato["communication_type"] == "service"
+
     log_text = caplog.text
     assert "bridge_status=error" in log_text
     assert "stima_id=501" in log_text

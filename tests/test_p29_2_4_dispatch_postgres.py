@@ -61,8 +61,32 @@ CREATE TABLE contacts (
 CREATE TABLE leads      (id BIGSERIAL PRIMARY KEY, agency_id BIGINT);
 CREATE TABLE stime      (id SERIAL    PRIMARY KEY, agency_id BIGINT);
 CREATE TABLE properties (id BIGSERIAL PRIMARY KEY, agency_id BIGINT);
+-- P29 cutover: la finalizzazione `sent` di una mail service/stima_pdf scrive
+-- QUI, nella sua stessa transazione. Senza questa tabella il ramo `sent` non
+-- committa e ogni messaggio finisce `lost` - un guasto che sembrerebbe del
+-- trasporto e non lo e'. Fedele a 017 + 044: indice parziale di idempotenza e
+-- `agency_id` NOT NULL.
+CREATE TABLE seller_timeline_events (
+    id BIGSERIAL PRIMARY KEY,
+    agency_id BIGINT NOT NULL REFERENCES agencies(id) ON DELETE CASCADE,
+    contact_id BIGINT, lead_id BIGINT, stima_id INTEGER, property_id BIGINT,
+    event_type VARCHAR(50) NOT NULL,
+    event_source VARCHAR(30),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    idempotency_key VARCHAR(255),
+    created_by VARCHAR(200),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE UNIQUE INDEX idx_seller_timeline_events_idempotency_key
+    ON seller_timeline_events (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 """
 
+
+#: Il `pdf_url` che una mail service/stima_pdf deve portare: il cutover P29
+#: lo pretende, perche' l'evento `email_stima_inviata` non puo' nascere con
+#: un payload senza il documento di cui parla.
+PDF_DI_PROVA = {"pdf_url": "https://example.it/stima.pdf"}
 VERSIONI = ("061_p29_consent_notices", "062_p29_consent_events",
             "063_p29_contacts_consent_projection", "064_p29_communication_foundation")
 
@@ -140,6 +164,7 @@ def mondo(db, monkeypatch):
     from psycopg2.extras import RealDictCursor
 
     from communication import database as communication_database
+    from communication import dispatcher as communication_dispatcher
     from communication import repository as communication_repository
     from communication import service as communication_service
     from consent import database as consent_database
@@ -168,6 +193,10 @@ def mondo(db, monkeypatch):
         c1 = cur.fetchone()[0]
         cur.execute("INSERT INTO contacts (agency_id) VALUES (%s) RETURNING id", (a2,))
         c2 = cur.fetchone()[0]
+        # P29 cutover: una mail service/stima_pdf ha per definizione una stima,
+        # e la finalizzazione `sent` la usa per la chiave dell'evento P17.
+        cur.execute("INSERT INTO stime (agency_id) VALUES (%s) RETURNING id", (a1,))
+        s1 = cur.fetchone()[0]
     db.commit()
 
     @contextmanager
@@ -183,14 +212,19 @@ def mondo(db, monkeypatch):
         finally:
             cur.close()
 
-    for modulo in (communication_database, communication_service):
+    # `dispatcher` e' nell'elenco perche' dal cutover P29 e' LUI ad aprire la
+    # transazione del ramo `sent`: il compare-and-set e il seguito devono stare
+    # nello stesso commit. Lasciarlo fuori manderebbe quel solo commit al DSN di
+    # default, e nessun messaggio arriverebbe mai a `sent`.
+    for modulo in (communication_database, communication_service,
+                   communication_dispatcher):
         monkeypatch.setattr(modulo, "communication_cursor", cursore, raising=False)
     monkeypatch.setattr(communication_repository, "communication_cursor", cursore,
                         raising=False)
     for modulo in (consent_database, consent_repository):
         monkeypatch.setattr(modulo, "consent_cursor", cursore, raising=False)
 
-    return {"conn": db, "a1": a1, "a2": a2, "c1": c1, "c2": c2,
+    return {"conn": db, "a1": a1, "a2": a2, "c1": c1, "c2": c2, "s1": s1,
             "op1": Operatore(a1), "op2": Operatore(a2),
             "cur": lambda: db.cursor(cursor_factory=RealDictCursor)}
 
@@ -205,7 +239,8 @@ def accoda(mondo, *, chiave, tipo="marketing", contact_id=None, agency=None, op=
             communication_type=tipo, mode=MODE_AUTOMATIC,
             reason_code=REASON_M2 if tipo == "marketing" else REASON_STIMA_PDF,
             rendered_body="corpo", destination_snapshot="a@b.it",
-            subject_snapshot="oggetto", idempotency_key=chiave)
+            subject_snapshot="oggetto", idempotency_key=chiave,
+            stima_id=mondo["s1"], metadata=PDF_DI_PROVA)
     mondo["conn"].commit()
     return esito["message"]
 

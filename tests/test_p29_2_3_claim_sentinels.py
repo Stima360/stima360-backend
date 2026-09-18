@@ -56,7 +56,10 @@ NUCLEO = frozenset({
 #: I file che appartengono alle fasi successive e che il nucleo non include.
 #: `dependencies.py` e' di P29-2.6E: dice CHI puo' chiedere un giro di
 #: dispatch, non parla col database, e le regole del nucleo non lo riguardano.
-FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py")
+#: `integrations.py` e' del cutover P29: e' l'unico modulo che conosce due
+#: domini, e il nucleo non deve conoscerlo.
+FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py",
+                    "integrations.py")
 
 
 def sorgenti() -> dict[str, str]:
