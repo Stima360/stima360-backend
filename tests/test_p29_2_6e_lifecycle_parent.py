@@ -85,8 +85,17 @@ def test_A4_la_up_non_crea_tabelle_e_non_scrive_righe():
     assert eseguibile.count("DELETE FROM") == 1
 
 
-def test_A5_non_esiste_una_066():
-    assert sorted(p.name for p in MIGRAZIONI.glob("066*.sql")) == []
+def test_A5_la_066_non_e_di_p29():
+    """P29-2.6E finisce con la 065. La 066 esiste, ma e' di LMC-1A (il grant
+    pre-incarico `owner_stima_access`, dominio OWNER): qui si verifica che sia
+    quella e che non tocchi il ledger delle comunicazioni."""
+    assert sorted(p.name for p in MIGRAZIONI.glob("066*.sql")) == [
+        "066_lmc1_owner_stima_access.sql",
+        "066_lmc1_owner_stima_access_down.sql",
+    ]
+    up_066 = (MIGRAZIONI / "066_lmc1_owner_stima_access.sql").read_text(encoding="utf-8")
+    assert "communication_messages" not in up_066
+    assert "communication_attempts" not in up_066
 
 
 # ---------------------------------------------------------------------------

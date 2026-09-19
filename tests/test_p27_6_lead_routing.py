@@ -658,7 +658,7 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # P29-2.6E ha aggiunto la 065 (`contact_id` nullable per le comunicazioni
     # SERVICE senza contatto, con la stima come genitore di lifecycle). Il perno
     # sale di una fase per volta, deliberatamente, ed e' questa la fase.
-    assert numeri[-1] == 65, numeri[-4:]
+    assert numeri[-1] == 66, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

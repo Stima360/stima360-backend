@@ -6732,6 +6732,8 @@ COLLOCAZIONE_SCRITTURE = {
     "leads": (PERIMETRO,
               "la fixture NEXT_BEST_ACTION crea un lead con azione scaduta: e' il segnale da cui nasce l'azione"),
     "lead_stime": (GUARDIA, "ponte lead-stima, scritto dal funnel pubblico"),
+    "owner_stima_access": (GUARDIA,
+                           "grant pre-incarico LMC-1A, scritto solo dal provisioning del funnel pubblico che la matrice non percorre; CASCADE verso owner_accounts e stime, entrambi genitori del cleanup"),
     "property_leads": (GUARDIA, "nessuna fixture collega lead a immobili"),
     "property_price_history": (GUARDIA, "solo su cambio prezzo: la matrice non aggiorna i propri immobili"),
     "property_visits": (GUARDIA, "nessuna fixture fissa visite"),

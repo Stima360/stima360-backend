@@ -35,6 +35,7 @@ from proposal.router import router as proposal_router
 from sale.router import router as sale_router
 from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
+from owner import provisioning as owner_provisioning
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
@@ -902,6 +903,20 @@ async def salva_stima(request: Request):
             new_id,
             type(exc).__name__,
         )
+
+    # --- LMC-1A Owner provisioning: contact -> owner_account -> owner_stima_access
+    # (additive, non-blocking) ---
+    # Subito dopo il bridge, perche' e' del bridge che vive: senza un contatto
+    # collegato (linked/already_linked) il servizio non scrive niente. Stesso
+    # contesto LETTO dalla stima che e' andato al bridge, quindi account e grant
+    # non possono finire in un'agenzia diversa da contatto e lead. Il wrapper
+    # `safe_*` non lascia uscire nessuna eccezione e la logica sta in
+    # owner/provisioning.py: qui c'e' solo la chiamata.
+    owner_provisioning.safe_provision_for_public_stima(
+        bridge_ctx,
+        stima_id=new_id,
+        bridge_result=bridge_result,
+    )
 
     # --- P17 Seller Intelligence: stima_richiesta (additive, non-blocking) ---
     # Registrato dopo che la riga stime esiste e il bridge CORE e' stato

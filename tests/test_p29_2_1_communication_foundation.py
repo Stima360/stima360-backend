@@ -91,7 +91,7 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
 
     numeri = sorted(m.number for m in runner.discover_migrations())
     assert 64 in numeri and 63 in numeri, numeri[-4:]
-    assert numeri[-1] == 65, numeri[-4:]
+    assert numeri[-1] == 66, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
@@ -113,14 +113,26 @@ def test_l5_la_065_esiste_ma_non_e_di_questa_fase():
     `contact_id` nullable per le comunicazioni SERVICE senza contatto e da'
     loro la stima come genitore di lifecycle. Cio' che si verifica qui e'
     quindi che sia QUELLA 065 - non `delivered_at`, non i thread, che restano
-    non scritti - e che la 066 continui a non esistere.
+    non scritti.
+
+    Lo stesso spostamento vale per la 066: LMC-1A l'ha giustificata (il grant
+    pre-incarico `owner_stima_access`, dominio OWNER, non P29), quindi la
+    sentinella verifica che sia QUELLA 066 e che la 067 continui a non
+    esistere. Una 066 o una 067 di P29 - `delivered_at`, i thread - resterebbe
+    il difetto da evitare.
     """
     trovate = sorted(p.name for p in MIGRATIONS.glob("065*.sql"))
     assert trovate == ["065_p29_service_lifecycle_parent.sql",
                        "065_p29_service_lifecycle_parent_down.sql"], trovate
-    assert sorted(p.name for p in MIGRATIONS.glob("066*.sql")) == [], (
-        "una 066 e' comparsa senza la fase che la giustifica"
+    assert sorted(p.name for p in MIGRATIONS.glob("066*.sql")) == [
+        "066_lmc1_owner_stima_access.sql",
+        "066_lmc1_owner_stima_access_down.sql",
+    ], "una 066 diversa da quella di LMC-1A e' comparsa senza la fase che la giustifica"
+    assert sorted(p.name for p in MIGRATIONS.glob("067*.sql")) == [], (
+        "una 067 e' comparsa senza la fase che la giustifica"
     )
+    up_066 = (MIGRATIONS / "066_lmc1_owner_stima_access.sql").read_text(encoding="utf-8")
+    assert "communication_messages" not in up_066, "la 066 non e' di P29"
     up = (MIGRATIONS / "065_p29_service_lifecycle_parent.sql").read_text(encoding="utf-8")
     assert "delivered_at" not in up, "la 065 anticipa D3, che il design mette DOPO"
 

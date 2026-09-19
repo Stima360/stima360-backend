@@ -2072,3 +2072,65 @@ def audit_notification_access_denied(a, notification_id, scope="read"):
         )
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# LMC-1A - il provisioning PRE-INCARICO: contatto -> account -> accesso alla stima.
+#
+# Una transazione sola, sul modello di `create_access`: la tenancy si decide
+# DENTRO la stessa transazione della scrittura, con FOR SHARE sui genitori, e
+# non arriva mai da un parametro del chiamante se non come agenzia da
+# CONFRONTARE - il servizio la riceve dal contesto di sistema della stima gia'
+# scritta (`stime.agency_id`, fonte di verita' da P27-6) e questa funzione la
+# verifica su ENTRAMBE le radici prima di toccare una riga.
+#
+# Idempotente per costruzione, non per controllo: `owner_accounts.contact_id`
+# e' UNIQUE (009) e `owner_stima_access (owner_account_id, stima_id)` e'
+# UNIQUE (066), quindi le due INSERT sono ON CONFLICT DO NOTHING e la riga
+# esistente viene riletta. L'audit si scrive SOLO per cio' che questa
+# esecuzione ha creato, sullo stesso cursore: un retry non produce ne' righe
+# ne' audit.
+#
+# L'advisory lock sul contatto serializza due stime dello stesso contatto che
+# arrivano insieme: senza, entrambe potrebbero vedere "nessun account" e una
+# delle due perderebbe la INSERT sull'UNIQUE dopo aver deciso `account_created`.
+# ---------------------------------------------------------------------------
+
+def provision_stima_access(agency_id, *, contact_id, stima_id, granted_by):
+ """Lega il contatto alla sua stima attraverso un account owner, in una transazione.
+
+ Ritorna un dict con `status` in {'provisioned', 'already_provisioned',
+ 'account_disabled'}, `owner_account_id`, `access_id` (None se nessun grant),
+ `account_created`, `access_created`.
+
+ Solleva NotFoundError (il 404 neutro di OWNER) se contatto o stima non
+ esistono, non hanno agenzia, o non stanno entrambi in `agency_id`. Nessuna
+ riga viene scritta in quel caso: la transazione si chiude con il rollback.
+ """
+ with core_cursor(commit=True) as(_,c):
+  c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",(f"owner:provision:contact:{contact_id}",))
+  c.execute("SELECT agency_id FROM contacts WHERE id=%s FOR SHARE",(contact_id,));ct=c.fetchone()
+  c.execute("SELECT agency_id FROM stime WHERE id=%s FOR SHARE",(stima_id,));st=c.fetchone()
+  if not ct or not st:raise NotFoundError(NF)
+  if ct['agency_id'] is None or st['agency_id'] is None:raise NotFoundError(NF)
+  if ct['agency_id']!=st['agency_id']:raise NotFoundError(NF)
+  if ct['agency_id']!=agency_id:raise NotFoundError(NF)
+  c.execute("INSERT INTO owner_accounts(contact_id,status,preferred_language) VALUES(%s,'invited','it') ON CONFLICT (contact_id) DO NOTHING RETURNING *",(contact_id,));account=c.fetchone()
+  account_created=account is not None
+  if account is None:
+   c.execute("SELECT * FROM owner_accounts WHERE contact_id=%s FOR SHARE",(contact_id,));account=c.fetchone()
+  if account is None:raise NotFoundError(NF)
+  account=dict(account)
+  if account_created:
+   _audit_with_cursor(c,'account_created',account['id'],etype='owner_account',eid=account['id'],meta={'source':granted_by,'stima_id':stima_id})
+  if account['status']=='disabled':
+   return {'status':'account_disabled','owner_account_id':account['id'],'access_id':None,'account_created':account_created,'access_created':False}
+  c.execute("INSERT INTO owner_stima_access(owner_account_id,stima_id,access_role,access_status,is_primary,valid_from,granted_by) VALUES(%s,%s,'owner','active',TRUE,NOW(),%s) ON CONFLICT (owner_account_id,stima_id) DO NOTHING RETURNING *",(account['id'],stima_id,granted_by));access=c.fetchone()
+  access_created=access is not None
+  if access is None:
+   c.execute("SELECT * FROM owner_stima_access WHERE owner_account_id=%s AND stima_id=%s",(account['id'],stima_id));access=c.fetchone()
+  if access is None:raise NotFoundError(NF)
+  access=dict(access)
+  if access_created:
+   _audit_with_cursor(c,'stima_access_granted',account['id'],etype='owner_stima_access',eid=access['id'],meta={'stima_id':stima_id,'granted_by':granted_by,'access_role':access['access_role']})
+  return {'status':'provisioned' if access_created else 'already_provisioned','owner_account_id':account['id'],'access_id':access['id'],'account_created':account_created,'access_created':access_created}

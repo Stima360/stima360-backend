@@ -280,6 +280,22 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "application choke point and must stay uncoupled from a throwaway "
         "test database"
     ),
+    "tests/test_lmc1a_owner_provisioning_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing another entry: an "
+        "allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. Connects only to a disposable PostgreSQL that it creates "
+        "and drops itself, where it applies 009 and 066 to prove LMC-1A: that "
+        "the owner/stima grant trigger refuses a contact of one agency and an "
+        "estimation of another, that the UNIQUE denies a duplicate grant, that "
+        "the automatic provisioning is idempotent on a second run - one "
+        "account, one grant, one audit row each - and that the 066 down "
+        "removes exactly what the up created. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_p29_cutover_email_cliente.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "
