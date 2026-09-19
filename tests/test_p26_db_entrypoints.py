@@ -263,6 +263,23 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "second connection towards a real environment - and always replaces "
         "database.invia_mail with a spy, so no email is ever sent"
     ),
+    "tests/test_p20_property_watch_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing a P29 entry: an "
+        "allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. Connects only to a disposable PostgreSQL that it creates "
+        "and drops itself, where it applies 022-025 and 046-048 to prove the "
+        "PW-FIX: that the ctx-less watch writer the public funnel reaches "
+        "through safe_ensure_watch_for_stima derives agency_id from the "
+        "persisted stima, is idempotent on a second call, and that the 048 "
+        "trigger still refuses a watch in another agency. A NOT NULL refusal "
+        "swallowed by a fail-open wrapper is exactly what a fake cursor cannot "
+        "show. It must not go through database.get_connection(): that is the "
+        "application choke point and must stay uncoupled from a throwaway "
+        "test database"
+    ),
     "tests/test_p29_cutover_email_cliente.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "

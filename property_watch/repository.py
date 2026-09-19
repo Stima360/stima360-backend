@@ -68,13 +68,32 @@ def get_stima_completed_valuation(stima_id: int) -> dict[str, Any] | None:
 def ensure_watch_with_baseline(
     stima_id: int, baseline: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:
-    """Create the watch and its baseline atomically, returning existing rows on retry."""
+    """Create the watch and its baseline atomically, returning existing rows on retry.
+
+    PW-FIX: `agency_id` is derived from the persisted stima, inside the INSERT.
+
+    Migration 046 gave `property_watches` a physical `agency_id`; 048 made it
+    NOT NULL with no default, and its trigger VERIFIES the agency against the
+    stima but never assigns it. This ctx-less writer - the one the public
+    funnel reaches through `safe_ensure_watch_for_stima`, with no operator and
+    no scope - kept inserting `(stima_id, status)` only, so on any database
+    past 048 the row was refused and `safe_ensure` swallowed the refusal:
+    no watch, no baseline, no visible error.
+
+    `stime.agency_id` is the source of truth from the stima's COMMIT onward
+    (P27-6), so the row is written with `INSERT ... SELECT s.agency_id FROM
+    stime s`: no agency arrives from a caller, no second tenancy rule is
+    introduced, and the 048 trigger keeps checking the same equality it always
+    checked - it just no longer compares against NULL.
+    """
     idempotency_key = f"property_watch:watch_started:stima:{stima_id}:v1"
     with property_watch_cursor(commit=True) as (_, cur):
         cur.execute(
             """
-            INSERT INTO property_watches (stima_id, status)
-            VALUES (%s, 'active')
+            INSERT INTO property_watches (stima_id, status, agency_id)
+            SELECT s.id, 'active', s.agency_id
+            FROM stime s
+            WHERE s.id = %s
             ON CONFLICT (stima_id) WHERE stima_id IS NOT NULL
             DO NOTHING
             RETURNING *
