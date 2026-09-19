@@ -313,6 +313,22 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_lmc2_owner_homes_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing another entry: an "
+        "allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. Connects only to a disposable PostgreSQL that it creates "
+        "and drops itself, where it applies 009, 022 and 066 to prove LMC-2: "
+        "that a revoked, expired, foreign-owner or foreign-tenant home is "
+        "refused with the SAME neutral 404 as one that does not exist, that "
+        "the initial value comes from the watch baseline and falls back to the "
+        "tenant-scoped stima_completata event, that reading writes nothing, "
+        "and that no buyer or CRM datum reaches the owner. It must not go "
+        "through database.get_connection(): that is the application choke "
+        "point and must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_p29_cutover_email_cliente.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "

@@ -2239,3 +2239,125 @@ def issue_login_token_with_cursor(c,*,owner_account_id,agency_id,minutes,created
  raw=generate_secret()
  c.execute("INSERT INTO owner_access_tokens(owner_account_id,token_hash,token_type,expires_at,created_by) VALUES(%s,%s,'login',NOW()+make_interval(mins => %s),%s) RETURNING *",(owner_account_id,hash_secret(raw),minutes,created_by))
  return one(c),raw
+
+
+# ---------------------------------------------------------------------------
+# LMC-2 - le letture di "La Mia Casa". SOLO SELECT.
+#
+# IL PREDICATO DEL GRANT, IN UN POSTO SOLO. `_COHERENT_HOME_GRANT` e' per la
+# stima cio' che `_COHERENT_GRANT`/`_GRANT_ROOTS_AGREE` sono per l'immobile: le
+# due radici del grant - il contatto dell'account e la stima - devono nominare
+# la STESSA agenzia, e il grant deve essere attivo, non revocato e non scaduto.
+# Lista e dettaglio compongono la stessa stringa, quindi non possono avere due
+# idee diverse di chi puo' vedere che cosa.
+#
+# NESSUNA AGENZIA COME PARAMETRO. L'identita' qui e' l'`owner_account_id` della
+# sessione, come in tutto il portale; il tenant lo porta il grant. Le funzioni
+# che leggono PROPERTY WATCH ricevono invece un'agenzia, ma e' quella che
+# `home_agency_for_account` ha ricavato dal contatto - server-side, mai dal
+# client.
+#
+# COSA NON ESCE DA QUI. `stime` contiene nome, cognome, email e telefono di chi
+# ha chiesto la stima, piu' campi gestionali (`lead_status`, `note_internal`,
+# `prezzo_mq_base`, `token`). Le SELECT sotto NOMINANO le colonne una per una e
+# non usano `*`: l'elenco e' la lista di cio' che il proprietario puo' vedere,
+# e aggiungere una colonna e' un atto visibile in diff.
+# ---------------------------------------------------------------------------
+
+#: Le colonne di `stime` che il portale proprietario puo' leggere. Nessun dato
+#: personale, nessun campo gestionale, nessun prezzo di riferimento interno.
+HOME_STIMA_COLUMNS = (
+    "id", "comune", "microzona", "via", "civico", "tipologia", "mq", "piano",
+    "locali", "bagni", "pertinenze", "ascensore", "anno", "stato",
+    "vistamareyn", "distanzamare", "altrodescrizione", "data",
+)
+
+_HOME_GRANT_JOIN = """
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+"""
+
+_HOME_GRANT_WHERE = """
+     WHERE x.owner_account_id = %s
+       AND ct.agency_id = s.agency_id
+       AND x.access_status = 'active'
+       AND x.revoked_at IS NULL
+       AND (x.valid_until IS NULL OR x.valid_until > NOW())
+"""
+
+
+def _home_columns(alias="s"):
+ return ", ".join(f"{alias}.{c}" for c in HOME_STIMA_COLUMNS)
+
+
+def home_agency_for_account(owner_account_id):
+ """L'agenzia dell'account, dalla catena account -> contatto -> agenzia.
+
+ E' l'unico modo in cui un tenant entra nel read model di LMC-2, ed e' la
+ stessa catena che P26-6C ha certificato per l'Owner Admin. `None` quando
+ l'account non esiste o il contatto non ha agenzia: il chiamante lo tratta
+ come "nessuna casa", mai come "tutte".
+ """
+ with core_cursor() as(_,c):
+  c.execute("SELECT ct.agency_id FROM owner_accounts oa JOIN contacts ct ON ct.id=oa.contact_id WHERE oa.id=%s",(owner_account_id,));r=c.fetchone()
+ return r['agency_id'] if r else None
+
+
+def list_home_grants(owner_account_id):
+ """Le stime accessibili all'account, con le colonne pubbliche. Zero o piu'."""
+ with core_cursor() as(_,c):
+  c.execute(f"SELECT {_home_columns()}, s.agency_id AS agency_id{_HOME_GRANT_JOIN}{_HOME_GRANT_WHERE} ORDER BY s.id",(owner_account_id,))
+  return[dict(x) for x in c.fetchall()]
+
+
+def get_home_grant(owner_account_id,stima_id):
+ """Una stima, se quell'account puo' vederla. Altrimenti il 404 neutro.
+
+ Assente, di un altro proprietario, di un'altra agenzia, con il grant revocato
+ o scaduto: una risposta sola, di proposito. Distinguerle direbbe a chi prova
+ un id quali stime esistono.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"SELECT {_home_columns()}, s.agency_id AS agency_id{_HOME_GRANT_JOIN}{_HOME_GRANT_WHERE} AND x.stima_id = %s",(owner_account_id,stima_id))
+  return one(c)
+
+
+def home_completed_valuation(agency_id,stima_id):
+ """Il payload dell'evento `stima_completata` di QUELLA stima, in QUELL'agenzia.
+
+ E' il ripiego del valore iniziale quando il watch non c'e'. Il predicato
+ porta l'agenzia perche' `stima_id` da solo non e' un tenant: un evento
+ scritto per un'altra agenzia non puo' diventare il valore di questa casa.
+ Il piu' recente, se per qualsiasi ragione ce ne fosse piu' di uno.
+ """
+ with core_cursor() as(_,c):
+  c.execute("SELECT payload FROM seller_timeline_events WHERE stima_id=%s AND agency_id=%s AND event_type='stima_completata' ORDER BY occurred_at DESC, id DESC LIMIT 1",(stima_id,agency_id));r=c.fetchone()
+ if not r:return None
+ payload=r['payload']
+ return dict(payload) if isinstance(payload,dict) else None
+
+
+def home_watch_summary(agency_id,stima_id):
+ """Presenza e stato del watch, e i due estremi della sua storia.
+
+ Non ritorna le osservazioni: in LMC-2 il proprietario vede QUANTA storia c'e'
+ e da quando, non che cosa contiene - meta' di quei payload sono metriche
+ interne (pressione degli acquirenti, inventario dei concorrenti) che
+ appartengono alla fase LMC-4 e alla decisione di pubblicarle.
+ """
+ with core_cursor() as(_,c):
+  c.execute("SELECT id, status FROM property_watches WHERE stima_id=%s AND agency_id=%s",(stima_id,agency_id));w=c.fetchone()
+  if not w:return None
+  # Tipo e data, MAI il payload: e' cio' che serve per dire quanta storia c'e'
+  # e da quando, e non c'e' nessun modo di far uscire per sbaglio una metrica
+  # interna da righe che non la portano.
+  c.execute("SELECT observation_type, observed_at FROM property_watch_observations WHERE watch_id=%s ORDER BY observed_at ASC, id ASC",(w['id'],))
+  osservazioni=[dict(x) for x in c.fetchall()]
+  # La baseline e' l'unica osservazione di cui si legge il payload, e se ne
+  # prende un campo solo (`price_exact`, lato servizio): e' il valore che il
+  # motore calcolo' al momento della stima.
+  c.execute("SELECT payload FROM property_watch_observations WHERE watch_id=%s AND observation_type='watch_started' ORDER BY observed_at ASC, id ASC LIMIT 1",(w['id'],));b=c.fetchone()
+ baseline=b['payload'] if b else None
+ return {'status':w['status'],'observations':osservazioni,'baseline_payload':dict(baseline) if isinstance(baseline,dict) else None}

@@ -52,6 +52,27 @@ class LoginLinkRequest(M):
     email: str = Field(min_length=1, max_length=320)
 
 
+class HomeSummary(M):
+    """LMC-2: una casa nella lista. Solo campi descrittivi e di stato."""
+
+    stima_id: int
+    comune: str | None = None
+    microzona: str | None = None
+    via: str | None = None
+    civico: str | None = None
+    tipologia: str | None = None
+    mq: int | None = None
+    created_at: datetime | None = None
+    has_watch: bool
+    initial_value: float | None = None
+    last_update_at: datetime | None = None
+    data_status: Literal["ready", "partial", "building_history"]
+
+
+class HomeListResponse(M):
+    items: list[HomeSummary]
+
+
 class PublicationCreate(M):
     property_id: int
     publication_type: Literal[

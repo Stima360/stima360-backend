@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
+from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, HomeListResponse, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
 from .dependencies import current_owner
-from . import login_service
+from . import home_service, login_service
 from .security import clear_cookie, set_cookie
 from .enums import COOKIE_NAME
 from . import repository as r
@@ -102,8 +102,24 @@ def session(s=Depends(current_owner)):
 
 @router.get("/dashboard")
 def dashboard(s=Depends(current_owner)):
-    items = nf(r.portal_properties, s["owner_account_id"])
-    return {"properties": items, "property_count": len(items)}
+    """LMC-2: additivo. `properties` e `property_count` restano quelli di
+    prima, con la stessa funzione dietro; `homes` e `home_count` si aggiungono
+    per il pre-incarico. Un owner legacy vede lista vuota e zero, e nient'altro
+    cambia per lui."""
+    return nf(home_service.build_dashboard, s["owner_account_id"])
+
+
+@router.get("/homes", response_model=HomeListResponse)
+def homes(s=Depends(current_owner)):
+    """Le case PRE-INCARICO dell'owner autenticato."""
+    return {"items": nf(home_service.list_homes, s["owner_account_id"])}
+
+
+@router.get("/homes/{stima_id}")
+def home_detail(stima_id: int, s=Depends(current_owner)):
+    """Una casa sola. `nf` traduce qualunque rifiuto nel 404 neutro, quindi
+    non autorizzato e inesistente danno la stessa risposta."""
+    return nf(home_service.get_home, s["owner_account_id"], stima_id)
 
 
 @router.get("/properties")
