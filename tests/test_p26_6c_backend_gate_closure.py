@@ -1463,7 +1463,12 @@ def test_48_the_owner_portal_takes_no_agency_and_no_account_from_the_client():
 
     assert offenders == [], offenders
     # Only the two routes that cannot have a session yet are exempt.
-    assert routed - session_bound == {"login", "logout"}, sorted(routed - session_bound)
+    # LMC-1B: `request_link` e' la terza che non ha una sessione, e non puo'
+    # averla - la chiede chi non e' ancora entrato. Non prende pero' nessun
+    # identificativo dal client (l'asserzione sugli argomenti, qui sopra, vale
+    # anche per lei): riceve un indirizzo e risponde sempre allo stesso modo.
+    assert routed - session_bound == {"login", "logout", "request_link"}, \
+        sorted(routed - session_bound)
 
 
 def test_49_every_portal_query_that_follows_a_grant_requires_the_two_roots_to_agree():

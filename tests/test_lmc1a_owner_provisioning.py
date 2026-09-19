@@ -343,7 +343,7 @@ def test_e2_il_runner_non_solleva_violazioni_e_la_serie_resta_valida(runner):
         violazioni.extend(runner.validate_migration(migration))
     assert violazioni == []
     numeri = [m.number for m in runner.discover_migrations()]
-    assert numeri[-1] == 66 and numeri[-2] == 65
+    assert 66 in numeri and numeri[numeri.index(66) - 1] == 65
 
 
 def test_e3_la_up_e_runner_owned_e_non_tocca_il_ledger(runner):

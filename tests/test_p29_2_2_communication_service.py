@@ -94,10 +94,23 @@ def dati_validi(**override):
     return base
 
 
+#: LMC-1B: la 067 allarga `reason_code` di un valore. Il CHECK che il database
+#: ha davvero e' quello della 064 EMENDATO dalle migration successive, quindi si
+#: legge l'ultima definizione della serie e non la prima: confrontare l'enum con
+#: la sola 064 direbbe che il codice ha un valore di troppo, mentre e' la 064 ad
+#: avere un valore in meno.
+EMENDAMENTI = tuple(
+    (ROOT / "migrations" / f"{v}.sql").read_text(encoding="utf-8")
+    for v in ("067_lmc1b_owner_login_reason",)
+)
+
+
 def valori_del_check(nome: str) -> set[str]:
-    """I letterali ammessi da un CHECK ... IN (...) della migration 064."""
-    clausola = re.search(rf"CONSTRAINT {nome}\s*CHECK \(([^)]*\))", MIGRAZIONE)
-    assert clausola, f"{nome} non e' nella 064"
+    """I letterali ammessi da un CHECK ... IN (...), come risulta dopo la serie."""
+    clausole = re.findall(
+        rf"CONSTRAINT {nome}\s*CHECK \(([^)]*\))", MIGRAZIONE + "".join(EMENDAMENTI))
+    assert clausole, f"{nome} non e' nella 064"
+    clausola = re.match(r"(?s)(.*)", clausole[-1])
     return set(re.findall(r"'([a-z_0-9]+)'", clausola.group(1)))
 
 
@@ -473,11 +486,11 @@ def test_n7_nessuna_migration_nuova():
         int(p.name[:3]) for p in (ROOT / "migrations").glob("*.sql")
         if not p.name.endswith("_down.sql") and p.name[:3].isdigit()
     )
-    # P29-2.2 non ha introdotto migration, e non lo fa adesso: la 065 e'
-    # di P29-2.6E (`contact_id` nullable per le SERVICE senza contatto).
-    # Cio' che resta vietato qui e' che una migration nasca DA QUESTA fase,
-    # e la 065 non le appartiene.
-    assert numeri[-1] == 66, "la serie si e' fermata o e' andata oltre la 066"
+    # P29-2.2 non ha introdotto migration, e non lo fa adesso: la 065 e' di
+    # P29-2.6E, la 066 di LMC-1A, la 067 di LMC-1B (il reason code del magic
+    # link owner). Cio' che resta vietato qui e' che una migration nasca DA
+    # QUESTA fase, e nessuna di quelle le appartiene.
+    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

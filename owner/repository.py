@@ -2134,3 +2134,108 @@ def provision_stima_access(agency_id, *, contact_id, stima_id, granted_by):
   if access_created:
    _audit_with_cursor(c,'stima_access_granted',account['id'],etype='owner_stima_access',eid=access['id'],meta={'stima_id':stima_id,'granted_by':granted_by,'access_role':access['access_role']})
   return {'status':'provisioned' if access_created else 'already_provisioned','owner_account_id':account['id'],'access_id':access['id'],'account_created':account_created,'access_created':access_created}
+
+
+# ---------------------------------------------------------------------------
+# LMC-1B - il lookup e il token del magic link.
+#
+# `audit_with_cursor` e' l'alias pubblico di `_audit_with_cursor`: il servizio
+# di login compone la propria transazione e ha bisogno di scrivere l'audit su
+# QUEL cursore, non su una connessione nuova.
+#
+# IL LOOKUP NON PRENDE UN'AGENZIA. Ne restituisce una per riga: quella del
+# contatto che porta l'indirizzo. E' l'unico punto del flusso in cui il tenant
+# nasce, e nasce da un dato del server - `contacts.email_normalized` - mai da
+# ciò che il client ha scritto oltre all'indirizzo stesso.
+#
+# ELEGGIBILITA': un account non disabilitato il cui contatto ha quell'indirizzo
+# e che possiede ALMENO UN accesso valido, di uno dei due mondi:
+#
+#     PRE-INCARICO   owner_stima_access  -> stime      (LMC-1A, migration 066)
+#     POST-INCARICO  owner_property_access -> properties (Owner Portal legacy)
+#
+# Entrambi con lo stesso predicato di validita' che il portale gia' applica
+# (attivo, non revocato, non scaduto) e con le DUE RADICI CHE CONCORDANO: il
+# contatto dell'account e la stima (o l'immobile) devono nominare la stessa
+# agenzia. E' la stessa regola di `_COHERENT_GRANT`/`_GRANT_ROOTS_AGREE` qui
+# sopra, estesa al grant pre-incarico: un grant scritto fra due agenzie non
+# rende nessuno eleggibile, e non viene riparato - viene ignorato.
+# ---------------------------------------------------------------------------
+
+audit_with_cursor = _audit_with_cursor
+
+_GRANT_VALIDO = ("x.access_status='active' AND x.revoked_at IS NULL "
+                 "AND (x.valid_until IS NULL OR x.valid_until>NOW())")
+
+_LOGIN_CANDIDATES = f"""
+SELECT oa.id AS owner_account_id, ct.id AS contact_id, ct.agency_id AS agency_id,
+       ct.email AS email, ct.display_name AS display_name
+  FROM owner_accounts oa
+  JOIN contacts ct ON ct.id = oa.contact_id
+ WHERE ct.email_normalized = %s
+   AND oa.status <> 'disabled'
+   AND ct.agency_id IS NOT NULL
+   AND (
+        EXISTS (SELECT 1 FROM owner_stima_access x
+                  JOIN stime s ON s.id = x.stima_id
+                 WHERE x.owner_account_id = oa.id
+                   AND s.agency_id = ct.agency_id
+                   AND {_GRANT_VALIDO})
+     OR EXISTS (SELECT 1 FROM owner_property_access x
+                  JOIN properties p ON p.id = x.property_id
+                 WHERE x.owner_account_id = oa.id
+                   AND p.agency_id = ct.agency_id
+                   AND {_GRANT_VALIDO})
+   )
+ ORDER BY oa.id
+"""
+
+
+def find_login_candidates(email_normalized):
+ """Gli account che possono ricevere un magic link per quell'indirizzo.
+
+ Zero, uno o piu' di uno: la stessa persona puo' essere contatto di piu'
+ agenzie, e ognuna e' un tenant a se'. Nessuna riga significa "nessuno", e il
+ chiamante non deve distinguerlo da nient'altro verso l'esterno.
+ """
+ if not email_normalized:return[]
+ with core_cursor() as(_,c):c.execute(_LOGIN_CANDIDATES,(email_normalized,));return[dict(x) for x in c.fetchall()]
+
+
+def issue_login_token_with_cursor(c,*,owner_account_id,agency_id,minutes,created_by,
+                                  max_recent=3,window_minutes=15):
+ """Il token di login, sul cursore del chiamante. Non committa.
+
+ Ritorna `(riga, raw)`, oppure `(None, None)` se l'account ha gia' raggiunto
+ il tetto di token di login CREATI nella finestra. Il segreto in chiaro
+ esiste solo qui e nel valore di ritorno: in tabella va lo sha256, come per
+ ogni altro token owner.
+
+ SI CONTANO LE RICHIESTE, NON I LINK ANCORA APERTI. Il conteggio non guarda
+ `used_at` ne' `revoked_at`: una richiesta gia' fatta pesa per tutti e quindici
+ i minuti, che l'abbiano usata o no. Escludere i token consumati avrebbe
+ trasformato il limite in una porta girevole - apri il link, il posto si
+ libera, ne chiedi un altro - e avrebbe reso il tetto inefficace proprio per
+ chi ha accesso alla casella e sta ripetendo la richiesta. Solo il tempo
+ libera un posto.
+
+ Perche' sul cursore del chiamante: il token e il messaggio che lo porta
+ devono vivere o cadere insieme. Un token committato e una email mai accodata
+ e' una credenziale che nessuno ricevera' mai ma che occupa il rate limit di
+ chi ci riprova.
+
+ L'advisory lock sull'account serializza due richieste simultanee per lo
+ stesso proprietario: senza, entrambe conterebbero due token e ne scriverebbero
+ un terzo e un quarto.
+
+ Il tenant si verifica qui come ovunque in OWNER: `_require_account_in_agency`
+ risale l'account al suo contatto e rifiuta con il 404 neutro se non e' di
+ `agency_id`.
+ """
+ c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0)) AS locked",(f"owner:login_token:account:{owner_account_id}",))
+ _require_account_in_agency(c,agency_id,owner_account_id)
+ c.execute("SELECT count(*) AS n FROM owner_access_tokens WHERE owner_account_id=%s AND token_type='login' AND created_at >= NOW() - make_interval(mins => %s)",(owner_account_id,window_minutes))
+ if c.fetchone()['n']>=max_recent:return None,None
+ raw=generate_secret()
+ c.execute("INSERT INTO owner_access_tokens(owner_account_id,token_hash,token_type,expires_at,created_by) VALUES(%s,%s,'login',NOW()+make_interval(mins => %s),%s) RETURNING *",(owner_account_id,hash_secret(raw),minutes,created_by))
+ return one(c),raw

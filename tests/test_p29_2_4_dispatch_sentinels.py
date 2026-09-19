@@ -118,7 +118,11 @@ def test_S3_e_il_tipo_a_decidere_se_il_gate_si_applica():
 def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     from operator_auth import context
 
-    assert context.SYSTEM_CONTEXT_ORIGINS == ("public_stima", "communication_dispatch")
+    # LMC-1B ha aggiunto `owner_login` (il magic link del proprietario). Cio'
+    # che questa sentinella protegge non e' la cardinalita' ma il dispatcher:
+    # il suo origin esiste, e' il suo, e non e' quello di nessun altro flusso.
+    assert context.SYSTEM_CONTEXT_ORIGINS == (
+        "public_stima", "communication_dispatch", "owner_login")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
@@ -366,7 +370,7 @@ def test_N4_nessuna_migration_nuova():
     # di P29-2.6E (`contact_id` nullable per le SERVICE senza contatto).
     # Cio' che resta vietato qui e' che una migration nasca DA QUESTA fase,
     # e la 065 non le appartiene.
-    assert numeri[-1] == 66, "la serie si e' fermata o e' andata oltre la 066"
+    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

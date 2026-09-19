@@ -296,6 +296,23 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_lmc1b_owner_login_link_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing another entry: an "
+        "allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. Connects only to a disposable PostgreSQL that it creates "
+        "and drops itself, where it applies 009, 064, 065, 066 and 067 to "
+        "prove LMC-1B: that the database admits owner_login_link only after "
+        "067 and still refuses an invented reason code, that a login token "
+        "lasts thirty minutes and is stored as a hash, that the rate limit "
+        "counts real rows, that a failed enqueue takes its token down with it "
+        "because both live in one transaction, and that the down refuses while "
+        "login messages exist. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_p29_cutover_email_cliente.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "

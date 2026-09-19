@@ -549,12 +549,17 @@ def test_system_context_origin_public_stima_is_accepted():
 
 def test_system_context_origin_set_is_closed_and_declared():
     """P26-1 ne entitolava uno. P29-2.4 ne aggiunge un secondo, approvato dal
-    design come decisione D1.
+    design come decisione D1. LMC-1B ne aggiunge un terzo, `owner_login`: la
+    richiesta di magic link del proprietario, che come le altre due non ha un
+    operatore dietro e come le altre due prende l'agenzia da una riga del
+    database e mai dalla richiesta.
 
-    L'asserzione resta per UGUAGLIANZA, ed e' il punto: un terzo origin aggiunto
-    per distrazione fa fallire questo test, che e' esattamente cio' per cui
-    l'insieme e' chiuso. Ampliarlo e' un atto deliberato, e passa da qui."""
-    assert context.SYSTEM_CONTEXT_ORIGINS == ("public_stima", "communication_dispatch")
+    L'asserzione resta per UGUAGLIANZA, ed e' il punto: un QUARTO origin
+    aggiunto per distrazione fa fallire questo test, che e' esattamente cio'
+    per cui l'insieme e' chiuso. Ampliarlo e' un atto deliberato, e passa da
+    qui."""
+    assert context.SYSTEM_CONTEXT_ORIGINS == (
+        "public_stima", "communication_dispatch", "owner_login")
 
 
 def test_system_context_rejects_an_unapproved_origin():

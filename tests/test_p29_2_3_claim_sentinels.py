@@ -434,7 +434,7 @@ def test_N6_nessuna_migration_nuova():
     # di P29-2.6E (`contact_id` nullable per le SERVICE senza contatto).
     # Cio' che resta vietato qui e' che una migration nasca DA QUESTA fase,
     # e la 065 non le appartiene.
-    assert numeri[-1] == 66, "la serie si e' fermata o e' andata oltre la 066"
+    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

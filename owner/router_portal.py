@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, NotificationPreferencesUpdate, TokenConsume
+from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
 from .dependencies import current_owner
+from . import login_service
 from .security import clear_cookie, set_cookie
 from .enums import COOKIE_NAME
 from . import repository as r
@@ -59,6 +60,22 @@ def shared_document_nf(
             reason_code=getattr(exc, "error_code", "not_found"),
         )
         raise HTTPException(404, 'Risorsa non trovata')
+
+@router.post("/auth/request-link", status_code=204)
+def request_link(p: LoginLinkRequest):
+    """LMC-1B: chiede il magic link per accedere a "La Mia Casa".
+
+    Pubblica per forza - chi la chiama non ha ancora una sessione - e per
+    questo risponde SEMPRE 204 a corpo vuoto: indirizzo sconosciuto, account
+    disabilitato, nessun accesso valido, rate limit, guasto interno danno tutti
+    la stessa risposta, altrimenti bastera' provare indirizzi per sapere quali
+    esistono. Tutto cio' che si puo' sapere sta nel log del server.
+
+    Nessuna logica qui: `safe_request_login_link` non solleva mai e decide.
+    """
+    login_service.safe_request_login_link(p.email)
+    return None
+
 
 @router.post("/auth/token", status_code=204)
 def login(p: TokenConsume, response: Response):

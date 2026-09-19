@@ -91,7 +91,7 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
 
     numeri = sorted(m.number for m in runner.discover_migrations())
     assert 64 in numeri and 63 in numeri, numeri[-4:]
-    assert numeri[-1] == 66, numeri[-4:]
+    assert numeri[-1] == 67, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
@@ -128,11 +128,21 @@ def test_l5_la_065_esiste_ma_non_e_di_questa_fase():
         "066_lmc1_owner_stima_access.sql",
         "066_lmc1_owner_stima_access_down.sql",
     ], "una 066 diversa da quella di LMC-1A e' comparsa senza la fase che la giustifica"
-    assert sorted(p.name for p in MIGRATIONS.glob("067*.sql")) == [], (
-        "una 067 e' comparsa senza la fase che la giustifica"
+    assert sorted(p.name for p in MIGRATIONS.glob("067*.sql")) == [
+        "067_lmc1b_owner_login_reason.sql",
+        "067_lmc1b_owner_login_reason_down.sql",
+    ], "una 067 diversa da quella di LMC-1B e' comparsa senza la fase che la giustifica"
+    assert sorted(p.name for p in MIGRATIONS.glob("068*.sql")) == [], (
+        "una 068 e' comparsa senza la fase che la giustifica"
     )
     up_066 = (MIGRATIONS / "066_lmc1_owner_stima_access.sql").read_text(encoding="utf-8")
     assert "communication_messages" not in up_066, "la 066 non e' di P29"
+    # La 067 TOCCA `communication_messages`, ma non e' una migration di P29:
+    # allarga di un valore il CHECK del motivo per un flusso OWNER, e non
+    # aggiunge ne' `delivered_at` ne' i thread, che restano non scritti.
+    up_067 = (MIGRATIONS / "067_lmc1b_owner_login_reason.sql").read_text(encoding="utf-8")
+    assert "delivered_at" not in up_067 and "thread" not in up_067
+    assert "CREATE TABLE" not in up_067
     up = (MIGRATIONS / "065_p29_service_lifecycle_parent.sql").read_text(encoding="utf-8")
     assert "delivered_at" not in up, "la 065 anticipa D3, che il design mette DOPO"
 

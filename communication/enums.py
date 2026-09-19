@@ -135,9 +135,14 @@ REASON_M2 = "m2"
 REASON_M3 = "m3"
 REASON_M4 = "m4"
 REASON_M5 = "m5"
+# LMC-1B: il magic link con cui il proprietario entra in "La Mia Casa". E' di
+# SERVIZIO - risponde a una richiesta esplicita del destinatario - e il suo
+# valore nel CHECK arriva dalla migration 067, non dalla 064.
+REASON_OWNER_LOGIN_LINK = "owner_login_link"
 REASON_CODES = frozenset({
     REASON_STIMA_PDF, REASON_OPERATOR_MANUAL, REASON_OPERATOR_REPLY,
     REASON_M1, REASON_M2, REASON_M3, REASON_M4, REASON_M5,
+    REASON_OWNER_LOGIN_LINK,
 })
 
 # --------------------------------------------------------------------------

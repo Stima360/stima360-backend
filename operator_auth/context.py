@@ -44,7 +44,17 @@ AUTH_CHANNELS = ("operator_session", "legacy_basic")
 # L'agenzia resta quella della sessione autenticata che invoca il dispatcher -
 # non arriva mai dal payload - quindi questo secondo origin non allarga nulla:
 # esprime "questa agenzia", come il primo.
-SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch")
+# LMC-1B aggiunge il terzo: la richiesta di magic link del proprietario. Come i
+# due precedenti non ha un operatore dietro - la avvia chi non e' ancora
+# autenticato - e come i due precedenti l'agenzia NON arriva dalla richiesta: e'
+# quella del contatto che il server ha trovato per quell'indirizzo, letta da
+# `contacts.agency_id`. Un contesto per account trovato, mai uno globale.
+#
+# Non allarga nessun privilegio: `SystemAgencyContext` espone "questa agenzia" e
+# nient'altro, e chi lo riceve continua a controllarne l'origine - il bridge del
+# funnel pubblico ammette solo `public_stima`, il dispatcher solo
+# `communication_dispatch`.
+SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login")
 
 
 @runtime_checkable

@@ -388,7 +388,7 @@ def test_N4_nessuna_migration_nuova():
     # P29-2.5E non ha introdotto migration: la 065 e' di P29-2.6E, la fase
     # successiva, e riguarda il genitore di lifecycle delle SERVICE senza
     # contatto - non il trasporto email.
-    assert numeri[-1] == 66, "la serie si e' fermata o e' andata oltre la 066"
+    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
     assert 64 in numeri
 
 

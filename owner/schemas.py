@@ -34,6 +34,24 @@ class TokenConsume(M):
     token: str = Field(min_length=32, max_length=512)
 
 
+class LoginLinkRequest(M):
+    """LMC-1B: l'indirizzo, e nient'altro.
+
+    Nessun `agency_id`, nessun `owner_account_id`: chi chiede il link non
+    sceglie il tenant, lo si ricava dal contatto che porta l'indirizzo. Il
+    limite di 320 caratteri e' quello di `contacts.email` e ferma un corpo
+    enorme prima che diventi una query.
+
+    La validazione e' volutamente LARGA - una stringa non vuota - perche' un
+    422 su un indirizzo malformato e un 204 su uno sconosciuto sarebbero due
+    risposte diverse, cioe' un canale di enumerazione: l'indirizzo che non
+    esiste e quello che non e' nemmeno un indirizzo devono finire nello stesso
+    silenzio, e ci arrivano perche' la normalizzazione non trova nessuno.
+    """
+
+    email: str = Field(min_length=1, max_length=320)
+
+
 class PublicationCreate(M):
     property_id: int
     publication_type: Literal[

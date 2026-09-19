@@ -656,9 +656,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # la 059 e' l'ULTIMA di P27 e segue la 058 - e sale di una fase per volta,
     # deliberatamente.
     # P29-2.6E ha aggiunto la 065 (`contact_id` nullable per le comunicazioni
-    # SERVICE senza contatto, con la stima come genitore di lifecycle). Il perno
-    # sale di una fase per volta, deliberatamente, ed e' questa la fase.
-    assert numeri[-1] == 66, numeri[-4:]
+    # SERVICE senza contatto, con la stima come genitore di lifecycle), LMC-1A
+    # la 066 (il grant pre-incarico owner/stima) e LMC-1B la 067 (il motivo
+    # `owner_login_link` nel ledger). Il perno sale di una fase per volta,
+    # deliberatamente.
+    assert numeri[-1] == 67, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

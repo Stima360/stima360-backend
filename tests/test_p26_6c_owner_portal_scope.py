@@ -279,7 +279,12 @@ def test_7_every_portal_route_still_derives_the_account_from_the_session():
 
     # The two that legitimately have no session yet: consuming a token, and
     # logging out. Everything else is session-bound.
-    assert routed - session_bound == {"login", "logout"}, sorted(routed - session_bound)
+    # LMC-1B: `request_link` e' la terza che non ha una sessione, e non puo'
+    # averla - la chiede chi non e' ancora entrato. Non prende pero' nessun
+    # identificativo dal client (l'asserzione sugli argomenti, qui sopra, vale
+    # anche per lei): riceve un indirizzo e risponde sempre allo stesso modo.
+    assert routed - session_bound == {"login", "logout", "request_link"}, \
+        sorted(routed - session_bound)
 
 
 def test_8_the_session_and_token_lookups_are_unchanged():
