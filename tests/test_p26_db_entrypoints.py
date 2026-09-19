@@ -329,6 +329,23 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "through database.get_connection(): that is the application choke "
         "point and must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_lmc3_valuation_snapshot_postgres.py": (
+        "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
+        "explicitly supplied: without that variable the whole module is "
+        "skipped, so it never reaches TEST or PROD from a development machine. "
+        "Registered in its own right rather than reusing another entry: an "
+        "allow-list shared between phases would let a new entrypoint arrive "
+        "unannounced. Connects only to a disposable PostgreSQL that it creates "
+        "and drops itself, where it applies 009, 022 and 066 to prove LMC-3: "
+        "that a refresh writes one valuation_snapshot computed by the official "
+        "engine, that repeating it the same day with the same input and the "
+        "same algorithm writes nothing and overwrites nothing, that changed "
+        "input or a changed fingerprint writes a NEW row beside the old one, "
+        "that agency A cannot snapshot agency B's estimation, and that the "
+        "owner read model reads those snapshots back. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_p29_cutover_email_cliente.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "

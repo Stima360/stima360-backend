@@ -33,6 +33,7 @@ colonne dichiarate. Cio' che non e' stato scritto esplicitamente non esce.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.exceptions import NotFoundError
@@ -64,20 +65,27 @@ BASELINE_OBSERVATION = "watch_started"
 
 #: I tipi di osservazione che costituiscono STORIA DEL VALORE dell'immobile.
 #:
-#: Vuoto, e resta vuoto per tutta LMC-2. Le osservazioni che PROPERTY WATCH
-#: scrive oggi - `microzone_price_changed`, `internal_supply_snapshot`,
+#: Uno solo, e per costruzione. Le altre osservazioni che PROPERTY WATCH
+#: scrive - `microzone_price_changed`, `internal_supply_snapshot`,
 #: `buyer_pressure_snapshot` - sono monitoraggio del MERCATO attorno alla casa:
 #: dicono che il prezzo medio della microzona si e' mosso, quante case
 #: concorrenti ci sono, quanta pressione c'e' dal lato acquirenti. Nessuna di
-#: esse afferma che QUESTA casa oggi vale una cifra diversa da quella della
-#: stima. Trattarle come storia del valore significherebbe mostrare al
-#: proprietario un andamento che nessuno ha calcolato.
+#: esse afferma che QUESTA casa oggi vale una cifra diversa, e trattarle come
+#: storia del valore significherebbe mostrare un andamento che nessuno ha
+#: calcolato.
 #:
-#: L'unica cosa che sara' storia del valore e' il `valuation_snapshot` di
-#: LMC-3: un ricalcolo esplicito, con il motore ufficiale, datato e persistito.
-#: Finche' non esiste, `valuation_history` e' false e `history_status` e'
-#: `building` - qualunque sia il numero di osservazioni.
-VALUATION_HISTORY_OBSERVATIONS: frozenset[str] = frozenset()
+#: `valuation_snapshot` (LMC-3) lo afferma: e' un ricalcolo esplicito con il
+#: motore ufficiale, datato, con l'impronta dell'input e dell'algoritmo.
+VALUATION_HISTORY_OBSERVATIONS: frozenset[str] = frozenset({"valuation_snapshot"})
+
+#: I periodi su cui si espone una variazione, in giorni.
+CHANGE_WINDOWS = (("change_30d", 30), ("change_90d", 90), ("change_365d", 365))
+
+#: I campi di uno snapshot che il proprietario vede. `reason` e `input_digest`
+#: restano interni: dicono perche' il sistema ha ricalcolato e su quali dati,
+#: che e' diagnostica, non informazione sulla casa.
+SNAPSHOT_PUBLIC_FIELDS = ("computed_at", "price_exact", "eur_mq_finale",
+                          "algorithm_fingerprint")
 
 #: Gli stati dei dati esposti al frontend.
 STATUS_READY = "ready"
@@ -88,8 +96,11 @@ STATUS_BUILDING_HISTORY = "building_history"
 SOURCE_BASELINE = "property_watch_baseline"
 SOURCE_EVENT = "seller_timeline_event"
 
-#: Lo stato del valore corrente finche' LMC-3 non esiste.
-CURRENT_VALUE_STATUS = "history_not_available"
+#: Lo stato del valore corrente: `available` quando esiste almeno uno
+#: snapshot, altrimenti `history_not_available`. La baseline NON e' un valore
+#: corrente e non fa mai diventare questo stato `available`.
+CURRENT_VALUE_AVAILABLE = "available"
+CURRENT_VALUE_MISSING = "history_not_available"
 
 
 class OwnerAgencyScope:
@@ -207,6 +218,100 @@ def _data_status(valore, ha_watch: bool) -> str:
     return STATUS_READY if ha_watch else STATUS_BUILDING_HISTORY
 
 
+def _snapshots(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Gli snapshot del valore, in ordine di calcolo. Solo quelli veri.
+
+    Un'osservazione senza payload - tutte quelle che non sono snapshot, per
+    come il repository le legge - non puo' entrare qui nemmeno per errore.
+    """
+    punti = [o for o in observations
+             if o.get("observation_type") in VALUATION_HISTORY_OBSERVATIONS
+             and isinstance(o.get("payload"), dict)
+             and _price(o["payload"]) is not None]
+    return sorted(punti, key=lambda o: o["payload"].get("computed_at") or o.get("observed_at") or "")
+
+
+def _public_snapshot(osservazione: dict[str, Any]) -> dict[str, Any]:
+    """Un punto dello storico, campo per campo."""
+    payload = osservazione["payload"]
+    return {campo: payload.get(campo) for campo in SNAPSHOT_PUBLIC_FIELDS}
+
+
+def _as_datetime(valore) -> datetime | None:
+    if isinstance(valore, datetime):
+        return valore if valore.tzinfo else valore.replace(tzinfo=timezone.utc)
+    if isinstance(valore, str):
+        try:
+            momento = datetime.fromisoformat(valore.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return momento if momento.tzinfo else momento.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _change(punti: list[dict[str, Any]], giorni: int):
+    """La variazione su una finestra, oppure `None` se la storia non basta.
+
+    L'ANCORA E' L'ULTIMO SNAPSHOT REALE, NON L'OROLOGIO. Il confine si misura
+    da `ultimo.computed_at`, non da adesso: "negli ultimi 30 giorni" significa
+    "nei 30 giorni che precedono il valore che sto mostrando". Se l'ultimo
+    ricalcolo e' di 40 giorni fa, una finestra ancorata a oggi confronterebbe
+    quel valore con se' stesso - il confine `oggi - 30 giorni` cadrebbe DOPO
+    di esso, quindi nessun punto precedente resterebbe eleggibile, oppure
+    peggio lo si prenderebbe come termine di paragone di se' stesso. Ancorando
+    all'ultimo snapshot, `change_30d` resta sempre "quanto e' cambiato nei 30
+    giorni prima di questa misura", che e' l'unica frase vera che i dati
+    sostengono.
+
+    LA REGOLA DI SELEZIONE, per intero. Si prende l'ultimo snapshot e, fra
+    quelli calcolati PRIMA del confine `ultimo.computed_at - giorni`, il PIU'
+    RECENTE: e' quello che meglio rappresenta "com'era allora" senza andare
+    piu' indietro del necessario. L'ultimo non puo' mai essere anche il punto
+    di partenza (si guarda solo `punti[:-1]`). Se nessuno snapshot e'
+    abbastanza vecchio, la risposta e' `None` - non si usa la baseline al suo
+    posto, non si ripiega su osservazioni di mercato, e non si sposta il
+    confine per far tornare un numero.
+
+    METODOLOGIA. Se i due punti sono stati calcolati con impronte diverse,
+    la differenza mescola mercato e metodo: `methodology_changed` lo dice, e
+    `change_percent` diventa `None` perche' quei due numeri non si sottraggono.
+    I due valori restano visibili - sono entrambi veri - ma la percentuale
+    che li lega non lo sarebbe.
+    """
+    if len(punti) < 2:
+        return None
+    ultimo = punti[-1]
+    ancora = (_as_datetime(ultimo["payload"].get("computed_at")) or
+              _as_datetime(ultimo.get("observed_at")))
+    if ancora is None:
+        return None
+    confine = ancora - timedelta(days=giorni)
+    # Un punto con data illeggibile ricade sull'ancora, che e' posteriore al
+    # confine: resta fuori. Nessuna data inventata lo fa entrare.
+    precedenti = [p for p in punti[:-1]
+                  if (_as_datetime(p["payload"].get("computed_at")) or
+                      _as_datetime(p.get("observed_at")) or ancora) <= confine]
+    if not precedenti:
+        return None
+    storico = precedenti[-1]
+
+    da = _price(storico["payload"])
+    a = _price(ultimo["payload"])
+    metodologia_cambiata = (storico["payload"].get("algorithm_fingerprint")
+                            != ultimo["payload"].get("algorithm_fingerprint"))
+    percentuale = None
+    if not metodologia_cambiata and da:
+        percentuale = round((a - da) / da * 100, 2)
+    return {
+        "from_value": da,
+        "to_value": a,
+        "from_computed_at": storico["payload"].get("computed_at"),
+        "to_computed_at": ultimo["payload"].get("computed_at"),
+        "change_percent": percentuale,
+        "methodology_changed": metodologia_cambiata,
+    }
+
+
 def build_home_summary(*, stima, has_watch, initial_value, last_observed_at,
                        observation_count) -> dict[str, Any]:
     """Una voce della lista. Campo per campo, mai la riga cosi' com'e'."""
@@ -233,11 +338,19 @@ def build_home_detail(*, stima, watch, observations, baseline_payload,
 
     `watch` e' la riga del watch oppure `None`; di essa esce SOLO presenza e
     stato. `observations` serve a contare e a datare, non a mostrare.
+
+    Nessun orologio: tutto cio' che questa vista dice sul valore e' datato dai
+    dati stessi. Due chiamate a distanza di mesi sulle stesse osservazioni
+    danno lo stesso identico dizionario.
     """
     valore, fonte = initial_value(baseline_payload=baseline_payload,
                                   completed_payload=completed_payload)
     storia = _history(observations)
     ha_watch = watch is not None
+    punti = _snapshots(observations)
+    ultimo = punti[-1]["payload"] if punti else None
+    corrente = _price(ultimo) if ultimo is not None else None
+    variazioni = {nome: _change(punti, giorni) for nome, giorni in CHANGE_WINDOWS}
     return {
         "stima_id": stima.get("id"),
         "property": {
@@ -260,11 +373,21 @@ def build_home_detail(*, stima, watch, observations, baseline_payload,
         },
         "created_at": stima.get("data"),
         "valuation": {
+            # Il valore ORIGINARIO: storico, immutabile, mai ricalcolato.
             "initial_value": valore,
             "initial_value_source": fonte,
-            "current_value": None,
-            "current_value_status": CURRENT_VALUE_STATUS,
+            # Il valore di oggi: l'ultimo snapshot reale, se esiste.
+            "current_value": corrente,
+            "current_value_status": (CURRENT_VALUE_AVAILABLE if corrente is not None
+                                     else CURRENT_VALUE_MISSING),
+            # Quando e' stato calcolato quel valore. Serve a non far credere
+            # che sia di oggi: e' la stessa data su cui sono ancorate le
+            # finestre 30/90/365. `None` finche' nessuno snapshot esiste.
+            "current_value_computed_at": (ultimo.get("computed_at")
+                                          if ultimo is not None else None),
+            **variazioni,
         },
+        "valuation_history": [_public_snapshot(p) for p in punti],
         "watch": {"has_watch": ha_watch,
                   "status": watch.get("status") if ha_watch else None},
         "history": storia,

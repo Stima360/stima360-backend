@@ -168,11 +168,12 @@ def test_c1_in_lmc2_le_capability_sono_tutte_false():
                                      "comparables": False, "profile_update": False}
 
 
-def test_c2_valuation_history_richiede_una_storia_del_valore_che_non_esiste_ancora():
+def test_c2_valuation_history_richiede_una_storia_del_valore():
     """Le osservazioni di PROPERTY WATCH sono monitoraggio del MERCATO, non
     rivalutazioni della casa: per quante ce ne siano, la capability resta
-    false finche' LMC-3 non porta i `valuation_snapshot`."""
-    assert home_service.VALUATION_HISTORY_OBSERVATIONS == frozenset()
+    false. L'unica cosa che fa storia del valore e' il `valuation_snapshot`
+    introdotto da LMC-3, e nessuno degli scenari qui sotto ne ha uno."""
+    assert home_service.VALUATION_HISTORY_OBSERVATIONS == frozenset({"valuation_snapshot"})
 
     for osservazioni in (
         [],
@@ -411,11 +412,15 @@ def test_f3_nessuna_migration_in_lmc2():
     assert migrazioni[-1] == "067_lmc1b_owner_login_reason.sql", migrazioni[-2:]
 
 
-def test_f4_lmc2_non_tocca_property_watch_ne_il_funnel():
+def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
+    """`property_watch/` NON e' in questo elenco dal LMC-3 in poi: quella fase
+    ha aggiunto li' lo snapshot del valore, ed e' il suo posto. Cio' che
+    questo test protegge resta il funnel pubblico e i domini che il portale
+    proprietario non deve toccare per leggere una casa."""
     import subprocess
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "property_watch/", "main.py", "seller_intelligence/", "seller_intent/",
+         "main.py", "seller_intelligence/", "seller_intent/",
          "next_best_action/", "followup/", "communication/", "operator_auth/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff

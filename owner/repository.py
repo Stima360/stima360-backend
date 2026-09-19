@@ -2353,7 +2353,12 @@ def home_watch_summary(agency_id,stima_id):
   # Tipo e data, MAI il payload: e' cio' che serve per dire quanta storia c'e'
   # e da quando, e non c'e' nessun modo di far uscire per sbaglio una metrica
   # interna da righe che non la portano.
-  c.execute("SELECT observation_type, observed_at FROM property_watch_observations WHERE watch_id=%s ORDER BY observed_at ASC, id ASC",(w['id'],))
+  # LMC-3: il payload esce SOLO per `valuation_snapshot`, che e' un valore
+  # dell'immobile e appartiene al proprietario. Per ogni altro tipo la colonna
+  # non viene nemmeno selezionata: `buyer_pressure_snapshot` e
+  # `internal_supply_snapshot` portano metriche interne, e cio' che non si
+  # legge non si puo' far uscire per sbaglio.
+  c.execute("SELECT observation_type, observed_at, CASE WHEN observation_type=%s THEN payload ELSE NULL END AS payload FROM property_watch_observations WHERE watch_id=%s ORDER BY observed_at ASC, id ASC",('valuation_snapshot',w['id']))
   osservazioni=[dict(x) for x in c.fetchall()]
   # La baseline e' l'unica osservazione di cui si legge il payload, e se ne
   # prende un campo solo (`price_exact`, lato servizio): e' il valore che il

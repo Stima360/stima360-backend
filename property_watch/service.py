@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from . import buyer_pressure, buyer_pressure_score, repository
+from . import buyer_pressure, buyer_pressure_score, repository, valuation_snapshot
 from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 
 
@@ -731,3 +731,69 @@ def get_current_watch_state_scoped(ctx, stima_id: int) -> dict[str, Any]:
     watch = get_watch_for_stima_scoped(ctx, stima_id)
     observations = repository.list_observations_scoped(ctx, watch["id"])
     return _watch_state_from_observations(watch, observations)
+
+
+# ---------------------------------------------------------------------------
+# LMC-3 - il refresh del valore.
+#
+# Una sola funzione pubblica, e solo nella forma scopata: non esiste una
+# gemella senza contesto, perche' non esiste un chiamante senza tenant. Il
+# cron non e' di questa fase; quando arrivera' iterera' le agenzie come gia'
+# fanno `*_for_all_agencies`, passando uno scope per ciascuna.
+#
+# Non e' esposta da nessuna rotta: il motore di valutazione non deve poter
+# essere martellato da fuori, e per LMC-3 il servizio si invoca direttamente.
+# ---------------------------------------------------------------------------
+
+def refresh_valuation_snapshot_scoped(ctx, stima_id: int, *, reason: str,
+                                      now=None) -> dict[str, Any]:
+    """Calcola il valore di oggi con il motore ufficiale e lo registra.
+
+    L'ordine non e' casuale:
+
+      1. la stima, risolta NELLO scope - una stima di un'altra agenzia non
+         esiste, e si ferma qui senza aver toccato niente;
+      2. il payload per il motore, dai dati persistiti di quella stima;
+      3. il calcolo, con `valuation.compute_from_payload` e nient'altro;
+      4. la scrittura, sul watch di quella stima e di questa agenzia, con una
+         chiave di idempotenza che rende la ripetizione un no-op.
+
+    Il watch si pretende esistente: uno snapshot senza watch non avrebbe dove
+    stare, e crearne uno qui vorrebbe dire che leggere un valore apre un
+    monitoraggio - una decisione che appartiene al funnel pubblico e a
+    `ensure_watch_for_stima`, non a questa funzione.
+
+    Ritorna `{'status': 'created'|'reused', 'observation': riga,
+    'idempotency_key': ..., 'snapshot': payload}`. Non solleva per la
+    ripetizione: ripetere e' normale.
+    """
+    _validate_stima_id(stima_id)
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationError("reason is required")
+
+    stima = repository.get_stima_valuation_input_scoped(ctx, stima_id)
+    if stima is None:
+        raise StimaNotFoundError(f"stima {stima_id} not found")
+
+    watch = repository.get_watch_for_stima_scoped(ctx, stima_id)
+    if watch is None:
+        raise WatchNotFoundError(f"property watch for stima {stima_id} not found")
+
+    momento = now or datetime.now(timezone.utc)
+    snapshot = valuation_snapshot.compute_snapshot(stima, reason=reason, computed_at=momento)
+    chiave = valuation_snapshot.snapshot_idempotency_key(
+        watch_id=watch["id"], computed_at=momento,
+        input_digest=snapshot["input_digest"],
+        fingerprint=snapshot["algorithm_fingerprint"],
+    )
+    observation, created = repository.insert_valuation_snapshot_scoped(
+        ctx, stima_id, snapshot, chiave, observed_at=momento,
+    )
+    logger.info(
+        "valuation_snapshot stima_id=%s watch_id=%s status=%s reason=%s fingerprint=%s",
+        stima_id, watch["id"], "created" if created else "reused", reason,
+        snapshot["algorithm_fingerprint"],
+    )
+    return {"status": "created" if created else "reused",
+            "observation": observation, "idempotency_key": chiave,
+            "snapshot": snapshot}

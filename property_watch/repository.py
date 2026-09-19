@@ -13,7 +13,8 @@ from match.enums import ACTIVE_PROPERTY_STATUSES
 
 from .buyer_pressure import canonicalize_metrics, metrics_digest
 from .database import property_watch_cursor
-from .exceptions import StimaNotFoundError
+from .exceptions import StimaNotFoundError, WatchNotFoundError
+from .valuation_snapshot import SNAPSHOT_OBSERVATION, SNAPSHOT_SOURCE
 
 
 def _row(row: Any) -> dict[str, Any] | None:
@@ -1110,3 +1111,105 @@ def get_stima_completed_valuation_scoped(ctx, stima_id: int) -> dict[str, Any] |
             return None
         payload = row["payload"]
         return dict(payload) if isinstance(payload, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# LMC-3 - lo snapshot del valore.
+#
+# Due sole funzioni, entrambe scopate: leggere i dati della stima che servono
+# al motore, e scrivere l'osservazione sul watch di QUELLA agenzia. Nessuna
+# gemella senza contesto: non esiste un percorso batch che scriva snapshot, e
+# quando esistera' (il cron non e' di questa fase) passera' da qui con uno
+# scope, come gia' fanno i collector.
+# ---------------------------------------------------------------------------
+
+#: Le colonne che il motore di valutazione legge. Non c'e' nessun dato
+#: personale: il motore non ne ha bisogno e questo modulo non deve averli in
+#: memoria. `id` e' qui solo per riconoscere la riga.
+VALUATION_INPUT_COLUMNS = (
+    "id", "comune", "microzona", "tipologia", "mq", "piano", "locali", "bagni",
+    "pertinenze", "ascensore", "anno", "stato", "posizionemare", "distanzamare",
+    "barrieramare", "vistamareyn", "vistamaredettaglio", "vistamare",
+    "mqgiardino", "mqgarage", "mqcantina", "mqpostoauto", "mqtaverna",
+    "mqsoffitta", "mqterrazzo", "numbalconi", "via", "altrodescrizione",
+)
+
+
+def get_stima_valuation_input_scoped(ctx, stima_id: int) -> dict[str, Any] | None:
+    """I dati dell'immobile per il motore, per una stima di questa agenzia.
+
+    Le colonne sono nominate una per una: `SELECT *` porterebbe nome, email,
+    telefono e i campi gestionali dentro un payload che non ne ha bisogno e
+    dentro un digest che finirebbe nel ledger delle osservazioni.
+    """
+    agency_id = _agency(ctx)
+    colonne = ", ".join(VALUATION_INPUT_COLUMNS)
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            f"SELECT {colonne} FROM stime WHERE id = %s AND agency_id = %s",
+            (stima_id, agency_id),
+        )
+        return _row(cur.fetchone())
+
+
+def insert_valuation_snapshot_scoped(
+    ctx,
+    stima_id: int,
+    payload: dict[str, Any],
+    idempotency_key: str,
+    *,
+    observed_at: datetime | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Scrive lo snapshot sul watch della stima, se quel watch e' di questa agenzia.
+
+    Ritorna `(osservazione, creata)`. `ON CONFLICT DO NOTHING` sulla chiave di
+    idempotenza: una seconda chiamata con la stessa chiave rilegge la riga che
+    c'e' gia' e non ne scrive un'altra, e soprattutto non sovrascrive - uno
+    snapshot e' un fatto datato, non un campo da aggiornare.
+
+    Il watch si risolve NELLA STESSA transazione della scrittura e con
+    l'agenzia nel predicato: un `watch_id` indovinato non basta, perche' qui
+    non si riceve un watch ma una stima.
+    """
+    agency_id = _agency(ctx)
+    with property_watch_cursor(commit=True) as (_, cur):
+        cur.execute(
+            "SELECT id FROM property_watches WHERE stima_id = %s AND agency_id = %s",
+            (stima_id, agency_id),
+        )
+        watch = _row(cur.fetchone())
+        if watch is None:
+            raise WatchNotFoundError(f"property watch for stima {stima_id} not found")
+
+        cur.execute(
+            """
+            INSERT INTO property_watch_observations (
+                watch_id, observation_type, source, payload, idempotency_key, observed_at
+            ) VALUES (%s, %s, %s, %s, %s, COALESCE(%s, NOW()))
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING *
+            """,
+            (watch["id"], SNAPSHOT_OBSERVATION, SNAPSHOT_SOURCE,
+             Json(payload, dumps=_json_dumps), idempotency_key, observed_at),
+        )
+        observation = _row(cur.fetchone())
+        if observation is not None:
+            return observation, True
+
+        # La chiave c'era gia'. La si rilegge attraverso il watch di questa
+        # agenzia: `idempotency_key` e' unica globalmente, quindi una lettura
+        # non scopata potrebbe restituire la riga di un altro tenant.
+        cur.execute(
+            """
+            SELECT o.* FROM property_watch_observations o
+            JOIN property_watches w ON w.id = o.watch_id
+            WHERE o.idempotency_key = %s AND w.agency_id = %s
+            """,
+            (idempotency_key, agency_id),
+        )
+        observation = _row(cur.fetchone())
+        if observation is None:
+            raise RuntimeError(
+                "valuation snapshot conflict without an existing observation in scope"
+            )
+        return observation, False
