@@ -442,9 +442,13 @@ def test_f3_nessuna_migration_in_lmc2():
     # LMC-12 (dominio OWNER, radice `stime` + `owner_stima_access`). Si nomina
     # invece di smettere di guardare: qualunque ALTRA migration comparisse
     # farebbe ancora fallire questo test.
-    assert migrazioni[-3:] == ["067_lmc1b_owner_login_reason.sql",
+    # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
+    # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
+    # GATE di LMC-15A.2. Si nomina invece di smettere di guardare.
+    assert migrazioni[-4:] == ["067_lmc1b_owner_login_reason.sql",
                                "068_lmc10_owner_home_overrides.sql",
-                               "069_lmc12_owner_home_notifications.sql"], migrazioni[-4:]
+                               "069_lmc12_owner_home_notifications.sql",
+                               "070_lmc15_acquisition_bridge.sql"], migrazioni[-5:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
@@ -455,10 +459,18 @@ def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
     import subprocess
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "main.py", "seller_intelligence/", "seller_intent/",
+         "seller_intelligence/", "seller_intent/",
          "next_best_action/", "followup/", "communication/", "operator_auth/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # LMC-15 (collisione autorizzata, dichiarata): `main.py` esce dall'elenco
+    # dei percorsi sorvegliati IN BLOCCO perche' LMC-15 vi monta il router del
+    # ponte di acquisizione. Non smette di essere guardato - sarebbe la
+    # risposta comoda e sbagliata: il suo diff viene controllato riga per riga
+    # qui sotto, e qualunque modifica che non sia quel montaggio fa ancora
+    # fallire questo test.
+    from tests.lmc15_main_diff import righe_impreviste_in_main
+    assert righe_impreviste_in_main(ROOT) == [], righe_impreviste_in_main(ROOT)
 
 
 def test_f5_lo_scope_passato_a_property_watch_espone_solo_l_agenzia():

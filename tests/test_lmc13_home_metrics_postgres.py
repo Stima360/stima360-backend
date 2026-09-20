@@ -221,9 +221,10 @@ def mondo(db):
 def metriche(modulo, mondo, agency=None, *, days=30, now=ORA):
     """Il DTO completo, come lo produrrebbe la rotta."""
     da, a = modulo["metrics"].window(days, now=now)
-    conteggi = modulo["repository"].home_metrics_counts(
+    conteggi, inizio = modulo["repository"].home_metrics_counts(
         agency if agency is not None else mondo["a"], cohort_from=da, cohort_to=a)
-    return modulo["metrics"].build(conteggi, days=days, cohort_from=da, cohort_to=a)
+    return modulo["metrics"].build(conteggi, days=days, cohort_from=da, cohort_to=a,
+                                   measurement_started_at=inizio)
 
 
 VISTA = "owner_home_viewed"
@@ -579,7 +580,15 @@ def test_21_coorte_vuota_conteggi_zero_e_tassi_null(mondo, modulo):
     assert d["active_homes_now"] == 1
 
 
-def test_22_inspection_e_mandate_sempre_null(mondo, modulo):
+def test_22_inspection_e_mandate_null_finche_il_ponte_non_e_acceso(mondo, modulo):
+    """AGGIORNATO DA LMC-15.
+
+    Erano `null` per sempre, perche' non esisteva una fonte autorevole. Da
+    LMC-15 esiste, ma su QUESTO database la 070 non e' applicata: restano
+    `null`, e la ragione lo dice - "non attivo su questo ambiente" invece di
+    "non esiste nessuna fonte". La prova che i numeri veri escono quando il
+    ponte c'e' sta nei test di LMC-15, che quella migration la applicano.
+    """
     st = mondo["stima"](mondo["a"])
     acc = mondo["account"](mondo["a"], "mario")
     mondo["grant"](acc, st)
@@ -587,8 +596,11 @@ def test_22_inspection_e_mandate_sempre_null(mondo, modulo):
     d = metriche(modulo, mondo)
     assert d["inspection_homes"] is None and d["mandate_homes"] is None
     assert d["rates"]["inspection_rate"] is None and d["rates"]["mandate_rate"] is None
-    assert "sopralluogo" in d["not_measurable"]["inspection_homes"]
-    assert "PRE-incarico" in d["not_measurable"]["mandate_homes"]
+    assert d["measurement_started_at"] is None
+    assert (d["not_measurable"]["inspection_homes"]
+            == modulo["metrics"].REASON_NOT_APPLIED)
+    assert (d["not_measurable"]["mandate_homes"]
+            == modulo["metrics"].REASON_NOT_APPLIED)
 
 
 #: LE CHIAVI APPROVATE, scritte a mano e non derivate dalle costanti del
@@ -599,6 +611,7 @@ def test_22_inspection_e_mandate_sempre_null(mondo, modulo):
 #: fa fallire il test.
 CHIAVI_DTO_APPROVATE = {
     "period_days", "cohort_from", "cohort_to", "unit",
+    "measurement_started_at",
     "cohort_homes", "active_homes_now", "activated_owners",
     "viewed_homes", "returning_homes",
     "value_interest_homes", "demand_interest_homes", "updated_homes",
@@ -733,22 +746,41 @@ class _CursoreContato:
         return iter(self._cur)
 
 
-def test_28_una_sola_query_anche_con_molte_case(mondo, modulo, monkeypatch, db):
-    """Nessun N+1: venti case e un solo `execute`."""
+def test_28_nessun_n_piu_uno_il_numero_di_query_non_dipende_dai_dati(
+        mondo, modulo, monkeypatch, db):
+    """AGGIORNATO DA LMC-15: il conteggio resta UNA query, e il totale e' fisso.
+
+    Diceva "un solo `execute`". LMC-15 ne ha aggiunta una che chiede al
+    catalogo se le tabelle del ponte esistono, e - solo se esistono - una che
+    legge la data dal registro delle migration. Cio' che questo test
+    protegge non e' il numero 1 ma l'assenza di N+1, e per dimostrarla non
+    basta piu' contare: si conta CON 5 case e CON 20, e il numero deve essere
+    lo stesso. Una query per casa lo farebbe cambiare.
+
+    In piu' resta vero che i conteggi vengono da UNA query sola: le altre non
+    toccano i dati del funnel, interrogano il catalogo e il registro.
+    """
     import psycopg2
 
     from core import database as core_database
 
-    acc = mondo["account"](mondo["a"], "mario")
-    for i in range(20):
-        st = mondo["stima"](mondo["a"], via=f"Via {i}")
-        mondo["grant"](acc, st)
-        mondo["evento"](mondo["a"], acc, st, VISTA, quando=ORA - GIORNO)
+    def misura(quante, via):
+        acc = mondo["account"](mondo["a"], f"mario{via}")
+        for i in range(quante):
+            st = mondo["stima"](mondo["a"], via=f"{via} {i}")
+            mondo["grant"](acc, st)
+            mondo["evento"](mondo["a"], acc, st, VISTA, quando=ORA - GIORNO)
+        eseguite: list[str] = []
+        monkeypatch.setattr(
+            core_database, "get_connection",
+            lambda: _ConnessioneContata(psycopg2.connect(db["dsn"]), eseguite))
+        return metriche(modulo, mondo), eseguite
 
-    eseguite: list[str] = []
-    monkeypatch.setattr(
-        core_database, "get_connection",
-        lambda: _ConnessioneContata(psycopg2.connect(db["dsn"]), eseguite))
-    d = metriche(modulo, mondo)
-    assert d["cohort_homes"] == 20 and d["viewed_homes"] == 20
-    assert len(eseguite) == 1, f"{len(eseguite)} query invece di una"
+    d5, q5 = misura(5, "Prima")
+    d20, q20 = misura(15, "Poi")
+    assert d5["cohort_homes"] == 5 and d20["cohort_homes"] == 20
+    assert d20["viewed_homes"] == 20
+    assert len(q5) == len(q20), (len(q5), len(q20))
+    # E una sola di quelle query conta righe del funnel.
+    sul_funnel = [s for s in q20 if "coherent_grants" in s]
+    assert len(sul_funnel) == 1, len(sul_funnel)

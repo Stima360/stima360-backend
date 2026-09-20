@@ -157,6 +157,8 @@ def test_a7_il_modulo_non_tocca_il_database_ne_calcola_punteggi():
 #: qualunque chiave in piu' o in meno fa fallire.
 CHIAVI_DTO_APPROVATE = {
     "period_days", "cohort_from", "cohort_to", "unit",
+    # LMC-15 - dichiara da quando sopralluogo e incarico sono misurati.
+    "measurement_started_at",
     "cohort_homes", "active_homes_now", "activated_owners",
     "viewed_homes", "returning_homes",
     "value_interest_homes", "demand_interest_homes", "updated_homes",
@@ -187,9 +189,10 @@ def test_b1_il_dto_e_una_whitelist_chiusa():
     assert set(HomeMetricsRates.model_fields) == CHIAVI_RATES_APPROVATE
     # E le costanti del modulo non devono aver aggiunto niente di proprio.
     assert set(home_metrics.COHORT_COUNTS) | set(home_metrics.STOCK_COUNTS) \
-        | set(home_metrics.NOT_MEASURABLE) | {"period_days", "cohort_from",
-                                              "cohort_to", "unit", "rates",
-                                              "not_measurable"} == CHIAVI_DTO_APPROVATE
+        | set(home_metrics.BRIDGE_COUNTS) | {"period_days", "cohort_from",
+                                             "cohort_to", "unit", "rates",
+                                             "not_measurable",
+                                             "measurement_started_at"} == CHIAVI_DTO_APPROVATE
     HomeMetricsResponse.model_validate(dto)
 
 
@@ -208,9 +211,12 @@ def test_b2_nessuna_pii_e_nessun_identificativo_nel_dto():
         for vietata in CHIAVI_VIETATE:
             assert vietata not in chiave.lower(), (chiave, vietata)
     # Le stringhe che il DTO porta sono solo quelle dichiarate: due date,
-    # l'unita' e le due ragioni. Nessun valore libero che arrivi dai dati.
+    # l'unita' e - quando il ponte non misura - le ragioni, che sono costanti
+    # del modulo e non valori che arrivino dai dati.
     assert set(v for k, v in dto.items() if isinstance(v, str)) == {
         dto["cohort_from"], dto["cohort_to"], "stima"}
+    assert set(dto["not_measurable"].values()) <= {
+        home_metrics.REASON_NOT_APPLIED, home_metrics.REASON_BEFORE_START}
     for valore in dto.values():
         assert not isinstance(valore, (list, tuple)), "nessuna lista di righe nel DTO"
 
@@ -368,7 +374,8 @@ def test_d2_days_fuori_insieme_da_422(monkeypatch):
     class Ctx:
         def require_agency(self):
             return 1
-    monkeypatch.setattr(router_admin.r, "home_metrics_counts", lambda a, **kw: dict(PIENA))
+    monkeypatch.setattr(router_admin.r, "home_metrics_counts",
+                        lambda a, **kw: (dict(PIENA), None))
     for rifiutato in (1, 29, 31, 366, 0):
         with pytest.raises(HTTPException) as info:
             router_admin.home_metrics_view(days=rifiutato, ctx=Ctx())
@@ -402,7 +409,7 @@ def test_d4_l_agenzia_passata_alla_query_e_quella_del_contesto(monkeypatch):
 
     def finta(agency_id, *, cohort_from, cohort_to):
         visto.update(agency=agency_id, da=cohort_from, a=cohort_to)
-        return dict(PIENA)
+        return dict(PIENA), None
     monkeypatch.setattr(router_admin.r, "home_metrics_counts", finta)
 
     class Ctx:
@@ -420,10 +427,21 @@ def test_d4_l_agenzia_passata_alla_query_e_quella_del_contesto(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_e1_nessuna_migration_nuova():
+    """LMC-13 non ha creato schema, e continua a non averne creato.
+
+    SENTINELLA AGGIORNATA DA LMC-15: nel working tree c'e' ora la 070, il
+    ponte di acquisizione approvato dallo SCHEMA GATE di LMC-15A.2. LMC-15
+    ha esteso le metriche di LMC-13 - da qui la modifica a questo file - ma
+    le due tabelle nuove sono sue, non di LMC-13. La si nomina invece di
+    smettere di guardare: qualunque ALTRA migration comparisse nel working
+    tree farebbe ancora fallire questo test.
+    """
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
-    assert nuovi == set(), sorted(nuovi)
+    atteso = {"migrations/070_lmc15_acquisition_bridge.sql",
+              "migrations/070_lmc15_acquisition_bridge_down.sql"}
+    assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 
 def test_e2_nessun_cron_nuovo():

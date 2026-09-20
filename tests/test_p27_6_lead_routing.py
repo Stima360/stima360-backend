@@ -665,7 +665,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # LMC-12 ha aggiunto la 069 (`owner_home_notifications`, lo stream di
     # notifiche PRE-INCARICO, approvata dal DESIGN GATE): dominio OWNER, non
     # di questa fase. La coda si nomina, come sempre.
-    assert numeri[-1] == 69, numeri[-4:]
+    # LMC-15 ha aggiunto la 070 (`stima_acquisitions` e
+    # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
+    # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
+    # si nomina, come sempre.
+    assert numeri[-1] == 70, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

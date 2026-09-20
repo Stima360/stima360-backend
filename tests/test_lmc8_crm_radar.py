@@ -305,6 +305,10 @@ def test_e1_niente_diagnostica_nel_blocco(monkeypatch, vietato):
 
 
 def test_e2_la_forma_di_una_casa_e_chiusa(monkeypatch):
+    # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
+    # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
+    # GATE di LMC-15A.2. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire il test.
     atteso = {"stima_id", "address", "tipologia", "mq", "created_at",
               "initial_value", "current_value", "current_value_computed_at",
               "interest"}
@@ -444,10 +448,18 @@ def test_h3_i_domini_vietati_non_sono_stati_toccati():
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
          "seller_intent/", "next_best_action/", "followup/", "communication/",
-         "valuation.py", "main.py",
+         "valuation.py",
          "static/os_shell/assets/views/oggi.js"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # LMC-15 (collisione autorizzata, dichiarata): `main.py` esce dall'elenco
+    # dei percorsi sorvegliati IN BLOCCO perche' LMC-15 vi monta il router del
+    # ponte di acquisizione. Non smette di essere guardato - sarebbe la
+    # risposta comoda e sbagliata: il suo diff viene controllato riga per riga
+    # qui sotto, e qualunque modifica che non sia quel montaggio fa ancora
+    # fallire questo test.
+    from tests.lmc15_main_diff import righe_impreviste_in_main
+    assert righe_impreviste_in_main(ROOT) == [], righe_impreviste_in_main(ROOT)
 
 
 def test_h3b_il_modulo_di_lmc8_non_nomina_property_watch_ne_lo_schema():
@@ -493,7 +505,9 @@ def test_h5_nessuna_migration():
     atteso = {"migrations/068_lmc10_owner_home_overrides.sql",
               "migrations/068_lmc10_owner_home_overrides_down.sql",
               "migrations/069_lmc12_owner_home_notifications.sql",
-              "migrations/069_lmc12_owner_home_notifications_down.sql"}
+              "migrations/069_lmc12_owner_home_notifications_down.sql",
+              "migrations/070_lmc15_acquisition_bridge.sql",
+              "migrations/070_lmc15_acquisition_bridge_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

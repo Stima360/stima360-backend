@@ -36,6 +36,7 @@ from sale.router import router as sale_router
 from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
 from owner import provisioning as owner_provisioning
+from acquisition.router import router as acquisition_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
@@ -107,6 +108,9 @@ app.include_router(crm_router, dependencies=[Depends(require_authenticated_opera
 app.include_router(proposal_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(sale_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(flow_router)
+# LMC-15: il ponte di acquisizione. Superficie operatore, montata come gli
+# altri domini; lo scope vero lo prende ogni rotta da `require_operator`.
+app.include_router(acquisition_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
 

@@ -532,8 +532,14 @@ def test_h1_nessuna_migration_nuova():
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
+    # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
+    # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
+    # GATE di LMC-15A.2. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire il test.
     atteso = {"migrations/069_lmc12_owner_home_notifications.sql",
-              "migrations/069_lmc12_owner_home_notifications_down.sql"}
+              "migrations/069_lmc12_owner_home_notifications_down.sql",
+              "migrations/070_lmc15_acquisition_bridge.sql",
+              "migrations/070_lmc15_acquisition_bridge_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

@@ -112,8 +112,10 @@ def home_metrics_view(
     except home_metrics.InvalidPeriod:
         raise HTTPException(422, "Periodo non ammesso: 7, 30, 90 o 365 giorni")
     da, a = home_metrics.window(periodo)
-    conteggi = x(r.home_metrics_counts, agency_of(ctx), cohort_from=da, cohort_to=a)
-    return home_metrics.build(conteggi, days=periodo, cohort_from=da, cohort_to=a)
+    conteggi, inizio = x(r.home_metrics_counts, agency_of(ctx),
+                         cohort_from=da, cohort_to=a)
+    return home_metrics.build(conteggi, days=periodo, cohort_from=da, cohort_to=a,
+                              measurement_started_at=inizio)
 
 
 @router.get("/dashboard")

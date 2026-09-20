@@ -647,9 +647,13 @@ def test_g2_nessuna_migration_in_lmc3():
     # LMC-12 (dominio OWNER, radice `stime` + `owner_stima_access`). Si nomina
     # invece di smettere di guardare: qualunque ALTRA migration comparisse
     # farebbe ancora fallire questo test.
-    assert migrazioni[-3:] == ["067_lmc1b_owner_login_reason.sql",
+    # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
+    # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
+    # GATE di LMC-15A.2. Si nomina invece di smettere di guardare.
+    assert migrazioni[-4:] == ["067_lmc1b_owner_login_reason.sql",
                                "068_lmc10_owner_home_overrides.sql",
-                               "069_lmc12_owner_home_notifications.sql"], migrazioni[-4:]
+                               "069_lmc12_owner_home_notifications.sql",
+                               "070_lmc15_acquisition_bridge.sql"], migrazioni[-5:]
 
 
 DOMINI_VIETATI_LMC3 = (

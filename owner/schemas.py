@@ -509,6 +509,10 @@ class HomeMetricsResponse(M):
     cohort_to: str
     unit: Literal["stima"]
 
+    # Da quando sopralluogo e incarico sono misurati su QUESTO ambiente, letto
+    # dal registro delle migration. `null` finche' il ponte non e' applicato.
+    measurement_started_at: str | None = None
+
     cohort_homes: int
     activated_owners: int
     active_homes_now: int
@@ -523,9 +527,14 @@ class HomeMetricsResponse(M):
 
     consultation_homes: int
 
-    # Sempre null: nessuna fonte autorevole. Il tipo lo dichiara.
-    inspection_homes: None = None
-    mandate_homes: None = None
+    # Da LMC-15 in poi hanno una fonte autorevole, ma solo per le coorti
+    # posteriori a `measurement_started_at`: prima di quella data restano
+    # `null`, e il tipo deve ammettere entrambe le forme. `int | None` non
+    # e' un rilassamento del vincolo - la ragione del `null` resta obbligata
+    # in `not_measurable` - ma la dichiarazione che qui zero e assente sono
+    # due risposte diverse.
+    inspection_homes: int | None = None
+    mandate_homes: int | None = None
 
     rates: HomeMetricsRates
     not_measurable: dict[str, str]

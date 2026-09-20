@@ -435,6 +435,32 @@ DOMAINS = (
              "e nessun effetto sulla coda dell'altra agenzia",
     ),
     Domain(
+        "ACQUISITION", "/api/acquisition",
+        # LMC-15. La superficie e' fatta di SOLE scritture: sette POST, nessuna
+        # GET. Come per FOLLOWUP e COMMUNICATION, l'assenza di letture rende
+        # non provabili le LETTURE, non il dominio.
+        #
+        # PERCHE' LA MATRICE NON CREA UN LEGAME VERO
+        #
+        # Un link di acquisizione riuscito dichiara che un immobile REALE nasce
+        # da una stima REALE, e un mandato dichiara che qualcuno ha firmato.
+        # Sono affermazioni sul mondo, con il nome di un operatore sopra: su
+        # TEST le righe restano, e un revisore che le trovasse dopo non
+        # saprebbe distinguerle da fatti veri. Inoltre l'indice unico parziale
+        # occuperebbe l'unica origine attiva di quella property.
+        #
+        # Quindi ogni domanda di questa matrice ha come risposta giusta un
+        # RIFIUTO, e l'ultima e' la guardia read-only: dopo tutto il giro il
+        # registro deve essere identico a prima.
+        derive="stime",
+        depends_on="PROPERTY",
+        certifier="acquisition",
+        api_delete=False,
+        note="sette POST: anonimo e Basic -> 401, agency_id e l'id "
+             "dell'operatore nel corpo -> 422, la stima e la property "
+             "dell'altra agenzia -> 404, e il registro invariato a fine giro",
+    ),
+    Domain(
         "SELLER_INTENT", "/api/seller-intent",
         # Lo score si chiede per lead_id, e questo run non crea lead. La sonda
         # forte sarebbe l'ID diretto; qui resta il percorso che attraversa il
@@ -5049,6 +5075,217 @@ def certify_batch_only(report, http, cert, domain, jars, owned, context) -> None
         "un'agenzia condivisa la creerebbe toccando righe altrui. Eseguire con "
         "--with-dedicated-agencies",
     )
+
+
+def certify_acquisition(report, http, cert, domain, jars, owned, context) -> None:
+    """ACQUISITION: SOLO RIFIUTI, come COMMUNICATION e per una ragione simile.
+
+    PERCHE' LA MATRICE NON CREA UN LEGAME VERO
+
+    `POST /api/acquisition/stime/{id}/links` dichiara che un immobile REALE
+    nasce da una stima REALE, e `.../mandate` che qualcuno ha firmato un
+    incarico. Sono affermazioni sul mondo, con il nome di un operatore sopra e
+    una riga di timeline che le racconta. Su TEST quelle righe restano, e un
+    revisore che le trovasse dopo non avrebbe modo di distinguerle da fatti
+    veri. In piu' l'indice unico parziale occuperebbe l'unica origine attiva
+    della property usata, che appartiene alle prove di un altro dominio.
+
+    Quindi ogni domanda qui ha come risposta giusta un RIFIUTO. Il giro
+    riuscito appartiene alla suite su PostgreSQL usa-e-getta
+    (`tests/test_lmc15_acquisition_bridge_postgres.py`), dove le righe muoiono
+    con il database.
+
+    LE DOMANDE
+
+        anonimo                                   -> 401
+        HTTP Basic (P26-5 l'ha tolto)             -> 401
+        agency_id nel corpo                       -> 422
+        l'id dell'operatore nel corpo             -> 422
+        property_id mancante                      -> 422
+        ragione di revoca vuota                   -> 422
+        la stima dell'altra agenzia               -> 404
+        la property dell'altra agenzia            -> 404
+        un link e un sopralluogo inesistenti      -> 404
+        e il registro, dopo tutto questo          -> invariato
+
+    L'ultima e' la guardia read-only, e si misura sulle righe: se una sola
+    delle domande avesse scritto, il ponte avrebbe registrato un fatto che
+    nessuno ha dichiarato.
+    """
+    database = context.get("database")
+    stime = context.get("stime") or {}
+    immobili = context.get("owned_properties") or {}
+
+    def registro() -> tuple[int, int] | None:
+        """(link, sopralluoghi) nel database, o None se non si puo' leggere.
+
+        None e non zero: "non ho potuto contare" e "ho contato e non c'era
+        niente" sono due cose diverse, e la seconda diventerebbe una guardia
+        read-only che passa sempre. Le due tabelle possono legittimamente non
+        esistere - un ambiente su cui la 070 non e' ancora passata - e in quel
+        caso la prova e' BLOCKED, come per ogni altra prova non eseguita.
+        """
+        if database is None:
+            return None
+        with database.read() as cur:
+            cur.execute(
+                "SELECT to_regclass('public.stima_acquisitions') IS NOT NULL"
+                "   AND to_regclass('public.stima_inspections')  IS NOT NULL AS pronte")
+            riga = cur.fetchone()
+            if riga is None or not riga["pronte"]:
+                return None
+            cur.execute("SELECT (SELECT count(*) FROM stima_acquisitions) AS l,"
+                        "       (SELECT count(*) FROM stima_inspections) AS s")
+            riga = cur.fetchone()
+            if riga is None:
+                return None
+            return int(riga["l"]), int(riga["s"])
+
+    prima = registro()
+
+    link_di = f"{domain.prefix}/stime/{{}}/links"
+    corpo = {"property_id": 1}
+
+    # -- senza identita' ----------------------------------------------------
+    anonima = http.request("POST", link_di.format(1), payload=corpo)
+    report.check(
+        "ACQUISITION-anonimo",
+        anonima.status == 401,
+        f"POST {link_di.format(1)} senza sessione -> {anonima.status} (atteso 401)",
+    )
+
+    # Il canale Basic: P26-5 lo ha tolto, e una rotta nuova non deve
+    # riaprirlo. La credenziale e' FINTA di proposito.
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    basic = http.request("POST", link_di.format(1), payload=corpo,
+                         headers={"Authorization": f"Basic {credenziale}"})
+    report.check(
+        "ACQUISITION-basic",
+        basic.status == 401,
+        f"POST {link_di.format(1)} con solo HTTP Basic -> {basic.status} "
+        "(atteso 401: P26-5 ha tolto quel canale, e una rotta nuova non lo riapre)",
+    )
+
+    # -- le due direzioni ---------------------------------------------------
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        mia_stima = stime.get(etichetta)
+        sua_stima = stime.get(altro)
+        mio_immobile = immobili.get(etichetta)
+        suo_immobile = immobili.get(altro)
+
+        if mia_stima is None or mio_immobile is None:
+            report.blocked(
+                f"ACQUISITION-fixture-{etichetta}",
+                f"{etichetta}: manca una stima o un immobile propri, le sonde "
+                "ostili di questa direzione non sono eseguibili")
+            continue
+
+        # Il corpo non ammette campi di troppo: `extra="forbid"`.
+        intruso = http.request("POST", link_di.format(mia_stima), jar=jar, payload={
+            "property_id": mio_immobile, "agency_id": context["agencies"].get(altro)})
+        report.check(
+            f"ACQUISITION-agency-nel-corpo-{etichetta}",
+            intruso.status == 422,
+            f"{etichetta} mette `agency_id` nel corpo del link -> {intruso.status} "
+            "(atteso 422: lo scope viene dalla sessione, e un campo di troppo "
+            "si rifiuta invece di ignorarlo)",
+        )
+
+        attore = http.request("POST", link_di.format(mia_stima), jar=jar, payload={
+            "property_id": mio_immobile, "linked_by_operator_user_id": 1})
+        report.check(
+            f"ACQUISITION-attore-nel-corpo-{etichetta}",
+            attore.status == 422,
+            f"{etichetta} dichiara l'operatore nel corpo -> {attore.status} "
+            "(atteso 422: l'attore viene da `ctx.user_id`, e un registro di "
+            "audit non lascia scegliere al client chi ha firmato)",
+        )
+
+        vuoto = http.request("POST", link_di.format(mia_stima), jar=jar, payload={})
+        report.check(
+            f"ACQUISITION-property-obbligatoria-{etichetta}",
+            vuoto.status == 422,
+            f"{etichetta}, corpo senza `property_id` -> {vuoto.status} (atteso 422)",
+        )
+
+        if suo_immobile is not None:
+            rubata = http.request("POST", link_di.format(mia_stima), jar=jar,
+                                  payload={"property_id": suo_immobile})
+            report.check(
+                f"ACQUISITION-property-altrui-{etichetta}-{altro}",
+                rubata.status == 404,
+                f"{etichetta} collega la propria stima all'immobile di {altro} "
+                f"-> {rubata.status} (atteso 404: le due radici devono essere "
+                "della stessa agenzia, e dire 'esiste ma non e' tua' "
+                "confermerebbe che esiste)",
+            )
+        else:
+            report.blocked(f"ACQUISITION-property-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha un immobile: sonda non eseguibile")
+
+        if sua_stima is not None:
+            for suffisso, percorso in (
+                ("link", link_di.format(sua_stima)),
+                ("sopralluogo", f"{domain.prefix}/stime/{sua_stima}/inspections"),
+            ):
+                payload = ({"property_id": mio_immobile} if suffisso == "link"
+                           else {"scheduled_for": "2030-01-01T10:00:00Z"})
+                furto = http.request("POST", percorso, jar=jar, payload=payload)
+                report.check(
+                    f"ACQUISITION-stima-altrui-{suffisso}-{etichetta}-{altro}",
+                    furto.status == 404,
+                    f"{etichetta} scrive sul {suffisso} della stima di {altro} "
+                    f"-> {furto.status} (atteso 404)",
+                )
+        else:
+            report.blocked(f"ACQUISITION-stima-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha una stima: sonde non eseguibili")
+
+        # Un id che non esiste: 404, mai 500 e mai un effetto.
+        for suffisso, percorso, payload in (
+            ("revoca", f"{domain.prefix}/links/2147483000/revoke",
+             {"revoked_reason": "sonda di certificazione"}),
+            ("mandato", f"{domain.prefix}/links/2147483000/mandate",
+             {"mandate_signed_at": "2030-01-01T10:00:00Z"}),
+            ("chiusura", f"{domain.prefix}/inspections/2147483000/complete",
+             {"completed_at": "2030-01-01T10:00:00Z"}),
+        ):
+            assente = http.request("POST", percorso, jar=jar, payload=payload)
+            report.check(
+                f"ACQUISITION-inesistente-{suffisso}-{etichetta}",
+                assente.status == 404,
+                f"{etichetta} agisce su un id che non esiste ({suffisso}) -> "
+                f"{assente.status} (atteso 404)",
+            )
+
+        # Una revoca senza motivo non e' una revoca: e' una riga di audit che
+        # non spiega niente.
+        muta = http.request("POST", f"{domain.prefix}/links/2147483000/revoke",
+                            jar=jar, payload={"revoked_reason": "   "})
+        report.check(
+            f"ACQUISITION-ragione-obbligatoria-{etichetta}",
+            muta.status == 422,
+            f"{etichetta} revoca con una ragione vuota -> {muta.status} "
+            "(atteso 422, e prima ancora del 404 sull'id: la validazione del "
+            "corpo viene prima della risoluzione della risorsa)",
+        )
+
+    # -- la guardia read-only ------------------------------------------------
+    dopo = registro()
+    if prima is None or dopo is None:
+        report.blocked(
+            "ACQUISITION-registro-invariato",
+            "nessuna connessione al database: non si puo' provare che il giro "
+            "ostile non abbia scritto")
+    else:
+        report.check(
+            "ACQUISITION-registro-invariato",
+            prima == dopo,
+            f"link e sopralluoghi prima {prima} e dopo {dopo} il giro ostile "
+            "(attesi identici: ogni domanda doveva essere un rifiuto, e un "
+            "rifiuto non scrive)",
+        )
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

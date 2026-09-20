@@ -125,7 +125,11 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # LMC-12 ha aggiunto la 069 (`owner_home_notifications`, lo stream di
     # notifiche PRE-INCARICO, approvata dal DESIGN GATE): dominio OWNER, non
     # di questa fase. La coda si nomina, come sempre.
-    assert max(numeri) == 69, "la serie non e' piu' contigua in coda"
+    # LMC-15 ha aggiunto la 070 (`stima_acquisitions` e
+    # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
+    # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
+    # si nomina, come sempre.
+    assert max(numeri) == 70, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

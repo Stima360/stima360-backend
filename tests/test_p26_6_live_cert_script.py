@@ -247,6 +247,19 @@ class FakeCursor:
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
             self._row = {"name": self.state.get("database", "stima360_db_test")}
+        elif "TO_REGCLASS('PUBLIC.STIMA_ACQUISITIONS')" in upper:
+            # LMC-15. Su un ambiente aggiornato le due tabelle del ponte ci
+            # sono, e il doppio lo dice: cosi' la guardia read-only di
+            # ACQUISITION viene ESEGUITA invece di restare BLOCKED, e una
+            # prova non eseguita non passa per una prova.
+            self._row = {"pronte": self.state.get("ponte_presente", True)}
+        elif "(SELECT COUNT(*) FROM STIMA_ACQUISITIONS) AS L" in upper:
+            # Il registro del ponte, prima e dopo il giro ostile. Il doppio
+            # non lo scrive mai, che e' esattamente cio' che la guardia deve
+            # poter osservare: ogni domanda di quella matrice e' un rifiuto,
+            # e un rifiuto non scrive.
+            self._row = {"l": self.state.get("ponte_link", 0),
+                         "s": self.state.get("ponte_sopralluoghi", 0)}
         elif "FROM OWNER_AUDIT_LOG" in upper and "GROUP BY" in upper:
             # La classificazione degli audit senza radice: righe, non un
             # conteggio. Un doppio che rispondesse con un numero solo non
@@ -1367,6 +1380,72 @@ class FakeHttp(cert.HttpProbe):
         return self._reply(method, path, 200,
                            f'{{"stima_id":{identifier},"watch":true}}'.encode())
 
+    def _acquisition(self, method, path, agency, payload):
+        """LMC-15. Il doppio riproduce il CONTRATTO REALE della superficie.
+
+        Gli schemi Pydantic VERI decidono i 422 - `extra="forbid"` compreso,
+        che e' la ragione per cui `agency_id` e l'id dell'operatore nel corpo
+        sono rifiutati e non ignorati - e la tenancy decide i 404. Un doppio
+        che accettasse qualunque corpo direbbe che la matrice passa su un
+        contratto che non esiste: e' la lezione di P29-2.6E.
+
+        Il doppio non possiede nessun link e nessun sopralluogo, quindi ogni
+        id di quelle due famiglie e' 404. E' fedele: la matrice ostile non ne
+        crea mai uno, di proposito.
+        """
+        import json as _json
+
+        import pydantic
+
+        from acquisition import schemas as acq
+
+        modelli = (
+            (r"^/api/acquisition/stime/(\d+)/links$", acq.AcquisitionLinkCreate),
+            (r"^/api/acquisition/stime/(\d+)/inspections$", acq.InspectionSchedule),
+            (r"^/api/acquisition/stime/(\d+)/inspections/completed$",
+             acq.InspectionComplete),
+            (r"^/api/acquisition/links/(\d+)/mandate$", acq.MandateRecord),
+            (r"^/api/acquisition/links/(\d+)/revoke$", acq.AcquisitionRevoke),
+            (r"^/api/acquisition/inspections/(\d+)/complete$", acq.InspectionComplete),
+            (r"^/api/acquisition/inspections/(\d+)/cancel$", acq.InspectionCancel),
+        )
+        for schema, modello in modelli:
+            trovato = re.match(schema, path)
+            if trovato is None:
+                continue
+            # Il corpo si valida PRIMA di risolvere la risorsa, come fa
+            # FastAPI: un 422 su un id inesistente e' la risposta giusta.
+            try:
+                corpo = modello(**(payload or {}))
+            except pydantic.ValidationError:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+
+            identificativo = int(trovato.group(1))
+            if "/stime/" not in path:
+                # Nessun link e nessun sopralluogo esistono in questo doppio.
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+
+            proprietario = next(
+                (etichetta for etichetta, sid in self.stime.items()
+                 if sid == identificativo), None)
+            if proprietario is None:
+                proprietario = getattr(self, "stime_dedicate", {}).get(identificativo)
+            if proprietario != agency:
+                return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+
+            if modello is acq.AcquisitionLinkCreate:
+                immobile = self.rows.get(corpo.property_id)
+                if immobile is None or immobile["agency"] != agency:
+                    # Le due radici devono essere della stessa agenzia:
+                    # l'INSERT ... SELECT del repository non seleziona niente,
+                    # e il chiamante riceve il 404 neutro.
+                    return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+
+            return self._reply(method, path, 201,
+                               _json.dumps({"id": identificativo}).encode())
+
+        return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+
     def _link_contact(self, method, path, agency, property_id, contact_id):
         """Il legame proprietario: entrambe le righe devono essere del chiamante.
 
@@ -1598,6 +1677,9 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200, _json.dumps(
                 {"claimed": 0, "sent": 0, "suppressed": 0, "failed": 0,
                  "indeterminate": 0, "lost": 0}).encode())
+
+        if path.startswith("/api/acquisition/") and method == "POST":
+            return self._acquisition(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -4267,6 +4349,17 @@ def _fk_delle_migrazioni():
     """
     testo = "\n".join(p.read_text(encoding="utf-8")
                       for p in sorted((ROOT / "migrations").glob("*.sql")))
+    # I COMMENTI VANNO VIA PRIMA, e non e' una pulizia estetica.
+    #
+    # `[^,]` nella regex qui sotto attraversa anche gli a capo, quindi un
+    # commento `--` fra il nome della colonna e il suo `REFERENCES` diventava
+    # il nome della colonna: l'inventario portava
+    # `agency_territory_assignments.which` e `network_territory_aliases.che`
+    # al posto di `territory_id`, e nessuno se ne era accorto perche' la
+    # coppia (tabella, genitore, azione) restava giusta. Un difetto latente da
+    # P27-5, che la 070 - commentata riga per riga - ha fatto emergere con
+    # altre due voci inventate.
+    testo = re.sub(r"--[^\n]*", "", testo)
     dentro = re.compile(
         r"[\s,(]([a-z_][a-z0-9_]*)\s+[A-Za-z][^,]*?REFERENCES\s+([a-z_]+)\s*\(\s*id\s*\)"
         r"(?:\s+ON DELETE\s+(CASCADE|RESTRICT|SET NULL|NO ACTION))?", re.I)
@@ -4370,6 +4463,75 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # quasi mai - una sessione dura al massimo dodici ore e nessuna superficie
     # cancella agenzie - ma quando morde, morde nel verso giusto.
     ("operator_sessions", "acting_agency_id", "agencies", "RESTRICT"),
+    # LMC-15, migration 070. Il ponte di acquisizione: NOVE riferimenti
+    # non-CASCADE, e nessuno dei tre gruppi e' un ripiego.
+    #
+    #   stima_id -> stime            SET NULL (due volte)
+    #
+    # `stime` E' hard-deleted dal repository: `DELETE /api/admin/stime/delete`
+    # cancella davvero la riga, a differenza di `properties`, che viene
+    # archiviata. Le tre alternative:
+    #
+    #   CASCADE   cancellare una stima porterebbe via il REGISTRO
+    #             dell'incarico: che quell'immobile e' stato acquisito, chi ha
+    #             firmato e quando. Il registro non e' della stima, e' del
+    #             percorso commerciale. Inaccettabile.
+    #   RESTRICT  una stima non si potrebbe piu' cancellare per essere stata
+    #             collegata una volta, e una cancellazione legittima verrebbe
+    #             bloccata da una riga di audit.
+    #   SET NULL  si perde il puntatore e si tiene il fatto. Il numero della
+    #             stima resta comunque, in `stima_id_snapshot`, che e' NOT
+    #             NULL e immutabile: la ricostruzione storica non si perde,
+    #             perde solo la garanzia referenziale - che e' esattamente
+    #             cio' che la cancellazione ha distrutto.
+    #
+    # Conseguenza per il cleanup: azzeramento di colonna, non rifiuto. E il
+    # trigger di tenancy della 070 lo sa: verifica gli attori solo quando li
+    # si SCRIVE, altrimenti il SET NULL non potrebbe nemmeno avvenire.
+    ("stima_acquisitions", "stima_id", "stime", "SET NULL"),
+    ("stima_inspections", "stima_id", "stime", "SET NULL"),
+    #
+    #   property_id -> properties    RESTRICT
+    #
+    # `properties` non viene MAI hard-deleted dal repository: l'endpoint di
+    # DELETE archivia (`commercial_status='archived'`). RESTRICT non blocca
+    # quindi nessun percorso esistente, e se qualcuno ne aprisse uno nuovo il
+    # registro tratterrebbe la riga invece di perdere il legame in silenzio -
+    # che e' il verso giusto, perche' la property e' la seconda radice della
+    # tenancy del link e senza di lei un link orfano non avrebbe piu'
+    # nessuna agenzia.
+    ("stima_acquisitions", "property_id", "properties", "RESTRICT"),
+    #
+    #   *_operator_user_id -> operator_users    RESTRICT (sei volte)
+    #
+    # Sono le firme: chi ha collegato, chi ha registrato l'incarico, chi ha
+    # revocato, chi ha creato, concluso e annullato un sopralluogo. Le tre
+    # alternative:
+    #
+    #   CASCADE   cancellare un operatore porterebbe via i FATTI che ha
+    #             registrato. Inaccettabile: il fatto non e' suo.
+    #   SET NULL  resterebbe il fatto senza l'autore, e un registro di audit
+    #             che non dice piu' chi ha firmato un incarico non e' piu' un
+    #             registro. E' la differenza con
+    #             `owner_home_overrides.updated_by_owner_account_id` qui
+    #             sotto: li' si perde "chi ha premuto Salva" su un dato
+    #             dell'immobile, qui si perderebbe l'autore di una
+    #             dichiarazione contrattuale.
+    #   RESTRICT  un operatore che ha firmato non si cancella. Gli account si
+    #             disattivano (`status`), non si cancellano, quindi il
+    #             percorso reale resta aperto.
+    #
+    # Conseguenza per il cleanup: RIFIUTO, e dichiarato. Le identita' create
+    # dalla certificazione non firmano niente - la matrice ostile di
+    # ACQUISITION e' fatta di soli rifiuti proprio per questo - quindi in
+    # pratica non morde mai su righe del run.
+    ("stima_acquisitions", "linked_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("stima_acquisitions", "mandate_recorded_by_operator_user_id", "operator_users",
+     "RESTRICT"),
+    ("stima_acquisitions", "revoked_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("stima_inspections", "created_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("stima_inspections", "completed_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("stima_inspections", "cancelled_by_operator_user_id", "operator_users", "RESTRICT"),
     # LMC-10, migration 068. Chi ha corretto per ultimo i dati della propria
     # casa, verso `owner_accounts`.
     #

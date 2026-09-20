@@ -258,6 +258,10 @@ TENANT_PREFIXES = (
     # altre - l'agenzia viene dalla sessione - e quindi deve dichiarare il
     # cookie e SOLO il cookie, come verifica il test 6 qui sopra.
     "/api/communication",
+    # LMC-15: il ponte di acquisizione. Superficie operatore come le altre -
+    # l'agenzia viene dalla sessione, mai dal client - quindi dichiara il
+    # cookie e SOLO il cookie, come verifica il test 6 qui sopra.
+    "/api/acquisition",
 )
 
 

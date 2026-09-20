@@ -442,7 +442,11 @@ def test_N6_nessuna_migration_nuova():
     # LMC-12 ha aggiunto la 069 (`owner_home_notifications`, lo stream di
     # notifiche PRE-INCARICO, approvata dal DESIGN GATE): dominio OWNER, non
     # di questa fase. La coda si nomina, come sempre.
-    assert numeri[-1] == 69, "la serie si e' fermata o e' andata oltre la 069"
+    # LMC-15 ha aggiunto la 070 (`stima_acquisitions` e
+    # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
+    # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
+    # si nomina, come sempre.
+    assert numeri[-1] == 70, "la serie si e' fermata o e' andata oltre la 070"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

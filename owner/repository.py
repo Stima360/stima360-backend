@@ -5,6 +5,7 @@ from core.repository import create_activity_with_cursor
 from integration_owner_request import record_owner_request_event_with_cursor, process_saved_owner_request_event
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from .security import generate_secret,hash_secret,utcnow,valid_session
+from . import home_metrics
 from .schemas import validate_visit_feedback_summary, visit_feedback_privacy_issues
 NF='Risorsa non trovata'
 def one(cur):
@@ -2910,7 +2911,7 @@ HOME_METRIC_EVENTS = (
 #: dalla seconda in poi e' un gesto deliberato. E' una caratteristica del
 #: prodotto, non un difetto del dato, e NON va corretta qui con un'euristica:
 #: si dichiara, e la UI la chiama "aperte almeno una volta".
-_HOME_METRICS_SQL = """
+_HOME_METRICS_CTE = """
 WITH coherent_grants AS (
     -- L'UNICA PORTA. Un grant entra solo se la sua stima e' dell'agenzia
     -- dello scope e se le due radici della tenancy sono d'accordo fra loro.
@@ -2997,6 +2998,65 @@ stock AS (
       FROM coherent_grants
      WHERE valido_ora
 )
+"""
+
+#: LMC-15 - i due gradini del ponte, appesi alle stesse CTE e alla stessa
+#: porta di tenancy. Non sono una query a parte: `cohort` e' gia' ristretta
+#: all'agenzia dello scope, quindi una riga di `stima_inspections` o di
+#: `stima_acquisitions` entra solo attraverso una stima che quella porta ha
+#: gia' fatto passare.
+#:
+#: Il confine temporale e' quello di tutti gli altri numeratori:
+#: `>= cohort_at` perche' un fatto anteriore all'ingresso della casa nel
+#: portale non appartiene a quella coorte, e `< cohort_to` perche' il limite
+#: superiore semiaperto vale per tutto il DTO.
+_BRIDGE_CTE = """,
+inspected AS (
+    -- Il sopralluogo AVVENUTO, non quello fissato: `status='completed'` e
+    -- `completed_at`, che e' quando e' successo. `completed_recorded_at`,
+    -- cioe' quando l'operatore lo ha scritto, non conta qui: registrare in
+    -- ritardo un sopralluogo di marzo non lo sposta ad aprile.
+    --
+    -- `status = 'completed'` e' OGGI RIDONDANTE, e si tiene apposta. La
+    -- matrice di CHECK della 070 impone `completed_at IS NULL` in ogni altro
+    -- stato, quindi il confronto sulle date basterebbe da solo: toglierlo non
+    -- cambierebbe un numero, e infatti nessuna prova di comportamento lo
+    -- coglie (verificato neutralizzandolo). Ma la ridondanza dice a voce alta
+    -- cosa conta questa metrica, e sopravvive a una matrice che un giorno
+    -- ammettesse `completed_at` in uno stato diverso - nel qual caso la sua
+    -- assenza sarebbe un difetto silenzioso. Una sentinella di testo la
+    -- protegge, ed e' dichiarata li' per quello che e'.
+    SELECT DISTINCT c.stima_id
+      FROM cohort c
+      JOIN stima_inspections i
+        ON i.stima_id = c.stima_id
+       AND i.status = 'completed'
+       AND i.completed_at >= c.cohort_at
+       AND i.completed_at <  %(cohort_to)s
+),
+mandated AS (
+    -- L'incarico FIRMATO su un link ANCORA attivo. Un link revocato non e'
+    -- un incarico in corso, e `mandate_signed_at` e' la data della firma,
+    -- non quella della registrazione, per la stessa ragione di sopra.
+    --
+    -- Il join su `properties` non serve a trovare righe - `cohort` ha gia'
+    -- imposto l'agenzia - ma a imporla una seconda volta sull'altra radice
+    -- del ponte: la tenancy sta in ogni ramo, come in tutto il resto di
+    -- questa query.
+    SELECT DISTINCT c.stima_id
+      FROM cohort c
+      JOIN stima_acquisitions a
+        ON a.stima_id = c.stima_id
+       AND a.link_status = 'active'
+       AND a.mandate_signed_at IS NOT NULL
+       AND a.mandate_signed_at >= c.cohort_at
+       AND a.mandate_signed_at <  %(cohort_to)s
+      JOIN properties pr
+        ON pr.id = a.property_id
+       AND pr.agency_id = %(agency_id)s
+)"""
+
+_HOME_METRICS_SELECT = """
 SELECT
     (SELECT COUNT(*) FROM cohort)                       AS cohort_homes,
     (SELECT COUNT(*) FROM activated)                    AS activated_owners,
@@ -3018,21 +3078,91 @@ SELECT
                            'owner_buyer_demand_viewed',
                            'owner_home_updated'))       AS strong_interest_homes,
     (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
-      WHERE event_type = 'owner_consultation_requested') AS consultation_homes
+      WHERE event_type = 'owner_consultation_requested') AS consultation_homes"""
+
+_BRIDGE_SELECT = """,
+    (SELECT COUNT(*) FROM inspected)                    AS inspection_homes,
+    (SELECT COUNT(*) FROM mandated)                     AS mandate_homes"""
+
+#: Due testi, non uno con un `IF` dentro. Quando il ponte non e' applicato le
+#: due tabelle NON ESISTONO, e PostgreSQL rifiuta uno statement che le nomina
+#: gia' in analisi, prima ancora di valutare qualunque condizione: una query
+#: sola con un ramo spento non sarebbe eseguibile. La parte comune e' scritta
+#: una volta e condivisa, cosi' le due varianti non possono divergere sui
+#: numeri che hanno in comune.
+_HOME_METRICS_SQL = _HOME_METRICS_CTE + _HOME_METRICS_SELECT
+_HOME_METRICS_SQL_BRIDGE = (_HOME_METRICS_CTE + _BRIDGE_CTE
+                            + _HOME_METRICS_SELECT + _BRIDGE_SELECT)
+
+#: Il nome con cui il runner registra la migration del ponte in
+#: `schema_migrations.version`: lo stem del file, senza `.sql`. Scritto qui
+#: una volta e mai una data al suo posto.
+BRIDGE_MIGRATION_VERSION = "070_lmc15_acquisition_bridge"
+
+_BRIDGE_PRESENCE_SQL = """
+SELECT to_regclass('public.schema_migrations')  IS NOT NULL AS registro,
+       to_regclass('public.stima_acquisitions') IS NOT NULL AS acquisizioni,
+       to_regclass('public.stima_inspections')  IS NOT NULL AS sopralluoghi
+"""
+
+_BRIDGE_STARTED_SQL = """
+SELECT applied_at
+  FROM schema_migrations
+ WHERE version = %(version)s
+   AND rolled_back_at IS NULL
 """
 
 
+def _bridge_measurement_started_at(c):
+ """Quando la misura del ponte e' cominciata su QUESTO database, o `None`.
+
+ La data viene dal registro delle migration e da nessun altro posto: non e'
+ una costante nel codice, che sarebbe giusta su un ambiente e sbagliata su
+ tutti gli altri, ne' la data del primo record, che direbbe quando qualcuno
+ ha usato la funzione e non da quando il dato e' completo.
+
+ `version` e' PRIMARY KEY, quindi la riga e' al massimo una e non serve
+ nessun altro predicato per sceglierla; `rolled_back_at IS NULL` la esclude
+ se la migration e' stata annullata, perche' in quel caso le tabelle o non
+ ci sono piu' o non contengono piu' niente di attendibile.
+
+ La presenza delle tabelle si controlla prima, e non per prudenza generica:
+ su un database dove la migration non e' mai passata `schema_migrations`
+ stessa puo' non esistere, e la seconda query fallirebbe invece di
+ rispondere "non misurabile".
+ """
+ c.execute(_BRIDGE_PRESENCE_SQL)
+ presenza = dict(one(c))
+ if not all(presenza.values()):
+  return None
+ c.execute(_BRIDGE_STARTED_SQL, {"version": BRIDGE_MIGRATION_VERSION})
+ riga = c.fetchone()
+ return riga["applied_at"] if riga else None
+
+
 def home_metrics_counts(agency_id, *, cohort_from, cohort_to):
- """I conteggi della coorte per UNA agenzia. Una query, sola lettura.
+ """I conteggi della coorte per UNA agenzia, e l'inizio della misura.
 
  `agency_id` e' il primo parametro e non ha default: il tenant non si puo'
  omettere, e arriva sempre da `ctx.require_agency()`, mai dal client. La
  composizione del DTO - percentuali, `null` contro `0`, le voci non
  misurabili - non sta qui ma in `owner/home_metrics.py`: qui si contano
  righe.
+
+ Torna una coppia perche' `measurement_started_at` non e' un conteggio: e'
+ il fatto che spiega perche' due conteggi possono mancare, e il chiamante
+ deve poterlo mettere nel DTO senza andarselo a ripescare.
+
+ Le due letture stanno nello stesso cursore, quindi nella stessa
+ transazione: la data che decide quale variante eseguire e' la stessa che
+ il DTO poi dichiara.
  """
  with core_cursor() as(_,c):
-  c.execute(_HOME_METRICS_SQL,
+  inizio = _bridge_measurement_started_at(c)
+  sql = (_HOME_METRICS_SQL_BRIDGE
+         if home_metrics.bridge_measurable(inizio, cohort_from)
+         else _HOME_METRICS_SQL)
+  c.execute(sql,
             {"agency_id":agency_id,"cohort_from":cohort_from,"cohort_to":cohort_to,
              "event_types":list(HOME_METRIC_EVENTS)})
-  return dict(one(c))
+  return dict(one(c)), inizio

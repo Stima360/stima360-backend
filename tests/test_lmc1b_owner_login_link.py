@@ -418,7 +418,11 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # notifiche PRE-INCARICO `owner_home_notifications`, approvato dal DESIGN
     # GATE. La piu' alta si nomina, cosi' una migration inattesa fa ancora
     # fallire il test.
-    assert numeri[-1] == 69, numeri[-3:]
+    # LMC-15 ha aggiunto la 070 (`stima_acquisitions` e
+    # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
+    # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
+    # si nomina, come sempre.
+    assert numeri[-1] == 70, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

@@ -94,7 +94,11 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # LMC-10 ha aggiunto la 068; LMC-12 la 069 (`owner_home_notifications`,
     # dominio OWNER, approvata dal DESIGN GATE). La piu' alta si nomina, cosi'
     # una migration inattesa fa ancora fallire il test.
-    assert numeri[-1] == 69, numeri[-4:]
+    # LMC-15 ha aggiunto la 070 (`stima_acquisitions` e
+    # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
+    # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
+    # si nomina, come sempre.
+    assert numeri[-1] == 70, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
