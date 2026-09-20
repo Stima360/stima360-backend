@@ -11,6 +11,7 @@ from operator_auth.exceptions import PlatformAdminAgencyRequired
 from .schemas import (
     AccessCreate,
     AccountCreate,
+    HomeMetricsResponse,
     FeedbackStatus,
     PrivacyValidationRequest,
     PublicationCreate,
@@ -28,6 +29,7 @@ from .schemas import (
     VisitFeedbackSupersede,
     VisitFeedbackUpdate,
 )
+from . import home_metrics
 from . import repository as r
 from .router_admin_lookups import router as lookup_router
 from .document_storage import (
@@ -88,6 +90,30 @@ def x(f, *a, **kw):
         raise HTTPException(422, {"code": exc.code, "message": str(exc)})
     except DocumentStorageError as exc:
         raise HTTPException(503, {"code": exc.error_code, "message": "Storage documentale non disponibile"})
+
+
+# LMC-13 - le metriche di acquisizione di "La Mia Casa" ---------------------
+#
+# INTERNA, operator-facing: sta su OWNER Admin, dietro
+# `require_owner_admin_context`, e non esiste nessuna rotta equivalente sul
+# portale - il proprietario non deve vedere quanto converte la propria casa.
+#
+# L'agenzia arriva da `agency_of(ctx)` come per ogni altra rotta di questo
+# router: mai dal client, e un platform admin non legato a un'agenzia riceve
+# 403 invece di un totale di piattaforma, che sarebbe un aggregato
+# cross-tenant.
+@router.get("/home-metrics", response_model=HomeMetricsResponse)
+def home_metrics_view(
+    days: int = Query(home_metrics.DEFAULT_DAYS),
+    ctx: OperatorContext = Depends(require_owner_admin_context),
+):
+    try:
+        periodo = home_metrics.validate_days(days)
+    except home_metrics.InvalidPeriod:
+        raise HTTPException(422, "Periodo non ammesso: 7, 30, 90 o 365 giorni")
+    da, a = home_metrics.window(periodo)
+    conteggi = x(r.home_metrics_counts, agency_of(ctx), cohort_from=da, cohort_to=a)
+    return home_metrics.build(conteggi, days=periodo, cohort_from=da, cohort_to=a)
 
 
 @router.get("/dashboard")

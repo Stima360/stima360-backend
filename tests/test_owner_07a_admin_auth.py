@@ -201,7 +201,14 @@ def test_every_owner_admin_api_route_has_server_side_auth_dependency():
     declared_routes = _declared_routes("owner/router_admin.py")
     declared_routes += _declared_routes("owner/router_admin_lookups.py", "/api/owner/admin")
 
-    assert len(declared_routes) == 42
+    # SENTINELLA AGGIORNATA DA LMC-13: la 43esima route e' `GET
+    # /api/owner/admin/home-metrics`, le metriche di acquisizione di "La Mia
+    # Casa". Cio' che questo test protegge non e' il numero - sarebbe una
+    # sentinella che scade a ogni fase - ma che OGNI route dichiarata stia
+    # dietro la guardia del router: il conteggio si aggiorna, l'asserzione
+    # sulla dipendenza qui sopra e quella sul prefisso qui sotto no.
+    assert len(declared_routes) == 43
+    assert ("GET", "/api/owner/admin/home-metrics") in set(declared_routes)
     assert len(declared_routes) == len(set(declared_routes))
     assert all(path.startswith("/api/owner/admin/") for _, path in declared_routes)
     assert {

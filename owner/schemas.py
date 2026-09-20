@@ -488,3 +488,44 @@ class HomeNotificationListResponse(M):
     limit: int
     offset: int
     has_more: bool
+
+
+# LMC-13 - le metriche di acquisizione, operator-facing. DTO CHIUSO e senza
+# PII: solo interi, tassi, i due confini della finestra e le ragioni di cio'
+# che non e' misurabile. Nessun identificativo (stima, account, contatto,
+# lead, immobile), nessun dato personale, nessun punteggio.
+class HomeMetricsRates(M):
+    view_rate: float | None = None
+    return_rate: float | None = None
+    strong_interest_rate: float | None = None
+    consultation_rate: float | None = None
+    inspection_rate: float | None = None
+    mandate_rate: float | None = None
+
+
+class HomeMetricsResponse(M):
+    period_days: int
+    cohort_from: str
+    cohort_to: str
+    unit: Literal["stima"]
+
+    cohort_homes: int
+    activated_owners: int
+    active_homes_now: int
+
+    viewed_homes: int
+    returning_homes: int
+
+    value_interest_homes: int
+    demand_interest_homes: int
+    updated_homes: int
+    strong_interest_homes: int
+
+    consultation_homes: int
+
+    # Sempre null: nessuna fonte autorevole. Il tipo lo dichiara.
+    inspection_homes: None = None
+    mandate_homes: None = None
+
+    rates: HomeMetricsRates
+    not_measurable: dict[str, str]

@@ -340,6 +340,27 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "the phase - that a failed write answers 503 rather than a false "
         "success"
     ),
+    "tests/test_lmc13_home_metrics_postgres.py": (
+        "TEST-only LMC-13 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to seed "
+        "grants, owner accounts and owner_portal timeline events across two "
+        "agencies and read the aggregate back, which is the only way to prove "
+        "six things a double cannot: that a home with owner, co-owner and "
+        "delegate counts as ONE home while its people count as three in "
+        "activated_owners, that the cohort anchor is MIN(created_at) over the "
+        "home's grants and the UTC window is half-open, that two distinct UTC "
+        "days of the SAME owner make a return while one day each from two "
+        "different owners does not, that one agency never sees the other's "
+        "grants or events and a grant whose two roots stop agreeing leaves "
+        "every count, that a revoked or expired grant leaves the historical "
+        "cohort untouched while dropping out of active_homes_now, and that an "
+        "empty cohort yields zero counts with null rates. It also proves the "
+        "aggregate is a single query with twenty homes, so no N+1 can appear "
+        "unnoticed. It must not go through database.get_connection(): that is "
+        "the application choke point and must stay uncoupled from a throwaway "
+        "test database"
+    ),
     "tests/test_lmc12_home_notifications_postgres.py": (
         "TEST-only LMC-12 proof; opts in through P29_TEST_DSN and skips "
         "entirely without it. Creates and drops its own throwaway database "

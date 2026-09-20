@@ -741,6 +741,10 @@ SCOPED_ROUTES = {
     # block A: dashboard, publications, feedback, audit
     "dash", "pubs", "pub", "edit", "publish", "archive", "supersede",
     "feedback", "feedback_status", "audit",
+    # LMC-13: le metriche di acquisizione di "La Mia Casa". Legge
+    # `owner_stima_access`, `stime` e `seller_timeline_events`, quindi e'
+    # agency-bound come tutte le altre e non puo' stare in NO_TENANT.
+    "home_metrics_view",
     # block B: shared documents
     "documents", "document_create", "document_upload", "document_detail",
     "document_update", "document_publish", "document_revoke", "document_archive",

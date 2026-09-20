@@ -2867,3 +2867,172 @@ def audit_home_notification_access_denied(a,notification_id,scope="read"):
         meta={"scope":scope,"reason_code":"not_found_or_not_authorized"})
  except Exception:
   pass
+
+
+# ---------------------------------------------------------------------------
+# LMC-13 - LE METRICHE DI ACQUISIZIONE DI "LA MIA CASA".
+#
+# UNA query, non N. Il funnel e' un aggregato: farlo casa per casa sarebbe un
+# N+1 su una superficie che un operatore ricarica, e l'unico modo per essere
+# certi che non lo diventi e' che ci sia una sola `execute`.
+#
+# SOLA LETTURA. Nessuna INSERT, nessuna UPDATE, nessun audit: una metrica non
+# e' un fatto del dominio, e scriverne uno per averla guardata sporcherebbe
+# esattamente i dati che sta contando.
+#
+# L'UNITA' E' LA STIMA. `COUNT(DISTINCT stima_id)` ovunque: una casa con tre
+# grant - proprietario, comproprietario, delegato - e' una opportunita' sola.
+# L'unica eccezione dichiarata e' `activated_owners`, che conta persone.
+#
+# LA TENANCY STA IN OGNI RAMO, non a valle. `coherent_grants` e' l'unica porta
+# d'ingresso: impone l'agenzia dello scope sulla stima E l'accordo fra le due
+# radici (`ct.agency_id = s.agency_id`), cioe' il predicato che P26-6C ha
+# certificato e che LMC-2/10/12 gia' usano. Gli eventi si filtrano per
+# `agency_id` proprio (colonna NOT NULL dalla 045) E si ricongiungono alla
+# coorte solo attraverso quella porta: un evento di un'altra agenzia non ha
+# nessuna strada per entrare in un conteggio.
+# ---------------------------------------------------------------------------
+
+#: Gli eventi del portale che il funnel legge. Insieme CHIUSO e allineato a
+#: `owner.tracking.EVENT_TYPES`: un tipo nuovo entra qui solo di proposito.
+#: `owner_home_viewed` e' l'apertura della scheda; gli altri tre sono gesti
+#: espliciti; la richiesta di consulenza e' l'ultimo gradino misurabile.
+HOME_METRIC_EVENTS = (
+ "owner_home_viewed", "owner_value_history_viewed", "owner_buyer_demand_viewed",
+ "owner_home_updated", "owner_consultation_requested",
+)
+
+#: NOTA SU `viewed_homes`, e va letta prima di interpretare il numero.
+#:
+#: `owner_home_viewed` nasce dalla GET del dettaglio. Il portale, dopo il
+#: login, apre da solo la PRIMA casa (`selectFirstHome`), quindi per la prima
+#: casa di ogni proprietario questo evento equivale all'ingresso nel portale;
+#: dalla seconda in poi e' un gesto deliberato. E' una caratteristica del
+#: prodotto, non un difetto del dato, e NON va corretta qui con un'euristica:
+#: si dichiara, e la UI la chiama "aperte almeno una volta".
+_HOME_METRICS_SQL = """
+WITH coherent_grants AS (
+    -- L'UNICA PORTA. Un grant entra solo se la sua stima e' dell'agenzia
+    -- dello scope e se le due radici della tenancy sono d'accordo fra loro.
+    SELECT x.stima_id        AS stima_id,
+           x.owner_account_id AS owner_account_id,
+           oa.contact_id     AS contact_id,
+           x.created_at      AS created_at,
+           (x.access_status = 'active'
+            AND x.revoked_at IS NULL
+            AND (x.valid_until IS NULL OR x.valid_until > NOW())
+            AND oa.status <> 'disabled') AS valido_ora
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct       ON ct.id = oa.contact_id
+      JOIN stime s           ON s.id = x.stima_id
+     WHERE s.agency_id = %(agency_id)s
+       AND ct.agency_id = s.agency_id
+),
+home_cohort AS (
+    -- La data di ingresso della CASA: il primo grant coerente che l'ha resa
+    -- visibile a qualcuno. Non `stime.data`, che e' senza fuso orario.
+    SELECT stima_id, MIN(created_at) AS cohort_at
+      FROM coherent_grants
+     GROUP BY stima_id
+),
+cohort AS (
+    SELECT stima_id, cohort_at
+      FROM home_cohort
+     WHERE cohort_at >= %(cohort_from)s
+       AND cohort_at <  %(cohort_to)s
+),
+cohort_events AS (
+    -- Gli eventi del portale delle case in coorte. `occurred_at >= cohort_at`
+    -- perche' un evento anteriore all'ingresso non appartiene a quella
+    -- coorte, e `< cohort_to` perche' il confine superiore vale per tutto.
+    --
+    -- `contact_id` identifica il proprietario senza ambiguita' e senza
+    -- indovinare: `owner_accounts.contact_id` e' NOT NULL UNIQUE, quindi il
+    -- contatto di un evento e' UN account e uno solo. Il join su
+    -- `coherent_grants` lo conferma contro il grant di QUELLA casa, cosi' un
+    -- evento non puo' essere attribuito a chi su quella casa non ha accesso.
+    SELECT c.stima_id        AS stima_id,
+           g.owner_account_id AS owner_account_id,
+           e.event_type      AS event_type,
+           (e.occurred_at AT TIME ZONE 'UTC')::date AS giorno_utc
+      FROM cohort c
+      JOIN seller_timeline_events e
+        ON e.stima_id = c.stima_id
+       AND e.agency_id = %(agency_id)s
+       AND e.event_source = 'owner_portal'
+       AND e.event_type = ANY(%(event_types)s)
+       AND e.occurred_at >= c.cohort_at
+       AND e.occurred_at <  %(cohort_to)s
+      JOIN coherent_grants g
+        ON g.stima_id = c.stima_id
+       AND g.contact_id = e.contact_id
+),
+returning_homes AS (
+    -- IL RITORNO, per PERSONA e non per casa: serve UNO STESSO proprietario
+    -- che sia tornato in due giorni UTC distinti. Due comproprietari che
+    -- aprono la casa in due giorni diversi sono due prime visite, non un
+    -- ritorno, ed e' la ragione per cui questo raggruppa anche per account
+    -- prima di contare le case.
+    SELECT DISTINCT stima_id
+      FROM (
+            SELECT stima_id, owner_account_id
+              FROM cohort_events
+             WHERE event_type = 'owner_home_viewed'
+             GROUP BY stima_id, owner_account_id
+            HAVING COUNT(DISTINCT giorno_utc) >= 2
+           ) AS per_account
+),
+activated AS (
+    -- Persone, non case: i proprietari con un grant coerente su una casa
+    -- della coorte.
+    SELECT DISTINCT g.owner_account_id
+      FROM coherent_grants g
+      JOIN cohort c ON c.stima_id = g.stima_id
+),
+stock AS (
+    -- Lo stock di oggi, indipendente dalla coorte: quante case hanno adesso
+    -- almeno un accesso valido.
+    SELECT COUNT(DISTINCT stima_id) AS active_homes_now
+      FROM coherent_grants
+     WHERE valido_ora
+)
+SELECT
+    (SELECT COUNT(*) FROM cohort)                       AS cohort_homes,
+    (SELECT COUNT(*) FROM activated)                    AS activated_owners,
+    (SELECT active_homes_now FROM stock)                AS active_homes_now,
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type = 'owner_home_viewed')           AS viewed_homes,
+    (SELECT COUNT(*) FROM returning_homes)              AS returning_homes,
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type = 'owner_value_history_viewed')  AS value_interest_homes,
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type = 'owner_buyer_demand_viewed')   AS demand_interest_homes,
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type = 'owner_home_updated')          AS updated_homes,
+    -- L'interesse esplicito e' una UNIONE, non una somma: una casa su cui il
+    -- proprietario ha fatto tutti e tre i gesti conta una volta. Nessun
+    -- punteggio, nessuna soglia, nessun punto sommato.
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type IN ('owner_value_history_viewed',
+                           'owner_buyer_demand_viewed',
+                           'owner_home_updated'))       AS strong_interest_homes,
+    (SELECT COUNT(DISTINCT stima_id) FROM cohort_events
+      WHERE event_type = 'owner_consultation_requested') AS consultation_homes
+"""
+
+
+def home_metrics_counts(agency_id, *, cohort_from, cohort_to):
+ """I conteggi della coorte per UNA agenzia. Una query, sola lettura.
+
+ `agency_id` e' il primo parametro e non ha default: il tenant non si puo'
+ omettere, e arriva sempre da `ctx.require_agency()`, mai dal client. La
+ composizione del DTO - percentuali, `null` contro `0`, le voci non
+ misurabili - non sta qui ma in `owner/home_metrics.py`: qui si contano
+ righe.
+ """
+ with core_cursor() as(_,c):
+  c.execute(_HOME_METRICS_SQL,
+            {"agency_id":agency_id,"cohort_from":cohort_from,"cohort_to":cohort_to,
+             "event_types":list(HOME_METRIC_EVENTS)})
+  return dict(one(c))
