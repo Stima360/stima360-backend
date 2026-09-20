@@ -75,10 +75,18 @@ CONTACT_B = 900
 # namespace at import time, so the seam is per-module rather than one shared
 # patch - installing on `core.database` alone would leave four live cursors.
 CURSOR_MODULES = (
-    "core.repository",
-    "property.repository",
-    "buy.repository",
-    "match.repository",
+    ("core.repository", "core_cursor"),
+    ("property.repository", "core_cursor"),
+    ("buy.repository", "core_cursor"),
+    ("match.repository", "core_cursor"),
+    # LMC-8: il 360 legge una nona sezione, le case pre-incarico del
+    # contatto. Passa da due helper diversi - OWNER usa `core_cursor`,
+    # Seller Intelligence il proprio `si_cursor` - e finche' non erano
+    # intercettati quelle letture uscivano da questo gate senza essere
+    # controllate: esattamente la forma di fuga che il gate esiste per
+    # trovare. Entrano nella prova, non la aggirano.
+    ("owner.repository", "core_cursor"),
+    ("seller_intelligence.repository", "si_cursor"),
 )
 
 
@@ -161,6 +169,14 @@ class TenantCursor:
             "property_title": label, "code": label,
             "contact_type": "person", "status": "active", "roles": [],
             "n": 0, "count": 0, "total": 0,
+            # LMC-8: le forme di OWNER e di Seller Intelligence. Stessa
+            # ragione dichiarata sopra - una chiave mancante fallirebbe come
+            # KeyError invece che come l'asserzione di isolamento.
+            "stima_id": marker, "payload": None, "observation_type": None,
+            "observed_at": None, "occurred_at": None, "event_type": None,
+            "event_source": None, "data": None, "comune": label,
+            "microzona": label, "via": label, "civico": None,
+            "tipologia": label, "mq": None,
         }
 
     def fetchone(self):
@@ -182,15 +198,15 @@ def install_cursor(cursor, modules=CURSOR_MODULES):
         yield None, cursor
 
     originals = []
-    for name in modules:
+    for name, attributo in modules:
         module = importlib.import_module(name)
-        originals.append((module, getattr(module, "core_cursor")))
-        module.core_cursor = fake
+        originals.append((module, attributo, getattr(module, attributo)))
+        setattr(module, attributo, fake)
     try:
         yield cursor
     finally:
-        for module, original in originals:
-            module.core_cursor = original
+        for module, attributo, original in originals:
+            setattr(module, attributo, original)
 
 
 class Recorder:
@@ -286,6 +302,10 @@ SUBSYSTEMS = (
     ("list_visits_by_contact", []),
     ("list_activities", []),
     ("list_tasks", []),
+    # LMC-8: la nona lettura riceve lo stesso contesto delle altre otto, per
+    # identita'. Entra nell'elenco invece di essere esclusa: una lettura
+    # nuova che non lo ricevesse sarebbe il difetto che questo test cerca.
+    ("owner_home_block", {"available": False, "homes": []}),
 )
 
 
@@ -428,7 +448,8 @@ def _mentions_agency_b(value) -> bool:
 
 
 @pytest.mark.parametrize(
-    "section", ["properties", "buy_requests", "matches", "visits", "activities", "tasks"]
+    "section", ["properties", "buy_requests", "matches", "visits", "activities",
+                "tasks", "owner_home"]
 )
 def test_14_to_18_no_agency_b_row_appears_in_agency_as_360(section):
     document, _cursor = _assembled_360_against_agency_b()
@@ -444,7 +465,23 @@ def test_18b_every_root_read_of_the_360_names_a_tenant():
     """
     _document, cursor = _assembled_360_against_agency_b()
     roots = ("FROM properties", "FROM buy_requests", "FROM property_visits",
-             "FROM matches")
+             "FROM matches",
+             # LMC-8: le due radici della nona sezione. Le letture figlie -
+             # le osservazioni di un watch gia' risolto nell'agenzia - non
+             # sono radici e non compaiono qui, come per le altre sezioni.
+             "FROM owner_stima_access", "FROM seller_timeline_events",
+             # LMC-10: la scheda mostra il PROFILO EFFETTIVO, quindi legge
+             # anche le correzioni del proprietario. `owner_home_overrides`
+             # non porta `agency_id` (la 068 dice perche'), quindi il tenant
+             # entra dalla `stime` in join - ed e' proprio il caso in cui
+             # una radice puo' sembrare scopata senza esserlo.
+             "FROM owner_home_overrides")
+    # LMC-10: questa radice DEVE essere stata letta. Le altre possono non
+    # comparire secondo la forma del documento, ma un `continue` silenzioso
+    # su questa trasformerebbe il test in un verde che non ha verificato
+    # niente il giorno in cui la lettura sparisse o cambiasse nome.
+    assert cursor.sql_of("FROM owner_home_overrides"), \
+        "il 360 non ha letto gli override: la sezione owner_home non e' piu' coperta"
     for root in roots:
         statements = cursor.sql_of(root)
         if not statements:

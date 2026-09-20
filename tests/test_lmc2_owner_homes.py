@@ -148,8 +148,15 @@ def test_b7_nessun_peso_commerciale_ne_punteggio():
         if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
             nodo.value = ""
     codice = ast.unparse(albero).lower()
+    # Due asterischi non sono una moltiplicazione e non vanno cercati come
+    # tale: `* 100` e' la conversione in percentuale, e il `*` della firma e'
+    # il marcatore dei parametri solo-per-nome che LMC-10 ha aggiunto
+    # (`version`, `overridden`, `updated_at`). Si tolgono entrambi PRIMA di
+    # cercare, invece di togliere `*` dall'elenco dei vietati: cosi' una
+    # moltiplicazione vera - un peso - continuerebbe a far fallire il test.
+    codice = codice.replace("* 100", "").replace("*,", "")
     for vietato in ("weight", "peso", "score", "punteggio", "bonus", "*"):
-        assert vietato not in codice.replace("* 100", ""), vietato
+        assert vietato not in codice, vietato
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +171,14 @@ def test_c1_in_lmc2_le_capability_sono_tutte_false():
                       {"observation_type": "microzone_price_changed",
                        "observed_at": "2026-09-10T10:00:00+00:00", "payload": {}}],
         baseline_payload={"price_exact": 185000}, completed_payload=None)
+    # LMC-10 ha acceso `profile_update`: il proprietario puo' correggere i
+    # dati della sua casa, e chi arriva a questa vista ha gia' un grant
+    # valido. Le altre tre restano false per la stessa ragione di LMC-2 -
+    # nessuna storia del valore, nessuna rilevazione di domanda, nessuna
+    # fonte di comparabili - ed e' quello che questo test continua a
+    # sorvegliare.
     assert vista["capabilities"] == {"valuation_history": False, "buyer_demand": False,
-                                     "comparables": False, "profile_update": False}
+                                     "comparables": False, "profile_update": True}
 
 
 def test_c2_valuation_history_richiede_una_storia_del_valore():
@@ -226,7 +239,14 @@ def test_c3_senza_watch_nessuna_capability_diventa_vera():
     vista = home_service.build_home_detail(
         stima=stima(), watch=None, observations=[], baseline_payload=None,
         completed_payload=None)
-    assert set(vista["capabilities"].values()) == {False}
+    # `profile_update` fa eccezione da LMC-10 e non e' una svista: correggere
+    # i dati della propria casa non dipende dal monitoraggio, e anzi una casa
+    # senza watch e' proprio quella che ha piu' bisogno di essere completata.
+    # Le tre capability di LETTURA restano false senza watch, ed e' quello
+    # che questo test sorveglia.
+    letture = {k: v for k, v in vista["capabilities"].items() if k != "profile_update"}
+    assert set(letture.values()) == {False}, letture
+    assert vista["capabilities"]["profile_update"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -407,9 +427,18 @@ def test_f2_il_router_resta_sottile():
 
 
 def test_f3_nessuna_migration_in_lmc2():
+    """SENTINELLA AGGIORNATA DA LMC-10.
+
+    LMC-2 non ha creato migration e continua a non averne: cio' che questo
+    test sorveglia e' che il read-model non si porti dietro schema nuovo. La
+    068 non e' sua - e' la tabella degli override del proprietario, approvata
+    dallo STORAGE GATE di LMC-10 - quindi l'elenco atteso cresce di quella
+    sola voce invece di essere abbandonato.
+    """
     migrazioni = sorted(p.name for p in (ROOT / "migrations").glob("*.sql")
                         if not p.name.endswith("_down.sql"))
-    assert migrazioni[-1] == "067_lmc1b_owner_login_reason.sql", migrazioni[-2:]
+    assert migrazioni[-2:] == ["067_lmc1b_owner_login_reason.sql",
+                               "068_lmc10_owner_home_overrides.sql"], migrazioni[-3:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():

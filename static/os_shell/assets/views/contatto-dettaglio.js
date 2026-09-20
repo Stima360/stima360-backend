@@ -867,6 +867,7 @@ function renderPanoramica(contact, data) {
     </div>
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(contact.notes || 'Nessuna nota.')}</p>
+    ${renderOwnerHome(data.owner_home)}
     <h3 class="section-title">Seller Intelligence</h3>
     <div class="seller-intelligence-section" data-seller-intent-mount>
       <p class="muted">Calcolo Seller Intent…</p>
@@ -886,6 +887,114 @@ function renderPanoramica(contact, data) {
     </div>
   `;
 }
+
+// LMC8_START - IL RADAR DEL PROPRIETARIO NELLA SCHEDA CONTATTO.
+//
+// Mostra un segnale, non un verdetto. Il livello lo decide `interest_service`
+// (LMC-7) e qui si traduce soltanto in italiano; le motivazioni arrivano
+// gia' scritte dal backend e non vengono ne' reinterpretate ne' integrate.
+// Nessun punteggio: un numero sembra preciso e non lo e', e un operatore o
+// ci crede troppo o smette di guardarlo. Il "perche'" e' la parte utile.
+//
+// Non c'e' nessun pulsante che crei qualcosa da solo: attivita' e task si
+// aprono con i dialoghi che la scheda ha gia', e li compila una persona.
+
+const OWNER_INTEREST_LABELS = {
+  high: 'ALTO',
+  medium: 'MEDIO',
+  low: 'BASSO',
+  none: 'NESSUNO',
+};
+
+const OWNER_INTEREST_TONES = {
+  high: 'warn',
+  medium: 'ok',
+  low: 'gray',
+  none: 'gray',
+};
+
+// Quante motivazioni si mostrano. `interest_service` le emette gia' in
+// ordine di importanza - prima i ritorni, poi le sezioni aperte, infine la
+// data - quindi tagliare in fondo non perde il motivo principale.
+const OWNER_MAX_REASONS = 3;
+
+function ownerHomeValue(home) {
+  if (home.current_value === null || home.current_value === undefined) {
+    return home.initial_value === null || home.initial_value === undefined
+      ? '—'
+      : `${formatEuro(home.initial_value)} <small class="muted">(valore iniziale)</small>`;
+  }
+  if (!home.current_value_computed_at) return formatEuro(home.current_value);
+  // Niente HTML parcheggiato in una variabile: ogni valore viene messo in
+  // pagina dove lo si vede passare da un escape.
+  return `${formatEuro(home.current_value)} <small class="muted">al `
+    + `${escapeHtml(formatDate(home.current_value_computed_at))}</small>`;
+}
+
+function formatEuro(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '—';
+  try {
+    return escapeHtml(new Intl.NumberFormat('it-IT', {
+      style: 'currency', currency: 'EUR', maximumFractionDigits: 0,
+    }).format(value));
+  } catch (_error) {
+    return escapeHtml(`${Math.round(value)} EUR`);
+  }
+}
+
+function renderOwnerHomeCard(home) {
+  const radar = home.interest || {};
+  const livello = OWNER_INTEREST_LABELS[radar.level] || OWNER_INTEREST_LABELS.none;
+  const tono = OWNER_INTEREST_TONES[radar.level] || 'gray';
+  const motivi = (radar.reasons || []).slice(0, OWNER_MAX_REASONS);
+  // Costruito da pezzi gia' passati per l'escape, cosi' ogni valore viene
+  // ripulito dove lo si prende e non dove lo si stampa.
+  const sottotitolo = [
+    home.tipologia ? escapeHtml(home.tipologia) : null,
+    home.mq ? `${escapeHtml(String(home.mq))} m²` : null,
+  ].filter(Boolean).join(' · ');
+  const ultima = radar.last_activity_at
+    ? `Ultima attività: ${escapeHtml(formatDateTime(radar.last_activity_at))}`
+    : 'Nessuna attività registrata';
+  const titolo = escapeHtml(home.address || `Stima #${home.stima_id}`);
+  return `
+    <div class="owner-home-card">
+      <div class="owner-home-head">
+        <strong>${titolo}</strong>
+        ${sottotitolo ? `<span class="muted">${sottotitolo}</span>` : ''}
+      </div>
+      <div class="owner-home-row">
+        <span class="muted">Valore monitorato</span>
+        <span class="owner-home-value">${ownerHomeValue(home)}</span>
+      </div>
+      <div class="owner-home-row">
+        <span class="muted">${ultima}</span>
+      </div>
+      <div class="owner-home-interest">
+        INTERESSE PROPRIETARIO: ${renderBadge(livello, tono)}
+      </div>
+      ${motivi.length
+        ? `<ul class="owner-home-reasons">${motivi.map((motivo) => `<li>${escapeHtml(motivo)}</li>`).join('')}</ul>`
+        : ''}
+    </div>
+  `;
+}
+
+function renderOwnerHome(block) {
+  // `available` false significa che questo contatto non ha case
+  // pre-incarico: il riquadro non compare affatto, invece di comparire
+  // vuoto e far sembrare che manchi un dato.
+  if (!block || block.available !== true || !(block.homes || []).length) return '';
+  return `
+    <h3 class="section-title">La Mia Casa</h3>
+    <p class="muted">Cosa ha fatto il proprietario nel portale, casa per casa.
+      Ordinate per attività più recente.</p>
+    <div class="owner-home-list">
+      ${block.homes.map(renderOwnerHomeCard).join('')}
+    </div>
+  `;
+}
+// LMC8_END
 
 async function hydrateInvisibleSale(mount, leads, cache) {
   if (!mount) return;

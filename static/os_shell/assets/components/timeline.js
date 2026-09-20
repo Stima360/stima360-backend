@@ -11,10 +11,39 @@ const EVENT_TYPE_LABELS = {
   stima_richiesta: 'Stima richiesta',
   stima_completata: 'Stima completata',
   email_stima_inviata: 'Email stima inviata',
+  // LMC-8: gli eventi del portale proprietario (LMC-7). Frasi, non codici:
+  // chi legge questa timeline sta decidendo se telefonare, e "la domanda di
+  // immobili simili" gli dice qualcosa che "buyer_demand" non gli dice.
+  // I nomi tecnici dei moduli non compaiono di proposito.
+  owner_home_viewed: 'Ha aperto La Mia Casa',
+  owner_value_history_viewed: 'Ha consultato l’andamento del valore',
+  owner_buyer_demand_viewed: 'Ha consultato la domanda di immobili simili',
+  // LMC-9: non un'osservazione, una richiesta. E' la riga piu' importante
+  // che un operatore possa trovare in questa timeline.
+  owner_consultation_requested: 'Ha richiesto una verifica gratuita',
+  // LMC-10: il proprietario ha corretto i dati della sua casa. La frase e'
+  // la stessa che il radar usa come motivazione, perche' e' lo stesso fatto
+  // e leggerlo scritto in due modi diversi farebbe dubitare che lo sia.
+  owner_home_updated: 'Ha aggiornato i dati della casa',
 };
 
 const EVENT_SOURCE_LABELS = {
   stima360_it: 'Stima360.it',
+  owner_portal: 'Area proprietario',
+};
+
+// LMC-8: chiavi che non si mostrano, per tipo di evento.
+//
+// Il payload degli eventi del proprietario e' `{"action": "..."}`, e
+// l'etichetta qui sopra dice gia' la stessa cosa in italiano. Mostrarlo
+// aggiungerebbe "action: value_history_viewed" sotto "Ha consultato
+// l’andamento del valore": la stessa informazione, una volta in gergo.
+const PAYLOAD_KEYS_HIDDEN_BY_EVENT_TYPE = {
+  owner_home_viewed: ['action'],
+  owner_value_history_viewed: ['action'],
+  owner_buyer_demand_viewed: ['action'],
+  owner_consultation_requested: ['action'],
+  owner_home_updated: ['action'],
 };
 
 const PAYLOAD_FIELDS_BY_EVENT_TYPE = {
@@ -136,8 +165,9 @@ function formatPayloadEntries(eventType, payload) {
     }
   }
 
+  const hidden = new Set(PAYLOAD_KEYS_HIDDEN_BY_EVENT_TYPE[eventType] || []);
   Object.keys(payload)
-    .filter((key) => key !== 'idempotency_key' && !handledKeys.has(key))
+    .filter((key) => key !== 'idempotency_key' && !hidden.has(key) && !handledKeys.has(key))
     .sort()
     .forEach((key) => {
       entries.push({ label: key.replace(/[_-]+/g, ' '), value: payload[key] });

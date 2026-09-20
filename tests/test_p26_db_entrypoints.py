@@ -329,6 +329,65 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "through database.get_connection(): that is the application choke "
         "point and must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_lmc9_consultation_request_postgres.py": (
+        "TEST-only LMC-9 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to seed "
+        "grants and then read seller_timeline_events back, which is the only "
+        "way to prove that a double submit on the same UTC day leaves one "
+        "row, that the next day opens a new one, that every shape of missing "
+        "access writes nothing and answers identically, and - the point of "
+        "the phase - that a failed write answers 503 rather than a false "
+        "success"
+    ),
+    "tests/test_lmc10_owner_home_update_postgres.py": (
+        "TEST-only LMC-10 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to "
+        "apply migration 068 and then read information_schema, "
+        "owner_home_overrides, property_watch_observations and "
+        "seller_timeline_events back, which is the only way to prove four "
+        "things a double cannot: that the override columns carry the same "
+        "types as the columns of stime they override (locali is INTEGER "
+        "there and VARCHAR in the namesake stime_dettagliate, so the wrong "
+        "source would pass unnoticed), that two concurrent saves from the "
+        "same version leave one written and one refused with nothing "
+        "changed, that the down migration refuses to drop a table holding "
+        "real owner corrections and succeeds on an empty one, and that the "
+        "snapshot born after an update is computed by "
+        "valuation.compute_from_payload on the EFFECTIVE profile while "
+        "every snapshot already written stays byte-identical. It must not "
+        "go through database.get_connection(): that is the application "
+        "choke point and must stay uncoupled from a throwaway test database"
+    ),
+    "tests/test_lmc8_crm_radar_postgres.py": (
+        "TEST-only LMC-8 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to seed "
+        "grants, estimations and owner events and then read the Contact 360 "
+        "block back, which is the only way to prove that a namesake contact "
+        "in another agency brings in no home, that a revoked grant removes "
+        "one, and that the level shown is the one LMC-7 computes on the real "
+        "rows rather than a copy that can drift"
+    ),
+    "tests/test_lmc7_owner_radar_postgres.py": (
+        "TEST-only LMC-7 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to seed "
+        "leads, grants and Property Watch observations as fixtures and to "
+        "read seller_timeline_events back, which is the only way to prove "
+        "that a second view on the same UTC day writes no second row and "
+        "does not alter the first, and that a revoked or expired grant "
+        "records nothing at all"
+    ),
+    "tests/test_lmc4_buyer_demand_postgres.py": (
+        "TEST-only LMC-4 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. LMC-4 is read-only, so the "
+        "connection exists to seed Buyer Pressure observations as fixtures "
+        "and to count rows before and after a portal read, which is how the "
+        "no-write guarantee and the tenancy boundary are proven at all"
+    ),
     "tests/test_lmc3_valuation_snapshot_postgres.py": (
         "TEST-only integration connection. Disabled unless P29_TEST_DSN is "
         "explicitly supplied: without that variable the whole module is "

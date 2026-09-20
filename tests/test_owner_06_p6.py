@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import get_args
@@ -21,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PORTAL = ROOT / "static" / "owner_portal"
 INDEX = PORTAL / "index.html"
 APP_JS = PORTAL / "assets" / "app.js"
+# LMC-6: il portale carica anche un modulo puro con le decisioni di "La Mia
+# Casa". L'armatura deve eseguirlo prima di app.js, altrimenti `VM` e'
+# undefined e ogni scenario runtime muore per un motivo che non e' il suo.
+VIEW_MODEL_JS = PORTAL / "assets" / "home-view-model.js"
 APP_CSS = PORTAL / "assets" / "app.css"
 
 
@@ -67,6 +72,7 @@ def _run_node_scenario(routes: dict[str, list[dict]], assertions: str) -> str:
     """Execute the real app.js against a tiny deterministic DOM/fetch harness."""
     route_json = json.dumps(routes, ensure_ascii=False)
     app_path = json.dumps(str(APP_JS))
+    view_model_path = json.dumps(str(VIEW_MODEL_JS))
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
@@ -94,6 +100,7 @@ class FakeElement {{
     this.id = id;
     this.hidden = false;
     this.disabled = false;
+    this.checked = false;
     this.value = '';
     this.type = '';
     this.className = '';
@@ -103,11 +110,36 @@ class FakeElement {{
     this.listeners = {{}};
     this.classList = new FakeClassList(this);
     this._textContent = '';
+    // LMC-6: il grafico prende il namespace da un <svg> del markup e crea i
+    // nodi con createElementNS. Lo stub deve saperlo fare, altrimenti il
+    // ramo con storico non sarebbe eseguibile qui.
+    this.namespaceURI = null;
+    this.style = {{}};
   }}
   set textContent(value) {{ this._textContent = String(value ?? ''); }}
   get textContent() {{ return this._textContent; }}
   append(...nodes) {{ this.children.push(...nodes); }}
   replaceChildren(...nodes) {{ this.children = [...nodes]; }}
+  // LMC-10: il form di aggiornamento raccoglie le pertinenze con
+  // querySelectorAll sulle caselle di spunta, che sono figlie di <label>.
+  // Un selettore solo, quello che app.js usa davvero: uno stub che
+  // simulasse un motore CSS intero direbbe piu' di quanto sa.
+  querySelectorAll(selector) {{
+    if (selector !== 'input[type="checkbox"]') {{
+      throw new Error('selettore non supportato dallo stub: ' + selector);
+    }}
+    const trovati = [];
+    const visita = (nodo) => {{
+      for (const figlio of nodo.children || []) {{
+        if (figlio.tagName === 'INPUT' && figlio.type === 'checkbox') {{
+          trovati.push(figlio);
+        }}
+        visita(figlio);
+      }}
+    }};
+    visita(this);
+    return trovati;
+  }}
   setAttribute(name, value) {{ this.attributes[name] = String(value); }}
   getAttribute(name) {{ return this.attributes[name]; }}
   removeAttribute(name) {{ delete this.attributes[name]; }}
@@ -128,6 +160,35 @@ const ids = {{}};
 const requiredIds = [
   'loading-view','login-view','app-view','loading-message','login-form','token-input',
   'login-button','auth-message','app-message','logout-button','property-count',
+  // LMC-6 (collisione autorizzata): il portale ha ora anche la superficie
+  // PRE-INCARICO "La Mia Casa". Questi id sono markup nuovo, non un cambio
+  // di contratto del legacy: senza dichiararli qui `getElementById` torna
+  // undefined e app.js non arriva nemmeno in fondo, quindi ogni scenario
+  // runtime di questo file fallirebbe per un motivo che non e' il suo.
+  'email-login-form','email-input','email-login-button','email-login-message',
+  'dashboard-section','homes-section','home-count','homes-loading','homes-error',
+  'homes-error-message','homes-retry','homes-content','home-list',
+  'home-detail-loading','home-detail-empty','home-detail-error',
+  'home-detail-error-message','home-detail-retry','home-detail-content',
+  'home-detail-address','home-detail-summary','home-value-list','home-value-note',
+  'home-history-message','home-chart-seed','home-history-chart','home-history-range',
+  'home-history-changes','home-demand-unavailable','home-demand-content',
+  'home-demand-label','home-demand-message','home-demand-counts','home-demand-disclaimer',
+  'home-profile-percent','home-profile-bar-fill','home-profile-known',
+  'home-profile-missing','home-profile-note',
+  // LMC-10 (collisione autorizzata, stessa natura di quella di LMC-6): il
+  // blocco "Profilo casa" ha ora il form di aggiornamento. Sono id di
+  // markup nuovo; senza dichiararli qui `getElementById` torna undefined e
+  // app.js non arriva in fondo, quindi ogni scenario runtime di questo file
+  // fallirebbe per un motivo che non e' il suo.
+  'home-profile-updated','home-profile-edit','home-profile-form',
+  'home-profile-fields','home-profile-pertinenze-list','home-profile-altro',
+  'home-profile-cancel','home-profile-save','home-profile-status',
+  // LMC-7: i due pulsanti che aprono le sezioni ad alta intenzione.
+  'home-history-toggle','home-demand-toggle',
+  // LMC-9: la CTA di conversione e la sua conferma esplicita.
+  'home-consultation-cta','home-consultation-confirm','home-consultation-cancel',
+  'home-consultation-send','home-consultation-status',
   'dashboard-loading','shell-empty','dashboard-error','dashboard-error-message',
   'dashboard-retry','dashboard-content','property-list','property-detail-loading',
   'property-detail-empty','property-detail-error','property-detail-error-message',
@@ -248,10 +309,43 @@ for (const id of ['preference-in-app','preference-publication','preference-visit
 }}
 ids['notification-preferences-save'].tagName = 'BUTTON';
 
+ids['home-chart-seed'].namespaceURI = 'svg-namespace';
+for (const id of ['email-login-form','login-form','homes-content','homes-section',
+                  'home-detail-content','dashboard-section']) {{
+  ids[id].hidden = true;
+}}
+for (const id of ['home-consultation-cta','home-consultation-cancel',
+                  'home-consultation-send']) {{
+  ids[id].tagName = 'BUTTON';
+}}
+ids['home-history-toggle'].tagName = 'BUTTON';
+ids['home-demand-toggle'].tagName = 'BUTTON';
+ids['email-login-form'].tagName = 'FORM';
+ids['email-input'].tagName = 'INPUT';
+ids['email-login-button'].tagName = 'BUTTON';
+// LMC-10.
+ids['home-profile-form'].tagName = 'FORM';
+ids['home-profile-edit'].tagName = 'BUTTON';
+ids['home-profile-cancel'].tagName = 'BUTTON';
+ids['home-profile-save'].tagName = 'BUTTON';
+ids['home-profile-altro'].tagName = 'TEXTAREA';
+
 global.document = {{
   activeElement: null,
   getElementById(id) {{ return ids[id]; }},
   createElement(tag) {{ return new FakeElement(tag); }},
+  createElementNS(ns, tag) {{
+    const element = new FakeElement(tag);
+    element.namespaceURI = ns;
+    return element;
+  }},
+  // LMC-10: le etichette delle pertinenze mettono il nome accanto alla
+  // casella come nodo di testo.
+  createTextNode(value) {{
+    const nodo = new FakeElement('#text');
+    nodo.textContent = String(value ?? '');
+    return nodo;
+  }},
 }};
 
 global.window = {{
@@ -305,6 +399,11 @@ async function flush(rounds = 30) {{
 }}
 
 global.URL = URL;
+// LMC-6: il view model si attacca a `self`, che nel browser e' `window`.
+global.self = global.window;
+vm.runInThisContext(fs.readFileSync({view_model_path}, 'utf8'),
+                    {{ filename: 'home-view-model.js' }});
+assert(global.window.OwnerHomeViewModel, 'view model non caricato');
 vm.runInThisContext(fs.readFileSync({app_path}, 'utf8'), {{ filename: 'app.js' }});
 
 (async () => {{
@@ -518,7 +617,6 @@ def test_p6_3_does_not_render_generic_json_or_internal_fields():
     for forbidden in (
         "contact_id",
         "lead_id",
-        "email",
         "telefono",
         "phone",
         "storage_key",
@@ -531,6 +629,29 @@ def test_p6_3_does_not_render_generic_json_or_internal_fields():
         "buy_id",
     ):
         assert forbidden not in source.lower()
+
+    # LMC-6 (collisione autorizzata). "email" era in questo elenco perche' il
+    # portale non deve MOSTRARE dati personali arrivati dall'API. LMC-6
+    # introduce pero' il login via magic link, dove l'indirizzo lo DIGITA la
+    # persona che sta guardando lo schermo e viene solo spedito: e' l'esatto
+    # contrario di un dato altrui reso in pagina.
+    #
+    # Il divieto non viene tolto, viene reso preciso: fuori dalla regione
+    # LMC-6 la parola resta proibita com'era, e dentro si verifica che
+    # l'indirizzo finisca solo nel corpo della richiesta e mai in un nodo di
+    # testo.
+    regioni = re.findall(r"LMC6_START(.*?)LMC6_END", source, flags=re.S)
+    assert regioni, "marcatori LMC-6 assenti"
+    fuori = source
+    for regione in regioni:
+        fuori = fuori.replace(regione, "")
+    assert "email" not in fuori.lower(), "fuori da LMC-6 il divieto resta intero"
+
+    dentro = "\n".join(regioni)
+    assert "JSON.stringify({ email })" in dentro, "l'indirizzo si spedisce"
+    for reso in ("textContent = email", "textContent = emailInput",
+                 "textContent = state.email"):
+        assert reso not in dentro, f"l'indirizzo non si scrive in pagina: {reso}"
 
 
 def test_p6_3_dashboard_is_loaded_only_after_authenticated_session():

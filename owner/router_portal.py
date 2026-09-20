@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, HomeListResponse, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
+from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, HomeEventCreate, HomeListResponse, HomeProfileUpdate, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
+from core.exceptions import NotFoundError
 from .dependencies import current_owner
-from . import home_service, login_service
+from . import home_service, home_update, login_service, tracking
 from .security import clear_cookie, set_cookie
 from .enums import COOKIE_NAME
 from . import repository as r
@@ -120,6 +121,112 @@ def home_detail(stima_id: int, s=Depends(current_owner)):
     """Una casa sola. `nf` traduce qualunque rifiuto nel 404 neutro, quindi
     non autorizzato e inesistente danno la stessa risposta."""
     return nf(home_service.get_home, s["owner_account_id"], stima_id)
+
+
+@router.patch("/homes/{stima_id}")
+def home_profile_update(stima_id: int, p: HomeProfileUpdate,
+                        s=Depends(current_owner)):
+    """LMC-10: il proprietario corregge i dati della sua casa.
+
+    QUATTRO ESITI, E OGNUNO DICE UNA COSA DIVERSA.
+
+    `404` quando l'accesso non c'e' - stima inesistente, di un altro
+    proprietario, di un'altra agenzia, grant revocato o scaduto: una
+    risposta sola per tutti i casi, come in tutto OWNER, perche'
+    distinguerli direbbe a chi prova gli id quali stime esistono.
+
+    `409` quando la versione attesa non e' quella corrente. Significa che
+    qualcun altro ha scritto fra il momento in cui il form e' stato aperto e
+    il salvataggio: l'altra scheda del browser, oppure un comproprietario,
+    che il grant ammette (`co_owner`, `delegate`). Non si sovrascrive: chi
+    ha davanti dati vecchi deve ricaricarli, e il messaggio lo dice senza
+    parlare di versioni, che non sono un concetto del proprietario.
+
+    `422` quando la patch non e' accettabile. Porta i campi, cosi' il form
+    puo' segnare le caselle sbagliate invece di mostrare un errore generico.
+
+    `200` quando e' andata, con due sotto-casi che il corpo distingue e che
+    il frontend traduce in due frasi diverse: `updated` (qualcosa e'
+    cambiato) e `unchanged` (il salvataggio non cambiava niente, e allora
+    non e' successo niente: nessuna versione nuova, nessun evento, nessuno
+    snapshot).
+
+    E una cosa che NON succede: un guasto del ricalcolo del valore non
+    diventa un errore. L'aggiornamento e' gia' salvato, e la risposta lo
+    dice senza affermare che il valore e' stato ricalcolato.
+    """
+    try:
+        return home_update.update_home(s["owner_account_id"], stima_id,
+                                       p.patch(), p.expected_version)
+    except home_update.HomeVersionConflict:
+        raise HTTPException(409, 'I dati della casa sono stati aggiornati da '
+                                 "un'altra sessione. Ricarica i dati e riprova.")
+    except home_update.InvalidHomeUpdate as exc:
+        raise HTTPException(422, {'detail': 'Dati non validi.',
+                                  'fields': list(exc.fields)})
+    except NotFoundError:
+        raise HTTPException(404, 'Risorsa non trovata')
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - un guasto non diventa un successo
+        # NON un 404, che qui significherebbe "non e' tua" e manderebbe il
+        # proprietario a cercare un problema che non esiste; e soprattutto
+        # non un 200. E' la stessa scelta di LMC-9: se non abbiamo salvato,
+        # lo diciamo, e il frontend tiene i dati nel form e propone di
+        # riprovare.
+        raise HTTPException(503, 'Aggiornamento non riuscito. Riprova.') from exc
+
+
+@router.post("/homes/{stima_id}/events", status_code=204)
+def home_event(stima_id: int, p: HomeEventCreate, s=Depends(current_owner)):
+    """LMC-7: il proprietario ha aperto una sezione che richiede un gesto.
+
+    Cosa arriva dal client: un id di stima e un'azione fra due. Cosa decide
+    il server: il tipo di evento, la sorgente, l'agenzia, il contatto e il
+    lead. `track_action` non solleva mai e verifica per conto proprio sia il
+    grant sia la capability, quindi:
+
+      - una stima non autorizzata non registra niente,
+      - un'azione su una sezione che quella casa non ha non registra niente,
+      - un guasto nella scrittura non registra niente,
+
+    e tutti e tre danno la STESSA risposta, 204, come per il magic link:
+    un tracciamento che raccontasse il proprio esito diventerebbe un modo
+    per sapere quali stime esistono e cosa contengono.
+    """
+    tracking.track_action(s["owner_account_id"], stima_id, p.action)
+    return None
+
+
+@router.post("/homes/{stima_id}/consultation-request")
+def consultation_request(stima_id: int, s=Depends(current_owner)):
+    """LMC-9: il proprietario chiede di essere ricontattato.
+
+    NON E' UN EVENTO DI ANALYTICS, e per questo non passa dalla rotta
+    `/events`. Li' la risposta e' sempre 204 perche' l'esito non riguarda
+    chi guarda una pagina; qui riguarda: una persona ha chiesto una
+    telefonata, e ha diritto di sapere se la richiesta e' arrivata.
+
+    DUE FALLIMENTI DIVERSI, DUE RISPOSTE DIVERSE.
+
+    Se l'accesso non c'e' - stima inesistente, di un altro proprietario, di
+    un'altra agenzia, grant revocato o scaduto - la risposta e' il 404
+    neutro di sempre, uguale per tutti i casi: distinguerli direbbe a chi
+    prova gli id quali stime esistono.
+
+    Se invece l'accesso c'e' ma non siamo riusciti a registrare, la risposta
+    e' 503. Non 404, che significherebbe "non tua", e soprattutto non 200:
+    rispondere "fatto" a una richiesta che abbiamo perso significa lasciare
+    una persona ad aspettare una telefonata che nessuno fara'. Il messaggio
+    e' generico - niente stack, niente SQL - ma dice la verita', e il
+    frontend puo' proporre di riprovare.
+    """
+    try:
+        return tracking.track_consultation_request(s["owner_account_id"], stima_id)
+    except tracking.ConsultationNotAllowed:
+        raise HTTPException(404, 'Risorsa non trovata')
+    except Exception as exc:  # noqa: BLE001 - un guasto non diventa un successo
+        raise HTTPException(503, 'Richiesta non registrata. Riprova.') from exc
 
 
 @router.get("/properties")

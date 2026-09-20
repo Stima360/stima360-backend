@@ -1152,6 +1152,41 @@ def get_stima_valuation_input_scoped(ctx, stima_id: int) -> dict[str, Any] | Non
         return _row(cur.fetchone())
 
 
+#: Le colonne di `owner_home_overrides` che il motore puo' ricevere. Sono i
+#: campi correggibili di LMC-10, gli stessi di `home_profile`; le colonne di
+#: servizio (`version`, `updated_at`, chi ha scritto) non sono dati
+#: dell'immobile e non entrano in nessun payload.
+VALUATION_OVERRIDE_COLUMNS = (
+    "mq", "piano", "locali", "bagni", "ascensore", "anno", "stato",
+    "pertinenze", "mqgiardino", "mqgarage", "mqcantina", "mqpostoauto",
+    "mqtaverna", "mqsoffitta", "mqterrazzo", "numbalconi", "altrodescrizione",
+)
+
+
+def get_stima_override_scoped(ctx, stima_id: int) -> dict[str, Any] | None:
+    """Le correzioni del proprietario su quella stima, in questa agenzia.
+
+    LMC-10. `None` quando non ne esistono, che e' il caso normale: il motore
+    riceve allora esattamente cio' che riceveva prima.
+
+    `owner_home_overrides` non porta `agency_id` (la migration 068 dice
+    perche'), quindi il tenant entra da `stime`, come per ogni altra lettura
+    scopata di questo dominio. La composizione non avviene qui: la fa
+    `home_profile.build_effective_home_profile`, che e' l'unico posto in cui
+    "override vince se non nullo" e' scritto.
+    """
+    agency_id = _agency(ctx)
+    colonne = ", ".join(f"o.{c}" for c in VALUATION_OVERRIDE_COLUMNS)
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            f"SELECT {colonne} FROM owner_home_overrides o "
+            "JOIN stime s ON s.id = o.stima_id "
+            "WHERE o.stima_id = %s AND s.agency_id = %s",
+            (stima_id, agency_id),
+        )
+        return _row(cur.fetchone())
+
+
 def insert_valuation_snapshot_scoped(
     ctx,
     stima_id: int,

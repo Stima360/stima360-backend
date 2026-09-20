@@ -388,7 +388,12 @@ def test_N4_nessuna_migration_nuova():
     # P29-2.5E non ha introdotto migration: la 065 e' di P29-2.6E, la fase
     # successiva, e riguarda il genitore di lifecycle delle SERVICE senza
     # contatto - non il trasporto email.
-    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
+    # LMC-10 (collisione autorizzata): la 068 e' la tabella degli
+    # override del proprietario, approvata dallo STORAGE GATE di quella
+    # fase. Non appartiene a questa, ed e' proprio cio' che la
+    # sentinella continua a dire: la coda della serie e' nominata una
+    # per una, quindi una migration nata QUI farebbe ancora fallire.
+    assert numeri[-1] == 68, "la serie si e' fermata o e' andata oltre la 068"
     assert 64 in numeri
 
 

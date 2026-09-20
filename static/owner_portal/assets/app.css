@@ -1424,3 +1424,542 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* LMC-6 - "La Mia Casa" (PRE-INCARICO).
+ *
+ * Additivo: nessuna regola qui sopra viene ridefinita, il portale
+ * POST-INCARICO conserva il proprio aspetto. Mobile-first davvero - le
+ * misure di base valgono da 320px in su e le media query aggiungono spazio
+ * quando ce n'e', non tolgono quando manca.
+ *
+ * Il vincolo che rompe piu' spesso una pagina stretta non e' il font ma la
+ * griglia: un figlio di flex/grid ha `min-width: auto`, quindi un importo
+ * lungo allarga la colonna e la pagina scorre in orizzontale. Da qui i
+ * `min-width: 0` sotto, che sono la vera regola responsive di questo
+ * foglio.
+ */
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.5rem 0 1rem;
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.email-login h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.email-login p {
+  margin: 0 0 0.85rem;
+  color: #4b5563;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.homes-section {
+  margin-bottom: 2rem;
+  min-width: 0;
+}
+
+.homes-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.home-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.home-card {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #fff;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.home-card.is-selected {
+  border-color: #1f3d7a;
+  box-shadow: 0 0 0 2px rgba(31, 61, 122, 0.12);
+}
+
+.home-card-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.home-card-subtitle,
+.home-card-status {
+  color: #6b7280;
+  font-size: 0.86rem;
+}
+
+.home-card-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.home-card-value small {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.home-card-value strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-card-cta {
+  justify-self: start;
+  margin-top: 0.15rem;
+  color: #1f3d7a;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.home-detail {
+  min-width: 0;
+}
+
+.home-address,
+.home-summary-line {
+  margin: 0.15rem 0 0;
+  color: #4b5563;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.home-block {
+  margin-top: 1.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid #eef0f4;
+  min-width: 0;
+}
+
+.home-block h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.home-value-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.home-value-list dt {
+  color: #6b7280;
+  font-size: 0.9rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.home-value-list dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-note {
+  margin: 0.6rem 0 0;
+  color: #6b7280;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.home-chart {
+  margin-top: 0.4rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.home-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.home-chart-line {
+  fill: none;
+  stroke: #1f3d7a;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.home-chart-dot {
+  fill: #1f3d7a;
+}
+
+.home-chart-single,
+.home-chart-range {
+  margin: 0.5rem 0 0;
+  color: #6b7280;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.home-changes {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+  min-width: 0;
+}
+
+.home-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  background: #f7f8fb;
+  min-width: 0;
+}
+
+.home-change-label {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.home-change-percent {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-change-values {
+  font-size: 0.85rem;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+.home-change-note {
+  flex: 1 1 100%;
+  color: #6b7280;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.home-demand-label {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.home-demand-message {
+  margin: 0.3rem 0 0.7rem;
+  color: #4b5563;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.home-disclaimer {
+  margin: 0.7rem 0 0;
+  color: #6b7280;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.home-profile-percent {
+  margin: 0 0 0.45rem;
+  font-weight: 650;
+}
+
+.home-profile-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #eef0f4;
+  overflow: hidden;
+}
+
+.home-profile-bar span {
+  display: block;
+  height: 100%;
+  background: #1f3d7a;
+}
+
+.home-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  min-width: 0;
+}
+
+.home-chip {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.home-chip.is-known {
+  background: #e8f0e8;
+  color: #2f5d3a;
+}
+
+.home-chip.is-missing {
+  background: #fdf0e6;
+  color: #8a4b12;
+}
+
+/* Da 430px in su c'e' spazio per due colonne di card; sotto restano
+ * impilate, che e' l'unica forma leggibile a 320px. */
+@media (min-width: 430px) {
+  .home-list {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .homes-layout {
+    grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .home-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* LMC-7 - il pulsante che apre una sezione.
+ *
+ * Non e' una CTA e non promette niente: dice cosa mostra e mostra quello.
+ * Sta nel flusso, non in evidenza, perche' l'informazione che apre e'
+ * disponibile a chiunque abbia la casa - il gesto serve a non far dire ai
+ * dati qualcosa che il proprietario non ha fatto.
+ */
+
+.disclosure-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid #d5dae4;
+  border-radius: 999px;
+  background: #fff;
+  color: #1f3d7a;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.disclosure-button::after {
+  content: '▾';
+  font-size: 0.75rem;
+}
+
+.disclosure-button:hover {
+  border-color: #1f3d7a;
+}
+
+.disclosure-button:focus-visible {
+  outline: 2px solid #1f3d7a;
+  outline-offset: 2px;
+}
+
+/* LMC-9 - la richiesta di verifica gratuita.
+ *
+ * L'unica CTA del portale, e l'unica cosa qui dentro che parte da un gesto
+ * deliberato: per questo ha una conferma, e per questo la conferma ha due
+ * pulsanti con lo stesso peso visivo. Annullare non deve costare piu' che
+ * confermare.
+ */
+
+.home-consultation-cta {
+  margin-top: 0.6rem;
+}
+
+.home-consultation-confirm {
+  margin-top: 0.7rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #d5dae4;
+  border-radius: 14px;
+  background: #f7f8fb;
+}
+
+.home-consultation-confirm p {
+  margin: 0 0 0.75rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.home-consultation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.home-consultation-actions button {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  min-height: 44px;
+}
+
+/* LMC10_START - il form di aggiornamento dei dati della casa. */
+
+.home-profile-form {
+  margin-top: 0.8rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #d5dae4;
+  border-radius: 14px;
+  background: #f7f8fb;
+}
+
+.home-profile-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.home-profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.home-profile-field label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4a5262;
+}
+
+.home-profile-field input[type="text"],
+.home-profile-field input[type="number"],
+.home-profile-field select,
+.home-profile-form textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #ccd2dd;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
+
+.home-profile-form textarea {
+  min-height: 5rem;
+  margin-top: 0.25rem;
+  resize: vertical;
+}
+
+.home-profile-field input[type="checkbox"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  min-height: 0;
+  align-self: flex-start;
+  margin-top: 0.4rem;
+}
+
+.home-profile-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #6b7280;
+}
+
+.home-profile-pertinenze {
+  margin: 0.9rem 0 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #e0e4ec;
+  border-radius: 12px;
+}
+
+.home-profile-pertinenze legend {
+  padding: 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4a5262;
+}
+
+/* Le caselle delle pertinenze riusano `.home-chip`, che per le pastiglie di
+ * sola lettura ha `overflow-wrap: anywhere` - giusto li', perche' un comune
+ * lungo deve poter andare a capo. Qui no: l'etichetta convive con una
+ * casella dentro un flex item, il contenitore la stringe alla larghezza
+ * della casella e "garage" finisce spezzato in "gar / ag / e". Verificato a
+ * 430px in Chromium. Quindi la pastiglia non si comprime e il testo non va
+ * a capo; se lo spazio non basta, va a capo la pastiglia intera. */
+.home-profile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #d5dae4;
+  border-radius: 999px;
+  background: #fff;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.home-profile-chip input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+}
+
+.home-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  min-width: 0;
+}
+
+.home-profile-actions button {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  min-height: 44px;
+}
+
+/* LMC10_END */

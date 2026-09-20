@@ -10,7 +10,11 @@ from operator_auth.context import OperatorContext
 
 ROOT = Path(__file__).resolve().parent.parent
 CLIENT = TestClient(app)
+# LMC-8: il blocco `owner_home` si aggiunge alle nove sezioni storiche, che
+# restano tutte. L'insieme e' tenuto esatto di proposito - una sezione in
+# piu' e' un cambio di contratto e deve passare da qui.
 EXPECTED_KEYS = {
+    "owner_home",
     "contact",
     "roles",
     "leads",
@@ -53,6 +57,11 @@ def _patch_empty_contact(monkeypatch, *, contact=None, roles=None):
     monkeypatch.setattr(service, "list_visits_by_contact", lambda ctx, contact_id: [])
     monkeypatch.setattr(service, "list_activities", lambda *args, **kwargs: [])
     monkeypatch.setattr(service, "list_tasks", lambda *args, **kwargs: [])
+    # LMC-8: la decima lettura. Senza questo stub il servizio aprirebbe una
+    # connessione vera e questi test unitari fallirebbero per un motivo che
+    # non e' il loro.
+    monkeypatch.setattr(service, "owner_home_block",
+                        lambda ctx, contact_id: {"available": False, "homes": []})
     return service
 
 
@@ -135,7 +144,7 @@ def test_06_contact_only_core_returns_empty_relations(monkeypatch):
     service = _patch_empty_contact(monkeypatch)
     result = service.get_contact_360(CTX, 1)
     assert result["contact"]["id"] == 1
-    for key in EXPECTED_KEYS - {"contact"}:
+    for key in EXPECTED_KEYS - {"contact", "owner_home"}:
         assert result[key] == []
 
 
@@ -217,19 +226,40 @@ def test_14_tasks_are_aggregated(monkeypatch):
 
 
 def test_15_payload_has_exactly_nine_sections(monkeypatch):
+    """LMC-8: le nove sezioni storiche piu' `owner_home`. Il nome resta
+    quello per non perdere la storia del test; l'insieme atteso e'
+    `EXPECTED_KEYS`, che dichiara il decimo esplicitamente."""
     service = _patch_empty_contact(monkeypatch)
-    assert set(service.get_contact_360(CTX, 1)) == EXPECTED_KEYS
+    sezioni = set(service.get_contact_360(CTX, 1))
+    assert sezioni == EXPECTED_KEYS
+    assert len(sezioni - {"owner_home"}) == 9, "le nove storiche non si toccano"
 
 
 def test_16_crm_has_no_owner_imports():
+    # LMC-8 (collisione autorizzata). La regola tiene il CRM fuori dagli
+    # interni del portale proprietario, e resta giusta: il Contact 360 non
+    # deve conoscere ne' la catena dei grant, ne' PROPERTY WATCH, ne' la
+    # proiezione dell'interesse. LMC-8 ha pero' il mandato esplicito di
+    # portare quel segnale nella scheda contatto, e la scelta e' stata una
+    # cucitura SOLA, in sola lettura: `owner.crm_radar`, che esiste per
+    # questo e non espone altro.
+    #
+    # L'ammissione e' per modulo, non per pacchetto: `owner.repository`,
+    # `owner.home_service` e tutti gli altri restano irraggiungibili dal
+    # CRM esattamente come prima, e il test lo verifica ancora.
+    SEAM = {"owner.crm_radar"}
+
     crm_path = ROOT / "crm"
     for py_file in crm_path.glob("*.py"):
         tree = ast.parse(py_file.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                assert all(alias.name.split(".")[0] != "owner" for alias in node.names)
+                for alias in node.names:
+                    assert alias.name in SEAM or alias.name.split(".")[0] != "owner", \
+                        f"{py_file.name}: {alias.name}"
             elif isinstance(node, ast.ImportFrom) and node.module:
-                assert node.module.split(".")[0] != "owner"
+                assert node.module in SEAM or node.module.split(".")[0] != "owner", \
+                    f"{py_file.name}: {node.module}"
 
 
 def test_17_no_inverse_domain_dependency_on_crm():

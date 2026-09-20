@@ -14,6 +14,10 @@ the legacy one, and it is not aliased back to the legacy spelling.
 """
 
 from buy.service import list_requests_scoped
+# LMC-8: l'unica cucitura verso il portale proprietario, e passa da un
+# adapter dedicato in sola lettura. Vedi `test_next3_crm_360::test_16`, che
+# ammette esattamente questo modulo e continua a vietare tutti gli altri.
+from owner.crm_radar import contact_homes_block as owner_home_block
 from core.service import get_contact, list_activities, list_leads, list_tasks
 from match.service import list_matches_scoped
 from property.service import list_properties, list_visits_by_contact
@@ -105,4 +109,7 @@ def get_contact_360(ctx, contact_id: int) -> dict:
         "visits": visits,
         "activities": activities,
         "tasks": tasks,
+        # LMC-8, additivo: le case pre-incarico di questo contatto, ognuna
+        # con il radar di LMC-7. Il livello NON si calcola qui.
+        "owner_home": owner_home_block(ctx, contact_id),
     }

@@ -4,7 +4,8 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr,
+                      field_validator, model_validator)
 
 
 class M(BaseModel):
@@ -71,6 +72,81 @@ class HomeSummary(M):
 
 class HomeListResponse(M):
     items: list[HomeSummary]
+
+
+class HomeEventCreate(M):
+    """LMC-7: l'unica cosa che il client puo' dire sul proprio comportamento.
+
+    Un `Literal`, non una stringa: l'insieme chiuso e' applicato dallo
+    schema, quindi un'azione inventata riceve un 422 senza arrivare a
+    toccare il dominio. Non c'e' `event_type`, non c'e' `contact_id`, non
+    c'e' `lead_id`, non c'e' `agency_id`: sono tutte cose che il server
+    deriva, e che un portale non deve poter dichiarare - `seller_timeline_events`
+    e' la memoria su cui il CRM decide chi richiamare.
+    """
+
+    action: Literal["value_history_viewed", "buyer_demand_viewed"]
+
+
+class HomeProfileUpdate(BaseModel):
+    """LMC-10: cio' che il proprietario puo' correggere della propria casa.
+
+    `extra="forbid"`: una chiave fuori da questo elenco riceve un 422 senza
+    arrivare al dominio. E' la stessa whitelist di `home_profile` e delle
+    colonne della migration 068, e un test la riconfronta con quelle - tre
+    elenchi che devono coincidere e che nessuno confronta prima o poi non
+    coincidono.
+
+    COSA NON C'E', E NON PER DIMENTICANZA. `comune` e `microzona` scelgono la
+    base EUR/mq; `via` e `civico` sono identita'; `tipologia`, la posizione e
+    la vista mare sono classificazione. Per quelli la strada e' la richiesta
+    di verifica gratuita di LMC-9. E naturalmente non c'e' nessun
+    `agency_id`, `contact_id`, `owner_account_id` o `lead_id`: il server li
+    deriva, sempre.
+
+    I tipi sono STRETTI: `StrictInt` rifiuta `true` e `"95"`, che pydantic in
+    modalita' permissiva convertirebbe in `1` e `95`. Un browser che manda
+    una casella di spunta dove va un numero deve sentirselo dire, non vedere
+    la propria casa diventare di un metro quadro. La validazione vera resta
+    pero' in `owner.home_update.normalize_patch` (limiti, insiemi chiusi,
+    token delle pertinenze): questo schema e' il primo cancello, non l'unico.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: La versione del profilo su cui il form e' stato aperto. `0` significa
+    #: "nessuna correzione ancora", ed e' il valore della prima modifica.
+    expected_version: StrictInt = Field(ge=0)
+
+    mq: StrictInt | None = None
+    piano: StrictStr | None = None
+    locali: StrictInt | None = None
+    bagni: StrictInt | None = None
+    ascensore: StrictBool | None = None
+    anno: StrictInt | None = None
+    stato: StrictStr | None = None
+    pertinenze: list[StrictStr] | None = None
+    mqgiardino: StrictInt | None = None
+    mqgarage: StrictInt | None = None
+    mqcantina: StrictInt | None = None
+    mqpostoauto: StrictInt | None = None
+    mqtaverna: StrictInt | None = None
+    mqsoffitta: StrictInt | None = None
+    mqterrazzo: StrictInt | None = None
+    numbalconi: StrictInt | None = None
+    altrodescrizione: StrictStr | None = None
+
+    def patch(self) -> dict:
+        """Solo i campi che il client ha davvero mandato.
+
+        `exclude_unset` e' la differenza fra "non l'ho toccato" e "l'ho messo
+        a null": il primo non entra nella patch, il secondo si' e viene
+        rifiutato piu' avanti, perche' in LMC-10 cancellare un valore non e'
+        un gesto che esiste.
+        """
+        dati = self.model_dump(exclude_unset=True)
+        dati.pop("expected_version", None)
+        return dati
 
 
 class PublicationCreate(M):

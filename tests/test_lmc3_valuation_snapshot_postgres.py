@@ -68,7 +68,17 @@ CREATE TABLE seller_timeline_events (
 CREATE TABLE schema_migrations (version VARCHAR(200) PRIMARY KEY);
 """
 
-CATENA = ("009_owner_01", "022_property_watch", "066_lmc1_owner_stima_access")
+# LMC-10 (collisione autorizzata): la catena cresce di una voce.
+# Il read-model di "La Mia Casa" legge ora anche `owner_home_overrides`
+# per comporre il PROFILO EFFETTIVO, quindi senza la 068 questo
+# database usa-e-getta non ha piu' la forma che il codice si aspetta e
+# ogni test qui fallirebbe per una tabella mancante invece che per il
+# proprio motivo. La tabella resta vuota in tutti i test di questo
+# file: nessuna correzione del proprietario esiste, quindi il profilo
+# effettivo coincide con l'originale e cio' che si verificava prima si
+# verifica identico.
+CATENA = ("009_owner_01", "022_property_watch", "066_lmc1_owner_stima_access",
+          "068_lmc10_owner_home_overrides")
 
 
 def _dsn_per(nome: str) -> str:

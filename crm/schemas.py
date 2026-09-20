@@ -13,3 +13,5 @@ class Contact360Response(BaseModel):
     visits: list[dict[str, Any]]
     activities: list[dict[str, Any]]
     tasks: list[dict[str, Any]]
+    # LMC-8: additivo. Le nove sezioni storiche restano quelle che erano.
+    owner_home: dict[str, Any]

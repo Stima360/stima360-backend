@@ -404,7 +404,17 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
         violazioni.extend(runner.validate_migration(migration))
     assert violazioni == []
     numeri = [m.number for m in runner.discover_migrations()]
-    assert numeri[-1] == 67 and numeri[-2] == 66
+    # LMC-10 (collisione autorizzata): la 068 e' arrivata, approvata dallo
+    # STORAGE GATE. Cio' che questo test sorveglia non e' che la 067 sia
+    # l'ultima per sempre - sarebbe una sentinella che scade a ogni fase -
+    # ma che sia al suo posto, valida per il runner, e che la numerazione
+    # non abbia buchi ne' doppioni: un numero saltato o ripetuto e' il modo
+    # in cui due migration finiscono per applicarsi in ordine diverso su
+    # due ambienti.
+    assert 67 in numeri and numeri.index(67) == numeri.index(66) + 1
+    assert numeri == sorted(numeri), numeri
+    assert len(numeri) == len(set(numeri)), "numeri di migration duplicati"
+    assert numeri[-1] == 68, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

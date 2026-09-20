@@ -632,20 +632,57 @@ def test_g1_nessuna_rotta_nuova_sul_router_property_watch():
 
 
 def test_g2_nessuna_migration_in_lmc3():
+    """SENTINELLA AGGIORNATA DA LMC-10.
+
+    LMC-3 non ha creato schema e continua a non averne bisogno:
+    `observation_type` e' VARCHAR(100) senza CHECK, ed e' la ragione per cui
+    lo snapshot del valore non richiese una migration. La 068 e' di LMC-10,
+    approvata dallo STORAGE GATE: si nomina invece di smettere di guardare,
+    cosi' una migration inattesa farebbe ancora fallire il test.
+    """
     migrazioni = sorted(p.name for p in (ROOT / "migrations").glob("*.sql")
                         if not p.name.endswith("_down.sql"))
-    assert migrazioni[-1] == "067_lmc1b_owner_login_reason.sql", migrazioni[-2:]
+    assert migrazioni[-2:] == ["067_lmc1b_owner_login_reason.sql",
+                               "068_lmc10_owner_home_overrides.sql"], migrazioni[-3:]
+
+
+DOMINI_VIETATI_LMC3 = (
+    "main.py", "communication/", "operator_auth/", "seller_intelligence/",
+    "seller_intent/", "next_best_action/", "followup/", "static/", "crm/",
+    "migrations/",
+)
 
 
 def test_g3_lmc3_non_tocca_i_domini_vietati():
+    """Il commit di LMC-3 non ha toccato nessuno di questi domini.
+
+    CORRETTO IN LMC-6 (collisione segnalata). La versione originale guardava
+    `git diff`, cioe' il WORKING TREE: andava bene finche' LMC-3 era l'unico
+    lavoro non committato, ma da allora il significato e' cambiato sotto i
+    piedi al test. Con LMC-3 committato, `git diff` non mostra piu' le
+    modifiche di LMC-3 - mostra quelle delle fasi successive, e LMC-6 ha il
+    mandato esplicito di lavorare su `static/owner_portal`. Cosi' com'era,
+    il test avrebbe accusato LMC-3 di una modifica fatta da qualcun altro
+    tre fasi dopo.
+
+    La garanzia non cambia, cambia il soggetto: si guarda il commit che ha
+    introdotto LMC-3, che e' immutabile, invece dello stato di lavoro
+    condiviso. Se quel commit non si trova (storia troncata), il test si
+    salta invece di dare un verde che non ha verificato niente.
+    """
     import subprocess
-    diff = subprocess.run(
-        ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "main.py", "communication/", "operator_auth/", "seller_intelligence/",
-         "seller_intent/", "next_best_action/", "followup/", "static/", "crm/",
-         "migrations/"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    assert diff == "", diff
+
+    def git(*argomenti):
+        return subprocess.run(["git", "--no-optional-locks", *argomenti],
+                              cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+    commit = git("log", "--diff-filter=A", "--format=%H", "-1", "--",
+                 "property_watch/valuation_snapshot.py")
+    if not commit:
+        pytest.skip("commit LMC-3 non trovato nella storia")
+    toccati = git("show", "--name-only", "--format=", commit, "--",
+                  *DOMINI_VIETATI_LMC3)
+    assert toccati == "", toccati
 
 
 def test_g4_il_servizio_scoped_non_ha_una_gemella_senza_contesto():

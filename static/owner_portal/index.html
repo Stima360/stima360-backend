@@ -47,6 +47,31 @@
       </form>
 
       <p id="auth-message" class="status-message" role="status" aria-live="polite"></p>
+
+      <!--LMC6:START-->
+      <div class="login-divider" role="separator" aria-hidden="true"><span>oppure</span></div>
+
+      <div class="email-login">
+        <h3>Non hai un codice?</h3>
+        <p>Inserisci la tua email. Se è associata a un accesso STIMA360, riceverai un link per entrare.</p>
+        <form id="email-login-form" novalidate>
+          <label for="email-input">Email</label>
+          <input
+            id="email-input"
+            name="email"
+            type="email"
+            inputmode="email"
+            autocomplete="email"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+            aria-describedby="email-login-message"
+          >
+          <button id="email-login-button" class="secondary-button" type="submit">Inviami il link</button>
+        </form>
+        <p id="email-login-message" class="status-message" role="status" aria-live="polite"></p>
+      </div>
+      <!--LMC6:END-->
     </section>
 
     <section id="app-view" class="app-panel" hidden>
@@ -59,6 +84,175 @@
       </div>
 
       <div id="app-message" class="status-message" role="status" aria-live="polite"></div>
+
+      <!--LMC6:START-->
+      <section id="homes-section" class="homes-section" aria-labelledby="homes-title" hidden>
+        <div class="section-heading dashboard-heading">
+          <div>
+            <p class="eyebrow">Pre-incarico</p>
+            <h2 id="homes-title">La Mia Casa</h2>
+          </div>
+          <p id="home-count" class="count-badge" aria-live="polite"></p>
+        </div>
+
+        <div id="homes-loading" class="section-state" role="status" aria-live="polite" hidden>
+          <div class="spinner spinner-small" aria-hidden="true"></div>
+          <p>Caricamento delle case in monitoraggio…</p>
+        </div>
+
+        <div id="homes-error" class="error-state" role="alert" hidden>
+          <h3>Impossibile caricare le case</h3>
+          <p id="homes-error-message">Riprova tra poco.</p>
+          <button id="homes-retry" class="secondary-button" type="button">Riprova</button>
+        </div>
+
+        <div id="homes-content" class="homes-layout" hidden>
+          <div id="home-list" class="home-list" role="list" aria-label="Case in monitoraggio"></div>
+
+          <section id="home-detail-section" class="home-detail" aria-labelledby="home-detail-title">
+            <div id="home-detail-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+              <div class="spinner spinner-small" aria-hidden="true"></div>
+              <p>Caricamento della casa…</p>
+            </div>
+
+            <div id="home-detail-empty" class="empty-state compact-empty" hidden>
+              <h3>Seleziona una casa</h3>
+              <p>Il monitoraggio apparirà qui.</p>
+            </div>
+
+            <div id="home-detail-error" class="error-state compact-error" role="alert" hidden>
+              <h3>Casa non disponibile</h3>
+              <p id="home-detail-error-message">Casa non disponibile o accesso non più valido.</p>
+              <button id="home-detail-retry" class="secondary-button" type="button">Riprova</button>
+            </div>
+
+            <div id="home-detail-content" hidden>
+              <div class="subsection-heading detail-heading">
+                <p class="eyebrow">Monitoraggio</p>
+                <h3 id="home-detail-title">La Mia Casa</h3>
+                <p id="home-detail-address" class="home-address"></p>
+                <p id="home-detail-summary" class="home-summary-line"></p>
+              </div>
+
+              <section class="home-block" aria-labelledby="home-value-title">
+                <h4 id="home-value-title">Valore</h4>
+                <dl id="home-value-list" class="home-value-list"></dl>
+                <p id="home-value-note" class="home-note" hidden></p>
+              </section>
+
+              <section class="home-block" aria-labelledby="home-history-title">
+                <h4 id="home-history-title">Andamento</h4>
+                <p id="home-history-message" class="home-note" hidden></p>
+                <!--LMC7:START-->
+                <button id="home-history-toggle" class="disclosure-button" type="button" hidden
+                        aria-expanded="false" aria-controls="home-history-chart">
+                  Vedi andamento
+                </button>
+                <!--LMC7:END-->
+                <!-- Il seme da cui il grafico prende il proprio namespace: un
+                     <svg> scritto nel markup e' gia' nel namespace SVG, quindi
+                     l'URI non deve comparire da nessuna parte nel sorgente. -->
+                <svg id="home-chart-seed" aria-hidden="true" hidden></svg>
+                <div id="home-history-chart" class="home-chart" hidden></div>
+                <p id="home-history-range" class="home-chart-range" hidden></p>
+                <div id="home-history-changes" class="home-changes"></div>
+              </section>
+
+              <section id="home-demand-block" class="home-block" aria-labelledby="home-demand-title">
+                <h4 id="home-demand-title">Domanda</h4>
+                <p id="home-demand-unavailable" class="home-note" hidden></p>
+                <!--LMC7:START-->
+                <button id="home-demand-toggle" class="disclosure-button" type="button" hidden
+                        aria-expanded="false" aria-controls="home-demand-content">
+                  Vedi domanda
+                </button>
+                <!--LMC7:END-->
+                <div id="home-demand-content" hidden>
+                  <p id="home-demand-label" class="home-demand-label"></p>
+                  <p id="home-demand-message" class="home-demand-message"></p>
+                  <dl id="home-demand-counts" class="home-value-list"></dl>
+                  <p id="home-demand-disclaimer" class="home-disclaimer"></p>
+                </div>
+              </section>
+
+              <!--LMC9:START-->
+              <section id="home-consultation-block" class="home-block"
+                       aria-labelledby="home-consultation-title">
+                <h4 id="home-consultation-title">Verifica gratuita</h4>
+                <p class="home-note">Un nostro incaricato può verificare con te la
+                  situazione e il valore della tua casa.</p>
+
+                <button id="home-consultation-cta" class="primary-button home-consultation-cta"
+                        type="button">Richiedi verifica gratuita</button>
+
+                <div id="home-consultation-confirm" class="home-consultation-confirm" hidden>
+                  <p>Vuoi essere ricontattato da STIMA360 per una verifica gratuita
+                    della tua casa?</p>
+                  <div class="home-consultation-actions">
+                    <button id="home-consultation-cancel" class="secondary-button"
+                            type="button">Annulla</button>
+                    <button id="home-consultation-send" class="primary-button"
+                            type="button">Invia richiesta</button>
+                  </div>
+                </div>
+
+                <p id="home-consultation-status" class="home-note" role="status"
+                   aria-live="polite" hidden></p>
+              </section>
+              <!--LMC9:END-->
+
+              <section class="home-block" aria-labelledby="home-profile-title">
+                <h4 id="home-profile-title">Profilo casa</h4>
+                <p id="home-profile-percent" class="home-profile-percent"></p>
+                <div id="home-profile-bar" class="home-profile-bar" aria-hidden="true">
+                  <span id="home-profile-bar-fill"></span>
+                </div>
+                <div id="home-profile-known" class="home-chip-group"></div>
+                <div id="home-profile-missing" class="home-chip-group"></div>
+                <p id="home-profile-note" class="home-note"></p>
+
+                <!--LMC10:START-->
+                <p id="home-profile-updated" class="home-note" hidden></p>
+
+                <button id="home-profile-edit" class="secondary-button" type="button" hidden>
+                  Aggiorna i dati della casa
+                </button>
+
+                <form id="home-profile-form" class="home-profile-form" novalidate hidden>
+                  <!-- I campi nascono da JS a partire dall'elenco che il
+                       backend dichiara in `profile.editable_fields`: cosi' il
+                       form non puo' mostrare una casella che il server
+                       rifiuterebbe. -->
+                  <div id="home-profile-fields" class="home-profile-fields"></div>
+
+                  <fieldset class="home-profile-pertinenze">
+                    <legend>Pertinenze</legend>
+                    <div id="home-profile-pertinenze-list" class="home-chip-group"></div>
+                  </fieldset>
+
+                  <label for="home-profile-altro">Altre informazioni</label>
+                  <textarea id="home-profile-altro" name="altrodescrizione" rows="3"
+                            maxlength="2000"></textarea>
+
+                  <div class="home-profile-actions">
+                    <button id="home-profile-cancel" class="secondary-button" type="button">
+                      Annulla
+                    </button>
+                    <button id="home-profile-save" class="primary-button" type="submit">
+                      Salva
+                    </button>
+                  </div>
+                </form>
+
+                <p id="home-profile-status" class="home-note" role="status"
+                   aria-live="polite" hidden></p>
+                <!--LMC10:END-->
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+      <!--LMC6:END-->
 
       <section id="dashboard-section" class="dashboard-section" aria-labelledby="dashboard-title">
         <div class="section-heading dashboard-heading">
@@ -509,6 +703,7 @@
     <p class="noscript-message">Per usare l’Area proprietario è necessario abilitare JavaScript.</p>
   </noscript>
 
+  <script src="/owner/assets/home-view-model.js"></script>
   <script src="/owner/assets/app.js"></script>
 </body>
 </html>

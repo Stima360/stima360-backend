@@ -543,3 +543,76 @@ dialog.modal.modal-wide { max-width: 680px; }
   background: transparent;
 }
 .acting-bar .acting-exit:hover { background: #fff; color: #b3261e; }
+
+/* LMC-8 - il radar del proprietario nella scheda contatto.
+ *
+ * Additivo: nessuna regola esistente viene ridefinita. Deliberatamente
+ * sobrio - e' un segnale da leggere di sfuggita mentre si decide se
+ * telefonare, non un cruscotto.
+ */
+
+.owner-home-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  min-width: 0;
+}
+
+.owner-home-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--st-border, #e5e7eb);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.owner-home-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.owner-home-head strong {
+  overflow-wrap: anywhere;
+}
+
+.owner-home-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.owner-home-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.owner-home-interest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--st-muted, #6b7280);
+}
+
+.owner-home-reasons {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.owner-home-reasons li {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}

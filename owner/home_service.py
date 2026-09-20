@@ -36,10 +36,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import home_profile
 from core.exceptions import NotFoundError
 from property_watch.exceptions import WatchNotFoundError  # noqa: F401  (documenta la fonte)
 
+from . import demand
 from . import repository as owner_repository
+from . import tracking
 
 #: I campi di `stime` su cui si misura la completezza del profilo. Insieme
 #: DICHIARATO e chiuso: la percentuale e' `len(known) / len(PROFILE_FIELDS)`,
@@ -161,20 +164,58 @@ def initial_value(*, baseline_payload, completed_payload) -> tuple[Any, str | No
     return None, None
 
 
-def build_profile(stima: dict[str, Any]) -> dict[str, Any]:
+def _dichiarato_vuoto(campo: str, overridden) -> bool:
+    """Il proprietario ha risposto "nessuna", ed e' una risposta.
+
+    LMC-10. Un campo puo' essere conosciuto in due modi: perche' porta un
+    valore (`_has_value`), oppure perche' il proprietario ha dichiarato
+    esplicitamente che non ce n'e'. Il secondo modo esiste solo dove la
+    stringa vuota e' un'affermazione sulla casa invece dell'assenza di un
+    dato, cioe' per `pertinenze` e per nient'altro: l'insieme arriva da
+    `home_profile.EMPTY_MEANS_OVERRIDE`, non da un elenco ricopiato qui.
+
+    E si guarda `overridden`, non il valore: e' la differenza fra
+    "`owner_home_overrides.pertinenze` vale `''`" e "vale NULL". Nel primo
+    caso il proprietario ha risposto, nel secondo non ha detto niente e vale
+    la regola di LMC-2 sul dato originale. Leggere la stringa vuota senza
+    sapere da dove viene confonderebbe i due casi, ed e' esattamente
+    l'errore che questa funzione esiste per non fare.
+
+    Una stringa vuota in un altro campo non acquista nessun significato:
+    `altrodescrizione` salvato vuoto resta un campo non compilato.
+    """
+    return campo in home_profile.EMPTY_MEANS_OVERRIDE and campo in (overridden or ())
+
+
+def build_profile(stima: dict[str, Any], *, version: int = 0,
+                  overridden: tuple[str, ...] = (),
+                  updated_at: Any = None) -> dict[str, Any]:
     """Quali campi dichiarati ci sono, quali mancano, e la percentuale.
 
     `conosciuti / considerati * 100`, arrotondata. Nessun peso: un campo vale
     un campo. L'ordine e' quello di `PROFILE_FIELDS`, quindi due chiamate sugli
     stessi dati danno lo stesso identico dizionario.
+
+    LMC-10: un campo conta come conosciuto anche quando il proprietario ha
+    dichiarato esplicitamente che non c'e' - oggi solo le pertinenze. Vedi
+    `_dichiarato_vuoto`.
     """
-    conosciuti = [campo for campo in PROFILE_FIELDS if _has_value(stima.get(campo))]
+    conosciuti = [campo for campo in PROFILE_FIELDS
+                  if _has_value(stima.get(campo))
+                  or _dichiarato_vuoto(campo, overridden)]
     mancanti = [campo for campo in PROFILE_FIELDS if campo not in conosciuti]
     return {
         "considered_fields": list(PROFILE_FIELDS),
         "known_fields": conosciuti,
         "missing_fields": mancanti,
         "completion_percent": round(len(conosciuti) / len(PROFILE_FIELDS) * 100),
+        # LMC-10. `editable_fields` e' la whitelist, e viene di la' invece di
+        # essere ricopiata: il form del proprietario non deve poter mostrare
+        # una casella che il server rifiuterebbe.
+        "editable_fields": list(home_profile.OVERRIDABLE_FIELDS),
+        "overridden_fields": list(overridden),
+        "version": version,
+        "updated_at": updated_at,
     }
 
 
@@ -333,16 +374,27 @@ def build_home_summary(*, stima, has_watch, initial_value, last_observed_at,
 
 
 def build_home_detail(*, stima, watch, observations, baseline_payload,
-                      completed_payload) -> dict[str, Any]:
+                      completed_payload, buyer_pressure=None,
+                      overrides=None) -> dict[str, Any]:
     """Il dettaglio di una casa, composto dai domini esistenti.
 
     `watch` e' la riga del watch oppure `None`; di essa esce SOLO presenza e
     stato. `observations` serve a contare e a datare, non a mostrare.
 
+    `buyer_pressure` (LMC-4) e' l'ultima rilevazione della domanda, gia'
+    sfoltita dal repository, oppure `None`. Arriva dal chiamante e non viene
+    letta qui: chi costruisce la vista non apre connessioni.
+
     Nessun orologio: tutto cio' che questa vista dice sul valore e' datato dai
     dati stessi. Due chiamate a distanza di mesi sulle stesse osservazioni
     danno lo stesso identico dizionario.
     """
+    # LMC-10: cio' che si mostra e' il PROFILO EFFETTIVO, cioe' l'originale
+    # con sopra le correzioni del proprietario. La somma la fa `home_profile`,
+    # e la fa anche per Property Watch e per il CRM: una regola sola, in un
+    # posto solo. `stima` resta la riga originale e non viene modificata.
+    profilo = home_profile.build_effective_home_profile(stima, overrides)
+    casa = profilo["home"]
     valore, fonte = initial_value(baseline_payload=baseline_payload,
                                   completed_payload=completed_payload)
     storia = _history(observations)
@@ -351,27 +403,33 @@ def build_home_detail(*, stima, watch, observations, baseline_payload,
     ultimo = punti[-1]["payload"] if punti else None
     corrente = _price(ultimo) if ultimo is not None else None
     variazioni = {nome: _change(punti, giorni) for nome, giorni in CHANGE_WINDOWS}
+    domanda = demand.build(buyer_pressure)
     return {
-        "stima_id": stima.get("id"),
+        "stima_id": casa.get("id"),
         "property": {
-            "comune": stima.get("comune"),
-            "microzona": stima.get("microzona"),
-            "via": stima.get("via"),
-            "civico": stima.get("civico"),
-            "tipologia": stima.get("tipologia"),
-            "mq": stima.get("mq"),
-            "piano": stima.get("piano"),
-            "locali": stima.get("locali"),
-            "bagni": stima.get("bagni"),
-            "pertinenze": stima.get("pertinenze"),
-            "ascensore": stima.get("ascensore"),
-            "anno": stima.get("anno"),
-            "stato": stima.get("stato"),
-            "vistamareyn": stima.get("vistamareyn"),
-            "distanzamare": stima.get("distanzamare"),
-            "altrodescrizione": stima.get("altrodescrizione"),
+            "comune": casa.get("comune"),
+            "microzona": casa.get("microzona"),
+            "via": casa.get("via"),
+            "civico": casa.get("civico"),
+            "tipologia": casa.get("tipologia"),
+            "mq": casa.get("mq"),
+            "piano": casa.get("piano"),
+            "locali": casa.get("locali"),
+            "bagni": casa.get("bagni"),
+            "pertinenze": casa.get("pertinenze"),
+            "ascensore": casa.get("ascensore"),
+            "anno": casa.get("anno"),
+            "stato": casa.get("stato"),
+            "vistamareyn": casa.get("vistamareyn"),
+            "distanzamare": casa.get("distanzamare"),
+            "altrodescrizione": casa.get("altrodescrizione"),
         },
-        "created_at": stima.get("data"),
+        "created_at": casa.get("data"),
+        # LMC-10: la versione del profilo, che il client rimanda indietro come
+        # `expected_version`. Zero significa "nessuna correzione ancora", ed
+        # e' il valore con cui si fa la PRIMA modifica: cosi' il client non
+        # deve distinguere "non c'e' riga" da "c'e' e vale qualcosa".
+        "profile_version": profilo["version"],
         "valuation": {
             # Il valore ORIGINARIO: storico, immutabile, mai ricalcolato.
             "initial_value": valore,
@@ -388,22 +446,39 @@ def build_home_detail(*, stima, watch, observations, baseline_payload,
             **variazioni,
         },
         "valuation_history": [_public_snapshot(p) for p in punti],
+        # LMC-4: la domanda acquirenti, aggregata. Vedi `owner/demand.py` per
+        # cosa resta dentro Property Watch e perche'.
+        "buyer_demand": domanda,
         "watch": {"has_watch": ha_watch,
                   "status": watch.get("status") if ha_watch else None},
         "history": storia,
-        "profile": build_profile(stima),
+        "profile": build_profile(casa, version=profilo["version"],
+                                 overridden=profilo["overridden_fields"],
+                                 updated_at=profilo["updated_at"]),
         "capabilities": {
             # Vera solo con una storia reale del VALORE, cioe' con almeno una
             # rivalutazione persistita. In LMC-2 non ne esistono: le
             # osservazioni di mercato di PROPERTY WATCH non lo sono, e
             # `valuation_snapshot` arriva con LMC-3. Quindi false, sempre.
             "valuation_history": storia["history_available"],
-            # LMC-4: la domanda degli acquirenti non e' ancora pubblicata.
-            "buyer_demand": False,
+            # Vera solo con una rilevazione Buyer Pressure leggibile: senza
+            # misura, o con una misura che non si lascia interpretare, il
+            # blocco esiste ma dice "non disponibile", e la capability lo
+            # segue invece di promettere una sezione vuota.
+            "buyer_demand": domanda["status"] != demand.STATUS_UNAVAILABLE,
             # Non esiste nessuna fonte di comparabili per il proprietario.
             "comparables": False,
-            # LMC-2 e' sola lettura.
-            "profile_update": False,
+            # LMC-10: il proprietario puo' correggere i dati della sua casa.
+            # Vera per chiunque arrivi fin qui, perche' arrivarci significa
+            # gia' avere un grant valido su questa stima: non c'e' una
+            # seconda condizione da controllare, e inventarne una (per
+            # esempio "solo se c'e' un watch") vorrebbe dire nascondere il
+            # form proprio alle case con meno dati.
+            #
+            # Il CRM (LMC-8) compone la stessa vista con `stima={}`: li' non
+            # c'e' nessun proprietario e nessun form, e la capability non
+            # viene letta.
+            "profile_update": True,
         },
         "data_status": _data_status(valore, ha_watch),
     }
@@ -424,8 +499,15 @@ def list_homes(owner_account_id: int) -> list[dict[str, Any]]:
     stime = owner_repository.list_home_grants(owner_account_id)
     if not stime:
         return []
+    # LMC-10: gli override di TUTTE le case in una query sola. Il riepilogo
+    # mostra `mq`, che e' un campo correggibile: senza questa lettura la
+    # lista direbbe 95 e il dettaglio 110 della stessa casa. Una query per
+    # riga sarebbe stata l'altra soluzione, e con dieci case sono dieci
+    # viaggi in piu' per un dato che quasi nessuna casa ha.
+    override = owner_repository.home_overrides_for_account(owner_account_id)
     homes = []
-    for stima in stime:
+    for originale in stime:
+        stima = home_profile.effective_home(originale, override.get(originale["id"]))
         agency_id = stima["agency_id"]
         watch = _watch_bundle(agency_id, stima["id"])
         baseline = watch["baseline_payload"] if watch else None
@@ -444,8 +526,15 @@ def list_homes(owner_account_id: int) -> list[dict[str, Any]]:
     return homes
 
 
-def get_home(owner_account_id: int, stima_id: int) -> dict[str, Any]:
-    """Una casa sola. `NotFoundError` - il 404 neutro di OWNER - in ogni altro caso.
+def compose_home(owner_account_id: int, stima_id: int) -> dict[str, Any]:
+    """La vista di una casa, senza audit e senza radar. `NotFoundError` altrimenti.
+
+    E' il corpo di `get_home`, estratto perche' LMC-10 ha un secondo lettore:
+    la risposta dell'aggiornamento, che restituisce la casa gia' aggiornata
+    per non costringere il frontend a una seconda GET (e a una finestra in
+    cui mostra dati vecchi). Quella risposta NON deve pero' contare come una
+    visita - chi ha appena salvato non e' "tornato a guardare" - ne' lasciare
+    una riga in `owner_audit_log` per un'azione che non e' un accesso.
 
     L'autorizzazione e' la prima cosa che accade: `get_home_grant` solleva
     prima che qualunque altro dominio venga interrogato, quindi un id altrui
@@ -460,10 +549,38 @@ def get_home(owner_account_id: int, stima_id: int) -> dict[str, Any]:
     completed = (None if _price(baseline) is not None
                  else owner_repository.home_completed_valuation(agency_id, stima_id))
 
-    vista = build_home_detail(stima=stima, watch={"status": watch["status"]} if watch else None,
-                              observations=watch["observations"] if watch else [],
-                              baseline_payload=baseline, completed_payload=completed)
+    # LMC-4: la domanda acquirenti, solo se questa casa ha un watch. Lettura
+    # separata e volutamente stretta: `get_current_watch_state_scoped`
+    # risponderebbe alla stessa domanda, ma caricherebbe ogni osservazione
+    # con il suo payload - metriche interne comprese - dentro il processo del
+    # portale. Meglio non leggere il dato privato che leggerlo e scartarlo.
+    pressione = owner_repository.home_buyer_pressure(agency_id, stima_id) if watch else None
+
+    return build_home_detail(stima=stima, watch={"status": watch["status"]} if watch else None,
+                             observations=watch["observations"] if watch else [],
+                             baseline_payload=baseline, completed_payload=completed,
+                             buyer_pressure=pressione,
+                             overrides=owner_repository.home_override(agency_id, stima_id))
+
+
+def get_home(owner_account_id: int, stima_id: int) -> dict[str, Any]:
+    """Una casa sola, come la vede il proprietario che la apre.
+
+    Composizione, poi la traccia locale, poi il radar - in quest'ordine, e
+    con il radar per ultimo perche' non deve poter togliere niente a chi sta
+    guardando la propria casa.
+    """
+    vista = compose_home(owner_account_id, stima_id)
     _audit_view(owner_account_id, stima_id)
+    # LMC-7: l'apertura della scheda e' un fatto che il server osserva, non
+    # una dichiarazione del client. Dopo l'audit e dopo che la vista e' gia'
+    # costruita: se il tracciamento fallisce, il proprietario ha comunque la
+    # sua casa davanti. `track_home_viewed` non solleva mai.
+    #
+    # Qui, non nella lista: aprire `/homes` significa vedere un elenco di
+    # indirizzi, non guardare una casa, e contarlo come visita farebbe
+    # risultare "tornato" chi ha solo fatto login.
+    tracking.track_home_viewed(owner_account_id, stima_id)
     return vista
 
 

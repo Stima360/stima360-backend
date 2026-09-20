@@ -285,8 +285,19 @@ def test_d2_the_entry_is_added_only_for_a_platform_admin():
 def test_d3_no_page_outside_the_network_was_touched():
     import subprocess
 
+    # LMC-6 (collisione segnalata). Il perimetro era `static/`, cioe' TUTTO
+    # il frontend, ma l'elenco degli ammessi qui sotto contiene solo pagine
+    # della Shell: il test parla di "nessuna pagina fuori dalla Rete", e le
+    # pagine di cui si occupa vivono in `static/os_shell/`. Il portale
+    # proprietario (`static/owner_portal/`) e' un'altra applicazione, con i
+    # propri test e le proprie sentinelle, e LMC-6 ha il mandato esplicito di
+    # estenderlo: con il perimetro vecchio questo test avrebbe accusato la
+    # Rete di aver toccato una pagina che non le appartiene nemmeno.
+    #
+    # La garanzia non si allenta: dentro `static/os_shell/` l'elenco resta
+    # identico, riga per riga.
     modificati = subprocess.run(
-        ["git", "status", "--porcelain", "--", "static/"],
+        ["git", "status", "--porcelain", "--", "static/os_shell/"],
         cwd=ROOT, capture_output=True, text=True,
     ).stdout.splitlines()
     ammessi = {
@@ -329,6 +340,16 @@ def test_d3_no_page_outside_the_network_was_touched():
         # endpoint, non una rotta, non un componente della Rete. La vista
         # guadagna un attributo e perde tre righe.
         "static/os_shell/assets/views/contatto-dettaglio.js",
+        # LMC-8 - IL RADAR DEL PROPRIETARIO NELLA SCHEDA CONTATTO.
+        #
+        # Due file, entrambi per addizione. `contatto-dettaglio.js` era gia'
+        # ammesso e guadagna un riquadro in Panoramica; `timeline.js`
+        # guadagna tre etichette leggibili per gli eventi che LMC-7 scrive
+        # nella timeline di vendita, piu' la regola che nasconde il loro
+        # payload tecnico. Nessuna logica di Rete e nessun contratto P27 e'
+        # toccato: non un endpoint, non una rotta, non un componente della
+        # Rete, e nessuna vista del CRM oltre a quella gia' elencata.
+        "static/os_shell/assets/components/timeline.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

@@ -18,6 +18,73 @@
   const appMessage = document.getElementById('app-message');
   const logoutButton = document.getElementById('logout-button');
 
+  // LMC6_START - "La Mia Casa" (PRE-INCARICO). Superficie ADDITIVA: tutto
+  // cio' che sta sotto convive con il portale POST-INCARICO, che non viene
+  // ne' spostato ne' riscritto. Le decisioni su cosa mostrare non sono qui:
+  // stanno in `home-view-model.js`, che e' puro e si puo' eseguire nei test.
+  const VM = window.OwnerHomeViewModel;
+
+  const emailLoginForm = document.getElementById('email-login-form');
+  const emailInput = document.getElementById('email-input');
+  const emailLoginButton = document.getElementById('email-login-button');
+  const emailLoginMessage = document.getElementById('email-login-message');
+
+  const homesSection = document.getElementById('homes-section');
+  const homeCount = document.getElementById('home-count');
+  const homesLoading = document.getElementById('homes-loading');
+  const homesError = document.getElementById('homes-error');
+  const homesErrorMessage = document.getElementById('homes-error-message');
+  const homesRetry = document.getElementById('homes-retry');
+  const homesContent = document.getElementById('homes-content');
+  const homeList = document.getElementById('home-list');
+
+  const homeDetailLoading = document.getElementById('home-detail-loading');
+  const homeDetailEmpty = document.getElementById('home-detail-empty');
+  const homeDetailError = document.getElementById('home-detail-error');
+  const homeDetailErrorMessage = document.getElementById('home-detail-error-message');
+  const homeDetailRetry = document.getElementById('home-detail-retry');
+  const homeDetailContent = document.getElementById('home-detail-content');
+  const homeDetailAddress = document.getElementById('home-detail-address');
+  const homeDetailSummary = document.getElementById('home-detail-summary');
+  const homeValueList = document.getElementById('home-value-list');
+  const homeValueNote = document.getElementById('home-value-note');
+  const homeHistoryMessage = document.getElementById('home-history-message');
+  const homeHistoryChart = document.getElementById('home-history-chart');
+  const homeHistoryRange = document.getElementById('home-history-range');
+  const homeHistoryChanges = document.getElementById('home-history-changes');
+  const homeDemandUnavailable = document.getElementById('home-demand-unavailable');
+  const homeDemandContent = document.getElementById('home-demand-content');
+  const homeDemandLabel = document.getElementById('home-demand-label');
+  const homeDemandMessage = document.getElementById('home-demand-message');
+  const homeDemandCounts = document.getElementById('home-demand-counts');
+  const homeDemandDisclaimer = document.getElementById('home-demand-disclaimer');
+  const homeHistoryToggle = document.getElementById('home-history-toggle');
+  const homeDemandToggle = document.getElementById('home-demand-toggle');
+  const homeConsultationCta = document.getElementById('home-consultation-cta');
+  const homeConsultationConfirm = document.getElementById('home-consultation-confirm');
+  const homeConsultationCancel = document.getElementById('home-consultation-cancel');
+  const homeConsultationSend = document.getElementById('home-consultation-send');
+  const homeConsultationStatus = document.getElementById('home-consultation-status');
+  const homeProfilePercent = document.getElementById('home-profile-percent');
+  const homeProfileBarFill = document.getElementById('home-profile-bar-fill');
+  const homeProfileKnown = document.getElementById('home-profile-known');
+  const homeProfileMissing = document.getElementById('home-profile-missing');
+  const homeProfileNote = document.getElementById('home-profile-note');
+  // LMC6_END
+
+  // LMC10_START
+  const homeProfileUpdated = document.getElementById('home-profile-updated');
+  const homeProfileEdit = document.getElementById('home-profile-edit');
+  const homeProfileForm = document.getElementById('home-profile-form');
+  const homeProfileFields = document.getElementById('home-profile-fields');
+  const homeProfilePertinenzeList = document.getElementById('home-profile-pertinenze-list');
+  const homeProfileAltro = document.getElementById('home-profile-altro');
+  const homeProfileCancel = document.getElementById('home-profile-cancel');
+  const homeProfileSave = document.getElementById('home-profile-save');
+  const homeProfileStatus = document.getElementById('home-profile-status');
+  // LMC10_END
+
+  const dashboardSection = document.getElementById('dashboard-section');
   const propertyCount = document.getElementById('property-count');
   const dashboardLoading = document.getElementById('dashboard-loading');
   const dashboardEmpty = document.getElementById('shell-empty');
@@ -167,9 +234,47 @@
   };
   const NOTIFICATIONS_LIMIT = 50;
 
+  // LMC6_START
+  const EMAIL_LINK_NEUTRAL_MESSAGE =
+    'Se l\u2019indirizzo è associato a un accesso STIMA360, riceverai a breve un\u2019email.';
+  // Il namespace SVG NON si scrive qui. `test_owner_06_p6` vieta qualunque
+  // URL nel sorgente del portale per impedire una dipendenza remota: un URI
+  // di namespace non e' una dipendenza - non viene mai scaricato - ma il
+  // controllo lavora per sottostringa e non puo' distinguerli. Invece di
+  // allentare una sentinella che protegge da un CDN nascosto, il namespace
+  // si prende dal DOM: un <svg> scritto nel markup ce l'ha gia'.
+  const svgSeed = document.getElementById('home-chart-seed');
+  const SVG_NS = svgSeed ? svgSeed.namespaceURI : null;
+  // LMC6_END
+
   const state = {
     session: null,
     busy: false,
+    // LMC6_START
+    homes: [],
+    selectedStimaId: null,
+    homesGeneration: 0,
+    homeDetailGeneration: 0,
+    emailLinkInFlight: false,
+    // LMC6_END
+    // LMC7_START
+    openedSections: new Set(),
+    // LMC7_END
+    // LMC9_START
+    consultationInFlight: false,
+    consultationSent: new Set(),
+    // LMC9_END
+    // LMC10_START
+    profileSaveInFlight: false,
+    profileEditable: false,
+    profileVersion: 0,
+    profileEditableFields: [],
+    profileValues: {},
+    // I nodi creati dal form, tenuti per riferimento invece di essere
+    // ricercati con getElementById: sono figli nostri, e cercarli per id
+    // nel documento e' un giro inutile attraverso il DOM.
+    profileInputs: {},
+    // LMC10_END
     properties: [],
     selectedPropertyId: null,
     dashboardGeneration: 0,
@@ -542,6 +647,10 @@
     state.session = null;
     state.busy = false;
     resetDashboardState();
+    // LMC6_START
+    resetHomesState();
+    emailLoginMessage.textContent = '';
+    // LMC6_END
     resetNotificationsState();
     resetNotificationPreferencesState();
     tokenInput.value = '';
@@ -3043,6 +3152,810 @@
     }
   }
 
+  // LMC6_START - il rendering di "La Mia Casa".
+  //
+  // Una regola sola, e vale per ogni funzione qui sotto: si scrive
+  // `textContent`, mai HTML. I testi arrivano dall'API e dal view model, e
+  // il modo sicuro di stamparli non e' ripulirli ma non interpretarli.
+
+  function homeText(tag, className, value) {
+    const element = document.createElement(tag);
+    if (className) {
+      element.className = className;
+    }
+    element.textContent = value === null || value === undefined ? '' : String(value);
+    return element;
+  }
+
+  function appendPair(list, label, value) {
+    if (value === null || value === undefined || value === '') {
+      return;
+    }
+    list.append(homeText('dt', null, label), homeText('dd', null, value));
+  }
+
+  function showHomesState(name, message = '') {
+    homesLoading.hidden = name !== 'loading';
+    homesError.hidden = name !== 'error';
+    homesContent.hidden = name !== 'content';
+    homesErrorMessage.textContent = name === 'error' ? message : '';
+  }
+
+  function showHomeDetailState(name, message = '') {
+    homeDetailLoading.hidden = name !== 'loading';
+    homeDetailEmpty.hidden = name !== 'empty';
+    homeDetailError.hidden = name !== 'error';
+    homeDetailContent.hidden = name !== 'content';
+    homeDetailErrorMessage.textContent = name === 'error'
+      ? (message || 'Casa non disponibile o accesso non più valido.')
+      : '';
+  }
+
+  function resetHomesState() {
+    state.homesGeneration += 1;
+    state.homeDetailGeneration += 1;
+    state.homes = [];
+    state.selectedStimaId = null;
+    homeCount.textContent = '';
+    homeList.replaceChildren();
+    homesSection.hidden = true;
+    showHomesState('idle');
+    showHomeDetailState('empty');
+  }
+
+  function setSelectedHomeCardState() {
+    Array.from(homeList.children).forEach((card) => {
+      const selected = Number(card.dataset.stimaId) === state.selectedStimaId;
+      card.classList.toggle('is-selected', selected);
+      card.setAttribute('aria-current', selected ? 'true' : 'false');
+    });
+  }
+
+  function createHomeCard(home) {
+    const view = VM.homeCard(home);
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'home-card';
+    card.setAttribute('role', 'listitem');
+    card.dataset.stimaId = String(view.stimaId);
+
+    card.append(homeText('span', 'home-card-title', view.title));
+    if (view.subtitle) {
+      card.append(homeText('span', 'home-card-subtitle', view.subtitle));
+    }
+    if (view.initialValue) {
+      const riga = document.createElement('span');
+      riga.className = 'home-card-value';
+      riga.append(homeText('small', null, view.initialLabel),
+                  homeText('strong', null, view.initialValue));
+      card.append(riga);
+    }
+    if (view.statusLabel) {
+      card.append(homeText('span', 'home-card-status', view.statusLabel));
+    }
+    card.append(homeText('span', 'home-card-cta', 'Apri'));
+    card.addEventListener('click', () => {
+      void selectHome(view.stimaId);
+    });
+    return card;
+  }
+
+  function renderHomeList(items) {
+    homeList.replaceChildren(...items.map(createHomeCard));
+    setSelectedHomeCardState();
+  }
+
+  function renderHomeValue(value) {
+    homeValueList.replaceChildren();
+    appendPair(homeValueList, value.initialLabel, value.initialValue);
+    if (value.hasCurrent) {
+      appendPair(homeValueList, value.currentLabel, value.currentValue);
+      appendPair(homeValueList, value.computedAtLabel, value.computedAt);
+    }
+    // Nessun valore monitorato: si dice che lo storico si sta formando, non
+    // si ripiega sul valore iniziale spacciandolo per quello di oggi.
+    homeValueNote.textContent = value.buildingHistory ? value.buildingMessage : '';
+    homeValueNote.hidden = !value.buildingHistory;
+  }
+
+  function renderHistoryChart(points) {
+    homeHistoryChart.replaceChildren();
+    if (points.length < 2) {
+      // Un punto solo non e' un andamento, e unirlo a qualcosa
+      // significherebbe inventare il secondo.
+      homeHistoryChart.hidden = points.length === 0;
+      if (points.length === 1) {
+        homeHistoryChart.hidden = false;
+        homeHistoryChart.append(
+          homeText('p', 'home-chart-single',
+                   `${points[0].dateLabel} · ${points[0].valueText}`));
+      }
+      return;
+    }
+    homeHistoryChart.hidden = false;
+
+    const width = 320;
+    const height = 120;
+    const pad = 10;
+    const valori = points.map((punto) => punto.value);
+    const minimo = Math.min(...valori);
+    const massimo = Math.max(...valori);
+    const span = massimo - minimo || 1;
+    const passo = points.length > 1 ? (width - pad * 2) / (points.length - 1) : 0;
+    const coordinate = points.map((punto, indice) => ({
+      x: pad + passo * indice,
+      y: height - pad - ((punto.value - minimo) / span) * (height - pad * 2),
+    }));
+
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label',
+      `Andamento del valore su ${points.length} rilevazioni`);
+
+    const linea = document.createElementNS(SVG_NS, 'polyline');
+    linea.setAttribute('class', 'home-chart-line');
+    linea.setAttribute('points',
+      coordinate.map((c) => `${c.x.toFixed(2)},${c.y.toFixed(2)}`).join(' '));
+    svg.append(linea);
+
+    coordinate.forEach((c, indice) => {
+      const punto = document.createElementNS(SVG_NS, 'circle');
+      punto.setAttribute('class', 'home-chart-dot');
+      punto.setAttribute('cx', c.x.toFixed(2));
+      punto.setAttribute('cy', c.y.toFixed(2));
+      punto.setAttribute('r', '3.5');
+      const titolo = document.createElementNS(SVG_NS, 'title');
+      titolo.textContent = `${points[indice].dateLabel} · ${points[indice].valueText}`;
+      punto.append(titolo);
+      svg.append(punto);
+    });
+
+    homeHistoryChart.append(svg);
+  }
+
+  function renderHistoryChanges(changes) {
+    homeHistoryChanges.replaceChildren();
+    changes.forEach((change) => {
+      const riga = document.createElement('div');
+      riga.className = 'home-change';
+      riga.append(homeText('span', 'home-change-label', change.label));
+      if (change.percentText) {
+        riga.append(homeText('strong', 'home-change-percent', change.percentText));
+      }
+      const estremi = [change.fromValue, change.toValue].filter(Boolean).join(' → ');
+      if (estremi) {
+        riga.append(homeText('span', 'home-change-values', estremi));
+      }
+      if (change.note) {
+        // Metodo cambiato: la frase PRENDE IL POSTO della percentuale.
+        riga.append(homeText('span', 'home-change-note', change.note));
+      }
+      homeHistoryChanges.append(riga);
+    });
+  }
+
+  function renderHomeHistory(history) {
+    homeHistoryMessage.textContent = history.available ? '' : history.message;
+    homeHistoryMessage.hidden = history.available;
+    homeHistoryChart.hidden = true;
+    homeHistoryRange.hidden = true;
+    homeHistoryChanges.replaceChildren();
+    // LMC7: contenuto costruito subito, mostrato solo su richiesta.
+    homeHistoryChanges.hidden = true;
+    setSectionOpen(homeHistoryToggle, false);
+    homeHistoryToggle.hidden = !history.available;
+    if (!history.available) {
+      return;
+    }
+    renderHistoryChart(history.points);
+    if (history.points.length >= 2) {
+      const primo = history.points[0];
+      const ultimo = history.points[history.points.length - 1];
+      homeHistoryRange.textContent =
+        `${primo.dateLabel} · ${primo.valueText} → ${ultimo.dateLabel} · ${ultimo.valueText}`;
+      homeHistoryRange.hidden = false;
+    }
+    renderHistoryChanges(history.changes);
+    // Quali parti esistono davvero: `revealHistory` non deve mostrare un
+    // contenitore vuoto (un solo snapshot non ha una fascia da mostrare).
+    state.historyChartEmpty = homeHistoryChart.children.length === 0;
+    state.historyRangeEmpty = homeHistoryRange.textContent === '';
+    homeHistoryChart.hidden = true;
+    homeHistoryRange.hidden = true;
+  }
+
+  // LMC7_START - LE DUE SEZIONI CHE SI APRONO CON UN GESTO.
+  //
+  // Prima stavano aperte, e il caricamento della pagina sarebbe bastato a
+  // dire "ha guardato l'andamento": un segnale che descrive qualcosa che non
+  // e' successo. Ora c'e' un pulsante, e solo premerlo racconta qualcosa.
+  //
+  // Il CONTENUTO non cambia di una virgola rispetto a LMC-6: cambia quando
+  // compare. E il proprietario non vede niente del radar - nessun livello,
+  // nessuna motivazione, nessun messaggio: il pulsante dice "Vedi andamento"
+  // e fa esattamente quello.
+
+  function setSectionOpen(toggle, open) {
+    toggle.hidden = open;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function revealHistory({ track = true } = {}) {
+    setSectionOpen(homeHistoryToggle, true);
+    homeHistoryChart.hidden = state.historyChartEmpty === true;
+    homeHistoryRange.hidden = state.historyRangeEmpty === true;
+    homeHistoryChanges.hidden = false;
+    if (track) {
+      void trackAction('value_history_viewed');
+    }
+  }
+
+  function revealDemand({ track = true } = {}) {
+    setSectionOpen(homeDemandToggle, true);
+    homeDemandContent.hidden = false;
+    if (track) {
+      void trackAction('buyer_demand_viewed');
+    }
+  }
+
+  async function trackAction(action) {
+    const stimaId = state.selectedStimaId;
+    if (stimaId === null || stimaId === undefined) {
+      return;
+    }
+    const memoria = `${stimaId}:${action}`;
+    if (state.openedSections.has(memoria)) {
+      return;
+    }
+    state.openedSections.add(memoria);
+    try {
+      await apiRequest(`/homes/${encodeURIComponent(stimaId)}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+    } catch (_error) {
+      // Il tracciamento non e' un servizio per il proprietario: se non passa,
+      // la sezione resta aperta e lui non deve sapere che esisteva.
+    }
+  }
+  // LMC7_END
+
+  function renderHomeDemand(demand) {
+    homeDemandUnavailable.textContent = demand.available ? '' : demand.message;
+    homeDemandUnavailable.hidden = demand.available;
+    // LMC7: il contenuto c'e', ma si apre con un gesto.
+    homeDemandContent.hidden = true;
+    setSectionOpen(homeDemandToggle, false);
+    homeDemandToggle.hidden = !demand.available;
+    homeDemandLabel.textContent = '';
+    homeDemandMessage.textContent = '';
+    homeDemandCounts.replaceChildren();
+    homeDemandDisclaimer.textContent = '';
+    if (!demand.available) {
+      return;
+    }
+    homeDemandContent.dataset.status = demand.status || '';
+    homeDemandLabel.textContent = demand.label || '';
+    homeDemandMessage.textContent = demand.message || '';
+    appendPair(homeDemandCounts, demand.compatibleLabel, demand.compatibleText);
+    appendPair(homeDemandCounts, demand.recentLabel, demand.recentText);
+    appendPair(homeDemandCounts, demand.updatedAtLabel, demand.updatedAt);
+    homeDemandDisclaimer.textContent = demand.disclaimer || '';
+  }
+
+  function renderChips(container, items, variante) {
+    container.replaceChildren();
+    items.forEach((campo) => {
+      container.append(homeText('span', `home-chip ${variante}`, campo));
+    });
+  }
+
+  function renderHomeProfile(profile) {
+    homeProfilePercent.textContent = profile.percentText
+      ? `Completezza ${profile.percentText}`
+      : '';
+    homeProfileBarFill.style.width = profile.percentText || '0%';
+    renderChips(homeProfileKnown, profile.known, 'is-known');
+    renderChips(homeProfileMissing, profile.missing, 'is-missing');
+    homeProfileNote.textContent = profile.note;
+    // LMC10: il form vive o non vive secondo `editable`, che e' la
+    // capability dichiarata dal backend.
+    renderHomeProfileUpdate(profile);
+  }
+
+  // LMC10_START - AGGIORNA I DATI DELLA CASA.
+  //
+  // Il form mostra SOLO i campi che il backend dichiara modificabili
+  // (`profile.editable_fields`), precompilati con il profilo effettivo -
+  // cioe' con gli stessi numeri che il proprietario ha appena letto sopra.
+  // Nessuna whitelist scritta qui: se il server ne togliesse uno, la casella
+  // sparirebbe da sola invece di restare a proporre una modifica che
+  // verrebbe rifiutata.
+  //
+  // TRE COSE CHE QUESTO CODICE NON FA.
+  //
+  // Non promette precisione. Il messaggio di successo dice che il valore e'
+  // stato ricalcolato SOLO se il server dice che un nuovo calcolo e' nato
+  // davvero; in tutti gli altri casi dice che i dati sono aggiornati e tace
+  // sul valore. Mai "ora la stima e' piu' precisa": nessuno lo sa.
+  //
+  // Non sovrascrive. La versione su cui il form e' stato aperto torna
+  // indietro come `expected_version`, e un 409 diventa un invito a
+  // ricaricare, non un secondo tentativo automatico che cancellerebbe il
+  // lavoro dell'altra sessione.
+  //
+  // Non perde quello che la persona ha scritto. Su errore il form resta
+  // aperto con i suoi valori: chiuderlo significherebbe far ribattere tutto.
+
+  const PROFILE_FIELD_SPECS = {
+    mq: { label: 'Superficie (mq)', type: 'number', min: 1 },
+    locali: { label: 'Locali', type: 'number', min: 1 },
+    bagni: { label: 'Bagni', type: 'number', min: 0 },
+    piano: { label: 'Piano', type: 'text', hint: 'terra, ultimo o il numero del piano' },
+    ascensore: { label: 'Ascensore', type: 'checkbox' },
+    anno: { label: 'Anno di costruzione', type: 'number', min: 1500 },
+    stato: {
+      label: 'Stato',
+      type: 'select',
+      options: ['nuovo', 'ristrutturato', 'buono', 'scarso', 'grezzo'],
+    },
+    mqgiardino: { label: 'Giardino (mq)', type: 'number', min: 0 },
+    mqgarage: { label: 'Garage (mq)', type: 'number', min: 0 },
+    mqcantina: { label: 'Cantina (mq)', type: 'number', min: 0 },
+    mqpostoauto: { label: 'Posto auto (mq)', type: 'number', min: 0 },
+    mqtaverna: { label: 'Taverna (mq)', type: 'number', min: 0 },
+    mqsoffitta: { label: 'Soffitta (mq)', type: 'number', min: 0 },
+    mqterrazzo: { label: 'Terrazzo (mq)', type: 'number', min: 0 },
+    numbalconi: { label: 'Balconi', type: 'number', min: 0 },
+  };
+
+  const PROFILE_PERTINENZE = [
+    'garage', 'posto auto', 'cantina', 'soffitta', 'taverna',
+    'balconi', 'terrazzo', 'giardino', 'piscina', 'posto moto', 'posto bici',
+  ];
+
+  const PROFILE_TRUTHY = ['si', 'sì', 'true', '1', 'yes', 'y'];
+
+  const PROFILE_SAVED_MESSAGE = 'Dati della casa aggiornati.';
+  const PROFILE_SAVED_RECALCULATED_MESSAGE =
+    'Dati aggiornati e valore ricalcolato.';
+  const PROFILE_UNCHANGED_MESSAGE = 'Non ci sono modifiche da salvare.';
+  const PROFILE_CONFLICT_MESSAGE =
+    'I dati della casa sono stati aggiornati da un’altra sessione. Ricarica i dati e riprova.';
+  const PROFILE_INVALID_MESSAGE = 'Controlla i dati inseriti e riprova.';
+  const PROFILE_ERROR_MESSAGE =
+    'Non siamo riusciti a salvare le modifiche. Riprova.';
+  const PROFILE_SAVING_MESSAGE = 'Salvataggio…';
+
+  function profileFieldId(campo) {
+    return `home-profile-field-${campo}`;
+  }
+
+  function profileIsTruthy(valore) {
+    if (typeof valore === 'boolean') {
+      return valore;
+    }
+    return PROFILE_TRUTHY.indexOf(String(valore === null || valore === undefined
+      ? '' : valore).trim().toLowerCase()) !== -1;
+  }
+
+  function profileTokens(valore) {
+    const testo = String(valore === null || valore === undefined ? '' : valore)
+      .toLowerCase().replace(/[;|/\\]/g, ',');
+    const pezzi = testo.split(',').map((p) => p.trim()).filter((p) => p !== '');
+    return PROFILE_PERTINENZE.filter((token) => pezzi.indexOf(token) !== -1
+      || testo.indexOf(token) !== -1);
+  }
+
+  function profileAppendField(campo, valore) {
+    const spec = PROFILE_FIELD_SPECS[campo];
+    if (!spec) {
+      return;
+    }
+    const riga = document.createElement('div');
+    riga.className = 'home-profile-field';
+
+    const etichetta = document.createElement('label');
+    etichetta.setAttribute('for', profileFieldId(campo));
+    etichetta.textContent = spec.label;
+
+    let campoInput;
+    if (spec.type === 'select') {
+      campoInput = document.createElement('select');
+      // Il valore corrente entra come opzione anche se non e' fra quelle
+      // previste: una casa nata con uno stato che l'elenco non contiene deve
+      // poter restare com'e' finche' il proprietario non ne sceglie un altro.
+      const correnti = spec.options.slice();
+      const attuale = valore === null || valore === undefined ? '' : String(valore).trim();
+      if (attuale !== '' && correnti.indexOf(attuale) === -1) {
+        correnti.unshift(attuale);
+      }
+      correnti.forEach((opzione) => {
+        const elemento = document.createElement('option');
+        elemento.value = opzione;
+        elemento.textContent = opzione;
+        if (opzione === attuale) {
+          elemento.selected = true;
+        }
+        campoInput.append(elemento);
+      });
+    } else {
+      campoInput = document.createElement('input');
+      campoInput.type = spec.type;
+      if (spec.type === 'checkbox') {
+        campoInput.checked = profileIsTruthy(valore);
+      } else {
+        campoInput.value = valore === null || valore === undefined ? '' : String(valore);
+      }
+      if (spec.type === 'number') {
+        campoInput.inputMode = 'numeric';
+        if (typeof spec.min === 'number') {
+          campoInput.min = String(spec.min);
+        }
+      }
+    }
+    campoInput.id = profileFieldId(campo);
+    campoInput.name = campo;
+    state.profileInputs[campo] = campoInput;
+
+    riga.append(etichetta, campoInput);
+    if (spec.hint) {
+      riga.append(homeText('p', 'home-profile-hint', spec.hint));
+    }
+    homeProfileFields.append(riga);
+  }
+
+  function profileRenderPertinenze(valore) {
+    homeProfilePertinenzeList.replaceChildren();
+    const attive = profileTokens(valore);
+    PROFILE_PERTINENZE.forEach((token) => {
+      const etichetta = document.createElement('label');
+      etichetta.className = 'home-chip home-profile-chip';
+      const casella = document.createElement('input');
+      casella.type = 'checkbox';
+      casella.value = token;
+      casella.checked = attive.indexOf(token) !== -1;
+      casella.setAttribute('data-pertinenza', token);
+      etichetta.append(casella, document.createTextNode(` ${token}`));
+      homeProfilePertinenzeList.append(etichetta);
+    });
+  }
+
+  function profileBuildForm() {
+    homeProfileFields.replaceChildren();
+    state.profileInputs = {};
+    state.profileEditableFields.forEach((campo) => {
+      if (campo === 'pertinenze' || campo === 'altrodescrizione') {
+        return;
+      }
+      profileAppendField(campo, state.profileValues[campo]);
+    });
+    profileRenderPertinenze(state.profileValues.pertinenze);
+    const altro = state.profileValues.altrodescrizione;
+    homeProfileAltro.value = altro === null || altro === undefined ? '' : String(altro);
+  }
+
+  function setProfileFormOpen(aperto) {
+    homeProfileForm.hidden = !aperto;
+    homeProfileEdit.hidden = aperto || !state.profileEditable;
+  }
+
+  function setProfileStatus(messaggio) {
+    homeProfileStatus.textContent = messaggio || '';
+    homeProfileStatus.hidden = !messaggio;
+  }
+
+  function profileCollectPatch() {
+    const patch = {};
+    state.profileEditableFields.forEach((campo) => {
+      if (campo === 'pertinenze' || campo === 'altrodescrizione') {
+        return;
+      }
+      const spec = PROFILE_FIELD_SPECS[campo];
+      const elemento = state.profileInputs[campo];
+      if (!spec || !elemento) {
+        return;
+      }
+      if (spec.type === 'checkbox') {
+        patch[campo] = elemento.checked === true;
+        return;
+      }
+      const grezzo = String(elemento.value === null || elemento.value === undefined
+        ? '' : elemento.value).trim();
+      if (grezzo === '') {
+        // Una casella lasciata vuota non e' "cancella questo campo": in
+        // LMC-10 quel gesto non esiste, quindi il campo semplicemente non
+        // parte.
+        return;
+      }
+      if (spec.type === 'number') {
+        const numero = Number(grezzo);
+        if (!Number.isFinite(numero) || !Number.isInteger(numero)) {
+          return;
+        }
+        patch[campo] = numero;
+        return;
+      }
+      patch[campo] = grezzo;
+    });
+
+    if (state.profileEditableFields.indexOf('pertinenze') !== -1) {
+      patch.pertinenze = Array.prototype.slice
+        .call(homeProfilePertinenzeList.querySelectorAll('input[type="checkbox"]'))
+        .filter((casella) => casella.checked)
+        .map((casella) => casella.value);
+    }
+    if (state.profileEditableFields.indexOf('altrodescrizione') !== -1) {
+      const testo = String(homeProfileAltro.value || '').trim();
+      if (testo !== '') {
+        patch.altrodescrizione = testo;
+      }
+    }
+    return patch;
+  }
+
+  async function saveHomeProfile() {
+    const stimaId = state.selectedStimaId;
+    if (stimaId === null || stimaId === undefined || state.profileSaveInFlight) {
+      return;
+    }
+    const patch = profileCollectPatch();
+    if (Object.keys(patch).length === 0) {
+      setProfileStatus(PROFILE_UNCHANGED_MESSAGE);
+      return;
+    }
+
+    state.profileSaveInFlight = true;
+    homeProfileSave.disabled = true;
+    setProfileStatus(PROFILE_SAVING_MESSAGE);
+
+    let esito;
+    try {
+      esito = await apiRequest(`/homes/${encodeURIComponent(stimaId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ expected_version: state.profileVersion },
+                                           patch)),
+      });
+    } catch (error) {
+      const stato = error instanceof PortalRequestError ? error.status : 0;
+      if (stato === 409) {
+        setProfileStatus(PROFILE_CONFLICT_MESSAGE);
+      } else if (stato === 422) {
+        setProfileStatus(PROFILE_INVALID_MESSAGE);
+      } else {
+        setProfileStatus(PROFILE_ERROR_MESSAGE);
+      }
+      // Il form resta aperto con i valori digitati: riprovare non deve
+      // costare la ribattitura.
+      return;
+    } finally {
+      state.profileSaveInFlight = false;
+      homeProfileSave.disabled = false;
+    }
+
+    if (esito && esito.status === 'unchanged') {
+      setProfileStatus(PROFILE_UNCHANGED_MESSAGE);
+      return;
+    }
+    if (esito && esito.home) {
+      // La casa aggiornata arriva nella risposta: si ridisegna con quella,
+      // senza una seconda GET e senza una finestra in cui la scheda mostra
+      // ancora i numeri di prima.
+      //
+      // PRIMA del messaggio, non dopo: ridisegnare rifa' anche questo
+      // blocco e azzera lo stato, quindi l'esito va scritto quando la
+      // scheda e' gia' quella nuova. (Scritto al contrario, il
+      // proprietario non vedeva alcuna conferma - un test se n'e'
+      // accorto.)
+      renderHomeDetail(esito.home);
+    }
+    setProfileFormOpen(false);
+    setProfileStatus(esito && esito.value_recalculated === true
+      ? PROFILE_SAVED_RECALCULATED_MESSAGE
+      : PROFILE_SAVED_MESSAGE);
+  }
+
+  function renderHomeProfileUpdate(profile) {
+    state.profileEditable = profile.editable === true;
+    state.profileVersion = typeof profile.version === 'number' ? profile.version : 0;
+    state.profileEditableFields = Array.isArray(profile.editableFields)
+      ? profile.editableFields.slice() : [];
+    state.profileValues = profile.values || {};
+
+    const aggiornato = profile.updatedAt;
+    homeProfileUpdated.textContent = aggiornato
+      ? `Aggiornato da te il ${aggiornato}` : '';
+    homeProfileUpdated.hidden = !aggiornato;
+
+    if (!state.profileEditable || state.profileEditableFields.length === 0) {
+      homeProfileEdit.hidden = true;
+      homeProfileForm.hidden = true;
+      setProfileStatus('');
+      return;
+    }
+    profileBuildForm();
+    setProfileFormOpen(false);
+    setProfileStatus('');
+  }
+  // LMC10_END
+
+  function renderHomeDetail(payload) {
+    const view = VM.homeDetail(payload);
+    homeDetailAddress.textContent = view.header.address || '';
+    homeDetailSummary.textContent = view.header.summary || '';
+    renderHomeValue(view.value);
+    renderHomeHistory(view.history);
+    renderHomeDemand(view.demand);
+    renderHomeProfile(view.profile);
+    // Nessuna sezione comparabili: LMC-5 ha chiuso la fonte dati.
+  }
+
+  function homeErrorText(error) {
+    if (!(error instanceof PortalRequestError)) {
+      return 'Impossibile caricare la casa. Riprova tra poco.';
+    }
+    return error.message;
+  }
+
+  // LMC9_START - LA RICHIESTA DI VERIFICA GRATUITA.
+  //
+  // E' la prima cosa in questo portale che non osserva ma CHIEDE, e cambia
+  // due regole rispetto a LMC-7.
+  //
+  // La prima: si conferma prima di inviare. Un tocco accidentale mentre si
+  // scorre non deve diventare "questa persona vuole essere richiamata" - un
+  // segnale commerciale forte nato da uno scroll e' un segnale falso, e
+  // qualcuno si metterebbe a richiamare una persona che non ha chiesto
+  // niente.
+  //
+  // La seconda: il successo si dichiara solo se il server lo conferma. Un
+  // "Richiesta inviata" mostrato su un errore lascerebbe una persona ad
+  // aspettare una telefonata che nessuno fara'.
+
+  const CONSULTATION_SENT_MESSAGE = 'Richiesta inviata. Ti ricontatteremo.';
+  const CONSULTATION_ERROR_MESSAGE =
+    'Non siamo riusciti a inviare la richiesta. Riprova.';
+  const CONSULTATION_SENDING_MESSAGE = 'Invio…';
+
+  function setConsultationState(name, message = '') {
+    homeConsultationConfirm.hidden = name !== 'confirming';
+    homeConsultationCta.hidden = name === 'confirming' || name === 'sent';
+    homeConsultationCta.disabled = name === 'sending';
+    homeConsultationSend.disabled = name === 'sending';
+    homeConsultationStatus.textContent = message;
+    homeConsultationStatus.hidden = message === '';
+  }
+
+  function resetConsultation(stimaId) {
+    // Gia' inviata per questa casa in questa sessione: la CTA non torna
+    // attiva, perche' chiedere due volte la stessa cosa non aggiunge
+    // niente e fa sembrare che la prima non sia arrivata.
+    if (state.consultationSent.has(stimaId)) {
+      setConsultationState('sent', CONSULTATION_SENT_MESSAGE);
+      return;
+    }
+    setConsultationState('idle');
+  }
+
+  async function sendConsultationRequest() {
+    const stimaId = state.selectedStimaId;
+    if (stimaId === null || stimaId === undefined || state.consultationInFlight) {
+      return;
+    }
+    state.consultationInFlight = true;
+    setConsultationState('sending', CONSULTATION_SENDING_MESSAGE);
+    try {
+      await apiRequest(`/homes/${encodeURIComponent(stimaId)}/consultation-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      state.consultationSent.add(stimaId);
+      setConsultationState('sent', CONSULTATION_SENT_MESSAGE);
+    } catch (_error) {
+      // Nessun dettaglio tecnico, e soprattutto nessun falso successo: la
+      // CTA torna disponibile perche' riprovare e' la cosa giusta da fare.
+      setConsultationState('idle', CONSULTATION_ERROR_MESSAGE);
+    } finally {
+      state.consultationInFlight = false;
+    }
+  }
+  // LMC9_END
+
+  async function selectHome(stimaId) {
+    if (!state.session || stimaId === null || stimaId === undefined) {
+      return;
+    }
+    state.selectedStimaId = stimaId;
+    setSelectedHomeCardState();
+    // Cambiando casa le sezioni tornano chiuse: l'apertura vale per la casa
+    // che si sta guardando, non per il portale.
+    setSectionOpen(homeHistoryToggle, false);
+    setSectionOpen(homeDemandToggle, false);
+    resetConsultation(stimaId);
+    const generation = ++state.homeDetailGeneration;
+    showHomeDetailState('loading');
+
+    let payload;
+    try {
+      payload = await apiRequest(`/homes/${encodeURIComponent(stimaId)}`);
+    } catch (error) {
+      if (generation !== state.homeDetailGeneration || !state.session) {
+        return;
+      }
+      if (error instanceof PortalRequestError && error.status === 404) {
+        // 404 neutro: non si dice se la casa non esiste o non e' tua.
+        showHomeDetailState('error', 'Casa non disponibile o accesso non più valido.');
+        return;
+      }
+      if (isAuthLoss(error)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      showHomeDetailState('error', homeErrorText(error));
+      return;
+    }
+
+    if (generation !== state.homeDetailGeneration || !state.session) {
+      return;
+    }
+    renderHomeDetail(payload);
+    showHomeDetailState('content');
+  }
+
+  async function requestLoginLink(email) {
+    if (state.emailLinkInFlight) {
+      return;
+    }
+    state.emailLinkInFlight = true;
+    emailLoginButton.disabled = true;
+    try {
+      await apiRequest('/auth/request-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      emailLoginMessage.textContent = EMAIL_LINK_NEUTRAL_MESSAGE;
+    } catch (_error) {
+      // LA STESSA RISPOSTA, SEMPRE. Indirizzo sconosciuto, account chiuso,
+      // limite raggiunto, guasto: distinguerli qui rimetterebbe in piedi
+      // proprio l'enumerazione che il 204 uniforme del backend impedisce.
+      emailLoginMessage.textContent = EMAIL_LINK_NEUTRAL_MESSAGE;
+    } finally {
+      state.emailLinkInFlight = false;
+      emailLoginButton.disabled = false;
+    }
+  }
+  // LMC6_END
+
+  // LMC6_START
+  function renderHomesSection(sections) {
+    homesSection.hidden = !sections.showHomes;
+    if (!sections.showHomes) {
+      homeList.replaceChildren();
+      homeCount.textContent = '';
+      showHomesState('idle');
+      showHomeDetailState('empty');
+      return;
+    }
+    const numero = sections.homeCount;
+    homeCount.textContent = `${numero} ${numero === 1 ? 'casa' : 'case'}`;
+    renderHomeList(state.homes);
+    showHomesState('content');
+    showHomeDetailState('empty');
+  }
+
+  async function selectFirstHome() {
+    const prima = state.homes.length ? state.homes[0].stima_id : null;
+    if (prima !== null) {
+      await selectHome(prima);
+    }
+  }
+  // LMC6_END
+
   function preferredPropertyId(items) {
     const primary = items.find((item) => item && item.is_primary === true && propertyId(item) !== null);
     if (primary) {
@@ -3091,13 +4004,37 @@
       : state.properties.length;
     propertyCount.textContent = `${apiCount} ${apiCount === 1 ? 'immobile' : 'immobili'}`;
 
+    // LMC6_START - le due superfici arrivano dalla STESSA risposta, che LMC-2
+    // ha reso additiva. `showEmpty` e' vero solo quando non c'e' ne' una casa
+    // ne' un immobile: prima bastava zero immobili per dire "niente qui" a chi
+    // aveva una casa in monitoraggio.
+    const rawHomes = payload && Array.isArray(payload.homes) ? payload.homes : [];
+    state.homes = rawHomes.filter((item) => item && Number.isInteger(item.stima_id));
+    const sections = VM.dashboardSections({
+      homes: state.homes,
+      properties: state.properties,
+    });
+    renderHomesSection(sections);
+    dashboardSection.hidden = !sections.showProperties && !sections.showEmpty;
+
     if (state.properties.length === 0) {
-      showDashboardState('empty');
+      // L'ospite senza immobili vede la schermata vuota SOLO se non ha
+      // nemmeno una casa; altrimenti la sezione legacy resta nascosta.
+      if (sections.showEmpty) {
+        showDashboardState('empty');
+      }
+      if (sections.showHomes) {
+        await selectFirstHome();
+      }
       return;
     }
 
     renderPropertyList(state.properties);
     showDashboardState('content');
+    if (sections.showHomes) {
+      await selectFirstHome();
+    }
+    // LMC6_END
 
     const initialId = preferredPropertyId(state.properties);
     if (initialId !== null) {
@@ -3171,6 +4108,75 @@
       enterLoggedOut(error instanceof PortalRequestError ? error.message : 'Accesso non riuscito.');
     }
   });
+
+  // LMC6_START
+  emailLoginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const email = emailInput.value.trim();
+    if (!email) {
+      emailInput.focus();
+      return;
+    }
+    void requestLoginLink(email);
+  });
+
+  homesRetry.addEventListener('click', () => {
+    if (state.session) {
+      void loadDashboard();
+    }
+  });
+
+  homeHistoryToggle.addEventListener('click', () => {
+    revealHistory();
+  });
+
+  homeDemandToggle.addEventListener('click', () => {
+    revealDemand();
+  });
+
+  // LMC9_START
+  homeConsultationCta.addEventListener('click', () => {
+    setConsultationState('confirming');
+  });
+
+  homeConsultationCancel.addEventListener('click', () => {
+    // Annulla e basta: nessuna richiesta parte, e non resta traccia di un
+    // ripensamento.
+    setConsultationState('idle');
+  });
+
+  homeConsultationSend.addEventListener('click', () => sendConsultationRequest());
+  // LMC9_END
+
+  // LMC10_START
+  homeProfileEdit.addEventListener('click', () => {
+    // Si riparte sempre dai valori con cui la scheda e' stata disegnata: se
+    // il form era stato aperto, modificato e annullato, quelle modifiche non
+    // devono riaffiorare alla riapertura.
+    profileBuildForm();
+    setProfileFormOpen(true);
+    setProfileStatus('');
+  });
+
+  homeProfileCancel.addEventListener('click', () => {
+    // ANNULLA NON CHIAMA NIENTE. Nessuna PATCH, nessun evento, nessuna
+    // traccia: chi ha cambiato idea non ha aggiornato la propria casa.
+    setProfileFormOpen(false);
+    setProfileStatus('');
+  });
+
+  homeProfileForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    return saveHomeProfile();
+  });
+  // LMC10_END
+
+  homeDetailRetry.addEventListener('click', () => {
+    if (state.session && state.selectedStimaId !== null) {
+      void selectHome(state.selectedStimaId);
+    }
+  });
+  // LMC6_END
 
   dashboardRetry.addEventListener('click', () => {
     if (state.session) {

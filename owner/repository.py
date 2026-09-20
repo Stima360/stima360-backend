@@ -2339,6 +2339,134 @@ def home_completed_valuation(agency_id,stima_id):
  return dict(payload) if isinstance(payload,dict) else None
 
 
+def contact_homes(agency_id,contact_id):
+ """Le case PRE-INCARICO di un contatto, viste dal CRM.
+
+ LMC-8. E' la stessa definizione che vede il proprietario nel suo portale,
+ letta dall'altro lato: una casa e' "sua" quando il suo account owner ha un
+ grant valido su quella stima. Non si passa da `lead_stime`, che lega i
+ lead alle stime per ragioni commerciali e puo' collegarne di altri; si
+ passa dal grant, che e' l'unico posto dove e' scritto chi puo' vederla.
+ Cosi' la scheda contatto e il portale non possono raccontare due cose
+ diverse sulla stessa casa.
+
+ Il tenant e' nel predicato tre volte e non per abbondanza: l'agenzia del
+ contatto, quella della stima e la coerenza fra le due. Un contatto puo'
+ esistere in piu' agenzie con lo stesso indirizzo email - il CRM di A non
+ deve vedere la casa che quella persona ha in B.
+
+ `data` esce perche' serve all'ordinamento di ripiego quando non c'e'
+ nessuna attivita' del proprietario.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"""
+    SELECT {_home_columns()}
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+     WHERE ct.id = %s
+       AND ct.agency_id = %s
+       AND s.agency_id = %s
+       AND ct.agency_id = s.agency_id
+       AND x.access_status = 'active'
+       AND x.revoked_at IS NULL
+       AND (x.valid_until IS NULL OR x.valid_until > NOW())
+     ORDER BY s.id
+  """,(contact_id,agency_id,agency_id))
+  return[dict(x) for x in c.fetchall()]
+
+
+def home_tracking_context(owner_account_id,stima_id):
+ """Chi sta guardando, di chi e' la casa, e quale lead SELL la riguarda.
+
+ LMC-7. Una query sola, e il grant e' il primo predicato: se l'accesso non
+ e' valido non esce niente, quindi non c'e' nessun percorso in cui si
+ registri un evento per una stima che quell'owner non puo' vedere.
+
+ IL LEAD NON E' GARANTITO, E NON SI INDOVINA. `lead_stime` ha UNIQUE su
+ (lead_id, stima_id), non su stima_id: la stessa stima puo' essere legata a
+ piu' lead - il CRM puo' averne aperto un secondo, o averla collegata a una
+ trattativa diversa. Quindi non si prende "il" lead, si prende quello che
+ soddisfa tutte queste condizioni insieme:
+
+   - pipeline 'sell', perche' un lead BUY non e' il venditore di questa casa;
+   - stessa agenzia della stima, perche' `stima_id` da solo non e' un tenant;
+   - stesso contatto dell'account proprietario, perche' attribuire il
+     comportamento di questa persona al lead di un'altra e' peggio che non
+     attribuirlo a nessuno;
+   - fra i rimasti, prima il legame 'origin' (quello che il funnel scrive
+     quando la stima nasce), poi il piu' vecchio per id.
+
+ Se nessun lead supera i filtri il risultato e' `None`, e l'evento viene
+ comunque registrato con `contact_id` e `stima_id`: Seller Intelligence
+ chiede almeno un riferimento, non tutti. Un lead sbagliato sporcherebbe la
+ timeline di vendita di qualcun altro; un lead assente si puo' ricostruire.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"""
+    SELECT ct.agency_id AS agency_id,
+           ct.id        AS contact_id,
+           (SELECT ls.lead_id
+              FROM lead_stime ls
+              JOIN leads l ON l.id = ls.lead_id
+             WHERE ls.stima_id = x.stima_id
+               AND l.agency_id = s.agency_id
+               AND l.contact_id = ct.id
+               AND l.pipeline = 'sell'
+             ORDER BY (ls.relation_type = 'origin') DESC, ls.id ASC
+             LIMIT 1) AS lead_id
+      {_HOME_GRANT_JOIN}
+      {_HOME_GRANT_WHERE}
+       AND x.stima_id = %s
+  """,(owner_account_id,stima_id));r=c.fetchone()
+ return dict(r) if r else None
+
+
+def home_buyer_pressure(agency_id,stima_id):
+ """L'ultima rilevazione Buyer Pressure di QUESTA casa, gia' sfoltita.
+
+ LMC-4. Una sola riga, e di quella riga solo i campi che servono: la SELECT
+ estrae dal payload le chiavi una per una invece di prendere `payload` e
+ scartare dopo. La differenza non e' stilistica - `average_budget` e' la
+ media dei budget di chi risulta compatibile, e con un solo compatibile e'
+ il budget di quella persona. Qui non viene selezionato, quindi non esce da
+ PostgreSQL, quindi non c'e' nessun punto piu' a valle in cui possa
+ sfuggire. Le altre chiavi servono davvero: `evaluated_buyers` e i due
+ punteggi entrano nella derivazione della fascia (e non nella risposta).
+
+ L'agenzia e' nel predicato insieme alla stima: `stima_id` da solo non e' un
+ tenant, e la rilevazione del watch di un'altra agenzia non puo' diventare
+ la domanda di questa casa. `None` quando non c'e' watch, o non c'e'
+ rilevazione: il chiamante lo traduce in "non disponibile".
+
+ Le due forme che il dominio scrive contano entrambe: `buyer_pressure_snapshot`
+ la prima volta, `buyer_pressure_changed` a ogni variazione.
+ """
+ with core_cursor() as(_,c):
+  c.execute("""
+    SELECT o.observed_at AS observed_at,
+           o.payload->'evaluated_buyers'             AS evaluated_buyers,
+           o.payload->'compatible_buyers'            AS compatible_buyers,
+           o.payload->'highly_compatible_buyers'     AS highly_compatible_buyers,
+           o.payload->'recent_compatible_buyers_30d' AS recent_compatible_buyers_30d,
+           o.payload->'average_match_score'          AS average_match_score,
+           o.payload->'maximum_match_score'          AS maximum_match_score,
+           o.payload->'algorithm_version'            AS algorithm_version
+      FROM property_watch_observations o
+      JOIN property_watches w ON w.id = o.watch_id
+     WHERE w.stima_id = %s
+       AND w.agency_id = %s
+       AND o.observation_type IN ('buyer_pressure_snapshot','buyer_pressure_changed')
+     ORDER BY o.observed_at DESC, o.id DESC
+     LIMIT 1
+  """,(stima_id,agency_id));r=c.fetchone()
+ if not r:return None
+ riga=dict(r)
+ return {'metrics':{k:v for k,v in riga.items() if k!='observed_at'},
+         'observed_at':riga['observed_at']}
+
+
 def home_watch_summary(agency_id,stima_id):
  """Presenza e stato del watch, e i due estremi della sua storia.
 
@@ -2366,3 +2494,114 @@ def home_watch_summary(agency_id,stima_id):
   c.execute("SELECT payload FROM property_watch_observations WHERE watch_id=%s AND observation_type='watch_started' ORDER BY observed_at ASC, id ASC LIMIT 1",(w['id'],));b=c.fetchone()
  baseline=b['payload'] if b else None
  return {'status':w['status'],'observations':osservazioni,'baseline_payload':dict(baseline) if isinstance(baseline,dict) else None}
+
+
+# ---------------------------------------------------------------------------
+# LMC-10 - GLI OVERRIDE DEL PROPRIETARIO.
+#
+# `stime` resta la fotografia del momento della valutazione e non viene mai
+# riscritta da qui. Cio' che il proprietario corregge vive in
+# `owner_home_overrides`, una riga per stima, e il profilo effettivo lo
+# compone `home_profile.build_effective_home_profile` - non queste query, che
+# si limitano a portare a galla le due righe.
+#
+# La tenancy e' quella di sempre: l'agenzia sta nel predicato accanto alla
+# stima, mai da sola. `owner_home_overrides` non ha `agency_id` (la 068 dice
+# perche'), quindi si passa sempre da `stime`.
+# ---------------------------------------------------------------------------
+
+#: Le colonne che il profilo effettivo legge dalla riga di override: la
+#: whitelist piu' versione e data. Nominate una per una, come ovunque qui.
+HOME_OVERRIDE_COLUMNS = (
+ "stima_id","mq","piano","locali","bagni","ascensore","anno","stato",
+ "pertinenze","mqgiardino","mqgarage","mqcantina","mqpostoauto","mqtaverna",
+ "mqsoffitta","mqterrazzo","numbalconi","altrodescrizione","version","updated_at",
+)
+
+
+def _override_columns(alias="o"):
+ return ", ".join(f"{alias}.{c}" for c in HOME_OVERRIDE_COLUMNS)
+
+
+def home_override(agency_id,stima_id):
+ """L'override di QUESTA casa, in QUESTA agenzia. `None` se non esiste.
+
+ `None` non e' un errore: la stragrande maggioranza delle case non e' mai
+ stata corretta, e il profilo effettivo coincide con l'originale.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"SELECT {_override_columns()} FROM owner_home_overrides o "
+            "JOIN stime s ON s.id=o.stima_id "
+            "WHERE o.stima_id=%s AND s.agency_id=%s",(stima_id,agency_id))
+  r=c.fetchone()
+ return dict(r) if r else None
+
+
+def home_overrides_for_account(owner_account_id):
+ """Gli override delle case di questo account, per `stima_id`.
+
+ Una query sola per tutta la lista: il riepilogo mostra `mq`, che e' un
+ campo correggibile, e leggerlo casa per casa sarebbe una query per riga.
+ Passa dallo stesso grant di `list_home_grants`, quindi una casa che non
+ compare nella lista non compare nemmeno qui.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"SELECT {_override_columns()}{_HOME_GRANT_JOIN}"
+            "      JOIN owner_home_overrides o ON o.stima_id = x.stima_id"
+            f"{_HOME_GRANT_WHERE}",(owner_account_id,))
+  return {r['stima_id']:dict(r) for r in c.fetchall()}
+
+
+def upsert_home_override(owner_account_id,stima_id,valori,expected_version):
+ """Scrive l'override, se la versione attesa e' quella giusta.
+
+ Ritorna la riga nuova, oppure `None` quando la versione non corrisponde -
+ cioe' quando qualcun altro (l'altra scheda del browser, un comproprietario)
+ ha scritto nel frattempo. `None` diventa un 409, mai una sovrascrittura
+ silenziosa: chi ha aperto il form su dati vecchi deve ricaricarli.
+
+ IL GRANT SI RIVERIFICA QUI, NELLA STESSA TRANSAZIONE DELLA SCRITTURA.
+ Il servizio lo ha gia' controllato per rispondere 404, ma fra quel
+ controllo e questa scrittura passa del tempo, e un grant revocato nel mezzo
+ non deve poter scrivere. Vale la stessa regola di
+ `insert_valuation_snapshot_scoped`: il tenant non si eredita da una lettura
+ precedente, si rimette nel predicato. `FOR SHARE` sulla stima perche' il
+ trigger della 068 rilegge `stime.agency_id` subito dopo.
+
+ `expected_version = 0` significa "non esiste ancora": l'INSERT e' consentito
+ solo allora, e `ON CONFLICT (stima_id) DO NOTHING` trasforma la seconda
+ prima-modifica in un `None`, cioe' nello stesso 409 di una versione vecchia.
+ """
+ campi=[k for k in valori]
+ ritorno=", ".join(HOME_OVERRIDE_COLUMNS)
+ with core_cursor(commit=True) as(_,c):
+  c.execute("""
+    SELECT s.id
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+     WHERE x.owner_account_id = %s
+       AND x.stima_id = %s
+       AND ct.agency_id = s.agency_id
+       AND x.access_status = 'active'
+       AND x.revoked_at IS NULL
+       AND (x.valid_until IS NULL OR x.valid_until > NOW())
+     FOR SHARE OF s
+  """,(owner_account_id,stima_id))
+  if c.fetchone() is None:raise NotFoundError(NF)
+  if expected_version==0:
+   colonne=["stima_id","updated_by_owner_account_id",*campi]
+   parametri=[stima_id,owner_account_id,*[valori[k] for k in campi]]
+   c.execute(f"INSERT INTO owner_home_overrides ({','.join(colonne)}) "
+             f"VALUES ({','.join(['%s']*len(colonne))}) "
+             f"ON CONFLICT (stima_id) DO NOTHING RETURNING {ritorno}",parametri)
+  else:
+   assegnazioni=[f"{k}=%s" for k in campi]
+   parametri=[valori[k] for k in campi]
+   c.execute("UPDATE owner_home_overrides SET "+",".join([*assegnazioni,
+             "version=version+1","updated_at=NOW()","updated_by_owner_account_id=%s"])+
+             " WHERE stima_id=%s AND version=%s "
+             f"RETURNING {ritorno}",[*parametri,owner_account_id,stima_id,expected_version])
+  r=c.fetchone()
+ return dict(r) if r else None

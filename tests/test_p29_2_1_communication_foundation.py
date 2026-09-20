@@ -91,7 +91,8 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
 
     numeri = sorted(m.number for m in runner.discover_migrations())
     assert 64 in numeri and 63 in numeri, numeri[-4:]
-    assert numeri[-1] == 67, numeri[-4:]
+    # LMC-10 ha aggiunto la 068.
+    assert numeri[-1] == 68, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
@@ -132,9 +133,18 @@ def test_l5_la_065_esiste_ma_non_e_di_questa_fase():
         "067_lmc1b_owner_login_reason.sql",
         "067_lmc1b_owner_login_reason_down.sql",
     ], "una 067 diversa da quella di LMC-1B e' comparsa senza la fase che la giustifica"
-    assert sorted(p.name for p in MIGRATIONS.glob("068*.sql")) == [], (
-        "una 068 e' comparsa senza la fase che la giustifica"
-    )
+    # Lo stesso spostamento, ancora: la 068 esiste e ha una fase che la
+    # giustifica, LMC-10, il cui STORAGE GATE l'ha approvata. E' la tabella
+    # degli override del proprietario, dominio OWNER e non P29. Una 068 di
+    # P29 - `delivered_at`, i thread - resterebbe il difetto da evitare, ed
+    # e' quello che le due righe sotto continuano a verificare.
+    assert sorted(p.name for p in MIGRATIONS.glob("068*.sql")) == [
+        "068_lmc10_owner_home_overrides.sql",
+        "068_lmc10_owner_home_overrides_down.sql",
+    ], "una 068 diversa da quella di LMC-10 e' comparsa senza la fase che la giustifica"
+    up_068 = (MIGRATIONS / "068_lmc10_owner_home_overrides.sql").read_text(encoding="utf-8")
+    assert "communication_messages" not in up_068, "la 068 non e' di P29"
+    assert "delivered_at" not in up_068 and "thread" not in up_068
     up_066 = (MIGRATIONS / "066_lmc1_owner_stima_access.sql").read_text(encoding="utf-8")
     assert "communication_messages" not in up_066, "la 066 non e' di P29"
     # La 067 TOCCA `communication_messages`, ma non e' una migration di P29:

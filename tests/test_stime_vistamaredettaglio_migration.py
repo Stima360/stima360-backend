@@ -86,11 +86,30 @@ def test_main_py_salva_stima_vista_mare_block_is_unchanged_by_this_fix():
 
 
 def test_no_other_migration_already_defines_vistamaredettaglio():
+    """SENTINELLA AGGIORNATA DA LMC-10: si cerca una DEFINIZIONE, non una
+    menzione.
+
+    Il rischio da cui questo test protegge e' che due migration creino la
+    stessa colonna, non che due la nominino. La 068 la nomina in una
+    `DO $do$` che VIETA la sua presenza fra le colonne di
+    `owner_home_overrides` - la vista mare non e' un campo che il
+    proprietario possa correggere - e una proibizione e' l'opposto di una
+    duplicazione: cercarla come stringa qualunque farebbe fallire il test
+    proprio per un file che sta impedendo il problema.
+
+    Quindi si cerca la forma con cui una colonna si crea davvero:
+    `ADD COLUMN ... vistamaredettaglio` oppure una sua dichiarazione dentro
+    una CREATE TABLE. Una seconda 019 continuerebbe a far fallire il test.
+    """
     migrations_dir = ROOT / "migrations"
+    definizione = re.compile(
+        r"(add\s+column\s+(if\s+not\s+exists\s+)?vistamaredettaglio"
+        r"|^\s*vistamaredettaglio\s+(varchar|text|character))",
+        re.IGNORECASE | re.MULTILINE)
     for path in sorted(migrations_dir.glob("*.sql")):
         if path.name in {UP.name, DOWN.name}:
             continue
         text = path.read_text(encoding="utf-8")
-        assert "vistamaredettaglio" not in text.lower(), (
-            f"{path.name} referenzia gia' vistamaredettaglio - la 019 duplicherebbe una migration esistente"
+        assert not definizione.search(text), (
+            f"{path.name} definisce gia' vistamaredettaglio - la 019 duplicherebbe una migration esistente"
         )

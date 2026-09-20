@@ -121,7 +121,8 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # infilato fra loro. Il massimo della serie e' salito con le fasi
     # successive (064 di P29-2.1, 065 di P29-2.6E, 066 di LMC-1A, 067 di LMC-1B).
     assert {61, 62, 63} <= set(numeri)
-    assert max(numeri) == 67, "la serie non e' piu' contigua in coda"
+    # ... e 068 di LMC-10.
+    assert max(numeri) == 68, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+import home_profile
+
 from . import buyer_pressure, buyer_pressure_score, repository, valuation_snapshot
 from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 
@@ -771,9 +773,21 @@ def refresh_valuation_snapshot_scoped(ctx, stima_id: int, *, reason: str,
     if not isinstance(reason, str) or not reason.strip():
         raise ValidationError("reason is required")
 
-    stima = repository.get_stima_valuation_input_scoped(ctx, stima_id)
-    if stima is None:
+    originale = repository.get_stima_valuation_input_scoped(ctx, stima_id)
+    if originale is None:
         raise StimaNotFoundError(f"stima {stima_id} not found")
+    # LMC-10: il motore lavora sul PROFILO EFFETTIVO, cioe' sulla stima con
+    # sopra le correzioni del proprietario. Non e' una seconda formula: la
+    # somma la fa lo stesso `home_profile` che compone il portale e il CRM,
+    # e la COALESCE non e' stata scritta nella query proprio per questo - in
+    # SQL sarebbe stata una seconda implementazione della stessa frase.
+    #
+    # Gli snapshot GIA' SCRITTI non si ricalcolano: sono immutabili, e questa
+    # funzione ne crea semmai uno nuovo. Il fatto che il profilo sia cambiato
+    # entra nell'`input_digest`, quindi il punto nuovo nasce subito invece di
+    # aspettare il giorno dopo.
+    stima = home_profile.effective_home(
+        originale, repository.get_stima_override_scoped(ctx, stima_id))
 
     watch = repository.get_watch_for_stima_scoped(ctx, stima_id)
     if watch is None:

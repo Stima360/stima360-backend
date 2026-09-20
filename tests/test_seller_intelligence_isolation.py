@@ -145,13 +145,50 @@ def test_main_py_references_seller_intelligence_only_through_the_p17b1_contract(
     assert "seller_intelligence_service.record_event(" not in main_source
 
 
+#: LMC-7 (collisione autorizzata). Fino a qui solo `main.py` - il funnel
+#: pubblico - poteva nominare Seller Intelligence, e la regola serviva a una
+#: cosa precisa: che un guasto dell'osservatore non potesse mai rompere
+#: un'operazione di business. Il modo di garantirlo era tenere l'osservatore
+#: fuori da ogni dominio.
+#:
+#: LMC-7 introduce il radar del portale proprietario, che per definizione
+#: registra il comportamento dentro "La Mia Casa" e quindi DEVE scrivere in
+#: quella timeline. La dipendenza e' voluta e circoscritta a due file: uno
+#: che scrive (`tracking`) e uno che legge (`interest_service`).
+#:
+#: La proprieta' che la regola difende non viene pero' allentata, viene resa
+#: esplicita: questi due file devono essere fail-open, e non e' una promessa
+#: nel commento - `tests/test_lmc7_owner_radar_postgres.py` fa sollevare
+#: Seller Intelligence e verifica che il proprietario veda comunque la sua
+#: casa. Per ogni altro file dei domini elencati il divieto resta intero.
+SELLER_INTELLIGENCE_CONSUMERS = {
+    ("owner", "tracking.py"),
+    ("owner", "interest_service.py"),
+}
+
+
 def test_core_property_buy_match_proposal_owner_flow_still_do_not_import_seller_intelligence():
-    # Isolamento verso il resto del sistema resta valido anche dopo P17-B1:
-    # solo main.py (funnel pubblico) puo' referenziare seller_intelligence.
     for domain_dir in ("core", "property", "buy", "match", "proposal", "owner", "flow"):
         for path in (ROOT / domain_dir).glob("*.py"):
+            if (domain_dir, path.name) in SELLER_INTELLIGENCE_CONSUMERS:
+                continue
             text = path.read_text(encoding="utf-8")
             assert "seller_intelligence" not in text, f"{path} non deve importare seller_intelligence"
+
+
+def test_the_two_authorized_consumers_are_fail_open_by_construction():
+    """I due file ammessi devono avere il confine, non solo l'intenzione."""
+    tracking = (ROOT / "owner" / "tracking.py").read_text(encoding="utf-8")
+    assert "def _fail_open(" in tracking
+    assert "except Exception" in tracking
+    for chiamante in ("def track_home_viewed(", "def track_action("):
+        corpo = tracking[tracking.index(chiamante):]
+        corpo = corpo[:corpo.index("\n\ndef ")] if "\n\ndef " in corpo else corpo
+        assert "_fail_open(" in corpo, f"{chiamante} non passa dal confine"
+
+    # Chi legge non scrive, quindi non puo' rompere niente scrivendo.
+    lettura = (ROOT / "owner" / "interest_service.py").read_text(encoding="utf-8")
+    assert "record_event" not in lettura
 
 
 def test_contatto_dettaglio_only_uses_the_approved_read_only_p17b3_timeline_integration():

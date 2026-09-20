@@ -490,7 +490,12 @@ def test_n7_nessuna_migration_nuova():
     # P29-2.6E, la 066 di LMC-1A, la 067 di LMC-1B (il reason code del magic
     # link owner). Cio' che resta vietato qui e' che una migration nasca DA
     # QUESTA fase, e nessuna di quelle le appartiene.
-    assert numeri[-1] == 67, "la serie si e' fermata o e' andata oltre la 067"
+    # LMC-10 (collisione autorizzata): la 068 e' la tabella degli
+    # override del proprietario, approvata dallo STORAGE GATE di quella
+    # fase. Non appartiene a questa, ed e' proprio cio' che la
+    # sentinella continua a dire: la coda della serie e' nominata una
+    # per una, quindi una migration nata QUI farebbe ancora fallire.
+    assert numeri[-1] == 68, "la serie si e' fermata o e' andata oltre la 068"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

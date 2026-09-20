@@ -4370,6 +4370,36 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # quasi mai - una sessione dura al massimo dodici ore e nessuna superficie
     # cancella agenzie - ma quando morde, morde nel verso giusto.
     ("operator_sessions", "acting_agency_id", "agencies", "RESTRICT"),
+    # LMC-10, migration 068. Chi ha corretto per ultimo i dati della propria
+    # casa, verso `owner_accounts`.
+    #
+    # ESAMINATA, e la scelta e' deliberata. `owner_home_overrides` ha DUE
+    # riferimenti e due sorti diverse, ed e' il punto:
+    #
+    #   stima_id -> stime          CASCADE. Un override senza la sua stima non
+    #                              significa niente, e sparisce con lei. Non
+    #                              compare in questo inventario perche'
+    #                              CASCADE.
+    #   updated_by_owner_account_id -> owner_accounts   SET NULL, ed e' qui.
+    #
+    # Le tre alternative e perche' SET NULL:
+    #
+    #   CASCADE   cancellare un ACCOUNT porterebbe via il DATO della casa. Il
+    #             dato non e' dell'account, e' dell'immobile: l'account dice
+    #             solo chi ha premuto Salva. Inaccettabile.
+    #   RESTRICT  un account non si potrebbe piu' cancellare per aver corretto
+    #             una volta i metri quadri. Una cancellazione legittima
+    #             (cessazione, richiesta dell'interessato) verrebbe bloccata da
+    #             una colonna di audit.
+    #   SET NULL  si perde CHI, si tiene COSA e QUANDO (`updated_at` resta). E'
+    #             la stessa forma delle otto figlie di `leads` in cima a questo
+    #             inventario, e l'unica che non fa pagare al dato la sorte di
+    #             chi lo ha scritto.
+    #
+    # Conseguenza per il cleanup: azzeramento di colonna, non rifiuto. Il
+    # trigger di tenancy della 068 lascia passare il NULL proprio per questo -
+    # e' la cancellazione dell'account, non una scrittura cross-tenant.
+    ("owner_home_overrides", "updated_by_owner_account_id", "owner_accounts", "SET NULL"),
     ("buy_request_history", "match_id", "matches", "SET NULL"),
     ("buy_request_history", "property_id", "properties", "SET NULL"),
     ("buy_request_history", "task_id", "tasks", "SET NULL"),
@@ -6734,6 +6764,8 @@ COLLOCAZIONE_SCRITTURE = {
     "lead_stime": (GUARDIA, "ponte lead-stima, scritto dal funnel pubblico"),
     "owner_stima_access": (GUARDIA,
                            "grant pre-incarico LMC-1A, scritto solo dal provisioning del funnel pubblico che la matrice non percorre; CASCADE verso owner_accounts e stime, entrambi genitori del cleanup"),
+    "owner_home_overrides": (GUARDIA,
+                             "correzioni del proprietario LMC-10, scritte solo dalla PATCH del portale proprietario che la matrice non chiama; CASCADE verso stime (genitore del cleanup) e SET NULL verso owner_accounts, esaminata in FK_NON_CASCADE_ATTESE"),
     "property_leads": (GUARDIA, "nessuna fixture collega lead a immobili"),
     "property_price_history": (GUARDIA, "solo su cambio prezzo: la matrice non aggiorna i propri immobili"),
     "property_visits": (GUARDIA, "nessuna fixture fissa visite"),

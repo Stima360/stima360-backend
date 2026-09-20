@@ -47,6 +47,16 @@ CREATE TABLE stime (
     tipologia VARCHAR(50), mq INTEGER, piano VARCHAR(30), locali INTEGER, bagni INTEGER,
     pertinenze VARCHAR(200), ascensore VARCHAR(10), anno INTEGER, stato VARCHAR(40),
     vistamareyn VARCHAR(10), distanzamare VARCHAR(50), altrodescrizione TEXT,
+    -- LMC-10: le superfici delle pertinenze e il numero di balconi. Sono
+    -- colonne che `stime` ha sempre avuto (database.py) e che questo schema
+    -- minimo ometteva perche' nessun test le guardava; la migration 068 le
+    -- pretende, perche' confronta il tipo di ogni campo correggibile con la
+    -- colonna di `stime` da cui deriva e si rifiuta di applicarsi se una
+    -- manca. E' il controllo che fa il suo lavoro, non un intralcio: con lo
+    -- schema incompleto l'override di `mqgiardino` sarebbe nato senza un
+    -- originale su cui poggiare.
+    mqgiardino INTEGER, mqgarage INTEGER, mqcantina INTEGER, mqpostoauto INTEGER,
+    mqtaverna INTEGER, mqsoffitta INTEGER, mqterrazzo INTEGER, numbalconi INTEGER,
     nome VARCHAR(50), cognome VARCHAR(50), email VARCHAR(100), telefono VARCHAR(30),
     prezzo_mq_base NUMERIC(10,2), lead_status VARCHAR(32), note_internal TEXT,
     data TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
@@ -72,7 +82,17 @@ CREATE TABLE next_best_actions (id BIGSERIAL PRIMARY KEY, agency_id BIGINT,
 CREATE TABLE schema_migrations (version VARCHAR(200) PRIMARY KEY);
 """
 
-CATENA = ("009_owner_01", "022_property_watch", "066_lmc1_owner_stima_access")
+# LMC-10 (collisione autorizzata): la catena cresce di una voce.
+# Il read-model di "La Mia Casa" legge ora anche `owner_home_overrides`
+# per comporre il PROFILO EFFETTIVO, quindi senza la 068 questo
+# database usa-e-getta non ha piu' la forma che il codice si aspetta e
+# ogni test qui fallirebbe per una tabella mancante invece che per il
+# proprio motivo. La tabella resta vuota in tutti i test di questo
+# file: nessuna correzione del proprietario esiste, quindi il profilo
+# effettivo coincide con l'originale e cio' che si verificava prima si
+# verifica identico.
+CATENA = ("009_owner_01", "022_property_watch", "066_lmc1_owner_stima_access",
+          "068_lmc10_owner_home_overrides")
 
 
 def _dsn_per(nome: str) -> str:
@@ -451,11 +471,30 @@ def test_16_nessun_dato_privato_nel_detail(mondo, modulo):
                     "pressure", "supply", "budget", "score", "82", "210000",
                     "1500", "note_internal", "lead_status"):
         assert vietato not in testo, vietato
-    # "buyer" compare UNA volta sola, come nome della capability dichiarata
-    # `buyer_demand` (che vale False): mai come dato.
-    senza_capability = {k: v for k, v in vista.items() if k != "capabilities"}
-    assert "buyer" not in repr(senza_capability).lower()
+    # LMC-4 (collisione autorizzata con LMC-2). Fino a LMC-3 la parola
+    # "buyer" poteva comparire in un solo posto, il nome della capability
+    # `buyer_demand`, e questo test lo verificava sul dettaglio intero meno
+    # `capabilities`. Da LMC-4 esiste anche il BLOCCO `buyer_demand`, che e'
+    # lo scopo dichiarato di quella fase, quindi la forma vecchia
+    # dell'asserzione non puo' piu' reggere.
+    #
+    # Il divieto non viene allentato, viene spostato di un livello: fuori dal
+    # blocco la parola resta proibita esattamente come prima, e DENTRO il
+    # blocco si verifica che non ci sia nulla di interno - qui la rilevazione
+    # e' un payload finto e non canonico, quindi la risposta corretta e'
+    # "non disponibile" con i conteggi a null.
+    dominio = {k: v for k, v in vista.items()
+               if k not in ("capabilities", "buyer_demand")}
+    assert "buyer" not in repr(dominio).lower()
     assert vista["capabilities"]["buyer_demand"] is False
+
+    domanda = vista["buyer_demand"]
+    assert domanda["status"] == "unavailable", "un payload non canonico non si interpreta"
+    assert domanda["compatible_requests"] is None
+    assert domanda["recent_compatible_requests"] is None
+    assert domanda["updated_at"] is None
+    for vietato in ("82", "210000", "budget", "score", "pressure", "buy_request"):
+        assert vietato not in repr(domanda).lower(), vietato
 
 
 # ---------------------------------------------------------------------------
@@ -481,8 +520,13 @@ def test_17_la_completezza_e_deterministica_e_spiegabile(mondo, modulo):
 def test_18_le_capability_seguono_i_dati_reali(mondo, modulo):
     """Il monitoraggio cresce, le capability no: nessuna delle osservazioni
     che PROPERTY WATCH scrive e' una rivalutazione dell'immobile."""
+    # LMC-10 (collisione autorizzata): `profile_update` e' vero da questa
+    # fase. Le tre capability di LETTURA restano false, ed e' quello che
+    # questo test sorveglia: per quante osservazioni di mercato arrivino,
+    # nessuna di esse e' una rivalutazione dell'immobile. Correggere i dati
+    # della propria casa e' un'altra cosa e non dipende dal monitoraggio.
     tutte_false = {"valuation_history": False, "buyer_demand": False,
-                   "comparables": False, "profile_update": False}
+                   "comparables": False, "profile_update": True}
 
     con_watch = modulo["home_service"].get_home(mondo["acc_mario"], mondo["st_watch"])
     assert con_watch["capabilities"] == tutte_false

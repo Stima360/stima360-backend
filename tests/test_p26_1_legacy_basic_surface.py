@@ -1098,13 +1098,18 @@ def test_g8_the_crm_scope_is_agency_bound_and_reaches_core_scoped(monkeypatch):
     monkeypatch.setattr(crm_service, "list_requests_scoped", lambda c, *a, **k: seen.append(("list_requests_scoped", c)) or [{"id": 30}])
     monkeypatch.setattr(crm_service, "list_matches_scoped", lambda c, *a, **k: seen.append(("list_matches_scoped", c)) or [])
     monkeypatch.setattr(crm_service, "list_visits_by_contact", lambda c, i: seen.append(("list_visits_by_contact", c)) or [])
+    # LMC-8: la nona lettura. Entra nella prova invece di esserne esclusa -
+    # il punto di questo test e' che OGNI lettura riceva lo stesso contesto
+    # per identita', e una lettura nuova che non lo facesse sarebbe
+    # esattamente il difetto che il test esiste per trovare.
+    monkeypatch.setattr(crm_service, "owner_home_block", lambda c, i: seen.append(("owner_home_block", c)) or {"available": False, "homes": []})
 
     crm_service.get_contact_360(ctx, 7)
 
     assert {name for name, _ in seen} == {
         "get_contact", "list_leads", "list_activities", "list_tasks",
         "list_properties", "list_requests_scoped", "list_matches_scoped",
-        "list_visits_by_contact",
+        "list_visits_by_contact", "owner_home_block",
     }, seen
     for name, forwarded in seen:
         assert forwarded is ctx, name

@@ -660,7 +660,9 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # la 066 (il grant pre-incarico owner/stima) e LMC-1B la 067 (il motivo
     # `owner_login_link` nel ledger). Il perno sale di una fase per volta,
     # deliberatamente.
-    assert numeri[-1] == 67, numeri[-4:]
+    # LMC-10 ha aggiunto la 068 (la tabella degli override del
+    # proprietario, approvata dallo STORAGE GATE).
+    assert numeri[-1] == 68, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]
