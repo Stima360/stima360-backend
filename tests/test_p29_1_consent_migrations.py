@@ -122,7 +122,10 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # successive (064 di P29-2.1, 065 di P29-2.6E, 066 di LMC-1A, 067 di LMC-1B).
     assert {61, 62, 63} <= set(numeri)
     # ... e 068 di LMC-10.
-    assert max(numeri) == 68, "la serie non e' piu' contigua in coda"
+    # LMC-12 ha aggiunto la 069 (`owner_home_notifications`, lo stream di
+    # notifiche PRE-INCARICO, approvata dal DESIGN GATE): dominio OWNER, non
+    # di questa fase. La coda si nomina, come sempre.
+    assert max(numeri) == 69, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

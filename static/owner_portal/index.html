@@ -251,6 +251,46 @@
             </div>
           </section>
         </div>
+
+        <!--LMC12:START-->
+        <section id="home-notifications-section" class="home-notifications panel-subsection" aria-labelledby="home-notifications-title" hidden>
+          <div class="section-heading notifications-heading">
+            <div>
+              <p class="eyebrow">La Mia Casa</p>
+              <h3 id="home-notifications-title">Novità sulla tua casa</h3>
+              <p>Cambiamenti sul valore stimato e sulla domanda, quando ci sono davvero.</p>
+            </div>
+            <label class="notification-filter" for="home-notifications-unread-only">
+              <input id="home-notifications-unread-only" type="checkbox">
+              <span>Solo non lette</span>
+            </label>
+          </div>
+
+          <div id="home-notifications-loading" class="section-state compact-state" role="status" aria-live="polite" hidden>
+            <div class="spinner spinner-small" aria-hidden="true"></div>
+            <p>Caricamento delle novità…</p>
+          </div>
+
+          <div id="home-notifications-empty" class="empty-state compact-empty" hidden>
+            <h4>Nessuna novità</h4>
+            <p id="home-notifications-empty-message">Per ora non ci sono novità sulla tua casa.</p>
+          </div>
+
+          <div id="home-notifications-error" class="error-state compact-error" role="alert" hidden>
+            <h4>Novità non disponibili</h4>
+            <p id="home-notifications-error-message">Riprova tra poco.</p>
+            <button id="home-notifications-retry" class="secondary-button" type="button">Riprova</button>
+          </div>
+
+          <div id="home-notifications-content" hidden>
+            <div id="home-notifications-list" class="notifications-list home-notifications-list" role="list" aria-label="Novità sulla tua casa"></div>
+            <div id="home-notifications-pagination" class="notifications-pagination" hidden>
+              <button id="home-notifications-load-more" class="secondary-button" type="button">Carica altre</button>
+              <p id="home-notifications-pagination-status" class="status-message" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+        </section>
+        <!--LMC12:END-->
       </section>
       <!--LMC6:END-->
 

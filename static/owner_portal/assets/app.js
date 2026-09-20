@@ -207,6 +207,24 @@
   const notificationPreferencesSave = document.getElementById('notification-preferences-save');
   const notificationPreferencesStatus = document.getElementById('notification-preferences-status');
 
+  // LMC12_START - "Novita' sulla tua casa": lo stream PRE-INCARICO, dentro
+  // la sezione LMC delle case. Storage, API e stato sono SEPARATI da quelli
+  // delle notifiche P5 qui sopra; le classi delle card sono le stesse.
+  const homeNotificationsSection = document.getElementById('home-notifications-section');
+  const homeNotificationsUnreadOnly = document.getElementById('home-notifications-unread-only');
+  const homeNotificationsLoading = document.getElementById('home-notifications-loading');
+  const homeNotificationsEmpty = document.getElementById('home-notifications-empty');
+  const homeNotificationsEmptyMessage = document.getElementById('home-notifications-empty-message');
+  const homeNotificationsError = document.getElementById('home-notifications-error');
+  const homeNotificationsErrorMessage = document.getElementById('home-notifications-error-message');
+  const homeNotificationsRetry = document.getElementById('home-notifications-retry');
+  const homeNotificationsContent = document.getElementById('home-notifications-content');
+  const homeNotificationsList = document.getElementById('home-notifications-list');
+  const homeNotificationsPagination = document.getElementById('home-notifications-pagination');
+  const homeNotificationsLoadMore = document.getElementById('home-notifications-load-more');
+  const homeNotificationsPaginationStatus = document.getElementById('home-notifications-pagination-status');
+  // LMC12_END
+
   const REQUEST_TYPE_LABELS = {
     contact_request: 'Essere ricontattato',
     correction_request: 'Segnalare una correzione',
@@ -233,6 +251,15 @@
     request_handled: 'Aggiornamento richiesta',
   };
   const NOTIFICATIONS_LIMIT = 50;
+
+  // LMC12_START
+  const HOME_NOTIFICATION_TYPE_LABELS = {
+    home_value_changed: 'Valore stimato',
+    home_demand_changed: 'Domanda',
+    home_method_changed: 'Metodo di stima',
+  };
+  const HOME_NOTIFICATIONS_LIMIT = 20;
+  // LMC12_END
 
   // LMC6_START
   const EMAIL_LINK_NEUTRAL_MESSAGE =
@@ -311,6 +338,16 @@
     notificationReadInFlight: new Set(),
     notificationPreferencesGeneration: 0,
     notificationPreferencesSaving: false,
+
+    // LMC12_START
+    homeNotificationItems: [],
+    homeNotificationGeneration: 0,
+    homeNotificationOffset: 0,
+    homeNotificationHasMore: false,
+    homeNotificationUnreadOnly: false,
+    homeNotificationLoadInFlight: false,
+    homeNotificationReadInFlight: new Set(),
+    // LMC12_END
   };
 
   class PortalRequestError extends Error {
@@ -3201,6 +3238,9 @@
     homesSection.hidden = true;
     showHomesState('idle');
     showHomeDetailState('empty');
+    // LMC12_START
+    resetHomeNotificationsState();
+    // LMC12_END
   }
 
   function setSelectedHomeCardState() {
@@ -3939,6 +3979,9 @@
       homeCount.textContent = '';
       showHomesState('idle');
       showHomeDetailState('empty');
+      // LMC12_START - senza case niente novita', e nessuna richiesta parte.
+      resetHomeNotificationsState();
+      // LMC12_END
       return;
     }
     const numero = sections.homeCount;
@@ -3946,6 +3989,11 @@
     renderHomeList(state.homes);
     showHomesState('content');
     showHomeDetailState('empty');
+    // LMC12_START - le novita' si caricano solo quando c'e' almeno una casa:
+    // senza case la sezione non esiste e nessuna richiesta parte.
+    homeNotificationsSection.hidden = false;
+    void loadHomeNotifications({ reset: true });
+    // LMC12_END
   }
 
   async function selectFirstHome() {
@@ -3955,6 +4003,314 @@
     }
   }
   // LMC6_END
+
+  // LMC12_START - "Novita' sulla tua casa".
+  //
+  // Stesso modello delle notifiche P5 (paginazione, filtro non lette, segna
+  // come letta con conferma nella card), ma su `/home-notifications`: uno
+  // stream diverso, uno stato diverso, nessuna riga condivisa con P5. In
+  // piu' ogni card sa a quale casa si riferisce (`stima_id`) e la apre.
+  function resetHomeNotificationsState({ preserveFilter = false } = {}) {
+    state.homeNotificationGeneration += 1;
+    state.homeNotificationItems = [];
+    state.homeNotificationOffset = 0;
+    state.homeNotificationHasMore = false;
+    state.homeNotificationLoadInFlight = false;
+    state.homeNotificationReadInFlight.clear();
+    if (!preserveFilter) {
+      state.homeNotificationUnreadOnly = false;
+      homeNotificationsUnreadOnly.checked = false;
+    }
+    homeNotificationsList.replaceChildren();
+    homeNotificationsSection.hidden = true;
+    homeNotificationsLoading.hidden = true;
+    homeNotificationsEmpty.hidden = true;
+    homeNotificationsError.hidden = true;
+    homeNotificationsContent.hidden = true;
+    homeNotificationsErrorMessage.textContent = '';
+    homeNotificationsEmptyMessage.textContent = 'Per ora non ci sono novità sulla tua casa.';
+    homeNotificationsPagination.hidden = true;
+    homeNotificationsLoadMore.disabled = false;
+    homeNotificationsLoadMore.textContent = 'Carica altre';
+    homeNotificationsPaginationStatus.textContent = '';
+  }
+
+  function showHomeNotificationsState(name, message = '') {
+    homeNotificationsLoading.hidden = name !== 'loading';
+    homeNotificationsEmpty.hidden = name !== 'empty';
+    homeNotificationsError.hidden = name !== 'error';
+    homeNotificationsContent.hidden = name !== 'content';
+    if (name === 'error') {
+      homeNotificationsErrorMessage.textContent = message || 'Riprova tra poco.';
+    }
+    if (name === 'empty') {
+      homeNotificationsEmptyMessage.textContent = state.homeNotificationUnreadOnly
+        ? 'Non ci sono novità non lette.'
+        : 'Per ora non ci sono novità sulla tua casa.';
+    }
+  }
+
+  function homeNotificationTypeLabel(type) {
+    return HOME_NOTIFICATION_TYPE_LABELS[type] || 'Novità';
+  }
+
+  function homeNotificationStimaId(item) {
+    const id = Number(item && item.stima_id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  function homeNotificationHomeName(stimaId) {
+    const casa = state.homes.find((home) => home && home.stima_id === stimaId);
+    if (!casa) return '';
+    const via = [casa.via, casa.civico].filter((v) => typeof v === 'string' && v.trim()).join(' ');
+    const parti = [via, casa.comune].filter((v) => typeof v === 'string' && v.trim());
+    return parti.join(', ');
+  }
+
+  function renderHomeNotificationCard(item) {
+    const id = notificationId(item);
+    const stimaId = homeNotificationStimaId(item);
+    const card = document.createElement('article');
+    card.className = 'notification-card home-notification-card';
+    card.setAttribute('role', 'listitem');
+    if (id !== null) card.dataset.homeNotificationId = String(id);
+    if (stimaId !== null) card.dataset.stimaId = String(stimaId);
+    card.classList.toggle('is-unread', !item.read_at);
+
+    const top = document.createElement('div');
+    top.className = 'notification-card-topline';
+    const type = document.createElement('span');
+    type.className = 'notification-type-label';
+    type.textContent = homeNotificationTypeLabel(item.type);
+    const readState = document.createElement('span');
+    readState.className = 'notification-read-badge';
+    readState.textContent = item.read_at ? 'Letta' : 'Non letta';
+    top.append(type, readState);
+
+    const title = document.createElement('h4');
+    title.className = 'notification-title';
+    title.textContent = typeof item.title === 'string' && item.title.trim() ? item.title : 'Novità';
+    const body = document.createElement('p');
+    body.className = 'notification-body';
+    body.textContent = typeof item.body === 'string' ? item.body : '';
+    const date = document.createElement('p');
+    date.className = 'notification-date';
+    const casa = stimaId !== null ? homeNotificationHomeName(stimaId) : '';
+    date.textContent = (item.created_at ? formatPublishedAt(item.created_at) : 'Data non disponibile')
+      + (casa ? ` · ${casa}` : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'notification-actions home-notification-actions';
+    const button = document.createElement('button');
+    button.className = 'secondary-button notification-read-button';
+    button.type = 'button';
+    button.textContent = item.read_at ? 'Letta' : 'Segna come letta';
+    button.disabled = Boolean(item.read_at) || id === null;
+    if (id !== null) button.dataset.homeNotificationId = String(id);
+    button.addEventListener('click', () => {
+      if (id !== null) void markHomeNotificationRead(id);
+    });
+    const open = document.createElement('button');
+    open.className = 'secondary-button home-notification-open';
+    open.type = 'button';
+    open.textContent = 'Vedi la casa';
+    open.disabled = stimaId === null || !state.homes.some((home) => home && home.stima_id === stimaId);
+    if (stimaId !== null) open.dataset.stimaId = String(stimaId);
+    open.addEventListener('click', () => {
+      if (stimaId !== null) void selectHome(stimaId);
+    });
+    const actionStatus = document.createElement('p');
+    actionStatus.className = 'status-message notification-action-status';
+    actionStatus.setAttribute('role', 'status');
+    actionStatus.setAttribute('aria-live', 'polite');
+    actions.append(button, open, actionStatus);
+    card.append(top, title, body, date, actions);
+    return card;
+  }
+
+  function renderHomeNotifications() {
+    homeNotificationsList.replaceChildren();
+    for (const item of state.homeNotificationItems) {
+      if (item && typeof item === 'object') {
+        homeNotificationsList.append(renderHomeNotificationCard(item));
+      }
+    }
+  }
+
+  function homeNotificationPageUrl(offset) {
+    const params = new URLSearchParams({
+      limit: String(HOME_NOTIFICATIONS_LIMIT),
+      offset: String(offset),
+      unread_only: state.homeNotificationUnreadOnly ? 'true' : 'false',
+    });
+    return `/home-notifications?${params.toString()}`;
+  }
+
+  function updateHomeNotificationPagination() {
+    homeNotificationsPagination.hidden = !state.homeNotificationHasMore;
+    homeNotificationsLoadMore.disabled = state.homeNotificationLoadInFlight || !state.homeNotificationHasMore;
+    homeNotificationsLoadMore.textContent = state.homeNotificationLoadInFlight ? 'Caricamento…' : 'Carica altre';
+    homeNotificationsPaginationStatus.textContent = state.homeNotificationHasMore
+      ? `${state.homeNotificationItems.length} novità caricate.`
+      : '';
+  }
+
+  async function loadHomeNotifications({ reset = false } = {}) {
+    if (!state.session) return;
+    if (reset) {
+      resetHomeNotificationsState({ preserveFilter: true });
+      homeNotificationsSection.hidden = false;
+    }
+    if (state.homeNotificationLoadInFlight
+      || (!reset && !state.homeNotificationHasMore && state.homeNotificationOffset > 0)) {
+      return;
+    }
+
+    const generation = state.homeNotificationGeneration;
+    const filterAtStart = state.homeNotificationUnreadOnly;
+    const offsetAtStart = state.homeNotificationOffset;
+    state.homeNotificationLoadInFlight = true;
+    if (offsetAtStart === 0) showHomeNotificationsState('loading');
+    updateHomeNotificationPagination();
+
+    let payload;
+    try {
+      payload = await apiRequest(homeNotificationPageUrl(offsetAtStart));
+    } catch (error) {
+      if (generation !== state.homeNotificationGeneration
+        || filterAtStart !== state.homeNotificationUnreadOnly
+        || !state.session) return;
+      state.homeNotificationLoadInFlight = false;
+      updateHomeNotificationPagination();
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      showHomeNotificationsState('error', error instanceof PortalRequestError && error.status === 404
+        ? 'Contenuto non disponibile o accesso non più valido.'
+        : 'Impossibile caricare le novità. Riprova tra poco.');
+      return;
+    }
+
+    if (generation !== state.homeNotificationGeneration
+      || filterAtStart !== state.homeNotificationUnreadOnly
+      || !state.session) return;
+
+    state.homeNotificationLoadInFlight = false;
+    const items = payload && Array.isArray(payload.items)
+      ? payload.items.filter((item) => item && typeof item === 'object')
+      : [];
+    state.homeNotificationItems = offsetAtStart === 0 ? items : state.homeNotificationItems.concat(items);
+    state.homeNotificationHasMore = payload && payload.has_more === true;
+    const payloadLimit = payload && Number.isInteger(payload.limit) && payload.limit > 0
+      ? payload.limit
+      : HOME_NOTIFICATIONS_LIMIT;
+    const payloadOffset = payload && Number.isInteger(payload.offset) && payload.offset >= 0
+      ? payload.offset
+      : offsetAtStart;
+    state.homeNotificationOffset = payloadOffset + payloadLimit;
+
+    if (state.homeNotificationItems.length === 0) {
+      showHomeNotificationsState('empty');
+      updateHomeNotificationPagination();
+      return;
+    }
+    renderHomeNotifications();
+    showHomeNotificationsState('content');
+    updateHomeNotificationPagination();
+  }
+
+  function homeNotificationCardById(id) {
+    return Array.from(homeNotificationsList.children)
+      .find((card) => Number(card.dataset.homeNotificationId) === id) || null;
+  }
+
+  function updateHomeNotificationItemFromRead(id, payload) {
+    const index = state.homeNotificationItems.findIndex((item) => notificationId(item) === id);
+    if (index < 0) return;
+    const card = homeNotificationCardById(id);
+    if (state.homeNotificationUnreadOnly) {
+      state.homeNotificationItems.splice(index, 1);
+      state.homeNotificationOffset = Math.max(0, state.homeNotificationOffset - 1);
+      if (card) {
+        const remaining = Array.from(homeNotificationsList.children).filter((item) => item !== card);
+        homeNotificationsList.replaceChildren(...remaining);
+      }
+    } else {
+      state.homeNotificationItems[index] = {
+        ...state.homeNotificationItems[index],
+        ...(payload && typeof payload === 'object' ? payload : {}),
+        read_at: payload && payload.read_at ? payload.read_at : new Date().toISOString(),
+      };
+      if (card) {
+        card.classList.remove('is-unread');
+        const readState = card.children[0]?.children?.[1];
+        const button = card.children[4]?.children?.[0];
+        const status = card.children[4]?.children?.[2];
+        if (readState) readState.textContent = 'Letta';
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Letta';
+        }
+        if (status) {
+          status.classList.remove('is-error');
+          status.textContent = 'Novità segnata come letta.';
+        }
+      }
+    }
+    if (state.homeNotificationItems.length === 0) {
+      showHomeNotificationsState('empty');
+      homeNotificationsList.replaceChildren();
+    } else {
+      showHomeNotificationsState('content');
+    }
+    updateHomeNotificationPagination();
+  }
+
+  async function markHomeNotificationRead(id) {
+    if (!state.session || state.homeNotificationReadInFlight.has(id)) return;
+    const item = state.homeNotificationItems.find((entry) => notificationId(entry) === id);
+    if (!item || item.read_at) return;
+
+    const generation = state.homeNotificationGeneration;
+    state.homeNotificationReadInFlight.add(id);
+    const card = homeNotificationCardById(id);
+    const button = card && card.children.length ? card.children[4]?.children?.[0] : null;
+    const status = card && card.children.length ? card.children[4]?.children?.[2] : null;
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Aggiornamento…';
+    }
+    if (status) status.textContent = 'Aggiornamento in corso…';
+
+    let payload;
+    try {
+      payload = await apiRequest(`/home-notifications/${encodeURIComponent(String(id))}/read`, { method: 'POST' });
+    } catch (error) {
+      if (generation !== state.homeNotificationGeneration || !state.session) return;
+      state.homeNotificationReadInFlight.delete(id);
+      if (error instanceof PortalRequestError && (error.status === 401 || error.status === 403)) {
+        enterLoggedOut('Sessione non disponibile o scaduta.');
+        return;
+      }
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Segna come letta';
+      }
+      if (status) {
+        status.classList.add('is-error');
+        status.textContent = error instanceof PortalRequestError && error.status === 404
+          ? 'Novità non disponibile o accesso non più valido.'
+          : 'Impossibile aggiornare la novità. Riprova tra poco.';
+      }
+      return;
+    }
+
+    if (generation !== state.homeNotificationGeneration || !state.session) return;
+    state.homeNotificationReadInFlight.delete(id);
+    updateHomeNotificationItemFromRead(id, payload);
+  }
+  // LMC12_END
 
   function preferredPropertyId(items) {
     const primary = items.find((item) => item && item.is_primary === true && propertyId(item) !== null);
@@ -4283,6 +4639,24 @@
       void loadNotifications();
     }
   });
+
+  // LMC12_START
+  homeNotificationsUnreadOnly.addEventListener('change', () => {
+    if (!state.session) return;
+    state.homeNotificationUnreadOnly = homeNotificationsUnreadOnly.checked === true;
+    void loadHomeNotifications({ reset: true });
+  });
+
+  homeNotificationsRetry.addEventListener('click', () => {
+    if (state.session) void loadHomeNotifications({ reset: true });
+  });
+
+  homeNotificationsLoadMore.addEventListener('click', () => {
+    if (state.session && state.homeNotificationHasMore && !state.homeNotificationLoadInFlight) {
+      void loadHomeNotifications();
+    }
+  });
+  // LMC12_END
 
   notificationPreferencesRetry.addEventListener('click', () => {
     if (state.session) void loadNotificationPreferences();

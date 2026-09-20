@@ -340,6 +340,27 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "the phase - that a failed write answers 503 rather than a false "
         "success"
     ),
+    "tests/test_lmc12_home_notifications_postgres.py": (
+        "TEST-only LMC-12 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to "
+        "apply migration 069 and then seed grants, valuation snapshots and "
+        "buyer-pressure readings across two agencies and read "
+        "owner_home_notifications and owner_audit_log back, which is the only "
+        "way to prove six things a double cannot: that the down migration "
+        "refuses to destroy real notifications and the up re-applies after an "
+        "empty down, that the 069 trigger rejects an owner and an estimation "
+        "of two different agencies even on a hand-written INSERT, that the "
+        "idempotency key is refused by the database on the second run and that "
+        "identical daily snapshots never add a row, that a run of one tenant "
+        "never reads another tenant's grants and a revoked or expired grant "
+        "makes the notification unreadable and unmarkable, that the "
+        "owner:home_alerts session lock keeps a second run out while the "
+        "LMC-11 lock does not, and that keyset pagination walks every grant "
+        "with no starvation and no loop on a failing last element. It must "
+        "not go through database.get_connection(): that is the application "
+        "choke point and must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_lmc11_valuation_cron_postgres.py": (
         "TEST-only LMC-11 proof; opts in through P29_TEST_DSN and skips "
         "entirely without it. Creates and drops its own throwaway database "

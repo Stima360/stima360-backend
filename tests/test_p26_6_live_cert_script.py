@@ -6766,6 +6766,10 @@ COLLOCAZIONE_SCRITTURE = {
                            "grant pre-incarico LMC-1A, scritto solo dal provisioning del funnel pubblico che la matrice non percorre; CASCADE verso owner_accounts e stime, entrambi genitori del cleanup"),
     "owner_home_overrides": (GUARDIA,
                              "correzioni del proprietario LMC-10, scritte solo dalla PATCH del portale proprietario che la matrice non chiama; CASCADE verso stime (genitore del cleanup) e SET NULL verso owner_accounts, esaminata in FK_NON_CASCADE_ATTESE"),
+    "owner_home_notifications": (GUARDIA,
+                                 "LMC-12: le notifiche in-app PRE-INCARICO; mai scritte dalla matrice, "
+                                 "referenzia owner_accounts e stime (entrambe CASCADE), quindi il "
+                                 "preflight la vedrebbe"),
     "property_leads": (GUARDIA, "nessuna fixture collega lead a immobili"),
     "property_price_history": (GUARDIA, "solo su cambio prezzo: la matrice non aggiorna i propri immobili"),
     "property_visits": (GUARDIA, "nessuna fixture fissa visite"),

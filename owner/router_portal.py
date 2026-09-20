@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, HomeEventCreate, HomeListResponse, HomeProfileUpdate, LoginLinkRequest, NotificationPreferencesUpdate, TokenConsume
+from .schemas import FeedbackCreate, FeedbackListResponse, FeedbackPublic, HomeEventCreate, HomeListResponse, HomeNotificationListResponse, HomeProfileUpdate, LoginLinkRequest, NotificationPreferencesUpdate, OwnerHomeNotificationDTO, TokenConsume
 from core.exceptions import NotFoundError
 from .dependencies import current_owner
 from . import home_service, home_update, login_service, tracking
@@ -413,6 +413,38 @@ def notification_read(i: int, s=Depends(current_owner)):
         notification_id=i,
         scope="read",
     )
+
+
+# LMC-12 - notifiche PRE-INCARICO "Novita' sulla tua casa" -----------------
+#
+# Uno stream separato da P5, con le sue due rotte. Le funzioni P5 qui sopra
+# non cambiano. Ogni lettura rivalida il grant `owner_stima_access` con le
+# due radici d'accordo; il rifiuto e' il 404 neutro di tutto OWNER, auditato.
+@router.get("/home-notifications", response_model=HomeNotificationListResponse)
+def home_notifications(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    unread_only: bool = False,
+    s=Depends(current_owner),
+):
+    account = s["owner_account_id"]
+    rows = nf(r.portal_home_notifications, account, limit + 1, offset, unread_only)
+    return {
+        "items": rows[:limit],
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(rows) > limit,
+    }
+
+
+@router.post("/home-notifications/{i}/read", response_model=OwnerHomeNotificationDTO)
+def home_notification_read(i: int, s=Depends(current_owner)):
+    account = s["owner_account_id"]
+    try:
+        return r.mark_home_notification_read(account, i)
+    except Exception:
+        r.audit_home_notification_access_denied(account, i, scope="read")
+        raise HTTPException(404, 'Risorsa non trovata')
 
 
 @router.get("/notification-preferences")

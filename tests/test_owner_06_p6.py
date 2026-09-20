@@ -189,6 +189,16 @@ const requiredIds = [
   // LMC-9: la CTA di conversione e la sua conferma esplicita.
   'home-consultation-cta','home-consultation-confirm','home-consultation-cancel',
   'home-consultation-send','home-consultation-status',
+  // LMC-12 (collisione autorizzata, stessa natura di quella di LMC-6): la
+  // sezione delle case ha ora la sottosezione "Novita' sulla tua casa", lo
+  // stream di notifiche PRE-INCARICO separato da quello P5 qui sotto. Sono
+  // id di markup nuovo; senza dichiararli qui `getElementById` torna
+  // undefined e app.js non arriva in fondo.
+  'home-notifications-section','home-notifications-unread-only','home-notifications-loading',
+  'home-notifications-empty','home-notifications-empty-message','home-notifications-error',
+  'home-notifications-error-message','home-notifications-retry','home-notifications-content',
+  'home-notifications-list','home-notifications-pagination','home-notifications-load-more',
+  'home-notifications-pagination-status',
   'dashboard-loading','shell-empty','dashboard-error','dashboard-error-message',
   'dashboard-retry','dashboard-content','property-list','property-detail-loading',
   'property-detail-empty','property-detail-error','property-detail-error-message',
@@ -373,6 +383,13 @@ global.fetch = async function(url, options = {{}}) {{
   if (!queue || queue.length === 0) {{
     if (url.includes('/api/owner/portal/notifications?')) {{
       return fakeResponse({{ status: 200, body: {{ items: [], limit: 50, offset: 0, has_more: false }} }});
+    }}
+    // LMC-12: lo stream PRE-INCARICO parte da solo appena c'e' una casa. Come
+    // per le notifiche P5, senza una risposta registrata risponde vuoto e
+    // non entra in `calls`: gli scenari di LMC-6..10 contano le richieste
+    // che hanno scritto loro, non questa.
+    if (url.includes('/api/owner/portal/home-notifications?')) {{
+      return fakeResponse({{ status: 200, body: {{ items: [], limit: 20, offset: 0, has_more: false }} }});
     }}
     if (url.endsWith('/api/owner/portal/notification-preferences') && (options.method || 'GET') === 'GET') {{
       return fakeResponse({{ status: 200, body: {{

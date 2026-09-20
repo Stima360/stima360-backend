@@ -535,8 +535,15 @@ def test_h5_nessuna_migration_creata():
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
+    # SENTINELLA AGGIORNATA DA LMC-12: la 069 e' lo stream di notifiche
+    # PRE-INCARICO `owner_home_notifications`, approvata dal DESIGN GATE di
+    # LMC-12 (dominio OWNER, radice `stime` + `owner_stima_access`). Si nomina
+    # invece di smettere di guardare: qualunque ALTRA migration comparisse
+    # farebbe ancora fallire questo test.
     atteso = {"migrations/068_lmc10_owner_home_overrides.sql",
-              "migrations/068_lmc10_owner_home_overrides_down.sql"}
+              "migrations/068_lmc10_owner_home_overrides_down.sql",
+              "migrations/069_lmc12_owner_home_notifications.sql",
+              "migrations/069_lmc12_owner_home_notifications_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

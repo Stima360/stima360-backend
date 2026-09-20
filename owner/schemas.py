@@ -460,3 +460,31 @@ class NotificationPreferencesDTO(M):
 
 class NotificationPreferencesUpdate(NotificationPreferencesDTO):
     pass
+
+
+# LMC-12 - le notifiche PRE-INCARICO ("Novita' sulla tua casa"). Stream
+# separato da P5: un DTO suo, chiuso, e `stima_id` al posto di
+# `target_type`/`target_id` perche' il bersaglio e' sempre la casa. Niente
+# `evidence`, niente impronta dell'algoritmo, niente id di osservazione.
+HomeNotificationType = Literal[
+    "home_value_changed",
+    "home_demand_changed",
+    "home_method_changed",
+]
+
+
+class OwnerHomeNotificationDTO(M):
+    id: int
+    type: HomeNotificationType
+    stima_id: int
+    title: str
+    body: str
+    created_at: datetime
+    read_at: datetime | None = None
+
+
+class HomeNotificationListResponse(M):
+    items: list[OwnerHomeNotificationDTO]
+    limit: int
+    offset: int
+    has_more: bool

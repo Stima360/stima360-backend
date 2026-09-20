@@ -437,8 +437,14 @@ def test_f3_nessuna_migration_in_lmc2():
     """
     migrazioni = sorted(p.name for p in (ROOT / "migrations").glob("*.sql")
                         if not p.name.endswith("_down.sql"))
-    assert migrazioni[-2:] == ["067_lmc1b_owner_login_reason.sql",
-                               "068_lmc10_owner_home_overrides.sql"], migrazioni[-3:]
+    # SENTINELLA AGGIORNATA DA LMC-12: la 069 e' lo stream di notifiche
+    # PRE-INCARICO `owner_home_notifications`, approvata dal DESIGN GATE di
+    # LMC-12 (dominio OWNER, radice `stime` + `owner_stima_access`). Si nomina
+    # invece di smettere di guardare: qualunque ALTRA migration comparisse
+    # farebbe ancora fallire questo test.
+    assert migrazioni[-3:] == ["067_lmc1b_owner_login_reason.sql",
+                               "068_lmc10_owner_home_overrides.sql",
+                               "069_lmc12_owner_home_notifications.sql"], migrazioni[-4:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():

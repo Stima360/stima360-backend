@@ -1312,6 +1312,9 @@ OWNER_TENANT_TABLES = frozenset({
     "owner_feedback", "owner_audit_log", "owner_shared_documents",
     "owner_document_reads", "owner_visit_feedback_publications",
     "owner_notifications", "owner_notification_preferences",
+    # LMC-12: lo stream di notifiche PRE-INCARICO. Tenancy derivata da
+    # `stime` via `owner_stima_access`, come `owner_home_overrides`.
+    "owner_home_notifications",
 })
 
 _SQL_SOURCE = re.compile(r"(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_]+)", re.IGNORECASE)

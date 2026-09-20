@@ -414,7 +414,11 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     assert 67 in numeri and numeri.index(67) == numeri.index(66) + 1
     assert numeri == sorted(numeri), numeri
     assert len(numeri) == len(set(numeri)), "numeri di migration duplicati"
-    assert numeri[-1] == 68, numeri[-3:]
+    # LMC-12 (collisione autorizzata, stessa natura): la 069 e' lo stream di
+    # notifiche PRE-INCARICO `owner_home_notifications`, approvato dal DESIGN
+    # GATE. La piu' alta si nomina, cosi' una migration inattesa fa ancora
+    # fallire il test.
+    assert numeri[-1] == 69, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

@@ -2605,3 +2605,265 @@ def upsert_home_override(owner_account_id,stima_id,valori,expected_version):
              f"RETURNING {ritorno}",[*parametri,owner_account_id,stima_id,expected_version])
   r=c.fetchone()
  return dict(r) if r else None
+
+
+# ---------------------------------------------------------------------------
+# LMC-12 - LE NOTIFICHE IN-APP PRE-INCARICO ("Novita' sulla tua casa").
+#
+# Uno stream SEPARATO da `owner_notifications` (P5): quella tabella e' radicata
+# su `properties`, questa su `stime` + `owner_stima_access`. Le funzioni P5
+# (`_emit_notification_event`, `portal_notifications`,
+# `mark_notification_read`) non vengono toccate ne' riusate: due radici, due
+# insiemi di query, nessun predicato a doppia radice.
+#
+# La tenancy e' quella di LMC-2/LMC-10: il grant `owner_stima_access` con le
+# due radici d'accordo (`ct.agency_id = s.agency_id`), rivalidato a OGNI
+# lettura e DENTRO la transazione di ogni scrittura. `owner_home_notifications`
+# non ha `agency_id` (la 069 dice perche'), quindi si passa sempre da `stime`,
+# e il trigger della 069 e' la seconda difesa.
+#
+# La decisione - cosa notificare - non vive qui: e' `owner/home_alerts.py`,
+# puro. Qui si leggono le serie, si scrive l'esito, si rilegge per il portale.
+# ---------------------------------------------------------------------------
+
+#: I tre tipi ammessi, gli stessi del CHECK della 069.
+_HOME_NOTIFICATION_TYPES = {"home_value_changed", "home_demand_changed",
+                            "home_method_changed"}
+
+#: Le metriche Buyer Pressure che il rilevatore legge: le STESSE di
+#: `home_buyer_pressure` (LMC-4), una per una, e come li' `average_budget`
+#: non viene selezionata e quindi non esce da PostgreSQL.
+_HOME_DEMAND_METRICS = ("evaluated_buyers", "compatible_buyers",
+                        "highly_compatible_buyers", "recent_compatible_buyers_30d",
+                        "average_match_score", "maximum_match_score",
+                        "algorithm_version")
+
+#: Il predicato del grant PRE-INCARICO, per esteso. Lo stesso di
+#: `_HOME_GRANT_WHERE`, con l'alias fisso e senza il parametro account, perche'
+#: qui il grant viene percorso per agenzia (dal cron) o per riga (dal portale).
+_HOME_ALERT_GRANT_JOIN = """
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+"""
+_HOME_ALERT_GRANT_VALID = """
+       AND ct.agency_id = s.agency_id
+       AND x.access_status = 'active'
+       AND x.revoked_at IS NULL
+       AND (x.valid_until IS NULL OR x.valid_until > NOW())
+       AND oa.status <> 'disabled'
+"""
+
+
+def list_home_alert_grants_page(agency_id, *, after_grant_id=0, page_size):
+ """Una pagina di grant attivi di QUESTA agenzia, per id crescente (keyset).
+
+ Il cron la chiama finche' non torna vuota, o corta. Mai OFFSET: il cursore e'
+ l'id del grant, e la pagina successiva riparte da li'. L'agenzia sta nel
+ predicato accanto alle due radici, che devono essere d'accordo fra loro e
+ con essa. Porta anche `in_app_enabled` (riga assente = TRUE, come P5) per
+ non rileggere le preferenze casa per casa.
+ """
+ with core_cursor() as(_,c):
+  c.execute(f"""
+    SELECT x.id AS grant_id, x.owner_account_id AS owner_account_id,
+           x.stima_id AS stima_id,
+           COALESCE(np.in_app_enabled, TRUE) AS in_app_enabled
+      {_HOME_ALERT_GRANT_JOIN}
+      LEFT JOIN owner_notification_preferences np
+        ON np.owner_account_id = x.owner_account_id
+     WHERE s.agency_id = %s
+       {_HOME_ALERT_GRANT_VALID}
+       AND x.id > %s
+     ORDER BY x.id ASC
+     LIMIT %s
+  """,(agency_id,after_grant_id,page_size))
+  return[dict(r) for r in c.fetchall()]
+
+
+def home_value_series(agency_id,stima_id):
+ """La serie `valuation_snapshot` di UNA casa, in ordine cronologico.
+
+ Del payload escono i tre campi che il confronto usa: il prezzo, l'impronta
+ dell'algoritmo e il `reason`. L'agenzia e' nel predicato con la stima.
+ """
+ with core_cursor() as(_,c):
+  c.execute("""
+    SELECT o.id AS observation_id, o.observed_at AS observed_at,
+           o.payload->'price_exact'            AS price_exact,
+           o.payload->>'algorithm_fingerprint' AS algorithm_fingerprint,
+           o.payload->>'reason'                AS reason
+      FROM property_watch_observations o
+      JOIN property_watches w ON w.id = o.watch_id
+     WHERE w.stima_id = %s
+       AND w.agency_id = %s
+       AND o.observation_type = 'valuation_snapshot'
+     ORDER BY o.observed_at ASC, o.id ASC
+  """,(stima_id,agency_id))
+  return[dict(r) for r in c.fetchall()]
+
+
+def home_demand_series(agency_id,stima_id):
+ """Le rilevazioni Buyer Pressure di UNA casa, in ordine cronologico, con le
+ sole metriche che il portale legge (vedi `_HOME_DEMAND_METRICS`)."""
+ colonne=",\n           ".join(f"o.payload->'{k}' AS {k}" for k in _HOME_DEMAND_METRICS)
+ with core_cursor() as(_,c):
+  c.execute(f"""
+    SELECT o.id AS observation_id, o.observed_at AS observed_at,
+           {colonne}
+      FROM property_watch_observations o
+      JOIN property_watches w ON w.id = o.watch_id
+     WHERE w.stima_id = %s
+       AND w.agency_id = %s
+       AND o.observation_type IN ('buyer_pressure_snapshot','buyer_pressure_changed')
+     ORDER BY o.observed_at ASC, o.id ASC
+  """,(stima_id,agency_id))
+  righe=[dict(r) for r in c.fetchall()]
+ return[{"observation_id":r["observation_id"],"observed_at":r["observed_at"],
+         "metrics":{k:r[k] for k in _HOME_DEMAND_METRICS}} for r in righe]
+
+
+def home_alert_anchors(owner_account_id,stima_id):
+ """Da dove il rilevatore riparte per questo proprietario e questa casa:
+ l'ultimo snapshot notificato (valore o metodo) e l'ultima rilevazione di
+ domanda notificata. `None` dove non c'e' ancora niente."""
+ with core_cursor() as(_,c):
+  c.execute("""
+    SELECT notification_type, evidence
+      FROM owner_home_notifications
+     WHERE owner_account_id = %s AND stima_id = %s
+  """,(owner_account_id,stima_id))
+  righe=[dict(r) for r in c.fetchall()]
+ valore=[int(r["evidence"]["to_observation_id"]) for r in righe
+         if r["notification_type"] in ("home_value_changed","home_method_changed")
+         and isinstance(r["evidence"],dict) and r["evidence"].get("to_observation_id") is not None]
+ domanda=[int(r["evidence"]["observation_id"]) for r in righe
+          if r["notification_type"]=="home_demand_changed"
+          and isinstance(r["evidence"],dict) and r["evidence"].get("observation_id") is not None]
+ return{"value":max(valore) if valore else None,"demand":max(domanda) if domanda else None}
+
+
+def home_alert_suppressed_keys(owner_account_id,keys):
+ """Le chiavi gia' auditate come soppresse per questo account: una
+ soppressione si scrive una volta per fatto, non una volta per giro."""
+ if not keys:return set()
+ with core_cursor() as(_,c):
+  c.execute("""
+    SELECT metadata->>'idempotency_key' AS k
+      FROM owner_audit_log
+     WHERE owner_account_id = %s
+       AND action = 'home_notification_suppressed'
+       AND metadata->>'idempotency_key' = ANY(%s)
+  """,(owner_account_id,list(keys)))
+  return{r["k"] for r in c.fetchall()}
+
+
+def create_home_notification(owner_account_id,stima_id,*,notification_type,title,body,
+                             evidence,idempotency_key):
+ """Scrive UNA notifica, race-safe, e ritorna 'created' o 'reused'.
+
+ L'INSERT e' un INSERT ... SELECT dal grant: se nel frattempo il grant e'
+ stato revocato o le due radici non sono piu' d'accordo, non seleziona
+ niente e si solleva `NotFoundError` (il cron lo conta come skipped). La
+ UNIQUE sulla chiave e' la guardia finale contro il doppio giro:
+ `ON CONFLICT DO NOTHING`, e la seconda volta e' 'reused'. L'audit porta
+ tipo, chiave e stima: mai il corpo.
+ """
+ if notification_type not in _HOME_NOTIFICATION_TYPES:raise ValidationError("Tipo notifica non ammesso")
+ title=str(title or "").strip();body=str(body or "").strip()
+ if not title or len(title)>200 or not body or len(body)>5000:raise ValidationError("Notifica non valida")
+ if not str(idempotency_key or "").strip():raise ValidationError("Chiave notifica non valida")
+ with core_cursor(commit=True) as(_,c):
+  c.execute(f"""
+    INSERT INTO owner_home_notifications(
+        owner_account_id, stima_id, notification_type, title, body, evidence, idempotency_key)
+    SELECT x.owner_account_id, x.stima_id, %s, %s, %s, %s, %s
+      {_HOME_ALERT_GRANT_JOIN}
+     WHERE x.owner_account_id = %s
+       AND x.stima_id = %s
+       {_HOME_ALERT_GRANT_VALID}
+    ON CONFLICT (idempotency_key) DO NOTHING
+    RETURNING id
+  """,(notification_type,title,body,Json(evidence or {}),idempotency_key,
+       owner_account_id,stima_id))
+  r=c.fetchone()
+  if r:
+   _audit_with_cursor(c,"home_notification_created",owner_account_id,None,
+                      "owner_home_notification",r["id"],
+                      meta={"notification_type":notification_type,"stima_id":stima_id,
+                            "idempotency_key":idempotency_key})
+   return "created"
+  c.execute("SELECT 1 FROM owner_home_notifications WHERE idempotency_key=%s",(idempotency_key,))
+  if c.fetchone():return "reused"
+ raise NotFoundError(NF)
+
+
+def audit_home_notification_suppressed(owner_account_id,stima_id,*,notification_type,idempotency_key):
+ audit("home_notification_suppressed",account=owner_account_id,prop=None,
+       etype="owner_home_notification",eid=None,
+       meta={"notification_type":notification_type,"stima_id":stima_id,
+             "idempotency_key":idempotency_key,"reason_code":"preference_disabled"})
+
+
+def _public_home_notification(row):
+ """Whitelist chiusa. Mai `evidence`, mai la chiave, mai l'account."""
+ return{"id":row["id"],"type":row["notification_type"],"stima_id":row["stima_id"],
+        "title":row["title"],"body":row["body"],"created_at":row["created_at"],
+        "read_at":row.get("read_at")}
+
+
+def portal_home_notifications(a,limit=50,offset=0,unread_only=False):
+ """Le notifiche PRE-INCARICO dell'account, rivalidando il grant a ogni riga:
+ una notifica su una casa il cui accesso e' stato revocato non si vede piu'."""
+ filtri=["n.owner_account_id = %s","n.expires_at > NOW()","x.owner_account_id = n.owner_account_id"]
+ valori=[a]
+ if unread_only:filtri.append("n.read_at IS NULL")
+ valori.extend((limit,offset))
+ with core_cursor() as(_,c):
+  c.execute(f"""
+    SELECT n.id, n.notification_type, n.stima_id, n.title, n.body, n.created_at, n.read_at
+      FROM owner_home_notifications n
+      JOIN owner_stima_access x ON x.stima_id = n.stima_id
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+     WHERE {' AND '.join(filtri)}
+       {_HOME_ALERT_GRANT_VALID}
+     ORDER BY n.created_at DESC, n.id DESC
+     LIMIT %s OFFSET %s
+  """,valori)
+  return[_public_home_notification(dict(r)) for r in c.fetchall()]
+
+
+def mark_home_notification_read(a,i):
+ """Idempotente: il primo `read_at` vince. Stesso predicato della lettura,
+ dentro l'UPDATE: senza grant valido non si aggiorna e si risponde 404."""
+ with core_cursor(commit=True) as(_,c):
+  c.execute(f"""
+    UPDATE owner_home_notifications n
+       SET read_at = COALESCE(n.read_at, NOW())
+      FROM owner_stima_access x
+      JOIN owner_accounts oa ON oa.id = x.owner_account_id
+      JOIN contacts ct ON ct.id = oa.contact_id
+      JOIN stime s ON s.id = x.stima_id
+     WHERE n.id = %s AND n.owner_account_id = %s
+       AND n.expires_at > NOW()
+       AND x.owner_account_id = n.owner_account_id
+       AND x.stima_id = n.stima_id
+       {_HOME_ALERT_GRANT_VALID}
+    RETURNING n.id, n.notification_type, n.stima_id, n.title, n.body, n.created_at, n.read_at
+  """,(i,a))
+  row=one(c)
+  _audit_with_cursor(c,"home_notification_read",a,None,"owner_home_notification",row["id"],
+                     meta={"notification_type":row["notification_type"],"stima_id":row["stima_id"]})
+  return _public_home_notification(row)
+
+
+def audit_home_notification_access_denied(a,notification_id,scope="read"):
+ try:
+  audit("home_notification_access_denied",account=a,prop=None,
+        etype="owner_home_notification",eid=notification_id,result="denied",
+        meta={"scope":scope,"reason_code":"not_found_or_not_authorized"})
+ except Exception:
+  pass

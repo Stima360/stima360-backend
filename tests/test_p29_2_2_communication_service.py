@@ -495,7 +495,10 @@ def test_n7_nessuna_migration_nuova():
     # fase. Non appartiene a questa, ed e' proprio cio' che la
     # sentinella continua a dire: la coda della serie e' nominata una
     # per una, quindi una migration nata QUI farebbe ancora fallire.
-    assert numeri[-1] == 68, "la serie si e' fermata o e' andata oltre la 068"
+    # LMC-12 ha aggiunto la 069 (`owner_home_notifications`, lo stream di
+    # notifiche PRE-INCARICO, approvata dal DESIGN GATE): dominio OWNER, non
+    # di questa fase. La coda si nomina, come sempre.
+    assert numeri[-1] == 69, "la serie si e' fermata o e' andata oltre la 069"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

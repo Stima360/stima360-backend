@@ -520,11 +520,21 @@ def test_g5_il_try_sta_dentro_il_ciclo():
 # ---------------------------------------------------------------------------
 
 def test_h1_nessuna_migration_nuova():
+    """SENTINELLA AGGIORNATA DA LMC-12.
+
+    LMC-11 non ha creato schema e continua a non averne bisogno. La 069 e' di
+    LMC-12 - lo stream di notifiche PRE-INCARICO `owner_home_notifications`,
+    approvato dal DESIGN GATE - e si nomina invece di smettere di guardare:
+    qualunque ALTRA migration comparisse nel working tree farebbe ancora
+    fallire questo test.
+    """
     import subprocess
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
-    assert nuovi == set(), sorted(nuovi)
+    atteso = {"migrations/069_lmc12_owner_home_notifications.sql",
+              "migrations/069_lmc12_owner_home_notifications_down.sql"}
+    assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 
 def test_h2_il_lock_passa_dal_choke_point_del_repository():

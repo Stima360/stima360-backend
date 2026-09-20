@@ -91,8 +91,10 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
 
     numeri = sorted(m.number for m in runner.discover_migrations())
     assert 64 in numeri and 63 in numeri, numeri[-4:]
-    # LMC-10 ha aggiunto la 068.
-    assert numeri[-1] == 68, numeri[-4:]
+    # LMC-10 ha aggiunto la 068; LMC-12 la 069 (`owner_home_notifications`,
+    # dominio OWNER, approvata dal DESIGN GATE). La piu' alta si nomina, cosi'
+    # una migration inattesa fa ancora fallire il test.
+    assert numeri[-1] == 69, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
