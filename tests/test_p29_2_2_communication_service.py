@@ -440,7 +440,12 @@ def test_n3_nessun_dispatcher_nessun_provider_nessun_template():
     non era implementata. Adesso ci sono per progetto, e il divieto si e'
     spostato dove conta: il nucleo non li importa.
     """
-    assert not (PACCHETTO / "templates.py").exists(), "templates.py non e' di P29-2.2"
+    # SENTINELLA AGGIORNATA DA P29-3B.2A: `templates.py` ORA ESISTE, per
+    # progetto - il registry versionato e immutabile (P29-3A.1 SS I), senza
+    # testi commerciali. Il divieto che questa fase manteneva non era sul
+    # file ma sul NUCLEO, che continua a non importarlo: e' quello che si
+    # verifica qui sotto.
+    assert (PACCHETTO / "templates.py").exists()
     assert set(p.name for p in file_del_nucleo()) == set(NUCLEO), "il nucleo non e' intero"
     for percorso in file_del_nucleo():
         # Si giudica il CODICE, non la prosa: un commento che spiega che il
@@ -502,7 +507,10 @@ def test_n7_nessuna_migration_nuova():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, "la serie si e' fermata o e' andata oltre la 070"
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, "la serie si e' fermata o e' andata oltre la 071"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

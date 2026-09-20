@@ -2331,6 +2331,10 @@ def test_j6_no_pre_existing_migration_was_modified(runner):
         ["git", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True,
     ).stdout.splitlines()
+    tracked = set(subprocess.run(
+        ["git", "ls-files", "--", "migrations/"],
+        cwd=ROOT, capture_output=True, text=True,
+    ).stdout.split())
     for line in changed:
         stato, path = line[:2].strip(), line[3:]
         # `??` = non tracciato, cioe' NUOVO. Una migration gia' applicata che
@@ -2339,7 +2343,17 @@ def test_j6_no_pre_existing_migration_was_modified(runner):
         # >= 058, perche' P27-6 aggiunge la 059 e le fasi seguenti ne
         # aggiungeranno altre - mentre "nessuna PRE-ESISTENTE e' stata
         # modificata" e' la garanzia che non deve mai indebolirsi.
-        assert stato == "??", line
+        #
+        # SENTINELLA AGGIORNATA DA P29-3B (collisione dichiarata con P27-5,
+        # che e' committata). `A` - una migration NUOVA gia' in stage - vale
+        # come `??`: sono lo stesso file un attimo prima e un attimo dopo
+        # `git add`, e distinguerli rendeva questo test rosso fra lo stage e
+        # il commit di qualunque fase autorizzata a creare una migration,
+        # cioe' in uno stato normale del repository. Cio' che resta vietato -
+        # ed e' la garanzia intera - e' `M`, `D` o `R` su una migration.
+        assert stato in ("??", "A"), line
+        if stato == "A":
+            assert path in tracked, line
         numero = int(Path(path).name.split("_", 1)[0])
         assert numero >= int(VERSION.split("_", 1)[0]), line
 

@@ -4532,6 +4532,63 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("stima_inspections", "created_by_operator_user_id", "operator_users", "RESTRICT"),
     ("stima_inspections", "completed_by_operator_user_id", "operator_users", "RESTRICT"),
     ("stima_inspections", "cancelled_by_operator_user_id", "operator_users", "RESTRICT"),
+    # P29-3B, migration 071. La journey automation: DIECI riferimenti
+    # non-CASCADE, in tre gruppi, e nessuno e' un ripiego.
+    #
+    #   *_operator_user_id -> operator_users    RESTRICT (sette volte)
+    #
+    # Sono le firme: chi ha creato o attivato una journey, chi ha iscritto,
+    # messo in pausa o fermato una iscrizione, chi ha sospeso o ripreso le
+    # automazioni di un contatto. La stessa scelta, per la stessa ragione,
+    # delle sei firme del ponte di acquisizione qui sopra: CASCADE porterebbe
+    # via i fatti, SET NULL toglierebbe l'autore a un registro, e gli account
+    # si disattivano, non si cancellano. In piu' la 071 lo pretende: una
+    # firma da operatore ha `*_by_type = 'operator'` E l'id (CHECK), e una di
+    # sistema non ha ne' l'uno ne' l'altro, quindi un SET NULL lascerebbe una
+    # riga che il CHECK stesso dichiara irrappresentabile.
+    #
+    # Conseguenza per il cleanup: RIFIUTO, e dichiarato. Le identita' della
+    # certificazione non creano journey ne' iscrizioni - P29-3B non ha rotte
+    # operatore - quindi in pratica non morde mai su righe del run.
+    ("communication_journeys", "created_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("communication_journeys", "activated_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("communication_enrollments", "enrolled_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("communication_enrollments", "paused_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("communication_enrollments", "stopped_by_operator_user_id", "operator_users", "RESTRICT"),
+    ("communication_automation_controls", "paused_by_operator_user_id", "operator_users",
+     "RESTRICT"),
+    ("communication_automation_controls", "resumed_by_operator_user_id", "operator_users",
+     "RESTRICT"),
+    #
+    #   stima_id -> stime            SET NULL
+    #   lead_id  -> leads            SET NULL
+    #
+    # L'iscrizione e' il registro di un percorso commerciale nato da una
+    # stima: la stessa forma di `stima_acquisitions.stima_id`, con lo stesso
+    # snapshot (`stima_id_snapshot` NOT NULL, assegnato dal database e
+    # immutabile - disciplina LMC-15). Cancellare la stima non cancella la
+    # storia della journey, e non e' bloccato da essa. `lead_id` ha la forma
+    # delle otto figlie di `leads` in cima a questo inventario.
+    #
+    # Conseguenza per il cleanup: azzeramento di colonna, non rifiuto. Il
+    # trigger di tenancy della 071 verifica gli attori e la stima solo quando
+    # li si SCRIVE, quindi il SET NULL puo' avvenire.
+    ("communication_enrollments", "stima_id", "stime", "SET NULL"),
+    ("communication_enrollments", "lead_id", "leads", "SET NULL"),
+    #
+    #   stop_event_id -> seller_timeline_events    SET NULL
+    #
+    # L'evento della timeline che ha fermato l'iscrizione (incarico firmato,
+    # sopralluogo, ...). E' un puntatore di spiegazione: la ragione dello
+    # stop sta in `stop_reason`, che resta. CASCADE cancellerebbe una
+    # iscrizione per aver perso la sua spiegazione; RESTRICT tratterrebbe un
+    # evento di timeline per una colonna di comodo. SET NULL.
+    #
+    # Conseguenza per il cleanup: `seller_timeline_events` si cancella per
+    # `agency_id`, quindi dei suoi id non restava traccia e questa figlia non
+    # sarebbe mai stata interrogata dalla guardia. Da P29-3B la tabella entra
+    # in `DEDICATED_SNAPSHOT_TABLES`, come `leads` prima di lei.
+    ("communication_enrollments", "stop_event_id", "seller_timeline_events", "SET NULL"),
     # LMC-10, migration 068. Chi ha corretto per ultimo i dati della propria
     # casa, verso `owner_accounts`.
     #

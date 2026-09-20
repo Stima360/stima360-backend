@@ -536,10 +536,17 @@ def test_h1_nessuna_migration_nuova():
     # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
     # GATE di LMC-15A.2. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire il test.
+    # SENTINELLA AGGIORNATA DA P29-3B: la 071 e' la fondazione delle journey
+    # (`communication_journeys`, `_journey_steps`, `_enrollments`,
+    # `_automation_controls` + tre colonne di provenienza sul ledger),
+    # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
     atteso = {"migrations/069_lmc12_owner_home_notifications.sql",
               "migrations/069_lmc12_owner_home_notifications_down.sql",
               "migrations/070_lmc15_acquisition_bridge.sql",
-              "migrations/070_lmc15_acquisition_bridge_down.sql"}
+              "migrations/070_lmc15_acquisition_bridge_down.sql",
+              "migrations/071_p29_3_journey_automation.sql",
+              "migrations/071_p29_3_journey_automation_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

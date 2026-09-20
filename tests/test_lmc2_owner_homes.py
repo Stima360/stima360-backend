@@ -445,10 +445,16 @@ def test_f3_nessuna_migration_in_lmc2():
     # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
     # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
     # GATE di LMC-15A.2. Si nomina invece di smettere di guardare.
-    assert migrazioni[-4:] == ["067_lmc1b_owner_login_reason.sql",
+    # SENTINELLA AGGIORNATA DA P29-3B: la 071 e' la fondazione delle journey
+    # (`communication_journeys`, `_journey_steps`, `_enrollments`,
+    # `_automation_controls` + tre colonne di provenienza sul ledger),
+    # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert migrazioni[-5:] == ["067_lmc1b_owner_login_reason.sql",
                                "068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
-                               "070_lmc15_acquisition_bridge.sql"], migrazioni[-5:]
+                               "070_lmc15_acquisition_bridge.sql",
+                               "071_p29_3_journey_automation.sql"], migrazioni[-6:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
@@ -460,9 +466,16 @@ def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
          "seller_intelligence/", "seller_intent/",
-         "next_best_action/", "followup/", "communication/", "operator_auth/"],
+         "next_best_action/", "followup/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3B (collisione autorizzata, dichiarata): `communication/` e `operator_auth/` esce
+    # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
+    # provenienza di journey e aggiunge l'origine `public_unsubscribe`. Non smette di essere guardato: il diff di
+    # quei domini viene controllato file per file e riga per riga qui sotto,
+    # e qualunque modifica che non sia quella dichiarata fa ancora fallire.
+    from tests.p29_3b_diff import diff_imprevisto_nei_domini
+    assert diff_imprevisto_nei_domini(ROOT) == [], diff_imprevisto_nei_domini(ROOT)
     # LMC-15 (collisione autorizzata, dichiarata): `main.py` esce dall'elenco
     # dei percorsi sorvegliati IN BLOCCO perche' LMC-15 vi monta il router del
     # ponte di acquisizione. Non smette di essere guardato - sarebbe la

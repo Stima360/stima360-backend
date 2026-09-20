@@ -121,8 +121,12 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     # LMC-1B ha aggiunto `owner_login` (il magic link del proprietario). Cio'
     # che questa sentinella protegge non e' la cardinalita' ma il dispatcher:
     # il suo origin esiste, e' il suo, e non e' quello di nessun altro flusso.
+    # P29-3B.0 ne aggiunge un quarto, `public_unsubscribe`: il link di
+    # disiscrizione dal marketing. Come `owner_login` non ha un operatore
+    # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
+    # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
@@ -193,8 +197,13 @@ def test_G2_una_soppressione_non_chiama_il_provider():
 
 
 def test_G3_il_consenso_non_e_interrogato_fuori_dal_dispatcher():
+    # SENTINELLA AGGIORNATA DA P29-3B.2A: `journey_service.py` interroga il
+    # consenso all'ISCRIZIONE (P29-3A.1 SS D: una enrollment nasce `stopped`
+    # con la ragione di consenso, non `active`). Non e' un secondo punto di
+    # invio: il gate di invio resta nel dispatcher e il journey_service non
+    # importa provider ne' chiama `send`. Nessun altro file puo' chiederlo.
     for nome, corpo in sorgenti().items():
-        if nome == "dispatcher.py":
+        if nome in ("dispatcher.py", "journey_service.py"):
             continue
         assert "can_send_marketing" not in corpo, f"{nome} interroga il consenso"
 
@@ -320,7 +329,11 @@ def test_N1_nessuno_scheduler():
 
 
 def test_N2_nessun_template_e_nessun_M1_M5():
-    assert not (PACCHETTO / "templates.py").exists()
+    # SENTINELLA AGGIORNATA DA P29-3B.2A: `templates.py` esiste per progetto
+    # (registry versionato e immutabile, P29-3A.1 SS I, senza testi
+    # commerciali - lo verifica test_p29_3_journey_foundation). Il divieto
+    # che resta e' quello di un motore di template dentro il nucleo.
+    assert (PACCHETTO / "templates.py").exists()
     for nome, corpo in sorgenti().items():
         assert "render_template" not in corpo, nome
 
@@ -341,8 +354,11 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
     """
     import main
 
-    percorsi = [p for p in main.app.openapi()["paths"] if "communication" in p]
-    assert percorsi == ["/api/communication/dispatch"], percorsi
+    percorsi = sorted(p for p in main.app.openapi()["paths"] if "communication" in p)
+    # P29-3B.0 aggiunge la rotta pubblica di unsubscribe (token firmato, senza
+    # login per progetto): e' l'unica altra superficie `communication`.
+    assert percorsi == ["/api/communication/dispatch",
+                        "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.
     testo = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -382,7 +398,10 @@ def test_N4_nessuna_migration_nuova():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, "la serie si e' fermata o e' andata oltre la 070"
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, "la serie si e' fermata o e' andata oltre la 071"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

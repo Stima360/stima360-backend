@@ -59,7 +59,13 @@ NUCLEO = frozenset({
 #: `integrations.py` e' del cutover P29: e' l'unico modulo che conosce due
 #: domini, e il nucleo non deve conoscerlo.
 FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py",
-                    "integrations.py")
+                    "integrations.py",
+                    # P29-3B: il registry dei template, la disiscrizione
+                    # pubblica e la fondazione delle journey. Fuori dal nucleo
+                    # per progetto: il nucleo non li importa, e il tick che
+                    # li usera' e' una fase successiva.
+                    "templates.py", "unsubscribe.py", "public_router.py",
+                    "journey_enums.py", "journey_repository.py", "journey_service.py")
 
 
 def sorgenti() -> dict[str, str]:
@@ -446,7 +452,10 @@ def test_N6_nessuna_migration_nuova():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, "la serie si e' fermata o e' andata oltre la 070"
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, "la serie si e' fermata o e' andata oltre la 071"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

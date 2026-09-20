@@ -2534,6 +2534,11 @@ class Certification:
         # id non resta traccia: senza istantanea le sue otto figlie SET NULL
         # non verrebbero mai interrogate dalla guardia.
         "leads",
+        # P29-3B, migration 071: `communication_enrollments.stop_event_id`
+        # e' SET NULL verso `seller_timeline_events`, che si cancella per
+        # `agency_id` come `leads`. Stessa ragione, stessa istantanea: senza
+        # di essa quella figlia non verrebbe mai interrogata dalla guardia.
+        "seller_timeline_events",
     )
 
     #: Il tipo pubblico dei documenti condivisi, e NON e' una preferenza.

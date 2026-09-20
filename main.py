@@ -47,6 +47,7 @@ from property_watch.router import router as property_watch_router
 from next_best_action.router import router as next_best_action_router
 from communication import service as communication_service
 from communication.router import router as communication_router
+from communication.public_router import router as communication_public_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -134,6 +135,10 @@ app.include_router(next_best_action_router, dependencies=[Depends(require_authen
 # N agenzie servono N cron, come gia' oggi per P18-D2 - vedi
 # `run_communication_dispatch_cron.py`.
 app.include_router(communication_router, dependencies=[Depends(require_authenticated_operator)])
+# P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
+# e' l'interessato, non un operatore - e autorizzata dalla firma del token,
+# non da una sessione. Nessuna dipendenza qui, di proposito.
+app.include_router(communication_public_router)
 
 # P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
 #

@@ -148,8 +148,14 @@ def test_10_nessun_provider_registry_e_stato_anticipato():
         if "__pycache__" in percorso.parts:
             continue
         corpo = codice(percorso)
-        for vietato in ("PROVIDERS = {", "PROVIDER_REGISTRY", "registry",
-                        "whatsapp_meta"):
+        # SENTINELLA AGGIORNATA DA P29-3B.2A: la parola "registry" e' ammessa
+        # SOLO in templates.py (registry dei template, non dei provider) e nel
+        # journey_service che lo consulta. Il registry canale -> adapter resta
+        # vietato ovunque.
+        vietati = ("PROVIDERS = {", "PROVIDER_REGISTRY", "whatsapp_meta")
+        if percorso.name not in ("templates.py", "journey_service.py"):
+            vietati = vietati + ("registry",)
+        for vietato in vietati:
             assert vietato not in corpo, f"{percorso.name} nomina {vietato}"
 
 

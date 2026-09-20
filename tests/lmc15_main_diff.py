@@ -37,7 +37,15 @@ def righe_impreviste_in_main(root) -> list[str]:
     Vuota significa "nessuno ha toccato `main.py` se non LMC-15, e solo per
     montare il suo router". Qualunque RIMOZIONE e' impervista per
     definizione: LMC-15 aggiunge e non toglie.
+
+    P29-3B (collisione autorizzata, dichiarata): LMC-15 e' committata, e
+    P29-3B monta a sua volta il router pubblico dell'unsubscribe. Le sue
+    righe sono dichiarate UNA volta, in `p29_3b_diff`, e qui si ammettono
+    per importazione: la regola resta la stessa - `main.py` puo' contenere
+    SOLO righe che una fase ha dichiarato per nome.
     """
+    from tests.p29_3b_diff import RIGHE_PER_FILE
+    ammesse = RIGHE_LMC15 | RIGHE_PER_FILE["main.py"]
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()
@@ -47,6 +55,6 @@ def righe_impreviste_in_main(root) -> list[str]:
             continue
         if riga.startswith("-"):
             fuori.append(riga)
-        elif riga.startswith("+") and riga[1:].strip() not in RIGHE_LMC15:
+        elif riga.startswith("+") and riga[1:].strip() not in ammesse:
             fuori.append(riga)
     return fuori

@@ -129,7 +129,10 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert max(numeri) == 70, "la serie non e' piu' contigua in coda"
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert max(numeri) == 71, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

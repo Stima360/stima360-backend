@@ -439,8 +439,15 @@ def test_e1_nessuna_migration_nuova():
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
+    # SENTINELLA AGGIORNATA DA P29-3B: la 071 e' la fondazione delle journey
+    # (`communication_journeys`, `_journey_steps`, `_enrollments`,
+    # `_automation_controls` + tre colonne di provenienza sul ledger),
+    # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
     atteso = {"migrations/070_lmc15_acquisition_bridge.sql",
-              "migrations/070_lmc15_acquisition_bridge_down.sql"}
+              "migrations/070_lmc15_acquisition_bridge_down.sql",
+              "migrations/071_p29_3_journey_automation.sql",
+              "migrations/071_p29_3_journey_automation_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

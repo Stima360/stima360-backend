@@ -98,7 +98,10 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, numeri[-4:]
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():
@@ -212,7 +215,12 @@ def test_u2_nessun_altra_migration_le_crea():
             continue
         testo = senza_commenti(percorso.read_text(encoding="utf-8"))
         for tabella in (MESSAGES, ATTEMPTS):
-            assert not re.search(rf"CREATE TABLE[^;]*\b{tabella}\b", testo, re.IGNORECASE), (
+            # `CREATE TABLE ... {tabella}` e non `CREATE TABLE[^;]*{tabella}`:
+            # la forma larga scattava sulla 071, che crea `communication_
+            # enrollments` con una FK VERSO communication_messages nello
+            # stesso statement - un riferimento, non una seconda definizione.
+            # Corretto da P29-3B.
+            assert not re.search(rf"CREATE TABLE\s+(IF NOT EXISTS\s+)?{tabella}\b", testo, re.IGNORECASE), (
                 f"{percorso.name} crea anche {tabella}"
             )
 
@@ -702,9 +710,14 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
     #    e `providers/` stavano in questa lista finche' P29-2.4 non era
     #    implementata: adesso esistono per progetto, e il divieto si e' spostato
     #    sul nucleo, che non li conosce.
-    assert not (pacchetto / "templates.py").exists(), (
-        "communication/templates.py non appartiene a nessuna fase gia' chiusa"
-    )
+    # SENTINELLA AGGIORNATA DA P29-3B.2A: `templates.py` ORA ESISTE, per
+    # progetto - il registry versionato e immutabile (P29-3A.1 SS I), senza
+    # testi commerciali. Il divieto che questa fase manteneva non era sul
+    # file ma sul NUCLEO, che continua a non importarlo: e' quello che si
+    # verifica qui sotto.
+    assert (pacchetto / "templates.py").exists()
+    for nome, corpo in sorgenti_communication().items():
+        assert "templates" not in corpo, f"il nucleo ({nome}) conosce il registry"
     assert set(sorgenti_communication()) == set(NUCLEO), (
         "il nucleo DB-safe non e' intero: la sentinella esaminerebbe meno di "
         "quanto crede"

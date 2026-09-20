@@ -512,6 +512,31 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "fixture created, and closed in a finally. It must not go through "
         "database.get_connection() for the same reason as the module above"
     ),
+    "tests/test_p29_3_journey_foundation_postgres.py": (
+        "TEST-only P29-3B proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing an earlier P29 entry: an allow-list shared "
+        "between phases would let a new entrypoint arrive unannounced. The "
+        "connection exists to apply 061-067 and then 071 and to prove what a "
+        "double cannot: that the 071 down restores the post-065 ledger guard "
+        "TEXTUALLY and refuses to run while an enrollment, a control or a "
+        "journey message exists; that the enrollment and control state "
+        "matrices, the one-open-enrollment-per-contact rule, the "
+        "(journey, trigger) uniqueness and the step/run uniqueness of journey "
+        "messages are enforced by CHECKs and partial unique indexes and not "
+        "by application code; that stima_id_snapshot and the message "
+        "provenance are assigned by the database and immutable afterwards; "
+        "that tenancy is derived so an enrollment of another agency cannot be "
+        "seen, paused or stopped, while a platform admin in acting still can; "
+        "and that the public unsubscribe revokes the marketing consent once, "
+        "idempotently, through the consent domain and never the service one. "
+        "It monkeypatches get_connection in the database, communication, "
+        "consent and core modules onto its own connection so no domain "
+        "module opens a second one. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

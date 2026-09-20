@@ -375,6 +375,11 @@ def test_f2_la_forma_della_proiezione_e_quella_concordata():
     # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
     # GATE di LMC-15A.2. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire il test.
+    # SENTINELLA AGGIORNATA DA P29-3B: la 071 e' la fondazione delle journey
+    # (`communication_journeys`, `_journey_steps`, `_enrollments`,
+    # `_automation_controls` + tre colonne di provenienza sul ledger),
+    # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
     atteso = {"level", "active_days_7d", "active_days_30d", "last_activity_at",
               "home_viewed_days_30d", "value_history_viewed", "buyer_demand_viewed",
               "home_updated", "consultation_requested", "reasons"}
@@ -491,10 +496,17 @@ def test_h4_i_domini_vietati_non_sono_stati_toccati():
     import subprocess
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "seller_intent/", "next_best_action/", "followup/", "communication/",
+         "seller_intent/", "next_best_action/", "followup/",
          "valuation.py"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3B (collisione autorizzata, dichiarata): `communication/` esce
+    # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
+    # provenienza di journey. Non smette di essere guardato: il diff di
+    # quei domini viene controllato file per file e riga per riga qui sotto,
+    # e qualunque modifica che non sia quella dichiarata fa ancora fallire.
+    from tests.p29_3b_diff import diff_imprevisto_nei_domini
+    assert diff_imprevisto_nei_domini(ROOT) == [], diff_imprevisto_nei_domini(ROOT)
     # LMC-15 (collisione autorizzata, dichiarata): `main.py` esce dall'elenco
     # dei percorsi sorvegliati IN BLOCCO perche' LMC-15 vi monta il router del
     # ponte di acquisizione. Non smette di essere guardato - sarebbe la
@@ -557,7 +569,9 @@ def test_h5_nessuna_migration_creata():
               "migrations/069_lmc12_owner_home_notifications.sql",
               "migrations/069_lmc12_owner_home_notifications_down.sql",
               "migrations/070_lmc15_acquisition_bridge.sql",
-              "migrations/070_lmc15_acquisition_bridge_down.sql"}
+              "migrations/070_lmc15_acquisition_bridge_down.sql",
+              "migrations/071_p29_3_journey_automation.sql",
+              "migrations/071_p29_3_journey_automation_down.sql"}
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 

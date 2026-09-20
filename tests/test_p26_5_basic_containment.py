@@ -75,6 +75,14 @@ PUBLIC_BY_DESIGN = {
     # una dipendenza di autenticazione qui renderebbe impossibile entrare.
     ("POST", "/api/operator-auth/login"),
     ("POST", "/api/operator-auth/logout"),
+    # P29-3B.0: l'unsubscribe pubblico. Autenticato dal token firmato
+    # (HMAC, `communication.unsubscribe.verify`), non da una sessione: chi
+    # riceve una email di marketing deve poter dire "basta" senza login. La
+    # GET e' una pagina neutra che non scrive; la POST scrive attraverso
+    # `SystemAgencyContext(origin="public_unsubscribe")`, con l'agenzia presa
+    # dal token e mai dal client.
+    ("GET", "/api/public/communication/unsubscribe"),
+    ("POST", "/api/public/communication/unsubscribe"),
 }
 
 # L'UNICO INGRESSO BASIC RESIDUO.

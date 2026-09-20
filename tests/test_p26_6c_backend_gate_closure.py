@@ -869,6 +869,13 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
     self_authenticating = {
         "operator_auth_router", "flow_router",
         "owner_admin_router", "owner_portal_router",
+        # P29-3B.0: il router pubblico dell'unsubscribe monta senza dipendenze
+        # PER PROGETTO - chi clicca e' l'interessato, non un operatore - e si
+        # autentica da solo con la firma HMAC del token, dal quale prende
+        # anche l'agenzia (`SystemAgencyContext(origin="public_unsubscribe")`).
+        # Nessuna rotta accetta un'agenzia o un contatto dal client. Invisibile
+        # a G5 come gli altri quattro, e per la stessa ragione strutturale.
+        "communication_public_router",
     }
     assert unguarded - self_authenticating == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, (
         sorted(unguarded - self_authenticating)

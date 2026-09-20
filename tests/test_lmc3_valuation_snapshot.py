@@ -650,10 +650,16 @@ def test_g2_nessuna_migration_in_lmc3():
     # SENTINELLA AGGIORNATA DA LMC-15: la 070 e' il ponte di acquisizione
     # (`stima_acquisitions`, `stima_inspections`), approvato dallo SCHEMA
     # GATE di LMC-15A.2. Si nomina invece di smettere di guardare.
-    assert migrazioni[-4:] == ["067_lmc1b_owner_login_reason.sql",
+    # SENTINELLA AGGIORNATA DA P29-3B: la 071 e' la fondazione delle journey
+    # (`communication_journeys`, `_journey_steps`, `_enrollments`,
+    # `_automation_controls` + tre colonne di provenienza sul ledger),
+    # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert migrazioni[-5:] == ["067_lmc1b_owner_login_reason.sql",
                                "068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
-                               "070_lmc15_acquisition_bridge.sql"], migrazioni[-5:]
+                               "070_lmc15_acquisition_bridge.sql",
+                               "071_p29_3_journey_automation.sql"], migrazioni[-6:]
 
 
 DOMINI_VIETATI_LMC3 = (

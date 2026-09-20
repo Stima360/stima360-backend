@@ -181,6 +181,14 @@ def _validated(ctx, dati: dict[str, Any]) -> dict[str, Any]:
 
     actor_type, actor_user_id = _attore(ctx, mode)
 
+    provenienza = (dati.get("enrollment_id"), dati.get("step_no"), dati.get("run_no"))
+    if any(v is not None for v in provenienza) and not all(
+            isinstance(v, int) and v >= 1 for v in provenienza):
+        raise ValidationError(
+            "enrollment_id, step_no and run_no go together, as positive integers, "
+            "or not at all"
+        )
+
     metadata = dati.get("metadata")
     if metadata is None:
         metadata = {}
@@ -212,6 +220,7 @@ def _validated(ctx, dati: dict[str, Any]) -> dict[str, Any]:
         "idempotency_key": _testo(dati.get("idempotency_key"), "idempotency_key",
                                   obbligatorio=True, massimo=300),
         "metadata": json.dumps(metadata),
+        "enrollment_id": provenienza[0], "step_no": provenienza[1], "run_no": provenienza[2],
     }
 
 
@@ -235,9 +244,17 @@ def enqueue(
     property_id: int | None = None,
     scheduled_at=None,
     metadata: dict[str, Any] | None = None,
+    enrollment_id: int | None = None,
+    step_no: int | None = None,
+    run_no: int | None = None,
     cur=None,
 ) -> dict[str, Any]:
     """Mette in coda un messaggio. Restituisce ``{'message': riga, 'created': bool}``.
+
+    P29-3B: `enrollment_id`, `step_no` e `run_no` dicono DA QUALE passo di
+    quale iscrizione nasce il messaggio. Vanno insieme o non vanno affatto; un
+    messaggio manuale non li porta. Il dispatcher non li legge: non sa cosa
+    sia una journey, e non deve saperlo.
 
     Ripetibile: chiamarla due volte con la stessa `idempotency_key` nella stessa
     agenzia restituisce lo STESSO messaggio con ``created=False``, e non ne crea
@@ -262,6 +279,7 @@ def enqueue(
         "template_key": template_key, "template_version": template_version,
         "lead_id": lead_id, "stima_id": stima_id, "property_id": property_id,
         "scheduled_at": scheduled_at, "metadata": metadata,
+        "enrollment_id": enrollment_id, "step_no": step_no, "run_no": run_no,
     }
     prepared = _validated(ctx, dati)
 

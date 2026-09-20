@@ -344,7 +344,12 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     assert "070_lmc15_acquisition_bridge" in trovate
     assert runner.validate_migration(trovate["070_lmc15_acquisition_bridge"]) == []
     numeri = sorted(m.number for m in trovate.values())
-    assert numeri[-1] == 70 and numeri[-2] == 69
+    # SENTINELLA AGGIORNATA DA P29-3B: la 070 segue la 069 senza buchi, come
+    # LMC-15 voleva; in coda alla serie ora c'e' la 071 della journey
+    # automation, approvata da P29-3A.1 (SCHEMA FROZEN). Si nomina invece di
+    # smettere di guardare: una 072 farebbe ancora fallire questo test.
+    assert numeri[numeri.index(70) - 1] == 69
+    assert numeri[-1] == 71 and numeri[-2] == 70
     assert len(numeri) == len(set(numeri))
 
 
@@ -553,23 +558,63 @@ def test_36_il_denominatore_dei_due_tassi_nuovi_e_cohort_homes():
 # ---------------------------------------------------------------------------
 
 def test_37_nessuna_migration_oltre_la_070():
+    """SENTINELLA AGGIORNATA DA P29-3B, in due punti.
+
+    Prima: LMC-15 e' COMMITTATA (7aa76b0), quindi la 070 non compare piu'
+    nel working tree ma nell'indice - e' questo che si verifica, con
+    `git ls-files`, invece di un elenco di non tracciati che dopo il commit
+    diceva soltanto "LMC-15 non e' in corso".
+
+    Poi: la sola migration nuova nel working tree e' la 071 della journey
+    automation, approvata da P29-3A.1. Si nomina invece di smettere di
+    guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    """
+    tracciate = set(subprocess.run(
+        ["git", "--no-optional-locks", "ls-files", "--", "migrations/070_*"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split())
+    assert tracciate == {"migrations/070_lmc15_acquisition_bridge.sql",
+                         "migrations/070_lmc15_acquisition_bridge_down.sql"}
     nuovi = {riga[3:].strip() for riga in subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
-    atteso = {"migrations/070_lmc15_acquisition_bridge.sql",
-              "migrations/070_lmc15_acquisition_bridge_down.sql"}
-    assert nuovi == atteso, sorted(nuovi ^ atteso)
+    atteso = {"migrations/071_p29_3_journey_automation.sql",
+              "migrations/071_p29_3_journey_automation_down.sql"}
+    assert nuovi <= atteso, sorted(nuovi - atteso)
 
 
 def test_38_nessuna_migration_storica_e_stata_toccata():
     """Il ledger e' append-only: una migration gia' applicata che cambia e'
-    una migration che cambia sotto i piedi di chi l'aveva applicata."""
+    una migration che cambia sotto i piedi di chi l'aveva applicata.
+
+    SENTINELLA AGGIORNATA DA P29-3B (collisione dichiarata con LMC-15, che
+    e' committata). La versione originale pretendeva che OGNI riga di
+    `git status` sotto `migrations/` fosse `??`, e cosi' scritta diceva due
+    cose insieme: "nessuna migration storica e' cambiata" - che e' la
+    garanzia - e "nessuna migration nuova e' in stage" - che non lo e'. La
+    seconda rendeva il test rosso nella finestra fra `git add` e
+    `git commit` di QUALUNQUE fase successiva, cioe' in uno stato normale
+    del repository, e verde solo per l'assenza di lavoro in corso.
+
+    La garanzia non cambia, cambia cio' che si misura: una migration gia'
+    TRACCIATA non puo' risultare modificata, cancellata o rinominata, in
+    stage o nel working tree. Una migration NUOVA puo' essere non tracciata
+    (`??`) o aggiunta (`A`), e nient'altro: e' esattamente cio' che una
+    fase autorizzata a crearne una fa. Qualunque `M`, `D` o `R` su un file
+    di `migrations/` fa ancora fallire questo test.
+    """
     righe = subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
+    tracciate = set(subprocess.run(
+        ["git", "--no-optional-locks", "ls-files", "--", "migrations/"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split())
     for riga in righe:
-        stato = riga[:2].strip()
-        assert stato == "??", riga
+        stato, percorso = riga[:2], riga[3:].strip()
+        assert stato.strip() in ("??", "A"), riga
+        if stato.strip() == "A":
+            # Un'aggiunta: il file non esisteva nel commit precedente. Se
+            # esisteva, `git status` direbbe `M`, e siamo nel caso di sopra.
+            assert percorso in tracciate, riga
 
 
 def test_39_nessun_cron_nuovo():
@@ -589,10 +634,17 @@ def test_40_il_ponte_non_tocca_i_domini_vicini():
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
          "seller_intelligence/", "seller_intent/", "next_best_action/",
-         "followup/", "communication/", "operator_auth/", "property_watch/",
+         "followup/", "property_watch/",
          "valuation.py", "database.py"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3B (collisione autorizzata, dichiarata): `communication/` e `operator_auth/` esce
+    # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
+    # provenienza di journey e aggiunge l'origine `public_unsubscribe`. Non smette di essere guardato: il diff di
+    # quei domini viene controllato file per file e riga per riga qui sotto,
+    # e qualunque modifica che non sia quella dichiarata fa ancora fallire.
+    from tests.p29_3b_diff import diff_imprevisto_nei_domini
+    assert diff_imprevisto_nei_domini(ROOT) == [], diff_imprevisto_nei_domini(ROOT)
 
 
 def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
@@ -602,18 +654,21 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     del working tree direbbe soltanto che il working tree e' uguale a se'
     stesso.
 
+    SENTINELLA AGGIORNATA DA P29-3B: LMC-15 e' COMMITTATA (7aa76b0), e un
+    confronto con `git status` diceva, dopo il commit, che LMC-15 "non aveva
+    toccato niente" - cioe' niente. La verifica cambia forma e resta: ogni
+    file dell'elenco e' nell'indice (`git ls-files`), e nel working tree ne
+    e' modificato solo cio' che la fase successiva, P29-3B, dichiara per nome
+    in `p29_3b_diff` - qualunque altro file di LMC-15 toccato fa fallire.
+
     `P29_2_0_COMMUNICATION_DESIGN.md` compare fra i non tracciati e NON e'
     di questa fase: e' un documento che deve restare fuori dall'indice, e
     questo test e' anche il posto in cui si verifica che LMC-15 non lo abbia
     ne' toccato ne' messo in stage.
     """
-    righe = subprocess.run(
-        ["git", "--no-optional-locks", "status", "--porcelain"],
-        cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
-    modificati = {r[3:].strip() for r in righe if not r.startswith("??")}
-    nuovi = {r[3:].strip() for r in righe if r.startswith("??")}
+    from tests.p29_3b_diff import FILE_MODIFICATI as MODIFICATI_P29_3B
 
-    atteso_modificati = {
+    lmc15_modificati = {
         # Il codice: le metriche di LMC-13 estese, e il router montato.
         "main.py", "owner/home_metrics.py", "owner/repository.py",
         "owner/router_admin.py", "owner/schemas.py",
@@ -643,18 +698,34 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
         "tests/test_p29_2_4_dispatch_sentinels.py",
         "tests/test_p29_2_5e_email_adapter.py",
     }
-    atteso_nuovi = {
-        "acquisition/",
+    lmc15_nuovi = {
+        "acquisition/__init__.py",
+        "acquisition/repository.py", "acquisition/router.py",
+        "acquisition/schemas.py", "acquisition/service.py",
         "migrations/070_lmc15_acquisition_bridge.sql",
         "migrations/070_lmc15_acquisition_bridge_down.sql",
         "tests/lmc15_main_diff.py",
         "tests/test_lmc15_acquisition_bridge.py",
         "tests/test_lmc15_acquisition_bridge_postgres.py",
-        # NON di LMC-15, e deliberatamente non tracciato.
-        "P29_2_0_COMMUNICATION_DESIGN.md",
     }
-    assert modificati == atteso_modificati, sorted(modificati ^ atteso_modificati)
-    assert nuovi == atteso_nuovi, sorted(nuovi ^ atteso_nuovi)
+    tracciati = set(subprocess.run(
+        ["git", "--no-optional-locks", "ls-files"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split())
+    mancanti = (lmc15_modificati | lmc15_nuovi) - tracciati
+    assert mancanti == set(), sorted(mancanti)
+    assert "P29_2_0_COMMUNICATION_DESIGN.md" not in tracciati
+
+    righe = subprocess.run(
+        ["git", "--no-optional-locks", "status", "--porcelain"],
+        cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
+    modificati = {r[3:].strip() for r in righe if not r.startswith("??")}
+    nuovi = {r[3:].strip() for r in righe if r.startswith("??")}
+    # Di LMC-15 nel working tree puo' essere toccato solo cio' che P29-3B
+    # dichiara; e la 070 non puo' comparire ne' modificata ne' nuova.
+    fuori = (modificati & (lmc15_modificati | lmc15_nuovi)) - MODIFICATI_P29_3B
+    assert fuori == set(), sorted(fuori)
+    assert not any(n.startswith("migrations/070_") for n in modificati | nuovi)
+    assert "P29_2_0_COMMUNICATION_DESIGN.md" in nuovi
 
 
 def test_42_il_documento_di_p29_2_0_resta_fuori_dall_indice():

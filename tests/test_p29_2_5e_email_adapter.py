@@ -400,12 +400,18 @@ def test_N4_nessuna_migration_nuova():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, "la serie si e' fermata o e' andata oltre la 070"
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, "la serie si e' fermata o e' andata oltre la 071"
     assert 64 in numeri
 
 
 def test_N5_nessun_template_nessuno_scheduler_nessuna_ui():
-    assert not (PACCHETTO / "templates.py").exists()
+    # SENTINELLA AGGIORNATA DA P29-3B.2A: `templates.py` esiste per progetto
+    # (registry strutturale, P29-3A.1 SS I). Scheduler e testi M1..M5 restano
+    # vietati: la foundation non avanza nulla e non contiene copy.
+    assert (PACCHETTO / "templates.py").exists()
     for percorso in sorted(PACCHETTO.rglob("*.py")):
         if "__pycache__" in percorso.parts:
             continue

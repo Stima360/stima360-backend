@@ -669,7 +669,10 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, numeri[-4:]
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

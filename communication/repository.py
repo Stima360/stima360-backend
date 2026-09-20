@@ -47,7 +47,17 @@ INSERTABLE_COLUMNS = (
     "template_key", "template_version", "subject_snapshot", "rendered_body",
     "destination_snapshot", "actor_type", "actor_user_id",
     "scheduled_at", "idempotency_key", "metadata",
+    # P29-3B: la PROVENIENZA di un messaggio di journey. Tre colonne insieme o
+    # nessuna (CHECK della 071), scritte all'INSERT e mai piu' (guardia).
+    "enrollment_id", "step_no", "run_no",
 )
+
+#: Le tre colonne di provenienza vengono NOMINATE nella INSERT solo quando il
+#: messaggio le porta: un messaggio manuale o di sistema non le scrive, e non
+#: le nomina. Cosi' un ledger senza la 071 - il codice si distribuisce prima
+#: che la migration venga applicata - continua ad accettare ogni messaggio
+#: che accettava prima, e solo un messaggio di journey richiede lo schema.
+PROVENANCE_COLUMNS = ("enrollment_id", "step_no", "run_no")
 
 
 def utcnow() -> datetime:
@@ -98,8 +108,10 @@ def insert_message(cur, ctx, prepared: dict[str, Any]) -> tuple[dict[str, Any], 
     globale - qui non puo' verificarsi: se la INSERT non ha scritto, la riga
     esistente e' necessariamente di questa agenzia, e quindi leggibile.
     """
-    colonne = ", ".join(INSERTABLE_COLUMNS)
-    segnaposti = ", ".join(f"%({c})s" for c in INSERTABLE_COLUMNS)
+    attive = [c for c in INSERTABLE_COLUMNS
+              if c not in PROVENANCE_COLUMNS or prepared.get(c) is not None]
+    colonne = ", ".join(attive)
+    segnaposti = ", ".join(f"%({c})s" for c in attive)
     cur.execute(
         f"""
         INSERT INTO communication_messages ({colonne})

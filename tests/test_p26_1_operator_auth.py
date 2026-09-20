@@ -558,8 +558,12 @@ def test_system_context_origin_set_is_closed_and_declared():
     aggiunto per distrazione fa fallire questo test, che e' esattamente cio'
     per cui l'insieme e' chiuso. Ampliarlo e' un atto deliberato, e passa da
     qui."""
+    # P29-3B.0 ne aggiunge un quarto, `public_unsubscribe`: il link di
+    # disiscrizione dal marketing. Come `owner_login` non ha un operatore
+    # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
+    # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
 
 
 def test_system_context_rejects_an_unapproved_origin():

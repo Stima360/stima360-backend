@@ -798,7 +798,7 @@ def test_f4_owner_homes_lmc11_crm_radar_p29_invariati():
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
          "owner/home_service.py", "owner/crm_radar.py", "owner/demand.py",
-         "owner/home_update.py", "home_profile.py", "communication/", "seller_intelligence/",
+         "owner/home_update.py", "home_profile.py", "seller_intelligence/",
          "seller_intent/", "next_best_action/", "followup/", "valuation.py",
          "property_watch/", "run_property_watch_valuation_cron.py",
          "migrations/011_owner_02_p5.sql", "migrations/015_owner_02_p5_prod.sql",
@@ -806,6 +806,13 @@ def test_f4_owner_homes_lmc11_crm_radar_p29_invariati():
          "migrations/068_lmc10_owner_home_overrides.sql"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3B (collisione autorizzata, dichiarata): `communication/` esce
+    # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
+    # provenienza di journey. Non smette di essere guardato: il diff di
+    # quel dominio viene controllato file per file e riga per riga qui sotto,
+    # e qualunque modifica che non sia quella dichiarata fa ancora fallire.
+    from tests.p29_3b_diff import diff_imprevisto_nei_domini
+    assert diff_imprevisto_nei_domini(ROOT) == [], diff_imprevisto_nei_domini(ROOT)
 
 
 def test_f5_la_069_e_additiva_canonica_e_senza_guardie_sul_database():

@@ -54,7 +54,12 @@ AUTH_CHANNELS = ("operator_session", "legacy_basic")
 # nient'altro, e chi lo riceve continua a controllarne l'origine - il bridge del
 # funnel pubblico ammette solo `public_stima`, il dispatcher solo
 # `communication_dispatch`.
-SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login")
+# P29-3B.0: `public_unsubscribe` e' il link di disiscrizione dal marketing.
+# Come `owner_login` non ha un operatore dietro - c'e' l'interessato, che
+# clicca - e come `public_stima` la sua agenzia non viene da una sessione ma
+# da un dato verificato lato server: qui la firma HMAC del token.
+SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login",
+                          "public_unsubscribe")
 
 
 @runtime_checkable

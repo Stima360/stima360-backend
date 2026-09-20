@@ -300,8 +300,12 @@ def test_c1_owner_login_e_un_origin_ammesso():
 
 def test_c2_l_insieme_degli_origin_resta_chiuso():
     from operator_auth import context
+    # P29-3B.0 ne aggiunge un quarto, `public_unsubscribe`: il link di
+    # disiscrizione dal marketing. Come `owner_login` non ha un operatore
+    # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
+    # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):
@@ -422,7 +426,10 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # `stima_inspections`, il ponte di acquisizione approvato dallo SCHEMA
     # GATE di LMC-15A.2): dominio ACQUISITION, non di questa fase. La coda
     # si nomina, come sempre.
-    assert numeri[-1] == 70, numeri[-3:]
+    # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
+    # iscrizioni, controlli per contatto e la provenienza sul ledger),
+    # approvata da P29-3A.1. La coda si nomina, come sempre.
+    assert numeri[-1] == 71, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):
