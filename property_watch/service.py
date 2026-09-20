@@ -811,3 +811,170 @@ def refresh_valuation_snapshot_scoped(ctx, stima_id: int, *, reason: str,
     return {"status": "created" if created else "reused",
             "observation": observation, "idempotency_key": chiave,
             "snapshot": snapshot}
+
+
+# ---------------------------------------------------------------------------
+# LMC-11 - IL GIRO PERIODICO DEL VALORE.
+#
+# LMC-3 aveva lasciato scritto dove sarebbe andato il cron: "iterera' le
+# agenzie come gia' fanno `*_for_all_agencies`, passando uno scope per
+# ciascuna". E' esattamente quello che c'e' qui sotto, nella stessa forma dei
+# due batch gia' certificati di questo modulo.
+#
+# COSA QUESTO CODICE NON FA, CHE E' LA PARTE CHE CONTA.
+#
+# Non costruisce payload. Non conosce `stime`, non conosce gli override di
+# LMC-10, non sa cosa sia `home_profile` e non nomina `compute_from_payload`.
+# Chiama `refresh_valuation_snapshot_scoped` e basta: la composizione del
+# profilo effettivo e il motore stanno li', e una seconda strada verso il
+# valore sarebbe una seconda verita'.
+#
+# Non costruisce chiavi di idempotenza. Quella di LMC-3 porta il giorno UTC,
+# l'impronta dell'input e quella dell'algoritmo, ed e' cio' che rende un
+# secondo giro nello stesso giorno un `reused` e il giorno dopo un punto
+# nuovo - anche a valore identico, perche' "il 21 valeva ancora 210.000" e'
+# un'informazione vera sul tempo. Un cron che si inventasse una chiave
+# propria romperebbe quella semantica senza che nessun test di LMC-3 se ne
+# accorgesse.
+#
+# Non tocca niente quando fallisce. Nessun cambio di `status`, nessuna
+# baseline riscritta, nessuno snapshot vecchio modificato: un watch che
+# fallisce viene contato e si passa al successivo.
+# ---------------------------------------------------------------------------
+
+#: Il `reason` con cui nascono gli snapshot di questo giro. Finisce nel
+#: payload dell'osservazione e distingue, guardando lo storico, un punto nato
+#: dal cron da uno nato perche' il proprietario ha corretto i dati
+#: (`owner_profile_updated`, LMC-10).
+CRON_REFRESH_REASON = "scheduled_refresh"
+
+#: Gli esiti di un watch, dichiarati. `created` e `reused` arrivano da LMC-3;
+#: `skipped` e `failed` li decide questo modulo.
+#:
+#: `skipped` NON e' un errore: e' un watch che risulta eleggibile alla lettura
+#: ma che il dominio rifiuta di rivalutare - la stima non e' raggiungibile in
+#: questo tenant, il watch e' sparito fra la lettura e il refresh. Contarlo
+#: come `failed` farebbe suonare un allarme per uno stato lecito, e
+#: soprattutto renderebbe invisibile un guasto vero in mezzo al rumore.
+VALUATION_CYCLE_STATUSES = ("created", "reused", "skipped", "failed")
+
+
+#: La dimensione di pagina predefinita del giro. E' una PAGINA, non un tetto:
+#: il ciclo continua finche' ci sono watch, e questo numero dice solo quanti
+#: ne legge per volta. Vedi `refresh_valuation_snapshots_for_agency`.
+VALUATION_PAGE_SIZE_DEFAULT = 500
+
+
+def refresh_valuation_snapshots_for_agency(agency_id: int, *,
+                                           page_size: int | None = None,
+                                           now: datetime | None = None
+                                           ) -> dict[str, Any]:
+    """Il giro del valore per UNA agenzia, a pagine, fino in fondo.
+
+    PAGINA, NON TETTO GIORNALIERO. La prima stesura leggeva i primi N watch
+    e si fermava: con 700 watch attivi e N=500, i watch dal 501 al 700 non
+    venivano rivalutati mai, perche' l'ordine e' deterministico e ogni notte
+    il giro ripartiva dagli stessi. Il riepilogo diceva `processed=500
+    failed=0` ed era vero - ed e' proprio questo che rendeva la fame
+    invisibile. Adesso il ciclo scorre tutte le pagine e `page_size` dice
+    soltanto quante righe si leggono per volta.
+
+    IL CURSORE AVANZA SEMPRE, QUALUNQUE SIA L'ESITO. `dopo` diventa l'id
+    dell'ultimo watch della pagina PRIMA di elaborarla, non dopo: se
+    avanzasse solo sui successi, un watch che fallisce sistematicamente
+    verrebbe riletto nella pagina successiva - la stessa pagina, all'infinito.
+    Un guasto costa il suo watch, non il giro.
+
+    PERCHE' NON PUO' CICLARE ALL'INFINITO. Il cursore e' `w.id >`, gli id
+    sono strettamente crescenti e ogni pagina non vuota lo porta oltre il
+    proprio ultimo elemento: la pagina dopo e' per forza piu' avanti. La
+    guardia esplicita sotto non serve alla correttezza - serve a non
+    trasformare un'anomalia impossibile (una pagina che torna righe che non
+    fanno avanzare il cursore) in un processo che gira per sempre di notte.
+
+    Lo scope e' `_AgencyScope`, lo stesso dei due batch gia' certificati.
+    """
+    dimensione = int(page_size or VALUATION_PAGE_SIZE_DEFAULT)
+    scope = _AgencyScope(agency_id)
+    totali = {stato: 0 for stato in VALUATION_CYCLE_STATUSES}
+    processati = 0
+    dopo = 0
+
+    while True:
+        pagina = repository.list_active_watch_page_for_agency(
+            agency_id, after_watch_id=dopo, page_size=dimensione)
+        if not pagina:
+            break
+
+        avanzamento = max(int(b["watch_id"]) for b in pagina)
+        if avanzamento <= dopo:
+            # Impossibile con `w.id >` e id crescenti. Se accadesse, e'
+            # un'anomalia: ci si ferma invece di rileggere la stessa pagina.
+            logger.error("valuation_cron_cursor_stalled agency_id=%s after_watch_id=%s",
+                         agency_id, dopo)
+            break
+        dopo = avanzamento
+
+        for bersaglio in pagina:
+            processati += 1
+            stima_id = bersaglio["stima_id"]
+            try:
+                esito = refresh_valuation_snapshot_scoped(
+                    scope, stima_id, reason=CRON_REFRESH_REASON, now=now)
+            except (StimaNotFoundError, WatchNotFoundError, ValidationError) as exc:
+                # Stato lecito, non guasto: la stima non e' raggiungibile in
+                # questo tenant oppure il watch non c'e' piu'. Si nomina la
+                # classe dell'eccezione e nient'altro.
+                logger.info(
+                    "valuation_cron_item_skipped agency_id=%s watch_id=%s stima_id=%s reason=%s",
+                    agency_id, bersaglio["watch_id"], stima_id, type(exc).__name__)
+                totali["skipped"] += 1
+                continue
+            except Exception as exc:  # noqa: BLE001 - un watch non ferma il giro
+                logger.error(
+                    "valuation_cron_item_failed agency_id=%s watch_id=%s stima_id=%s error_type=%s",
+                    agency_id, bersaglio["watch_id"], stima_id, type(exc).__name__)
+                totali["failed"] += 1
+                continue
+            stato = esito.get("status")
+            totali[stato if stato in totali else "failed"] += 1
+
+        if len(pagina) < dimensione:
+            # Pagina non piena: non ce n'e' un'altra. Si evita l'ultimo giro
+            # a vuoto senza rinunciare alla condizione di uscita vera, che
+            # resta la pagina vuota qui sopra.
+            break
+
+    return {"agency_id": agency_id, "processed": processati, **totali}
+
+
+def refresh_valuation_snapshots_for_all_agencies(*, page_size: int | None = None,
+                                                 now: datetime | None = None
+                                                 ) -> dict[str, Any]:
+    """Un giro per ogni agenzia attiva, e la somma degli esiti.
+
+    `page_size` e' la dimensione di pagina, non un tetto: ogni agenzia viene
+    percorsa fino in fondo, a pagine, e nessun tenant resta indietro perche'
+    un altro aveva l'id piu' basso.
+
+    Un'agenzia che solleva non ferma le altre, per la stessa ragione per cui
+    non lo fa un watch: il guasto di un tenant non e' la sospensione della
+    piattaforma.
+    """
+    esiti = []
+    for agency_id in repository.list_active_agency_ids():
+        try:
+            esiti.append(refresh_valuation_snapshots_for_agency(
+                agency_id, page_size=page_size, now=now))
+        except Exception as exc:  # noqa: BLE001 - un tenant non ferma gli altri
+            logger.error("valuation_cron_agency_failed agency_id=%s error_type=%s",
+                         agency_id, type(exc).__name__)
+            esiti.append({"agency_id": agency_id, "processed": 0,
+                          **{s: 0 for s in VALUATION_CYCLE_STATUSES},
+                          "failed": 1})
+    riepilogo = {"agencies": len(esiti),
+                 "processed": sum(e["processed"] for e in esiti)}
+    for stato in VALUATION_CYCLE_STATUSES:
+        riepilogo[stato] = sum(e[stato] for e in esiti)
+    riepilogo["runs"] = esiti
+    return riepilogo

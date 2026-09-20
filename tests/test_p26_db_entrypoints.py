@@ -340,6 +340,25 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "the phase - that a failed write answers 503 rather than a false "
         "success"
     ),
+    "tests/test_lmc11_valuation_cron_postgres.py": (
+        "TEST-only LMC-11 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. The connection exists to seed "
+        "watches across two agencies and then read property_watch_observations, "
+        "property_watches, stime, owner_home_overrides and "
+        "seller_timeline_events back, which is the only way to prove five "
+        "things a double cannot: that a watch of another tenant - or one "
+        "pointing at another tenant's estimation - is never read, that two "
+        "runs on the same UTC day leave one snapshot while the next day opens "
+        "a new one even at an identical price, that a real session-level "
+        "advisory lock keeps a second run out and is released on the way out "
+        "and on error, that the estimation, the owner overrides, the baseline "
+        "and every snapshot already written stay byte-identical across a run, "
+        "and that the owner's history really grows so change_30d turns from "
+        "null into a number. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
     "tests/test_lmc10_owner_home_update_postgres.py": (
         "TEST-only LMC-10 proof; opts in through P29_TEST_DSN and skips "
         "entirely without it. Creates and drops its own throwaway database "

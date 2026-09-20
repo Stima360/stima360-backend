@@ -13,7 +13,7 @@ from match.enums import ACTIVE_PROPERTY_STATUSES
 
 from .buyer_pressure import canonicalize_metrics, metrics_digest
 from .database import property_watch_cursor
-from .exceptions import StimaNotFoundError, WatchNotFoundError
+from .exceptions import StimaNotFoundError, ValidationError, WatchNotFoundError
 from .valuation_snapshot import SNAPSHOT_OBSERVATION, SNAPSHOT_SOURCE
 
 
@@ -913,6 +913,59 @@ def list_active_watch_stima_ids_for_agency(agency_id: int) -> list[int]:
             (agency_id,),
         )
         return [row["stima_id"] for row in cur.fetchall()]
+
+
+def list_active_watch_page_for_agency(agency_id: int, *, after_watch_id: int = 0,
+                                      page_size: int) -> list[dict[str, Any]]:
+    """LMC-11 - UNA PAGINA di watch da rivalutare, in ordine di id.
+
+    PAGINA, NON TETTO. La prima stesura prendeva i primi N watch di ogni
+    agenzia e si fermava li'. Con 700 watch attivi e N=500, i watch dal 501
+    al 700 non venivano rivalutati MAI: l'ordine e' deterministico, quindi
+    ogni notte il giro rileggeva gli stessi primi 500. Non un rallentamento -
+    una fascia di case permanentemente ferma, e invisibile, perche' il
+    riepilogo diceva `processed=500 failed=0` ed era vero.
+
+    KEYSET, NON OFFSET. Il cursore e' `w.id > after_watch_id`, non
+    `OFFSET n`. Un giro completo dura, e nel frattempo un watch puo'
+    cambiare stato o nascere: con OFFSET la finestra scorre su un insieme
+    che si muove sotto, e il risultato e' che qualche riga viene saltata e
+    qualche altra elaborata due volte. Con il keyset l'ordine e' su una
+    chiave immutabile e strettamente crescente: una riga che sparisce non
+    sposta le altre, e una che nasce con un id piu' alto viene semplicemente
+    raggiunta.
+
+    I FILTRI SONO GLI STESSI, parola per parola: `status = 'active'`,
+    `stima_id NOT NULL`, l'agenzia nel predicato e la JOIN su `stime` con le
+    due agenzie che devono concordare. Il cursore e' l'unica condizione
+    aggiunta, e l'ordine resta `w.id ASC`.
+
+    RILETTA A OGNI PAGINA, ed e' voluto: l'eleggibilita' viene rivalutata
+    quando la pagina viene chiesta, quindi un watch disattivato mentre il
+    giro e' in corso non viene processato. Una lista presa tutta all'inizio
+    avrebbe lavorato su uno stato vecchio.
+    """
+    agency_id = int(agency_id)
+    page_size = int(page_size)
+    if page_size < 1:
+        raise ValidationError("page_size must be positive")
+    with property_watch_cursor() as (_, cur):
+        cur.execute(
+            """
+            SELECT w.id AS watch_id, w.stima_id AS stima_id
+            FROM property_watches w
+            JOIN stime s ON s.id = w.stima_id
+            WHERE w.status = 'active'
+              AND w.stima_id IS NOT NULL
+              AND w.agency_id = %s
+              AND s.agency_id = w.agency_id
+              AND w.id > %s
+            ORDER BY w.id ASC
+            LIMIT %s
+            """,
+            (agency_id, int(after_watch_id), page_size),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def list_active_agency_ids() -> list[int]:
