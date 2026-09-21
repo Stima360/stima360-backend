@@ -63,7 +63,7 @@ from .journey_enums import (
     CONSENT_STOP_BY_GUARD_REASON, ENR_ACTIVE, KIND_AWAIT_OPERATOR, KIND_ENQUEUE,
     STOP_ACQUISITION_LINKED, STOP_CONSENT_NOT_GRANTED, STOP_CONSULTATION_REQUESTED,
     STOP_CONTACT_INACTIVE, STOP_INSPECTION, STOP_LEAD_CLOSED, STOP_MANDATE_SIGNED,
-    STOP_PRIORITY, TRIGGER_STIMA_PDF_SENT, choose_stop_reason,
+    STOP_PRIORITY, TRIGGER_STIMA_PDF_SENT, assisted_action_is_due, choose_stop_reason,
 )
 from .journey_service import cursore, operatore
 from .repository import contact_in_scope
@@ -639,6 +639,31 @@ def _passo_corrente(cur, ctx, riga: dict[str, Any]) -> tuple[dict[str, Any], lis
     return passo, passi
 
 
+def _pretendi_azione_assistita(riga: dict[str, Any], adesso: datetime, *,
+                               enrollment_id: int, step_no: int) -> None:
+    """Il contratto temporale dei due atti dell'operatore, in un posto solo.
+
+    P29-3G. `assisted_action_is_due` da' la RISPOSTA; questa funzione la
+    traduce nel rifiuto giusto, perche' a chi ha cliccato non basta "no":
+    deve sapere se sta guardando un passo automatico, un'iscrizione senza
+    scadenza, o semplicemente un passo che non e' ancora il suo momento.
+    Invio e salto passano entrambi di qui, e passano dalla stessa decisione:
+    la sicurezza non dipende dai bottoni che l'interfaccia mostra.
+    """
+    if assisted_action_is_due(riga, adesso):
+        return
+    if riga["next_action_kind"] != KIND_AWAIT_OPERATOR:
+        raise ConflictError(
+            f"enrollment {enrollment_id} is not waiting for an operator")
+    if riga["next_action_at"] is None:
+        raise ConflictError(
+            f"step {step_no} of enrollment {enrollment_id} has no due time: "
+            "an assisted step without one is never actionable")
+    raise ConflictError(
+        f"step {step_no} of enrollment {enrollment_id} is not due yet "
+        f"({riga['next_action_at'].isoformat()})")
+
+
 def send_current(ctx, enrollment_id: int, *, now: datetime | None = None,
                  cur=None) -> dict[str, Any]:
     """Manda ADESSO il passo assistito che sta aspettando.
@@ -673,13 +698,8 @@ def send_current(ctx, enrollment_id: int, *, now: datetime | None = None,
             return {"message": esistente, "created": False, "stopped": None,
                     "enrollment": repo.select_enrollment(c, ctx, enrollment_id)}
 
-        if riga["next_action_kind"] != KIND_AWAIT_OPERATOR:
-            raise ConflictError(
-                f"enrollment {enrollment_id} is not waiting for an operator")
-        if riga["next_action_at"] > adesso:
-            raise ConflictError(
-                f"step {passo['step_no']} of enrollment {enrollment_id} is not due yet "
-                f"({riga['next_action_at'].isoformat()})")
+        _pretendi_azione_assistita(riga, adesso, enrollment_id=enrollment_id,
+                                   step_no=passo["step_no"])
 
         # IL FENCE, prima di far partire il passo assistito. Un operatore che
         # clicca mentre un collega registra l'incarico non deve poter mandare
@@ -737,10 +757,16 @@ def skip_current(ctx, enrollment_id: int, *, now: datetime | None = None,
         if riga["status"] != ENR_ACTIVE:
             raise ConflictError(f"enrollment {enrollment_id} is {riga['status']}, not active")
         passo, passi = _passo_corrente(c, ctx, riga)
-        if passo["default_mode"] != "assisted" or riga["next_action_kind"] != KIND_AWAIT_OPERATOR:
+        if passo["default_mode"] != "assisted":
             raise ConflictError(
                 f"step {passo['step_no']} of enrollment {enrollment_id} is not waiting for "
                 "an operator: there is nothing to skip")
+        # P29-3G: LO STESSO CONTRATTO TEMPORALE DELL'INVIO. Saltare in
+        # anticipo scartava un passo che nessuno aveva ancora potuto
+        # leggere, e lo faceva riuscendo - il che e' peggio di un bottone
+        # che sbaglia: e' una decisione presa al posto di una persona.
+        _pretendi_azione_assistita(riga, adesso, enrollment_id=enrollment_id,
+                                   step_no=passo["step_no"])
 
         journey = repo.select_journey(c, ctx, riga["journey_id"])
         repo.timeline_event(

@@ -24,6 +24,9 @@ sarebbe la prima cosa che qualcuno nota.
 """
 from __future__ import annotations
 
+import html
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from . import journey_repository as journey_repo
@@ -35,7 +38,9 @@ from .enums import (
     TYPE_SERVICE,
 )
 from .exceptions import ValidationError
-from .journey_enums import ENR_ACTIVE, ENR_PAUSED, KIND_AWAIT_OPERATOR
+from .journey_enums import (
+    ENR_ACTIVE, ENR_PAUSED, KIND_AWAIT_OPERATOR, assisted_action_is_due,
+)
 
 #: Quanti caratteri del corpo finiscono nell'anteprima. Abbastanza per
 #: riconoscere il messaggio, non abbastanza per leggerlo di sfuggita in una
@@ -67,10 +72,56 @@ NOTA_INBOUND = (
     "Le risposte ricevute non sono ancora sincronizzate automaticamente nel CRM."
 )
 
+#: Cio' che rende un corpo HTML riconoscibile: un tag di chiusura, o uno dei
+#: tag che un'email costruita davvero contiene. Deliberatamente stretto: un
+#: testo scritto a mano che dice "se a < b > c" non deve finire smontato.
+#: Il `<` deve essere ATTACCATO al nome del tag: `<b>` e' HTML, `a < b > c`
+#: e' aritmetica scritta da una persona, e la prima stesura di questa
+#: espressione le confondeva - ammetteva lo spazio e smontava la frase.
+_SEMBRA_HTML = re.compile(
+    r"</[a-zA-Z]|<(?:br|div|p|span|table|tr|td|a|img|h[1-6]|ul|ol|li"
+    r"|strong|b|em|i|hr|html|body|head|style|script)[\s/>]", re.IGNORECASE)
+
+#: `<style>` e `<script>` non si tolgono come tag: si toglie anche cio' che
+#: contengono. Levare solo i delimitatori lascerebbe il CSS nel testo, che e'
+#: esattamente l'anteprima illeggibile da cui nasce questa correzione.
+_BLOCCHI_MUTI = re.compile(r"<\s*(style|script)\b[\s\S]*?<\s*/\s*\1\s*>",
+                           re.IGNORECASE)
+_TAG = re.compile(r"<[^>]+>")
+
+#: Un tag diventa uno SPAZIO e non il nulla, altrimenti `<b>a</b><b>b</b>`
+#: diventerebbe `ab`. Lo spazio pero' non deve restare davanti alla
+#: punteggiatura: `Ciao <b>Anna</b>, la stima` finirebbe "Anna , la stima".
+_SPAZIO_PRIMA_DI_PUNTEGGIATURA = re.compile(r"\s+([,.;:!?])")
+
+
+def _testo_leggibile(corpo: str) -> str:
+    """Il corpo come lo legge una persona, per l'anteprima e per nient'altro.
+
+    P29-3G. La mail della stima e' HTML, e l'anteprima ne mostrava i primi
+    centosessanta caratteri cosi' com'erano: `<div style="font-family:Arial`
+    - identico su ogni messaggio, quindi buono a distinguerne nessuno.
+
+    `rendered_body` NON viene toccato: il ledger conserva cio' che e' stato
+    spedito, parola per parola, e questa e' una lettura. Un corpo di testo
+    puro attraversa questa funzione senza cambiare di una virgola: niente
+    tag da togliere, e nessuna entita' da decodificare in un testo che
+    nessuno ha codificato.
+    """
+    if not _SEMBRA_HTML.search(corpo):
+        return corpo
+    testo = _BLOCCHI_MUTI.sub(" ", corpo)
+    testo = _TAG.sub(" ", testo)
+    return _SPAZIO_PRIMA_DI_PUNTEGGIATURA.sub(r"\1", html.unescape(testo))
+
+
 #: I CAMPI CHE ESCONO. Tutto il resto resta nel ledger.
 def _messaggio_visibile(riga: dict[str, Any]) -> dict[str, Any]:
     corpo = (riga.get("rendered_body") or "").strip()
-    anteprima = " ".join(corpo.split())
+    # Prima leggibile, POI troncato: troncare per primo taglierebbe a meta'
+    # un tag e lascerebbe l'anteprima piu' corta del previsto una volta
+    # tolto il resto.
+    anteprima = " ".join(_testo_leggibile(corpo).split())
     return {
         "id": riga["id"],
         "created_at": riga.get("created_at"),
@@ -145,7 +196,15 @@ def journey(ctx, contact_id: int, *, cur=None) -> dict[str, Any]:
         testata = journey_repo.select_journey(c, ctx, aperta["journey_id"])
         passi = journey_repo.list_steps(c, ctx, aperta["journey_id"])
         corrente = next((p for p in passi if p["step_no"] == aperta["next_step_no"]), None)
+        # P29-3G. `in_attesa` dice che l'iscrizione ASPETTA una persona, ed e'
+        # cio' che l'etichetta deve raccontare anche prima della scadenza.
+        # `azionabile` dice un'altra cosa: che quella persona puo' agire
+        # ADESSO. Confonderle e' il difetto trovato in P29-3F - due bottoni
+        # offerti con una settimana di anticipo, uno che rispondeva 409 e
+        # l'altro che saltava il passo sul serio. La decisione e' la stessa
+        # che applicano i due service: una sola, in `journey_enums`.
         in_attesa = aperta["next_action_kind"] == KIND_AWAIT_OPERATOR
+        azionabile = assisted_action_is_due(aperta, datetime.now(timezone.utc))
         return {
             "contact_id": contact_id,
             "available": True,
@@ -167,8 +226,8 @@ def journey(ctx, contact_id: int, *, cur=None) -> dict[str, Any]:
                 "total_steps": len(passi),
                 "can_pause": aperta["status"] == ENR_ACTIVE,
                 "can_resume": aperta["status"] == ENR_PAUSED,
-                "can_send_current": in_attesa,
-                "can_skip_current": in_attesa,
+                "can_send_current": azionabile,
+                "can_skip_current": azionabile,
             },
         }
 

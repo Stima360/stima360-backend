@@ -314,7 +314,10 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # fase, il verso del controllo resta identico in entrambe le direzioni.
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
     from tests.p29_3d_diff import FILE_MODIFICATI as MOD_3D, FILE_NUOVI as NUOVI_3D
+    # P29-3G si dichiara allo stesso modo: l'unione cresce di una fase,
+    # il verso del controllo no.
     from tests.p29_3e_diff import FILE_MODIFICATI as MOD_3E, FILE_NUOVI as NUOVI_3E
+    from tests.p29_3g_diff import FILE_MODIFICATI as MOD_3G, FILE_NUOVI as NUOVI_3G
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
@@ -327,9 +330,9 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     tracciati = set(subprocess.run(["git", "--no-optional-locks", "ls-files"],
                                    cwd=ROOT, capture_output=True, text=True).stdout.split())
 
-    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3D | NUOVI_3E
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3D | NUOVI_3E | NUOVI_3G
     dichiarati_modificati = (FILE_MODIFICATI | MOD_3C | NUOVI_3C | MOD_3D | NUOVI_3D
-                             | MOD_3E | NUOVI_3E)
+                             | MOD_3E | NUOVI_3E | MOD_3G | NUOVI_3G)
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)

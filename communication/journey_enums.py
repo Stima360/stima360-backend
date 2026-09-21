@@ -66,3 +66,38 @@ def choose_stop_reason(reasons) -> str | None:
         if ragione in presenti:
             return ragione
     return None
+
+
+def assisted_action_is_due(enrollment, now) -> bool:
+    """Un passo ASSISTITO si puo' approvare o saltare? Una risposta sola.
+
+    P29-3G. Prima questa domanda aveva due risposte diverse a seconda di chi
+    la faceva: il servizio dell'invio guardava l'orologio, quello del salto
+    no, e la scheda contatto nemmeno. Il risultato, trovato dal vivo in
+    P29-3F: la card offriva "Approva e invia" e "Salta questo passo" con una
+    settimana di anticipo, il primo bottone rispondeva 409, e il secondo
+    SALTAVA DAVVERO un passo che nessuno aveva ancora avuto modo di leggere.
+
+    Le tre condizioni, tutte necessarie:
+
+    `next_action_kind == await_operator`
+        l'iscrizione sta aspettando una persona, e non un accodamento
+        automatico. Su un passo automatico non c'e' niente da approvare.
+
+    `next_action_at` non e' NULL
+        senza un istante non esiste una scadenza, e "non si sa quando" non
+        e' "adesso". Un'iscrizione in quello stato e' un dato malformato, e
+        la risposta giusta e' rifiutare, non indovinare.
+
+    `next_action_at <= now`
+        l'attesa e' cominciata davvero. Prima di quel momento il passo e'
+        programmato, non in attesa: approvarlo vorrebbe dire anticipare la
+        sequenza, saltarlo vorrebbe dire scartarlo senza averlo mai visto.
+
+    `now` deve essere timezone-aware, come tutto in questo dominio: un
+    confronto con un istante ingenuo solleverebbe, ed e' meglio che sollevi
+    qui che sbagliare silenziosamente di due ore.
+    """
+    quando = enrollment["next_action_at"]
+    return (enrollment["next_action_kind"] == KIND_AWAIT_OPERATOR
+            and quando is not None and quando <= now)

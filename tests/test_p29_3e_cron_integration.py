@@ -552,6 +552,8 @@ def test_27_questo_modulo_non_apre_nessuna_connessione_vera():
 
 def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3e_diff import FILE_MODIFICATI, FILE_NUOVI
+    # P29-3G si dichiara allo stesso modo: l'unione cresce di una fase.
+    from tests.p29_3g_diff import FILE_MODIFICATI as MOD_3G, FILE_NUOVI as NUOVI_3G
 
     def _git(*argomenti):
         return subprocess.run(["git", "--no-optional-locks", *argomenti],
@@ -562,15 +564,19 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    assert nuovi - FILE_NUOVI == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
-        sorted(nuovi - FILE_NUOVI)
-    assert modificati <= (FILE_MODIFICATI | FILE_NUOVI), \
-        sorted(modificati - (FILE_MODIFICATI | FILE_NUOVI))
+    tutti_nuovi = FILE_NUOVI | NUOVI_3G
+    assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+        sorted(nuovi - tutti_nuovi)
+    assert modificati <= (FILE_MODIFICATI | MOD_3G | tutti_nuovi), \
+        sorted(modificati - (FILE_MODIFICATI | MOD_3G | tutti_nuovi))
+    # NOTA DI P29-3G: dopo il commit di P29-3E i suoi file non sono piu' nel
+    # working tree, e la garanzia si sposta su cio' che resta vero per
+    # sempre: ogni file dichiarato esiste ed e' nell'indice.
     for nome in FILE_NUOVI:
         assert (ROOT / nome).exists(), nome
-        assert nome in nuovi, nome
+        assert nome in tracciati, nome
     for nome in FILE_MODIFICATI:
-        assert nome in tracciati and nome in modificati, nome
+        assert nome in tracciati, nome
     assert "P29_2_0_COMMUNICATION_DESIGN.md" not in tracciati
 
 

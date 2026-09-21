@@ -660,7 +660,10 @@ def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
     from tests.p29_3d_diff import FILE_MODIFICATI, FILE_NUOVI
     # P29-3E si dichiara allo stesso modo: l'unione cresce di una fase.
+    # P29-3G si dichiara allo stesso modo: l'unione cresce di una fase,
+    # il verso del controllo no.
     from tests.p29_3e_diff import FILE_MODIFICATI as MOD_3E, FILE_NUOVI as NUOVI_3E
+    from tests.p29_3g_diff import FILE_MODIFICATI as MOD_3G, FILE_NUOVI as NUOVI_3G
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
@@ -669,8 +672,8 @@ def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
 
     # Nel working tree non c'e' NIENTE che nessuna delle due fasi abbia
     # dichiarato - tranne il documento di design, che resta fuori apposta.
-    tutti_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3E
-    tutti_modificati = FILE_MODIFICATI | MOD_3C | MOD_3E | tutti_nuovi
+    tutti_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3E | NUOVI_3G
+    tutti_modificati = FILE_MODIFICATI | MOD_3C | MOD_3E | MOD_3G | tutti_nuovi
     assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - tutti_nuovi)
     assert modificati <= tutti_modificati, sorted(modificati - tutti_modificati)
