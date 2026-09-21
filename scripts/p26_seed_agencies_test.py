@@ -51,13 +51,37 @@ EXPECTED_OPERATOR_COUNT = 6
 EXPECTED_MEMBERSHIP_COUNT = 5
 
 # (key, email, password environment variable, is_platform_admin)
+#
+# PERCHE' IL PLATFORM ADMIN NON E' PIU' SU @test.stima360.local
+#
+# Le cinque identita' tenant restano finte, sul dominio riservato `.local`:
+# sono comparse, esistono per popolare un'agenzia di prova, e nessuna di loro
+# deve poter ricevere posta.
+#
+# Il platform admin no. Su TEST quell'identita' e' diventata quella reale di
+# chi amministra la piattaforma, e la riga qui sotto e' allineata al database
+# per una ragione precisa: questo seed e' idempotente PER `email_normalized`
+# (vedi `seed()` piu' sotto). Se l'elenco dicesse ancora
+# `platform@test.stima360.local` mentre il database porta `info@stima360.it`,
+# una ri-esecuzione non troverebbe corrispondenza e INSERIREBBE UN SECONDO
+# amministratore di piattaforma - senza errori, senza avvisi, e con la
+# migration 027 che non ha nulla da obiettare perche' `is_platform_admin` non
+# e' un ruolo e non ha vincoli di unicita'.
+#
+# E' esattamente il tipo di riga che nessuno nota finche' non conta: due
+# amministratori di piattaforma, uno dei quali con una credenziale che
+# qualcuno ha dimenticato.
+#
+# La variabile d'ambiente NON cambia nome: `P26_SEED_PLATFORM_PASSWORD` resta
+# quella, perche' nomina il RUOLO nel seed e non la persona, ed e' asserita
+# per nome da tests/test_p26_1_seed_and_fixtures.py.
 OPERATORS = (
     ("owner_a", "owner.a@test.stima360.local", "P26_SEED_OWNER_A_PASSWORD", False),
     ("admin_a", "admin.a@test.stima360.local", "P26_SEED_ADMIN_A_PASSWORD", False),
     ("agent_a", "agent.a@test.stima360.local", "P26_SEED_AGENT_A_PASSWORD", False),
     ("agent_a2", "agent.a2@test.stima360.local", "P26_SEED_AGENT_A2_PASSWORD", False),
     ("owner_b", "owner.b@test.stima360.local", "P26_SEED_OWNER_B_PASSWORD", False),
-    ("platform_admin", "platform@test.stima360.local", "P26_SEED_PLATFORM_PASSWORD", True),
+    ("platform_admin", "info@stima360.it", "P26_SEED_PLATFORM_PASSWORD", True),
 )
 
 # (operator key, agency slug, role). Five rows for six operators: the platform
