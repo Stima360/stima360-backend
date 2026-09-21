@@ -350,6 +350,19 @@ def test_d3_no_page_outside_the_network_was_touched():
         # toccato: non un endpoint, non una rotta, non un componente della
         # Rete, e nessuna vista del CRM oltre a quella gia' elencata.
         "static/os_shell/assets/components/timeline.js",
+        # P29-3D - LA TAB "COMUNICAZIONI" DELLA SCHEDA CONTATTO.
+        #
+        # Un componente NUOVO, piu' la riga che lo monta in
+        # `contatto-dettaglio.js`, che era gia' ammesso. Mostra lo stato delle
+        # automazioni del contatto, lo storico dei messaggi e un modulo per
+        # scriverne uno a mano.
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato - non un endpoint, non una rotta,
+        # non un componente della Rete - e nessuna vista del CRM oltre a
+        # quella gia' elencata. Il componente non conosce ne' agenzie ne'
+        # territori: parla di un contatto per volta.
+        "static/os_shell/assets/components/communications.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

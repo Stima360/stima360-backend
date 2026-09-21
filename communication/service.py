@@ -57,7 +57,7 @@ from .enums import (
     TYPE_MARKETING,
     WRITABLE_DIRECTIONS,
 )
-from .exceptions import ValidationError
+from .exceptions import ConflictError, ValidationError
 
 #: Quanti messaggi restituisce una lettura per contatto se il chiamante non lo
 #: dice. Un tetto esiste perche' una lista senza limite e' una query che cresce
@@ -317,6 +317,37 @@ def cancel(ctx, message_id: int, *, cur=None) -> dict[str, Any]:
         return repository.cancel_queued(cur, ctx, message_id)
     with communication_cursor(commit=True) as (_conn, proprio_cur):
         return repository.cancel_queued(proprio_cur, ctx, message_id)
+
+
+def send_now(ctx, message_id: int, *, cur=None) -> dict[str, Any]:
+    """P29-3D - anticipa un messaggio GIA' IN CODA a subito.
+
+    NON spedisce: sposta `scheduled_at` ad adesso, e il prossimo giro del
+    dispatcher lo trovera' dovuto. La differenza non e' formale - e' che il
+    consenso, il claim e il trasporto restano dove sono, e questa funzione
+    non diventa una seconda strada per far partire una email.
+
+    `queued` e' l'unico stato che si puo' anticipare: un messaggio gia'
+    spedito non si rimanda, uno annullato non si resuscita. Solleva
+    `NotFoundError` se non esiste in questa agenzia, `ConflictError` se non
+    e' piu' in coda - gli stessi due casi distinti di `cancel`.
+    """
+    def _anticipa(c):
+        riga = repository.reschedule_queued(c, ctx, message_id, quando=repository.utcnow())
+        if riga is not None:
+            return riga
+        # `select_message` solleva gia' `NotFoundError` per un messaggio che
+        # non esiste in questa agenzia: se torna, il messaggio c'e' e il
+        # problema e' il suo stato.
+        corrente = repository.select_message(c, ctx, message_id)
+        raise ConflictError(
+            f"message {message_id} is {corrente['status']}, not queued: only a queued "
+            "message can be moved to the front")
+
+    if cur is not None:
+        return _anticipa(cur)
+    with communication_cursor(commit=True) as (_conn, proprio_cur):
+        return _anticipa(proprio_cur)
 
 
 def get_message(ctx, message_id: int, *, cur=None) -> dict[str, Any]:

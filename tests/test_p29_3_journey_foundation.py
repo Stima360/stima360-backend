@@ -122,7 +122,22 @@ def test_07_le_tre_ragioni_del_consenso_mappano_la_guardia():
 
 #: LE IMPRONTE DELLE VERSIONI PUBBLICATE. Cambiare un renderer gia' registrato
 #: fa fallire qui; aggiungere una versione nuova richiede una riga nuova.
-IMPRONTE = {("registry_probe", 1): "87a60835b9a0afd9"}
+#:
+#: SENTINELLA AGGIORNATA DA P29-3D (collisione dichiarata). P29-3B non doveva
+#: portare testo commerciale, e non ne ha portato: il registro conteneva il
+#: solo template di prova. I cinque testi della sequenza della stima arrivano
+#: con la fase che li ha approvati, e la garanzia che questo test da' non
+#: cambia di natura - il registro e' CHIUSO e ogni renderer dentro e'
+#: IMMUTABILE - guadagna cinque righe. Che quei testi dicano il vero, e cosa
+#: non dicano, lo verifica `test_p29_3d_crm_journey.py`.
+IMPRONTE = {
+    ("registry_probe", 1): "87a60835b9a0afd9",
+    ("stima_lead_m1", 1): "1d0616599b645684",
+    ("stima_lead_m2", 1): "1e1c92f6b0faaa0c",
+    ("stima_lead_m3", 1): "5a2adfdb541ec526",
+    ("stima_lead_m4", 1): "b632a89875c4b924",
+    ("stima_lead_m5", 1): "9cb8d18094d34f07",
+}
 
 
 def test_08_il_registry_e_versionato_immutabile_e_senza_fallback():
@@ -283,7 +298,10 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # inventario, dichiarato allo stesso modo. Questo test continua a
     # pretendere che nel working tree non ci sia NIENTE che nessuna delle due
     # fasi abbia dichiarato - non smette di guardare, guarda l'unione.
+    # E DA P29-3D, che si dichiara allo stesso modo: l'unione cresce di una
+    # fase, il verso del controllo resta identico in entrambe le direzioni.
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
+    from tests.p29_3d_diff import FILE_MODIFICATI as MOD_3D, FILE_NUOVI as NUOVI_3D
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
@@ -296,8 +314,8 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     tracciati = set(subprocess.run(["git", "--no-optional-locks", "ls-files"],
                                    cwd=ROOT, capture_output=True, text=True).stdout.split())
 
-    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C
-    dichiarati_modificati = FILE_MODIFICATI | MOD_3C | NUOVI_3C
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3D
+    dichiarati_modificati = FILE_MODIFICATI | MOD_3C | NUOVI_3C | MOD_3D | NUOVI_3D
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)

@@ -532,8 +532,13 @@ def test_n9_la_superficie_pubblica_del_service_e_dichiarata():
         n for n, v in vars(service).items()
         if callable(v) and not n.startswith("_") and getattr(v, "__module__", "") == service.__name__
     }
+    # SENTINELLA AGGIORNATA DA P29-3D: `send_now` e' la dodicesima, e sta
+    # QUI e non altrove perche' scrive sul ledger - sposta `scheduled_at` di
+    # un messaggio in coda - e il ledger ha un solo scrittore. Non spedisce:
+    # il consenso, il claim e il trasporto restano dove sono, e il
+    # dispatcher continua a essere l'unico che parla con un provider.
     assert pubbliche == {
-        "enqueue", "cancel", "get_message", "list_for_contact",
+        "enqueue", "cancel", "send_now", "get_message", "list_for_contact",
         "claim_due", "finalize_sent", "finalize_failed", "finalize_indeterminate",
         "finalize_suppressed", "recover_stale", "list_attempts",
     }, sorted(pubbliche)

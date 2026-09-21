@@ -171,6 +171,31 @@ def list_by_contact(cur, ctx, contact_id: int, *, limit: int) -> list[dict[str, 
     return [dict(r) for r in cur.fetchall()]
 
 
+def reschedule_queued(cur, ctx, message_id: int, *, quando) -> dict[str, Any] | None:
+    """P29-3D - "invia ora": sposta `scheduled_at` di un messaggio IN CODA.
+
+    Non manda niente e non tocca lo stato: il dispatcher resta l'unico che
+    parla con un provider. Cio' che cambia e' solo QUANDO quel messaggio
+    diventa eleggibile, e per "adesso" si intende adesso.
+
+    Stesso compare-and-set di `cancel_queued`, per la stessa ragione: fra la
+    lettura e la richiesta un dispatcher puo' aver reclamato la riga, e
+    riscriverle la data mentre e' in mano a un worker vorrebbe dire cambiare
+    le carte a un invio gia' partito. `None` quando non era piu' in coda; chi
+    chiama distingue "non esiste" da "non e' piu' in coda" rileggendola.
+    """
+    cur.execute(
+        """
+        UPDATE communication_messages
+           SET scheduled_at = %s, updated_at = NOW()
+         WHERE id = %s AND agency_id = %s AND status = ANY(%s)
+        RETURNING *
+        """,
+        (quando, message_id, ctx.require_agency(), sorted(CANCELLABLE_STATUSES)))
+    riga = cur.fetchone()
+    return _row(riga) if riga else None
+
+
 def cancel_queued(cur, ctx, message_id: int) -> dict[str, Any]:
     """`queued` -> `cancelled`, e solo quella.
 

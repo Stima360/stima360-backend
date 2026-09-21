@@ -179,12 +179,22 @@ def _dichiarati_da_fasi_successive() -> frozenset[str]:
     per nome, e quale riga sia lecita lo verifica l'inventario di quella
     fase (`tests/p29_3c_diff.py`, e la sentinella che lo confronta con
     `git status` in entrambe le direzioni).
+
+    P29-3D (collisione dichiarata) sta nella stessa posizione: i testi reali
+    della sequenza, "invia ora" sul ledger, le rotte del Contact 360 e la
+    sonda dello schema toccano ancora `communication/`. Si aggiunge il suo
+    inventario accanto a quello di P29-3C invece di allargare la maglia:
+    l'elenco delle fasi e' esplicito, e una fase che non si dichiara non
+    passa.
     """
-    try:
-        from tests.p29_3c_diff import FILE_MODIFICATI, FILE_NUOVI
-    except ImportError:  # la fase non esiste ancora: nulla da ammettere
-        return frozenset()
-    return frozenset(FILE_MODIFICATI | FILE_NUOVI)
+    dichiarati: set[str] = set()
+    for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff"):
+        try:
+            inventario = __import__(modulo, fromlist=["FILE_MODIFICATI"])
+        except ImportError:  # la fase non esiste ancora: nulla da ammettere
+            continue
+        dichiarati |= set(inventario.FILE_MODIFICATI) | set(inventario.FILE_NUOVI)
+    return frozenset(dichiarati)
 
 
 def diff_imprevisto_nei_domini(root) -> list[str]:

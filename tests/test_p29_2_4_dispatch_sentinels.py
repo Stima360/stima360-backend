@@ -207,7 +207,13 @@ def test_G3_il_consenso_non_e_interrogato_fuori_dal_dispatcher():
         # condizione di STOP e alla nascita di una iscrizione. Non spedisce -
         # non importa provider e non chiama `send` - e il gate di invio resta
         # nel dispatcher, una decisione alla volta.
-        if nome in ("dispatcher.py", "journey_service.py", "journey_tick.py"):
+        # P29-3D aggiunge `contact_view.py`: un messaggio MANUALE di
+        # marketing chiede il consenso PRIMA di metterlo in coda, per dire
+        # subito a chi scrive che non partira'. Non e' un secondo gate di
+        # invio - quello resta nel dispatcher, immediatamente prima di
+        # spedire - e' un rifiuto anticipato che evita una coda inutile.
+        if nome in ("dispatcher.py", "journey_service.py", "journey_tick.py",
+                    "contact_view.py"):
             continue
         assert "can_send_marketing" not in corpo, f"{nome} interroga il consenso"
 
@@ -364,11 +370,28 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
     # P29-3C monta le tre rotte delle journey sullo STESSO router del
     # dispatch, dietro la stessa ammissione di livello mount: nessuna nuova
     # riga in `main.py`, e nessuna superficie aperta.
+    # SENTINELLA AGGIORNATA DA P29-3D: il Contact 360 aggiunge la sua
+    # superficie - storico, card, azioni, messaggio manuale - sempre sullo
+    # STESSO router e dietro la stessa ammissione di livello mount. Cio' che
+    # questo test continua a garantire e' che nessuna di queste sia aperta:
+    # l'unica senza sessione resta l'unsubscribe pubblico.
     assert percorsi == [
+        "/api/communication/contacts/{contact_id}/automation/pause",
+        "/api/communication/contacts/{contact_id}/automation/resume",
+        "/api/communication/contacts/{contact_id}/journey",
+        "/api/communication/contacts/{contact_id}/messages",
         "/api/communication/dispatch",
+        "/api/communication/journeys/enrollments/{enrollment_id}/pause",
+        "/api/communication/journeys/enrollments/{enrollment_id}/resume",
         "/api/communication/journeys/enrollments/{enrollment_id}/send-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/skip-current",
+        "/api/communication/journeys/enrollments/{enrollment_id}/stop",
+        "/api/communication/journeys/stima-lead/provision",
         "/api/communication/journeys/tick",
+        "/api/communication/journeys/{journey_id}/activate",
+        "/api/communication/journeys/{journey_id}/retire",
+        "/api/communication/messages/{message_id}/cancel",
+        "/api/communication/messages/{message_id}/send-now",
         "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.

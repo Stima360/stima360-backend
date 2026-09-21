@@ -271,11 +271,22 @@ def test_18_nessuna_journey_viene_creata_o_attivata_da_sola():
         assert vietato not in migrazione, vietato
 
 
-def test_19_il_registro_dei_template_non_ha_guadagnato_testi_commerciali():
+def test_19_il_template_di_prova_e_immutabile_e_i_testi_reali_sono_di_P29_3D():
+    """SENTINELLA AGGIORNATA DA P29-3D.
+
+    P29-3C non doveva portare testi commerciali, e non ne ha portati: i
+    cinque della sequenza della stima arrivano con la fase che li ha
+    approvati, e li verifica `test_p29_3d_crm_journey.py` parola per parola.
+    Qui resta la garanzia che vale sempre: il template di PROVA non e'
+    cambiato, e il registro non contiene niente che nessuna fase abbia
+    dichiarato.
+    """
     import hashlib
 
     from communication import templates
-    assert set(templates.REGISTRY) == {("registry_probe", 1)}
+    assert set(templates.REGISTRY) == {
+        ("registry_probe", 1), ("stima_lead_m1", 1), ("stima_lead_m2", 1),
+        ("stima_lead_m3", 1), ("stima_lead_m4", 1), ("stima_lead_m5", 1)}
     impronta = hashlib.sha256(
         inspect.getsource(templates.REGISTRY[("registry_probe", 1)].body).encode()).hexdigest()
     assert impronta[:16] == "774d98a71f3dcd94", impronta[:16]
@@ -400,22 +411,32 @@ def test_29_nessuno_dei_moduli_nuovi_apre_una_connessione():
 
 def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3c_diff import FILE_MODIFICATI, FILE_NUOVI
+    # SENTINELLA AGGIORNATA DA P29-3D: la fase successiva ha il suo
+    # inventario, dichiarato allo stesso modo. Questo test continua a
+    # pretendere che nel working tree non ci sia NIENTE che nessuna delle due
+    # fasi abbia dichiarato: guarda l'unione, non smette di guardare.
+    from tests.p29_3d_diff import FILE_MODIFICATI as MOD_3D, FILE_NUOVI as NUOVI_3D
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    assert nuovi - FILE_NUOVI == {"P29_2_0_COMMUNICATION_DESIGN.md"}, sorted(nuovi - FILE_NUOVI)
-    assert modificati <= FILE_MODIFICATI, sorted(modificati - FILE_MODIFICATI)
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3D
+    dichiarati_modificati = FILE_MODIFICATI | MOD_3D | NUOVI_3D
+    assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+        sorted(nuovi - dichiarati_nuovi)
+    assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)
     for nome in FILE_NUOVI:
         assert (ROOT / nome).exists(), nome
     for nome in FILE_MODIFICATI:
         assert nome in tracciati, nome
-    # Finche' la fase non e' committata, ogni voce dichiarata deve
-    # corrispondere a una modifica VERA: un inventario che elenca file che
-    # nessuno ha toccato sarebbe un permesso, non una dichiarazione.
-    if modificati:
-        assert FILE_MODIFICATI <= modificati | frozenset(), sorted(FILE_MODIFICATI - modificati)
+    # NOTA DI P29-3D: finche' P29-3C era in corso, qui si pretendeva che
+    # ogni voce dichiarata corrispondesse a una modifica VERA nel working
+    # tree - un inventario che elenca file intonsi sarebbe un permesso, non
+    # una dichiarazione. Dopo il commit di quella fase la verifica non ha
+    # piu' un working tree da guardare, e la garanzia si sposta su quello
+    # che resta vero per sempre: ogni file dichiarato esiste ed e'
+    # nell'indice, ed e' cio' che i due cicli qui sopra controllano.
     assert "P29_2_0_COMMUNICATION_DESIGN.md" not in tracciati
     assert (ROOT / "P29_2_0_COMMUNICATION_DESIGN.md").exists()

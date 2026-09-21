@@ -35,6 +35,11 @@ import { mountInvisibleSale } from '../components/invisible-sale.js';
 // data.leads, nessuna nuova chiamata). Stessi dialog condivisi già usati da
 // attivita.js — vedi components/activity-task-dialogs.js.
 import { openNewActivityDialog, openNewTaskDialog } from '../components/activity-task-dialogs.js';
+// P29-3D: la tab "Comunicazioni". Vive in un componente suo perche' ha uno
+// stato proprio (ricarica dopo ogni azione) e due chiamate proprie, e perche'
+// questa vista e' gia' lunga: metterci dentro anche il motore delle journey
+// l'avrebbe resa illeggibile.
+import { mountCommunications } from '../components/communications.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -101,6 +106,7 @@ const TABS = [
   { key: 'stime', label: 'Stime' },
   { key: 'abbinamenti', label: 'Abbinamenti' },
   { key: 'visite', label: 'Visite' },
+  { key: 'comunicazioni', label: 'Comunicazioni' },
   { key: 'attivita', label: 'Attività' },
   { key: 'task', label: 'Task' },
   { key: 'documenti', label: 'Documenti' },
@@ -801,6 +807,11 @@ export async function renderContattoDettaglio(container, params = []) {
         case 'lead':
           contentEl.innerHTML = renderLeadTab(data.leads);
           bindLeadTabActions();
+          break;
+        case 'comunicazioni':
+          // Carico posticipato come le altre tab pesanti: le due chiamate
+          // partono al primo click, non all'apertura della scheda.
+          await mountCommunications(contentEl, contact.id);
           break;
         case 'richieste': contentEl.innerHTML = renderRichieste(data.buy_requests); break;
         case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;

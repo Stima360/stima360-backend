@@ -1387,10 +1387,20 @@ def test_47_le_tre_rotte_sono_montate_nell_app_vera(mondo):
     import tests.conftest  # noqa: F401
     import main as main_module
     percorsi = sorted(p for p in main_module.app.openapi()["paths"] if "journeys" in p)
+    # SENTINELLA AGGIORNATA DA P29-3D: il Contact 360 aggiunge le azioni
+    # dell'operatore su una iscrizione (pausa, ripresa, stop) e la gestione
+    # della sequenza (provision, activate, retire). Le tre di P29-3C restano
+    # dove erano: l'elenco cresce, non cambia.
     assert percorsi == [
+        "/api/communication/journeys/enrollments/{enrollment_id}/pause",
+        "/api/communication/journeys/enrollments/{enrollment_id}/resume",
         "/api/communication/journeys/enrollments/{enrollment_id}/send-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/skip-current",
+        "/api/communication/journeys/enrollments/{enrollment_id}/stop",
+        "/api/communication/journeys/stima-lead/provision",
         "/api/communication/journeys/tick",
+        "/api/communication/journeys/{journey_id}/activate",
+        "/api/communication/journeys/{journey_id}/retire",
     ], percorsi
 
 

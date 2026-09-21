@@ -69,7 +69,11 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # P29-3C: il motore e la finestra di invio, la fase
                     # successiva annunciata sopra. Anche loro fuori dal
                     # nucleo, che continua a non importarli.
-                    "journey_tick.py", "send_window.py")
+                    "journey_tick.py", "send_window.py",
+                    # P29-3D: il catalogo delle journey pubblicate e il
+                    # read-model del Contact 360. Fuori dal nucleo come gli
+                    # altri: il nucleo non li importa.
+                    "journey_catalog.py", "contact_view.py")
 
 
 def sorgenti() -> dict[str, str]:
@@ -169,6 +173,17 @@ def test_F2_le_due_transizioni_pre_claim_sono_solo_due():
     token: qui si fissa quali sono."""
     pre_claim = [s for s in statement_update()
                  if "claim_token" not in s.split("WHERE", 1)[1]]
+    # SENTINELLA AGGIORNATA DA P29-3D: la terza e' "invia ora", che sposta
+    # `scheduled_at` di un messaggio ancora in coda. Non e' una transizione
+    # di STATO - lo stato non lo tocca - e porta lo stesso compare-and-set
+    # dell'annullamento, cosi' non puo' strappare di mano una riga a un
+    # dispatcher che l'ha gia' reclamata. La si NOMINA e la si mette da
+    # parte, invece di allargare il conto e basta.
+    anticipa = [x for x in pre_claim if "scheduled_at = %s" in x.split("WHERE")[0]]
+    assert len(anticipa) == 1, "manca la transizione di anticipo"
+    assert "status = ANY(%s)" in anticipa[0], "l'anticipo non e' condizionato alla coda"
+    assert "status =" not in anticipa[0].split("WHERE")[0], "l'anticipo non tocca lo stato"
+    pre_claim = [x for x in pre_claim if x is not anticipa[0]]
     assert len(pre_claim) == 2, f"transizioni pre-claim: {len(pre_claim)}"
 
     # Le due si riconoscono dalla FORMA dell'SQL, non da un nome di costante
@@ -314,6 +329,9 @@ def test_A2_la_superficie_pubblica_e_quella_prevista():
         # P29-2.3
         "claim_due", "finalize_sent", "finalize_failed", "finalize_indeterminate",
         "finalize_suppressed", "recover_stale", "list_attempts",
+        # P29-3D: "invia ora". Sposta `scheduled_at` di un messaggio in
+        # coda; non spedisce, non reclama, non tocca lo stato.
+        "send_now",
     }, sorted(pubbliche)
 
 

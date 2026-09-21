@@ -745,6 +745,16 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
     for nome, codice in sorgenti.items():
         for orchestrazione in ("def dispatch", "def run_dispatch", "def send_",
                                "def deliver"):
+            # SENTINELLA AGGIORNATA DA P29-3D: `send_now` NON spedisce. E'
+            # una UPDATE su `scheduled_at` di un messaggio gia' in coda -
+            # sposta il QUANDO, non il SE - e il dispatcher resta l'unico
+            # che parla con un provider. Il divieto resta su cio' che manda
+            # davvero, e il punto 4 qui sotto (nessuna rete nel nucleo) non
+            # si tocca: e' quello che lo rende impossibile e non solo
+            # vietato.
+            if nome == "service.py" and orchestrazione == "def send_":
+                assert "def send_now" in codice
+                continue
             assert orchestrazione not in codice, (
                 f"communication/{nome} contiene {orchestrazione!r}: il dispatcher "
                 "e' P29-2.4"

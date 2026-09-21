@@ -132,6 +132,7 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
     passi = _valida_passi(steps)
     actor_type, actor_user_id = _attore(ctx)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         return repo.insert_journey(
             c, ctx, journey_key=journey_key, version=version, trigger_type=trigger_type,
             name=name, send_timezone=send_timezone, actor_type=actor_type,
@@ -141,17 +142,20 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
 def activate_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
     actor_type, actor_user_id = _attore(ctx)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         return repo.activate_journey(c, ctx, journey_id, actor_type=actor_type,
                                      actor_user_id=actor_user_id)
 
 
 def retire_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         return repo.retire_journey(c, ctx, journey_id)
 
 
 def get_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         j = repo.select_journey(c, ctx, journey_id)
         j["steps"] = repo.list_steps(c, ctx, journey_id)
         return j
@@ -184,6 +188,7 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
     """
     actor_type, actor_user_id = _attore(ctx)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         agency = ctx.require_agency()
         contact_in_scope(c, ctx, contact_id)
         journey = repo.select_journey(c, ctx, journey_id)
@@ -231,6 +236,7 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
 
 def get_open_enrollment(ctx, contact_id: int, *, cur=None) -> dict[str, Any] | None:
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         contact_in_scope(c, ctx, contact_id)
         return repo.select_open_enrollment(c, ctx, contact_id)
 
@@ -239,6 +245,7 @@ def inspect_next_step(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any] | 
     """Il passo che l'iscrizione sta aspettando, con il suo template. `None`
     se l'iscrizione e' chiusa."""
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         e = repo.select_enrollment(c, ctx, enrollment_id)
         if e["next_step_no"] is None:
             return None
@@ -252,6 +259,7 @@ def pause_enrollment(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any]:
     """Operatore. `active -> paused`; il `queued` del passo corrente viene cancellato."""
     utente = operatore(ctx)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         e = repo.pause_enrollment(c, ctx, enrollment_id, actor_user_id=utente, source=PAUSED_BY_ENROLLMENT)
         repo.cancel_queued_journey_messages(c, ctx, enrollment_id, reason="paused", actor_user_id=utente)
         return e
@@ -263,6 +271,7 @@ def resume_enrollment(ctx, enrollment_id: int, *, now: datetime | None = None, c
     utente = operatore(ctx)
     adesso = now or datetime.now(timezone.utc)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         e = repo.select_enrollment(c, ctx, enrollment_id, for_update=True)
         if e["status"] != ENR_PAUSED:
             raise ConflictError(f"enrollment {enrollment_id} is {e['status']}, not paused")
@@ -280,6 +289,7 @@ def stop_enrollment(ctx, enrollment_id: int, *, reason: str = "operator", cur=No
         raise ValidationError(f"unknown stop reason {reason!r}")
     actor_user_id = operatore(ctx) if reason == "operator" else None
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         e = repo.stop_enrollment(c, ctx, enrollment_id, reason=reason, actor_user_id=actor_user_id)
         repo.cancel_queued_journey_messages(c, ctx, enrollment_id, reason=f"stopped:{reason}",
                                             actor_user_id=actor_user_id)
@@ -297,6 +307,7 @@ def pause_automations(ctx, contact_id: int, *, reason: str | None = None, cur=No
     utente = operatore(ctx)
     ragione = (reason or "").strip() or None
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         contact_in_scope(c, ctx, contact_id)
         aperte = repo.list_open_enrollments_for_contact(c, ctx, contact_id)
         stima = next((e["stima_id"] for e in aperte if e["stima_id"]), None)
@@ -317,6 +328,7 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
     pausa una per una restano ferme; niente viene inventato."""
     utente = operatore(ctx)
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         contact_in_scope(c, ctx, contact_id)
         controllo = repo.set_control_resumed(c, ctx, contact_id, actor_user_id=utente)
         for e in repo.list_open_enrollments_for_contact(c, ctx, contact_id):
@@ -327,4 +339,5 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
 
 def automations_paused(ctx, contact_id: int, *, cur=None) -> bool:
     with cursore(cur) as (_, c):
+        repo.require_schema(c)
         return repo.automations_paused(c, ctx, contact_id)

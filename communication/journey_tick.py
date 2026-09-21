@@ -164,25 +164,13 @@ class _Savepoint:
 # LO SCHEMA
 # ---------------------------------------------------------------------------
 
-class FeatureNotMigrated(ConflictError):
-    """Le journey esistono nel codice, non ancora nel database.
-
-    Un errore DICHIARATO e non un incidente: il codice arriva in TEST con il
-    deploy, la 071 con un gesto separato, e fra i due momenti le rotte delle
-    journey devono dire "non ancora" invece di rompersi. Il router la traduce
-    in 503 - un 500 con `UndefinedTable` direbbe la stessa cosa a chi legge i
-    log, e niente a chi chiama.
-    """
-
-
-MESSAGGIO_NON_MIGRATO = (
-    "journey automation requires migration 071, which is not applied on this database"
-)
-
-
-def _pretendi_schema(cur) -> None:
-    if not repo.schema_ready(cur):
-        raise FeatureNotMigrated(MESSAGGIO_NON_MIGRATO)
+#: La sonda e il suo errore vivono nel repository, accanto allo schema che
+#: descrivono (P29-3D): li usano anche le primitive del service, che il
+#: Contact 360 chiama senza passare da un tick. Qui si ri-espongono con i
+#: nomi con cui il motore li ha sempre chiamati.
+FeatureNotMigrated = repo.FeatureNotMigrated
+MESSAGGIO_NON_MIGRATO = repo.MESSAGGIO_NON_MIGRATO
+_pretendi_schema = repo.require_schema
 
 
 # ---------------------------------------------------------------------------
@@ -497,27 +485,46 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
 # D - AZIONI DOVUTE
 # ---------------------------------------------------------------------------
 
-def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int) -> dict[str, str]:
+def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
+                           stima_url: str | None = None) -> dict[str, str]:
     """I campi che un template puo' chiedere. Nessun altro.
 
     `unsubscribe_url` e' obbligatorio per il marketing (P29-3B.0) e viene
     costruito qui: senza la chiave di firma la costruzione FALLISCE, e il
     messaggio non nasce. Una mail di marketing senza link di disiscrizione
     non e' un messaggio degradato, e' un messaggio che non si manda.
+
+    P29-3D, i due indirizzi dei testi reali:
+
+      `stima_url`         il PDF che l'interessato ha GIA' ricevuto, riletto
+                          dal ledger. Se quel messaggio non porta un
+                          `pdf_url` - una mail vecchia, un producer diverso -
+                          si ripiega sul portale, dove la stima si vede
+                          comunque: meglio un link che funziona di un campo
+                          mancante che ferma il passo.
+      `owner_portal_url`  la porta del portale proprietario. NON un link con
+                          token: quelli sono personali e a uso singolo, e
+                          metterne uno dentro una mail di sequenza vorrebbe
+                          dire spedire una credenziale a ogni passo.
     """
     nome = (anagrafica.get("first_name") or anagrafica.get("display_name") or "").strip()
+    portale = f"{_base_pubblica()}/owner/"
     return {
         "contact_first_name": nome,
         "agency_name": (anagrafica.get("agency_name") or "").strip(),
+        "owner_portal_url": portale,
+        "stima_url": (stima_url or "").strip() or portale,
         "unsubscribe_url": unsubscribe.unsubscribe_url(
             _base_pubblica(), ctx.require_agency(), contact_id),
     }
 
 
 def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode: str,
-                  scheduled_at: datetime, anagrafica: dict[str, Any]) -> dict[str, Any]:
+                  scheduled_at: datetime, anagrafica: dict[str, Any],
+                  stima_url: str | None = None) -> dict[str, Any]:
     """Il messaggio del passo, nel ledger. Nessun provider, nessuna rete."""
-    contesto = _contesto_di_rendering(ctx, anagrafica, contact_id=riga["contact_id"])
+    contesto = _contesto_di_rendering(ctx, anagrafica, contact_id=riga["contact_id"],
+                                      stima_url=stima_url)
     soggetto, corpo = templates.render(passo["template_key"], passo["template_version"], contesto)
     destinazione = (anagrafica.get("email") or "").strip()
     if not destinazione:
@@ -543,6 +550,9 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
         return
     passi = _passi_per_journey(cur, ctx, [r["journey_id"] for r in righe])
     anagrafiche = repo.rendering_context(cur, ctx, [r["contact_id"] for r in righe])
+    # Una query per il lotto, non una per riga: gli URL delle stime gia'
+    # spedite si rileggono tutti insieme.
+    collegamenti = repo.trigger_links(cur, ctx, [r["trigger_message_id"] for r in righe])
 
     for r in righe:
         try:
@@ -569,7 +579,8 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                     # La policy del ledger, applicata qui invece che subita:
                     # un passo dovuto parte adesso, uno futuro porta la sua ora.
                     scheduled_at=r["next_action_at"] if r["next_action_at"] > adesso else adesso,
-                    anagrafica=anagrafiche.get(r["contact_id"], {}))
+                    anagrafica=anagrafiche.get(r["contact_id"], {}),
+                    stima_url=collegamenti.get(r["trigger_message_id"]))
                 conteggi["queued" if esito["created"] else "queued_idempotent"] += 1
         except Exception:
             conteggi["errors"] += 1
@@ -696,8 +707,10 @@ def send_current(ctx, enrollment_id: int, *, now: datetime | None = None,
                     "stopped": ragione}
 
         anagrafiche = repo.rendering_context(c, ctx, [riga["contact_id"]])
+        collegamenti = repo.trigger_links(c, ctx, [riga["trigger_message_id"]])
         esito = _accoda_passo(ctx, c, riga, passo, mode="assisted", scheduled_at=adesso,
-                              anagrafica=anagrafiche.get(riga["contact_id"], {}))
+                              anagrafica=anagrafiche.get(riga["contact_id"], {}),
+                              stima_url=collegamenti.get(riga["trigger_message_id"]))
         repo.hand_to_enqueue(c, ctx, enrollment_id, step_no=passo["step_no"])
         logger.info("journey_step_sent_by_operator enrollment_id=%s step_no=%s user_id=%s",
                     enrollment_id, passo["step_no"], utente)

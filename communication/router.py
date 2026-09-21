@@ -25,11 +25,15 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
+from . import contact_view
 from . import dispatcher
+from . import service as dispatcher_service
+from . import journey_catalog
+from . import journey_service
 from . import journey_tick
 from .dependencies import require_dispatch_context
 from .exceptions import ConflictError, NotFoundError, ValidationError
-from .schemas import DispatchRequest, JourneyTickRequest
+from .schemas import DispatchRequest, JourneyTickRequest, ManualMessageRequest
 
 router = APIRouter(prefix="/api/communication", tags=["communication"])
 
@@ -162,3 +166,157 @@ def journeys_skip_current(
     esito = _tradotto(lambda: journey_tick.skip_current(ctx, enrollment_id))
     return {"skipped_step_no": esito["skipped_step_no"], "completed": esito["completed"],
             "enrollment": esito["enrollment"]}
+
+
+# ===========================================================================
+# P29-3D - LA SUPERFICIE DEL CONTACT 360
+#
+# DUE SOGLIE, E NESSUNA TERZA.
+#
+#   Cio' che riguarda UN CONTATTO - leggerne lo storico, annullare un suo
+#   messaggio, mettere in pausa la sua automazione - chiede una sessione, e
+#   il restringimento dell'agente ai propri contatti lo applica `core.scope`
+#   dentro il dominio, dove quella regola vive gia'. Un agente sui contatti
+#   che gli sono assegnati lavora; su quelli di un collega riceve 404, che e'
+#   la stessa risposta che riceverebbe per un contatto inesistente.
+#
+#   Cio' che riguarda L'INTERA AGENZIA - creare la sequenza, accenderla,
+#   ritirarla - chiede la riga di matrice del dispatch ("vede tutti i
+#   record"), perche' accendere una journey decide cosa ricevera' OGNI
+#   contatto dell'agenzia. Un agente prende 403.
+#
+# NESSUN `agency_id` NEL CORPO, in nessuna di queste rotte: viene dalla
+# sessione o dall'acting, come ovunque in P29.
+# ===========================================================================
+
+@router.get("/contacts/{contact_id}/messages")
+def contact_messages(
+    contact_id: int,
+    limit: int = 50,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Lo storico delle comunicazioni di un contatto, gia' tradotto.
+
+    Funziona anche senza la 071: il ledger esiste dalla 064, e una scheda
+    contatto non deve rompersi perche' una migration non e' ancora passata.
+    """
+    return _tradotto(lambda: contact_view.messages(ctx, contact_id, limit=limit))
+
+
+@router.get("/contacts/{contact_id}/journey")
+def contact_journey(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """La card dell'automazione. `available: false` se la 071 non c'e'."""
+    return _tradotto(lambda: contact_view.journey(ctx, contact_id))
+
+
+@router.post("/contacts/{contact_id}/messages")
+def contact_send_manual(
+    contact_id: int,
+    payload: ManualMessageRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Un messaggio scritto da una persona. Il destinatario lo decide il
+    contatto, non il client; il consenso non si aggira."""
+    esito = _tradotto(lambda: contact_view.send_manual(
+        ctx, contact_id, subject=payload.subject, body=payload.body,
+        communication_type=payload.communication_type))
+    return {"created": esito["created"], "message_id": esito["message"]["id"],
+            "status": esito["message"]["status"]}
+
+
+@router.post("/contacts/{contact_id}/automation/pause")
+def contact_automation_pause(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Ferma le automazioni di QUESTO contatto. I messaggi manuali restano."""
+    return _tradotto(lambda: journey_service.pause_automations(ctx, contact_id))
+
+
+@router.post("/contacts/{contact_id}/automation/resume")
+def contact_automation_resume(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return _tradotto(lambda: journey_service.resume_automations(ctx, contact_id))
+
+
+@router.post("/messages/{message_id}/cancel")
+def message_cancel(
+    message_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Ritira dalla coda un messaggio non ancora partito."""
+    esito = _tradotto(lambda: dispatcher_service.cancel(ctx, message_id))
+    return {"message_id": esito["id"], "status": esito["status"]}
+
+
+@router.post("/messages/{message_id}/send-now")
+def message_send_now(
+    message_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Anticipa a subito un messaggio in coda. NON spedisce: sposta la data,
+    e il dispatcher resta l'unico che parla con un provider."""
+    esito = _tradotto(lambda: dispatcher_service.send_now(ctx, message_id))
+    return {"message_id": esito["id"], "status": esito["status"],
+            "scheduled_at": esito["scheduled_at"]}
+
+
+@router.post("/journeys/enrollments/{enrollment_id}/pause")
+def enrollment_pause(
+    enrollment_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return _tradotto(lambda: journey_service.pause_enrollment(ctx, enrollment_id))
+
+
+@router.post("/journeys/enrollments/{enrollment_id}/resume")
+def enrollment_resume(
+    enrollment_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return _tradotto(lambda: journey_service.resume_enrollment(ctx, enrollment_id))
+
+
+@router.post("/journeys/enrollments/{enrollment_id}/stop")
+def enrollment_stop(
+    enrollment_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Interrompe l'iscrizione per decisione di una persona: `operator`, con
+    il suo nome nel registro."""
+    return _tradotto(lambda: journey_service.stop_enrollment(ctx, enrollment_id))
+
+
+@router.post("/journeys/stima-lead/provision")
+def provision_stima_lead(
+    ctx: OperatorContext = Depends(require_dispatch_context),
+):
+    """Crea la sequenza della stima v1 in BOZZA. Idempotente, e non accende
+    niente: l'attivazione e' un secondo gesto, esplicito."""
+    esito = _tradotto(lambda: journey_catalog.ensure_stima_lead_v1(ctx))
+    return {"created": esito["created"], "journey": esito["journey"]}
+
+
+@router.post("/journeys/{journey_id}/activate")
+def journey_activate(
+    journey_id: int,
+    ctx: OperatorContext = Depends(require_dispatch_context),
+):
+    """Accende una journey. Da questo istante in avanti: le stime spedite
+    PRIMA non producono iscrizioni (P29-3A.1 SS C)."""
+    return _tradotto(lambda: journey_service.activate_journey(ctx, journey_id))
+
+
+@router.post("/journeys/{journey_id}/retire")
+def journey_retire(
+    journey_id: int,
+    ctx: OperatorContext = Depends(require_dispatch_context),
+):
+    """Spegne una journey: non nascono piu' iscrizioni. Quelle gia' aperte
+    proseguono sulla versione a cui sono nate, salvo una condizione di stop."""
+    return _tradotto(lambda: journey_service.retire_journey(ctx, journey_id))

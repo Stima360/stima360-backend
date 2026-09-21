@@ -127,6 +127,20 @@ def select_active_journey(cur, ctx, journey_key: str) -> dict[str, Any] | None:
     return _proietta(riga, JOURNEY_COLUMNS) if riga else None
 
 
+def select_journey_version(cur, ctx, *, journey_key: str, version: int) -> dict[str, Any] | None:
+    """UNA versione precisa, qualunque sia il suo stato.
+
+    P29-3D: il provisioning deve poter dire "questa v1 esiste gia'" anche
+    quando e' in bozza o ritirata - `select_active_journey` non basta,
+    perche' chiederebbe di ricrearla ogni volta che e' spenta.
+    """
+    cur.execute(
+        "SELECT * FROM communication_journeys WHERE agency_id = %s AND journey_key = %s "
+        "AND version = %s", (ctx.require_agency(), journey_key, version))
+    riga = cur.fetchone()
+    return _proietta(riga, JOURNEY_COLUMNS) if riga else None
+
+
 def list_steps(cur, ctx, journey_id: int) -> list[dict[str, Any]]:
     cur.execute(
         """SELECT s.* FROM communication_journey_steps s
@@ -421,6 +435,32 @@ MOTORE_COLUMNS = (
 )
 
 
+class FeatureNotMigrated(ConflictError):
+    """Le journey esistono nel codice, non ancora nel database.
+
+    Un errore DICHIARATO e non un incidente: il codice arriva in TEST con il
+    deploy, la 071 con un gesto separato, e fra i due momenti le rotte delle
+    journey devono dire "non ancora" invece di rompersi. Il router la
+    traduce in 503 - un 500 con `UndefinedTable` direbbe la stessa cosa a
+    chi legge i log, e niente a chi chiama.
+
+    Sta QUI, accanto a `schema_ready`, e non nel motore: da P29-3D la
+    pretendono anche le primitive del service (pausa, ripresa, stop), che il
+    Contact 360 chiama senza passare dal tick.
+    """
+
+
+MESSAGGIO_NON_MIGRATO = (
+    "journey automation requires migration 071, which is not applied on this database"
+)
+
+
+def require_schema(cur) -> None:
+    """Una query, e un errore chiaro se la 071 non c'e'."""
+    if not schema_ready(cur):
+        raise FeatureNotMigrated(MESSAGGIO_NON_MIGRATO)
+
+
 def schema_ready(cur) -> bool:
     """La 071 e' applicata su QUESTO database?
 
@@ -595,6 +635,31 @@ def rendering_context(cur, ctx, contact_ids: list[int]) -> dict[int, dict[str, A
             WHERE c.agency_id = %s AND c.id = ANY(%s)""",
         (ctx.require_agency(), contact_ids))
     return {r["id"]: dict(r) for r in cur.fetchall()}
+
+
+def trigger_links(cur, ctx, message_ids: list[int]) -> dict[int, str]:
+    """`id del trigger -> URL del PDF della stima`, per il lotto.
+
+    P29-3D: i testi reali rimandano alla stima che l'interessato ha gia'
+    ricevuto, e quel link e' gia' nel ledger - `metadata.pdf_url` del
+    messaggio `stima_pdf`, scritto dal producer. Si rilegge da li' invece di
+    ricostruirlo: un URL ricalcolato potrebbe puntare a un documento diverso
+    da quello spedito.
+
+    Una query per lotto, non una per messaggio.
+    """
+    if not message_ids:
+        return {}
+    cur.execute(
+        "SELECT id, metadata FROM communication_messages WHERE agency_id = %s AND id = ANY(%s)",
+        (ctx.require_agency(), message_ids))
+    collegamenti = {}
+    for r in cur.fetchall():
+        metadata = r["metadata"] or {}
+        url = metadata.get("pdf_url") if isinstance(metadata, dict) else None
+        if isinstance(url, str) and url.strip():
+            collegamenti[r["id"]] = url.strip()
+    return collegamenti
 
 
 def timeline_event(cur, ctx, *, event_type: str, contact_id: int, stima_id: int | None,
