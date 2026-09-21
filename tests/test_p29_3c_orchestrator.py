@@ -249,14 +249,41 @@ def _git_righe(*argomenti) -> list[str]:
 MODULI_NUOVI = ("journey_tick", "send_window")
 
 
-def test_17_nessun_cron_nuovo_e_il_runner_del_dispatch_non_e_cambiato():
-    """Il wiring tick -> dispatch si fa DOPO la 071 su TEST. Finche' non e'
-    applicata, il cron esistente deve funzionare esattamente come oggi."""
-    assert _git("status", "--porcelain", "--", "run_*.py") == ""
+def test_17_nessun_cron_nuovo_e_il_runner_non_accende_niente():
+    """SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata).
+
+    Quando P29-3C fu scritta il wiring tick -> dispatch non doveva esistere:
+    la 071 non era applicata, e un cron che avesse chiamato il tick avrebbe
+    preso 503 a ogni giro. Quella condizione e' finita - la migration e'
+    su TEST, e la fase che collega le due cose e' P29-3E - quindi la
+    sentinella non pretende piu' che il runner ignori le journey.
+
+    Cio' che pretende ancora, e che non smettera' mai di pretendere: che di
+    cron ce ne sia UNO, che sia quello dichiarato, e che non provisioni e non
+    attivi niente. Accendere una sequenza commerciale e' un gesto
+    amministrativo, e un cron che lo facesse da solo manderebbe email a nome
+    di un'agenzia che non ha deciso niente.
+    """
+    from tests.p29_3e_diff import RUNNER_TOCCATO
+
+    toccati = {r[3:].strip() for r in _git_righe("status", "--porcelain", "--", "run_*.py")}
+    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
     assert not list(ROOT.glob("run_journey*.py"))
-    corrente = (ROOT / "run_communication_dispatch_cron.py").read_text(encoding="utf-8")
-    assert "journey" not in corrente.lower()
-    assert "tick" not in corrente.lower()
+
+    # Si legge il CODICE, non la prosa: la docstring del runner SPIEGA che la
+    # sequenza si accende a mano, e una sentinella che leggesse le spiegazioni
+    # scambierebbe quella frase per l'infrazione che descrive.
+    import re as _re
+    corrente = (ROOT / RUNNER_TOCCATO).read_text(encoding="utf-8")
+    corrente = _re.sub(r'"{3}[\s\S]*?"{3}', "", corrente)
+    corrente = _re.sub(r"#[^\n]*", "", corrente)
+    for vietato in ("ensure_stima_lead", "stima_lead", "/provision", "/activate",
+                    "/retire"):
+        assert vietato not in corrente, vietato
+    # E resta un CLIENT: nessun import del dominio, nessuna connessione.
+    for vietato in ("from communication", "import communication", "psycopg2",
+                    "get_connection", "smtplib"):
+        assert vietato not in corrente, vietato
 
 
 def test_18_nessuna_journey_viene_creata_o_attivata_da_sola():
@@ -385,15 +412,26 @@ def test_27_la_sonda_dello_schema_e_una_query_e_non_e_memorizzata():
     assert "to_regclass" in codice
 
 
-def test_28_il_tick_non_e_chiamato_da_nessun_percorso_automatico():
-    """La rotta esiste, ma nessuno la chiama ancora: il collegamento con il
-    dispatch appartiene alla fase dopo la migration su TEST."""
-    # Si guarda CHI la chiamerebbe - runner, script, frontend - non chi la
-    # DICHIARA, che e' il router e deve nominarla.
-    chiamanti = _git("grep", "-l", "journeys/tick", "--",
-                     "run_*.py", "scripts/*.py", "static/*", "*.sh")
-    assert chiamanti == "", chiamanti
+def test_28_il_tick_lo_chiama_UN_SOLO_percorso_automatico():
+    """SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata).
+
+    Prima: nessuno chiamava il tick, e doveva restare cosi' finche' la 071
+    non fosse applicata. Adesso lo chiama il cron del dispatch, ed e' il
+    punto della fase. Quello che la sentinella continua a impedire e' che lo
+    chiami QUALCUN ALTRO: uno script dimenticato, una pagina della Shell, uno
+    `.sh` di deploy. Due percorsi automatici verso lo stesso motore sono due
+    giri concorrenti che nessuno ha progettato.
+    """
+    from tests.p29_3e_diff import RUNNER_TOCCATO
+
+    chiamanti = set(_git("grep", "-l", "journeys/tick", "--",
+                         "run_*.py", "scripts/*.py", "static/*", "*.sh").split())
+    assert chiamanti <= {RUNNER_TOCCATO}, sorted(chiamanti)
+    # E nessun ALTRO runner nomina le journey: quello dichiarato le nomina
+    # perche' e' il suo mestiere, gli altri quattro no.
     for sorgente in ROOT.glob("run_*.py"):
+        if sorgente.name == RUNNER_TOCCATO:
+            continue
         assert "journey" not in sorgente.read_text(encoding="utf-8").lower(), sorgente.name
 
 
@@ -415,15 +453,18 @@ def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # inventario, dichiarato allo stesso modo. Questo test continua a
     # pretendere che nel working tree non ci sia NIENTE che nessuna delle due
     # fasi abbia dichiarato: guarda l'unione, non smette di guardare.
+    # E DA P29-3E, terza fase a dichiararsi allo stesso modo: l'unione
+    # cresce, il verso del controllo no.
     from tests.p29_3d_diff import FILE_MODIFICATI as MOD_3D, FILE_NUOVI as NUOVI_3D
+    from tests.p29_3e_diff import FILE_MODIFICATI as MOD_3E, FILE_NUOVI as NUOVI_3E
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    dichiarati_nuovi = FILE_NUOVI | NUOVI_3D
-    dichiarati_modificati = FILE_MODIFICATI | MOD_3D | NUOVI_3D
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3D | NUOVI_3E
+    dichiarati_modificati = FILE_MODIFICATI | MOD_3D | NUOVI_3D | MOD_3E | NUOVI_3E
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)

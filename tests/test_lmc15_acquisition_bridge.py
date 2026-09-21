@@ -624,10 +624,21 @@ def test_39_nessun_cron_nuovo():
              + SU)
     for vietato in ("advisory_lock", "pg_try_advisory_lock", "cron", "schedule("):
         assert vietato not in testo, vietato
-    nuovi = subprocess.run(
+    # SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata). LMC-15 non
+    # doveva toccare nessun runner, e non ne ha toccato nessuno: questa
+    # riga lo verificava guardando che `run_*.py` fosse intonso. P29-3E ne
+    # tocca UNO, dichiarato per nome nel suo inventario, per far girare il
+    # motore delle journey prima del dispatch nello stesso giro. Cio' che
+    # questo test difende resta intero: il ponte di acquisizione non ha
+    # cron, non ne nasce nessuno, e nessun runner cambia senza che una fase
+    # lo abbia dichiarato.
+    from tests.p29_3e_diff import RUNNER_TOCCATO
+
+    righe = subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "run_*.py"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    assert nuovi == "", nuovi
+        cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
+    toccati = {r[3:].strip() for r in righe}
+    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
 
 
 def test_40_il_ponte_non_tocca_i_domini_vicini():

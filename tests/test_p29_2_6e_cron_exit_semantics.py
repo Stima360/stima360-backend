@@ -235,5 +235,11 @@ def test_exit_10_il_log_non_nomina_credenziali_ne_destinatari(capsys):
     # verifica non dipende da quanto sia distinguibile la password di prova.
     campi = dict(pezzo.split("=", 1) for pezzo in stampato.split() if "=" in pezzo)
     assert not {"email", "password", "user", "destination", "to", "cookie"} & set(campi)
-    assert set(campi) <= ({"status", "channel", "duration_ms", "reason"}
-                          | set(runner.CONTEGGI)), sorted(campi)
+    # SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata). Un giro
+    # stampa adesso DUE righe - il tick e il dispatch - e quella del tick
+    # porta `phase=journey_tick` con i conteggi del motore. La garanzia che
+    # questo test da' non cambia: l'elenco dei nomi ammessi resta CHIUSO, e
+    # nessun nome nuovo e' un indirizzo, una credenziale o un cookie.
+    assert set(campi) <= ({"status", "phase", "channel", "duration_ms", "reason"}
+                          | set(runner.CONTEGGI)
+                          | set(runner.CONTEGGI_TICK)), sorted(campi)

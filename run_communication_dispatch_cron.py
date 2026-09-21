@@ -1,5 +1,18 @@
 """P29-2.6E cron runner per il dispatch delle comunicazioni. Scheduling remains external.
 
+P29-3E: LO STESSO CRON FA ANCHE GIRARE IL MOTORE DELLE JOURNEY
+
+Un secondo runner sarebbe stato piu' facile da scrivere e peggio da gestire:
+due cron da configurare per ogni agenzia, due credenziali, due allarmi, e
+soprattutto nessuna garanzia sull'ORDINE. Cio' che il tick mette in coda deve
+poter partire nello stesso giro, altrimenti M1 aspetta il giro dopo senza
+ragione. Quindi: TICK PRIMA, DISPATCH POI, nello stesso login.
+
+Il runner resta cio' che era: un CLIENT HTTP. Non importa il dominio, non
+apre connessioni, non conosce una journey - chiama una rotta che esiste gia'
+(P29-3C) e legge dei conteggi. E non provisiona e non attiva NIENTE: la
+sequenza `stima_lead` si accende a mano, una volta, da un amministratore.
+
 PERCHE' NON E' UNA COPIA DI `run_followup_p18d_cron.py`
 
 Quel runner e' il modello che il design indica (§8.3), e la sua FORMA e' quella
@@ -63,11 +76,24 @@ I TRE CODICI DI USCITA
         (`claimed == 0`) e' exit 0: non c'era niente da mandare.
     1   guasto TECNICO del giro: configurazione, login, rete, timeout,
         protocollo. Il dispatch non e' avvenuto, o non si sa se sia avvenuto.
-    2   guasto APPLICATIVO: il giro e' andato, ma almeno un messaggio non e'
-        partito. Vedi `CONTEGGI_DI_GUASTO`.
+    2   guasto APPLICATIVO: il giro e' andato, ma qualcosa non e' passato -
+        almeno un messaggio non e' partito (`CONTEGGI_DI_GUASTO`), oppure il
+        tick delle journey non e' riuscito. Il dispatch e' avvenuto lo stesso.
 
 La differenza fra 1 e 2 e' operativa e non estetica: l'1 si guarda nella
-piattaforma (credenziali, rete, servizio giu'), il 2 nel ledger.
+piattaforma (credenziali, rete, servizio giu'), il 2 nel ledger e nel motore.
+
+IL TICK NON PUO' TOGLIERE AL CRON LA CAPACITA' DI SPEDIRE
+
+Un guasto del motore delle journey e' un guasto del motore delle journey. Se
+diventasse un `return 1` prima del dispatch, un bug nel tick bloccherebbe
+anche i messaggi che sono GIA' in coda - compresi quelli scritti a mano da
+una persona, che con le journey non c'entrano niente. Quindi: qualunque cosa
+faccia il tick, il dispatch parte; se il tick non e' riuscito, il giro finisce
+2 e lo dice nel log, ma le email in coda sono partite.
+
+L'unica eccezione e' il login: senza sessione non si fa nemmeno il tick, e il
+giro e' 1 prima di cominciare.
 """
 
 from __future__ import annotations
@@ -96,6 +122,13 @@ class Config:
     channel: str
     limit: int
     timeout: tuple[float, float]
+    #: Quante iscrizioni al massimo puo' toccare UN giro del motore. Non e'
+    #: `limit`: quello conta messaggi da spedire, questo conta iscrizioni da
+    #: far avanzare, e i due numeri non hanno ragione di coincidere. Il
+    #: default e' quello della rotta; l'intervallo lo pretende lo schema
+    #: `JourneyTickRequest`, e qui si rifiuta prima di partire invece di
+    #: scoprirlo con un 422 a meta' giro.
+    journey_limit: int = 500
 
 
 #: I canali che il dominio conosce. Tenuti qui come letterali e non importati da
@@ -150,6 +183,7 @@ def load_config() -> Config:
             _seconds("COMMUNICATION_CONNECT_TIMEOUT_SECONDS", 5),
             _seconds("COMMUNICATION_READ_TIMEOUT_SECONDS", 120),
         ),
+        _integer("COMMUNICATION_JOURNEY_TICK_LIMIT", 500, minimum=1, maximum=2000),
     )
 
 
@@ -158,14 +192,31 @@ def load_config() -> Config:
 CONTEGGI = ("claimed", "sent", "suppressed", "failed", "indeterminate", "lost")
 
 
+#: I conteggi che `journeys/tick` restituisce (P29-3C). Stessa regola dei
+#: precedenti: elencati per NOME, perche' un giro che ne restituisse uno
+#: diverso e' un contratto cambiato e va visto subito.
+CONTEGGI_TICK = ("stopped", "advanced", "completed",
+                 "enrolled_active", "enrolled_stopped", "enrolled_skipped",
+                 "queued", "queued_idempotent", "awaiting_operator", "errors")
+
+
 def _log(status: str, duration_ms: int, reason: str | None = None,
-         counts: dict | None = None, channel: str | None = None) -> None:
+         counts: dict | None = None, channel: str | None = None,
+         phase: str | None = None, nomi: tuple[str, ...] = CONTEGGI) -> None:
     """Una riga sola, a campi. Nessuna credenziale, nessun cookie, nessun
-    indirizzo: un log di cron finisce in posti che non controlliamo."""
+    indirizzo: un log di cron finisce in posti che non controlliamo.
+
+    P29-3E: `phase` distingue le DUE righe che un giro stampa adesso - una
+    per il tick, una per il dispatch - e `nomi` dice quali conteggi ci si
+    aspetta in questa fase. Senza `phase` la riga e' quella del dispatch, e
+    resta identica a com'era: i cruscotti che la leggono non cambiano.
+    """
     fields = [f"status={status}"]
+    if phase:
+        fields.append(f"phase={phase}")
     if channel:
         fields.append(f"channel={channel}")
-    for key in CONTEGGI:
+    for key in nomi:
         if counts and key in counts:
             fields.append(f"{key}={counts[key]}")
     fields.append(f"duration_ms={duration_ms}")
@@ -192,17 +243,154 @@ def _log(status: str, duration_ms: int, reason: str | None = None,
 CONTEGGI_DI_GUASTO = ("failed", "indeterminate", "lost")
 
 
+#: Il codice macchina che la rotta usa quando la 071 non c'e' (P29-3C). Il
+#: runner lo riconosce invece di leggere una frase: una frase cambia.
+NON_MIGRATA = "feature_not_migrated"
+
+#: Gli esiti possibili del tick dentro un giro. `not_migrated` e' uno stato
+#: ATTESO finche' la 071 non e' applicata ovunque, e non e' un guasto; dopo,
+#: non dovrebbe comparire mai piu', ed e' la riga da cercare nei log.
+TICK_COMPLETATO = "completed"
+TICK_NON_MIGRATA = "not_migrated"
+TICK_FALLITO = "failed"
+
+
+def _journey_failure(data: dict) -> bool:
+    """True quando il motore delle journey non ha fatto il suo giro.
+
+    Due casi, e nessuno dei due impedisce al dispatch di partire:
+
+    `journey_status == failed`  il tick non e' arrivato in fondo - rete,
+                                timeout, 4xx, 5xx, contratto cambiato.
+    `journey_errors > 0`        il tick e' arrivato in fondo, ma almeno una
+                                iscrizione e' morta nel suo savepoint. Come
+                                `failed` per il dispatch: il ledger lo sa, e
+                                un exit 0 farebbe si' che non lo guardi
+                                nessuno.
+
+    Assente vuol dire "nessun tick in questo giro" e non e' un guasto: un
+    dizionario di soli conteggi di dispatch resta valido.
+    """
+    if data.get("journey_status") == TICK_FALLITO:
+        return True
+    return int(data.get("journey_errors", 0) or 0) > 0
+
+
 def _application_failure(data: dict) -> bool:
     """True quando almeno un messaggio NON e' partito e il giro non puo' dirsi
     riuscito. Vedi `CONTEGGI_DI_GUASTO`.
 
     `claimed == 0` non e' un guasto: una coda vuota e' il caso normale di un
     cron che gira ogni ora.
+
+    P29-3E: un tick che non e' riuscito conta come guasto applicativo. Il
+    dispatch e' avvenuto lo stesso - questo predicato si legge DOPO - ma il
+    giro non puo' dirsi verde se il motore non ha girato.
     """
-    return any(int(data.get(chiave, 0) or 0) > 0 for chiave in CONTEGGI_DI_GUASTO)
+    if any(int(data.get(chiave, 0) or 0) > 0 for chiave in CONTEGGI_DI_GUASTO):
+        return True
+    return _journey_failure(data)
+
+
+def _codice_di_errore(risposta) -> str | None:
+    """Il codice macchina dentro un corpo di errore, se c'e'.
+
+    La rotta risponde `{"detail": {"code": ..., "message": ...}}`. Un corpo
+    diverso - una pagina HTML di un proxy, un 503 del load balancer - non ha
+    un `detail` e non ha un codice: si restituisce None, e il chiamante lo
+    tratta come un guasto qualunque, che e' cio' che e'.
+    """
+    try:
+        corpo = risposta.json()
+    except Exception:  # noqa: BLE001 - un corpo illeggibile non e' un codice
+        return None
+    dettaglio = corpo.get("detail") if isinstance(corpo, dict) else None
+    if isinstance(dettaglio, dict):
+        codice = dettaglio.get("code")
+        return codice if isinstance(codice, str) else None
+    return None
+
+
+def _journey_tick(config: Config, sessione) -> dict:
+    """UN giro del motore. Non solleva mai, e non ritenta mai.
+
+    NON SOLLEVA perche' il dispatch deve partire comunque: l'esito torna come
+    dato, e chi legge decide. Nemmeno un guasto che qui non e' previsto -
+    un trasporto che alza un'eccezione di un'altra libreria, un corpo di una
+    forma che nessuno si aspettava - deve poter togliere al giro la capacita'
+    di spedire cio' che e' gia' in coda. Finisce in `unexpected`, che nel log
+    si vede e nel codice di uscita pesa come qualunque altro guasto del tick.
+
+    NON RITENTA perche' un tick e' una SCRITTURA - iscrizioni create, passi
+    accodati - e riprovarlo dentro lo stesso giro significherebbe farlo
+    girare due volte su una risposta persa. Il motore e' idempotente e
+    sopravviverebbe, ma la ripetizione e' del cron: fra un'ora c'e' il giro
+    dopo.
+
+    Restituisce `{"status": ..., "counts": dict | None, "reason": str | None}`.
+    """
+    iniziato = time.monotonic()
+
+    def esito(stato, reason=None, counts=None):
+        _log("completed" if stato == TICK_COMPLETATO else
+             "skipped" if stato == TICK_NON_MIGRATA else "failed",
+             int((time.monotonic() - iniziato) * 1000), reason,
+             counts=counts, phase="journey_tick", nomi=CONTEGGI_TICK)
+        return {"status": stato, "counts": counts, "reason": reason}
+
+    try:
+        try:
+            risposta = sessione.post(
+                f"{config.base_url}/api/communication/journeys/tick",
+                json={"limit": config.journey_limit},
+                timeout=config.timeout,
+            )
+        except requests.Timeout:
+            return esito(TICK_FALLITO, "timeout")
+        except requests.RequestException:
+            return esito(TICK_FALLITO, "http_or_network")
+
+        # Lo stato si LEGGE invece di farsi sollevare da `raise_for_status`:
+        # quel metodo alza l'eccezione della libreria che ha fatto la
+        # richiesta, e questa funzione ha promesso di non sollevare niente.
+        stato = getattr(risposta, "status_code", None)
+        if not isinstance(stato, int):
+            return esito(TICK_FALLITO, "invalid_response")
+
+        if stato == 503 and _codice_di_errore(risposta) == NON_MIGRATA:
+            # La 071 non c'e' ancora su questo ambiente. E' lo stato previsto
+            # dal deploy-prima-della-migration, non un guasto: si passa
+            # oltre, e il log lo dice con una parola che si puo' cercare.
+            return esito(TICK_NON_MIGRATA, NON_MIGRATA)
+        if stato >= 400:
+            return esito(TICK_FALLITO, f"http_{stato}")
+
+        try:
+            dati = risposta.json()
+        except ValueError:
+            return esito(TICK_FALLITO, "invalid_json")
+        if not isinstance(dati, dict) or any(
+                type(dati.get(chiave)) is not int or dati[chiave] < 0
+                for chiave in CONTEGGI_TICK):
+            return esito(TICK_FALLITO, "invalid_json")
+
+        return esito(TICK_COMPLETATO, counts=dati)
+    except Exception:  # noqa: BLE001 - vedi la docstring: l'isolamento e' il punto
+        return esito(TICK_FALLITO, "unexpected")
 
 
 def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
+    """UN giro intero: login, tick, dispatch, logout.
+
+    L'ordine non e' un dettaglio. Il tick sta PRIMA perche' cio' che mette in
+    coda deve poter partire in questo stesso giro; sta DOPO il login perche'
+    la rotta vuole una sessione; e il logout sta nel `finally` perche' vale
+    anche quando il resto e' andato male.
+
+    Restituisce i conteggi del dispatch - il contratto di prima, invariato -
+    con accanto `journey_status` e, se il tick e' arrivato in fondo,
+    `journey_errors` e `journey_queued`.
+    """
     started = time.monotonic()
     propria = sessione is None
     sessione = sessione or requests.Session()
@@ -219,6 +407,11 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
             _log("failed", int((time.monotonic() - started) * 1000), "login",
                  channel=config.channel)
             raise TechnicalError("login") from None
+
+        # IL TICK PRIMA DEL DISPATCH, nello stesso login: cio' che il motore
+        # mette in coda adesso puo' partire in questo stesso giro. Non
+        # solleva: qualunque cosa risponda, il dispatch va fatto.
+        journey = _journey_tick(config, sessione)
 
         try:
             risposta = sessione.post(
@@ -248,6 +441,14 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
 
         _log("completed", int((time.monotonic() - started) * 1000), counts=dati,
              channel=config.channel)
+        # L'esito del tick viaggia accanto ai conteggi del dispatch, piatto e
+        # con un prefisso suo: `main` ne ha bisogno per il codice di uscita, e
+        # chi legge la risposta di un giro non deve andarselo a cercare in un
+        # dizionario annidato.
+        dati["journey_status"] = journey["status"]
+        if journey["counts"] is not None:
+            dati["journey_errors"] = journey["counts"]["errors"]
+            dati["journey_queued"] = journey["counts"]["queued"]
         return dati
     finally:
         # Sempre, anche dopo un errore: una sessione abbandonata a ogni giro

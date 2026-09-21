@@ -588,13 +588,25 @@ def _git_righe(*argomenti) -> list[str]:
                           cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
 
 
-def test_35_nessun_cron_nuovo_e_il_runner_del_dispatch_non_e_cambiato():
-    """Il wiring tick -> dispatch appartiene alla fase dopo la 071 su TEST."""
-    assert _git("status", "--porcelain", "--", "run_*.py") == ""
+def test_35_nessun_cron_nuovo_e_il_cron_non_accende_la_sequenza():
+    """SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata).
+
+    Il wiring tick -> dispatch e' la fase P29-3E, ed e' stato fatto li'. Cio'
+    che questa sentinella difendeva e che resta vero: di cron ce n'e' UNO, e
+    non provisiona e non attiva la sequenza della stima. Il collegamento al
+    motore e' un'altra cosa dall'accendere una sequenza commerciale, e la
+    seconda resta un gesto che fa una persona.
+    """
+    from tests.p29_3e_diff import RUNNER_TOCCATO
+
+    toccati = {r[3:].strip() for r in _git_righe("status", "--porcelain", "--", "run_*.py")}
+    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
     assert not list(ROOT.glob("run_journey*.py"))
-    corrente = (ROOT / "run_communication_dispatch_cron.py").read_text(encoding="utf-8")
-    for vietato in ("journey", "tick", "stima_lead"):
-        assert vietato not in corrente.lower(), vietato
+    corrente = re.sub(r'"{3}[\s\S]*?"{3}', "",
+                      (ROOT / RUNNER_TOCCATO).read_text(encoding="utf-8"))
+    corrente = re.sub(r"#[^\n]*", "", corrente)
+    for vietato in ("stima_lead", "ensure_stima_lead", "/provision", "/activate"):
+        assert vietato not in corrente, vietato
 
 
 def test_36_i_moduli_nuovi_non_toccano_la_rete_e_non_spediscono():
@@ -647,6 +659,8 @@ def test_38_le_rotte_nuove_non_accettano_l_agenzia_dal_client():
 def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
     from tests.p29_3d_diff import FILE_MODIFICATI, FILE_NUOVI
+    # P29-3E si dichiara allo stesso modo: l'unione cresce di una fase.
+    from tests.p29_3e_diff import FILE_MODIFICATI as MOD_3E, FILE_NUOVI as NUOVI_3E
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
@@ -655,17 +669,21 @@ def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
 
     # Nel working tree non c'e' NIENTE che nessuna delle due fasi abbia
     # dichiarato - tranne il documento di design, che resta fuori apposta.
-    assert nuovi - (FILE_NUOVI | NUOVI_3C) == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
-        sorted(nuovi - (FILE_NUOVI | NUOVI_3C))
-    assert modificati <= (FILE_MODIFICATI | MOD_3C | FILE_NUOVI | NUOVI_3C), \
-        sorted(modificati - (FILE_MODIFICATI | MOD_3C | FILE_NUOVI | NUOVI_3C))
-    # E ogni voce dichiarata da QUESTA fase corrisponde a qualcosa di vero.
+    tutti_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3E
+    tutti_modificati = FILE_MODIFICATI | MOD_3C | MOD_3E | tutti_nuovi
+    assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+        sorted(nuovi - tutti_nuovi)
+    assert modificati <= tutti_modificati, sorted(modificati - tutti_modificati)
+    # NOTA DI P29-3E: finche' P29-3D era in corso, qui si pretendeva anche
+    # che ogni voce dichiarata da quella fase fosse VERAMENTE modificata nel
+    # working tree. Dopo il suo commit non c'e' piu' un working tree da
+    # guardare, e la garanzia si sposta su cio' che resta vero per sempre:
+    # ogni file dichiarato esiste ed e' nell'indice.
     for nome in FILE_NUOVI:
         assert (ROOT / nome).exists(), nome
-        assert nome in nuovi, nome
+        assert nome in tracciati, nome
     for nome in FILE_MODIFICATI:
         assert nome in tracciati, nome
-        assert nome in modificati, nome
     assert "P29_2_0_COMMUNICATION_DESIGN.md" not in tracciati
     assert (ROOT / "P29_2_0_COMMUNICATION_DESIGN.md").exists()
 

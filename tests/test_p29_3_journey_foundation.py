@@ -275,10 +275,22 @@ def test_16_nessun_invio_marketing_reale_e_nessun_tick():
     assert "enqueue(" not in _codice(journey_service)
 
 
-def test_17_nessun_cron_nuovo_e_il_runner_non_e_cambiato():
-    nuovi = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain", "--", "run_*.py"],
-                           cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    assert nuovi == "", nuovi
+def test_17_nessun_cron_nuovo_e_il_runner_toccato_e_quello_dichiarato():
+    """SENTINELLA AGGIORNATA DA P29-3E (collisione dichiarata).
+
+    P29-3B non doveva toccare nessun runner, e non ne tocco' nessuno. P29-3E
+    ne tocca uno, dichiarato per nome, per far girare il motore prima del
+    dispatch nello stesso giro. La garanzia resta: nessun runner cambia
+    senza che una fase lo abbia dichiarato, e di cron nuovi non ne nasce
+    nessuno.
+    """
+    from tests.p29_3e_diff import RUNNER_TOCCATO
+
+    righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain",
+                            "--", "run_*.py"],
+                           cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
+    toccati = {r[3:].strip() for r in righe}
+    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
 
 
 def test_18_il_dispatcher_non_conosce_le_journey():
@@ -302,6 +314,7 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # fase, il verso del controllo resta identico in entrambe le direzioni.
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
     from tests.p29_3d_diff import FILE_MODIFICATI as MOD_3D, FILE_NUOVI as NUOVI_3D
+    from tests.p29_3e_diff import FILE_MODIFICATI as MOD_3E, FILE_NUOVI as NUOVI_3E
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
@@ -314,8 +327,9 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     tracciati = set(subprocess.run(["git", "--no-optional-locks", "ls-files"],
                                    cwd=ROOT, capture_output=True, text=True).stdout.split())
 
-    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3D
-    dichiarati_modificati = FILE_MODIFICATI | MOD_3C | NUOVI_3C | MOD_3D | NUOVI_3D
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C | NUOVI_3D | NUOVI_3E
+    dichiarati_modificati = (FILE_MODIFICATI | MOD_3C | NUOVI_3C | MOD_3D | NUOVI_3D
+                             | MOD_3E | NUOVI_3E)
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)
