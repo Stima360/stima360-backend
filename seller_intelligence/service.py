@@ -177,7 +177,11 @@ def record_event_scoped(
     payload: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     created_by: str | None = None,
+    lock_stima: bool = False,
 ) -> dict[str, Any]:
+    """`lock_stima` (P29-3C): blocca la stima nella stessa transazione
+    dell'evento, per i soli eventi che il motore delle journey tratta come
+    FATTI di stop. Vedi `repository.insert_event_scoped`."""
     values = {
         "contact_id": contact_id,
         "lead_id": lead_id,
@@ -197,7 +201,7 @@ def record_event_scoped(
         "idempotency_key": idempotency_key,
         "created_by": created_by,
     }
-    return repository.insert_event_scoped(ctx, data)
+    return repository.insert_event_scoped(ctx, data, lock_stima=lock_stima)
 
 
 def list_timeline_scoped(ctx, **filters: Any) -> list[dict[str, Any]]:

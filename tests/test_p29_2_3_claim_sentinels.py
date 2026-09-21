@@ -65,7 +65,11 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # per progetto: il nucleo non li importa, e il tick che
                     # li usera' e' una fase successiva.
                     "templates.py", "unsubscribe.py", "public_router.py",
-                    "journey_enums.py", "journey_repository.py", "journey_service.py")
+                    "journey_enums.py", "journey_repository.py", "journey_service.py",
+                    # P29-3C: il motore e la finestra di invio, la fase
+                    # successiva annunciata sopra. Anche loro fuori dal
+                    # nucleo, che continua a non importarli.
+                    "journey_tick.py", "send_window.py")
 
 
 def sorgenti() -> dict[str, str]:

@@ -87,6 +87,68 @@ def _riga(cur, colonne):
 # IL LINK
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# P29-3C - IL FENCE SULLA STIMA
+#
+# Questi scrittori producono i FATTI che fermano una journey: un incarico
+# firmato, un link di acquisizione, un sopralluogo. Il motore delle journey
+# (P29-3C) decide se far partire un messaggio tenendo bloccate contatto,
+# lead e stima, e rileggendo i fatti con quelle righe in mano.
+#
+# Perche' quel contratto valga servono DUE meta': chi legge prende il lock, e
+# chi scrive lo rispetta. Queste funzioni prendono `stime` FOR UPDATE nella
+# STESSA transazione della scrittura, prima di scrivere. Da li' in poi solo
+# uno dei due passa alla volta:
+#
+#   se lo stop ha committato prima del lock del motore, il motore lo vede;
+#   se il lock lo ha preso prima il motore, questa scrittura ASPETTA il suo
+#   commit, e il messaggio che il motore stava per accodare e' partito con
+#   una decisione che al suo istante era vera.
+#
+# Nessuna semantica di questo dominio cambia: nessun predicato nuovo, nessun
+# campo nuovo, nessun errore nuovo. Si aggiunge solo il coordinamento.
+#
+# ORDINE DEI LOCK: qui si prende SOLO la stima. Il motore prende contatto,
+# poi lead, poi stima; il consenso prende solo il contatto. Ogni percorso
+# prende un sottoinsieme nello stesso ordine relativo, quindi nessun ciclo
+# di attesa puo' formarsi.
+# ---------------------------------------------------------------------------
+
+def _blocca_stima(cur, agency_id, stima_id):
+    """`stime` FOR UPDATE, dentro l'agenzia. Una stima assente non e' un
+    errore qui: lo diranno i predicati della scrittura, come hanno sempre
+    fatto."""
+    if stima_id is None:
+        return
+    cur.execute("SELECT id FROM stime WHERE id = %s AND agency_id = %s FOR UPDATE",
+                (stima_id, agency_id))
+
+
+def _blocca_stima_dell_acquisizione(cur, agency_id, acquisition_id):
+    """La stima del link, bloccata prima di toccarlo. Passa dalla PROPERTY
+    come il predicato della revoca: dopo un hard delete della stima
+    `a.stima_id` e' NULL, e non c'e' niente da bloccare."""
+    cur.execute(
+        """SELECT a.stima_id FROM stima_acquisitions a
+             JOIN properties p ON p.id = a.property_id
+            WHERE a.id = %s AND p.agency_id = %s""",
+        (acquisition_id, agency_id))
+    riga = cur.fetchone()
+    if riga is not None:
+        _blocca_stima(cur, agency_id, riga["stima_id"])
+
+
+def _blocca_stima_del_sopralluogo(cur, agency_id, inspection_id):
+    cur.execute(
+        """SELECT i.stima_id FROM stima_inspections i
+             JOIN stime s ON s.id = i.stima_id
+            WHERE i.id = %s AND s.agency_id = %s""",
+        (inspection_id, agency_id))
+    riga = cur.fetchone()
+    if riga is not None:
+        _blocca_stima(cur, agency_id, riga["stima_id"])
+
+
 def create_acquisition_link(agency_id, *, stima_id, property_id, actor_user_id):
     """Collega una property alla stima da cui nasce.
 
@@ -96,6 +158,7 @@ def create_acquisition_link(agency_id, *, stima_id, property_id, actor_user_id):
     la seconda difesa, e l'indice unico parziale la terza.
     """
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima(cur, agency_id, stima_id)
         cur.execute(
             """
             INSERT INTO stima_acquisitions
@@ -126,6 +189,7 @@ def record_mandate(agency_id, *, acquisition_id, signed_at, reference, actor_use
     da "gia' registrato" rileggendo la riga.
     """
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima_dell_acquisizione(cur, agency_id, acquisition_id)
         cur.execute(
             """
             UPDATE stima_acquisitions a
@@ -183,6 +247,7 @@ def revoke_acquisition_link(agency_id, *, acquisition_id, reason, actor_user_id)
     renderebbe irrevocabile proprio il link orfano.
     """
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima_dell_acquisizione(cur, agency_id, acquisition_id)
         cur.execute(
             """
             UPDATE stima_acquisitions a
@@ -228,6 +293,7 @@ def revoke_acquisition_link(agency_id, *, acquisition_id, reason, actor_user_id)
 
 def create_inspection(agency_id, *, stima_id, scheduled_for, actor_user_id):
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima(cur, agency_id, stima_id)
         cur.execute(
             """
             INSERT INTO stima_inspections
@@ -258,6 +324,7 @@ def create_completed_inspection(agency_id, *, stima_id, completed_at, actor_user
     data di appuntamento mai esistita costringerebbe a inventarla.
     """
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima(cur, agency_id, stima_id)
         cur.execute(
             """
             INSERT INTO stima_inspections
@@ -304,6 +371,7 @@ def _chiudi_sopralluogo(agency_id, *, inspection_id, actor_user_id, assegnazioni
     """Chiude un sopralluogo ANCORA `scheduled`: entrambi gli stati finali sono
     terminali, quindi il predicato esige lo stato di partenza."""
     with core_cursor(commit=True) as (_, cur):
+        _blocca_stima_del_sopralluogo(cur, agency_id, inspection_id)
         cur.execute(
             f"""
             UPDATE stima_inspections i

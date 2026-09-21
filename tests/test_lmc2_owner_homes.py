@@ -465,10 +465,23 @@ def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():
     import subprocess
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "seller_intelligence/", "seller_intent/",
-         "next_best_action/", "followup/"],
+         "seller_intent/", "next_best_action/", "followup/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3C (collisione autorizzata, dichiarata): `seller_intelligence/`
+    # esce dall'elenco IN BLOCCO perche' quella fase vi aggiunge il flag
+    # `lock_stima`, che blocca la stima nella stessa transazione dell'evento
+    # per il solo evento trattato come fatto di stop. Non smette di essere
+    # guardato: i file toccati devono essere esattamente quelli dichiarati
+    # da quella fase, e il flag deve restare spento per default.
+    toccati = subprocess.run(
+        ["git", "--no-optional-locks", "diff", "--name-only", "--", "seller_intelligence/"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split()
+    from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C
+    assert set(toccati) <= MOD_3C, sorted(set(toccati) - MOD_3C)
+    import inspect as _inspect
+    from seller_intelligence import service as si_service
+    assert "lock_stima: bool = False" in _inspect.getsource(si_service.record_event_scoped)
     # P29-3B (collisione autorizzata, dichiarata): `communication/` e `operator_auth/` esce
     # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
     # provenienza di journey e aggiunge l'origine `public_unsubscribe`. Non smette di essere guardato: il diff di

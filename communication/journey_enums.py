@@ -23,14 +23,31 @@ ACTION_KINDS = frozenset({KIND_ENQUEUE, KIND_AWAIT_OPERATOR})
 
 PAUSED_BY_ENROLLMENT, PAUSED_BY_CONTACT_CONTROL = "enrollment", "contact_control"
 
+#: I nomi delle ragioni, uno per costante. P29-3C li passa come PARAMETRI
+#: alla query fresca degli stop: cosi' il SQL non contiene nessun letterale
+#: da tenere allineato a mano con questa lista.
+STOP_MANDATE_SIGNED = "mandate_signed"
+STOP_ACQUISITION_LINKED = "acquisition_linked"
+STOP_INSPECTION = "inspection"
+STOP_CONSULTATION_REQUESTED = "consultation_requested"
+STOP_LEAD_CLOSED = "lead_closed"
+STOP_CONTACT_INACTIVE = "contact_inactive"
+STOP_CONSENT_REVOKED = "consent_revoked"
+STOP_CONSENT_NOT_GRANTED = "consent_not_granted"
+STOP_CONSENT_INCONSISTENT = "consent_inconsistent"
+STOP_EXPIRED_ON_RESUME = "expired_on_resume"
+STOP_OPERATOR = "operator"
+
 #: L'ORDINE E' LA PRIORITA' (P29-3A.1 §H): quando piu' ragioni sono vere
 #: insieme vince la prima. Una tupla, non un insieme, e un test ne fissa
-#: l'ordine.
+#: l'ordine. E' l'UNICA fonte dell'ordinamento: la query fresca di P29-3C
+#: la riceve come array di parametri e ordina per la posizione in questa
+#: tupla, invece di riscriverla in SQL.
 STOP_PRIORITY = (
-    "mandate_signed", "acquisition_linked", "inspection", "consultation_requested",
-    "lead_closed", "contact_inactive",
-    "consent_revoked", "consent_not_granted", "consent_inconsistent",
-    "expired_on_resume", "operator",
+    STOP_MANDATE_SIGNED, STOP_ACQUISITION_LINKED, STOP_INSPECTION,
+    STOP_CONSULTATION_REQUESTED, STOP_LEAD_CLOSED, STOP_CONTACT_INACTIVE,
+    STOP_CONSENT_REVOKED, STOP_CONSENT_NOT_GRANTED, STOP_CONSENT_INCONSISTENT,
+    STOP_EXPIRED_ON_RESUME, STOP_OPERATOR,
 )
 STOP_REASONS = frozenset(STOP_PRIORITY)
 

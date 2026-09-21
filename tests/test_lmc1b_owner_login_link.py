@@ -505,8 +505,19 @@ def test_f3_il_servizio_non_usa_il_token_della_stima():
 
 def test_f4_il_dispatcher_e_l_adapter_non_sono_stati_toccati():
     import subprocess
+    # SENTINELLA AGGIORNATA DA P29-3C (collisione dichiarata): `router.py`
+    # esce dall'elenco IN BLOCCO perche' quella fase vi monta le tre rotte
+    # delle journey - sullo stesso router e dietro la stessa ammissione di
+    # livello mount, quindi senza toccare `main.py`. Cio' che LMC-1B
+    # proteggeva davvero resta e resta sul working tree: il DISPATCHER e gli
+    # ADAPTER, cioe' chi spedisce, non sono cambiati. Che il router nuovo non
+    # spedisca lo verifica P29-3C (`test_20`, `test_22`).
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "communication/dispatcher.py", "communication/providers/", "communication/router.py"],
+         "communication/dispatcher.py", "communication/providers/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    from communication import router as router_comunicazione
+    import inspect as _inspect
+    sorgente = _inspect.getsource(router_comunicazione)
+    assert "invia_mail" not in sorgente and "providers" not in sorgente

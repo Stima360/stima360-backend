@@ -27,6 +27,7 @@ from core.exceptions import PermissionDenied
 from .exceptions import ConflictError, NotFoundError, ValidationError
 
 from . import journey_repository as repo
+from . import send_window
 from . import templates
 from .database import communication_cursor
 from .journey_enums import (
@@ -47,7 +48,10 @@ MAX_RESUME_AGE = timedelta(days=30)
 # attore
 # ---------------------------------------------------------------------------
 
-def _operatore(ctx) -> int:
+def operatore(ctx) -> int:
+    """L'operatore della sessione, o un rifiuto. Pubblica da P29-3C: il
+    motore delle journey fa gli stessi atti da operatore (invio assistito,
+    salto di un passo) e deve porre la stessa domanda, non una simile."""
     user_id = getattr(ctx, "user_id", None)
     if user_id is None:
         raise PermissionDenied("this action requires an authenticated operator session")
@@ -60,7 +64,9 @@ def _attore(ctx) -> tuple[str, int | None]:
     return (ACTOR_OPERATOR, int(user_id)) if user_id is not None else (ACTOR_SYSTEM, None)
 
 
-def _cursore(cur):
+def cursore(cur):
+    """La transazione: quella del chiamante se la presta, altrimenti la
+    propria. Pubblica da P29-3C per la stessa ragione di `operatore`."""
     if cur is not None:
         class _Prestato:
             def __enter__(self):
@@ -93,6 +99,14 @@ def _valida_passi(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sconosciute = set(s.get("stop_on") or []) - STOP_REASONS
         if sconosciute:
             raise ValidationError(f"step {s.get('step_no')}: unknown stop reasons {sorted(sconosciute)}")
+        # P29-3C: la finestra di invio si valida QUI. Una finestra malformata
+        # scoperta dal tick sarebbe un passo che non parte in un orario in cui
+        # nessuno guarda; scoperta al provisioning e' una journey che non
+        # nasce.
+        try:
+            s["send_window"] = send_window.validate(s.get("send_window"))
+        except ValidationError as exc:
+            raise ValidationError(f"step {s.get('step_no')}: {exc}") from None
         # Il template deve ESISTERE nel registro, con quel canale e quel tipo:
         # una journey che nomina un template che nessuno ha approvato non si
         # crea nemmeno come bozza.
@@ -117,7 +131,7 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
         raise ValidationError(f"send_timezone {send_timezone!r} is not a known IANA zone") from None
     passi = _valida_passi(steps)
     actor_type, actor_user_id = _attore(ctx)
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         return repo.insert_journey(
             c, ctx, journey_key=journey_key, version=version, trigger_type=trigger_type,
             name=name, send_timezone=send_timezone, actor_type=actor_type,
@@ -126,18 +140,18 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
 
 def activate_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
     actor_type, actor_user_id = _attore(ctx)
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         return repo.activate_journey(c, ctx, journey_id, actor_type=actor_type,
                                      actor_user_id=actor_user_id)
 
 
 def retire_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         return repo.retire_journey(c, ctx, journey_id)
 
 
 def get_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         j = repo.select_journey(c, ctx, journey_id)
         j["steps"] = repo.list_steps(c, ctx, journey_id)
         return j
@@ -169,7 +183,7 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
     Restituisce ``{'enrollment': riga, 'created': bool}``.
     """
     actor_type, actor_user_id = _attore(ctx)
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         agency = ctx.require_agency()
         contact_in_scope(c, ctx, contact_id)
         journey = repo.select_journey(c, ctx, journey_id)
@@ -216,7 +230,7 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
 
 
 def get_open_enrollment(ctx, contact_id: int, *, cur=None) -> dict[str, Any] | None:
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         contact_in_scope(c, ctx, contact_id)
         return repo.select_open_enrollment(c, ctx, contact_id)
 
@@ -224,7 +238,7 @@ def get_open_enrollment(ctx, contact_id: int, *, cur=None) -> dict[str, Any] | N
 def inspect_next_step(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any] | None:
     """Il passo che l'iscrizione sta aspettando, con il suo template. `None`
     se l'iscrizione e' chiusa."""
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         e = repo.select_enrollment(c, ctx, enrollment_id)
         if e["next_step_no"] is None:
             return None
@@ -236,8 +250,8 @@ def inspect_next_step(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any] | 
 
 def pause_enrollment(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any]:
     """Operatore. `active -> paused`; il `queued` del passo corrente viene cancellato."""
-    utente = _operatore(ctx)
-    with _cursore(cur) as (_, c):
+    utente = operatore(ctx)
+    with cursore(cur) as (_, c):
         e = repo.pause_enrollment(c, ctx, enrollment_id, actor_user_id=utente, source=PAUSED_BY_ENROLLMENT)
         repo.cancel_queued_journey_messages(c, ctx, enrollment_id, reason="paused", actor_user_id=utente)
         return e
@@ -246,9 +260,9 @@ def pause_enrollment(ctx, enrollment_id: int, *, cur=None) -> dict[str, Any]:
 def resume_enrollment(ctx, enrollment_id: int, *, now: datetime | None = None, cur=None) -> dict[str, Any]:
     """Operatore. `paused -> active` con `run_no + 1`; il passo riprende dal
     tempo residuo. Una pausa troppo vecchia non riprende: `expired_on_resume`."""
-    utente = _operatore(ctx)
+    utente = operatore(ctx)
     adesso = now or datetime.now(timezone.utc)
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         e = repo.select_enrollment(c, ctx, enrollment_id, for_update=True)
         if e["status"] != ENR_PAUSED:
             raise ConflictError(f"enrollment {enrollment_id} is {e['status']}, not paused")
@@ -264,8 +278,8 @@ def stop_enrollment(ctx, enrollment_id: int, *, reason: str = "operator", cur=No
     """Stop. `operator` richiede una persona; una ragione di sistema no."""
     if reason not in STOP_REASONS:
         raise ValidationError(f"unknown stop reason {reason!r}")
-    actor_user_id = _operatore(ctx) if reason == "operator" else None
-    with _cursore(cur) as (_, c):
+    actor_user_id = operatore(ctx) if reason == "operator" else None
+    with cursore(cur) as (_, c):
         e = repo.stop_enrollment(c, ctx, enrollment_id, reason=reason, actor_user_id=actor_user_id)
         repo.cancel_queued_journey_messages(c, ctx, enrollment_id, reason=f"stopped:{reason}",
                                             actor_user_id=actor_user_id)
@@ -280,9 +294,9 @@ def pause_automations(ctx, contact_id: int, *, reason: str | None = None, cur=No
     """Operatore. Ferma le automazioni del contatto: nessuna nuova iscrizione,
     le aperte in pausa (`contact_control`), i loro `queued` cancellati. I
     messaggi manuali (senza `enrollment_id`) non vengono toccati."""
-    utente = _operatore(ctx)
+    utente = operatore(ctx)
     ragione = (reason or "").strip() or None
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         contact_in_scope(c, ctx, contact_id)
         aperte = repo.list_open_enrollments_for_contact(c, ctx, contact_id)
         stima = next((e["stima_id"] for e in aperte if e["stima_id"]), None)
@@ -301,8 +315,8 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
     """Operatore. Riabilita le automazioni. Riprende SOLO le iscrizioni messe
     in pausa dal controllo del contatto e non troppo vecchie; quelle messe in
     pausa una per una restano ferme; niente viene inventato."""
-    utente = _operatore(ctx)
-    with _cursore(cur) as (_, c):
+    utente = operatore(ctx)
+    with cursore(cur) as (_, c):
         contact_in_scope(c, ctx, contact_id)
         controllo = repo.set_control_resumed(c, ctx, contact_id, actor_user_id=utente)
         for e in repo.list_open_enrollments_for_contact(c, ctx, contact_id):
@@ -312,5 +326,5 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
 
 
 def automations_paused(ctx, contact_id: int, *, cur=None) -> bool:
-    with _cursore(cur) as (_, c):
+    with cursore(cur) as (_, c):
         return repo.automations_paused(c, ctx, contact_id)

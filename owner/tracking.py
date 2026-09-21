@@ -159,6 +159,12 @@ def _record(contesto: dict[str, Any], *, event_type: str, owner_account_id: int,
     quando = when or datetime.now(timezone.utc)
     seller_intelligence.record_event_scoped(
         _OwnerScope(contesto["agency_id"]),
+        # P29-3C: la RICHIESTA DI CONSULENZA e' uno dei fatti autorevoli che
+        # fermano una journey, quindi si scrive con la stima bloccata - lo
+        # stesso oggetto su cui il motore prende il fence prima di decidere
+        # se mandare un passo. Gli altri eventi del portale restano come
+        # sono: nessuno di loro ferma niente.
+        lock_stima=(event_type == CONSULTATION_REQUESTED),
         event_type=event_type,
         event_source=EVENT_SOURCE,
         stima_id=stima_id,

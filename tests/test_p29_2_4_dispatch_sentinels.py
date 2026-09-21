@@ -203,7 +203,11 @@ def test_G3_il_consenso_non_e_interrogato_fuori_dal_dispatcher():
     # invio: il gate di invio resta nel dispatcher e il journey_service non
     # importa provider ne' chiama `send`. Nessun altro file puo' chiederlo.
     for nome, corpo in sorgenti().items():
-        if nome in ("dispatcher.py", "journey_service.py"):
+        # P29-3C aggiunge `journey_tick.py`: valuta il consenso come
+        # condizione di STOP e alla nascita di una iscrizione. Non spedisce -
+        # non importa provider e non chiama `send` - e il gate di invio resta
+        # nel dispatcher, una decisione alla volta.
+        if nome in ("dispatcher.py", "journey_service.py", "journey_tick.py"):
             continue
         assert "can_send_marketing" not in corpo, f"{nome} interroga il consenso"
 
@@ -357,8 +361,15 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
     percorsi = sorted(p for p in main.app.openapi()["paths"] if "communication" in p)
     # P29-3B.0 aggiunge la rotta pubblica di unsubscribe (token firmato, senza
     # login per progetto): e' l'unica altra superficie `communication`.
-    assert percorsi == ["/api/communication/dispatch",
-                        "/api/public/communication/unsubscribe"], percorsi
+    # P29-3C monta le tre rotte delle journey sullo STESSO router del
+    # dispatch, dietro la stessa ammissione di livello mount: nessuna nuova
+    # riga in `main.py`, e nessuna superficie aperta.
+    assert percorsi == [
+        "/api/communication/dispatch",
+        "/api/communication/journeys/enrollments/{enrollment_id}/send-current",
+        "/api/communication/journeys/enrollments/{enrollment_id}/skip-current",
+        "/api/communication/journeys/tick",
+        "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.
     testo = (ROOT / "main.py").read_text(encoding="utf-8")

@@ -423,6 +423,79 @@ def read_send_decision_inputs(ctx, contact_id: int, purpose: str):
     return contact, event
 
 
+def read_send_decision_inputs_bulk(ctx, contact_ids, purpose: str):
+    """Gli stessi due ingressi di `read_send_decision_inputs`, per PIU' contatti.
+
+    P29-3C. Il tick delle journey valuta il consenso come condizione di stop
+    su tutte le iscrizioni aperte di un'agenzia: una chiamata per iscrizione
+    sarebbe la N+1 che il motore ha il mandato di non avere.
+
+    Non e' una decisione diversa ne' una scorciatoia: restituisce gli stessi
+    `(contatto, evento)` della versione singola - stessa LATERAL, stessi due
+    scope, stesso ordinamento dell'ultimo evento - e chi la chiama li passa
+    alla STESSA funzione di decisione. Cio' che cambia e' quante righe una
+    query riporta, non cosa significano.
+
+    Un contatto non visibile nello scope semplicemente NON compare nel
+    risultato: qui non si solleva `NotFoundError` come nella versione
+    singola, perche' il chiamante non sta chiedendo di UN contatto - sta
+    chiedendo di quelli che puo' vedere, e l'assenza e' la risposta.
+
+    Sola lettura, nessun lock, nessun commit. Uno statement, uno snapshot:
+    la ragione per cui la versione singola ne usa uno solo vale identica qui.
+    """
+    if purpose not in PURPOSES:
+        raise ProgrammingError(f"unsupported consent purpose {purpose!r}")
+    identificativi = [int(c) for c in contact_ids]
+    if not identificativi:
+        return {}
+
+    contact_predicate, contact_params = core_scoped_predicate(ctx, "contacts", "c")
+    event_source, event_params = consent_scoped_source(ctx, "consent_events", "ce")
+
+    sql = f"""
+        SELECT c.*,
+               ev.id         AS consent_event_id,
+               ev.decision   AS consent_event_decision,
+               ev.decided_at AS consent_event_decided_at,
+               ev.source     AS consent_event_source,
+               ev.notice_id  AS consent_event_notice_id
+          FROM contacts c
+          LEFT JOIN LATERAL (
+              SELECT ce.id, ce.decision, ce.decided_at, ce.source, ce.notice_id
+                FROM {event_source}
+                 AND ce.contact_id = c.id
+                 AND ce.purpose = %s
+               ORDER BY ce.decided_at DESC, ce.id DESC
+               LIMIT 1
+          ) ev ON TRUE
+         WHERE c.id = ANY(%s) AND {contact_predicate}
+    """
+    params = list(event_params) + [purpose, identificativi] + list(contact_params)
+
+    with consent_cursor() as (_, cur):
+        cur.execute(sql, params)
+        righe = [_row(r) for r in cur.fetchall()]
+
+    risultato = {}
+    for row in righe:
+        event = None
+        if row.get("consent_event_id") is not None:
+            event = {
+                "id": row["consent_event_id"],
+                "decision": row["consent_event_decision"],
+                "decided_at": row["consent_event_decided_at"],
+                "source": row["consent_event_source"],
+                "notice_id": row["consent_event_notice_id"],
+            }
+        contact = {
+            chiave: valore for chiave, valore in row.items()
+            if not chiave.startswith("consent_event_")
+        }
+        risultato[contact["id"]] = (contact, event)
+    return risultato
+
+
 def utcnow() -> datetime:
     """L'istante di default per una decisione che non ne dichiara uno.
 

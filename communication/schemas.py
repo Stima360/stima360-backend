@@ -40,3 +40,17 @@ class DispatchRequest(BaseModel):
 
     class Config:
         extra = "forbid"
+
+
+class JourneyTickRequest(BaseModel):
+    """Quanto lavoro al massimo in un giro. Nient'altro.
+
+    Nessun `agency_id`, per la stessa ragione del dispatch: lo scope viene
+    dalla sessione. Nessun `journey_id` e nessun `contact_id`: un giro non si
+    pilota dall'esterno verso un bersaglio scelto - fa cio' che e' dovuto, e
+    cio' che e' dovuto lo dicono i dati.
+    """
+
+    limit: int = Field(default=500, ge=1, le=2000)
+
+    model_config = {"extra": "forbid"}

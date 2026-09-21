@@ -235,9 +235,21 @@ def _insert_event_with_agency(cur, data: dict[str, Any], agency_id: int) -> dict
     return existing
 
 
-def insert_event_scoped(ctx, data: dict[str, Any]) -> dict[str, Any]:
+def insert_event_scoped(ctx, data: dict[str, Any], *, lock_stima: bool = False) -> dict[str, Any]:
+    """P29-3C: `lock_stima` blocca la stima PRIMA di scrivere l'evento.
+
+    Spento per tutti e acceso da un solo chiamante - l'evento
+    `owner_consultation_requested` di LMC-9, che per il motore delle journey
+    e' un FATTO di stop e non una nota di cronaca. Il motore decide se far
+    partire un messaggio tenendo bloccata la stima: perche' quel contratto
+    valga, chi scrive il fatto deve passare dallo stesso oggetto. Senza il
+    flag questa funzione e' identica a prima, riga per riga.
+    """
     agency_id = ctx.require_agency()
     with si_cursor(commit=True) as (_, cur):
+        if lock_stima and data.get("stima_id") is not None:
+            cur.execute("SELECT id FROM stime WHERE id = %s AND agency_id = %s FOR UPDATE",
+                        (data["stima_id"], agency_id))
         _assert_references_in_agency(cur, data, agency_id)
         return _insert_event_with_agency(cur, data, agency_id)
 

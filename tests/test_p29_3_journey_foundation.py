@@ -245,8 +245,17 @@ def test_16_nessun_invio_marketing_reale_e_nessun_tick():
     codice = "".join(_codice(m) for m in (journey_repository, journey_service, templates, unsubscribe))
     assert "dispatch_batch" not in codice and "provider" not in codice
     assert "reason_code='m1'" not in codice and 'reason_code="m1"' not in codice
-    for vietato in ("def tick", "def scan", "def advance", "claim_due", "advisory_lock"):
+    # SENTINELLA AGGIORNATA DA P29-3C: il tick ORA esiste, ed e' il mandato
+    # di quella fase. Cio' che questa continua a garantire e' DOVE vive - in
+    # `journey_tick.py`, un modulo suo - e che i quattro moduli della
+    # fondazione restino quello che erano: nessuno di loro scandisce, avanza
+    # o spedisce. `advance_enrollment` e' una UPDATE condizionata nel
+    # repository, chiamata dal motore: il verbo sta qui, la decisione no.
+    for vietato in ("def tick", "def scan", "claim_due", "advisory_lock"):
         assert vietato not in codice, vietato
+    assert "def advance" not in _codice(journey_service)
+    from communication import journey_tick
+    assert "def tick" in _codice(journey_tick)
     # l'unico `enqueue` di journey_service e' quello del ledger, e non c'e'
     assert "enqueue(" not in _codice(journey_service)
 
@@ -270,6 +279,11 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     oltre l'inventario; dopo, ogni file dell'inventario e' nell'indice.
     `P29_2_0_COMMUNICATION_DESIGN.md` non entra nell'indice in nessun caso."""
     from tests.p29_3b_diff import FILE_MODIFICATI, FILE_NUOVI
+    # SENTINELLA AGGIORNATA DA P29-3C: una fase successiva ha il suo
+    # inventario, dichiarato allo stesso modo. Questo test continua a
+    # pretendere che nel working tree non ci sia NIENTE che nessuna delle due
+    # fasi abbia dichiarato - non smette di guardare, guarda l'unione.
+    from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
@@ -282,8 +296,11 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     tracciati = set(subprocess.run(["git", "--no-optional-locks", "ls-files"],
                                    cwd=ROOT, capture_output=True, text=True).stdout.split())
 
-    assert nuovi - FILE_NUOVI == {"P29_2_0_COMMUNICATION_DESIGN.md"}, sorted(nuovi - FILE_NUOVI)
-    assert modificati <= FILE_MODIFICATI, sorted(modificati - FILE_MODIFICATI)
+    dichiarati_nuovi = FILE_NUOVI | NUOVI_3C
+    dichiarati_modificati = FILE_MODIFICATI | MOD_3C | NUOVI_3C
+    assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+        sorted(nuovi - dichiarati_nuovi)
+    assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)
     for nome in FILE_NUOVI:
         assert (ROOT / nome).exists() and (nome in tracciati or nome in nuovi), nome
     for nome in FILE_MODIFICATI:

@@ -168,18 +168,41 @@ def righe_impreviste(root, percorso: str) -> list[str]:
     return fuori
 
 
-def diff_imprevisto_nei_domini(root) -> list[str]:
-    """Tutto cio' che, in `DOMINI_SORVEGLIATI`, P29-3B non giustifica.
+def _dichiarati_da_fasi_successive() -> frozenset[str]:
+    """I file che una fase SUCCESSIVA dichiara nei domini sorvegliati.
 
-    Vuota significa "nessuno ha toccato quei domini se non P29-3B, e solo
-    per le righe dichiarate". Un file toccato che non e' fra i tre dichiarati
-    e' imprevisto per intero; nei tre dichiarati lo e' ogni riga in piu'.
+    P29-3C riscrive parti intere di `communication/` - il motore, le sue
+    query, le tre rotte, la timeline dell'invio - e pinnarne ogni riga qui
+    vorrebbe dire tenere due copie dello stesso diff. La garanzia resta la
+    stessa di prima, un gradino piu' grossa per quei file: nessun file di
+    quei domini puo' essere toccato senza che UNA fase lo abbia dichiarato
+    per nome, e quale riga sia lecita lo verifica l'inventario di quella
+    fase (`tests/p29_3c_diff.py`, e la sentinella che lo confronta con
+    `git status` in entrambe le direzioni).
     """
+    try:
+        from tests.p29_3c_diff import FILE_MODIFICATI, FILE_NUOVI
+    except ImportError:  # la fase non esiste ancora: nulla da ammettere
+        return frozenset()
+    return frozenset(FILE_MODIFICATI | FILE_NUOVI)
+
+
+def diff_imprevisto_nei_domini(root) -> list[str]:
+    """Tutto cio' che, in `DOMINI_SORVEGLIATI`, nessuna fase giustifica.
+
+    Vuota significa "nessuno ha toccato quei domini se non le fasi che lo
+    hanno dichiarato". Per i tre file di P29-3B il controllo resta riga per
+    riga; per i file che una fase successiva dichiara, il controllo e' che
+    li abbia dichiarati.
+    """
+    ammessi_da_dopo = _dichiarati_da_fasi_successive()
     fuori = []
     for nome in _git(root, "diff", "--name-only", "--", *DOMINI_SORVEGLIATI):
         nome = nome.strip()
+        if nome in ammessi_da_dopo:
+            continue
         if nome not in RIGHE_PER_FILE:
-            fuori.append(f"{nome}: file non dichiarato da P29-3B")
+            fuori.append(f"{nome}: file non dichiarato da nessuna fase")
         else:
             fuori.extend(f"{nome}: {riga}" for riga in righe_impreviste(root, nome))
     return fuori

@@ -153,11 +153,46 @@ def can_send_marketing(ctx, contact_id: int) -> MarketingSendDecision:
     quello che impedisce di scoprire l'esistenza dei contatti altrui chiedendo
     il loro consenso.
     """
-    columns = PROJECTION_COLUMNS[PURPOSE_MARKETING]
     contact, event = repository.read_send_decision_inputs(
         ctx, contact_id, PURPOSE_MARKETING
     )
+    return _decidi(contact, event)
 
+
+def can_send_marketing_bulk(ctx, contact_ids):
+    """La stessa domanda, per piu' contatti: `{contact_id: MarketingSendDecision}`.
+
+    P29-3C. NON e' una seconda implementazione e non e' una versione
+    "veloce": legge gli stessi due ingressi con la stessa query (una riga per
+    contatto invece di una sola) e li passa a `_decidi`, che e' la funzione
+    che decide - l'unica, la stessa che usa `can_send_marketing`. Una
+    sentinella confronta le due strade su ogni stato e pretende che diano la
+    stessa risposta.
+
+    Esiste perche' il tick delle journey valuta il consenso su tutte le
+    iscrizioni aperte di un'agenzia, e una chiamata per iscrizione sarebbe una
+    query per riga. Il GATE DI INVIO non passa di qui e non cambia: resta
+    `can_send_marketing`, interrogata dal dispatcher immediatamente prima di
+    spedire.
+
+    Un contatto fuori dallo scope non compare nel risultato, invece di
+    sollevare: chi chiama sta iterando righe che gia' vede.
+    """
+    ingressi = repository.read_send_decision_inputs_bulk(
+        ctx, contact_ids, PURPOSE_MARKETING
+    )
+    return {cid: _decidi(contact, event)
+            for cid, (contact, event) in ingressi.items()}
+
+
+def _decidi(contact, event) -> MarketingSendDecision:
+    """LA DECISIONE. Pura: due righe gia' lette, nessun accesso al database.
+
+    Separata dalla lettura per un motivo solo - poterla applicare a ingressi
+    letti uno per uno o tutti insieme SENZA duplicarla. Il contenuto e'
+    quello di sempre, spostato e non riscritto.
+    """
+    columns = PROJECTION_COLUMNS[PURPOSE_MARKETING]
     proiezione = state_from_projection(contact, PURPOSE_MARKETING)
     agency_id = contact.get("agency_id")
 

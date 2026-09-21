@@ -715,7 +715,14 @@ def test_c1_esiste_una_sola_implementazione_della_decisione():
         if not nome.startswith("_") and callable(getattr(guard, nome))
         and getattr(getattr(guard, nome), "__module__", "") == "consent.guard"
     }
-    assert pubbliche == {"can_send_marketing", "MarketingSendDecision"}
+    # SENTINELLA AGGIORNATA DA P29-3C: `can_send_marketing_bulk` e' una
+    # seconda LETTURA, non una seconda decisione. Entrambe le porte
+    # chiamano `_decidi`, che e' l'unica implementazione - lo verifica
+    # `test_23` di P29-3C sull'AST, e una prova su PostgreSQL confronta le
+    # due strade stato per stato. Il gate di invio del dispatcher continua a
+    # passare da `can_send_marketing`, una decisione alla volta.
+    assert pubbliche == {"can_send_marketing", "can_send_marketing_bulk",
+                         "MarketingSendDecision"}
 
 
 def test_c2_la_decisione_e_tipizzata_e_congelata(db, ctx):

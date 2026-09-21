@@ -633,11 +633,26 @@ def test_39_nessun_cron_nuovo():
 def test_40_il_ponte_non_tocca_i_domini_vicini():
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
-         "seller_intelligence/", "seller_intent/", "next_best_action/",
+         "seller_intent/", "next_best_action/",
          "followup/", "property_watch/",
          "valuation.py", "database.py"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
     assert diff == "", diff
+    # P29-3C (collisione autorizzata, dichiarata): `seller_intelligence/`
+    # esce dall'elenco IN BLOCCO perche' quella fase vi aggiunge UN flag -
+    # `lock_stima` - che blocca la stima nella stessa transazione
+    # dell'evento, per il solo evento che il motore delle journey tratta
+    # come fatto di stop. Non smette di essere guardato: i file toccati
+    # devono essere esattamente i due dichiarati, e il flag deve essere
+    # spento per default, altrimenti questo test fallisce ancora.
+    toccati = subprocess.run(
+        ["git", "--no-optional-locks", "diff", "--name-only", "--", "seller_intelligence/"],
+        cwd=ROOT, capture_output=True, text=True).stdout.split()
+    from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C
+    assert set(toccati) <= MOD_3C, sorted(set(toccati) - MOD_3C)
+    import inspect as _inspect
+    from seller_intelligence import repository as si_repo
+    assert "lock_stima: bool = False" in _inspect.getsource(si_repo.insert_event_scoped)
     # P29-3B (collisione autorizzata, dichiarata): `communication/` e `operator_auth/` esce
     # dall'elenco IN BLOCCO perche' P29-3B vi estende `enqueue` con la
     # provenienza di journey e aggiunge l'origine `public_unsubscribe`. Non smette di essere guardato: il diff di
@@ -667,6 +682,11 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     ne' toccato ne' messo in stage.
     """
     from tests.p29_3b_diff import FILE_MODIFICATI as MODIFICATI_P29_3B
+    # P29-3C dichiara il proprio inventario allo stesso modo: fra i suoi
+    # file c'e' `acquisition/repository.py`, che prende il fence sulla
+    # stima. Si guarda l'unione delle due dichiarazioni - nessuna fase puo'
+    # toccare un file di LMC-15 senza averlo scritto nel proprio elenco.
+    from tests.p29_3c_diff import FILE_MODIFICATI as MODIFICATI_P29_3C
 
     lmc15_modificati = {
         # Il codice: le metriche di LMC-13 estese, e il router montato.
@@ -722,7 +742,8 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     nuovi = {r[3:].strip() for r in righe if r.startswith("??")}
     # Di LMC-15 nel working tree puo' essere toccato solo cio' che P29-3B
     # dichiara; e la 070 non puo' comparire ne' modificata ne' nuova.
-    fuori = (modificati & (lmc15_modificati | lmc15_nuovi)) - MODIFICATI_P29_3B
+    fuori = ((modificati & (lmc15_modificati | lmc15_nuovi))
+             - MODIFICATI_P29_3B - MODIFICATI_P29_3C)
     assert fuori == set(), sorted(fuori)
     assert not any(n.startswith("migrations/070_") for n in modificati | nuovi)
     assert "P29_2_0_COMMUNICATION_DESIGN.md" in nuovi

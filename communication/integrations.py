@@ -63,6 +63,9 @@ logger = logging.getLogger(__name__)
 #: L'evento P17 che il cutover deve preservare, parola per parola.
 EVENT_EMAIL_STIMA_INVIATA = "email_stima_inviata"
 
+#: P29-3C: l'invio di un passo di journey, sulla timeline del venditore.
+EVENT_JOURNEY_MESSAGE_SENT = "journey_message_sent"
+
 #: La sorgente, invariata rispetto al percorso legacy di `/api/salva_stima`.
 EVENT_SOURCE_STIMA360 = "stima360_it"
 
@@ -161,10 +164,75 @@ def _evento_email_stima(cur, message: dict[str, Any]) -> None:
     )
 
 
+def _e_un_messaggio_di_journey(message: dict[str, Any]) -> bool:
+    """Dai DATI, come per la mail della stima: la provenienza sul ledger.
+
+    `enrollment_id` esiste come colonna solo dopo la 071. Prima, la riga non
+    ha la chiave e questo predicato e' semplicemente falso: il percorso
+    esistente continua a funzionare senza sapere che le journey esistono, ed
+    e' il motivo per cui il deploy puo' precedere la migration.
+    """
+    return message.get("enrollment_id") is not None
+
+
+def _evento_journey_inviato(cur, message: dict[str, Any]) -> None:
+    """Una riga di storia per il passo spedito. Minima, e senza PII.
+
+    COSA C'E': la journey (chiave e versione) e il passo (`step_key`), piu'
+    l'identificativo del messaggio, che e' il ponte verso il ledger per chi
+    ha il permesso di leggerlo.
+
+    COSA NON C'E', DI PROPOSITO: nessun corpo, nessun oggetto, nessun
+    indirizzo, nessun nome. La timeline del venditore la leggono superfici
+    diverse dal ledger, e il testo di una email di marketing non deve
+    comparire in nessuna di quelle - il ledger e' gia' il posto in cui quel
+    testo vive, immutabile e sotto la sua guardia.
+
+    PERCHE' QUESTO HOOK NON FA CADERE L'INVIO, mentre quello della stima si'.
+    L'evento `email_stima_inviata` E' la garanzia del cutover: senza, il
+    sistema mente sul fatto che la mail sia partita, quindi meglio annullare
+    il `sent`. Questo invece e' un annotazione di storia su una mail che e'
+    GIA' partita davvero: se la sua provenienza non si ritrova - una journey
+    ritirata e ripulita, un passo disattivato - perdere il `sent` di un
+    messaggio realmente spedito sarebbe il danno maggiore. Si registra e si
+    prosegue.
+    """
+    from . import journey_repository as journey_repo
+
+    provenienza = journey_repo.message_provenance(
+        cur, agency_id=message["agency_id"], enrollment_id=message["enrollment_id"],
+        step_no=message.get("step_no"))
+    if provenienza is None or not provenienza.get("step_key"):
+        logger.warning(
+            "journey_message_sent_without_provenance message_id=%s enrollment_id=%s step_no=%s",
+            message.get("id"), message.get("enrollment_id"), message.get("step_no"))
+        return
+
+    seller_intelligence_service.record_event_on_cursor(
+        cur,
+        event_type=EVENT_JOURNEY_MESSAGE_SENT,
+        event_source=EVENT_SOURCE_STIMA360,
+        stima_id=message.get("stima_id"),
+        contact_id=message.get("contact_id"),
+        lead_id=message.get("lead_id"),
+        payload={"journey_key": provenienza["journey_key"],
+                 "journey_version": provenienza["journey_version"],
+                 "step_key": provenienza["step_key"],
+                 "message_id": message["id"]},
+        idempotency_key=f"{EVENT_JOURNEY_MESSAGE_SENT}:{message['id']}",
+    )
+
+
 #: Gli hook, nell'ordine. Ciascuno riceve `(cur, message)` e scrive sul cursore
 #: della finalizzazione. Un hook che solleva annulla il `sent`: e' voluto, ed e'
 #: la ragione per cui questa lista resta corta e ogni voce e' una decisione.
-HOOK_DOPO_INVIO = ((_e_la_mail_della_stima, _evento_email_stima),)
+HOOK_DOPO_INVIO = (
+    (_e_la_mail_della_stima, _evento_email_stima),
+    # P29-3C. I due non si incontrano mai: una mail di stima e' `service` e
+    # non nasce da una iscrizione, un passo di journey nasce da una
+    # iscrizione e non e' la mail di stima.
+    (_e_un_messaggio_di_journey, _evento_journey_inviato),
+)
 
 
 def dopo_invio(cur, message: dict[str, Any]) -> None:
