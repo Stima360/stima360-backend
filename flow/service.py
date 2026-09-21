@@ -179,16 +179,48 @@ def _scan_failure(code, stage, error, entity_type=None, entity_id=None, mode="si
     return item
 
 
+# SCANSIONARE NON E' SINCRONIZZARE, E QUESTA E' LA RIGA FRA I DUE.
+#
+# `scan` cominciava con `repository.sync_rules()`, e questa funzione e'
+# raggiungibile da `POST /api/flow/scan` - una superficie TENANT, aperta a
+# `agency_owner`, `agency_admin` e `agent`. Quindi un operatore qualunque
+# faceva INSERT e UPDATE sul catalogo di TUTTA la piattaforma: le stesse
+# scritture che le cinque rotte di amministrazione ora riservano al platform
+# admin, raggiunte per la porta di servizio.
+#
+# Era lo stesso difetto delle due GET, in una terza forma: una chiamata di
+# sincronizzazione scritta dentro un percorso che nessuno chiama per
+# sincronizzare. E la conseguenza peggiore non era la scrittura in se': su un
+# cambio di `code_version` la sincronizzazione riporta
+# `last_simulation_status` a `outdated`, quindi una scansione poteva
+# invalidare il prerequisito di attivazione di una regola gia' attiva.
+#
+# Adesso `scan` LEGGE il catalogo che trova. La sincronizzazione resta una
+# sola, `repository.sync_rules`, dietro `POST /api/flow/sync-rules` e la sua
+# dipendenza `require_platform_admin`.
+#
+# CONSEGUENZA VOLUTA: UNA REGOLA NUOVA NON ENTRA DA SOLA.
+#
+# Una regola presente in `ALL_RULES` ma assente dalla tabella non viene piu'
+# creata da una scansione. Se e' chiesta per nome finisce fra gli esiti come
+# fallimento di stage `adapter` - `get_rule_row` solleva `NotFoundError`, il
+# ciclo la raccoglie - e se non e' chiesta per nome semplicemente non compare
+# fra i codici attivi. In entrambi i casi il rimedio e' il gesto esplicito di
+# chi amministra la piattaforma, non un effetto collaterale che nessuno vede.
+#
+# NON E' STATA SPOSTATA NEL CRON. Il cron elabora il catalogo, non lo
+# modifica: spostarla li' avrebbe conservato la scrittura automatica
+# togliendole anche il chiamante che la si poteva attribuire.
 def scan(payload, *, agency_id=None):
-    data=dump(payload); repository.sync_rules()
+    data=dump(payload)
     codes=data.get("rule_codes")
     if not codes:
-        codes=[r["code"] for r in repository.list_rules(synchronize=False) if r["is_active"] or data.get("simulation")]
+        codes=[r["code"] for r in repository.list_rules() if r["is_active"] or data.get("simulation")]
     _scan,_load=_adapters(agency_id)
     results=[]; plans=[]
     for code in codes:
         try:
-            row=repository.get_rule_row(code,synchronize=False); rule=get_rule(code)
+            row=repository.get_rule_row(code); rule=get_rule(code)
             p=rule.validate_parameters(dict(row["parameters"])); candidates=_scan(code,p,data["limit"])
             plans.append({"code":code,"parameters":p,"candidates":list(candidates),"offset":0})
         except Exception as exc:

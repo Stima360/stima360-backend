@@ -40,12 +40,30 @@ def sync_rules():
     return items
 
 
-def list_rules(synchronize=True):
-    if synchronize: sync_rules()
+# LEGGERE E SINCRONIZZARE SONO DUE ATTI, E QUESTA E' LA RIGA FRA I DUE.
+#
+# Fino a qui `list_rules` e `get_rule_row` avevano `synchronize=True` per
+# default, quindi una GET del catalogo faceva INSERT, UPDATE e COMMIT: creava
+# le regole mancanti, riscriveva `updated_at` su tutte, e su un cambio di
+# versione spostava `last_simulation_status` a `outdated` - cioe' poteva
+# DISATTIVARE di fatto il percorso di attivazione di una regola, per il solo
+# fatto che qualcuno aveva aperto una lista.
+#
+# Il flag c'era, ma era il default sbagliato: chi leggeva non sapeva di
+# scrivere, e i due chiamanti che lo spegnevano lo facevano per motivi loro.
+# Adesso il parametro non esiste piu': queste due funzioni LEGGONO, e basta.
+# Chi vuole sincronizzare chiama `sync_rules`, che e' un atto esplicito con
+# una rotta sua, riservata a chi amministra la piattaforma.
+#
+# Conseguenza voluta: una regola presente nel codice ma assente dalla tabella
+# non nasce piu' da sola. `_get_rule_row_with_cursor` solleva `NotFoundError`,
+# la rotta risponde 404, e chi amministra fa `POST /api/flow/sync-rules`. Una
+# riga di catalogo creata come effetto collaterale della lettura di un agente
+# era esattamente il modo in cui nessuno si accorgeva che mancava.
+def list_rules():
     with core_cursor() as (_,cur): cur.execute("SELECT * FROM flow_rules WHERE archived_at IS NULL ORDER BY code"); return [dict(x) for x in cur.fetchall()]
 
-def get_rule_row(code, synchronize=True):
-    if synchronize: sync_rules()
+def get_rule_row(code):
     with core_cursor() as (_,cur):
         return _get_rule_row_with_cursor(cur,code)
 
@@ -69,7 +87,7 @@ def record_simulation(code, entity_type, entity_id, matched, reasons, action, re
     rather than a NULL that 054's NOT NULL rejects one layer down with a far
     worse message. Same discipline as P26-6B's collect_internal_supply_change.
     """
-    row=get_rule_row(code,synchronize=False); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
+    row=get_rule_row(code); rule=get_rule(code); p=dict(row['parameters']); h=rule.parameters_hash(p)
     status='failed' if error else ('matched' if matched else 'not_matched')
     with core_cursor(commit=True) as (_,cur):
         cur.execute("""INSERT INTO flow_executions(agency_id,rule_id,entity_type,entity_id,execution_mode,status,conditions_result,actions_result,rule_version,parameters_snapshot,parameters_hash,error_message,retry_count,max_retry,started_at,completed_at,created_at)

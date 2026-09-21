@@ -50,6 +50,7 @@ from . import service
 from .schemas import *
 from .enums import SCAN_DEFAULT_LIMIT, SCAN_MAX_LIMIT
 from operator_auth.dependencies import require_authenticated_operator
+from platform_admin.dependencies import require_platform_admin
 
 # P26-3: the mount is the operator one now.
 #
@@ -72,6 +73,31 @@ PLATFORM_CONFIG_ROUTES = (
     "sync_rules", "rules", "rule", "parameters", "reset", "activate", "deactivate",
 )
 
+# LE CINQUE CHE SCRIVONO IL CATALOGO, E PERCHE' HANNO UNA PORTA LORO.
+#
+# "Nessun tenant da portare" non vuol dire "aperta a chiunque". Queste cinque
+# rotte cambiano il catalogo di TUTTA la piattaforma - i parametri di una
+# regola, la sua attivazione - e fino a qui erano dietro il solo
+# `require_authenticated_operator`: un `agent` di una qualunque agenzia poteva
+# attivare una regola per ogni agenzia. Le due GET restano dove sono: leggere
+# il catalogo e' cio' che la Shell fa per mostrare una lista, e non concede
+# niente.
+#
+# La dipendenza e' quella che il progetto ha gia', `require_platform_admin`:
+# stessa decisione, stesso 403, e - non secondario - lo stesso registro
+# append-only, che di un tentativo respinto conserva una riga `denied` con
+# l'attore e il percorso. Un controllo scritto qui dentro sarebbe stato una
+# seconda definizione di "amministratore di piattaforma", e la prima cosa che
+# le due definizioni fanno e' divergere.
+#
+# NON apre `/api/platform`: e' una dipendenza applicata a queste rotte, non un
+# mount. E vale per il PRIVILEGIO, non per l'agenzia attiva: un platform admin
+# che sta operando dentro un'agenzia resta platform admin, perche'
+# `is_platform_admin` viene dalla persona e non dall'acting.
+PLATFORM_WRITE_ROUTES = ("sync_rules", "parameters", "reset", "activate", "deactivate")
+
+SOLO_PLATFORM = [Depends(require_platform_admin)]
+
 def tr(fn,*a,**kw):
     try: return fn(*a,**kw)
     except NotFoundError as e: raise HTTPException(404,str(e))
@@ -88,19 +114,19 @@ def tr(fn,*a,**kw):
 # ---------------------------------------------------------------------------
 # Rule registry - platform-global template, no tenant.
 # ---------------------------------------------------------------------------
-@router.post("/sync-rules")
+@router.post("/sync-rules", dependencies=SOLO_PLATFORM)
 def sync_rules(): return {"items":tr(service.sync_rules)}
 @router.get("/rules")
 def rules(): return {"items":tr(service.list_rules)}
 @router.get("/rules/{code}")
 def rule(code:str): return tr(service.get_rule_row,code)
-@router.patch("/rules/{code}/parameters")
+@router.patch("/rules/{code}/parameters", dependencies=SOLO_PLATFORM)
 def parameters(code:str,payload:RuleParametersUpdate): return tr(service.update_parameters,code,payload)
-@router.post("/rules/{code}/reset-parameters")
+@router.post("/rules/{code}/reset-parameters", dependencies=SOLO_PLATFORM)
 def reset(code:str): return tr(service.reset_parameters,code)
-@router.post("/rules/{code}/activate")
+@router.post("/rules/{code}/activate", dependencies=SOLO_PLATFORM)
 def activate(code:str,payload:ActivationRequest): return tr(service.activate,code,payload)
-@router.post("/rules/{code}/deactivate")
+@router.post("/rules/{code}/deactivate", dependencies=SOLO_PLATFORM)
 def deactivate(code:str): return tr(service.deactivate,code)
 
 # ---------------------------------------------------------------------------

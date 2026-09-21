@@ -287,8 +287,24 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
                "communication/templates.py", "communication/router.py",
                "run_communication_dispatch_cron.py", "consent/", "migrations/",
                "static/")
-    diff = _git("diff", "--name-only", "--", *intatti).split()
-    assert diff == [], diff
+    # LA COLLISIONE CON "FLOW GLOBAL SECURITY", NOMINATA E NON AGGIRATA.
+    #
+    # Questa asserzione era "il diff e' vuoto", ed era giusta finche' P29-3G
+    # era la fase in corso: nessun'altra mano stava scrivendo. Dopo il suo
+    # commit il working tree appartiene alla fase successiva, e la prima che
+    # e' arrivata tocca `static/` per una ragione sua - i due bottoni
+    # Attiva/Disattiva di un'automazione, che da quando il catalogo globale ha
+    # una porta rispondono 403 a un ruolo tenant.
+    #
+    # Si sottrae ESATTAMENTE cio' che quella fase dichiara, non l'intero
+    # prefisso: ogni altro file sotto `static/`, `migrations/`, `consent/` e
+    # gli otto moduli di communication resta soggetto all'asserzione di prima.
+    # Un `intatti` accorciato avrebbe chiuso il test invece di aggiornarlo.
+    from tests.flow_global_security_diff import (
+        FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
+
+    diff = set(_git("diff", "--name-only", "--", *intatti).split())
+    assert diff - MOD_FGS - NUOVI_FGS == set(), sorted(diff - MOD_FGS - NUOVI_FGS)
 
 
 def test_19_STOP_PRIORITY_e_le_fasi_del_tick_sono_intatte():
@@ -301,15 +317,23 @@ def test_19_STOP_PRIORITY_e_le_fasi_del_tick_sono_intatte():
 
 def test_20_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3g_diff import FILE_MODIFICATI, FILE_NUOVI
+    # FLOW GLOBAL SECURITY si dichiara allo stesso modo: l'unione cresce di
+    # una fase, il verso del controllo no. Non e' una fase di P29 - e' il
+    # catalogo globale di FLOW - ma questa sentinella guarda il working tree
+    # intero, quindi la collisione c'e' e va nominata.
+    from tests.flow_global_security_diff import (
+        FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
 
     righe = _git("status", "--porcelain").splitlines()
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    assert nuovi - FILE_NUOVI == {"P29_2_0_COMMUNICATION_DESIGN.md"}, sorted(nuovi - FILE_NUOVI)
-    assert modificati <= (FILE_MODIFICATI | FILE_NUOVI), \
-        sorted(modificati - (FILE_MODIFICATI | FILE_NUOVI))
+    tutti_nuovi = FILE_NUOVI | NUOVI_FGS
+    tutti_modificati = FILE_MODIFICATI | MOD_FGS | tutti_nuovi
+    assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+        sorted(nuovi - tutti_nuovi)
+    assert modificati <= tutti_modificati, sorted(modificati - tutti_modificati)
     for nome in FILE_NUOVI:
         assert (ROOT / nome).exists(), nome
     for nome in FILE_MODIFICATI:

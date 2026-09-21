@@ -107,7 +107,8 @@ export async function renderAutomazioneDettaglio(container, params = []) {
       ${renderBadge(PRIORITY_LABELS[rule.priority] || rule.priority || '—', 'gray')}
     `;
 
-    container.querySelector('#rule-detail-panel').innerHTML = renderDetailPanel(rule);
+    container.querySelector('#rule-detail-panel').innerHTML =
+      renderDetailPanel(rule, puoAmministrare());
     bindActions();
   }
 
@@ -172,7 +173,27 @@ export async function renderAutomazioneDettaglio(container, params = []) {
   }
 }
 
-function renderDetailPanel(rule) {
+// CHI PUO' ATTIVARE E DISATTIVARE, E PERCHE' QUI SI CHIEDE.
+//
+// Le regole FLOW sono UN catalogo per tutta la piattaforma: attivarne una la
+// attiva per ogni agenzia. Il backend lo ha sempre inteso cosi', ma fino alla
+// correzione sulla sicurezza del catalogo globale le due rotte stavano dietro
+// alla sola guardia del mount, quindi chiunque avesse una sessione poteva
+// premere questi bottoni. Adesso rispondono 403 a chi non e' amministratore
+// di piattaforma.
+//
+// Nascondere i due bottoni NON e' la difesa - quella e' `require_platform_admin`
+// lato server, ed e' l'unica autorita' in materia. E' la stessa scelta che la
+// Shell fa gia' per la voce "Rete": una richiesta che si sa gia' rifiutata non
+// si manda, e un bottone che risponde sempre 403 e' un difetto
+// dell'interfaccia, non una protezione. Chi non amministra la piattaforma
+// continua a VEDERE tutto - stato, verifica di sicurezza, chi ha attivato e
+// quando - perche' leggere il catalogo non e' mai stato ristretto.
+function puoAmministrare() {
+  return getSession()?.is_platform_admin === true;
+}
+
+function renderDetailPanel(rule, amministra) {
   const cooldown = Number(rule.cooldown_minutes) || 0;
   return `
     <div class="list">
@@ -181,12 +202,14 @@ function renderDetailPanel(rule) {
       <div class="list-item"><span class="muted">Verifica di sicurezza</span><span>${renderBadge(SIMULATION_STATUS_LABELS[rule.last_simulation_status] || rule.last_simulation_status || '—', simulationTone(rule.last_simulation_status))}${rule.last_simulation_at ? ` <small class="muted">(${escapeHtml(formatDateTime(rule.last_simulation_at))})</small>` : ''}</span></div>
       <div class="list-item"><span class="muted">Stato</span><span>${rule.is_active ? `Attiva dal ${escapeHtml(formatDateTime(rule.activated_at))}${rule.activated_by ? ` (da ${escapeHtml(rule.activated_by)})` : ''}` : 'Non attiva: nessuna esecuzione reale finché non viene attivata'}</span></div>
     </div>
+    ${amministra ? `
     <div class="action-bar" style="margin-top:16px">
       ${rule.is_active
         ? '<button type="button" id="rule-deactivate" class="btn ghost">Disattiva</button>'
         : '<button type="button" id="rule-activate" class="btn primary">Attiva</button>'}
     </div>
     ${!rule.is_active && rule.last_simulation_status !== 'success' ? '<p class="muted" style="margin-top:8px">L\'attivazione richiede una verifica di sicurezza superata con la versione e i parametri correnti della regola (eseguita dalla FLOW Admin). Se l\'attivazione viene rifiutata, il messaggio del backend viene mostrato qui sopra.</p>' : ''}
+    ` : '<p class="muted" style="margin-top:16px">Le automazioni valgono per tutta la piattaforma: attivarle e disattivarle spetta all\'amministratore di piattaforma.</p>'}
   `;
 }
 

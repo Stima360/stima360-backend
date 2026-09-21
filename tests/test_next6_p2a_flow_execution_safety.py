@@ -439,7 +439,25 @@ def _patch_scan_basics(monkeypatch, *, candidates, load=None, evaluate=None, exe
     return sync, recorder, failures
 
 
-def test_scan_round_robin_limit_prevents_first_rule_monopoly_and_syncs_once(monkeypatch):
+# LA GARANZIA CHE SI E' ROVESCIATA, E PERCHE'.
+#
+# Questo test asseriva `sync.assert_called_once_with()`: certificava cioe' che
+# una scansione sincronizza il catalogo, una volta sola. La parte "una volta
+# sola" era una difesa vera contro il ciclo che chiamava `sync_rules` per ogni
+# regola; la parte "sincronizza" era il difetto K1, scritto come promessa.
+#
+# `service.scan` e' raggiungibile da `POST /api/flow/scan`, che e' una
+# superficie TENANT: `agency_owner`, `agency_admin` e `agent`. Finche' quella
+# riga c'era, un operatore qualunque faceva INSERT e UPDATE sul catalogo di
+# tutta la piattaforma - e su un cambio di `code_version` riportava
+# `last_simulation_status` a `outdated`, cioe' poteva invalidare il
+# prerequisito di attivazione di una regola attiva. La sincronizzazione ha
+# adesso una superficie sola, `POST /api/flow/sync-rules`, dietro
+# `require_platform_admin`.
+#
+# L'asserzione si rovescia; il soggetto del test - il round robin che impedisce
+# alla prima regola di monopolizzare il limite - non cambia di una riga.
+def test_scan_round_robin_limit_prevents_first_rule_monopoly_and_does_not_sync(monkeypatch):
     sync, recorder, _ = _patch_scan_basics(
         monkeypatch,
         candidates=lambda code: (
@@ -459,7 +477,7 @@ def test_scan_round_robin_limit_prevents_first_rule_monopoly_and_syncs_once(monk
     assert result["failures"] == 0
     assert result["skips"] == 0
     assert result["status"] == "completed"
-    sync.assert_called_once_with()
+    sync.assert_not_called()
     assert recorder.call_count == 2
 
 

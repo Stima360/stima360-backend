@@ -363,6 +363,23 @@ def test_d3_no_page_outside_the_network_was_touched():
         # quella gia' elencata. Il componente non conosce ne' agenzie ne'
         # territori: parla di un contatto per volta.
         "static/os_shell/assets/components/communications.js",
+        # FLOW GLOBAL SECURITY - I DUE BOTTONI DI UN'AUTOMAZIONE.
+        #
+        # Le regole FLOW sono un catalogo unico per tutta la piattaforma, e da
+        # quando le cinque rotte che lo scrivono sono dietro
+        # `require_platform_admin` le due che questa vista premeva - activate e
+        # deactivate - rispondono 403 a un ruolo tenant. I bottoni compaiono
+        # quindi solo a chi e' `is_platform_admin`, per la stessa ragione per
+        # cui la voce "Rete" compare solo a lui: la difesa e' lato server, e un
+        # controllo che risponde sempre 403 e' un difetto dell'interfaccia. La
+        # lettura della scheda non cambia per nessuno.
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato - non un endpoint, non una rotta, non
+        # un componente della Rete - e nessuna vista del CRM oltre a quelle
+        # gia' elencate. Questa non e' una vista del CRM: e' la scheda di una
+        # regola di piattaforma.
+        "static/os_shell/assets/views/automazione-dettaglio.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

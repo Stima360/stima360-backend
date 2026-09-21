@@ -554,6 +554,12 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.p29_3e_diff import FILE_MODIFICATI, FILE_NUOVI
     # P29-3G si dichiara allo stesso modo: l'unione cresce di una fase.
     from tests.p29_3g_diff import FILE_MODIFICATI as MOD_3G, FILE_NUOVI as NUOVI_3G
+    # FLOW GLOBAL SECURITY si dichiara allo stesso modo: l'unione cresce
+    # di una fase, il verso del controllo no. Non e' una fase di P29 - e'
+    # il catalogo globale di FLOW - ma questa sentinella guarda il working
+    # tree intero, quindi la collisione c'e' e va nominata.
+    from tests.flow_global_security_diff import (
+        FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
 
     def _git(*argomenti):
         return subprocess.run(["git", "--no-optional-locks", *argomenti],
@@ -564,11 +570,12 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    tutti_nuovi = FILE_NUOVI | NUOVI_3G
+    tutti_nuovi = FILE_NUOVI | NUOVI_3G | NUOVI_FGS
+    tutti_modificati = FILE_MODIFICATI | MOD_3G | MOD_FGS | tutti_nuovi
     assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - tutti_nuovi)
-    assert modificati <= (FILE_MODIFICATI | MOD_3G | tutti_nuovi), \
-        sorted(modificati - (FILE_MODIFICATI | MOD_3G | tutti_nuovi))
+    assert modificati <= tutti_modificati, \
+        sorted(modificati - tutti_modificati)
     # NOTA DI P29-3G: dopo il commit di P29-3E i suoi file non sono piu' nel
     # working tree, e la garanzia si sposta su cio' che resta vero per
     # sempre: ogni file dichiarato esiste ed e' nell'indice.
