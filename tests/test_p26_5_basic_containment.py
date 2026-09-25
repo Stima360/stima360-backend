@@ -270,6 +270,10 @@ TENANT_PREFIXES = (
     # l'agenzia viene dalla sessione, mai dal client - quindi dichiara il
     # cookie e SOLO il cookie, come verifica il test 6 qui sopra.
     "/api/acquisition",
+    # A30 MOUNT: l'API Agenda. Superficie operatore come le altre - l'agenzia
+    # viene dalla sessione (`require_operator` su ogni rotta) - quindi
+    # dichiara il cookie e SOLO il cookie, come verifica il test 6 qui sopra.
+    "/api/appointments",
 )
 
 

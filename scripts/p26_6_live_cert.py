@@ -88,6 +88,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from datetime import timedelta as _timedelta
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
@@ -459,6 +461,31 @@ DOMAINS = (
         note="sette POST: anonimo e Basic -> 401, agency_id e l'id "
              "dell'operatore nel corpo -> 422, la stima e la property "
              "dell'altra agenzia -> 404, e il registro invariato a fine giro",
+    ),
+    Domain(
+        "APPOINTMENTS", "/api/appointments",
+        # A30 - L'API AGENDA. HOSTILE / REJECTION ONLY, come ACQUISITION.
+        #
+        # PERCHE' LA MATRICE NON CREA NE' TOCCA UN APPUNTAMENTO
+        #
+        # Un appuntamento non si cancella (la 072 rifiuta la DELETE) e il suo
+        # registro e' append-only: una riga nata dal run resterebbe sul TEST
+        # per sempre, con un operatore di certificazione come autore, e
+        # bloccherebbe perfino il cleanup degli operatori (FK RESTRICT). La
+        # purge `a30_test` appartiene al gate A30, non a questa matrice.
+        #
+        # Quindi ogni domanda ha come risposta giusta un RIFIUTO che arriva
+        # PRIMA di qualunque scrittura: anonimo e Basic (401 al mount),
+        # corpo non valido (422 prima del service), risorsa dell'altra
+        # agenzia trovata in SOLA LETTURA (404, e con una `version` che non
+        # puo' coincidere: anche uno scope rotto finirebbe in 409). Il giro
+        # riuscito appartiene alle suite A30 su PostgreSQL usa-e-getta.
+        certifier="appointments",
+        api_delete=False,
+        note="solo rifiuti: anonimo e Basic -> 401 su ogni rotta, l'appuntamento "
+             "dell'altra agenzia (trovato in sola lettura) -> 404 su lettura e "
+             "su ogni scrittura, liste e calendario senza le sue righe, agente e "
+             "stima altrui -> 422/404, e registro, facade e Q10 invariati",
     ),
     Domain(
         "SELLER_INTENT", "/api/seller-intent",
@@ -5293,6 +5320,358 @@ def certify_acquisition(report, http, cert, domain, jars, owned, context) -> Non
         )
 
 
+#: Una `version` che nessun appuntamento reale porta: le scritture ostili
+#: dell'Agenda la dichiarano, cosi' che anche uno scope rotto finisca in
+#: VERSION_CONFLICT (409) invece di scrivere. La prova resta il 404.
+AGENDA_VERSIONE_IMPOSSIBILE = 2147483000
+
+#: Le sedici operazioni dell'API Agenda, per il giro anonimo. Un id qualunque
+#: basta: il rifiuto arriva dal mount, prima della rotta.
+AGENDA_OPERAZIONI = (
+    ("GET", ""), ("POST", ""), ("GET", "/calendar"), ("GET", "/agents"),
+    ("GET", "/availability"), ("POST", "/availability/check"),
+    ("GET", "/{id}"), ("PATCH", "/{id}"), ("GET", "/{id}/events"),
+    ("POST", "/{id}/schedule"), ("POST", "/{id}/confirm"),
+    ("POST", "/{id}/reschedule"), ("POST", "/{id}/reassign"),
+    ("POST", "/{id}/cancel"), ("POST", "/{id}/complete"),
+    ("POST", "/{id}/no-show"),
+)
+
+
+def _agenda_istante(valore) -> str:
+    return valore.isoformat() if hasattr(valore, "isoformat") else str(valore)
+
+
+def _agenda_fotografia(database) -> dict | None:
+    """Conteggi, massimi, facade e Q10: SOLA LETTURA. None se l'Agenda non c'e'
+    (072 non applicata) o se non c'e' un database: "non ho potuto contare" non
+    e' "ho contato zero"."""
+    if database is None:
+        return None
+    from scripts.a30_2p_facade_live_cert import Q10
+
+    with database.read() as cur:
+        cur.execute("SELECT to_regclass('public.appointments') IS NOT NULL"
+                    "   AND to_regclass('public.appointment_events') IS NOT NULL"
+                    " AS a30_agenda_pronta")
+        riga = cur.fetchone()
+        if riga is None or not riga["a30_agenda_pronta"]:
+            return None
+        cur.execute(
+            "SELECT (SELECT count(*) FROM appointments) AS a30_appuntamenti,"
+            "       (SELECT count(*) FROM appointment_events) AS a30_eventi,"
+            "       (SELECT count(*) FROM appointments WHERE source = 'lmc15_facade')"
+            "           AS a30_facade,"
+            "       (SELECT coalesce(max(id), 0) FROM appointments) AS a30_max_appuntamento,"
+            "       (SELECT coalesce(max(id), 0) FROM appointment_events) AS a30_max_evento")
+        conteggi = dict(cur.fetchone())
+        cur.execute(Q10)
+        q10 = dict(cur.fetchone())
+    return {"conteggi": {k: int(v) for k, v in conteggi.items()},
+            "q10": {k: int(v) for k, v in q10.items()}}
+
+
+def _agenda_altrui(database, agency_id) -> dict | None:
+    """Un appuntamento GIA' ESISTENTE dell'agenzia, letto e mai toccato."""
+    with database.read() as cur:
+        cur.execute(
+            "SELECT id, version, status, start_at, updated_at, stima_id"
+            "  FROM appointments WHERE agency_id = %s AND version <> %s"
+            " ORDER BY id LIMIT 1 /* a30_altrui */",
+            (agency_id, AGENDA_VERSIONE_IMPOSSIBILE))
+        riga = cur.fetchone()
+    return None if riga is None else dict(riga)
+
+
+def _agenda_righe(database, ids) -> dict:
+    """(version, status, updated_at) delle righe sondate, per id."""
+    if not ids:
+        return {}
+    with database.read() as cur:
+        cur.execute("SELECT id, version, status, updated_at FROM appointments"
+                    " WHERE id = ANY(%s) /* a30_sondate */", (sorted(ids),))
+        return {int(r["id"]): (r["version"], r["status"], str(r["updated_at"]))
+                for r in cur.fetchall()}
+
+
+def _agenda_attribuibili(database, prima: dict, operatori: list) -> dict:
+    """Le righe NATE dopo la fotografia che portano come autore un'identita'
+    di questo run. Con attivita' concorrente sul TEST i conteggi globali
+    possono cambiare; queste no."""
+    with database.read() as cur:
+        cur.execute(
+            "SELECT (SELECT count(*) FROM appointments WHERE id > %s"
+            "          AND created_by_user_id = ANY(%s)) AS a30_nuovi_appuntamenti,"
+            "       (SELECT count(*) FROM appointment_events WHERE id > %s"
+            "          AND actor_user_id = ANY(%s)) AS a30_nuovi_eventi",
+            (prima["a30_max_appuntamento"], operatori,
+             prima["a30_max_evento"], operatori))
+        riga = cur.fetchone()
+    return {k: int(v) for k, v in dict(riga).items()}
+
+
+def certify_appointments(report, http, cert, domain, jars, owned, context) -> None:
+    """APPOINTMENTS (A30): HOSTILE / REJECTION ONLY.
+
+    La matrice certifica AMMISSIONE e CONTENIMENTO DEL TENANT dell'Agenda, non
+    il suo funzionamento: quello appartiene al gate A30. Nessuna richiesta di
+    questa sezione puo' arrivare a un percorso riuscito che scrive:
+
+        anonimo, su tutte le sedici operazioni       -> 401 (al mount)
+        HTTP Basic (P26-5 l'ha tolto)                -> 401
+        l'appuntamento dell'altra agenzia            -> 404 in lettura, eventi,
+            e su PATCH, schedule, confirm, reschedule, reassign, cancel,
+            complete, no-show (con una `version` impossibile: anche uno scope
+            rotto finirebbe in 409, non in una scrittura)
+        lista e calendario sulla finestra di quell'appuntamento -> non c'e'
+        disponibilita' dell'agente dell'altra agenzia -> 422 (lettura e check)
+        creazione: `agency_id` o `source` nel corpo  -> 422 (prima del service)
+        creazione con l'agente dell'altra agenzia    -> 422 (prima dell'INSERT)
+        creazione sulla stima dell'altra agenzia     -> 404 (prima dell'INSERT)
+        e, prima e dopo: conteggi, facade `lmc15_facade`, Q10 e le righe
+        sondate -> invariati; Q10 tutto 0.
+
+    L'appuntamento dell'altra agenzia NON si crea: si cerca in sola lettura.
+    Se l'altra agenzia non ne ha, le sonde su di esso restano BLOCKED con il
+    prerequisito dichiarato - mai un dato inventato.
+    """
+    database = context.get("database")
+    agenzie = context.get("agencies") or {}
+    operatori = context.get("operators") or {}
+    stime = context.get("stime") or {}
+    base = domain.prefix
+
+    def agenzia(etichetta):
+        valore = agenzie.get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    # -- prima: la fotografia in sola lettura --------------------------------
+    prima = _agenda_fotografia(database)
+    if prima is None:
+        report.blocked(
+            "APPOINTMENTS-fotografia",
+            "nessuna connessione al database, o 072 non applicata: non si puo' "
+            "provare che il giro ostile non scriva, e il giro non parte")
+        return
+    report.check(
+        "APPOINTMENTS-q10-prima",
+        all(v == 0 for v in prima["q10"].values()),
+        f"Q10 prima della sezione: {prima['q10']} (atteso tutto 0)",
+    )
+
+    # -- senza identita': tutte le rotte -------------------------------------
+    for metodo, suffisso in AGENDA_OPERAZIONI:
+        percorso = base + suffisso.replace("{id}", "1")
+        payload = {} if metodo in ("POST", "PATCH") else None
+        risposta = http.request(metodo, percorso, payload=payload)
+        report.check(
+            f"APPOINTMENTS-anonimo-{metodo}{suffisso or '/'}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, percorso in (("GET", base), ("POST", base), ("POST", f"{base}/1/cancel")):
+        risposta = http.request(metodo, percorso,
+                                payload={} if metodo == "POST" else None,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(
+            f"APPOINTMENTS-basic-{metodo}-{percorso.rsplit('/', 1)[-1] or 'root'}",
+            risposta.status == 401,
+            f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} "
+            "(atteso 401: P26-5 ha tolto quel canale)",
+        )
+
+    # -- le due direzioni ----------------------------------------------------
+    sondate: set[int] = set()
+    righe_prima: dict = {}
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        altrui = _agenda_altrui(database, agenzia(altro))
+        agente_altrui = operatori.get(altro)
+        mio_agente = operatori.get(etichetta)
+        sua_stima = stime.get(altro)
+
+        # Disponibilita' dell'agente dell'altra agenzia: una lettura che
+        # rivelerebbe i suoi impegni.
+        if agente_altrui is not None:
+            finestra = urllib.parse.urlencode({
+                "user_id": agente_altrui, "from": "2030-01-07T08:00:00+00:00",
+                "to": "2030-01-07T18:00:00+00:00"})
+            slot = http.request("GET", f"{base}/availability?{finestra}", jar=jar)
+            report.check(
+                f"APPOINTMENTS-disponibilita-{etichetta}-{altro}",
+                slot.status == 422,
+                f"{etichetta} chiede gli slot dell'agente di {altro} -> {slot.status} "
+                "(atteso 422 AGENT_NOT_ACTIVE: non e' un membro di questa agenzia)",
+            )
+            check = http.request("POST", f"{base}/availability/check", jar=jar, payload={
+                "assigned_user_id": agente_altrui,
+                "start_at": "2030-01-07T10:00:00+00:00",
+                "end_at": "2030-01-07T11:00:00+00:00"})
+            report.check(
+                f"APPOINTMENTS-verifica-{etichetta}-{altro}",
+                check.status == 422,
+                f"{etichetta} verifica un intervallo dell'agente di {altro} -> "
+                f"{check.status} (atteso 422)",
+            )
+        else:
+            report.blocked(f"APPOINTMENTS-disponibilita-{etichetta}-{altro}",
+                           f"manca l'identita' di {altro}")
+
+        # Creazione: SOLO corpi che il rifiuto ferma prima dell'INSERT.
+        def corpo(**extra):
+            return {"appointment_type": "inspection", "status": "requested",
+                    "start_at": "2030-01-07T10:00:00+00:00",
+                    "end_at": "2030-01-07T11:00:00+00:00",
+                    "client_request_id": str(uuid.uuid4()), **extra}
+
+        for nome, extra in (("agency-nel-corpo", {"agency_id": agenzia(altro)}),
+                            ("source-nel-corpo", {"source": "a30_test"})):
+            intruso = http.request("POST", base, jar=jar, payload=corpo(**extra))
+            report.check(
+                f"APPOINTMENTS-create-{nome}-{etichetta}",
+                intruso.status == 422,
+                f"{etichetta} crea con `{nome.split('-')[0]}` nel corpo -> "
+                f"{intruso.status} (atteso 422: `extra=forbid`, prima del service)",
+            )
+        if agente_altrui is not None:
+            furto = http.request("POST", base, jar=jar, payload=corpo(
+                status="scheduled", assigned_user_id=agente_altrui))
+            report.check(
+                f"APPOINTMENTS-create-agente-altrui-{etichetta}-{altro}",
+                furto.status == 422,
+                f"{etichetta} fissa un appuntamento all'agente di {altro} -> "
+                f"{furto.status} (atteso 422 AGENT_NOT_ACTIVE, prima dell'INSERT)",
+            )
+        if sua_stima is not None:
+            furto = http.request("POST", base, jar=jar, payload=corpo(stima_id=sua_stima))
+            report.check(
+                f"APPOINTMENTS-create-stima-altrui-{etichetta}-{altro}",
+                furto.status == 404,
+                f"{etichetta} crea una richiesta sulla stima di {altro} -> "
+                f"{furto.status} (atteso 404, prima dell'INSERT)",
+            )
+        else:
+            report.blocked(f"APPOINTMENTS-create-stima-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha una stima: sonda non eseguibile")
+
+        # L'appuntamento dell'altra agenzia: esiste o la sonda e' BLOCKED.
+        if altrui is None:
+            report.blocked(
+                f"APPOINTMENTS-altrui-{etichetta}-{altro}",
+                f"PREREQUISITO: l'agenzia {altro} non ha alcun appuntamento sul "
+                "TEST. La matrice non ne crea uno (un appuntamento non si "
+                "cancella): lettura, liste e scritture ostili verso "
+                f"{altro} restano non provate finche' non ne esiste uno")
+            continue
+        ident = int(altrui["id"])
+        sondate.add(ident)
+        righe_prima.update(_agenda_righe(database, {ident}))
+
+        for suffisso, nome in (("", "dettaglio"), ("/events", "eventi")):
+            lettura = http.request("GET", f"{base}/{ident}{suffisso}", jar=jar)
+            report.check(
+                f"APPOINTMENTS-{nome}-{etichetta}-{altro}",
+                lettura.status == 404,
+                f"{etichetta} legge ({nome}) l'appuntamento {ident} di {altro} -> "
+                f"{lettura.status} (atteso 404)",
+            )
+
+        inizio = altrui["start_at"]
+        if hasattr(inizio, "isoformat"):
+            dal = (inizio - _timedelta(hours=1)).isoformat()
+            al = (inizio + _timedelta(hours=1)).isoformat()
+        else:
+            dal = al = None
+        if dal is not None:
+            finestra = urllib.parse.urlencode({"from": dal, "to": al, "limit": 200})
+            for nome, percorso in (("list", f"{base}?{finestra}"),
+                                   ("calendario", f"{base}/calendar?{finestra}")):
+                elenco = http.request("GET", percorso, jar=jar)
+                visti = [v.get("id") for v in elenco.items() if isinstance(v, dict)]
+                report.check(
+                    f"APPOINTMENTS-{nome}-{etichetta}-non-vede-{altro}",
+                    elenco.status == 200 and ident not in visti,
+                    f"{etichetta}: {nome} sulla finestra dell'appuntamento di {altro} "
+                    f"-> {elenco.status}, {len(visti)} elementi osservati, "
+                    f"{'CONTIENE' if ident in visti else 'senza'} l'id {ident}",
+                )
+
+        futuro = {"start_at": "2030-01-07T10:00:00+00:00",
+                  "end_at": "2030-01-07T11:00:00+00:00"}
+        versione = {"version": AGENDA_VERSIONE_IMPOSSIBILE}
+        scritture = (
+            ("PATCH", "", {**versione, "notes": "sonda P26-6"}),
+            ("POST", "/schedule", {**versione, **futuro, "assigned_user_id": mio_agente}),
+            ("POST", "/confirm", versione),
+            ("POST", "/reschedule", {**versione, **futuro}),
+            ("POST", "/reassign", {**versione, "assigned_user_id": mio_agente}),
+            ("POST", "/cancel", {**versione, "reason": "sonda P26-6"}),
+            ("POST", "/complete", versione),
+            ("POST", "/no-show", versione),
+        )
+        for metodo, suffisso, payload in scritture:
+            scrittura = http.request(metodo, f"{base}/{ident}{suffisso}", jar=jar,
+                                     payload=payload)
+            report.check(
+                f"APPOINTMENTS-write{suffisso.replace('/', '-') or '-patch'}"
+                f"-{etichetta}-{altro}",
+                scrittura.status == 404,
+                f"{etichetta} {metodo} {suffisso or '(patch)'} sull'appuntamento "
+                f"{ident} di {altro} -> {scrittura.status} (atteso 404: la riga "
+                "dell'altra agenzia non esiste per chi chiama)",
+            )
+
+    # -- dopo: le guardie read-only ------------------------------------------
+    righe_dopo = _agenda_righe(database, sondate)
+    report.check(
+        "APPOINTMENTS-righe-sondate-intatte",
+        righe_dopo == righe_prima,
+        f"version, stato e updated_at delle righe sondate {sorted(sondate)} prima "
+        f"{righe_prima} e dopo {righe_dopo} (attesi identici)",
+    )
+    dopo = _agenda_fotografia(database)
+    if dopo is None:
+        report.fail("APPOINTMENTS-fotografia-dopo",
+                    "la fotografia finale non e' leggibile")
+        return
+    report.check(
+        "APPOINTMENTS-q10-dopo",
+        all(v == 0 for v in dopo["q10"].values()),
+        f"Q10 dopo la sezione: {dopo['q10']} (atteso tutto 0)",
+    )
+    chiavi = ("a30_appuntamenti", "a30_eventi", "a30_facade")
+    uguali = all(prima["conteggi"][k] == dopo["conteggi"][k] for k in chiavi)
+    attribuibili = _agenda_attribuibili(
+        database, prima["conteggi"], sorted(v for v in operatori.values() if v is not None))
+    report.check(
+        "APPOINTMENTS-nessuna-riga-del-run",
+        all(v == 0 for v in attribuibili.values()),
+        f"righe nate durante la sezione con un'identita' del run come autore: "
+        f"{attribuibili} (attese 0)",
+    )
+    if uguali:
+        report.note(
+            "APPOINTMENTS-registro-invariato",
+            "appuntamenti, eventi e righe lmc15_facade invariati: "
+            + ", ".join(f"{k}={dopo['conteggi'][k]}" for k in chiavi))
+    else:
+        # Attivita' concorrente sul TEST: i conteggi globali non bastano. Il
+        # verdetto sta sulle righe attribuibili (sopra) - nessuna - e qui si
+        # dichiara la differenza invece di tacerla.
+        diminuiti = [k for k in chiavi if dopo["conteggi"][k] < prima["conteggi"][k]]
+        report.check(
+            "APPOINTMENTS-registro-invariato",
+            not diminuiti,
+            "conteggi cambiati durante la sezione per attivita' concorrente, "
+            f"nessuna riga attribuibile al run: prima "
+            f"{ {k: prima['conteggi'][k] for k in chiavi} }, dopo "
+            f"{ {k: dopo['conteggi'][k] for k in chiavi} }"
+            + (f"; DIMINUITI {diminuiti}: una riga e' sparita" if diminuiti else ""),
+        )
+
+
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:
     """COMMUNICATION: SOLO RIFIUTI, e per una ragione.
 
@@ -5887,6 +6266,10 @@ def certify(report, http, cert, operators, jars, owner_sessions=None,
         # messaggio. Senza connessione dichiara di non averlo misurato invece
         # di tacere.
         "database": database,
+        # A30: gli id delle due identita' della matrice. L'Agenda li usa come
+        # "agente dell'altra agenzia" (rifiuto atteso) e per attribuire al run
+        # le righe eventualmente nate durante la sua sezione.
+        "operators": {label: op["id"] for label, op in operators.items()},
     }
 
     # -- le due sessioni sono vive e portano agenzie diverse -----------------

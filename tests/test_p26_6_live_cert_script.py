@@ -27,6 +27,7 @@ seam invece che con chiamate dirette.
 from __future__ import annotations
 
 import ast
+import datetime as _dt
 import functools
 import io
 import py_compile
@@ -233,6 +234,52 @@ class FakeCursor:
             return
         self._row = {"n": quante}
 
+    def _agenda_execute(self, upper, params):
+        """A30: le sole letture della sezione APPOINTMENTS. Le righe sono le
+        stesse che il doppio HTTP conosce (`appuntamenti`), cosi' una
+        scrittura che il doppio applicasse per un difetto si vedrebbe qui."""
+        righe = self.state.setdefault("appuntamenti", {})
+        eventi = self.state.setdefault("eventi_agenda", {})
+        if "A30_AGENDA_PRONTA" in upper:
+            self._row = {"a30_agenda_pronta": self.state.get("agenda_presente", True)}
+        elif "COLLEGAMENTO_SENZA_RIGA_LMC15" in upper:
+            q10 = dict.fromkeys(Q10_CHIAVI, 0)
+            q10.update(self.state.get("q10", {}))
+            self._row = q10
+        elif "A30_NUOVI_APPUNTAMENTI" in upper:
+            max_a, autori_a, max_e, autori_e = params
+            self._row = {
+                "a30_nuovi_appuntamenti": sum(
+                    1 for i, r in righe.items()
+                    if i > max_a and r.get("created_by") in set(autori_a)),
+                "a30_nuovi_eventi": sum(
+                    1 for i, e in eventi.items()
+                    if i > max_e and e.get("actor") in set(autori_e)),
+            }
+        elif "A30_MAX_EVENTO" in upper:
+            self._row = {
+                "a30_appuntamenti": len(righe), "a30_eventi": len(eventi),
+                "a30_facade": sum(1 for r in righe.values()
+                                  if r.get("source") == "lmc15_facade"),
+                "a30_max_appuntamento": max(righe, default=0),
+                "a30_max_evento": max(eventi, default=0),
+            }
+        elif "A30_ALTRUI" in upper:
+            agenzia, impossibile = params
+            candidati = sorted(i for i, r in righe.items()
+                               if r["agency"] == agenzia and r["version"] != impossibile)
+            self._row = None if not candidati else {
+                "id": candidati[0], **{k: righe[candidati[0]][k]
+                                       for k in ("version", "status", "start_at",
+                                                 "updated_at", "stima_id")}}
+        elif "A30_SONDATE" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i, "version": r["version"], "status": r["status"],
+                           "updated_at": r["updated_at"]}
+                          for i, r in sorted(righe.items()) if i in ids]
+        else:
+            raise AssertionError(f"domanda dell'Agenda non prevista dal doppio: {upper}")
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
@@ -244,6 +291,10 @@ class FakeCursor:
 
         if self.state.get("explode_on") and self.state["explode_on"] in statement:
             raise RuntimeError("il database e' caduto")
+
+        if "A30_" in upper or "COLLEGAMENTO_SENZA_RIGA_LMC15" in upper:
+            self._agenda_execute(upper, params)
+            return
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
             self._row = {"name": self.state.get("database", "stima360_db_test")}
@@ -952,6 +1003,12 @@ class FakeHttp(cert.HttpProbe):
         self.origine_condivisa: dict = {}
         self.match_property: dict = {}         # match_id  -> property_id
         self.proposal_property: dict = {}      # proposal_id -> property_id
+        # A30: gli appuntamenti GIA' ESISTENTI sul TEST (condivisi con il
+        # doppio del database da `working_run`) e le identita' della matrice,
+        # id operatore -> agenzia, per il rifiuto dell'agente altrui.
+        self.appuntamenti: dict = {}
+        self.eventi_agenda: dict = {}
+        self.operatori: dict = {}
 
     # -- helper -----------------------------------------------------------
     def _effetto(self, tabella: str) -> int | None:
@@ -1446,6 +1503,107 @@ class FakeHttp(cert.HttpProbe):
 
         return self._reply(method, path, 404, b'{"detail":"non trovata"}')
 
+    def _appointments(self, method, path, agency, payload):
+        """A30. Il doppio riproduce il CONTRATTO REALE della superficie.
+
+        Gli schemi Pydantic VERI decidono i 422 (`extra="forbid"` compreso), e
+        l'ordine e' quello del router e del service: corpo -> agente -> stima
+        -> riga (per id, filtrata per agenzia) -> version. Le difettosita'
+        sono sulla superficie "appointments": `isolation` (la riga altrui si
+        legge e si scrive), `write` (rifiuta con 404 e scrive comunque),
+        `listing` (liste e calendario mostrano le righe altrui),
+        `agenda_create` (la stima e l'agente altrui passano e nasce una riga).
+        """
+        import json as _json
+        from urllib.parse import parse_qs, urlsplit
+
+        import pydantic
+
+        from appointments import schemas as agenda
+
+        parti = urlsplit(path)
+        percorso, query = parti.path, parse_qs(parti.query)
+        rotto = lambda tipo: self._broken(tipo, "appointments")  # noqa: E731
+
+        def agente_mio(uid):
+            return uid is None or self.operatori.get(uid) == agency
+
+        def valida(modello):
+            try:
+                return modello.model_validate(payload if isinstance(payload, dict) else None)
+            except pydantic.ValidationError:
+                return None
+
+        def scrivi(ident, azione):
+            riga = self.appuntamenti[ident]
+            riga["version"] += 1
+            riga["updated_at"] = f"toccata-{riga['version']}"
+            self.eventi_agenda[max(self.eventi_agenda, default=0) + 1] = {
+                "actor": next((u for u, a in self.operatori.items() if a == agency), None),
+                "azione": azione}
+
+        if percorso in ("/api/appointments", "/api/appointments/calendar") and method == "GET":
+            visibili = [{"id": i} for i, r in sorted(self.appuntamenti.items())
+                        if r["agency"] == agency or rotto("listing")]
+            return self._reply(method, path, 200, _json.dumps({"items": visibili}).encode())
+        if percorso == "/api/appointments/availability" and method == "GET":
+            uid = int(query.get("user_id", ["0"])[0])
+            if not agente_mio(uid):
+                return self._reply(method, path, 422, b'{"code":"AGENT_NOT_ACTIVE"}')
+            return self._reply(method, path, 200, b'{"slots":[]}')
+        if percorso == "/api/appointments/availability/check" and method == "POST":
+            corpo = valida(agenda.AvailabilityCheckBody)
+            if corpo is None:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+            if not agente_mio(corpo.assigned_user_id):
+                return self._reply(method, path, 422, b'{"code":"AGENT_NOT_ACTIVE"}')
+            return self._reply(method, path, 200, b'{"available":true}')
+        if percorso == "/api/appointments" and method == "POST":
+            corpo = valida(agenda.AppointmentCreateBody)
+            if corpo is None:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+            if not agente_mio(corpo.assigned_user_id) and not rotto("agenda_create"):
+                return self._reply(method, path, 422, b'{"code":"AGENT_NOT_ACTIVE"}')
+            if corpo.stima_id is not None and not rotto("agenda_create"):
+                proprietario = next((a for a, sid in self.stime.items()
+                                     if sid == corpo.stima_id), None)
+                if proprietario != agency:
+                    return self._reply(method, path, 404, b'{"code":"NOT_FOUND"}')
+            nuovo = max(self.appuntamenti, default=0) + 1
+            self.appuntamenti[nuovo] = {
+                "agency": agency, "version": 1, "status": corpo.status,
+                "start_at": corpo.start_at, "updated_at": "nuova",
+                "stima_id": corpo.stima_id, "source": "crm_manual",
+                "created_by": next((u for u, a in self.operatori.items() if a == agency),
+                                   None)}
+            return self._reply(method, path, 201, _json.dumps({"id": nuovo}).encode())
+
+        trovato = re.match(r"^/api/appointments/(\d+)(/[a-z-]+)?$", percorso)
+        if trovato is None:
+            return self._reply(method, path, 404, b'{"detail":"Not Found"}')
+        ident, azione = int(trovato.group(1)), (trovato.group(2) or "")
+        modelli = {("PATCH", ""): agenda.PatchBody, ("POST", "/schedule"): agenda.ScheduleBody,
+                   ("POST", "/confirm"): agenda.ConfirmBody,
+                   ("POST", "/reschedule"): agenda.RescheduleBody,
+                   ("POST", "/reassign"): agenda.ReassignBody,
+                   ("POST", "/cancel"): agenda.CancelBody,
+                   ("POST", "/complete"): agenda.CompleteBody,
+                   ("POST", "/no-show"): agenda.NoShowBody}
+        corpo = None
+        if (method, azione) in modelli:
+            corpo = valida(modelli[(method, azione)])
+            if corpo is None:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+        riga = self.appuntamenti.get(ident)
+        altrui = riga is not None and riga["agency"] != agency
+        if riga is None or (altrui and not rotto("isolation")):
+            if altrui and corpo is not None and rotto("write"):
+                scrivi(ident, azione or "patch")      # rifiuta a parole, scrive
+            return self._reply(method, path, 404, b'{"code":"NOT_FOUND"}')
+        if corpo is not None:
+            scrivi(ident, azione or "patch")
+        return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
+
     def _link_contact(self, method, path, agency, property_id, contact_id):
         """Il legame proprietario: entrambe le righe devono essere del chiamante.
 
@@ -1680,6 +1838,9 @@ class FakeHttp(cert.HttpProbe):
 
         if path.startswith("/api/acquisition/") and method == "POST":
             return self._acquisition(method, path, agency, payload)
+
+        if path.startswith("/api/appointments"):
+            return self._appointments(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -1935,6 +2096,24 @@ OWNERS = {1: 7001, 2: 7002}
 #: Le stime che ciascuna agenzia gia' possiede. Chiave: agency_id.
 STIME = {1: 9001, 2: 9002}
 
+#: A30: un appuntamento preesistente per agenzia (id -> riga).
+APPUNTAMENTI = {
+    4001: {"agency": 1, "version": 3, "status": "requested",
+           "start_at": _dt.datetime(2026, 10, 5, 10, 0, tzinfo=_dt.timezone.utc),
+           "updated_at": "2026-09-01", "stima_id": 9001,
+           "source": "stima_inspections_backfill", "created_by": None},
+    4002: {"agency": 2, "version": 1, "status": "scheduled",
+           "start_at": _dt.datetime(2026, 10, 6, 9, 0, tzinfo=_dt.timezone.utc),
+           "updated_at": "2026-09-02", "stima_id": None,
+           "source": "crm_manual", "created_by": None},
+}
+
+#: Le nove colonne di Q10 (A30-2P), tutte 0 su un TEST allineato.
+Q10_CHIAVI = ("collegamento_senza_riga_lmc15", "stato_incompatibile",
+              "scheduled_for_diverso_da_start_at", "completed_at_diverso",
+              "cancelled_at_diverso", "no_show_at_diverso", "stima_o_agenzia_diversa",
+              "rescheduled_ancora_collegato", "lmc15_con_stima_non_rappresentati")
+
 
 def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
                 stime=STIME, dedicated_agencies=False, **state):
@@ -1993,6 +2172,12 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     probe.osservazioni = database.state.setdefault("osservazioni", {})
     probe.stime_valutate = database.state.setdefault("stime_valutate", set())
     probe.origine_condivisa = database.state.setdefault("origine_condivisa", {})
+    # A30: un appuntamento GIA' ESISTENTE per agenzia, condiviso fra i due
+    # doppi. `appuntamenti={}` (o senza una delle due agenzie) riproduce il
+    # TEST senza il prerequisito, dove le sonde restano BLOCKED.
+    probe.appuntamenti = database.state.setdefault("appuntamenti", {
+        i: dict(r) for i, r in APPUNTAMENTI.items()})
+    probe.eventi_agenda = database.state.setdefault("eventi_agenda", {})
     # LE RIGHE DEGLI EFFETTI, materializzate come il run le crea davvero.
     #
     # Senza, l'istantanea non trova nulla, le cancellazioni degli effetti non
@@ -2071,6 +2256,7 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
         operator = original_create(self, agency)
         probe.logins = getattr(probe, "logins", {})
         probe.logins[operator["email"]] = agency["id"]
+        probe.operatori[operator["id"]] = agency["id"]
         return operator
 
     monkeypatch.setattr(cert.Certification, "create_operator", create)
@@ -8367,3 +8553,173 @@ def test_107d_nba_pre_esistente_in_altra_agenzia_sopravvive(monkeypatch):
         http=FakeHttp(prepopulate=DERIVED, stime=STIME))
     assert {i:k for k,i,_ in report.rows}["CLEAN-PREFLIGHT"] == cert.PASS
     assert db.state["nba_rows"] == {990001: foreign}
+
+
+# ---------------------------------------------------------------------------
+# A30 - APPOINTMENTS: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+def _righe_agenda(report):
+    return [(k, i, t) for k, i, t in report.rows if i.startswith("APPOINTMENTS-")]
+
+
+def _mutazioni_agenda_riuscite(probe):
+    """Ogni scrittura dell'Agenda che il doppio ha ACCETTATO (2xx)."""
+    return [(chiamata, stato) for chiamata, stato, _ in probe.exchanges
+            if chiamata.split(" ", 1)[1].startswith("/api/appointments")
+            and chiamata.split(" ", 1)[0] in ("POST", "PATCH", "PUT", "DELETE")
+            and 200 <= stato < 300]
+
+
+def test_a30_01_agenda_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
+    code, report, database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    righe = _righe_agenda(report)
+    assert [r for r in righe if r[0] != cert.PASS] == [], righe
+    idents = {i for _k, i, _t in righe}
+    # sedici operazioni anonime, tre con HTTP Basic
+    assert sum(1 for i in idents if i.startswith("APPOINTMENTS-anonimo-")) == 16
+    assert sum(1 for i in idents if i.startswith("APPOINTMENTS-basic-")) == 3
+    for a, b in (("A", "B"), ("B", "A")):
+        for nome in ("dettaglio", "eventi", "disponibilita", "verifica",
+                     "create-agente-altrui", "create-stima-altrui", "write-patch",
+                     "write-schedule", "write-confirm", "write-reschedule",
+                     "write-reassign", "write-cancel", "write-complete", "write-no-show"):
+            assert f"APPOINTMENTS-{nome}-{a}-{b}" in idents, (nome, a, b)
+        for nome in ("list", "calendario"):
+            assert f"APPOINTMENTS-{nome}-{a}-non-vede-{b}" in idents
+        for nome in ("agency-nel-corpo", "source-nel-corpo"):
+            assert f"APPOINTMENTS-create-{nome}-{a}" in idents
+    for guardia in ("q10-prima", "q10-dopo", "righe-sondate-intatte",
+                    "nessuna-riga-del-run", "registro-invariato"):
+        assert f"APPOINTMENTS-{guardia}" in idents, guardia
+    # nessuna scrittura accettata, e le righe preesistenti identiche
+    assert _mutazioni_agenda_riuscite(probe) == []
+    assert probe.appuntamenti == APPUNTAMENTI
+    assert probe.eventi_agenda == {}
+    # le liste hanno guardato righe vere (la propria c'era)
+    osservati = [t for _k, i, t in righe if "-list-" in i]
+    assert all(re.search(r"[1-9]\d* elementi osservati", t) for t in osservati), osservati
+
+
+def test_a30_02_senza_appuntamento_altrui_e_BLOCKED_non_inventato(monkeypatch):
+    """Rule 6: l'agenzia B non ha appuntamenti. La matrice non ne crea uno:
+    le sonde A->B restano BLOCKED con il prerequisito, B->A girano."""
+    solo_a = {4001: dict(APPUNTAMENTI[4001])}
+    code, report, database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        appuntamenti=solo_a)
+    righe = {i: (k, t) for k, i, t in _righe_agenda(report)}
+    assert righe["APPOINTMENTS-altrui-A-B"][0] == cert.BLOCKED
+    assert "PREREQUISITO" in righe["APPOINTMENTS-altrui-A-B"][1]
+    assert "APPOINTMENTS-dettaglio-A-B" not in righe
+    assert righe["APPOINTMENTS-dettaglio-B-A"][0] == cert.PASS
+    assert righe["APPOINTMENTS-write-cancel-B-A"][0] == cert.PASS
+    assert not any(k == cert.FAIL for k, _t in righe.values())
+    assert probe.appuntamenti == solo_a                  # nessuna riga inventata
+    assert _mutazioni_agenda_riuscite(probe) == []
+    assert code == 2
+
+
+def test_a30_03_senza_agenda_sul_database_la_sezione_e_BLOCKED(monkeypatch):
+    _code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME), agenda_presente=False)
+    righe = {i: k for k, i, _t in _righe_agenda(report)}
+    assert righe == {"APPOINTMENTS-fotografia": cert.BLOCKED}
+    assert not any("/api/appointments" in c for c, _s, _b in probe.exchanges)
+
+
+@pytest.mark.parametrize("difetto, atteso", [
+    ("isolation", "APPOINTMENTS-dettaglio-"),
+    ("listing", "APPOINTMENTS-list-"),
+    ("write", "APPOINTMENTS-righe-sondate-intatte"),
+    ("agenda_create", "APPOINTMENTS-create-agente-altrui-"),
+])
+def test_a30_04_ogni_difetto_dell_agenda_fa_fallire(monkeypatch, difetto, atteso):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME,
+                                   broken={difetto}, only="appointments"))
+    falliti = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert code == 1
+    assert any(i.startswith(atteso) for i in falliti), falliti
+
+
+def test_a30_05_q10_sporco_prima_della_sezione_e_un_fallimento(monkeypatch):
+    code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        q10={"stato_incompatibile": 1})
+    falliti = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert falliti == ["APPOINTMENTS-q10-prima"]
+    assert code == 1
+    # fermata prima di ogni richiesta all'Agenda
+    assert not any("/api/appointments" in c for c, _s, _b in probe.exchanges)
+
+
+@pytest.mark.parametrize("attribuibile", [False, True])
+def test_a30_06_attivita_concorrente_non_e_un_falso_allarme(monkeypatch, attribuibile):
+    """Una riga nasce durante la sezione. Se non porta un'identita' del run e'
+    attivita' concorrente del TEST (PASS, dichiarata); se la porta, e' un
+    fallimento."""
+    http = FakeHttp(prepopulate=DERIVED, stime=STIME)
+    originale = http._appointments
+    fatto = []
+
+    def con_concorrenza(method, path, agency, payload):
+        if not fatto:
+            fatto.append(1)
+            autore = next(iter(http.operatori)) if attribuibile else 999999
+            http.appuntamenti[9999] = {
+                "agency": 1, "version": 1, "status": "requested",
+                "start_at": APPUNTAMENTI[4001]["start_at"], "updated_at": "x",
+                "stima_id": None, "source": "crm_manual", "created_by": autore}
+        return originale(method, path, agency, payload)
+
+    http._appointments = con_concorrenza
+    code, report, _db, _probe, _ = working_run(monkeypatch, http=http)
+    righe = {i: (k, t) for k, i, t in _righe_agenda(report)}
+    if attribuibile:
+        assert righe["APPOINTMENTS-nessuna-riga-del-run"][0] == cert.FAIL
+        assert code == 1
+    else:
+        assert righe["APPOINTMENTS-nessuna-riga-del-run"][0] == cert.PASS
+        assert righe["APPOINTMENTS-registro-invariato"][0] == cert.PASS
+        assert "concorrente" in righe["APPOINTMENTS-registro-invariato"][1]
+
+
+def test_a30_07_la_sezione_non_cancella_non_purga_non_tocca_le_sequence():
+    nomi = ("certify_appointments", "_agenda_fotografia", "_agenda_altrui",
+            "_agenda_righe", "_agenda_attribuibili")
+    sorgente = "\n".join(_function_source(nome) for nome in nomi)
+    for vietato in ("a30_test_purge", "setval", "database.write", "commit=True",
+                    '"DELETE"', "'DELETE'"):
+        assert vietato not in sorgente, vietato
+    # ogni SQL della sezione e' una lettura
+    albero = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    eseguite = []
+    for nodo in ast.walk(albero):
+        if isinstance(nodo, ast.FunctionDef) and nodo.name in nomi:
+            for chiamata in ast.walk(nodo):
+                if (isinstance(chiamata, ast.Call) and isinstance(chiamata.func, ast.Attribute)
+                        and chiamata.func.attr == "execute" and chiamata.args):
+                    primo = chiamata.args[0]
+                    testo = (primo.value if isinstance(primo, ast.Constant)
+                             else ast.unparse(primo))
+                    eseguite.append(testo)
+    assert len(eseguite) >= 6, eseguite
+    for testo in eseguite:
+        assert testo == "Q10" or testo.lstrip().upper().startswith("SELECT"), testo
+    # ogni scrittura sulla riga dell'altra agenzia porta la version impossibile
+    assert "AGENDA_VERSIONE_IMPOSSIBILE" in _function_source("certify_appointments")
+    assert cert.AGENDA_VERSIONE_IMPOSSIBILE > 10**9
+
+
+def test_a30_08_l_agenda_e_nella_matrice_con_il_suo_certificatore():
+    dominio = _domain("APPOINTMENTS")
+    assert dominio.prefix == "/api/appointments"
+    assert dominio.certifier == "appointments" and callable(cert.certify_appointments)
+    assert dominio.fixture is None and dominio.api_delete is False
+    # le sedici operazioni del giro anonimo sono esattamente quelle montate
+    from tests.test_a30_mount_api import OPERAZIONI_AGENDA
+    dichiarate = {(m, "/api/appointments" + s.replace("{id}", "{appointment_id}"))
+                  for m, s in cert.AGENDA_OPERAZIONI}
+    assert dichiarate == set(OPERAZIONI_AGENDA)

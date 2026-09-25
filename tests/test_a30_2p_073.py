@@ -134,8 +134,9 @@ def test_08_la_down_segue_le_convenzioni_della_072():
 
 def test_09_facade_non_ancora_implementata():
     # SENTINELLA AGGIORNATA DA A30-2P FACADE: la facade ora esiste (fase
-    # successiva alla 073); resta vero che il router LMC-15 e `main.py` non
-    # nominano l'Agenda.
+    # successiva alla 073); resta vero che il router LMC-15 non nomina
+    # l'Agenda. MOUNT A30: `main.py` la nomina solo per import + mount.
+    from tests.test_a30_mount_api import _righe_codice_agenda
     assert (ROOT / "appointments" / "lmc15_facade.py").exists()
     assert "appointments" not in (ROOT / "acquisition" / "router.py").read_text(encoding="utf-8")
-    assert "appointments" not in (ROOT / "main.py").read_text(encoding="utf-8")
+    assert len(_righe_codice_agenda((ROOT / "main.py").read_text(encoding="utf-8"))) == 2

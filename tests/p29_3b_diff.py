@@ -155,6 +155,11 @@ def _git(root, *argomenti) -> list[str]:
 def righe_impreviste(root, percorso: str) -> list[str]:
     """Le righe del diff di `percorso` che P29-3B non giustifica."""
     ammesse = RIGHE_PER_FILE.get(percorso, frozenset())
+    if percorso == "main.py":
+        # MOUNT A30 (collisione dichiarata): le righe del mount dell'API
+        # Agenda, per intero, da `a30_mount_diff`. Nessun'altra riga.
+        from tests.a30_mount_diff import RIGHE_MAIN
+        ammesse = ammesse | RIGHE_MAIN
     rimovibili = RIMOZIONI_PER_FILE.get(percorso, frozenset())
     fuori = []
     for riga in _git(root, "diff", "--unified=0", "--", percorso):

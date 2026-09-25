@@ -157,14 +157,21 @@ def test_05_la_down_rifiuta_con_righe_e_non_tocca_la_070_ne_l_estensione():
 
 def test_10_il_pacchetto_non_ha_rotte_e_non_e_montato_in_main():
     # SENTINELLA AGGIORNATA DA A30-2: A30-1 non aveva rotte; A30-2 aggiunge
-    # `router.py` PREPARATO MA NON MONTATO (D1). L'invariante che resta e'
-    # quella che contava: `main.py` non nomina l'Agenda, e nessun modulo di
-    # produzione fuori dal pacchetto include il suo router.
+    # `router.py` PREPARATO MA NON MONTATO (D1).
+    # SENTINELLA AGGIORNATA DAL MOUNT A30: `main.py` nomina l'Agenda SOLO per
+    # importarne il router e montarlo (tests/test_a30_mount_api.py); nessun
+    # altro modulo di primo livello la nomina.
+    from tests.test_a30_mount_api import _righe_codice_agenda
     assert (PACCHETTO / "router.py").exists()
     main = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "appointments" not in main
+    assert _righe_codice_agenda(main) == [
+        "from appointments.router import router as appointments_router",
+        "app.include_router(appointments_router, "
+        "dependencies=[Depends(require_authenticated_operator)])",
+    ]
     for file in ROOT.glob("*.py"):
-        assert "appointments" not in file.read_text(encoding="utf-8"), file.name
+        if file.name != "main.py":
+            assert "appointments" not in file.read_text(encoding="utf-8"), file.name
 
 
 def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere():

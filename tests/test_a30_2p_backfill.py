@@ -118,8 +118,10 @@ def test_11_nessun_accesso_a_domini_esclusi():
 
 def test_12_proiezione_accesa_facade_assente_e_main_non_monta_l_agenda():
     from appointments import projection
+    from tests.test_a30_mount_api import _righe_codice_agenda
     assert projection.PROJECTION_ENABLED is True
-    assert "appointments" not in (ROOT / "main.py").read_text(encoding="utf-8")
+    # MOUNT A30: `main.py` nomina l'Agenda solo per import + mount
+    assert len(_righe_codice_agenda((ROOT / "main.py").read_text(encoding="utf-8"))) == 2
     # SENTINELLA AGGIORNATA DA A30-2P FACADE: il service LMC-15 delega alla
     # facade; il router LMC-15 resta senza Agenda.
     assert "from appointments import lmc15_facade" in \

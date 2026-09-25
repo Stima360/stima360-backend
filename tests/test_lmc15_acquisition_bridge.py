@@ -730,6 +730,8 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     from tests.a30_1_diff import FILE_MODIFICATI as MODIFICATI_A30_1
     from tests.a30_2_diff import FILE_MODIFICATI as MODIFICATI_A30_2
     from tests.a30_2p_diff import FILE_MODIFICATI as MODIFICATI_A30_2P
+    # MOUNT A30: `main.py` monta l'API Agenda, e lo dichiara per nome.
+    from tests.a30_mount_diff import FILE_MODIFICATI as MODIFICATI_A30_M
 
     lmc15_modificati = {
         # Il codice: le metriche di LMC-13 estese, e il router montato.
@@ -787,7 +789,8 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     # dichiara; e la 070 non puo' comparire ne' modificata ne' nuova.
     fuori = ((modificati & (lmc15_modificati | lmc15_nuovi))
              - MODIFICATI_P29_3B - MODIFICATI_P29_3C
-             - MODIFICATI_A30_1 - MODIFICATI_A30_2 - MODIFICATI_A30_2P)
+             - MODIFICATI_A30_1 - MODIFICATI_A30_2 - MODIFICATI_A30_2P
+             - MODIFICATI_A30_M)
     assert fuori == set(), sorted(fuori)
     assert not any(n.startswith("migrations/070_") for n in modificati | nuovi)
     assert "P29_2_0_COMMUNICATION_DESIGN.md" in nuovi

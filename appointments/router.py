@@ -1,8 +1,9 @@
 """A30-2 - la superficie HTTP dell'Agenda: `/api/appointments`.
 
-NON MONTATO (D1). `main.py` non nomina questo router: lo si prova su
-un'applicazione FastAPI creata nei test, e il mount si chiede al gate finale
-di A30-2.
+MONTATO in `main.py` (mount A30, chiude D1): l'API e' attiva ovunque questo
+codice viene deployato. Mount come i domini operatore - ammissione con
+`require_authenticated_operator` - e `main.py` nomina l'Agenda solo per
+l'import e il mount. La UI dell'Agenda NON e' ancora montata ne' pubblicata.
 
 Lo scope arriva da `require_operator` su OGNI rotta, scritto per esteso e non
 attraverso un alias di modulo (P26-4: un alias fa leggere le rotte come non

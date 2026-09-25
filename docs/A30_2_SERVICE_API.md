@@ -1,12 +1,12 @@
-# A30-2 — Agenda: service, state machine, API (NON montata)
+# A30-2 — Agenda: service, state machine, API (montata; UI non ancora pubblicata)
 
 Fase: A30-2 · Branch: `core-0.1-test` · Riferimento: `roadmap/A30-2_IMPLEMENTATION_PLAN.md` rev. 2
 Dipende da: A30-1 (migration 072, certificata su TEST `stima360_db_test`).
 
 ## Perimetro
 
-- Router `appointments/router.py` **preparato e non montato** (D1): `main.py` non nomina `appointments`; il router si prova su un'app FastAPI isolata nei test.
-- **Proiezione LMC-15** (`projection.PROJECTION_ENABLED`, D3): spenta in A30-2, **accesa in A30-2P**. Un sopralluogo legato a una stima si fissa, si sposta e si chiude dall'Agenda, e `stima_inspections` è scritta nella stessa transazione. A interruttore spento (arresto d'emergenza) quelle azioni rispondono `INSPECTION_PROJECTION_NOT_ACTIVE`. La facade LMC-15 → Agenda non esiste ancora.
+- Router `appointments/router.py` **montato in `main.py`** (mount A30, chiude D1) con lo stesso modello dei domini operatore: ammissione al mount con `require_authenticated_operator`, scope su ogni rotta da `require_operator`. `main.py` nomina l'Agenda solo per l'import del router e il mount (`tests/test_a30_mount_api.py`). L'API `/api/appointments` è **attiva ovunque questo codice viene deployato**; la copertura ostile è la sezione APPOINTMENTS della matrice P26-6 (solo rifiuti). **Nessuna UI**: nessuna pagina, voce di menu o asset dell'OS Shell chiama ancora l'Agenda.
+- **Proiezione LMC-15** (`projection.PROJECTION_ENABLED`, D3): spenta in A30-2, **accesa in A30-2P**. Un sopralluogo legato a una stima si fissa, si sposta e si chiude dall'Agenda, e `stima_inspections` è scritta nella stessa transazione. A interruttore spento (arresto d'emergenza) quelle azioni rispondono `INSPECTION_PROJECTION_NOT_ACTIVE`. La facade LMC-15 → Agenda **esiste** (A30-2P, `appointments/lmc15_facade.py`, migration 073): le quattro operazioni LMC-15 sui sopralluoghi (`/api/acquisition/...`: fissa, registra a posteriori, completa, annulla) passano da `acquisition/service.py` alla facade, quindi da `appointments`, e `stima_inspections` è la loro proiezione nella stessa transazione.
 - Nessuna lettura runtime di `stime_dettagliate` (D10), nessun uso di `property_visits`, nessun Google Calendar, nessuna nuova migration.
 
 ## Moduli
@@ -72,7 +72,7 @@ Riga `appointments` (`FOR UPDATE`) → lock consultivi per agente in ordine cres
 
 ## Collisione dichiarata: `acquisition/repository.py` (LMC-15)
 
-Q1: aggiunte le varianti sul cursore `create_inspection_in`, `complete_inspection_in`, `cancel_inspection_in`, `reschedule_inspection_in` (nuova: UPDATE di `scheduled_for` solo se `scheduled`) e `_chiudi_sopralluogo_in`, senza commit interno. Le funzioni pubbliche esistenti mantengono firma e comportamento (wrapper su `core_cursor(commit=True)`); `acquisition/service.py` e `acquisition/router.py` non sono toccati. Usate solo da `projection.py` (accesa da A30-2P).
+Q1: aggiunte le varianti sul cursore `create_inspection_in`, `complete_inspection_in`, `cancel_inspection_in`, `reschedule_inspection_in` (nuova: UPDATE di `scheduled_for` solo se `scheduled`) e `_chiudi_sopralluogo_in`, senza commit interno. Le funzioni pubbliche esistenti mantengono firma e comportamento (wrapper su `core_cursor(commit=True)`), ma nessun codice runtime le chiama più (sentinella `tests/test_a30_2p_facade.py`). `acquisition/router.py` non è toccato; `acquisition/service.py` sì, in A30-2P: delega le quattro operazioni sui sopralluoghi alla facade. Le varianti sul cursore (A30-2P aggiunge `create_completed_inspection_in`) sono usate da `projection.py` e da `lmc15_facade.py`.
 
 `completed_at` (correzione A del gate A30-2): se assente vale il `NOW()` del database letto nella stessa transazione della mutazione e della proiezione; se dichiarato si conserva esattamente, purché `start_at <= completed_at <= db_now`, altrimenti `COMPLETED_AT_INVALID`. Nessuna tolleranza di orologio, nessuna correzione silenziosa. Anche la guardia "si completa solo da `start_at`" usa quel `NOW()`. LMC-15 registra `completed_recorded_at` con lo stesso `NOW()`, quindi `completed_recorded_at >= completed_at` vale per costruzione.
 

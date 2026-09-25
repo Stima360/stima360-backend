@@ -250,7 +250,15 @@ def _senza_commenti_py(testo):
 
 
 def test_30_main_py_non_nomina_appointments_d1():
-    assert "appointments" not in (ROOT / "main.py").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DAL MOUNT A30: D1 e' chiuso dal mount. `main.py`
+    # nomina l'Agenda solo per import + mount, nient'altro.
+    from tests.test_a30_mount_api import _righe_codice_agenda
+    righe = _righe_codice_agenda((ROOT / "main.py").read_text(encoding="utf-8"))
+    assert righe == [
+        "from appointments.router import router as appointments_router",
+        "app.include_router(appointments_router, "
+        "dependencies=[Depends(require_authenticated_operator)])",
+    ]
 
 
 def test_31_ogni_rotta_ha_require_operator_scritto_per_esteso():
