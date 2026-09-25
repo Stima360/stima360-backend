@@ -101,7 +101,14 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # P29-3B ha aggiunto la 071 (la fondazione delle journey: definizioni,
     # iscrizioni, controlli per contatto e la provenienza sul ledger),
     # approvata da P29-3A.1. La coda si nomina, come sempre.
-    assert numeri[-1] == 71, numeri[-4:]
+    # A30-1 ha aggiunto la 072 (`appointments` e `appointment_events`, il
+    # modello dell'Agenda CRM approvato dal GATE A30-0): dominio AGENDA, non
+    # di questa fase. La coda si nomina, come sempre.
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 73, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

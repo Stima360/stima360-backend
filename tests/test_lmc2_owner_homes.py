@@ -450,11 +450,21 @@ def test_f3_nessuna_migration_in_lmc2():
     # `_automation_controls` + tre colonne di provenienza sul ledger),
     # approvata da P29-3A.1 SCHEMA FROZEN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-5:] == ["067_lmc1b_owner_login_reason.sql",
+    # SENTINELLA AGGIORNATA DA A30-1: la 072 e' il modello dell'Agenda CRM
+    # (`appointments`, `appointment_events`), approvato dal GATE A30-0. Si
+    # nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire questo test.
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert migrazioni[-7:] == ["067_lmc1b_owner_login_reason.sql",
                                "068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
-                               "071_p29_3_journey_automation.sql"], migrazioni[-6:]
+                               "071_p29_3_journey_automation.sql",
+                               "072_a30_1_appointments.sql",
+                               "073_a30_2p_lmc15_facade.sql"], migrazioni[-8:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():

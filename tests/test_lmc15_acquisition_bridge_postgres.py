@@ -115,6 +115,29 @@ CREATE TABLE schema_migrations (
 #: file veri, non riscritte qui: una copia diverge.
 CATENA = ("009_owner_01", "066_lmc1_owner_stima_access", VERSIONE)
 
+#: SENTINELLA AGGIORNATA DA A30-2P: dalla facade le rotte LMC-15 sui
+#: sopralluoghi scrivono PRIMA `appointments` (fonte autorevole) e poi
+#: `stima_inspections` (proiezione), nella stessa transazione. Il database di
+#: prova porta quindi anche l'Agenda (072) e la sua apertura alla facade
+#: (073). Il contratto HTTP e le asserzioni di questa suite non cambiano.
+#: `CATENA` resta quella di LMC-15: altri moduli la importano e ci applicano
+#: la propria catena.
+AGENDA = ("072_a30_1_appointments", "073_a30_2p_lmc15_facade")
+
+
+def _svuota_agenda(cur):
+    """Le righe dell'Agenda si tolgono PRIMA di `stima_inspections` (una riga
+    facade collegata non ammette il SET NULL, 073) e con i trigger di
+    append-only disattivati solo per il tempo della pulizia."""
+    for trg, tab in (("trg_appointments_refuse_delete", "appointments"),
+                     ("trg_appointment_events_append_only", "appointment_events")):
+        cur.execute(f"ALTER TABLE {tab} DISABLE TRIGGER {trg}")
+    cur.execute("DELETE FROM appointment_events")
+    cur.execute("DELETE FROM appointments")
+    for trg, tab in (("trg_appointments_refuse_delete", "appointments"),
+                     ("trg_appointment_events_append_only", "appointment_events")):
+        cur.execute(f"ALTER TABLE {tab} ENABLE TRIGGER {trg}")
+
 
 def _dsn_per(nome: str) -> str:
     if "?" in DSN:
@@ -142,7 +165,7 @@ def db():
     try:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_MINIMO)
-            for versione in CATENA:
+            for versione in CATENA + AGENDA:
                 cur.execute((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
         conn.autocommit = False
         yield {"conn": conn, "dsn": dsn}
@@ -174,6 +197,7 @@ def mondo(db):
     conn = db["conn"]
     conn.rollback()
     with conn.cursor() as cur:
+        _svuota_agenda(cur)
         for tabella in ("stima_acquisitions", "stima_inspections",
                         "seller_timeline_events", "owner_stima_access",
                         "owner_accounts", "leads", "stime", "properties",
@@ -1205,6 +1229,13 @@ def test_92_la_down_pulita_scende_e_la_up_risale(mondo):
     giu = (MIGRAZIONI / f"{VERSIONE}_down.sql").read_text(encoding="utf-8")
     su = (MIGRAZIONI / f"{VERSIONE}.sql").read_text(encoding="utf-8")
 
+    # SENTINELLA AGGIORNATA DA A30-2P: sopra la 070 ora ci sono l'Agenda (072)
+    # e la sua apertura alla facade (073), che referenziano `stima_inspections`.
+    # Si scende nell'ordine inverso della catena, come farebbe un rollback
+    # vero, e si risale nello stesso modo alla fine.
+    for versione in reversed(AGENDA):
+        mondo["sql"]((MIGRAZIONI / f"{versione}_down.sql").read_text(encoding="utf-8"))
+        conn.commit()
     mondo["sql"](giu)
     conn.commit()
     presenti = mondo["sql"](
@@ -1232,6 +1263,10 @@ def test_92_la_down_pulita_scende_e_la_up_risale(mondo):
         "SELECT count(*) AS n FROM pg_trigger WHERE tgname IN "
         "('trg_stima_acquisitions_guard','trg_stima_inspections_guard')")[0]["n"]
     assert trigger == 2
+    for versione in AGENDA:                      # l'Agenda torna sopra la 070
+        mondo["sql"]((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
+        conn.commit()
+    assert mondo["sql"]("SELECT to_regclass('public.appointments') AS t")[0]["t"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1505,7 +1540,7 @@ def db_http():
             for versione in CATENA_AUTH:
                 cur.execute((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
             cur.execute(SCHEMA_HTTP)
-            for versione in CATENA:
+            for versione in CATENA + AGENDA:
                 cur.execute((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
         yield {"conn": conn, "dsn": dsn}
     finally:
@@ -1555,6 +1590,7 @@ def piattaforma(db_http):
 
     conn = db_http["conn"]
     with conn.cursor() as cur:
+        _svuota_agenda(cur)
         for tabella in ("stima_acquisitions", "stima_inspections",
                         "seller_timeline_events", "owner_stima_access",
                         "owner_accounts", "leads", "stime", "properties",

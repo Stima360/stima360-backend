@@ -46,7 +46,16 @@ def test_01_la_071_e_valida_e_in_coda():
     m = trovate["071_p29_3_journey_automation"]
     assert runner.validate_migration(m) == [] and m.down_available
     numeri = sorted(x.number for x in trovate.values())
-    assert numeri[-1] == 71 and len(numeri) == len(set(numeri))
+    # SENTINELLA AGGIORNATA DA A30-1: la 072 e' il modello dell'Agenda CRM
+    # (`appointments`, `appointment_events`), approvato dal GATE A30-0. Si
+    # nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire questo test.
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 73
+    assert len(numeri) == len(set(numeri))
 
 
 def test_02_la_071_non_tocca_reason_code_ne_il_consenso():
@@ -324,6 +333,17 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # tree intero, quindi la collisione c'e' e va nominata.
     from tests.flow_global_security_diff import (
         FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
+    # A30-1 si dichiara allo stesso modo: l'unione cresce di una fase, il
+    # verso del controllo no. Non e' una fase di P29 - e' l'Agenda CRM - ma
+    # questa sentinella guarda il working tree intero.
+    # SENTINELLA AGGIORNATA DA A30-2: l'Agenda si dichiara in due file
+    # (A30-1 + A30-2), letti come un'unica fase.
+    from tests.a30_1_diff import FILE_MODIFICATI as MOD_A30_1, FILE_NUOVI as NUOVI_A30_1
+    from tests.a30_2_diff import FILE_MODIFICATI as MOD_A30_2, FILE_NUOVI as NUOVI_A30_2
+    # SENTINELLA AGGIORNATA DA A30-2P: terza dichiarazione dell'Agenda.
+    from tests.a30_2p_diff import FILE_MODIFICATI as MOD_A30_2P, FILE_NUOVI as NUOVI_A30_2P
+    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P
+    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
@@ -337,10 +357,10 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
                                    cwd=ROOT, capture_output=True, text=True).stdout.split())
 
     dichiarati_nuovi = (FILE_NUOVI | NUOVI_3C | NUOVI_3D | NUOVI_3E | NUOVI_3G
-                        | NUOVI_FGS)
+                        | NUOVI_FGS | NUOVI_A30)
     dichiarati_modificati = (FILE_MODIFICATI | MOD_3C | NUOVI_3C | MOD_3D | NUOVI_3D
                              | MOD_3E | NUOVI_3E | MOD_3G | NUOVI_3G
-                             | MOD_FGS | NUOVI_FGS)
+                             | MOD_FGS | NUOVI_FGS | MOD_A30 | NUOVI_A30)
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)

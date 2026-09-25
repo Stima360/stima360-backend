@@ -214,6 +214,10 @@ def test_10_ogni_funzione_del_servizio_passa_agenzia_e_attore(monkeypatch):
             return finta
 
     monkeypatch.setattr(service, "repository", FintoRepo())
+    # SENTINELLA AGGIORNATA DA A30-2P: i quattro sopralluoghi passano dalla
+    # facade dell'Agenda (appointments/lmc15_facade.py). La regola e' la
+    # stessa: tenant da `require_agency()`, attore da `ctx.user_id`.
+    monkeypatch.setattr(service, "_facade", lambda: FintoRepo())
     ctx = _Ctx(user_id=7, agency=3)
     quando = datetime.now(timezone.utc)
 
@@ -349,7 +353,16 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # automation, approvata da P29-3A.1 (SCHEMA FROZEN). Si nomina invece di
     # smettere di guardare: una 072 farebbe ancora fallire questo test.
     assert numeri[numeri.index(70) - 1] == 69
-    assert numeri[-1] == 71 and numeri[-2] == 70
+    # SENTINELLA AGGIORNATA DA A30-1: la 072 e' il modello dell'Agenda CRM
+    # (`appointments`, `appointment_events`), approvato dal GATE A30-0. Si
+    # nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire questo test.
+    assert numeri[numeri.index(70) + 1] == 71
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 73 and numeri[-2] == 72 and numeri[-3] == 71
     assert len(numeri) == len(set(numeri))
 
 
@@ -578,7 +591,19 @@ def test_37_nessuna_migration_oltre_la_070():
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "migrations/"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()}
     atteso = {"migrations/071_p29_3_journey_automation.sql",
-              "migrations/071_p29_3_journey_automation_down.sql"}
+              "migrations/071_p29_3_journey_automation_down.sql",
+              "migrations/072_a30_1_appointments.sql",
+              "migrations/072_a30_1_appointments_down.sql",
+              "migrations/073_a30_2p_lmc15_facade.sql",
+              "migrations/073_a30_2p_lmc15_facade_down.sql"}
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    # SENTINELLA AGGIORNATA DA A30-1: la 072 e' il modello dell'Agenda CRM
+    # (`appointments`, `appointment_events`), approvato dal GATE A30-0. Si
+    # nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire questo test.
     assert nuovi <= atteso, sorted(nuovi - atteso)
 
 
@@ -698,6 +723,13 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     # stima. Si guarda l'unione delle due dichiarazioni - nessuna fase puo'
     # toccare un file di LMC-15 senza averlo scritto nel proprio elenco.
     from tests.p29_3c_diff import FILE_MODIFICATI as MODIFICATI_P29_3C
+    # SENTINELLA AGGIORNATA DA A30-2P: l'Agenda (A30-1, A30-2, A30-2P) tocca
+    # file di LMC-15 - le varianti `*_in` del repository, la facade nel
+    # service, i fixture e le sentinelle - e li dichiara per nome nei propri
+    # inventari. L'unione cresce; il verso del controllo no.
+    from tests.a30_1_diff import FILE_MODIFICATI as MODIFICATI_A30_1
+    from tests.a30_2_diff import FILE_MODIFICATI as MODIFICATI_A30_2
+    from tests.a30_2p_diff import FILE_MODIFICATI as MODIFICATI_A30_2P
 
     lmc15_modificati = {
         # Il codice: le metriche di LMC-13 estese, e il router montato.
@@ -754,7 +786,8 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
     # Di LMC-15 nel working tree puo' essere toccato solo cio' che P29-3B
     # dichiara; e la 070 non puo' comparire ne' modificata ne' nuova.
     fuori = ((modificati & (lmc15_modificati | lmc15_nuovi))
-             - MODIFICATI_P29_3B - MODIFICATI_P29_3C)
+             - MODIFICATI_P29_3B - MODIFICATI_P29_3C
+             - MODIFICATI_A30_1 - MODIFICATI_A30_2 - MODIFICATI_A30_2P)
     assert fuori == set(), sorted(fuori)
     assert not any(n.startswith("migrations/070_") for n in modificati | nuovi)
     assert "P29_2_0_COMMUNICATION_DESIGN.md" in nuovi

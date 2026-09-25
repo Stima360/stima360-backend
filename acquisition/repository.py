@@ -291,29 +291,44 @@ def revoke_acquisition_link(agency_id, *, acquisition_id, reason, actor_user_id)
 # IL SOPRALLUOGO
 # ---------------------------------------------------------------------------
 
+# A30-2 (Q1) - VARIANTI SUL CURSORE RICEVUTO.
+#
+# L'Agenda (A30-2P) deve scrivere il sopralluogo nella SUA transazione, con
+# l'appuntamento: le funzioni `*_in(cur, ...)` fanno esattamente cio' che
+# facevano le funzioni pubbliche, ma sul cursore del chiamante e SENZA
+# commit. Le funzioni pubbliche sono ora un guscio che apre la transazione e
+# le chiama: stesso SQL, stessi lock, stesse chiavi di idempotenza della
+# timeline, stesse risposte. Una sola implementazione, niente copie.
+
 def create_inspection(agency_id, *, stima_id, scheduled_for, actor_user_id):
     with core_cursor(commit=True) as (_, cur):
-        _blocca_stima(cur, agency_id, stima_id)
-        cur.execute(
-            """
-            INSERT INTO stima_inspections
-                   (stima_id, stima_id_snapshot, status, scheduled_for,
-                    created_by_operator_user_id)
-            SELECT s.id, s.id, 'scheduled', %s, %s
-              FROM stime s WHERE s.id = %s AND s.agency_id = %s
-            RETURNING *
-            """,
-            (scheduled_for, actor_user_id, stima_id, agency_id),
-        )
-        riga = cur.fetchone()
-        if riga is None:
-            raise NotFoundError("Risorsa non trovata")
-        _proietta(cur, agency_id=agency_id, event_type=INSPECTION_SCHEDULED_EVENT,
-                  stima_id=riga["stima_id"], property_id=None,
-                  payload={"inspection_id": riga["id"]},
-                  idempotency_key=f"lmc15:v1:{INSPECTION_SCHEDULED_EVENT}:insp:{riga['id']}",
-                  created_by=str(actor_user_id), occurred_at=riga["created_at"])
-        return {c: riga[c] for c in INSPECTION_COLUMNS}
+        return create_inspection_in(cur, agency_id, stima_id=stima_id,
+                                    scheduled_for=scheduled_for, actor_user_id=actor_user_id)
+
+
+def create_inspection_in(cur, agency_id, *, stima_id, scheduled_for, actor_user_id):
+    """Come `create_inspection`, sul cursore del chiamante, senza commit."""
+    _blocca_stima(cur, agency_id, stima_id)
+    cur.execute(
+        """
+        INSERT INTO stima_inspections
+               (stima_id, stima_id_snapshot, status, scheduled_for,
+                created_by_operator_user_id)
+        SELECT s.id, s.id, 'scheduled', %s, %s
+          FROM stime s WHERE s.id = %s AND s.agency_id = %s
+        RETURNING *
+        """,
+        (scheduled_for, actor_user_id, stima_id, agency_id),
+    )
+    riga = cur.fetchone()
+    if riga is None:
+        raise NotFoundError("Risorsa non trovata")
+    _proietta(cur, agency_id=agency_id, event_type=INSPECTION_SCHEDULED_EVENT,
+              stima_id=riga["stima_id"], property_id=None,
+              payload={"inspection_id": riga["id"]},
+              idempotency_key=f"lmc15:v1:{INSPECTION_SCHEDULED_EVENT}:insp:{riga['id']}",
+              created_by=str(actor_user_id), occurred_at=riga["created_at"])
+    return {c: riga[c] for c in INSPECTION_COLUMNS}
 
 
 def create_completed_inspection(agency_id, *, stima_id, completed_at, actor_user_id):
@@ -324,28 +339,36 @@ def create_completed_inspection(agency_id, *, stima_id, completed_at, actor_user
     data di appuntamento mai esistita costringerebbe a inventarla.
     """
     with core_cursor(commit=True) as (_, cur):
-        _blocca_stima(cur, agency_id, stima_id)
-        cur.execute(
-            """
-            INSERT INTO stima_inspections
-                   (stima_id, stima_id_snapshot, status, completed_at,
-                    completed_recorded_at, completed_by_operator_user_id,
-                    created_by_operator_user_id)
-            SELECT s.id, s.id, 'completed', %s, NOW(), %s, %s
-              FROM stime s WHERE s.id = %s AND s.agency_id = %s
-            RETURNING *
-            """,
-            (completed_at, actor_user_id, actor_user_id, stima_id, agency_id),
-        )
-        riga = cur.fetchone()
-        if riga is None:
-            raise NotFoundError("Risorsa non trovata")
-        _proietta(cur, agency_id=agency_id, event_type=INSPECTION_COMPLETED_EVENT,
-                  stima_id=riga["stima_id"], property_id=None,
-                  payload={"inspection_id": riga["id"]},
-                  idempotency_key=f"lmc15:v1:{INSPECTION_COMPLETED_EVENT}:insp:{riga['id']}",
-                  created_by=str(actor_user_id), occurred_at=riga["completed_at"])
-        return {c: riga[c] for c in INSPECTION_COLUMNS}
+        return create_completed_inspection_in(
+            cur, agency_id, stima_id=stima_id, completed_at=completed_at,
+            actor_user_id=actor_user_id)
+
+
+def create_completed_inspection_in(cur, agency_id, *, stima_id, completed_at, actor_user_id):
+    """Come `create_completed_inspection`, sul cursore del chiamante, senza
+    commit (A30-2P: la facade LMC-15 la scrive nella transazione dell'Agenda)."""
+    _blocca_stima(cur, agency_id, stima_id)
+    cur.execute(
+        """
+        INSERT INTO stima_inspections
+               (stima_id, stima_id_snapshot, status, completed_at,
+                completed_recorded_at, completed_by_operator_user_id,
+                created_by_operator_user_id)
+        SELECT s.id, s.id, 'completed', %s, NOW(), %s, %s
+          FROM stime s WHERE s.id = %s AND s.agency_id = %s
+        RETURNING *
+        """,
+        (completed_at, actor_user_id, actor_user_id, stima_id, agency_id),
+    )
+    riga = cur.fetchone()
+    if riga is None:
+        raise NotFoundError("Risorsa non trovata")
+    _proietta(cur, agency_id=agency_id, event_type=INSPECTION_COMPLETED_EVENT,
+              stima_id=riga["stima_id"], property_id=None,
+              payload={"inspection_id": riga["id"]},
+              idempotency_key=f"lmc15:v1:{INSPECTION_COMPLETED_EVENT}:insp:{riga['id']}",
+              created_by=str(actor_user_id), occurred_at=riga["completed_at"])
+    return {c: riga[c] for c in INSPECTION_COLUMNS}
 
 
 def complete_inspection(agency_id, *, inspection_id, completed_at, actor_user_id):
@@ -366,40 +389,106 @@ def cancel_inspection(agency_id, *, inspection_id, reason, actor_user_id):
         evento=INSPECTION_CANCELLED_EVENT, campo_quando="cancelled_at")
 
 
+def complete_inspection_in(cur, agency_id, *, inspection_id, completed_at, actor_user_id):
+    """Come `complete_inspection`, sul cursore del chiamante, senza commit."""
+    return _chiudi_sopralluogo_in(
+        cur, agency_id, inspection_id=inspection_id, actor_user_id=actor_user_id,
+        assegnazioni="status='completed', completed_at=%s, completed_recorded_at=NOW(), "
+                     "completed_by_operator_user_id=%s, updated_at=NOW()",
+        valori=(completed_at, actor_user_id),
+        evento=INSPECTION_COMPLETED_EVENT, campo_quando="completed_at")
+
+
+def cancel_inspection_in(cur, agency_id, *, inspection_id, reason, actor_user_id):
+    """Come `cancel_inspection`, sul cursore del chiamante, senza commit."""
+    return _chiudi_sopralluogo_in(
+        cur, agency_id, inspection_id=inspection_id, actor_user_id=actor_user_id,
+        assegnazioni="status='cancelled', cancelled_at=NOW(), cancelled_recorded_at=NOW(), "
+                     "cancelled_by_operator_user_id=%s, cancelled_reason=%s, updated_at=NOW()",
+        valori=(actor_user_id, reason),
+        evento=INSPECTION_CANCELLED_EVENT, campo_quando="cancelled_at")
+
+
+def reschedule_inspection_in(cur, agency_id, *, inspection_id, scheduled_for):
+    """A30-2P: lo SPOSTAMENTO di un sopralluogo ancora `scheduled`.
+
+    LMC-15 non aveva uno spostamento: lo porta l'Agenda. Aggiorna solo
+    `scheduled_for`; nessun evento di timeline, perche' LMC-15 non ne
+    definisce uno per lo spostamento e inventarlo cambierebbe cio' che
+    journey e metriche leggono. Stesso lock sulla stima, stesso predicato di
+    stato e di agenzia della chiusura.
+    """
+    _blocca_stima_del_sopralluogo(cur, agency_id, inspection_id)
+    cur.execute(
+        """
+        UPDATE stima_inspections i
+           SET scheduled_for = %s, updated_at = NOW()
+          FROM stime s
+         WHERE i.id = %s
+           AND i.status = 'scheduled'
+           AND s.id = i.stima_id
+           AND s.agency_id = %s
+        RETURNING i.*
+        """,
+        (scheduled_for, inspection_id, agency_id),
+    )
+    riga = cur.fetchone()
+    if riga is None:
+        cur.execute(
+            """SELECT i.status FROM stima_inspections i
+                 JOIN stime s ON s.id = i.stima_id
+                WHERE i.id = %s AND s.agency_id = %s""",
+            (inspection_id, agency_id),
+        )
+        r = cur.fetchone()
+        if r is None:
+            raise NotFoundError("Risorsa non trovata")
+        raise ConflictError(f"Sopralluogo gia' {r['status']}: nessuna transizione possibile")
+    return {c: riga[c] for c in INSPECTION_COLUMNS}
+
+
 def _chiudi_sopralluogo(agency_id, *, inspection_id, actor_user_id, assegnazioni,
                         valori, evento, campo_quando):
     """Chiude un sopralluogo ANCORA `scheduled`: entrambi gli stati finali sono
     terminali, quindi il predicato esige lo stato di partenza."""
     with core_cursor(commit=True) as (_, cur):
-        _blocca_stima_del_sopralluogo(cur, agency_id, inspection_id)
+        return _chiudi_sopralluogo_in(
+            cur, agency_id, inspection_id=inspection_id, actor_user_id=actor_user_id,
+            assegnazioni=assegnazioni, valori=valori, evento=evento,
+            campo_quando=campo_quando)
+
+
+def _chiudi_sopralluogo_in(cur, agency_id, *, inspection_id, actor_user_id, assegnazioni,
+                           valori, evento, campo_quando):
+    _blocca_stima_del_sopralluogo(cur, agency_id, inspection_id)
+    cur.execute(
+        f"""
+        UPDATE stima_inspections i
+           SET {assegnazioni}
+          FROM stime s
+         WHERE i.id = %s
+           AND i.status = 'scheduled'
+           AND s.id = i.stima_id
+           AND s.agency_id = %s
+        RETURNING i.*
+        """,
+        (*valori, inspection_id, agency_id),
+    )
+    riga = cur.fetchone()
+    if riga is None:
         cur.execute(
-            f"""
-            UPDATE stima_inspections i
-               SET {assegnazioni}
-              FROM stime s
-             WHERE i.id = %s
-               AND i.status = 'scheduled'
-               AND s.id = i.stima_id
-               AND s.agency_id = %s
-            RETURNING i.*
-            """,
-            (*valori, inspection_id, agency_id),
+            """SELECT i.status FROM stima_inspections i
+                 JOIN stime s ON s.id = i.stima_id
+                WHERE i.id = %s AND s.agency_id = %s""",
+            (inspection_id, agency_id),
         )
-        riga = cur.fetchone()
-        if riga is None:
-            cur.execute(
-                """SELECT i.status FROM stima_inspections i
-                     JOIN stime s ON s.id = i.stima_id
-                    WHERE i.id = %s AND s.agency_id = %s""",
-                (inspection_id, agency_id),
-            )
-            r = cur.fetchone()
-            if r is None:
-                raise NotFoundError("Risorsa non trovata")
-            raise ConflictError(f"Sopralluogo gia' {r['status']}: nessuna transizione possibile")
-        _proietta(cur, agency_id=agency_id, event_type=evento,
-                  stima_id=riga["stima_id"], property_id=None,
-                  payload={"inspection_id": riga["id"]},
-                  idempotency_key=f"lmc15:v1:{evento}:insp:{riga['id']}",
-                  created_by=str(actor_user_id), occurred_at=riga[campo_quando])
-        return {c: riga[c] for c in INSPECTION_COLUMNS}
+        r = cur.fetchone()
+        if r is None:
+            raise NotFoundError("Risorsa non trovata")
+        raise ConflictError(f"Sopralluogo gia' {r['status']}: nessuna transizione possibile")
+    _proietta(cur, agency_id=agency_id, event_type=evento,
+              stima_id=riga["stima_id"], property_id=None,
+              payload={"inspection_id": riga["id"]},
+              idempotency_key=f"lmc15:v1:{evento}:insp:{riga['id']}",
+              created_by=str(actor_user_id), occurred_at=riga[campo_quando])
+    return {c: riga[c] for c in INSPECTION_COLUMNS}

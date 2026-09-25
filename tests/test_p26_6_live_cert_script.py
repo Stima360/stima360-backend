@@ -4715,6 +4715,35 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("stime", "agency_id", "agencies", "RESTRICT"),
     ("stime_dettagliate", "agency_id", "agencies", "RESTRICT"),
     ("tasks", "contact_id", "contacts", "SET NULL"),
+    # A30-1, migration 072. L'Agenda CRM: SEI riferimenti non-CASCADE verso
+    # tabelle che il cleanup cancella. ESAMINATI.
+    #
+    #   agency_id -> agencies                RESTRICT
+    #   created_by_user_id / actor_user_id -> operator_users   RESTRICT
+    #
+    # Stessa scelta, e stessa ragione, delle firme LMC-15 qui sopra: un
+    # appuntamento e il suo registro sono fatti dell'agenzia con un autore;
+    # CASCADE li cancellerebbe con l'operatore, SET NULL toglierebbe l'autore.
+    #
+    #   contact_id / lead_id / property_id    SET NULL
+    #
+    # Sono puntatori di contesto: l'appuntamento resta anche se il contatto
+    # sparisce, come per `seller_timeline_events`.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: `appointments` RIFIUTA la DELETE
+    # (trigger della 072) e `appointment_events` e' append-only. Un'agenzia di
+    # prova con appuntamenti non si cancella: il preflight la incontra come
+    # RIFIUTO, non come cancellazione silenziosa. Decisione Q7 del GATE A30-1:
+    # le righe di prova dell'Agenda portano `source='a30_test'` e un
+    # `test_run_id`, e muoiono SOLO con `a30_test_purge(run_id)`
+    # (`scripts/a30_test_cleanup.py`), che rifiuta PROD e porta via anche i
+    # loro eventi. Va chiamata PRIMA del cleanup delle agenzie dedicate.
+    ("appointment_events", "actor_user_id", "operator_users", "RESTRICT"),
+    ("appointments", "agency_id", "agencies", "RESTRICT"),
+    ("appointments", "contact_id", "contacts", "SET NULL"),
+    ("appointments", "created_by_user_id", "operator_users", "RESTRICT"),
+    ("appointments", "lead_id", "leads", "SET NULL"),
+    ("appointments", "property_id", "properties", "SET NULL"),
 })
 
 

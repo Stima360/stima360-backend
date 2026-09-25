@@ -466,15 +466,28 @@ def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # tree intero, quindi la collisione c'e' e va nominata.
     from tests.flow_global_security_diff import (
         FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
+    # A30-1 si dichiara allo stesso modo: l'unione cresce di una fase, il
+    # verso del controllo no. Non e' una fase di P29 - e' l'Agenda CRM - ma
+    # questa sentinella guarda il working tree intero.
+    # SENTINELLA AGGIORNATA DA A30-2: l'Agenda si dichiara in due file
+    # (A30-1 + A30-2), letti come un'unica fase.
+    from tests.a30_1_diff import FILE_MODIFICATI as MOD_A30_1, FILE_NUOVI as NUOVI_A30_1
+    from tests.a30_2_diff import FILE_MODIFICATI as MOD_A30_2, FILE_NUOVI as NUOVI_A30_2
+    # SENTINELLA AGGIORNATA DA A30-2P: terza dichiarazione dell'Agenda.
+    from tests.a30_2p_diff import FILE_MODIFICATI as MOD_A30_2P, FILE_NUOVI as NUOVI_A30_2P
+    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P
+    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
     modificati = {r[3:].strip() for r in righe if r[:2].strip() not in ("??", "A")}
     tracciati = set(_git("ls-files").split())
 
-    dichiarati_nuovi = FILE_NUOVI | NUOVI_3D | NUOVI_3E | NUOVI_3G | NUOVI_FGS
+    dichiarati_nuovi = (FILE_NUOVI | NUOVI_3D | NUOVI_3E | NUOVI_3G | NUOVI_FGS
+                        | NUOVI_A30)
     dichiarati_modificati = (FILE_MODIFICATI | MOD_3D | NUOVI_3D | MOD_3E | NUOVI_3E
-                             | MOD_3G | NUOVI_3G | MOD_FGS | NUOVI_FGS)
+                             | MOD_3G | NUOVI_3G | MOD_FGS | NUOVI_FGS
+                             | MOD_A30 | NUOVI_A30)
     assert nuovi - dichiarati_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
         sorted(nuovi - dichiarati_nuovi)
     assert modificati <= dichiarati_modificati, sorted(modificati - dichiarati_modificati)

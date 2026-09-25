@@ -43,25 +43,42 @@ def revoke_link(ctx, acquisition_id, payload):
         reason=payload.revoked_reason, actor_user_id=_attore(ctx))
 
 
+# ---------------------------------------------------------------------------
+# I SOPRALLUOGHI - A30-2P: FACADE VERSO L'AGENDA
+#
+# Stesso contratto (tenant da `require_agency()`, attore da `ctx.user_id`,
+# stessi corpi, stesse risposte), ma la scrittura passa da `appointments`, la
+# fonte autorevole: `stima_inspections` ne e' la proiezione, nella stessa
+# transazione (appointments/lmc15_facade.py). Le funzioni pubbliche del
+# repository LMC-15 restano per compatibilita', ma queste rotte non le usano.
+# ---------------------------------------------------------------------------
+
+def _facade():
+    # Import differito: `appointments` importa a sua volta il repository
+    # LMC-15; cosi' il pacchetto acquisition resta importabile da solo.
+    from appointments import lmc15_facade
+    return lmc15_facade
+
+
 def schedule_inspection(ctx, stima_id, payload):
-    return repository.create_inspection(
+    return _facade().schedule_inspection(
         ctx.require_agency(), stima_id=stima_id,
         scheduled_for=payload.scheduled_for, actor_user_id=_attore(ctx))
 
 
 def record_completed_inspection(ctx, stima_id, payload):
-    return repository.create_completed_inspection(
+    return _facade().record_completed_inspection(
         ctx.require_agency(), stima_id=stima_id,
         completed_at=payload.completed_at, actor_user_id=_attore(ctx))
 
 
 def complete_inspection(ctx, inspection_id, payload):
-    return repository.complete_inspection(
+    return _facade().complete_inspection(
         ctx.require_agency(), inspection_id=inspection_id,
         completed_at=payload.completed_at, actor_user_id=_attore(ctx))
 
 
 def cancel_inspection(ctx, inspection_id, payload):
-    return repository.cancel_inspection(
+    return _facade().cancel_inspection(
         ctx.require_agency(), inspection_id=inspection_id,
         reason=payload.cancelled_reason, actor_user_id=_attore(ctx))

@@ -564,6 +564,48 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_a30_1_appointments_postgres.py": (
+        "TEST-only A30-1 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing an earlier entry: an allow-list shared between "
+        "phases would let a new entrypoint arrive unannounced. The connection "
+        "exists to apply the LMC-15 chain and then 072 and to prove what a "
+        "double cannot: that the btree_gist EXCLUDE constraint makes two "
+        "blocking appointments of the same agent overlapping in time "
+        "unrepresentable, buffers included, while adjacent half-open ranges "
+        "and non-blocking states are accepted; that blocked_range, version "
+        "and updated_at are written by the trigger and ignore the caller; "
+        "that the state matrices, the reference tenancy and the active "
+        "agent membership are enforced by the database; that stima_id has no "
+        "foreign key towards the legacy stime table; that source and "
+        "source_record_id make imports idempotent; that appointments refuse "
+        "DELETE and appointment_events is append-only; that the 072 down "
+        "refuses while an appointment exists; and, deterministically through "
+        "pg_stat_activity rather than sleeps, that a second concurrent booking "
+        "of the same agent waits on the per-agent advisory lock and then "
+        "receives a readable conflict. It monkeypatches get_connection in the "
+        "core module onto its own connection. It deliberately does NOT go "
+        "through database.get_connection(): that is the application choke "
+        "point and must stay uncoupled from a throwaway test database."
+    ),
+    "tests/test_a30_2_appointments_postgres.py": (
+        "TEST-only A30-2 proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing the A30-1 entry: an allow-list shared between "
+        "phases would let a new entrypoint arrive unannounced. The connection "
+        "exists to apply the LMC-15 chain and 072 and to drive the NOT "
+        "MOUNTED Agenda router through an isolated FastAPI test app: "
+        "idempotent creation by client_request_id, the state machine and its "
+        "time guards, optimistic versions, per-role visibility, "
+        "availability, and the LMC-15 projection kept OFF (switched on only "
+        "inside a test to prove the mapping and its rollback). It "
+        "monkeypatches get_connection in the core module onto connections to "
+        "its own throwaway database. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

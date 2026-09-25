@@ -521,7 +521,19 @@ def test_h5_nessuna_migration():
               "migrations/070_lmc15_acquisition_bridge.sql",
               "migrations/070_lmc15_acquisition_bridge_down.sql",
               "migrations/071_p29_3_journey_automation.sql",
-              "migrations/071_p29_3_journey_automation_down.sql"}
+              "migrations/071_p29_3_journey_automation_down.sql",
+              "migrations/072_a30_1_appointments.sql",
+              "migrations/072_a30_1_appointments_down.sql",
+              "migrations/073_a30_2p_lmc15_facade.sql",
+              "migrations/073_a30_2p_lmc15_facade_down.sql"}
+    # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
+    # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
+    # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    # SENTINELLA AGGIORNATA DA A30-1: la 072 e' il modello dell'Agenda CRM
+    # (`appointments`, `appointment_events`), approvato dal GATE A30-0. Si
+    # nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire questo test.
     assert nuovi - atteso == set(), sorted(nuovi - atteso)
 
 
