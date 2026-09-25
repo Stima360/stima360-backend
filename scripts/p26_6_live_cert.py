@@ -103,7 +103,7 @@ APPROVED_BRANCH = "core-0.1-test"
 COOKIE_NAME = "stima360_operator_session"
 DEFAULT_AGENCY_SLUG = "stima360"
 # scripts/p26_seed_agencies_test.py
-AGENCY_B_SLUG = "agenzia-b-test"
+AGENCY_B_SLUG = "stima360-giulianova"
 
 # migrations/027: un solo agency_owner attivo per agenzia, quindi le identita'
 # di certificazione non possono esserlo. `agency_admin` e' la soglia piu' alta
