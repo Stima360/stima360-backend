@@ -477,8 +477,10 @@ def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.a30_2p_diff import FILE_MODIFICATI as MOD_A30_2P, FILE_NUOVI as NUOVI_A30_2P
     # SENTINELLA AGGIORNATA DAL MOUNT A30: quarta dichiarazione dell'Agenda.
     from tests.a30_mount_diff import FILE_MODIFICATI as MOD_A30_M, FILE_NUOVI as NUOVI_A30_M
-    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M
-    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M
+    # A30-4: la UI Agenda (OS Shell), sesta dichiarazione.
+    from tests.a30_4_diff import FILE_MODIFICATI as MOD_A30_4, FILE_NUOVI as NUOVI_A30_4
+    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
+    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}

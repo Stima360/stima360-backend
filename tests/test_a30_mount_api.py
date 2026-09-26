@@ -219,11 +219,20 @@ def test_32_appointments_router_usato_una_volta_sola_e_solo_nel_mount():
     assert [k.arg for k in mount.keywords] == ["dependencies"]
 
 
-def test_33_nessuna_ui_agenda_aggiunta():
-    """Questo step monta solo l'API: nessuna pagina, voce di menu o asset
-    dell'OS Shell chiama `/api/appointments`."""
-    trovati = [p.relative_to(ROOT).as_posix()
-               for p in (ROOT / "static").rglob("*")
-               if p.is_file() and p.suffix in {".js", ".html", ".css"}
-               and "/api/appointments" in p.read_text(encoding="utf-8", errors="replace")]
-    assert trovati == []
+def test_33_solo_il_client_agenda_chiama_l_api():
+    """SENTINELLA AGGIORNATA DA A30-4: il mount non portava UI; A30-4 aggiunge
+    la pagina `#/agenda`. L'invariante che resta: un solo modulo del frontend
+    nomina `/api/appointments` (`agenda/agenda-api.js`), e nessuna voce di
+    menu porta all'Agenda (tests/test_a30_4_agenda_ui.py)."""
+    import re
+
+    def codice(testo):                      # i commenti possono NOMINARE l'API
+        testo = "\n".join(re.sub(r"(^|[^:'\"])//.*$", r"\1", r) for r in testo.splitlines())
+        return re.sub(r"/\*.*?\*/", "", testo, flags=re.S)
+
+    trovati = sorted(p.relative_to(ROOT).as_posix()
+                     for p in (ROOT / "static").rglob("*")
+                     if p.is_file() and p.suffix in {".js", ".html", ".css"}
+                     and "/api/appointments" in codice(
+                         p.read_text(encoding="utf-8", errors="replace")))
+    assert trovati == ["static/os_shell/assets/agenda/agenda-api.js"]

@@ -303,8 +303,14 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
     from tests.flow_global_security_diff import (
         FILE_MODIFICATI as MOD_FGS, FILE_NUOVI as NUOVI_FGS)
 
+    # A30-4 (collisione dichiarata, stessa forma): la UI Agenda tocca
+    # `static/` - `main.js` (la rotta, senza voce in barra laterale) e
+    # `app.css` (una sezione in coda). Si sottrae SOLO cio' che A30-4 dichiara.
+    from tests.a30_4_diff import FILE_MODIFICATI as MOD_A30_4, FILE_NUOVI as NUOVI_A30_4
+
     diff = set(_git("diff", "--name-only", "--", *intatti).split())
-    assert diff - MOD_FGS - NUOVI_FGS == set(), sorted(diff - MOD_FGS - NUOVI_FGS)
+    fuori = diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
+    assert fuori == set(), sorted(fuori)
 
 
 def test_19_STOP_PRIORITY_e_le_fasi_del_tick_sono_intatte():
@@ -334,8 +340,10 @@ def test_20_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.a30_2p_diff import FILE_MODIFICATI as MOD_A30_2P, FILE_NUOVI as NUOVI_A30_2P
     # SENTINELLA AGGIORNATA DAL MOUNT A30: quarta dichiarazione dell'Agenda.
     from tests.a30_mount_diff import FILE_MODIFICATI as MOD_A30_M, FILE_NUOVI as NUOVI_A30_M
-    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M
-    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M
+    # A30-4: la UI Agenda (OS Shell), sesta dichiarazione.
+    from tests.a30_4_diff import FILE_MODIFICATI as MOD_A30_4, FILE_NUOVI as NUOVI_A30_4
+    NUOVI_A30 = NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
+    MOD_A30 = MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4
 
     righe = _git("status", "--porcelain").splitlines()
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}

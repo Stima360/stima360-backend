@@ -380,6 +380,16 @@ def test_d3_no_page_outside_the_network_was_touched():
         # gia' elencate. Questa non e' una vista del CRM: e' la scheda di una
         # regola di piattaforma.
         "static/os_shell/assets/views/automazione-dettaglio.js",
+        # A30-4 - L'AGENDA. Tre cartelle NUOVE (git le mostra come cartelle non
+        # tracciate), piu' `main.js` e `app.css` gia' ammessi: la rotta
+        # `#/agenda` senza voce in barra laterale, e una sezione CSS in coda.
+        #
+        # Cio' che questo test difende resta intatto: nessuna vista del CRM e
+        # nessun componente della Rete e' toccato; l'Agenda vive nei suoi
+        # moduli e parla solo con `/api/appointments`.
+        "static/os_shell/assets/agenda/",
+        "static/os_shell/assets/components/agenda/",
+        "static/os_shell/assets/views/agenda/",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

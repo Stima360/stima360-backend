@@ -31,6 +31,7 @@ import { renderAutomazioneDettaglio } from './views/automazione-dettaglio.js';
 import { renderRete } from './views/rete.js';
 import { renderReteAgenzia } from './views/rete-agenzia.js';
 import { renderReteTerritorio } from './views/rete-territorio.js';
+import { renderAgenda } from './views/agenda/agenda-page.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -57,6 +58,10 @@ const SECTIONS = [
 // `require_platform_admin` (P27-1), che e' l'unica autorita' in materia. Un
 // tenant normale che arrivi qui non vede dati: vede un avviso.
 const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
+
+// A30-4 - l'Agenda. Rotta registrata, NESSUNA voce in SECTIONS: durante il
+// gate si raggiunge solo da `#/agenda`. Serve solo il titolo della pagina.
+const SEZIONE_AGENDA = { name: 'agenda', label: 'Agenda' };
 
 // P28 - dove finisce un tenant rimandato indietro dalla Rete.
 //
@@ -126,6 +131,8 @@ registerRoute('rete', (container, params = []) => {
   if (params[0] === 'territori' && params[1]) return renderReteTerritorio(container, params[1]);
   return renderRete(container);
 });
+// A30-4: `#/agenda[/<vista>/<data>]`. Tutta la logica sta in views/agenda/.
+registerRoute('agenda', (container, params = []) => renderAgenda(container, params));
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
@@ -158,7 +165,7 @@ initRouter(contentEl, {
     return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
   },
   onNavigate(name) {
-    const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);
+    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_AGENDA].find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === name);

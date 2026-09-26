@@ -616,3 +616,108 @@ dialog.modal.modal-wide { max-width: 680px; }
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+
+/* --- A30-4 Agenda (solo aggiunte; nessuna regola esistente modificata) ---
+   Desktop: settimana lunedi' -> domenica. Tablet: settimana completa con
+   scorrimento orizzontale. Mobile (< 768px): Lista e Giorno, la settimana
+   non si offre. La griglia copre 00-24; 08-20 e' solo lo scroll iniziale. */
+.agenda-page { display: flex; flex-direction: column; gap: 12px; }
+.agenda-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; justify-content: space-between; }
+.agenda-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.agenda-period { font-size: 16px; margin: 0 0 0 8px; }
+.agenda-views { display: flex; gap: 4px; }
+.agenda-view-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.agenda-commands { display: flex; gap: 8px; }
+.agenda-notice .error-box, .agenda-notice .success-box { margin-bottom: 0; }
+
+.agenda-scroll { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; max-height: calc(100vh - 220px); min-height: 360px; }
+.agenda-grid { --agenda-days: 7; min-width: 100%; }
+.agenda-grid-head, .agenda-grid-body { display: grid; grid-template-columns: 56px repeat(var(--agenda-days), minmax(110px, 1fr)); }
+.agenda-grid-head { position: sticky; top: 0; z-index: 3; background: var(--panel); border-bottom: 1px solid var(--border); }
+.agenda-hours-head { border-right: 1px solid var(--border); }
+.agenda-day-head { padding: 8px 6px; font-size: 13px; font-weight: 600; border-right: 1px solid var(--border); text-align: center; }
+.agenda-day-head::first-letter { text-transform: uppercase; }
+.agenda-day-head.agenda-today { color: var(--primary); background: #eef3fd; }
+.agenda-hours { border-right: 1px solid var(--border); }
+/* La colonna delle ore resta ferma quando la settimana scorre in orizzontale. */
+.agenda-hours, .agenda-hours-head { position: sticky; left: 0; z-index: 2; background: var(--panel); }
+.agenda-hour-label { font-size: 11px; color: var(--muted); text-align: right; padding: 2px 6px 0 0; box-sizing: border-box; }
+.agenda-day-column { position: relative; border-right: 1px solid var(--border); }
+.agenda-hour-slot { position: absolute; left: 0; right: 0; border-top: 1px solid #eef1f6; }
+
+.agenda-card { display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; line-height: 1.3; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; padding: 4px 6px; overflow: hidden; }
+button.agenda-card { cursor: pointer; }
+button.agenda-card:hover { box-shadow: 0 1px 4px rgba(23, 35, 58, .18); }
+button.agenda-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agenda-block { position: absolute; z-index: 1; }
+.agenda-card-compact .agenda-card-title, .agenda-card-compact .agenda-card-meta, .agenda-card-compact .agenda-card-type { display: none; }
+.agenda-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.agenda-card-compact .agenda-card-head { flex-wrap: nowrap; overflow: hidden; }
+.agenda-card-compact { padding-top: 2px; padding-bottom: 2px; }
+.agenda-card-time { font-weight: 600; white-space: nowrap; }
+.agenda-card-type { font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .02em; }
+.agenda-card-title, .agenda-card-agent { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agenda-card-agent { color: var(--muted); }
+.agenda-card-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; margin: 2px 0; }
+.agenda-card-duration { color: var(--muted); }
+.agenda-card-meta > span + span:not(.agenda-badge)::before { content: "· "; }
+
+/* Stato: bordo + fondo + etichetta, mai solo il colore. */
+.agenda-status-confirmed { border-left-color: var(--primary); background: #eef3fd; }
+.agenda-status-scheduled { border-left-color: #5b7bd5; }
+.agenda-status-requested { border-style: dashed; border-color: #c98a0a; border-left-width: 3px; background: repeating-linear-gradient(135deg, #fff, #fff 6px, #fdf6e3 6px, #fdf6e3 12px); }
+.agenda-status-completed { border-left-color: #1c7a3c; color: #3b4a5f; background: #f3f8f4; }
+.agenda-status-no_show { border-left-color: var(--danger); background: #fdf1ef; }
+.agenda-status-cancelled { border-style: dotted; background: transparent; color: var(--muted); text-decoration: line-through; }
+.agenda-status-rescheduled { border-style: dotted; background: transparent; color: var(--muted); }
+.agenda-status-busy { border-left-color: #94a3b8; color: #3b4a5f; background: repeating-linear-gradient(135deg, #eef1f6, #eef1f6 4px, #e2e7ef 4px, #e2e7ef 8px); }
+
+.agenda-badge { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 7px; background: #eef2f9; color: var(--muted); text-decoration: none; }
+.agenda-badge-requested { background: #fdf3d8; color: #92650a; }
+.agenda-badge-scheduled { background: #e3ecfd; color: #1a3f9e; }
+.agenda-badge-confirmed { background: var(--primary); color: #fff; }
+.agenda-badge-completed { background: #e3f6e8; color: #1c7a3c; }
+.agenda-badge-no_show { background: #fdecea; color: var(--danger); }
+.agenda-badge-cancelled, .agenda-badge-rescheduled { background: #eef2f9; color: var(--muted); }
+.agenda-badge-test { background: #f1e7fd; color: #6b2fb3; }
+
+.agenda-list { display: flex; flex-direction: column; gap: 16px; }
+.agenda-list-day { display: flex; flex-direction: column; gap: 8px; }
+.agenda-list-day-title { font-size: 13px; color: var(--muted); margin: 0; }
+.agenda-list-day-title::first-letter { text-transform: uppercase; }
+.agenda-list .agenda-card { font-size: 14px; padding: 10px 12px; min-height: 44px; }
+
+/* Pannello: dialog ancorato a destra. */
+dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: 440px; max-width: 100vw; border-radius: 0; padding: 20px; overflow-y: auto; }
+.agenda-drawer-close { float: right; }
+.agenda-drawer-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.agenda-drawer-head h2 { font-size: 18px; margin: 0; }
+.agenda-drawer-grid { grid-template-columns: 1fr; }
+.agenda-drawer-actions .btn, .agenda-drawer-links .btn { min-height: 40px; }
+.agenda-drawer-links a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.agenda-history { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+
+.agenda-availability { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
+.agenda-availability-status.is-free { color: #1c7a3c; font-weight: 600; }
+.agenda-availability-status.is-busy { color: var(--danger); font-weight: 600; }
+.agenda-conflicts { margin: 6px 0; padding-left: 18px; }
+.agenda-alternatives, .agenda-slots { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.agenda-chip { padding: 4px 10px; font-size: 13px; }
+
+/* Tablet: settimana completa, scorrimento orizzontale. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .agenda-grid-week { min-width: 880px; }
+  dialog.modal.agenda-drawer { width: 60vw; }
+}
+
+/* Smartphone: Lista e Giorno; la settimana non si offre; pannello e dialog
+   a tutta pagina; bersagli da almeno 44px. */
+@media (max-width: 767px) {
+  .agenda-desktop-only { display: none; }
+  .agenda-toolbar { flex-direction: column; align-items: stretch; }
+  .agenda-commands .btn, .agenda-views .btn, .agenda-nav .btn { min-height: 44px; }
+  .agenda-period { font-size: 15px; margin: 6px 0 0; flex-basis: 100%; }
+  .agenda-grid-day .agenda-grid-head, .agenda-grid-day .agenda-grid-body { grid-template-columns: 48px 1fr; }
+  dialog.modal.agenda-drawer, dialog.modal.agenda-dialog { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; margin: 0; border-radius: 0; }
+  .agenda-dialog .form-grid-3, .agenda-dialog .form-grid-2 { grid-template-columns: 1fr; }
+}
