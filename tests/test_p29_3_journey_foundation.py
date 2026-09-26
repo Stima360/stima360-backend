@@ -54,7 +54,12 @@ def test_01_la_071_e_valida_e_in_coda():
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 73
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 74 and numeri[-2] == 73
     assert len(numeri) == len(set(numeri))
 
 
@@ -354,10 +359,15 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.a30_7_diff import FILE_MODIFICATI as MOD_A30_7, FILE_NUOVI as NUOVI_A30_7
     # SENTINELLA AGGIORNATA DA A30-8: decima dichiarazione dell'Agenda.
     from tests.a30_8_diff import FILE_MODIFICATI as MOD_A30_8, FILE_NUOVI as NUOVI_A30_8
+    # SENTINELLA AGGIORNATA DA A30-9A: undicesima dichiarazione dell'Agenda
+    # (le fondamenta della sincronizzazione calendario, package `calendar_sync/`).
+    from tests.a30_9a_diff import FILE_MODIFICATI as MOD_A30_9A, FILE_NUOVI as NUOVI_A30_9A
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
-                 | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8)
+                 | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
+                 | NUOVI_A30_9A)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
-               | MOD_A30_6 | MOD_A30_7 | MOD_A30_8)
+               | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
+               | MOD_A30_9A)
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()

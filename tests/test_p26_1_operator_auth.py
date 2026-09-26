@@ -371,8 +371,17 @@ def test_s6_crypto_uses_the_standard_library_only():
 
 def test_s6_no_new_requirement_was_added():
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
-    for package in ("passlib", "bcrypt", "argon2", "pyjwt", "python-jose", "cryptography"):
+    for package in ("passlib", "bcrypt", "argon2", "pyjwt", "python-jose"):
         assert package not in requirements, f"{package} must not be added"
+    # SENTINELLA AGGIORNATA DA A30-9A: `cryptography` entra in requirements.txt
+    # per la cifratura applicativa (Fernet) dei token OAuth del calendario in
+    # `calendar_sync/crypto.py`, approvata dal GATE A30-9A. Resta vietata a
+    # operator_auth (test_s6_crypto_uses_the_standard_library_only). Si nomina
+    # invece di smettere di guardare: e' ammessa SOLO la riga pinnata della
+    # A30-9A, e qualunque ALTRA dipendenza crittografica farebbe ancora fallire.
+    righe_crypto = [riga.strip() for riga in requirements.splitlines()
+                    if "cryptography" in riga and not riga.strip().startswith("#")]
+    assert righe_crypto == ["cryptography==50.0.1"], righe_crypto
 
 
 def test_s6_no_dependency_on_the_owner_module():

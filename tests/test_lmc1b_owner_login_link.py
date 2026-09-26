@@ -436,7 +436,12 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 73, numeri[-3:]
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 74 and numeri[-2] == 73, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

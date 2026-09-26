@@ -4930,6 +4930,38 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("appointments", "created_by_user_id", "operator_users", "RESTRICT"),
     ("appointments", "lead_id", "leads", "SET NULL"),
     ("appointments", "property_id", "properties", "SET NULL"),
+    # A30-9A, migration 074. Le fondamenta della sincronizzazione in uscita
+    # verso Google Calendar, approvate dal GATE A30-9A: TRE riferimenti
+    # non-CASCADE verso tabelle che il cleanup cancella. ESAMINATI.
+    #
+    #   agency_id -> agencies    RESTRICT  (calendar_connections,
+    #                                       calendar_oauth_states,
+    #                                       appointment_calendar_sync)
+    #
+    # Stessa forma, e stessa ragione, di `agency_memberships.agency_id` e di
+    # `appointments.agency_id` qui sopra: una connessione al calendario, uno
+    # stato OAuth in volo e il legame appuntamento-evento remoto sono fatti
+    # dell'agenzia. CASCADE li porterebbe via insieme all'agenzia di prova
+    # senza che nessuno lo veda; SET NULL e' impossibile (NOT NULL, e la
+    # tenancy composita la pretende). RESTRICT.
+    #
+    # Le FK COMPOSITE della 074 non compaiono in questo inventario, e non per
+    # dimenticanza: l'inventario si legge da `_fk_delle_migrazioni`, che vede
+    # solo i riferimenti a `(id)`. Le si nomina qui:
+    #
+    #   (agency_id, user_id) -> agency_memberships   RESTRICT (connections)
+    #                                                CASCADE  (oauth_states)
+    #   (agency_id, chain_root_appointment_id)  -> appointments   CASCADE
+    #   (agency_id, current_appointment_id)     -> appointments   CASCADE
+    #   (agency_id, remote_connection_id) -> calendar_connections  RESTRICT
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: un'agenzia di prova con una
+    # connessione al calendario, o una membership che ne ha una, non si
+    # cancella - il preflight la incontra come RIFIUTO, non come
+    # cancellazione silenziosa, come per gli appuntamenti della 072.
+    ("appointment_calendar_sync", "agency_id", "agencies", "RESTRICT"),
+    ("calendar_connections", "agency_id", "agencies", "RESTRICT"),
+    ("calendar_oauth_states", "agency_id", "agencies", "RESTRICT"),
 })
 
 

@@ -410,7 +410,12 @@ def test_N4_nessuna_migration_nuova():
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 73, "la serie si e' fermata o e' andata oltre la 073"
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 74 and numeri[-2] == 73, "la serie si e' fermata o e' andata oltre la 074"
     assert 64 in numeri
 
 

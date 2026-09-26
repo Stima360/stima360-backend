@@ -50,7 +50,12 @@ def test_01_la_073_e_valida_per_il_runner_e_in_coda_alla_serie():
     assert runner.validate_migration(m) == [] and m.down_available
     assert not m.non_transactional
     numeri = sorted(x.number for x in trovate.values())
-    assert numeri[-1] == 73 and numeri[-2] == 72 and len(numeri) == len(set(numeri))
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 74 and numeri[-2] == 73 and numeri[-3] == 72 and len(numeri) == len(set(numeri))
 
 
 def test_02_la_up_non_apre_transazioni_e_non_scrive_il_ledger():

@@ -362,7 +362,12 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 73 and numeri[-2] == 72 and numeri[-3] == 71
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 74 and numeri[-2] == 73 and numeri[-3] == 72 and numeri[-4] == 71
     assert len(numeri) == len(set(numeri))
 
 
@@ -595,7 +600,14 @@ def test_37_nessuna_migration_oltre_la_070():
               "migrations/072_a30_1_appointments.sql",
               "migrations/072_a30_1_appointments_down.sql",
               "migrations/073_a30_2p_lmc15_facade.sql",
-              "migrations/073_a30_2p_lmc15_facade_down.sql"}
+              "migrations/073_a30_2p_lmc15_facade_down.sql",
+              "migrations/074_a30_9a_calendar_sync.sql",
+              "migrations/074_a30_9a_calendar_sync_down.sql"}
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA A30-2P: la 073 ridefinisce due CHECK di
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di

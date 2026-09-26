@@ -679,7 +679,12 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # `appointments` per la facade LMC-15 (fonte `lmc15_facade`), approvata
     # dal GATE A30-2P FACADE DESIGN. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 73, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
+    # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
+    # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
+    # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 74 and numeri[-2] == 73, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

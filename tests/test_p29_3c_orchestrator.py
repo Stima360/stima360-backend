@@ -487,10 +487,15 @@ def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.a30_7_diff import FILE_MODIFICATI as MOD_A30_7, FILE_NUOVI as NUOVI_A30_7
     # SENTINELLA AGGIORNATA DA A30-8: decima dichiarazione dell'Agenda.
     from tests.a30_8_diff import FILE_MODIFICATI as MOD_A30_8, FILE_NUOVI as NUOVI_A30_8
+    # SENTINELLA AGGIORNATA DA A30-9A: undicesima dichiarazione dell'Agenda
+    # (le fondamenta della sincronizzazione calendario, package `calendar_sync/`).
+    from tests.a30_9a_diff import FILE_MODIFICATI as MOD_A30_9A, FILE_NUOVI as NUOVI_A30_9A
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
-                 | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8)
+                 | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
+                 | NUOVI_A30_9A)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
-               | MOD_A30_6 | MOD_A30_7 | MOD_A30_8)
+               | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
+               | MOD_A30_9A)
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}
