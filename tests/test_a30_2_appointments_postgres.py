@@ -468,7 +468,8 @@ def test_16_complete_solo_da_start_e_completed_at_reale(http, mondo):
                          start_at=futuro(15).isoformat(), end_at=futuro(16).isoformat())
     r = http("giorgio").post(f"/api/appointments/{non_iniziato['id']}/complete",
                              json={"version": non_iniziato["version"]})
-    assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio (era 409).
+    assert r.status_code == 422 and r.json()["code"] == "COMPLETE_TOO_EARLY"
     passato = _crea(http, assigned_user_id=mondo["luca"])      # GIORNO 10-11, < db_now
     db_now = mondo["sql"]("SELECT NOW()")[0][0]
     for sbagliato in (ore(9, 59), db_now + timedelta(seconds=1), futuro(9)):
@@ -514,7 +515,8 @@ def test_17_no_show_solo_da_end(http, mondo):
                      end_at=(db_now + timedelta(minutes=30)).isoformat())
     r = http("giorgio").post(f"/api/appointments/{in_corso['id']}/no-show",
                              json={"version": in_corso["version"]})
-    assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio (era 409).
+    assert r.status_code == 422 and r.json()["code"] == "NO_SHOW_TOO_EARLY"
     finito = _crea(http, assigned_user_id=mondo["marta"])
     r = http("giorgio").post(f"/api/appointments/{finito['id']}/no-show",
                              json={"version": finito["version"]})
@@ -740,23 +742,27 @@ def test_51_accesa_schedule_reschedule_complete(http, mondo, proiezione_accesa):
     timeline = mondo["sql"]("SELECT event_type FROM seller_timeline_events ORDER BY id")
     assert [t[0] for t in timeline] == ["inspection_scheduled"]
 
+    # SENTINELLA AGGIORNATA DA A30-8 (D6): anche `reschedule` rifiuta un
+    # inizio gia' passato per l'orologio del service (ORA = 12): lo
+    # spostamento va alle 15, ancora nel passato del database, quindi il
+    # completamento resta possibile.
     r = http("giorgio").post(f"/api/appointments/{fissato['id']}/reschedule",
-                             json={"version": fissato["version"], "start_at": ore(10).isoformat(),
-                                   "end_at": ore(11).isoformat()})
+                             json={"version": fissato["version"], "start_at": ore(15).isoformat(),
+                                   "end_at": ore(16).isoformat()})
     assert r.status_code == 201, r.text
     nuova = r.json()
     assert nuova["stima_inspection_id"] == ins
     vecchia = mondo["sql"]("SELECT stima_inspection_id FROM appointments WHERE id=%s",
                            (fissato["id"],))[0][0]
     assert vecchia is None
-    assert _ispezione(mondo, ins)[1] == ore(10)
+    assert _ispezione(mondo, ins)[1] == ore(15)
 
     r = http("giorgio").post(f"/api/appointments/{nuova['id']}/complete",
                              json={"version": nuova["version"],
-                                   "completed_at": ore(10, 55).isoformat()})
+                                   "completed_at": ore(15, 55).isoformat()})
     assert r.status_code == 200, r.text
     stato, _, completato, _ = _ispezione(mondo, ins)
-    assert stato == "completed" and completato == ore(10, 55)
+    assert stato == "completed" and completato == ore(15, 55)
     timeline = mondo["sql"]("SELECT event_type FROM seller_timeline_events ORDER BY id")
     assert [t[0] for t in timeline] == ["inspection_scheduled", "inspection_completed"]
 

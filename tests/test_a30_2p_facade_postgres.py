@@ -368,7 +368,8 @@ def test_40_agenda_nativa_invariata_sulle_righe_facade(lmc15, http, mondo):
     assert r.status_code == 422 and r.json()["code"] == "AGENT_REQUIRED"
     # completare prima dell'inizio: D11 resta (409), niente bypass
     r = agenda.post(f"/api/appointments/{a['id']}/complete", json={"version": a["version"]})
-    assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio (era 409).
+    assert r.status_code == 422 and r.json()["code"] == "COMPLETE_TOO_EARLY"
     # annullare senza motivo un sopralluogo con stima: REASON_REQUIRED
     r = agenda.post(f"/api/appointments/{a['id']}/cancel", json={"version": a["version"]})
     assert r.status_code == 422 and r.json()["code"] == "REASON_REQUIRED"

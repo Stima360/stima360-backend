@@ -536,7 +536,8 @@ def test_34_f9_regole_native_invariate(http, mondo):
     assert r.status_code == 422 and r.json()["code"] == "REASON_REQUIRED"
     # D11: l'assenza solo dopo la fine (fine nel futuro del NOW() del database)
     r = http("giorgio").post(f"/api/appointments/{a['id']}/no-show", json={"version": a["version"]})
-    assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio (era 409).
+    assert r.status_code == 422 and r.json()["code"] == "NO_SHOW_TOO_EARLY"
     # un agente non vede l'appuntamento di un collega
     r = http("marta").post(f"/api/appointments/{a['id']}/cancel",
                            json={"version": a["version"], "reason": "x"})
@@ -551,7 +552,7 @@ def test_35_f9_confine_no_show_sull_orologio_del_database(http, mondo, monkeypat
     nell'altro."""
     from appointments import service
 
-    # 1) db_now < end_at: 409 anche se l'orologio del processo e' GIA' oltre
+    # 1) db_now < end_at: 422 NO_SHOW_TOO_EARLY (A30-8; era 409) anche se l'orologio del processo e' GIA' oltre
     db_now = mondo["sql"]("SELECT NOW()")[0][0]
     fine = db_now + timedelta(minutes=10)
     a = _sopralluogo_tra(http, mondo, fine - timedelta(hours=1), fine,
@@ -559,7 +560,8 @@ def test_35_f9_confine_no_show_sull_orologio_del_database(http, mondo, monkeypat
     monkeypatch.setattr(service, "_adesso", lambda: fine + timedelta(days=1))
     r = http("giorgio").post(f"/api/appointments/{a['id']}/no-show",
                              json={"version": a["version"]})
-    assert r.status_code == 409 and r.json()["code"] == "INVALID_TRANSITION"
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio (era 409).
+    assert r.status_code == 422 and r.json()["code"] == "NO_SHOW_TOO_EARLY"
     assert datetime.fromisoformat(r.json()["available_from"]) == fine
     assert mondo["sql"]("SELECT status FROM stima_inspections WHERE id=%s",
                         (a["stima_inspection_id"],))[0][0] == "scheduled"

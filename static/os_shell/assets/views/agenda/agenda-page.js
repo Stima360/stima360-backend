@@ -21,6 +21,7 @@ import {
   VIEW_SLUGS,
   VIEWS,
   MOBILE_VIEWS,
+  actionSuccessMessage,
   addDays,
   effectiveView,
   errorMessage,
@@ -275,7 +276,9 @@ export async function renderAgenda(container, params = []) {
             if (stale()) return;
             const fissato = azione === 'schedule'
               && detail.appointment.appointment_type === 'inspection';
-            await carica(fissato ? 'Sopralluogo fissato.' : 'Operazione completata.');
+            // A30-8: un messaggio proprio per ogni esito, dopo il 2xx.
+            await carica(fissato ? 'Sopralluogo fissato.'
+              : (actionSuccessMessage(azione) || 'Operazione completata.'));
             // Dopo uno spostamento l'appuntamento "vivo" e' la riga nuova.
             const prossimo = esito && esito.id ? esito.id : detail.appointment.id;
             if (!stale()) apri(prossimo);

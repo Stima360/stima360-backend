@@ -64,10 +64,11 @@ def test_02_i_terminali_non_hanno_uscite_q6():
 
 def test_03_complete_solo_da_start_no_show_solo_da_end_d11():
     s, e = _t(2026, 10, 5, 10), _t(2026, 10, 5, 11)
-    with pytest.raises(errors.InvalidTransition):
+    # A30-8 D6: "troppo presto" e' un 422 con codice proprio, non 409.
+    with pytest.raises(errors.CompleteTooEarly):
         sm.check_time_guard("complete", start_at=s, end_at=e, now=s - timedelta(seconds=1))
     sm.check_time_guard("complete", start_at=s, end_at=e, now=s)
-    with pytest.raises(errors.InvalidTransition):
+    with pytest.raises(errors.NoShowTooEarly):
         sm.check_time_guard("no_show", start_at=s, end_at=e, now=e - timedelta(seconds=1))
     sm.check_time_guard("no_show", start_at=s, end_at=e, now=e)
 

@@ -32,6 +32,12 @@ PLATFORM_ADMIN_AGENCY_REQUIRED = "PLATFORM_ADMIN_AGENCY_REQUIRED"
 # A30-7: le due guardie di "Pianifica" / "Fissa sopralluogo".
 SCHEDULE_IN_PAST = "SCHEDULE_IN_PAST"
 STIMA_INSPECTION_ALREADY_OPEN = "STIMA_INSPECTION_ALREADY_OPEN"
+# A30-8: le guardie temporali degli esiti e del follow-up.
+COMPLETE_TOO_EARLY = "COMPLETE_TOO_EARLY"
+NO_SHOW_TOO_EARLY = "NO_SHOW_TOO_EARLY"
+RESCHEDULE_IN_PAST = "RESCHEDULE_IN_PAST"
+FOLLOW_UP_IN_PAST = "FOLLOW_UP_IN_PAST"
+FOLLOW_UP_REQUIRES_LINK = "FOLLOW_UP_REQUIRES_LINK"
 
 
 class _ConCodice:
@@ -120,6 +126,34 @@ class LinkMismatch(_ConCodice, ValidationError):
 class ScheduleInPast(_ConCodice, ValidationError):
     """A30-7 D4: si fissa solo un inizio futuro (confronto fra istanti)."""
     code = SCHEDULE_IN_PAST
+
+
+class CompleteTooEarly(_ConCodice, ValidationError):
+    """A30-8 D6: un appuntamento si completa solo dal suo inizio in poi
+    (NOW() del database). `available_from` = `start_at`."""
+    code = COMPLETE_TOO_EARLY
+
+
+class NoShowTooEarly(_ConCodice, ValidationError):
+    """A30-8 D6: l'assenza si registra solo dalla fine in poi (NOW() del
+    database). `available_from` = `end_at`."""
+    code = NO_SHOW_TOO_EARLY
+
+
+class RescheduleInPast(_ConCodice, ValidationError):
+    """A30-8 D6: si sposta solo verso un inizio futuro (come SCHEDULE_IN_PAST)."""
+    code = RESCHEDULE_IN_PAST
+
+
+class FollowUpInPast(_ConCodice, ValidationError):
+    """A30-8: la scadenza del follow-up deve essere futura (NOW() del database)."""
+    code = FOLLOW_UP_IN_PAST
+
+
+class FollowUpRequiresLink(_ConCodice, ValidationError):
+    """A30-8 D4: un follow-up e' un task CORE, che vuole almeno un contatto,
+    un lead o una stima; l'appuntamento non ne ha nessuno."""
+    code = FOLLOW_UP_REQUIRES_LINK
 
 
 class InspectionProjectionNotActive(_ConCodice, ValidationError):

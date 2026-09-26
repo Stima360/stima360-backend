@@ -177,29 +177,69 @@ class ConfirmBody(_ConVersione):
     pass
 
 
+def _testo(valore):
+    """Spazi ai bordi tolti; un testo vuoto e' assente."""
+    if valore is None:
+        return None
+    valore = valore.strip()
+    return valore or None
+
+
+class FollowUpBody(_Corpo):
+    """A30-8: il follow-up facoltativo di un esito. SOLO scadenza, titolo e
+    nota: contatto, lead, stima, agenzia e assegnatario li deriva il SERVER
+    dall'appuntamento gia' bloccato; `extra="forbid"` rifiuta ogni tentativo
+    di mandarli (422)."""
+    due_at: datetime
+    title: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=2000)
+
+    @field_validator("due_at")
+    @classmethod
+    def _con_fuso(cls, valore):
+        return _istante(valore)
+
+    @field_validator("title", "note")
+    @classmethod
+    def _pulito(cls, valore):
+        return _testo(valore)
+
+
 class CancelBody(_ConVersione):
     reason: str | None = Field(None, max_length=300)
+    follow_up: FollowUpBody | None = None
 
     @field_validator("reason")
     @classmethod
     def _ragione(cls, valore):
-        if valore is None:
-            return None
-        valore = valore.strip()
-        return valore or None
+        return _testo(valore)
 
 
 class CompleteBody(_ConVersione):
     completed_at: datetime | None = None
+    #: A30-8 D1: scritta SOLO nell'evento `status_changed` (changes.outcome_note).
+    outcome_note: str | None = Field(None, max_length=1000)
+    follow_up: FollowUpBody | None = None
 
     @field_validator("completed_at")
     @classmethod
     def _con_fuso(cls, valore):
         return None if valore is None else _istante(valore)
 
+    @field_validator("outcome_note")
+    @classmethod
+    def _nota(cls, valore):
+        return _testo(valore)
+
 
 class NoShowBody(_ConVersione):
-    pass
+    outcome_note: str | None = Field(None, max_length=1000)
+    follow_up: FollowUpBody | None = None
+
+    @field_validator("outcome_note")
+    @classmethod
+    def _nota(cls, valore):
+        return _testo(valore)
 
 
 class PatchBody(_ConVersione):

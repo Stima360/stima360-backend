@@ -10,7 +10,7 @@
 
 Terminali (Q6): completed, cancelled, no_show, rescheduled. Non si esce mai.
 
-Guardie di tempo (D11 rev. 2):
+Guardie di tempo (D11 rev. 2; codici 422 propri da A30-8 D6):
   * complete: solo da `start_at` in poi, con start_at <= completed_at <= adesso
     (completed_at dichiarato dall'operatore o adesso: Q3);
   * no_show: solo da `end_at` in poi.
@@ -67,12 +67,15 @@ def check_transition(action: str, status: str) -> None:
 
 def check_time_guard(action: str, *, start_at: datetime, end_at: datetime,
                      now: datetime) -> None:
+    # A30-8 D6: "troppo presto" non e' una transizione vietata dallo stato
+    # (quella resta 409 INVALID_TRANSITION) ma un dato non ancora valido:
+    # 422 con un codice proprio e `available_from`.
     if action == "complete" and now < start_at:
-        raise errors.InvalidTransition(
+        raise errors.CompleteTooEarly(
             "Un appuntamento si completa solo dal suo inizio in poi",
             action=action, available_from=start_at)
     if action == "no_show" and now < end_at:
-        raise errors.InvalidTransition(
+        raise errors.NoShowTooEarly(
             "L'assenza si registra solo dopo la fine dell'appuntamento",
             action=action, available_from=end_at)
 

@@ -321,10 +321,15 @@ def created_event_changes(cur, appointment_id: int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def update_appointment(cur, appointment_id: int, changes: dict, *, actor_user_id,
-                       event_type: str, from_status: str, azione: str) -> dict:
+                       event_type: str, from_status: str, azione: str,
+                       event_extra: dict | None = None) -> dict:
     """UPDATE di `changes` sulla riga (gia' bloccata dal chiamante) e il suo
     evento, nella stessa transazione. `version` e `updated_at` li scrive il
-    trigger della 072."""
+    trigger della 072.
+
+    A30-8: `event_extra` aggiunge all'evento dati che NON sono colonne (la
+    nota di esito, l'id del task di follow-up); non puo' riscrivere le chiavi
+    delle colonne cambiate ne' `azione`."""
     colonne = sorted(changes)
     cur.execute("SELECT * FROM appointments WHERE id = %s", (appointment_id,))
     prima = dict(cur.fetchone())
@@ -336,6 +341,10 @@ def update_appointment(cur, appointment_id: int, changes: dict, *, actor_user_id
     riga = _riga(cur.fetchone())
     diff = {c: {"da": prima[c], "a": riga[c]} for c in colonne if prima[c] != riga[c]}
     diff["azione"] = azione
+    for chiave, valore in (event_extra or {}).items():
+        if chiave in diff:
+            raise ValueError(f"event_extra non puo' riscrivere {chiave!r}")
+        diff[chiave] = valore
     record_event(
         cur, agency_id=riga["agency_id"], appointment_id=appointment_id,
         event_type=event_type, from_status=from_status, to_status=riga["status"],
@@ -450,6 +459,21 @@ def get_appointment(cur, agency_id: int, appointment_id: int):
                 (appointment_id, agency_id))
     riga = cur.fetchone()
     return None if riga is None else _riga(riga)
+
+
+def agent_name(cur, agency_id: int, user_id: int):
+    """A30-8: il nome dell'agente come lo mostra l'Agenda (stessa espressione
+    di `agents`), per `tasks.assigned_to` del follow-up. Solo informativo."""
+    cur.execute(
+        f"""SELECT COALESCE({_NOME_OPERATORE.format(a='u')},
+                            split_part(u.email, '@', 1)) AS name
+              FROM operator_users u
+              JOIN agency_memberships m
+                ON m.operator_user_id = u.id AND m.agency_id = %s
+             WHERE u.id = %s""",
+        (agency_id, user_id))
+    riga = cur.fetchone()
+    return None if riga is None else riga["name"]
 
 
 def detail_links(cur, row: dict) -> dict:

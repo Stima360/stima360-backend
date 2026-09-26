@@ -830,8 +830,60 @@ def list_activities(ctx, limit: int, offset: int, contact_id: int | None, lead_i
         return [dict(row) for row in cur.fetchall()]
 
 
-def create_task_with_cursor(cur, data: dict[str, Any], *, ctx=None) -> dict[str, Any]:
-    """Create one CORE task using an already-open transaction. See R-4 above."""
+def _operator_may_author(cur, agency_id: int, operator_user_id: int) -> bool:
+    """A30-8: the attributed author of an R-4 row must be able to act in the
+    agency the 030/033 trigger derived from the row's own references - an
+    active member of it, or a platform administrator (who reaches a tenant
+    only through the audited acting context). Same predicate LMC-15 applies to
+    its actors."""
+    cur.execute(
+        """
+        SELECT 1 FROM operator_users u
+         WHERE u.id = %s
+           AND (u.is_platform_admin
+                OR EXISTS (SELECT 1 FROM agency_memberships m
+                            WHERE m.operator_user_id = u.id
+                              AND m.agency_id = %s
+                              AND m.status = 'active'))
+        """,
+        (operator_user_id, agency_id),
+    )
+    return cur.fetchone() is not None
+
+
+def create_task_with_cursor(cur, data: dict[str, Any], *, ctx=None,
+                            created_by_user_id: int | None = None) -> dict[str, Any]:
+    """Create one CORE task using an already-open transaction. See R-4 above.
+
+    A30-8 - `created_by_user_id`, ONLY on the ctx-less R-4 path.
+
+    The Agenda records an appointment outcome and, in the same transaction,
+    the follow-up task its operator asked for. The references come from the
+    appointment row the caller has already locked and authorised - never from
+    the client - so they take the R-4 validation (existence here, agency
+    derived and cross-checked by the 030/033 trigger) rather than the operator
+    scope, which for an `agent` would also demand that the contact and lead be
+    assigned to him. What R-4 lacks is attribution; this parameter adds it and
+    nothing else:
+
+    * it cannot be combined with `ctx` (that path stamps its own author);
+    * it does not touch validation - references, existence and the trigger's
+      agency derivation are exactly those of every R-4 call;
+    * the author must be able to act in the DERIVED agency, checked after the
+      trigger has resolved it; otherwise ValidationError, and the caller's
+      transaction rolls back;
+    * no `agency_id` is accepted from anyone: the trigger stays authoritative.
+
+    It is not reachable over HTTP: `POST /api/core/tasks` goes through
+    `create_task(ctx, ...)`, and no request schema declares the field.
+    """
+    if created_by_user_id is not None:
+        if ctx is not None:
+            raise ProgrammingError(
+                "created_by_user_id is for the ctx-less R-4 path; a ctx stamps its own author")
+        if isinstance(created_by_user_id, bool) or not isinstance(created_by_user_id, int):
+            raise ProgrammingError("created_by_user_id must be an operator id")
+        _reject_server_owned(data)
     _validate_references(cur, data, ctx=ctx)
     prepared = {**data, "metadata": Json(data.get("metadata") or {})}
     columns = ""
@@ -840,6 +892,10 @@ def create_task_with_cursor(cur, data: dict[str, Any], *, ctx=None) -> dict[str,
         prepared = {**_stamp(ctx, prepared)}
         columns = ", agency_id, created_by_user_id"
         values = ", %(agency_id)s, %(created_by_user_id)s"
+    elif created_by_user_id is not None:
+        prepared["created_by_user_id"] = created_by_user_id
+        columns = ", created_by_user_id"
+        values = ", %(created_by_user_id)s"
     cur.execute(
         f"""
         INSERT INTO tasks (
@@ -853,7 +909,13 @@ def create_task_with_cursor(cur, data: dict[str, Any], *, ctx=None) -> dict[str,
         """,
         prepared,
     )
-    return _row(cur.fetchone())
+    row = _row(cur.fetchone())
+    if created_by_user_id is not None and not _operator_may_author(
+        cur, row["agency_id"], created_by_user_id
+    ):
+        # Names neither the operator nor the agency (same rule as assignments).
+        raise ValidationError("created_by_user_id cannot act in this record's agency")
+    return row
 
 
 def create_task(ctx, data: dict[str, Any]) -> dict[str, Any]:

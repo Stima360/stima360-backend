@@ -428,6 +428,12 @@ const MESSAGGI_CODICE = Object.freeze({
   AGENT_NOT_ACTIVE: "L'agente selezionato non è un membro attivo dell'agenzia.",
   PLATFORM_ADMIN_AGENCY_REQUIRED: "Scegli un'agenzia per usare l'Agenda.",
   PROJECTION_CONFLICT: 'Il sopralluogo è già stato aggiornato altrove. Ricarica.',
+  // A30-8 D6: le guardie temporali e il follow-up.
+  COMPLETE_TOO_EARLY: "L'appuntamento non è ancora iniziato: potrai completarlo dall'orario di inizio.",
+  NO_SHOW_TOO_EARLY: "Potrai segnare il cliente come non presentato solo dopo la fine dell'appuntamento.",
+  RESCHEDULE_IN_PAST: 'Il nuovo orario è già passato: scegli un orario futuro.',
+  FOLLOW_UP_IN_PAST: 'La scadenza del follow-up deve essere nel futuro.',
+  FOLLOW_UP_REQUIRES_LINK: 'Il follow-up richiede un cliente, un lead o una stima collegati.',
 });
 
 const MESSAGGI_STATO = Object.freeze({
@@ -464,4 +470,56 @@ export function errorNeedsReload(error) {
   if (!error) return false;
   return error.status === 404 || error.code === 'VERSION_CONFLICT'
     || error.code === 'INVALID_TRANSITION' || error.code === 'PROJECTION_CONFLICT';
+}
+
+// ---------------------------------------------------------------------------
+// A30-8 - esito e follow-up. Funzioni pure: il backend resta autorevole.
+// ---------------------------------------------------------------------------
+
+/** Il messaggio mostrato DOPO il 2xx di un esito (mai prima). */
+export const OUTCOME_SUCCESS = Object.freeze({
+  complete: 'Appuntamento completato.',
+  no_show: 'Cliente segnato come non presentato.',
+  cancel: 'Appuntamento annullato.',
+});
+
+/** Il messaggio di successo di un'azione, o null se non ne ha uno proprio. */
+export function actionSuccessMessage(action) {
+  return OUTCOME_SUCCESS[action] || null;
+}
+
+/** Vero se l'appuntamento ha un contatto, un lead o una stima: senza, il
+ *  follow-up (un task CORE) non si puo' creare e il blocco non si mostra. */
+export function canFollowUp(row) {
+  if (!row) return false;
+  return ['contact_id', 'lead_id', 'stima_id'].some((c) => row[c] !== null && row[c] !== undefined);
+}
+
+/**
+ * Da quando un esito sara' registrabile: `start_at` per "Completa", `end_at`
+ * per "Non presentato". null se l'azione non ha guardia, se lo stato non e'
+ * aperto-fissato o se l'orario e' gia' passato. Solo un'indicazione: il
+ * server ricontrolla sul proprio orologio.
+ */
+export function availableFrom(row, action, now = new Date()) {
+  if (!row || !['scheduled', 'confirmed'].includes(row.status)) return null;
+  const campo = action === 'complete' ? 'start_at' : action === 'no_show' ? 'end_at' : null;
+  if (!campo || !row[campo]) return null;
+  const quando = new Date(row[campo]);
+  if (Number.isNaN(quando.getTime())) return null;
+  return quando.getTime() > now.getTime() ? row[campo] : null;
+}
+
+/** La nota di esito registrata: dall'ultimo evento `status_changed` che la
+ *  porta, tra quelli che il pannello ha GIA' caricato (`/events`). */
+export function outcomeNote(events) {
+  const lista = Array.isArray(events) ? events : [];
+  for (let i = lista.length - 1; i >= 0; i -= 1) {
+    const e = lista[i];
+    if (e && e.event_type === 'status_changed' && e.changes
+        && typeof e.changes.outcome_note === 'string' && e.changes.outcome_note.trim()) {
+      return e.changes.outcome_note.trim();
+    }
+  }
+  return null;
 }

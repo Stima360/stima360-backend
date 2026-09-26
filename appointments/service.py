@@ -28,6 +28,21 @@ A30-7 - DUE GUARDIE DI "PIANIFICA" / "FISSA SOPRALLUOGO"
         prima. Vale per `schedule` (la pianificazione di una richiesta): la
         creazione gia' fissata e la facade LMC-15 restano come in A30-2/2P.
 
+A30-8 - ESITO E FOLLOW-UP
+    L'esito autorevole e' lo stato terminale (completed = Svolto, no_show =
+    Non presentato, cancelled = Annullato). complete/no_show accettano una
+    `outcome_note` facoltativa, scritta SOLO nell'evento `status_changed`
+    (changes.outcome_note); cancel conserva `cancelled_reason`.
+    complete/no_show/cancel accettano un `follow_up` facoltativo: un task CORE
+    (`appointment_followup`) creato NELLA STESSA TRANSAZIONE della transizione,
+    con contatto/lead/stima letti dalla riga bloccata (mai dal client) e
+    l'operatore come autore. Exactly-once per costruzione: un retry trova la
+    riga terminale o una version nuova (409) e non crea nulla.
+    Guardie di tempo (D6): COMPLETE_TOO_EARLY, NO_SHOW_TOO_EARLY (NOW() del
+    database, 422 con `available_from`), RESCHEDULE_IN_PAST (come D4 di A30-7),
+    FOLLOW_UP_IN_PAST (NOW() del database). Nessun cambio automatico di lead,
+    contatto, stima o mandato.
+
 VISIBILITA' (matrice P26-1, D4, D6)
     owner / admin / platform admin in acting: tutta l'agenzia;
     agent: SOLO gli appuntamenti assegnati a lui. Una richiesta senza agente
@@ -45,6 +60,9 @@ from datetime import datetime, timedelta, timezone
 
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ValidationError
+# A30-8: il follow-up di un esito e' un task CORE, creato nella transazione
+# dell'Agenda con l'helper autorevole (percorso R-4 + autore esplicito).
+from core.repository import create_task_with_cursor
 
 from . import availability, errors, projection, repository, state_machine
 from .enums import (
@@ -232,6 +250,78 @@ def _sopralluogo_unico(ctx, cur, agency_id, *, appointment_type, stima_id, esclu
         dati["existing_appointment_id"] = altro["id"]
     raise errors.StimaInspectionAlreadyOpen(
         "Esiste gia' un sopralluogo aperto per questa stima", **dati)
+
+
+# ---------------------------------------------------------------------------
+# A30-8: il follow-up di un esito
+# ---------------------------------------------------------------------------
+
+FOLLOW_UP_TASK_TYPE = "appointment_followup"
+#: Titolo neutro, senza dati personali, quando l'operatore non ne scrive uno.
+FOLLOW_UP_DEFAULT_TITLE = "Follow-up appuntamento"
+
+
+def _riferimenti_follow_up(cur, agency_id, row) -> dict:
+    """I riferimenti del task, SOLO dalla riga dell'appuntamento gia' bloccata
+    e autorizzata. La stima e' un riferimento morbido (nessuna FK): se non
+    esiste piu' nella stessa agenzia non si aggancia."""
+    riferimenti = {c: row[c] for c in ("contact_id", "lead_id", "stima_id")}
+    if (riferimenti["stima_id"] is not None
+            and repository.stima_agency(cur, riferimenti["stima_id"]) != agency_id):
+        riferimenti["stima_id"] = None
+    return riferimenti
+
+
+def _prepara_follow_up(cur, agency_id, row, follow_up, db_now):
+    """Controlli prima di scrivere: un collegamento CRM e una scadenza futura.
+    Restituisce i riferimenti (o None se non c'e' follow-up)."""
+    if follow_up is None:
+        return None
+    riferimenti = _riferimenti_follow_up(cur, agency_id, row)
+    if all(v is None for v in riferimenti.values()):
+        raise errors.FollowUpRequiresLink(
+            "Il follow-up richiede un contatto, un lead o una stima collegati all'appuntamento")
+    if follow_up.due_at <= db_now:
+        raise errors.FollowUpInPast("La scadenza del follow-up deve essere nel futuro")
+    return riferimenti
+
+
+def _crea_follow_up(cur, agency_id, actor, row, follow_up, riferimenti, *, esito) -> dict:
+    """Il task CORE del follow-up, nella transazione della transizione.
+
+    `create_task_with_cursor` sul percorso R-4 con l'autore esplicito: i
+    riferimenti vengono dalla riga (esistenza + agenzia derivata dal trigger
+    030/033), l'autore deve poter agire in quell'agenzia. Nessuna ricerca
+    agent-scoped (D5): chi arriva qui ha gia' superato `_su_riga`.
+    """
+    agente = row["assigned_user_id"]
+    task = create_task_with_cursor(cur, {
+        **riferimenti,
+        "title": follow_up.title or FOLLOW_UP_DEFAULT_TITLE,
+        "description": follow_up.note,
+        "task_type": FOLLOW_UP_TASK_TYPE,
+        "priority": "normal",
+        "status": "open",
+        "due_at": follow_up.due_at,
+        "completed_at": None,
+        # Solo informativo, mai una fonte di autorizzazione (D3).
+        "assigned_to": repository.agent_name(cur, agency_id, agente) if agente else None,
+        "created_by": None,
+        "metadata": {"appointment_id": row["id"], "outcome": esito},
+    }, created_by_user_id=actor)
+    if task["agency_id"] != agency_id:
+        # Irraggiungibile: 072 tiene i riferimenti nell'agenzia della riga.
+        raise errors.LinkMismatch("Il follow-up non appartiene all'agenzia dell'appuntamento")
+    return task
+
+
+def _extra_evento(outcome_note, task) -> dict:
+    extra = {}
+    if outcome_note is not None:
+        extra["outcome_note"] = outcome_note
+    if task is not None:
+        extra["follow_up_task_id"] = task["id"]
+    return extra
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +539,11 @@ def reschedule_appointment(ctx, appointment_id, payload):
     versione = getattr(payload, "version", None)
 
     def lavoro(cur, agency_id, actor, vecchia):
+        # A30-8 D6: come `schedule` (A30-7 D4), istanti con fuso contro
+        # l'orologio del service.
+        if payload.start_at < _adesso():
+            raise errors.RescheduleInPast(
+                "Il nuovo orario e' gia' passato: scegli un orario futuro")
         proietta = projection.is_projectable(vecchia["appointment_type"], vecchia["stima_id"])
         if proietta:
             projection.require_active()
@@ -504,13 +599,17 @@ def cancel_appointment(ctx, appointment_id, body):
             raise errors.ReasonRequired(
                 "Per annullare un sopralluogo legato a una stima serve il motivo")
         db_now = repository.db_now(cur)
+        riferimenti = _prepara_follow_up(cur, agency_id, row, body.follow_up, db_now)
         if row["stima_inspection_id"] is not None:
             projection.on_cancel(cur, agency_id, row, reason=body.reason, actor_user_id=actor)
+        task = (None if riferimenti is None else
+                _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
+                                esito="cancelled"))
         return repository.update_appointment(
             cur, row["id"], {"status": "cancelled", "cancelled_at": db_now,
                              "cancelled_reason": body.reason},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
-            azione="cancel")
+            azione="cancel", event_extra=_extra_evento(None, task))
     return _su_riga(ctx, appointment_id, "cancel", body.version, lavoro)
 
 
@@ -523,19 +622,23 @@ def complete_appointment(ctx, appointment_id, body):
     accesa) `stima_inspections`. LMC-15 registra `completed_recorded_at` con
     lo stesso NOW(), quindi `completed_at <= completed_recorded_at` vale per
     costruzione: nessuno skew d'orologio da tollerare, nessun valore corretto
-    in silenzio. Nessun esito (A30-8)."""
+    in silenzio. A30-8: nota di esito nell'evento, follow-up facoltativo."""
     def lavoro(cur, agency_id, actor, row):
         db_now = repository.db_now(cur)
         state_machine.check_time_guard("complete", start_at=row["start_at"],
                                        end_at=row["end_at"], now=db_now)
         quando = state_machine.resolve_completed_at(
             start_at=row["start_at"], declared=body.completed_at, db_now=db_now)
+        riferimenti = _prepara_follow_up(cur, agency_id, row, body.follow_up, db_now)
         if row["stima_inspection_id"] is not None:
             projection.on_complete(cur, agency_id, row, completed_at=quando, actor_user_id=actor)
+        task = (None if riferimenti is None else
+                _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
+                                esito="completed"))
         return repository.update_appointment(
             cur, row["id"], {"status": "completed", "completed_at": quando},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
-            azione="complete")
+            azione="complete", event_extra=_extra_evento(body.outcome_note, task))
     return _su_riga(ctx, appointment_id, "complete", body.version, lavoro)
 
 
@@ -552,12 +655,16 @@ def no_show_appointment(ctx, appointment_id, body):
         db_now = repository.db_now(cur)
         state_machine.check_time_guard("no_show", start_at=row["start_at"],
                                        end_at=row["end_at"], now=db_now)
+        riferimenti = _prepara_follow_up(cur, agency_id, row, body.follow_up, db_now)
         if row["stima_inspection_id"] is not None:
             projection.on_no_show(cur, agency_id, row, actor_user_id=actor)
+        task = (None if riferimenti is None else
+                _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
+                                esito="no_show"))
         return repository.update_appointment(
             cur, row["id"], {"status": "no_show", "no_show_at": db_now},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
-            azione="no_show")
+            azione="no_show", event_extra=_extra_evento(body.outcome_note, task))
     return _su_riga(ctx, appointment_id, "no_show", body.version, lavoro)
 
 

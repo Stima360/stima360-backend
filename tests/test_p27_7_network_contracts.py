@@ -405,6 +405,11 @@ def test_d3_no_page_outside_the_network_was_touched():
         # gli altri tre file erano gia' ammessi. Nessuna vista del CRM e
         # nessun componente della Rete e' toccato.
         "static/os_shell/assets/components/agenda/agenda-drawer.js",
+        # A30-8 - ESITO E FOLLOW-UP. Il modello dell'Agenda guadagna i
+        # messaggi degli esiti e tre funzioni pure (follow-up ammesso,
+        # "disponibile dal", nota di esito dagli eventi). Nessuna vista del
+        # CRM e nessun componente della Rete e' toccato.
+        "static/os_shell/assets/agenda/agenda-model.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

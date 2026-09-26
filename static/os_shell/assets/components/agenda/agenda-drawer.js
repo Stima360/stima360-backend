@@ -19,11 +19,13 @@ import {
   ACTION_LABELS,
   ACTION_ORDER,
   EVENT_LABELS,
+  availableFrom,
   durationMinutes,
   errorMessage,
   formatDateTime,
   formatDuration,
   formatTime,
+  outcomeNote,
   statusLabel,
   typeLabel,
 } from '../../agenda/agenda-model.js';
@@ -84,13 +86,16 @@ function descriviEvento(evento, nomi) {
   return { tipo, passaggio, chi, quando: evento.occurred_at ? formatDateTime(evento.occurred_at) : '' };
 }
 
-async function caricaCronologia(sezione, appointmentId, nomi, isStale) {
+async function caricaCronologia(sezione, appointmentId, nomi, isStale, onEventi) {
   const corpo = sezione.querySelector('[data-history-body]');
   corpo.replaceChildren(el('p', 'muted', 'Caricamento cronologia…'));
   try {
     const esito = await getEvents(appointmentId);
     if (isStale()) return;
     const eventi = (esito && esito.items) || [];
+    // A30-8: la nota di esito vive nell'evento: si legge da QUESTI eventi,
+    // senza un'altra richiesta.
+    if (onEventi) onEventi(eventi);
     corpo.replaceChildren();
     if (!eventi.length) {
       corpo.appendChild(el('p', 'muted', 'Nessun evento registrato.'));
@@ -175,7 +180,9 @@ export async function openAppointmentDrawer(drawerEl, {
     voce('Lead (sola lettura)', riepilogoLead(detail.lead)),
     voce('Luogo', riga.location_text),
     voce('Note', riga.notes),
+    voce('Confermato il', riga.confirmed_at ? formatDateTime(riga.confirmed_at) : null),
     voce('Completato il', riga.completed_at ? formatDateTime(riga.completed_at) : null),
+    voce('Non presentato il', riga.no_show_at ? formatDateTime(riga.no_show_at) : null),
     voce('Annullato il', riga.cancelled_at ? formatDateTime(riga.cancelled_at) : null),
     voce('Motivo annullamento', riga.cancelled_reason),
   );
@@ -207,6 +214,24 @@ export async function openAppointmentDrawer(drawerEl, {
     pulsante.addEventListener('click', () => onAction(azione, detail));
     azioni.appendChild(pulsante);
   }
+  // A30-8: un esito non ancora registrabile NON e' un pulsante eseguibile.
+  // Chi puo' agire sull'appuntamento (il server gli offre "Annulla") vede da
+  // quando lo sara'; l'orario e' solo indicativo, decide il server.
+  if (ammesse.includes('cancel')) {
+    for (const azione of ['complete', 'no_show']) {
+      if (ammesse.includes(azione)) continue;
+      const da = availableFrom(riga, azione);
+      if (!da) continue;
+      const inAttesa = el('button', 'btn', ACTION_LABELS[azione]);
+      inAttesa.type = 'button';
+      inAttesa.disabled = true;
+      inAttesa.dataset.pendingAction = azione;
+      inAttesa.title = `Disponibile dal ${formatDateTime(da)}`;
+      azioni.appendChild(inAttesa);
+      azioni.appendChild(el('span', 'muted agenda-available-from',
+        `${ACTION_LABELS[azione]}: disponibile dal ${formatDateTime(da)}`));
+    }
+  }
   pannello.appendChild(azioni);
 
   const cronologia = el('section', 'agenda-drawer-history');
@@ -216,7 +241,10 @@ export async function openAppointmentDrawer(drawerEl, {
   cronologia.appendChild(corpo);
   pannello.appendChild(cronologia);
   const nomi = new Map((agents || []).map((a) => [Number(a.id), a.name]));
-  caricaCronologia(cronologia, riga.id, nomi, isStale);
+  caricaCronologia(cronologia, riga.id, nomi, isStale, (eventi) => {
+    const nota = outcomeNote(eventi);
+    if (nota) aggiungi(dati, voce('Nota esito', nota));
+  });
 
   return detail;
 }

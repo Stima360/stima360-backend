@@ -729,6 +729,11 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 }
 /* A30-7 - Pianifica / Fissa sopralluogo: richieste dal sito e slot della giornata */
 .agenda-badge-site { background: #e0f2fe; color: #075985; }
+/* A30-8: follow-up facoltativo negli esiti e "disponibile dal" nel pannello. */
+.agenda-follow-up { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.agenda-follow-up-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.agenda-follow-up-fields { margin-top: 8px; }
+.agenda-available-from { font-size: 12px; align-self: center; }
 .agenda-preference { margin: 0 0 12px; font-weight: 600; }
 .agenda-slot.is-busy { opacity: .55; cursor: not-allowed; text-decoration: line-through; }
 .agenda-slot.is-free { border-color: #16a34a; }

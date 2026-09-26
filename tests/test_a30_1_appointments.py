@@ -187,6 +187,10 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # SENTINELLA AGGIORNATA DA A30-2P: la facade LMC-15 scrive la
         # proiezione con le stesse varianti `*_in` (Q1/Q2).
         "lmc15_facade.py": {"acquisition"},
+        # SENTINELLA AGGIORNATA DA A30-8: SOLO il service, SOLO l'helper
+        # autorevole dei task CORE (`create_task_with_cursor`) per il
+        # follow-up di un esito. Nessun altro file del pacchetto.
+        "service.py": {"core.repository"},
         "router.py": {"fastapi", "fastapi.encoders", "fastapi.responses",
                       "operator_auth.context", "operator_auth.dependencies",
                       "operator_auth.exceptions"},

@@ -600,8 +600,16 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
         "data, inizio[0], inizio[1]", "data, fine[0], fine[1]",        # leggiIntervallo
         "data", "addDays(data, 1",                                       # slot (mezzanotti)
         "data", "addDays(data, 1",                                       # A30-7: slot di Pianifica
+        # SENTINELLA AGGIORNATA DA A30-8: la scadenza del follow-up, dentro
+        # `leggiFollowUp`, che si chiama solo nel corpo dell'invio.
+        "data, ora[0], ora[1]",                                          # follow-up
         "data, ora[0], ora[1]",                                          # completa
     ], chiamate
+    for esito in ("complete", "no_show", "cancel"):
+        corpo = dialoghi[dialoghi.index(f"if (action === '{esito}') {{"):]
+        corpo = corpo[:corpo.index("dialogEl.showModal();")]
+        invio = corpo[corpo.index("collegaInvio(dialogEl, form, () => {"):]
+        assert invio.index("leggiFollowUp(form)") < invio.index("runAction("), esito
     # leggiIntervallo serve nuovo appuntamento, pianifica e sposta, sempre
     # dentro la funzione di invio (quindi prima di qualunque richiesta).
     # A30-5: la terza chiamata e' "Verifica disponibilita'", dentro il suo

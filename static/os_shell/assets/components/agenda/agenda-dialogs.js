@@ -26,6 +26,7 @@ import {
   ACTION_LABELS,
   TYPE_LABELS,
   addDays,
+  canFollowUp,
   defaultDuration,
   durationMinutes,
   errorMessage,
@@ -429,6 +430,69 @@ function apriPianifica(dialogEl, { riga, titolo, versione, agents, onDone, onOpe
   });
   dialogEl.showModal();
   if (agente.value) aggiornaSlot();
+}
+
+// A30-8 - la nota di esito (solo complete e no-show) e il follow-up
+// facoltativo (complete, no-show, cancel). Il follow-up parte SPENTO: nessun
+// task nasce se l'operatore non lo chiede. Contatto, lead, stima e agente del
+// task li decide il server dall'appuntamento: qui solo scadenza, titolo, nota.
+const BLOCCO_NOTA_ESITO = `
+  <div class="form-field"><label>Nota esito</label>
+    <textarea class="input" data-field="outcome-note" maxlength="1000"></textarea>
+    <small class="muted">Facoltativa. Resta nella cronologia dell'appuntamento.</small></div>`;
+
+const BLOCCO_FOLLOW_UP = `
+  <fieldset class="agenda-follow-up" data-follow-up>
+    <label class="agenda-follow-up-toggle"><input type="checkbox" data-field="follow-up"> Crea follow-up</label>
+    <div class="agenda-follow-up-fields" data-follow-up-fields hidden>
+      <div class="form-grid-2">
+        <div class="form-field"><label>Data follow-up *</label><input type="date" class="input" data-field="follow-up-date"></div>
+        <div class="form-field"><label>Ora *</label><input type="time" class="input" data-field="follow-up-time" step="60"></div>
+      </div>
+      <div class="form-field"><label>Titolo</label><input type="text" class="input" data-field="follow-up-title" maxlength="200" placeholder="Follow-up appuntamento"></div>
+      <div class="form-field"><label>Nota follow-up</label><textarea class="input" data-field="follow-up-note" maxlength="2000"></textarea></div>
+      <small class="muted">Crea un'attività nel CRM collegata al cliente dell'appuntamento. Nessun messaggio al cliente.</small>
+    </div>
+  </fieldset>`;
+
+/** Il blocco follow-up solo se l'appuntamento ha un contatto, un lead o una
+ *  stima (D4): senza, il server risponderebbe FOLLOW_UP_REQUIRES_LINK. */
+function bloccoFollowUp(riga) {
+  return canFollowUp(riga) ? BLOCCO_FOLLOW_UP : '';
+}
+
+function montaFollowUp(form) {
+  const interruttore = form.querySelector('[data-field="follow-up"]');
+  if (!interruttore) return;
+  interruttore.checked = false;                    // D2: sempre spento all'apertura
+  const campi = form.querySelector('[data-follow-up-fields]');
+  interruttore.addEventListener('change', () => { campi.hidden = !interruttore.checked; });
+}
+
+/** Il corpo `follow_up`, o null se l'interruttore e' spento. Errori leggibili
+ *  PRIMA di scrivere; il server ricontrolla (FOLLOW_UP_IN_PAST). */
+function leggiFollowUp(form) {
+  const interruttore = form.querySelector('[data-field="follow-up"]');
+  if (!interruttore || !interruttore.checked) return null;
+  const data = form.querySelector('[data-field="follow-up-date"]').value;
+  const ora = parseTime(form.querySelector('[data-field="follow-up-time"]').value);
+  if (!data || !ora) throw new Error('Indica data e ora del follow-up.');
+  const scadenza = romeIso(data, ora[0], ora[1]);
+  if (Date.parse(scadenza) <= Date.now()) {
+    throw new Error('La scadenza del follow-up deve essere nel futuro.');
+  }
+  const corpo = { due_at: scadenza };
+  const titolo = form.querySelector('[data-field="follow-up-title"]').value.trim();
+  const nota = form.querySelector('[data-field="follow-up-note"]').value.trim();
+  if (titolo) corpo.title = titolo;
+  if (nota) corpo.note = nota;
+  return corpo;
+}
+
+function leggiNotaEsito(form) {
+  const campo = form.querySelector('[data-field="outcome-note"]');
+  const nota = campo ? campo.value.trim() : '';
+  return nota || null;
 }
 
 function preparaDialog(dialogEl, titolo, corpo) {
@@ -871,12 +935,34 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
   const versione = { version: riga.version };
   const ammesse = detail.allowed_actions || [];
 
-  if (action === 'confirm' || action === 'no_show') {
+  if (action === 'confirm') {
     const form = preparaDialog(dialogEl, titolo, `<p data-question></p>`);
-    form.querySelector('[data-question]').textContent = action === 'confirm'
-      ? `Confermare l'appuntamento del ${formatDateTime(riga.start_at)}?`
-      : `Registrare che il cliente non si è presentato all'appuntamento del ${formatDateTime(riga.start_at)}?`;
+    form.querySelector('[data-question]').textContent =
+      `Confermare l'appuntamento del ${formatDateTime(riga.start_at)}?`;
     collegaInvio(dialogEl, form, () => runAction(riga.id, action, versione), { onDone });
+    dialogEl.showModal();
+    return;
+  }
+
+  // A30-8: gli esiti. Nessun successo prima del 2xx (collegaInvio); il corpo
+  // porta solo `version`, i campi dell'esito e l'eventuale `follow_up`.
+  if (action === 'no_show') {
+    const form = preparaDialog(dialogEl, 'Cliente non presentato', `
+      <p data-question></p>
+      ${BLOCCO_NOTA_ESITO}
+      ${bloccoFollowUp(riga)}`);
+    form.querySelector('[data-question]').textContent =
+      `Registrare che il cliente non si è presentato all'appuntamento del ${formatDateTime(riga.start_at)}?`;
+    form.querySelector('[data-submit]').textContent = 'Segna non presentato';
+    montaFollowUp(form);
+    collegaInvio(dialogEl, form, () => {
+      const corpo = { ...versione };
+      const nota = leggiNotaEsito(form);
+      const followUp = leggiFollowUp(form);
+      if (nota) corpo.outcome_note = nota;
+      if (followUp) corpo.follow_up = followUp;
+      return runAction(riga.id, 'no_show', corpo);
+    }, { onDone });
     dialogEl.showModal();
     return;
   }
@@ -885,25 +971,34 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
     const form = preparaDialog(dialogEl, titolo, `
       <p data-question></p>
       <div class="form-field"><label>Motivo</label><textarea class="input" data-field="reason" maxlength="300"></textarea>
-      <small class="muted">Obbligatorio per un sopralluogo collegato a una stima: se manca, il server lo segnala.</small></div>`);
+      <small class="muted">Obbligatorio per un sopralluogo collegato a una stima: se manca, il server lo segnala.</small></div>
+      ${bloccoFollowUp(riga)}`);
     form.querySelector('[data-question]').textContent =
       `Annullare l'appuntamento del ${formatDateTime(riga.start_at)}?`;
     form.querySelector('[data-submit]').textContent = 'Annulla appuntamento';
+    montaFollowUp(form);
     collegaInvio(dialogEl, form, () => {
       const motivo = form.querySelector('[data-field="reason"]').value.trim();
-      return runAction(riga.id, 'cancel', { ...versione, reason: motivo || null });
+      const corpo = { ...versione, reason: motivo || null };
+      const followUp = leggiFollowUp(form);
+      if (followUp) corpo.follow_up = followUp;
+      return runAction(riga.id, 'cancel', corpo);
     }, { onDone });
     dialogEl.showModal();
     return;
   }
 
   if (action === 'complete') {
-    const form = preparaDialog(dialogEl, titolo, `
+    const form = preparaDialog(dialogEl, 'Registra esito: appuntamento svolto', `
       <p class="muted">Lascia vuoto per registrare l'orario attuale del server.</p>
       <div class="form-grid-2">
         <div class="form-field"><label>Svolto il</label><input type="date" class="input" data-field="done-date"></div>
         <div class="form-field"><label>Alle</label><input type="time" class="input" data-field="done-time" step="60"></div>
-      </div>`);
+      </div>
+      ${BLOCCO_NOTA_ESITO}
+      ${bloccoFollowUp(riga)}`);
+    form.querySelector('[data-submit]').textContent = 'Completa appuntamento';
+    montaFollowUp(form);
     collegaInvio(dialogEl, form, () => {
       const data = form.querySelector('[data-field="done-date"]').value;
       const ora = parseTime(form.querySelector('[data-field="done-time"]').value);
@@ -912,6 +1007,10 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
         if (!data || !ora) throw new Error('Indica sia la data sia l’ora, oppure lascia entrambe vuote.');
         corpo.completed_at = romeIso(data, ora[0], ora[1]);
       }
+      const nota = leggiNotaEsito(form);
+      const followUp = leggiFollowUp(form);
+      if (nota) corpo.outcome_note = nota;
+      if (followUp) corpo.follow_up = followUp;
       return runAction(riga.id, 'complete', corpo);
     }, { onDone });
     dialogEl.showModal();
@@ -994,6 +1093,10 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
     collegaInvio(dialogEl, form, async () => {
       const { startAt, endAt } = leggiIntervallo(form);
       const scelto = agente && agente.value ? Number(agente.value) : null;
+      // A30-8 D6: indicazione preventiva; il server risponde RESCHEDULE_IN_PAST.
+      if (action === 'reschedule' && Date.parse(startAt) < Date.now()) {
+        throw new Error('Il nuovo orario è già passato: scegli un orario futuro.');
+      }
       if (action === 'schedule' && !scelto) throw new Error('Per pianificare scegli un agente.');
       const perControllo = scelto || riga.assigned_user_id;
       if (!(await disponibilePrima(form, {
