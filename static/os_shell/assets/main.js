@@ -35,6 +35,7 @@ import { renderAgenda } from './views/agenda/agenda-page.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
+  { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },
   { name: 'acquirenti', label: 'Acquirenti' },
@@ -58,10 +59,6 @@ const SECTIONS = [
 // `require_platform_admin` (P27-1), che e' l'unica autorita' in materia. Un
 // tenant normale che arrivi qui non vede dati: vede un avviso.
 const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
-
-// A30-4 - l'Agenda. Rotta registrata, NESSUNA voce in SECTIONS: durante il
-// gate si raggiunge solo da `#/agenda`. Serve solo il titolo della pagina.
-const SEZIONE_AGENDA = { name: 'agenda', label: 'Agenda' };
 
 // P28 - dove finisce un tenant rimandato indietro dalla Rete.
 //
@@ -165,7 +162,7 @@ initRouter(contentEl, {
     return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
   },
   onNavigate(name) {
-    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_AGENDA].find((s) => s.name === name);
+    const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === name);

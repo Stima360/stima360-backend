@@ -22,8 +22,8 @@ FILE_NUOVI = frozenset({
 })
 
 FILE_MODIFICATI = frozenset({
-    # import della pagina, registerRoute('agenda') e il titolo; NESSUNA voce
-    # in SECTIONS (la barra laterale arriva solo al gate finale)
+    # import della pagina, registerRoute('agenda') e - dal gate finale - la
+    # voce "Agenda" in SECTIONS (SEZIONE_AGENDA rimossa)
     "static/os_shell/assets/main.js",
     # solo la sezione "A30-4 Agenda" aggiunta in coda
     "static/os_shell/assets/app.css",
@@ -31,6 +31,8 @@ FILE_MODIFICATI = frozenset({
     # cartelle dell'Agenda (P27-7) e un solo client di /api/appointments
     "tests/test_p27_7_network_contracts.py",
     "tests/test_a30_mount_api.py",
+    # gate finale: l'ordine della sidebar anonima ora contiene "agenda"
+    "tests/test_p27_7_network_runtime.py",
     # le sentinelle di working tree che imparano questa dichiarazione
     "tests/test_p29_3_journey_foundation.py",
     "tests/test_p29_3c_orchestrator.py",

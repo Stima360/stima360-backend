@@ -304,7 +304,9 @@ def test_a2_a_normal_tenant_has_no_network_entry(staged):
 
 def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     out = run(staged, REPORT, script({"status": 401, "body": {"detail": "no"}}))
-    assert out["navRoutes"] == ["oggi", "contatti", "immobili", "acquirenti",
+    # SENTINELLA AGGIORNATA DAL GATE FINALE A30-4: "agenda" e' una voce normale
+    # di SECTIONS, subito dopo "oggi". "rete" resta assente.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquirenti",
                                 "abbinamenti", "attivita", "automazioni"]
 
 

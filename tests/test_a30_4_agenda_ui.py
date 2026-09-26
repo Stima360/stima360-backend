@@ -2,8 +2,8 @@
 
 Due famiglie di prove, nello stile gia' usato per `/os` (nessuna dipendenza):
 
-* STATICHE sul testo dei moduli: rotta registrata una volta, nessuna voce in
-  barra laterale, nessun Mese, nessun trascinamento, solo `/api/appointments`,
+* STATICHE sul testo dei moduli: rotta registrata una volta, UNA voce
+  "Agenda" in SECTIONS (gate finale A30-4), nessun Mese, nessun trascinamento, solo `/api/appointments`,
   nessun Basic, nessun collegamento finto a stima o lead, `innerHTML` solo con
   markup fisso, `main.js` ridotto al minimo.
 * ESEGUITE con node (ESM, moduli copiati come `.mjs`): le funzioni pure del
@@ -70,31 +70,38 @@ def test_01_la_rotta_agenda_e_registrata_una_sola_volta():
     assert "registerRoute('agenda', (container, params = []) => renderAgenda(container, params));" in main
 
 
-def test_02_nessuna_voce_agenda_nella_barra_laterale():
+def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
+    """GATE FINALE A30-4: l'Agenda entra nella sidebar con lo STESSO meccanismo
+    delle altre sezioni tenant - una riga in SECTIONS - e nient'altro: nessuna
+    costante a parte, nessuna voce aggiunta a mano, nessun push."""
     main = _testo(MAIN_JS)
-    sezioni = main[main.index("const SECTIONS = ["):main.index("];", main.index("const SECTIONS = ["))]
-    assert "agenda" not in sezioni.lower()
-    # La costante del titolo non entra mai in un elenco di voci della nav.
-    assert "creaVoceNav(SEZIONE_AGENDA)" not in main
+    inizio = main.index("const SECTIONS = [")
+    sezioni = main[inizio:main.index("];", inizio)]
+    assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
+        "oggi", "agenda", "contatti", "immobili", "acquirenti", "abbinamenti",
+        "attivita", "automazioni"]
+    assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
+    # la costante del workaround non esiste piu', in nessuna forma
+    assert "SEZIONE_AGENDA" not in main
     assert "SECTIONS.push" not in main
-    usi = [r.strip() for r in _senza_commenti(main).splitlines() if "SEZIONE_AGENDA" in r]
-    assert usi == [
-        "const SEZIONE_AGENDA = { name: 'agenda', label: 'Agenda' };",
-        "const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_AGENDA].find((s) => s.name === name);",
-    ]
+    assert len(re.findall(r"name:\s*'agenda'", main)) == 1
+    # il titolo passa dalla stessa ricerca di prima dell'Agenda
+    assert ("const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);"
+            in main)
+    # la home tenant resta la prima voce, e la prima voce resta "Oggi"
+    assert "const ROTTA_TENANT_INIZIALE = SECTIONS[0].name;" in main
     # e nessun file dell'Agenda disegna voci di navigazione
     for f in AGENDA_FILES:
         assert "nav-item" not in _testo(f) and "#nav" not in _testo(f), f.name
 
 
-def test_03_main_js_contiene_solo_import_rotta_e_titolo():
+def test_03_main_js_contiene_solo_import_voce_e_rotta():
     righe = [r.strip() for r in _senza_commenti(_testo(MAIN_JS)).splitlines()
              if "agenda" in r.lower() and r.strip()]
     assert righe == [
         "import { renderAgenda } from './views/agenda/agenda-page.js';",
-        "const SEZIONE_AGENDA = { name: 'agenda', label: 'Agenda' };",
+        "{ name: 'agenda', label: 'Agenda' },",
         "registerRoute('agenda', (container, params = []) => renderAgenda(container, params));",
-        "const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_AGENDA].find((s) => s.name === name);",
     ]
     # nessun riferimento all'API dal bootstrap
     assert "appointments" not in _testo(MAIN_JS)
@@ -585,3 +592,113 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
     # un errore senza `status` si mostra con il suo testo
     assert ("errore.textContent = e && e.status !== undefined ? errorMessage(e) : "
             "(e.message || errorMessage(e));") in dialoghi
+
+
+# ---------------------------------------------------------------------------
+# GATE FINALE - LA VOCE IN SIDEBAR, ESEGUITA
+# ---------------------------------------------------------------------------
+#
+# `main.js` VERO, router e sessione veri, nello stub di DOM e con il `fetch`
+# scriptato di P26-4/P27-7 (riusati, non copiati). Si legge la sidebar che
+# la Shell disegna davvero, non il testo di SECTIONS.
+
+def _shell():
+    from tests import test_p27_7_network_runtime as rt
+    return rt
+
+
+@pytest.fixture(scope="module")
+def shell_staged(tmp_path_factory):
+    if NODE is None:
+        pytest.skip("node non disponibile: prova di runtime NON eseguita (BLOCKED)")
+    return _shell()._stage(tmp_path_factory.mktemp("agenda-sidebar"))
+
+
+_VUOTO = {"items": []}
+_CLASSI_NAV = """
+console.log(JSON.stringify({
+  active: __dom.byId['nav'].children.filter((b) => b.classList.contains('active'))
+    .map((b) => b.dataset.route),
+  hash: window.location.hash,
+}));
+"""
+
+
+def _agenda_ok(n=8):
+    rt = _shell()
+    return [rt.ok(_VUOTO) for _ in range(n)]
+
+
+def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()), hash="#/oggi")
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquirenti",
+                                "abbinamenti", "attivita", "automazioni"], out["navRoutes"]
+    assert out["navRoutes"].count("agenda") == 1
+    assert out["nav"].count("Agenda") == 1
+    # Rete resta assente per un tenant
+    assert "rete" not in out["navRoutes"]
+
+
+def test_s2_la_voce_porta_a_agenda_e_la_pagina_si_apre_con_il_suo_titolo(shell_staged):
+    rt = _shell()
+    scenario = """
+      const voce = __dom.byId['nav'].children.find((b) => b.dataset.route === 'agenda');
+      voce.dispatch('click');
+      // lo stub non emette `hashchange` da solo: lo fa il browser, e i test
+      // di P26-4 lo simulano cosi'
+      await window._fire('hashchange');
+      await __settle(40);
+    """
+    # `run` legge l'ULTIMA riga stampata: qui e' quella di _CLASSI_NAV.
+    out = rt.run(shell_staged, scenario + _CLASSI_NAV,
+                 rt.script(rt.ok(rt.TENANT), *_agenda_ok(12)), hash="#/oggi")
+    assert out["hash"] == "#/agenda", out
+    assert out["active"] == ["agenda"], out
+
+
+def test_s3_agenda_aperta_a_mano_ha_titolo_agenda_e_voce_attiva(shell_staged):
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok(12)),
+                 hash="#/agenda")
+    assert out["title"] == "Agenda", out["title"]
+    assert out["navRoutes"].count("agenda") == 1
+    # la pagina parla solo con /api/appointments (oltre alla sessione)
+    assert [u for u in out["urls"] if not u.startswith(("/api/operator-auth", "/api/appointments"))] == [], out["urls"]
+    assert any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
+
+
+def test_s4_platform_admin_senza_agenzia_resta_sulla_rete_senza_agenda(shell_staged):
+    """#/rete invariato: chi non ha una superficie tenant non vede la voce, e
+    #/agenda lo rimanda alla Rete come ogni altra sezione tenant."""
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT,
+                 rt.script(rt.ok(rt.PLATFORM_ADMIN), rt.ok(rt.PLATFORM_ME), rt.ok(rt.AGENZIE)),
+                 hash="#/agenda")
+    assert out["navRoutes"] == ["rete"], out["navRoutes"]
+    assert out["title"] == "Rete", out["title"]
+    assert not any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
+
+
+def test_s5_un_tenant_su_rete_torna_a_oggi_come_prima(shell_staged):
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()),
+                 hash="#/rete")
+    assert out["title"] == "Oggi", out["title"]
+    assert [u for u in out["urls"] if u.startswith("/api/platform")] == []
+
+
+def test_s6_una_rotta_sconosciuta_resta_pagina_non_trovata(shell_staged):
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()),
+                 hash="#/non-esiste")
+    assert out["title"] == "Pagina non trovata", out["title"]
+    assert out["navRoutes"].count("agenda") == 1
+
+
+def test_s7_anonimo_la_sidebar_nel_dom_ha_agenda_una_volta(shell_staged):
+    rt = _shell()
+    out = rt.run(shell_staged, rt.REPORT, rt.script({"status": 401, "body": {"detail": "no"}}),
+                 hash="#/agenda")
+    assert out["navRoutes"].count("agenda") == 1
+    assert not any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
