@@ -5330,6 +5330,7 @@ AGENDA_VERSIONE_IMPOSSIBILE = 2147483000
 AGENDA_OPERAZIONI = (
     ("GET", ""), ("POST", ""), ("GET", "/calendar"), ("GET", "/agents"),
     ("GET", "/availability"), ("POST", "/availability/check"),
+    ("GET", "/lookups/stime"),                      # A30-5: ricerca stime, sola lettura
     ("GET", "/{id}"), ("PATCH", "/{id}"), ("GET", "/{id}/events"),
     ("POST", "/{id}/schedule"), ("POST", "/{id}/confirm"),
     ("POST", "/{id}/reschedule"), ("POST", "/{id}/reassign"),

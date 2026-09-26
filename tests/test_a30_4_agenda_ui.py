@@ -32,13 +32,15 @@ ASSETS = ROOT / "static" / "os_shell" / "assets"
 MAIN_JS = ASSETS / "main.js"
 MODEL = ASSETS / "agenda" / "agenda-model.js"
 API = ASSETS / "agenda" / "agenda-api.js"
+# A30-5: le letture CRM del dialog Nuovo appuntamento (cliente/lead/immobile)
+LOOKUP = ASSETS / "agenda" / "agenda-lookup.js"
 PAGE = ASSETS / "views" / "agenda" / "agenda-page.js"
 VIEWS_JS = ASSETS / "components" / "agenda" / "agenda-views.js"
 DRAWER = ASSETS / "components" / "agenda" / "agenda-drawer.js"
 DIALOGS = ASSETS / "components" / "agenda" / "agenda-dialogs.js"
 CSS = ASSETS / "app.css"
 
-AGENDA_FILES = (MODEL, API, PAGE, VIEWS_JS, DRAWER, DIALOGS)
+AGENDA_FILES = (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER, DIALOGS)
 NODE = shutil.which("node")
 
 
@@ -138,16 +140,31 @@ def test_06_nessun_trascinamento_ne_ridimensionamento():
     assert "resize" not in css and "cursor: move" not in css and "ns-resize" not in css
 
 
+#: A30-5 - le SOLE letture fuori da /api/appointments, e solo in agenda-lookup.js:
+#: i lead DEL cliente scelto e la ricerca immobili. Il cliente passa da
+#: components/contact-picker.js (riusato, non duplicato).
+LETTURE_CRM = ("/api/core/leads?contact_id=", "/api/property/properties?search=")
+
+
 def test_07_solo_api_appointments_e_solo_da_agenda_api():
     for f in AGENDA_FILES:
         codice = _senza_commenti(_testo(f))
         for percorso in re.findall(r"['\"`](/api/[^'\"`$]*)", codice):
-            assert percorso.startswith("/api/appointments"), (f.name, percorso)
+            if f == LOOKUP:
+                assert percorso in LETTURE_CRM, (f.name, percorso)
+            else:
+                assert percorso.startswith("/api/appointments"), (f.name, percorso)
         if f != API:
             assert "fetch(" not in codice, f.name
+        if f not in (API, LOOKUP):
             assert "core/api-client" not in codice, f.name
             assert "/api/" not in codice, f.name
     assert "const BASE = '/api/appointments';" in _testo(API)
+    # A30-5: la lookup LEGGE soltanto, con la sessione di core/api-client.js
+    lookup = _senza_commenti(_testo(LOOKUP))
+    assert "import { apiGet } from '../core/api-client.js';" in lookup
+    for vietato in ("apiPost", "apiPatch", "apiPut", "apiDelete", "method:", "fetch("):
+        assert vietato not in lookup, vietato
 
 
 def test_08_nessun_accesso_a_stime_dettagliate_visite_acquirente_o_google():
@@ -181,7 +198,7 @@ def test_10_nessun_basic_nessun_authorization_nessuna_agenzia_dal_client():
 
 
 def test_11_innerhtml_solo_con_markup_fisso():
-    for f in (MODEL, API, PAGE, VIEWS_JS, DRAWER):
+    for f in (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER):
         assert "innerHTML" not in _senza_commenti(_testo(f)), f.name
     dialoghi = _senza_commenti(_testo(DIALOGS))
     assert dialoghi.count("innerHTML") == 1                      # solo preparaDialog
@@ -189,6 +206,8 @@ def test_11_innerhtml_solo_con_markup_fisso():
     # fisse. Nessun dato del server passa di li'.
     ammesse = {
         "corpo", "BLOCCO_ORARIO", "BLOCCO_DISPONIBILITA",
+        # A30-5: markup fisso dei collegamenti CRM e della durata
+        "BLOCCO_CRM", "BLOCCO_DURATA",
         "action === 'schedule' ? ' *' : ''",
     }
     for espressione in re.findall(r"\$\{([^{}]+)\}", dialoghi):
@@ -580,8 +599,13 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
         "data", "addDays(data, 1", "data, ora[0], ora[1]",                # slot (mezzanotti), completa
     ], chiamate
     # leggiIntervallo serve nuovo appuntamento, pianifica e sposta, sempre
-    # dentro la funzione di invio (quindi prima di qualunque richiesta)
-    assert dialoghi.count("const { startAt, endAt } = leggiIntervallo(form);") == 2
+    # dentro la funzione di invio (quindi prima di qualunque richiesta).
+    # A30-5: la terza chiamata e' "Verifica disponibilita'", dentro il suo
+    # try e PRIMA della richiesta: un orario inesistente non parte nemmeno li'.
+    assert dialoghi.count("const { startAt, endAt } = leggiIntervallo(form);") == 3
+    verifica = dialoghi[dialoghi.index("form.querySelector('[data-check]')"):]
+    verifica = verifica[:verifica.index("  });")]
+    assert verifica.index("leggiIntervallo(form)") < verifica.index("checkAvailability(")
     assert "collegaInvio(dialogEl, form, async () => {\n    const { startAt, endAt } = leggiIntervallo(form);" in dialoghi
     assert "const { startAt, endAt } = leggiIntervallo(form);\n      const scelto" in dialoghi
     # completa: romeIso dentro il corpo dell'invio

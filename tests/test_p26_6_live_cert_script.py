@@ -8577,8 +8577,11 @@ def test_a30_01_agenda_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
     righe = _righe_agenda(report)
     assert [r for r in righe if r[0] != cert.PASS] == [], righe
     idents = {i for _k, i, _t in righe}
-    # sedici operazioni anonime, tre con HTTP Basic
-    assert sum(1 for i in idents if i.startswith("APPOINTMENTS-anonimo-")) == 16
+    # diciassette operazioni anonime, tre con HTTP Basic
+    assert sum(
+        1 for i in idents
+        if i.startswith("APPOINTMENTS-anonimo-")
+    ) == len(cert.AGENDA_OPERAZIONI) == 17
     assert sum(1 for i in idents if i.startswith("APPOINTMENTS-basic-")) == 3
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("dettaglio", "eventi", "disponibilita", "verifica",

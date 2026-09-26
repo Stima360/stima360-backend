@@ -185,7 +185,9 @@ def test_03_anonimo_e_basic_si_fermano_al_mount(banco):
     anonime = [i for k, i, _t in report.rows
                if i.startswith(("APPOINTMENTS-anonimo-", "APPOINTMENTS-basic-"))
                and k == cert.PASS]
-    assert len(anonime) == 19
+    # Una sonda anonima per ogni operazione di AGENDA_OPERAZIONI piu' le tre
+    # Basic fisse del certificatore. A30-5 (+ GET /lookups/stime): 17 + 3.
+    assert len(anonime) == len(cert.AGENDA_OPERAZIONI) + 3 == 20
 
     vero = core_database.get_connection
     try:

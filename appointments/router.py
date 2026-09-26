@@ -226,6 +226,21 @@ def list_appointments(
     return _x(lambda: {"items": service.list_appointments(ctx, **args)})
 
 
+# A30-5: la ricerca delle stime per il collegamento manuale (sola lettura).
+# Dichiarata PRIMA di "/{appointment_id}": due segmenti, nessuna ambiguita',
+# ma l'ordine resta quello leggibile.
+@router.get("/lookups/stime")
+def lookup_stime(
+    search: str | None = None,
+    lead_id: int | None = None,
+    contact_id: int | None = None,
+    limit: int = 10,
+    ctx: OperatorContext = Depends(require_operator),
+):
+    return _x(lambda: {"items": service.lookup_stime(
+        ctx, search=search, lead_id=lead_id, contact_id=contact_id, limit=limit)})
+
+
 @router.get("/{appointment_id}")
 def get_appointment(appointment_id: int, ctx: OperatorContext = Depends(require_operator)):
     return _x(service.get_appointment_detail, ctx, appointment_id)

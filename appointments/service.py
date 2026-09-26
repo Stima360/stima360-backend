@@ -544,6 +544,37 @@ def _valida_elenco(valori, ammessi, nome):
     return list(valori)
 
 
+#: A30-5: quanti risultati al massimo e quanto testo si accetta.
+STIMA_LOOKUP_MAX = 20
+STIMA_LOOKUP_MIN_CHARS = 2
+STIMA_LOOKUP_MAX_CHARS = 100
+
+
+def lookup_stime(ctx, *, search=None, lead_id=None, contact_id=None, limit=10):
+    """A30-5: le stime selezionabili per un appuntamento, SOLO dell'agenzia
+    della sessione. Sola lettura: nessuna scrittura, nessun evento.
+
+    Senza criteri (niente testo, niente lead o cliente) non si elenca l'intero
+    archivio: la risposta e' vuota. `stima_id` resta poi verificato alla
+    creazione (`_controlla_stima`): questa ricerca serve a scegliere, non e'
+    la garanzia.
+    """
+    agency_id = ctx.require_agency()
+    _attore(ctx)
+    testo = (search or "").strip()
+    if len(testo) > STIMA_LOOKUP_MAX_CHARS:
+        raise ValidationError(f"search: al massimo {STIMA_LOOKUP_MAX_CHARS} caratteri")
+    if testo and len(testo) < STIMA_LOOKUP_MIN_CHARS:
+        testo = ""
+    if not (1 <= int(limit) <= STIMA_LOOKUP_MAX):
+        raise ValidationError(f"limit: tra 1 e {STIMA_LOOKUP_MAX}")
+    if not testo and lead_id is None and contact_id is None:
+        return []
+    with core_cursor() as (_, cur):
+        return repository.lookup_stime(cur, agency_id, search=testo or None, lead_id=lead_id,
+                                       contact_id=contact_id, limit=int(limit))
+
+
 def list_agents(ctx):
     agency_id = ctx.require_agency()
     io = _attore(ctx)

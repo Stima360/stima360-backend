@@ -30,6 +30,8 @@ OPERAZIONI_AGENDA = frozenset({
     ("GET", "/api/appointments/agents"),
     ("GET", "/api/appointments/availability"),
     ("POST", "/api/appointments/availability/check"),
+    # A30-5: la ricerca delle stime per il collegamento manuale (sola lettura)
+    ("GET", "/api/appointments/lookups/stime"),
     ("GET", "/api/appointments"),
     ("POST", "/api/appointments"),
     ("GET", "/api/appointments/{appointment_id}"),

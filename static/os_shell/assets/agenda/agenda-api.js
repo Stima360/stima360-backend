@@ -113,6 +113,17 @@ export function checkAvailability(body) {
   return request('POST', '/availability/check', body);
 }
 
+/** A30-5: le stime dell'agenzia selezionabili, per testo e/o lead o cliente.
+ *  Sola lettura; l'agenzia la decide il server. */
+export function lookupStime({ search, leadId, contactId, limit = 10 } = {}) {
+  return request('GET', `/lookups/stime${query({
+    search: search ? String(search).trim() : undefined,
+    lead_id: leadId ? id(leadId) : undefined,
+    contact_id: contactId ? id(contactId) : undefined,
+    limit,
+  })}`);
+}
+
 export function getAppointment(appointmentId) {
   return request('GET', `/${id(appointmentId)}`);
 }

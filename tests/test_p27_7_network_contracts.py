@@ -390,6 +390,16 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/agenda/",
         "static/os_shell/assets/components/agenda/",
         "static/os_shell/assets/views/agenda/",
+        # A30-5 - LA CREAZIONE MANUALE DI UN APPUNTAMENTO. Le cartelle
+        # dell'Agenda ora sono tracciate, quindi git elenca i file: il dialog,
+        # la pagina e un modulo nuovo di sole letture CRM. Nessuna vista del
+        # CRM e nessun componente della Rete e' toccato; `contact-picker.js`
+        # e' riusato cosi' com'e'. `agenda-api.js` guadagna il client della
+        # ricerca stime (una GET sotto `/api/appointments`).
+        "static/os_shell/assets/agenda/agenda-api.js",
+        "static/os_shell/assets/agenda/agenda-lookup.js",
+        "static/os_shell/assets/components/agenda/agenda-dialogs.js",
+        "static/os_shell/assets/views/agenda/agenda-page.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

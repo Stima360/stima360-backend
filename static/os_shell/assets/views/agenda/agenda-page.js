@@ -24,12 +24,16 @@ import {
   addDays,
   effectiveView,
   errorMessage,
+  formatDateTime,
   formatDayLong,
   formatRange,
   isDateKey,
   rangeFor,
+  romeDateKey,
+  statusLabel,
   stepDays,
   todayKey,
+  typeLabel,
   viewFromSlug,
 } from '../../agenda/agenda-model.js';
 import { getAgents, getCalendar, getList } from '../../agenda/agenda-api.js';
@@ -50,6 +54,25 @@ async function agenti() {
   const esito = await getAgents();
   agentiInMemoria = { epoch: sessionEpoch(), items: (esito && esito.items) || [] };
   return agentiInMemoria.items;
+}
+
+// A30-5: un appuntamento creato in un giorno fuori dal periodo visualizzato
+// porta la pagina su quel giorno; il messaggio di conferma sopravvive a quella
+// navigazione (una sola volta, poi si consuma). Legato alla sessione: un
+// messaggio non passa mai a un altro operatore.
+let messaggioInSospeso = { epoch: null, testo: '' };
+
+function prendiMessaggio() {
+  const { epoch, testo } = messaggioInSospeso;
+  messaggioInSospeso = { epoch: null, testo: '' };
+  return epoch === sessionEpoch() ? testo : '';
+}
+
+function confermaCreazione(creato) {
+  if (!creato || !creato.start_at) return 'Appuntamento creato.';
+  const cosa = [typeLabel(creato.appointment_type), statusLabel(creato.status)]
+    .filter(Boolean).join(' · ');
+  return `Appuntamento creato: ${formatDateTime(creato.start_at)}${cosa ? ` · ${cosa}` : ''}.`;
 }
 
 function isMobile() {
@@ -231,12 +254,20 @@ export async function renderAgenda(container, params = []) {
     openCreateDialog(dialogo, {
       agents: listaAgenti,
       dateKey: key,
-      onDone: async () => {
+      onDone: async (creato) => {
         if (stale()) return;
-        await carica('Appuntamento creato.');
+        const messaggio = confermaCreazione(creato);
+        const giorno = creato && creato.start_at ? romeDateKey(creato.start_at) : null;
+        if (giorno && !range.days.includes(giorno)) {
+          // Nella vista attuale non si vedrebbe: si va al suo giorno.
+          messaggioInSospeso = { epoch: sessionEpoch(), testo: messaggio };
+          vai(view, giorno);
+          return;
+        }
+        await carica(messaggio);
       },
     });
   });
 
-  await carica();
+  await carica(prendiMessaggio());
 }

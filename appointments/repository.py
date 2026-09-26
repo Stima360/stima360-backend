@@ -125,13 +125,68 @@ def find_conflicts(cur, *, assigned_user_id, start_at, end_at,
 def stima_agency(cur, stima_id: int):
     """L'agenzia della stima, o None se la stima non esiste.
 
-    E' l'UNICO punto dell'Agenda che legge `stime`: il database non la
-    referenzia (nessuna FK, decisione Q-A6b), quindi l'appartenenza si
-    verifica qui, una volta, quando il riferimento viene scritto.
+    Il controllo di appartenenza di una stima: il database non la referenzia
+    (nessuna FK, decisione Q-A6b), quindi l'appartenenza si verifica qui, una
+    volta, quando il riferimento viene scritto. L'altra lettura di `stime`
+    dell'Agenda e' la ricerca di `lookup_stime` (A30-5), in sola lettura.
     """
     cur.execute("SELECT agency_id FROM stime WHERE id = %s", (stima_id,))
     riga = cur.fetchone()
     return None if riga is None else riga["agency_id"]
+
+
+#: A30-5 - le SOLE colonne di `stime` che la ricerca restituisce: cio' che
+#: serve a riconoscere una stima (chi, dove, cosa, quando). Niente email,
+#: telefono o consensi; niente `stime_dettagliate`. Tutte presenti su TEST
+#: (docs/P26_BASELINE_CERTIFICATE_TEST.md §3.0.2: di `stime` mancano solo
+#: `lead_status` e `note_internal`).
+STIMA_LOOKUP_COLUMNS = ("id", "data", "nome", "cognome", "comune", "microzona", "via",
+                        "civico", "tipologia", "mq")
+
+
+def _like(testo: str) -> str:
+    """Il testo dell'operatore come sottostringa letterale: `%` e `_` non
+    diventano caratteri jolly."""
+    return "%" + testo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def lookup_stime(cur, agency_id: int, *, search=None, lead_id=None, contact_id=None,
+                 limit: int = 10):
+    """A30-5: le stime DI QUESTA AGENZIA per il collegamento manuale di un
+    appuntamento. Sola lettura.
+
+    `lead_id` / `contact_id` restringono alle stime che la relazione CORE
+    autorevole (`lead_stime`) lega a quel lead o ai lead di quel cliente - e il
+    lead deve essere della stessa agenzia: un id di un'altra agenzia non
+    restringe a niente, restituisce zero righe.
+    """
+    condizioni = ["s.agency_id = %(agenzia)s"]
+    parametri = {"agenzia": agency_id, "limite": limit}
+    if search:
+        condizioni.append(
+            "(concat_ws(' ', s.nome, s.cognome) ILIKE %(testo)s"
+            " OR concat_ws(' ', s.cognome, s.nome) ILIKE %(testo)s"
+            " OR s.comune ILIKE %(testo)s OR s.microzona ILIKE %(testo)s"
+            " OR concat_ws(' ', s.via, s.civico) ILIKE %(testo)s)")
+        parametri["testo"] = _like(search)
+    if lead_id is not None:
+        condizioni.append(
+            "EXISTS (SELECT 1 FROM lead_stime ls JOIN leads l ON l.id = ls.lead_id"
+            " WHERE ls.stima_id = s.id AND l.id = %(lead)s AND l.agency_id = %(agenzia)s)")
+        parametri["lead"] = lead_id
+    if contact_id is not None:
+        condizioni.append(
+            "EXISTS (SELECT 1 FROM lead_stime ls JOIN leads l ON l.id = ls.lead_id"
+            " WHERE ls.stima_id = s.id AND l.contact_id = %(contatto)s"
+            " AND l.agency_id = %(agenzia)s)")
+        parametri["contatto"] = contact_id
+    colonne = ", ".join(f"s.{c}" for c in STIMA_LOOKUP_COLUMNS)
+    cur.execute(
+        f"SELECT {colonne} FROM stime s WHERE {' AND '.join(condizioni)}"
+        " ORDER BY s.data DESC NULLS LAST, s.id DESC LIMIT %(limite)s",
+        parametri,
+    )
+    return [{c: r[c] for c in STIMA_LOOKUP_COLUMNS} for r in cur.fetchall()]
 
 
 def active_membership(cur, agency_id: int, user_id: int) -> bool:

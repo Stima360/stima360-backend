@@ -703,6 +703,12 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .agenda-conflicts { margin: 6px 0; padding-left: 18px; }
 .agenda-alternatives, .agenda-slots { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .agenda-chip { padding: 4px 10px; font-size: 13px; }
+/* A30-5: collegamenti CRM e durata nel dialog Nuovo appuntamento. */
+.agenda-links { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px 0; margin: 0 0 12px; }
+.agenda-links legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+.agenda-lookup-results { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.agenda-lookup-item { text-align: left; white-space: normal; }
+.agenda-lookup-selected { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 4px; }
 
 /* Tablet: settimana completa, scorrimento orizzontale. */
 @media (min-width: 768px) and (max-width: 1199px) {
