@@ -62,8 +62,14 @@ REGOLE DI CONDOTTA
 * Ogni run ha un `run_id`; le fixture nascono con quel marchio e il cleanup
   cancella per ID, mai per prefisso: due certificazioni avviate insieme non si
   distruggono a vicenda.
-* Un residuo trovato all'avvio ferma il run senza creare e senza cancellare
-  nulla: da qui non si distingue un resto di ieri da un run in corso adesso.
+* Un solo run alla volta: prima di qualunque scrittura - e prima di 0.11 - il
+  run prende un advisory lock PostgreSQL di SESSIONE su una connessione
+  dedicata (`application_name = stima360-p26-6-certifier`) e lo tiene fino
+  alla fine. Un secondo run che lo trova occupato si ferma BLOCKED
+  `P26-6-lock` senza creare, scrivere o cancellare nulla.
+* Un residuo trovato all'avvio - a lock acquisito - ferma il run senza creare
+  e senza cancellare nulla: non e' un run concorrente di questo codice, quindi
+  e' un resto da verificare a mano.
 * Cleanup in `finally`, nell'ordine imposto dalle chiavi esterne. Qualunque
   cleanup incompleto e' FAIL.
 * Qualunque prova non eseguita e' BLOCKED, mai PASS. Una lista vuota non e' una
@@ -690,14 +696,18 @@ class Database:
     file esercitano guardie e cleanup senza un PostgreSQL.
     """
 
-    def __init__(self, cursor_factory) -> None:
+    def __init__(self, cursor_factory, lock_connector=None) -> None:
         self._cursor_factory = cursor_factory
+        # Apre la connessione DEDICATA del lock di certificazione (vedi
+        # `AdvisorySessionLock`). None = nessun lock possibile: `run` si ferma.
+        self.lock_connector = lock_connector
 
     @classmethod
     def connect(cls) -> "Database":
+        from database import get_connection
         from operator_auth.database import operator_cursor
 
-        return cls(operator_cursor)
+        return cls(operator_cursor, lock_connector=get_connection)
 
     @contextmanager
     def read(self):
@@ -713,6 +723,144 @@ class Database:
         with self.read() as cur:
             cur.execute("SELECT current_database() AS name")
             return cur.fetchone()["name"]
+
+
+# ---------------------------------------------------------------------------
+# Il lock globale di certificazione
+# ---------------------------------------------------------------------------
+#
+# DUE SITUAZIONI CHE 0.11 DA SOLO NON SEPARA
+#
+#   A) RUN CONCORRENTE: un'altra P26-6 e' in esecuzione adesso, da un'altra
+#      shell o da un'altra istanza. Le sue identita' sono vive e verranno
+#      cancellate - per id - dal SUO cleanup.
+#   B) RESIDUO VERO: un run precedente non ha completato il cleanup.
+#
+# Contando le identita', le due sono indistinguibili ("2 identita' gia'
+# presenti"). Il lock le separa PRIMA di contare: occupato => A, e il run si
+# ferma BLOCKED senza toccare nulla; acquisito => nessuna P26-6 con questo
+# codice e' in corso, e cio' che 0.11 trova e' B.
+#
+# PERCHE' DI SESSIONE, SU UNA CONNESSIONE DEDICATA
+#
+# `Database` apre e chiude una connessione per ogni operazione: un lock di
+# transazione (o di sessione su una di quelle connessioni) sparirebbe alla
+# prima chiusura. La connessione del lock nasce qui, in autocommit - nessuna
+# transazione resta aperta, nessuna riga e' mai letta o scritta attraverso di
+# essa - e vive quanto il run. Se il processo muore, PostgreSQL chiude la
+# sessione e il lock se ne va con lei: nessun lock orfano da ripulire a mano.
+#
+# `pg_try_advisory_lock` non attende: il secondo run non si mette in coda
+# dietro al primo, si ferma subito e lo dice.
+LOCK_ID = "P26-6-lock"
+LOCK_NAME = "stima360:p26_6_live_cert"
+LOCK_APPLICATION_NAME = "stima360-p26-6-certifier"
+LOCK_BUSY_TEXT = "un'altra certificazione P26-6 e' gia' in esecuzione"
+
+
+class AdvisorySessionLock:
+    """Il lock di sessione P26-6, tenuto da una connessione che serve solo a lui.
+
+    `connector` e' una funzione senza argomenti che apre una connessione
+    DB-API nuova (in produzione `database.get_connection`). Iniettabile: le
+    prove offline la sostituiscono con un doppio.
+    """
+
+    def __init__(self, connector) -> None:
+        self._connector = connector
+        self._conn = None
+        self.held = False
+
+    def acquire(self) -> bool:
+        """True se questo processo ora tiene il lock, False se e' occupato.
+
+        Solleva `GuardFailure` se la connessione del lock non e' sul database
+        di certificazione: un lock preso altrove non escluderebbe nessuno.
+        """
+        if self._connector is None:
+            raise GuardFailure(
+                "BLOCCATO: nessuna connessione dedicata per il lock P26-6.")
+        conn = self._connector()
+        self._conn = conn                 # registrata subito: release() la chiude
+        conn.autocommit = True
+        cur = conn.cursor()
+        try:
+            # Solo per la diagnostica (pg_stat_activity): nessun segreto.
+            cur.execute("SELECT set_config('application_name', %s, false)",
+                        (LOCK_APPLICATION_NAME,))
+            cur.execute("SELECT current_database()")
+            name = cur.fetchone()[0]
+            if name != REQUIRED_DB_NAME:
+                raise GuardFailure(
+                    f"BLOCCATO: la connessione del lock e' su {name!r}, "
+                    f"non su {REQUIRED_DB_NAME!r}.")
+            cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                        (LOCK_NAME,))
+            self.held = bool(cur.fetchone()[0])
+        finally:
+            cur.close()
+        return self.held
+
+    def release(self) -> None:
+        """Rilascia e chiude. Idempotente, e non solleva mai: la chiusura
+        della sessione rilascia comunque il lock."""
+        conn, self._conn = self._conn, None
+        if conn is None:
+            self.held = False
+            return
+        try:
+            if self.held:
+                cur = conn.cursor()
+                try:
+                    cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                                (LOCK_NAME,))
+                finally:
+                    cur.close()
+        except Exception:                          # noqa: BLE001 - vedi docstring
+            pass
+        finally:
+            self.held = False
+            try:
+                conn.close()
+            except Exception:                      # noqa: BLE001
+                pass
+
+    # `with lock:` e non try/finally in `run`: il rilascio e' garantito anche su
+    # eccezione o Ctrl-C, e il primo `try ... finally` di `run` resta quello
+    # del cleanup, che le prove strutturali leggono.
+    def __enter__(self) -> "AdvisorySessionLock":
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        self.release()
+        return False
+
+
+def acquire_certification_lock(report: "Report", lock: AdvisorySessionLock) -> bool:
+    """Prende il lock e lo dice nel report. False = il run deve fermarsi.
+
+    Occupato => BLOCKED `P26-6-lock`, ed e' l'unico messaggio: nessuna
+    credenziale, nessun dato dell'altro run, nessun conteggio di identita'.
+    """
+    try:
+        acquired = lock.acquire()
+    except GuardFailure as exc:
+        report.fail(LOCK_ID, str(exc))
+        return False
+    except Exception as exc:                        # noqa: BLE001 - nessun DSN stampato
+        report.fail(LOCK_ID, "lock di certificazione non acquisibile "
+                             f"({type(exc).__name__}): nessuna scrittura eseguita")
+        return False
+    if not acquired:
+        report.blocked(
+            LOCK_ID,
+            f"{LOCK_BUSY_TEXT}: nessuna identita' creata, nessuna fixture "
+            "scritta, nessuna riga cancellata. Rieseguire a run concluso.",
+        )
+        return False
+    report.note(LOCK_ID, "lock di certificazione acquisito, tenuto fino alla fine "
+                         f"(application_name {LOCK_APPLICATION_NAME})")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -6932,123 +7080,133 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
         report.summary()
         return report.exit_code
 
-    http = http_factory(base)
-    try:
-        response = http.request("GET", PUBLIC)
-        report.check("0.10", response.status == 200,
-                     f"app raggiungibile: GET {PUBLIC} -> {response.status}")
-        agency_a, agency_b = read_agencies(report, database)
-    except CheckFailed:
+    # IL LOCK, PRIMA DI OGNI ALTRA COSA DOPO LA GUARDIA DEL DATABASE - e quindi
+    # prima di 0.11, di ogni identita', fixture e cancellazione. Tenuto fino a
+    # cleanup e verdetto conclusi, rilasciato da `with` anche su eccezione.
+    with AdvisorySessionLock(database.lock_connector) as lock:
+        if not acquire_certification_lock(report, lock):
+            report.summary()
+            return report.exit_code
+
+        http = http_factory(base)
+        try:
+            response = http.request("GET", PUBLIC)
+            report.check("0.10", response.status == 200,
+                         f"app raggiungibile: GET {PUBLIC} -> {response.status}")
+            agency_a, agency_b = read_agencies(report, database)
+        except CheckFailed:
+            report.summary()
+            return report.exit_code
+
+        cert = Certification(database, report)
+
+        # Residui di un run precedente: si ferma qui. Il lock e' nostro, quindi
+        # nessuna P26-6 con questo codice e' in corso: cio' che si trova qui e'
+        # un resto (o un certifier di un commit precedente, senza lock). NON
+        # si cancella nulla: il cleanup resta per id, del singolo run.
+        leftovers = cert.leftovers()
+        if leftovers:
+            report.fail(
+                "0.11",
+                f"{leftovers} identita' di certificazione gia' presenti con il "
+                f"lock {LOCK_ID} acquisito: nessuna P26-6 con lock e' in corso, "
+                "quindi e' il residuo di un run non completato (o di un "
+                "certifier senza lock). Nessuna identita' creata e nessuna riga "
+                "cancellata. Verificare a mano prima di rieseguire.",
+            )
+            report.summary()
+            return report.exit_code
+        report.note("0.11", "nessun residuo di certificazioni precedenti")
+
+        incoherence_census(report, database)
+
+        jars = {"A": http.new_jar(), "B": http.new_jar()}
+        agencies = {"A": agency_a, "B": agency_b}
+        owner_sessions = OwnerSessions(database, report)
+        context: dict = {}
+        try:
+            operators = {
+                "A": cert.create_operator(agency_a),
+                "B": cert.create_operator(agency_b),
+            }
+            report.note("0.12", f"due identita' create, ruolo {CERT_ROLE}, "
+                                f"run {cert.run_id}")
+            context = certify(report, http, cert, operators, jars,
+                              owner_sessions=owner_sessions, agencies=agencies,
+                              database=database,
+                              dedicated_agencies=dedicated_agencies) or {}
+            scan_for_leaks(report, http, cert.secrets,
+                           tuple(context.get("disclosures", ())))
+        except CheckFailed:
+            pass
+        except Exception as exc:                       # pragma: no cover - difensivo
+            report.fail("RUN", f"eccezione non gestita: {type(exc).__name__}")
+        finally:
+            # L'ORDINE E' QUELLO DELLE CHIAVI ESTERNE, E NON E' NEGOZIABILE.
+            #
+            # `matches` e `property_sales` referenziano richieste e immobili;
+            # `owner_accounts.contact_id` e' ON DELETE RESTRICT sul contatto. Se le
+            # fixture HTTP se ne andassero per prime, ogni DELETE fallirebbe e il
+            # run riporterebbe un cleanup incompleto - un FAIL vero, per una ragione
+            # che non ha nulla a che vedere con l'isolamento.
+            # PRIMA DI OGNI CANCELLAZIONE, comprese quelle via API: gli id dei
+            # genitori le cui figlie andranno verificate dopo. Presa piu' tardi,
+            # l'istantanea fotograferebbe un database gia' potato.
+            # PRIMA dell'istantanea e di ogni cancellazione: token e sessioni si
+            # leggono finche' il conto esiste. Dopo `cleanup_owner_fixtures` la
+            # stessa query risponderebbe zero, e il report direbbe il falso.
+            cert.registra_identita_owner()
+            cert.snapshot_before_cleanup()
+            # La guardia PRIMA della prima DELETE. Vendite, proposte e conti
+            # proprietario se ne vanno nelle due chiamate qui sotto: chiedersi
+            # dopo se qualcosa li referenziava sarebbe chiederselo quando non
+            # esistono piu'.
+            cert.preflight_dependencies()
+            cert.cleanup_chain_fixtures()
+            cert.cleanup_owner_fixtures()
+            # Le righe create nelle agenzie CONDIVISE: si cancellano per id,
+            # perche' li' non esiste - e non deve esistere - una cancellazione per
+            # agenzia. Prima di `cleanup_orphan_fixtures`, che tocca i contatti e
+            # gli immobili da cui quelle righe non dipendono, ma dopo il conto
+            # proprietario, per tenere i passi nell'ordine in cui il report li
+            # legge.
+            cert.cleanup_shared_watch_fixtures()
+            # Evento ed esecuzione FLOW, per la stessa ragione e con lo stesso
+            # criterio. Prima di `cleanup_orphan_fixtures`: la richiesta d'acquisto
+            # che l'esecuzione NOMINA se ne va di la', e benche' `entity_id` non
+            # sia una chiave esterna - il catalogo non lo vedrebbe - lasciare
+            # l'esecuzione dopo la sparizione della sua entita' significherebbe
+            # tenere sul TEST una riga che punta a un id che non esiste piu'.
+            cert.cleanup_shared_flow_fixtures()
+            cert.cleanup_http_fixtures(http, jars)
+            # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
+            # `property_contacts` li referenziano con RESTRICT, quindi finche' le
+            # righe di sopra esistono il contatto non e' cancellabile.
+            # Il bucket PRIMA delle righe: la chiave si legge da property_documents,
+            # e cancellata quella riga la chiave non e' piu' recuperabile.
+            cert.cleanup_storage_objects()
+            cert.cleanup_orphan_fixtures(agencies)
+            # Le agenzie dedicate PRIMA della verifica, e non e' una preferenza:
+            # `flow_events` e `stime` sono effetti del run che stanno dentro
+            # quelle agenzie, e verificarli prima li conterebbe tutti.
+            # `verify_no_residue` non si fida dell'ordine scritto qui: se la
+            # chiamata sotto finisse sopra, se ne accorge e fallisce dicendolo.
+            cert.cleanup_dedicated_agencies()
+            # Per ultima, e indipendente da come si e' cancellato: l'unica prova
+            # che il TEST sia tornato com'era.
+            cert.verify_no_residue()
+            for jar in context.get("portal_jars", {}).values():
+                http.request("POST", PORTAL_LOGOUT, jar=jar)
+            for label, jar in jars.items():
+                if http.token_in(jar):
+                    http.request("POST", LOGOUT, jar=jar)
+            # Le sessioni di titolare per ultime fra le identita': finche' esistono,
+            # i cleanup sopra possono ancora chiamare le route di OWNER Admin.
+            owner_sessions.cleanup()
+            cert.cleanup_database()
+
         report.summary()
         return report.exit_code
-
-    cert = Certification(database, report)
-
-    # Residui di un run precedente: si ferma qui. Da questo processo non si
-    # distingue il resto di ieri da una certificazione avviata adesso da
-    # un'altra shell, e le due chiedono risposte opposte.
-    leftovers = cert.leftovers()
-    if leftovers:
-        report.fail(
-            "0.11",
-            f"{leftovers} identita' di certificazione gia' presenti. Potrebbero "
-            "essere il residuo di un run non completato oppure una "
-            "certificazione in corso: nessuna identita' creata e nessuna riga "
-            "cancellata. Verificare a mano prima di rieseguire.",
-        )
-        report.summary()
-        return report.exit_code
-    report.note("0.11", "nessun residuo di certificazioni precedenti")
-
-    incoherence_census(report, database)
-
-    jars = {"A": http.new_jar(), "B": http.new_jar()}
-    agencies = {"A": agency_a, "B": agency_b}
-    owner_sessions = OwnerSessions(database, report)
-    context: dict = {}
-    try:
-        operators = {
-            "A": cert.create_operator(agency_a),
-            "B": cert.create_operator(agency_b),
-        }
-        report.note("0.12", f"due identita' create, ruolo {CERT_ROLE}, "
-                            f"run {cert.run_id}")
-        context = certify(report, http, cert, operators, jars,
-                          owner_sessions=owner_sessions, agencies=agencies,
-                          database=database,
-                          dedicated_agencies=dedicated_agencies) or {}
-        scan_for_leaks(report, http, cert.secrets,
-                       tuple(context.get("disclosures", ())))
-    except CheckFailed:
-        pass
-    except Exception as exc:                       # pragma: no cover - difensivo
-        report.fail("RUN", f"eccezione non gestita: {type(exc).__name__}")
-    finally:
-        # L'ORDINE E' QUELLO DELLE CHIAVI ESTERNE, E NON E' NEGOZIABILE.
-        #
-        # `matches` e `property_sales` referenziano richieste e immobili;
-        # `owner_accounts.contact_id` e' ON DELETE RESTRICT sul contatto. Se le
-        # fixture HTTP se ne andassero per prime, ogni DELETE fallirebbe e il
-        # run riporterebbe un cleanup incompleto - un FAIL vero, per una ragione
-        # che non ha nulla a che vedere con l'isolamento.
-        # PRIMA DI OGNI CANCELLAZIONE, comprese quelle via API: gli id dei
-        # genitori le cui figlie andranno verificate dopo. Presa piu' tardi,
-        # l'istantanea fotograferebbe un database gia' potato.
-        # PRIMA dell'istantanea e di ogni cancellazione: token e sessioni si
-        # leggono finche' il conto esiste. Dopo `cleanup_owner_fixtures` la
-        # stessa query risponderebbe zero, e il report direbbe il falso.
-        cert.registra_identita_owner()
-        cert.snapshot_before_cleanup()
-        # La guardia PRIMA della prima DELETE. Vendite, proposte e conti
-        # proprietario se ne vanno nelle due chiamate qui sotto: chiedersi
-        # dopo se qualcosa li referenziava sarebbe chiederselo quando non
-        # esistono piu'.
-        cert.preflight_dependencies()
-        cert.cleanup_chain_fixtures()
-        cert.cleanup_owner_fixtures()
-        # Le righe create nelle agenzie CONDIVISE: si cancellano per id,
-        # perche' li' non esiste - e non deve esistere - una cancellazione per
-        # agenzia. Prima di `cleanup_orphan_fixtures`, che tocca i contatti e
-        # gli immobili da cui quelle righe non dipendono, ma dopo il conto
-        # proprietario, per tenere i passi nell'ordine in cui il report li
-        # legge.
-        cert.cleanup_shared_watch_fixtures()
-        # Evento ed esecuzione FLOW, per la stessa ragione e con lo stesso
-        # criterio. Prima di `cleanup_orphan_fixtures`: la richiesta d'acquisto
-        # che l'esecuzione NOMINA se ne va di la', e benche' `entity_id` non
-        # sia una chiave esterna - il catalogo non lo vedrebbe - lasciare
-        # l'esecuzione dopo la sparizione della sua entita' significherebbe
-        # tenere sul TEST una riga che punta a un id che non esiste piu'.
-        cert.cleanup_shared_flow_fixtures()
-        cert.cleanup_http_fixtures(http, jars)
-        # I contatti per ULTIMI fra le fixture di dominio: `buy_requests` e
-        # `property_contacts` li referenziano con RESTRICT, quindi finche' le
-        # righe di sopra esistono il contatto non e' cancellabile.
-        # Il bucket PRIMA delle righe: la chiave si legge da property_documents,
-        # e cancellata quella riga la chiave non e' piu' recuperabile.
-        cert.cleanup_storage_objects()
-        cert.cleanup_orphan_fixtures(agencies)
-        # Le agenzie dedicate PRIMA della verifica, e non e' una preferenza:
-        # `flow_events` e `stime` sono effetti del run che stanno dentro
-        # quelle agenzie, e verificarli prima li conterebbe tutti.
-        # `verify_no_residue` non si fida dell'ordine scritto qui: se la
-        # chiamata sotto finisse sopra, se ne accorge e fallisce dicendolo.
-        cert.cleanup_dedicated_agencies()
-        # Per ultima, e indipendente da come si e' cancellato: l'unica prova
-        # che il TEST sia tornato com'era.
-        cert.verify_no_residue()
-        for jar in context.get("portal_jars", {}).values():
-            http.request("POST", PORTAL_LOGOUT, jar=jar)
-        for label, jar in jars.items():
-            if http.token_in(jar):
-                http.request("POST", LOGOUT, jar=jar)
-        # Le sessioni di titolare per ultime fra le identita': finche' esistono,
-        # i cleanup sopra possono ancora chiamare le route di OWNER Admin.
-        owner_sessions.cleanup()
-        cert.cleanup_database()
-
-    report.summary()
-    return report.exit_code
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -818,7 +818,86 @@ class FakeCursor:
         return self._rows
 
 
+class FakeAdvisoryServer:
+    """Un PostgreSQL ridotto ai soli advisory lock di SESSIONE.
+
+    Ogni `connect()` e' una sessione (un processo P26-6, per il run). Chiudere
+    la sessione rilascia i suoi lock, come fa PostgreSQL. Qualunque SQL che non
+    sia una delle quattro del lock fa fallire la prova: la connessione del
+    lock non legge e non scrive dati.
+    """
+
+    def __init__(self, database_name: str = cert.REQUIRED_DB_NAME) -> None:
+        self.database_name = database_name
+        self.holders: dict = {}
+        self.sessions: list = []
+        self.log: list = []
+
+    def connect(self):
+        session = FakeLockSession(self)
+        self.sessions.append(session)
+        return session
+
+    def held_by_someone(self) -> bool:
+        return cert.LOCK_NAME in self.holders
+
+
+class FakeLockSession:
+    def __init__(self, server: FakeAdvisoryServer) -> None:
+        self.server = server
+        self.autocommit = False
+        self.application_name = None
+        self.closed = False
+
+    def cursor(self):
+        return FakeLockCursor(self)
+
+    def close(self) -> None:
+        self.closed = True
+        for key, holder in list(self.server.holders.items()):
+            if holder is self:
+                del self.server.holders[key]
+
+
+class FakeLockCursor:
+    def __init__(self, session: FakeLockSession) -> None:
+        self.session = session
+        self._row = None
+
+    def execute(self, sql, params=()):
+        session, server = self.session, self.session.server
+        assert not session.closed, "SQL su una sessione del lock gia' chiusa"
+        assert session.autocommit, "la sessione del lock deve stare in autocommit"
+        server.log.append((id(session), sql))
+        if "set_config('application_name'" in sql:
+            session.application_name = params[0]
+            self._row = (params[0],)
+        elif sql == "SELECT current_database()":
+            self._row = (server.database_name,)
+        elif "pg_try_advisory_lock(hashtextextended(%s, 0))" in sql:
+            holder = server.holders.get(params[0])
+            if holder is None or holder is session:
+                server.holders[params[0]] = session
+                self._row = (True,)
+            else:
+                self._row = (False,)
+        elif "pg_advisory_unlock(hashtextextended(%s, 0))" in sql:
+            mine = server.holders.get(params[0]) is session
+            if mine:
+                del server.holders[params[0]]
+            self._row = (mine,)
+        else:
+            raise AssertionError(f"SQL inattesa sulla connessione del lock: {sql}")
+
+    def fetchone(self):
+        return self._row
+
+    def close(self) -> None:
+        pass
+
+
 def fake_database(**state) -> cert.Database:
+    lock_server = state.pop("lock_server", None) or FakeAdvisoryServer()
     shared = dict(state)
 
     @contextmanager
@@ -826,8 +905,9 @@ def fake_database(**state) -> cert.Database:
         shared.setdefault("commits", []).append(commit)
         yield (None, FakeCursor(shared))
 
-    database = cert.Database(factory)
+    database = cert.Database(factory, lock_connector=lock_server.connect)
     database.state = shared          # type: ignore[attr-defined]
+    database.lock_server = lock_server  # type: ignore[attr-defined]
     return database
 
 
@@ -8723,3 +8803,349 @@ def test_a30_08_l_agenda_e_nella_matrice_con_il_suo_certificatore():
     dichiarate = {(m, "/api/appointments" + s.replace("{id}", "{appointment_id}"))
                   for m, s in cert.AGENDA_OPERAZIONI}
     assert dichiarate == set(OPERAZIONI_AGENDA)
+
+
+# ---------------------------------------------------------------------------
+# P26-6-lock - il lock globale di certificazione
+# ---------------------------------------------------------------------------
+#
+# Separa i due casi che 0.11 da solo confondeva:
+#   A) RUN CONCORRENTE = lock occupato  -> BLOCKED P26-6-lock, nulla toccato
+#   B) RESIDUO VERO    = lock nostro + identita' presenti -> FAIL 0.11 come oggi
+
+
+def _altro_run_in_corso(server: FakeAdvisoryServer) -> cert.AdvisorySessionLock:
+    """Un secondo processo P26-6 che ha gia' preso il lock e lo tiene."""
+    altro = cert.AdvisorySessionLock(server.connect)
+    assert altro.acquire() is True
+    return altro
+
+
+def _righe(report, ident):
+    return [(k, t) for k, i, t in report.rows if i == ident]
+
+
+def test_lock_01_il_primo_run_acquisisce_il_lock_prima_di_0_11_e_lo_tiene(monkeypatch):
+    server = FakeAdvisoryServer()
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME,
+                             lock_server=server)
+    visto = {}
+    leftovers, create = cert.Certification.leftovers, cert.Certification.create_operator
+
+    def leftovers_osservato(self):
+        visto["a_0_11"] = server.held_by_someone()
+        return leftovers(self)
+
+    def create_osservato(self, agency):
+        visto.setdefault("a_create", []).append(server.held_by_someone())
+        return create(self, agency)
+
+    monkeypatch.setattr(cert.Certification, "leftovers", leftovers_osservato)
+    monkeypatch.setattr(cert.Certification, "create_operator", create_osservato)
+
+    _code, report, _db, _probe, _ = working_run(monkeypatch, database=database)
+
+    assert _righe(report, cert.LOCK_ID) and _righe(report, cert.LOCK_ID)[0][0] == cert.PASS
+    assert visto["a_0_11"] is True
+    assert visto["a_create"] == [True, True]
+    # una sola sessione, dedicata, riconoscibile in pg_stat_activity
+    assert len(server.sessions) == 1
+    assert server.sessions[0].application_name == cert.LOCK_APPLICATION_NAME
+    # e alla fine rilasciato e chiuso
+    assert not server.held_by_someone() and server.sessions[0].closed
+
+
+def test_lock_02_05_il_secondo_run_si_ferma_BLOCKED_senza_toccare_nulla(monkeypatch):
+    """2: non acquisisce. 3: non chiama create_operator. 4: nessuna fixture.
+    5: nessun cleanup sulle risorse dell'altro run."""
+    server = FakeAdvisoryServer()
+    altro = _altro_run_in_corso(server)
+    # le identita' VIVE dell'altro run: identiche a quelle viste su TEST
+    identita_altrui = {77: f"{cert.CERT_PREFIX}bbfdc0f36e01-0c7ba527{cert.CERT_DOMAIN}",
+                       78: f"{cert.CERT_PREFIX}bbfdc0f36e01-79b158fd{cert.CERT_DOMAIN}"}
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME,
+                             users=dict(identita_altrui), lock_server=server)
+    chiamate = []
+    monkeypatch.setattr(cert.Certification, "__init__",
+                        lambda *a, **k: chiamate.append("Certification") or (_ for _ in ()).throw(
+                            AssertionError("Certification creata da un run BLOCKED")))
+    monkeypatch.setattr(cert.Certification, "create_operator",
+                        lambda *a, **k: chiamate.append("create_operator"))
+    for nome in ("cleanup_database", "cleanup_http_fixtures", "cleanup_orphan_fixtures",
+                 "cleanup_chain_fixtures", "cleanup_owner_fixtures"):
+        monkeypatch.setattr(cert.Certification, nome,
+                            lambda *a, _n=nome, **k: chiamate.append(_n))
+    monkeypatch.setattr(cert.OwnerSessions, "cleanup",
+                        lambda *a, **k: chiamate.append("owner_sessions.cleanup"))
+
+    code, report, database, probe, stream = working_run(monkeypatch, database=database)
+
+    assert code == 2                                            # BLOCKED, non FAIL
+    assert [(k, i) for k, i, _t in report.rows if k != cert.PASS] == [
+        (cert.BLOCKED, cert.LOCK_ID)]
+    assert cert.LOCK_BUSY_TEXT in _righe(report, cert.LOCK_ID)[0][1]
+    assert _righe(report, "0.11") == []                         # mai l'ambiguo 0.11
+    assert "identita' di certificazione gia' presenti" not in stream.getvalue()
+    assert chiamate == []                                       # 3 e 5
+    eseguite = " ".join(database.state.get("sql", [])).upper()
+    assert "INSERT" not in eseguite and "DELETE" not in eseguite and "UPDATE" not in eseguite
+    assert probe.exchanges == []                                # 4: nemmeno una richiesta HTTP
+    assert database.state["users"] == identita_altrui           # 5: l'altro run intatto
+    # il lock resta all'altro run, e la sessione del secondo e' chiusa
+    assert server.holders[cert.LOCK_NAME] is altro._conn
+    assert all(s.closed for s in server.sessions if s is not altro._conn)
+    altro.release()
+
+
+def test_lock_02b_il_messaggio_BLOCKED_non_rivela_nulla_dell_altro_run(monkeypatch):
+    server = FakeAdvisoryServer()
+    altro = _altro_run_in_corso(server)
+    database = fake_database(agencies=AGENCIES, lock_server=server,
+                             users={77: f"{cert.CERT_PREFIX}bbfdc0f36e01-0c7ba527{cert.CERT_DOMAIN}"})
+    _code, _report, _db, _probe, stream = working_run(monkeypatch, database=database)
+    uscita = stream.getvalue()
+    for vietato in ("bbfdc0f36e01", "@certification.invalid", "password", "DSN", "77"):
+        assert vietato not in uscita, vietato
+    altro.release()
+
+
+def test_lock_06_rilasciato_anche_su_eccezione_e_su_ctrl_c(monkeypatch):
+    server = FakeAdvisoryServer()
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME,
+                             lock_server=server)
+
+    def interrotto(*_a, **_k):
+        assert server.held_by_someone()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cert, "certify", interrotto)
+    with pytest.raises(KeyboardInterrupt):
+        working_run(monkeypatch, database=database)
+    assert not server.held_by_someone()
+    assert all(s.closed for s in server.sessions)
+    # e il cleanup per id e' comunque passato: nessuna identita' del run resta
+    assert not [e for e in database.state.get("users", {}).values()
+                if e.startswith(cert.CERT_PREFIX)]
+
+
+def test_lock_06b_rilasciato_anche_quando_un_passo_solleva_un_errore(monkeypatch):
+    server = FakeAdvisoryServer()
+    database = fake_database(agencies=AGENCIES, lock_server=server)
+    monkeypatch.setattr(cert, "read_agencies",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("guasto")))
+    with pytest.raises(RuntimeError):
+        working_run(monkeypatch, database=database)
+    assert not server.held_by_someone() and all(s.closed for s in server.sessions)
+
+
+def test_lock_06c_una_connessione_del_lock_impossibile_ferma_il_run_senza_scrivere(monkeypatch):
+    def rotta():
+        raise ConnectionError("host=segreto password=segreta")
+
+    database = fake_database(agencies=AGENCIES)
+    database.lock_connector = rotta
+    code, report, database, probe, stream = working_run(monkeypatch, database=database)
+    assert code == 1 and _righe(report, cert.LOCK_ID)[0][0] == cert.FAIL
+    assert "segret" not in stream.getvalue()
+    assert probe.exchanges == [] and "INSERT" not in " ".join(database.state.get("sql", []))
+
+
+def test_lock_06d_senza_connettore_il_run_non_parte(monkeypatch):
+    database = fake_database(agencies=AGENCIES)
+    database.lock_connector = None
+    code, report, database, probe, _ = working_run(monkeypatch, database=database)
+    assert code == 1 and _righe(report, cert.LOCK_ID)[0][0] == cert.FAIL
+    assert probe.exchanges == []
+
+
+def test_lock_06e_un_lock_su_un_altro_database_e_rifiutato_e_la_sessione_chiusa():
+    server = FakeAdvisoryServer(database_name="stima360_db")
+    lock = cert.AdvisorySessionLock(server.connect)
+    with pytest.raises(cert.GuardFailure):
+        lock.acquire()
+    assert not server.held_by_someone()          # il try_lock non e' nemmeno partito
+    lock.release()
+    assert server.sessions[0].closed
+    lock.release()                               # idempotente
+
+
+def test_lock_07_lock_libero_e_due_residui_resta_il_FAIL_di_0_11_senza_cancellare(monkeypatch):
+    server = FakeAdvisoryServer()
+    residui = {77: f"{cert.CERT_PREFIX}bbfdc0f36e01-0c7ba527{cert.CERT_DOMAIN}",
+               78: f"{cert.CERT_PREFIX}bbfdc0f36e01-79b158fd{cert.CERT_DOMAIN}"}
+    database = fake_database(agencies=AGENCIES, users=dict(residui), lock_server=server)
+
+    code, report, database, probe, _ = working_run(monkeypatch, database=database)
+
+    assert code == 1
+    assert _righe(report, cert.LOCK_ID)[0][0] == cert.PASS      # lock preso: caso B
+    assert [k for k, _t in _righe(report, "0.11")] == [cert.FAIL]
+    assert "2 identita' di certificazione gia' presenti" in _righe(report, "0.11")[0][1]
+    eseguite = " ".join(database.state.get("sql", [])).upper()
+    assert "INSERT" not in eseguite and "DELETE" not in eseguite
+    assert database.state["users"] == residui                   # NON cancellati
+    assert not server.held_by_someone()                         # e rilasciato
+
+
+def test_lock_08_lock_libero_e_zero_residui_il_run_procede(monkeypatch):
+    server = FakeAdvisoryServer()
+    database = fake_database(agencies=AGENCIES, owners=OWNERS, stime=STIME,
+                             lock_server=server)
+    creati = []
+    originale = cert.Certification.create_operator
+    monkeypatch.setattr(cert.Certification, "create_operator",
+                        lambda self, a: creati.append(a["id"]) or originale(self, a))
+    code, report, _db, _probe, _ = working_run(monkeypatch, database=database)
+
+    assert [k for k, _t in _righe(report, "0.11")] == [cert.PASS]
+    assert _righe(report, "0.12") and len(creati) == 2
+    # il run arriva alla fine: nessun FAIL, e l'unico BLOCKED ammesso e'
+    # quello dei domini che il doppio non popola - mai il lock
+    assert [r for r in report.rows if r[0] == cert.FAIL] == []
+    assert _righe(report, cert.LOCK_ID) == [(cert.PASS, _righe(report, cert.LOCK_ID)[0][1])]
+    assert code in (0, 2)
+    assert not server.held_by_someone()
+
+
+def test_lock_09_la_struttura_il_lock_avvolge_0_11_e_il_cleanup_resta_il_primo_finally():
+    """Il `with` del lock precede, e contiene, 0.11, la creazione delle
+    identita' e il `finally` del cleanup."""
+    albero = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    run = next(n for n in albero.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    blocchi = [n for n in run.body if isinstance(n, ast.With)]
+    assert len(blocchi) == 1
+    dentro = ast.unparse(blocchi[0])
+    assert ast.unparse(blocchi[0].items[0].context_expr) == \
+        "AdvisorySessionLock(database.lock_connector)"
+    assert dentro.index("acquire_certification_lock") < dentro.index("cert.leftovers()") \
+        < dentro.index("cert.create_operator(agency_a)")
+    assert "cleanup_database()" in dentro
+    # prima del `with` solo il preflight: nessuna scrittura possibile fuori dal lock
+    prima = ast.unparse(ast.Module(body=run.body[:run.body.index(blocchi[0])],
+                                   type_ignores=[]))
+    for vietato in ("Certification(", "create_operator", "cleanup", "http_factory"):
+        assert vietato not in prima, vietato
+
+
+def test_lock_10_il_lock_non_cancella_e_non_tocca_dati():
+    """Il lock non ha DELETE, TRUNCATE, UPDATE o INSERT; non conosce il
+    prefisso delle identita'; ogni SQL che esegue e' una delle quattro note
+    (il doppio fallisce su qualunque altra)."""
+    albero = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    classe = next(n for n in albero.body
+                  if isinstance(n, ast.ClassDef) and n.name == "AdvisorySessionLock")
+    sorgente = ast.unparse(classe) + _function_source("acquire_certification_lock")
+    for vietato in ("DELETE", "TRUNCATE", "UPDATE ", "INSERT", "CERT_PREFIX", "LIKE",
+                    "CERT_EMAIL_LIKE", "created_user_ids"):
+        assert vietato not in sorgente, vietato
+    assert "pg_try_advisory_lock(" in sorgente
+    assert "pg_advisory_xact_lock" not in sorgente and "pg_try_advisory_xact_lock" not in sorgente
+    assert "pg_advisory_unlock_all" not in sorgente
+    # nessun `pg_advisory_lock` bloccante: il secondo run non si mette in coda
+    assert "pg_advisory_lock(" not in sorgente
+
+
+def test_lock_11_rientro_e_rilascio_sono_per_sessione():
+    """Due sessioni: la seconda non entra finche' la prima non rilascia, poi si."""
+    server = FakeAdvisoryServer()
+    primo, secondo = cert.AdvisorySessionLock(server.connect), cert.AdvisorySessionLock(server.connect)
+    assert primo.acquire() is True
+    assert secondo.acquire() is False
+    secondo.release()                               # non tocca il lock del primo
+    assert server.holders[cert.LOCK_NAME] is primo._conn
+    primo.release()
+    terzo = cert.AdvisorySessionLock(server.connect)
+    assert terzo.acquire() is True
+    terzo.release()
+    assert not server.held_by_someone()
+
+
+# --- PostgreSQL vero, usa-e-getta (opt-in: P29_TEST_DSN) ---------------------
+
+_PG_DSN = __import__("os").environ.get("P29_TEST_DSN")
+
+
+@pytest.mark.skipif(not _PG_DSN, reason="P29_TEST_DSN non impostata: nessun PostgreSQL usa-e-getta")
+def test_lock_pg_due_processi_insieme_ne_entra_uno_solo(monkeypatch):
+    """Sessioni PostgreSQL vere, in thread paralleli sincronizzati da una
+    barriera: esattamente uno acquisisce. Poi: application_name visibile in
+    pg_stat_activity, rilascio esplicito, e rilascio per morte della sessione.
+    Nessuna tabella letta o scritta."""
+    import threading
+
+    import database as punto_unico
+    from psycopg2.extensions import parse_dsn
+
+    # Il connettore e' quello di produzione (`Database.connect` passa
+    # `database.get_connection`), puntato sul database usa-e-getta: nessun
+    # nuovo sito di connessione (test_p26_db_entrypoints::h11).
+    parti = parse_dsn(_PG_DSN)
+    for chiave, attributo in (("host", "DB_HOST"), ("port", "DB_PORT"), ("dbname", "DB_NAME"),
+                              ("user", "DB_USER"), ("password", "DB_PASSWORD")):
+        monkeypatch.setattr(punto_unico, attributo, parti.get(chiave))
+    connetti = punto_unico.get_connection
+
+    c = connetti()
+    try:
+        with c.cursor() as cur:
+            cur.execute("SELECT current_database()")
+            nome = cur.fetchone()[0]
+    finally:
+        c.close()
+    if nome in ("stima360_db_test", "stima360_db"):
+        pytest.skip("P29_TEST_DSN punta a un database reale: questa prova e' solo usa-e-getta")
+    monkeypatch.setattr(cert, "REQUIRED_DB_NAME", nome)
+    monkeypatch.setattr(cert, "LOCK_NAME", f"p26-6-lock-test-{__import__('uuid').uuid4()}")
+
+    n = 8
+    barriera = threading.Barrier(n)
+    esiti, locks = [None] * n, [None] * n
+
+    def processo(i):
+        locks[i] = cert.AdvisorySessionLock(connetti)
+        barriera.wait()
+        esiti[i] = locks[i].acquire()
+
+    fili = [threading.Thread(target=processo, args=(i,)) for i in range(n)]
+    for f in fili:
+        f.start()
+    for f in fili:
+        f.join(30)
+    assert esiti.count(True) == 1 and esiti.count(False) == n - 1, esiti
+    vincitore = locks[esiti.index(True)]
+
+    with connetti() as c, c.cursor() as cur:
+        cur.execute("SELECT count(*) FROM pg_stat_activity "
+                    "WHERE application_name = %s AND pid = %s",
+                    (cert.LOCK_APPLICATION_NAME, vincitore._conn.get_backend_pid()))
+        assert cur.fetchone()[0] == 1
+    c.close()
+    for lock in locks:
+        if lock is not vincitore:
+            lock.release()                       # i perdenti chiudono senza liberare nulla
+    ritardatario = cert.AdvisorySessionLock(connetti)
+    assert ritardatario.acquire() is False, "un perdente ha rilasciato il lock del vincitore"
+    ritardatario.release()
+
+    # rilascio esplicito
+    vincitore.release()
+    nuovo = cert.AdvisorySessionLock(connetti)
+    assert nuovo.acquire() is True
+
+    # morte della sessione (processo ucciso): PostgreSQL libera il lock da solo
+    # (solo il pid di QUESTA sessione: nessun'altra connessione e' toccata)
+    with connetti() as c, c.cursor() as cur:
+        cur.execute("SELECT pg_terminate_backend(%s)", (nuovo._conn.get_backend_pid(),))
+    c.close()
+    import time
+    for _ in range(50):                          # la terminazione e' asincrona
+        sonda = cert.AdvisorySessionLock(connetti)
+        preso = sonda.acquire()
+        sonda.release()
+        if preso:
+            break
+        time.sleep(0.1)
+    nuovo.release()                              # non solleva su sessione gia' morta
+    ultimo = cert.AdvisorySessionLock(connetti)
+    assert ultimo.acquire() is True
+    ultimo.release()
