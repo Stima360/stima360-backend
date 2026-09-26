@@ -29,6 +29,9 @@ NOT_FOUND = "NOT_FOUND"
 FORBIDDEN_ROLE = "FORBIDDEN_ROLE"
 SESSION_REQUIRED = "SESSION_REQUIRED"
 PLATFORM_ADMIN_AGENCY_REQUIRED = "PLATFORM_ADMIN_AGENCY_REQUIRED"
+# A30-7: le due guardie di "Pianifica" / "Fissa sopralluogo".
+SCHEDULE_IN_PAST = "SCHEDULE_IN_PAST"
+STIMA_INSPECTION_ALREADY_OPEN = "STIMA_INSPECTION_ALREADY_OPEN"
 
 
 class _ConCodice:
@@ -82,6 +85,13 @@ class ProjectionConflict(_ConCodice, ConflictError):
     code = PROJECTION_CONFLICT
 
 
+class StimaInspectionAlreadyOpen(_ConCodice, ConflictError):
+    """A30-7 D5: la stima ha gia' un sopralluogo aperto (uno stato non
+    terminale). `existing_appointment_id` c'e' solo se il chiamante puo'
+    vedere quell'appuntamento."""
+    code = STIMA_INSPECTION_ALREADY_OPEN
+
+
 # --- 422 ------------------------------------------------------------------
 class AgentRequired(_ConCodice, ValidationError):
     code = AGENT_REQUIRED
@@ -105,6 +115,11 @@ class RangeTooLarge(_ConCodice, ValidationError):
 
 class LinkMismatch(_ConCodice, ValidationError):
     code = LINK_MISMATCH
+
+
+class ScheduleInPast(_ConCodice, ValidationError):
+    """A30-7 D4: si fissa solo un inizio futuro (confronto fra istanti)."""
+    code = SCHEDULE_IN_PAST
 
 
 class InspectionProjectionNotActive(_ConCodice, ValidationError):

@@ -48,7 +48,10 @@ def righe_impreviste_in_main(root) -> list[str]:
     # MOUNT A30 (collisione dichiarata): l'API Agenda si monta come LMC-15, e
     # le sue righe sono dichiarate per intero in `a30_mount_diff`.
     from tests.a30_mount_diff import RIGHE_MAIN as RIGHE_A30_MOUNT
-    ammesse = RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT
+    # A30-7 (collisione dichiarata): il mount della sincronizzazione delle
+    # richieste dal sito, dichiarato per intero in `a30_7_diff`.
+    from tests.a30_7_diff import RIGHE_MAIN as RIGHE_A30_7
+    ammesse = RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT | RIGHE_A30_7
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()

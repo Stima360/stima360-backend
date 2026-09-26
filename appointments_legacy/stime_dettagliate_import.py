@@ -180,6 +180,7 @@ SELECT d.id, d.agency_id, d.stima_id, d.sopralluogo,
   FROM stime_dettagliate d
   LEFT JOIN stime s ON s.id = d.stima_id
  WHERE d.sopralluogo IS NOT NULL
+   AND (%s::bigint IS NULL OR d.agency_id = %s::bigint)
  ORDER BY d.id
 """
 
@@ -251,9 +252,14 @@ def _report(apply: bool) -> dict:
     return esito
 
 
-def run_import(cur, *, apply: bool, today: date | None = None) -> dict:
+def run_import(cur, *, apply: bool, today: date | None = None,
+               agency_id: int | None = None) -> dict:
     """Classifica ogni record con un sopralluogo e, con `apply=True`, inserisce
     gli idonei nella transazione del chiamante (nessun commit qui).
+
+    `agency_id` (A30-7): se dato, SOLO i record legacy di quell'agenzia - la
+    sincronizzazione dall'Agenda lo prende dalla sessione. Senza, tutto il
+    database, come la CLI esplicita (A30-6).
 
     Con `apply=False` e' SOLA LETTURA: nessuna scrittura, solo il piano.
     Ogni INSERT sta in un SAVEPOINT: un errore inatteso su un record si conta
@@ -264,9 +270,11 @@ def run_import(cur, *, apply: bool, today: date | None = None) -> dict:
     oggi = today if today is not None else rome_today(cur)
     esito = _report(apply)
 
-    cur.execute("SELECT count(*) AS n FROM stime_dettagliate WHERE sopralluogo IS NULL")
+    esito["agency_id"] = agency_id
+    cur.execute("SELECT count(*) AS n FROM stime_dettagliate WHERE sopralluogo IS NULL "
+                "AND (%s::bigint IS NULL OR agency_id = %s::bigint)", (agency_id, agency_id))
     esito["without_sopralluogo"] = cur.fetchone()["n"]
-    cur.execute(_CANDIDATI, (SOURCE, KEY_PREFIX))
+    cur.execute(_CANDIDATI, (SOURCE, KEY_PREFIX, agency_id, agency_id))
     righe = [dict(r) for r in cur.fetchall()]
     esito["with_sopralluogo"] = len(righe)
 

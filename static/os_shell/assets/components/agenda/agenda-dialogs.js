@@ -27,6 +27,7 @@ import {
   TYPE_LABELS,
   addDays,
   defaultDuration,
+  durationMinutes,
   errorMessage,
   formatDateTime,
   formatDuration,
@@ -36,6 +37,7 @@ import {
   romeIso,
   romeParts,
   statusLabel,
+  todayKey,
   typeLabel,
 } from '../../agenda/agenda-model.js';
 import {
@@ -247,6 +249,186 @@ async function mostraSlot(radice, agente, durata, escluso) {
   } catch (errore) {
     box.textContent = errorMessage(errore);
   }
+}
+
+// ---------------------------------------------------------------------------
+// A30-7 - PIANIFICA / FISSA SOPRALLUOGO: gli slot della giornata
+// ---------------------------------------------------------------------------
+
+//: La fascia mostrata all'apertura: SOLO la posizione iniziale della vista
+//: (come la griglia A30-4), NON un orario di lavoro - quelli arrivano con
+//: A30-11. "Mostra tutta la giornata" toglie il filtro.
+const FASCIA_SLOT = Object.freeze({ da: 8, a: 20 });
+//: Il passo di SCELTA degli slot. La durata dell'appuntamento e' un'altra cosa.
+const PASSO_SLOT = 30;
+const DURATA_SOPRALLUOGO = 60;
+const FONTE_SITO = 'legacy_stime_dettagliate';
+
+const MSG_PASSATO = "L'orario scelto è già passato: scegli un orario futuro.";
+const MSG_ALTRO_SOPRALLUOGO = 'Esiste già un sopralluogo aperto per questa stima.';
+
+/**
+ * Tutti gli slot del giorno per l'agente scelto (GET /availability, passo 30):
+ * liberi = selezionabili; occupati = visibili ma disabilitati; passati = non
+ * mostrati. Un errore del server NON produce slot: nessuno slot e' "libero"
+ * senza la risposta del motore Agenda. Le risposte arrivate dopo una
+ * richiesta piu' recente si scartano.
+ */
+async function mostraSlotGiornata(radice, { agente, durata, escluso, tuttaGiornata }) {
+  const box = radice.querySelector('[data-slots]');
+  box.hidden = false;
+  box._giro = (box._giro || 0) + 1;
+  const giro = box._giro;
+  const data = radice.querySelector('[data-field="date"]').value;
+  if (!agente) {
+    box.textContent = 'Scegli un agente per vedere gli slot.';
+    return;
+  }
+  if (!data) {
+    box.textContent = 'Scegli un giorno.';
+    return;
+  }
+  box.textContent = 'Caricamento disponibilità…';
+  let esito;
+  try {
+    esito = await getAvailability({
+      userId: agente, from: romeIso(data), to: romeIso(addDays(data, 1)),
+      duration: durata, step: PASSO_SLOT, excludeAppointmentId: escluso || undefined,
+    });
+  } catch (errore) {
+    if (box._giro === giro) box.textContent = errorMessage(errore);
+    return;
+  }
+  if (box._giro !== giro) return;
+  box.replaceChildren();
+  const adesso = Date.now();
+  const futuri = (esito && Array.isArray(esito.slots) ? esito.slots : [])
+    .filter((s) => Date.parse(s.start_at) > adesso);
+  const visibili = tuttaGiornata ? futuri : futuri.filter((s) => {
+    const ora = romeParts(s.start_at).hour;
+    return ora >= FASCIA_SLOT.da && ora < FASCIA_SLOT.a;
+  });
+  if (!visibili.length) {
+    box.textContent = tuttaGiornata
+      ? 'Nessuno slot in questo giorno: scegli un altro giorno.'
+      : 'Nessuno slot nella fascia 08:00–20:00: prova tutta la giornata o un altro giorno.';
+    return;
+  }
+  const titolo = document.createElement('div');
+  titolo.className = 'muted';
+  titolo.textContent = 'Slot del giorno (clic su uno libero per usarlo):';
+  box.appendChild(titolo);
+  for (const s of visibili) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    const libero = s.available === true;
+    chip.className = `btn agenda-chip agenda-slot ${libero ? 'is-free' : 'is-busy'}`;
+    chip.textContent = `${formatTime(s.start_at)}–${formatTime(s.end_at)}${libero ? '' : ' · Occupato'}`;
+    chip.dataset.slot = libero ? 'free' : 'busy';
+    if (libero) {
+      chip.addEventListener('click', () => {
+        impostaOrario(radice, s.start_at, s.end_at);
+        nascondiDisponibilita(radice);
+      });
+    } else {
+      chip.disabled = true;
+      chip.setAttribute('aria-disabled', 'true');
+    }
+    box.appendChild(chip);
+  }
+}
+
+/** A30-7 D5: il link all'altro sopralluogo aperto, solo se il server l'ha dato. */
+function mostraAltroSopralluogo(form, errore, onOpenAppointment) {
+  const box = form.querySelector('[data-open-other]');
+  if (!box) return;
+  box.replaceChildren();
+  box.hidden = true;
+  if (!errore || errore.code !== 'STIMA_INSPECTION_ALREADY_OPEN') return;
+  const altro = Number(errore.existingAppointmentId);
+  if (!Number.isInteger(altro) || altro <= 0 || !onOpenAppointment) return;
+  const apri = document.createElement('button');
+  apri.type = 'button';
+  apri.className = 'btn';
+  apri.textContent = 'Apri appuntamento';
+  apri.addEventListener('click', () => onOpenAppointment(altro));
+  box.appendChild(apri);
+  box.hidden = false;
+}
+
+function messaggioPianifica(errore) {
+  if (!errore) return null;
+  if (errore.code === 'STIMA_INSPECTION_ALREADY_OPEN') return MSG_ALTRO_SOPRALLUOGO;
+  if (errore.code === 'SCHEDULE_IN_PAST') return MSG_PASSATO;
+  return null;
+}
+
+/** Il dialog "Pianifica" di una richiesta (A30-7): agente, giorno, slot,
+ *  controllo, conferma. Stessa riga: `POST /{id}/schedule` con `version`. */
+function apriPianifica(dialogEl, { riga, titolo, versione, agents, onDone, onOpenAppointment }) {
+  const dalSito = riga.source === FONTE_SITO && riga.status === 'requested';
+  const minuti = durationMinutes(riga.start_at, riga.end_at);
+  const durata = Number.isInteger(minuti) && minuti >= 5 && minuti <= 480 ? minuti : DURATA_SOPRALLUOGO;
+  const form = preparaDialog(dialogEl, titolo, `
+    <p class="agenda-preference" data-preference hidden></p>
+    <div class="form-field"><label>Agente *</label><select class="input" data-field="agent"></select></div>
+    ${BLOCCO_ORARIO}
+    <p class="muted" data-slot-hint></p>
+    <div class="action-bar">
+      <button type="button" class="btn" data-show-slots>Mostra slot</button>
+      <button type="button" class="btn ghost" data-all-day>Mostra tutta la giornata</button>
+    </div>
+    <div class="agenda-slots" data-slots hidden></div>
+    ${BLOCCO_DISPONIBILITA}
+    <div class="action-bar agenda-open-other" data-open-other hidden></div>`);
+  if (dalSito) {
+    const preferenza = form.querySelector('[data-preference]');
+    preferenza.textContent = `Preferenza cliente: ${formatDateTime(riga.start_at)} (richiesta dal sito, non ancora fissata)`;
+    preferenza.hidden = false;
+  }
+  form.querySelector('[data-slot-hint]').textContent =
+    `Durata: ${formatDuration(durata)} · slot ogni ${PASSO_SLOT} minuti · fascia mostrata 08:00–20:00 (non è un orario di lavoro).`;
+  impostaOrario(form, riga.start_at, riga.end_at);
+  if (!(Date.parse(riga.start_at) > Date.now())) {
+    // Preferenza gia' passata: il giorno proposto e' oggi, l'ora si sceglie.
+    form.querySelector('[data-field="date"]').value = todayKey();
+  }
+  const agente = form.querySelector('[data-field="agent"]');
+  riempiAgenti(agente, agents, { vuoto: 'Scegli un agente', selezionato: riga.assigned_user_id });
+  let tuttaGiornata = false;
+  const tutta = form.querySelector('[data-all-day]');
+  const aggiornaSlot = () => mostraSlotGiornata(form, {
+    agente: agente.value ? Number(agente.value) : null, durata, escluso: riga.id, tuttaGiornata,
+  });
+  form.querySelector('[data-show-slots]').addEventListener('click', aggiornaSlot);
+  tutta.addEventListener('click', () => {
+    tuttaGiornata = !tuttaGiornata;
+    tutta.textContent = tuttaGiornata ? 'Mostra solo 08:00–20:00' : 'Mostra tutta la giornata';
+    aggiornaSlot();
+  });
+  for (const campo of [agente, form.querySelector('[data-field="date"]')]) {
+    campo.addEventListener('change', aggiornaSlot);
+  }
+  collegaInvio(dialogEl, form, async () => {
+    const { startAt, endAt } = leggiIntervallo(form);
+    const scelto = agente.value ? Number(agente.value) : null;
+    if (!scelto) throw new Error('Per pianificare scegli un agente.');
+    if (!(Date.parse(startAt) > Date.now())) throw new Error(MSG_PASSATO);
+    mostraAltroSopralluogo(form, null, null);
+    if (!(await disponibilePrima(form, {
+      agente: scelto, startAt, endAt, escluso: riga.id,
+    }))) return false;
+    return runAction(riga.id, 'schedule', {
+      ...versione, assigned_user_id: scelto, start_at: startAt, end_at: endAt,
+    });
+  }, {
+    onDone,
+    onConflict: conflittoDalServer(form),
+    messaggio: messaggioPianifica,
+    onError: (e) => mostraAltroSopralluogo(form, e, onOpenAppointment),
+  });
+  dialogEl.showModal();
+  if (agente.value) aggiornaSlot();
 }
 
 function preparaDialog(dialogEl, titolo, corpo) {
@@ -683,7 +865,7 @@ export function openCreateDialog(dialogEl, { agents, dateKey, onDone }) {
  * `version` viene da li', e le azioni offerte sono solo quelle che il server
  * ha messo in `allowed_actions`.
  */
-export function openActionDialog(dialogEl, { action, detail, agents, onDone }) {
+export function openActionDialog(dialogEl, { action, detail, agents, onDone, onOpenAppointment }) {
   const riga = detail.appointment;
   const titolo = `${ACTION_LABELS[action] || action} · ${typeLabel(riga.appointment_type) || 'Appuntamento'}`;
   const versione = { version: riga.version };
@@ -778,7 +960,12 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone }) {
     return;
   }
 
-  if (action === 'schedule' || action === 'reschedule') {
+  if (action === 'schedule') {
+    apriPianifica(dialogEl, { riga, titolo, versione, agents, onDone, onOpenAppointment });
+    return;
+  }
+
+  if (action === 'reschedule') {
     // Sposta: l'agente si cambia qui solo se il server permette anche la
     // riassegnazione a questo operatore (owner/admin). Pianifica: l'agente e'
     // obbligatorio ed esplicito (D2).

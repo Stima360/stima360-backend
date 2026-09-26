@@ -400,6 +400,11 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/agenda/agenda-lookup.js",
         "static/os_shell/assets/components/agenda/agenda-dialogs.js",
         "static/os_shell/assets/views/agenda/agenda-page.js",
+        # A30-7 - PIANIFICA / FISSA SOPRALLUOGO. Il pannello dell'Agenda
+        # guadagna il badge "Richiesta dal sito" e la preferenza del cliente;
+        # gli altri tre file erano gia' ammessi. Nessuna vista del CRM e
+        # nessun componente della Rete e' toccato.
+        "static/os_shell/assets/components/agenda/agenda-drawer.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

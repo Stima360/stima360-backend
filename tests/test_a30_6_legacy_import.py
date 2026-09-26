@@ -274,7 +274,18 @@ def test_33_nessuna_credenziale_nel_codice():
 
 
 def test_34_il_package_legacy_non_e_montato_ne_importato_dall_app():
+    # SENTINELLA AGGIORNATA DA A30-7: `main.py` monta SOLO il router della
+    # sincronizzazione (import + mount, tests/test_a30_mount_api.py test_30b);
+    # l'import e lo script restano fuori dall'app.
     main = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "appointments_legacy" not in main
+    righe = [r.strip() for r in main.splitlines()
+             if "appointments_legacy" in r.split("#", 1)[0]]
+    assert righe == [
+        "from appointments_legacy.router import router as appointments_legacy_router",
+        "app.include_router(appointments_legacy_router, "
+        "dependencies=[Depends(require_authenticated_operator)])",
+    ]
+    assert "stime_dettagliate_import" not in main
     for file in ROOT.glob("*.py"):
-        assert "appointments_legacy" not in file.read_text(encoding="utf-8"), file.name
+        if file.name != "main.py":
+            assert "appointments_legacy" not in file.read_text(encoding="utf-8"), file.name

@@ -726,14 +726,17 @@ def _ispezione(mondo, id_):
 
 def test_51_accesa_schedule_reschedule_complete(http, mondo, proiezione_accesa):
     req = _crea(http, status="requested", appointment_type="inspection", stima_id=mondo["stima"])
+    # SENTINELLA AGGIORNATA DA A30-7 (D4): `schedule` rifiuta un inizio gia'
+    # passato per l'orologio del service (ORA = mezzogiorno di GIORNO): la
+    # richiesta si fissa alle 13, lo spostamento e il completamento restano.
     r = http("giorgio").post(f"/api/appointments/{req['id']}/schedule",
                              json={"version": req["version"], "assigned_user_id": mondo["luca"],
-                                   "start_at": ore(9).isoformat(), "end_at": ore(10).isoformat()})
+                                   "start_at": ore(13).isoformat(), "end_at": ore(14).isoformat()})
     assert r.status_code == 200, r.text
     fissato = r.json()
     ins = fissato["stima_inspection_id"]
     assert ins is not None
-    assert _ispezione(mondo, ins)[0] == "scheduled" and _ispezione(mondo, ins)[1] == ore(9)
+    assert _ispezione(mondo, ins)[0] == "scheduled" and _ispezione(mondo, ins)[1] == ore(13)
     timeline = mondo["sql"]("SELECT event_type FROM seller_timeline_events ORDER BY id")
     assert [t[0] for t in timeline] == ["inspection_scheduled"]
 

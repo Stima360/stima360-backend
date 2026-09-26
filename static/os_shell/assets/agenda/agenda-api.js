@@ -62,6 +62,10 @@ async function request(method, path, body) {
     errore.alternatives = dati && Array.isArray(dati.alternatives) ? dati.alternatives : [];
     errore.currentVersion = dati && Number.isInteger(dati.current_version)
       ? dati.current_version : null;
+    // A30-7 D5: l'altro sopralluogo aperto della stessa stima, solo se il
+    // server lo ha incluso (cioe' se l'operatore puo' vederlo).
+    errore.existingAppointmentId = dati && Number.isInteger(dati.existing_appointment_id)
+      && dati.existing_appointment_id > 0 ? dati.existing_appointment_id : null;
     throw errore;
   }
   return dati;
@@ -154,4 +158,11 @@ export function runAction(appointmentId, action, body) {
   const percorso = PERCORSI_AZIONE[action];
   if (!percorso) throw new Error(`Azione non supportata: ${action}`);
   return request('POST', `/${id(appointmentId)}/${percorso}`, body);
+}
+
+/** A30-7: POST /legacy-requests/sync - porta nell'Agenda le richieste di
+ *  sopralluogo arrivate dal sito e non ancora importate. Nessun corpo:
+ *  l'agenzia la decide il server dalla sessione. Solo contatori in risposta. */
+export function syncLegacyRequests() {
+  return request('POST', '/legacy-requests/sync', {});
 }

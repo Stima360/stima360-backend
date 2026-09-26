@@ -152,11 +152,19 @@ export async function openAppointmentDrawer(drawerEl, {
   const stato = statusLabel(riga.status);
   if (stato) testata.appendChild(el('span', `agenda-badge agenda-badge-${riga.status}`, stato));
   if (riga.source === 'a30_test') testata.appendChild(el('span', 'agenda-badge agenda-badge-test', 'TEST'));
+  // A30-7: una richiesta arrivata dal form pubblico del sito (import A30-6).
+  const dalSito = riga.source === 'legacy_stime_dettagliate';
+  if (dalSito) testata.appendChild(el('span', 'agenda-badge agenda-badge-site', 'Richiesta dal sito'));
   pannello.appendChild(testata);
 
+  // Finche' e' una richiesta, l'orario e' la PREFERENZA del cliente, non un
+  // appuntamento fissato: si dice cosi'. Dopo "Pianifica" e' l'orario vero.
+  const preferenza = dalSito && riga.status === 'requested';
   const dati = el('div', 'detail-grid agenda-drawer-grid');
   aggiungi(dati,
-    voce('Quando', `${formatDateTime(riga.start_at)}–${formatTime(riga.end_at)}`),
+    preferenza
+      ? voce('Preferenza cliente', formatDateTime(riga.start_at))
+      : voce('Quando', `${formatDateTime(riga.start_at)}–${formatTime(riga.end_at)}`),
     voce('Durata', formatDuration(durationMinutes(riga.start_at, riga.end_at))),
     voce('Agente', detail.agent ? detail.agent.name : (riga.assigned_user_id ? '' : 'Nessuno (richiesta)')),
     voce('Cliente', detail.contact ? detail.contact.display_name : null),

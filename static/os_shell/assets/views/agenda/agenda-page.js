@@ -13,7 +13,7 @@
 // Ogni caricamento annota `sessionEpoch()` e la rotta: una risposta arrivata
 // dopo un cambio di sessione o di pagina viene buttata, come nel router.
 
-import { sessionEpoch } from '../../core/auth.js';
+import { getSession, sessionEpoch } from '../../core/auth.js';
 import { navigate } from '../../core/router.js';
 import {
   MOBILE_MAX_WIDTH,
@@ -36,7 +36,9 @@ import {
   typeLabel,
   viewFromSlug,
 } from '../../agenda/agenda-model.js';
-import { getAgents, getCalendar, getList } from '../../agenda/agenda-api.js';
+import {
+  getAgents, getCalendar, getList, syncLegacyRequests,
+} from '../../agenda/agenda-api.js';
 import { renderDay, renderList, renderWeek } from '../../components/agenda/agenda-views.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
 import { openActionDialog, openCreateDialog } from '../../components/agenda/agenda-dialogs.js';
@@ -73,6 +75,29 @@ function confermaCreazione(creato) {
   const cosa = [typeLabel(creato.appointment_type), statusLabel(creato.status)]
     .filter(Boolean).join(' · ');
   return `Appuntamento creato: ${formatDateTime(creato.start_at)}${cosa ? ` · ${cosa}` : ''}.`;
+}
+
+// A30-7: chi smista la coda delle richieste. Specchio della permission del
+// dominio (`operator_auth.permissions.may_assign_records`: titolare,
+// amministratore, platform admin dentro un'agenzia) solo per NON mostrare un
+// bottone che il server rifiuterebbe; l'autorita' resta il server (403).
+function gestisceRichieste(sessione) {
+  if (!sessione) return false;
+  if (sessione.is_platform_admin === true) {
+    return sessione.acting !== null && sessione.acting !== undefined;
+  }
+  return sessione.role === 'agency_owner' || sessione.role === 'agency_admin';
+}
+
+function numero(valore) {
+  const n = Number(valore);
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+function esitoSincronizzazione(esito) {
+  return `Richieste dal sito aggiornate: nuove ${numero(esito && esito.imported)} · `
+    + `già presenti ${numero(esito && esito.already_present)} · `
+    + `escluse ${numero(esito && esito.excluded)}.`;
 }
 
 function isMobile() {
@@ -146,7 +171,15 @@ export async function renderAgenda(container, params = []) {
   aggiorna.type = 'button';
   const nuovo = el('button', 'btn primary', '+ Nuovo appuntamento');
   nuovo.type = 'button';
-  comandi.append(aggiorna, nuovo);
+  comandi.append(aggiorna);
+  // A30-7: solo su richiesta esplicita, mai al caricamento della pagina.
+  const sincronizza = gestisceRichieste(getSession())
+    ? el('button', 'btn', 'Aggiorna richieste dal sito') : null;
+  if (sincronizza) {
+    sincronizza.type = 'button';
+    comandi.append(sincronizza);
+  }
+  comandi.append(nuovo);
   barra.appendChild(comandi);
   pagina.appendChild(barra);
 
@@ -229,10 +262,20 @@ export async function renderAgenda(container, params = []) {
           action: azione,
           detail,
           agents: listaAgenti,
+          // A30-7 D5: "Apri appuntamento" verso l'altro sopralluogo aperto
+          // della stessa stima. Si segna come fatto, cosi' la chiusura del
+          // dialog non riapre il pannello di partenza.
+          onOpenAppointment: (altroId) => {
+            fatto = true;
+            dialogo.close();
+            if (!stale()) apri(altroId);
+          },
           onDone: async (esito) => {
             fatto = true;
             if (stale()) return;
-            await carica('Operazione completata.');
+            const fissato = azione === 'schedule'
+              && detail.appointment.appointment_type === 'inspection';
+            await carica(fissato ? 'Sopralluogo fissato.' : 'Operazione completata.');
             // Dopo uno spostamento l'appuntamento "vivo" e' la riga nuova.
             const prossimo = esito && esito.id ? esito.id : detail.appointment.id;
             if (!stale()) apri(prossimo);
@@ -243,6 +286,23 @@ export async function renderAgenda(container, params = []) {
   }
 
   aggiorna.addEventListener('click', () => carica());
+  if (sincronizza) {
+    sincronizza.addEventListener('click', async () => {
+      if (sincronizza.disabled) return;
+      sincronizza.disabled = true;
+      avviso.replaceChildren(el('span', 'muted', 'Aggiornamento delle richieste dal sito…'));
+      try {
+        const esito = await syncLegacyRequests();
+        if (stale()) return;
+        await carica(esitoSincronizzazione(esito));
+      } catch (errore) {
+        if (stale()) return;
+        avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
+      } finally {
+        sincronizza.disabled = false;
+      }
+    });
+  }
   nuovo.addEventListener('click', async () => {
     try {
       listaAgenti = await agenti();

@@ -254,9 +254,11 @@ def test_21_accesa_fissare_una_richiesta_importata_riusa_e_sposta_la_riga(
     a = _appuntamento_di(mondo, isp["aperta"]["id"])
     righe_lmc15 = mondo["sql"]("SELECT count(*) FROM stima_inspections")[0][0]
     timeline = mondo["sql"]("SELECT count(*) FROM seller_timeline_events")[0][0]
+    # SENTINELLA AGGIORNATA DA A30-7 (D4): un inizio futuro per l'orologio del
+    # service (ORA = mezzogiorno di GIORNO).
     r = http("giorgio").post(f"/api/appointments/{a['id']}/schedule", json={
         "version": a["version"], "assigned_user_id": mondo["luca"],
-        "start_at": ore(9, 30).isoformat(), "end_at": ore(10, 30).isoformat()})
+        "start_at": ore(13, 30).isoformat(), "end_at": ore(14, 30).isoformat()})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "scheduled"
     assert r.json()["stima_inspection_id"] == isp["aperta"]["id"]          # stessa riga
@@ -264,7 +266,7 @@ def test_21_accesa_fissare_una_richiesta_importata_riusa_e_sposta_la_riga(
     stato, quando = mondo["sql"](
         "SELECT status, scheduled_for FROM stima_inspections WHERE id=%s",
         (isp["aperta"]["id"],))[0]
-    assert stato == "scheduled" and quando == ore(9, 30)
+    assert stato == "scheduled" and quando == ore(13, 30)
     # LMC-15 non definisce un evento di spostamento: la timeline non cambia
     assert mondo["sql"]("SELECT count(*) FROM seller_timeline_events")[0][0] == timeline
 
@@ -291,9 +293,10 @@ def test_23_accesa_riga_lmc15_gia_chiusa_altrove_e_un_conflitto_leggibile(
     # dopo il backfill, LMC-15 (scrittore legacy) chiude la riga per conto suo
     _lmc15().cancel_inspection(mondo["a"], inspection_id=isp["aperta"]["id"],
                                reason="altrove", actor_user_id=mondo["giorgio"])
+    # SENTINELLA AGGIORNATA DA A30-7 (D4): inizio futuro per l'orologio del service
     r = http("giorgio").post(f"/api/appointments/{a['id']}/schedule", json={
         "version": a["version"], "assigned_user_id": mondo["luca"],
-        "start_at": ore(9).isoformat(), "end_at": ore(10).isoformat()})
+        "start_at": ore(13).isoformat(), "end_at": ore(14).isoformat()})
     assert r.status_code == 409 and r.json()["code"] == "PROJECTION_CONFLICT"
     riga = _appuntamento_di(mondo, isp["aperta"]["id"])
     assert riga["status"] == "requested" and riga["version"] == a["version"]

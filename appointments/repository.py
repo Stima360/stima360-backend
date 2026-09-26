@@ -12,7 +12,9 @@ ORDINE DEI LOCK (unico per tutti i percorsi di scrittura dell'Agenda):
        `stima_inspections`, prese dalle varianti LMC-15.
 
 NON legge MAI `stime_dettagliate` (D10) ne' `property_visits` (A30-2). Di
-`stime` legge solo l'agenzia e il riepilogo per il pannello, in sola lettura.
+`stime` legge solo l'agenzia e il riepilogo per il pannello, in sola lettura;
+A30-7 vi prende in piu' il lock di riga (`lock_stima`, FOR UPDATE, nessuna
+scrittura) che serializza i sopralluoghi della stessa stima.
 
 Nessun percorso prende un lock di riga dopo un lock di agente: due
 transazioni non possono aspettarsi a vicenda.
@@ -120,6 +122,41 @@ def find_conflicts(cur, *, assigned_user_id, start_at, end_at,
          "escluso": exclude_appointment_id},
     )
     return [{c: r[c] for c in CONFLICT_COLUMNS} for r in cur.fetchall()]
+
+
+def lock_stima(cur, agency_id: int, stima_id: int) -> bool:
+    """A30-7 D5: `stime` FOR UPDATE dentro l'agenzia - la stessa riga e lo
+    stesso lock che la proiezione LMC-15 prende poco dopo
+    (`acquisition.repository._blocca_stima`). Serializza due pianificazioni di
+    sopralluogo sulla stessa stima. Nell'ORDINE DEI LOCK viene dopo la riga
+    `appointments` e gli agenti. Vero se la stima c'e'."""
+    cur.execute("SELECT id FROM stime WHERE id = %s AND agency_id = %s FOR UPDATE",
+                (stima_id, agency_id))
+    return cur.fetchone() is not None
+
+
+def open_inspection_for_stima(cur, agency_id: int, stima_id: int, *, statuses,
+                              exclude_appointment_id=None):
+    """A30-7 D5: un altro sopralluogo della stessa stima ancora aperto (uno
+    degli stati `statuses`, quelli NON terminali della macchina a stati), o
+    None. Da chiamare DOPO `lock_stima`."""
+    cur.execute(
+        """
+        SELECT id, assigned_user_id, status
+          FROM appointments
+         WHERE agency_id = %(agency)s
+           AND stima_id = %(stima)s
+           AND appointment_type = 'inspection'
+           AND status = ANY(%(stati)s)
+           AND (%(escluso)s::bigint IS NULL OR id <> %(escluso)s::bigint)
+         ORDER BY id
+         LIMIT 1
+        """,
+        {"agency": agency_id, "stima": stima_id, "stati": list(statuses),
+         "escluso": exclude_appointment_id},
+    )
+    riga = cur.fetchone()
+    return None if riga is None else dict(riga)
 
 
 def stima_agency(cur, stima_id: int):

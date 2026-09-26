@@ -25,7 +25,7 @@ MAIN = ROOT / "main.py"
 
 #: Le operazioni che il mount espone: (metodo, percorso). Una in piu' o in
 #: meno e' una modifica del contratto A30-2, non del mount.
-OPERAZIONI_AGENDA = frozenset({
+OPERAZIONI_AGENDA_ROUTER = frozenset({
     ("GET", "/api/appointments/calendar"),
     ("GET", "/api/appointments/agents"),
     ("GET", "/api/appointments/availability"),
@@ -45,6 +45,16 @@ OPERAZIONI_AGENDA = frozenset({
     ("POST", "/api/appointments/{appointment_id}/complete"),
     ("POST", "/api/appointments/{appointment_id}/no-show"),
 })
+
+#: SENTINELLA AGGIORNATA DA A30-7: sotto lo stesso prefisso, e con lo stesso
+#: modello di mount, il router `appointments_legacy` espone UNA rotta - la
+#: sincronizzazione esplicita delle richieste di sopralluogo dal sito.
+OPERAZIONI_LEGACY = frozenset({
+    ("POST", "/api/appointments/legacy-requests/sync"),
+})
+
+#: Tutto cio' che vive sotto `/api/appointments`.
+OPERAZIONI_AGENDA = OPERAZIONI_AGENDA_ROUTER | OPERAZIONI_LEGACY
 
 METODI_HTTP = {"get", "post", "put", "patch", "delete"}
 
@@ -77,6 +87,11 @@ def _chi_serve(app, metodo, percorso):
 
 def _e_il_router_agenda(rotta):
     from appointments.router import router
+    return getattr(rotta, "original_router", None) is router
+
+
+def _e_il_router_legacy(rotta):
+    from appointments_legacy.router import router
     return getattr(rotta, "original_router", None) is router
 
 
@@ -154,14 +169,16 @@ def test_12_ammissione_al_mount_e_scope_su_ogni_rotta(app):
 @pytest.mark.parametrize("metodo,percorso", sorted(OPERAZIONI_AGENDA))
 def test_20_ogni_operazione_agenda_e_servita_solo_dal_router_agenda(app, metodo, percorso):
     chi = _chi_serve(app, metodo, _concreto(percorso))
-    assert len(chi) == 1 and _e_il_router_agenda(chi[0]), (metodo, percorso, chi)
+    proprio = _e_il_router_legacy if (metodo, percorso) in OPERAZIONI_LEGACY \
+        else _e_il_router_agenda
+    assert len(chi) == 1 and proprio(chi[0]), (metodo, percorso, chi)
 
 
 def test_21_il_router_agenda_non_intercetta_nessun_altra_operazione(app):
     (agenda,) = [r for r in app.routes if _e_il_router_agenda(r)]
     from starlette.routing import Match
 
-    altre = _operazioni(app) - OPERAZIONI_AGENDA
+    altre = _operazioni(app) - OPERAZIONI_AGENDA_ROUTER
     assert altre, "OpenAPI vuota: la prova non proverebbe nulla"
     rubate = []
     for metodo, percorso in altre:
@@ -182,8 +199,18 @@ def test_22_nessun_altro_percorso_sotto_il_prefisso_agenda(app):
 # ---------------------------------------------------------------------------
 
 def _righe_codice_agenda(sorgente):
+    """Le righe di codice che nominano il dominio Agenda `appointments`.
+
+    SENTINELLA AGGIORNATA DA A30-7: il package `appointments_legacy` (adattatore
+    di import, fuori dal dominio, D5 di A30-6) ha le sue righe e la sua
+    sentinella (`_righe_codice_legacy`, test_30b): qui non si contano."""
     return [r.strip() for r in sorgente.splitlines()
-            if "appointments" in r.split("#", 1)[0]]
+            if re.search(r"\bappointments(?!_legacy)", r.split("#", 1)[0])]
+
+
+def _righe_codice_legacy(sorgente):
+    return [r.strip() for r in sorgente.splitlines()
+            if "appointments_legacy" in r.split("#", 1)[0]]
 
 
 def test_30_main_nomina_l_agenda_solo_per_import_e_mount():
@@ -191,6 +218,16 @@ def test_30_main_nomina_l_agenda_solo_per_import_e_mount():
     assert _righe_codice_agenda(sorgente) == [
         "from appointments.router import router as appointments_router",
         "app.include_router(appointments_router, "
+        "dependencies=[Depends(require_authenticated_operator)])",
+    ]
+
+
+def test_30b_main_nomina_il_router_legacy_solo_per_import_e_mount():
+    """A30-7: la sincronizzazione delle richieste dal sito, stesso modello."""
+    sorgente = MAIN.read_text(encoding="utf-8")
+    assert _righe_codice_legacy(sorgente) == [
+        "from appointments_legacy.router import router as appointments_legacy_router",
+        "app.include_router(appointments_legacy_router, "
         "dependencies=[Depends(require_authenticated_operator)])",
     ]
 
@@ -203,7 +240,9 @@ def test_31_main_non_importa_altro_dal_dominio_agenda():
             importati.append((nodo.module, [(a.name, a.asname) for a in nodo.names]))
         elif isinstance(nodo, ast.Import):
             assert not any(a.name.startswith("appointments") for a in nodo.names)
-    assert importati == [("appointments.router", [("router", "appointments_router")])]
+    assert importati == [("appointments.router", [("router", "appointments_router")]),
+                         ("appointments_legacy.router",
+                          [("router", "appointments_legacy_router")])]
 
 
 def test_32_appointments_router_usato_una_volta_sola_e_solo_nel_mount():

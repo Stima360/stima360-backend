@@ -169,7 +169,9 @@ def test_07_solo_api_appointments_e_solo_da_agenda_api():
 
 def test_08_nessun_accesso_a_stime_dettagliate_visite_acquirente_o_google():
     for f in AGENDA_FILES:
-        codice = _senza_commenti(_testo(f)).lower()
+        # A30-7: `legacy_stime_dettagliate` e' solo il VALORE di `source` di una
+        # richiesta importata (lo stesso esonero dei test backend A30-2/2P).
+        codice = _senza_commenti(_testo(f)).lower().replace("legacy_stime_dettagliate", "")
         for vietato in ("stime_dettagliate", "property_visits", "property-visits", "/visits",
                         "admin/stime", "salva_stima", "google", "booking"):
             assert vietato not in codice, (f.name, vietato)
@@ -596,13 +598,16 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
     chiamate = re.findall(r"romeIso\(([^)]*)\)", dialoghi)
     assert chiamate == [
         "data, inizio[0], inizio[1]", "data, fine[0], fine[1]",        # leggiIntervallo
-        "data", "addDays(data, 1", "data, ora[0], ora[1]",                # slot (mezzanotti), completa
+        "data", "addDays(data, 1",                                       # slot (mezzanotti)
+        "data", "addDays(data, 1",                                       # A30-7: slot di Pianifica
+        "data, ora[0], ora[1]",                                          # completa
     ], chiamate
     # leggiIntervallo serve nuovo appuntamento, pianifica e sposta, sempre
     # dentro la funzione di invio (quindi prima di qualunque richiesta).
     # A30-5: la terza chiamata e' "Verifica disponibilita'", dentro il suo
     # try e PRIMA della richiesta: un orario inesistente non parte nemmeno li'.
-    assert dialoghi.count("const { startAt, endAt } = leggiIntervallo(form);") == 3
+    # A30-7: la quarta e' l'invio di "Pianifica", ora un dialog proprio.
+    assert dialoghi.count("const { startAt, endAt } = leggiIntervallo(form);") == 4
     verifica = dialoghi[dialoghi.index("form.querySelector('[data-check]')"):]
     verifica = verifica[:verifica.index("  });")]
     assert verifica.index("leggiIntervallo(form)") < verifica.index("checkAvailability(")

@@ -5336,6 +5336,10 @@ AGENDA_OPERAZIONI = (
     ("POST", "/{id}/reschedule"), ("POST", "/{id}/reassign"),
     ("POST", "/{id}/cancel"), ("POST", "/{id}/complete"),
     ("POST", "/{id}/no-show"),
+    # A30-7: la sincronizzazione esplicita delle richieste dal sito
+    # (router `appointments_legacy`, stesso prefisso): solo inventario - il
+    # giro anonimo la sonda (-> 401), nessuna scrittura nel giro live.
+    ("POST", "/legacy-requests/sync"),
 )
 
 

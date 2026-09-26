@@ -14,7 +14,19 @@ LA PROTEZIONE ANTI-SOVRAPPOSIZIONE, A TRE LIVELLI
        di database.
 
 ORDINE DEI LOCK, unico: riga appointments -> agenti (id crescente) -> (solo
-proiezione, A30-2P) stima -> riga stima_inspections.
+proiezione, A30-2P, e guardia D5 di A30-7) stima -> riga stima_inspections.
+
+A30-7 - DUE GUARDIE DI "PIANIFICA" / "FISSA SOPRALLUOGO"
+    D4: `schedule` rifiuta un inizio gia' passato (SCHEDULE_IN_PAST, 422),
+        confrontando ISTANTI (con fuso) con l'orologio del service. Solo la
+        pianificazione: le righe storiche non si toccano.
+    D5: un sopralluogo legato a una stima non si fissa se la stessa stima ha
+        gia' un altro sopralluogo APERTO (stati non terminali della macchina a
+        stati): STIMA_INSPECTION_ALREADY_OPEN, 409. La verifica avviene sotto
+        il lock della riga `stime`, nella transazione della scrittura: due
+        pianificazioni concorrenti si mettono in fila e la seconda vede la
+        prima. Vale per `schedule` (la pianificazione di una richiesta): la
+        creazione gia' fissata e la facade LMC-15 restano come in A30-2/2P.
 
 VISIBILITA' (matrice P26-1, D4, D6)
     owner / admin / platform admin in acting: tutta l'agenzia;
@@ -193,6 +205,36 @@ def _in_transazione(funzione):
 
 
 # ---------------------------------------------------------------------------
+# A30-7: le guardie della pianificazione
+# ---------------------------------------------------------------------------
+
+def _non_nel_passato(start_at) -> None:
+    """D4: istanti con fuso, mai orologi locali ingenui."""
+    if start_at < _adesso():
+        raise errors.ScheduleInPast(
+            "L'orario scelto e' gia' passato: scegli un orario futuro")
+
+
+def _sopralluogo_unico(ctx, cur, agency_id, *, appointment_type, stima_id, escluso=None):
+    """D5: al massimo UN sopralluogo aperto per stima. Chiamare dopo i lock di
+    riga e di agente (ordine dei lock); il lock della stima resta fino al
+    commit, quindi la proiezione che segue lavora sulla stessa riga bloccata."""
+    if appointment_type != "inspection" or stima_id is None:
+        return
+    repository.lock_stima(cur, agency_id, stima_id)
+    altro = repository.open_inspection_for_stima(
+        cur, agency_id, stima_id, statuses=state_machine.OPEN_STATUSES,
+        exclude_appointment_id=escluso)
+    if altro is None:
+        return
+    dati = {}
+    if _visibile(ctx, altro):
+        dati["existing_appointment_id"] = altro["id"]
+    raise errors.StimaInspectionAlreadyOpen(
+        "Esiste gia' un sopralluogo aperto per questa stima", **dati)
+
+
+# ---------------------------------------------------------------------------
 # CREAZIONE (idempotente)
 # ---------------------------------------------------------------------------
 
@@ -347,9 +389,12 @@ def schedule_appointment(ctx, appointment_id, body):
         if proietta:
             projection.require_active()
         _controlla_agente(ctx, cur, agency_id, body.assigned_user_id)
+        _non_nel_passato(body.start_at)
         _occupa(cur, assigned_user_id=body.assigned_user_id, start_at=body.start_at,
                 end_at=body.end_at, before=row["buffer_before_minutes"],
                 after=row["buffer_after_minutes"], escluso=row["id"])
+        _sopralluogo_unico(ctx, cur, agency_id, appointment_type=row["appointment_type"],
+                           stima_id=row["stima_id"], escluso=row["id"])
         nuova = repository.update_appointment(
             cur, row["id"], {"assigned_user_id": body.assigned_user_id,
                              "start_at": body.start_at, "end_at": body.end_at,

@@ -38,6 +38,7 @@ from owner.router_portal import router as owner_portal_router
 from owner import provisioning as owner_provisioning
 from acquisition.router import router as acquisition_router
 from appointments.router import router as appointments_router
+from appointments_legacy.router import router as appointments_legacy_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
@@ -116,6 +117,9 @@ app.include_router(acquisition_router, dependencies=[Depends(require_authenticat
 # A30: l'API Agenda (`/api/appointments`). Solo il mount, come LMC-15: lo
 # scope lo prende ogni rotta da `require_operator`. Nessuna UI in questo step.
 app.include_router(appointments_router, dependencies=[Depends(require_authenticated_operator)])
+# A30-7: la sincronizzazione esplicita delle richieste di sopralluogo dal sito
+# (`/api/appointments/legacy-requests/sync`). Solo il mount, come l'Agenda.
+app.include_router(appointments_legacy_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
 

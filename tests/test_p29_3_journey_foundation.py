@@ -350,10 +350,12 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     from tests.a30_5_diff import FILE_MODIFICATI as MOD_A30_5, FILE_NUOVI as NUOVI_A30_5
     # SENTINELLA AGGIORNATA DA A30-6: ottava dichiarazione dell'Agenda.
     from tests.a30_6_diff import FILE_MODIFICATI as MOD_A30_6, FILE_NUOVI as NUOVI_A30_6
+    # SENTINELLA AGGIORNATA DA A30-7: nona dichiarazione dell'Agenda.
+    from tests.a30_7_diff import FILE_MODIFICATI as MOD_A30_7, FILE_NUOVI as NUOVI_A30_7
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
-                 | NUOVI_A30_5 | NUOVI_A30_6)
+                 | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
-               | MOD_A30_6)
+               | MOD_A30_6 | MOD_A30_7)
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
