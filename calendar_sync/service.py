@@ -426,13 +426,27 @@ def _transitorio(cursor, claim, riga, code):
 # ---------------------------------------------------------------------------
 
 def run_once(*, provider, limit: int = 10, lease_seconds: int = k.DEFAULT_LEASE_SECONDS,
-             agency_id: int | None = None, keyring=None, cursor=core_cursor) -> list:
+             agency_id: int | None = None, sync_id: int | None = None, keyring=None,
+             cursor=core_cursor) -> list:
     """Prende un lotto (transazione breve, poi commit) e riconcilia riga per
     riga. Un errore inatteso su una riga non ferma le altre: la riga torna in
-    retry con un codice generico, senza dettagli."""
+    retry con un codice generico, senza dettagli.
+
+    `sync_id`: primitiva interna per recovery/diagnostica e smoke live mirati
+    - restringe il giro a UNA sola riga (vedi `repository.claim_batch`). Il
+    cron ordinario (`run_calendar_sync_cron.py`) non la usa mai: nessun
+    cambiamento al comportamento di batch quando e' assente. Un'esecuzione
+    mirata dev'essere sempre anche tenant-scoped: `sync_id` senza `agency_id`
+    e' un errore di chi chiama, non un giro "su tutte le agenzie" piu'
+    ristretto - si rifiuta PRIMA di qualunque claim."""
+    if sync_id is not None:
+        if agency_id is None:
+            raise ValueError("sync_id richiede agency_id (esecuzione mirata sempre tenant-scoped)")
+        if isinstance(sync_id, bool) or not isinstance(sync_id, int) or sync_id <= 0:
+            raise ValueError("sync_id deve essere un intero positivo")
     with cursor(commit=True) as (_, cur):
         prese = repository.claim_batch(cur, limit=limit, lease_seconds=lease_seconds,
-                                       agency_id=agency_id)
+                                       agency_id=agency_id, sync_id=sync_id)
     esiti = []
     for presa in prese:
         try:

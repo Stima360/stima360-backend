@@ -500,6 +500,146 @@ def test_20b_generazione_cambiata_durante_il_lavoro_non_e_synced(w, http):
 
 
 # ---------------------------------------------------------------------------
+# F2 - HOTFIX A30-9B: `sync_id` mirato (recovery/diagnostica, smoke live)
+# ---------------------------------------------------------------------------
+
+def _impronta_sync(w, sync_id):
+    """Le colonne che un claim mirato ad UN'ALTRA riga non deve toccare."""
+    riga = w["sql"](
+        "SELECT status, dirty_generation, synced_generation, attempt_count, "
+        "next_attempt_at, claim_token, claimed_at, updated_at "
+        "FROM appointment_calendar_sync WHERE id=%s", (sync_id,))[0]
+    return tuple(riga)
+
+
+def _crea_b(http, w, **kw):
+    """Un appuntamento vero nell'agenzia b (via `estraneo`), non nell'agenzia a
+    di `_crea` - serve per il test cross-tenant sul filtro `sync_id`."""
+    corpo = {"appointment_type": "inspection", "status": "scheduled",
+             "start_at": ore(10).isoformat(), "end_at": ore(11).isoformat(),
+             "client_request_id": chiave(), "assigned_user_id": w["estraneo"]}
+    corpo.update(kw)
+    r = http("estraneo").post("/api/appointments", json=corpo)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_68_sync_id_mirato_prende_solo_quella_riga_le_altre_intatte(w, http):
+    """A: due righe pending della STESSA agenzia (una piu' vecchia, una piu'
+    nuova) - un claim mirato con `sync_id` sulla piu' nuova prende SOLO
+    quella; la piu' vecchia resta identica su ogni colonna che il claim
+    tocca normalmente (nessun bypass, nessun effetto collaterale)."""
+    from calendar_sync import repository
+    vecchio_a = _crea(http, assigned_user_id=w["luca"], start_at=ore(8).isoformat(),
+                      end_at=ore(9).isoformat())
+    vecchia = _dirty(w, vecchio_a["id"])
+    nuovo_a = _crea(http, assigned_user_id=w["luca"], start_at=ore(14).isoformat(),
+                    end_at=ore(15).isoformat())
+    nuova = _dirty(w, nuovo_a["id"])
+    prima = _impronta_sync(w, vecchia["id"])
+
+    (presa,) = _tx(repository.claim_batch, agency_id=w["a"], sync_id=nuova["id"])
+
+    assert presa.sync_id == nuova["id"]
+    assert _impronta_sync(w, vecchia["id"]) == prima                   # byte/logicamente invariata
+    dopo = w["sql"]("SELECT status FROM appointment_calendar_sync WHERE id=%s",
+                    (vecchia["id"],))[0][0]
+    assert dopo == "pending"                                            # mai reclamata
+
+
+def test_69_sync_id_di_unaltra_agenzia_nessun_claim(w, http):
+    """B: `sync_id` esiste ma appartiene all'agenzia b, mentre si chiede
+    `agency_id=a` - i due filtri si sommano (AND), non si sostituiscono:
+    nessun claim, e la riga di b resta intatta."""
+    from calendar_sync import repository
+    a_di_b = _crea_b(http, w)
+    riga_b = _tx(repository.mark_dirty_with_cursor, w["b"], a_di_b["id"],
+                deployment_namespace=NS)
+    prima = _impronta_sync(w, riga_b["id"])
+
+    presa = _tx(repository.claim_batch, agency_id=w["a"], sync_id=riga_b["id"])
+
+    assert presa == []
+    assert _impronta_sync(w, riga_b["id"]) == prima
+
+
+def test_63_sync_id_non_eleggibile_nessun_claim(w, http):
+    """C: la riga esiste, e' della stessa agenzia, ma non e' eleggibile ora
+    (next_attempt_at nel futuro, come dopo un retry con backoff) - il filtro
+    `sync_id` non bypassa le regole normali della coda."""
+    from calendar_sync import repository
+    a = _crea(http, assigned_user_id=w["luca"])
+    riga = _dirty(w, a["id"])
+    w["sql"]("UPDATE appointment_calendar_sync SET next_attempt_at = NOW() + INTERVAL '1 hour' "
+            "WHERE id=%s", (riga["id"],))
+    assert _tx(repository.claim_batch, agency_id=w["a"], sync_id=riga["id"]) == []
+
+
+def test_64_sync_id_inesistente_lista_vuota(w, http):
+    """D: `sync_id` che non esiste in tabella - nessun errore, lista vuota
+    (come un batch normale senza righe idonee)."""
+    from calendar_sync import repository
+    assert _tx(repository.claim_batch, agency_id=w["a"], sync_id=999999999) == []
+
+
+def test_65_sync_id_senza_agency_id_valueerror_prima_di_ogni_claim(w, http, ring):
+    """E: `run_once(sync_id=...)` senza `agency_id` e' un errore di chi
+    chiama (un'esecuzione mirata dev'essere sempre anche tenant-scoped) - il
+    ValueError arriva PRIMA di qualunque claim: la riga resta pending."""
+    from calendar_sync import repository, service
+    a = _crea(http, assigned_user_id=w["luca"])
+    riga = _dirty(w, a["id"])
+    prima = _impronta_sync(w, riga["id"])
+
+    with pytest.raises(ValueError):
+        service.run_once(provider=_fake(), keyring=ring, sync_id=riga["id"])
+
+    assert _impronta_sync(w, riga["id"]) == prima                      # nessun claim avvenuto
+    # anche un sync_id non valido (bool/zero/negativo/non intero) e' rifiutato,
+    # sempre PRIMA di qualunque claim - mai un bypass silenzioso del controllo
+    for cattivo in (True, 0, -1, "1"):
+        with pytest.raises(ValueError):
+            service.run_once(provider=_fake(), keyring=ring, agency_id=w["a"], sync_id=cattivo)
+    assert _impronta_sync(w, riga["id"]) == prima
+
+
+def test_66_sync_id_none_comportamento_batch_preesistente_invariato(w, http):
+    """F: senza `sync_id` (default None) il batch si comporta esattamente
+    come prima dell'hotfix - stesso claim, stesso ordinamento, stesso
+    risultato per righe multiple della stessa agenzia."""
+    from calendar_sync import repository
+    ids = []
+    for ora in (8, 13, 15):
+        a = _crea(http, assigned_user_id=w["luca"], start_at=ore(ora).isoformat(),
+                  end_at=ore(ora + 1).isoformat())
+        ids.append(_dirty(w, a["id"])["id"])
+    prese = _tx(repository.claim_batch, agency_id=w["a"], limit=10)
+    assert {p.sync_id for p in prese} == set(ids)
+
+
+def test_67_due_worker_concorrenti_sullo_stesso_sync_id_uno_solo_vince(w, http):
+    """G: due worker che puntano DELIBERATAMENTE allo stesso `sync_id` - `FOR
+    UPDATE SKIP LOCKED` vale anche col filtro mirato, mai un doppio claim
+    sulla stessa riga."""
+    from psycopg2.extras import RealDictCursor
+
+    from calendar_sync import repository
+    from core import database as core_database
+    a = _crea(http, assigned_user_id=w["luca"])
+    riga = _dirty(w, a["id"])
+    uno = core_database.get_connection()
+    try:
+        cur1 = uno.cursor(cursor_factory=RealDictCursor)
+        primo = repository.claim_batch(cur1, agency_id=w["a"], sync_id=riga["id"])   # tx aperta
+        secondo = _tx(repository.claim_batch, agency_id=w["a"], sync_id=riga["id"])  # altro worker
+        uno.commit()
+    finally:
+        uno.close()
+    assert len(primo) == 1 and secondo == []
+    assert primo[0].sync_id == riga["id"]
+
+
+# ---------------------------------------------------------------------------
 # G - RICONCILIATORE CON IL PROVIDER FINTO (22-41)
 # ---------------------------------------------------------------------------
 

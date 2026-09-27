@@ -285,16 +285,26 @@ class Claim:
 
 
 def claim_batch(cur, *, limit: int = 10, lease_seconds: int = k.DEFAULT_LEASE_SECONDS,
-                agency_id: int | None = None) -> list:
+                agency_id: int | None = None, sync_id: int | None = None) -> list:
     """Prende fino a `limit` righe da lavorare: `pending`/`retrying` scadute, o
     `syncing` con lease scaduto (worker morto). `FOR UPDATE SKIP LOCKED`: due
     worker concorrenti non prendono mai la stessa riga. Ogni presa riceve un
     `claim_token` casuale (uuid4, 122 bit da os.urandom) e la generazione
-    corrente, che il worker dovra' ripresentare."""
+    corrente, che il worker dovra' ripresentare.
+
+    `sync_id`, se valorizzato, restringe il claim a QUELLA sola riga (usato
+    per recovery/diagnostica e per smoke live mirati: non sostituisce
+    `agency_id`, si somma - la riga deve comunque essere dell'agenzia data
+    E deve comunque essere eleggibile secondo le regole normali della coda,
+    nessun bypass dello stato)."""
     limit = max(1, min(int(limit), 100))
     filtro, par = "", {"lease": int(lease_seconds), "limit": limit}
     if agency_id is not None:
-        filtro, par["agency"] = " AND agency_id = %(agency)s", agency_id
+        filtro += " AND agency_id = %(agency)s"
+        par["agency"] = agency_id
+    if sync_id is not None:
+        filtro += " AND id = %(sync_id)s"
+        par["sync_id"] = sync_id
     cur.execute(
         f"""
         SELECT id FROM appointment_calendar_sync
