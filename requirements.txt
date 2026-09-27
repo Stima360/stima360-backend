@@ -15,3 +15,10 @@ boto3==1.43.18
 # A30-9A: cifratura applicativa dei token OAuth del calendario (Fernet).
 cryptography==50.0.1
 sqlglot==30.18.0
+
+# A30-9B: OAuth 2.0 (PKCE) e refresh del token verso Google Calendar. Solo
+# queste due (§2): il client ufficiale Google e' volutamente assente (il
+# provider parla REST diretto in calendar_sync/google_provider.py, con
+# requests e AuthorizedSession).
+google-auth==2.58.1
+google-auth-oauthlib==1.4.1

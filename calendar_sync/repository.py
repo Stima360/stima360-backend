@@ -536,6 +536,20 @@ def connection_secret(cur, agency_id: int, connection_id: int):
     return bytes(r["refresh_token_ciphertext"]), r["token_key_id"]
 
 
+def connection_sync_counts(cur, agency_id: int, connection_id: int) -> dict:
+    """§10 (facoltativo): quante catene di QUESTA connessione aspettano
+    ancora un giro, e quante sono `failed` - nessun dettaglio sensibile."""
+    cur.execute(
+        "SELECT "
+        " count(*) FILTER (WHERE status IN ('pending', 'retrying', 'syncing')) AS pending, "
+        " count(*) FILTER (WHERE status = 'failed') AS failed "
+        "FROM appointment_calendar_sync WHERE agency_id = %s AND remote_connection_id = %s",
+        (agency_id, connection_id),
+    )
+    r = cur.fetchone()
+    return {"pending_sync_count": int(r["pending"]), "failed_sync_count": int(r["failed"])}
+
+
 def mark_connection_needs_reauth(cur, agency_id: int, connection_id: int, *, error_code: str):
     cur.execute(
         "UPDATE calendar_connections SET status = 'needs_reauth', last_error_code = %s "
@@ -560,6 +574,34 @@ def mark_connection_disconnected(cur, agency_id: int, connection_id: int):
         "WHERE agency_id = %s AND remote_connection_id = %s AND status <> 'syncing'",
         (agency_id, connection_id),
     )
+
+
+# ---------------------------------------------------------------------------
+# A30-9B: MEMBERSHIP, BACKFILL/RESYNC (§5, §7, §19, §26)
+# ---------------------------------------------------------------------------
+
+def membership_active(cur, agency_id: int, user_id: int) -> bool:
+    """Verifica ESPLICITA (§5, §7, §30) che l'operatore sia membro ATTIVO di
+    QUESTA agenzia ADESSO - oltre a quanto la sessione stessa gia' implica."""
+    cur.execute(
+        "SELECT 1 FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s "
+        "AND status = 'active'",
+        (agency_id, user_id),
+    )
+    return cur.fetchone() is not None
+
+
+def future_syncable_appointment_ids(cur, agency_id: int, user_id: int) -> list:
+    """§19/§26: le catene VIVE, `scheduled`/`confirmed`, future, assegnate a
+    QUESTO operatore in QUESTA agenzia - la stessa lista per il backfill dopo
+    il connect e per il resync manuale. Niente `requested`, niente stati
+    terminali, niente righe passate, niente righe di un altro agente."""
+    cur.execute(
+        "SELECT id FROM appointments WHERE agency_id = %s AND assigned_user_id = %s "
+        "AND status IN %s AND start_at > NOW()",
+        (agency_id, user_id, tuple(k.APPOINTMENT_REMOTE_PRESENT)),
+    )
+    return [int(r["id"]) for r in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -607,3 +649,33 @@ def consume_oauth_state(cur, *, agency_id: int, user_id: int, state_hash: str,
         return None
     return {"id": r["id"], "code_verifier_ciphertext": bytes(r["code_verifier_ciphertext"]),
             "token_key_id": r["token_key_id"]}
+
+
+#: §31: i soli codici stabili che `classify_oauth_state_failure` restituisce.
+OAUTH_STATE_USED = "GOOGLE_OAUTH_STATE_USED"
+OAUTH_STATE_EXPIRED = "GOOGLE_OAUTH_STATE_EXPIRED"
+OAUTH_STATE_INVALID = "GOOGLE_OAUTH_STATE_INVALID"
+
+
+def classify_oauth_state_failure(cur, *, agency_id: int, user_id: int, state_hash: str,
+                                 provider: str = k.PROVIDER_GOOGLE) -> str:
+    """SOLO dopo che `consume_oauth_state` e' tornato None: perche' e' stato
+    RIFIUTATO (§31). Distingue USED da EXPIRED *solo per lo stato di QUESTA
+    sessione* (agency_id/user_id dal contesto server, mai dalla querystring):
+    non e' un oracolo su stati di un altro operatore o di un'altra agenzia,
+    che restano `OAUTH_STATE_INVALID` (errore generico, senza rivelare quale
+    agenzia/operatore erano attesi)."""
+    cur.execute(
+        "SELECT used_at, expires_at FROM calendar_oauth_states "
+        "WHERE state_hash = %s AND agency_id = %s AND user_id = %s AND provider = %s",
+        (state_hash, agency_id, user_id, provider),
+    )
+    r = cur.fetchone()
+    if r is None:
+        return OAUTH_STATE_INVALID
+    if r["used_at"] is not None:
+        return OAUTH_STATE_USED
+    cur.execute("SELECT %s::timestamptz <= NOW() AS scaduto", (r["expires_at"],))
+    if cur.fetchone()["scaduto"]:
+        return OAUTH_STATE_EXPIRED
+    return OAUTH_STATE_INVALID

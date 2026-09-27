@@ -671,11 +671,17 @@ def test_39_nessun_cron_nuovo():
     # lo abbia dichiarato.
     from tests.p29_3e_diff import RUNNER_TOCCATO
 
+    # SENTINELLA AGGIORNATA DA A30-9B (collisione dichiarata, stessa forma di
+    # P29-3E): un SECONDO runner nuovo, nominato per nome, IN PROCESSO (niente
+    # HTTP, §23) per il worker della sincronizzazione Google Calendar. Non e'
+    # LMC-15: nessun runner di LMC-15 nasce o cambia.
+    RUNNER_A30_9B = "run_calendar_sync_cron.py"
+
     righe = subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--", "run_*.py"],
         cwd=ROOT, capture_output=True, text=True).stdout.splitlines()
     toccati = {r[3:].strip() for r in righe}
-    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
+    assert toccati <= {RUNNER_TOCCATO, RUNNER_A30_9B}, sorted(toccati)
 
 
 def test_40_il_ponte_non_tocca_i_domini_vicini():

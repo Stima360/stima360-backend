@@ -737,3 +737,17 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .agenda-preference { margin: 0 0 12px; font-weight: 600; }
 .agenda-slot.is-busy { opacity: .55; cursor: not-allowed; text-decoration: line-through; }
 .agenda-slot.is-free { border-color: #16a34a; }
+
+/* A30-9B - il pannello Google Calendar dentro l'Agenda (§27): riquadro
+   minimo, mai una pagina Impostazioni, mai un badge sulle singole card. */
+.gcal-panel-slot { margin: 0 0 12px; }
+.gcal-panel { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+.gcal-panel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gcal-panel-label { font-weight: 600; }
+.gcal-panel-detail { font-size: 13px; }
+.gcal-panel-error { color: var(--danger); }
+.gcal-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.gcal-badge-stato { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; }
+.gcal-status-muted { background: #eef2f9; color: var(--muted); }
+.gcal-status-ok { background: #e3f6e8; color: #1c7a3c; }
+.gcal-status-warn { background: #fdf3d8; color: #92650a; }

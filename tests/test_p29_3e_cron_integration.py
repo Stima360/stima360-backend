@@ -496,8 +496,11 @@ def test_24_nessun_secondo_cron_e_nessun_altro_percorso_automatico():
 
     assert not list(ROOT.glob("run_journey*.py"))
     cron = sorted(p.name for p in ROOT.glob("run_*cron*.py"))
-    assert cron == ["run_communication_dispatch_cron.py", "run_flow_p2b_cron.py",
-                    "run_followup_p18d_cron.py", "run_owner_home_alert_cron.py",
+    # A30-9B (collisione dichiarata): un secondo runner, per Google Calendar -
+    # non un secondo dispatch della sequenza che questo test protegge.
+    assert cron == ["run_calendar_sync_cron.py", "run_communication_dispatch_cron.py",
+                    "run_flow_p2b_cron.py", "run_followup_p18d_cron.py",
+                    "run_owner_home_alert_cron.py",
                     "run_property_watch_valuation_cron.py"], cron
 
     chiamanti = subprocess.run(
@@ -584,12 +587,15 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-9A: undicesima dichiarazione dell'Agenda
     # (le fondamenta della sincronizzazione calendario, package `calendar_sync/`).
     from tests.a30_9a_diff import FILE_MODIFICATI as MOD_A30_9A, FILE_NUOVI as NUOVI_A30_9A
+    # SENTINELLA AGGIORNATA DA A30-9B: dodicesima dichiarazione dell'Agenda
+    # (OAuth + hook Agenda + worker reale verso Google Calendar).
+    from tests.a30_9b_diff import FILE_MODIFICATI as MOD_A30_9B, FILE_NUOVI as NUOVI_A30_9B
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A)
+                 | NUOVI_A30_9A | NUOVI_A30_9B)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A)
+               | MOD_A30_9A | MOD_A30_9B)
 
     def _git(*argomenti):
         return subprocess.run(["git", "--no-optional-locks", *argomenti],

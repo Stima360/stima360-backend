@@ -40,7 +40,17 @@ DRAWER = ASSETS / "components" / "agenda" / "agenda-drawer.js"
 DIALOGS = ASSETS / "components" / "agenda" / "agenda-dialogs.js"
 CSS = ASSETS / "app.css"
 
+# A30-9B: il client di `/api/calendar/google` e il pannello che lo usa. Un
+# SECONDO gruppo, non aggiunto ad `AGENDA_FILES`: quella tupla e' il confine
+# ORIGINALE di A30-4/5 ("solo /api/appointments", "mai google") e resta
+# tale, riga per riga; questi due file sono l'eccezione DICHIARATA - la
+# ragione stessa per cui A30-9B esiste - e i test che li riguardano lo dicono
+# esplicitamente invece di allargare in silenzio il confine vecchio.
+CALENDAR_SYNC_API = ASSETS / "agenda" / "calendar-sync-api.js"
+CALENDAR_SYNC_PANEL = ASSETS / "components" / "agenda" / "agenda-calendar-sync-panel.js"
+
 AGENDA_FILES = (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER, DIALOGS)
+AGENDA_FILES_GOOGLE = (CALENDAR_SYNC_API, CALENDAR_SYNC_PANEL)
 NODE = shutil.which("node")
 
 
@@ -111,7 +121,10 @@ def test_03_main_js_contiene_solo_import_voce_e_rotta():
 
 def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_agenda():
     for f in ASSETS.rglob("*.js"):
-        if f in AGENDA_FILES or f == MAIN_JS:
+        # A30-9B: i due file nuovi vivono anche loro sotto "agenda/" (uno e'
+        # `agenda/calendar-sync-api.js`, l'altro importa da li'): non sono
+        # una vista ESTERNA all'Agenda che la importa, sono l'Agenda stessa.
+        if f in AGENDA_FILES or f in AGENDA_FILES_GOOGLE or f == MAIN_JS:
             continue
         testo = _testo(f)
         assert "agenda/" not in testo, f.relative_to(ROOT)
@@ -122,7 +135,7 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
 # ---------------------------------------------------------------------------
 
 def test_05_nessuna_vista_mese():
-    for f in AGENDA_FILES:
+    for f in AGENDA_FILES + AGENDA_FILES_GOOGLE:
         codice = _senza_commenti(_testo(f))
         assert "'month'" not in codice.replace("month: 'long'", "").replace(
             "month: '2-digit'", "").replace("month: 'short'", ""), f.name
@@ -131,7 +144,7 @@ def test_05_nessuna_vista_mese():
 
 
 def test_06_nessun_trascinamento_ne_ridimensionamento():
-    for f in AGENDA_FILES:
+    for f in AGENDA_FILES + AGENDA_FILES_GOOGLE:
         codice = _senza_commenti(_testo(f)).lower()
         for vietato in ("drag", "draggable", "'drop'", "dragover", "mousemove", "pointermove",
                         "pointerdown", "mousedown", "touchmove"):
@@ -167,13 +180,55 @@ def test_07_solo_api_appointments_e_solo_da_agenda_api():
         assert vietato not in lookup, vietato
 
 
+def test_07b_il_client_google_parla_solo_con_calendar_google_e_solo_da_li():
+    """A30-9B: `calendar-sync-api.js` e' l'UNICO punto della OS Shell che
+    chiama `/api/calendar/google` (stesso principio di `agenda-api.js` per
+    `/api/appointments`, un file a parte apposta); il pannello non fa mai
+    `fetch` da solo, passa sempre da quel client."""
+    api = _senza_commenti(_testo(CALENDAR_SYNC_API))
+    for percorso in re.findall(r"['\"`](/api/[^'\"`$]*)", api):
+        assert percorso.startswith("/api/calendar/google"), percorso
+    assert "const BASE = '/api/calendar/google';" in _testo(CALENDAR_SYNC_API)
+    assert "credentials: 'include'" in api
+    pannello = _senza_commenti(_testo(CALENDAR_SYNC_PANEL))
+    assert "fetch(" not in pannello and "/api/" not in pannello
+    assert "from '../../agenda/calendar-sync-api.js'" in pannello
+    # nessuno dei due conosce Authorization/Basic/localStorage, come il resto
+    # dell'Agenda (stesso elenco di test_10, qui perche' questi due file non
+    # sono in AGENDA_FILES).
+    for f, codice in ((CALENDAR_SYNC_API, api), (CALENDAR_SYNC_PANEL, pannello)):
+        for vietato in ("Authorization", "Basic ", "btoa(", "agency_id", "localStorage",
+                        "sessionStorage", "document.cookie"):
+            assert vietato not in codice, (f.name, vietato)
+    # mai un URL di Google costruito qui: SOLO quello che il server restituisce.
+    assert "accounts.google.com" not in api and "accounts.google.com" not in pannello
+    assert "client_id" not in api and "client_secret" not in api
+    assert "window.location.assign(esito.authorization_url)" in pannello
+    # niente badge per-card: il pannello non tocca le viste esistenti
+    for f in (VIEWS_JS, DRAWER):
+        assert "gcal" not in _testo(f).lower() and "google" not in _testo(f).lower()
+    # niente provider_subject mostrato in pagina
+    assert "provider_subject" not in pannello
+
+
 def test_08_nessun_accesso_a_stime_dettagliate_visite_acquirente_o_google():
+    """SENTINELLA AGGIORNATA DA A30-9B (in un modo dichiarato, non rimossa):
+    il divieto di "google" valeva perche' l'Agenda non ne parlava affatto -
+    ora ne parla, ma SOLO nel pannello dedicato (§27), mai per accedere a
+    stime dettagliate o visite acquirente, che restano fuori esattamente come
+    prima. Si esclude quindi "google" solo per `agenda-page.js` (che monta
+    il pannello) - ogni altro file dell'Agenda (modello, client, lookup,
+    viste, drawer, dialoghi) resta senza alcun riferimento a Google, come
+    prima di A30-9B."""
     for f in AGENDA_FILES:
         # A30-7: `legacy_stime_dettagliate` e' solo il VALORE di `source` di una
         # richiesta importata (lo stesso esonero dei test backend A30-2/2P).
         codice = _senza_commenti(_testo(f)).lower().replace("legacy_stime_dettagliate", "")
-        for vietato in ("stime_dettagliate", "property_visits", "property-visits", "/visits",
-                        "admin/stime", "salva_stima", "google", "booking"):
+        vietati = ("stime_dettagliate", "property_visits", "property-visits", "/visits",
+                   "admin/stime", "salva_stima", "booking")
+        if f != PAGE:
+            vietati = vietati + ("google",)
+        for vietato in vietati:
             assert vietato not in codice, (f.name, vietato)
 
 
@@ -518,7 +573,7 @@ def test_23_client_conserva_codici_conflitti_e_gestisce_il_401(tmp_path):
 def test_24_tutti_i_moduli_agenda_sono_sintatticamente_validi():
     if NODE is None:
         pytest.skip("node non disponibile: BLOCKED")
-    for f in (*AGENDA_FILES, MAIN_JS):
+    for f in (*AGENDA_FILES, *AGENDA_FILES_GOOGLE, MAIN_JS):
         esito = subprocess.run([NODE, "--check", str(f)], capture_output=True, text=True)
         assert esito.returncode == 0, (f.name, esito.stderr)
 
@@ -700,9 +755,13 @@ def test_s3_agenda_aperta_a_mano_ha_titolo_agenda_e_voce_attiva(shell_staged):
                  hash="#/agenda")
     assert out["title"] == "Agenda", out["title"]
     assert out["navRoutes"].count("agenda") == 1
-    # la pagina parla solo con /api/appointments (oltre alla sessione)
-    assert [u for u in out["urls"] if not u.startswith(("/api/operator-auth", "/api/appointments"))] == [], out["urls"]
+    # la pagina parla solo con /api/appointments (oltre alla sessione) - E,
+    # da A30-9B (in un modo dichiarato: e' esattamente cio' che quel gate
+    # aggiunge), con `/api/calendar/google` per il pannello di stato.
+    assert [u for u in out["urls"] if not u.startswith(
+        ("/api/operator-auth", "/api/appointments", "/api/calendar/google"))] == [], out["urls"]
     assert any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
+    assert any(u.startswith("/api/calendar/google") for u in out["urls"]), out["urls"]
 
 
 def test_s4_platform_admin_senza_agenzia_resta_sulla_rete_senza_agenda(shell_staged):

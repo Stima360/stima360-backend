@@ -43,6 +43,7 @@ import {
 import { renderDay, renderList, renderWeek } from '../../components/agenda/agenda-views.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
 import { openActionDialog, openCreateDialog } from '../../components/agenda/agenda-dialogs.js';
+import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-sync-panel.js';
 
 const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`;
 
@@ -99,6 +100,38 @@ function esitoSincronizzazione(esito) {
   return `Richieste dal sito aggiornate: nuove ${numero(esito && esito.imported)} · `
     + `già presenti ${numero(esito && esito.already_present)} · `
     + `escluse ${numero(esito && esito.excluded)}.`;
+}
+
+// A30-9B: dopo il callback OAuth, Google riporta qui con un errore in query
+// string PRIMA del `#` (mai nel fragment: il router leggerebbe la rotta
+// sbagliata, vedi calendar_sync/router.py::_AGENDA_BASE). Si legge una sola
+// volta e si pulisce l'URL, cosi' un ricaricamento della pagina non la
+// ripete.
+const MESSAGGI_ERRORE_GOOGLE = {
+  GOOGLE_OAUTH_DENIED: 'Autorizzazione Google annullata.',
+  GOOGLE_OAUTH_STATE_EXPIRED: 'La richiesta di collegamento e\' scaduta. Riprova.',
+  GOOGLE_OAUTH_STATE_USED: 'Questa richiesta di collegamento e\' gia\' stata usata. Riprova.',
+  GOOGLE_OAUTH_STATE_INVALID: 'Richiesta di collegamento non valida. Riprova.',
+  GOOGLE_MEMBERSHIP_INACTIVE: 'Solo un membro attivo dell\'agenzia puo\' collegare Google Calendar.',
+  GOOGLE_NOT_CONFIGURED: 'Google Calendar non e\' configurato per questo ambiente.',
+  GOOGLE_OPERATOR_REQUIRED: 'Serve un operatore autenticato per collegare Google Calendar.',
+  GOOGLE_REFRESH_TOKEN_MISSING: 'Google non ha concesso un accesso permanente. Riprova e accetta il consenso.',
+  GOOGLE_ID_TOKEN_MISSING: 'Risposta di Google incompleta. Riprova.',
+  GOOGLE_ID_TOKEN_INVALID: 'Risposta di Google non verificabile. Riprova.',
+  GOOGLE_TOKEN_EXCHANGE_FAILED: 'Impossibile completare il collegamento con Google. Riprova.',
+  GOOGLE_SCOPE_INSUFFICIENT: 'Serve accettare tutte le autorizzazioni richieste da Google.',
+};
+
+function erroreGoogleInSospeso() {
+  if (!window.location.search) return '';
+  const parametri = new URLSearchParams(window.location.search);
+  const codice = parametri.get('google_calendar_error');
+  if (!codice) return '';
+  parametri.delete('google_calendar_error');
+  const resto = parametri.toString();
+  const nuovoUrl = `${window.location.pathname}${resto ? `?${resto}` : ''}${window.location.hash}`;
+  window.history.replaceState(null, '', nuovoUrl);
+  return MESSAGGI_ERRORE_GOOGLE[codice] || 'Collegamento con Google Calendar non riuscito.';
 }
 
 function isMobile() {
@@ -183,6 +216,12 @@ export async function renderAgenda(container, params = []) {
   comandi.append(nuovo);
   barra.appendChild(comandi);
   pagina.appendChild(barra);
+
+  // A30-9B: il pannello Google Calendar, sotto la barra e sopra l'elenco -
+  // niente di nuovo nella barra laterale, e' parte dell'Agenda stessa (§27).
+  const gcalContenitore = el('div', 'gcal-panel-slot');
+  pagina.appendChild(gcalContenitore);
+  mountCalendarSyncPanel(gcalContenitore, { isStale: stale });
 
   const avviso = el('div', 'agenda-notice');
   avviso.setAttribute('role', 'status');
@@ -332,5 +371,7 @@ export async function renderAgenda(container, params = []) {
     });
   });
 
+  const erroreGoogle = erroreGoogleInSospeso();
   await carica(prendiMessaggio());
+  if (erroreGoogle && !stale()) avviso.appendChild(el('div', 'error-box', erroreGoogle));
 }

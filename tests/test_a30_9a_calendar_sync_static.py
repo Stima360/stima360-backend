@@ -336,18 +336,44 @@ def test_46_fake_semantica_e_zero_rete(monkeypatch):
 
 
 def test_46b_il_package_non_importa_librerie_di_rete():
-    vietati = {"requests", "httpx", "httpx2", "urllib", "urllib3", "socket", "http",
-               "aiohttp", "googleapiclient", "google"}
+    """A30-9A: NESSUN file del package faceva rete (nessuna rotta, nessun
+    provider vero). A30-9B (gate §11, §2) introduce IL provider vero
+    (`google_provider.py`, REST diretto con `requests`/`google-auth`) e il
+    flusso OAuth (`oauth.py`, che nel modulo di test dedicato usa `requests`
+    solo per la revoca best-effort, §25): SOLO questi due file possono
+    importare una libreria di rete o `google`. Ogni altro file del package -
+    compreso il riconciliatore, il repository, il router e l'hook verso
+    l'Agenda - resta com'era: zero rete."""
+    #: `urllib.parse` (usato da `router.py` per costruire una query string di
+    #: redirect, nessuna rete) resta ammesso ovunque; solo `urllib.request` -
+    #: e le vere librerie di trasporto - sono un segnale di rete.
+    vietati = {"requests", "httpx", "httpx2", "urllib.request", "urllib3", "socket",
+               "http", "http.client", "aiohttp", "googleapiclient", "google"}
+    #: A30-9B: i SOLI due file autorizzati a toccare Google/rete (§2, §11).
+    reti_ammesse = {"google_provider.py", "oauth.py"}
     for file in PACCHETTO.glob("*.py"):
+        if file.name in reti_ammesse:
+            continue
         albero = ast.parse(file.read_text(encoding="utf-8"))
         for nodo in ast.walk(albero):
             if isinstance(nodo, ast.Import):
-                nomi = [a.name.split(".")[0] for a in nodo.names]
+                nomi = [a.name for a in nodo.names]
             elif isinstance(nodo, ast.ImportFrom) and nodo.level == 0:
-                nomi = [nodo.module.split(".")[0]]
+                nomi = [nodo.module]
             else:
                 continue
-            assert not (set(nomi) & vietati), (file.name, nomi)
+            radici = {n.split(".")[0] for n in nomi}
+            assert not (set(nomi) & vietati) and not (radici & vietati), (file.name, nomi)
+
+
+def test_46c_google_provider_non_usa_il_client_vietato():
+    """§2: `google-api-python-client` e' VIETATA. Nessun file del package la
+    importa (nessun `googleapiclient`, gia' coperto sopra, ma qui si
+    verifica anche il nome del pacchetto pip nei requisiti)."""
+    requisiti = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "google-api-python-client" not in requisiti
+    assert "google-auth-oauthlib" in requisiti
+    assert re.search(r"^google-auth==", requisiti, re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -474,10 +500,22 @@ def test_42_riga_viva_spostata_catena_rotta():
 # CONFINI: package, migration, costanti
 # ---------------------------------------------------------------------------
 
-def test_50_nessuno_importa_calendar_sync_in_a30_9a():
+def test_50_calendar_sync_solo_nei_tre_punti_dichiarati():
+    """A30-9A: NESSUNO importava `calendar_sync`. A30-9B collega l'hook
+    (§16, §20, §45): SOLO `main.py` (il mount del router, §37), e SOLO
+    `appointments/service.py` e `appointments/lmc15_facade.py` (l'unico
+    write path LMC-15 confermato dall'audit, §20) possono nominarlo. Ogni
+    altro file di `appointments/` e TUTTO `appointments_legacy/` (che scrive
+    sempre e solo `requested`, §20 nota) restano com'erano: senza Google."""
+    ammessi = {ROOT / "main.py", ROOT / "appointments" / "service.py",
+              ROOT / "appointments" / "lmc15_facade.py"}
     for file in [ROOT / "main.py", *ROOT.glob("appointments/*.py"),
                  *ROOT.glob("appointments_legacy/*.py")]:
-        assert "calendar_sync" not in file.read_text(encoding="utf-8"), file.name
+        testo = file.read_text(encoding="utf-8")
+        if file in ammessi:
+            assert "calendar_sync" in testo, file.name
+        else:
+            assert "calendar_sync" not in testo, file.name
 
 
 def test_51_costanti_specchio_dei_check_della_074():

@@ -1009,6 +1009,11 @@ class FakeHttp(cert.HttpProbe):
         self.appuntamenti: dict = {}
         self.eventi_agenda: dict = {}
         self.operatori: dict = {}
+        # A30-9B: nessuna agenzia ha una connessione Google in questo doppio -
+        # gli operatori della matrice sono sempre nuovi - e Google non e' mai
+        # "configurato": e' cosi' che /connect e /resync restano fail-
+        # controlled (409) senza che il doppio debba simulare un consenso.
+        self.calendar_connections: dict = {}   # agency_id -> True
 
     # -- helper -----------------------------------------------------------
     def _effetto(self, tabella: str) -> int | None:
@@ -1604,6 +1609,65 @@ class FakeHttp(cert.HttpProbe):
             scrivi(ident, azione or "patch")
         return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
 
+    def _calendar_sync(self, method, path, agency, payload):
+        """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
+
+        Nessuna delle cinque rotte ha un `id` nel percorso, e nessuna legge
+        `agency_id`/`user_id`/`connection_id` dal corpo - il router vero
+        (`calendar_sync/router.py`) non dichiara nemmeno un parametro body per
+        connect/disconnect/resync - quindi il doppio li ignora esattamente
+        come farebbe FastAPI: un corpo intruso non cambia la risposta.
+
+        Google non e' MAI "configurato" in questo doppio: e' cosi' che
+        `/connect` e `/resync` restano fail-controlled (409) senza che serva
+        simulare un consenso reale, e `/status` riporta sempre `configured:
+        false` - mai un segreto, perche' il doppio non ne possiede nessuno da
+        rivelare.
+        """
+        import json as _json
+
+        # La query string non fa parte del percorso: `/callback` la porta
+        # sempre (code/state), le altre quattro rotte non ne hanno bisogno.
+        percorso = path.split("?")[0]
+
+        if percorso.endswith("/status") and method == "GET":
+            corpo = {"configured": False, "enabled": False,
+                     "connection_status": ("connected"
+                                           if agency in self.calendar_connections
+                                           else "not_connected"),
+                     "connected_at": None, "needs_reauth": False,
+                     "last_error_code": None, "pending_sync_count": 0,
+                     "failed_sync_count": 0}
+            return self._reply(method, path, 200, _json.dumps(corpo).encode())
+
+        if percorso.endswith("/connect") and method == "POST":
+            # Google non e' configurato: il rifiuto arriva prima di scrivere
+            # uno stato OAuth, qualunque sia il corpo.
+            return self._reply(method, path, 409,
+                               b'{"detail":"non configurato","code":"GOOGLE_NOT_CONFIGURED"}')
+
+        if percorso.endswith("/callback") and method == "GET":
+            # Nessun code/state vero arriva mai qui (la matrice non li manda):
+            # sia "parametri assenti" sia "stato inesistente" finiscono in un
+            # redirect di errore, mai nell'exchange verso Google.
+            return self._reply(method, path, 302, b"")
+
+        if percorso.endswith("/disconnect") and method == "POST":
+            if agency not in self.calendar_connections:
+                return self._reply(
+                    method, path, 404,
+                    b'{"detail":"nessuna connessione","code":"GOOGLE_NOT_CONNECTED"}')
+            del self.calendar_connections[agency]
+            return self._reply(method, path, 200, b'{"status":"disconnected"}')
+
+        if percorso.endswith("/resync") and method == "POST":
+            # Nessun appuntamento di questo operatore in questo doppio: il
+            # requeue e' sempre vuoto, quando Google fosse configurato.
+            return self._reply(method, path, 409,
+                               b'{"detail":"non configurato","code":"GOOGLE_NOT_CONFIGURED"}')
+
+        return self._reply(method, path, 404, b'{"detail":"non trovata"}')
+
     def _link_contact(self, method, path, agency, property_id, contact_id):
         """Il legame proprietario: entrambe le righe devono essere del chiamante.
 
@@ -1841,6 +1905,9 @@ class FakeHttp(cert.HttpProbe):
 
         if path.startswith("/api/appointments"):
             return self._appointments(method, path, agency, payload)
+
+        if path.startswith("/api/calendar/google"):
+            return self._calendar_sync(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -2360,6 +2427,21 @@ def test_4_the_matrix_covers_every_mounted_tenant_prefix():
     declared = {domain.prefix for domain in cert.DOMAINS}
     mounted = _mounted_tenant_prefixes()
 
+    # A30-9B: `/api/calendar/google` e' OAuth verso un provider esterno, e per
+    # un'intera revisione questo e' bastato a tenerlo fuori da `DOMAINS` - il
+    # contratto `Domain` presuppone un `fixture` che crea una riga con una POST
+    # e un `id` diretto, e l'unico modo di ottenere una riga `calendar_
+    # connections` VERA e' completare un consenso reale con Google, cosa che
+    # questo script non deve mai fare.
+    #
+    # La conclusione era sbagliata: il contratto NON presuppone un fixture.
+    # COMMUNICATION, FOLLOWUP, ACQUISITION e APPOINTMENTS non ne hanno uno, e
+    # sono comunque nella matrice con un certificatore dedicato,
+    # rejection-only. `certify_calendar_sync` segue lo stesso pattern: prova
+    # AMMISSIONE e CONTENIMENTO (anonimo/Basic -> 401, /status senza segreti,
+    # /connect fail-controlled senza mai completare il consenso, /callback
+    # senza mai raggiungere l'exchange, /disconnect e /resync session-derivati)
+    # senza completare un OAuth vero in nessuna delle sue domande.
     missing = mounted - declared
     assert missing == set(), (
         f"domini montati e non coperti dalla matrice ostile: {sorted(missing)}"

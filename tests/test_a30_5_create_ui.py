@@ -533,9 +533,12 @@ def test_17_isolamento_nessuna_agenzia_nessun_authorization_solo_cookie(staged):
         assert "Authorization" not in c["headers"], c
         testo = json.dumps(c).lower()
         assert "agency_id" not in testo and "created_by" not in testo, c
-    # le sole letture fuori da /api/appointments sono le tre del collegamento CRM
+    # le sole letture fuori da /api/appointments sono le tre del collegamento
+    # CRM, piu' (A30-9B, dichiarato) lo /status del pannello Google Calendar
+    # che la pagina Agenda monta ora ad ogni apertura.
     fuori = {re.sub(r"\?.*", "", c["url"]) for c in out["calls"]
-             if not c["url"].startswith(("/api/appointments", "/api/operator-auth"))}
+             if not c["url"].startswith(("/api/appointments", "/api/operator-auth",
+                                          "/api/calendar/google"))}
     assert fuori == {"/api/core/contacts", "/api/core/leads", "/api/property/properties"}
     assert all(c["m"] == "GET" for c in out["calls"]
                if not c["url"].startswith("/api/appointments"))

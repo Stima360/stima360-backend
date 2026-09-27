@@ -274,6 +274,12 @@ TENANT_PREFIXES = (
     # viene dalla sessione (`require_operator` su ogni rotta) - quindi
     # dichiara il cookie e SOLO il cookie, come verifica il test 6 qui sopra.
     "/api/appointments",
+    # A30-9B: Google Calendar (OAuth + hook + worker). Superficie operatore
+    # come le altre - agency_id e user_id vengono da `ctx.require_agency()`/
+    # `ctx.user_id`, mai dal client - quindi dichiara il cookie e SOLO il
+    # cookie, come verifica il test 6 qui sopra (il callback resta legato
+    # alla sessione: e' una GET del browser, non una rotta senza sicurezza).
+    "/api/calendar/google",
 )
 
 

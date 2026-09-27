@@ -39,6 +39,7 @@ from owner import provisioning as owner_provisioning
 from acquisition.router import router as acquisition_router
 from appointments.router import router as appointments_router
 from appointments_legacy.router import router as appointments_legacy_router
+from calendar_sync.router import router as calendar_sync_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
 from followup import service as followup_service
@@ -120,6 +121,11 @@ app.include_router(appointments_router, dependencies=[Depends(require_authentica
 # A30-7: la sincronizzazione esplicita delle richieste di sopralluogo dal sito
 # (`/api/appointments/legacy-requests/sync`). Solo il mount, come l'Agenda.
 app.include_router(appointments_legacy_router, dependencies=[Depends(require_authenticated_operator)])
+# A30-9B: le rotte Google Calendar (`/api/calendar/google`). Solo il mount
+# (§37): nessuna logica OAuth/Google in questo file. Ogni rotta - tranne il
+# callback, che resta comunque legata alla sessione (§7, §30) - prende lo
+# scope da `require_operator`, come l'Agenda.
+app.include_router(calendar_sync_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(owner_admin_router)
 app.include_router(owner_portal_router)
 

@@ -488,6 +488,26 @@ DOMAINS = (
              "stima altrui -> 422/404, e registro, facade e Q10 invariati",
     ),
     Domain(
+        "CALENDAR_SYNC", "/api/calendar/google",
+        # A30-9B - OAuth verso Google. HOSTILE / REJECTION ONLY, come
+        # COMMUNICATION: un giro "riuscito" avrebbe un effetto reale
+        # indesiderato su TEST - iniziare un vero consenso OAuth con Google -
+        # e nessuna delle sei domande generiche e' applicabile: nessun
+        # listing, nessun dettaglio per id, nessuna DELETE. L'identita' viene
+        # SEMPRE dalla sessione (nessuna rotta accetta agency_id/user_id dal
+        # client), quindi non esiste un id da sondare in croce: la prova
+        # cross-tenant e' che quei campi, mandati comunque nel corpo, non
+        # cambiano la risposta.
+        certifier="calendar_sync",
+        api_delete=False,
+        note="cinque rotte (status, connect, callback, disconnect, resync): "
+             "anonimo e Basic -> 401 su tutte, /status senza segreti, "
+             "/connect fail-controlled senza mai completare il consenso, "
+             "/callback senza mai raggiungere l'exchange, /disconnect e "
+             "/resync session-derivati e senza effetto sull'altro operatore, "
+             "e le tre tabelle di A30-9A invariate a fine sezione",
+    ),
+    Domain(
         "SELLER_INTENT", "/api/seller-intent",
         # Lo score si chiede per lead_id, e questo run non crea lead. La sonda
         # forte sarebbe l'ID diretto; qui resta il percorso che attraversa il
@@ -5675,6 +5695,244 @@ def certify_appointments(report, http, cert, domain, jars, owned, context) -> No
             f"{ {k: dopo['conteggi'][k] for k in chiavi} }"
             + (f"; DIMINUITI {diminuiti}: una riga e' sparita" if diminuiti else ""),
         )
+
+
+#: Le cinque rotte di A30-9B, per il giro anonimo/Basic. Un id qualunque non
+#: serve: nessuna porta un parametro nel percorso, l'identita' viene sempre
+#: dalla sessione.
+CALENDAR_SYNC_OPERAZIONI = (
+    ("GET", "/status"), ("POST", "/connect"), ("GET", "/callback"),
+    ("POST", "/disconnect"), ("POST", "/resync"),
+)
+
+#: Cio' che il corpo di /status non deve MAI portare. `token_key_id` e
+#: `provider_subject` non sono segreti in senso stretto, ma identificano la
+#: chiave di cifratura o l'account Google e non hanno posto in una risposta
+#: pubblica quanto un token.
+_CALENDAR_SYNC_SEGRETI = (
+    "refresh_token", "access_token", "ciphertext", "token_key_id",
+    "provider_subject", "client_secret", "fernet", "secret",
+)
+
+
+def _calendar_sync_firma(database) -> dict | None:
+    """I tre conteggi READ-ONLY di A30-9A/9B, o None se non misurabili.
+
+    Una sola SELECT con tre sotto-query, come `_agenda_fotografia`: cosi' il
+    doppio di test puo' rispondere None a un'unica domanda invece di dover
+    riconoscere tre statement distinti.
+    """
+    if database is None:
+        return None
+    with database.read() as cur:
+        cur.execute(
+            "SELECT (SELECT count(*) FROM calendar_connections) AS connessioni,"
+            "       (SELECT count(*) FROM calendar_oauth_states) AS stati,"
+            "       (SELECT count(*) FROM appointment_calendar_sync) AS sincronizzazioni")
+        riga = cur.fetchone()
+    if riga is None:
+        return None
+    return {k: int(v) for k, v in dict(riga).items()}
+
+
+def certify_calendar_sync(report, http, cert, domain, jars, owned, context) -> None:
+    """CALENDAR_SYNC (A30-9B): HOSTILE / REJECTION ONLY, MAI un OAuth vero.
+
+    PERCHE' LA MATRICE NON COMPLETA UN CONSENSO GOOGLE
+
+    `POST /connect` restituisce un `authorization_url` verso Google e, se la
+    configurazione e' presente, SCRIVE uno stato OAuth persistente
+    (`calendar_oauth_states`). Completarlo esigerebbe un consenso umano vero
+    con Google - esattamente cio' che nessuno strumento di questa
+    certificazione deve mai fare (§39 del gate A30-9B). Il certificatore prova
+    quindi AMMISSIONE e CONTENIMENTO, non il funzionamento: quello ha la sua
+    certificazione su PostgreSQL usa-e-getta, con Google FINTO, mai reale
+    (`tests/test_a30_9b_calendar_google_postgres.py`).
+
+    LE CINQUE ROTTE, E PERCHE' NESSUNA DELLE SEI DOMANDE GENERICHE BASTA
+
+        GET  /status       sola lettura, ammessa con la sessione della matrice
+        POST /connect       scrive uno stato OAuth: mai chiamata se Google e'
+                            configurato, altrimenti fail-controlled (409)
+        GET  /callback      mai un code/state VERI: il rifiuto arriva prima
+                            di qualunque configurazione o rete
+        POST /disconnect    nessuna connessione da questo operatore: 404
+        POST /resync        nessun appuntamento di questo operatore: nessun
+                            effetto, che sia 409 (non configurato) o 200
+
+    Nessuna delle cinque ha un `id` nel percorso: l'identita' e' SEMPRE quella
+    della sessione (§5 del gate), quindi non esiste una sonda cross-tenant per
+    id da inventare. Cio' che si prova al suo posto e' che un corpo con
+    `agency_id`/`user_id` dell'ALTRO operatore non cambia nulla: la risposta
+    resta quella dell'operatore CHIAMANTE, perche' nessuna di queste rotte ha
+    un parametro body che legga quei campi (`calendar_sync/router.py`: nessuna
+    riceve altro che `ctx = Depends(require_operator)`).
+
+    LA GUARDIA READ-ONLY
+
+    Le tre tabelle di A30-9A (`calendar_connections`, `calendar_oauth_states`,
+    `appointment_calendar_sync`) si fotografano prima e dopo: ogni domanda di
+    questa sezione ha come risposta corretta un rifiuto o un no-op, quindi
+    nessuna riga nuova deve comparire.
+    """
+    base = domain.prefix
+    database = context.get("database")
+
+    prima = _calendar_sync_firma(database)
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    # -- senza identita': tutte le rotte --------------------------------------
+    for metodo, suffisso in CALENDAR_SYNC_OPERAZIONI:
+        percorso = base + suffisso
+        payload = {} if metodo == "POST" else None
+        risposta = http.request(metodo, percorso, payload=payload)
+        report.check(
+            f"CALENDAR_SYNC-anonimo-{metodo}{suffisso}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    # HTTP Basic: P26-5 lo ha tolto, e una rotta nuova non lo riapre. La
+    # credenziale e' FINTA di proposito - vedi certify_communication.
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in CALENDAR_SYNC_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso,
+                                payload={} if metodo == "POST" else None,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(
+            f"CALENDAR_SYNC-basic-{metodo}{suffisso}",
+            risposta.status == 401,
+            f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} "
+            "(atteso 401: P26-5 ha tolto quel canale, e una rotta nuova non lo riapre)",
+        )
+
+    # -- STATUS: l'unica lettura ammessa, e senza un solo segreto ------------
+    configurato = {}
+    for etichetta in ("A", "B"):
+        jar = jars[etichetta]
+        risposta = http.request("GET", f"{base}/status", jar=jar)
+        report.check(
+            f"CALENDAR_SYNC-status-{etichetta}",
+            risposta.status == 200,
+            f"{etichetta}: GET {base}/status -> {risposta.status} (atteso 200: "
+            "e' sola lettura, con gli operatori dedicati del live-cert)",
+        )
+        corpo_minuscolo = risposta.text().lower()
+        trovati = [s for s in _CALENDAR_SYNC_SEGRETI if s in corpo_minuscolo]
+        report.check(
+            f"CALENDAR_SYNC-status-senza-segreti-{etichetta}",
+            not trovati,
+            f"{etichetta}: il corpo di /status contiene {trovati}" if trovati else
+            f"{etichetta}: il corpo di /status non porta nessuno dei segreti "
+            f"vietati {_CALENDAR_SYNC_SEGRETI}",
+        )
+        configurato[etichetta] = bool((risposta.json() or {}).get("configured"))
+
+    # -- CONNECT: fail-controlled, MAI il consenso ---------------------------
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        if configurato.get(etichetta):
+            # Google e' configurato su questo ambiente: NON si chiama
+            # /connect, perche' un giro riuscito scriverebbe uno stato OAuth
+            # persistente. Il rifiuto anonimo/Basic sopra resta la prova su
+            # questa rotta; qui si dichiara lo skip invece di tacerlo.
+            report.note(
+                f"CALENDAR_SYNC-connect-fail-controlled-{etichetta}-{altro}",
+                f"{etichetta}: Google e' configurato su questo ambiente, quindi "
+                "/connect non viene invocata con sessione (creerebbe uno stato "
+                "OAuth reale); il rifiuto anonimo/Basic resta la prova su questa rotta",
+            )
+            continue
+        intruso = http.request("POST", f"{base}/connect", jar=jar, payload={
+            "agency_id": agenzia_id(altro), "user_id": 999999})
+        report.check(
+            f"CALENDAR_SYNC-connect-fail-controlled-{etichetta}-{altro}",
+            intruso.status == 409,
+            f"{etichetta} chiama /connect con `agency_id`/`user_id` di {altro} nel "
+            f"corpo -> {intruso.status} (atteso 409 GOOGLE_NOT_CONFIGURED: nessuno "
+            "di quei campi e' letto dalla rotta, che non ha un parametro body - "
+            "l'unico motivo di rifiuto e' l'assenza di configurazione Google su TEST, "
+            "e nessuno stato OAuth nasce prima di quel controllo)",
+        )
+
+    # -- CALLBACK: mai un code/state veri -------------------------------------
+    for etichetta in ("A", "B"):
+        jar = jars[etichetta]
+        senza = http.request("GET", f"{base}/callback", jar=jar)
+        report.check(
+            f"CALENDAR_SYNC-callback-senza-parametri-{etichetta}",
+            senza.status == 302,
+            f"{etichetta}: GET {base}/callback senza `code`/`state` -> {senza.status} "
+            "(atteso 302: redirect di errore verso l'Agenda, prima di qualunque "
+            "configurazione o rete)",
+        )
+        finti = urllib.parse.urlencode({"code": "p26-6-finto", "state": "p26-6-finto"})
+        con_stato_finto = http.request("GET", f"{base}/callback?{finti}", jar=jar)
+        report.check(
+            f"CALENDAR_SYNC-callback-stato-fittizio-{etichetta}",
+            con_stato_finto.status == 302,
+            f"{etichetta}: GET {base}/callback con `code`/`state` fittizi -> "
+            f"{con_stato_finto.status} (atteso 302: lo stato non esiste in "
+            "`calendar_oauth_states`, e l'exchange verso Google non viene mai "
+            "raggiunto: il consumo dello stato e' l'unico varco verso la rete, "
+            "ed e' una lettura che fallisce prima di qualunque scrittura)",
+        )
+
+    # -- DISCONNECT / RESYNC: session-derivati, nessuna connessione altrui ---
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        corpo_intruso = {"agency_id": agenzia_id(altro), "user_id": 999999,
+                         "connection_id": 999999}
+
+        disconnessione = http.request("POST", f"{base}/disconnect", jar=jar,
+                                      payload=corpo_intruso)
+        report.check(
+            f"CALENDAR_SYNC-disconnect-session-derivata-{etichetta}-{altro}",
+            disconnessione.status == 404,
+            f"{etichetta} chiama /disconnect con l'agenzia/l'utente/la connessione "
+            f"di {altro} nel corpo -> {disconnessione.status} (atteso 404 "
+            "GOOGLE_NOT_CONNECTED: l'identita' viene dalla sessione, non dal corpo "
+            "- questa rotta non ha nemmeno un parametro per leggerli - e questo "
+            "operatore di certificazione non ha mai avuto una connessione propria)",
+        )
+
+        risincronizzazione = http.request("POST", f"{base}/resync", jar=jar,
+                                          payload=corpo_intruso)
+        risincronizzazione_ok = (
+            risincronizzazione.status == 409
+            or (risincronizzazione.status == 200
+                and (risincronizzazione.json() or {}).get("requeued") == 0))
+        report.check(
+            f"CALENDAR_SYNC-resync-session-derivata-{etichetta}-{altro}",
+            risincronizzazione_ok,
+            f"{etichetta} chiama /resync con l'agenzia/l'utente di {altro} nel "
+            f"corpo -> {risincronizzazione.status} (atteso 409 se Google non e' "
+            "configurato, altrimenti 200 con `requeued=0`: questo operatore non "
+            "ha appuntamenti futuri propri da risincronizzare, tanto meno quelli "
+            "di un altro)",
+        )
+
+    # -- la guardia read-only --------------------------------------------------
+    dopo = _calendar_sync_firma(database)
+    if prima is None or dopo is None:
+        report.note(
+            "CALENDAR_SYNC-tabelle-invariate",
+            "nessuna connessione di lettura: che il giro ostile non abbia scritto "
+            "non e' stato misurato sulle righe in questo run",
+        )
+        return
+    report.check(
+        "CALENDAR_SYNC-tabelle-invariate",
+        dopo == prima,
+        "calendar_connections/calendar_oauth_states/appointment_calendar_sync "
+        f"prima e dopo la sezione: {prima} -> {dopo} (attesi identici: nessuna "
+        "di queste domande deve aver creato uno stato OAuth, una connessione o "
+        "una riga di sincronizzazione)",
+    )
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

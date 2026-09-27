@@ -191,11 +191,16 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         "projection.py": {"acquisition"},
         # SENTINELLA AGGIORNATA DA A30-2P: la facade LMC-15 scrive la
         # proiezione con le stesse varianti `*_in` (Q1/Q2).
-        "lmc15_facade.py": {"acquisition"},
+        # SENTINELLA AGGIORNATA DA A30-9B (§20): l'hook verso la
+        # sincronizzazione Google (`calendar_sync.integration`), NO-OP se
+        # quel package non e' configurato. Nessuna logica Google qui.
+        "lmc15_facade.py": {"acquisition", "calendar_sync"},
         # SENTINELLA AGGIORNATA DA A30-8: SOLO il service, SOLO l'helper
         # autorevole dei task CORE (`create_task_with_cursor`) per il
         # follow-up di un esito. Nessun altro file del pacchetto.
-        "service.py": {"core.repository"},
+        # SENTINELLA AGGIORNATA DA A30-9B (§16, §18): lo stesso hook, per gli
+        # stessi motivi, sui write path nativi dell'Agenda.
+        "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants"},
         "router.py": {"fastapi", "fastapi.encoders", "fastapi.responses",
                       "operator_auth.context", "operator_auth.dependencies",
                       "operator_auth.exceptions"},

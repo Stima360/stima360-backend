@@ -598,9 +598,10 @@ def test_35_nessun_cron_nuovo_e_il_cron_non_accende_la_sequenza():
     seconda resta un gesto che fa una persona.
     """
     from tests.p29_3e_diff import RUNNER_TOCCATO
+    from tests.a30_9b_diff import RUNNER_A30_9B
 
     toccati = {r[3:].strip() for r in _git_righe("status", "--porcelain", "--", "run_*.py")}
-    assert toccati <= {RUNNER_TOCCATO}, sorted(toccati)
+    assert toccati <= {RUNNER_TOCCATO, RUNNER_A30_9B}, sorted(toccati)
     assert not list(ROOT.glob("run_journey*.py"))
     corrente = re.sub(r'"{3}[\s\S]*?"{3}', "",
                       (ROOT / RUNNER_TOCCATO).read_text(encoding="utf-8"))
@@ -694,12 +695,15 @@ def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-9A: undicesima dichiarazione dell'Agenda
     # (le fondamenta della sincronizzazione calendario, package `calendar_sync/`).
     from tests.a30_9a_diff import FILE_MODIFICATI as MOD_A30_9A, FILE_NUOVI as NUOVI_A30_9A
+    # SENTINELLA AGGIORNATA DA A30-9B: dodicesima dichiarazione dell'Agenda
+    # (OAuth + hook Agenda + worker reale verso Google Calendar).
+    from tests.a30_9b_diff import FILE_MODIFICATI as MOD_A30_9B, FILE_NUOVI as NUOVI_A30_9B
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A)
+                 | NUOVI_A30_9A | NUOVI_A30_9B)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A)
+               | MOD_A30_9A | MOD_A30_9B)
 
     righe = _git_righe("status", "--porcelain")
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}

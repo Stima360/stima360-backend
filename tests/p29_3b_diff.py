@@ -164,6 +164,10 @@ def righe_impreviste(root, percorso: str) -> list[str]:
         # richieste dal sito, per intero, da `a30_7_diff`. Nessun'altra riga.
         from tests.a30_7_diff import RIGHE_MAIN as RIGHE_MAIN_A30_7
         ammesse = ammesse | RIGHE_MAIN_A30_7
+        # A30-9B (collisione dichiarata): il mount delle rotte Google
+        # Calendar, per intero, da `a30_9b_diff`. Nessun'altra riga.
+        from tests.a30_9b_diff import RIGHE_MAIN as RIGHE_MAIN_A30_9B
+        ammesse = ammesse | RIGHE_MAIN_A30_9B
     rimovibili = RIMOZIONI_PER_FILE.get(percorso, frozenset())
     fuori = []
     for riga in _git(root, "diff", "--unified=0", "--", percorso):

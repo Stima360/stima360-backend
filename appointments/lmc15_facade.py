@@ -37,6 +37,11 @@ from acquisition import repository as lmc15
 from . import backfill, errors, repository
 from .enums import default_duration_minutes
 
+# A30-9B, §20: LMC-15 crea/aggiorna `appointments` fuori da `service.py` (le
+# righe qui non hanno mai un agente): stesso hook, stessa regola di fail-open
+# di `appointments/service.py`, nessuna logica Google duplicata.
+from calendar_sync import integration as _gcal
+
 SOURCE = "lmc15_facade"
 APPOINTMENT_TYPE = "inspection"
 DURATA = timedelta(minutes=default_duration_minutes(APPOINTMENT_TYPE))
@@ -105,8 +110,12 @@ def schedule_inspection(agency_id: int, *, stima_id: int, scheduled_for, actor_u
         ispezione = lmc15.create_inspection_in(
             cur, agency_id, stima_id=stima_id, scheduled_for=scheduled_for,
             actor_user_id=actor_user_id)
-        _nuova_riga(cur, ispezione, status="scheduled", start_at=ispezione["scheduled_for"],
-                    actor_user_id=actor_user_id, agency_id=agency_id)
+        riga = _nuova_riga(cur, ispezione, status="scheduled",
+                           start_at=ispezione["scheduled_for"],
+                           actor_user_id=actor_user_id, agency_id=agency_id)
+        # A30-9B, §20: CREATE gia' `scheduled` (matrice §18), come in
+        # `appointments/service.py::create_appointment_idempotent`.
+        _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
         return ispezione
     return _in_transazione(lavoro)
 
@@ -225,10 +234,13 @@ def cancel_inspection(agency_id: int, *, inspection_id: int, reason, actor_user_
         chiusa = lmc15.cancel_inspection_in(
             cur, agency_id, inspection_id=inspection_id, reason=reason,
             actor_user_id=actor_user_id)
-        repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, riga["id"], {"status": "cancelled", "cancelled_at": db_now,
                               "cancelled_reason": reason},
             actor_user_id=actor_user_id, event_type="status_changed",
             from_status=riga["status"], azione="lmc15_cancel")
+        # A30-9B, §20: CANCEL (matrice §18), come in
+        # `appointments/service.py::cancel_appointment`.
+        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
         return chiusa
     return _in_transazione(lavoro)

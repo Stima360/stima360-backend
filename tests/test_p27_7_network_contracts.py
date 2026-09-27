@@ -410,6 +410,16 @@ def test_d3_no_page_outside_the_network_was_touched():
         # "disponibile dal", nota di esito dagli eventi). Nessuna vista del
         # CRM e nessun componente della Rete e' toccato.
         "static/os_shell/assets/agenda/agenda-model.js",
+        # A30-9B - IL PANNELLO GOOGLE CALENDAR. Due file nuovi (un client
+        # dedicato a `/api/calendar/google`, mai `agenda-api.js`, che resta
+        # solo per `/api/appointments`; e il pannello che lo usa), piu' i due
+        # gia' ammessi (`agenda-page.js` lo monta, `app.css` lo stila).
+        #
+        # Cio' che questo test difende resta intatto: nessuna vista del CRM e
+        # nessun componente della Rete e' toccato, e l'Agenda continua a
+        # parlare SOLO con questi due prefissi (nessun altro endpoint).
+        "static/os_shell/assets/agenda/calendar-sync-api.js",
+        "static/os_shell/assets/components/agenda/agenda-calendar-sync-panel.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

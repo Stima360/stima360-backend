@@ -71,6 +71,15 @@ from .enums import (
     BLOCKING_STATUSES,
 )
 
+# A30-9B: l'hook verso la sincronizzazione del calendario esterno (Google).
+# NO-OP controllato se quel package non e' configurato per questo deployment
+# (calendar_sync.integration.on_appointment_mutation, §17): l'Agenda non deve
+# mai dipendere da Google per riuscire. Nessuna rete qui, nessuna logica
+# Google in questo modulo: solo "questa catena va riconciliata", nella STESSA
+# transazione della mutazione.
+from calendar_sync import integration as _gcal
+from calendar_sync.constants import APPOINTMENT_REMOTE_PRESENT as _GCAL_PRESENT
+
 try:  # il driver vero; in sviluppo senza psycopg2 il conftest ne mette uno finto
     from psycopg2 import errors as _pg_errors
     _EXCLUSION_VIOLATION = getattr(_pg_errors, "ExclusionViolation", None)
@@ -424,6 +433,10 @@ def create_appointment_idempotent(ctx, payload):
         if proietta:
             projection.on_schedule(cur, agency_id, riga, actor_user_id=actor)
             riga = repository.get_appointment(cur, agency_id, riga["id"])
+        # A30-9B, matrice §18: CREATE gia' `scheduled`/`confirmed` -> mark
+        # dirty; una CREATE `requested` non ha bisogno di riga di sync.
+        if riga["status"] in _GCAL_PRESENT:
+            _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
         return riga, False
 
     return _in_transazione(_lavoro)
@@ -494,6 +507,8 @@ def schedule_appointment(ctx, appointment_id, body):
         if proietta:
             projection.on_schedule(cur, agency_id, nuova, actor_user_id=actor)
             nuova = repository.get_appointment(cur, agency_id, row["id"])
+        # A30-9B, matrice §18: SCHEDULE requested->scheduled -> mark dirty.
+        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
         return nuova
     return _su_riga(ctx, appointment_id, "schedule", body.version, lavoro)
 
@@ -525,9 +540,13 @@ def reassign_appointment(ctx, appointment_id, body):
                     end_at=row["end_at"], before=row["buffer_before_minutes"],
                     after=row["buffer_after_minutes"], escluso=row["id"],
                     gia_bloccato=True)
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], {"assigned_user_id": nuovo}, actor_user_id=actor,
             event_type="updated", from_status=row["status"], azione="reassign")
+        # A30-9B, matrice §18/§22: REASSIGN -> mark dirty (l'evento si sposta
+        # dal calendario del vecchio agente a quello del nuovo).
+        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+        return nuova
     return _su_riga(ctx, appointment_id, "reassign", body.version, lavoro)
 
 
@@ -582,6 +601,10 @@ def reschedule_appointment(ctx, appointment_id, payload):
         if proietta:
             projection.on_reschedule(cur, agency_id, vecchia, nuova)
             nuova = repository.get_appointment(cur, agency_id, nuova["id"])
+        # A30-9B, matrice §18/§21: RESCHEDULE -> stessa catena, mark dirty
+        # sulla riga viva; l'id evento remoto non cambia (deterministico sulla
+        # radice della catena), il worker aggiorna lo STESSO evento Google.
+        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
         return nuova
 
     return _su_riga(ctx, appointment_id, "reschedule", versione, lavoro)
@@ -605,11 +628,15 @@ def cancel_appointment(ctx, appointment_id, body):
         task = (None if riferimenti is None else
                 _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
                                 esito="cancelled"))
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], {"status": "cancelled", "cancelled_at": db_now,
                              "cancelled_reason": body.reason},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
             azione="cancel", event_extra=_extra_evento(None, task))
+        # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
+        # esiste, va rimosso).
+        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+        return nuova
     return _su_riga(ctx, appointment_id, "cancel", body.version, lavoro)
 
 
@@ -668,6 +695,15 @@ def no_show_appointment(ctx, appointment_id, body):
     return _su_riga(ctx, appointment_id, "no_show", body.version, lavoro)
 
 
+#: A30-9B, matrice §18: i SOLI campi di un PATCH che sono esportati verso
+#: Google. `PatchBody` (appointments/schemas.py) oggi non ne consente
+#: nessuno (solo note, luogo e collegamenti): il controllo resta comunque
+#: esplicito, cosi' un futuro campo temporale/agente nel PATCH non passerebbe
+#: silenziosamente senza mark dirty.
+_GCAL_RELEVANT_PATCH_FIELDS = frozenset({"appointment_type", "start_at", "end_at",
+                                         "assigned_user_id"})
+
+
 def patch_appointment(ctx, appointment_id, body):
     """Solo note, luogo e collegamenti; mai orari, agente, tipo o stato."""
     cambi = body.changes()
@@ -677,9 +713,15 @@ def patch_appointment(ctx, appointment_id, body):
             return repository.get_appointment(cur, agency_id, row["id"])
         finale = {c: cambi.get(c, row[c]) for c in ("contact_id", "lead_id", "property_id")}
         _controlla_collegamenti(cur, agency_id, **finale)
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], cambi, actor_user_id=actor, event_type="updated",
             from_status=row["status"], azione="patch")
+        # A30-9B, matrice §18: mark dirty SOLO se il PATCH ha cambiato un
+        # campo esportato verso Google; un PATCH di sole note/luogo/
+        # collegamenti non tocca la sincronizzazione.
+        if _GCAL_RELEVANT_PATCH_FIELDS & cambi.keys():
+            _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+        return nuova
     return _su_riga(ctx, appointment_id, "patch", body.version, lavoro)
 
 
