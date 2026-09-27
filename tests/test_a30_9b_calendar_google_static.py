@@ -258,6 +258,117 @@ def test_11b_scope_insufficiente():
         modulo.build_flow = original
 
 
+def test_11c_scope_come_lista_hotfix_live_test():
+    """HOTFIX (live TEST, commit 726cc65): `oauthlib`/`google-auth-oauthlib`
+    puo' gia' restituire `token["scope"]` normalizzato come LISTA, non come
+    stringa delimitata da spazi (RFC 6749 la vuole stringa, ma la libreria
+    non lo garantisce) - questo e' esattamente il 500 osservato in
+    `calendar_sync/oauth.py:113` durante un vero consenso Google su TEST.
+    `exchange_code` deve accettarlo senza sollevare `AttributeError`, produrre
+    gli `ExchangedToken.granted_scopes` corretti e non allargare SCOPES."""
+    from calendar_sync import oauth
+
+    class _FlowFinto:
+        def fetch_token(self, **kw):
+            return {
+                "scope": ["openid", "https://www.googleapis.com/auth/calendar.events.owned"],
+                "refresh_token": "refresh-lista",
+                "id_token": "jwt-lista",
+            }
+
+    def verificatore(id_token_jwt, client_id):
+        return {"iss": "https://accounts.google.com", "aud": client_id, "sub": "sub-lista"}
+
+    import calendar_sync.oauth as modulo
+    original = modulo.build_flow
+    modulo.build_flow = lambda config, *, code_verifier: _FlowFinto()
+    try:
+        esito = oauth.exchange_code(_cfg(), code="C", code_verifier="v",
+                                    id_token_verifier=verificatore)
+    finally:
+        modulo.build_flow = original
+    assert esito.refresh_token == "refresh-lista"
+    assert esito.subject == "sub-lista"
+    assert set(esito.granted_scopes) == set(oauth.SCOPES)
+
+
+def test_11d_scope_come_tupla_o_insieme_e_scope_lista_insufficiente():
+    """La normalizzazione accetta anche tupla/insieme (non solo lista), e
+    una lista che non copre tutti gli SCOPES resta GOOGLE_SCOPE_INSUFFICIENT
+    - lo stesso rifiuto della forma stringa, la lista non e' un modo per
+    aggirare il controllo."""
+    from calendar_sync import oauth
+
+    def verificatore(id_token_jwt, client_id):
+        return {"iss": "https://accounts.google.com", "aud": client_id, "sub": "s"}
+
+    import calendar_sync.oauth as modulo
+    original = modulo.build_flow
+
+    class _FlowCompleto:
+        def __init__(self, scope_value):
+            self._scope_value = scope_value
+
+        def fetch_token(self, **kw):
+            return {"scope": self._scope_value, "refresh_token": "r", "id_token": "j"}
+
+    for scope_value in (
+        ("openid", "https://www.googleapis.com/auth/calendar.events.owned"),
+        {"openid", "https://www.googleapis.com/auth/calendar.events.owned"},
+    ):
+        modulo.build_flow = lambda config, *, code_verifier, sv=scope_value: _FlowCompleto(sv)
+        try:
+            esito = oauth.exchange_code(_cfg(), code="C", code_verifier="v",
+                                        id_token_verifier=verificatore)
+        finally:
+            modulo.build_flow = original
+        assert set(esito.granted_scopes) == set(oauth.SCOPES)
+
+    class _FlowIncompleto:
+        def fetch_token(self, **kw):
+            return {"scope": ["openid"], "refresh_token": "r", "id_token": "j"}
+
+    modulo.build_flow = lambda config, *, code_verifier: _FlowIncompleto()
+    try:
+        with pytest.raises(oauth.OAuthError) as exc:
+            oauth.exchange_code(_cfg(), code="C", code_verifier="v",
+                                id_token_verifier=verificatore)
+        assert exc.value.code == "GOOGLE_SCOPE_INSUFFICIENT"
+    finally:
+        modulo.build_flow = original
+
+
+def test_11e_scope_assente_o_forma_inattesa():
+    """`token.get("scope")` assente (None) o in una forma che non e' ne'
+    stringa ne' lista/tupla/insieme: insieme vuoto, stesso rifiuto
+    GOOGLE_SCOPE_INSUFFICIENT di prima del hotfix - nessuna eccezione
+    diversa, nessun bypass del controllo."""
+    from calendar_sync import oauth
+
+    import calendar_sync.oauth as modulo
+    original = modulo.build_flow
+
+    class _FlowFinto:
+        def __init__(self, token):
+            self._token = token
+
+        def fetch_token(self, **kw):
+            return self._token
+
+    for token in (
+        {"refresh_token": "r", "id_token": "j"},                 # scope assente
+        {"scope": None, "refresh_token": "r", "id_token": "j"},  # scope None esplicito
+        {"scope": 12345, "refresh_token": "r", "id_token": "j"}, # forma inattesa
+    ):
+        modulo.build_flow = lambda config, *, code_verifier, t=token: _FlowFinto(t)
+        try:
+            with pytest.raises(oauth.OAuthError) as exc:
+                oauth.exchange_code(_cfg(), code="C", code_verifier="v")
+            assert exc.value.code == "GOOGLE_SCOPE_INSUFFICIENT"
+        finally:
+            modulo.build_flow = original
+
+
 # ---------------------------------------------------------------------------
 # GOOGLE PROVIDER - CLASSIFICAZIONE HTTP (44-63, senza rete: sessione finta)
 # ---------------------------------------------------------------------------

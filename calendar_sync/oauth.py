@@ -93,6 +93,25 @@ def _default_id_token_verifier(id_token_jwt: str, client_id: str) -> dict:
     return google_id_token.verify_oauth2_token(id_token_jwt, Request(), client_id)
 
 
+def _normalizza_scope(scope_value) -> set[str]:
+    """Lo `scope` di un token OAuth, nell'insieme che porta davvero.
+
+    Google/oauthlib non garantisce una forma sola: la RFC 6749 lo vuole una
+    stringa delimitata da spazi, ma `google-auth-oauthlib`/`requests-oauthlib`
+    puo' gia' restituirlo normalizzato come lista (visto in produzione: il
+    500 di questo hotfix). Qui si accetta ENTRAMBE le forme, senza assumerne
+    una: una stringa si divide sugli spazi, una lista/tupla/insieme si
+    accetta cosi' com'e' (elementi vuoti scartati), qualunque altra cosa (None
+    compreso) e' un insieme vuoto - la stessa cosa che restituiva il vecchio
+    codice per uno scope assente, cosi' il ramo GOOGLE_SCOPE_INSUFFICIENT resta
+    lo stesso rifiuto di prima."""
+    if isinstance(scope_value, str):
+        return set(scope_value.split())
+    if isinstance(scope_value, (list, tuple, set)):
+        return {str(elemento) for elemento in scope_value if elemento}
+    return set()
+
+
 def exchange_code(config: GoogleConfig, *, code: str, code_verifier: str,
                   id_token_verifier=None) -> ExchangedToken:
     """§8: scambio server-side del `code`. Verifica scope, refresh token
@@ -110,7 +129,7 @@ def exchange_code(config: GoogleConfig, *, code: str, code_verifier: str,
     except Exception as errore:  # noqa: BLE001 - qualunque errore della libreria e' opaco
         raise OAuthError("GOOGLE_TOKEN_EXCHANGE_FAILED") from errore
 
-    concessi = set((token.get("scope") or "").split())
+    concessi = _normalizza_scope(token.get("scope"))
     mancanti = set(SCOPES) - concessi
     if mancanti:
         raise OAuthError("GOOGLE_SCOPE_INSUFFICIENT")
