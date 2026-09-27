@@ -522,7 +522,11 @@ def test_n7_nessuna_migration_nuova():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 74 and numeri[-2] == 73, "la serie si e' fermata o e' andata oltre la 074"
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 75 and numeri[-2] == 74, "la serie si e' fermata o e' andata oltre la 075"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

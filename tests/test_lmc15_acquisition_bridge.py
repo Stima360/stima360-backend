@@ -367,7 +367,11 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 74 and numeri[-2] == 73 and numeri[-3] == 72 and numeri[-4] == 71
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 75 and numeri[-2] == 74 and numeri[-3] == 73 and numeri[-4] == 72
     assert len(numeri) == len(set(numeri))
 
 
@@ -602,7 +606,13 @@ def test_37_nessuna_migration_oltre_la_070():
               "migrations/073_a30_2p_lmc15_facade.sql",
               "migrations/073_a30_2p_lmc15_facade_down.sql",
               "migrations/074_a30_9a_calendar_sync.sql",
-              "migrations/074_a30_9a_calendar_sync_down.sql"}
+              "migrations/074_a30_9a_calendar_sync_down.sql",
+              "migrations/075_a30_10_calendar_inbound.sql",
+              "migrations/075_a30_10_calendar_inbound_down.sql"}
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA A30-9A: la 074 crea le fondamenta della
     # sincronizzazione in uscita verso Google Calendar (`calendar_connections`,
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal

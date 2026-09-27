@@ -29,6 +29,12 @@ SYNC_COLUMNS = (
     "last_error_detail", "etag", "remote_updated_at", "last_synced_at", "created_at",
     "updated_at",
 )
+#: A30-10: le colonne della coda INBOUND (075), separate e indipendenti da
+#: quelle outbound sopra - nessuna condivisa (D6 del gate A30-10B).
+INBOUND_SYNC_COLUMNS = SYNC_COLUMNS + (
+    "inbound_next_check_at", "inbound_checked_at", "inbound_attempt_count",
+    "inbound_claim_token", "inbound_claimed_at", "inbound_last_error_code",
+)
 #: Le colonne di una connessione che escono dal repository: MAI il ciphertext,
 #: salvo che nella funzione dedicata del riconciliatore.
 CONNECTION_COLUMNS = (
@@ -37,6 +43,7 @@ CONNECTION_COLUMNS = (
     "disconnected_at", "created_at", "updated_at",
 )
 _SYNC = ", ".join(SYNC_COLUMNS)
+_SYNC_INBOUND = ", ".join(INBOUND_SYNC_COLUMNS)
 _CONN = ", ".join(CONNECTION_COLUMNS)
 
 #: QUANDO UNA CONNESSIONE E' UTILIZZABILE, verificato AL MOMENTO DELL'USO (non
@@ -689,3 +696,141 @@ def classify_oauth_state_failure(cur, *, agency_id: int, user_id: int, state_has
     if cur.fetchone()["scaduto"]:
         return OAUTH_STATE_EXPIRED
     return OAUTH_STATE_INVALID
+
+
+# ---------------------------------------------------------------------------
+# A30-10 - CODA INBOUND: claim, lease, compare-and-set (colonne PROPRIE, 075)
+# ---------------------------------------------------------------------------
+#
+# Stesso schema del claim outbound sopra (`Claim`/`claim_batch`/`_cas`), ma su
+# `inbound_claim_token`/`inbound_claimed_at`: nessuna `status` propria (D6, la
+# 075 non ne aggiunge una), quindi il CAS qui confronta solo il token, mai uno
+# stato. L'eleggibilita' (`remote_connection_id IS NOT NULL`, riga viva
+# `scheduled`/`confirmed`) e' nel WHERE del claim, non in una colonna
+# specchiata: e' sempre la riga `appointments` a decidere, mai una copia.
+
+_DEFAULT_INBOUND_FAIRNESS_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class InboundClaim:
+    sync_id: int
+    agency_id: int
+    claim_token: str
+
+
+def claim_batch_inbound(cur, *, limit: int = 10, lease_seconds: int = k.DEFAULT_LEASE_SECONDS,
+                        agency_id: int | None = None) -> list:
+    """Prende fino a `limit` mapping da LEGGERE: connesse, la cui riga viva e'
+    `scheduled`/`confirmed`, dovute (`inbound_next_check_at <= NOW()`), senza
+    un claim inbound in corso (o con lease scaduto). `FOR UPDATE OF s SKIP
+    LOCKED` blocca solo la riga di sync, mai `appointments` (nessuna
+    interferenza con una scrittura CRM concorrente); l'ordine
+    (`inbound_next_check_at, id`) e' la fairness richiesta dal gate."""
+    limit = max(1, min(int(limit), 200))
+    filtro, par = "", {"lease": int(lease_seconds), "limit": limit}
+    if agency_id is not None:
+        filtro = " AND s.agency_id = %(agency)s"
+        par["agency"] = agency_id
+    cur.execute(
+        f"""
+        SELECT s.id FROM appointment_calendar_sync s
+          JOIN appointments a
+            ON a.id = s.current_appointment_id AND a.agency_id = s.agency_id
+         WHERE s.remote_connection_id IS NOT NULL
+           AND a.status IN ('scheduled', 'confirmed')
+           AND s.inbound_next_check_at <= NOW()
+           AND (s.inbound_claim_token IS NULL
+                OR s.inbound_claimed_at < NOW() - make_interval(secs => %(lease)s))
+           {filtro}
+         ORDER BY s.inbound_next_check_at, s.id
+         LIMIT %(limit)s
+         FOR UPDATE OF s SKIP LOCKED
+        """,
+        par,
+    )
+    ids = [r["id"] for r in cur.fetchall()]
+    prese = []
+    for sync_id in ids:
+        token = str(uuid.uuid4())
+        cur.execute(
+            "UPDATE appointment_calendar_sync SET inbound_claim_token = %s, "
+            "inbound_claimed_at = NOW() WHERE id = %s RETURNING id, agency_id",
+            (token, sync_id),
+        )
+        r = cur.fetchone()
+        prese.append(InboundClaim(r["id"], r["agency_id"], token))
+    return prese
+
+
+def load_claimed_inbound(cur, claim: InboundClaim):
+    """La riga, SOLO se il claim inbound e' ancora nostro."""
+    cur.execute(
+        f"SELECT {_SYNC_INBOUND} FROM appointment_calendar_sync "
+        "WHERE id = %s AND agency_id = %s AND inbound_claim_token = %s",
+        (claim.sync_id, claim.agency_id, claim.claim_token),
+    )
+    return _riga(cur.fetchone())
+
+
+def _cas_inbound(cur, claim: InboundClaim, assegnazioni: str, valori: dict):
+    """UPDATE compare-and-set sul claim INBOUND: nessun effetto se il claim
+    non e' piu' nostro. Restituisce la riga aggiornata o None."""
+    par = dict(valori)
+    par.update({"id": claim.sync_id, "agency": claim.agency_id, "token": claim.claim_token})
+    cur.execute(
+        f"UPDATE appointment_calendar_sync SET {assegnazioni} "
+        "WHERE id = %(id)s AND agency_id = %(agency)s "
+        f"AND inbound_claim_token = %(token)s RETURNING {_SYNC_INBOUND}",
+        par,
+    )
+    return _riga(cur.fetchone())
+
+
+def finalize_inbound_success(cur, claim: InboundClaim,
+                             *, fairness_seconds: int = _DEFAULT_INBOUND_FAIRNESS_SECONDS):
+    """Successo o no-op: la riga torna eleggibile dopo `fairness_seconds`,
+    tentativi azzerati, claim liberato, nessun errore residuo."""
+    return _cas_inbound(
+        cur, claim,
+        """
+        inbound_checked_at = NOW(),
+        inbound_next_check_at = NOW() + make_interval(secs => %(fair)s),
+        inbound_attempt_count = 0,
+        inbound_claim_token = NULL, inbound_claimed_at = NULL,
+        inbound_last_error_code = NULL
+        """,
+        {"fair": int(fairness_seconds)},
+    )
+
+
+def mark_retry_inbound(cur, claim: InboundClaim, *, error_code: str, delay_seconds: int):
+    """Errore TRANSITORIO di lettura (429/5xx/timeout/rete): tentativi di
+    lettura +1, backoff proprio (mai `attempt_count` outbound), claim
+    liberato. Nessuno stato terminale: l'eleggibilita' resta legata solo alla
+    riga viva (`scheduled`/`confirmed`), non a un tetto di tentativi qui."""
+    return _cas_inbound(
+        cur, claim,
+        """
+        inbound_checked_at = NOW(),
+        inbound_attempt_count = inbound_attempt_count + 1,
+        inbound_next_check_at = NOW() + make_interval(secs => %(delay)s),
+        inbound_claim_token = NULL, inbound_claimed_at = NULL,
+        inbound_last_error_code = %(code)s
+        """,
+        {"delay": int(delay_seconds), "code": error_code},
+    )
+
+
+def release_inbound_claim(cur, claim: InboundClaim, *, error_code: str | None = None):
+    """Libera il claim SENZA cambiare `inbound_next_check_at' (defer puro: la
+    guardia local-dirty, una race con una scrittura concorrente, una riga
+    diventata non eleggibile fra il claim e l'uso, un contesto operatore non
+    disponibile). Il codice, se presente, resta solo come diagnostica
+    dell'ultimo giro: non e' un tentativo di lettura fallito."""
+    return _cas_inbound(
+        cur, claim,
+        "inbound_claim_token = NULL, inbound_claimed_at = NULL, "
+        "inbound_last_error_code = %(code)s",
+        {"code": error_code},
+    )

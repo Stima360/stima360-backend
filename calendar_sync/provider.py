@@ -2,6 +2,15 @@
 
 Il dominio (riconciliatore) parla solo con questa interfaccia:
 
+    get_event(auth, calendar_id, event_id) -> RemoteEvent | None
+        A30-10: LETTURA puntuale di un evento GIA' mappato (mai un elenco, mai
+        un evento arbitrario del calendario dell'operatore). `None` per
+        "assente" (404/410 Google): un evento sparito non e' un errore da
+        ritentare, e' un fatto (§A30-10). Il risultato porta SOLO stato,
+        orari, fuso, `etag`, ultimo aggiornamento e le proprieta' private
+        TECNICHE (whitelist applicata dal provider, mai un dato personale:
+        niente titolo/descrizione arbitraria, niente luogo, partecipanti,
+        organizzatore, email, dati di conferenza).
     ensure_event(auth, calendar_id, payload) -> EnsureResult
         "fai si' che l'evento `payload.event_id` ESISTA su quel calendario con
         QUESTO contenuto". Non e' un INSERT cieco: un'implementazione deve
@@ -69,8 +78,36 @@ class DeleteResult:
     outcome: str                      # deleted | absent
 
 
+#: A30-10: le SOLE proprieta' private tecniche che possono uscire da un
+#: provider verso il dominio inbound. Qualunque altra chiave (o l'intero
+#: `summary`/`description`/`location`/`attendees`/`organizer` dell'evento
+#: Google) resta dentro il provider: non e' MAI un campo di `RemoteEvent`.
+PRIVATE_PROPERTIES_WHITELIST = frozenset({
+    "stima360_chain_id", "stima360_appointment_id", "stima360_origin",
+})
+
+
+@dataclass(frozen=True)
+class RemoteEvent:
+    """L'evento remoto letto, neutro rispetto a Google (A30-10). `status` e'
+    uno tra "confirmed", "tentative", "cancelled" (il vocabolario Google);
+    per un evento cancellato (tombstone HTTP 200) `start_at`/`end_at`/
+    `timezone` sono `None` e `private_properties` e' vuoto: un evento sparito
+    non porta piu' nessun dato al dominio, nemmeno tecnico."""
+    status: str
+    start_at: datetime | None
+    end_at: datetime | None
+    timezone: str | None
+    etag: str | None
+    updated_at: datetime | None
+    private_properties: dict
+
+
 class CalendarProvider(Protocol):
     name: str
+
+    def get_event(self, auth: ProviderAuth, calendar_id: str,
+                  event_id: str) -> RemoteEvent | None: ...
 
     def ensure_event(self, auth: ProviderAuth, calendar_id: str,
                      payload: EventPayload) -> EnsureResult: ...

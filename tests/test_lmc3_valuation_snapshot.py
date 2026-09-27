@@ -668,14 +668,18 @@ def test_g2_nessuna_migration_in_lmc3():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert migrazioni[-8:] == ["067_lmc1b_owner_login_reason.sql",
-                               "068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert migrazioni[-8:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
                                "072_a30_1_appointments.sql",
                                "073_a30_2p_lmc15_facade.sql",
-                               "074_a30_9a_calendar_sync.sql"], migrazioni[-9:]
+                               "074_a30_9a_calendar_sync.sql",
+                               "075_a30_10_calendar_inbound.sql"], migrazioni[-9:]
 
 
 DOMINI_VIETATI_LMC3 = (

@@ -15,7 +15,7 @@ NESSUNA RETE: nessun import di librerie HTTP, nessun socket.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from .provider import (
@@ -25,6 +25,7 @@ from .provider import (
     EventPayload,
     ProviderAuth,
 )
+from .provider import RemoteEvent as _ContrattoRemoteEvent
 
 
 class SimulatedCrash(BaseException):
@@ -67,6 +68,47 @@ class FakeCalendarProvider:
         """L'evento sparisce del tutto dal remoto (GET/PATCH -> 404)."""
         self.calendars.get((connection_id, calendar_id), {}).pop(event_id, None)
 
+    # -- A30-10: simulazioni per l'inbound -----------------------------------
+
+    def simulate_remote_reschedule(self, connection_id, calendar_id, event_id, *,
+                                   start_at, end_at):
+        """"Qualcuno" ha spostato l'evento direttamente su Google."""
+        cal = self.calendars[(connection_id, calendar_id)]
+        ev = cal[event_id]
+        nuovo = replace(ev.payload, start_at=start_at, end_at=end_at)
+        cal[event_id] = RemoteEvent(nuovo, ev.status, self._etag(), datetime.now(timezone.utc))
+
+    def simulate_remote_content_drift(self, connection_id, calendar_id, event_id, *,
+                                      summary=None, description=None):
+        """Solo `summary`/`description` cambiati su Google: orari intatti."""
+        cal = self.calendars[(connection_id, calendar_id)]
+        ev = cal[event_id]
+        nuovo = replace(
+            ev.payload,
+            summary=ev.payload.summary if summary is None else summary,
+            description=ev.payload.description if description is None else description,
+        )
+        cal[event_id] = RemoteEvent(nuovo, ev.status, self._etag(), datetime.now(timezone.utc))
+
+    def simulate_remote_private_properties(self, connection_id, calendar_id, event_id, **valori):
+        """Le proprieta' private tecniche manomesse/incoerenti su Google."""
+        cal = self.calendars[(connection_id, calendar_id)]
+        ev = cal[event_id]
+        nuove = dict(ev.payload.private_properties)
+        nuove.update(valori)
+        nuovo = replace(ev.payload, private_properties=nuove)
+        cal[event_id] = RemoteEvent(nuovo, ev.status, self._etag(), datetime.now(timezone.utc))
+
+    def simulate_remote_cancelled_tombstone(self, connection_id, calendar_id, event_id):
+        """HTTP 200 con `status: cancelled` (l'evento resta, ma e' un
+        tombstone): diverso da `vanish`, che simula un 404/410."""
+        cal = self.calendars.get((connection_id, calendar_id), {})
+        ev = cal.get(event_id)
+        if ev is not None:
+            ev.status = "cancelled"
+            ev.etag = self._etag()
+            ev.updated = datetime.now(timezone.utc)
+
     # -- letture per i test -------------------------------------------------
 
     def active_events(self, connection_id, calendar_id="primary"):
@@ -94,6 +136,29 @@ class FakeCalendarProvider:
     def _etag(self):
         self._versione += 1
         return f'"{self._versione}"'
+
+    def get_event(self, auth: ProviderAuth, calendar_id: str,
+                  event_id: str) -> _ContrattoRemoteEvent | None:
+        self.calls.append(("get", auth.connection_id, calendar_id, event_id))
+        self._guasto("get")
+        cal = self.calendars.get((auth.connection_id, calendar_id), {})
+        ev = cal.get(event_id)
+        if ev is None:
+            return None
+        self._forse_crash("get")
+        if ev.status == "cancelled":
+            return _ContrattoRemoteEvent(status="cancelled", start_at=None, end_at=None,
+                                         timezone=None, etag=ev.etag, updated_at=ev.updated,
+                                         private_properties={})
+        return _ContrattoRemoteEvent(
+            status=ev.status,
+            start_at=ev.payload.start_at,
+            end_at=ev.payload.end_at,
+            timezone=ev.payload.timezone,
+            etag=ev.etag,
+            updated_at=ev.updated,
+            private_properties=dict(ev.payload.private_properties),
+        )
 
     def ensure_event(self, auth: ProviderAuth, calendar_id: str,
                      payload: EventPayload) -> EnsureResult:

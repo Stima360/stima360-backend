@@ -1318,9 +1318,13 @@ def test_i1_operator_context_still_has_exactly_six_fields():
 
 
 def test_i2_acting_is_not_an_authentication_channel():
-    """L'acting non e' un modo di autenticarsi: e' dove si sta operando."""
+    """L'acting non e' un modo di autenticarsi: e' dove si sta operando.
+
+    SENTINELLA AGGIORNATA DA A30-10B: `calendar_inbound` (decisione D2) e' il
+    TERZO channel registrato nel modello - mai raggiungibile da una
+    richiesta HTTP - e non contiene comunque "acting"."""
     from operator_auth.context import AUTH_CHANNELS
-    assert AUTH_CHANNELS == ("operator_session", "legacy_basic")
+    assert AUTH_CHANNELS == ("operator_session", "legacy_basic", "calendar_inbound")
     for canale in AUTH_CHANNELS:
         assert "acting" not in canale
 

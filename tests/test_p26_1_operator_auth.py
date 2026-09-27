@@ -423,11 +423,17 @@ def test_s6_no_database_access():
 def test_no_later_operator_auth_module_exists():
     """Fail-closed: a router, dependencies or schemas module here would mean a
     later task had started. Updated by Task 4 (context, exceptions,
-    permissions) and Task 5 (database, repository, service)."""
+    permissions) and Task 5 (database, repository, service).
+
+    SENTINELLA AGGIORNATA DA A30-10B: `calendar_inbound.py` e' il TERZO
+    `auth_channel` (decisione D2), la sola factory server-side che puo'
+    costruire un `OperatorContext` col canale `calendar_inbound` - nessuna
+    route, nessuna dependency: si nomina invece di smettere di guardare."""
     package = ROOT / "operator_auth"
     present = sorted(item.name for item in package.glob("*.py"))
     assert present == [
         "__init__.py",
+        "calendar_inbound.py",
         "context.py",
         "database.py",
         "dependencies.py",
@@ -533,7 +539,12 @@ def test_legacy_basic_channel_is_agency_bound_and_never_platform_admin():
 
 
 def test_declared_auth_channels():
-    assert context.AUTH_CHANNELS == ("operator_session", "legacy_basic")
+    # SENTINELLA AGGIORNATA DA A30-10B: `calendar_inbound` (decisione D2) e'
+    # il TERZO channel - mai raggiungibile da una richiesta HTTP, costruito
+    # SOLO dalla factory server-side `operator_auth.calendar_inbound`. Si
+    # nomina invece di smettere di guardare: qualunque ALTRO channel farebbe
+    # ancora fallire questo test.
+    assert context.AUTH_CHANNELS == ("operator_session", "legacy_basic", "calendar_inbound")
 
 
 # ---------------------------------------------------------------------------

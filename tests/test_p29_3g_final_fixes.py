@@ -356,12 +356,13 @@ def test_20_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-9B: dodicesima dichiarazione dell'Agenda
     # (OAuth + hook Agenda + worker reale verso Google Calendar).
     from tests.a30_9b_diff import FILE_MODIFICATI as MOD_A30_9B, FILE_NUOVI as NUOVI_A30_9B
+    from tests.a30_10_diff import FILE_MODIFICATI as MOD_A30_10, FILE_NUOVI as NUOVI_A30_10
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A | NUOVI_A30_9B)
+                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A | MOD_A30_9B)
+               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10)
 
     righe = _git("status", "--porcelain").splitlines()
     nuovi = {r[3:].strip() for r in righe if r[:2].strip() in ("??", "A")}

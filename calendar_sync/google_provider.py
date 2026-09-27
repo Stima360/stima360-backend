@@ -32,6 +32,7 @@ from .provider import (
     INVALID_GRANT,
     NETWORK,
     NOT_FOUND,
+    PRIVATE_PROPERTIES_WHITELIST,
     RATE_LIMITED,
     SERVER_ERROR,
     TIMEOUT,
@@ -41,6 +42,7 @@ from .provider import (
     EnsureResult,
     EventPayload,
     ProviderAuth,
+    RemoteEvent,
 )
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -84,14 +86,45 @@ def _classify_status(status: int, body, *, operation: str) -> CalendarProviderEr
     return CalendarProviderError(kind, http_status=status, reason=reason, operation=operation)
 
 
-def _updated_at(body):
-    valore = body.get("updated") if isinstance(body, dict) else None
+def _istante(valore) -> datetime | None:
     if not valore:
         return None
     try:
         return datetime.fromisoformat(str(valore).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _updated_at(body):
+    return _istante(body.get("updated") if isinstance(body, dict) else None)
+
+
+def _remote_event(body: dict) -> RemoteEvent:
+    """A30-10: SOLO i campi ammessi da `RemoteEvent` - mai `summary`,
+    `description`, `location`, `attendees`, `organizer`, dati di conferenza:
+    quei campi restano nel `dict` grezzo di Google, che non esce da questa
+    funzione. Un evento `cancelled` (tombstone HTTP 200) non porta orari ne'
+    proprieta' private: e' un fatto ("questo evento non c'e' piu'"), non un
+    contenuto."""
+    stato = body.get("status") or "confirmed"
+    if stato == "cancelled":
+        return RemoteEvent(status=stato, start_at=None, end_at=None, timezone=None,
+                           etag=body.get("etag"), updated_at=_updated_at(body),
+                           private_properties={})
+    inizio = body.get("start") or {}
+    fine = body.get("end") or {}
+    private_grezze = ((body.get("extendedProperties") or {}).get("private") or {})
+    private = {chiave: valore for chiave, valore in private_grezze.items()
+              if chiave in PRIVATE_PROPERTIES_WHITELIST}
+    return RemoteEvent(
+        status=stato,
+        start_at=_istante(inizio.get("dateTime")),
+        end_at=_istante(fine.get("dateTime")),
+        timezone=inizio.get("timeZone"),
+        etag=body.get("etag"),
+        updated_at=_updated_at(body),
+        private_properties=private,
+    )
 
 
 def _event_body(payload: EventPayload) -> dict:
@@ -152,6 +185,20 @@ class GoogleCalendarProvider:
             return risposta.json()
         except ValueError:
             return None
+
+    def get_event(self, auth: ProviderAuth, calendar_id: str,
+                  event_id: str) -> RemoteEvent | None:
+        """A30-10: lettura puntuale di un evento GIA' mappato. 404/410 =
+        assente = `None`, mai un errore da ritentare (§ contratto). Nessuna
+        `attendees`/`summary`/`description` arbitraria esce da qui: solo
+        quanto `_remote_event` porta nel `RemoteEvent` neutro."""
+        url = f"{API_BASE}/calendars/{calendar_id}/events/{event_id}"
+        risposta = self._request(auth, "GET", url, operation="get")
+        if risposta.status_code in (404, 410):
+            return None
+        if not risposta.ok:
+            raise _classify_status(risposta.status_code, self._corpo(risposta), operation="get")
+        return _remote_event(self._corpo(risposta) or {})
 
     def ensure_event(self, auth: ProviderAuth, calendar_id: str,
                      payload: EventPayload) -> EnsureResult:

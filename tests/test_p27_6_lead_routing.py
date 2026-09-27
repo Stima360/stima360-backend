@@ -684,7 +684,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 74 and numeri[-2] == 73, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 75 and numeri[-2] == 74, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

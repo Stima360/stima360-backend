@@ -199,9 +199,17 @@ def _dichiarati_da_fasi_successive() -> frozenset[str]:
     inventario accanto a quello di P29-3C invece di allargare la maglia:
     l'elenco delle fasi e' esplicito, e una fase che non si dichiara non
     passa.
+
+    A30-10B REVIEW FIX GATE (FIX 1, collisione dichiarata) tocca il TERZO
+    dominio sorvegliato qui, `operator_auth/context.py`: registra il canale
+    interno `calendar_inbound` in `AUTH_CHANNELS`. Stessa posizione di
+    P29-3C/3D - il proprio inventario (`tests/a30_10_diff.py`) e' cio' che
+    verifica la forma esatta di quella riga, e la sentinella statica
+    `test_d2_04` in `tests/test_a30_10_calendar_inbound_static.py` prova il
+    valore finale della tupla; qui basta sapere che A30-10B si e' dichiarata.
     """
     dichiarati: set[str] = set()
-    for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff"):
+    for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff", "tests.a30_10_diff"):
         try:
             inventario = __import__(modulo, fromlist=["FILE_MODIFICATI"])
         except ImportError:  # la fase non esiste ancora: nulla da ammettere

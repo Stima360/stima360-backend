@@ -441,7 +441,11 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 74 and numeri[-2] == 73, numeri[-3:]
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 75 and numeri[-2] == 74, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

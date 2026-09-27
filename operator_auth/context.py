@@ -28,7 +28,22 @@ from .exceptions import PlatformAdminAgencyRequired
 # How an OperatorContext was authenticated. 'legacy_basic' is the temporary
 # ADMIN_USER/ADMIN_PASS compatibility channel, confined to the Default Agency
 # on /api/core and never granting platform-admin rights.
-AUTH_CHANNELS = ("operator_session", "legacy_basic")
+#
+# 'calendar_inbound' (A30-10B, decisione D2) is the THIRD channel: it names
+# the OperatorContext the Google Calendar inbound worker builds for a
+# mutation ORIGINATED BY GOOGLE, never by an HTTP request. It is registered
+# here so the authoritative model lists every channel that exists - the
+# closed set an OperatorContext.auth_channel can legitimately hold - not
+# because any HTTP surface can produce it. No route, dependency or session
+# helper (`optional_session`, `require_operator`, `current_session`,
+# `require_authenticated_operator`) constructs it or branches on its
+# presence: the ONLY constructor is the server-side factory in
+# `operator_auth/calendar_inbound.py`, called only from
+# `calendar_sync/inbound.py` (the static sentinels in
+# `tests/test_a30_10_calendar_inbound_static.py` prove both). Registering it
+# here changes no HTTP/cookie/session behavior - it only makes the set of
+# valid channels honest.
+AUTH_CHANNELS = ("operator_session", "legacy_basic", "calendar_inbound")
 
 # Flows entitled to a SystemAgencyContext. Closed set: adding a value is a
 # deliberate edit, not an accident.

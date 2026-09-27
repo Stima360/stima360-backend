@@ -59,7 +59,11 @@ def test_01_la_071_e_valida_e_in_coda():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 74 and numeri[-2] == 73
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 75 and numeri[-2] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -369,12 +373,15 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-9B: dodicesima dichiarazione dell'Agenda
     # (OAuth + hook Agenda + worker reale verso Google Calendar).
     from tests.a30_9b_diff import FILE_MODIFICATI as MOD_A30_9B, FILE_NUOVI as NUOVI_A30_9B
+    # SENTINELLA AGGIORNATA DA A30-10B: tredicesima dichiarazione dell'Agenda
+    # (INBOUND: Google Calendar -> Agenda, migration 075, coda propria).
+    from tests.a30_10_diff import FILE_MODIFICATI as MOD_A30_10, FILE_NUOVI as NUOVI_A30_10
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A | NUOVI_A30_9B)
+                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A | MOD_A30_9B)
+               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10)
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()

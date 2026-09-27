@@ -113,7 +113,11 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 74 and numeri[-2] == 73, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 75 and numeri[-2] == 74, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

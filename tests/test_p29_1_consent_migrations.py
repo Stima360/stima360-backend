@@ -144,7 +144,11 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # `calendar_oauth_states`, `appointment_calendar_sync`), approvata dal
     # GATE A30-9A. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert max(numeri) == 74, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
+    # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
+    # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
+    # migration comparisse farebbe ancora fallire.
+    assert max(numeri) == 75, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):
