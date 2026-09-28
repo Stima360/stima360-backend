@@ -17,7 +17,7 @@ senza toccare gli handler globali dell'applicazione (che non sono di A30-2).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.encoders import jsonable_encoder
@@ -41,6 +41,12 @@ from .schemas import (
     ReassignBody,
     RescheduleBody,
     ScheduleBody,
+)
+from . import working_hours_service
+from .working_hours_schemas import (
+    AgencyClosureCreate,
+    AvailabilityExceptionCreate,
+    WorkingHoursReplaceBody,
 )
 
 router = APIRouter(prefix="/api/appointments", tags=["appointments"])
@@ -130,6 +136,15 @@ def _elenco(valore):
     if valore is None or valore.strip() == "":
         return None
     return [v.strip() for v in valore.split(",") if v.strip()]
+
+
+def _data(valore, nome):
+    """Una data semplice `YYYY-MM-DD` (A30-11: eccezioni/chiusure sono per
+    GIORNO, non per istante: niente fuso da richiedere qui)."""
+    try:
+        return date.fromisoformat(valore)
+    except ValueError as exc:
+        raise _Richiesta(errors.VALIDATION_ERROR, f"{nome}: data non valida (YYYY-MM-DD)") from exc
 
 
 def _interi(valore, nome):
@@ -239,6 +254,91 @@ def lookup_stime(
 ):
     return _x(lambda: {"items": service.lookup_stime(
         ctx, search=search, lead_id=lead_id, contact_id=contact_id, limit=limit)})
+
+
+# ---------------------------------------------------------------------------
+# A30-11 - ORARI DI LAVORO, ECCEZIONI, CHIUSURE AGENZIA. Dichiarate PRIMA di
+# "/{appointment_id}" per lo stesso motivo di "/lookups/stime": i segmenti
+# letterali ("agents", "closures") non devono essere consumati dalla rotta a
+# un solo segmento dinamico.
+# ---------------------------------------------------------------------------
+
+@router.get("/agents/{user_id}/working-hours")
+def get_working_hours(user_id: int, ctx: OperatorContext = Depends(require_operator)):
+    return _x(lambda: {"items": working_hours_service.get_weekly_hours(ctx, user_id)})
+
+
+@router.put("/agents/{user_id}/working-hours")
+def put_working_hours(user_id: int, dati: dict = Body(...),
+                      ctx: OperatorContext = Depends(require_operator)):
+    try:
+        corpo = _corpo(WorkingHoursReplaceBody, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(lambda: {"items": working_hours_service.replace_weekly_hours(ctx, user_id, corpo)})
+
+
+@router.get("/agents/{user_id}/availability-exceptions")
+def get_availability_exceptions(
+    user_id: int,
+    date_from: str = Query(..., alias="from"),
+    date_to: str = Query(..., alias="to"),
+    ctx: OperatorContext = Depends(require_operator),
+):
+    try:
+        args = dict(date_from=_data(date_from, "from"), date_to=_data(date_to, "to"))
+    except _Richiesta as exc:
+        return _errore(exc)
+    return _x(lambda: {"items": working_hours_service.list_exceptions(ctx, user_id, **args)})
+
+
+@router.post("/agents/{user_id}/availability-exceptions")
+def post_availability_exception(user_id: int, dati: dict = Body(...),
+                                ctx: OperatorContext = Depends(require_operator)):
+    try:
+        corpo = _corpo(AvailabilityExceptionCreate, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(working_hours_service.create_exception, ctx, user_id, corpo, status=201)
+
+
+@router.delete("/agents/{user_id}/availability-exceptions/{exception_id}")
+def delete_availability_exception(user_id: int, exception_id: int,
+                                  ctx: OperatorContext = Depends(require_operator)):
+    def _elimina():
+        working_hours_service.delete_exception(ctx, user_id, exception_id)
+        return {"deleted": True}
+    return _x(_elimina)
+
+
+@router.get("/closures")
+def get_agency_closures(
+    date_from: str = Query(..., alias="from"),
+    date_to: str = Query(..., alias="to"),
+    ctx: OperatorContext = Depends(require_operator),
+):
+    try:
+        args = dict(date_from=_data(date_from, "from"), date_to=_data(date_to, "to"))
+    except _Richiesta as exc:
+        return _errore(exc)
+    return _x(lambda: {"items": working_hours_service.list_closures(ctx, **args)})
+
+
+@router.post("/closures")
+def post_agency_closure(dati: dict = Body(...), ctx: OperatorContext = Depends(require_operator)):
+    try:
+        corpo = _corpo(AgencyClosureCreate, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(working_hours_service.create_closure, ctx, corpo, status=201)
+
+
+@router.delete("/closures/{closure_id}")
+def delete_agency_closure(closure_id: int, ctx: OperatorContext = Depends(require_operator)):
+    def _elimina():
+        working_hours_service.delete_closure(ctx, closure_id)
+        return {"deleted": True}
+    return _x(_elimina)
 
 
 @router.get("/{appointment_id}")

@@ -59,7 +59,11 @@ def test_01_la_073_e_valida_per_il_runner_e_in_coda_alla_serie():
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 75 and numeri[-2] == 74 and numeri[-3] == 73 and len(numeri) == len(set(numeri))
+    # SENTINELLA AGGIORNATA DA A30-11B: la 076 aggiunge le tabelle di orari
+    # di lavoro/eccezioni/chiusure agenzia (vincolo SOFT, D2), approvata dal
+    # GATE A30-11B. Si nomina invece di smettere di guardare: qualunque
+    # ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 76 and numeri[-2] == 75 and numeri[-3] == 74 and len(numeri) == len(set(numeri))
 
 
 def test_02_la_up_non_apre_transazioni_e_non_scrive_il_ledger():

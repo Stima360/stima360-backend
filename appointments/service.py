@@ -65,6 +65,8 @@ from core.exceptions import NotFoundError, ValidationError
 from core.repository import create_task_with_cursor
 
 from . import availability, errors, projection, repository, state_machine
+from . import working_hours
+from . import working_hours_repository as _wh_repository
 from .enums import (
     APPOINTMENT_STATUSES,
     APPOINTMENT_TYPES,
@@ -892,11 +894,52 @@ def _redigi_conflitti(ctx, agente, conflitti):
             for c in conflitti]
 
 
+def _finestra_effettiva(cur, agency_id, assigned_user_id, date_from, date_to):
+    """A30-11 (D2, vincolo SOFT): gli intervalli UTC in cui l'agente lavora
+    davvero in `[date_from, date_to)`, o `None` se non ha alcuna
+    configurazione (D1: legacy, nessun vincolo). Sola lettura: mai chiamata
+    dal percorso di scrittura (`_occupa` resta esattamente come prima)."""
+    ingressi = _wh_repository.effective_inputs(
+        cur, agency_id, assigned_user_id,
+        (date_from.astimezone(working_hours.ROMA) - timedelta(days=1)).date(),
+        (date_to.astimezone(working_hours.ROMA) + timedelta(days=1)).date())
+    return working_hours.effective_windows(
+        date_from, date_to, has_weekly_config=ingressi["has_weekly_config"],
+        weekly_rows=ingressi["weekly_rows"], exception_rows=ingressi["exception_rows"],
+        closure_rows=ingressi["closure_rows"])
+
+
+def _alternative_effettiva(cur, *, agency_id, assigned_user_id, start_at, end_at, before, after,
+                           escluso=None):
+    """Come `_alternative`, ma filtrata sull'availability EFFETTIVA (A30-11,
+    D2): usata SOLO da `availability_check` e da `availability_slots`, mai
+    dal percorso di scrittura (`_occupa` chiama ancora `_alternative`,
+    invariata). Un agente legacy (nessuna configurazione) non e' filtrato:
+    `_finestra_effettiva` restituisce `None` e `is_within` e' sempre vero."""
+    durata = int((end_at - start_at).total_seconds() // 60)
+    orizzonte_fine = start_at + availability.ALTERNATIVES_HORIZON + timedelta(days=1)
+    occupato = repository.busy_intervals(
+        cur, assigned_user_id=assigned_user_id, date_from=start_at,
+        date_to=orizzonte_fine, exclude_appointment_id=escluso)
+    grezze = availability.alternatives(
+        start_at, duration=durata, busy=occupato, buffer_before=before, buffer_after=after,
+        count=availability.ALTERNATIVES_COUNT * 4)
+    effettiva = _finestra_effettiva(cur, agency_id, assigned_user_id, start_at, orizzonte_fine)
+    filtrate = [a for a in grezze
+                if working_hours.is_within(a["start_at"], a["end_at"], effettiva)]
+    return filtrate[:availability.ALTERNATIVES_COUNT]
+
+
 def availability_slots(ctx, *, assigned_user_id, date_from, date_to, duration, step=30,
                        buffer_before_minutes=0, buffer_after_minutes=0,
                        exclude_appointment_id=None):
     """Gli slot liberi/occupati di un agente nella finestra RICHIESTA (D7:
-    nessun orario lavorativo). Sola lettura, nessun lock."""
+    nessun orario lavorativo IMPOSTO dal chiamante - resta la finestra a
+    decidere l'ambito). Ogni slot porta anche `within_working_hours` (A30-11,
+    campo ADDITIVO): l'orario EFFETTIVO dell'agente, se configurato, `True`
+    per un agente legacy (D1). `available` resta cio' che era: libero da
+    conflitti con altri appuntamenti, invariato per compatibilita'. Sola
+    lettura, nessun lock."""
     agency_id = ctx.require_agency()
     _attore(ctx)
     for buffer in (buffer_before_minutes, buffer_after_minutes):
@@ -910,6 +953,7 @@ def availability_slots(ctx, *, assigned_user_id, date_from, date_to, duration, s
         occupato = repository.busy_intervals(
             cur, assigned_user_id=assigned_user_id, date_from=date_from, date_to=date_to,
             exclude_appointment_id=exclude_appointment_id)
+        effettiva = _finestra_effettiva(cur, agency_id, assigned_user_id, date_from, date_to)
     try:
         slot = availability.slots(date_from, date_to, duration=duration, step=step,
                                   busy=occupato, buffer_before=buffer_before_minutes,
@@ -919,12 +963,20 @@ def availability_slots(ctx, *, assigned_user_id, date_from, date_to, duration, s
             raise errors.RangeTooLarge(
                 "La finestra di disponibilita' e' al massimo di 7 giorni") from exc
         raise ValidationError(str(exc)) from exc
+    for s in slot:
+        s["within_working_hours"] = working_hours.is_within(s["start_at"], s["end_at"], effettiva)
     return {"assigned_user_id": assigned_user_id, "from": date_from, "to": date_to,
             "duration": duration, "step": step, "timezone": "Europe/Rome", "slots": slot}
 
 
 def availability_check(ctx, body):
-    """Verifica un intervallo esatto: disponibile, conflitti e alternative."""
+    """Verifica un intervallo esatto: disponibile, conflitti e alternative.
+
+    A30-11 (D2, vincolo SOFT): `available` ora richiede ANCHE che l'agente
+    lavori in quell'orario (se configurato; D1: un agente legacy non ne e'
+    toccato). `within_working_hours` (campo ADDITIVO) distingue le due
+    cause: un `False` con `conflicts` vuoti e' "fuori orario", non
+    "occupato". `alternatives` cerca solo dentro l'orario effettivo."""
     agency_id = ctx.require_agency()
     _attore(ctx)
     with core_cursor() as (_, cur):
@@ -935,13 +987,17 @@ def availability_check(ctx, body):
             end_at=body.end_at, buffer_before_minutes=body.buffer_before_minutes,
             buffer_after_minutes=body.buffer_after_minutes,
             exclude_appointment_id=body.exclude_appointment_id)
+        effettiva = _finestra_effettiva(cur, agency_id, body.assigned_user_id,
+                                        body.start_at, body.end_at)
+        dentro_orario = working_hours.is_within(body.start_at, body.end_at, effettiva)
         alternative = []
-        if conflitti:
-            alternative = _alternative(
-                cur, assigned_user_id=body.assigned_user_id, start_at=body.start_at,
-                end_at=body.end_at, before=body.buffer_before_minutes,
+        if conflitti or not dentro_orario:
+            alternative = _alternative_effettiva(
+                cur, agency_id=agency_id, assigned_user_id=body.assigned_user_id,
+                start_at=body.start_at, end_at=body.end_at, before=body.buffer_before_minutes,
                 after=body.buffer_after_minutes, escluso=body.exclude_appointment_id)
-    return {"available": not conflitti,
+    return {"available": not conflitti and dentro_orario,
+            "within_working_hours": dentro_orario,
             "conflicts": _redigi_conflitti(ctx, body.assigned_user_id, conflitti),
             "alternatives": alternative}
 

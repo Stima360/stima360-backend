@@ -63,7 +63,12 @@ def test_01_la_071_e_valida_e_in_coda():
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 75 and numeri[-2] == 74
+    # SENTINELLA AGGIORNATA DA A30-11B: la 076 aggiunge le tabelle di
+    # orari di lavoro/eccezioni/chiusure agenzia (vincolo SOFT, D2),
+    # approvata dal GATE A30-11B. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora
+    # fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 76 and numeri[-2] == 75
     assert len(numeri) == len(set(numeri))
 
 
@@ -376,12 +381,15 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-10B: tredicesima dichiarazione dell'Agenda
     # (INBOUND: Google Calendar -> Agenda, migration 075, coda propria).
     from tests.a30_10_diff import FILE_MODIFICATI as MOD_A30_10, FILE_NUOVI as NUOVI_A30_10
+    # SENTINELLA AGGIORNATA DA A30-11B: quattordicesima dichiarazione
+    # dell'Agenda (ORARI DI LAVORO, migration 076, vincolo SOFT - D2).
+    from tests.a30_11_diff import FILE_MODIFICATI as MOD_A30_11, FILE_NUOVI as NUOVI_A30_11
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10)
+                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10 | NUOVI_A30_11)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10)
+               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10 | MOD_A30_11)
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()

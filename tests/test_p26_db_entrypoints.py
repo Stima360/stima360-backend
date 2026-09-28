@@ -606,6 +606,31 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_a30_11_working_hours_postgres.py": (
+        "TEST-only A30-11B proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing the A30-1/A30-2 entries: an allow-list shared "
+        "between phases would let a new entrypoint arrive unannounced. Its "
+        "schema is a deliberately minimal, self-contained subset "
+        "(agencies/operator_users/agency_memberships/schema_migrations) "
+        "independent of 072-075, against which it applies 076 directly. The "
+        "connection exists to prove what a pure-Python unit test cannot: "
+        "that the btree_gist EXCLUDE constraints on agent_working_hours, "
+        "agent_availability_exceptions and agency_closures make two "
+        "overlapping slots for the same agency/user/day (or agency/date) "
+        "unrepresentable while adjacent half-open ranges and rows under a "
+        "different key are accepted; that the membership-guard triggers "
+        "reject a target user without an ACTIVE agency_memberships row; "
+        "that the composite tenancy foreign keys reject a cross-agency "
+        "target; that the minute-range CHECK constraints reject an invalid "
+        "window; and that 076's up/down/up round-trip is clean, with the "
+        "down migration refusing while any of the three tables holds rows. "
+        "It monkeypatches nothing and opens its own connection directly to "
+        "the throwaway database. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

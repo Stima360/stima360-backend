@@ -5345,12 +5345,28 @@ def certify_acquisition(report, http, cert, domain, jars, owned, context) -> Non
 #: VERSION_CONFLICT (409) invece di scrivere. La prova resta il 404.
 AGENDA_VERSIONE_IMPOSSIBILE = 2147483000
 
-#: Le sedici operazioni dell'API Agenda, per il giro anonimo. Un id qualunque
-#: basta: il rifiuto arriva dal mount, prima della rotta.
+#: L'INVENTARIO COMPLETO delle rotte montate sotto il prefisso Agenda -
+#: comprese le DELETE (A30-11B: eccezioni di disponibilita' e chiusure
+#: agenzia). E' cio' che `test_a30_08` confronta, uno-a-uno, con
+#: `OPERAZIONI_AGENDA` del mount: un inventario, non un traffico. Nessuna
+#: parte del certificatore live deve iterare QUESTA lista per emettere
+#: richieste HTTP - per quello c'e' `AGENDA_SONDE_ANONIME` qui sotto.
 AGENDA_OPERAZIONI = (
     ("GET", ""), ("POST", ""), ("GET", "/calendar"), ("GET", "/agents"),
     ("GET", "/availability"), ("POST", "/availability/check"),
     ("GET", "/lookups/stime"),                      # A30-5: ricerca stime, sola lettura
+    # A30-11B: orari di lavoro, eccezioni, chiusure agenzia (vincolo SOFT nel
+    # CRM, D2). Le due DELETE sono rotte reali e vanno dichiarate qui per la
+    # parita' con l'inventario del mount - ma NON vanno sondate dal giro
+    # anonimo: vedi `AGENDA_SONDE_ANONIME`.
+    ("GET", "/agents/{user_id}/working-hours"),
+    ("PUT", "/agents/{user_id}/working-hours"),
+    ("GET", "/agents/{user_id}/availability-exceptions"),
+    ("POST", "/agents/{user_id}/availability-exceptions"),
+    ("DELETE", "/agents/{user_id}/availability-exceptions/{exception_id}"),
+    ("GET", "/closures"),
+    ("POST", "/closures"),
+    ("DELETE", "/closures/{closure_id}"),
     ("GET", "/{id}"), ("PATCH", "/{id}"), ("GET", "/{id}/events"),
     ("POST", "/{id}/schedule"), ("POST", "/{id}/confirm"),
     ("POST", "/{id}/reschedule"), ("POST", "/{id}/reassign"),
@@ -5360,6 +5376,19 @@ AGENDA_OPERAZIONI = (
     # (router `appointments_legacy`, stesso prefisso): solo inventario - il
     # giro anonimo la sonda (-> 401), nessuna scrittura nel giro live.
     ("POST", "/legacy-requests/sync"),
+)
+
+#: Il SOTTOINSIEME di `AGENDA_OPERAZIONI` che il giro anonimo chiama
+#: DAVVERO. A30-11C: il certificatore live non deve MAI emettere una DELETE
+#: HTTP - un'invarianza di difesa-in-profondita' sulla sicurezza del
+#: cleanup (vedi `test_86m`/`test_86r`/`test_96c`), che vale per l'intero
+#: giro, non solo per quello anonimo. Le due DELETE A30-11B restano quindi
+#: fuori da questo sottoinsieme: il loro rifiuto anonimo (401) e' comunque
+#: provato dal mount stesso (`test_a30_mount_api.py`), che non emette mai
+#: traffico verso un database reale.
+AGENDA_SONDE_ANONIME = tuple(
+    (metodo, suffisso) for metodo, suffisso in AGENDA_OPERAZIONI
+    if metodo != "DELETE"
 )
 
 
@@ -5442,7 +5471,8 @@ def certify_appointments(report, http, cert, domain, jars, owned, context) -> No
     il suo funzionamento: quello appartiene al gate A30. Nessuna richiesta di
     questa sezione puo' arrivare a un percorso riuscito che scrive:
 
-        anonimo, su tutte le sedici operazioni       -> 401 (al mount)
+        anonimo, su tutte le operazioni SONDATE       -> 401 (al mount;
+            AGENDA_SONDE_ANONIME esclude le DELETE per costruzione - A30-11C)
         HTTP Basic (P26-5 l'ha tolto)                -> 401
         l'appuntamento dell'altra agenzia            -> 404 in lettura, eventi,
             e su PATCH, schedule, confirm, reschedule, reassign, cancel,
@@ -5484,8 +5514,8 @@ def certify_appointments(report, http, cert, domain, jars, owned, context) -> No
         f"Q10 prima della sezione: {prima['q10']} (atteso tutto 0)",
     )
 
-    # -- senza identita': tutte le rotte -------------------------------------
-    for metodo, suffisso in AGENDA_OPERAZIONI:
+    # -- senza identita': tutte le rotte SONDATE (mai una DELETE - A30-11C) --
+    for metodo, suffisso in AGENDA_SONDE_ANONIME:
         percorso = base + suffisso.replace("{id}", "1")
         payload = {} if metodo in ("POST", "PATCH") else None
         risposta = http.request(metodo, percorso, payload=payload)

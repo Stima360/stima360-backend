@@ -32,6 +32,17 @@ OPERAZIONI_AGENDA_ROUTER = frozenset({
     ("POST", "/api/appointments/availability/check"),
     # A30-5: la ricerca delle stime per il collegamento manuale (sola lettura)
     ("GET", "/api/appointments/lookups/stime"),
+    # SENTINELLA AGGIORNATA DA A30-11B: orari di lavoro, eccezioni,
+    # chiusure agenzia (vincolo SOFT nel CRM, D2), dichiarate PRIMA di
+    # "/{appointment_id}" come "/lookups/stime".
+    ("GET", "/api/appointments/agents/{user_id}/working-hours"),
+    ("PUT", "/api/appointments/agents/{user_id}/working-hours"),
+    ("GET", "/api/appointments/agents/{user_id}/availability-exceptions"),
+    ("POST", "/api/appointments/agents/{user_id}/availability-exceptions"),
+    ("DELETE", "/api/appointments/agents/{user_id}/availability-exceptions/{exception_id}"),
+    ("GET", "/api/appointments/closures"),
+    ("POST", "/api/appointments/closures"),
+    ("DELETE", "/api/appointments/closures/{closure_id}"),
     ("GET", "/api/appointments"),
     ("POST", "/api/appointments"),
     ("GET", "/api/appointments/{appointment_id}"),

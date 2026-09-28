@@ -451,7 +451,12 @@ def test_N4_nessuna_migration_nuova():
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 75 and numeri[-2] == 74, "la serie si e' fermata o e' andata oltre la 075"
+    # SENTINELLA AGGIORNATA DA A30-11B: la 076 aggiunge le tabelle di
+    # orari di lavoro/eccezioni/chiusure agenzia (vincolo SOFT, D2),
+    # approvata dal GATE A30-11B. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora
+    # fallire.
+    assert numeri[-1] == 76 and numeri[-2] == 75, "la serie si e' fermata o e' andata oltre la 076"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

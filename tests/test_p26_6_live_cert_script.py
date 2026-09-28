@@ -5044,6 +5044,37 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("appointment_calendar_sync", "agency_id", "agencies", "RESTRICT"),
     ("calendar_connections", "agency_id", "agencies", "RESTRICT"),
     ("calendar_oauth_states", "agency_id", "agencies", "RESTRICT"),
+    # A30-11B, migration 076. Il vincolo morbido degli orari di lavoro,
+    # approvato dal GATE A30-11B: TRE riferimenti non-CASCADE verso
+    # `agencies`, tutti sullo stesso schema gia' visto sopra per
+    # `agency_memberships`, `appointments` e la sincronizzazione calendario.
+    # ESAMINATI.
+    #
+    #   agency_id -> agencies    RESTRICT  (agent_working_hours,
+    #                                       agent_availability_exceptions,
+    #                                       agency_closures)
+    #
+    # Stessa forma, stessa ragione: un orario settimanale, un'eccezione o una
+    # chiusura d'agenzia sono fatti dell'agenzia di cui parlano. CASCADE li
+    # porterebbe via insieme all'agenzia di prova senza che nessuno lo veda;
+    # SET NULL e' impossibile (NOT NULL, e la tenancy la pretende). RESTRICT.
+    #
+    # Le FK COMPOSITE della 076 non compaiono in questo inventario, per la
+    # stessa ragione della 074 qui sopra: l'inventario si legge da
+    # `_fk_delle_migrazioni`, che vede solo i riferimenti a `(id)`. Le si
+    # nomina qui:
+    #
+    #   (agency_id, user_id) -> agency_memberships   RESTRICT
+    #       (agent_working_hours, agent_availability_exceptions)
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: un'agenzia di prova con un
+    # orario settimanale, un'eccezione o una chiusura configurati, o una
+    # membership che ne ha uno, non si cancella - il preflight la incontra
+    # come RIFIUTO, non come cancellazione silenziosa, come per gli
+    # appuntamenti della 072 e la sincronizzazione calendario della 074.
+    ("agent_working_hours", "agency_id", "agencies", "RESTRICT"),
+    ("agent_availability_exceptions", "agency_id", "agencies", "RESTRICT"),
+    ("agency_closures", "agency_id", "agencies", "RESTRICT"),
 })
 
 
@@ -8691,13 +8722,21 @@ def test_a30_01_agenda_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
     righe = _righe_agenda(report)
     assert [r for r in righe if r[0] != cert.PASS] == [], righe
     idents = {i for _k, i, _t in righe}
-    # un'operazione anonima per ogni voce di AGENDA_OPERAZIONI (A30-7: il
-    # conteggio e' DERIVATO dalla lista), tre con HTTP Basic
+    # un'operazione anonima per ogni voce di AGENDA_SONDE_ANONIME (A30-7: il
+    # conteggio e' DERIVATO dalla lista; A30-11C: NON da AGENDA_OPERAZIONI,
+    # che include anche le DELETE mai sondate dal giro anonimo), tre con
+    # HTTP Basic
     assert sum(
         1 for i in idents
         if i.startswith("APPOINTMENTS-anonimo-")
-    ) == len(cert.AGENDA_OPERAZIONI)
+    ) == len(cert.AGENDA_SONDE_ANONIME)
     assert sum(1 for i in idents if i.startswith("APPOINTMENTS-basic-")) == 3
+    # A30-11C: nessuna DELETE nel traffico del giro Agenda - la stessa
+    # invarianza generale di test_86m/test_86r/test_96c, provata qui anche
+    # sul giro specifico che l'ha fatta scattare (A30-11B ha montato due
+    # DELETE reali).
+    assert not [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")], \
+        [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")]
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("dettaglio", "eventi", "disponibilita", "verifica",
                      "create-agente-altrui", "create-stima-altrui", "write-patch",
@@ -8836,8 +8875,33 @@ def test_a30_08_l_agenda_e_nella_matrice_con_il_suo_certificatore():
     assert dominio.prefix == "/api/appointments"
     assert dominio.certifier == "appointments" and callable(cert.certify_appointments)
     assert dominio.fixture is None and dominio.api_delete is False
-    # le sedici operazioni del giro anonimo sono esattamente quelle montate
+    # l'INVENTARIO completo delle rotte Agenda (AGENDA_OPERAZIONI, comprese
+    # le DELETE A30-11B) e' esattamente quello montato - un inventario, non
+    # un traffico: il giro anonimo ne sonda solo il sottoinsieme
+    # AGENDA_SONDE_ANONIME (A30-11C), verificato a parte qui sotto.
     from tests.test_a30_mount_api import OPERAZIONI_AGENDA
     dichiarate = {(m, "/api/appointments" + s.replace("{id}", "{appointment_id}"))
                   for m, s in cert.AGENDA_OPERAZIONI}
     assert dichiarate == set(OPERAZIONI_AGENDA)
+
+
+def test_a30_08b_le_sonde_anonime_escludono_sempre_le_delete():
+    """A30-11C: la parte SONDATA dell'inventario, e le sue tre garanzie.
+
+    Il certificatore live non deve MAI emettere una DELETE HTTP - vedi
+    `test_86m`/`test_86r`/`test_96c`, che restano verdi indipendentemente da
+    questo test. Qui si prova che l'invarianza vale STRUTTURALMENTE per
+    l'Agenda: nessuna voce DELETE puo' finire nel sottoinsieme sondato, ogni
+    voce sondata e' un sottoinsieme dell'inventario completo, e ogni DELETE
+    montata resta comunque dichiarata nell'inventario (non sparisce, si
+    sposta solo fuori dal giro anonimo).
+    """
+    sonde = set(cert.AGENDA_SONDE_ANONIME)
+    inventario = set(cert.AGENDA_OPERAZIONI)
+    assert sonde <= inventario
+    assert not [m for m, _s in sonde if m == "DELETE"], \
+        [op for op in sonde if op[0] == "DELETE"]
+    delete_montate = {(m, s) for m, s in inventario if m == "DELETE"}
+    assert delete_montate, "nessuna DELETE nell'inventario: la garanzia sarebbe vuota"
+    assert delete_montate <= inventario
+    assert not (delete_montate & sonde)

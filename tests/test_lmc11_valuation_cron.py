@@ -554,7 +554,9 @@ def test_h1_nessuna_migration_nuova():
               "migrations/074_a30_9a_calendar_sync.sql",
               "migrations/074_a30_9a_calendar_sync_down.sql",
               "migrations/075_a30_10_calendar_inbound.sql",
-              "migrations/075_a30_10_calendar_inbound_down.sql"}
+              "migrations/075_a30_10_calendar_inbound_down.sql",
+              "migrations/076_a30_11_working_hours.sql",
+              "migrations/076_a30_11_working_hours_down.sql"}
     # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA

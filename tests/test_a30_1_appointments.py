@@ -55,7 +55,12 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA
     # migration comparisse farebbe ancora fallire.
-    assert numeri[-2] == 74 and numeri[-3] == 73 and numeri[-4] == 72 and numeri[-1] == 75
+    # SENTINELLA AGGIORNATA DA A30-11B: la 076 aggiunge `agent_working_hours`,
+    # `agent_availability_exceptions`, `agency_closures` (vincolo SOFT, D2:
+    # non tocca `appointments`), approvata dal GATE A30-11B. Si nomina
+    # invece di smettere di guardare: qualunque ALTRA migration comparisse
+    # farebbe ancora fallire.
+    assert numeri[-1] == 76 and numeri[-2] == 75 and numeri[-3] == 74 and numeri[-4] == 73
     assert len(numeri) == len(set(numeri))
 
 
@@ -208,6 +213,12 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         "router.py": {"fastapi", "fastapi.encoders", "fastapi.responses",
                       "operator_auth.context", "operator_auth.dependencies",
                       "operator_auth.exceptions"},
+        # SENTINELLA AGGIORNATA DA A30-11B: la traduzione dell'EXCLUDE di
+        # orari/eccezioni/chiusure (076) in un errore leggibile, stesso
+        # principio di `service.py._traduci_esclusione` (che intercetta
+        # l'eccezione psycopg2 gia' importata altrove nel repository, non
+        # nel pacchetto `appointments`).
+        "working_hours_service.py": {"psycopg2.errors"},
     }
     for file in PACCHETTO.glob("*.py"):
         consentiti = ammessi | per_file.get(file.name, set())
