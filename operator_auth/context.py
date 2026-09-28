@@ -73,8 +73,16 @@ AUTH_CHANNELS = ("operator_session", "legacy_basic", "calendar_inbound")
 # Come `owner_login` non ha un operatore dietro - c'e' l'interessato, che
 # clicca - e come `public_stima` la sua agenzia non viene da una sessione ma
 # da un dato verificato lato server: qui la firma HMAC del token.
+# A30-12: `public_booking` e' il quarto - il booking pubblico a link
+# singolo-agente. Come `public_stima` e `public_unsubscribe` non ha un
+# operatore dietro - c'e' il client pubblico che compila il form - e come
+# loro l'agenzia non arriva dalla richiesta: arriva dal link stesso
+# (`public_booking_links.agency_id`, risolto server-side dal token). Non
+# allarga nessun privilegio: chi riceve questo scope continua a controllarne
+# l'origine, e solo `create_public_booking_appointment` (appointments/) lo
+# ammette.
 SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login",
-                          "public_unsubscribe")
+                          "public_unsubscribe", "public_booking")
 
 
 @runtime_checkable

@@ -83,6 +83,14 @@ PUBLIC_BY_DESIGN = {
     # dal token e mai dal client.
     ("GET", "/api/public/communication/unsubscribe"),
     ("POST", "/api/public/communication/unsubscribe"),
+    # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
+    # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
+    # una sessione: chi apre il link non e' un operatore. Le tre rotte
+    # scrivono/leggono attraverso `SystemAgencyContext(origin="public_booking")`,
+    # con l'agenzia presa dal link e mai dal client - GET non scrive mai.
+    ("GET", "/api/public/booking/{token}"),
+    ("GET", "/api/public/booking/{token}/slots"),
+    ("POST", "/api/public/booking/{token}/submit"),
 }
 
 # L'UNICO INGRESSO BASIC RESIDUO.

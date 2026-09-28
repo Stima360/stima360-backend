@@ -126,7 +126,8 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
     # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
+        "public_booking")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
@@ -456,7 +457,7 @@ def test_N4_nessuna_migration_nuova():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75, "la serie si e' fermata o e' andata oltre la 076"
+    assert numeri[-1] == 77 and numeri[-2] == 76, "la serie si e' fermata o e' andata oltre la 077"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

@@ -152,7 +152,7 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # di lavoro/eccezioni/chiusure agenzia (vincolo SOFT, D2), approvata dal
     # GATE A30-11B. Si nomina invece di smettere di guardare: qualunque
     # ALTRA migration comparisse farebbe ancora fallire.
-    assert max(numeri) == 76, "la serie non e' piu' contigua in coda"
+    assert max(numeri) == 77, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

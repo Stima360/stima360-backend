@@ -55,6 +55,14 @@ OPERAZIONI_AGENDA_ROUTER = frozenset({
     ("POST", "/api/appointments/{appointment_id}/cancel"),
     ("POST", "/api/appointments/{appointment_id}/complete"),
     ("POST", "/api/appointments/{appointment_id}/no-show"),
+    # SENTINELLA AGGIORNATA DA A30-12: la gestione operatore dei link di
+    # booking pubblico (D2), dichiarate PRIMA di "/{appointment_id}" come
+    # "/lookups/stime" e le rotte A30-11.
+    ("GET", "/api/appointments/booking-links"),
+    ("POST", "/api/appointments/booking-links"),
+    ("PATCH", "/api/appointments/booking-links/{link_id}"),
+    ("POST", "/api/appointments/booking-links/{link_id}/rotate"),
+    ("POST", "/api/appointments/booking-links/{link_id}/disable"),
 })
 
 #: SENTINELLA AGGIORNATA DA A30-7: sotto lo stesso prefisso, e con lo stesso

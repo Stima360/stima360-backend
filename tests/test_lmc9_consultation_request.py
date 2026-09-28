@@ -444,7 +444,14 @@ def test_f4_nessuna_migration():
               "migrations/075_a30_10_calendar_inbound.sql",
               "migrations/075_a30_10_calendar_inbound_down.sql",
               "migrations/076_a30_11_working_hours.sql",
-              "migrations/076_a30_11_working_hours_down.sql"}
+              "migrations/076_a30_11_working_hours_down.sql",
+              "migrations/077_a30_12_public_booking.sql",
+              "migrations/077_a30_12_public_booking_down.sql"}
+    # SENTINELLA AGGIORNATA DA A30-12: la 077 crea le tre tabelle del
+    # booking pubblico (`public_booking_links`, `public_booking_submissions`,
+    # `public_booking_rate_limits`), approvata dal GATE A30-12B. Si nomina
+    # invece di smettere di guardare: qualunque ALTRA migration comparisse
+    # farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA A30-10B: la 075 aggiunge la coda INBOUND
     # (colonne proprie su `appointment_calendar_sync`), approvata dal GATE
     # A30-10B. Si nomina invece di smettere di guardare: qualunque ALTRA

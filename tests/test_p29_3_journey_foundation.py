@@ -68,7 +68,7 @@ def test_01_la_071_e_valida_e_in_coda():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 76 and numeri[-2] == 75
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 77 and numeri[-2] == 76
     assert len(numeri) == len(set(numeri))
 
 
@@ -231,7 +231,8 @@ def test_11_il_token_e_firmato_e_non_enumerabile(monkeypatch):
 def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
     from operator_auth import context
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
+        "public_booking")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):
@@ -384,12 +385,14 @@ def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
     # SENTINELLA AGGIORNATA DA A30-11B: quattordicesima dichiarazione
     # dell'Agenda (ORARI DI LAVORO, migration 076, vincolo SOFT - D2).
     from tests.a30_11_diff import FILE_MODIFICATI as MOD_A30_11, FILE_NUOVI as NUOVI_A30_11
+    # A30-12: PUBLIC BOOKING LINK, quindicesima dichiarazione dell'Agenda.
+    from tests.a30_12_diff import FILE_MODIFICATI as MOD_A30_12, FILE_NUOVI as NUOVI_A30_12
     NUOVI_A30 = (NUOVI_A30_1 | NUOVI_A30_2 | NUOVI_A30_2P | NUOVI_A30_M | NUOVI_A30_4
                  | NUOVI_A30_5 | NUOVI_A30_6 | NUOVI_A30_7 | NUOVI_A30_8
-                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10 | NUOVI_A30_11)
+                 | NUOVI_A30_9A | NUOVI_A30_9B | NUOVI_A30_10 | NUOVI_A30_11 | NUOVI_A30_12)
     MOD_A30 = (MOD_A30_1 | MOD_A30_2 | MOD_A30_2P | MOD_A30_M | MOD_A30_4 | MOD_A30_5
                | MOD_A30_6 | MOD_A30_7 | MOD_A30_8
-               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10 | MOD_A30_11)
+               | MOD_A30_9A | MOD_A30_9B | MOD_A30_10 | MOD_A30_11 | MOD_A30_12)
 
     righe = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"],
                            cwd=ROOT, capture_output=True, text=True).stdout.splitlines()

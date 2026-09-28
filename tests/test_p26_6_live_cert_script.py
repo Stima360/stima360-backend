@@ -5075,6 +5075,20 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("agent_working_hours", "agency_id", "agencies", "RESTRICT"),
     ("agent_availability_exceptions", "agency_id", "agencies", "RESTRICT"),
     ("agency_closures", "agency_id", "agencies", "RESTRICT"),
+    # A30-12, migration 077. Il link di booking pubblico: DUE riferimenti
+    # non-CASCADE, stessa forma di ogni altra tabella di tenant dell'Agenda
+    # sopra (072, 074, 076). `assigned_user_id -> agency_memberships` e' la
+    # FK COMPOSITA (stessa nota della 076: non compare qui, si legge solo
+    # `(id)`), nominata invece di lasciata invisibile:
+    #
+    #   (agency_id, assigned_user_id) -> agency_memberships   RESTRICT
+    #       (public_booking_links)
+    #
+    # CONSEGUENZA PER IL CLEANUP: un'agenzia di prova con un link di booking
+    # pubblico configurato, o un operatore che ne ha creato uno, non si
+    # cancella - RIFIUTO, non cancellazione silenziosa.
+    ("public_booking_links", "agency_id", "agencies", "RESTRICT"),
+    ("public_booking_links", "created_by_user_id", "operator_users", "RESTRICT"),
 })
 
 

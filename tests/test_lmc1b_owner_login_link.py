@@ -305,7 +305,8 @@ def test_c2_l_insieme_degli_origin_resta_chiuso():
     # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
     # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
+        "public_booking")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):
@@ -450,7 +451,7 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75, numeri[-3:]
+    assert numeri[-1] == 77 and numeri[-2] == 76, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

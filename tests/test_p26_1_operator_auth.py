@@ -583,7 +583,8 @@ def test_system_context_origin_set_is_closed_and_declared():
     # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
     # lato server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
-        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe")
+        "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
+        "public_booking")
 
 
 def test_system_context_rejects_an_unapproved_origin():

@@ -876,6 +876,12 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
         # Nessuna rotta accetta un'agenzia o un contatto dal client. Invisibile
         # a G5 come gli altri quattro, e per la stessa ragione strutturale.
         "communication_public_router",
+        # A30-12: il booking pubblico monta senza dipendenze PER PROGETTO -
+        # chi apre il link non e' un operatore - e l'agenzia arriva dal
+        # token del link stesso (`SystemAgencyContext(origin="public_booking")`),
+        # mai dal client. Stessa forma di `communication_public_router`
+        # sopra: invisibile a G5 per la stessa ragione strutturale.
+        "public_booking_router",
     }
     assert unguarded - self_authenticating == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, (
         sorted(unguarded - self_authenticating)

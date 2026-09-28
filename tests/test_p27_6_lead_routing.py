@@ -693,7 +693,7 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75, numeri[-4:]
+    assert numeri[-1] == 77 and numeri[-2] == 76, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

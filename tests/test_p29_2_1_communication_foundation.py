@@ -122,7 +122,7 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75, numeri[-4:]
+    assert numeri[-1] == 77 and numeri[-2] == 76, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

@@ -24,6 +24,12 @@ TIMEZONE_REQUIRED = "TIMEZONE_REQUIRED"
 RANGE_TOO_LARGE = "RANGE_TOO_LARGE"
 LINK_MISMATCH = "LINK_MISMATCH"
 INSPECTION_PROJECTION_NOT_ACTIVE = "INSPECTION_PROJECTION_NOT_ACTIVE"
+# A30-12: il booking pubblico HARD-recheck (D10) e la ri-verifica sotto lock
+# possono rifiutare uno slot che il GET aveva mostrato libero (TOCTOU) - un
+# 409 distinto da APPOINTMENT_CONFLICT perche' qui non esistono "conflitti"
+# ne' "alternative" da mostrare a un chiamante pubblico: solo "non piu'
+# disponibile".
+PUBLIC_SLOT_UNAVAILABLE = "PUBLIC_SLOT_UNAVAILABLE"
 VALIDATION_ERROR = "VALIDATION_ERROR"
 NOT_FOUND = "NOT_FOUND"
 FORBIDDEN_ROLE = "FORBIDDEN_ROLE"
@@ -160,3 +166,11 @@ class InspectionProjectionNotActive(_ConCodice, ValidationError):
     """Un sopralluogo legato a una stima si fissa solo con la proiezione
     verso `stima_inspections` attiva (A30-2P)."""
     code = INSPECTION_PROJECTION_NOT_ACTIVE
+
+
+class PublicSlotUnavailable(_ConCodice, ConflictError):
+    """A30-12 D10: lo slot non e' (piu') disponibile per il booking
+    pubblico - fuori orario, dentro un'eccezione/chiusura, o appena occupato
+    da un altro submit vinto per primo sotto lock. Mai `conflicts`/
+    `alternatives`: il chiamante pubblico non vede mai perche'."""
+    code = PUBLIC_SLOT_UNAVAILABLE

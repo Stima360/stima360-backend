@@ -39,6 +39,11 @@ from owner import provisioning as owner_provisioning
 from acquisition.router import router as acquisition_router
 from appointments.router import router as appointments_router
 from appointments_legacy.router import router as appointments_legacy_router
+# A30-12: il booking pubblico. Router PUBBLICO separato (stessa forma di
+# communication_public_router), montato piu' sotto senza
+# require_authenticated_operator: qui non c'e' un operatore, c'e' il client
+# pubblico che apre un link.
+from public_booking.public_router import router as public_booking_router
 from calendar_sync.router import router as calendar_sync_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
@@ -153,6 +158,9 @@ app.include_router(communication_router, dependencies=[Depends(require_authentic
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
 app.include_router(communication_public_router)
+# A30-12: PUBBLICA per natura - chi apre il link non e' un operatore -
+# esattamente come communication_public_router sopra.
+app.include_router(public_booking_router)
 
 # P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
 #

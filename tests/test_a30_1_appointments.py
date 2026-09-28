@@ -60,7 +60,7 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # non tocca `appointments`), approvata dal GATE A30-11B. Si nomina
     # invece di smettere di guardare: qualunque ALTRA migration comparisse
     # farebbe ancora fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75 and numeri[-3] == 74 and numeri[-4] == 73
+    assert numeri[-1] == 77 and numeri[-2] == 76 and numeri[-3] == 75 and numeri[-4] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -209,10 +209,26 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # follow-up di un esito. Nessun altro file del pacchetto.
         # SENTINELLA AGGIORNATA DA A30-9B (§16, §18): lo stesso hook, per gli
         # stessi motivi, sui write path nativi dell'Agenda.
-        "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants"},
+        # SENTINELLA AGGIORNATA DA A30-12: l'entrypoint autorevole del
+        # booking pubblico, `create_public_booking_appointment`, verifica
+        # `type(ctx) is SystemAgencyContext` (operator_auth.context) e legge
+        # `contacts` in sola lettura tenant-safe con lo stesso predicato di
+        # CORE (core.scope.scoped_source) - MAI un import di `public_booking`
+        # stesso: l'Agenda non dipende da chi la chiama.
+        "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants",
+                       "operator_auth.context", "core.scope"},
+        # SENTINELLA AGGIORNATA DA A30-12: le 5 rotte OPERATORE di gestione
+        # dei link di booking pubblico (create/list/patch/rotate/disable)
+        # sono montate qui per URL (`/api/appointments/booking-links...`),
+        # come richiesto dal gate approvato. Delegano al service del
+        # pacchetto `public_booking` (CRUD dei soli link, MAI una scrittura
+        # su `appointments`): e' una dipendenza distinta e dichiarata dal
+        # percorso di scrittura pubblico (`create_public_booking_appointment`
+        # in service.py), che continua a non importare `public_booking`.
         "router.py": {"fastapi", "fastapi.encoders", "fastapi.responses",
                       "operator_auth.context", "operator_auth.dependencies",
-                      "operator_auth.exceptions"},
+                      "operator_auth.exceptions",
+                      "public_booking", "public_booking.schemas"},
         # SENTINELLA AGGIORNATA DA A30-11B: la traduzione dell'EXCLUDE di
         # orari/eccezioni/chiusure (076) in un errore leggibile, stesso
         # principio di `service.py._traduci_esclusione` (che intercetta

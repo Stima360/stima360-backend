@@ -54,8 +54,12 @@ def righe_impreviste_in_main(root) -> list[str]:
     # A30-9B (collisione dichiarata): il mount del router Google Calendar,
     # dichiarato per intero in `a30_9b_diff` (stessa regola di A30-7/mount).
     from tests.a30_9b_diff import RIGHE_MAIN as RIGHE_A30_9B
+    # A30-12 (collisione dichiarata): il mount del router PUBBLICO del
+    # booking, dichiarato per intero in `a30_12_diff` (stessa regola di
+    # A30-7/9B/mount).
+    from tests.a30_12_diff import RIGHE_MAIN as RIGHE_A30_12
     ammesse = (RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT | RIGHE_A30_7
-              | RIGHE_A30_9B)
+              | RIGHE_A30_9B | RIGHE_A30_12)
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()

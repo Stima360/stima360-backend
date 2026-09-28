@@ -207,9 +207,16 @@ def _dichiarati_da_fasi_successive() -> frozenset[str]:
     verifica la forma esatta di quella riga, e la sentinella statica
     `test_d2_04` in `tests/test_a30_10_calendar_inbound_static.py` prova il
     valore finale della tupla; qui basta sapere che A30-10B si e' dichiarata.
+
+    A30-12 (collisione dichiarata) aggiunge 'public_booking' allo stesso
+    insieme chiuso: il booking pubblico scrive senza operatore, con l'agenzia
+    presa dal link stesso. Stessa posizione di A30-10B - il proprio
+    inventario (`tests/a30_12_diff.py`) verifica la forma esatta; qui basta
+    sapere che A30-12 si e' dichiarata.
     """
     dichiarati: set[str] = set()
-    for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff", "tests.a30_10_diff"):
+    for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff", "tests.a30_10_diff",
+                   "tests.a30_12_diff"):
         try:
             inventario = __import__(modulo, fromlist=["FILE_MODIFICATI"])
         except ImportError:  # la fase non esiste ancora: nulla da ammettere

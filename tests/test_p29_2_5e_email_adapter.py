@@ -424,7 +424,7 @@ def test_N4_nessuna_migration_nuova():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 76 and numeri[-2] == 75, "la serie si e' fermata o e' andata oltre la 076"
+    assert numeri[-1] == 77 and numeri[-2] == 76, "la serie si e' fermata o e' andata oltre la 077"
     assert 64 in numeri
 
 

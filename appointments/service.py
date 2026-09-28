@@ -67,6 +67,16 @@ from core.repository import create_task_with_cursor
 from . import availability, errors, projection, repository, state_machine
 from . import working_hours
 from . import working_hours_repository as _wh_repository
+# A30-12: il booking pubblico e' l'unico chiamante di questo modulo che
+# porta un `SystemAgencyContext` invece di un `OperatorContext` - lo si
+# importa qui solo per il controllo di tipo in
+# `create_public_booking_appointment`, mai per costruirne uno.
+from operator_auth.context import SystemAgencyContext
+# Sola lettura, tenant-safe, su `contacts` (A30-12 D5): la stessa funzione
+# di predicato che usa `core.repository.bridge_public_stima`, riusata qui
+# sullo stesso cursore della transazione di booking - mai una `core_cursor`
+# separata, che il lock d'agente preso sopra non proteggerebbe piu'.
+from core.scope import scoped_source
 from .enums import (
     APPOINTMENT_STATUSES,
     APPOINTMENT_TYPES,
@@ -448,6 +458,280 @@ def create_appointment(ctx, payload):
     """Come `create_appointment_idempotent`, restituisce solo la riga (A30-1)."""
     riga, _ = create_appointment_idempotent(ctx, payload)
     return riga
+
+
+# ---------------------------------------------------------------------------
+# A30-12 - BOOKING PUBBLICO: entrypoint AUTOREVOLE dedicato.
+#
+# CORREZIONE ARCHITETTURALE OBBLIGATORIA del gate A30-12B: NON riusa
+# `create_appointment_idempotent` con un `SystemAgencyContext` - quella
+# funzione pretende `_attore(ctx)` (un utente reale), forza
+# `source='crm_manual'` e applica controlli di assegnazione pensati per un
+# operatore autenticato. Il booking pubblico non ha nessuna delle tre cose:
+# nessun operatore dietro, `source='booking_link'` sempre, e l'unico
+# controllo di assegnazione che ha senso e' "l'agente del link e' ancora un
+# membro attivo di questa agenzia".
+#
+# Ordine obbligatorio (le 14 fasi del gate), tutte nella STESSA transazione:
+#   1-2. link e agenzia sono gia' risolti dal chiamante (`public_booking`),
+#        che ha gia' verificato token attivo/non scaduto/non revocato PRIMA
+#        di aprire questa transazione - un fallimento li' non deve mai
+#        toccare un lock d'agente;
+#   3.   membership ancora attiva (puo' essere cambiata dopo la creazione
+#        del link: si ri-verifica qui, non ci si fida della sola guardia di
+#        scrittura del link);
+#   4.   lock_agents - stesso namespace/ordine di `_occupa`, cosi' un
+#        booking pubblico e una scrittura CRM per lo stesso agente si
+#        mettono in fila l'uno dietro l'altro, mai in corsa;
+#   5.   RI-LETTURA di orari/eccezioni/chiusure DOPO il lock - la difesa
+#        TOCTOU: un GET che mostrava lo slot libero e una chiusura inserita
+#        nel frattempo devono produrre un rifiuto, non una prenotazione;
+#   6.   D10, HARD: un agente SENZA alcuna riga di orario settimanale non
+#        e' "sempre disponibile" (il comportamento permissivo di
+#        `is_within` con `effective=None`, corretto per il CRM SOFT) - qui
+#        e' l'esatto opposto, zero slot pubblici;
+#   7.   find_conflicts, stessa regola EXCLUDE di sempre;
+#   8.   risolvi/crea il contatto, sullo STESSO cursore (mai una transazione
+#        propria: altrimenti il lock d'agente non protegge piu' l'intera
+#        prenotazione);
+#   9.   idempotenza sotto lock: un retry dello stesso submission_token
+#        trova la riga gia' creata e la restituisce, senza un secondo
+#        evento - la garanzia finale resta l'indice UNIQUE
+#        (source, source_record_id) della 072, questo e' solo il percorso
+#        veloce che evita di tentarlo due volte;
+#   10.  INSERT tramite `repository.insert_appointment` - MAI un INSERT
+#        scritto qui o nel package `public_booking`: e' questo il solo
+#        punto autorevole;
+#   11.  l'evento `created` lo scrive gia' `insert_appointment` con
+#        `actor_user_id=None` ("NULL = sistema/import", il commento della
+#        guardia 072 - un percorso gia' supportato, mai nuovo);
+#   12.  collega la riga di `public_booking_submissions` all'appuntamento
+#        appena creato - un UPDATE mirato per `submission_hash`, non una
+#        chiamata al package `public_booking` (nessuna dipendenza
+#        circolare: l'Agenda non importa `public_booking`, ne conosce solo
+#        questa singola colonna per questo singolo scopo, come CORE
+#        `bridge_public_stima` scrive nel dominio `consent/`);
+#   13.  A30-9B, stessa regola di ogni altra CREATE gia' `scheduled`: mark
+#        dirty, mai una chiamata Google dentro la transazione;
+#   14.  commit - lo gestisce `_in_transazione`, come ogni altra scrittura
+#        di questo modulo.
+# ---------------------------------------------------------------------------
+
+#: A30-12: la sorgente riservata dalla 072, mai usata prima di questo gate.
+PUBLIC_BOOKING_SOURCE = "booking_link"
+
+#: I campi confrontati per decidere se un retry dello stesso
+#: submission_token e' "la stessa richiesta" (stesso principio di
+#: `_CAMPI_IMPRONTA`, ma per il booking pubblico: qui non c'e' un payload
+#: CRM, c'e' uno slot e un'identita' dichiarata dal client).
+PUBLIC_BOOKING_CAMPI_IMPRONTA = ("start_at", "end_at", "client_name",
+                                 "client_phone", "client_email")
+
+
+def _contatto_pubblico_coerente(cur, agency_id, contact_data):
+    """A30-12 D5: cerca silenziosamente un contatto DI QUESTA agenzia per
+    email/telefono normalizzati; se trova un solo match coerente lo
+    collega, altrimenti (nessun match, o match ambigui/in conflitto fra
+    loro) crea un nuovo contatto. Mai bloccare una prenotazione per
+    ambiguita' della rubrica: chi sta prenotando e' una persona reale in
+    questo momento.
+
+    Stesso principio di `core.repository.bridge_public_stima` (lock
+    consultivo per identita', poi `FOR UPDATE`), ma sul cursore di QUESTA
+    transazione: il lock d'agente gia' preso sopra deve restare la sola
+    cosa che serializza l'intero booking, e una `core_cursor` separata
+    aprirebbe una seconda transazione che quel lock non protegge piu'.
+
+    Restituisce `(contact_id, creato: bool)`.
+    """
+    sys_ctx = _ContattoScope(agency_id)
+
+    ambiti_identita = []
+    if contact_data.get("email_normalized"):
+        ambiti_identita.append(f"public_booking:contact:{agency_id}:email:{contact_data['email_normalized']}")
+    if contact_data.get("phone_normalized"):
+        ambiti_identita.append(f"public_booking:contact:{agency_id}:phone:{contact_data['phone_normalized']}")
+    for ambito in sorted(ambiti_identita):
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0)) AS locked", (ambito,))
+
+    email_matches = []
+    if contact_data.get("email_normalized"):
+        source, params = scoped_source(sys_ctx, "contacts", "c")
+        cur.execute(f"SELECT * FROM {source} AND c.email_normalized = %s "
+                    f"AND c.status <> 'archived' ORDER BY c.id FOR UPDATE",
+                    params + [contact_data["email_normalized"]])
+        email_matches = [dict(r) for r in cur.fetchall()]
+
+    phone_matches = []
+    if contact_data.get("phone_normalized"):
+        source, params = scoped_source(sys_ctx, "contacts", "c")
+        cur.execute(f"SELECT * FROM {source} AND c.phone_normalized = %s "
+                    f"AND c.status <> 'archived' ORDER BY c.id FOR UPDATE",
+                    params + [contact_data["phone_normalized"]])
+        phone_matches = [dict(r) for r in cur.fetchall()]
+
+    contatto = None
+    if len(email_matches) == 1 and len(phone_matches) <= 1:
+        if not phone_matches or phone_matches[0]["id"] == email_matches[0]["id"]:
+            contatto = email_matches[0]
+    if contatto is None and len(phone_matches) == 1 and not email_matches:
+        contatto = phone_matches[0]
+
+    if contatto is not None:
+        return contatto["id"], False
+
+    # P29-1.4: le due colonne del consenso NON compaiono in questa INSERT -
+    # un contatto nasce SENZA consenso (il loro default e' gia' NULL, mai
+    # scritto qui): il booking pubblico non raccoglie alcun consenso
+    # marketing, e nominarle esplicitamente e' esattamente il pattern che
+    # la guardia di P29-1.5 sorveglia (`LETTORI_LEGITTIMI`).
+    cur.execute(
+        """INSERT INTO contacts(
+            contact_type, first_name, last_name, company_name, display_name,
+            email, email_normalized, phone, phone_normalized, secondary_phone,
+            source, status, notes,
+            agency_id, created_by_user_id
+        ) VALUES(
+            %(contact_type)s, %(first_name)s, %(last_name)s, %(company_name)s, %(display_name)s,
+            %(email)s, %(email_normalized)s, %(phone)s, %(phone_normalized)s, %(secondary_phone)s,
+            %(source)s, %(status)s, %(notes)s,
+            %(agency_id)s, NULL
+        ) RETURNING id""",
+        {**contact_data, "agency_id": agency_id},
+    )
+    return cur.fetchone()["id"], True
+
+
+class _ContattoScope:
+    """Il minimo che `core.scope.scoped_source` richiede (`AgencyScope`),
+    per riusare quell'unica funzione di predicato senza costruire un
+    `SystemAgencyContext` con un origin che CORE non ammetterebbe - CORE
+    conosce solo i propri origin (`SYSTEM_CONTEXT_FUNCTIONS`), e questo
+    modulo non e' uno di quelli: legge `contacts` in sola lettura scoped,
+    non scrive attraverso `core.repository`."""
+
+    role = None
+    is_platform_admin = False
+    user_id = None
+
+    def __init__(self, agency_id):
+        self.agency_id = agency_id
+
+    def require_agency(self):
+        return self.agency_id
+
+
+def create_public_booking_appointment(ctx, *, link, submission_hash, start_at, contact_data):
+    """A30-12: l'unico punto che crea un appuntamento dal booking pubblico.
+
+    `ctx` deve essere un `SystemAgencyContext(origin='public_booking')` -
+    rifiutato altrimenti, prima di aprire qualunque cursore (stesso
+    principio del guard-before-cursor di `bridge_public_stima`). `link` e'
+    la riga di `public_booking_links` gia' risolta e validata (token
+    attivo, non scaduto, non revocato) dal chiamante `public_booking`, che
+    ha gia' scritto la riga `public_booking_submissions` (con
+    `client_ip_hash`) PRIMA di chiamare questa funzione: qui basta il suo
+    `submission_hash` per ritrovarla al passo 12.
+    """
+    if type(ctx) is not SystemAgencyContext or ctx.origin != "public_booking":
+        raise TypeError(
+            "create_public_booking_appointment richiede un "
+            "SystemAgencyContext(origin='public_booking')")
+    agency_id = ctx.require_agency()
+    assigned_user_id = link["assigned_user_id"]
+    end_at = start_at + timedelta(minutes=int(link["duration_minutes"]))
+    before = int(link["buffer_before_minutes"])
+    after = int(link["buffer_after_minutes"])
+
+    def _lavoro(cur):
+        # 3. membership ancora attiva.
+        if not repository.active_membership(cur, agency_id, assigned_user_id):
+            raise errors.PublicSlotUnavailable(
+                "Questo link non e' piu' associato a un agente attivo")
+        # 4. lock d'agente.
+        repository.lock_agents(cur, [assigned_user_id])
+        # 5. ri-lettura DOPO il lock (difesa TOCTOU). Il range passato ad
+        # `effective_inputs` va ALLARGATO di un giorno per lato (stessa
+        # ragione di `_finestra_effettiva`, CRM SOFT): `exception_date` e
+        # `closure_date` sono colonne DATE confrontate con `BETWEEN` contro
+        # `start_at`/`end_at` - un appuntamento breve (es. 30 minuti, non a
+        # mezzanotte) altrimenti non includerebbe MAI la mezzanotte della
+        # propria giornata, e una chiusura/eccezione dello stesso giorno
+        # sfuggirebbe silenziosamente al ri-controllo TOCTOU. La FINESTRA
+        # su cui si valuta `is_within` resta invece quella esatta,
+        # `start_at`/`end_at`: solo le righe recuperate sono piu' ampie.
+        ingressi = _wh_repository.effective_inputs(
+            cur, agency_id, assigned_user_id,
+            (start_at.astimezone(working_hours.ROMA) - timedelta(days=1)).date(),
+            (end_at.astimezone(working_hours.ROMA) + timedelta(days=1)).date())
+        # 6. D10 HARD: nessun orario configurato = zero slot pubblici,
+        # l'ESATTO opposto del ramo permissivo che `is_within` applica per
+        # il CRM SOFT quando `effective is None`.
+        if not ingressi["has_weekly_config"]:
+            raise errors.PublicSlotUnavailable(
+                "Questo agente non ha orari pubblici configurati")
+        effettiva = working_hours.effective_windows(start_at, end_at, **ingressi)
+        if not working_hours.is_within(start_at, end_at, effettiva):
+            raise errors.PublicSlotUnavailable(
+                "Questo orario e' fuori dalla disponibilita' pubblica dell'agente")
+        # 7. find_conflicts.
+        conflitti = repository.find_conflicts(
+            cur, assigned_user_id=assigned_user_id, start_at=start_at, end_at=end_at,
+            buffer_before_minutes=before, buffer_after_minutes=after)
+        if conflitti:
+            raise errors.PublicSlotUnavailable("Questo orario non e' piu' disponibile")
+        # 9a. idempotenza sotto lock, PRIMA di creare un contatto inutile.
+        esistente = repository.find_by_source_key(
+            cur, PUBLIC_BOOKING_SOURCE, submission_hash)
+        if esistente is not None:
+            return repository.get_appointment(cur, agency_id, esistente["id"])
+        # 8. risolvi/crea il contatto (stesso cursore, stessa transazione).
+        contact_id, _creato = _contatto_pubblico_coerente(cur, agency_id, contact_data)
+        # 9b. ri-verifica: un'altra richiesta identica potrebbe aver vinto
+        # fra la 9a e qui (fra la lettura e la creazione del contatto non
+        # c'e' nessun lock che lo impedisca).
+        esistente = repository.find_by_source_key(
+            cur, PUBLIC_BOOKING_SOURCE, submission_hash)
+        if esistente is not None:
+            return repository.get_appointment(cur, agency_id, esistente["id"])
+        # 10. INSERT tramite il repository autorevole dell'Agenda.
+        valori = {
+            "agency_id": agency_id,
+            "assigned_user_id": assigned_user_id,
+            "appointment_type": link["appointment_type"],
+            "status": "scheduled",
+            "start_at": start_at,
+            "end_at": end_at,
+            "buffer_before_minutes": before,
+            "buffer_after_minutes": after,
+            "contact_id": contact_id,
+            "source": PUBLIC_BOOKING_SOURCE,
+            "source_record_id": submission_hash,
+            "created_by_user_id": None,
+        }
+        riga = repository.insert_appointment(cur, valori, actor_user_id=None)
+        if riga is None:
+            # L'indice unico ha deciso: un'altra transazione concorrente ha
+            # appena inserito la stessa chiave.
+            esistente = repository.find_by_source_key(
+                cur, PUBLIC_BOOKING_SOURCE, submission_hash)
+            return repository.get_appointment(cur, agency_id, esistente["id"])
+        # 12. collega la submission all'appuntamento appena creato.
+        cur.execute(
+            "UPDATE public_booking_submissions "
+            "SET appointment_id = %s, status = 'succeeded', completed_at = NOW() "
+            "WHERE submission_hash = %s",
+            (riga["id"], submission_hash),
+        )
+        # 13. A30-9B: mark dirty, mai una chiamata Google qui dentro.
+        if riga["status"] in _GCAL_PRESENT:
+            _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
+        return riga
+
+    # 14. commit (o rollback): stessa `_in_transazione` di ogni altra
+    # scrittura di questo modulo, con la stessa traduzione delle violazioni
+    # EXCLUDE in un errore leggibile.
+    return _in_transazione(_lavoro)
 
 
 # ---------------------------------------------------------------------------

@@ -5355,6 +5355,15 @@ AGENDA_OPERAZIONI = (
     ("GET", ""), ("POST", ""), ("GET", "/calendar"), ("GET", "/agents"),
     ("GET", "/availability"), ("POST", "/availability/check"),
     ("GET", "/lookups/stime"),                      # A30-5: ricerca stime, sola lettura
+    # A30-12: gestione OPERATORE dei link di booking pubblico (owner/admin su
+    # tutti gli agenti, agent solo sul proprio) - CRUD dei soli link, mai una
+    # scrittura su `appointments`. Nessuna DELETE: si disattiva (`/disable`),
+    # non si cancella. Autenticate come le altre rotte operatore: il giro
+    # anonimo le sonda regolarmente (-> 401), nessuna scrittura nel giro live.
+    ("GET", "/booking-links"), ("POST", "/booking-links"),
+    ("PATCH", "/booking-links/{link_id}"),
+    ("POST", "/booking-links/{link_id}/rotate"),
+    ("POST", "/booking-links/{link_id}/disable"),
     # A30-11B: orari di lavoro, eccezioni, chiusure agenzia (vincolo SOFT nel
     # CRM, D2). Le due DELETE sono rotte reali e vanno dichiarate qui per la
     # parita' con l'inventario del mount - ma NON vanno sondate dal giro

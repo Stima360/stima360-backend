@@ -49,6 +49,12 @@ from .working_hours_schemas import (
     WorkingHoursReplaceBody,
 )
 
+# A30-12: la gestione operatore dei link di booking pubblico vive nel
+# pacchetto `public_booking/` (CRUD, permessi D2) - queste rotte sono solo
+# la superficie HTTP, stessa forma delle rotte A30-11 sopra.
+from public_booking import service as booking_link_service
+from public_booking.schemas import BookingLinkCreateBody, BookingLinkPatchBody
+
 router = APIRouter(prefix="/api/appointments", tags=["appointments"])
 
 #: Tipi d'errore pydantic che hanno un codice proprio nel contratto A30-2.
@@ -339,6 +345,47 @@ def delete_agency_closure(closure_id: int, ctx: OperatorContext = Depends(requir
         working_hours_service.delete_closure(ctx, closure_id)
         return {"deleted": True}
     return _x(_elimina)
+
+
+# ---------------------------------------------------------------------------
+# A30-12 - GESTIONE OPERATORE DEI LINK DI BOOKING PUBBLICO. Dichiarate PRIMA
+# di "/{appointment_id}" per lo stesso motivo delle rotte A30-11 sopra: il
+# segmento letterale "booking-links" non deve essere consumato dalla rotta a
+# un solo segmento dinamico.
+# ---------------------------------------------------------------------------
+
+@router.get("/booking-links")
+def list_booking_links(ctx: OperatorContext = Depends(require_operator)):
+    return _x(lambda: {"items": booking_link_service.list_links(ctx)})
+
+
+@router.post("/booking-links")
+def create_booking_link(dati: dict = Body(...), ctx: OperatorContext = Depends(require_operator)):
+    try:
+        corpo = _corpo(BookingLinkCreateBody, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(booking_link_service.create_link, ctx, corpo, status=201)
+
+
+@router.patch("/booking-links/{link_id}")
+def patch_booking_link(link_id: int, dati: dict = Body(...),
+                       ctx: OperatorContext = Depends(require_operator)):
+    try:
+        corpo = _corpo(BookingLinkPatchBody, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(booking_link_service.patch_link, ctx, link_id, corpo)
+
+
+@router.post("/booking-links/{link_id}/rotate")
+def rotate_booking_link(link_id: int, ctx: OperatorContext = Depends(require_operator)):
+    return _x(booking_link_service.rotate_link, ctx, link_id)
+
+
+@router.post("/booking-links/{link_id}/disable")
+def disable_booking_link(link_id: int, ctx: OperatorContext = Depends(require_operator)):
+    return _x(booking_link_service.disable_link, ctx, link_id)
 
 
 @router.get("/{appointment_id}")

@@ -631,6 +631,31 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    "tests/test_a30_12_public_booking_postgres.py": (
+        "TEST-only A30-12B proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing an earlier phase's entry: an allow-list shared "
+        "between phases would let a new entrypoint arrive unannounced. Its "
+        "schema applies the LMC-15 chain (009-070) plus 072/073/076/077 "
+        "directly, deliberately skipping 074/075 (calendar_sync) because "
+        "calendar_sync.integration.on_appointment_mutation fails open when "
+        "no deployment namespace is configured. The connection exists to "
+        "prove what a pure-Python unit test cannot: migration 077 up/down/up "
+        "and its down-rejects-with-rows guard; booking-link CRUD operator "
+        "permissions (owner-vs-agent, tenant isolation, rotate invalidation); "
+        "the public token-resolution endpoint's identical-generic-404 for "
+        "every failure cause; the D10 HARD availability gate against real "
+        "weekly hours, exceptions, closures and buffers; the authoritative "
+        "submit path's idempotency, contact matching, TOCTOU re-check "
+        "against a same-day closure inserted after the GET, and true "
+        "concurrency (multiple threads racing the same slot, exactly one "
+        "201); rate limiting; and that client_ip_hash is a real HMAC, never "
+        "the raw IP. It monkeypatches nothing and opens its own connection "
+        "directly to the throwaway database. It must not go through "
+        "database.get_connection(): that is the application choke point and "
+        "must stay uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor
