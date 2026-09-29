@@ -488,6 +488,97 @@ export function actionSuccessMessage(action) {
   return OUTCOME_SUCCESS[action] || null;
 }
 
+// A30-13B.1: specchio puro di `operator_auth.permissions.may_assign_records`
+// (titolare, amministratore o platform admin dentro un'agenzia "acting").
+// Usato sia per mostrare "Aggiorna richieste dal sito" (A30-7) sia per
+// decidere se il campo Agente del form di creazione e' un selettore libero o
+// bloccato su se stessi (A30-13B.1): UNA sola funzione, non due copie della
+// stessa regola. Solo per NON mostrare un controllo che il server
+// rifiuterebbe: l'autorita' resta sempre il server (403/ForbiddenRole).
+export function canAssignRecords(session) {
+  if (!session) return false;
+  if (session.is_platform_admin === true) {
+    return session.acting !== null && session.acting !== undefined;
+  }
+  return session.role === 'agency_owner' || session.role === 'agency_admin';
+}
+
+// ---------------------------------------------------------------------------
+// FILTRI della vista (piano A30-4 congelato, §3 AgendaFilters, §4.1, §7, §11).
+//
+// Traducono una scelta dell'operatore nei parametri che `GET /calendar` e la
+// lista ACCETTANO GIA' (appointments/router.py): nessuna regola nuova, nessun
+// parametro inventato. Con i valori di partenza non si manda NIENTE, cosi' la
+// richiesta resta identica a quella di prima e ogni vista tiene il default
+// del server (il calendario nasconde annullati e spostati, la lista no).
+//
+// La visibilita' NON si decide qui: un `agent` vede comunque solo i propri
+// appuntamenti (server, `_solo_agente`). Il filtro agente si offre solo a chi
+// assegna, e solo dove l'API lo accetta (calendario, non lista).
+// ---------------------------------------------------------------------------
+
+/** "Tutti gli stati", anche annullati e spostati. */
+export const ALL_STATUSES_FILTER = 'all';
+
+export const DEFAULT_FILTERS = Object.freeze({
+  agent: '', type: '', status: '', colleagues: true,
+});
+
+/** Un filtro qualunque (anche arrivato da un vecchio stato) ridotto a valori
+ *  che il server accetterebbe; tutto il resto torna al valore di partenza. */
+export function normalizeFilters(filters) {
+  const f = filters || {};
+  const agente = Number(f.agent);
+  return {
+    agent: Number.isInteger(agente) && agente > 0 ? String(agente) : '',
+    type: Object.prototype.hasOwnProperty.call(TYPE_LABELS, f.type) ? f.type : '',
+    status: f.status === ALL_STATUSES_FILTER
+      || Object.prototype.hasOwnProperty.call(STATUS_LABELS, f.status) ? f.status : '',
+    colleagues: f.colleagues !== false,
+  };
+}
+
+function statiDelFiltro(status) {
+  if (status === ALL_STATUSES_FILTER) return Object.keys(STATUS_LABELS);
+  return status ? [status] : undefined;
+}
+
+/** I parametri di `getCalendar` (Settimana, Giorno). */
+export function calendarFilterParams(filters, { canAssign = false } = {}) {
+  const f = normalizeFilters(filters);
+  const parametri = {};
+  if (canAssign && f.agent) parametri.agents = [Number(f.agent)];
+  if (f.type) parametri.types = [f.type];
+  const stati = statiDelFiltro(f.status);
+  if (stati) parametri.statuses = stati;
+  // Solo per chi vede i colleghi come "Occupato", e solo se li spegne: il
+  // valore di partenza del server e' "si'".
+  if (!canAssign && !f.colleagues) parametri.showColleagues = false;
+  return parametri;
+}
+
+/** I parametri di `getList` (Lista): la lista non ha un filtro agente. */
+export function listFilterParams(filters) {
+  const f = normalizeFilters(filters);
+  const parametri = {};
+  if (f.type) parametri.types = [f.type];
+  const stati = statiDelFiltro(f.status);
+  if (stati) parametri.statuses = stati;
+  return parametri;
+}
+
+/** Quanti filtri stanno cambiando cio' che si vede in questa vista. */
+export function activeFilterCount(filters, { canAssign = false, view = 'week' } = {}) {
+  const f = normalizeFilters(filters);
+  const griglia = view !== 'list';
+  return [
+    Boolean(f.type),
+    Boolean(f.status),
+    griglia && canAssign && Boolean(f.agent),
+    griglia && !canAssign && !f.colleagues,
+  ].filter(Boolean).length;
+}
+
 /** Vero se l'appuntamento ha un contatto, un lead o una stima: senza, il
  *  follow-up (un task CORE) non si puo' creare e il blocco non si mostra. */
 export function canFollowUp(row) {

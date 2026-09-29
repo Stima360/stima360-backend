@@ -103,7 +103,7 @@ function colonnaOre() {
   return colonna;
 }
 
-function colonnaGiorno(key, items, onOpen) {
+function colonnaGiorno(key, items, onOpen, onSlotClick) {
   const colonna = el('div', 'agenda-day-column');
   colonna.dataset.day = key;
   colonna.style.height = `${24 * HOUR_HEIGHT}px`;
@@ -111,6 +111,25 @@ function colonnaGiorno(key, items, onOpen) {
     const riga = el('div', 'agenda-hour-slot');
     riga.style.top = `${h * HOUR_HEIGHT}px`;
     riga.style.height = `${HOUR_HEIGHT}px`;
+    // A30-13B.1: un click (o Invio/Spazio) su un'ora VUOTA apre il dialog di
+    // creazione precompilato su questo giorno e questa ora. Le card degli
+    // appuntamenti sono sopra (assolute, aggiunte dopo) e intercettano il
+    // click prima che arrivi qui: uno slot occupato non apre mai questo
+    // percorso.
+    if (onSlotClick) {
+      riga.classList.add('agenda-hour-slot-clickable');
+      riga.tabIndex = 0;
+      riga.setAttribute('role', 'button');
+      riga.setAttribute('aria-label',
+        `Nuovo appuntamento alle ${String(h).padStart(2, '0')}:00`);
+      riga.addEventListener('click', () => onSlotClick(key, h));
+      riga.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          onSlotClick(key, h);
+        }
+      });
+    }
     colonna.appendChild(riga);
   }
   const delGiorno = itemsForDay(items, key);
@@ -129,7 +148,7 @@ function colonnaGiorno(key, items, onOpen) {
   return colonna;
 }
 
-function griglia(days, items, onOpen, classe) {
+function griglia(days, items, onOpen, classe, onSlotClick) {
   const oggi = todayKey();
   const radice = el('div', `agenda-grid ${classe}`);
   radice.style.setProperty('--agenda-days', String(days.length));
@@ -146,7 +165,7 @@ function griglia(days, items, onOpen, classe) {
 
   const corpo = el('div', 'agenda-grid-body');
   corpo.appendChild(colonnaOre());
-  for (const key of days) corpo.appendChild(colonnaGiorno(key, items, onOpen));
+  for (const key of days) corpo.appendChild(colonnaGiorno(key, items, onOpen, onSlotClick));
   radice.appendChild(corpo);
   return radice;
 }
@@ -157,17 +176,17 @@ function scrollIniziale(scroller) {
 }
 
 /** SETTIMANA: lunedi' -> domenica, sette colonne, domenica sempre visibile. */
-export function renderWeek(target, { days, items, onOpen }) {
+export function renderWeek(target, { days, items, onOpen, onSlotClick }) {
   const scroller = el('div', 'agenda-scroll agenda-scroll-week');
-  scroller.appendChild(griglia(days, items, onOpen, 'agenda-grid-week'));
+  scroller.appendChild(griglia(days, items, onOpen, 'agenda-grid-week', onSlotClick));
   target.appendChild(scroller);
   scrollIniziale(scroller);
 }
 
 /** GIORNO: una colonna. */
-export function renderDay(target, { days, items, onOpen }) {
+export function renderDay(target, { days, items, onOpen, onSlotClick }) {
   const scroller = el('div', 'agenda-scroll agenda-scroll-day');
-  scroller.appendChild(griglia(days.slice(0, 1), items, onOpen, 'agenda-grid-day'));
+  scroller.appendChild(griglia(days.slice(0, 1), items, onOpen, 'agenda-grid-day', onSlotClick));
   target.appendChild(scroller);
   scrollIniziale(scroller);
 }

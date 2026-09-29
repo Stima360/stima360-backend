@@ -16,19 +16,28 @@
 import { getSession, sessionEpoch } from '../../core/auth.js';
 import { navigate } from '../../core/router.js';
 import {
+  ALL_STATUSES_FILTER,
+  DEFAULT_FILTERS,
   MOBILE_MAX_WIDTH,
+  STATUS_LABELS,
+  TYPE_LABELS,
   VIEW_LABELS,
   VIEW_SLUGS,
   VIEWS,
   MOBILE_VIEWS,
   actionSuccessMessage,
+  activeFilterCount,
   addDays,
+  calendarFilterParams,
+  canAssignRecords,
   effectiveView,
   errorMessage,
   formatDateTime,
   formatDayLong,
   formatRange,
   isDateKey,
+  listFilterParams,
+  normalizeFilters,
   rangeFor,
   romeDateKey,
   statusLabel,
@@ -60,6 +69,20 @@ async function agenti() {
   return agentiInMemoria.items;
 }
 
+// Filtri (piano A30-4 §11): restano in memoria per la sessione, cosi'
+// cambiando settimana o vista non si perdono. Legati alla sessione come gli
+// agenti: non passano mai a un altro operatore. Nessun localStorage.
+let filtriInMemoria = { epoch: null, valori: DEFAULT_FILTERS };
+
+function leggiFiltri() {
+  return filtriInMemoria.epoch === sessionEpoch()
+    ? filtriInMemoria.valori : { ...DEFAULT_FILTERS };
+}
+
+function salvaFiltri(valori) {
+  filtriInMemoria = { epoch: sessionEpoch(), valori };
+}
+
 // A30-5: un appuntamento creato in un giorno fuori dal periodo visualizzato
 // porta la pagina su quel giorno; il messaggio di conferma sopravvive a quella
 // navigazione (una sola volta, poi si consuma). Legato alla sessione: un
@@ -79,16 +102,14 @@ function confermaCreazione(creato) {
   return `Appuntamento creato: ${formatDateTime(creato.start_at)}${cosa ? ` · ${cosa}` : ''}.`;
 }
 
-// A30-7: chi smista la coda delle richieste. Specchio della permission del
-// dominio (`operator_auth.permissions.may_assign_records`: titolare,
-// amministratore, platform admin dentro un'agenzia) solo per NON mostrare un
-// bottone che il server rifiuterebbe; l'autorita' resta il server (403).
+// A30-7: chi smista la coda delle richieste. La regola (`may_assign_records`)
+// e' la STESSA che decide, in A30-13B.1, se il campo Agente del form di
+// creazione e' libero o bloccato su se stessi: vive una volta sola, in
+// agenda-model.js (`canAssignRecords`), non duplicata qui. Solo per NON
+// mostrare un bottone che il server rifiuterebbe; l'autorita' resta il
+// server (403).
 function gestisceRichieste(sessione) {
-  if (!sessione) return false;
-  if (sessione.is_platform_admin === true) {
-    return sessione.acting !== null && sessione.acting !== undefined;
-  }
-  return sessione.role === 'agency_owner' || sessione.role === 'agency_admin';
+  return canAssignRecords(sessione);
 }
 
 function numero(valore) {
@@ -136,6 +157,10 @@ function erroreGoogleInSospeso() {
 
 function isMobile() {
   return typeof window.matchMedia === 'function' && window.matchMedia(MOBILE_QUERY).matches;
+}
+
+function due(n) {
+  return String(n).padStart(2, '0');
 }
 
 function el(tag, className, text) {
@@ -217,6 +242,102 @@ export async function renderAgenda(container, params = []) {
   barra.appendChild(comandi);
   pagina.appendChild(barra);
 
+  // -- filtri (piano A30-4 congelato: §3 AgendaFilters, §4.1, §7) ------------
+  // Agente: solo a chi assegna (owner, admin, Supreme in acting) e solo dove
+  // l'API lo accetta (Settimana, Giorno). Un agent vede comunque solo i propri
+  // appuntamenti: per lui c'e' l'interruttore dei colleghi "Occupato".
+  // Tipo e Stato in ogni vista. "Stati predefiniti" non manda nulla: ogni
+  // vista tiene il default del server.
+  const puoAssegnare = canAssignRecords(getSession());
+  const griglia = view !== 'list';
+  let filtri = normalizeFilters(leggiFiltri());
+  const barraFiltri = el('div', 'agenda-toolbar agenda-filters');
+  barraFiltri.setAttribute('role', 'group');
+  barraFiltri.setAttribute('aria-label', 'Filtri');
+  const campoFiltro = (etichetta, controllo) => {
+    const campo = el('label', 'agenda-filter');
+    campo.append(el('span', 'muted', etichetta), controllo);
+    return campo;
+  };
+  const selezione = (nome, voci, valore) => {
+    const s = el('select', 'input');
+    s.dataset.filter = nome;
+    for (const [v, t] of voci) {
+      const o = el('option', '', t);
+      o.value = v;
+      if (v === valore) o.selected = true;
+      s.appendChild(o);
+    }
+    s.value = valore;
+    return s;
+  };
+  const selAgente = puoAssegnare && griglia
+    ? selezione('agent', [['', 'Tutti gli agenti']], filtri.agent) : null;
+  let spuntaColleghi = null;
+  if (!puoAssegnare && griglia) {
+    spuntaColleghi = el('input');
+    spuntaColleghi.type = 'checkbox';
+    spuntaColleghi.dataset.filter = 'colleagues';
+    spuntaColleghi.checked = filtri.colleagues;
+  }
+  const selTipo = selezione('type', [['', 'Tutti i tipi'], ...Object.entries(TYPE_LABELS)], filtri.type);
+  const selStato = selezione('status', [
+    ['', 'Stati predefiniti'], [ALL_STATUSES_FILTER, 'Tutti gli stati'],
+    ...Object.entries(STATUS_LABELS)], filtri.status);
+  const azzera = el('button', 'btn', 'Azzera filtri');
+  azzera.type = 'button';
+  const aggiornaAzzera = () => {
+    azzera.hidden = activeFilterCount(filtri, { canAssign: puoAssegnare, view }) === 0;
+  };
+  if (selAgente) barraFiltri.appendChild(campoFiltro('Agente', selAgente));
+  if (spuntaColleghi) {
+    const campo = el('label', 'agenda-filter');
+    campo.append(spuntaColleghi, el('span', '', 'Mostra gli impegni dei colleghi'));
+    barraFiltri.appendChild(campo);
+  }
+  barraFiltri.append(campoFiltro('Tipo', selTipo), campoFiltro('Stato', selStato), azzera);
+  aggiornaAzzera();
+  pagina.appendChild(barraFiltri);
+
+  // Il filtro agente si riempie con l'elenco /agents del server (attivi,
+  // di questa agenzia). Un agente che non c'e' piu' non resta scelto.
+  const riempiFiltroAgenti = (lista) => {
+    if (!selAgente) return;
+    if (filtri.agent && !lista.some((a) => String(a.id) === filtri.agent)) {
+      filtri = normalizeFilters({ ...filtri, agent: '' });
+      salvaFiltri(filtri);
+      aggiornaAzzera();
+    }
+    selAgente.replaceChildren();
+    for (const [v, t] of [['', 'Tutti gli agenti'],
+      ...lista.map((a) => [String(a.id), a.name || `Operatore ${a.id}`])]) {
+      const o = el('option', '', t);
+      o.value = v;
+      if (v === filtri.agent) o.selected = true;
+      selAgente.appendChild(o);
+    }
+    selAgente.value = filtri.agent;
+  };
+  const cambiaFiltri = (modifica) => {
+    filtri = normalizeFilters({ ...filtri, ...modifica });
+    salvaFiltri(filtri);
+    aggiornaAzzera();
+    carica();
+  };
+  if (selAgente) selAgente.addEventListener('change', () => cambiaFiltri({ agent: selAgente.value }));
+  if (spuntaColleghi) {
+    spuntaColleghi.addEventListener('change', () => cambiaFiltri({ colleagues: spuntaColleghi.checked }));
+  }
+  selTipo.addEventListener('change', () => cambiaFiltri({ type: selTipo.value }));
+  selStato.addEventListener('change', () => cambiaFiltri({ status: selStato.value }));
+  azzera.addEventListener('click', () => {
+    if (selAgente) selAgente.value = '';
+    if (spuntaColleghi) spuntaColleghi.checked = true;
+    selTipo.value = '';
+    selStato.value = '';
+    cambiaFiltri({ ...DEFAULT_FILTERS });
+  });
+
   // A30-9B: il pannello Google Calendar, sotto la barra e sopra l'elenco -
   // niente di nuovo nella barra laterale, e' parte dell'Agenda stessa (§27).
   const gcalContenitore = el('div', 'gcal-panel-slot');
@@ -253,14 +374,23 @@ export async function renderAgenda(container, params = []) {
 
   let listaAgenti = [];
 
+  // Piano A30-4 §1.6: vince l'ultima richiesta. Due filtri cambiati in fretta
+  // fanno partire due caricamenti; una risposta superata non si disegna.
+  let giroCarica = 0;
+
   async function carica(messaggio = '') {
+    const giro = ++giroCarica;
+    const superata = () => stale() || giro !== giroCarica;
     avviso.replaceChildren(el('span', 'muted', 'Caricamento…'));
     try {
       listaAgenti = await agenti();
-      if (stale()) return;
+      if (superata()) return;
+      riempiFiltroAgenti(listaAgenti);
       let items;
       if (view === 'list') {
-        const esito = await getList({ from: range.from, to: range.to, limit: 200 });
+        const esito = await getList({
+          from: range.from, to: range.to, limit: 200, ...listFilterParams(filtri),
+        });
         // La lista porta le righe, senza il nome dell'agente: lo si prende
         // dall'elenco /agents del server, mai inventato.
         const nomi = new Map(listaAgenti.map((a) => [Number(a.id), a.name]));
@@ -268,19 +398,29 @@ export async function renderAgenda(container, params = []) {
           ...r, agent_name: nomi.get(Number(r.assigned_user_id)) || null,
         }));
       } else {
-        const esito = await getCalendar({ from: range.from, to: range.to });
+        const esito = await getCalendar({
+          from: range.from, to: range.to,
+          ...calendarFilterParams(filtri, { canAssign: puoAssegnare }),
+        });
         items = (esito && esito.items) || [];
       }
-      if (stale()) return;
+      if (superata()) return;
       area.replaceChildren();
-      const argomenti = { days: range.days, items, onOpen: (item) => apri(item.id) };
+      const argomenti = {
+        days: range.days,
+        items,
+        onOpen: (item) => apri(item.id),
+        // A30-13B.1: un click su un'ora vuota apre lo stesso dialog del
+        // pulsante "+ Nuovo appuntamento", precompilato su quel giorno e ora.
+        onSlotClick: (giorno, ora) => apriCreazione({ dateKey: giorno, startTime: `${due(ora)}:00` }),
+      };
       if (view === 'week') renderWeek(area, argomenti);
       else if (view === 'day') renderDay(area, argomenti);
       else renderList(area, argomenti);
       avviso.replaceChildren();
       if (messaggio) avviso.appendChild(el('div', 'success-box', messaggio));
     } catch (errore) {
-      if (stale()) return;
+      if (superata()) return;
       avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
     }
   }
@@ -345,7 +485,12 @@ export async function renderAgenda(container, params = []) {
       }
     });
   }
-  nuovo.addEventListener('click', async () => {
+  // A30-13B.1: aperta sia dal pulsante "+ Nuovo appuntamento" sia da un
+  // click su uno slot vuoto della griglia — UNA sola implementazione,
+  // parametrizzata sul giorno e sull'ora di partenza da precompilare, cosi'
+  // le due entrate restano sempre in sincronia (permessi, ricarico, salto al
+  // giorno dell'appuntamento creato).
+  async function apriCreazione({ dateKey: giornoIniziale, startTime } = {}) {
     try {
       listaAgenti = await agenti();
     } catch (errore) {
@@ -355,7 +500,9 @@ export async function renderAgenda(container, params = []) {
     if (stale()) return;
     openCreateDialog(dialogo, {
       agents: listaAgenti,
-      dateKey: key,
+      dateKey: giornoIniziale || key,
+      startTime,
+      session: getSession(),
       onDone: async (creato) => {
         if (stale()) return;
         const messaggio = confermaCreazione(creato);
@@ -369,7 +516,8 @@ export async function renderAgenda(container, params = []) {
         await carica(messaggio);
       },
     });
-  });
+  }
+  nuovo.addEventListener('click', () => apriCreazione());
 
   const erroreGoogle = erroreGoogleInSospeso();
   await carica(prendiMessaggio());

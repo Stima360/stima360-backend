@@ -420,6 +420,18 @@ def test_d3_no_page_outside_the_network_was_touched():
         # parlare SOLO con questi due prefissi (nessun altro endpoint).
         "static/os_shell/assets/agenda/calendar-sync-api.js",
         "static/os_shell/assets/components/agenda/agenda-calendar-sync-panel.js",
+        # A30-13B.1 - CLICK SU UNO SLOT VUOTO -> QUICK BOOKING. Le viste
+        # Settimana/Giorno rendono cliccabile (click, Invio, Spazio) ogni ora
+        # vuota della griglia e passano giorno e ora alla pagina, che apre lo
+        # stesso dialog di "+ Nuovo appuntamento". Il file era coperto dalla
+        # voce di cartella di A30-4 finche' la cartella non era tracciata; ora
+        # git lo elenca per nome. Gli altri tre file della fase erano gia'
+        # ammessi.
+        #
+        # Cio' che questo test difende resta intatto: nessuna vista del CRM e
+        # nessun componente della Rete e' toccato, e l'Agenda continua a
+        # parlare solo con `/api/appointments` (nessun endpoint nuovo).
+        "static/os_shell/assets/components/agenda/agenda-views.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

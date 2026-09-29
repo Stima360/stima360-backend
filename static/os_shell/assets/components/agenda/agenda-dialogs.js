@@ -26,6 +26,7 @@ import {
   ACTION_LABELS,
   TYPE_LABELS,
   addDays,
+  canAssignRecords,
   canFollowUp,
   defaultDuration,
   durationMinutes,
@@ -671,7 +672,9 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
 // NUOVO APPUNTAMENTO
 // ---------------------------------------------------------------------------
 
-export function openCreateDialog(dialogEl, { agents, dateKey, onDone }) {
+export function openCreateDialog(dialogEl, {
+  agents, dateKey, startTime, session, onDone,
+}) {
   const tipi = Object.keys(TYPE_LABELS);
   const form = preparaDialog(dialogEl, 'Nuovo appuntamento', `
     <div class="form-field"><label>Tipo *</label><select class="input" data-field="type"></select></div>
@@ -696,7 +699,24 @@ export function openCreateDialog(dialogEl, { agents, dateKey, onDone }) {
   const tipo = form.querySelector('[data-field="type"]');
   for (const t of tipi) tipo.appendChild(opzione(t, TYPE_LABELS[t], t === 'seller_meeting'));
   const agente = form.querySelector('[data-field="agent"]');
-  riempiAgenti(agente, agents, { vuoto: 'Nessuno: salva come richiesta' });
+  // A30-13B.1 - Requisito 6: un `agent` non vede il vero selettore (non puo'
+  // assegnare colleghi: matrice P26-1, `_controlla_agente` sul server), solo
+  // "Io" bloccato su se stesso; titolare/amministratore/Supreme "acting"
+  // vedono il selettore intero, invariato. `canAssignRecords` e' la STESSA
+  // regola usata per "Aggiorna richieste dal sito" (A30-7): non duplicata.
+  const puoAssegnare = canAssignRecords(session);
+  const io = puoAssegnare ? null : (agents || []).find((a) => a.is_me === true) || null;
+  if (puoAssegnare) {
+    riempiAgenti(agente, agents, { vuoto: 'Nessuno: salva come richiesta' });
+  } else {
+    // Nessuna opzione "Nessuno": un agente non puo' lasciare l'appuntamento
+    // senza assegnatario per aggirare il blocco, ne' scegliere un collega -
+    // il server rifiuterebbe comunque (ForbiddenRole), ma qui non si offre
+    // nemmeno la possibilita' di provarci.
+    riempiAgenti(agente, io ? [{ id: io.id, name: `Io — ${io.name || 'operatore'}` }] : [],
+      { selezionato: io ? io.id : undefined });
+    agente.disabled = true;
+  }
   const suggerimento = form.querySelector('[data-status-hint]');
   const aggiornaSuggerimento = () => {
     suggerimento.textContent = agente.value
@@ -791,7 +811,10 @@ export function openCreateDialog(dialogEl, { agents, dateKey, onDone }) {
   const campoDurata = form.querySelector('[data-field="duration"]');
   const testoDurata = form.querySelector('[data-duration-text]');
   campoData.value = dateKey;
-  campoInizio.value = '09:00';
+  // A30-13B.1 - Requisito 1: click su uno slot vuoto -> ora precompilata;
+  // dal pulsante "+ Nuovo appuntamento" (nessun `startTime`) resta 09:00
+  // come prima.
+  campoInizio.value = startTime || '09:00';
   let durataScelta = false;                        // l'operatore ha deciso la durata
   let durataMostrata = null;                       // l'ultima letta da inizio/fine
 
