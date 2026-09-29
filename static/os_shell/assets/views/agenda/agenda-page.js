@@ -62,6 +62,10 @@ import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-
 
 const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`;
 
+// Toglie il listener sulla soglia mobile della pagina Agenda montata per
+// ultima (uno solo alla volta, vedi `renderAgenda`).
+let smettiDiSeguireLaSoglia = null;
+
 // Gli agenti si chiedono una volta per sessione (e dopo ogni cambio di
 // sessione): servono al form e ai nomi nella cronologia.
 let agentiInMemoria = { epoch: null, items: null };
@@ -395,19 +399,36 @@ export async function renderAgenda(container, params = []) {
   dialogo.setAttribute('aria-modal', 'true');
   pagina.append(drawer, dialogo);
 
-  // Se la finestra passa sotto la soglia mobile con la settimana aperta, si
-  // torna alla Lista: la settimana non si comprime. Il listener si toglie da
-  // solo quando la pagina non c'e' piu'.
+  // Se la finestra passa sotto la soglia mobile con la settimana (o il mese)
+  // aperta, si torna alla Lista: la settimana non si comprime. Ma tornare alla
+  // Lista ricostruisce la pagina, e con lei i dialog: con un pannello o un
+  // dialog aperto (dettaglio, nuovo appuntamento, Disponibilita', Link
+  // prenotazione, "+N") non si ricostruisce nulla - il pannello resta vivo coi
+  // suoi dati non salvati - e la vista si adegua quando l'ultimo si chiude
+  // (`close` non risale: lo si ascolta in cattura sulla pagina). Un solo
+  // listener sulla soglia per volta: quello della pagina precedente si toglie
+  // quando se ne monta una nuova.
+  if (smettiDiSeguireLaSoglia) smettiDiSeguireLaSoglia();
   if (typeof window.matchMedia === 'function') {
     const mq = window.matchMedia(MOBILE_QUERY);
-    const cambio = () => {
+    const pannelloAperto = () => drawer.open === true || dialogo.open === true
+      || (typeof pagina.querySelector === 'function' && !!pagina.querySelector('dialog[open]'));
+    const adegua = () => {
       if (!pagina.isConnected) {
-        if (mq.removeEventListener) mq.removeEventListener('change', cambio);
+        smetti();
         return;
       }
-      if (effectiveView(view, mq.matches) !== view) vai(effectiveView(view, mq.matches), key);
+      if (pannelloAperto()) return;
+      const giusta = effectiveView(view, mq.matches);
+      if (giusta !== view) vai(giusta, key);
     };
-    if (mq.addEventListener) mq.addEventListener('change', cambio);
+    const smetti = () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', adegua);
+      if (smettiDiSeguireLaSoglia === smetti) smettiDiSeguireLaSoglia = null;
+    };
+    if (mq.addEventListener) mq.addEventListener('change', adegua);
+    pagina.addEventListener('close', adegua, true);
+    smettiDiSeguireLaSoglia = smetti;
   }
 
   let listaAgenti = [];
