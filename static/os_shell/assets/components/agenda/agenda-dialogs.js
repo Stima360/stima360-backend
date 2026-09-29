@@ -31,23 +31,38 @@ import {
   defaultDuration,
   durationMinutes,
   errorMessage,
+  WEEKDAY_LABELS,
   formatDateTime,
+  formatDayLong,
   formatDuration,
   formatTime,
+  groupWeeklyHours,
+  intervalLabel,
+  minutesToTime,
   parseTime,
   romeDateKey,
   romeIso,
   romeParts,
   statusLabel,
+  timeToMinutes,
   todayKey,
   typeLabel,
+  weeklySlotsFromDays,
 } from '../../agenda/agenda-model.js';
 import {
   checkAvailability,
   createAppointment,
+  createAvailabilityException,
+  createClosure,
+  deleteAvailabilityException,
+  deleteClosure,
   getAvailability,
+  getAvailabilityExceptions,
+  getClosures,
+  getWorkingHours,
   lookupStime,
   patchAppointment,
+  putWorkingHours,
   runAction,
 } from '../../agenda/agenda-api.js';
 import {
@@ -1134,4 +1149,506 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
   }
 
   throw new Error(`Azione non supportata: ${action}`);
+}
+
+// ---------------------------------------------------------------------------
+// DISPONIBILITA' - la UI delle rotte A30-11 gia' esistenti (orari settimanali,
+// eccezioni per agente, chiusure agenzia). Nessuna regola nuova:
+//
+//   * PERMESSI (D6, `appointments/working_hours_service.py`): titolare,
+//     amministratore e Supreme "acting" gestiscono qualunque agente ATTIVO
+//     della propria agenzia; un `agent` solo se stesso, quindi niente
+//     selettore; le chiusure le LEGGONO tutti, le scrivono solo titolare e
+//     amministratore. La UI non offre cio' che il server rifiuterebbe, ma e'
+//     il server a decidere (403 / 422).
+//   * FASCE: minuti [start, end) dalla mezzanotte di Roma, nessuna fascia
+//     oltre la mezzanotte; le sovrapposizioni le rifiuta il database (076).
+//   * Gli orari NON bloccano il CRM (A30-11 SOFT): un appuntamento si puo'
+//     sempre fissare a mano fuori orario. Contano per i suggerimenti e per
+//     le prenotazioni online (A30-12 HARD).
+//   * Dopo ogni scrittura si rilegge dal server: nessun aggiornamento
+//     ottimistico. Cancellare chiede conferma. Nessun id interno a schermo.
+// ---------------------------------------------------------------------------
+
+/** Finestra mostrata per eccezioni e chiusure: da oggi a 12 mesi. */
+const GIORNI_FINESTRA_DISPONIBILITA = 365;
+
+function nodo(tag, classe, testo) {
+  const n = document.createElement(tag);
+  if (classe) n.className = classe;
+  if (testo !== undefined && testo !== null && testo !== '') n.textContent = String(testo);
+  return n;
+}
+
+function bottoneTesto(testo, classe = 'btn') {
+  const b = nodo('button', classe, testo);
+  b.type = 'button';
+  return b;
+}
+
+/** Un orario `HH:MM` come testo: a differenza di `type="time"` accetta
+ *  anche `24:00`, la fine giornata del contratto (end_minute 1440). */
+function campoOra({ nome, valore = '', etichetta }) {
+  const input = nodo('input', 'input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
+  input.maxLength = 5;
+  input.placeholder = 'HH:MM';
+  input.value = valore;
+  input.dataset.field = nome;
+  input.setAttribute('aria-label', etichetta);
+  return input;
+}
+
+function etichettato(testo, controllo) {
+  const campo = nodo('label', 'form-field');
+  campo.append(nodo('span', 'muted', testo), controllo);
+  return campo;
+}
+
+/** Conferma in linea (nessun `confirm()` del browser): un riquadro con il
+ *  testo e due pulsanti; l'azione parte solo dal secondo click. */
+function confermaInLinea(contenitore, { testo, etichetta, azione }) {
+  const riquadro = nodo('div', 'error-box');
+  riquadro.setAttribute('role', 'alertdialog');
+  riquadro.dataset.confirm = '';
+  riquadro.appendChild(nodo('p', '', testo));
+  const si = bottoneTesto(etichetta, 'btn danger');
+  si.dataset.confirmYes = '';
+  const no = bottoneTesto('Annulla', 'btn ghost');
+  no.dataset.confirmNo = '';
+  riquadro.append(si, no);
+  contenitore.appendChild(riquadro);
+  no.addEventListener('click', () => riquadro.remove());
+  si.addEventListener('click', async () => {
+    si.disabled = true;
+    no.disabled = true;
+    try { await azione(); } finally { riquadro.remove(); }
+  });
+}
+
+/**
+ * Apre il pannello Disponibilita'. `agents` e' la risposta di /agents
+ * (attivi di questa agenzia, con `is_me`); `session` e' la sessione della
+ * Shell, usata SOLO per non mostrare comandi che il server rifiuterebbe.
+ */
+export function openAvailabilityDialog(dialogEl, { agents, session }) {
+  const puoGestire = canAssignRecords(session);
+  const lista = agents || [];
+  const io = lista.find((a) => a.is_me === true) || null;
+  let agenteId = puoGestire ? ((io || lista[0] || {}).id ?? null) : (io ? io.id : null);
+  let scheda = 'weekly';
+  let giro = 0;                                   // vince l'ultima lettura
+
+  dialogEl.replaceChildren();
+  dialogEl.setAttribute('aria-label', 'Disponibilità');
+  const radice = nodo('div', 'agenda-form agenda-availability');
+  radice.appendChild(nodo('h3', 'section-title', 'Disponibilità'));
+  radice.appendChild(nodo('p', 'muted',
+    'Gli orari guidano gli slot suggeriti e le prenotazioni online. Nel CRM un appuntamento '
+    + 'si può sempre fissare anche fuori orario.'));
+
+  const testata = nodo('div', 'agenda-toolbar');
+  let selAgente = null;
+  if (puoGestire) {
+    selAgente = nodo('select', 'input');
+    selAgente.dataset.field = 'availability-agent';
+    for (const a of lista) {
+      selAgente.appendChild(opzione(String(a.id), a.name || 'Operatore', a.id === agenteId));
+    }
+    if (agenteId !== null) selAgente.value = String(agenteId);
+    testata.appendChild(etichettato('Agente', selAgente));
+  } else {
+    testata.appendChild(nodo('p', 'muted', io && io.name ? `I tuoi orari · ${io.name}` : 'I tuoi orari'));
+  }
+  radice.appendChild(testata);
+
+  const schede = nodo('div', 'tabs');
+  schede.setAttribute('role', 'tablist');
+  const voci = [['weekly', 'Orari settimanali'], ['exceptions', 'Eccezioni'], ['closures', 'Chiusure agenzia']];
+  const pulsantiScheda = voci.map(([chiave, testo]) => {
+    const b = bottoneTesto(testo, 'tab-btn');
+    b.dataset.tab = chiave;
+    b.setAttribute('role', 'tab');
+    schede.appendChild(b);
+    return b;
+  });
+  radice.appendChild(schede);
+
+  const avviso = nodo('div', '');
+  avviso.setAttribute('role', 'status');
+  avviso.setAttribute('aria-live', 'polite');
+  avviso.dataset.notice = '';
+  const errore = nodo('div', 'field-error');
+  errore.dataset.error = '';
+  errore.setAttribute('role', 'alert');
+  const pannello = nodo('div', '');
+  pannello.setAttribute('role', 'tabpanel');
+  pannello.dataset.tabPanel = '';
+  radice.append(avviso, errore, pannello);
+
+  const azioni = nodo('div', 'modal-actions');
+  const chiudi = bottoneTesto('Chiudi', 'btn ghost');
+  chiudi.addEventListener('click', () => dialogEl.close());
+  azioni.appendChild(chiudi);
+  radice.appendChild(azioni);
+  dialogEl.appendChild(radice);
+
+  const pulisci = () => { avviso.replaceChildren(); errore.textContent = ''; };
+  const mostraErrore = (e) => {
+    errore.textContent = e && e.status !== undefined ? errorMessage(e) : ((e && e.message) || errorMessage(e));
+  };
+  const successo = (testo) => { avviso.replaceChildren(nodo('div', 'success-box', testo)); };
+  const inizio = () => {
+    const mio = ++giro;
+    pannello.replaceChildren(nodo('p', 'muted', 'Caricamento…'));
+    return () => mio === giro;
+  };
+  const finestra = () => {
+    const oggi = todayKey();
+    return { from: oggi, to: addDays(oggi, GIORNI_FINESTRA_DISPONIBILITA) };
+  };
+  const senzaAgente = () => {
+    pannello.replaceChildren(nodo('p', 'muted', 'Nessun agente attivo da gestire.'));
+  };
+
+  // -- ORARI SETTIMANALI ----------------------------------------------------
+  function rigaFascia(contenitore, { start = '', end = '' } = {}) {
+    const riga = nodo('div', 'agenda-toolbar');
+    riga.dataset.interval = '';
+    const inizioF = campoOra({ nome: 'start', valore: start, etichetta: 'Ora inizio' });
+    const fineF = campoOra({ nome: 'end', valore: end, etichetta: 'Ora fine' });
+    const togli = bottoneTesto('Rimuovi fascia', 'btn ghost');
+    togli.addEventListener('click', () => riga.remove());
+    riga.append(inizioF, nodo('span', '', '–'), fineF, togli);
+    contenitore.appendChild(riga);
+  }
+
+  async function mostraOrari() {
+    const vivo = inizio();
+    if (agenteId === null) { senzaAgente(); return; }
+    let righe;
+    try {
+      righe = ((await getWorkingHours(agenteId)) || {}).items || [];
+    } catch (e) {
+      if (!vivo()) return;
+      pannello.replaceChildren();
+      mostraErrore(e);
+      return;
+    }
+    if (!vivo()) return;
+    const giorni = groupWeeklyHours(righe);
+    const corpo = nodo('div', '');
+    if (!righe.length) {
+      const vuoto = nodo('p', 'muted',
+        'Nessun orario impostato. Nel CRM l’agente resta prenotabile a qualunque ora; '
+        + 'le prenotazioni online non mostrano slot finché non ci sono orari.');
+      vuoto.dataset.empty = '';
+      corpo.appendChild(vuoto);
+    }
+    for (let d = 1; d <= 7; d += 1) {
+      const giorno = nodo('div', 'agenda-list-day');
+      giorno.dataset.day = String(d);
+      const testa = nodo('label', 'agenda-filter');
+      const attivo = nodo('input');
+      attivo.type = 'checkbox';
+      attivo.dataset.field = 'active';
+      attivo.checked = giorni[d].length > 0;
+      testa.append(attivo, nodo('span', '', WEEKDAY_LABELS[d]));
+      const fasce = nodo('div', '');
+      fasce.dataset.intervals = '';
+      for (const f of giorni[d]) rigaFascia(fasce, { start: minutesToTime(f.start), end: minutesToTime(f.end) });
+      const aggiungi = bottoneTesto('Aggiungi fascia', 'btn ghost');
+      aggiungi.dataset.addInterval = '';
+      aggiungi.addEventListener('click', () => rigaFascia(fasce, { start: '09:00', end: '13:00' }));
+      attivo.addEventListener('change', () => {
+        fasce.hidden = !attivo.checked;
+        aggiungi.hidden = !attivo.checked;
+        if (attivo.checked && !fasce.querySelectorAll('[data-interval]').length) {
+          rigaFascia(fasce, { start: '09:00', end: '18:00' });
+        }
+      });
+      fasce.hidden = !attivo.checked;
+      aggiungi.hidden = !attivo.checked;
+      giorno.append(testa, fasce, aggiungi);
+      corpo.appendChild(giorno);
+    }
+    const salva = bottoneTesto('Salva orari', 'btn primary');
+    salva.dataset.save = '';
+    const conferme = nodo('div', '');
+    corpo.append(salva, conferme);
+    pannello.replaceChildren(corpo);
+
+    const leggi = () => {
+      const stato = {};
+      for (const g of corpo.querySelectorAll('[data-day]')) {
+        stato[Number(g.dataset.day)] = {
+          active: g.querySelector('[data-field="active"]').checked,
+          intervals: g.querySelectorAll('[data-interval]').map((r) => ({
+            start: r.querySelector('[data-field="start"]').value,
+            end: r.querySelector('[data-field="end"]').value,
+          })),
+        };
+      }
+      return weeklySlotsFromDays(stato);
+    };
+    const scrivi = async (slots) => {
+      salva.disabled = true;
+      try {
+        await putWorkingHours(agenteId, slots);
+        await mostraOrari();                       // rilettura, niente ottimismo
+        successo('Orari salvati.');
+      } catch (e) {
+        mostraErrore(e);
+      } finally {
+        salva.disabled = false;
+      }
+    };
+    salva.addEventListener('click', () => {
+      pulisci();
+      conferme.replaceChildren();
+      const { slots, error } = leggi();
+      if (error) { errore.textContent = error; return; }
+      if (!slots.length && righe.length) {
+        // Togliere TUTTI gli orari e' una cancellazione: si conferma.
+        confermaInLinea(conferme, {
+          testo: 'Salvare senza orari? Le prenotazioni online non avranno slot per questo agente.',
+          etichetta: 'Sì, salva senza orari',
+          azione: () => scrivi(slots),
+        });
+        return;
+      }
+      scrivi(slots);
+    });
+  }
+
+  // -- ECCEZIONI E CHIUSURE: parti comuni -------------------------------------
+  function campiFascia(contenitore) {
+    const intero = nodo('input');
+    intero.type = 'checkbox';
+    intero.checked = true;
+    intero.dataset.field = 'all-day';
+    const inizioF = campoOra({ nome: 'start', valore: '09:00', etichetta: 'Ora inizio' });
+    const fineF = campoOra({ nome: 'end', valore: '13:00', etichetta: 'Ora fine' });
+    const orari = nodo('div', 'agenda-toolbar');
+    orari.append(inizioF, nodo('span', '', '–'), fineF);
+    orari.hidden = true;
+    intero.addEventListener('change', () => { orari.hidden = intero.checked; });
+    const riga = nodo('label', 'agenda-filter');
+    riga.append(intero, nodo('span', '', 'Tutto il giorno'));
+    contenitore.append(riga, orari);
+    return () => {
+      if (intero.checked) return { start_minute: 0, end_minute: 1440 };
+      const start = timeToMinutes(inizioF.value);
+      const end = timeToMinutes(fineF.value);
+      if (start === null || end === null) throw new Error('Indica ora di inizio e di fine.');
+      if (end <= start) {
+        throw new Error("L'ora di fine deve essere dopo l'ora di inizio (nessuna fascia attraversa la mezzanotte).");
+      }
+      return { start_minute: start, end_minute: end };
+    };
+  }
+
+  function campiDataMotivo(contenitore, altri = []) {
+    const data = nodo('input', 'input');
+    data.type = 'date';
+    data.value = todayKey();
+    data.dataset.field = 'date';
+    const motivo = nodo('input', 'input');
+    motivo.type = 'text';
+    motivo.maxLength = 40;
+    motivo.dataset.field = 'reason';
+    const griglia = nodo('div', 'agenda-toolbar');
+    griglia.append(etichettato('Data', data), ...altri, etichettato('Motivo (facoltativo)', motivo));
+    contenitore.appendChild(griglia);
+    return { data, motivo };
+  }
+
+  function rigaElenco(testi, { onDelete, etichettaConferma, testoConferma } = {}) {
+    const riga = nodo('div', 'agenda-card');
+    riga.dataset.row = '';
+    for (const t of testi) if (t) riga.appendChild(nodo('span', 'agenda-card-meta', t));
+    if (onDelete) {
+      const elimina = bottoneTesto('Elimina', 'btn ghost');
+      elimina.dataset.delete = '';
+      elimina.addEventListener('click', () => {
+        pulisci();
+        if (riga.querySelector('[data-confirm]')) return;
+        confermaInLinea(riga, { testo: testoConferma, etichetta: etichettaConferma, azione: onDelete });
+      });
+      riga.appendChild(elimina);
+    }
+    return riga;
+  }
+
+  /** Crea, poi rilegge l'elenco; nessun aggiornamento ottimistico. */
+  function collegaAggiunta(pulsante, { corpo, invia, rileggi, messaggio }) {
+    pulsante.addEventListener('click', async () => {
+      pulisci();
+      let dati;
+      try { dati = corpo(); } catch (e) { errore.textContent = e.message; return; }
+      pulsante.disabled = true;
+      try {
+        await invia(dati);
+        await rileggi();
+        successo(messaggio);
+      } catch (e) {
+        mostraErrore(e);
+      } finally {
+        pulsante.disabled = false;
+      }
+    });
+  }
+
+  async function leggiElenco(vivo, carica) {
+    try {
+      return ((await carica()) || {}).items || [];
+    } catch (e) {
+      if (vivo()) { pannello.replaceChildren(); mostraErrore(e); }
+      return null;
+    }
+  }
+
+  // -- ECCEZIONI ------------------------------------------------------------
+  async function mostraEccezioni() {
+    const vivo = inizio();
+    if (agenteId === null) { senzaAgente(); return; }
+    const righe = await leggiElenco(vivo, () => getAvailabilityExceptions(agenteId, finestra()));
+    if (righe === null || !vivo()) return;
+    const nomeAgente = (lista.find((a) => a.id === agenteId) || {}).name || '';
+    const corpo = nodo('div', '');
+    const elenco = nodo('div', 'agenda-list-day');
+    elenco.appendChild(nodo('h4', 'agenda-list-day-title', 'Prossimi 12 mesi'));
+    if (!righe.length) {
+      const vuoto = nodo('p', 'muted', 'Nessuna eccezione nei prossimi 12 mesi.');
+      vuoto.dataset.empty = '';
+      elenco.appendChild(vuoto);
+    }
+    for (const r of righe) {
+      elenco.appendChild(rigaElenco([
+        formatDayLong(r.exception_date), intervalLabel(r.start_minute, r.end_minute),
+        r.is_available ? 'Disponibile' : 'Non disponibile', r.reason_code || '', nomeAgente,
+      ], {
+        testoConferma: `Eliminare l’eccezione del ${formatDayLong(r.exception_date)}?`,
+        etichettaConferma: 'Sì, elimina',
+        onDelete: async () => {
+          try {
+            await deleteAvailabilityException(agenteId, r.id);
+            await mostraEccezioni();
+            successo('Eccezione eliminata.');
+          } catch (e) { mostraErrore(e); }
+        },
+      }));
+    }
+    const nuovo = nodo('div', 'agenda-list-day');
+    nuovo.appendChild(nodo('h4', 'agenda-list-day-title', 'Nuova eccezione'));
+    const tipo = nodo('select', 'input');
+    tipo.dataset.field = 'is-available';
+    tipo.append(opzione('false', 'Non disponibile', true), opzione('true', 'Disponibile'));
+    const { data, motivo } = campiDataMotivo(nuovo, [etichettato('Tipo', tipo)]);
+    const fascia = campiFascia(nuovo);
+    const aggiungi = bottoneTesto('Aggiungi eccezione', 'btn primary');
+    aggiungi.dataset.save = '';
+    nuovo.appendChild(aggiungi);
+    collegaAggiunta(aggiungi, {
+      corpo: () => {
+        if (!data.value) throw new Error('Indica la data.');
+        const dati = { exception_date: data.value, is_available: tipo.value === 'true', ...fascia() };
+        if (motivo.value.trim()) dati.reason_code = motivo.value.trim();
+        return dati;
+      },
+      invia: (dati) => createAvailabilityException(agenteId, dati),
+      rileggi: mostraEccezioni,
+      messaggio: 'Eccezione aggiunta.',
+    });
+    corpo.append(elenco, nuovo);
+    pannello.replaceChildren(corpo);
+  }
+
+  // -- CHIUSURE AGENZIA -------------------------------------------------------
+  async function mostraChiusure() {
+    const vivo = inizio();
+    const righe = await leggiElenco(vivo, () => getClosures(finestra()));
+    if (righe === null || !vivo()) return;
+    const corpo = nodo('div', '');
+    const elenco = nodo('div', 'agenda-list-day');
+    elenco.appendChild(nodo('h4', 'agenda-list-day-title', 'Prossimi 12 mesi'));
+    if (!righe.length) {
+      const vuoto = nodo('p', 'muted', 'Nessuna chiusura nei prossimi 12 mesi.');
+      vuoto.dataset.empty = '';
+      elenco.appendChild(vuoto);
+    }
+    for (const r of righe) {
+      elenco.appendChild(rigaElenco([
+        formatDayLong(r.closure_date), intervalLabel(r.start_minute, r.end_minute), r.reason_code || '',
+      ], puoGestire ? {
+        testoConferma: `Eliminare la chiusura del ${formatDayLong(r.closure_date)}?`,
+        etichettaConferma: 'Sì, elimina',
+        onDelete: async () => {
+          try {
+            await deleteClosure(r.id);
+            await mostraChiusure();
+            successo('Chiusura eliminata.');
+          } catch (e) { mostraErrore(e); }
+        },
+      } : {}));
+    }
+    corpo.appendChild(elenco);
+    if (!puoGestire) {
+      corpo.appendChild(nodo('p', 'muted', 'Solo il titolare e gli amministratori gestiscono le chiusure dell’agenzia.'));
+      pannello.replaceChildren(corpo);
+      return;
+    }
+    const nuovo = nodo('div', 'agenda-list-day');
+    nuovo.appendChild(nodo('h4', 'agenda-list-day-title', 'Nuova chiusura'));
+    const { data, motivo } = campiDataMotivo(nuovo);
+    const fascia = campiFascia(nuovo);
+    const aggiungi = bottoneTesto('Aggiungi chiusura', 'btn primary');
+    aggiungi.dataset.save = '';
+    nuovo.appendChild(aggiungi);
+    collegaAggiunta(aggiungi, {
+      corpo: () => {
+        if (!data.value) throw new Error('Indica la data.');
+        const dati = { closure_date: data.value, ...fascia() };
+        if (motivo.value.trim()) dati.reason_code = motivo.value.trim();
+        return dati;
+      },
+      invia: createClosure,
+      rileggi: mostraChiusure,
+      messaggio: 'Chiusura aggiunta.',
+    });
+    corpo.appendChild(nuovo);
+    pannello.replaceChildren(corpo);
+  }
+
+  const mostra = { weekly: mostraOrari, exceptions: mostraEccezioni, closures: mostraChiusure };
+  const apriScheda = (chiave) => {
+    scheda = chiave;
+    for (const b of pulsantiScheda) {
+      const attiva = b.dataset.tab === chiave;
+      b.classList.toggle('active', attiva);
+      b.setAttribute('aria-selected', attiva ? 'true' : 'false');
+      b.tabIndex = attiva ? 0 : -1;
+    }
+    pulisci();
+    mostra[chiave]();
+  };
+  for (const b of pulsantiScheda) b.addEventListener('click', () => apriScheda(b.dataset.tab));
+  // Frecce sinistra/destra fra le schede (pattern tablist).
+  schede.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+    const i = voci.findIndex(([k]) => k === scheda);
+    const j = (i + (ev.key === 'ArrowRight' ? 1 : voci.length - 1)) % voci.length;
+    apriScheda(voci[j][0]);
+    if (typeof pulsantiScheda[j].focus === 'function') pulsantiScheda[j].focus();
+  });
+  if (selAgente) {
+    selAgente.addEventListener('change', () => {
+      agenteId = Number(selAgente.value);
+      apriScheda(scheda);
+    });
+  }
+
+  apriScheda('weekly');
+  dialogEl.showModal();
 }

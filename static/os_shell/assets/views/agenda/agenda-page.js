@@ -51,7 +51,9 @@ import {
 } from '../../agenda/agenda-api.js';
 import { renderDay, renderList, renderWeek } from '../../components/agenda/agenda-views.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
-import { openActionDialog, openCreateDialog } from '../../components/agenda/agenda-dialogs.js';
+import {
+  openActionDialog, openAvailabilityDialog, openCreateDialog,
+} from '../../components/agenda/agenda-dialogs.js';
 import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-sync-panel.js';
 
 const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`;
@@ -230,7 +232,11 @@ export async function renderAgenda(container, params = []) {
   aggiorna.type = 'button';
   const nuovo = el('button', 'btn primary', '+ Nuovo appuntamento');
   nuovo.type = 'button';
-  comandi.append(aggiorna);
+  // Orari di lavoro, eccezioni e chiusure (API A30-11): per tutti gli
+  // operatori; cosa si puo' gestire lo decide il server (D6).
+  const disponibilita = el('button', 'btn', 'Disponibilità');
+  disponibilita.type = 'button';
+  comandi.append(aggiorna, disponibilita);
   // A30-7: solo su richiesta esplicita, mai al caricamento della pagina.
   const sincronizza = gestisceRichieste(getSession())
     ? el('button', 'btn', 'Aggiorna richieste dal sito') : null;
@@ -518,6 +524,16 @@ export async function renderAgenda(container, params = []) {
     });
   }
   nuovo.addEventListener('click', () => apriCreazione());
+  disponibilita.addEventListener('click', async () => {
+    try {
+      listaAgenti = await agenti();
+    } catch (errore) {
+      avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
+      return;
+    }
+    if (stale()) return;
+    openAvailabilityDialog(dialogo, { agents: listaAgenti, session: getSession() });
+  });
 
   const erroreGoogle = erroreGoogleInSospeso();
   await carica(prendiMessaggio());

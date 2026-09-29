@@ -160,6 +160,43 @@ export function runAction(appointmentId, action, body) {
   return request('POST', `/${id(appointmentId)}/${percorso}`, body);
 }
 
+// -- A30-11: orari di lavoro, eccezioni, chiusure (rotte gia' esistenti) ----
+// Le minute sono dalla mezzanotte LOCALE di Roma, intervallo [start, end);
+// le date sono `YYYY-MM-DD`. Nessun agency_id: lo decide il server.
+
+export function getWorkingHours(userId) {
+  return request('GET', `/agents/${id(userId)}/working-hours`);
+}
+
+/** PUT: l'intero set settimanale, sostituito in blocco dal server. */
+export function putWorkingHours(userId, slots) {
+  return request('PUT', `/agents/${id(userId)}/working-hours`, { slots });
+}
+
+export function getAvailabilityExceptions(userId, { from, to }) {
+  return request('GET', `/agents/${id(userId)}/availability-exceptions${query({ from, to })}`);
+}
+
+export function createAvailabilityException(userId, body) {
+  return request('POST', `/agents/${id(userId)}/availability-exceptions`, body);
+}
+
+export function deleteAvailabilityException(userId, exceptionId) {
+  return request('DELETE', `/agents/${id(userId)}/availability-exceptions/${id(exceptionId)}`);
+}
+
+export function getClosures({ from, to }) {
+  return request('GET', `/closures${query({ from, to })}`);
+}
+
+export function createClosure(body) {
+  return request('POST', '/closures', body);
+}
+
+export function deleteClosure(closureId) {
+  return request('DELETE', `/closures/${id(closureId)}`);
+}
+
 /** A30-7: POST /legacy-requests/sync - porta nell'Agenda le richieste di
  *  sopralluogo arrivate dal sito e non ancora importate. Nessun corpo:
  *  l'agenzia la decide il server dalla sessione. Solo contatori in risposta. */

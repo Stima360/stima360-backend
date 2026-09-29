@@ -634,6 +634,75 @@ export function activeFilterCount(filters, { canAssign = false, view = 'week' } 
   ].filter(Boolean).length;
 }
 
+// ---------------------------------------------------------------------------
+// A30-11 in UI: orari di lavoro, eccezioni, chiusure. Solo traduzioni fra i
+// minuti del contratto ([start, end), 0..1440, dalla mezzanotte di Roma) e
+// l'ora che l'operatore legge e scrive. Nessuna regola nuova: le fasce
+// sovrapposte e i limiti li rifiuta il server (EXCLUDE della 076, schemi).
+// ---------------------------------------------------------------------------
+
+/** ISO: 1 = lunedi' ... 7 = domenica, come `day_of_week` della 076. */
+export const WEEKDAY_LABELS = Object.freeze({
+  1: 'Lunedì', 2: 'Martedì', 3: 'Mercoledì', 4: 'Giovedì', 5: 'Venerdì', 6: 'Sabato', 7: 'Domenica',
+});
+
+/** 540 -> "09:00"; 1440 -> "24:00" (fine giornata). */
+export function minutesToTime(minuti) {
+  const m = Number(minuti);
+  if (!Number.isInteger(m) || m < 0 || m > 1440) return '';
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/** "09:00" -> 540; "24:00" -> 1440; altro -> null. */
+export function timeToMinutes(testo) {
+  if (String(testo || '').trim() === '24:00') return 1440;
+  const t = parseTime(testo);
+  return t ? t[0] * 60 + t[1] : null;
+}
+
+/** "Tutto il giorno" per [0, 1440), altrimenti "09:00–13:00". */
+export function intervalLabel(start, end) {
+  if (Number(start) === 0 && Number(end) === 1440) return 'Tutto il giorno';
+  return `${minutesToTime(start)}–${minutesToTime(end)}`;
+}
+
+/** Le righe di GET working-hours raggruppate per giorno 1..7, in ordine. */
+export function groupWeeklyHours(items) {
+  const giorni = {};
+  for (let d = 1; d <= 7; d += 1) giorni[d] = [];
+  for (const r of items || []) {
+    const d = Number(r.day_of_week);
+    if (giorni[d]) giorni[d].push({ start: Number(r.start_minute), end: Number(r.end_minute) });
+  }
+  for (let d = 1; d <= 7; d += 1) giorni[d].sort((a, b) => a.start - b.start);
+  return giorni;
+}
+
+/**
+ * Dai giorni della UI al corpo del PUT: `{ slots, error }`. Si rifiuta qui
+ * solo cio' che non e' un orario leggibile o una fascia vuota/rovesciata
+ * (lo stesso controllo dello schema); tutto il resto lo decide il server.
+ */
+export function weeklySlotsFromDays(giorni) {
+  const slots = [];
+  for (let d = 1; d <= 7; d += 1) {
+    const giorno = (giorni && giorni[d]) || { active: false, intervals: [] };
+    if (!giorno.active) continue;
+    for (const f of giorno.intervals || []) {
+      const start = timeToMinutes(f.start);
+      const end = timeToMinutes(f.end);
+      if (start === null || end === null) {
+        return { slots: null, error: `${WEEKDAY_LABELS[d]}: indica ora di inizio e di fine.` };
+      }
+      if (end <= start) {
+        return { slots: null, error: `${WEEKDAY_LABELS[d]}: la fine deve essere dopo l'inizio (nessuna fascia attraversa la mezzanotte).` };
+      }
+      slots.push({ day_of_week: d, start_minute: start, end_minute: end });
+    }
+  }
+  return { slots, error: null };
+}
+
 /** Vero se l'appuntamento ha un contatto, un lead o una stima: senza, il
  *  follow-up (un task CORE) non si puo' creare e il blocco non si mostra. */
 export function canFollowUp(row) {
