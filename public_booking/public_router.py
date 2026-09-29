@@ -22,9 +22,15 @@ from pydantic import ValidationError as PydanticValidationError
 from core.exceptions import ValidationError
 
 from . import service
+from .log_redaction import install_access_log_redaction
 from .schemas import PublicBookingSubmitBody
 
 router = APIRouter(prefix="/api/public/booking", tags=["public-booking"])
+
+# P30-HARDENING C: il token e' nel path, e l'access log di uvicorn scrive il
+# path. uvicorn configura il logging PRIMA di importare l'app: il filtro
+# aggiunto qui, all'import, resta per tutta la vita del processo.
+install_access_log_redaction()
 
 _NO_STORE = {"Cache-Control": "no-store"}
 

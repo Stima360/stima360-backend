@@ -26,6 +26,7 @@ from operator_auth.context import SystemAgencyContext
 from appointments import availability as _availability
 from appointments import errors as _appt_errors
 from appointments import repository as _appt_repository
+from appointments import service as _appt_service
 from appointments import working_hours as _working_hours
 from appointments import working_hours_repository as _wh_repository
 from appointments.enums import APPOINTMENT_TYPE_LABELS_IT
@@ -355,6 +356,16 @@ def submit_booking(token: str, body, *, client_ip: str) -> dict:
         start_at=start_at, name=name, phone_normalized=phone_normalized,
         email_normalized=email_normalized)
 
+    # P30-HARDENING A: mai una prenotazione nel passato. Prima pero' il retry
+    # IDENTICO di una prenotazione gia' riuscita resta idempotente anche se
+    # nel frattempo il suo orario e' passato (sola lettura, nessuna scrittura).
+    with core_cursor() as (_, cur):
+        gia = _esito_gia_riuscito(cur, link, repository.find_submission(cur, submission_hash),
+                                  fingerprint)
+    if gia is not None:
+        return gia
+    _rifiuta_se_passato(start_at)
+
     with core_cursor(commit=True) as (_, cur):
         submission = repository.create_pending_submission(
             cur, link_id=link["id"], submission_hash=submission_hash,
@@ -384,8 +395,41 @@ def submit_booking(token: str, body, *, client_ip: str) -> dict:
     except Exception:
         with core_cursor(commit=True) as (_, cur):
             repository.mark_submission_failed(cur, submission_hash)
+            dopo = repository.find_submission(cur, submission_hash)
+            # P30-HARDENING B: una richiesta CONCORRENTE con lo STESSO
+            # submission_token e lo STESSO payload (impronta gia' verificata
+            # sopra) ha vinto la corsa: questa ha atteso il lock dell'agente e
+            # ha visto l'appuntamento del gemello come conflitto. La PROPRIA
+            # riga di submission e' pero' 'succeeded': stesso risultato logico.
+            # Solo quella riga, mai un altro 409 (slot preso da un altro token,
+            # HARD, membership) diventa un successo.
+            gia = _esito_gia_riuscito(cur, link, dopo, fingerprint)
+        if gia is not None:
+            return gia
         raise
     return _prenotazione_pubblica(riga)
+
+
+def _rifiuta_se_passato(start_at: datetime) -> None:
+    """P30-HARDENING A: la stessa regola dell'Agenda (`appointments.service.
+    _non_nel_passato`): istanti con fuso, `start_at < adesso`, nessuna
+    tolleranza, stesso orologio iniettabile `_adesso`. Il confronto e' fra
+    istanti assoluti: Europe/Rome e UTC danno lo stesso esito, e un orario
+    senza fuso e' gia' stato rifiutato sopra. L'esito pubblico e' quello di
+    uno slot non piu' disponibile (409 neutro): la pagina P30 ricarica gli
+    orari con un nuovo submission_token."""
+    if start_at < _appt_service._adesso():
+        raise _appt_errors.PublicSlotUnavailable("L'orario scelto e' gia' passato")
+
+
+def _esito_gia_riuscito(cur, link: dict, submission: dict | None, fingerprint: str) -> dict | None:
+    """La prenotazione gia' creata da QUESTO submission_token con QUESTO
+    payload, oppure None. Nessuna scrittura."""
+    if (submission is None or submission["payload_fingerprint"] != fingerprint
+            or submission["status"] != "succeeded" or submission["appointment_id"] is None):
+        return None
+    riga = _appt_repository.get_appointment(cur, link["agency_id"], submission["appointment_id"])
+    return None if riga is None else _prenotazione_pubblica(riga)
 
 
 def _prenotazione_pubblica(riga: dict) -> dict:

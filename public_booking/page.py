@@ -29,6 +29,12 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from .log_redaction import install_access_log_redaction
+
+# P30-HARDENING C: `/prenota/<token>` e' nell'access log di uvicorn come ogni
+# path; stesso filtro (idempotente) di `public_router.py`.
+install_access_log_redaction()
+
 #: Il percorso pubblico della pagina. La Booking Links UI costruisce l'URL
 #: cliente con lo stesso valore (`PUBLIC_BOOKING_PATH` in agenda-model.js).
 PAGE_PREFIX = "/prenota"
