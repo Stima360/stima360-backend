@@ -775,3 +775,10 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .agenda-month-chip.agenda-status-confirmed { border-left-color: var(--primary); }
 .agenda-month-chip.agenda-status-busy { color: var(--muted); }
 .agenda-month-more { font-size: 12px; color: var(--muted); }
+/* Agenda mobile: la barra entra nel viewport. In colonna la barra non va a capo
+   (una riga flessibile avvolta prende la larghezza del figlio piu' largo);
+   sono i gruppi di pulsanti ad andare a capo. Nessun overflow nascosto. */
+@media (max-width: 767px) {
+  .agenda-toolbar { flex-wrap: nowrap; }
+  .agenda-views, .agenda-commands { flex-wrap: wrap; }
+}
