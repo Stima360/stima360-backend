@@ -197,6 +197,30 @@ export function deleteClosure(closureId) {
   return request('DELETE', `/closures/${id(closureId)}`);
 }
 
+// -- A30-12: link di prenotazione pubblica (rotte operatore gia' esistenti) --
+// Il token grezzo arriva SOLO nella risposta di create e rotate: chi chiama
+// lo mostra una volta e non lo conserva. Le altre risposte non lo portano.
+
+export function getBookingLinks() {
+  return request('GET', '/booking-links');
+}
+
+export function createBookingLink(body) {
+  return request('POST', '/booking-links', body);
+}
+
+export function patchBookingLink(linkId, body) {
+  return request('PATCH', `/booking-links/${id(linkId)}`, body);
+}
+
+export function rotateBookingLink(linkId) {
+  return request('POST', `/booking-links/${id(linkId)}/rotate`);
+}
+
+export function disableBookingLink(linkId) {
+  return request('POST', `/booking-links/${id(linkId)}/disable`);
+}
+
 /** A30-7: POST /legacy-requests/sync - porta nell'Agenda le richieste di
  *  sopralluogo arrivate dal sito e non ancora importate. Nessun corpo:
  *  l'agenzia la decide il server dalla sessione. Solo contatori in risposta. */

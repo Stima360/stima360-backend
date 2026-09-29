@@ -703,6 +703,28 @@ export function weeklySlotsFromDays(giorni) {
   return { slots, error: null };
 }
 
+// ---------------------------------------------------------------------------
+// A30-12 in UI: link di prenotazione pubblica.
+// ---------------------------------------------------------------------------
+
+/** La rotta pubblica REALE di A30-12 (`public_booking/public_router.py`).
+ *  Non esiste ancora una pagina per il cliente: l'indirizzo mostrato e'
+ *  quello dell'API pubblica del link. */
+export const PUBLIC_BOOKING_PATH = '/api/public/booking/';
+
+/** L'indirizzo pubblico completo di un token appena creato o ruotato. */
+export function publicBookingUrl(origin, token) {
+  if (!token) return '';
+  return `${String(origin || '').replace(/\/+$/, '')}${PUBLIC_BOOKING_PATH}${encodeURIComponent(token)}`;
+}
+
+/** Lo stato leggibile di un link: disattivato, scaduto o attivo. */
+export function bookingLinkStatus(link, now = new Date()) {
+  if (!link || link.status !== 'active' || link.revoked_at) return 'Disattivato';
+  if (link.expires_at && Date.parse(link.expires_at) <= now.getTime()) return 'Scaduto';
+  return 'Attivo';
+}
+
 /** Vero se l'appuntamento ha un contatto, un lead o una stima: senza, il
  *  follow-up (un task CORE) non si puo' creare e il blocco non si mostra. */
 export function canFollowUp(row) {

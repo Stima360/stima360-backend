@@ -159,19 +159,44 @@ def test_06_nessun_trascinamento_ne_ridimensionamento():
 LETTURE_CRM = ("/api/core/leads?contact_id=", "/api/property/properties?search=")
 
 
+# SENTINELLE 07/08 AGGIORNATE DALLA UI "LINK PRENOTAZIONE" (A30-12), in modo
+# dichiarato come A30-9B per "google", non rimosse. Il perimetro ammesso e'
+# SOLO quello dei link di prenotazione gia' esistenti:
+#
+#   * 07: l'unico percorso fuori da /api/appointments e' l'indirizzo pubblico
+#     del link, come letterale ESATTO e SOLO nel modello, che lo mostra
+#     all'operatore e non lo chiama mai (nessun `fetch` fuori da
+#     agenda-api.js: controllato qui sotto);
+#   * 08: si toglie SOLO il lessico dei link di prenotazione dell'Agenda;
+#     ogni altro "booking" resta vietato come prima.
+#
+# `test_07c` e `test_08b` provano che il resto resta chiuso.
+PERCORSI_SOLO_MOSTRATI = {MODEL: "'/api/public/booking/'"}
+LESSICO_LINK_PRENOTAZIONE = ("booking-links", "bookinglink", "publicbookingurl",
+                             "public_booking_path", "'/api/public/booking/'")
+
+
+def _violazioni_07(f, codice):
+    """Le violazioni di test_07 in `codice` (senza commenti) del file `f`."""
+    if f in PERCORSI_SOLO_MOSTRATI:
+        codice = codice.replace(PERCORSI_SOLO_MOSTRATI[f], "")
+    violazioni = []
+    for percorso in re.findall(r"['\"`](/api/[^'\"`$]*)", codice):
+        if f == LOOKUP:
+            if percorso not in LETTURE_CRM:
+                violazioni.append(percorso)
+        elif not percorso.startswith("/api/appointments"):
+            violazioni.append(percorso)
+    if f != API and "fetch(" in codice:
+        violazioni.append("fetch(")
+    if f not in (API, LOOKUP):
+        violazioni += [v for v in ("core/api-client", "/api/") if v in codice]
+    return violazioni
+
+
 def test_07_solo_api_appointments_e_solo_da_agenda_api():
     for f in AGENDA_FILES:
-        codice = _senza_commenti(_testo(f))
-        for percorso in re.findall(r"['\"`](/api/[^'\"`$]*)", codice):
-            if f == LOOKUP:
-                assert percorso in LETTURE_CRM, (f.name, percorso)
-            else:
-                assert percorso.startswith("/api/appointments"), (f.name, percorso)
-        if f != API:
-            assert "fetch(" not in codice, f.name
-        if f not in (API, LOOKUP):
-            assert "core/api-client" not in codice, f.name
-            assert "/api/" not in codice, f.name
+        assert _violazioni_07(f, _senza_commenti(_testo(f))) == [], f.name
     assert "const BASE = '/api/appointments';" in _testo(API)
     # A30-5: la lookup LEGGE soltanto, con la sessione di core/api-client.js
     lookup = _senza_commenti(_testo(LOOKUP))
@@ -221,15 +246,46 @@ def test_08_nessun_accesso_a_stime_dettagliate_visite_acquirente_o_google():
     viste, drawer, dialoghi) resta senza alcun riferimento a Google, come
     prima di A30-9B."""
     for f in AGENDA_FILES:
-        # A30-7: `legacy_stime_dettagliate` e' solo il VALORE di `source` di una
-        # richiesta importata (lo stesso esonero dei test backend A30-2/2P).
-        codice = _senza_commenti(_testo(f)).lower().replace("legacy_stime_dettagliate", "")
-        vietati = ("stime_dettagliate", "property_visits", "property-visits", "/visits",
-                   "admin/stime", "salva_stima", "booking")
-        if f != PAGE:
-            vietati = vietati + ("google",)
-        for vietato in vietati:
-            assert vietato not in codice, (f.name, vietato)
+        assert _violazioni_08(f, _senza_commenti(_testo(f))) == [], f.name
+
+
+def _violazioni_08(f, codice):
+    """Le parole vietate da test_08 presenti in `codice` (senza commenti)."""
+    # A30-7: `legacy_stime_dettagliate` e' solo il VALORE di `source` di una
+    # richiesta importata (lo stesso esonero dei test backend A30-2/2P).
+    codice = codice.lower().replace("legacy_stime_dettagliate", "")
+    for ammesso in LESSICO_LINK_PRENOTAZIONE:
+        codice = codice.replace(ammesso, "")
+    vietati = ("stime_dettagliate", "property_visits", "property-visits", "/visits",
+               "admin/stime", "salva_stima", "booking")
+    if f != PAGE:
+        vietati = vietati + ("google",)
+    return [v for v in vietati if v in codice]
+
+
+def test_07c_l_indirizzo_pubblico_resta_vietato_fuori_dal_modello():
+    riga = "export const PUBLIC_BOOKING_PATH = '/api/public/booking/';"
+    assert _violazioni_07(MODEL, riga) == []                     # l'unico punto ammesso
+    for f in AGENDA_FILES:
+        if f not in (MODEL, LOOKUP):
+            assert _violazioni_07(f, riga) != [], f.name        # altrove resta vietato
+    # nel modello, un QUALUNQUE altro percorso resta vietato, anche se simile
+    for altro in ("const u = '/api/public/booking/altro';", "const u = '/api/public/booking';",
+                  "const u = '/api/booking/';", "fetch('/api/public/booking/' + t);"):
+        assert _violazioni_07(MODEL, altro) != [], altro
+
+
+def test_08b_ogni_altro_booking_resta_vietato():
+    # il lessico dei link di prenotazione e' ammesso...
+    for ammesso in ("request('GET', '/booking-links')", "export function getBookingLinks() {}",
+                    "openBookingLinksDialog(d, x);", "publicBookingUrl(o, t)",
+                    "export const PUBLIC_BOOKING_PATH = '/api/public/booking/';"):
+        assert "booking" not in _violazioni_08(API, ammesso), ammesso
+    # ...ogni altro "booking" no, in qualunque file dell'Agenda
+    for vietato in ("const x = '/api/property/booking';", "import { booking } from './b.js';",
+                    "const u = '/api/booking-requests';", "openBookingForm();"):
+        for f in AGENDA_FILES:
+            assert "booking" in _violazioni_08(f, vietato), (f.name, vietato)
 
 
 def test_09_nessun_collegamento_finto_a_stima_o_lead():

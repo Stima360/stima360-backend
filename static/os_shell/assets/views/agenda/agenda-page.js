@@ -52,7 +52,7 @@ import {
 import { renderDay, renderList, renderWeek } from '../../components/agenda/agenda-views.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
 import {
-  openActionDialog, openAvailabilityDialog, openCreateDialog,
+  openActionDialog, openAvailabilityDialog, openBookingLinksDialog, openCreateDialog,
 } from '../../components/agenda/agenda-dialogs.js';
 import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-sync-panel.js';
 
@@ -236,7 +236,11 @@ export async function renderAgenda(container, params = []) {
   // operatori; cosa si puo' gestire lo decide il server (D6).
   const disponibilita = el('button', 'btn', 'Disponibilità');
   disponibilita.type = 'button';
-  comandi.append(aggiorna, disponibilita);
+  // Link di prenotazione pubblica (API A30-12): anche qui decide il server
+  // chi gestisce quali link (D2).
+  const linkPrenotazione = el('button', 'btn', 'Link prenotazione');
+  linkPrenotazione.type = 'button';
+  comandi.append(aggiorna, disponibilita, linkPrenotazione);
   // A30-7: solo su richiesta esplicita, mai al caricamento della pagina.
   const sincronizza = gestisceRichieste(getSession())
     ? el('button', 'btn', 'Aggiorna richieste dal sito') : null;
@@ -533,6 +537,16 @@ export async function renderAgenda(container, params = []) {
     }
     if (stale()) return;
     openAvailabilityDialog(dialogo, { agents: listaAgenti, session: getSession() });
+  });
+  linkPrenotazione.addEventListener('click', async () => {
+    try {
+      listaAgenti = await agenti();
+    } catch (errore) {
+      avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
+      return;
+    }
+    if (stale()) return;
+    openBookingLinksDialog(dialogo, { agents: listaAgenti, session: getSession() });
   });
 
   const erroreGoogle = erroreGoogleInSospeso();

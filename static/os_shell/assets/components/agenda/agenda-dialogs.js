@@ -32,6 +32,7 @@ import {
   durationMinutes,
   errorMessage,
   WEEKDAY_LABELS,
+  bookingLinkStatus,
   formatDateTime,
   formatDayLong,
   formatDuration,
@@ -40,6 +41,7 @@ import {
   intervalLabel,
   minutesToTime,
   parseTime,
+  publicBookingUrl,
   romeDateKey,
   romeIso,
   romeParts,
@@ -53,16 +55,21 @@ import {
   checkAvailability,
   createAppointment,
   createAvailabilityException,
+  createBookingLink,
   createClosure,
   deleteAvailabilityException,
   deleteClosure,
+  disableBookingLink,
   getAvailability,
   getAvailabilityExceptions,
+  getBookingLinks,
   getClosures,
   getWorkingHours,
   lookupStime,
   patchAppointment,
+  patchBookingLink,
   putWorkingHours,
+  rotateBookingLink,
   runAction,
 } from '../../agenda/agenda-api.js';
 import {
@@ -1650,5 +1657,344 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
   }
 
   apriScheda('weekly');
+  dialogEl.showModal();
+}
+
+// ---------------------------------------------------------------------------
+// LINK DI PRENOTAZIONE - la UI delle rotte operatore A30-12 gia' esistenti
+// (`/booking-links`). Nessuna regola nuova:
+//
+//   * PERMESSI (D2, `public_booking/service.py`): titolare, amministratore e
+//     Supreme "acting" vedono e gestiscono i link di qualunque agente attivo
+//     dell'agenzia; un `agent` solo i propri, quindi niente selettore. Un
+//     link fuori portata e' "non trovato" (404), come uno inesistente.
+//   * IL TOKEN GREZZO esiste SOLO nella risposta di create e rotate (il
+//     server conserva l'hash). Qui vive in una variabile di questa funzione e
+//     nel valore del campo del riquadro "mostrato una volta"; mai in
+//     localStorage/sessionStorage, mai in un attributo o `data-*`, mai nei
+//     log. Chiudere il riquadro o il pannello lo dimentica. Per un link gia'
+//     esistente l'indirizzo non si puo' piu' mostrare: si ruota.
+//   * Il link non si riattiva e l'agente non si cambia: l'API non lo prevede.
+//     L'etichetta si puo' cambiare ma non svuotare (il PATCH ignora `null`).
+//   * Dopo ogni scrittura si rilegge l'elenco; ruotare e disattivare chiedono
+//     conferma. Nessun id interno a schermo.
+// ---------------------------------------------------------------------------
+
+function campoNumero({ nome, valore, min, max, etichetta }) {
+  const input = nodo('input', 'input');
+  input.type = 'number';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = '1';
+  input.value = String(valore);
+  input.dataset.field = nome;
+  input.setAttribute('aria-label', etichetta);
+  return input;
+}
+
+function interoNelRango(testo, min, max) {
+  const n = Number(String(testo).trim());
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+}
+
+/**
+ * Apre il pannello dei link di prenotazione. `agents` e' la risposta di
+ * /agents (attivi di questa agenzia, con `is_me`); `session` serve SOLO a non
+ * offrire comandi che il server rifiuterebbe.
+ */
+export function openBookingLinksDialog(dialogEl, { agents, session }) {
+  const puoGestire = canAssignRecords(session);
+  const lista = agents || [];
+  const io = lista.find((a) => a.is_me === true) || null;
+  const nomeAgente = (id) => {
+    const a = lista.find((x) => Number(x.id) === Number(id));
+    return a ? (a.name || 'Operatore') : 'Agente non più attivo';
+  };
+  let giro = 0;                                    // vince l'ultima lettura
+  let indirizzoUnaVolta = null;                    // SOLO dopo create/rotate
+
+  dialogEl.replaceChildren();
+  dialogEl.setAttribute('aria-label', 'Link prenotazione');
+  const radice = nodo('div', 'agenda-form agenda-booking-links');
+  radice.appendChild(nodo('h3', 'section-title', 'Link prenotazione'));
+  radice.appendChild(nodo('p', 'muted',
+    'Con un link il cliente prenota da solo, solo negli orari di lavoro dell’agente '
+    + '(Disponibilità) e mai sopra un altro impegno.'));
+
+  const avviso = nodo('div', '');
+  avviso.setAttribute('role', 'status');
+  avviso.setAttribute('aria-live', 'polite');
+  avviso.dataset.notice = '';
+  const errore = nodo('div', 'field-error');
+  errore.dataset.error = '';
+  errore.setAttribute('role', 'alert');
+  const unaVolta = nodo('div', '');
+  unaVolta.dataset.once = '';
+  const barra = nodo('div', 'agenda-toolbar');
+  const crea = bottoneTesto('Crea link', 'btn primary');
+  crea.dataset.create = '';
+  barra.appendChild(crea);
+  const modulo = nodo('div', '');
+  modulo.dataset.form = '';
+  const elenco = nodo('div', '');
+  elenco.dataset.list = '';
+  radice.append(avviso, errore, unaVolta, barra, modulo, elenco);
+
+  const azioni = nodo('div', 'modal-actions');
+  const chiudi = bottoneTesto('Chiudi', 'btn ghost');
+  azioni.appendChild(chiudi);
+  radice.appendChild(azioni);
+  dialogEl.appendChild(radice);
+
+  const pulisci = () => { avviso.replaceChildren(); errore.textContent = ''; };
+  const mostraErrore = (e) => {
+    errore.textContent = e && e.status !== undefined ? errorMessage(e) : ((e && e.message) || errorMessage(e));
+  };
+  const successo = (testo) => { avviso.replaceChildren(nodo('div', 'success-box', testo)); };
+
+  // Il token si dimentica: variabile azzerata, riquadro e campo rimossi.
+  const dimentica = () => {
+    indirizzoUnaVolta = null;
+    unaVolta.replaceChildren();
+  };
+  chiudi.addEventListener('click', () => { dimentica(); dialogEl.close(); });
+  dialogEl.addEventListener('close', dimentica, { once: true });   // anche con Esc
+
+  // Non e' una pagina da mandare al cliente: e' l'endpoint JSON A30-12.
+  const ENDPOINT_TECNICO = 'Endpoint tecnico — la pagina pubblica cliente sarà disponibile successivamente.';
+
+  function mostraUnaVolta(token, { ruotato }) {
+    indirizzoUnaVolta = publicBookingUrl(window.location.origin, token);
+    const riquadro = nodo('div', 'success-box');
+    riquadro.setAttribute('role', 'status');
+    riquadro.appendChild(nodo('h4', '', ruotato ? 'Nuovo link generato' : 'Link creato'));
+    const avvertenza = nodo('p', '', 'Questo link viene mostrato solo ora. Se lo perdi, dovrai rigenerarlo.');
+    avvertenza.dataset.onceWarning = '';
+    const campo = nodo('input', 'input');
+    campo.type = 'text';
+    campo.readOnly = true;
+    campo.setAttribute('aria-label', ENDPOINT_TECNICO);
+    campo.value = indirizzoUnaVolta;               // proprieta', non attributo
+    const copia = bottoneTesto('Copia', 'btn primary');
+    copia.dataset.copy = '';
+    const fatto = bottoneTesto('Ho copiato il link', 'btn ghost');
+    fatto.dataset.done = '';
+    const nota = nodo('p', 'muted', ENDPOINT_TECNICO);
+    nota.dataset.endpointNote = '';
+    riquadro.append(avvertenza, nota, campo, copia, fatto);
+    unaVolta.replaceChildren(riquadro);
+    copia.addEventListener('click', async () => {
+      pulisci();
+      try {
+        const appunti = globalThis.navigator && globalThis.navigator.clipboard;
+        if (!appunti || typeof appunti.writeText !== 'function' || !indirizzoUnaVolta) {
+          throw new Error('non disponibile');
+        }
+        await appunti.writeText(indirizzoUnaVolta);
+        successo('Link copiato.');
+      } catch (_e) {
+        if (typeof campo.select === 'function') campo.select();
+        errore.textContent = 'Copia automatica non disponibile: seleziona il link e copialo a mano.';
+      }
+    });
+    fatto.addEventListener('click', () => { dimentica(); pulisci(); });
+  }
+
+  // -- elenco ---------------------------------------------------------------
+  async function carica() {
+    const mio = ++giro;
+    elenco.replaceChildren(nodo('p', 'muted', 'Caricamento…'));
+    let righe;
+    try {
+      righe = ((await getBookingLinks()) || {}).items || [];
+    } catch (e) {
+      if (mio !== giro) return;
+      elenco.replaceChildren();
+      mostraErrore(e);
+      return;
+    }
+    if (mio !== giro) return;
+    elenco.replaceChildren();
+    if (!righe.length) {
+      const vuoto = nodo('p', 'muted', 'Nessun link di prenotazione.');
+      vuoto.dataset.empty = '';
+      elenco.appendChild(vuoto);
+      return;
+    }
+    for (const link of righe) elenco.appendChild(riga(link));
+  }
+
+  function riga(link) {
+    const stato = bookingLinkStatus(link);
+    const scheda = nodo('div', 'agenda-card');
+    scheda.dataset.row = '';
+    const testi = [
+      link.label || '', nomeAgente(link.assigned_user_id), typeLabel(link.appointment_type),
+      `Durata ${link.duration_minutes} min`,
+      `Buffer prima ${link.buffer_before_minutes} min · dopo ${link.buffer_after_minutes} min`,
+      stato, link.expires_at && stato !== 'Disattivato' ? `Scade ${formatDateTime(link.expires_at)}` : '',
+    ];
+    for (const t of testi) if (t) scheda.appendChild(nodo('span', 'agenda-card-meta', t));
+    const comandi = nodo('div', 'agenda-toolbar');
+    const conferme = nodo('div', '');
+    if (stato === 'Attivo') {
+      const modifica = bottoneTesto('Modifica', 'btn ghost');
+      modifica.dataset.edit = '';
+      modifica.addEventListener('click', () => { pulisci(); apriModulo(link); });
+      const ruota = bottoneTesto('Ruota link', 'btn ghost');
+      ruota.dataset.rotate = '';
+      ruota.addEventListener('click', () => {
+        pulisci();
+        conferme.replaceChildren();
+        confermaInLinea(conferme, {
+          testo: 'Il link attuale smetterà subito di funzionare: chi l’ha già ricevuto non potrà più prenotare. Generare un nuovo link?',
+          etichetta: 'Sì, genera nuovo link',
+          azione: async () => {
+            try {
+              const esito = await rotateBookingLink(link.id);
+              mostraUnaVolta(esito && esito.token, { ruotato: true });
+              await carica();
+            } catch (e) { mostraErrore(e); }
+          },
+        });
+      });
+      comandi.append(modifica, ruota);
+    }
+    if (stato !== 'Disattivato') {
+      const disattiva = bottoneTesto('Disattiva', 'btn ghost');
+      disattiva.dataset.disable = '';
+      disattiva.addEventListener('click', () => {
+        pulisci();
+        conferme.replaceChildren();
+        confermaInLinea(conferme, {
+          testo: 'Il link smetterà di funzionare e non potrà essere riattivato. Disattivarlo?',
+          etichetta: 'Sì, disattiva',
+          azione: async () => {
+            try {
+              await disableBookingLink(link.id);
+              await carica();
+              successo('Link disattivato.');
+            } catch (e) { mostraErrore(e); }
+          },
+        });
+      });
+      comandi.appendChild(disattiva);
+    }
+    if (comandi.childNodes.length) scheda.appendChild(comandi);
+    scheda.appendChild(conferme);
+    return scheda;
+  }
+
+  // -- crea / modifica -----------------------------------------------------
+  function apriModulo(link) {
+    const nuovo = !link;
+    const corpo = nodo('div', 'agenda-list-day');
+    corpo.appendChild(nodo('h4', 'agenda-list-day-title', nuovo ? 'Nuovo link' : 'Modifica link'));
+    const griglia = nodo('div', 'agenda-toolbar');
+    let selAgente = null;
+    let agenteFisso = null;
+    if (nuovo && puoGestire) {
+      selAgente = nodo('select', 'input');
+      selAgente.dataset.field = 'agent';
+      const scelto = (io || lista[0] || {}).id;
+      for (const a of lista) selAgente.appendChild(opzione(String(a.id), a.name || 'Operatore', a.id === scelto));
+      if (scelto !== undefined) selAgente.value = String(scelto);
+      griglia.appendChild(etichettato('Agente', selAgente));
+    } else {
+      agenteFisso = nuovo ? (io ? io.id : null) : link.assigned_user_id;
+      const testo = nuovo ? (io ? `Io — ${io.name || ''}`.trim() : '') : nomeAgente(link.assigned_user_id);
+      griglia.appendChild(etichettato('Agente', nodo('span', '', testo || '—')));
+    }
+    const tipo = nodo('select', 'input');
+    tipo.dataset.field = 'type';
+    if (nuovo) tipo.appendChild(opzione('', 'Scegli un tipo', true));
+    for (const [t, testo] of Object.entries(TYPE_LABELS)) {
+      tipo.appendChild(opzione(t, testo, !nuovo && t === link.appointment_type));
+    }
+    tipo.value = nuovo ? '' : link.appointment_type;
+    const durata = campoNumero({ nome: 'duration', valore: nuovo ? '' : link.duration_minutes,
+      min: 1, max: 1440, etichetta: 'Durata in minuti' });
+    const prima = campoNumero({ nome: 'buffer-before', valore: nuovo ? 0 : link.buffer_before_minutes,
+      min: 0, max: 1440, etichetta: 'Buffer prima in minuti' });
+    const dopo = campoNumero({ nome: 'buffer-after', valore: nuovo ? 0 : link.buffer_after_minutes,
+      min: 0, max: 1440, etichetta: 'Buffer dopo in minuti' });
+    const etichetta = nodo('input', 'input');
+    etichetta.type = 'text';
+    etichetta.maxLength = 200;
+    etichetta.value = nuovo ? '' : (link.label || '');
+    etichetta.dataset.field = 'label';
+    griglia.append(etichettato('Tipo', tipo), etichettato('Durata (min)', durata),
+      etichettato('Buffer prima (min)', prima), etichettato('Buffer dopo (min)', dopo),
+      etichettato('Etichetta (facoltativa)', etichetta));
+    corpo.appendChild(griglia);
+    // La durata proposta e' quella di default del tipo (enums del server),
+    // finche' l'operatore non la sceglie lui.
+    let durataToccata = !nuovo;
+    durata.addEventListener('input', () => { durataToccata = true; });
+    tipo.addEventListener('change', () => {
+      if (!durataToccata && tipo.value) durata.value = String(defaultDuration(tipo.value));
+    });
+
+    const salva = bottoneTesto(nuovo ? 'Crea link' : 'Salva modifiche', 'btn primary');
+    salva.dataset.save = '';
+    const annulla = bottoneTesto('Annulla', 'btn ghost');
+    annulla.addEventListener('click', () => { modulo.replaceChildren(); pulisci(); });
+    corpo.append(salva, annulla);
+    modulo.replaceChildren(corpo);
+
+    const leggi = () => {
+      if (!tipo.value) throw new Error('Scegli il tipo di appuntamento.');
+      const d = interoNelRango(durata.value, 1, 1440);
+      if (d === null) throw new Error('La durata deve essere un numero intero di minuti fra 1 e 1440.');
+      const bp = interoNelRango(prima.value, 0, 1440);
+      const bd = interoNelRango(dopo.value, 0, 1440);
+      if (bp === null || bd === null) throw new Error('I buffer devono essere numeri interi di minuti fra 0 e 1440.');
+      const testo = etichetta.value.trim();
+      if (!nuovo && link.label && !testo) {
+        throw new Error('L’etichetta non si può svuotare: scrivine una nuova o lasciala com’è.');
+      }
+      return { appointment_type: tipo.value, duration_minutes: d, buffer_before_minutes: bp,
+        buffer_after_minutes: bd, label: testo };
+    };
+
+    salva.addEventListener('click', async () => {
+      pulisci();
+      let v;
+      try { v = leggi(); } catch (e) { errore.textContent = e.message; return; }
+      salva.disabled = true;
+      try {
+        if (nuovo) {
+          const agente = selAgente ? Number(selAgente.value) : agenteFisso;
+          if (!agente) throw new Error('Il tuo profilo non risulta fra gli agenti attivi di questa agenzia.');
+          const richiesta = { assigned_user_id: agente, appointment_type: v.appointment_type,
+            duration_minutes: v.duration_minutes, buffer_before_minutes: v.buffer_before_minutes,
+            buffer_after_minutes: v.buffer_after_minutes };
+          if (v.label) richiesta.label = v.label;
+          const esito = await createBookingLink(richiesta);
+          modulo.replaceChildren();
+          mostraUnaVolta(esito && esito.token, { ruotato: false });
+          await carica();
+        } else {
+          const cambi = {};
+          for (const campo of ['appointment_type', 'duration_minutes', 'buffer_before_minutes', 'buffer_after_minutes']) {
+            if (v[campo] !== link[campo]) cambi[campo] = v[campo];
+          }
+          if (v.label && v.label !== (link.label || '')) cambi.label = v.label;
+          if (!Object.keys(cambi).length) { successo('Nessuna modifica da salvare.'); return; }
+          await patchBookingLink(link.id, cambi);
+          modulo.replaceChildren();
+          await carica();
+          successo('Link aggiornato.');
+        }
+      } catch (e) {
+        mostraErrore(e);
+      } finally {
+        salva.disabled = false;
+      }
+    });
+  }
+
+  crea.addEventListener('click', () => { pulisci(); apriModulo(null); });
+  carica();
   dialogEl.showModal();
 }
