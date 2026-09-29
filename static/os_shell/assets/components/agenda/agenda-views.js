@@ -1,9 +1,10 @@
 // STIMA360 OS — components/agenda/agenda-views.js (A30-4)
 //
-// Le tre viste dell'Agenda: SETTIMANA (desktop e tablet), GIORNO e LISTA
-// (smartphone, disponibili anche su desktop). Nessun Mese, nessun
-// trascinamento, nessun ridimensionamento: un blocco si apre con un click (o
-// Invio) e le modifiche passano dai dialog.
+// Le viste dell'Agenda: SETTIMANA e MESE (desktop e tablet), GIORNO e LISTA
+// (smartphone, disponibili anche su desktop). Nessun trascinamento, nessun
+// ridimensionamento: un blocco si apre con un click (o Invio) e le modifiche
+// passano dai dialog. Nel MESE una cella porta solo alla vista Giorno: niente
+// si modifica da li' (piano §4.3).
 //
 // Tutto e' costruito con le API del DOM e `textContent`: nessun dato arrivato
 // dal server finisce in `innerHTML`.
@@ -22,8 +23,11 @@ import {
   formatDuration,
   formatTime,
   initialScrollTop,
+  isOnlineAppointment,
   itemTitle,
   itemsForDay,
+  MONTH_CELL_ROWS,
+  monthGrid,
   overflowLayout,
   statusLabel,
   todayKey,
@@ -89,6 +93,8 @@ export function renderCard(item, { onOpen, compact = false } = {}) {
   const durata = formatDuration(minuti);
   if (durata) riga.appendChild(el('span', 'agenda-card-duration', durata));
   if (item.is_test) riga.appendChild(el('span', 'agenda-badge agenda-badge-test', 'TEST'));
+  // A30-12: prenotato dal cliente con il link pubblico (source='booking_link').
+  if (isOnlineAppointment(item)) riga.appendChild(el('span', 'agenda-badge agenda-badge-online', 'Online'));
   if (riga.childNodes.length) card.appendChild(riga);
   return card;
 }
@@ -258,4 +264,70 @@ export function renderList(target, { days, items, onOpen }) {
   }
   if (!qualcosa) lista.appendChild(el('p', 'muted', 'Nessun appuntamento in questo periodo.'));
   target.appendChild(lista);
+}
+
+const INTESTAZIONE_MESE = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+
+/** Una riga compatta del Mese: ora, tipo (o "Occupato"), "Online". Solo testo:
+ *  nessun click, nessun dettaglio - la cella porta al Giorno (piano §4.3). */
+function rigaMese(item) {
+  const riga = el('span', `agenda-month-chip agenda-status-${isBusy(item) ? 'busy' : (item.status || '')}`);
+  riga.title = itemAriaLabel(item);
+  const tipo = isBusy(item) ? (item.label || 'Occupato') : typeLabel(item.type || item.appointment_type);
+  riga.appendChild(el('span', 'agenda-month-chip-text', `${formatTime(item.start_at)} ${tipo || ''}`.trim()));
+  if (isOnlineAppointment(item)) riga.appendChild(el('span', 'agenda-badge agenda-badge-online', 'Online'));
+  return riga;
+}
+
+/**
+ * MESE (piano §4.3, desktop/tablet): settimane da lunedi', una cella per
+ * giorno. Nelle celle del mese: fino a MONTH_CELL_ROWS righe, poi "+N altri",
+ * e il conteggio nell'etichetta accessibile. Un click (o Invio) sulla cella
+ * porta alla vista Giorno di quella data. I giorni dei mesi vicini sono
+ * contorno: attenuati, senza conteggi (i loro dati sono nel loro mese).
+ */
+export function renderMonth(target, { dayKey, items, onDay }) {
+  const oggi = todayKey();
+  const mese = el('div', 'agenda-month');
+  mese.setAttribute('role', 'grid');
+  const testa = el('div', 'agenda-month-row agenda-month-head');
+  testa.setAttribute('role', 'row');
+  for (const g of INTESTAZIONE_MESE) {
+    const c = el('div', 'agenda-month-weekday', g);
+    c.setAttribute('role', 'columnheader');
+    testa.appendChild(c);
+  }
+  mese.appendChild(testa);
+  for (const settimana of monthGrid(dayKey)) {
+    const riga = el('div', 'agenda-month-row');
+    riga.setAttribute('role', 'row');
+    for (const { key, inMonth } of settimana) {
+      const cella = el('button', `agenda-month-cell${inMonth ? '' : ' agenda-month-out'}${key === oggi ? ' agenda-today' : ''}`);
+      cella.type = 'button';
+      cella.setAttribute('role', 'gridcell');
+      cella.dataset.day = key;
+      const numero = el('span', 'agenda-month-day', String(Number(key.slice(8, 10))));
+      cella.appendChild(numero);
+      if (inMonth) {
+        const delGiorno = itemsForDay(items, key)
+          .slice().sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at));
+        cella.dataset.count = String(delGiorno.length);
+        for (const item of delGiorno.slice(0, MONTH_CELL_ROWS)) cella.appendChild(rigaMese(item));
+        if (delGiorno.length > MONTH_CELL_ROWS) {
+          const altri = el('span', 'agenda-month-more', `+${delGiorno.length - MONTH_CELL_ROWS} altri`);
+          altri.dataset.more = '';
+          cella.appendChild(altri);
+        }
+        const conteggio = delGiorno.length === 1 ? '1 appuntamento'
+          : `${delGiorno.length} appuntamenti`;
+        cella.setAttribute('aria-label', `${formatDayLong(key)}, ${delGiorno.length ? conteggio : 'nessun appuntamento'}. Apri il giorno`);
+      } else {
+        cella.setAttribute('aria-label', `${formatDayLong(key)} (mese vicino). Apri il giorno`);
+      }
+      if (onDay) cella.addEventListener('click', () => onDay(key));
+      riga.appendChild(cella);
+    }
+    mese.appendChild(riga);
+  }
+  target.appendChild(mese);
 }

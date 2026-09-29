@@ -22,14 +22,16 @@ export const VIEWPORT_END_HOUR = 20;
 /** Sotto-colonne massime per eventi sovrapposti nello stesso giorno. */
 export const MAX_OVERLAP_COLUMNS = 4;
 
-/** Le viste di A30-4. Nessun Mese: non e' in questa fase. */
-export const VIEWS = Object.freeze(['week', 'day', 'list']);
-/** Su smartphone solo Lista e Giorno: la settimana non si comprime. */
+/** Le viste di A30-4 (piano §3/§4.3): il Mese e' solo desktop/tablet (G3). */
+export const VIEWS = Object.freeze(['week', 'day', 'month', 'list']);
+/** Su smartphone solo Lista e Giorno: settimana e mese non si comprimono (G3). */
 export const MOBILE_VIEWS = Object.freeze(['list', 'day']);
 export const MOBILE_MAX_WIDTH = 767;
-export const VIEW_LABELS = Object.freeze({ week: 'Settimana', day: 'Giorno', list: 'Lista' });
+export const VIEW_LABELS = Object.freeze({ week: 'Settimana', day: 'Giorno', month: 'Mese', list: 'Lista' });
 /** Il segmento di URL di ogni vista (`#/agenda/<vista>/<data>`). */
-export const VIEW_SLUGS = Object.freeze({ week: 'settimana', day: 'giorno', list: 'lista' });
+export const VIEW_SLUGS = Object.freeze({ week: 'settimana', day: 'giorno', month: 'mese', list: 'lista' });
+/** Righe al massimo per cella del Mese; oltre, "+N altri" (piano §4.3). */
+export const MONTH_CELL_ROWS = 3;
 
 // Specchio di appointments/state_machine.py::_ETICHETTE (un test li
 // confronta: se il backend cambia un'etichetta, il test lo dice).
@@ -322,14 +324,66 @@ export function rangeFor(view, key) {
   if (view === 'day') {
     return { from: romeIso(key), to: romeIso(addDays(key, 1)), days: [key] };
   }
+  if (view === 'month') {
+    // Il mese CIVILE (<= 31 giorni): l'API accetta al massimo 42 giorni di
+    // tempo trascorso, e una griglia di 6 settimane attraverso il cambio
+    // d'ora d'ottobre sarebbe 42 giorni + 1 ora. I giorni dei mesi vicini
+    // nella griglia sono solo contorno (`monthGrid`), senza dati.
+    const primo = firstOfMonth(key);
+    const giorni = [];
+    for (let g = primo; g.slice(0, 7) === primo.slice(0, 7); g = addDays(g, 1)) giorni.push(g);
+    return { from: romeIso(primo), to: romeIso(addDays(giorni[giorni.length - 1], 1)), days: giorni };
+  }
   // lista: il giorno scelto e i sei successivi
   const giorni = Array.from({ length: 7 }, (_, i) => addDays(key, i));
   return { from: romeIso(key), to: romeIso(addDays(key, 7)), days: giorni };
 }
 
-/** Il passo di navigazione (◀ ▶) in giorni. */
+/** Il passo di navigazione (◀ ▶) in giorni (Settimana, Giorno, Lista). */
 export function stepDays(view) {
   return view === 'day' ? 1 : 7;
+}
+
+/** 'YYYY-MM-01' del mese di `key`. */
+export function firstOfMonth(key) {
+  return `${key.slice(0, 7)}-01`;
+}
+
+/** Il primo giorno del mese precedente (dir -1) o successivo (+1). */
+export function addMonths(key, dir) {
+  const [y, m] = key.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + dir, 1));
+  return `${t.getUTCFullYear()}-${due(t.getUTCMonth() + 1)}-01`;
+}
+
+/** ◀ ▶ (e ← →): il Mese va di mese in mese, le altre viste di `stepDays`. */
+export function shiftKey(view, key, dir) {
+  return view === 'month' ? addMonths(key, dir) : addDays(key, dir * stepDays(view));
+}
+
+/**
+ * La griglia del Mese: settimane da LUNEDI' a DOMENICA (come `weekDays`),
+ * dalla settimana del 1 a quella dell'ultimo giorno - 4, 5 o 6 righe.
+ * Ogni cella: `{ key, inMonth }`; fuori mese = giorni dei mesi vicini.
+ */
+export function monthGrid(key) {
+  const primo = firstOfMonth(key);
+  const ultimo = addDays(addMonths(primo, 1), -1);
+  const settimane = [];
+  for (let lun = addDays(primo, -weekdayIndex(primo)); lun <= ultimo; lun = addDays(lun, 7)) {
+    settimane.push(Array.from({ length: 7 }, (_, i) => {
+      const k = addDays(lun, i);
+      return { key: k, inMonth: k.slice(0, 7) === primo.slice(0, 7) };
+    }));
+  }
+  return settimane;
+}
+
+const MESE_ANNO = new Intl.DateTimeFormat('it-IT', { timeZone: TIMEZONE, month: 'long', year: 'numeric' });
+
+/** "ottobre 2026". */
+export function formatMonth(key) {
+  return MESE_ANNO.format(new Date(romeToUtcMs(firstOfMonth(key), 12, 0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -759,4 +813,62 @@ export function outcomeNote(events) {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Rifiniture UX del piano A30-4 (§3 Legenda, §10-§11 rete, §12 tastiera e
+// fuso). Funzioni pure: nessun DOM, nessuna rete.
+// ---------------------------------------------------------------------------
+
+/** §12: date e orari dell'Agenda sono SEMPRE nel fuso di Roma (`TIMEZONE`). */
+export const TIMEZONE_LABEL = 'Orario di Roma';
+
+/**
+ * §3/§12 "Legenda sempre visibile": gli stati VERI (`STATUS_LABELS`, specchio
+ * del backend), con le stesse classi delle card; piu' "Occupato" solo dove un
+ * impegno di un collega puo' davvero comparire (chi non assegna, in una vista
+ * a griglia). Il TIPO non e' un codice visivo (§8): e' scritto su ogni card.
+ */
+export function legendEntries({ withBusy = false } = {}) {
+  const voci = Object.entries(STATUS_LABELS).map(([stato, etichetta]) => ({
+    key: stato, label: etichetta, className: `agenda-badge agenda-badge-${stato}`,
+  }));
+  if (withBusy) {
+    voci.push({ key: 'busy', label: 'Occupato (collega)', className: 'agenda-badge agenda-badge-busy' });
+  }
+  voci.push({ key: 'online', label: 'Online: prenotato dal link', className: 'agenda-badge agenda-badge-online' });
+  return voci;
+}
+
+/** A30-12: la `source` con cui nasce un appuntamento prenotato dal link pubblico. */
+export const ONLINE_SOURCE = 'booking_link';
+
+/** Vero SOLO per un appuntamento (mai un "Occupato" di collega, che non porta
+ *  `source`) nato da una prenotazione online. */
+export function isOnlineAppointment(item) {
+  return !!item && item.kind !== 'busy' && item.source === ONLINE_SOURCE;
+}
+
+/**
+ * §12 tastiera: ← periodo precedente, → successivo, T oggi. `null` quando il
+ * tasto non va interpretato: combinazioni con Ctrl/Alt/Meta, composizione
+ * (IME), un campo in scrittura (input, textarea, select, contenteditable),
+ * un dialog o il pannello aperti, oppure il fuoco fuori dalla barra
+ * dell'Agenda (§12: "quando il focus e' sulla toolbar"; nessun fuoco = il
+ * documento, vale come barra).
+ */
+export function shortcutAction(event, { editing = false, dialogOpen = false, inToolbar = false } = {}) {
+  if (!event || event.defaultPrevented || event.isComposing) return null;
+  if (event.ctrlKey || event.altKey || event.metaKey) return null;
+  if (editing || dialogOpen || !inToolbar) return null;
+  if (event.key === 'ArrowLeft') return 'prev';
+  if (event.key === 'ArrowRight') return 'next';
+  if (event.key === 't' || event.key === 'T') return 'today';
+  return null;
+}
+
+/** §10: "dati del 10:42" - l'ora (di Roma) dell'ultimo caricamento riuscito. */
+export function loadedAtLabel(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  return formatTime(date.toISOString());
 }

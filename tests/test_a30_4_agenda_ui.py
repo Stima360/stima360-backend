@@ -134,13 +134,34 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
 # COSA NON C'E'
 # ---------------------------------------------------------------------------
 
-def test_05_nessuna_vista_mese():
-    for f in AGENDA_FILES + AGENDA_FILES_GOOGLE:
-        codice = _senza_commenti(_testo(f))
-        assert "'month'" not in codice.replace("month: 'long'", "").replace(
-            "month: '2-digit'", "").replace("month: 'short'", ""), f.name
-        assert not re.search(r"\bMese\b|month-calendar|MonthCalendar|renderMonth", codice), f.name
-    assert "month" not in _agenda_css().lower()
+def test_05_mese_solo_desktop_senza_trascinamento_ne_modifica_dalla_cella():
+    """SENTINELLA AGGIORNATA (autorizzata, dichiarata): il piano A30-4 congelato
+    prevede il Mese su desktop/tablet (§3, §4.3) e NON su smartphone (G3).
+
+    * desktop: esattamente week, day, month, list; mobile: esattamente list, day
+      (la prova di esecuzione e' in test_20: VIEWS, MOBILE_VIEWS, effectiveView);
+    * il pulsante del Mese e' `agenda-desktop-only` come quello della Settimana
+      (stessa riga di test_14) e il CSS mobile lo nasconde (test_13);
+    * trascinamento e ridimensionamento restano vietati OVUNQUE (test_06);
+    * dalla cella del Mese NON si modifica nulla: `renderMonth` riceve solo
+      `onDay` (vai al Giorno) - nessun `onOpen`, nessun `onSlotClick`, nessun
+      dialog, nessuna scrittura."""
+    modello = _senza_commenti(_testo(MODEL))
+    assert "export const VIEWS = Object.freeze(['week', 'day', 'month', 'list']);" in modello
+    assert "export const MOBILE_VIEWS = Object.freeze(['list', 'day']);" in modello
+    viste = _senza_commenti(_testo(VIEWS_JS))
+    corpo = viste[viste.index("export function renderMonth("):]
+    fine = corpo.find("\n}\n")
+    corpo = corpo if fine < 0 else corpo[:fine + 2]
+    assert corpo.startswith("export function renderMonth(target, { dayKey, items, onDay })")
+    for vietato in ("onOpen", "onSlotClick", "renderCard", "openCreate", "openAction",
+                    "showModal", "fetch(", "request(", "method"):
+        assert vietato not in corpo, vietato
+    riga = viste[viste.index("function rigaMese("):]
+    riga = riga[:riga.index("\n}\n") + 2]
+    assert "addEventListener" not in riga                 # le righe del Mese non sono cliccabili
+    pagina = _senza_commenti(_testo(PAGE))
+    assert "renderMonth(area, { dayKey: key, items, onDay: (giorno) => vai('day', giorno) })" in pagina
 
 
 def test_06_nessun_trascinamento_ne_ridimensionamento():
@@ -173,7 +194,10 @@ LETTURE_CRM = ("/api/core/leads?contact_id=", "/api/property/properties?search="
 # `test_07c` e `test_08b` provano che il resto resta chiuso.
 PERCORSI_SOLO_MOSTRATI = {MODEL: "'/api/public/booking/'"}
 LESSICO_LINK_PRENOTAZIONE = ("booking-links", "bookinglink", "publicbookingurl",
-                             "public_booking_path", "'/api/public/booking/'")
+                             "public_booking_path", "'/api/public/booking/'",
+                             # AUTORIZZATO (badge "Online"): SOLO il literal esatto
+                             # della source ufficiale A30-12, fra apici singoli.
+                             "'booking_link'")
 
 
 def _violazioni_07(f, codice):
@@ -281,9 +305,16 @@ def test_08b_ogni_altro_booking_resta_vietato():
                     "openBookingLinksDialog(d, x);", "publicBookingUrl(o, t)",
                     "export const PUBLIC_BOOKING_PATH = '/api/public/booking/';"):
         assert "booking" not in _violazioni_08(API, ammesso), ammesso
+    # ...e il literal esatto della source A30-12 (badge "Online")
+    assert "booking" not in _violazioni_08(MODEL, "export const ONLINE_SOURCE = 'booking_link';")
     # ...ogni altro "booking" no, in qualunque file dell'Agenda
     for vietato in ("const x = '/api/property/booking';", "import { booking } from './b.js';",
-                    "const u = '/api/booking-requests';", "openBookingForm();"):
+                    "const u = '/api/booking-requests';", "openBookingForm();",
+                    # varianti della source: solo 'booking_link' esatto e' ammesso
+                    "if (s === 'booking_fake') x();", "if (s === 'booking_request') x();",
+                    "const u = '/api/qualcosa/booking';", "const nuovoBookingFlag = true;",
+                    'if (s === "booking_link") x();', "if (s === 'booking_link_x') x();",
+                    "const s = 'public_booking';", "const s = 'booking_';"):
         for f in AGENDA_FILES:
             assert "booking" in _violazioni_08(f, vietato), (f.name, vietato)
 
@@ -441,7 +472,8 @@ out.viewport = [m.VIEWPORT_START_HOUR, m.VIEWPORT_END_HOUR];
 out.views = m.VIEWS;
 out.mobile = m.MOBILE_VIEWS;
 out.eff = [m.effectiveView('week', true), m.effectiveView('day', true), m.effectiveView(null, true),
-           m.effectiveView(null, false), m.effectiveView('month', false), m.effectiveView('list', false)];
+           m.effectiveView(null, false), m.effectiveView('month', false), m.effectiveView('list', false),
+           m.effectiveView('month', true)];
 out.slug = [m.viewFromSlug('settimana'), m.viewFromSlug('mese')];
 out.dateOk = [m.isDateKey('2026-02-29'), m.isDateKey('2028-02-29'), m.isDateKey('x')];
 out.title = [m.itemTitle({kind: 'busy', label: 'Occupato', contact_name: 'segreto'}),
@@ -492,10 +524,11 @@ def test_20_modello_puro_uguale_in_ogni_fuso_del_browser(tmp_path, tz):
     assert o["overlap"] == [{"column": 0, "columns": 2}, {"column": 1, "columns": 2},
                             {"column": 0, "columns": 1}]
     assert o["scroll"] == 8 * 64 and o["viewport"] == [8, 20]
-    assert o["views"] == ["week", "day", "list"]         # nessun Mese
-    assert o["mobile"] == ["list", "day"]
-    assert o["eff"] == ["list", "day", "list", "week", "week", "list"]
-    assert o["slug"] == ["week", None]
+    # SENTINELLA AGGIORNATA (autorizzata): Mese solo desktop (piano §4.3, G3)
+    assert o["views"] == ["week", "day", "month", "list"]
+    assert o["mobile"] == ["list", "day"]                # su smartphone niente Mese
+    assert o["eff"] == ["list", "day", "list", "week", "month", "list", "list"]
+    assert o["slug"] == ["week", "month"]
     assert o["dateOk"] == [False, True, False]
     # un impegno di collega mostra SOLO cio' che il server gli ha dato
     assert o["title"] == ["Occupato", "Mario", ""]

@@ -751,3 +751,27 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .gcal-status-muted { background: #eef2f9; color: var(--muted); }
 .gcal-status-ok { background: #e3f6e8; color: #1c7a3c; }
 .gcal-status-warn { background: #fdf3d8; color: #92650a; }
+
+/* A30-4 rifiniture UX (§3 legenda, §10 riprova, §12 fuso): solo regole nuove. */
+.agenda-tz { font-size: 12px; margin-left: 8px; }
+.agenda-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: 12px; }
+.agenda-badge-busy { background: repeating-linear-gradient(45deg, #eef2f9, #eef2f9 4px, #e2e8f0 4px, #e2e8f0 8px); color: var(--muted); }
+.agenda-notice .error-box [data-retry] { margin-left: 8px; }
+.agenda-stale { color: var(--muted); }
+/* A30-4 §4.3 Mese (solo desktop/tablet: il pulsante e' .agenda-desktop-only) e badge "Online" (A30-12). */
+.agenda-badge-online { background: #e6f6f4; color: #0f6b5e; }
+.agenda-month { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+.agenda-month-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.agenda-month-weekday { padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); }
+.agenda-month-cell { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-height: 96px; padding: 6px; border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: transparent; text-align: left; font: inherit; cursor: pointer; min-width: 0; }
+.agenda-month-cell:hover { background: #f5f8fe; }
+.agenda-month-cell:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.agenda-month-out { color: var(--muted); background: #fafbfd; }
+.agenda-month-cell.agenda-today .agenda-month-day { background: var(--primary); color: #fff; border-radius: 999px; padding: 0 6px; }
+.agenda-month-day { align-self: flex-start; font-weight: 600; font-size: 13px; }
+.agenda-month-chip { display: flex; gap: 4px; align-items: center; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid var(--border); padding-left: 4px; }
+.agenda-month-chip-text { overflow: hidden; text-overflow: ellipsis; }
+.agenda-month-chip.agenda-status-requested { border-left-style: dashed; border-left-color: #d4a017; }
+.agenda-month-chip.agenda-status-confirmed { border-left-color: var(--primary); }
+.agenda-month-chip.agenda-status-busy { color: var(--muted); }
+.agenda-month-more { font-size: 12px; color: var(--muted); }

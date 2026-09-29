@@ -23,25 +23,29 @@ import {
   TYPE_LABELS,
   VIEW_LABELS,
   VIEW_SLUGS,
+  TIMEZONE_LABEL,
   VIEWS,
   MOBILE_VIEWS,
   actionSuccessMessage,
   activeFilterCount,
-  addDays,
   calendarFilterParams,
   canAssignRecords,
   effectiveView,
   errorMessage,
   formatDateTime,
   formatDayLong,
+  formatMonth,
   formatRange,
   isDateKey,
+  legendEntries,
   listFilterParams,
+  loadedAtLabel,
   normalizeFilters,
   rangeFor,
   romeDateKey,
+  shiftKey,
+  shortcutAction,
   statusLabel,
-  stepDays,
   todayKey,
   typeLabel,
   viewFromSlug,
@@ -49,7 +53,7 @@ import {
 import {
   getAgents, getCalendar, getList, syncLegacyRequests,
 } from '../../agenda/agenda-api.js';
-import { renderDay, renderList, renderWeek } from '../../components/agenda/agenda-views.js';
+import { renderDay, renderList, renderMonth, renderWeek } from '../../components/agenda/agenda-views.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
 import {
   openActionDialog, openAvailabilityDialog, openBookingLinksDialog, openCreateDialog,
@@ -174,6 +178,7 @@ function el(tag, className, text) {
 
 function etichettaPeriodo(view, range) {
   if (view === 'day') return formatDayLong(range.days[0]);
+  if (view === 'month') return formatMonth(range.days[0]);
   return formatRange(range.days[0], range.days[range.days.length - 1]);
 }
 
@@ -199,17 +204,28 @@ export async function renderAgenda(container, params = []) {
   const navigazione = el('div', 'agenda-nav');
   const indietro = el('button', 'btn', '◀');
   indietro.type = 'button';
-  indietro.setAttribute('aria-label', view === 'day' ? 'Giorno precedente' : 'Settimana precedente');
-  indietro.addEventListener('click', () => vai(view, addDays(key, -stepDays(view))));
+  const periodo = { day: ['Giorno precedente', 'Giorno successivo'], month: ['Mese precedente', 'Mese successivo'] }[view]
+    || ['Settimana precedente', 'Settimana successiva'];
+  indietro.setAttribute('aria-label', periodo[0]);
+  indietro.addEventListener('click', () => vai(view, shiftKey(view, key, -1)));
   const oggi = el('button', 'btn', 'Oggi');
   oggi.type = 'button';
   oggi.addEventListener('click', () => vai(view, todayKey()));
   const avanti = el('button', 'btn', '▶');
   avanti.type = 'button';
-  avanti.setAttribute('aria-label', view === 'day' ? 'Giorno successivo' : 'Settimana successiva');
-  avanti.addEventListener('click', () => vai(view, addDays(key, stepDays(view))));
+  avanti.setAttribute('aria-label', periodo[1]);
+  avanti.addEventListener('click', () => vai(view, shiftKey(view, key, 1)));
+  // §12: le scorciatoie di tastiera (← → T) dichiarate sui pulsanti che imitano.
+  indietro.setAttribute('aria-keyshortcuts', 'ArrowLeft');
+  avanti.setAttribute('aria-keyshortcuts', 'ArrowRight');
+  oggi.setAttribute('aria-keyshortcuts', 'T');
   navigazione.append(indietro, oggi, avanti);
   navigazione.appendChild(el('h2', 'agenda-period', etichettaPeriodo(view, range)));
+  // §12: il fuso e' scritto, non sottinteso - Roma, qualunque sia il dispositivo.
+  const fuso = el('span', 'agenda-tz muted', TIMEZONE_LABEL);
+  fuso.dataset.timezone = '';
+  fuso.title = 'Date e orari dell’Agenda sono sempre nel fuso di Roma, qualunque sia il fuso del dispositivo.';
+  navigazione.appendChild(fuso);
   barra.appendChild(navigazione);
 
   const viste = el('div', 'agenda-views');
@@ -309,6 +325,18 @@ export async function renderAgenda(container, params = []) {
   aggiornaAzzera();
   pagina.appendChild(barraFiltri);
 
+  // §3/§12 Legenda sempre visibile: gli stati veri, con le classi delle card.
+  const legenda = el('div', 'agenda-legend');
+  legenda.dataset.legend = '';
+  legenda.setAttribute('aria-label', 'Legenda degli stati');
+  legenda.appendChild(el('span', 'muted', 'Legenda:'));
+  for (const voce of legendEntries({ withBusy: !puoAssegnare && griglia })) {
+    const segno = el('span', voce.className, voce.label);
+    segno.dataset.legendKey = voce.key;
+    legenda.appendChild(segno);
+  }
+  pagina.appendChild(legenda);
+
   // Il filtro agente si riempie con l'elenco /agents del server (attivi,
   // di questa agenzia). Un agente che non c'e' piu' non resta scelto.
   const riempiFiltroAgenti = (lista) => {
@@ -387,6 +415,9 @@ export async function renderAgenda(container, params = []) {
   // Piano A30-4 §1.6: vince l'ultima richiesta. Due filtri cambiati in fretta
   // fanno partire due caricamenti; una risposta superata non si disegna.
   let giroCarica = 0;
+  // §10: l'ora dell'ultimo caricamento riuscito di QUESTA vista (i dati che
+  // restano a schermo se il successivo fallisce).
+  let caricatoAlle = null;
 
   async function carica(messaggio = '') {
     const giro = ++giroCarica;
@@ -426,12 +457,29 @@ export async function renderAgenda(container, params = []) {
       };
       if (view === 'week') renderWeek(area, argomenti);
       else if (view === 'day') renderDay(area, argomenti);
+      // Piano §4.3: una cella del Mese porta al Giorno, niente altro.
+      else if (view === 'month') renderMonth(area, { dayKey: key, items, onDay: (giorno) => vai('day', giorno) });
       else renderList(area, argomenti);
+      caricatoAlle = new Date();
       avviso.replaceChildren();
       if (messaggio) avviso.appendChild(el('div', 'success-box', messaggio));
     } catch (errore) {
       if (superata()) return;
-      avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
+      // §10: errore leggibile + [Riprova], che ripete la STESSA richiesta
+      // (vista, periodo e filtri attuali) passando dal gettone "vince l'ultima";
+      // i dati gia' a schermo restano, con l'ora a cui risalgono.
+      const box = el('div', 'error-box');
+      box.dataset.loadError = '';
+      box.appendChild(el('span', '', errorMessage(errore)));
+      if (caricatoAlle) {
+        box.appendChild(el('span', 'agenda-stale', ` Sono mostrati i dati delle ${loadedAtLabel(caricatoAlle)}.`));
+      }
+      const riprova = el('button', 'btn', 'Riprova');
+      riprova.type = 'button';
+      riprova.dataset.retry = '';
+      riprova.addEventListener('click', () => carica(messaggio));
+      box.appendChild(riprova);
+      avviso.replaceChildren(box);
     }
   }
 
@@ -548,6 +596,34 @@ export async function renderAgenda(container, params = []) {
     if (stale()) return;
     openBookingLinksDialog(dialogo, { agents: listaAgenti, session: getSession() });
   });
+
+  // §12 tastiera: ← → T come i pulsanti della barra, solo con il fuoco sulla
+  // barra (o su nessun elemento), mai in un campo in scrittura o con un
+  // dialog/pannello aperto. Il listener si toglie da solo quando la pagina
+  // non c'e' piu' (stesso schema del cambio mobile qui sopra).
+  const inScrittura = (nodo) => !!nodo && (['INPUT', 'TEXTAREA', 'SELECT'].includes(nodo.tagName)
+    || nodo.isContentEditable === true
+    || (typeof nodo.closest === 'function' && !!nodo.closest('[contenteditable="true"], [contenteditable=""]')));
+  const tasti = (evento) => {
+    if (!pagina.isConnected) {
+      document.removeEventListener('keydown', tasti);
+      return;
+    }
+    const attivo = document.activeElement;
+    const azione = shortcutAction(evento, {
+      editing: inScrittura(evento.target) || inScrittura(attivo),
+      dialogOpen: drawer.open === true || dialogo.open === true
+        || (typeof document.querySelector === 'function' && !!document.querySelector('dialog[open]')),
+      inToolbar: !attivo || attivo === document.body || attivo === document.documentElement
+        || barra.contains(attivo),
+    });
+    if (!azione) return;
+    evento.preventDefault();
+    if (azione === 'prev') vai(view, shiftKey(view, key, -1));
+    else if (azione === 'next') vai(view, shiftKey(view, key, 1));
+    else vai(view, todayKey());
+  };
+  document.addEventListener('keydown', tasti);
 
   const erroreGoogle = erroreGoogleInSospeso();
   await carica(prendiMessaggio());
