@@ -1760,8 +1760,8 @@ export function openBookingLinksDialog(dialogEl, { agents, session }) {
   chiudi.addEventListener('click', () => { dimentica(); dialogEl.close(); });
   dialogEl.addEventListener('close', dimentica, { once: true });   // anche con Esc
 
-  // Non e' una pagina da mandare al cliente: e' l'endpoint JSON A30-12.
-  const ENDPOINT_TECNICO = 'Endpoint tecnico — la pagina pubblica cliente sarà disponibile successivamente.';
+  // P30: l'URL e' la pagina pubblica `/prenota/<token>`, pronta per il cliente.
+  const LINK_CLIENTE = 'Link da condividere con il cliente';
 
   function mostraUnaVolta(token, { ruotato }) {
     indirizzoUnaVolta = publicBookingUrl(window.location.origin, token);
@@ -1773,14 +1773,14 @@ export function openBookingLinksDialog(dialogEl, { agents, session }) {
     const campo = nodo('input', 'input');
     campo.type = 'text';
     campo.readOnly = true;
-    campo.setAttribute('aria-label', ENDPOINT_TECNICO);
+    campo.setAttribute('aria-label', LINK_CLIENTE);
     campo.value = indirizzoUnaVolta;               // proprieta', non attributo
     const copia = bottoneTesto('Copia', 'btn primary');
     copia.dataset.copy = '';
     const fatto = bottoneTesto('Ho copiato il link', 'btn ghost');
     fatto.dataset.done = '';
-    const nota = nodo('p', 'muted', ENDPOINT_TECNICO);
-    nota.dataset.endpointNote = '';
+    const nota = nodo('p', 'muted', LINK_CLIENTE);
+    nota.dataset.clientLinkLabel = '';
     riquadro.append(avvertenza, nota, campo, copia, fatto);
     unaVolta.replaceChildren(riquadro);
     copia.addEventListener('click', async () => {

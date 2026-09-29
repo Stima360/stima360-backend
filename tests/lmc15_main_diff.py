@@ -58,8 +58,11 @@ def righe_impreviste_in_main(root) -> list[str]:
     # booking, dichiarato per intero in `a30_12_diff` (stessa regola di
     # A30-7/9B/mount).
     from tests.a30_12_diff import RIGHE_MAIN as RIGHE_A30_12
+    # P30 (collisione dichiarata, autorizzata): il mount statico della pagina
+    # pubblica `/prenota/{token}`, dichiarato per intero in `p30_diff`.
+    from tests.p30_diff import RIGHE_MAIN as RIGHE_P30
     ammesse = (RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT | RIGHE_A30_7
-              | RIGHE_A30_9B | RIGHE_A30_12)
+              | RIGHE_A30_9B | RIGHE_A30_12 | RIGHE_P30)
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()

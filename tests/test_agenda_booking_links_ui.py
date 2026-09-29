@@ -43,8 +43,9 @@ B = "/api/appointments/booking-links"
 ORIGINE = "https://crm.stima360.test"
 TOKEN = "TOKEN-FINTO-creato-0123456789abcdef"
 TOKEN_RUOTATO = "TOKEN-FINTO-ruotato-fedcba9876543210"
-URL = f"{ORIGINE}/api/public/booking/{TOKEN}"
-URL_RUOTATO = f"{ORIGINE}/api/public/booking/{TOKEN_RUOTATO}"
+# P30: l'URL mostrata e' la PAGINA cliente, non piu' l'endpoint JSON A30-12.
+URL = f"{ORIGINE}/prenota/{TOKEN}"
+URL_RUOTATO = f"{ORIGINE}/prenota/{TOKEN_RUOTATO}"
 
 
 def _link(id_, agente, stato="active", **extra):
@@ -134,8 +135,8 @@ function statoLink() {
     unaVolta: once.visibleText(),
     campoUrl: campo ? campo.value : null,
     campoEtichetta: campo ? campo.getAttribute('aria-label') : null,
-    notaEndpoint: once.querySelector('[data-endpoint-note]')
-      ? once.querySelector('[data-endpoint-note]').textContent : null,
+    notaLink: once.querySelector('[data-client-link-label]')
+      ? once.querySelector('[data-client-link-label]').textContent : null,
     vuoto: pan().querySelectorAll('[data-empty]').length,
     modulo: modulo().visibleText(),
     selAgente: modulo().querySelector('[data-field="agent"]')
@@ -192,7 +193,7 @@ def _letture_elenco(out):
 # A - ELENCO E RUOLI
 # ---------------------------------------------------------------------------
 
-ENDPOINT_TECNICO = "Endpoint tecnico — la pagina pubblica cliente sarà disponibile successivamente."
+LINK_CLIENTE = "Link da condividere con il cliente"
 
 def test_01_elenco_con_i_campi_reali_e_nessun_id(staged):
     out = run(staged, "await apriLink(); esito({ s: statoLink() });", _rotte())
@@ -266,10 +267,11 @@ def test_05_crea_con_i_default_reali_e_mostra_il_link_una_volta(staged):
     s = out["s"]
     assert "Questo link viene mostrato solo ora. Se lo perdi, dovrai rigenerarlo." in s["unaVolta"]
     assert s["campoUrl"] == URL
-    # l'URL e' l'endpoint JSON A30-12, NON una pagina pronta per il cliente
-    assert s["notaEndpoint"] == ENDPOINT_TECNICO and ENDPOINT_TECNICO in s["unaVolta"]
-    assert s["campoEtichetta"] == ENDPOINT_TECNICO
-    assert "Indirizzo pubblico" not in s["unaVolta"] and "pagina per il cliente" not in s["unaVolta"]
+    # P30: l'URL e' la pagina cliente /prenota/<token>, dichiarata come tale;
+    # la vecchia nota "Endpoint tecnico" e l'endpoint JSON non compaiono piu'.
+    assert s["notaLink"] == LINK_CLIENTE and LINK_CLIENTE in s["unaVolta"]
+    assert s["campoEtichetta"] == LINK_CLIENTE
+    assert "Endpoint tecnico" not in s["unaVolta"] and "/api/public/booking/" not in s["campoUrl"]
     assert len(_letture_elenco(out)) == 2                 # rilettura dopo la scrittura
     assert s["modulo"] == ""                              # il modulo si chiude
 

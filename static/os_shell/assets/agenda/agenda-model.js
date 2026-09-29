@@ -707,12 +707,12 @@ export function weeklySlotsFromDays(giorni) {
 // A30-12 in UI: link di prenotazione pubblica.
 // ---------------------------------------------------------------------------
 
-/** La rotta pubblica REALE di A30-12 (`public_booking/public_router.py`).
- *  Non esiste ancora una pagina per il cliente: l'indirizzo mostrato e'
- *  quello dell'API pubblica del link. */
-export const PUBLIC_BOOKING_PATH = '/api/public/booking/';
+/** P30: la PAGINA pubblica per il cliente (`public_booking/page.py`,
+ *  `static/public_booking/`). E' l'indirizzo da condividere: la pagina parla
+ *  da se' con l'API A30-12; l'Agenda non la chiama mai. */
+export const PUBLIC_BOOKING_PATH = '/prenota/';
 
-/** L'indirizzo pubblico completo di un token appena creato o ruotato. */
+/** L'URL cliente completa di un token appena creato o ruotato. */
 export function publicBookingUrl(origin, token) {
   if (!token) return '';
   return `${String(origin || '').replace(/\/+$/, '')}${PUBLIC_BOOKING_PATH}${encodeURIComponent(token)}`;

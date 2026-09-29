@@ -44,6 +44,7 @@ from appointments_legacy.router import router as appointments_legacy_router
 # require_authenticated_operator: qui non c'e' un operatore, c'e' il client
 # pubblico che apre un link.
 from public_booking.public_router import router as public_booking_router
+from public_booking.page import PAGE_PREFIX as PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage
 from calendar_sync.router import router as calendar_sync_router
 from seller_intelligence import service as seller_intelligence_service
 from seller_intelligence.router import router as seller_intelligence_router
@@ -344,6 +345,11 @@ app.mount(
     StaticFiles(directory=str(OWNER_PORTAL_DIR), html=True),
     name="owner-portal",
 )
+# P30 - la pagina pubblica del link di prenotazione A30-12 (`/prenota/{token}`).
+# Un mount statico come `/owner`, non una rotta API: la pagina e' la stessa per
+# qualunque token e parla solo con `/api/public/booking/...` (vedi
+# `public_booking/page.py`).
+app.mount(PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage(), name="public-booking-page")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
