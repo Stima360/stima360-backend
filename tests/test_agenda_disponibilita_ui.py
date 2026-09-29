@@ -57,21 +57,29 @@ VUOTO = {"items": []}
 
 
 def _rotte(sessione="agency_owner", *, orari=(ORARI_ANNA,), salva=None, eccezioni=(ECCEZIONI,),
-           chiusure=(CHIUSURE,)):
+           chiusure=(CHIUSURE,), crea_eccezione=None, elimina_eccezione=None,
+           crea_chiusura=None, elimina_chiusura=None):
+    """Le risposte scriptate. `orari`, `eccezioni`, `chiusure` sono corpi di
+    200; un elemento che e' gia' una risposta completa (`{"status": ...}` o
+    `{"throw": True}`) passa com'e' - serve per gli stati di errore."""
     rt = a30_5._rt()
     salva = salva or ({"status": 200, "body": VUOTO},)
+    risposta = (lambda x: x if isinstance(x, dict) and ("status" in x or "throw" in x)
+                and "items" not in x else rt.ok(x))
     voci = [
         ("GET", "/api/operator-auth/me", [rt.ok(a30_13b._sessione(sessione))]),
         # le rotte piu' specifiche PRIMA di /agents
-        ("GET", f"{A}/agents/3/working-hours", [rt.ok(o) for o in orari]),
+        ("GET", f"{A}/agents/3/working-hours", [risposta(o) for o in orari]),
         ("PUT", f"{A}/agents/3/working-hours", list(salva)),
         ("GET", f"{A}/agents/4/working-hours", [rt.ok(VUOTO)]),
-        ("GET", f"{A}/agents/3/availability-exceptions?", [rt.ok(e) for e in eccezioni]),
-        ("POST", f"{A}/agents/3/availability-exceptions", [{"status": 201, "body": {"id": 1}}]),
-        ("DELETE", f"{A}/agents/3/availability-exceptions/7777", [rt.ok({"deleted": True})]),
-        ("GET", f"{A}/closures?", [rt.ok(c) for c in chiusure]),
-        ("POST", f"{A}/closures", [{"status": 201, "body": {"id": 2}}]),
-        ("DELETE", f"{A}/closures/8888", [rt.ok({"deleted": True})]),
+        ("GET", f"{A}/agents/3/availability-exceptions?", [risposta(e) for e in eccezioni]),
+        ("POST", f"{A}/agents/3/availability-exceptions",
+         list(crea_eccezione or ({"status": 201, "body": {"id": 1}},))),
+        ("DELETE", f"{A}/agents/3/availability-exceptions/7777",
+         list(elimina_eccezione or (rt.ok({"deleted": True}),))),
+        ("GET", f"{A}/closures?", [risposta(c) for c in chiusure]),
+        ("POST", f"{A}/closures", list(crea_chiusura or ({"status": 201, "body": {"id": 2}},))),
+        ("DELETE", f"{A}/closures/8888", list(elimina_chiusura or (rt.ok({"deleted": True}),))),
         ("GET", f"{A}/agents", [rt.ok(a30_13b.AGENTI)]),
         ("GET", f"{A}/calendar?", [rt.ok(VUOTO)]),
         ("GET", f"{A}?", [rt.ok(VUOTO)]),
@@ -372,3 +380,213 @@ def test_14_frecce_fra_le_schede(staged):
     """, _rotte())
     assert out["dopoDestra"] == ["false", "true", "false"]
     assert out["fine"] == ["false", "false", "true"]              # da Eccezioni: <- Orari <- Chiusure
+
+
+# ---------------------------------------------------------------------------
+# F - GIORNI CHIUSI, STATI DI ERRORE, VALIDAZIONE (gate A30-11 UI)
+# ---------------------------------------------------------------------------
+
+def test_15_un_giorno_senza_fasce_e_scritto_chiuso(staged):
+    """Il giorno chiuso si LEGGE ("Chiuso"), non si deduce dalla casella vuota;
+    aprendolo la scritta sparisce, richiudendolo torna."""
+    out = run(staged, """
+      await apriDispo();
+      const chiusi = () => pan().querySelectorAll('[data-day]')
+        .filter((g) => g.querySelector('[data-closed]').hidden !== true).map((g) => Number(g.dataset.day));
+      const prima = chiusi();
+      const testoMartedi = giorno(2).visibleText();
+      const c = giorno(2).querySelector('[data-field="active"]');
+      c.checked = true; c.dispatch('change'); await wait();
+      const aperto = chiusi();
+      c.checked = false; c.dispatch('change'); await wait();
+      report({ prima, testoMartedi, aperto, dopo: chiusi() });
+    """, _rotte())
+    assert out["prima"] == [2, 4, 5, 6, 7]                 # ORARI_ANNA: solo lunedi' e mercoledi'
+    assert "Martedì · Chiuso" in out["testoMartedi"]      # sulla riga del SUO giorno
+    assert out["aperto"] == [4, 5, 6, 7] and out["dopo"] == [2, 4, 5, 6, 7]
+
+
+ERRORI_LETTURA = [
+    ({"status": 403, "body": {"code": "FORBIDDEN_ROLE",
+                              "detail": "Un agente puo' gestire solo i propri orari di lavoro"}},
+     None),                                                # il messaggio del server o quello del codice
+    ({"status": 500, "body": {"detail": "boom"}}, "Errore del server (500). Riprova."),
+    ({"throw": True}, "Impossibile contattare il server. Verifica la connessione."),
+]
+
+
+@pytest.mark.parametrize("scheda", ["weekly", "exceptions", "closures"])
+@pytest.mark.parametrize("errore,atteso", ERRORI_LETTURA,
+                         ids=["403", "500", "rete"])
+def test_16_errore_in_lettura_leggibile_in_ogni_scheda(staged, scheda, errore, atteso):
+    rotte = {"weekly": {"orari": (errore,)}, "exceptions": {"eccezioni": (errore,)},
+             "closures": {"chiusure": (errore,)}}[scheda]
+    out = run(staged, f"""
+      await apriDispo();
+      if ('{scheda}' !== 'weekly') await vai('{scheda}');
+      report({{ s: statoDispo(), pannello: pan().visibleText(),
+               comandi: pan().querySelectorAll('[data-save]').length + pan().querySelectorAll('[data-delete]').length }});
+    """, _rotte(**rotte))
+    s = out["s"]
+    assert s["errore"], s                                   # mai silenzioso
+    if atteso:
+        assert s["errore"] == atteso
+    else:
+        assert s["errore"] and "boom" not in s["errore"]
+    assert s["avviso"] == "" and out["comandi"] == 0         # nessun successo, nessun comando su dati assenti
+    assert "Caricamento" not in out["pannello"]
+    assert _scritture(out) == []
+
+
+@pytest.mark.parametrize("scheda", ["weekly", "exceptions", "closures"])
+def test_16b_401_riporta_al_login_come_il_resto_del_crm(staged, scheda):
+    """Il meccanismo ESISTENTE del CRM: un 401 chiama `sessionExpired()`
+    (core/auth.js) e la Shell torna alla schermata di login; il pannello e i
+    dati spariscono, nessuna scrittura parte."""
+    errore = {"status": 401, "body": {"detail": "Not authenticated"}}
+    rotte = {"weekly": {"orari": (errore,)}, "exceptions": {"eccezioni": (errore,)},
+             "closures": {"chiusure": (errore,)}}[scheda]
+    out = run(staged, f"""
+      await apriDispo();
+      if ('{scheda}' !== 'weekly') await vai('{scheda}');
+      await wait();
+      report({{ login: __dom.byId['login-view'].hidden !== true,
+               app: __dom.byId['app-view'].hidden !== true,
+               dialogo: !!(dlg() && dlg()._open) }});
+    """, _rotte(**rotte))
+    assert out["login"] is True and out["app"] is False
+    assert out["dialogo"] is False
+    assert _scritture(out) == []
+
+
+def test_17_eccezione_non_valida_non_parte(staged):
+    out = run(staged, """
+      await apriDispo(); await vai('exceptions');
+      const tutto = pan().querySelectorAll('[data-field="all-day"]')[0];
+      tutto.checked = false; tutto.dispatch('change');
+      const n = pan().querySelectorAll('[data-save]')[0].parentNode;
+      n.querySelector('[data-field="start"]').value = '12:00';
+      n.querySelector('[data-field="end"]').value = '10:00';
+      pan().querySelector('[data-save]').dispatch('click'); await wait();
+      const rovesciata = f('[data-error]').textContent;
+      n.querySelector('[data-field="end"]').value = '';
+      pan().querySelector('[data-save]').dispatch('click'); await wait();
+      const senzaFine = f('[data-error]').textContent;
+      tutto.checked = true; tutto.dispatch('change');
+      set('[data-field="date"]', '');
+      pan().querySelector('[data-save]').dispatch('click'); await wait();
+      report({ rovesciata, senzaFine, senzaData: f('[data-error]').textContent });
+    """, _rotte())
+    assert _scritture(out) == []
+    assert out["rovesciata"].startswith("L'ora di fine deve essere dopo l'ora di inizio")
+    assert out["senzaFine"] == "Indica ora di inizio e di fine."
+    assert out["senzaData"] == "Indica la data."
+
+
+@pytest.mark.parametrize("risposta,atteso", [
+    ({"status": 422, "body": {"code": "VALIDATION_ERROR", "detail":
+      "La fascia si sovrappone a un'altra gia' presente per lo stesso giorno/data"}}, "si sovrappone"),
+    ({"status": 403, "body": {"code": "FORBIDDEN_ROLE",
+                              "detail": "Un agente puo' gestire solo i propri orari di lavoro"}}, None),
+    ({"status": 422, "body": {"code": "AGENT_NOT_ACTIVE", "detail": "x"}},
+     "L'agente selezionato non è un membro attivo dell'agenzia."),
+    ({"throw": True}, "Impossibile contattare il server. Verifica la connessione."),
+], ids=["sovrapposta-422", "403", "agente-non-attivo", "rete"])
+def test_18_eccezione_rifiutata_dal_server_leggibile_e_nessun_successo(staged, risposta, atteso):
+    out = run(staged, """
+      await apriDispo(); await vai('exceptions');
+      set('[data-field="date"]', '2026-10-02');
+      pan().querySelector('[data-save]').dispatch('click'); await wait();
+      report({ s: statoDispo(), abilitato: pan().querySelector('[data-save]').disabled !== true });
+    """, _rotte(crea_eccezione=(risposta,)))
+    assert len(_scritture(out)) == 1
+    assert out["s"]["avviso"] == "" and out["s"]["errore"]
+    if atteso:
+        assert atteso in out["s"]["errore"]
+    assert out["abilitato"]                                  # si puo' correggere e riprovare
+    assert len(_letture(out, f"{A}/agents/3/availability-exceptions")) == 1   # niente rilettura finta
+
+
+@pytest.mark.parametrize("scheda,rotta,detail", [
+    ("exceptions", "elimina_eccezione", "Eccezione non trovata"),
+    ("closures", "elimina_chiusura", "Chiusura non trovata"),
+])
+def test_19_elimina_gia_tolta_404_messaggio_giusto_e_rilettura(staged, scheda, rotta, detail):
+    """Un 404 in questo pannello NON e' "Appuntamento non trovato": e' l'elemento
+    gia' tolto da un altro operatore. Si mostra il messaggio del server e si rilegge."""
+    kw = {rotta: ({"status": 404, "body": {"code": "NOT_FOUND", "detail": detail}},)}
+    kw["eccezioni" if scheda == "exceptions" else "chiusure"] = (
+        ECCEZIONI if scheda == "exceptions" else CHIUSURE, VUOTO)
+    out = run(staged, f"""
+      await apriDispo(); await vai('{scheda}');
+      pan().querySelectorAll('[data-delete]')[0].dispatch('click'); await wait();
+      await siConferma();
+      report({{ s: statoDispo() }});
+    """, _rotte(**kw))
+    assert out["s"]["errore"] == f"{detail}."
+    assert "Appuntamento" not in out["s"]["errore"]
+    assert out["s"]["avviso"] == ""
+    assert out["s"]["righe"] == [] and out["s"]["vuoto"] == 1        # riletto: gia' tolto
+    prefisso = f"{A}/agents/3/availability-exceptions" if scheda == "exceptions" else f"{A}/closures"
+    assert len(_letture(out, prefisso)) == 2
+
+
+@pytest.mark.parametrize("risposta,atteso", [
+    ({"status": 403, "body": {"code": "FORBIDDEN_ROLE",
+                              "detail": "Solo owner/admin possono gestire le chiusure dell'agenzia"}}, None),
+    ({"status": 422, "body": {"code": "VALIDATION_ERROR", "detail":
+      "La fascia si sovrappone a un'altra gia' presente per lo stesso giorno/data"}}, "si sovrappone"),
+    ({"status": 503, "body": {"detail": "x"}}, "Errore del server (503). Riprova."),
+], ids=["403", "sovrapposta-422", "503"])
+def test_20_chiusura_rifiutata_dal_server_leggibile(staged, risposta, atteso):
+    out = run(staged, """
+      await apriDispo(); await vai('closures');
+      set('[data-field="date"]', '2026-12-24');
+      pan().querySelector('[data-save]').dispatch('click'); await wait();
+      report({ s: statoDispo() });
+    """, _rotte(crea_chiusura=(risposta,)))
+    assert _scritture(out) == [("POST", f"{A}/closures", {
+        "closure_date": "2026-12-24", "start_minute": 0, "end_minute": 1440})]
+    assert out["s"]["avviso"] == "" and out["s"]["errore"]
+    if atteso:
+        assert out["s"]["errore"] == atteso or atteso in out["s"]["errore"]
+
+
+def test_21_agent_gestisce_le_proprie_eccezioni_ma_nessun_comando_sulle_chiusure(staged):
+    """Permessi (D6): un agent vede e modifica SOLO i propri orari/eccezioni;
+    le chiusure dell'agenzia le legge ma non ha comandi per cambiarle."""
+    out = run(staged, """
+      await apriDispo();
+      const orari = { salva: pan().querySelectorAll('[data-save]').length };
+      await vai('exceptions');
+      const ecc = { salva: pan().querySelectorAll('[data-save]').length,
+                    elimina: pan().querySelectorAll('[data-delete]').length };
+      await vai('closures');
+      report({ orari, ecc, s: statoDispo() });
+    """, _rotte("agent"))
+    assert out["orari"]["salva"] == 1 and out["ecc"]["salva"] == 1 and out["ecc"]["elimina"] == 2
+    assert out["s"]["salva"] == [] and out["s"]["elimina"] == 0     # chiusure: sola lettura
+    assert len(out["s"]["righe"]) == 1                               # ...ma le vede
+    assert out["s"]["agenti"] is None                                # nessun selettore di agenti
+    assert all(c["url"].startswith(f"{A}/agents/3/") or not c["url"].startswith(f"{A}/agents/")
+               or c["url"] == f"{A}/agents" for c in out["calls"])   # mai gli orari di altri
+
+
+def test_22_nessun_metodo_di_array_su_una_nodelist():
+    """Regressione trovata dalla certificazione in Chromium: nel browser
+    `querySelectorAll` restituisce una NodeList, che NON ha `.map`/`.filter`/
+    `.find`...; lo stub di DOM dei test restituisce un array e non se ne
+    accorge. "Salva orari" lanciava `querySelectorAll(...).map is not a
+    function` e non salvava mai. Qui si vieta il pattern in tutto il frontend
+    della Shell e della pagina pubblica (serve `Array.from(...)`)."""
+    import re
+    from pathlib import Path
+    radice = Path(__file__).resolve().parents[1] / "static"
+    ammessi = {"forEach", "length", "item", "entries", "keys", "values"}
+    trovati = []
+    for f in sorted(list((radice / "os_shell").rglob("*.js")) + list((radice / "public_booking").rglob("*.js"))):
+        testo = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"querySelectorAll\((?:[^()]|\([^()]*\))*\)\s*\.\s*(\w+)", testo):
+            if m.group(1) not in ammessi:
+                trovati.append(f"{f.relative_to(radice)}:{testo.count(chr(10), 0, m.start()) + 1} .{m.group(1)}")
+    assert trovati == [], trovati

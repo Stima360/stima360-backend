@@ -1303,6 +1303,14 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
 
   const pulisci = () => { avviso.replaceChildren(); errore.textContent = ''; };
   const mostraErrore = (e) => {
+    // Un 404 qui e' un'eccezione/chiusura gia' tolta (o di un agente non piu'
+    // attivo), non un appuntamento: il `detail` del server lo dice meglio.
+    if (e && Number(e.status) === 404) {
+      const dettaglio = typeof e.detail === 'string' ? e.detail.trim() : '';
+      errore.textContent = dettaglio ? `${dettaglio}.`.replace(/\.\.$/, '.')
+        : 'Elemento non trovato o già eliminato.';
+      return;
+    }
     errore.textContent = e && e.status !== undefined ? errorMessage(e) : ((e && e.message) || errorMessage(e));
   };
   const successo = (testo) => { avviso.replaceChildren(nodo('div', 'success-box', testo)); };
@@ -1361,7 +1369,11 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
       attivo.type = 'checkbox';
       attivo.dataset.field = 'active';
       attivo.checked = giorni[d].length > 0;
-      testa.append(attivo, nodo('span', '', WEEKDAY_LABELS[d]));
+      // Un giorno senza fasce e' CHIUSO: lo si scrive, sulla STESSA riga del
+      // giorno (sotto, sembrerebbe l'etichetta del giorno seguente).
+      const chiuso = nodo('span', 'muted', ' · Chiuso');
+      chiuso.dataset.closed = '';
+      testa.append(attivo, nodo('span', '', WEEKDAY_LABELS[d]), chiuso);
       const fasce = nodo('div', '');
       fasce.dataset.intervals = '';
       for (const f of giorni[d]) rigaFascia(fasce, { start: minutesToTime(f.start), end: minutesToTime(f.end) });
@@ -1371,12 +1383,14 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
       attivo.addEventListener('change', () => {
         fasce.hidden = !attivo.checked;
         aggiungi.hidden = !attivo.checked;
+        chiuso.hidden = attivo.checked;
         if (attivo.checked && !fasce.querySelectorAll('[data-interval]').length) {
           rigaFascia(fasce, { start: '09:00', end: '18:00' });
         }
       });
       fasce.hidden = !attivo.checked;
       aggiungi.hidden = !attivo.checked;
+      chiuso.hidden = attivo.checked;
       giorno.append(testa, fasce, aggiungi);
       corpo.appendChild(giorno);
     }
@@ -1391,7 +1405,8 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
       for (const g of corpo.querySelectorAll('[data-day]')) {
         stato[Number(g.dataset.day)] = {
           active: g.querySelector('[data-field="active"]').checked,
-          intervals: g.querySelectorAll('[data-interval]').map((r) => ({
+          // Array.from: nel browser querySelectorAll e' una NodeList, senza .map
+          intervals: Array.from(g.querySelectorAll('[data-interval]')).map((r) => ({
             start: r.querySelector('[data-field="start"]').value,
             end: r.querySelector('[data-field="end"]').value,
           })),
@@ -1543,7 +1558,10 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
             await deleteAvailabilityException(agenteId, r.id);
             await mostraEccezioni();
             successo('Eccezione eliminata.');
-          } catch (e) { mostraErrore(e); }
+          } catch (e) {
+            if (Number(e && e.status) === 404) await mostraEccezioni();   // gia' tolta: si rilegge
+            mostraErrore(e);
+          }
         },
       }));
     }
@@ -1596,7 +1614,10 @@ export function openAvailabilityDialog(dialogEl, { agents, session }) {
             await deleteClosure(r.id);
             await mostraChiusure();
             successo('Chiusura eliminata.');
-          } catch (e) { mostraErrore(e); }
+          } catch (e) {
+            if (Number(e && e.status) === 404) await mostraChiusure();    // gia' tolta: si rilegge
+            mostraErrore(e);
+          }
         },
       } : {}));
     }
