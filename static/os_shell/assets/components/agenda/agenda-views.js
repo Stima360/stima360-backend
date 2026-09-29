@@ -24,7 +24,7 @@ import {
   initialScrollTop,
   itemTitle,
   itemsForDay,
-  overlapLayout,
+  overflowLayout,
   statusLabel,
   todayKey,
   typeLabel,
@@ -103,7 +103,7 @@ function colonnaOre() {
   return colonna;
 }
 
-function colonnaGiorno(key, items, onOpen, onSlotClick) {
+function colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri) {
   const colonna = el('div', 'agenda-day-column');
   colonna.dataset.day = key;
   colonna.style.height = `${24 * HOUR_HEIGHT}px`;
@@ -133,19 +133,65 @@ function colonnaGiorno(key, items, onOpen, onSlotClick) {
     colonna.appendChild(riga);
   }
   const delGiorno = itemsForDay(items, key);
-  const layout = overlapLayout(delGiorno);
+  // A30-13C: oltre MAX_OVERLAP_COLUMNS eventi sovrapposti le card non si
+  // impilano piu' una sull'altra (solo quella sopra restava cliccabile):
+  // l'ultima corsia porta un "+N" che apre l'elenco dei nascosti.
+  const { placement, overflow } = overflowLayout(delGiorno);
+  const posiziona = (nodo, { top, height }, { column, columns }) => {
+    nodo.classList.add('agenda-block');
+    nodo.style.top = `${top}px`;
+    nodo.style.height = `${height}px`;
+    nodo.style.left = `calc(${(100 / columns) * column}% + 2px)`;
+    nodo.style.width = `calc(${100 / columns}% - 4px)`;
+  };
   delGiorno.forEach((item, i) => {
-    const { top, height } = blockGeometry(item, key);
-    const { column, columns } = layout[i];
-    const card = renderCard(item, { onOpen, compact: height < 40 });
-    card.classList.add('agenda-block');
-    card.style.top = `${top}px`;
-    card.style.height = `${height}px`;
-    card.style.left = `calc(${(100 / columns) * column}% + 2px)`;
-    card.style.width = `calc(${100 / columns}% - 4px)`;
+    if (!placement[i]) return;                   // dietro un "+N"
+    const geometria = blockGeometry(item, key);
+    const card = renderCard(item, { onOpen, compact: geometria.height < 40 });
+    posiziona(card, geometria, placement[i]);
     colonna.appendChild(card);
   });
+  for (const gruppo of overflow) {
+    const nascosti = gruppo.indices.map((i) => delGiorno[i]);
+    const orario = `${formatTime(gruppo.start_at)}–${formatTime(gruppo.end_at)}`;
+    const altri = el('button', 'btn agenda-more', `+${nascosti.length}`);
+    altri.type = 'button';
+    altri.dataset.overflowCount = String(nascosti.length);
+    altri.setAttribute('aria-label', `Altri ${nascosti.length} appuntamenti, ${orario}`);
+    altri.title = `Altri ${nascosti.length} appuntamenti, ${orario}`;
+    posiziona(altri, blockGeometry(gruppo, key), gruppo);
+    if (apriAltri) altri.addEventListener('click', () => apriAltri({ day: key, items: nascosti, orario }));
+    colonna.appendChild(altri);
+  }
   return colonna;
+}
+
+/**
+ * A30-13C: il pannello degli appuntamenti nascosti dietro un "+N", uno per
+ * griglia e creato solo al primo uso. Le card sono le stesse della Lista;
+ * aprirne una chiude il pannello e apre il suo dettaglio. Esc chiude (dialog
+ * nativo).
+ */
+function pannelloAltri(radice, onOpen) {
+  let dialogo = null;
+  return ({ day, items, orario }) => {
+    if (!dialogo) {
+      dialogo = el('dialog', 'modal agenda-overflow');
+      dialogo.setAttribute('aria-modal', 'true');
+      radice.appendChild(dialogo);
+    }
+    dialogo.setAttribute('aria-label', `Altri ${items.length} appuntamenti, ${formatDayLong(day)}, ${orario}`);
+    const gruppo = el('section', 'agenda-list-day');
+    gruppo.appendChild(el('h3', 'agenda-list-day-title',
+      `Altri ${items.length} appuntamenti · ${formatDayLong(day)} · ${orario}`));
+    const apri = onOpen ? (item) => { dialogo.close(); onOpen(item); } : undefined;
+    for (const item of items) gruppo.appendChild(renderCard(item, { onOpen: apri }));
+    const chiudi = el('button', 'btn', 'Chiudi');
+    chiudi.type = 'button';
+    chiudi.addEventListener('click', () => dialogo.close());
+    dialogo.replaceChildren(gruppo, chiudi);
+    dialogo.showModal();
+  };
 }
 
 function griglia(days, items, onOpen, classe, onSlotClick) {
@@ -165,7 +211,10 @@ function griglia(days, items, onOpen, classe, onSlotClick) {
 
   const corpo = el('div', 'agenda-grid-body');
   corpo.appendChild(colonnaOre());
-  for (const key of days) corpo.appendChild(colonnaGiorno(key, items, onOpen, onSlotClick));
+  const apriAltri = pannelloAltri(radice, onOpen);
+  for (const key of days) {
+    corpo.appendChild(colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri));
+  }
   radice.appendChild(corpo);
   return radice;
 }

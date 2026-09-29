@@ -367,28 +367,22 @@ export function blockGeometry(item, key, hourHeight = HOUR_HEIGHT) {
 }
 
 /**
- * Sotto-colonne per gli eventi sovrapposti di UN giorno. Restituisce, per
- * indice dell'elemento, `{ column, columns }`. Oltre MAX_OVERLAP_COLUMNS gli
- * eventi finiscono nell'ultima colonna (restano cliccabili).
+ * I gruppi di eventi sovrapposti di UN giorno, con la colonna "grezza" di
+ * ciascuno (assegnazione greedy, SENZA limite). Base comune di
+ * `overlapLayout` e `overflowLayout`: una sola regola di impaginazione.
  */
-export function overlapLayout(items) {
+function gruppiSovrapposti(items) {
   const ordinati = (items || []).map((it, i) => ({
     i, s: Date.parse(it.start_at), e: Date.parse(it.end_at),
   })).sort((a, b) => a.s - b.s || b.e - a.e || a.i - b.i);
-  const esito = new Array((items || []).length);
+  const gruppi = [];
   let gruppo = [];
   let fineGruppo = -Infinity;
-  const chiudi = () => {
-    const colonne = Math.min(Math.max(1, ...gruppo.map((g) => g.column + 1)), MAX_OVERLAP_COLUMNS);
-    for (const g of gruppo) {
-      esito[g.i] = { column: Math.min(g.column, colonne - 1), columns: colonne };
-    }
-    gruppo = [];
-  };
   let fineColonne = [];
   for (const it of ordinati) {
     if (gruppo.length && it.s >= fineGruppo) {
-      chiudi();
+      gruppi.push(gruppo);
+      gruppo = [];
       fineColonne = [];
     }
     let colonna = fineColonne.findIndex((fine) => fine <= it.s);
@@ -401,8 +395,69 @@ export function overlapLayout(items) {
     gruppo.push({ i: it.i, column: colonna });
     fineGruppo = Math.max(fineGruppo === -Infinity ? it.e : fineGruppo, it.e);
   }
-  if (gruppo.length) chiudi();
+  if (gruppo.length) gruppi.push(gruppo);
+  return gruppi;
+}
+
+/**
+ * Sotto-colonne per gli eventi sovrapposti di UN giorno. Restituisce, per
+ * indice dell'elemento, `{ column, columns }`. Oltre MAX_OVERLAP_COLUMNS gli
+ * eventi finiscono nell'ultima colonna: per la griglia si usa
+ * `overflowLayout`, che invece li raccoglie dietro "+N" (A30-13C).
+ */
+export function overlapLayout(items) {
+  const esito = new Array((items || []).length);
+  for (const gruppo of gruppiSovrapposti(items)) {
+    const colonne = Math.min(Math.max(1, ...gruppo.map((g) => g.column + 1)), MAX_OVERLAP_COLUMNS);
+    for (const g of gruppo) {
+      esito[g.i] = { column: Math.min(g.column, colonne - 1), columns: colonne };
+    }
+  }
   return esito;
+}
+
+/**
+ * A30-13C: come `overlapLayout`, ma nessun evento resta irraggiungibile.
+ *
+ * Un gruppo che sta in MAX_OVERLAP_COLUMNS colonne si impagina come sempre.
+ * Uno che ne chiederebbe di piu' mostra i suoi eventi nelle prime
+ * MAX_OVERLAP_COLUMNS - 1 colonne e usa l'ultima per un indicatore "+N":
+ * `overflow` elenca, per ogni gruppo, gli indici NASCOSTI (quelli che
+ * sarebbero finiti dalla colonna MAX_OVERLAP_COLUMNS - 1 in poi) e
+ * l'intervallo che coprono, dove l'indicatore si disegna.
+ *
+ * Restituisce `{ placement, overflow }`: `placement[i]` e' `{ column,
+ * columns }` per un evento visibile e `null` per uno nascosto. Ogni indice e'
+ * visibile oppure in UN solo gruppo di `overflow`, mai perso.
+ */
+export function overflowLayout(items) {
+  const lista = items || [];
+  const placement = new Array(lista.length).fill(null);
+  const overflow = [];
+  for (const gruppo of gruppiSovrapposti(lista)) {
+    const richieste = Math.max(1, ...gruppo.map((g) => g.column + 1));
+    if (richieste <= MAX_OVERLAP_COLUMNS) {
+      for (const g of gruppo) placement[g.i] = { column: g.column, columns: richieste };
+      continue;
+    }
+    const corsia = MAX_OVERLAP_COLUMNS - 1;
+    const nascosti = [];
+    for (const g of gruppo) {
+      if (g.column < corsia) placement[g.i] = { column: g.column, columns: MAX_OVERLAP_COLUMNS };
+      else nascosti.push(g.i);
+    }
+    nascosti.sort((a, b) => Date.parse(lista[a].start_at) - Date.parse(lista[b].start_at) || a - b);
+    const inizio = Math.min(...nascosti.map((i) => Date.parse(lista[i].start_at)));
+    const fine = Math.max(...nascosti.map((i) => Date.parse(lista[i].end_at)));
+    overflow.push({
+      indices: nascosti,
+      column: corsia,
+      columns: MAX_OVERLAP_COLUMNS,
+      start_at: new Date(inizio).toISOString(),
+      end_at: new Date(fine).toISOString(),
+    });
+  }
+  return { placement, overflow };
 }
 
 /** Lo scroll iniziale della griglia: 08:00. */
