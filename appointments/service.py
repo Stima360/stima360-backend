@@ -383,13 +383,13 @@ def _replica(ctx, agency_id, actor, esistente, payload, cur):
     return repository.get_appointment(cur, agency_id, esistente["id"])
 
 
-def create_appointment_idempotent(ctx, payload):
-    """Crea un appuntamento `crm_manual`. Restituisce `(riga, replica)`.
-
-    Con `client_request_id` (A30-2 §6): la stessa richiesta ripetuta dallo
-    stesso attore restituisce l'appuntamento gia' creato (`replica=True`),
-    senza un evento nuovo; la stessa chiave con dati diversi, o di un altro
-    attore o agenzia, e' IDEMPOTENCY_KEY_REUSED.
+def _creazione(ctx, payload):
+    """Il lavoro UNICO di una creazione `crm_manual`: restituisce la funzione
+    `(cur) -> (riga, replica)`. Chi apre la transazione lo decide il chiamante:
+    `create_appointment_idempotent` (la propria) o
+    `create_appointment_with_cursor` (quella di chi chiama, A31-3). Stessa
+    macchina a stati, stessi permessi, stesso controllo conflitti, stessa
+    proiezione, stesso evento, stesso mark dirty Google: il codice e' questo.
     """
     agency_id = ctx.require_agency()
     actor = _attore(ctx)
@@ -461,7 +461,36 @@ def create_appointment_idempotent(ctx, payload):
             _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
         return riga, False
 
-    return _in_transazione(_lavoro)
+    return _lavoro
+
+
+def create_appointment_idempotent(ctx, payload):
+    """Crea un appuntamento `crm_manual`. Restituisce `(riga, replica)`.
+
+    Con `client_request_id` (A30-2 §6): la stessa richiesta ripetuta dallo
+    stesso attore restituisce l'appuntamento gia' creato (`replica=True`),
+    senza un evento nuovo; la stessa chiave con dati diversi, o di un altro
+    attore o agenzia, e' IDEMPOTENCY_KEY_REUSED.
+    """
+    return _in_transazione(_creazione(ctx, payload))
+
+
+def create_appointment_with_cursor(ctx, cur, payload):
+    """A31-3 - la STESSA creazione sul cursore del chiamante.
+
+    Per i domini che devono scrivere l'appuntamento insieme alle proprie
+    righe in UNA transazione (BUY: interazione, match, storico). Nessun
+    commit, nessuna connessione: se qualcosa fallisce l'eccezione risale e il
+    chiamante annulla tutto. La violazione dell'EXCLUDE diventa lo stesso
+    APPOINTMENT_CONFLICT di `_in_transazione`. Restituisce `(riga, replica)`.
+    """
+    try:
+        return _creazione(ctx, payload)(cur)
+    except Exception as exc:
+        tradotta = _traduci_esclusione(exc)
+        if tradotta is not None:
+            raise tradotta from exc
+        raise
 
 
 def create_appointment(ctx, payload):

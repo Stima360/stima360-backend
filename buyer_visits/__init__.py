@@ -18,4 +18,11 @@ Regole del package:
   * non tocca le righe legacy (`appointment_id IS NULL`): nessun backfill,
     nessun import, nessuna mutazione automatica;
   * non tocca Google, BUY, owner feedback, FLOW.
+
+A31-3 aggiunge, con le stesse regole:
+  * `facade` - BUY "Visita programmata" e PROPERTY "Programma visita"
+    creano l'appuntamento con `appointments.service.create_appointment_with_cursor`
+    sul cursore del chiamante (la transazione resta di BUY/PROPERTY);
+  * `guards` - le regole pure del PATCH/DELETE legacy (D5-D7 + la regola
+    A31-1 sulle visite legacy future aperte), chiamate da PROPERTY.
 """

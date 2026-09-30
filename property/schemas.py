@@ -171,6 +171,10 @@ class VisitCreate(PropertyModel):
     rating: int | None = Field(None,ge=1,le=5)
     assigned_to: str | None = Field(None,max_length=200)
     created_by: str | None = Field(None,max_length=200)
+    # A31-3: una visita futura da svolgere nasce nell'Agenda. L'agente si
+    # indica esplicitamente (owner/admin, A31-4 in UI); un agent e' se stesso.
+    assigned_user_id: int | None = Field(None, gt=0)
+    client_request_id: str | None = Field(None, max_length=64)
     @root_validator(skip_on_failure=True)
     def validate_status(cls,v):
         if v.get('status') not in VISIT_STATUSES: raise ValueError('invalid visit status')

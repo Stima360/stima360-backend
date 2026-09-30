@@ -162,6 +162,11 @@ class MatchDecision(BuyModel):
     occurred_at: datetime | None = None
     created_by: str | None = None
     scheduled_at: datetime | None = None
+    # A31-3: la visita programmata nasce nell'Agenda. L'agente si indica
+    # esplicitamente (owner/admin, A31-4 in UI); un agent e' se stesso.
+    # `client_request_id` e' la chiave di idempotenza dell'appuntamento.
+    assigned_user_id: int | None = Field(None, gt=0)
+    client_request_id: str | None = Field(None, max_length=64)
     @root_validator(skip_on_failure=True)
     def validate_action(cls,v):
         if v.get('action') not in INTERACTION_TYPES - {'other'}: raise ValueError('invalid action')

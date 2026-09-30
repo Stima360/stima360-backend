@@ -242,6 +242,10 @@ def dashboard():
 from core.repository import create_task_with_cursor as core_create_task_with_cursor
 from core.scope import ProgrammingError
 
+# A31-3: la facade verso l'Agenda (visita programmata) e i suoi errori.
+from buyer_visits import errors as _visite_errori
+from buyer_visits import facade as _visite_facade
+
 
 def _agency(ctx) -> int:
     return ctx.require_agency()
@@ -637,9 +641,16 @@ def list_matches_scoped(ctx, request_id):
         return [dict(x) for x in cur.fetchall()]
 
 
+_D8_MESSAGE = ("Una visita programmata nasce dall'Agenda o da \"Visita programmata\" sul "
+               "match, non da un'interazione generica")
+
+
 def add_interaction_scoped(ctx, request_id, data):
     agency_id = _agency(ctx)
     data = dict(data)
+    if data.get("interaction_type") == _VISIT_SCHEDULED:
+        # A31-3, D8: senza appuntamento non esiste una visita programmata.
+        raise _visite_errori.BuyerVisitScheduleViaAgenda(_D8_MESSAGE)
     with core_cursor(commit=True) as (_, cur):
         _ensure_buy(cur, request_id, agency_id, for_update=True)
         match_id = data.get("match_id")
@@ -713,12 +724,127 @@ def add_interaction_scoped(ctx, request_id, data):
         return result
 
 
+_VISIT_SCHEDULED = "visit_scheduled"
+
+
+def _insert_visit_scheduled(cur, agency_id, request_id, match_id, property_id,
+                            property_visit_id, data):
+    """L'interazione `visit_scheduled` + stato del match + storico: le stesse
+    tre scritture di sempre, sul cursore del chiamante."""
+    interaction = {
+        "buy_request_id": request_id,
+        "match_id": match_id,
+        "property_id": property_id,
+        "property_visit_id": property_visit_id,
+        "interaction_type": _VISIT_SCHEDULED,
+        "reason_code": data.get("reason_code"),
+        "notes": data.get("notes"),
+        "occurred_at": data.get("occurred_at"),
+        "created_by": data.get("created_by"),
+    }
+    if interaction["occurred_at"] is None:
+        interaction.pop("occurred_at")
+    cols = list(interaction)
+    cur.execute(
+        f"INSERT INTO buy_request_interactions({','.join(cols)}) "
+        f"VALUES({','.join(['%s'] * len(cols))}) RETURNING *",
+        list(interaction.values()),
+    )
+    result = row(cur.fetchone())
+    cur.execute(
+        """
+        UPDATE matches
+           SET commercial_status=%s,last_reviewed_at=NOW(),updated_at=NOW()
+         WHERE id=%s AND buy_request_id=%s
+        """,
+        (MATCH_STATUS[_VISIT_SCHEDULED], match_id, request_id),
+    )
+    history(
+        cur, request_id, HISTORY_EVENT[_VISIT_SCHEDULED],
+        result.get("notes") or _VISIT_SCHEDULED,
+        match_id=match_id, property_id=property_id,
+        reason_code=result.get("reason_code"),
+        new_value={"interaction_type": _VISIT_SCHEDULED}, agency_id=agency_id
+    )
+    return result
+
+
 def schedule_match_visit_scoped(ctx, request_id, match_id, data):
+    """A31-3 - "Visita programmata" sul match: FACADE verso l'Agenda.
+
+    Una transazione, un commit: lock della richiesta, lock del match, tenant,
+    appuntamento `buyer_visit` (appointments.service sul NOSTRO cursore:
+    permessi, conflitti, evento, Google dirty), proiezione A31-2 su
+    `property_visits`, UNA interazione `visit_scheduled` che la collega,
+    stato del match, storico. Qualunque errore annulla tutto.
+
+    Agente (D2): esplicito, oppure l'agent stesso della sessione. Owner/admin
+    senza agente esplicito restano, per ora, sul percorso legacy dichiarato
+    (`_schedule_match_visit_scoped_legacy`): la UI non ha ancora un selettore
+    agente (attivazione in A31-4). Mai un agente inferito.
+    """
     agency_id = _agency(ctx)
     data = dict(data)
     scheduled_at = data.pop("scheduled_at", None)
     if scheduled_at is None:
         raise ValidationError("scheduled_at is required when scheduling a visit")
+    agente = _visite_facade.resolve_agent(ctx, data.pop("assigned_user_id", None))
+    client_request_id = data.pop("client_request_id", None)
+    if agente is None:
+        return _schedule_match_visit_scoped_legacy(agency_id, request_id, match_id,
+                                                   scheduled_at, data)
+    with core_cursor(commit=True) as (_, cur):
+        buy = _ensure_buy(cur, request_id, agency_id, for_update=True)
+        match = _ensure_match(cur, request_id, match_id, agency_id, for_update=True)
+        property_id = match["property_id"]
+        # Doppio invio senza chiave: la stessa visita ANCORA APERTA per lo
+        # stesso match e lo stesso orario e' quella gia' registrata. Una
+        # visita annullata/spostata non blocca una nuova prenotazione.
+        cur.execute(
+            """
+            SELECT i.* FROM buy_request_interactions i
+            JOIN property_visits v ON v.id=i.property_visit_id
+            JOIN properties p ON p.id=v.property_id
+            WHERE i.buy_request_id=%s
+              AND i.match_id=%s
+              AND i.interaction_type='visit_scheduled'
+              AND v.scheduled_at=%s
+              AND v.status IN ('scheduled','confirmed')
+              AND p.agency_id=%s
+            ORDER BY i.id DESC LIMIT 1
+            """,
+            (request_id, match_id, scheduled_at, agency_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            return row(existing)
+        _, visita, replica = _visite_facade.schedule(
+            cur, ctx, property_id=property_id, contact_id=buy["contact_id"],
+            lead_id=buy["lead_id"], start_at=scheduled_at, assigned_user_id=agente,
+            client_request_id=client_request_id)
+        if replica:
+            # Stessa `client_request_id`: l'appuntamento e la sua visita
+            # esistono gia'; la loro interazione anche.
+            cur.execute(
+                """
+                SELECT * FROM buy_request_interactions
+                WHERE property_visit_id=%s AND buy_request_id=%s AND match_id=%s
+                  AND interaction_type='visit_scheduled'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (visita["id"], request_id, match_id),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return row(existing)
+        return _insert_visit_scheduled(cur, agency_id, request_id, match_id, property_id,
+                                       visita["id"], data)
+
+
+def _schedule_match_visit_scoped_legacy(agency_id, request_id, match_id, scheduled_at, data):
+    """PERCORSO LEGACY DICHIARATO (A31-3), invariato: owner/admin senza agente
+    esplicito. Scrive `property_visits` senza appuntamento (`appointment_id`
+    NULL). Da spegnere in A31-4, quando la UI BUY avra' il selettore agente."""
     with core_cursor(commit=True) as (_, cur):
         buy = _ensure_buy(cur, request_id, agency_id, for_update=True)
         match = _ensure_match(cur, request_id, match_id, agency_id, for_update=True)
@@ -812,6 +938,10 @@ def update_interaction_scoped(ctx, interaction_id, data):
         if not current:
             raise NotFoundError(f"interaction {interaction_id} not found")
         current = dict(current)
+        if (data.get("interaction_type") == _VISIT_SCHEDULED
+                and current.get("interaction_type") != _VISIT_SCHEDULED):
+            # A31-3, D8: nemmeno trasformando un'interazione esistente.
+            raise _visite_errori.BuyerVisitScheduleViaAgenda(_D8_MESSAGE)
 
         if data.get("property_visit_id") is not None:
             if current.get("match_id") is None or current.get("property_id") is None:

@@ -1,9 +1,14 @@
 from __future__ import annotations
+from datetime import datetime, timezone
 from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.scope import ProgrammingError
+
+# A31-3: visite acquirente - facade verso l'Agenda e regole D5-D7.
+from buyer_visits import facade as _visite_facade
+from buyer_visits import guards as _visite_regole
 
 def row(x): return dict(x) if x else None
 
@@ -474,8 +479,55 @@ def list_visits_by_contact(*args, **kwargs):
             )
         return [dict(x) for x in cur.fetchall()]
 
+def _visita_da_agenda(data, agente):
+    """A31-3 §7: una NUOVA visita da svolgere (`scheduled`/`confirmed`) nel
+    futuro, con un agente certo, nasce nell'Agenda. Le visite passate o gia'
+    concluse si registrano come prima (storico)."""
+    if agente is None or data.get('status') not in _visite_facade.STATI_APERTI:
+        return False
+    quando = data.get('scheduled_at')
+    if quando is None:
+        return False
+    if quando.tzinfo is None or quando.utcoffset() is None:
+        return True   # senza fuso: la facade lo rifiuta con un errore pulito
+    return quando > datetime.now(timezone.utc)
+
+
 def add_visit(ctx, property_id, data):
-    return create_child(ctx, 'property_visits', property_id, data)
+    """POST /properties/{id}/visits. A31-3: facade verso l'Agenda per una
+    visita futura da svolgere con agente certo (esplicito, o l'agent stesso);
+    risposta invariata: la riga `property_visits` (la proiezione). Owner/admin
+    senza agente esplicito e visite storiche: percorso legacy invariato
+    (attivazione owner/admin in A31-4, con il selettore agente in UI)."""
+    data = dict(data)
+    richiesto = data.pop('assigned_user_id', None)
+    client_request_id = data.pop('client_request_id', None)
+    agente = _visite_facade.resolve_agent(ctx, richiesto) if ctx is not None else None
+    if not _visita_da_agenda(data, agente):
+        return create_child(ctx, 'property_visits', property_id, data)
+    agency_id = ctx.require_agency()
+    with core_cursor(commit=True) as (_, cur):
+        ensure_scoped(cur, 'properties', property_id, agency_id, 'property')
+        if data.get('contact_id') is not None:
+            ensure_scoped(cur, 'contacts', data['contact_id'], agency_id, 'contact')
+        if data.get('lead_id') is not None:
+            ensure_scoped(cur, 'leads', data['lead_id'], agency_id, 'lead')
+        _, visita, _ = _visite_facade.schedule(
+            cur, ctx, property_id=property_id, contact_id=data.get('contact_id'),
+            lead_id=data.get('lead_id'), start_at=data['scheduled_at'],
+            assigned_user_id=agente, status=data['status'],
+            client_request_id=client_request_id)
+        # D4: esito/feedback/voto restano del percorso legacy: se il form li
+        # manda gia' in creazione, li scrive questo repository, non la proiezione.
+        legacy = {k: data[k] for k in _visite_regole.CAMPI_LEGACY if data.get(k) is not None}
+        if legacy:
+            cur.execute(
+                f"UPDATE property_visits SET {','.join(f'{k}=%s' for k in legacy)},"
+                "updated_at=NOW() WHERE id=%s",
+                list(legacy.values()) + [visita['id']],
+            )
+        cur.execute('SELECT * FROM property_visits WHERE id=%s', (visita['id'],))
+        return row(cur.fetchone())
 
 def update_visit(*args, **kwargs):
     if len(args) == 2:
@@ -512,11 +564,15 @@ def update_visit(*args, **kwargs):
             current = cur.fetchone()
             if not current:
                 raise NotFoundError(f'visit {visit_id} not found')
+            # A31-3 (D5/D6 + regola A31-1): prima di scrivere, sulla riga bloccata.
+            _visite_regole.check_patch(dict(current), data, datetime.now(timezone.utc))
             if data.get('contact_id') is not None:
                 ensure_scoped(cur, 'contacts', data['contact_id'], agency_id, 'contact')
             if data.get('lead_id') is not None:
                 ensure_scoped(cur, 'leads', data['lead_id'], agency_id, 'lead')
         else:
+            # Firma storica senza ctx: nessuna route la usa (il router PROPERTY
+            # passa sempre ctx). Resta com'era; le regole A31-3 stanno sopra.
             if data.get('contact_id') is not None:
                 ensure(cur, 'contacts', data['contact_id'], 'contact')
             if data.get('lead_id') is not None:
@@ -550,6 +606,12 @@ def delete_child(*args, **kwargs):
                 raise NotFoundError(f'{label} {item_id} not found')
         if table == 'property_documents' and _document_has_published_owner_share(cur, item_id):
             raise ConflictError('Un documento già pubblicato in OWNER non può essere eliminato')
+        if table == 'property_visits':
+            # A31-3, D7: una visita proiettata si annulla dall'Agenda.
+            cur.execute('SELECT appointment_id FROM property_visits WHERE id=%s FOR UPDATE', (item_id,))
+            visita = cur.fetchone()
+            if visita:
+                _visite_regole.check_delete(dict(visita))
         cur.execute(f'DELETE FROM {table} WHERE id=%s', (item_id,))
         if not cur.rowcount:
             raise NotFoundError(f'{label} {item_id} not found')

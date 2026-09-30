@@ -1,5 +1,5 @@
 from fastapi import APIRouter,Depends,HTTPException,Query,Response
-from core.exceptions import NotFoundError,ConflictError,ValidationError
+from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -12,6 +12,7 @@ def tr(fn,*a,**k):
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
+    except PermissionDenied as e:raise HTTPException(403,str(e))
     except ValueError as e:raise HTTPException(422,str(e))
 @router.get('/dashboard')
 def dashboard(ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.dashboard_scoped,ctx)
