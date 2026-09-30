@@ -68,7 +68,12 @@ def test_01_la_071_e_valida_e_in_coda():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 77 and numeri[-2] == 76
+    # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
+    # `appointments` (colonna `appointment_id` + guardia propria: la visita
+    # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
+    # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76
     assert len(numeri) == len(set(numeri))
 
 

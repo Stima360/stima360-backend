@@ -122,7 +122,12 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 77 and numeri[-2] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
+    # `appointments` (colonna `appointment_id` + guardia propria: la visita
+    # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
+    # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

@@ -531,7 +531,12 @@ def test_n7_nessuna_migration_nuova():
     # approvata dal GATE A30-11B. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora
     # fallire.
-    assert numeri[-1] == 77 and numeri[-2] == 76, "la serie si e' fermata o e' andata oltre la 077"
+    # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
+    # `appointments` (colonna `appointment_id` + guardia propria: la visita
+    # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
+    # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76, "la serie si e' fermata o e' andata oltre la 078"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

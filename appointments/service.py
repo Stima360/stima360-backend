@@ -92,6 +92,13 @@ from .enums import (
 from calendar_sync import integration as _gcal
 from calendar_sync.constants import APPOINTMENT_REMOTE_PRESENT as _GCAL_PRESENT
 
+# A31-2: la proiezione delle visite acquirente (`buyer_visit` con immobile)
+# sulla tabella legacy delle visite. Vive FUORI da questo package (sentinella
+# A30-2): qui solo le chiamate agli hook, sullo STESSO cursore della
+# mutazione, prima del mark dirty Google. Se la proiezione fallisce, la
+# mutazione si annulla tutta.
+from buyer_visits import integration as _visite
+
 try:  # il driver vero; in sviluppo senza psycopg2 il conftest ne mette uno finto
     from psycopg2 import errors as _pg_errors
     _EXCLUSION_VIOLATION = getattr(_pg_errors, "ExclusionViolation", None)
@@ -445,6 +452,9 @@ def create_appointment_idempotent(ctx, payload):
         if proietta:
             projection.on_schedule(cur, agency_id, riga, actor_user_id=actor)
             riga = repository.get_appointment(cur, agency_id, riga["id"])
+        # A31-2: CREATE scheduled/confirmed di una visita acquirente con
+        # immobile -> la sua proiezione (D1: mai per `requested`).
+        _visite.on_create(cur, agency_id, riga, actor_user_id=actor)
         # A30-9B, matrice §18: CREATE gia' `scheduled`/`confirmed` -> mark
         # dirty; una CREATE `requested` non ha bisogno di riga di sync.
         if riga["status"] in _GCAL_PRESENT:
@@ -793,6 +803,8 @@ def schedule_appointment(ctx, appointment_id, body):
         if proietta:
             projection.on_schedule(cur, agency_id, nuova, actor_user_id=actor)
             nuova = repository.get_appointment(cur, agency_id, row["id"])
+        # A31-2: SCHEDULE -> la proiezione nasce (se non c'e' gia').
+        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
         # A30-9B, matrice §18: SCHEDULE requested->scheduled -> mark dirty.
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
         return nuova
@@ -804,10 +816,13 @@ def confirm_appointment(ctx, appointment_id, body):
         if row["status"] == "confirmed":
             return repository.get_appointment(cur, agency_id, row["id"])   # idempotente
         _agente_presente(row, "confermare")
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], {"status": "confirmed", "confirmed_at": _adesso()},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
             azione="confirm")
+        # A31-2: CONFIRM -> stato della proiezione `confirmed`.
+        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        return nuova
     return _su_riga(ctx, appointment_id, "confirm", body.version, lavoro)
 
 
@@ -829,6 +844,8 @@ def reassign_appointment(ctx, appointment_id, body):
         nuova = repository.update_appointment(
             cur, row["id"], {"assigned_user_id": nuovo}, actor_user_id=actor,
             event_type="updated", from_status=row["status"], azione="reassign")
+        # A31-2 D3: REASSIGN -> solo lo snapshot `assigned_to` della proiezione.
+        _visite.on_reassign(cur, agency_id, nuova)
         # A30-9B, matrice §18/§22: REASSIGN -> mark dirty (l'evento si sposta
         # dal calendario del vecchio agente a quello del nuovo).
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
@@ -887,6 +904,8 @@ def reschedule_appointment(ctx, appointment_id, payload):
         if proietta:
             projection.on_reschedule(cur, agency_id, vecchia, nuova)
             nuova = repository.get_appointment(cur, agency_id, nuova["id"])
+        # A31-2: RESCHEDULE -> la STESSA visita passa al successore.
+        _visite.on_reschedule(cur, agency_id, vecchia, nuova, actor_user_id=actor)
         # A30-9B, matrice §18/§21: RESCHEDULE -> stessa catena, mark dirty
         # sulla riga viva; l'id evento remoto non cambia (deterministico sulla
         # radice della catena), il worker aggiorna lo STESSO evento Google.
@@ -919,6 +938,8 @@ def cancel_appointment(ctx, appointment_id, body):
                              "cancelled_reason": body.reason},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
             azione="cancel", event_extra=_extra_evento(None, task))
+        # A31-2: CANCEL -> stato della proiezione `cancelled`.
+        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
         # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
         # esiste, va rimosso).
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
@@ -948,10 +969,14 @@ def complete_appointment(ctx, appointment_id, body):
         task = (None if riferimenti is None else
                 _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
                                 esito="completed"))
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], {"status": "completed", "completed_at": quando},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
             azione="complete", event_extra=_extra_evento(body.outcome_note, task))
+        # A31-2: COMPLETE -> stato `completed` (+ updated_at, FLOW-R007).
+        # D4: la nota di esito resta nell'evento, mai in outcome/feedback.
+        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        return nuova
     return _su_riga(ctx, appointment_id, "complete", body.version, lavoro)
 
 
@@ -974,10 +999,13 @@ def no_show_appointment(ctx, appointment_id, body):
         task = (None if riferimenti is None else
                 _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
                                 esito="no_show"))
-        return repository.update_appointment(
+        nuova = repository.update_appointment(
             cur, row["id"], {"status": "no_show", "no_show_at": db_now},
             actor_user_id=actor, event_type="status_changed", from_status=row["status"],
             azione="no_show", event_extra=_extra_evento(body.outcome_note, task))
+        # A31-2: NO_SHOW -> stato della proiezione `no_show` (D4 come sopra).
+        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        return nuova
     return _su_riga(ctx, appointment_id, "no_show", body.version, lavoro)
 
 
@@ -999,9 +1027,14 @@ def patch_appointment(ctx, appointment_id, body):
             return repository.get_appointment(cur, agency_id, row["id"])
         finale = {c: cambi.get(c, row[c]) for c in ("contact_id", "lead_id", "property_id")}
         _controlla_collegamenti(cur, agency_id, **finale)
+        # A31-2 D5: l'immobile di una visita gia' proiettata non cambia (409,
+        # prima di qualunque scrittura).
+        _visite.before_patch(cur, agency_id, row, cambi)
         nuova = repository.update_appointment(
             cur, row["id"], cambi, actor_user_id=actor, event_type="updated",
             from_status=row["status"], azione="patch")
+        # A31-2: PATCH contatto/lead -> allineati nella proiezione.
+        _visite.on_patch(cur, agency_id, row, nuova, actor_user_id=actor)
         # A30-9B, matrice §18: mark dirty SOLO se il PATCH ha cambiato un
         # campo esportato verso Google; un PATCH di sole note/luogo/
         # collegamenti non tocca la sincronizzazione.

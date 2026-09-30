@@ -676,7 +676,12 @@ def test_g2_nessuna_migration_in_lmc3():
     # di lavoro/eccezioni/chiusure agenzia (vincolo SOFT, D2), approvata dal
     # GATE A30-11B. Si nomina invece di smettere di guardare: qualunque
     # ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-10:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
+    # `appointments` (colonna `appointment_id` + guardia propria: la visita
+    # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
+    # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert migrazioni[-11:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -685,7 +690,8 @@ def test_g2_nessuna_migration_in_lmc3():
                                "074_a30_9a_calendar_sync.sql",
                                "075_a30_10_calendar_inbound.sql",
                                "076_a30_11_working_hours.sql",
-                               "077_a30_12_public_booking.sql"], migrazioni[-11:]
+                               "077_a30_12_public_booking.sql",
+                               "078_a31_2_buyer_visits_projection.sql"], migrazioni[-12:]
 
 
 DOMINI_VIETATI_LMC3 = (

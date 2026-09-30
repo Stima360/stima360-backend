@@ -60,7 +60,12 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # non tocca `appointments`), approvata dal GATE A30-11B. Si nomina
     # invece di smettere di guardare: qualunque ALTRA migration comparisse
     # farebbe ancora fallire.
-    assert numeri[-1] == 77 and numeri[-2] == 76 and numeri[-3] == 75 and numeri[-4] == 74
+    # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
+    # `appointments` (colonna `appointment_id` + guardia propria: la visita
+    # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
+    # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
+    # qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76 and numeri[-4] == 75 and numeri[-5] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -215,8 +220,13 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # `contacts` in sola lettura tenant-safe con lo stesso predicato di
         # CORE (core.scope.scoped_source) - MAI un import di `public_booking`
         # stesso: l'Agenda non dipende da chi la chiama.
+        # SENTINELLA AGGIORNATA DA A31-2: l'hook della proiezione delle visite
+        # acquirente (`buyer_visits.integration`), chiamato nella STESSA
+        # transazione come quello Google. Il package vive FUORI da
+        # `appointments/` (la sentinella A30-2 "nessun `property_visits` qui"
+        # resta intatta); approvato dal GATE A31-1 DESIGN FREEZE.
         "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants",
-                       "operator_auth.context", "core.scope"},
+                       "operator_auth.context", "core.scope", "buyer_visits"},
         # SENTINELLA AGGIORNATA DA A30-12: le 5 rotte OPERATORE di gestione
         # dei link di booking pubblico (create/list/patch/rotate/disable)
         # sono montate qui per URL (`/api/appointments/booking-links...`),
