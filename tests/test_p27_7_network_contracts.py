@@ -432,6 +432,19 @@ def test_d3_no_page_outside_the_network_was_touched():
         # nessun componente della Rete e' toccato, e l'Agenda continua a
         # parlare solo con `/api/appointments` (nessun endpoint nuovo).
         "static/os_shell/assets/components/agenda/agenda-views.js",
+        # SENTINELLA AGGIORNATA DA A31-4 - LE VISITE ACQUIRENTE NASCONO
+        # NELL'AGENDA. Tre viste del CRM, per nome, dichiarate in
+        # tests/a31_4_diff.py: "Programma visita" (abbinamento, richiesta
+        # acquirente, immobile) apre il dialog condiviso dell'Agenda al posto
+        # del vecchio campo data-ora, e manda la stessa POST di prima con
+        # l'agente scelto. Il dialog (`agenda-dialogs.js`) era gia' ammesso.
+        #
+        # Cio' che questo test difende resta intatto: nessun componente della
+        # Rete, nessun endpoint o contratto P27 e' toccato, e nessun'altra
+        # vista del CRM oltre a queste tre.
+        "static/os_shell/assets/views/abbinamento-dettaglio.js",
+        "static/os_shell/assets/views/acquirente-dettaglio.js",
+        "static/os_shell/assets/views/immobile-dettaglio.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

@@ -119,6 +119,23 @@ def test_03_main_js_contiene_solo_import_voce_e_rotta():
     assert "appointments" not in _testo(MAIN_JS)
 
 
+# SENTINELLA AGGIORNATA DA A31-4 (autorizzata, dichiarata in tests/a31_4_diff.py):
+# le tre viste che programmano una visita acquirente usano il dialog condiviso
+# dell'Agenda. L'esenzione e' CHIUSA: solo queste tre viste, e in ciascuna solo
+# queste tre righe di import, esatte. Qualunque altro riferimento ad "agenda/"
+# in queste viste, e qualunque altra vista che importi l'Agenda, resta vietato.
+A31_4_VISTE_CON_DIALOG_AGENDA = frozenset({
+    ASSETS / "views" / "abbinamento-dettaglio.js",
+    ASSETS / "views" / "acquirente-dettaglio.js",
+    ASSETS / "views" / "immobile-dettaglio.js",
+})
+A31_4_IMPORT_AMMESSI = (
+    "import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';",
+    "import { getAgents } from '../agenda/agenda-api.js';",
+    "import { todayKey } from '../agenda/agenda-model.js';",
+)
+
+
 def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_agenda():
     for f in ASSETS.rglob("*.js"):
         # A30-9B: i due file nuovi vivono anche loro sotto "agenda/" (uno e'
@@ -127,6 +144,10 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         if f in AGENDA_FILES or f in AGENDA_FILES_GOOGLE or f == MAIN_JS:
             continue
         testo = _testo(f)
+        if f in A31_4_VISTE_CON_DIALOG_AGENDA:
+            righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
+            assert righe == list(A31_4_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
+            continue
         assert "agenda/" not in testo, f.relative_to(ROOT)
 
 

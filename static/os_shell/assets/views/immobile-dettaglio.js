@@ -74,6 +74,14 @@ import { bindSaleDetails } from '../components/sale-detail.js';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+// A31-4: una NUOVA visita futura si programma con il dialog dell'Agenda
+// (agente obbligatorio, 60' bloccati, disponibilita'/conflitti/alternative).
+// La sola scrittura resta la POST .../properties/{id}/visits: la facade A31-3
+// crea appuntamento + proiezione. Il modal legacy resta per lo storico.
+import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
+import { getAgents } from '../agenda/agenda-api.js';
+import { todayKey } from '../agenda/agenda-model.js';
+import { getSession } from '../core/auth.js';
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -315,6 +323,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     <dialog id="sale-dialog" class="modal"></dialog>
     <dialog id="contact-dialog" class="modal"></dialog>
     <dialog id="visit-dialog" class="modal"></dialog>
+    <dialog id="visit-schedule-dialog" class="modal modal-wide agenda-dialog"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
@@ -1030,6 +1039,10 @@ export async function renderImmobileDettaglio(container, params = []) {
   // Proprietari sopra: nessun window.confirm(), conferma inline a due click
   // per l'eliminazione (runVisitRemove).
   function bindVisiteSection(panelEl) {
+    const scheduleBtn = panelEl.querySelector('#visit-schedule-btn');
+    if (scheduleBtn) {
+      scheduleBtn.addEventListener('click', () => { openVisitScheduleDialog(); });
+    }
     const newBtn = panelEl.querySelector('#visit-new-btn');
     if (newBtn) {
       newBtn.addEventListener('click', () => { openVisitCreateDialog(); });
@@ -1062,7 +1075,7 @@ export async function renderImmobileDettaglio(container, params = []) {
 
   function allVisiteButtons() {
     return Array.from(contentEl.querySelectorAll(
-      '#visit-new-btn, .visit-edit-btn, .visit-remove-btn, .visit-remove-confirm-btn, .visit-remove-back-btn',
+      '#visit-schedule-btn, #visit-new-btn, .visit-edit-btn, .visit-remove-btn, .visit-remove-confirm-btn, .visit-remove-back-btn',
     ));
   }
 
@@ -1235,6 +1248,53 @@ export async function renderImmobileDettaglio(container, params = []) {
     openVisitDialog(dialogEl, { mode: 'create' });
   }
 
+  // A31-4 - "Programma visita": il dialog condiviso dell'Agenda, configurato
+  // per una visita acquirente su QUESTO immobile (tipo e durata 60' bloccati,
+  // agente obbligatorio, cliente e lead scelti col blocco CRM dell'Agenda;
+  // niente stima, niente immobile, niente luogo, niente note: VisitCreate
+  // non le ha). Il dialog valida e controlla la disponibilita'; qui c'e' SOLO
+  // la POST .../visits, con `assigned_user_id` e la stessa
+  // `client_request_id` generata dal dialog.
+  async function openVisitScheduleDialog() {
+    const dialogEl = container.querySelector('#visit-schedule-dialog');
+    if (!dialogEl) return;
+    let agents;
+    try {
+      const esito = await getAgents();
+      agents = (esito && esito.items) || [];
+    } catch (error) {
+      const fb = contentEl.querySelector('#visite-feedback');
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile caricare gli agenti: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    openCreateDialog(dialogEl, {
+      agents,
+      dateKey: todayKey(),
+      session: getSession(),
+      title: 'Programma visita',
+      appointmentType: 'buyer_visit',
+      lockAppointmentType: true,
+      durationMinutes: 60,
+      lockDuration: true,
+      requireAgent: true,
+      crmMode: 'contact_lead',
+      showLocation: false,
+      showNotes: false,
+      submitAppointment: (corpo) => {
+        if (!(Date.parse(corpo.start_at) > Date.now())) {
+          throw new Error('L’orario scelto è già passato: scegli un orario futuro.');
+        }
+        return apiPost(`/api/property/properties/${property.id}/visits`, propertyVisitPayload(corpo));
+      },
+      onDone: async () => {
+        await reloadPropertyVisits();
+        showTab('visite');
+        const fb = contentEl.querySelector('#visite-feedback');
+        if (fb) fb.innerHTML = '<div class="success-box">Visita programmata nell’Agenda.</div>';
+      },
+    });
+  }
+
   function openVisitEditDialog(visit) {
     const dialogEl = container.querySelector('#visit-dialog');
     if (!dialogEl) return;
@@ -1259,6 +1319,11 @@ export async function renderImmobileDettaglio(container, params = []) {
   function openVisitDialog(dialogEl, opts) {
     const isEdit = opts.mode === 'edit';
     const visit = opts.visit || null;
+    // A31-4: una visita PROIETTATA (nata nell'Agenda) qui registra solo esito,
+    // feedback e valutazione: data, stato, cliente, lead e agente si gestiscono
+    // dall'Agenda e sono mostrati in sola lettura (il server li rifiuterebbe).
+    const proiettata = isEdit && !!visit && visit.appointment_id != null;
+    const bloccato = proiettata ? 'disabled' : '';
     let selectedContact = visit && visit.contact_id
       ? { id: visit.contact_id, display_name: visit.contact_name || `Contatto #${visit.contact_id}` }
       : null;
@@ -1268,26 +1333,28 @@ export async function renderImmobileDettaglio(container, params = []) {
 
     dialogEl.innerHTML = `
       <form id="visit-form">
-        <h3 class="section-title">${isEdit ? 'Aggiorna visita' : 'Nuova visita'}</h3>
+        <h3 class="section-title">${proiettata ? 'Esito visita' : (isEdit ? 'Aggiorna visita' : 'Registra visita passata')}</h3>
+        ${proiettata ? '<p class="muted" id="visit-agenda-note">Visita gestita dall’Agenda: data, stato, cliente e agente si cambiano dall’Agenda. Qui si registrano esito, feedback e valutazione.</p>' : ''}
+        ${isEdit ? '' : '<p class="muted" id="visit-history-note">Per una visita futura da svolgere usa “Programma visita”.</p>'}
         <div class="form-grid-2">
-          <div class="form-field"><label>Data e ora *</label><input type="datetime-local" id="visit-scheduled-at" class="input" required value="${visit ? visitDateTimeLocal(visit.scheduled_at) : ''}"></div>
+          <div class="form-field"><label>Data e ora *</label><input type="datetime-local" id="visit-scheduled-at" class="input" required ${bloccato} value="${visit ? visitDateTimeLocal(visit.scheduled_at) : ''}"></div>
           <div class="form-field">
             <label>Stato</label>
-            <select id="visit-status" class="input">
-              ${VISIT_STATUSES.map((s) => `<option value="${s}" ${(visit ? visit.status : 'scheduled') === s ? 'selected' : ''}>${escapeHtml(VISIT_STATUS_LABELS[s] || s)}</option>`).join('')}
+            <select id="visit-status" class="input" ${bloccato}>
+              ${VISIT_STATUSES.map((s) => `<option value="${s}" ${(visit ? visit.status : 'completed') === s ? 'selected' : ''}>${escapeHtml(VISIT_STATUS_LABELS[s] || s)}</option>`).join('')}
             </select>
           </div>
         </div>
         <div class="form-field">
           <label>Contatto (acquirente/visitatore)</label>
-          <input type="search" id="visit-contact-search-input" class="input" placeholder="Cerca per nome, email o telefono…" autocomplete="off" ${selectedContact ? 'hidden' : ''}>
+          <input type="search" id="visit-contact-search-input" class="input" placeholder="Cerca per nome, email o telefono…" autocomplete="off" ${selectedContact || proiettata ? 'hidden' : ''}>
           <div id="visit-contact-search-results"></div>
           <div id="visit-contact-selected" ${selectedContact ? '' : 'hidden'}></div>
         </div>
         ${leadOptions ? `
         <div class="form-field">
           <label>Lead collegato</label>
-          <select id="visit-lead" class="input">
+          <select id="visit-lead" class="input" ${bloccato}>
             <option value="">—</option>
             ${leadOptions}
           </select>
@@ -1296,7 +1363,7 @@ export async function renderImmobileDettaglio(container, params = []) {
           <div class="form-field"><label>Esito</label><input type="text" id="visit-outcome" class="input" maxlength="80" value="${visit ? escapeHtml(visit.outcome || '') : ''}"></div>
           <div class="form-field"><label>Valutazione (1-5)</label><input type="number" id="visit-rating" class="input" min="1" max="5" step="1" value="${visit && visit.rating != null ? escapeHtml(visit.rating) : ''}"></div>
         </div>
-        <div class="form-field"><label>Assegnata a</label><input type="text" id="visit-assigned-to" class="input" value="${visit ? escapeHtml(visit.assigned_to || '') : ''}"></div>
+        <div class="form-field"><label>Assegnata a</label><input type="text" id="visit-assigned-to" class="input" ${bloccato} value="${visit ? escapeHtml(visit.assigned_to || '') : ''}"></div>
         <div class="form-field"><label>Feedback / note</label><textarea id="visit-feedback" class="input">${visit ? escapeHtml(visit.feedback || '') : ''}</textarea></div>
         <div id="visit-form-error" class="field-error"></div>
         <div class="modal-actions">
@@ -1316,9 +1383,10 @@ export async function renderImmobileDettaglio(container, params = []) {
       selectedEl.innerHTML = `
         <div class="selected-contact-card">
           <div><strong>${escapeHtml(selectedContact.display_name)}</strong></div>
-          <button type="button" class="btn ghost" id="visit-contact-change-btn">Cambia</button>
+          ${proiettata ? '' : '<button type="button" class="btn ghost" id="visit-contact-change-btn">Cambia</button>'}
         </div>
       `;
+      if (proiettata) return;
       selectedEl.querySelector('#visit-contact-change-btn').addEventListener('click', () => {
         selectedContact = null;
         renderSelectedContact();
@@ -1374,6 +1442,13 @@ export async function renderImmobileDettaglio(container, params = []) {
         payload = buildVisitPayload(dialogEl, selectedContact, isEdit);
       } catch (error) {
         if (errorEl) errorEl.textContent = error.message || 'Dati non validi.';
+        return;
+      }
+      // A31-4: riga proiettata -> SOLO i campi legacy-owned (D4).
+      if (proiettata) payload = legacyOutcomePayload(payload);
+      // A31-4: il modal legacy non crea visite future da svolgere.
+      if (!isEdit && isFutureOpenVisit(payload)) {
+        if (errorEl) errorEl.textContent = 'Una visita futura da svolgere si programma con “Programma visita” (Agenda).';
         return;
       }
 
@@ -1744,7 +1819,44 @@ function buildVisitPayload(dialogEl, selectedContact, isEdit) {
   return payload;
 }
 
+// A31-4 - il corpo della POST .../properties/{id}/visits per una visita
+// programmata dal dialog Agenda: SOLO questi campi. Niente end_at, luogo,
+// note, assigned_to, esito, feedback, voto, created_by: li decide la facade.
+export function propertyVisitPayload(corpo) {
+  const payload = {
+    scheduled_at: corpo.start_at,
+    status: 'scheduled',
+    assigned_user_id: corpo.assigned_user_id,
+    client_request_id: corpo.client_request_id,
+  };
+  if (corpo.contact_id) payload.contact_id = corpo.contact_id;
+  if (corpo.lead_id) payload.lead_id = corpo.lead_id;
+  return payload;
+}
+
+// A31-4 - D4: su una visita proiettata il PATCH legacy porta solo esito,
+// feedback e valutazione.
+const LEGACY_OUTCOME_FIELDS = ['outcome', 'feedback', 'rating'];
+export function legacyOutcomePayload(payload) {
+  const ridotto = {};
+  for (const campo of LEGACY_OUTCOME_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(payload, campo)) ridotto[campo] = payload[campo];
+  }
+  return ridotto;
+}
+
+// A31-4 - una visita futura ancora da svolgere: nasce solo dall'Agenda.
+export function isFutureOpenVisit(payload, now = Date.now()) {
+  return ['scheduled', 'confirmed'].includes(payload.status)
+    && !!payload.scheduled_at && Date.parse(payload.scheduled_at) > now;
+}
+
 function renderVisitActionButtons(v, visitRemoveConfirm) {
+  // A31-4: una visita proiettata (appointment_id) si gestisce dall'Agenda:
+  // qui solo l'esito, mai la modifica di data/stato ne' l'eliminazione.
+  if (v.appointment_id != null) {
+    return `<div class="action-bar"><button type="button" class="btn ghost visit-edit-btn" data-visit-id="${escapeHtml(v.id)}">Registra esito</button></div>`;
+  }
   const confirming = visitRemoveConfirm ? visitRemoveConfirm.has(v.id) : false;
   if (confirming) {
     return `<div class="action-bar"><button type="button" class="btn ghost visit-remove-confirm-btn" data-visit-id="${escapeHtml(v.id)}">Conferma eliminazione</button> <button type="button" class="btn ghost visit-remove-back-btn" data-visit-id="${escapeHtml(v.id)}">Indietro</button></div>`;
@@ -1764,6 +1876,7 @@ function renderVisite(items, visitRemoveConfirm) {
         const badges = [];
         if (v.buy_request_id) badges.push(renderBadge(`Richiesta BUY #${v.buy_request_id}`, 'buy'));
         if (v.match_id) badges.push(renderBadge(`Match #${v.match_id}`, 'gray'));
+        if (v.appointment_id != null) badges.push(renderBadge('Agenda', 'ok'));
         return badges.length ? badges.join(' ') : '<span class="muted">—</span>';
       } },
       { label: '', render: (v) => renderVisitActionButtons(v, visitRemoveConfirm) },
@@ -1773,7 +1886,8 @@ function renderVisite(items, visitRemoveConfirm) {
   );
   return `
     <div class="action-bar" style="margin-bottom:12px">
-      <button type="button" id="visit-new-btn" class="btn primary">Nuova visita</button>
+      <button type="button" id="visit-schedule-btn" class="btn primary">Programma visita</button>
+      <button type="button" id="visit-new-btn" class="btn ghost">Registra visita passata</button>
     </div>
     <div id="visite-feedback"></div>
     ${table}

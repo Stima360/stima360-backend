@@ -150,15 +150,18 @@ const BLOCCO_DURATA = `
   </div>`;
 
 // A30-5: i collegamenti CRM. Markup fisso; i dati entrano solo via DOM.
-const BLOCCO_CRM = `
-  <fieldset class="agenda-links">
-    <legend>Collegamento CRM (facoltativo)</legend>
+// A31-4: il blocco e' composto da due parti, cosi' un chiamante puo' chiedere
+// solo cliente + lead (`crmMode: 'contact_lead'`) o nessun collegamento
+// (`crmMode: 'none'`). Il default (`'full'`) e' il blocco di sempre.
+const CRM_CLIENTE_LEAD = `
     <div class="form-field"><label>Cliente</label><div data-contact-picker></div></div>
     <div class="form-field">
       <label>Lead del cliente</label>
       <select class="input" data-field="lead" disabled></select>
       <small class="muted" data-lead-hint></small>
-    </div>
+    </div>`;
+
+const CRM_STIMA_IMMOBILE = `
     <div class="form-field">
       <label>Stima</label>
       <input type="search" class="input" data-stima-search placeholder="Cerca per nominativo, comune o via…" autocomplete="off">
@@ -171,8 +174,16 @@ const BLOCCO_CRM = `
       <input type="search" class="input" data-property-search placeholder="Cerca per titolo, codice o indirizzo…" autocomplete="off">
       <div class="agenda-lookup-results" data-property-results></div>
       <div class="agenda-lookup-selected" data-property-selected hidden></div>
-    </div>
+    </div>`;
+
+function bloccoCrm(modo) {
+  if (modo === 'none') return '';
+  const parti = modo === 'contact_lead' ? CRM_CLIENTE_LEAD : CRM_CLIENTE_LEAD + CRM_STIMA_IMMOBILE;
+  return `
+  <fieldset class="agenda-links">
+    <legend>Collegamento CRM (facoltativo)</legend>${parti}
   </fieldset>`;
+}
 
 const BLOCCO_DISPONIBILITA = `
   <div class="agenda-availability" data-availability hidden>
@@ -694,15 +705,64 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
 // NUOVO APPUNTAMENTO
 // ---------------------------------------------------------------------------
 
+// A31-4: le modalita' del blocco CRM e i messaggi dei vincoli chiesti dal
+// chiamante. Nessuna conoscenza di BUY o di immobili: solo opzioni generiche.
+const MODI_CRM = Object.freeze(['full', 'contact_lead', 'none']);
+const MSG_AGENTE_OBBLIGATORIO = 'Scegli l’agente: è obbligatorio.';
+
+const BLOCCO_LUOGO = `
+    <div class="form-field"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>`;
+const BLOCCO_NOTE = `
+    <div class="form-field"><label>Note</label><textarea class="input" data-field="notes" maxlength="5000"></textarea></div>`;
+
+/**
+ * "Nuovo appuntamento". Senza le opzioni A31-4 il dialog e' identico a prima.
+ *
+ * Opzioni A31-4 (tutte facoltative, generiche):
+ *   title                titolo del dialog
+ *   appointmentType      tipo iniziale (una chiave di TYPE_LABELS)
+ *   lockAppointmentType  il tipo non si cambia
+ *   durationMinutes      durata iniziale (5-480)
+ *   lockDuration         la durata non si cambia (richiede durationMinutes)
+ *   requireAgent         l'agente e' obbligatorio: nessun "Nessuno", nessuna
+ *                        richiesta; senza agente nessuna scrittura
+ *   crmMode              'full' (default) | 'contact_lead' | 'none'
+ *   showLocation         mostra "Luogo" (default true)
+ *   showNotes            mostra "Note" (default true)
+ *   submitAppointment    riceve il corpo GIA' validato (disponibilita'
+ *                        compresa) al posto di `createAppointment`: e' la
+ *                        sola scrittura, fatta dal chiamante
+ */
 export function openCreateDialog(dialogEl, {
   agents, dateKey, startTime, session, onDone,
+  title = 'Nuovo appuntamento',
+  appointmentType = null,
+  lockAppointmentType = false,
+  durationMinutes: durataFissa = null,
+  lockDuration = false,
+  requireAgent = false,
+  crmMode = 'full',
+  showLocation = true,
+  showNotes = true,
+  submitAppointment = null,
 }) {
+  if (!MODI_CRM.includes(crmMode)) throw new Error(`crmMode non valido: ${crmMode}`);
+  if (appointmentType !== null && !Object.prototype.hasOwnProperty.call(TYPE_LABELS, appointmentType)) {
+    throw new Error(`appointmentType non valido: ${appointmentType}`);
+  }
+  if (durataFissa !== null && !(Number.isInteger(durataFissa) && durataFissa >= 5 && durataFissa <= 480)) {
+    throw new Error('durationMinutes deve essere un intero fra 5 e 480.');
+  }
+  if (lockDuration && durataFissa === null) throw new Error('lockDuration richiede durationMinutes.');
+  if (submitAppointment !== null && typeof submitAppointment !== 'function') {
+    throw new Error('submitAppointment deve essere una funzione.');
+  }
   const tipi = Object.keys(TYPE_LABELS);
-  const form = preparaDialog(dialogEl, 'Nuovo appuntamento', `
+  const form = preparaDialog(dialogEl, title, `
     <div class="form-field"><label>Tipo *</label><select class="input" data-field="type"></select></div>
-    ${BLOCCO_CRM}
+    ${bloccoCrm(crmMode)}
     <div class="form-field">
-      <label>Agente</label>
+      <label>${requireAgent ? 'Agente *' : 'Agente'}</label>
       <select class="input" data-field="agent"></select>
       <small class="muted" data-status-hint></small>
     </div>
@@ -713,13 +773,13 @@ export function openCreateDialog(dialogEl, {
       <button type="button" class="btn" data-show-slots>Mostra slot liberi</button>
     </div>
     <div class="agenda-slots" data-slots hidden></div>
-    ${BLOCCO_DISPONIBILITA}
-    <div class="form-field"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>
-    <div class="form-field"><label>Note</label><textarea class="input" data-field="notes" maxlength="5000"></textarea></div>`);
+    ${BLOCCO_DISPONIBILITA}${showLocation ? BLOCCO_LUOGO : ''}${showNotes ? BLOCCO_NOTE : ''}`);
 
   const erroreBox = form.querySelector('[data-error]');
   const tipo = form.querySelector('[data-field="type"]');
-  for (const t of tipi) tipo.appendChild(opzione(t, TYPE_LABELS[t], t === 'seller_meeting'));
+  const tipoIniziale = appointmentType || 'seller_meeting';
+  for (const t of tipi) tipo.appendChild(opzione(t, TYPE_LABELS[t], t === tipoIniziale));
+  if (lockAppointmentType) tipo.disabled = true;
   const agente = form.querySelector('[data-field="agent"]');
   // A30-13B.1 - Requisito 6: un `agent` non vede il vero selettore (non puo'
   // assegnare colleghi: matrice P26-1, `_controlla_agente` sul server), solo
@@ -729,7 +789,12 @@ export function openCreateDialog(dialogEl, {
   const puoAssegnare = canAssignRecords(session);
   const io = puoAssegnare ? null : (agents || []).find((a) => a.is_me === true) || null;
   if (puoAssegnare) {
-    riempiAgenti(agente, agents, { vuoto: 'Nessuno: salva come richiesta' });
+    // A31-4 `requireAgent`: nessuna opzione "Nessuno" e nessun agente scelto
+    // al posto dell'operatore: la prima voce chiede la scelta e non vale.
+    riempiAgenti(agente, agents, {
+      vuoto: requireAgent ? 'Scegli un agente' : 'Nessuno: salva come richiesta',
+    });
+    if (requireAgent && agente.firstChild) agente.firstChild.disabled = true;
   } else {
     // Nessuna opzione "Nessuno": un agente non puo' lasciare l'appuntamento
     // senza assegnatario per aggirare il blocco, ne' scegliere un collega -
@@ -741,6 +806,12 @@ export function openCreateDialog(dialogEl, {
   }
   const suggerimento = form.querySelector('[data-status-hint]');
   const aggiornaSuggerimento = () => {
+    if (requireAgent) {
+      suggerimento.textContent = agente.value
+        ? 'L’appuntamento nasce “Fissato” nell’agenda dell’agente, dopo la verifica della disponibilità.'
+        : MSG_AGENTE_OBBLIGATORIO;
+      return;
+    }
     suggerimento.textContent = agente.value
       ? 'Con un agente l’appuntamento nasce “Fissato”, dopo la verifica della disponibilità.'
       : 'Senza agente l’appuntamento si salva come “Richiesta”.';
@@ -749,84 +820,93 @@ export function openCreateDialog(dialogEl, {
 
   // -- collegamenti CRM (facoltativi) ---------------------------------------
   let cliente = null;
-  let giroLead = 0;
-  // assegnata sotto, dopo il montaggio della ricerca stime
+  let selLead = null;
+  let immobile = null;
+  let stima = null;
+  // assegnata sotto, dopo il montaggio della ricerca stime (solo 'full')
   let aggiornaStime = () => {};
-  const selLead = form.querySelector('[data-field="lead"]');
-  const hintLead = form.querySelector('[data-lead-hint]');
-  const azzeraLead = (testo) => {
-    selLead.replaceChildren(opzione('', 'Nessun lead'));
-    selLead.value = '';                            // nessun lead del cliente precedente
-    selLead.disabled = true;
-    hintLead.textContent = testo;
-  };
-  azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
-  createContactPicker(form.querySelector('[data-contact-picker]'), {
-    onChange: async (scelto) => {
-      cliente = scelto;
-      const giro = ++giroLead;
-      if (!scelto) {
-        azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
+  if (crmMode !== 'none') {
+    let giroLead = 0;
+    selLead = form.querySelector('[data-field="lead"]');
+    const hintLead = form.querySelector('[data-lead-hint]');
+    const azzeraLead = (testo) => {
+      selLead.replaceChildren(opzione('', 'Nessun lead'));
+      selLead.value = '';                          // nessun lead del cliente precedente
+      selLead.disabled = true;
+      hintLead.textContent = testo;
+    };
+    azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
+    createContactPicker(form.querySelector('[data-contact-picker]'), {
+      onChange: async (scelto) => {
+        cliente = scelto;
+        const giro = ++giroLead;
+        if (!scelto) {
+          azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
+          aggiornaStime();
+          return;
+        }
+        azzeraLead('Caricamento lead…');         // prima: le stime filtrano sul lead
         aggiornaStime();
-        return;
-      }
-      azzeraLead('Caricamento lead…');           // prima: le stime filtrano sul lead
-      aggiornaStime();
-      try {
-        const leads = await leadsOfContact(scelto.id);
-        if (giro !== giroLead) return;              // nel frattempo e' cambiato il cliente
-        selLead.replaceChildren(opzione('', 'Nessun lead'));
-        for (const l of leads) selLead.appendChild(opzione(String(l.id), leadLabel(l)));
-        selLead.value = '';
-        selLead.disabled = leads.length === 0;
-        hintLead.textContent = leads.length ? '' : 'Questo cliente non ha lead.';
-      } catch (e) {
-        if (giro !== giroLead) return;
-        azzeraLead(`Lead non disponibili: ${e.message || errorMessage(e)}`);
-      }
-    },
-  });
+        try {
+          const leads = await leadsOfContact(scelto.id);
+          if (giro !== giroLead) return;            // nel frattempo e' cambiato il cliente
+          selLead.replaceChildren(opzione('', 'Nessun lead'));
+          for (const l of leads) selLead.appendChild(opzione(String(l.id), leadLabel(l)));
+          selLead.value = '';
+          selLead.disabled = leads.length === 0;
+          hintLead.textContent = leads.length ? '' : 'Questo cliente non ha lead.';
+        } catch (e) {
+          if (giro !== giroLead) return;
+          azzeraLead(`Lead non disponibili: ${e.message || errorMessage(e)}`);
+        }
+      },
+    });
+  }
 
-  const immobile = montaRicerca(form, 'property', {
-    // Senza testo non si elenca l'archivio immobili.
-    cerca: (testo) => (testo ? searchProperties(testo) : Promise.resolve(null)),
-    etichetta: propertyLabel,
-    vuoto: 'Nessun immobile trovato.',
-  });
+  if (crmMode === 'full') {
+    immobile = montaRicerca(form, 'property', {
+      // Senza testo non si elenca l'archivio immobili.
+      cerca: (testo) => (testo ? searchProperties(testo) : Promise.resolve(null)),
+      etichetta: propertyLabel,
+      vuoto: 'Nessun immobile trovato.',
+    });
 
-  // La stima: per testo, e - se c'e' - dentro la relazione CORE del lead
-  // scelto (o dei lead del cliente scelto). Il server restituisce solo stime
-  // di questa agenzia; una relazione che non esiste non si inventa.
-  const hintStima = form.querySelector('[data-stima-hint]');
-  const perStima = () => (selLead.value
-    ? { leadId: Number(selLead.value) }
-    : (cliente && cliente.id ? { contactId: Number(cliente.id) } : {}));
-  const stima = montaRicerca(form, 'stima', {
-    cerca: async (testo) => {
+    // La stima: per testo, e - se c'e' - dentro la relazione CORE del lead
+    // scelto (o dei lead del cliente scelto). Il server restituisce solo stime
+    // di questa agenzia; una relazione che non esiste non si inventa.
+    const hintStima = form.querySelector('[data-stima-hint]');
+    const perStima = () => (selLead.value
+      ? { leadId: Number(selLead.value) }
+      : (cliente && cliente.id ? { contactId: Number(cliente.id) } : {}));
+    stima = montaRicerca(form, 'stima', {
+      cerca: async (testo) => {
+        const filtro = perStima();
+        if (!testo && !filtro.leadId && !filtro.contactId) return null;
+        const esito = await lookupStime({ search: testo || undefined, ...filtro });
+        return (esito && esito.items) || [];
+      },
+      etichetta: stimaLabel,
+      vuoto: 'Nessuna stima trovata.',
+    });
+    aggiornaStime = () => {
+      // Cambiato il cliente o il lead: una stima scelta prima potrebbe non
+      // appartenergli piu'. Si azzera e si mostrano quelle collegate.
+      stima.azzera();
       const filtro = perStima();
-      if (!testo && !filtro.leadId && !filtro.contactId) return null;
-      const esito = await lookupStime({ search: testo || undefined, ...filtro });
-      return (esito && esito.items) || [];
-    },
-    etichetta: stimaLabel,
-    vuoto: 'Nessuna stima trovata.',
-  });
-  aggiornaStime = () => {
-    // Cambiato il cliente o il lead: una stima scelta prima potrebbe non
-    // appartenergli piu'. Si azzera e si mostrano quelle collegate.
-    stima.azzera();
-    const filtro = perStima();
-    if (filtro.leadId) hintStima.textContent = 'Solo le stime collegate al lead scelto (la ricerca resta al loro interno).';
-    else if (filtro.contactId) hintStima.textContent = 'Solo le stime collegate ai lead del cliente (la ricerca resta al loro interno).';
-    else hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
-    if (filtro.leadId || filtro.contactId) stima.cerca('');
-  };
-  hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
-  selLead.addEventListener('change', aggiornaStime);
+      if (filtro.leadId) hintStima.textContent = 'Solo le stime collegate al lead scelto (la ricerca resta al loro interno).';
+      else if (filtro.contactId) hintStima.textContent = 'Solo le stime collegate ai lead del cliente (la ricerca resta al loro interno).';
+      else hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
+      if (filtro.leadId || filtro.contactId) stima.cerca('');
+    };
+    hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
+    selLead.addEventListener('change', aggiornaStime);
+  }
 
   // -- orario e durata ------------------------------------------------------
   // La verita' e' la coppia inizio/fine che viaggia nel corpo. La durata e'
   // una lettura: il selettore riscrive la fine, la fine riscrive il selettore.
+  // A31-4 `lockDuration`: la durata e' quella del chiamante e la fine segue
+  // sempre l'inizio.
   const campoData = form.querySelector('[data-field="date"]');
   const campoInizio = form.querySelector('[data-field="start"]');
   const campoFine = form.querySelector('[data-field="end"]');
@@ -839,6 +919,7 @@ export function openCreateDialog(dialogEl, {
   campoInizio.value = startTime || '09:00';
   let durataScelta = false;                        // l'operatore ha deciso la durata
   let durataMostrata = null;                       // l'ultima letta da inizio/fine
+  const durataBase = () => durataFissa || defaultDuration(tipo.value);
 
   const minutiDi = (hhmm) => {
     const t = parseTime(hhmm);
@@ -871,12 +952,17 @@ export function openCreateDialog(dialogEl, {
     durataScelta = true;
     mostraDurata();
   };
-  fineDopo(defaultDuration(tipo.value));
+  fineDopo(durataBase());
   mostraDurata();
+  if (lockDuration) {
+    campoDurata.disabled = true;
+    campoFine.disabled = true;
+  }
   campoInizio.addEventListener('input', () => {
     // Spostare l'inizio sposta la fine: la durata resta quella che si
     // leggeva PRIMA della modifica (quella di adesso e' gia' falsata).
-    fineDopo(durataScelta && durataMostrata ? durataMostrata : defaultDuration(tipo.value));
+    if (lockDuration) fineDopo(durataFissa);
+    else fineDopo(durataScelta && durataMostrata ? durataMostrata : durataBase());
     mostraDurata();
     nascondiDisponibilita(form);
   });
@@ -893,15 +979,15 @@ export function openCreateDialog(dialogEl, {
   });
   campoData.addEventListener('input', () => nascondiDisponibilita(form));
   tipo.addEventListener('change', () => {
-    if (!durataScelta) {
-      fineDopo(defaultDuration(tipo.value));
+    if (!durataScelta && !lockDuration) {
+      fineDopo(durataBase());
       mostraDurata();
     }
   });
   agente.addEventListener('change', () => { aggiornaSuggerimento(); nascondiDisponibilita(form); });
 
   form.querySelector('[data-show-slots]').addEventListener('click', () => {
-    const durata = durataAttuale() || defaultDuration(tipo.value);
+    const durata = durataAttuale() || durataBase();
     mostraSlot(form, agente.value, durata);
   });
 
@@ -910,8 +996,10 @@ export function openCreateDialog(dialogEl, {
   form.querySelector('[data-check]').addEventListener('click', async () => {
     erroreBox.textContent = '';
     if (!agente.value) {
-      erroreBox.textContent = 'Senza agente non c’è un’agenda da verificare: '
-        + 'l’appuntamento si salverà come “Richiesta”.';
+      erroreBox.textContent = requireAgent
+        ? MSG_AGENTE_OBBLIGATORIO
+        : 'Senza agente non c’è un’agenda da verificare: '
+          + 'l’appuntamento si salverà come “Richiesta”.';
       return;
     }
     try {
@@ -927,12 +1015,18 @@ export function openCreateDialog(dialogEl, {
 
   // La chiave di idempotenza vive quanto la compilazione: un nuovo tentativo
   // dopo un timeout riusa la stessa, e il server risponde con la riga gia'
-  // creata invece di crearne una seconda.
+  // creata invece di crearne una seconda. A31-4: con `submitAppointment` e'
+  // la STESSA chiave che arriva al chiamante (nessuna seconda chiave).
   let chiave = nuovaChiave();
 
   collegaInvio(dialogEl, form, async () => {
     const { startAt, endAt } = leggiIntervallo(form);
     const idAgente = agente.value ? Number(agente.value) : null;
+    // A31-4: vincoli del chiamante, PRIMA di qualunque richiesta.
+    if (requireAgent && !idAgente) throw new Error(MSG_AGENTE_OBBLIGATORIO);
+    if (lockDuration && durationMinutes(startAt, endAt) !== durataFissa) {
+      throw new Error(`La durata è fissa (${formatDuration(durataFissa)}): scegli un orario di inizio che la consenta.`);
+    }
     if (!(await disponibilePrima(form, { agente: idAgente, startAt, endAt, dopoOrario }))) return false;
     const corpo = {
       appointment_type: tipo.value,
@@ -943,21 +1037,26 @@ export function openCreateDialog(dialogEl, {
       client_request_id: chiave,
     };
     if (cliente && cliente.id) corpo.contact_id = Number(cliente.id);
-    if (cliente && selLead.value) corpo.lead_id = Number(selLead.value);
-    if (stima.scelto && stima.scelto.id) corpo.stima_id = Number(stima.scelto.id);
-    if (immobile.scelto && immobile.scelto.id) corpo.property_id = Number(immobile.scelto.id);
-    const luogo = form.querySelector('[data-field="location"]').value.trim();
-    const note = form.querySelector('[data-field="notes"]').value.trim();
+    if (cliente && selLead && selLead.value) corpo.lead_id = Number(selLead.value);
+    if (stima && stima.scelto && stima.scelto.id) corpo.stima_id = Number(stima.scelto.id);
+    if (immobile && immobile.scelto && immobile.scelto.id) corpo.property_id = Number(immobile.scelto.id);
+    const campoLuogo = form.querySelector('[data-field="location"]');
+    const campoNote = form.querySelector('[data-field="notes"]');
+    const luogo = campoLuogo ? campoLuogo.value.trim() : '';
+    const note = campoNote ? campoNote.value.trim() : '';
     if (luogo) corpo.location_text = luogo;
     if (note) corpo.notes = note;
-    return createAppointment(corpo);
+    // A31-4: una sola scrittura - quella dell'Agenda, oppure quella del
+    // chiamante con lo stesso corpo. Mai tutte e due.
+    return submitAppointment ? submitAppointment({ ...corpo }) : createAppointment(corpo);
   }, {
     onDone,
     onConflict: conflittoDalServer(form, dopoOrario),
     onError: (e) => { if (e && e.code === 'IDEMPOTENCY_KEY_REUSED') chiave = nuovaChiave(); },
     // Il 404 della creazione e' generico ("Risorsa non trovata"): qui puo'
-    // riguardare solo cio' che si e' scelto nel form.
-    messaggio: (e) => (e && e.status === 404
+    // riguardare solo cio' che si e' scelto nel form. Con un chiamante
+    // (`submitAppointment`) il 404 e' suo: resta il messaggio del server.
+    messaggio: (e) => (!submitAppointment && e && e.status === 404
       ? 'Il cliente, il lead, la stima o l’immobile scelto non è più disponibile in questa agenzia: rifai la selezione.'
       : null),
   });

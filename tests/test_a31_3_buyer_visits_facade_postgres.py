@@ -551,21 +551,21 @@ def test_n2_admin_e_supreme_con_agente_esplicito(b):
     assert [tuple(r) for r in righe] == [(b["luca"], b["anna"]), (b["marta"], b["supremo"])]
 
 
-def test_n3_owner_senza_agente_percorso_legacy_dichiarato(b):
-    """A31-3 NON attiva la facade per owner/admin senza agente: la UI attuale
-    non ha un selettore (attivazione in A31-4). Il flusso resta quello di
-    prima - nessun agente inferito, nessun appuntamento."""
+def test_n3_owner_senza_agente_rifiutato_legacy_spento(b):
+    """SENTINELLA AGGIORNATA DA A31-4 (autorizzata, dichiarata in
+    tests/a31_4_diff.py). Era "owner/admin senza agente: percorso legacy
+    dichiarato". A31-4 ha dato alla UI il selettore agente e ha SPENTO quel
+    percorso: owner/admin/Supreme senza agente esplicito ricevono un errore e
+    NULLA viene scritto - nessuna visita fuori Agenda, nessun agente inferito."""
+    prima = _istantanea(b)
     for n, chi in enumerate(("giorgio", "anna", "supremo")):
-        b["sql"]("UPDATE matches SET commercial_status='interested' WHERE id=%s", (b["match"],))
         r = _decidi(b, chi=chi, quando=futuro(9 + n))
-        assert r.status_code == 201, (chi, r.text)
-    assert _conta(b, "appointments") == 0
-    assert _conta(b, "property_visits", "appointment_id IS NULL") == 3
-    assert _conta(b, "buy_request_interactions", "interaction_type='visit_scheduled'") == 3
+        assert r.status_code == 400, (chi, r.text)
     r = b["api"]("giorgio").post(f"/api/property/properties/{b['casa']}/visits",
                                  json=_visita_ui(b, scheduled_at=futuro(18).isoformat()))
-    assert r.status_code == 201 and r.json()["appointment_id"] is None
-    assert _conta(b, "appointments") == 0
+    assert r.status_code == 400, r.text
+    assert _istantanea(b) == prima
+    assert _conta(b, "property_visits") == 0
 
 
 def test_n4_visita_storica_dell_agente_resta_legacy(b):

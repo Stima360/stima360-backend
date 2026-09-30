@@ -479,26 +479,36 @@ def list_visits_by_contact(*args, **kwargs):
             )
         return [dict(x) for x in cur.fetchall()]
 
+#: A31-4: una visita futura da svolgere senza agente certo non nasce piu'.
+_VISITA_SENZA_AGENTE = ("Una visita futura da svolgere si programma dall'Agenda: "
+                        "scegli l'agente (assigned_user_id obbligatorio)")
+
+
 def _visita_da_agenda(data, agente):
     """A31-3 §7: una NUOVA visita da svolgere (`scheduled`/`confirmed`) nel
-    futuro, con un agente certo, nasce nell'Agenda. Le visite passate o gia'
-    concluse si registrano come prima (storico)."""
-    if agente is None or data.get('status') not in _visite_facade.STATI_APERTI:
+    futuro nasce nell'Agenda. Le visite passate o gia' concluse si
+    registrano come prima (storico). A31-4: senza un agente certo una visita
+    futura aperta e' un errore, mai piu' una riga legacy."""
+    if data.get('status') not in _visite_facade.STATI_APERTI:
         return False
     quando = data.get('scheduled_at')
     if quando is None:
         return False
     if quando.tzinfo is None or quando.utcoffset() is None:
-        return True   # senza fuso: la facade lo rifiuta con un errore pulito
-    return quando > datetime.now(timezone.utc)
+        futura = True   # senza fuso: la facade lo rifiuta con un errore pulito
+    else:
+        futura = quando > datetime.now(timezone.utc)
+    if futura and agente is None:
+        raise ValidationError(_VISITA_SENZA_AGENTE)
+    return futura
 
 
 def add_visit(ctx, property_id, data):
     """POST /properties/{id}/visits. A31-3: facade verso l'Agenda per una
     visita futura da svolgere con agente certo (esplicito, o l'agent stesso);
     risposta invariata: la riga `property_visits` (la proiezione). Owner/admin
-    senza agente esplicito e visite storiche: percorso legacy invariato
-    (attivazione owner/admin in A31-4, con il selettore agente in UI)."""
+    senza agente esplicito: ValidationError (A31-4, percorso legacy spento
+    per le visite future aperte). Visite storiche: percorso legacy invariato."""
     data = dict(data)
     richiesto = data.pop('assigned_user_id', None)
     client_request_id = data.pop('client_request_id', None)

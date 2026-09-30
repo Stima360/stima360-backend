@@ -78,6 +78,13 @@ import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from
 // della richiesta precompilati), stessi dialog condivisi gia' usati da
 // attivita.js e contatto-dettaglio.js — vedi components/activity-task-dialogs.js.
 import { openNewActivityDialog, openNewTaskDialog } from '../components/activity-task-dialogs.js';
+// A31-4: "Programma visita" usa il dialog dell'Agenda (agente, orario,
+// disponibilita', conflitti, alternative). La sola scrittura resta la POST
+// BUY .../decision: la facade A31-3 crea appuntamento + proiezione.
+import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
+import { getAgents } from '../agenda/agenda-api.js';
+import { todayKey } from '../agenda/agenda-model.js';
+import { getSession } from '../core/auth.js';
 
 const STATUS_LABELS = { draft: 'Bozza', active: 'Attiva', paused: 'In pausa', satisfied: 'Soddisfatta', closed: 'Chiusa', archived: 'Archiviata' };
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
@@ -261,6 +268,7 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     <dialog id="contact-activity-dialog" class="modal"></dialog>
     <dialog id="contact-task-dialog" class="modal"></dialog>
     <dialog id="match-decision-dialog" class="modal"></dialog>
+    <dialog id="visit-schedule-dialog" class="modal modal-wide agenda-dialog"></dialog>
   `;
 
   const contactLink = container.querySelector('#acquirente-contact-link');
@@ -541,6 +549,61 @@ export async function renderAcquirenteDettaglio(container, params = []) {
         if (match) openMatchDecisionDialog(match);
       });
     });
+    panelEl.querySelectorAll('.match-visit-btn').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const matchId = Number(btn.dataset.matchId);
+        const match = (data.matches || []).find((m) => m.id === matchId);
+        if (match) openVisitScheduleDialog(match);
+      });
+    });
+  }
+
+  // A31-4 - "Programma visita": il dialog condiviso dell'Agenda, configurato
+  // per una visita acquirente (tipo e durata 60' bloccati, agente
+  // obbligatorio, nessun collegamento CRM: immobile, cliente e lead li deriva
+  // il backend dal match e dalla richiesta). Il dialog valida e controlla la
+  // disponibilita'; qui c'e' SOLO la POST BUY, una volta, con la stessa
+  // `client_request_id` generata dal dialog.
+  async function openVisitScheduleDialog(match) {
+    const dialogEl = container.querySelector('#visit-schedule-dialog');
+    if (!dialogEl) return;
+    const feedbackEl = contentEl.querySelector('#abbinamenti-feedback');
+    let agents;
+    try {
+      const esito = await getAgents();
+      agents = (esito && esito.items) || [];
+    } catch (error) {
+      if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile caricare gli agenti: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    openCreateDialog(dialogEl, {
+      agents,
+      dateKey: todayKey(),
+      session: getSession(),
+      title: 'Programma visita',
+      appointmentType: 'buyer_visit',
+      lockAppointmentType: true,
+      durationMinutes: 60,
+      lockDuration: true,
+      requireAgent: true,
+      crmMode: 'none',
+      showLocation: false,
+      showNotes: true,
+      submitAppointment: (corpo) => {
+        if (!(Date.parse(corpo.start_at) > Date.now())) {
+          throw new Error('L’orario scelto è già passato: scegli un orario futuro.');
+        }
+        return apiPost(`/api/buy/requests/${requestId}/matches/${match.id}/decision`,
+          visitDecisionPayload(corpo));
+      },
+      onDone: async () => {
+        await reloadRequest();
+        showTab('abbinamenti');
+        const fb = contentEl.querySelector('#abbinamenti-feedback');
+        if (fb) fb.innerHTML = '<div class="success-box">Visita programmata sul match.</div>';
+      },
+    });
   }
 
   function openMatchDecisionDialog(match, visitId = null) {
@@ -557,7 +620,7 @@ export async function renderAcquirenteDettaglio(container, params = []) {
         <form id="match-decision-form">
           <div class="form-field"><label>Esito</label>
             <select name="action" id="match-decision-action" class="input">
-              ${(visitId ? outcomeActions : MATCH_DECISION_ACTIONS).map((a) => `<option value="${a}">${escapeHtml(INTERACTION_TYPE_LABELS[a] || a)}</option>`).join('')}
+              ${(visitId ? outcomeActions : MATCH_DECISION_ACTIONS.filter((a) => a !== 'visit_scheduled')).map((a) => `<option value="${a}">${escapeHtml(INTERACTION_TYPE_LABELS[a] || a)}</option>`).join('')}
             </select>
           </div>
           <div class="form-field" id="match-decision-visit-field" hidden><label>Visita collegata</label>
@@ -571,9 +634,6 @@ export async function renderAcquirenteDettaglio(container, params = []) {
               ${Object.entries(REJECTION_REASON_LABELS).map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('')}
             </select>
           </div>
-          <div class="form-field" id="match-decision-schedule-field" hidden><label>Data e ora visita</label>
-            <input type="datetime-local" name="scheduled_at" class="input">
-          </div>
           <div class="form-field"><label>Note</label><textarea name="notes" rows="2" class="input"></textarea></div>
           <div class="modal-actions">
             <button type="button" class="btn ghost" data-cancel>Annulla</button>
@@ -585,11 +645,9 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     const errorBox = dialog.querySelector('.error-box');
     const actionSelect = dialog.querySelector('#match-decision-action');
     const reasonField = dialog.querySelector('#match-decision-reason-field');
-    const scheduleField = dialog.querySelector('#match-decision-schedule-field');
     function syncFields() {
       dialog.querySelector('#match-decision-visit-field').hidden = !outcomeActions.includes(actionSelect.value);
       reasonField.hidden = actionSelect.value !== 'discarded';
-      scheduleField.hidden = actionSelect.value !== 'visit_scheduled';
     }
     actionSelect.addEventListener('change', syncFields);
     syncFields();
@@ -611,15 +669,6 @@ export async function renderAcquirenteDettaglio(container, params = []) {
       const notes = String(formData.get('notes') || '').trim();
       if (notes) payload.notes = notes;
       if (action === 'discarded') payload.reason_code = formData.get('reason_code');
-      if (action === 'visit_scheduled') {
-        const scheduledRaw = formData.get('scheduled_at');
-        if (!scheduledRaw) {
-          errorBox.hidden = false;
-          errorBox.textContent = 'Data e ora visita obbligatorie per "Visita programmata".';
-          return;
-        }
-        payload.scheduled_at = new Date(scheduledRaw).toISOString();
-      }
       submitBtn.disabled = true;
       submitBtn.textContent = 'Salvataggio…';
       try {
@@ -1333,10 +1382,25 @@ function renderAbbinamenti(matches) {
     { label: 'Ultima interazione', render: (m) => escapeHtml(INTERACTION_TYPE_LABELS[m.last_interaction] || m.last_interaction || '—') },
     { label: '', render: (m) => `
       <button type="button" class="btn ghost open-match-btn" data-match-id="${escapeHtml(m.id)}">Apri match</button>
+      <button type="button" class="btn ghost match-visit-btn" data-match-id="${escapeHtml(m.id)}">Programma visita</button>
       <button type="button" class="btn ghost match-decision-btn" data-match-id="${escapeHtml(m.id)}">Registra esito</button>
     ` },
   ], 'Nessun abbinamento calcolato.');
   return actionBar + table;
+}
+
+// A31-4 - il corpo della POST BUY .../decision per una visita programmata dal
+// dialog Agenda: SOLO questi campi. Niente end_at, property_id, contact_id,
+// lead_id, assigned_to, status, appointment_type: li decide la facade A31-3.
+export function visitDecisionPayload(corpo) {
+  const payload = {
+    action: 'visit_scheduled',
+    scheduled_at: corpo.start_at,
+    assigned_user_id: corpo.assigned_user_id,
+    client_request_id: corpo.client_request_id,
+  };
+  if (corpo.notes) payload.notes = corpo.notes;
+  return payload;
 }
 
 // Tabella match con click-through a #/immobili/{property_id} (non property-admin).

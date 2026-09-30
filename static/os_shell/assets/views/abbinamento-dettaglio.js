@@ -31,6 +31,14 @@
 // legge match.property_id e buy_requests.contact_id/lead_id). Nessuna
 // seconda POST verso /api/property/.../visits viene mai fatta da qui.
 //
+// A31-4: il dialog "Programma visita" e' quello dell'Agenda
+// (`openCreateDialog` del componente dialog dell'Agenda): agente
+// obbligatorio (owner/admin lo scelgono, un agent e' se stesso), durata 60'
+// bloccata, disponibilita'/conflitti/alternative dell'Agenda. La scrittura
+// resta UNA: la POST BUY qui sopra, con `assigned_user_id` e la stessa
+// `client_request_id` generata dal dialog. La facade A31-3 crea
+// l'appuntamento `buyer_visit` e la sua proiezione.
+//
 // GET .../matches/{id} e' indispensabile: se fallisce la scheda non apre.
 // refresh-history e feedback sono secondari e caricati a tab (nessun
 // Promise.all che li lega al GET principale ne' tra loro): un loro errore
@@ -62,6 +70,10 @@
 import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
+import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
+import { getAgents } from '../agenda/agenda-api.js';
+import { todayKey } from '../agenda/agenda-model.js';
+import { getSession } from '../core/auth.js';
 
 const MATCH_CLASS_LABELS = { excellent: 'Eccellente', strong: 'Forte', good: 'Buono', possible: 'Possibile', weak: 'Debole', poor: 'Scarso', incompatible: 'Incompatibile' };
 const FRESHNESS_LABELS = { fresh: 'Aggiornato', stale: 'Da ricalcolare', recalculating: 'Ricalcolo in corso', failed: 'Errore', excluded: 'Escluso' };
@@ -118,7 +130,7 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
       <div id="match-action-feedback"></div>
       <div class="tabs" id="match-tabs"></div>
       <div id="match-tab-content" class="card panel"></div>
-      <dialog id="visit-schedule-dialog" class="modal"></dialog>
+      <dialog id="visit-schedule-dialog" class="modal modal-wide agenda-dialog"></dialog>
     `;
 
     container.querySelector('#match-badges').innerHTML = renderBadgeRow(match);
@@ -236,75 +248,62 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
     }
   }
 
-  // Patch MATCH -> VISITA: dialog "Programma visita". Unico dato realmente
-  // richiesto all'operatore e' scheduled_at (obbligatorio lato MatchDecision,
-  // buy/schemas.py: "scheduled_at is required when scheduling a visit"); le
-  // note sono opzionali e vengono incluse nel payload solo se valorizzate.
-  // Nessun campo property_id/match_id/buy_request_id/contact_id/lead_id e'
-  // chiesto qui: schedule_match_visit li deriva da match_id (property_id) e
-  // da buy_requests.contact_id/lead_id (buy/repository.py:152-176).
-  function openVisitScheduleDialog() {
+  // A31-4 - "Programma visita": il dialog condiviso dell'Agenda, configurato
+  // per una visita acquirente (tipo e durata 60' bloccati, agente
+  // obbligatorio, nessun collegamento CRM: immobile, cliente e lead li deriva
+  // il backend dal match e dalla richiesta; note visibili, luogo no). Il
+  // dialog valida e controlla la disponibilita'; qui c'e' SOLO la POST BUY.
+  async function openVisitScheduleDialog() {
     const dialogEl = container.querySelector('#visit-schedule-dialog');
     if (!dialogEl) return;
-
-    dialogEl.innerHTML = `
-      <form id="visit-schedule-form">
-        <h3 class="section-title">Programma visita</h3>
-        <div class="form-field"><label>Data e ora *</label><input type="datetime-local" id="visit-schedule-at" class="input" required></div>
-        <div class="form-field"><label>Note</label><textarea id="visit-schedule-notes" class="input"></textarea></div>
-        <div id="visit-schedule-error" class="field-error"></div>
-        <div class="modal-actions">
-          <button type="button" id="visit-schedule-cancel" class="btn ghost">Annulla</button>
-          <button type="submit" id="visit-schedule-submit" class="btn primary">Programma</button>
-        </div>
-      </form>
-    `;
-
-    dialogEl.querySelector('#visit-schedule-cancel').addEventListener('click', () => dialogEl.close());
-
-    let submitting = false;
-    dialogEl.querySelector('#visit-schedule-form').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (submitting) return;
-      const errorEl = dialogEl.querySelector('#visit-schedule-error');
-      if (errorEl) errorEl.textContent = '';
-
-      const raw = String(dialogEl.querySelector('#visit-schedule-at').value || '').trim();
-      if (!raw) {
-        if (errorEl) errorEl.textContent = 'Data e ora visita obbligatorie.';
-        return;
-      }
-      const scheduledAt = new Date(raw);
-      if (Number.isNaN(scheduledAt.getTime())) {
-        if (errorEl) errorEl.textContent = 'Data e ora visita non valide.';
-        return;
-      }
-      const payload = { action: 'visit_scheduled', scheduled_at: scheduledAt.toISOString() };
-      const notes = dialogEl.querySelector('#visit-schedule-notes').value.trim();
-      if (notes) payload.notes = notes;
-
-      submitting = true;
-      const submitBtn = dialogEl.querySelector('#visit-schedule-submit');
-      const cancelBtn = dialogEl.querySelector('#visit-schedule-cancel');
-      submitBtn.disabled = true;
-      cancelBtn.disabled = true;
-      submitBtn.textContent = 'Salvataggio…';
-      try {
-        await apiPost(`/api/buy/requests/${match.buy_request_id}/matches/${matchId}/decision`, payload);
-        dialogEl.close();
+    let agents;
+    try {
+      const esito = await getAgents();
+      agents = (esito && esito.items) || [];
+    } catch (error) {
+      showFeedbackMessage(`Impossibile caricare gli agenti: ${error.message || 'errore sconosciuto'}`, true);
+      return;
+    }
+    openCreateDialog(dialogEl, {
+      agents,
+      dateKey: todayKey(),
+      session: getSession(),
+      title: 'Programma visita',
+      appointmentType: 'buyer_visit',
+      lockAppointmentType: true,
+      durationMinutes: 60,
+      lockDuration: true,
+      requireAgent: true,
+      crmMode: 'none',
+      showLocation: false,
+      showNotes: true,
+      submitAppointment: (corpo) => {
+        if (!(Date.parse(corpo.start_at) > Date.now())) {
+          throw new Error('L’orario scelto è già passato: scegli un orario futuro.');
+        }
+        return apiPost(`/api/buy/requests/${match.buy_request_id}/matches/${matchId}/decision`,
+          visitDecisionPayload(corpo));
+      },
+      onDone: async () => {
         await reload({ invalidateHistory: true });
         showFeedbackMessage('Visita programmata sul match.', false);
-      } catch (error) {
-        submitting = false;
-        submitBtn.disabled = false;
-        cancelBtn.disabled = false;
-        submitBtn.textContent = 'Programma';
-        if (errorEl) errorEl.textContent = error.message || 'Errore nella programmazione della visita.';
-      }
+      },
     });
-
-    dialogEl.showModal();
   }
+}
+
+// A31-4 - il corpo della POST BUY .../decision per una visita programmata dal
+// dialog Agenda: SOLO questi campi. Niente end_at, property_id, contact_id,
+// lead_id, assigned_to, status, appointment_type: li decide la facade A31-3.
+export function visitDecisionPayload(corpo) {
+  const payload = {
+    action: 'visit_scheduled',
+    scheduled_at: corpo.start_at,
+    assigned_user_id: corpo.assigned_user_id,
+    client_request_id: corpo.client_request_id,
+  };
+  if (corpo.notes) payload.notes = corpo.notes;
+  return payload;
 }
 
 function renderPairHeading(m) {

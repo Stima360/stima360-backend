@@ -8,6 +8,12 @@ la sessione stessa, facade ATTIVA), owner/admin/Supreme restano sul percorso
 legacy dichiarato finche' la UI non avra' un selettore agente (A31-4). Se
 un caller cominciasse a mandarlo, `test_02` cade e ricorda di spegnere il
 percorso legacy nello stesso gate.
+
+SENTINELLA AGGIORNATA DA A31-4: e' successo. I tre caller della OS Shell
+(abbinamento, acquirente, immobile) mandano `assigned_user_id` dal corpo del
+dialog Agenda, e nello stesso gate il percorso legacy scoped owner/admin e'
+spento (BUY: nessun fallback; PROPERTY: visita futura aperta senza agente =
+errore). `test_02` ora difende questo stato.
 """
 from __future__ import annotations
 
@@ -23,6 +29,18 @@ CALLER_DECISIONE = (
 )
 CALLER_VISITE = (
     "static/os_shell/assets/views/immobile-dettaglio.js",
+    "static/property_admin/assets/app.js",
+)
+#: A31-4: i caller della OS Shell che programmano una visita dal dialog Agenda.
+CALLER_OS_SHELL = (
+    "static/os_shell/assets/views/abbinamento-dettaglio.js",
+    "static/os_shell/assets/views/acquirente-dettaglio.js",
+    "static/os_shell/assets/views/immobile-dettaglio.js",
+)
+#: A31-4: le vecchie app admin restano fuori (debito dichiarato): non
+#: improvvisano un agente, e il backend rifiuta una loro visita futura aperta.
+CALLER_LEGACY_ADMIN = (
+    "static/buy_admin/assets/app.js",
     "static/property_admin/assets/app.js",
 )
 
@@ -70,9 +88,29 @@ def test_01_i_payload_ui_attuali_restano_validi():
     assert VisitCreate(scheduled_at="2031-01-10T10:00:00+01:00").assigned_user_id is None
 
 
-def test_02_nessun_caller_ui_invia_ancora_un_agente_attivazione_owner_admin_in_a31_4():
-    for percorso in CALLER_DECISIONE + CALLER_VISITE:
+def _js_senza_commenti(percorso: str) -> str:
+    return "\n".join(r for r in _testo(percorso).splitlines() if not r.strip().startswith("//"))
+
+
+def test_02_sentinella_a31_4_agente_solo_dal_dialog_agenda_e_legacy_spento():
+    """SENTINELLA AGGIORNATA DA A31-4 (era: "nessun caller invia ancora un
+    agente"). L'agente arriva SOLO dal corpo del dialog Agenda nei tre caller
+    della OS Shell; le app admin legacy non lo improvvisano; il backend scoped
+    non ha piu' il fallback owner/admin legacy."""
+    for percorso in CALLER_OS_SHELL:
+        codice = _js_senza_commenti(percorso)
+        assert "openCreateDialog(" in codice and "requireAgent: true" in codice, percorso
+        # una sola riga: `assigned_user_id: corpo.assigned_user_id`
+        assert codice.count("assigned_user_id") == 2, percorso
+        assert re.findall(r"\bassigned_user_id:\s*([\w.]+)", codice) == ["corpo.assigned_user_id"]
+        assert re.findall(r"\bclient_request_id:\s*([\w.]+)", codice) == ["corpo.client_request_id"]
+    for percorso in CALLER_LEGACY_ADMIN:
         assert "assigned_user_id" not in _testo(percorso), percorso
+    buy = _codice("buy/repository.py")
+    assert "_schedule_match_visit_scoped_legacy" not in buy
+    assert "raise ValidationError(_VISITA_SENZA_AGENTE)" in _funzione(buy, "schedule_match_visit_scoped")
+    immobili = _codice("property/repository.py")
+    assert "raise ValidationError(_VISITA_SENZA_AGENTE)" in _funzione(immobili, "_visita_da_agenda")
 
 
 def test_03_url_e_router_invariati():
@@ -127,9 +165,12 @@ def test_06_buy_la_programmazione_passa_dall_agenda():
     assert "INSERT INTO property_visits" not in facade
     assert "_insert_visit_scheduled(" in facade
     assert facade.count("core_cursor(") == 1
-    # gli unici INSERT diretti rimasti sono i due percorsi legacy dichiarati
-    assert codice.count("INSERT INTO property_visits") == 2
-    assert "INSERT INTO property_visits" in _funzione(codice, "_schedule_match_visit_scoped_legacy")
+    # SENTINELLA AGGIORNATA DA A31-4: lo scoped legacy e' spento. L'unico
+    # INSERT diretto rimasto e' l'unscoped storico `schedule_match_visit`,
+    # che nessuna route raggiunge (test_08).
+    assert "_schedule_match_visit_scoped_legacy" not in codice
+    assert "raise ValidationError(_VISITA_SENZA_AGENTE)" in facade
+    assert codice.count("INSERT INTO property_visits") == 1
     assert "INSERT INTO property_visits" in _funzione(codice, "schedule_match_visit")
 
 
@@ -141,8 +182,8 @@ def test_07_d8_l_interazione_generica_non_crea_visit_scheduled():
 
 def test_08_nessun_secondo_scrittore_non_dichiarato():
     """Inventario degli INSERT diretti su `property_visits` fuori dai test:
-    la proiezione A31-2, i due percorsi legacy BUY dichiarati e lo script
-    E2E storico. `schedule_match_visit` (senza ctx) non ha caller di
+    la proiezione A31-2, il percorso legacy BUY unscoped dichiarato (A31-4:
+    lo scoped e' spento) e lo script E2E storico. `schedule_match_visit` (senza ctx) non ha caller di
     produzione: lo chiama solo `buy.service.match_decision`, che nessuna
     route usa (il router usa `match_decision_scoped`)."""
     trovati = set()

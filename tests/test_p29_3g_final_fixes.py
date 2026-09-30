@@ -307,9 +307,15 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
     # `static/` - `main.js` (la rotta, senza voce in barra laterale) e
     # `app.css` (una sezione in coda). Si sottrae SOLO cio' che A30-4 dichiara.
     from tests.a30_4_diff import FILE_MODIFICATI as MOD_A30_4, FILE_NUOVI as NUOVI_A30_4
+    # SENTINELLA AGGIORNATA DA A31-4 (stessa forma): le tre viste che
+    # programmano una visita acquirente con il dialog dell'Agenda. Si
+    # sottrae ESATTAMENTE cio' che A31-4 dichiara - nessun prefisso, e
+    # `intatti` resta quello di prima.
+    from tests.a31_4_diff import FILE_MODIFICATI as MOD_A31_4, FILE_NUOVI as NUOVI_A31_4
 
     diff = set(_git("diff", "--name-only", "--", *intatti).split())
-    fuori = diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
+    fuori = (diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
+             - MOD_A31_4 - NUOVI_A31_4)
     assert fuori == set(), sorted(fuori)
 
 

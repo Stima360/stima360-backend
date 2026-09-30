@@ -129,9 +129,19 @@ def test_match_decision_requires_reason_code_when_discarded_and_scheduled_at_whe
     end = text.index("// --- P25.5: Criteri")
     dialog_fn = text[start:end]
     assert "reasonField.hidden = actionSelect.value !== 'discarded';" in dialog_fn
-    assert "scheduleField.hidden = actionSelect.value !== 'visit_scheduled';" in dialog_fn
     assert "if (action === 'discarded') payload.reason_code" in dialog_fn
-    assert "Data e ora visita obbligatorie" in dialog_fn
+    # SENTINELLA AGGIORNATA DA A31-4 (autorizzata, dichiarata in
+    # tests/a31_4_diff.py): "Visita programmata" non passa piu' da questo
+    # dialog con un datetime-local. Qui non e' offerta e non ha campi; la si
+    # programma con "Programma visita", che apre il dialog dell'Agenda
+    # (agente obbligatorio) e manda `scheduled_at` dal suo corpo validato.
+    assert "MATCH_DECISION_ACTIONS.filter((a) => a !== 'visit_scheduled')" in dialog_fn
+    for vecchio in ("scheduleField", "datetime-local", "scheduled_at", "Data e ora visita"):
+        assert vecchio not in dialog_fn, vecchio
+    visita = text[text.index("async function openVisitScheduleDialog(match)"):start]
+    assert "openCreateDialog(dialogEl, {" in visita
+    assert "requireAgent: true" in visita
+    assert "visitDecisionPayload(corpo)" in visita
 
 
 def test_rejection_reason_labels_match_real_backend_enum():
