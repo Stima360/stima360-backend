@@ -476,7 +476,12 @@ def test_f3_nessuna_migration_in_lmc2():
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
     # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-11:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
+    assert migrazioni[-12:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -486,7 +491,8 @@ def test_f3_nessuna_migration_in_lmc2():
                                "075_a30_10_calendar_inbound.sql",
                                "076_a30_11_working_hours.sql",
                                "077_a30_12_public_booking.sql",
-                               "078_a31_2_buyer_visits_projection.sql"], migrazioni[-12:]
+                               "078_a31_2_buyer_visits_projection.sql",
+                               "079_a32_1_appointment_reminders.sql"], migrazioni[-13:]
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():

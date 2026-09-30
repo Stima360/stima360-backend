@@ -157,7 +157,12 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
     # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert max(numeri) == 78, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
+    assert max(numeri) == 79, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

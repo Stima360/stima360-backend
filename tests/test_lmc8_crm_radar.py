@@ -535,7 +535,14 @@ def test_h5_nessuna_migration():
               "migrations/077_a30_12_public_booking.sql",
               "migrations/077_a30_12_public_booking_down.sql",
               "migrations/078_a31_2_buyer_visits_projection.sql",
-              "migrations/078_a31_2_buyer_visits_projection_down.sql"}
+              "migrations/078_a31_2_buyer_visits_projection_down.sql",
+              "migrations/079_a32_1_appointment_reminders.sql",
+              "migrations/079_a32_1_appointment_reminders_down.sql"}
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA A31-2: la 078 collega `property_visits` ad
     # `appointments` (colonna `appointment_id` + guardia propria: la visita
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE

@@ -698,7 +698,12 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
     # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
+    assert numeri[-1] == 79 and numeri[-2] == 78 and numeri[-3] == 77 and numeri[-4] == 76, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

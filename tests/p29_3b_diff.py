@@ -215,8 +215,12 @@ def _dichiarati_da_fasi_successive() -> frozenset[str]:
     sapere che A30-12 si e' dichiarata.
     """
     dichiarati: set[str] = set()
+    # A32-1 (collisione dichiarata): `communication/enums.py` riceve il motivo
+    # `appointment_reminder` (079) e `contact_view.py` la sua etichetta. Stessa
+    # posizione di A30-12: il proprio inventario (`tests/a32_1_diff.py`) nomina
+    # i file; qui basta sapere che A32-1 si e' dichiarata.
     for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff", "tests.a30_10_diff",
-                   "tests.a30_12_diff"):
+                   "tests.a30_12_diff", "tests.a32_1_diff"):
         try:
             inventario = __import__(modulo, fromlist=["FILE_MODIFICATI"])
         except ImportError:  # la fase non esiste ancora: nulla da ammettere

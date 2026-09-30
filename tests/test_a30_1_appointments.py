@@ -65,7 +65,12 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
     # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76 and numeri[-4] == 75 and numeri[-5] == 74
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
+    assert numeri[-1] == 79 and numeri[-2] == 78 and numeri[-3] == 77 and numeri[-4] == 76 and numeri[-5] == 75 and numeri[-6] == 74
     assert len(numeri) == len(set(numeri))
 
 

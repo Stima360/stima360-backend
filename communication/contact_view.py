@@ -53,6 +53,7 @@ ETICHETTE_MOTIVO = {
     "stima_pdf": "Stima", "m1": "M1", "m2": "M2", "m3": "M3", "m4": "M4", "m5": "M5",
     "operator_manual": "Manuale", "operator_reply": "Risposta operatore",
     "owner_login_link": "Accesso proprietario",
+    "appointment_reminder": "Promemoria appuntamento",
 }
 
 ETICHETTE_STATO = {

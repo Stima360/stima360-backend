@@ -382,7 +382,11 @@ def test_d4_il_token_e_percent_encoded_nel_link():
 def test_e1_il_reason_code_esiste_nell_enum():
     assert communication_enums.REASON_OWNER_LOGIN_LINK == "owner_login_link"
     assert "owner_login_link" in communication_enums.REASON_CODES
-    assert len(communication_enums.REASON_CODES) == 9
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 aggiunge UN motivo,
+    # `appointment_reminder` (gate A32-0/A32-0B). Il conteggio resta esatto:
+    # un undicesimo valore farebbe ancora fallire.
+    assert communication_enums.REASON_APPOINTMENT_REMINDER == "appointment_reminder"
+    assert len(communication_enums.REASON_CODES) == 10
 
 
 def test_e2_gli_altri_reason_code_sono_intatti():
@@ -456,7 +460,12 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # acquirente e' la PROIEZIONE di un `buyer_visit`), approvata dal GATE
     # A31-1 DESIGN FREEZE. Si nomina invece di smettere di guardare:
     # qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 78 and numeri[-2] == 77 and numeri[-3] == 76, numeri[-3:]
+    # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
+    # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
+    # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
+    # Si nomina invece di smettere di guardare: qualunque ALTRA migration
+    # comparisse farebbe ancora fallire.
+    assert numeri[-1] == 79 and numeri[-2] == 78 and numeri[-3] == 77 and numeri[-4] == 76, numeri[-3:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):
@@ -489,9 +498,14 @@ def test_e6_l_enum_e_il_check_effettivo_coincidono(runner):
     """L'insieme Python contro il CHECK che il database ha DAVVERO dopo la 067."""
     up_064 = (MIGRAZIONI / "064_p29_communication_foundation.sql").read_text(encoding="utf-8")
     up_067 = (MIGRAZIONI / f"{VERSION}.sql").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA A32-1: dopo la 067 il CHECK effettivo e' quello
+    # della 079 (`appointment_reminder`, gate A32-0/A32-0B). L'enum si confronta
+    # con l'ULTIMA definizione della serie, come prima.
+    up_079 = (MIGRAZIONI / "079_a32_1_appointment_reminders.sql").read_text(encoding="utf-8")
     ultimo = re.findall(
         r"CONSTRAINT communication_messages_reason_code_chk\s*CHECK \(([^)]*\))",
-        runner.strip_sql_comments(up_064) + runner.strip_sql_comments(up_067))[-1]
+        runner.strip_sql_comments(up_064) + runner.strip_sql_comments(up_067)
+        + runner.strip_sql_comments(up_079))[-1]
     assert set(re.findall(r"'([a-z_0-9]+)'", ultimo)) == communication_enums.REASON_CODES
 
 
