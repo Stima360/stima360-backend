@@ -656,6 +656,29 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "database.get_connection(): that is the application choke point and "
         "must stay uncoupled from a throwaway test database"
     ),
+    # SENTINELLA AGGIORNATA DA CRM-OPS-1A: +1 sito, dichiarato qui e nel
+    # documento, come ogni prova PostgreSQL delle fasi precedenti.
+    "tests/test_crm_ops_1a_creator_assignment.py": (
+        "TEST-only CRM-OPS-1A proof; opts in through P29_TEST_DSN and skips "
+        "entirely without it. Creates and drops its own throwaway database "
+        "and never touches an existing schema. Registered in its own right "
+        "rather than reusing an earlier entry: an allow-list shared between "
+        "phases would let a new entrypoint arrive unannounced. The connection "
+        "exists to apply the REAL P26 core migrations (027, 001, 028, 029, "
+        "030) and to prove what a recording cursor cannot: that a contact or "
+        "lead created by an agent is inserted with assigned_agent_id equal to "
+        "the creator and satisfies migration 030's composite foreign key "
+        "(agency_id, assigned_agent_id) -> agency_memberships, which the "
+        "module first shows to be live with a negative control; that the "
+        "creator then reads and updates its own row through the production "
+        "scope while a colleague agent and another agency get NotFound; that "
+        "owner and admin keep full access and still create unassigned rows; "
+        "and that an agent cannot open a lead on a contact it does not see. "
+        "It monkeypatches get_connection in the core module onto its own "
+        "connection. It must not go through database.get_connection(): that "
+        "is the application choke point and must stay uncoupled from a "
+        "throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

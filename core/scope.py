@@ -136,11 +136,63 @@ def scoped_predicate(ctx: AgencyScope, table: str, alias: str) -> tuple[str, lis
     parts = [f"{alias}.agency_id = %s"]
     params = [ctx.require_agency()]
 
-    if ctx.role == "agent" and table in AGENT_ASSIGNABLE:
+    if _narrowed_to_own_records(ctx, table):
         parts.append(f"{alias}.assigned_agent_id = %s")
         params.append(ctx.user_id)
 
     return " AND ".join(parts), params
+
+
+def _narrowed_to_own_records(ctx: AgencyScope, table: str) -> bool:
+    """True when ``ctx`` reads ``table`` only through ``assigned_agent_id``.
+
+    The one place the agent narrowing is decided. ``scoped_predicate`` above
+    turns it into a predicate; ``creator_assignment`` below turns it into the
+    value a row created by ``ctx`` must carry. Both ask this function, so the
+    two cannot disagree: a narrowed context can never create a row that its
+    own predicate would then hide.
+    """
+    return ctx.role == "agent" and table in AGENT_ASSIGNABLE
+
+
+def creator_assignment(ctx: AgencyScope, table: str) -> int | None:
+    """The ``assigned_agent_id`` a row created by ``ctx`` is born with.
+
+    CRM-OPS-1A. Until this function existed, `core/repository.py` wrote every
+    new contact and lead with ``assigned_agent_id = NULL`` whoever created it,
+    and ``scoped_predicate`` then hid that row from an ``agent`` creator the
+    moment it was committed (TEST: contact 158). The row was not lost, but it
+    was invisible and unmodifiable to the only person who knew it existed.
+
+    The rule: a context that reads ``table`` only through its own assignment
+    creates rows assigned to itself. Everyone else creates rows assigned to
+    nobody, exactly as before:
+
+    * ``agency_owner`` / ``agency_admin`` see the whole agency - ``None``.
+    * a platform admin bound to an agency - ``None`` (its role is not
+      ``agent``; the flag never narrows and never assigns).
+    * the legacy Basic context - ``None`` (``role`` is the agency owner).
+    * ``SystemAgencyContext`` (public STIMA bridge, public booking, dispatcher,
+      reminders) - ``None``: ``role`` is None, so there is no narrowing and
+      there is nobody to assign to.
+    * ``activities`` and ``tasks`` - ``None`` for every context: they carry no
+      ``assigned_agent_id`` (AGENT_ASSIGNABLE).
+
+    The value is ``ctx.user_id`` and nothing else: it is never read from a
+    payload, and migration 030's composite foreign key
+    ``(agency_id, assigned_agent_id) -> agency_memberships`` holds by
+    construction, because an ``OperatorContext`` with ``role='agent'`` exists
+    only through an active membership in ``ctx.agency_id``.
+
+    Reassignment stays where it was: ``set_contact_assignment`` /
+    ``set_lead_assignment``, gated by ``permissions.may_assign_records``. This
+    function is not a permission - it is the scoping rule applied at birth.
+    """
+    if table not in SCOPED_TABLES:
+        raise ProgrammingError(f"{table!r} is not a scoped CORE table")
+    if _narrowed_to_own_records(ctx, table):
+        return ctx.user_id
+    return None
 
 
 def scoped_source(ctx: AgencyScope, table: str, alias: str) -> tuple[str, list]:

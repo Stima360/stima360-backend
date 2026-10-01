@@ -2096,6 +2096,16 @@ def test_c12_scope_logs_nothing():
 
 
 def test_c12_the_module_exposes_no_unexpected_public_surface():
+    """SENTINELLA AGGIORNATA DA CRM-OPS-1A: +1 nome, `creator_assignment`.
+
+    E' l'inventario esatto della superficie pubblica di core/scope.py, e ha
+    fatto il suo lavoro: e' scattato quando CRM-OPS-1A ha aggiunto la funzione
+    che decide con quale `assigned_agent_id` nasce una riga creata da un
+    contesto. Sta qui, e non in core/repository.py, perche' e' l'altra faccia
+    del restringimento per `agent` di `scoped_predicate` (stessa condizione,
+    `_narrowed_to_own_records`) e perche' test_e3 vieta al repository di
+    nominare il ruolo. Nessun nome tolto, nessun'asserzione allentata.
+    """
     import core.scope as scope_module
 
     public = {name for name in vars(scope_module) if not name.startswith("_")}
@@ -2105,6 +2115,7 @@ def test_c12_the_module_exposes_no_unexpected_public_surface():
         "SCOPED_TABLES", "AGENT_ASSIGNABLE", "SYSTEM_CONTEXT_FUNCTIONS",
         "ProgrammingError", "scoped_predicate", "scoped_source",
         "resolve_default_agency_id", "system_context_for_public_stima",
+        "creator_assignment",
     }
     assert public <= imported | defined, public - (imported | defined)
     assert defined <= public, defined - public

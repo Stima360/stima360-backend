@@ -38,7 +38,7 @@ import pytest
 
 from core import repository
 from core.exceptions import ConflictError, NotFoundError, ValidationError
-from core.scope import ProgrammingError, scoped_predicate
+from core.scope import ProgrammingError, creator_assignment, scoped_predicate
 from operator_auth.context import OperatorContext, SystemAgencyContext
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
@@ -1557,10 +1557,19 @@ def _install_store(monkeypatch, store: AgencyStore, *, leaky_search: bool = Fals
             store.rows[table].remove(row)
         return _inner
 
+    # SENTINELLA AGGIORNATA DA CRM-OPS-1A: i due create della fixture ostile
+    # non scrivono piu' `assigned_agent_id: None` a prescindere, ma chiedono
+    # alla PRODUZIONE (`core.scope.creator_assignment`) con quale assegnazione
+    # nasce la riga - come `visible` chiede a `scoped_predicate` chi la vede.
+    # Per owner/admin/platform admin la risposta e' None, identica a prima;
+    # per un `agent` e' il suo user_id. Senza questo, i casi
+    # "l'agente crea e poi rilegge" di tests/test_crm_ops_1a_creator_assignment.py
+    # proverebbero la fixture e non il codice.
     def create_contact(ctx, data):
         store.next_id += 1
         row = {"id": store.next_id, "agency_id": ctx.require_agency(),
-               "assigned_agent_id": None, "display_name": data.get("display_name"),
+               "assigned_agent_id": creator_assignment(ctx, "contacts"),
+               "display_name": data.get("display_name"),
                "email_normalized": data.get("email_normalized"), "status": "active",
                "notes": None}
         store.rows["contacts"].append(row)
@@ -1571,7 +1580,8 @@ def _install_store(monkeypatch, store: AgencyStore, *, leaky_search: bool = Fals
             _not_found("contact", data["contact_id"])
         store.next_id += 1
         row = {"id": store.next_id, "agency_id": ctx.require_agency(),
-               "assigned_agent_id": None, "contact_id": data["contact_id"],
+               "assigned_agent_id": creator_assignment(ctx, "leads"),
+               "contact_id": data["contact_id"],
                "status": "open", "notes": None}
         store.rows["leads"].append(row)
         return dict(row)

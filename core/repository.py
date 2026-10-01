@@ -59,6 +59,7 @@ from operator_auth.context import SystemAgencyContext
 
 from .scope import (
     ProgrammingError,
+    creator_assignment,
     scoped_predicate,
     scoped_source,
 )
@@ -66,7 +67,17 @@ from .scope import (
 # Columns that record where a row came from. They are written from the scope,
 # never from a payload, so a caller cannot place a record in another agency or
 # attribute it to another operator.
-SERVER_OWNED_COLUMNS = ("agency_id", "created_by_user_id")
+#
+# CRM-OPS-1A adds `assigned_agent_id`. At creation it is decided by
+# `core.scope.creator_assignment` from the scope alone (an `agent` creator is
+# assigned the row, everyone else leaves it NULL); afterwards it changes only
+# through `set_contact_assignment` / `set_lead_assignment`, behind
+# `permissions.may_assign_records`. A generic create or update that names it
+# is therefore writing from the wrong door, and is refused here exactly as a
+# payload `agency_id` is. Over HTTP the schemas' `extra = "forbid"` already
+# answers 422; this is the same rule restated for callers that do not pass
+# through HTTP.
+SERVER_OWNED_COLUMNS = ("agency_id", "created_by_user_id", "assigned_agent_id")
 
 # P29-1.3: LE COLONNE DI CONSENSO NON SI SCRIVONO DA QUI.
 #
@@ -197,6 +208,10 @@ def create_contact(ctx, data: dict[str, Any]) -> dict[str, Any]:
     # deciso niente. Concederlo e' un atto separato, e passa da consent.service.
     prepared["marketing_consent"] = None
     prepared["marketing_consent_at"] = None
+    # CRM-OPS-1A: the row is born assigned to its creator when - and only
+    # when - the creator's own scope would otherwise hide it (an `agent`).
+    # Decided by core/scope.py from the scope, never read from `data`.
+    prepared["assigned_agent_id"] = creator_assignment(ctx, "contacts")
     with core_cursor(commit=True) as (_, cur):
         cur.execute(
             """
@@ -204,12 +219,12 @@ def create_contact(ctx, data: dict[str, Any]) -> dict[str, Any]:
                 contact_type, first_name, last_name, company_name, display_name,
                 email, email_normalized, phone, phone_normalized, secondary_phone,
                 source, status, marketing_consent, marketing_consent_at, notes,
-                agency_id, created_by_user_id
+                agency_id, created_by_user_id, assigned_agent_id
             ) VALUES (
                 %(contact_type)s, %(first_name)s, %(last_name)s, %(company_name)s, %(display_name)s,
                 %(email)s, %(email_normalized)s, %(phone)s, %(phone_normalized)s, %(secondary_phone)s,
                 %(source)s, %(status)s, %(marketing_consent)s, %(marketing_consent_at)s, %(notes)s,
-                %(agency_id)s, %(created_by_user_id)s
+                %(agency_id)s, %(created_by_user_id)s, %(assigned_agent_id)s
             )
             RETURNING *
             """,
@@ -387,6 +402,10 @@ def set_lead_assignment(ctx, lead_id: int, assigned_agent_id: int | None) -> dic
 
 def create_lead(ctx, data: dict[str, Any]) -> dict[str, Any]:
     prepared = _stamp(ctx, data)
+    # CRM-OPS-1A: same rule as create_contact. The contact check below is
+    # unchanged and still runs under the caller's own scope, so an `agent`
+    # can only open a lead on a contact already assigned to them.
+    prepared["assigned_agent_id"] = creator_assignment(ctx, "leads")
     with core_cursor(commit=True) as (_, cur):
         _ensure_exists_scoped(ctx, cur, "contacts", data["contact_id"], "contact")
         cur.execute(
@@ -394,11 +413,11 @@ def create_lead(ctx, data: dict[str, Any]) -> dict[str, Any]:
             INSERT INTO leads (
                 contact_id, source, pipeline, stage, priority, status, assigned_to,
                 estimated_value, next_action_at, lost_reason, notes,
-                agency_id, created_by_user_id
+                agency_id, created_by_user_id, assigned_agent_id
             ) VALUES (
                 %(contact_id)s, %(source)s, %(pipeline)s, %(stage)s, %(priority)s, %(status)s,
                 %(assigned_to)s, %(estimated_value)s, %(next_action_at)s, %(lost_reason)s, %(notes)s,
-                %(agency_id)s, %(created_by_user_id)s
+                %(agency_id)s, %(created_by_user_id)s, %(assigned_agent_id)s
             ) RETURNING *
             """,
             prepared,
