@@ -99,6 +99,13 @@ from calendar_sync.constants import APPOINTMENT_REMOTE_PRESENT as _GCAL_PRESENT
 # mutazione si annulla tutta.
 from buyer_visits import integration as _visite
 
+# CRM-OPS-3: le Acquisizioni seguono il LORO appuntamento (`seller_meeting`):
+# reschedule -> `appointment_id` al successore; completato -> sopralluogo
+# effettuato; annullato/mancato -> solo l'evento. Stesso schema di A31-2:
+# il pacchetto vive fuori dall'Agenda, qui solo le chiamate, sullo STESSO
+# cursore, prima del mark dirty Google.
+from acquisitions import integration as _acquisizioni
+
 try:  # il driver vero; in sviluppo senza psycopg2 il conftest ne mette uno finto
     from psycopg2 import errors as _pg_errors
     _EXCLUSION_VIOLATION = getattr(_pg_errors, "ExclusionViolation", None)
@@ -935,6 +942,8 @@ def reschedule_appointment(ctx, appointment_id, payload):
             nuova = repository.get_appointment(cur, agency_id, nuova["id"])
         # A31-2: RESCHEDULE -> la STESSA visita passa al successore.
         _visite.on_reschedule(cur, agency_id, vecchia, nuova, actor_user_id=actor)
+        # CRM-OPS-3: l'acquisizione segue la riga nuova.
+        _acquisizioni.on_reschedule(cur, agency_id, vecchia, nuova, actor_user_id=actor)
         # A30-9B, matrice §18/§21: RESCHEDULE -> stessa catena, mark dirty
         # sulla riga viva; l'id evento remoto non cambia (deterministico sulla
         # radice della catena), il worker aggiorna lo STESSO evento Google.
@@ -969,6 +978,8 @@ def cancel_appointment(ctx, appointment_id, body):
             azione="cancel", event_extra=_extra_evento(None, task))
         # A31-2: CANCEL -> stato della proiezione `cancelled`.
         _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        # CRM-OPS-3: CANCEL -> evento sull'acquisizione, che resta aperta.
+        _acquisizioni.on_status(cur, agency_id, nuova, actor_user_id=actor)
         # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
         # esiste, va rimosso).
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
@@ -1005,6 +1016,8 @@ def complete_appointment(ctx, appointment_id, body):
         # A31-2: COMPLETE -> stato `completed` (+ updated_at, FLOW-R007).
         # D4: la nota di esito resta nell'evento, mai in outcome/feedback.
         _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        # CRM-OPS-3: COMPLETE -> appointment_set diventa inspection_done.
+        _acquisizioni.on_status(cur, agency_id, nuova, actor_user_id=actor)
         return nuova
     return _su_riga(ctx, appointment_id, "complete", body.version, lavoro)
 
@@ -1034,6 +1047,8 @@ def no_show_appointment(ctx, appointment_id, body):
             azione="no_show", event_extra=_extra_evento(body.outcome_note, task))
         # A31-2: NO_SHOW -> stato della proiezione `no_show` (D4 come sopra).
         _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+        # CRM-OPS-3: NO_SHOW -> evento sull'acquisizione, che resta aperta.
+        _acquisizioni.on_status(cur, agency_id, nuova, actor_user_id=actor)
         return nuova
     return _su_riga(ctx, appointment_id, "no_show", body.version, lavoro)
 
@@ -1059,6 +1074,8 @@ def patch_appointment(ctx, appointment_id, body):
         # A31-2 D5: l'immobile di una visita gia' proiettata non cambia (409,
         # prima di qualunque scrittura).
         _visite.before_patch(cur, agency_id, row, cambi)
+        # CRM-OPS-3: idem per l'appuntamento di un'acquisizione.
+        _acquisizioni.before_patch(cur, agency_id, row, cambi)
         nuova = repository.update_appointment(
             cur, row["id"], cambi, actor_user_id=actor, event_type="updated",
             from_status=row["status"], azione="patch")

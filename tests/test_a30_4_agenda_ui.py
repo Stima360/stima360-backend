@@ -89,8 +89,10 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     main = _testo(MAIN_JS)
     inizio = main.index("const SECTIONS = [")
     sezioni = main[inizio:main.index("];", inizio)]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
+    # SECTIONS, dopo "immobili". L'elenco resta esatto.
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "immobili", "acquirenti", "abbinamenti",
+        "oggi", "agenda", "contatti", "immobili", "acquisizioni", "acquirenti", "abbinamenti",
         "attivita", "automazioni"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
@@ -148,6 +150,17 @@ CRM_OPS_1B_IMPORT_AMMESSI = (
     "import { canAssignRecords } from '../agenda/agenda-model.js';",
 )
 
+# SENTINELLA AGGIORNATA DA CRM-OPS-3 (autorizzata, dichiarata in
+# tests/crm_ops_3_diff.py): l'elenco e la scheda delle Acquisizioni fissano e
+# gestiscono l'appuntamento con il dialog CONDIVISO dell'Agenda
+# (`openCreateDialog`, `openActionDialog`) e il suo UNICO client (`getAgents`,
+# `getAppointment`: `/api/appointments` resta nominato solo in agenda-api.js).
+# Esenzione CHIUSA: solo queste due viste, e in ciascuna solo le righe
+# `agenda/` dichiarate, esatte e nell'ordine; nessuna pagina dell'Agenda.
+def _crm_ops_3_viste():
+    from tests.crm_ops_3_diff import VISTE_CON_DIALOG_AGENDA
+    return {ROOT / k: v for k, v in VISTE_CON_DIALOG_AGENDA.items()}
+
 
 def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_agenda():
     for f in ASSETS.rglob("*.js"):
@@ -164,6 +177,10 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         if f == CRM_OPS_1B_VISTA_CONTATTO:
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
             assert righe == list(CRM_OPS_1B_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
+            continue
+        if f in _crm_ops_3_viste():
+            righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
+            assert righe == list(_crm_ops_3_viste()[f]), (f.relative_to(ROOT), righe)
             continue
         assert "agenda/" not in testo, f.relative_to(ROOT)
 
@@ -851,8 +868,10 @@ def _agenda_ok(n=8):
 def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     rt = _shell()
     out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()), hash="#/oggi")
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquirenti",
-                                "abbinamenti", "attivita", "automazioni"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
+    # SECTIONS, dopo "immobili". L'elenco resta esatto.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
+                                "acquirenti", "abbinamenti", "attivita", "automazioni"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant

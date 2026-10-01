@@ -83,7 +83,12 @@ def test_01_la_071_e_valida_e_in_coda():
     # agency_memberships), additive, per il form Immobili. Si nomina invece di
     # smettere di guardare: qualunque ALTRA migration comparisse farebbe
     # ancora fallire.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78 and numeri[-4] == 77 and numeri[-5] == 76
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
+    # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
+    # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
+    # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76
     assert len(numeri) == len(set(numeri))
 
 

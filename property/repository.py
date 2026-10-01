@@ -17,6 +17,21 @@ from buyer_visits import guards as _visite_regole
 # operator_auth.membership_exists, con cui il bersaglio viene validato.
 from appointments import repository as _agenda_repository
 from .catalog import TITLE_SOURCE_FIELDS, generated_code, generated_title
+# CRM-OPS-3: il rifiuto del trigger della 081 (incarico nuovo senza
+# acquisizione) arriva come CHECK violation; il service lo ha gia' escluso,
+# questo copre la corsa fra la sua lettura e l'UPDATE.
+from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
+
+
+# Il driver finto dei test senza database non ha CheckViolation: `()` non
+# intercetta nulla.
+_CHECK_VIOLATION = getattr(errors, 'CheckViolation', ())
+
+
+def _mandate_origin_refused(exc):
+    if 'CRM-OPS-3' in str(exc):
+        return ValidationError(MANDATE_ONLY_FROM_ACQUISITION)
+    return None
 
 def row(x): return dict(x) if x else None
 
@@ -105,6 +120,10 @@ def create_property(ctx,data,*,generate_identity=False):
         try:
             cur.execute(f"INSERT INTO properties ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))}) RETURNING *",vals)
         except errors.UniqueViolation as exc: raise ConflictError('property code already exists') from exc
+        except _CHECK_VIOLATION as exc:
+            refused=_mandate_origin_refused(exc)
+            if refused is not None: raise refused from exc
+            raise
         created=row(cur.fetchone())
         if generate_identity and not (created.get('code') or '').strip():
             # CRM-OPS-2: codice generato nella stessa transazione, mai dopo.
@@ -306,6 +325,11 @@ def update_property(*args, **kwargs):
                 cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *", list(data.values()) + [property_id])
         except errors.UniqueViolation as exc:
             raise ConflictError('property code already exists') from exc
+        except _CHECK_VIOLATION as exc:
+            refused = _mandate_origin_refused(exc)
+            if refused is not None:
+                raise refused from exc
+            raise
         r = row(cur.fetchone())
         if 'asking_price' in data and data['asking_price'] != old.get('asking_price'):
             cur.execute("INSERT INTO property_price_history(property_id,old_price,new_price,change_reason,changed_by) VALUES(%s,%s,%s,%s,%s)", (property_id, old.get('asking_price'), data['asking_price'], change_reason, changed_by))

@@ -488,6 +488,37 @@ DOMAINS = (
              "stima altrui -> 422/404, e registro, facade e Q10 invariati",
     ),
     Domain(
+        "ACQUISITIONS", "/api/acquisitions",
+        # CRM-OPS-3 - LE ACQUISIZIONI. HOSTILE / REJECTION ONLY, come
+        # APPOINTMENTS e ACQUISITION (il ponte LMC-15, prefisso SINGOLARE
+        # `/api/acquisition`: un'altra superficie, con il suo certificatore).
+        #
+        # PERCHE' LA MATRICE NON CREA NE' TOCCA UN'ACQUISIZIONE
+        #
+        # Un'acquisizione non si cancella (la 081 rifiuta la DELETE), il suo
+        # registro e' append-only, nasce SEMPRE con un appuntamento vero
+        # nell'Agenda (che a sua volta non si cancella) e, se portata in fondo,
+        # scrive un incarico sull'immobile. Una riga nata dal run resterebbe
+        # sul TEST per sempre, con un operatore di certificazione come autore,
+        # e bloccherebbe il cleanup degli operatori e degli immobili (FK
+        # RESTRICT). Quindi ogni domanda ha come risposta giusta un RIFIUTO
+        # che arriva PRIMA di qualunque scrittura: anonimo e Basic (401 al
+        # mount), `agency_id` nel corpo (422 prima del service), l'immobile
+        # dell'altra agenzia in creazione (404 prima di ogni INSERT),
+        # l'acquisizione dell'altra agenzia trovata in SOLA LETTURA (404 su
+        # dettaglio e su ogni scrittura, con una `version` impossibile). Il
+        # giro riuscito appartiene alla suite CRM-OPS-3 su PostgreSQL
+        # usa-e-getta.
+        certifier="acquisitions",
+        api_delete=False,
+        note="solo rifiuti: anonimo e Basic -> 401 su ogni rotta, agency_id "
+             "nel corpo -> 422, immobile altrui in creazione -> 404, "
+             "l'acquisizione dell'altra agenzia (trovata in sola lettura) -> "
+             "404 su dettaglio e su patch/status/lost/appointment/mandate, "
+             "assente dall'elenco, /options senza gli agenti altrui, e "
+             "acquisizioni, eventi, immobile e appuntamento collegati invariati",
+    ),
+    Domain(
         "CALENDAR_SYNC", "/api/calendar/google",
         # A30-9B - OAuth verso Google. HOSTILE / REJECTION ONLY, come
         # COMMUNICATION: un giro "riuscito" avrebbe un effetto reale
@@ -5735,6 +5766,349 @@ def certify_appointments(report, http, cert, domain, jars, owned, context) -> No
             + (f"; DIMINUITI {diminuiti}: una riga e' sparita" if diminuiti else ""),
         )
 
+
+# ---------------------------------------------------------------------------
+# CRM-OPS-3 - ACQUISITIONS: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+#: Una `version` che nessuna acquisizione reale porta: ogni scrittura ostile
+#: la dichiara, cosi' che anche uno scope rotto finisca in VERSION_CONFLICT
+#: (409) invece di scrivere. La prova resta il 404.
+ACQUISITIONS_VERSIONE_IMPOSSIBILE = 2147483000
+
+#: L'INVENTARIO COMPLETO delle rotte montate sotto `/api/acquisitions`
+#: (acquisitions/router.py): nove, nessuna DELETE. Il giro anonimo le sonda
+#: tutte (-> 401); il prover offline le confronta con il mount vero.
+ACQUISITIONS_OPERAZIONI = (
+    ("GET", "/options"), ("GET", ""), ("POST", ""),
+    ("GET", "/{id}"), ("PATCH", "/{id}"),
+    ("POST", "/{id}/status"), ("POST", "/{id}/lost"),
+    ("POST", "/{id}/appointment"), ("POST", "/{id}/mandate"),
+)
+
+
+def _acquisizioni_fotografia(database) -> dict | None:
+    """Conteggi e massimi: SOLA LETTURA. None se la 081 non c'e' o non c'e'
+    un database: "non ho potuto contare" non e' "ho contato zero"."""
+    if database is None:
+        return None
+    with database.read() as cur:
+        cur.execute("SELECT to_regclass('public.acquisitions') IS NOT NULL"
+                    "   AND to_regclass('public.acquisition_events') IS NOT NULL"
+                    " AS acquisizioni_pronte")
+        riga = cur.fetchone()
+        if riga is None or not riga["acquisizioni_pronte"]:
+            return None
+        cur.execute(
+            "SELECT (SELECT count(*) FROM acquisitions) AS acquisizioni_righe,"
+            "       (SELECT count(*) FROM acquisition_events) AS acquisizioni_eventi,"
+            "       (SELECT coalesce(max(id), 0) FROM acquisitions) AS acquisizioni_max_riga,"
+            "       (SELECT coalesce(max(id), 0) FROM acquisition_events)"
+            "           AS acquisizioni_max_evento")
+        conteggi = dict(cur.fetchone())
+    return {k: int(v) for k, v in conteggi.items()}
+
+
+def _acquisizioni_altrui(database, agency_id) -> dict | None:
+    """Un'acquisizione GIA' ESISTENTE dell'agenzia, letta e mai toccata."""
+    with database.read() as cur:
+        cur.execute(
+            "SELECT id, version, status, updated_at, property_id, appointment_id"
+            "  FROM acquisitions WHERE agency_id = %s AND version <> %s"
+            " ORDER BY id LIMIT 1 /* acquisizioni_altrui */",
+            (agency_id, ACQUISITIONS_VERSIONE_IMPOSSIBILE))
+        riga = cur.fetchone()
+    return None if riga is None else dict(riga)
+
+
+def _acquisizioni_righe(database, ids) -> dict:
+    """(version, status, updated_at, appointment_id) delle righe sondate."""
+    if not ids:
+        return {}
+    with database.read() as cur:
+        cur.execute("SELECT id, version, status, updated_at, appointment_id FROM acquisitions"
+                    " WHERE id = ANY(%s) /* acquisizioni_sondate */", (sorted(ids),))
+        return {int(r["id"]): (r["version"], r["status"], str(r["updated_at"]),
+                               r["appointment_id"]) for r in cur.fetchall()}
+
+
+def _acquisizioni_collegate(database, ids) -> dict:
+    """L'immobile e l'appuntamento di ogni acquisizione sondata: cio' che un
+    incarico o un nuovo appuntamento avrebbero cambiato."""
+    if not ids:
+        return {}
+    with database.read() as cur:
+        cur.execute(
+            "SELECT a.id, p.acquisition_id, p.mandate_type, p.mandate_start, p.mandate_end,"
+            "       p.commercial_status, p.updated_at AS immobile_updated_at,"
+            "       ap.version AS appuntamento_version, ap.status AS appuntamento_status,"
+            "       ap.updated_at AS appuntamento_updated_at"
+            "  FROM acquisitions a"
+            "  JOIN properties p ON p.id = a.property_id"
+            "  JOIN appointments ap ON ap.id = a.appointment_id"
+            " WHERE a.id = ANY(%s) /* acquisizioni_collegate */", (sorted(ids),))
+        return {int(r["id"]): tuple(str(v) for v in (
+            r["acquisition_id"], r["mandate_type"], r["mandate_start"], r["mandate_end"],
+            r["commercial_status"], r["immobile_updated_at"], r["appuntamento_version"],
+            r["appuntamento_status"], r["appuntamento_updated_at"]))
+            for r in cur.fetchall()}
+
+
+def _acquisizioni_attribuibili(database, prima: dict, operatori: list) -> dict:
+    """Le righe NATE dopo la fotografia con un'identita' del run come autore."""
+    with database.read() as cur:
+        cur.execute(
+            "SELECT (SELECT count(*) FROM acquisitions WHERE id > %s"
+            "          AND created_by_user_id = ANY(%s)) AS acquisizioni_nuove_righe,"
+            "       (SELECT count(*) FROM acquisition_events WHERE id > %s"
+            "          AND actor_user_id = ANY(%s)) AS acquisizioni_nuovi_eventi",
+            (prima["acquisizioni_max_riga"], operatori,
+             prima["acquisizioni_max_evento"], operatori))
+        riga = cur.fetchone()
+    return {k: int(v) for k, v in dict(riga).items()}
+
+
+def certify_acquisitions(report, http, cert, domain, jars, owned, context) -> None:
+    """ACQUISITIONS (CRM-OPS-3): HOSTILE / REJECTION ONLY.
+
+    La matrice certifica AMMISSIONE e CONTENIMENTO DEL TENANT delle
+    Acquisizioni, non il loro funzionamento: quello appartiene alla suite
+    CRM-OPS-3 su PostgreSQL usa-e-getta. Nessuna richiesta di questa sezione
+    puo' arrivare a un percorso riuscito che scrive:
+
+        anonimo, su TUTTE le nove rotte                 -> 401 (al mount)
+        HTTP Basic (P26-5 l'ha tolto)                   -> 401
+        creazione con `agency_id` nel corpo             -> 422 (prima del service)
+        PATCH con `agency_id` nel corpo                 -> 422 (prima del service)
+        /options                                        -> mai un agente altrui
+        creazione sull'immobile dell'altra agenzia      -> 404 (prima di ogni INSERT)
+        l'acquisizione dell'altra agenzia               -> 404 in dettaglio e su
+            PATCH, status, lost, appointment, mandate (con una `version`
+            impossibile: anche uno scope rotto finirebbe in 409, non in una
+            scrittura)
+        l'elenco                                        -> non la contiene
+        e, prima e dopo: conteggi, righe sondate, immobile e appuntamento
+            collegati -> invariati; nessuna riga con un autore del run.
+
+    L'acquisizione dell'altra agenzia NON si crea: si cerca in sola lettura.
+    Se l'altra agenzia non ne ha, le sonde su di essa restano BLOCKED con il
+    prerequisito dichiarato - mai un dato inventato. L'immobile "altrui" e'
+    quello che la matrice ha creato per PROPERTY (`owned_properties`), e che
+    la matrice stessa ripulisce: nessuna fixture permanente.
+    """
+    database = context.get("database")
+    agenzie = context.get("agencies") or {}
+    operatori = context.get("operators") or {}
+    immobili = context.get("owned_properties") or {}
+    base = domain.prefix
+
+    def agenzia(etichetta):
+        valore = agenzie.get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    # -- prima: la fotografia in sola lettura --------------------------------
+    prima = _acquisizioni_fotografia(database)
+    if prima is None:
+        report.blocked(
+            "ACQUISITIONS-fotografia",
+            "nessuna connessione al database, o 081 non applicata: non si puo' "
+            "provare che il giro ostile non scriva, e il giro non parte")
+        return
+
+    # -- senza identita': tutte le rotte (nessuna DELETE esiste) --------------
+    for metodo, suffisso in ACQUISITIONS_OPERAZIONI:
+        percorso = base + suffisso.replace("{id}", "1")
+        payload = {} if metodo in ("POST", "PATCH") else None
+        risposta = http.request(metodo, percorso, payload=payload)
+        report.check(
+            f"ACQUISITIONS-anonimo-{metodo}{suffisso or '/'}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, percorso in (("GET", base), ("POST", base), ("POST", f"{base}/1/lost")):
+        risposta = http.request(metodo, percorso,
+                                payload={} if metodo == "POST" else None,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(
+            f"ACQUISITIONS-basic-{metodo}-{percorso.rsplit('/', 1)[-1] or 'root'}",
+            risposta.status == 401,
+            f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} "
+            "(atteso 401: P26-5 ha tolto quel canale)",
+        )
+
+    # -- le due direzioni ----------------------------------------------------
+    sondate: set[int] = set()
+    righe_prima: dict = {}
+    collegate_prima: dict = {}
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        altrui = _acquisizioni_altrui(database, agenzia(altro))
+        agente_altrui = operatori.get(altro)
+        mio_agente = operatori.get(etichetta)
+        suo_immobile = immobili.get(altro)
+
+        # /options: il catalogo e gli agenti assegnabili SOLO di questa agenzia.
+        opzioni = http.request("GET", f"{base}/options", jar=jar)
+        agenti = [a.get("id") for a in (opzioni.json() or {}).get("agents", [])
+                  if isinstance(a, dict)] if opzioni.status == 200 else None
+        report.check(
+            f"ACQUISITIONS-options-{etichetta}-{altro}",
+            opzioni.status == 200 and agenti is not None
+            and (agente_altrui is None or agente_altrui not in agenti),
+            f"{etichetta} legge /options -> {opzioni.status}, "
+            f"{len(agenti or [])} agenti, "
+            f"{'CONTIENE' if agenti and agente_altrui in agenti else 'senza'} "
+            f"l'operatore di {altro} (atteso 200, senza)",
+        )
+
+        # Creazione: SOLO corpi che il rifiuto ferma prima di ogni INSERT.
+        def corpo(**extra):
+            return {"property_id": 1, "owner_contact_id": 1,
+                    "appointment": {"start_at": "2030-01-07T10:00:00+00:00",
+                                    "assigned_user_id": mio_agente,
+                                    "client_request_id": str(uuid.uuid4())},
+                    **extra}
+
+        intruso = http.request("POST", base, jar=jar, payload=corpo(agency_id=agenzia(altro)))
+        report.check(
+            f"ACQUISITIONS-create-agency-nel-corpo-{etichetta}",
+            intruso.status == 422,
+            f"{etichetta} crea con `agency_id` nel corpo -> {intruso.status} "
+            "(atteso 422: `extra=forbid`, prima del service)",
+        )
+        intruso = http.request("PATCH", f"{base}/{ACQUISITIONS_VERSIONE_IMPOSSIBILE}", jar=jar,
+                               payload={"version": ACQUISITIONS_VERSIONE_IMPOSSIBILE,
+                                        "agency_id": agenzia(altro)})
+        report.check(
+            f"ACQUISITIONS-patch-agency-nel-corpo-{etichetta}",
+            intruso.status == 422,
+            f"{etichetta} modifica con `agency_id` nel corpo -> {intruso.status} "
+            "(atteso 422: `extra=forbid`, prima del service)",
+        )
+        if suo_immobile is not None:
+            furto = http.request("POST", base, jar=jar, payload=corpo(property_id=suo_immobile))
+            report.check(
+                f"ACQUISITIONS-create-immobile-altrui-{etichetta}-{altro}",
+                furto.status == 404,
+                f"{etichetta} apre un'acquisizione sull'immobile {suo_immobile} di "
+                f"{altro} -> {furto.status} (atteso 404: l'immobile dell'altra "
+                "agenzia non esiste per chi chiama, prima di ogni INSERT)",
+            )
+        else:
+            report.blocked(f"ACQUISITIONS-create-immobile-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha un immobile: sonda non eseguibile")
+
+        # L'acquisizione dell'altra agenzia: esiste o la sonda e' BLOCKED.
+        if altrui is None:
+            report.blocked(
+                f"ACQUISITIONS-altrui-{etichetta}-{altro}",
+                f"PREREQUISITO: l'agenzia {altro} non ha alcuna acquisizione sul "
+                "TEST. La matrice non ne crea una (un'acquisizione non si "
+                "cancella e nasce con un appuntamento vero): lettura, elenco e "
+                f"scritture ostili verso {altro} restano non provate finche' "
+                "non ne esiste una")
+            continue
+        ident = int(altrui["id"])
+        sondate.add(ident)
+        righe_prima.update(_acquisizioni_righe(database, {ident}))
+        collegate_prima.update(_acquisizioni_collegate(database, {ident}))
+
+        lettura = http.request("GET", f"{base}/{ident}", jar=jar)
+        report.check(
+            f"ACQUISITIONS-dettaglio-{etichetta}-{altro}",
+            lettura.status == 404,
+            f"{etichetta} legge l'acquisizione {ident} di {altro} -> "
+            f"{lettura.status} (atteso 404)",
+        )
+
+        elenco = http.request("GET", f"{base}?limit=200", jar=jar)
+        visti = [v.get("id") for v in elenco.items() if isinstance(v, dict)]
+        report.check(
+            f"ACQUISITIONS-list-{etichetta}-non-vede-{altro}",
+            elenco.status == 200 and ident not in visti,
+            f"{etichetta}: elenco -> {elenco.status}, {len(visti)} elementi osservati, "
+            f"{'CONTIENE' if ident in visti else 'senza'} l'id {ident}",
+        )
+
+        versione = {"version": ACQUISITIONS_VERSIONE_IMPOSSIBILE}
+        scritture = (
+            ("PATCH", "", {**versione, "notes": "sonda P26-6"}),
+            # Uno stato VALIDO e non terminale del catalogo (acquisitions/enums.py):
+            # il corpo supera lo schema e il catalogo, e il rifiuto che si prova
+            # e' quello del tenant (404), non un 422 di validazione. Innocuo
+            # comunque: riga altrui + version impossibile.
+            ("POST", "/status", {**versione, "status": "valuation_presented"}),
+            ("POST", "/lost", {**versione, "lost_reason": "other"}),
+            ("POST", "/appointment", {**versione, "appointment": {
+                "start_at": "2030-01-07T10:00:00+00:00",
+                "assigned_user_id": mio_agente,
+                "client_request_id": str(uuid.uuid4())}}),
+            ("POST", "/mandate", {**versione, "mandate_type": "sonda P26-6",
+                                  "mandate_start": "2030-01-01"}),
+        )
+        for metodo, suffisso, payload in scritture:
+            scrittura = http.request(metodo, f"{base}/{ident}{suffisso}", jar=jar,
+                                     payload=payload)
+            report.check(
+                f"ACQUISITIONS-write{suffisso.replace('/', '-') or '-patch'}"
+                f"-{etichetta}-{altro}",
+                scrittura.status == 404,
+                f"{etichetta} {metodo} {suffisso or '(patch)'} sull'acquisizione "
+                f"{ident} di {altro} -> {scrittura.status} (atteso 404: la riga "
+                "dell'altra agenzia non esiste per chi chiama)",
+            )
+
+    # -- dopo: le guardie read-only ------------------------------------------
+    righe_dopo = _acquisizioni_righe(database, sondate)
+    report.check(
+        "ACQUISITIONS-righe-sondate-intatte",
+        righe_dopo == righe_prima,
+        f"version, stato, updated_at e appuntamento delle righe sondate "
+        f"{sorted(sondate)} prima {righe_prima} e dopo {righe_dopo} (attesi identici)",
+    )
+    collegate_dopo = _acquisizioni_collegate(database, sondate)
+    report.check(
+        "ACQUISITIONS-collegate-intatte",
+        collegate_dopo == collegate_prima,
+        f"immobile (origine, incarico, stato) e appuntamento (version, stato) "
+        f"delle righe sondate {sorted(sondate)} prima {collegate_prima} e dopo "
+        f"{collegate_dopo} (attesi identici: nessun incarico, nessun appuntamento)",
+    )
+    dopo = _acquisizioni_fotografia(database)
+    if dopo is None:
+        report.fail("ACQUISITIONS-fotografia-dopo",
+                    "la fotografia finale non e' leggibile")
+        return
+    attribuibili = _acquisizioni_attribuibili(
+        database, prima, sorted(v for v in operatori.values() if v is not None))
+    report.check(
+        "ACQUISITIONS-nessuna-riga-del-run",
+        all(v == 0 for v in attribuibili.values()),
+        f"righe nate durante la sezione con un'identita' del run come autore: "
+        f"{attribuibili} (attese 0)",
+    )
+    chiavi = ("acquisizioni_righe", "acquisizioni_eventi")
+    if all(prima[k] == dopo[k] for k in chiavi):
+        report.note(
+            "ACQUISITIONS-registro-invariato",
+            "acquisizioni ed eventi invariati: "
+            + ", ".join(f"{k}={dopo[k]}" for k in chiavi))
+    else:
+        # Attivita' concorrente sul TEST: i conteggi globali non bastano. Il
+        # verdetto sta sulle righe attribuibili (sopra) - nessuna - e qui si
+        # dichiara la differenza invece di tacerla.
+        diminuiti = [k for k in chiavi if dopo[k] < prima[k]]
+        report.check(
+            "ACQUISITIONS-registro-invariato",
+            not diminuiti,
+            "conteggi cambiati durante la sezione per attivita' concorrente, "
+            f"nessuna riga attribuibile al run: prima "
+            f"{ {k: prima[k] for k in chiavi} }, dopo "
+            f"{ {k: dopo[k] for k in chiavi} }"
+            + (f"; DIMINUITI {diminuiti}: una riga e' sparita" if diminuiti else ""),
+        )
 
 #: Le cinque rotte di A30-9B, per il giro anonimo/Basic. Un id qualunque non
 #: serve: nessuna porta un parametro nel percorso, l'identita' viene sempre

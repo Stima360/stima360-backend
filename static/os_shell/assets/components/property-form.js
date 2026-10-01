@@ -33,7 +33,9 @@ const STATUS_LABELS = {
 // Stati offerti alla CREAZIONE (property/enums.py::PROPERTY_STATUSES meno
 // 'sold' e 'archived', che si raggiungono solo con i loro flussi). In
 // modifica lo stato resta nella sua sezione della scheda, con le sue conferme.
-const CREATE_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'withdrawn'];
+// CRM-OPS-3: niente 'mandate' - un incarico nasce solo da un'acquisizione
+// (POST /api/acquisitions/{id}/mandate), mai creando l'immobile.
+const CREATE_STATUSES = ['draft', 'evaluation', 'active', 'reserved', 'under_offer', 'withdrawn'];
 const PROPERTY_CLASSES = ['A', 'B', 'C'];
 const ROLE_LABELS = { agency_owner: 'Titolare', agency_admin: 'Amministratore', agent: 'Agente' };
 const HISTORICAL = ' (valore storico)';
@@ -213,7 +215,6 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
       <h3 class="section-title">Commerciale</h3>
       <div class="form-grid-2">
         <div class="form-field"><label for="pf-price">Prezzo richiesto (€)</label><input type="number" id="pf-price" class="input" min="0" step="any" value="${escapeHtml(str(p.asking_price))}"></div>
-        ${isEdit ? '' : '<div class="form-field"><label for="pf-mandate-end">Scadenza incarico</label><input type="date" id="pf-mandate-end" class="input"></div>'}
       </div>
       ${agentFieldHtml()}
 
@@ -308,8 +309,6 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
     if (!isEdit) {
       payload.commercial_status = fieldValue('#pf-status') || 'draft';
       if (!payload.property_type) payload.property_type = 'apartment';
-      const mandateEnd = fieldValue('#pf-mandate-end');
-      if (mandateEnd) payload.mandate_end = mandateEnd;
     }
     if (canAssign && $('#pf-agent')) {
       const agent = fieldValue('#pf-agent');

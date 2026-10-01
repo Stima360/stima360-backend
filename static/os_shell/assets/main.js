@@ -32,12 +32,16 @@ import { renderRete } from './views/rete.js';
 import { renderReteAgenzia } from './views/rete-agenzia.js';
 import { renderReteTerritorio } from './views/rete-territorio.js';
 import { renderAgenda } from './views/agenda/agenda-page.js';
+// CRM-OPS-3: le Acquisizioni (elenco, creazione, scheda).
+import { renderAcquisizioni } from './views/acquisizioni.js';
+import { renderAcquisizioneDettaglio } from './views/acquisizione-dettaglio.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },
+  { name: 'acquisizioni', label: 'Acquisizioni' },
   { name: 'acquirenti', label: 'Acquirenti' },
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
@@ -130,6 +134,14 @@ registerRoute('rete', (container, params = []) => {
 });
 // A30-4: `#/agenda[/<vista>/<data>]`. Tutta la logica sta in views/agenda/.
 registerRoute('agenda', (container, params = []) => renderAgenda(container, params));
+// CRM-OPS-3: `#/acquisizioni` (elenco), `#/acquisizioni/nuova/<immobile>`
+// (elenco + creazione su quell'immobile, dalla scheda immobile) e
+// `#/acquisizioni/<id>` (scheda).
+registerRoute('acquisizioni', (container, params = []) => {
+  return params[0] && params[0] !== 'nuova'
+    ? renderAcquisizioneDettaglio(container, params)
+    : renderAcquisizioni(container, params);
+});
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.

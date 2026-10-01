@@ -465,7 +465,14 @@ def test_e1_nessuna_migration_nuova():
               "migrations/079_a32_1_appointment_reminders.sql",
               "migrations/079_a32_1_appointment_reminders_down.sql",
               "migrations/080_crm_ops_2_property_form.sql",
-              "migrations/080_crm_ops_2_property_form_down.sql"}
+              "migrations/080_crm_ops_2_property_form_down.sql",
+              "migrations/081_crm_ops_3_acquisitions.sql",
+              "migrations/081_crm_ops_3_acquisitions_down.sql"}
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
+    # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
+    # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
+    # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
     # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
     # agency_memberships), additive, per il form Immobili. Si nomina invece di

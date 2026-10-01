@@ -288,6 +288,12 @@ TENANT_PREFIXES = (
     # cookie, come verifica il test 6 qui sopra (il callback resta legato
     # alla sessione: e' una GET del browser, non una rotta senza sicurezza).
     "/api/calendar/google",
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: le Acquisizioni. Superficie operatore
+    # come le altre - l'agenzia viene dalla sessione (`require_operator` su
+    # ogni rotta, mai `agency_id` dal client) - quindi dichiara il cookie e
+    # SOLO il cookie, come verifica il test 6 qui sopra. Distinta dal ponte
+    # LMC-15 (`/api/acquisition`, singolare).
+    "/api/acquisitions",
 )
 
 

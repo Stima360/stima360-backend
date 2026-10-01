@@ -306,8 +306,10 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     out = run(staged, REPORT, script({"status": 401, "body": {"detail": "no"}}))
     # SENTINELLA AGGIORNATA DAL GATE FINALE A30-4: "agenda" e' una voce normale
     # di SECTIONS, subito dopo "oggi". "rete" resta assente.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquirenti",
-                                "abbinamenti", "attivita", "automazioni"]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
+    # SECTIONS, dopo "immobili"; "rete" resta assente.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
+                                "acquirenti", "abbinamenti", "attivita", "automazioni"]
 
 
 def test_a4_the_entry_disappears_when_the_session_changes(staged):

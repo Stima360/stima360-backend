@@ -137,7 +137,12 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # agency_memberships), additive, per il form Immobili. Si nomina invece di
     # smettere di guardare: qualunque ALTRA migration comparisse farebbe
     # ancora fallire.
-    assert numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78 and numeri[-4] == 77 and numeri[-5] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
+    # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
+    # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
+    # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

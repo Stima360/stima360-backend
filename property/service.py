@@ -2,6 +2,10 @@ from core.exceptions import PermissionDenied, ValidationError
 from operator_auth import permissions
 
 from . import repository
+# CRM-OPS-3: un incarico NUOVO nasce solo da un'acquisizione
+# (`POST /api/acquisitions/{id}/mandate`). Stesse parole del service delle
+# Acquisizioni e dell'interfaccia; il trigger della 081 resta la garanzia.
+from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       territory_tree, validate_energy_class, validate_location)
 
@@ -11,6 +15,25 @@ ASSIGNMENT_DENIED_MESSAGE = (
 )
 ASSIGNMENT_TARGET_INVALID = "L'operatore scelto non e' un membro attivo dell'agenzia."
 LOCATION_FIELDS = ('region', 'province', 'city', 'microzone')
+MANDATE_FIELDS = ('mandate_type', 'mandate_start', 'mandate_end')
+
+
+def _new_mandate(data, current=None):
+    """True se la richiesta crea un incarico NUOVO: un campo dell'incarico
+    portato a un valore diverso da quello salvato, o lo stato che DIVENTA
+    `mandate`. Stessa definizione del trigger della 081. Rimandare invariati
+    i valori storici (property_admin lo fa a ogni salvataggio), azzerarli o
+    cambiare altri campi non e' un incarico nuovo."""
+    current = current or {}
+    for field in MANDATE_FIELDS:
+        if field in data and data[field] is not None and data[field] != current.get(field):
+            return True
+    return data.get('commercial_status') == 'mandate' and current.get('commercial_status') != 'mandate'
+
+
+def _check_mandate_origin(data, current=None):
+    if _new_mandate(data, current) and (current or {}).get('acquisition_id') is None:
+        raise ValidationError(MANDATE_ONLY_FROM_ACQUISITION)
 
 
 def _may_assign(ctx):
@@ -96,6 +119,8 @@ def create_property(ctx,p):
     data=dump(p)
     sent=_fields_set(p)
     _check_catalog({k:v for k,v in data.items() if k in sent})
+    # CRM-OPS-3: un immobile nuovo non nasce con un incarico.
+    _check_mandate_origin(data)
     # CRM-OPS-2: un agente su un immobile nuovo e' un'assegnazione.
     _apply_assignment(ctx,data)
     return repository.create_property(ctx,data,generate_identity=True)
@@ -108,9 +133,10 @@ def update_property(ctx,i,p):
     if 'code' in data and not (data['code'] or '').strip():
         del data['code']
     current=None
-    if {'assigned_agent_id','assigned_to','region','energy_class'} & set(data):
+    if {'assigned_agent_id','assigned_to','region','energy_class','commercial_status',*MANDATE_FIELDS} & set(data):
         current=repository.get_property(ctx,i)
     _check_catalog(data,current)
+    _check_mandate_origin(data,current)
     if 'assigned_agent_id' in data:
         _apply_assignment(ctx,data,current.get('assigned_agent_id'))
     if ('assigned_to' in data and 'assigned_agent_id' not in data

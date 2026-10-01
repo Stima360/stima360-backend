@@ -75,7 +75,12 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # agency_memberships), additive, per il form Immobili. Si nomina invece di
     # smettere di guardare: qualunque ALTRA migration comparisse farebbe
     # ancora fallire.
-    assert numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78 and numeri[-4] == 77 and numeri[-5] == 76 and numeri[-6] == 75 and numeri[-7] == 74
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
+    # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
+    # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
+    # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76 and numeri[-7] == 75 and numeri[-8] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -235,8 +240,13 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # transazione come quello Google. Il package vive FUORI da
         # `appointments/` (la sentinella A30-2 "nessun `property_visits` qui"
         # resta intatta); approvato dal GATE A31-1 DESIGN FREEZE.
+        # SENTINELLA AGGIORNATA DA CRM-OPS-3: l'hook delle Acquisizioni
+        # (`acquisitions.integration`), stessa forma di quello A31-2: chiamato
+        # nella STESSA transazione, il package vive FUORI da `appointments/` e
+        # l'Agenda non conosce `acquisitions` oltre a quel modulo.
         "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants",
-                       "operator_auth.context", "core.scope", "buyer_visits"},
+                       "operator_auth.context", "core.scope", "buyer_visits",
+                       "acquisitions"},
         # SENTINELLA AGGIORNATA DA A30-12: le 5 rotte OPERATORE di gestione
         # dei link di booking pubblico (create/list/patch/rotate/disable)
         # sono montate qui per URL (`/api/appointments/booking-links...`),

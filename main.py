@@ -37,6 +37,7 @@ from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
 from owner import provisioning as owner_provisioning
 from acquisition.router import router as acquisition_router
+from acquisitions.router import router as acquisitions_router
 from appointments.router import router as appointments_router
 from appointments_legacy.router import router as appointments_legacy_router
 # A30-12: il booking pubblico. Router PUBBLICO separato (stessa forma di
@@ -122,6 +123,9 @@ app.include_router(flow_router)
 # LMC-15: il ponte di acquisizione. Superficie operatore, montata come gli
 # altri domini; lo scope vero lo prende ogni rotta da `require_operator`.
 app.include_router(acquisition_router, dependencies=[Depends(require_authenticated_operator)])
+# CRM-OPS-3: le Acquisizioni (`/api/acquisitions`), distinte dal ponte LMC-15.
+# Solo il mount; lo scope lo prende ogni rotta da `require_operator`.
+app.include_router(acquisitions_router, dependencies=[Depends(require_authenticated_operator)])
 # A30: l'API Agenda (`/api/appointments`). Solo il mount, come LMC-15: lo
 # scope lo prende ogni rotta da `require_operator`. Nessuna UI in questo step.
 app.include_router(appointments_router, dependencies=[Depends(require_authenticated_operator)])

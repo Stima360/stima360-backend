@@ -167,7 +167,12 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # agency_memberships), additive, per il form Immobili. Si nomina invece di
     # smettere di guardare: qualunque ALTRA migration comparisse farebbe
     # ancora fallire.
-    assert max(numeri) == 80, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
+    # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
+    # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
+    # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
+    # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert max(numeri) == 81, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

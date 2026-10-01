@@ -457,6 +457,19 @@ def test_d3_no_page_outside_the_network_was_touched():
         # a quelle elencate.
         "static/os_shell/assets/views/immobili.js",
         "static/os_shell/assets/components/property-form.js",
+        # SENTINELLA AGGIORNATA DA CRM-OPS-3 - LE ACQUISIZIONI. Due viste
+        # NUOVE del CRM (elenco con creazione, scheda), dichiarate in
+        # tests/crm_ops_3_diff.py, che parlano con `/api/acquisitions` e, per
+        # l'appuntamento, con il dialog e il client dell'Agenda. Il form
+        # Immobili perde "Scadenza incarico" e lo stato "Mandato" in
+        # creazione; `main.js`, `app.css` e `immobile-dettaglio.js` erano gia'
+        # ammessi.
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato, e nessun'altra vista del CRM oltre
+        # a quelle elencate.
+        "static/os_shell/assets/views/acquisizioni.js",
+        "static/os_shell/assets/views/acquisizione-dettaglio.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

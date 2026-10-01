@@ -27,6 +27,7 @@ seam invece che con chiamate dirette.
 from __future__ import annotations
 
 import ast
+import inspect
 import datetime as _dt
 import functools
 import io
@@ -280,6 +281,63 @@ class FakeCursor:
         else:
             raise AssertionError(f"domanda dell'Agenda non prevista dal doppio: {upper}")
 
+    def _acquisizioni_execute(self, upper, params):
+        """CRM-OPS-3: le sole letture della sezione ACQUISITIONS. Le righe sono
+        le stesse che il doppio HTTP conosce (`acquisizioni`), cosi' una
+        scrittura che il doppio applicasse per un difetto si vedrebbe qui."""
+        righe = self.state.setdefault("acquisizioni", {})
+        eventi = self.state.setdefault("eventi_acquisizioni", {})
+        immobili = self.state.setdefault("immobili_acquisizioni", {})
+        appuntamenti = self.state.setdefault("appuntamenti", {})
+        if "ACQUISIZIONI_PRONTE" in upper:
+            self._row = {"acquisizioni_pronte": self.state.get("acquisizioni_presenti", True)}
+        elif "ACQUISIZIONI_NUOVE_RIGHE" in upper:
+            max_r, autori_r, max_e, autori_e = params
+            self._row = {
+                "acquisizioni_nuove_righe": sum(
+                    1 for i, r in righe.items()
+                    if i > max_r and r.get("created_by") in set(autori_r)),
+                "acquisizioni_nuovi_eventi": sum(
+                    1 for i, e in eventi.items()
+                    if i > max_e and e.get("actor") in set(autori_e)),
+            }
+        elif "ACQUISIZIONI_MAX_EVENTO" in upper:
+            self._row = {
+                "acquisizioni_righe": len(righe), "acquisizioni_eventi": len(eventi),
+                "acquisizioni_max_riga": max(righe, default=0),
+                "acquisizioni_max_evento": max(eventi, default=0),
+            }
+        elif "ACQUISIZIONI_ALTRUI" in upper:
+            agenzia, impossibile = params
+            candidati = sorted(i for i, r in righe.items()
+                               if r["agency"] == agenzia and r["version"] != impossibile)
+            self._row = None if not candidati else {
+                "id": candidati[0], **{k: righe[candidati[0]][k]
+                                       for k in ("version", "status", "updated_at",
+                                                 "property_id", "appointment_id")}}
+        elif "ACQUISIZIONI_SONDATE" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = [{"id": i, "version": r["version"], "status": r["status"],
+                           "updated_at": r["updated_at"], "appointment_id": r["appointment_id"]}
+                          for i, r in sorted(righe.items()) if i in ids]
+        elif "ACQUISIZIONI_COLLEGATE" in upper:
+            ids = set(params[0]) if params else set()
+            self._rows = []
+            for i, r in sorted(righe.items()):
+                p_ = immobili.get(r["property_id"])
+                a_ = appuntamenti.get(r["appointment_id"])
+                if i not in ids or p_ is None or a_ is None:
+                    continue
+                self._rows.append({
+                    "id": i, "acquisition_id": p_["acquisition_id"],
+                    "mandate_type": p_["mandate_type"], "mandate_start": p_["mandate_start"],
+                    "mandate_end": p_["mandate_end"], "commercial_status": p_["commercial_status"],
+                    "immobile_updated_at": p_["updated_at"],
+                    "appuntamento_version": a_["version"], "appuntamento_status": a_["status"],
+                    "appuntamento_updated_at": a_["updated_at"]})
+        else:
+            raise AssertionError(f"domanda delle Acquisizioni non prevista dal doppio: {upper}")
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
@@ -294,6 +352,10 @@ class FakeCursor:
 
         if "A30_" in upper or "COLLEGAMENTO_SENZA_RIGA_LMC15" in upper:
             self._agenda_execute(upper, params)
+            return
+
+        if "ACQUISIZIONI_" in upper:
+            self._acquisizioni_execute(upper, params)
             return
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
@@ -1014,6 +1076,12 @@ class FakeHttp(cert.HttpProbe):
         # "configurato": e' cosi' che /connect e /resync restano fail-
         # controlled (409) senza che il doppio debba simulare un consenso.
         self.calendar_connections: dict = {}   # agency_id -> True
+        # CRM-OPS-3: le acquisizioni GIA' ESISTENTI sul TEST (condivise con il
+        # doppio del database da `working_run`), i loro eventi e gli immobili
+        # che un incarico cambierebbe.
+        self.acquisizioni: dict = {}
+        self.eventi_acquisizioni: dict = {}
+        self.immobili_acquisizioni: dict = {}
 
     # -- helper -----------------------------------------------------------
     def _effetto(self, tabella: str) -> int | None:
@@ -1609,6 +1677,109 @@ class FakeHttp(cert.HttpProbe):
             scrivi(ident, azione or "patch")
         return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
 
+    def _acquisitions(self, method, path, agency, payload):
+        """CRM-OPS-3. Il doppio riproduce il CONTRATTO REALE della superficie.
+
+        Gli schemi Pydantic VERI (`acquisitions/schemas.py`) decidono i 422,
+        `extra="forbid"` compreso, e l'ordine e' quello del router e del
+        service: corpo -> immobile/riga (per id, filtrata per agenzia) ->
+        version. Una scrittura VALIDA sulla propria riga, o una creazione sul
+        proprio immobile, il doppio la ACCETTA e la registra (riga, evento con
+        l'attore): e' cosi' che un certificatore regredito, che scrivesse
+        davvero, verrebbe visto dalle guardie d'invarianza.
+
+        Le difettosita' sono sulla superficie "acquisitions": `isolation` (la
+        riga altrui si legge e si scrive), `write` (rifiuta con 404 e scrive
+        comunque), `listing` (l'elenco mostra le righe altrui), `acq_create`
+        (l'immobile altrui passa e nasce una riga), `options_leak` (/options
+        elenca anche gli agenti dell'altra agenzia).
+        """
+        import json as _json
+        from urllib.parse import urlsplit
+
+        import pydantic
+
+        from acquisitions import schemas as acq
+
+        percorso = urlsplit(path).path
+        rotto = lambda tipo: self._broken(tipo, "acquisitions")  # noqa: E731
+
+        def attore():
+            return next((u for u, a in self.operatori.items() if a == agency), None)
+
+        def valida(modello):
+            try:
+                return modello.model_validate(payload if isinstance(payload, dict) else None)
+            except pydantic.ValidationError:
+                return None
+
+        def scrivi(ident, azione):
+            riga = self.acquisizioni[ident]
+            riga["version"] += 1
+            riga["updated_at"] = f"toccata-{riga['version']}"
+            self.eventi_acquisizioni[max(self.eventi_acquisizioni, default=0) + 1] = {
+                "actor": attore(), "azione": azione}
+
+        if percorso == "/api/acquisitions/options" and method == "GET":
+            agenti = [{"id": u, "name": f"operatore-{u}"} for u, a in sorted(self.operatori.items())
+                      if a == agency or rotto("options_leak")]
+            return self._reply(method, path, 200, _json.dumps(
+                {"statuses": [], "lost_reasons": [], "agents": agenti,
+                 "can_assign": True}).encode())
+        if percorso == "/api/acquisitions" and method == "GET":
+            visibili = [{"id": i} for i, r in sorted(self.acquisizioni.items())
+                        if r["agency"] == agency or rotto("listing")]
+            return self._reply(method, path, 200, _json.dumps({"items": visibili}).encode())
+        if percorso == "/api/acquisitions" and method == "POST":
+            corpo = valida(acq.AcquisitionCreate)
+            if corpo is None:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+            immobile = self.rows.get(corpo.property_id)
+            if (immobile is None or immobile["agency"] != agency) and not rotto("acq_create"):
+                return self._reply(method, path, 404, b'{"code":"NOT_FOUND"}')
+            nuovo = max(self.acquisizioni, default=0) + 1
+            self.acquisizioni[nuovo] = {
+                "agency": agency, "version": 1, "status": "appointment_set",
+                "updated_at": "nuova", "property_id": corpo.property_id,
+                "appointment_id": None, "created_by": attore()}
+            self.eventi_acquisizioni[max(self.eventi_acquisizioni, default=0) + 1] = {
+                "actor": attore(), "azione": "created"}
+            return self._reply(method, path, 201, _json.dumps({"id": nuovo}).encode())
+
+        trovato = re.match(r"^/api/acquisitions/(\d+)(/[a-z]+)?$", percorso)
+        if trovato is None:
+            return self._reply(method, path, 404, b'{"detail":"Not Found"}')
+        ident, azione = int(trovato.group(1)), (trovato.group(2) or "")
+        modelli = {("PATCH", ""): acq.AcquisitionPatch, ("POST", "/status"): acq.StatusBody,
+                   ("POST", "/lost"): acq.LostBody,
+                   ("POST", "/appointment"): acq.NewAppointmentBody,
+                   ("POST", "/mandate"): acq.MandateBody}
+        corpo = None
+        if (method, azione) in modelli:
+            corpo = valida(modelli[(method, azione)])
+            if corpo is None:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+        if azione == "/status":
+            # Come il service vero, PRIMA della riga: uno stato fuori catalogo e'
+            # 422, uno terminale e' 409. Una sonda che usasse uno stato morto
+            # non arriverebbe mai alla prova del tenant - e qui lo si vede.
+            from acquisitions.enums import STATUSES as _STATI, TERMINAL_STATUSES as _TERMINALI
+            if corpo.status not in _STATI:
+                return self._reply(method, path, 422, b'{"code":"VALIDATION_ERROR"}')
+            if corpo.status in _TERMINALI:
+                return self._reply(method, path, 409, b'{"code":"INVALID_TRANSITION"}')
+        riga = self.acquisizioni.get(ident)
+        altrui = riga is not None and riga["agency"] != agency
+        if riga is None or (altrui and not rotto("isolation")):
+            if altrui and corpo is not None and rotto("write"):
+                scrivi(ident, azione or "patch")      # rifiuta a parole, scrive
+            return self._reply(method, path, 404, b'{"code":"NOT_FOUND"}')
+        if corpo is not None:
+            if corpo.version != riga["version"]:
+                return self._reply(method, path, 409, b'{"code":"VERSION_CONFLICT"}')
+            scrivi(ident, azione or "patch")
+        return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -1900,6 +2071,11 @@ class FakeHttp(cert.HttpProbe):
                 {"claimed": 0, "sent": 0, "suppressed": 0, "failed": 0,
                  "indeterminate": 0, "lost": 0}).encode())
 
+        # CRM-OPS-3 (plurale) PRIMA del ponte LMC-15 (singolare): due
+        # superfici distinte, e `startswith` non deve confonderle.
+        if path.startswith("/api/acquisitions"):
+            return self._acquisitions(method, path, agency, payload)
+
         if path.startswith("/api/acquisition/") and method == "POST":
             return self._acquisition(method, path, agency, payload)
 
@@ -2175,6 +2351,23 @@ APPUNTAMENTI = {
            "source": "crm_manual", "created_by": None},
 }
 
+#: CRM-OPS-3: un'acquisizione preesistente per agenzia (id -> riga), con il
+#: suo appuntamento (fra APPUNTAMENTI) e il suo immobile (qui sotto).
+ACQUISIZIONI = {
+    5001: {"agency": 1, "version": 2, "status": "appointment_set", "updated_at": "2026-09-10",
+           "property_id": 3001, "appointment_id": 4001, "created_by": None},
+    5002: {"agency": 2, "version": 1, "status": "inspection_done", "updated_at": "2026-09-11",
+           "property_id": 3002, "appointment_id": 4002, "created_by": None},
+}
+#: Gli immobili di quelle acquisizioni: nessun incarico (e' cio' che una
+#: scrittura riuscita su /mandate cambierebbe).
+IMMOBILI_ACQUISIZIONI = {
+    3001: {"acquisition_id": None, "mandate_type": None, "mandate_start": None,
+           "mandate_end": None, "commercial_status": "draft", "updated_at": "2026-09-01"},
+    3002: {"acquisition_id": None, "mandate_type": None, "mandate_start": None,
+           "mandate_end": None, "commercial_status": "evaluation", "updated_at": "2026-09-02"},
+}
+
 #: Le nove colonne di Q10 (A30-2P), tutte 0 su un TEST allineato.
 Q10_CHIAVI = ("collegamento_senza_riga_lmc15", "stato_incompatibile",
               "scheduled_for_diverso_da_start_at", "completed_at_diverso",
@@ -2245,6 +2438,14 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     probe.appuntamenti = database.state.setdefault("appuntamenti", {
         i: dict(r) for i, r in APPUNTAMENTI.items()})
     probe.eventi_agenda = database.state.setdefault("eventi_agenda", {})
+    # CRM-OPS-3: un'acquisizione GIA' ESISTENTE per agenzia, condivisa fra i
+    # due doppi, con eventi e immobili. `acquisizioni={}` riproduce il TEST
+    # senza il prerequisito, dove le sonde restano BLOCKED.
+    probe.acquisizioni = database.state.setdefault("acquisizioni", {
+        i: dict(r) for i, r in ACQUISIZIONI.items()})
+    probe.eventi_acquisizioni = database.state.setdefault("eventi_acquisizioni", {})
+    probe.immobili_acquisizioni = database.state.setdefault("immobili_acquisizioni", {
+        i: dict(r) for i, r in IMMOBILI_ACQUISIZIONI.items()})
     # LE RIGHE DEGLI EFFETTI, materializzate come il run le crea davvero.
     #
     # Senza, l'istantanea non trova nulla, le cancellazioni degli effetti non
@@ -5089,6 +5290,49 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # cancella - RIFIUTO, non cancellazione silenziosa.
     ("public_booking_links", "agency_id", "agencies", "RESTRICT"),
     ("public_booking_links", "created_by_user_id", "operator_users", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3, migration 081. Le Acquisizioni:
+    # CINQUE riferimenti non-CASCADE verso tabelle che il cleanup cancella.
+    # ESAMINATI.
+    #
+    #   agency_id -> agencies                 RESTRICT  (acquisitions)
+    #   property_id -> properties             RESTRICT  (acquisitions)
+    #   created_by_user_id -> operator_users  RESTRICT  (acquisitions)
+    #   actor_user_id -> operator_users       RESTRICT  (acquisition_events)
+    #
+    # Stessa scelta, e stessa ragione, degli appuntamenti della 072: un
+    # percorso d'acquisizione e il suo registro append-only sono fatti
+    # dell'agenzia, su un immobile, con un autore. CASCADE li cancellerebbe
+    # insieme all'immobile o all'operatore; SET NULL toglierebbe l'autore o
+    # l'immobile a una riga che sopravvive (e `property_id` e' NOT NULL).
+    #
+    #   lead_id -> leads                      SET NULL  (acquisitions)
+    #
+    # Un riferimento facoltativo di sola tracciabilita' (nessuna
+    # sincronizzazione lead/acquisizione): se il lead sparisce,
+    # l'acquisizione resta.
+    #
+    # Le FK COMPOSITE della 081 non compaiono in questo inventario, per la
+    # stessa ragione della 074/076: l'inventario si legge da
+    # `_fk_delle_migrazioni`, che vede solo i riferimenti a `(id)`. Le si
+    # nomina qui:
+    #
+    #   (agency_id, owner_contact_id)  -> contacts            RESTRICT
+    #   (agency_id, assigned_agent_id) -> agency_memberships  (NO ACTION)
+    #   (agency_id, appointment_id)    -> appointments        RESTRICT
+    #   (agency_id, acquisition_id)    -> acquisitions        RESTRICT
+    #       (acquisition_events, e `properties.acquisition_id`)
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: `acquisitions` RIFIUTA la DELETE
+    # (trigger della 081) e `acquisition_events` e' append-only. Un'agenzia di
+    # prova con acquisizioni, o un immobile, un contatto, un appuntamento o
+    # un operatore che ne hanno una, non si cancella: il preflight la
+    # incontra come RIFIUTO, non come cancellazione silenziosa, come per gli
+    # appuntamenti della 072. La matrice non crea acquisizioni.
+    ("acquisitions", "agency_id", "agencies", "RESTRICT"),
+    ("acquisitions", "property_id", "properties", "RESTRICT"),
+    ("acquisitions", "created_by_user_id", "operator_users", "RESTRICT"),
+    ("acquisitions", "lead_id", "leads", "SET NULL"),
+    ("acquisition_events", "actor_user_id", "operator_users", "RESTRICT"),
 })
 
 
@@ -8919,3 +9163,291 @@ def test_a30_08b_le_sonde_anonime_escludono_sempre_le_delete():
     assert delete_montate, "nessuna DELETE nell'inventario: la garanzia sarebbe vuota"
     assert delete_montate <= inventario
     assert not (delete_montate & sonde)
+
+
+# ---------------------------------------------------------------------------
+# CRM-OPS-3 - ACQUISITIONS: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+def _righe_acquisizioni(report):
+    return [(k, i, t) for k, i, t in report.rows if i.startswith("ACQUISITIONS-")]
+
+
+def _mutazioni_acquisizioni_riuscite(probe):
+    """Ogni scrittura delle Acquisizioni che il doppio ha ACCETTATO (2xx)."""
+    return [(chiamata, stato) for chiamata, stato, _ in probe.exchanges
+            if chiamata.split(" ", 1)[1].startswith("/api/acquisitions")
+            and chiamata.split(" ", 1)[0] in ("POST", "PATCH", "PUT", "DELETE")
+            and 200 <= stato < 300]
+
+
+def test_crm3_01_acquisizioni_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
+    code, report, _database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    righe = _righe_acquisizioni(report)
+    assert [r for r in righe if r[0] != cert.PASS] == [], righe
+    idents = {i for _k, i, _t in righe}
+    # un'operazione anonima per OGNI rotta montata, tre con HTTP Basic
+    assert sum(1 for i in idents if i.startswith("ACQUISITIONS-anonimo-")) \
+        == len(cert.ACQUISITIONS_OPERAZIONI)
+    assert sum(1 for i in idents if i.startswith("ACQUISITIONS-basic-")) == 3
+    # nessuna DELETE nel traffico (non esiste nemmeno come rotta)
+    assert not [s for s, _st, _b in probe.exchanges
+                if s.startswith("DELETE") and "/api/acquisitions" in s]
+    for a, b in (("A", "B"), ("B", "A")):
+        for nome in ("options", "create-immobile-altrui", "dettaglio", "write-patch",
+                     "write-status", "write-lost", "write-appointment", "write-mandate"):
+            assert f"ACQUISITIONS-{nome}-{a}-{b}" in idents, (nome, a, b)
+        assert f"ACQUISITIONS-list-{a}-non-vede-{b}" in idents
+        for nome in ("create-agency-nel-corpo", "patch-agency-nel-corpo"):
+            assert f"ACQUISITIONS-{nome}-{a}" in idents
+    for guardia in ("righe-sondate-intatte", "collegate-intatte",
+                    "nessuna-riga-del-run", "registro-invariato"):
+        assert f"ACQUISITIONS-{guardia}" in idents, guardia
+    # nessuna scrittura accettata; righe, eventi e immobili identici
+    assert _mutazioni_acquisizioni_riuscite(probe) == []
+    assert probe.acquisizioni == ACQUISIZIONI
+    assert probe.eventi_acquisizioni == {}
+    assert probe.immobili_acquisizioni == IMMOBILI_ACQUISIZIONI
+    assert probe.appuntamenti == APPUNTAMENTI
+    # l'elenco ha guardato righe vere (la propria c'era)
+    osservati = [t for _k, i, t in righe if "-list-" in i]
+    assert all(re.search(r"[1-9]\d* elementi osservati", t) for t in osservati), osservati
+    # il ponte LMC-15 ha fatto il suo giro a parte, sul suo prefisso
+    assert any(i.startswith("ACQUISITION-") for _k, i, _t in report.rows)
+    assert not any("/api/acquisitions" in c for c, _s, _b in probe.exchanges
+                   if c.split(" ", 1)[1].startswith("/api/acquisition/"))
+
+
+def test_crm3_02_senza_acquisizione_altrui_e_BLOCKED_non_inventata(monkeypatch):
+    """L'agenzia B non ha acquisizioni. La matrice non ne crea una: le sonde
+    A->B restano BLOCKED con il prerequisito, B->A girano."""
+    solo_a = {5001: dict(ACQUISIZIONI[5001])}
+    code, report, _database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME), acquisizioni=solo_a)
+    righe = {i: (k, t) for k, i, t in _righe_acquisizioni(report)}
+    assert righe["ACQUISITIONS-altrui-A-B"][0] == cert.BLOCKED
+    assert "PREREQUISITO" in righe["ACQUISITIONS-altrui-A-B"][1]
+    assert "ACQUISITIONS-dettaglio-A-B" not in righe
+    assert righe["ACQUISITIONS-dettaglio-B-A"][0] == cert.PASS
+    assert righe["ACQUISITIONS-write-mandate-B-A"][0] == cert.PASS
+    # le sonde che non dipendono dalla riga altrui girano comunque
+    assert righe["ACQUISITIONS-create-immobile-altrui-A-B"][0] == cert.PASS
+    assert righe["ACQUISITIONS-options-A-B"][0] == cert.PASS
+    assert not any(k == cert.FAIL for k, _t in righe.values())
+    assert probe.acquisizioni == solo_a                   # nessuna riga inventata
+    assert _mutazioni_acquisizioni_riuscite(probe) == []
+    assert code == 2
+
+
+def test_crm3_03_senza_081_sul_database_la_sezione_e_BLOCKED(monkeypatch):
+    _code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        acquisizioni_presenti=False)
+    righe = {i: k for k, i, _t in _righe_acquisizioni(report)}
+    assert righe == {"ACQUISITIONS-fotografia": cert.BLOCKED}
+    assert not any("/api/acquisitions" in c for c, _s, _b in probe.exchanges)
+
+
+@pytest.mark.parametrize("difetto, atteso", [
+    ("isolation", "ACQUISITIONS-dettaglio-"),
+    ("listing", "ACQUISITIONS-list-"),
+    ("write", "ACQUISITIONS-righe-sondate-intatte"),
+    ("acq_create", "ACQUISITIONS-create-immobile-altrui-"),
+    ("options_leak", "ACQUISITIONS-options-"),
+])
+def test_crm3_04_ogni_difetto_delle_acquisizioni_fa_fallire(monkeypatch, difetto, atteso):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME,
+                                   broken={difetto}, only="acquisitions"))
+    falliti = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert code == 1
+    assert any(i.startswith(atteso) for i in falliti), falliti
+
+
+@pytest.mark.parametrize("attribuibile", [False, True])
+def test_crm3_05_attivita_concorrente_non_e_un_falso_allarme(monkeypatch, attribuibile):
+    """Una riga nasce durante la sezione. Se non porta un'identita' del run e'
+    attivita' concorrente del TEST (PASS, dichiarata); se la porta, e' un
+    fallimento."""
+    http = FakeHttp(prepopulate=DERIVED, stime=STIME)
+    originale = http._acquisitions
+    fatto = []
+
+    def con_concorrenza(method, path, agency, payload):
+        if not fatto:
+            fatto.append(1)
+            autore = next(iter(http.operatori)) if attribuibile else 999999
+            http.acquisizioni[9999] = {
+                "agency": 1, "version": 1, "status": "appointment_set", "updated_at": "x",
+                "property_id": 3001, "appointment_id": 4001, "created_by": autore}
+        return originale(method, path, agency, payload)
+
+    http._acquisitions = con_concorrenza
+    code, report, _db, _probe, _ = working_run(monkeypatch, http=http)
+    righe = {i: (k, t) for k, i, t in _righe_acquisizioni(report)}
+    if attribuibile:
+        assert righe["ACQUISITIONS-nessuna-riga-del-run"][0] == cert.FAIL
+        assert code == 1
+    else:
+        assert righe["ACQUISITIONS-nessuna-riga-del-run"][0] == cert.PASS
+        assert righe["ACQUISITIONS-registro-invariato"][0] == cert.PASS
+        assert "concorrente" in righe["ACQUISITIONS-registro-invariato"][1]
+
+
+@pytest.mark.parametrize("mutazione", ["patch", "status", "create"])
+def test_crm3_06_un_certificatore_che_scrivesse_davvero_verrebbe_visto(monkeypatch, mutazione):
+    """LA GARANZIA SUL CERTIFICATORE STESSO. Si simula una regressione: a
+    meta' del giro (al primo dettaglio altrui) il certificatore compie UNA
+    scrittura valida - sulla propria riga con la version giusta, o una
+    creazione sul proprio immobile. Il doppio la accetta come farebbe il
+    server vero (riga, evento con l'attore), e le guardie d'invarianza del
+    certificatore VERO - non un controllo aggiunto dal test - devono dirlo:
+    `nessuna-riga-del-run` fallisce e il run esce con 1."""
+    http = FakeHttp(prepopulate=DERIVED, stime=STIME)
+    originale = http.request
+    fatto = []
+
+    def con_regressione(method, path, *, jar=None, payload=None, headers=None):
+        if (not fatto and jar is not None and method == "GET"
+                and re.match(r"^/api/acquisitions/\d+$", path)):
+            fatto.append(1)
+            agency = http._agency_of(jar)
+            mia = next(i for i, r in http.acquisizioni.items() if r["agency"] == agency)
+            immobile = next(i for i, r in http.rows.items()
+                            if r["prefix"] == "/api/property" and r["agency"] == agency)
+            agente = next(u for u, a in http.operatori.items() if a == agency)
+            if mutazione == "patch":
+                esito = originale("PATCH", f"/api/acquisitions/{mia}", jar=jar, payload={
+                    "version": http.acquisizioni[mia]["version"], "notes": "regressione"})
+            elif mutazione == "status":
+                esito = originale("POST", f"/api/acquisitions/{mia}/status", jar=jar, payload={
+                    "version": http.acquisizioni[mia]["version"], "status": "valuation_presented"})
+            else:
+                esito = originale("POST", "/api/acquisitions", jar=jar, payload={
+                    "property_id": immobile, "owner_contact_id": 1,
+                    "appointment": {"start_at": "2030-01-07T10:00:00+00:00",
+                                    "assigned_user_id": agente,
+                                    "client_request_id": "0f8fad5b-d9cb-469f-a165-70867728950e"}})
+            assert 200 <= esito.status < 300, esito.status      # il doppio l'ha accettata
+        return originale(method, path, jar=jar, payload=payload, headers=headers)
+
+    http.request = con_regressione
+    code, report, _db, probe, _ = working_run(monkeypatch, http=http)
+    assert fatto, "la regressione simulata non e' mai scattata"
+    assert _mutazioni_acquisizioni_riuscite(probe) != []
+    righe = {i: k for k, i, _t in _righe_acquisizioni(report)}
+    assert righe["ACQUISITIONS-nessuna-riga-del-run"] == cert.FAIL, righe
+    assert code == 1
+    # e il giro vero (test_crm3_01) non la compie: la differenza fra i due run
+    # e' esattamente quella scrittura
+    assert probe.eventi_acquisizioni != {} or probe.acquisizioni != ACQUISIZIONI
+
+
+def test_crm3_07_la_sezione_non_cancella_non_scrive_non_disabilita_trigger():
+    nomi = ("certify_acquisitions", "_acquisizioni_fotografia", "_acquisizioni_altrui",
+            "_acquisizioni_righe", "_acquisizioni_collegate", "_acquisizioni_attribuibili")
+    sorgente = "\n".join(_function_source(nome) for nome in nomi)
+    for vietato in ("setval", "database.write", "commit=True", '"DELETE"', "'DELETE'",
+                    "DISABLE TRIGGER", "DELETE FROM", "UPDATE acquisitions",
+                    "UPDATE properties", "UPDATE appointments", "INSERT INTO"):
+        assert vietato not in sorgente, vietato
+    # ogni SQL della sezione e' una lettura
+    albero = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    eseguite = []
+    for nodo in ast.walk(albero):
+        if isinstance(nodo, ast.FunctionDef) and nodo.name in nomi:
+            for chiamata in ast.walk(nodo):
+                if (isinstance(chiamata, ast.Call) and isinstance(chiamata.func, ast.Attribute)
+                        and chiamata.func.attr == "execute" and chiamata.args):
+                    primo = chiamata.args[0]
+                    testo = (primo.value if isinstance(primo, ast.Constant)
+                             else ast.unparse(primo))
+                    eseguite.append(testo)
+    assert len(eseguite) >= 6, eseguite
+    for testo in eseguite:
+        assert testo.lstrip().upper().startswith("SELECT"), testo
+    # ogni scrittura sulla riga dell'altra agenzia porta la version impossibile
+    certificatore = _function_source("certify_acquisitions")
+    assert "ACQUISITIONS_VERSIONE_IMPOSSIBILE" in certificatore
+    assert cert.ACQUISITIONS_VERSIONE_IMPOSSIBILE > 10**9
+    # le scritture ostili sono quelle e solo quelle: mai una transizione
+    # valida verso uno stato terminale, mai un incarico su una riga propria
+    for vietato in ('"acquired"', '"lost"}', "DISABLE", "a30_test_purge"):
+        assert vietato not in certificatore, vietato
+
+
+def test_crm3_08_le_acquisizioni_sono_nella_matrice_con_le_rotte_esatte():
+    dominio = _domain("ACQUISITIONS")
+    assert dominio.prefix == "/api/acquisitions"
+    assert dominio.certifier == "acquisitions" and callable(cert.certify_acquisitions)
+    assert dominio.fixture is None and dominio.api_delete is False
+    assert dominio.derive is None and dominio.chain is None
+    # l'INVENTARIO sondato e' ESATTAMENTE il mount vero, letto dall'OpenAPI
+    montate = set()
+    for pattern, methods, template in real_routes():
+        if template.startswith("/api/acquisitions"):
+            for m in methods:
+                montate.add((m, template[len("/api/acquisitions"):]
+                             .replace("{acquisition_id}", "{id}")))
+    dichiarate = set(cert.ACQUISITIONS_OPERAZIONI)
+    assert dichiarate == montate, (dichiarate ^ montate)
+    assert not [m for m, _s in dichiarate if m == "DELETE"]
+    # ed e' coperta dalla prova di completezza senza eccezioni
+    assert "/api/acquisitions" in _mounted_tenant_prefixes()
+    assert "/api/acquisitions" in {d.prefix for d in cert.DOMAINS}
+
+
+def test_crm3_09_nessuna_esclusione_speciale_e_il_ponte_lmc15_resta_distinto():
+    """Il prefisso compare nello script SOLO nella dichiarazione del dominio:
+    nessun `if prefix == ...`, nessuna lista di esclusione, nessun ramo
+    speciale nel run. E il ponte LMC-15 e' intatto."""
+    sorgente = SCRIPT.read_text(encoding="utf-8")
+    assert sorgente.count('"/api/acquisitions"') == 1
+    tree = ast.parse(sorgente)
+    dichiarazioni = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Domain"
+        and any(isinstance(a, ast.Constant) and a.value == "/api/acquisitions" for a in node.args)]
+    assert len(dichiarazioni) == 1
+    # nel prover: la derivazione dei prefissi montati non lo nomina
+    assert "/api/acquisitions" not in inspect.getsource(_mounted_tenant_prefixes)
+    # il ponte LMC-15: stesso nome, stesso prefisso singolare, stesso certificatore
+    ponte = _domain("ACQUISITION")
+    assert ponte.prefix == "/api/acquisition" and ponte.certifier == "acquisition"
+    assert _prefix_of("/api/acquisitions/5/mandate") == "/api/acquisitions"
+    assert _prefix_of("/api/acquisition/links/5/mandate") == "/api/acquisition"
+    # due nomi, due funzioni: nessuna delle due chiama l'altra
+    assert "certify_acquisitions" not in _function_source("certify_acquisition")
+    assert "certify_acquisition(" not in _function_source("certify_acquisitions")
+    assert "/api/acquisition/" not in _function_source("certify_acquisitions")
+
+
+def test_crm3_10_la_sonda_status_usa_uno_stato_del_catalogo_e_prova_il_tenant():
+    """La sonda ostile su /status deve arrivare al controllo del tenant: uno
+    stato che il catalogo non ha (per esempio uno rimosso) sarebbe un 422 di
+    validazione PRIMA del 404, e la prova cross-tenant risulterebbe falsata.
+    Il doppio riproduce quell'ordine, quindi una sonda regredita fallisce qui."""
+    from acquisitions.enums import STATUSES, TERMINAL_STATUSES
+    sorgente = _function_source("certify_acquisitions")
+    stati_usati = re.findall(r"[\"']status[\"']\s*:\s*[\"']([a-z_]+)[\"']", sorgente)
+    assert stati_usati, "la sonda /status e' sparita"
+    for stato in stati_usati:
+        assert stato in STATUSES and stato not in TERMINAL_STATUSES, stato
+    for morto in ("new", "contacted"):
+        assert f'"{morto}"' not in sorgente
+    # e il doppio ferma davvero uno stato fuori catalogo prima del tenant
+    http = FakeHttp()
+    http.sessions["t"] = 1
+    http.operatori[77] = 1
+    http.acquisizioni[5002] = dict(ACQUISIZIONI[5002])
+    jar = cert.HttpProbe("https://test.example").new_jar()
+    http.put_cookie(jar, "t")
+    morta = http.request("POST", "/api/acquisitions/5002/status", jar=jar,
+                         payload={"version": cert.ACQUISITIONS_VERSIONE_IMPOSSIBILE,
+                                  "status": "contacted"})
+    valida = http.request("POST", "/api/acquisitions/5002/status", jar=jar,
+                          payload={"version": cert.ACQUISITIONS_VERSIONE_IMPOSSIBILE,
+                                   "status": "valuation_presented"})
+    assert morta.status == 422 and valida.status == 404
+    assert http.acquisizioni[5002] == ACQUISIZIONI[5002]

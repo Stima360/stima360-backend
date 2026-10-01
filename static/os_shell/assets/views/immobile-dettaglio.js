@@ -107,6 +107,20 @@ const MANUAL_COMMERCIAL_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 
 // window.confirm().
 const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
 
+// CRM-OPS-3: un incarico NUOVO nasce solo da un'acquisizione
+// (POST /api/acquisitions/{id}/mandate). Stesse parole del backend
+// (acquisitions/enums.py::MANDATE_ONLY_FROM_ACQUISITION), che resta la
+// garanzia: service Immobili (400) e trigger della 081.
+export const MANDATE_ONLY_FROM_ACQUISITION = 'L’incarico può essere generato solo da un’acquisizione.';
+
+// CRM-OPS-3: gli stati offerti dal selettore. "Mandato" solo se l'immobile
+// ha gia' un incarico (generato da un'acquisizione, o storico gia' in quello
+// stato): diventarlo e' un incarico nuovo, che si genera dall'acquisizione.
+export function selectableCommercialStatuses(p) {
+  const conMandato = Boolean(p && (p.acquisition_id || p.commercial_status === 'mandate'));
+  return MANUAL_COMMERCIAL_STATUSES.filter((s) => s !== 'mandate' || conMandato);
+}
+
 function resolveCommercialStatusSave(currentStatus, selectedStatus, pendingTarget) {
   const target = pendingTarget || selectedStatus;
   if (target === currentStatus) return { action: 'unchanged', target, pendingTarget: null };
@@ -396,7 +410,8 @@ export async function renderImmobileDettaglio(container, params = []) {
   // caricamento pagina: la PATCH parte solo al click esplicito su "Salva".
   function bindIncaricoSection(panelEl) {
     const editBtn = panelEl.querySelector('#incarico-edit-btn');
-    if (editBtn) {
+    // CRM-OPS-3: senza acquisizione d'origine la sezione e' in sola lettura.
+    if (editBtn && property.acquisition_id) {
       editBtn.addEventListener('click', () => {
         incaricoEditMode = true;
         showTab('panoramica');
@@ -423,6 +438,12 @@ export async function renderImmobileDettaglio(container, params = []) {
         const typeVal = typeInput.value.trim();
         const startVal = startInput.value;
         const endVal = endInput.value;
+
+        // CRM-OPS-3: modificabile solo l'incarico nato da un'acquisizione.
+        if (!property.acquisition_id) {
+          if (errorEl) errorEl.textContent = MANDATE_ONLY_FROM_ACQUISITION;
+          return;
+        }
 
         // Validazione UX preventiva: il backend resta source of truth
         // (property/schemas.py:PropertyUpdate.validate_update applica la
@@ -1603,7 +1624,7 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
       </div>
     `;
   }
-  const options = MANUAL_COMMERCIAL_STATUSES.map((s) => `<option value="${s}" ${s === (pendingTarget || p.commercial_status) ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
+  const options = selectableCommercialStatuses(p).map((s) => `<option value="${s}" ${s === (pendingTarget || p.commercial_status) ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
   return `
     <h3 class="section-title">Stato commerciale</h3>
     <div class="form-grid-3">
@@ -1626,14 +1647,32 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
 // questa sezione: resta indipendente (property/schemas.py non impone alcun
 // accoppiamento tra i campi mandate_* e commercial_status).
 function renderIncaricoSection(p, editMode) {
-  if (!editMode) {
-    return `
-      <h3 class="section-title">Incarico</h3>
+  // CRM-OPS-3: l'origine dell'incarico. Con `acquisition_id` si vede da dove
+  // nasce e si modificano tipo e date; il collegamento non si toglie da qui
+  // (il form non lo invia e il database lo rifiuta). Senza, i valori storici
+  // restano visibili in sola lettura e la strada e' l'acquisizione.
+  const valori = `
       <div class="detail-grid">
         <div class="detail-item"><label>Tipo incarico</label>${escapeHtml(p.mandate_type || '—')}</div>
         <div class="detail-item"><label>Data inizio</label>${escapeHtml(formatDate(p.mandate_start))}</div>
         <div class="detail-item"><label>Data scadenza</label>${escapeHtml(formatDate(p.mandate_end))}</div>
+      </div>`;
+  if (!p.acquisition_id) {
+    return `
+      <h3 class="section-title">Incarico</h3>
+      ${valori}
+      <p class="muted" id="incarico-origin-required">${escapeHtml(MANDATE_ONLY_FROM_ACQUISITION)}</p>
+      <div class="action-bar" style="margin-top:12px">
+        <a class="btn ghost" id="incarico-acquisition-cta" href="#/acquisizioni/nuova/${encodeURIComponent(p.id)}">Avvia acquisizione</a>
       </div>
+    `;
+  }
+  const origine = `<p class="muted" id="incarico-origin">Origine: <a href="#/acquisizioni/${encodeURIComponent(p.acquisition_id)}">acquisizione #${escapeHtml(String(p.acquisition_id))}</a></p>`;
+  if (!editMode) {
+    return `
+      <h3 class="section-title">Incarico</h3>
+      ${valori}
+      ${origine}
       <div class="action-bar" style="margin-top:12px">
         <button type="button" id="incarico-edit-btn" class="btn ghost">Modifica</button>
       </div>
@@ -1641,6 +1680,7 @@ function renderIncaricoSection(p, editMode) {
   }
   return `
     <h3 class="section-title">Incarico</h3>
+    ${origine}
     <div class="form-grid-3">
       <div class="form-field"><label>Tipo incarico</label><input type="text" id="incarico-type" class="input" maxlength="80" value="${escapeHtml(p.mandate_type || '')}"></div>
       <div class="form-field"><label>Data inizio</label><input type="date" id="incarico-start" class="input" value="${toDateInputValue(p.mandate_start)}"></div>

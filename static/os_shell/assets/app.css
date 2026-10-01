@@ -790,3 +790,28 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
   .property-form-dialog .modal-actions { flex-direction: column-reverse; }
   .property-form-dialog .modal-actions .btn { width: 100%; }
 }
+
+/* CRM-OPS-3: Acquisizioni (elenco, creazione, scheda). Solo regole nuove,
+   prefisso `acq-`; su smartphone una colonna, come il form Immobili. */
+.acq-toolbar { flex-wrap: wrap; }
+.acq-period { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.acq-results { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.acq-result { justify-content: flex-start; text-align: left; white-space: normal; }
+.acq-owners { display: flex; flex-direction: column; gap: 6px; }
+.acq-owner-option { display: flex; flex-direction: column; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); }
+.acq-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.acq-header h2 { margin: 0; }
+.acq-actions { flex-wrap: wrap; margin: 8px 0 16px; }
+.acq-section { margin-top: 16px; }
+.acq-owners-list, .acq-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.acq-owner-main { border-left: 3px solid var(--primary); padding-left: 8px; }
+.acq-notes-label { margin: 12px 0 2px; font-weight: 600; font-size: 13px; }
+.acq-agenda-buttons { display: contents; }
+@media (max-width: 767px) {
+  .acq-toolbar { flex-direction: column; align-items: stretch; }
+  .acq-period { justify-content: space-between; }
+  .acq-detail .detail-grid, .acq-detail .form-grid-2, .acq-form .form-grid-2 { grid-template-columns: 1fr; }
+  .acq-actions .btn, #acq-agenda-actions .btn { width: 100%; }
+  .acq-form .modal-actions { flex-direction: column-reverse; }
+  .acq-form .modal-actions .btn { width: 100%; }
+}

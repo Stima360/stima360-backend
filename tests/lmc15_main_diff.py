@@ -65,8 +65,12 @@ def righe_impreviste_in_main(root) -> list[str]:
     # mount della rotta del giro
     # dei promemoria, dichiarato per intero in `a32_2_diff`.
     from tests.a32_2_diff import RIGHE_MAIN as RIGHE_A32_2
+    # SENTINELLA AGGIORNATA DA CRM-OPS-3 (collisione dichiarata, autorizzata):
+    # il mount delle Acquisizioni (`/api/acquisitions`), dichiarato per intero
+    # in `crm_ops_3_diff`.
+    from tests.crm_ops_3_diff import RIGHE_MAIN as RIGHE_CRM_OPS_3
     ammesse = (RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT | RIGHE_A30_7
-              | RIGHE_A30_9B | RIGHE_A30_12 | RIGHE_P30 | RIGHE_A32_2)
+              | RIGHE_A30_9B | RIGHE_A30_12 | RIGHE_P30 | RIGHE_A32_2 | RIGHE_CRM_OPS_3)
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()
