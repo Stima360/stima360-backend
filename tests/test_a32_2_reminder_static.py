@@ -168,8 +168,15 @@ def test_s09_il_repository_e_sempre_dell_agenzia():
 
 def test_s10_nessuna_migration_080():
     migrazioni = sorted(p.name for p in (ROOT / "migrations").glob("*.sql"))
-    assert not [m for m in migrazioni if m.startswith("080")]
-    assert migrazioni[-1].startswith("079_a32_1")
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: A32-2 non ha creato migration, e
+    # resta vero. La 080 che ora esiste e' quella di CRM-OPS-2 (form
+    # Immobili), nominata qui per intero: qualunque ALTRA 080, o qualunque
+    # migration oltre, farebbe ancora fallire.
+    assert [m for m in migrazioni if m.startswith("080")] == [
+        "080_crm_ops_2_property_form.sql", "080_crm_ops_2_property_form_down.sql"]
+    assert migrazioni[-1] == "080_crm_ops_2_property_form_down.sql"
+    assert [m for m in migrazioni if m.startswith("079")] == [
+        "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 
 
 def test_s11_la_chiave_non_contiene_l_email():

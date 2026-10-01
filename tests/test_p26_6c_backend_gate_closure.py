@@ -802,7 +802,11 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
     measurement while still serving tenant data.
     """
     expected = {
-        "property": 21, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CRM-OPS-2: PROPERTY 21 -> 22 per GET
+        # /api/property/form-options (cataloghi del form Immobili e agenti
+        # assegnabili), dietro lo stesso legacy_basic_agency_context. Il
+        # conteggio resta esatto: una ventitreesima route farebbe fallire.
+        "property": 22, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

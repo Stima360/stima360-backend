@@ -445,6 +445,18 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/views/abbinamento-dettaglio.js",
         "static/os_shell/assets/views/acquirente-dettaglio.js",
         "static/os_shell/assets/views/immobile-dettaglio.js",
+        # SENTINELLA AGGIORNATA DA CRM-OPS-2 - IL FORM IMMOBILI. Un componente
+        # NUOVO (`property-form.js`, creazione e modifica, cataloghi solo da
+        # GET /api/property/form-options) e la lista Immobili che lo apre al
+        # posto del vecchio form con titolo e codice manuali.
+        # `immobile-dettaglio.js` e `app.css` erano gia' ammessi.
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato - non un endpoint della Rete, non una
+        # sua rotta, non un suo componente - e nessun'altra vista del CRM oltre
+        # a quelle elencate.
+        "static/os_shell/assets/views/immobili.js",
+        "static/os_shell/assets/components/property-form.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

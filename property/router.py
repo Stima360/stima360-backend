@@ -22,6 +22,10 @@ def get_alerts(ctx:OperatorContext=Depends(legacy_basic_agency_context)):return 
 # and declares `require_admin` itself, so the caller supplies a credential and
 # never an agency. Resolved once here and passed down unchanged - the service
 # and the repository resolve nothing.
+# CRM-OPS-2: cataloghi del form Immobili (territorio, classi energetiche,
+# tipologie) e agenti assegnabili - questi ultimi solo a chi puo' assegnare.
+@router.get('/form-options')
+def get_form_options(ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.form_options,ctx)
 @router.post('/properties',status_code=201)
 def create_property(p:PropertyCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.create_property,ctx,p)
 @router.get('/properties')

@@ -10,7 +10,8 @@
 // Contratto backend verificato in fase di audit P14, nessun endpoint nuovo:
 //   POST /api/property/properties (property/router.py:11, status_code=201)
 //   schema PropertyCreate (property/schemas.py) — extra="forbid".
-// Unico campo realmente obbligatorio: title (min_length=1). property_type e
+// CRM-OPS-2: nessun campo obbligatorio per l'operatore - titolo (descrizione
+// sintetica) e codice (IMM-<id>) li genera il backend. property_type e
 // commercial_status hanno default backend ("apartment"/"draft") ma vengono
 // comunque inviati esplicitamente (stesso comportamento del form legacy
 // static/property_admin/assets/app.js:78-108, propertyForm/buildPropertyPayload).
@@ -46,25 +47,27 @@
 // nuova GET (nessuna cache client-side), quindi risulta gia' aggiornata senza
 // bisogno di refresh manuale.
 
-import { apiGet, apiPost } from '../core/api-client.js';
+// CRM-OPS-2: il form di creazione e' ora il componente condiviso con la
+// modifica (components/property-form.js): niente titolo ne' codice da
+// compilare (li genera il backend), territorio a menu Regione -> Provincia ->
+// Comune -> Microzona dal catalogo del portale, classe energetica a menu,
+// "Assegnato a" con gli agenti reali. La lista identifica l'immobile da
+// indirizzo, comune e microzona, non dal titolo.
+import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
+import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
 
 const PAGE_SIZE = 50;
 
 // Valori reali del CHECK constraint properties_status_check (migrations/002_property_01.sql:43).
 const STATUS_OPTIONS = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'sold', 'withdrawn', 'archived'];
 
-// Valori reali di PROPERTY_TYPES (property/enums.py) e PROPERTY_CLASSES (property/enums.py),
-// usati solo nel form di creazione (select coerenti col contratto backend, nessun valore inventato).
-const PROPERTY_TYPE_OPTIONS = ['apartment', 'villa', 'house', 'rustic', 'land', 'commercial', 'garage', 'office', 'building', 'other'];
-const PROPERTY_CLASS_OPTIONS = ['A', 'B', 'C'];
-
 export async function renderImmobili(container) {
   container.innerHTML = `
     <div class="card panel">
       <div class="list-toolbar">
-        <input id="immobili-search" class="input" type="search" placeholder="Cerca per titolo, codice, indirizzo o comune…">
+        <input id="immobili-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…">
         <select id="immobili-status" class="input">
           <option value="">Tutti gli stati</option>
           ${STATUS_OPTIONS.map((s) => `<option value="${s}">${escapeHtml(s)}</option>`).join('')}
@@ -106,7 +109,7 @@ export async function renderImmobili(container) {
 
     listArea.innerHTML = renderTable(
       [
-        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(p.title || `Immobile #${p.id}`)}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
+        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Tipologia', render: (p) => escapeHtml(p.property_type || '—') },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
@@ -135,192 +138,14 @@ export async function renderImmobili(container) {
     debounceHandle = setTimeout(load, 300);
   });
   statusSelect.addEventListener('change', () => { offset = 0; load(); });
-  container.querySelector('#immobili-new').addEventListener('click', () => openNewPropertyDialog(dialogEl));
+  // Creazione riuscita: si apre subito la scheda del nuovo immobile (stesso
+  // pattern di prima); la lista, rivisitata, rifa' sempre la GET.
+  container.querySelector('#immobili-new').addEventListener('click', () => openPropertyDialog(dialogEl, {
+    mode: 'create',
+    onSaved: (created) => navigate('immobili', [created.id]),
+  }));
 
   await load();
-}
-
-// --- Nuovo immobile: dialog con campi reali di PropertyCreate ---------------
-// Set di campi = quelli gia' presenti nel form legacy property_admin
-// (static/property_admin/assets/app.js:78-100, propertyForm), che a sua volta
-// riflette esattamente PropertyCreate (property/schemas.py). Nessun campo
-// obbligatorio inventato: solo "title" e' required lato form (mirror esatto
-// del vincolo backend NOT NULL / min_length=1); tutti gli altri sono opzionali
-// e omessi dal payload se vuoti.
-function openNewPropertyDialog(dialogEl) {
-  let submitting = false;
-
-  dialogEl.innerHTML = `
-    <form id="new-property-form">
-      <h2 style="margin-top:0">Nuovo immobile</h2>
-
-      <div class="form-field">
-        <label>Titolo *</label>
-        <input type="text" id="np-title" class="input" maxlength="200" placeholder="Es. Appartamento centro città" required>
-      </div>
-
-      <div class="form-grid-2">
-        <div class="form-field"><label>Codice</label><input type="text" id="np-code" class="input" maxlength="50"></div>
-        <div class="form-field">
-          <label>Tipologia</label>
-          <select id="np-type" class="input">
-            ${PROPERTY_TYPE_OPTIONS.map((t) => `<option value="${t}" ${t === 'apartment' ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-
-      <div class="form-grid-2">
-        <div class="form-field">
-          <label>Stato commerciale</label>
-          <select id="np-status" class="input">
-            ${STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === 'draft' ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-field">
-          <label>Classe</label>
-          <select id="np-class" class="input">
-            <option value="">—</option>
-            ${PROPERTY_CLASS_OPTIONS.map((c) => `<option value="${c}">${c}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-
-      <h3 class="section-title">Ubicazione</h3>
-      <div class="form-grid-2">
-        <div class="form-field"><label>Città</label><input type="text" id="np-city" class="input" maxlength="120"></div>
-        <div class="form-field"><label>Provincia</label><input type="text" id="np-province" class="input" maxlength="10"></div>
-      </div>
-      <div class="form-field"><label>Indirizzo</label><input type="text" id="np-address" class="input" maxlength="250"></div>
-      <div class="form-field"><label>Microzona</label><input type="text" id="np-microzone" class="input" maxlength="150"></div>
-
-      <h3 class="section-title">Caratteristiche</h3>
-      <div class="form-grid-3">
-        <div class="form-field"><label>Locali</label><input type="number" id="np-rooms" class="input" min="0" step="1"></div>
-        <div class="form-field"><label>Camere</label><input type="number" id="np-bedrooms" class="input" min="0" step="1"></div>
-        <div class="form-field"><label>Bagni</label><input type="number" id="np-bathrooms" class="input" min="0" step="1"></div>
-      </div>
-      <div class="form-grid-2">
-        <div class="form-field"><label>Superficie (mq)</label><input type="number" id="np-surface" class="input" min="0" step="any"></div>
-        <div class="form-field"><label>Superficie commerciale (mq)</label><input type="number" id="np-commercial-surface" class="input" min="0" step="any"></div>
-      </div>
-      <div class="form-grid-2">
-        <div class="form-field"><label>Condizione</label><input type="text" id="np-condition" class="input" maxlength="80"></div>
-        <div class="form-field"><label>Classe energetica</label><input type="text" id="np-energy" class="input" maxlength="20"></div>
-      </div>
-      <div class="form-field">
-        <label>Ascensore</label>
-        <select id="np-elevator" class="input">
-          <option value="">—</option>
-          <option value="true">Sì</option>
-          <option value="false">No</option>
-        </select>
-      </div>
-
-      <h3 class="section-title">Commerciale</h3>
-      <div class="form-grid-2">
-        <div class="form-field"><label>Prezzo richiesto (€)</label><input type="number" id="np-price" class="input" min="0" step="any"></div>
-        <div class="form-field"><label>Scadenza incarico</label><input type="date" id="np-mandate-end" class="input"></div>
-      </div>
-      <div class="form-field"><label>Assegnato a</label><input type="text" id="np-assigned" class="input" maxlength="200"></div>
-
-      <div class="form-field">
-        <label>Note interne</label>
-        <textarea id="np-notes" class="input" rows="3"></textarea>
-      </div>
-
-      <div id="new-property-error" class="field-error"></div>
-
-      <div class="modal-actions">
-        <button type="button" id="new-property-cancel" class="btn ghost">Annulla</button>
-        <button type="submit" id="new-property-submit" class="btn primary" disabled>Crea immobile</button>
-      </div>
-    </form>
-  `;
-
-  const form = dialogEl.querySelector('#new-property-form');
-  const titleInput = dialogEl.querySelector('#np-title');
-  const submitBtn = dialogEl.querySelector('#new-property-submit');
-  const errorEl = dialogEl.querySelector('#new-property-error');
-  const cancelBtn = dialogEl.querySelector('#new-property-cancel');
-
-  function updateSubmitState() {
-    submitBtn.disabled = submitting || !titleInput.value.trim();
-  }
-  titleInput.addEventListener('input', updateSubmitState);
-  cancelBtn.onclick = () => dialogEl.close();
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const title = titleInput.value.trim();
-    if (!title || submitting) return;
-
-    submitting = true;
-    updateSubmitState();
-    errorEl.innerHTML = '';
-
-    const payload = {
-      title,
-      property_type: dialogEl.querySelector('#np-type').value,
-      commercial_status: dialogEl.querySelector('#np-status').value,
-    };
-    addTextIfPresent(payload, 'code', dialogEl.querySelector('#np-code').value);
-    addTextIfPresent(payload, 'classification', dialogEl.querySelector('#np-class').value);
-    addTextIfPresent(payload, 'city', dialogEl.querySelector('#np-city').value);
-    addTextIfPresent(payload, 'province', dialogEl.querySelector('#np-province').value);
-    addTextIfPresent(payload, 'address', dialogEl.querySelector('#np-address').value);
-    addTextIfPresent(payload, 'microzone', dialogEl.querySelector('#np-microzone').value);
-    addIntegerIfPresent(payload, 'rooms', dialogEl.querySelector('#np-rooms').value);
-    addIntegerIfPresent(payload, 'bedrooms', dialogEl.querySelector('#np-bedrooms').value);
-    addIntegerIfPresent(payload, 'bathrooms', dialogEl.querySelector('#np-bathrooms').value);
-    addNumberIfPresent(payload, 'surface_sqm', dialogEl.querySelector('#np-surface').value);
-    addNumberIfPresent(payload, 'commercial_surface_sqm', dialogEl.querySelector('#np-commercial-surface').value);
-    addTextIfPresent(payload, 'condition', dialogEl.querySelector('#np-condition').value);
-    addTextIfPresent(payload, 'energy_class', dialogEl.querySelector('#np-energy').value);
-    const elevatorRaw = dialogEl.querySelector('#np-elevator').value;
-    if (elevatorRaw !== '') payload.elevator = elevatorRaw === 'true';
-    addNumberIfPresent(payload, 'asking_price', dialogEl.querySelector('#np-price').value);
-    const mandateEnd = dialogEl.querySelector('#np-mandate-end').value;
-    if (mandateEnd) payload.mandate_end = mandateEnd;
-    addTextIfPresent(payload, 'assigned_to', dialogEl.querySelector('#np-assigned').value);
-    addTextIfPresent(payload, 'internal_notes', dialogEl.querySelector('#np-notes').value);
-
-    let created;
-    try {
-      created = await apiPost('/api/property/properties', payload);
-    } catch (error) {
-      errorEl.textContent = error.message || 'Errore nella creazione dell’immobile.';
-      submitting = false;
-      updateSubmitState();
-      return;
-    }
-
-    // Creazione riuscita: chiude il dialog e apre subito la scheda del nuovo
-    // immobile (stesso pattern gia' in produzione in acquirenti.js). La lista
-    // Immobili, quando rivisitata, effettua sempre una nuova GET: nessun
-    // refresh manuale necessario.
-    dialogEl.close();
-    navigate('immobili', [created.id]);
-  });
-
-  updateSubmitState();
-  dialogEl.showModal();
-}
-
-function addTextIfPresent(payload, key, rawValue) {
-  const v = String(rawValue ?? '').trim();
-  if (v) payload[key] = v;
-}
-
-function addNumberIfPresent(payload, key, rawValue) {
-  if (rawValue === '' || rawValue === null || rawValue === undefined) return;
-  const n = Number(rawValue);
-  if (!Number.isNaN(n)) payload[key] = n;
-}
-
-function addIntegerIfPresent(payload, key, rawValue) {
-  if (rawValue === '' || rawValue === null || rawValue === undefined) return;
-  const n = Number.parseInt(rawValue, 10);
-  if (!Number.isNaN(n)) payload[key] = n;
 }
 
 function formatPrice(value) {

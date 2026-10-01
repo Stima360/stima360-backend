@@ -679,6 +679,27 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "is the application choke point and must stay uncoupled from a "
         "throwaway test database"
     ),
+    "tests/test_crm_ops_2_property_form.py": (
+        "TEST-only CRM-OPS-2 proof; opts in through P29_TEST_DSN and skips "
+        "its database layer entirely without it, and FAILS rather than run if "
+        "the DSN is not a Unix socket or localhost. Creates and drops its own "
+        "throwaway database and never touches an existing schema. Registered "
+        "in its own right rather than reusing an earlier entry: an allow-list "
+        "shared between phases would let a new entrypoint arrive unannounced. "
+        "The connection exists to apply the REAL migrations (027, 001, 028, "
+        "029, 030, 002, 003, 034, 035, 036 and 080) and to prove what a "
+        "recording cursor cannot: that migration 080 adds region and "
+        "assigned_agent_id with a live composite foreign key to "
+        "agency_memberships; that a property created without title or code "
+        "gets IMM-<id> and a generated description in the same transaction; "
+        "that edits keep the id, the code, the assignment and historical "
+        "values; that only active agents of the same agency are assignable; "
+        "and that the down migration refuses while data would be lost. It "
+        "monkeypatches get_connection in the core module onto its own "
+        "connection. It must not go through database.get_connection(): that "
+        "is the application choke point and must stay uncoupled from a "
+        "throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

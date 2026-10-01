@@ -508,7 +508,12 @@ def test_N6_nessuna_migration_nuova():
     # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
     # Si nomina invece di smettere di guardare: qualunque ALTRA migration
     # comparisse farebbe ancora fallire.
-    assert numeri[-1] == 79 and numeri[-2] == 78 and numeri[-3] == 77 and numeri[-4] == 76, "la serie si e' fermata o e' andata oltre la 079"
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
+    # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
+    # agency_memberships), additive, per il form Immobili. Si nomina invece di
+    # smettere di guardare: qualunque ALTRA migration comparisse farebbe
+    # ancora fallire.
+    assert numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78 and numeri[-4] == 77 and numeri[-5] == 76, "la serie si e' fermata o e' andata oltre la 080"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

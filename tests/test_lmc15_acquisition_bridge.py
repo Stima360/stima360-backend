@@ -386,7 +386,12 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
     # Si nomina invece di smettere di guardare: qualunque ALTRA migration
     # comparisse farebbe ancora fallire.
-    assert numeri[-1] == 79 and numeri[-2] == 78 and numeri[-3] == 77 and numeri[-4] == 76 and numeri[-5] == 75 and numeri[-6] == 74
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
+    # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
+    # agency_memberships), additive, per il form Immobili. Si nomina invece di
+    # smettere di guardare: qualunque ALTRA migration comparisse farebbe
+    # ancora fallire.
+    assert numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78 and numeri[-4] == 77 and numeri[-5] == 76 and numeri[-6] == 75 and numeri[-7] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -631,7 +636,14 @@ def test_37_nessuna_migration_oltre_la_070():
               "migrations/078_a31_2_buyer_visits_projection.sql",
               "migrations/078_a31_2_buyer_visits_projection_down.sql",
               "migrations/079_a32_1_appointment_reminders.sql",
-              "migrations/079_a32_1_appointment_reminders_down.sql"}
+              "migrations/079_a32_1_appointment_reminders_down.sql",
+              "migrations/080_crm_ops_2_property_form.sql",
+              "migrations/080_crm_ops_2_property_form_down.sql"}
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
+    # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
+    # agency_memberships), additive, per il form Immobili. Si nomina invece di
+    # smettere di guardare: qualunque ALTRA migration comparisse farebbe
+    # ancora fallire.
     # SENTINELLA AGGIORNATA DA A32-1: la 079 allarga il CHECK `reason_code` del
     # ledger COMMUNICATION di UN valore, `appointment_reminder` (promemoria degli
     # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.

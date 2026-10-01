@@ -1,13 +1,129 @@
+from core.exceptions import PermissionDenied, ValidationError
+from operator_auth import permissions
+
 from . import repository
+from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
+                      territory_tree, validate_energy_class, validate_location)
+
+# CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
+ASSIGNMENT_DENIED_MESSAGE = (
+    "Questa operazione richiede un ruolo di amministrazione dell'agenzia."
+)
+ASSIGNMENT_TARGET_INVALID = "L'operatore scelto non e' un membro attivo dell'agenzia."
+LOCATION_FIELDS = ('region', 'province', 'city', 'microzone')
+
+
+def _may_assign(ctx):
+    """La regola P26-1 delle assegnazioni (titolare, amministratore, platform
+    admin dentro l'agenzia), la stessa di contatti e lead."""
+    return permissions.may_assign_records(getattr(ctx, 'role', None),
+                                          getattr(ctx, 'is_platform_admin', False))
+
+
+def _apply_assignment(ctx, data, current_agent_id=None):
+    """Verifica e completa `assigned_agent_id` nel payload.
+
+    * invariato -> tolto dal payload: salvare il form senza toccare l'agente
+      non richiede alcun permesso;
+    * cambiato -> solo chi puo' assegnare (403 altrimenti), e solo verso un
+      membro ATTIVO della stessa agenzia (400 altrimenti);
+    * `assigned_to` diventa l'istantanea del nome, scritta dal server.
+    """
+    if 'assigned_agent_id' not in data:
+        return
+    target = data['assigned_agent_id']
+    if target == current_agent_id:
+        del data['assigned_agent_id']
+        return
+    if not _may_assign(ctx):
+        raise PermissionDenied(ASSIGNMENT_DENIED_MESSAGE)
+    if target is None:
+        data['assigned_to'] = None
+        return
+    name = repository.assignable_agent_name(ctx, target)
+    if name is None:
+        raise ValidationError(ASSIGNMENT_TARGET_INVALID)
+    data['assigned_to'] = name
+
+
+def form_options(ctx):
+    """Tutto cio' che il form Immobili deve offrire, deciso qui e non nel
+    browser: territorio, classi energetiche, tipologie e - solo per chi puo'
+    assegnare - gli agenti assegnabili della propria agenzia."""
+    can_assign = _may_assign(ctx)
+    return {
+        'territory': territory_tree(),
+        'territory_sources': TERRITORY_SOURCES,
+        'energy_classes': list(ENERGY_CLASSES),
+        'property_types': [{'value': k, 'label': v} for k, v in PROPERTY_TYPE_LABELS.items()],
+        'can_assign': can_assign,
+        'agents': repository.list_assignable_agents(ctx) if can_assign else [],
+    }
+
 
 def dump(model,exclude_unset=False):
     return model.model_dump(exclude_unset=exclude_unset) if hasattr(model,'model_dump') else model.dict(exclude_unset=exclude_unset)
 # P26-2C: ctx is threaded straight through, unread and unmodified. This layer
 # decides what the record looks like, never which agency it belongs to.
-def create_property(ctx,p):return repository.create_property(ctx,dump(p))
+def _fields_set(model):
+    return set(getattr(model, 'model_fields_set', None) or getattr(model, '__fields_set__', set()))
+
+
+def _check_catalog(data, current=None):
+    """Le regole del catalogo, con i client storici al riparo.
+
+    * Territorio: si giudica solo quando la richiesta porta `region`. Il form
+      OS invia SEMPRE la scelta a cascata intera (regione compresa);
+      property_admin non ha mai conosciuto la regione e continua a inviare
+      comune/provincia/microzona a testo libero come prima. Il giudizio e' sul
+      RISULTATO: i livelli non inviati restano quelli salvati.
+    * Classe energetica: si giudica solo un valore NUOVO. Rimandare invariata
+      una classe storica (es. "g", che property_admin rimanda a ogni
+      salvataggio) non e' un errore; scriverne una fuori elenco si'.
+    """
+    current = current or {}
+    try:
+        if 'region' in data:
+            merged = {f: data.get(f, current.get(f)) for f in LOCATION_FIELDS}
+            validate_location(merged['region'], merged['province'], merged['city'], merged['microzone'])
+        if 'energy_class' in data and data['energy_class'] != current.get('energy_class'):
+            validate_energy_class(data['energy_class'])
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
+def create_property(ctx,p):
+    data=dump(p)
+    sent=_fields_set(p)
+    _check_catalog({k:v for k,v in data.items() if k in sent})
+    # CRM-OPS-2: un agente su un immobile nuovo e' un'assegnazione.
+    _apply_assignment(ctx,data)
+    return repository.create_property(ctx,data,generate_identity=True)
 def list_properties(*a,**k):return repository.list_properties(*a,**k)
 def get_property(ctx,i):return repository.get_property(ctx,i)
-def update_property(ctx,i,p):return repository.update_property(ctx,i,dump(p,True))
+def update_property(ctx,i,p):
+    data=dump(p,True)
+    # CRM-OPS-2: il codice e' stabile. Un codice vuoto o nullo in modifica
+    # (property_admin lo rimanda null se il campo e' vuoto) non lo cancella.
+    if 'code' in data and not (data['code'] or '').strip():
+        del data['code']
+    current=None
+    if {'assigned_agent_id','assigned_to','region','energy_class'} & set(data):
+        current=repository.get_property(ctx,i)
+    _check_catalog(data,current)
+    if 'assigned_agent_id' in data:
+        _apply_assignment(ctx,data,current.get('assigned_agent_id'))
+    if ('assigned_to' in data and 'assigned_agent_id' not in data
+            and current.get('assigned_agent_id') is not None):
+        # CRM-OPS-2: con un agente assegnato per ID, l'ID e' la fonte
+        # autorevole e il nome e' la sua istantanea scritta dal server.
+        # property_admin rimanda a ogni salvataggio il testo "Assegnato a":
+        # lo si ignora, cosi' il nome non puo' divergere dall'agente reale e
+        # gli altri campi si salvano comunque. Cambiare agente resta possibile
+        # solo inviando assigned_agent_id (permessi + membro attivo).
+        # Senza ID il testo libero storico resta modificabile come prima.
+        del data['assigned_to']
+    return repository.update_property(ctx,i,data,derive_identity=True)
 def archive_property(ctx,i):return repository.archive_property(ctx,i)
 def add_contact(ctx,i,p):return repository.add_contact(ctx,i,dump(p))
 def delete_contact(ctx,i,c,r):return repository.delete_contact(ctx,i,c,r)

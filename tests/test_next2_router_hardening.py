@@ -28,9 +28,14 @@ REPRESENTATIVE_PATHS = (
 # property below still holds for every operation, including the two new ones:
 # both are on the CORE router behind Depends(require_operator), and
 # test_2 re-proves that no operation lacks a security gate.
+# SENTINELLA AGGIORNATA DA CRM-OPS-2: GET /api/property/form-options (i
+# cataloghi del form Immobili e gli agenti assegnabili) porta PROPERTY da 21 a
+# 22 e il totale da 108 a 109. Stessa condizione di P26-1: la route e' sul
+# router PROPERTY dietro Depends(legacy_basic_agency_context), e test_2
+# ri-verifica il gate di sicurezza su ogni operazione, la nuova compresa.
 EXPECTED_COUNTS = {
     "/api/core": 21,
-    "/api/property": 21,
+    "/api/property": 22,
     "/api/property-watch": 12,
     "/api/buy": 23,
     "/api/match": 26,
@@ -72,12 +77,12 @@ def test_1_all_100_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 108
+    assert len(operations) == 109
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 108
+    assert len(operations) == 109
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

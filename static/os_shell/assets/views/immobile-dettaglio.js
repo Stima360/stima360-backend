@@ -82,6 +82,8 @@ import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
 import { getAgents } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
+// CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
+import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -309,14 +311,22 @@ export async function renderImmobileDettaglio(container, params = []) {
   const photoRemoveConfirm = new Set();
   const documentRemoveConfirm = new Set();
 
-  const title = property.title || property.code || `Immobile #${property.id}`;
+  // CRM-OPS-2: l'immobile si riconosce dai suoi dati (indirizzo, comune,
+  // microzona), non dal titolo manuale; codice e id restano nella riga sotto.
+  function headerSubtitle() {
+    return `Immobile #${property.id} · ${property.code || '—'} · ${[property.region, property.province].filter(Boolean).join(' · ') || '—'}`;
+  }
 
   container.innerHTML = `
     <div class="contact-header card">
-      <h2>${escapeHtml(title)}</h2>
-      <div class="muted">Immobile #${escapeHtml(property.id)} · ${escapeHtml(property.code || '—')} · ${escapeHtml([property.address, property.city].filter(Boolean).join(', ') || '—')}</div>
+      <h2 id="property-header-title">${escapeHtml(propertyDisplayName(property))}</h2>
+      <div class="muted" id="property-header-subtitle">${escapeHtml(headerSubtitle())}</div>
       <div class="badge-row" id="property-status-badge">${headerBadgeHtml()}</div>
+      <div class="action-bar" style="margin-top:8px">
+        <button type="button" id="property-edit-btn" class="btn ghost">Modifica immobile</button>
+      </div>
     </div>
+    <dialog id="property-edit-dialog" class="modal modal-wide"></dialog>
     <div class="tabs" id="property-tabs"></div>
     <div id="property-tab-content" class="card panel"></div>
     <dialog id="proposal-dialog" class="modal"></dialog>
@@ -330,6 +340,27 @@ export async function renderImmobileDettaglio(container, params = []) {
   tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
 
   const contentEl = container.querySelector('#property-tab-content');
+
+  // CRM-OPS-2: modifica dell'immobile salvato. La PATCH aggiorna la stessa
+  // riga (stesso id); la risposta e' la riga `properties` e si fonde nello
+  // stato locale: contatti, lead, foto, documenti e visite restano quelli
+  // gia' caricati. Header e sezione corrente si ridisegnano; la lista, quando
+  // la si riapre, rifa' sempre la GET.
+  container.querySelector('#property-edit-btn').addEventListener('click', () => {
+    openPropertyDialog(container.querySelector('#property-edit-dialog'), {
+      mode: 'edit',
+      property,
+      onSaved: async (updated) => {
+        if (updated && typeof updated === 'object') Object.assign(property, updated);
+        const titleEl = container.querySelector('#property-header-title');
+        if (titleEl) titleEl.textContent = propertyDisplayName(property);
+        const subtitleEl = container.querySelector('#property-header-subtitle');
+        if (subtitleEl) subtitleEl.textContent = headerSubtitle();
+        const activeBtn = tabsEl.querySelector('.tab-btn.active');
+        await showTab(activeBtn ? activeBtn.dataset.tab : 'panoramica');
+      },
+    });
+  });
 
   async function showTab(key) {
     tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
@@ -1522,9 +1553,9 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget) {
   const fields = [
-    ['Tipologia', p.property_type], ['Classificazione', p.classification],
+    ['Codice', p.code], ['Tipologia', p.property_type], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
-    ['Comune', p.city], ['Provincia', p.province], ['CAP', p.postal_code], ['Microzona', p.microzone],
+    ['Regione', p.region], ['Provincia', p.province], ['Comune', p.city], ['Microzona', p.microzone], ['CAP', p.postal_code],
     ['Superficie (mq)', p.surface_sqm], ['Superficie commerciale (mq)', p.commercial_surface_sqm],
     ['Locali', p.rooms], ['Camere', p.bedrooms], ['Bagni', p.bathrooms],
     ['Piano', p.floor], ['Piani totali', p.total_floors],

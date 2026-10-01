@@ -782,3 +782,11 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
   .agenda-toolbar { flex-wrap: nowrap; }
   .agenda-views, .agenda-commands { flex-wrap: wrap; }
 }
+
+/* CRM-OPS-2: form Immobili (creazione e modifica) su smartphone: una colonna,
+   come il dialog dell'Agenda. Solo regole nuove, nessuna ridefinita. */
+@media (max-width: 767px) {
+  .property-form-dialog .form-grid-2, .property-form-dialog .form-grid-3 { grid-template-columns: 1fr; }
+  .property-form-dialog .modal-actions { flex-direction: column-reverse; }
+  .property-form-dialog .modal-actions .btn { width: 100%; }
+}

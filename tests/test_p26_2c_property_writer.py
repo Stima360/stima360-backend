@@ -384,7 +384,9 @@ def test_c_only_the_router_resolves_the_context():
 def test_d_the_service_passes_the_context_through_unchanged(monkeypatch):
     seen = {}
 
-    def _capture(received_ctx, data):
+    # CRM-OPS-2: il service chiede anche la generazione di titolo e codice
+    # (`generate_identity=True`); il contesto deve restare lo stesso oggetto.
+    def _capture(received_ctx, data, **kwargs):
         seen["ctx"] = received_ctx
         seen["data"] = data
         return {"id": NEW_PROPERTY_ID}

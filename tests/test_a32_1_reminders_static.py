@@ -120,7 +120,12 @@ def test_08_la_079_e_valida_per_il_runner_e_l_ultima():
     m = trovate[VERSIONE]
     assert runner.validate_migration(m) == [] and m.down_available and not m.non_transactional
     numeri = sorted(x.number for x in trovate.values())
-    assert numeri[-1] == 79 and numeri[-2] == 78
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
+    # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
+    # agency_memberships), additive, per il form Immobili. Si nomina invece di
+    # smettere di guardare: qualunque ALTRA migration comparisse farebbe
+    # ancora fallire.
+    assert numeri[-1] == 80 and numeri[-2] == 79 and numeri[-3] == 78
 
 
 def test_09_lo_storico_contatto_ha_l_etichetta_del_motivo():

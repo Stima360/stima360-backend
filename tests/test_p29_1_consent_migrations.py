@@ -162,7 +162,12 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # appuntamenti; stesso schema della 067), approvata dai GATE A32-0/A32-0B.
     # Si nomina invece di smettere di guardare: qualunque ALTRA migration
     # comparisse farebbe ancora fallire.
-    assert max(numeri) == 79, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA CRM-OPS-2: la 080 aggiunge a `properties` due
+    # colonne NULLABLE (`region`, `assigned_agent_id` con FK composita verso
+    # agency_memberships), additive, per il form Immobili. Si nomina invece di
+    # smettere di guardare: qualunque ALTRA migration comparisse farebbe
+    # ancora fallire.
+    assert max(numeri) == 80, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

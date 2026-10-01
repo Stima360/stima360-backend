@@ -10,11 +10,15 @@ class PropertyModel(BaseModel):
         extra = "forbid"
 
 class PropertyCreate(PropertyModel):
+    # CRM-OPS-2: ne' il codice ne' il titolo si chiedono piu' all'operatore.
+    # Se mancano li genera il backend (property/service.py): IMM-<id> e una
+    # descrizione sintetica dai dati. Restano accettati per i client storici.
     code: str | None = Field(None,max_length=50)
-    title: str = Field(...,min_length=1,max_length=200)
+    title: str | None = Field(None,min_length=1,max_length=200)
     property_type: str = "apartment"
     commercial_status: str = "draft"
     classification: str | None = None
+    region: str | None = Field(None,max_length=50)
     address: str | None = Field(None,max_length=250)
     civic_number: str | None = Field(None,max_length=30)
     city: str | None = Field(None,max_length=120)
@@ -40,6 +44,9 @@ class PropertyCreate(PropertyModel):
     mandate_start: date | None = None
     mandate_end: date | None = None
     assigned_to: str | None = Field(None,max_length=200)
+    # CRM-OPS-2: l'identificativo reale dell'agente. Chi puo' assegnare e a chi
+    # lo decide il service (permessi + membership attiva della stessa agenzia).
+    assigned_agent_id: int | None = Field(None,gt=0)
     source: str | None = Field(None,max_length=100)
     public_notes: str | None = None
     internal_notes: str | None = None
@@ -50,6 +57,9 @@ class PropertyCreate(PropertyModel):
         if v.get('commercial_status') not in PROPERTY_STATUSES: raise ValueError('invalid commercial_status')
         if v.get('classification') is not None and v['classification'] not in PROPERTY_CLASSES: raise ValueError('classification must be A, B or C')
         if v.get('mandate_start') and v.get('mandate_end') and v['mandate_end'] < v['mandate_start']: raise ValueError('mandate_end cannot precede mandate_start')
+        # CRM-OPS-2: catalogo territoriale e classe energetica si applicano nel
+        # service, dove si sa COSA e' stato inviato e cosa era gia' salvato:
+        # i client storici (property_admin) non devono trovare blocchi nuovi.
         return v
 
 class PropertyUpdate(PropertyModel):
@@ -58,6 +68,7 @@ class PropertyUpdate(PropertyModel):
     property_type: str | None = None
     commercial_status: str | None = None
     classification: str | None = None
+    region: str | None = Field(None,max_length=50)
     address: str | None = Field(None,max_length=250)
     civic_number: str | None = Field(None,max_length=30)
     city: str | None = Field(None,max_length=120)
@@ -83,6 +94,9 @@ class PropertyUpdate(PropertyModel):
     mandate_start: date | None = None
     mandate_end: date | None = None
     assigned_to: str | None = Field(None,max_length=200)
+    # CRM-OPS-2: l'identificativo reale dell'agente. Chi puo' assegnare e a chi
+    # lo decide il service (permessi + membership attiva della stessa agenzia).
+    assigned_agent_id: int | None = Field(None,gt=0)
     source: str | None = Field(None,max_length=100)
     public_notes: str | None = None
     internal_notes: str | None = None
@@ -97,6 +111,7 @@ class PropertyUpdate(PropertyModel):
         if v.get('commercial_status') is not None and v['commercial_status'] not in PROPERTY_STATUSES: raise ValueError('invalid commercial_status')
         if v.get('classification') is not None and v['classification'] not in PROPERTY_CLASSES: raise ValueError('classification must be A, B or C')
         if v.get('mandate_start') and v.get('mandate_end') and v['mandate_end'] < v['mandate_start']: raise ValueError('mandate_end cannot precede mandate_start')
+        # CRM-OPS-2: vedi PropertyCreate - le regole del catalogo sono nel service.
         return v
 
 class PropertyContactCreate(PropertyModel):

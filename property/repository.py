@@ -10,6 +10,14 @@ from core.scope import ProgrammingError
 from buyer_visits import facade as _visite_facade
 from buyer_visits import guards as _visite_regole
 
+# CRM-OPS-2: descrizione sintetica e codice generati; elenco degli agenti
+# assegnabili. L'elenco riusa la query gia' certificata dell'Agenda
+# (membri ATTIVI dell'agenzia, stesso nome visualizzato) invece di
+# scriverne una seconda: e' lo stesso predicato di
+# operator_auth.membership_exists, con cui il bersaglio viene validato.
+from appointments import repository as _agenda_repository
+from .catalog import TITLE_SOURCE_FIELDS, generated_code, generated_title
+
 def row(x): return dict(x) if x else None
 
 def ensure(cur, table, id_, label):
@@ -24,7 +32,43 @@ def ensure_scoped(cur, table, id_, agency_id, label):
     if not cur.fetchone():
         raise NotFoundError(f"{label} {id_} not found")
 
-def create_property(ctx,data):
+def _free_generated_code(cur, property_id):
+    """Il primo IMM-<id>[-n] non occupato. `code` e' UNIQUE su tutta la
+    tabella (migration 002): un codice storico scritto a mano potrebbe gia'
+    usare la forma IMM-<id>, e in quel caso si aggiunge un suffisso invece di
+    sovrascriverlo."""
+    for attempt in range(50):
+        candidate = generated_code(property_id, attempt)
+        cur.execute("SELECT 1 FROM properties WHERE code=%s", (candidate,))
+        if not cur.fetchone():
+            return candidate
+    raise ConflictError('cannot generate a free property code')
+
+
+def _assign_generated_code(cur, property_id, agency_id):
+    candidate = _free_generated_code(cur, property_id)
+    cur.execute("UPDATE properties SET code=%s WHERE id=%s AND agency_id=%s AND code IS NULL RETURNING *",
+                (candidate, property_id, agency_id))
+    return row(cur.fetchone())
+
+
+def list_assignable_agents(ctx):
+    """CRM-OPS-2: i membri ATTIVI dell'agenzia dello scope (id, ruolo, nome)."""
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        return _agenda_repository.agents(cur, agency_id)
+
+
+def assignable_agent_name(ctx, operator_user_id):
+    """Il nome dell'operatore se e' un membro ATTIVO dell'agenzia dello scope,
+    altrimenti None. Non dice ne' chi e' ne' dove sta: solo si' o no."""
+    for agent in list_assignable_agents(ctx):
+        if int(agent["id"]) == int(operator_user_id):
+            return agent["name"]
+    return None
+
+
+def create_property(ctx,data,*,generate_identity=False):
     """Create one property, owned by the agency the caller's scope names.
 
     P26-2C2B. `ctx` is resolved once by the router and passed down; nothing here
@@ -47,6 +91,14 @@ def create_property(ctx,data):
             "'agency_id' is derived from the agency scope and must not be supplied"
         )
     agency_id=ctx.require_agency()
+    if generate_identity and not (data.get('code') or '').strip():
+        # CRM-OPS-2: codice omesso, NULL, vuoto o di soli spazi = mancante.
+        # Si salva NULL, cosi' l'UPDATE ... WHERE code IS NULL qui sotto lo
+        # assegna nella stessa transazione (e '' non occupa il vincolo UNIQUE).
+        data={**data,'code':None}
+    if generate_identity and not (data.get('title') or '').strip():
+        # CRM-OPS-2: nessun titolo manuale -> descrizione sintetica dai dati.
+        data={**data,'title':generated_title(data)}
     data={**data,'metadata':Json(data.get('metadata') or {}),'agency_id':agency_id}
     cols=list(data); vals=[data[x] for x in cols]
     with core_cursor(commit=True) as (_,cur):
@@ -54,6 +106,9 @@ def create_property(ctx,data):
             cur.execute(f"INSERT INTO properties ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))}) RETURNING *",vals)
         except errors.UniqueViolation as exc: raise ConflictError('property code already exists') from exc
         created=row(cur.fetchone())
+        if generate_identity and not (created.get('code') or '').strip():
+            # CRM-OPS-2: codice generato nella stessa transazione, mai dopo.
+            created=_assign_generated_code(cur,created['id'],agency_id) or created
         if created.get('asking_price') is not None:
             cur.execute("INSERT INTO property_price_history(property_id,new_price,change_reason) VALUES(%s,%s,%s)",(created['id'],created['asking_price'],'initial price'))
         if created.get('commercial_status'):
@@ -197,6 +252,11 @@ def readiness_score(p):
     return round(sum(checks)/len(checks)*100)
 
 def update_property(*args, **kwargs):
+    # CRM-OPS-2: `derive_identity=True` (solo dal service del form) aggiorna la
+    # descrizione generata quando cambiano i dati da cui dipende - mai un
+    # titolo scritto a mano - e assegna il codice a un immobile storico che
+    # non lo ha. Senza il flag il comportamento e' quello di prima.
+    derive_identity = kwargs.pop('derive_identity', False)
     if len(args) == 2:
         ctx = None
         agency_id = None
@@ -222,14 +282,23 @@ def update_property(*args, **kwargs):
         return get_property(ctx, property_id) if ctx is not None else get_property(property_id)
 
     with core_cursor(commit=True) as (_, cur):
+        old_cols = 'asking_price,commercial_status,classification'
+        if derive_identity:
+            old_cols += ',title,code,' + ','.join(TITLE_SOURCE_FIELDS)
         if agency_id is not None:
-            cur.execute('SELECT asking_price,commercial_status,classification FROM properties WHERE id=%s AND agency_id = %s FOR UPDATE', (property_id, agency_id))
+            cur.execute(f'SELECT {old_cols} FROM properties WHERE id=%s AND agency_id = %s FOR UPDATE', (property_id, agency_id))
         else:
-            cur.execute('SELECT asking_price,commercial_status,classification FROM properties WHERE id=%s FOR UPDATE', (property_id,))
+            cur.execute(f'SELECT {old_cols} FROM properties WHERE id=%s FOR UPDATE', (property_id,))
         old = cur.fetchone()
         if not old:
             raise NotFoundError(f'property {property_id} not found')
         old = dict(old)
+        if derive_identity:
+            if ('title' not in data and old.get('title') == generated_title(old)
+                    and any(f in data for f in TITLE_SOURCE_FIELDS)):
+                data['title'] = generated_title({**old, **{f: data[f] for f in TITLE_SOURCE_FIELDS if f in data}})
+            if not (old.get('code') or '').strip() and not (data.get('code') or '').strip():
+                data['code'] = _free_generated_code(cur, property_id)
         try:
             if agency_id is not None:
                 cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s AND agency_id = %s RETURNING *", list(data.values()) + [property_id, agency_id])
