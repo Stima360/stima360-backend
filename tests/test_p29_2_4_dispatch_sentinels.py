@@ -125,9 +125,12 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     # disiscrizione dal marketing. Come `owner_login` non ha un operatore
     # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
     # lato server, non dal client.
+    # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
+    # (uguaglianza CHIUSA, invariata nella forma): il planner dei
+    # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking")
+        "public_booking", "appointment_reminder")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
@@ -393,6 +396,10 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         "/api/communication/journeys/{journey_id}/retire",
         "/api/communication/messages/{message_id}/cancel",
         "/api/communication/messages/{message_id}/send-now",
+        # SENTINELLA AGGIORNATA DA A32-2: il giro dei promemoria, sotto lo
+        # stesso prefisso e dietro la stessa ammissione di livello mount,
+        # con la soglia del dispatch (`require_dispatch_context`).
+        "/api/communication/reminders/tick",
         "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.

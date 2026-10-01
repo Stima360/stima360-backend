@@ -44,6 +44,13 @@ LOGIN = "/api/operator-auth/login"
 LOGOUT = "/api/operator-auth/logout"
 TICK = "/api/communication/journeys/tick"
 DISPATCH = "/api/communication/dispatch"
+#: SENTINELLA AGGIORNATA DA A32-2: il giro dei promemoria sta fra il tick e il
+#: dispatch. Il suo contratto e il suo ORDINE li prova
+#: `tests/test_a32_2_reminder_cron.py`; qui risponde "nessun lavoro" e resta
+#: fuori da `fasi()`, cosi' che ogni asserzione di P29-3E misuri cio' che misurava.
+PROMEMORIA = "/api/communication/reminders/tick"
+ZERO_PROMEMORIA = {"scanned": 0, "due": 0, "queued": 0, "queued_idempotent": 0,
+                   "not_due": 0, "ineligible": 0, "errors": 0, "skipped_by_reason": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +111,8 @@ class Sessione:
                 return esito
         if TICK in url:
             return Risposta(200, conteggi_tick())
+        if PROMEMORIA in url:  # SENTINELLA AGGIORNATA DA A32-2: "nessun lavoro"
+            return Risposta(200, dict(ZERO_PROMEMORIA))
         if DISPATCH in url:
             return Risposta(200, conteggi())
         return Risposta(204, None)
@@ -113,6 +122,8 @@ class Sessione:
         fatte. E' l'ordine che questa fase deve garantire."""
         nomi = []
         for url in self.chiamate:
+            if PROMEMORIA in url:  # SENTINELLA AGGIORNATA DA A32-2: SOLO l'URL esatto
+                continue
             for pezzo, nome in ((LOGIN, "login"), (LOGOUT, "logout"),
                                 (TICK, "tick"), (DISPATCH, "dispatch")):
                 if pezzo in url:
@@ -154,6 +165,11 @@ def test_01_l_ordine_e_login_tick_dispatch_logout():
     sessione = Sessione()
     runner.run_once(config(), sessione=sessione)
     assert sessione.fasi() == ["login", "tick", "dispatch", "logout"]
+    # SENTINELLA AGGIORNATA DA A32-2: `fasi()` esclude SOLO l'URL esatto del
+    # giro dei promemoria; l'ordine COMPLETO resta provato qui, sulle chiamate
+    # grezze - nessuna rotta in piu', nessuna in meno, nessuna fuori posto.
+    assert [u.replace("https://esempio.it", "") for u in sessione.chiamate] == [
+        LOGIN, TICK, PROMEMORIA, DISPATCH, LOGOUT]
 
 
 def test_02_il_tick_e_una_chiamata_sola_e_porta_il_suo_limite():
@@ -222,7 +238,9 @@ def test_06_i_conteggi_del_dispatch_restano_quelli_di_prima():
     for chiave in runner.CONTEGGI:
         assert chiave in dati, chiave
     assert set(dati) - set(runner.CONTEGGI) == {
-        "journey_status", "journey_queued", "journey_errors"}
+        "journey_status", "journey_queued", "journey_errors",
+        # SENTINELLA AGGIORNATA DA A32-2: l'esito del giro dei promemoria
+        "reminder_status", "reminder_queued", "reminder_errors"}
 
 
 # ===========================================================================
@@ -253,7 +271,10 @@ def test_08_senza_la_071_il_giro_e_verde_e_il_log_lo_dice_con_una_parola(capsys)
     dati = runner.run_once(config(), sessione=Sessione({TICK: NON_MIGRATA}))
     assert runner._application_failure(dati) is False
 
-    prima, seconda = righe_log(capsys)
+    # SENTINELLA AGGIORNATA DA A32-2: la riga del giro dei promemoria sta fra
+    # le due (filtrata per `phase` ESATTA); qui si leggono le
+    # due di P29-3E, come prima
+    prima, seconda = [r for r in righe_log(capsys) if r.get("phase") != "reminder_tick"]
     assert prima["status"] == "skipped" and prima["phase"] == "journey_tick"
     assert prima["reason"] == "feature_not_migrated"
     assert seconda["status"] == "completed" and "phase" not in seconda
@@ -437,12 +458,15 @@ def test_20_il_log_non_nomina_credenziali_ne_destinatari(capsys):
          DISPATCH: Risposta(200, conteggi(claimed=1, sent=1))}))
     righe = righe_log(capsys)
 
-    assert len(righe) == 2
+    # SENTINELLA AGGIORNATA DA A32-2: tre righe - journey, promemoria, dispatch -
+    # e la regola vale per tutte
+    assert len(righe) == 3
     for riga in righe:
         assert not {"email", "password", "user", "destination", "to", "cookie",
                     "contact_id", "message_id"} & set(riga)
         assert set(riga) <= ({"status", "phase", "channel", "duration_ms", "reason"}
-                             | set(runner.CONTEGGI) | set(runner.CONTEGGI_TICK)), riga
+                             | set(runner.CONTEGGI) | set(runner.CONTEGGI_TICK)
+                             | set(runner.CONTEGGI_PROMEMORIA)), riga
     assert "cron@example.it" not in capsys.readouterr().out
 
 
@@ -472,8 +496,12 @@ def test_22_il_cron_chiama_TRE_rotte_e_nessun_altra():
     chiesto a un processo che gira da solo ogni ora."""
     codice = _codice_runner()
     rotte = set(re.findall(r'/api/[a-z0-9\-/{}]+', codice))
+    # SENTINELLA AGGIORNATA DA A32-2: il giro dei promemoria, la sola rotta in
+    # piu' (una scrittura
+    # idempotente del ledger, come il tick: nessun provision, nessun activate)
     assert rotte == {"/api/operator-auth/login", "/api/operator-auth/logout",
                      "/api/communication/journeys/tick",
+                     "/api/communication/reminders/tick",
                      "/api/communication/dispatch"}, sorted(rotte)
 
 

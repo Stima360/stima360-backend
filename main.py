@@ -57,6 +57,7 @@ from next_best_action.router import router as next_best_action_router
 from communication import service as communication_service
 from communication.router import router as communication_router
 from communication.public_router import router as communication_public_router
+from appointment_reminders.router import router as appointment_reminders_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -155,6 +156,9 @@ app.include_router(next_best_action_router, dependencies=[Depends(require_authen
 # N agenzie servono N cron, come gia' oggi per P18-D2 - vedi
 # `run_communication_dispatch_cron.py`.
 app.include_router(communication_router, dependencies=[Depends(require_authenticated_operator)])
+# A32-2: il giro dei promemoria degli appuntamenti (`/api/communication/reminders/tick`).
+# Solo il mount, come il dispatch: la soglia la prende la rotta da `require_dispatch_context`.
+app.include_router(appointment_reminders_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

@@ -81,8 +81,15 @@ AUTH_CHANNELS = ("operator_session", "legacy_basic", "calendar_inbound")
 # allarga nessun privilegio: chi riceve questo scope continua a controllarne
 # l'origine, e solo `create_public_booking_appointment` (appointments/) lo
 # ammette.
+# A32-2: `appointment_reminder` e' il planner dei promemoria degli
+# appuntamenti. Non ha un operatore dietro - lo chiama il cron - e la sua
+# agenzia viene da `require_agency()` della sessione autenticata del cron,
+# mai dal corpo. Non riusa `communication_dispatch`: un origin dice QUALE
+# flusso agisce, e il planner non e' il dispatcher. Non allarga nessun
+# privilegio: e' lo scope di UNA agenzia, come gli altri.
 SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login",
-                          "public_unsubscribe", "public_booking")
+                          "public_unsubscribe", "public_booking",
+                          "appointment_reminder")
 
 
 @runtime_checkable

@@ -240,9 +240,12 @@ def test_11_il_token_e_firmato_e_non_enumerabile(monkeypatch):
 
 def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
     from operator_auth import context
+    # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
+    # (uguaglianza CHIUSA, invariata nella forma): il planner dei
+    # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking")
+        "public_booking", "appointment_reminder")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):

@@ -304,9 +304,12 @@ def test_c2_l_insieme_degli_origin_resta_chiuso():
     # disiscrizione dal marketing. Come `owner_login` non ha un operatore
     # dietro; la sua agenzia viene dalla firma HMAC del token, verificata
     # lato server, non dal client.
+    # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
+    # (uguaglianza CHIUSA, invariata nella forma): il planner dei
+    # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking")
+        "public_booking", "appointment_reminder")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):
@@ -557,7 +560,14 @@ def test_f4_il_dispatcher_e_l_adapter_non_sono_stati_toccati():
         ["git", "--no-optional-locks", "diff", "--name-only", "--",
          "communication/dispatcher.py", "communication/providers/"],
         cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    assert diff == "", diff
+    # SENTINELLA AGGIORNATA DA A32-2 (collisione dichiarata): il dispatcher
+    # riceve la revalida finale dei promemoria, un ramo stretto per il solo
+    # `reason_code='appointment_reminder'` fra il gate del consenso e il
+    # provider. Si sottrae SOLO il dispatcher, e SOLO se A32-2 lo dichiara: gli
+    # ADAPTER (`communication/providers/`) restano intatti.
+    from tests.a32_2_diff import FILE_MODIFICATI as MOD_A32_2
+    toccati = set(diff.split()) - (MOD_A32_2 & {"communication/dispatcher.py"})
+    assert toccati == set(), diff
     from communication import router as router_comunicazione
     import inspect as _inspect
     sorgente = _inspect.getsource(router_comunicazione)

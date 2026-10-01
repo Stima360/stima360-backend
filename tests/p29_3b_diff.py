@@ -219,8 +219,15 @@ def _dichiarati_da_fasi_successive() -> frozenset[str]:
     # `appointment_reminder` (079) e `contact_view.py` la sua etichetta. Stessa
     # posizione di A30-12: il proprio inventario (`tests/a32_1_diff.py`) nomina
     # i file; qui basta sapere che A32-1 si e' dichiarata.
+    # SENTINELLA AGGIORNATA DA A32-2 (collisione dichiarata, stessa forma): la
+    # revalida finale entra in
+    # `communication/dispatcher.py` come ramo stretto per il solo
+    # `reason_code='appointment_reminder'`, e `operator_auth/context.py` riceve
+    # l'origin `appointment_reminder`. Il proprio inventario
+    # (`tests/a32_2_diff.py`) nomina i file; qui basta sapere che A32-2 si e'
+    # dichiarata.
     for modulo in ("tests.p29_3c_diff", "tests.p29_3d_diff", "tests.a30_10_diff",
-                   "tests.a30_12_diff", "tests.a32_1_diff"):
+                   "tests.a30_12_diff", "tests.a32_1_diff", "tests.a32_2_diff"):
         try:
             inventario = __import__(modulo, fromlist=["FILE_MODIFICATI"])
         except ImportError:  # la fase non esiste ancora: nulla da ammettere

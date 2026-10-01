@@ -312,10 +312,14 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
     # sottrae ESATTAMENTE cio' che A31-4 dichiara - nessun prefisso, e
     # `intatti` resta quello di prima.
     from tests.a31_4_diff import FILE_MODIFICATI as MOD_A31_4, FILE_NUOVI as NUOVI_A31_4
+    # SENTINELLA AGGIORNATA DA A32-2 (stessa forma): la revalida finale dei
+    # promemoria nel dispatcher e il giro dei promemoria nel cron. Si sottrae
+    # ESATTAMENTE cio' che A32-2 dichiara.
+    from tests.a32_2_diff import FILE_MODIFICATI as MOD_A32_2, FILE_NUOVI as NUOVI_A32_2
 
     diff = set(_git("diff", "--name-only", "--", *intatti).split())
     fuori = (diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
-             - MOD_A31_4 - NUOVI_A31_4)
+             - MOD_A31_4 - NUOVI_A31_4 - MOD_A32_2 - NUOVI_A32_2)
     assert fuori == set(), sorted(fuori)
 
 

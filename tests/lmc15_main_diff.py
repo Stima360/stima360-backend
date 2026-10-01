@@ -61,8 +61,12 @@ def righe_impreviste_in_main(root) -> list[str]:
     # P30 (collisione dichiarata, autorizzata): il mount statico della pagina
     # pubblica `/prenota/{token}`, dichiarato per intero in `p30_diff`.
     from tests.p30_diff import RIGHE_MAIN as RIGHE_P30
+    # SENTINELLA AGGIORNATA DA A32-2 (collisione dichiarata, autorizzata): il
+    # mount della rotta del giro
+    # dei promemoria, dichiarato per intero in `a32_2_diff`.
+    from tests.a32_2_diff import RIGHE_MAIN as RIGHE_A32_2
     ammesse = (RIGHE_LMC15 | RIGHE_PER_FILE["main.py"] | RIGHE_A30_MOUNT | RIGHE_A30_7
-              | RIGHE_A30_9B | RIGHE_A30_12 | RIGHE_P30)
+              | RIGHE_A30_9B | RIGHE_A30_12 | RIGHE_P30 | RIGHE_A32_2)
     diff = subprocess.run(
         ["git", "--no-optional-locks", "diff", "--unified=0", "--", "main.py"],
         cwd=root, capture_output=True, text=True).stdout.splitlines()

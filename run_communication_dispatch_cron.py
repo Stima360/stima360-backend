@@ -8,6 +8,17 @@ soprattutto nessuna garanzia sull'ORDINE. Cio' che il tick mette in coda deve
 poter partire nello stesso giro, altrimenti M1 aspetta il giro dopo senza
 ragione. Quindi: TICK PRIMA, DISPATCH POI, nello stesso login.
 
+A32-2: E PRIMA DEL DISPATCH ANCHE IL GIRO DEI PROMEMORIA DEGLI APPUNTAMENTI
+
+    login -> journeys/tick -> reminders/tick -> dispatch -> logout
+
+Stessa ragione: cio' che il giro dei promemoria accoda deve poter partire nello
+stesso giro. Solo per il canale `email` (i promemoria sono solo email): con
+`COMMUNICATION_DISPATCH_CHANNEL=whatsapp` il passo non si chiama. Un giro dei
+promemoria fallito non ferma il dispatch (exit 2 alla fine); un 503
+`feature_not_migrated` (079 non applicata) e' `not_migrated`, non un guasto.
+Nessun segreto nuovo, nessun cron nuovo: stessa sessione, stesso account.
+
 Il runner resta cio' che era: un CLIENT HTTP. Non importa il dominio, non
 apre connessioni, non conosce una journey - chiama una rotta che esiste gia'
 (P29-3C) e legge dei conteggi. E non provisiona e non attiva NIENTE: la
@@ -200,6 +211,15 @@ CONTEGGI_TICK = ("stopped", "advanced", "completed",
                  "queued", "queued_idempotent", "awaiting_operator", "errors")
 
 
+#: A32-2: i conteggi che `reminders/tick` restituisce, per NOME, come sopra.
+#: `skipped_by_reason` (un dizionario) si legge ma non si stampa.
+CONTEGGI_PROMEMORIA = ("scanned", "due", "queued", "queued_idempotent", "not_due",
+                       "ineligible", "errors")
+
+#: A32-2: il solo canale per cui il giro dei promemoria ha senso.
+CANALE_PROMEMORIA = "email"
+
+
 def _log(status: str, duration_ms: int, reason: str | None = None,
          counts: dict | None = None, channel: str | None = None,
          phase: str | None = None, nomi: tuple[str, ...] = CONTEGGI) -> None:
@@ -253,6 +273,8 @@ NON_MIGRATA = "feature_not_migrated"
 TICK_COMPLETATO = "completed"
 TICK_NON_MIGRATA = "not_migrated"
 TICK_FALLITO = "failed"
+#: A32-2: il giro dei promemoria non chiamato perche' il canale non e' email.
+TICK_SALTATO = "skipped"
 
 
 def _journey_failure(data: dict) -> bool:
@@ -289,7 +311,18 @@ def _application_failure(data: dict) -> bool:
     """
     if any(int(data.get(chiave, 0) or 0) > 0 for chiave in CONTEGGI_DI_GUASTO):
         return True
-    return _journey_failure(data)
+    return _journey_failure(data) or _reminder_failure(data)
+
+
+def _reminder_failure(data: dict) -> bool:
+    """A32-2: come `_journey_failure`, per il giro dei promemoria.
+
+    `reminder_status == failed` o `reminder_errors > 0`. `not_migrated` e
+    `skipped` non sono guasti; l'assenza della chiave nemmeno.
+    """
+    if data.get("reminder_status") == TICK_FALLITO:
+        return True
+    return int(data.get("reminder_errors", 0) or 0) > 0
 
 
 def _codice_di_errore(risposta) -> str | None:
@@ -379,6 +412,59 @@ def _journey_tick(config: Config, sessione) -> dict:
         return esito(TICK_FALLITO, "unexpected")
 
 
+def _reminder_tick(config: Config, sessione) -> dict:
+    """A32-2: UN giro dei promemoria. Non solleva mai, e non ritenta mai.
+
+    Le stesse due regole di `_journey_tick`, per le stesse ragioni: il
+    dispatch deve partire comunque, e un giro e' una SCRITTURA che non si
+    ripete dentro lo stesso giro (il planner e' idempotente, ma la ripetizione
+    e' del cron). Il corpo e' vuoto: l'agenzia viene dalla sessione.
+
+    Restituisce `{"status": ..., "counts": dict | None, "reason": str | None}`.
+    """
+    iniziato = time.monotonic()
+
+    def esito(stato, reason=None, counts=None):
+        _log("completed" if stato == TICK_COMPLETATO else
+             "skipped" if stato == TICK_NON_MIGRATA else "failed",
+             int((time.monotonic() - iniziato) * 1000), reason,
+             counts=counts, phase="reminder_tick", nomi=CONTEGGI_PROMEMORIA)
+        return {"status": stato, "counts": counts, "reason": reason}
+
+    try:
+        try:
+            risposta = sessione.post(
+                f"{config.base_url}/api/communication/reminders/tick",
+                json={},
+                timeout=config.timeout,
+            )
+        except requests.Timeout:
+            return esito(TICK_FALLITO, "timeout")
+        except requests.RequestException:
+            return esito(TICK_FALLITO, "http_or_network")
+
+        stato = getattr(risposta, "status_code", None)
+        if not isinstance(stato, int):
+            return esito(TICK_FALLITO, "invalid_response")
+        if stato == 503 and _codice_di_errore(risposta) == NON_MIGRATA:
+            return esito(TICK_NON_MIGRATA, NON_MIGRATA)
+        if stato >= 400:
+            return esito(TICK_FALLITO, f"http_{stato}")
+
+        try:
+            dati = risposta.json()
+        except ValueError:
+            return esito(TICK_FALLITO, "invalid_json")
+        if not isinstance(dati, dict) or any(
+                type(dati.get(chiave)) is not int or dati[chiave] < 0
+                for chiave in CONTEGGI_PROMEMORIA):
+            return esito(TICK_FALLITO, "invalid_json")
+
+        return esito(TICK_COMPLETATO, counts=dati)
+    except Exception:  # noqa: BLE001 - l'isolamento e' il punto, come per le journey
+        return esito(TICK_FALLITO, "unexpected")
+
+
 def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
     """UN giro intero: login, tick, dispatch, logout.
 
@@ -412,6 +498,13 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
         # mette in coda adesso puo' partire in questo stesso giro. Non
         # solleva: qualunque cosa risponda, il dispatch va fatto.
         journey = _journey_tick(config, sessione)
+
+        # A32-2: I PROMEMORIA DOPO LE JOURNEY E PRIMA DEL DISPATCH, nello
+        # stesso login e solo per il canale email. Non solleva.
+        if config.channel == CANALE_PROMEMORIA:
+            promemoria = _reminder_tick(config, sessione)
+        else:
+            promemoria = {"status": TICK_SALTATO, "counts": None, "reason": "channel"}
 
         try:
             risposta = sessione.post(
@@ -449,6 +542,11 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
         if journey["counts"] is not None:
             dati["journey_errors"] = journey["counts"]["errors"]
             dati["journey_queued"] = journey["counts"]["queued"]
+        # A32-2: l'esito del giro dei promemoria, piatto e con il suo prefisso.
+        dati["reminder_status"] = promemoria["status"]
+        if promemoria["counts"] is not None:
+            dati["reminder_errors"] = promemoria["counts"]["errors"]
+            dati["reminder_queued"] = promemoria["counts"]["queued"]
         return dati
     finally:
         # Sempre, anche dopo un errore: una sessione abbandonata a ogni giro

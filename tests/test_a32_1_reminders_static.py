@@ -34,14 +34,22 @@ def _import(percorso: Path) -> set[str]:
 
 
 def test_01_il_package_ha_solo_i_moduli_della_foundation():
+    # SENTINELLA AGGIORNATA DA A32-2 (collisione dichiarata): il planner, la
+    # revalida finale, le letture e la rotta arrivano nello stesso package.
+    # La foundation PURA resta `policy` + `template` (test_02).
     assert {p.name for p in PACCHETTO.glob("*.py")} == {"__init__.py", "policy.py",
-                                                        "template.py"}
+                                                        "template.py", "repository.py",
+                                                        "planner.py", "revalidation.py",
+                                                        "router.py"}
 
 
 def test_02_il_package_e_puro_nessun_db_rete_router_dominio():
     ammessi = {"__future__", "re", "dataclasses", "datetime", "typing", "zoneinfo",
                "html", ".", "inspect"}
-    for file in PACCHETTO.glob("*.py"):
+    # SENTINELLA AGGIORNATA DA A32-2: la purezza e' della FOUNDATION (policy e
+    # template, piu' `__init__`); i moduli di A32-2 hanno le loro sentinelle
+    # (`tests/test_a32_2_reminder_static.py`).
+    for file in (PACCHETTO / n for n in ("__init__.py", "policy.py", "template.py")):
         importati = _import(file)
         assert importati <= ammessi, (file.name, importati - ammessi)
         codice = re.sub(r'""".*?"""', "", file.read_text(encoding="utf-8"), flags=re.S)
@@ -58,6 +66,10 @@ def test_03_nessuno_importa_il_package_fuori_dai_test():
     for file in ROOT.rglob("*.py"):
         relativo = file.relative_to(ROOT).as_posix()
         if relativo.startswith(("tests/", "appointment_reminders/", ".git/")):
+            continue
+        # SENTINELLA AGGIORNATA DA A32-2: gli UNICI due importatori ammessi -
+        # il mount della rotta e la revalida finale nel dispatcher.
+        if relativo in ("main.py", "communication/dispatcher.py"):
             continue
         assert "appointment_reminders" not in file.read_text(encoding="utf-8",
                                                              errors="ignore"), relativo
@@ -121,6 +133,7 @@ def test_10_fuori_scope_intatto():
     """A32-1 non tocca origini di sistema, dispatcher, integrations, router."""
     from operator_auth import context
     assert "appointment_reminders" not in context.SYSTEM_CONTEXT_ORIGINS
-    for relativo in ("communication/dispatcher.py", "communication/integrations.py",
-                     "communication/router.py", "main.py", "run_communication_dispatch_cron.py"):
+    # SENTINELLA AGGIORNATA DA A32-2: dispatcher, `main.py` e cron sono di A32-2
+    # (`tests/a32_2_diff.py`); integrations e router di COMMUNICATION restano fuori.
+    for relativo in ("communication/integrations.py", "communication/router.py"):
         assert "appointment_reminder" not in (ROOT / relativo).read_text(encoding="utf-8"), relativo
