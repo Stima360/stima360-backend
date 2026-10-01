@@ -40,6 +40,14 @@ import { openNewActivityDialog, openNewTaskDialog } from '../components/activity
 // questa vista e' gia' lunga: metterci dentro anche il motore delle journey
 // l'avrebbe resa illeggibile.
 import { mountCommunications } from '../components/communications.js';
+// CRM-OPS-1B: agente assegnato. La sessione serve SOLO a decidere se mostrare
+// il selettore; nessuna agenzia e nessun ruolo vengono mandati al server.
+// L'elenco degli operatori arriva dall'UNICO client di quell'API e la regola
+// del ruolo dall'UNICA funzione che la rispecchia (stesse due fonti gia' usate
+// dal dialog condiviso): nessuna seconda copia di nessuna delle due.
+import { getSession } from '../core/auth.js';
+import { getAgents } from '../agenda/agenda-api.js';
+import { canAssignRecords } from '../agenda/agenda-model.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -155,6 +163,7 @@ export async function renderContattoDettaglio(container, params = []) {
       <h2 id="contact-header-title">${escapeHtml(name)}</h2>
       <div class="muted" id="contact-header-subtitle">Contatto #${escapeHtml(contact.id)} · ${escapeHtml(contact.contact_type === 'company' ? 'Azienda' : 'Persona')}</div>
       <div id="contact-role-badges" class="badge-row"></div>
+      <div id="contact-assignment"></div>
       <div class="action-bar" style="margin-top:8px">
         <button type="button" id="contact-edit-btn" class="btn ghost">Modifica contatto</button>
         <button type="button" id="contact-quick-activity" class="btn ghost">+ Nuova attività</button>
@@ -251,6 +260,161 @@ export async function renderContattoDettaglio(container, params = []) {
 
   renderRoleBadges();
 
+  // --- CRM-OPS-1B: agente assegnato -----------------------------------------
+  // Chi segue il contatto (contacts.assigned_agent_id, gia' presente nella
+  // risposta Contact 360: core/repository.py::get_contact legge SELECT *).
+  //
+  // Scrittura: SOLO PATCH /api/core/contacts/{id}/assignment
+  // (core/router.py::set_contact_assignment, body AssignmentUpdate con l'unico
+  // campo assigned_agent_id; null = nessun agente). La PATCH generica del
+  // contatto non porta mai questo campo (ContactUpdate non lo dichiara).
+  //
+  // Elenco degli operatori: getAgents(), cioe' l'endpoint gia' esistente che
+  // restituisce i membri ATTIVI dell'agenzia della sessione
+  // (appointments/repository.py::agents: agency_memberships.status='active').
+  // E' lo stesso predicato con cui il backend valida il bersaglio
+  // dell'assegnazione (operator_auth/repository.py::membership_exists, sulla
+  // agenzia del record, che per un record visibile e' l'agenzia della
+  // sessione): l'elenco offre quindi esattamente chi il server accetterebbe.
+  // Nessun filtro lato client sul ruolo: il backend accetta qualunque membro
+  // attivo, e la UI non aggiunge ne' toglie regole.
+  //
+  // canAssignRecords e' lo specchio di
+  // operator_auth.permissions.may_assign_records (titolare, amministratore,
+  // platform admin dentro un'agenzia "acting"): serve SOLO a non mostrare a un
+  // agente un controllo che il server rifiuterebbe con 403. L'autorita' resta
+  // il server; un 403 viene comunque mostrato come errore.
+  const ASSIGNMENT_ROLE_LABELS = {
+    agency_owner: 'Titolare', agency_admin: 'Amministratore', agent: 'Agente',
+  };
+  const assignmentBox = container.querySelector('#contact-assignment');
+  const mayAssign = canAssignRecords(getSession());
+  const assignment = { operators: null, loadFailed: false, confirming: false };
+
+  function currentAssigneeId() {
+    const value = contact.assigned_agent_id;
+    return value === null || value === undefined ? null : Number(value);
+  }
+
+  function operatorLabel(operatorId) {
+    const operators = assignment.operators || [];
+    const found = operators.find((o) => Number(o.id) === operatorId);
+    if (found) {
+      const role = ASSIGNMENT_ROLE_LABELS[found.role] || found.role || '';
+      return `${found.name || `Operatore #${operatorId}`}${role ? ` · ${role}` : ''}${found.is_me ? ' (tu)' : ''}`;
+    }
+    const me = getSession();
+    if (me && Number(me.user_id) === operatorId) return 'Tu';
+    return `Operatore #${operatorId}`;
+  }
+
+  function renderAssignment(feedback = {}) {
+    if (!assignmentBox) return;
+    assignment.confirming = false;
+    const current = currentAssigneeId();
+    const currentLabel = current === null ? 'Nessun agente assegnato' : operatorLabel(current);
+
+    let control = '';
+    if (mayAssign) {
+      if (assignment.operators === null && !assignment.loadFailed) {
+        control = '<span class="muted">Caricamento operatori…</span>';
+      } else if (assignment.loadFailed) {
+        control = '<span class="field-error">Impossibile caricare gli operatori dell\'agenzia: assegnazione non disponibile.</span>';
+      } else {
+        const operators = assignment.operators;
+        const currentInactive = current !== null && !operators.some((o) => Number(o.id) === current);
+        const options = [
+          `<option value=""${current === null ? ' selected' : ''}>Nessun agente</option>`,
+          // L'assegnatario attuale non e' piu' un membro attivo: resta visibile
+          // come valore corrente, ma non e' selezionabile come nuovo bersaglio
+          // (il server lo rifiuterebbe con 400).
+          currentInactive
+            ? `<option value="${escapeHtml(current)}" selected disabled>Operatore #${escapeHtml(current)} (non attivo)</option>`
+            : '',
+          ...operators.map((o) => `<option value="${escapeHtml(o.id)}"${Number(o.id) === current ? ' selected' : ''}>${escapeHtml(operatorLabel(Number(o.id)))}</option>`),
+        ].join('');
+        control = `<select id="assignment-select" class="input" style="display:inline-block;width:auto" aria-label="Agente assegnato">${options}</select> <button type="button" id="assignment-save-btn" class="btn ghost" disabled>Assegna</button>`;
+      }
+    }
+
+    assignmentBox.innerHTML = `
+      <div style="margin-top:6px">
+        <span class="muted">Agente assegnato:</span>
+        <strong id="assignment-current">${escapeHtml(currentLabel)}</strong>
+        ${control ? `<div style="margin-top:4px">${control}</div>` : ''}
+      </div>
+      <div id="assignment-message" class="muted">${escapeHtml(feedback.message || '')}</div>
+      <div id="assignment-error" class="field-error">${escapeHtml(feedback.error || '')}</div>
+    `;
+    bindAssignmentActions();
+  }
+
+  function bindAssignmentActions() {
+    const select = assignmentBox.querySelector('#assignment-select');
+    const saveBtn = assignmentBox.querySelector('#assignment-save-btn');
+    if (!select || !saveBtn) return;
+
+    const chosen = () => (select.value === '' ? null : Number(select.value));
+    const resetButton = () => {
+      assignment.confirming = false;
+      saveBtn.textContent = 'Assegna';
+      saveBtn.disabled = chosen() === currentAssigneeId();
+    };
+
+    select.addEventListener('change', () => {
+      const messageEl = assignmentBox.querySelector('#assignment-message');
+      const errorEl = assignmentBox.querySelector('#assignment-error');
+      if (messageEl) messageEl.textContent = '';
+      if (errorEl) errorEl.textContent = '';
+      resetButton();
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const target = chosen();
+      if (target === currentAssigneeId()) return;
+      // Conferma inline a due click (stesso principio della rimozione ruolo
+      // sopra), mai window.confirm(): riassegnare toglie il contatto dalla
+      // vista dell'agente precedente.
+      if (!assignment.confirming) {
+        assignment.confirming = true;
+        saveBtn.textContent = target === null ? 'Conferma: rimuovi agente' : `Conferma: assegna a ${operatorLabel(target)}`;
+        return;
+      }
+      saveBtn.disabled = true;
+      select.disabled = true;
+      saveBtn.textContent = 'Salvataggio…';
+      try {
+        const updated = await apiPatch(`/api/core/contacts/${contact.id}/assignment`, { assigned_agent_id: target });
+        contact.assigned_agent_id = updated && Object.prototype.hasOwnProperty.call(updated, 'assigned_agent_id')
+          ? updated.assigned_agent_id
+          : target;
+        if (!container.isConnected) return;
+        renderAssignment({ message: target === null ? 'Agente rimosso.' : 'Assegnazione salvata.' });
+      } catch (error) {
+        if (!container.isConnected) return;
+        renderAssignment({ error: assignmentErrorMessage(error) });
+      }
+    });
+  }
+
+  async function loadAssignableOperators() {
+    try {
+      const response = await getAgents();
+      assignment.operators = Array.isArray(response && response.items) ? response.items : [];
+      assignment.loadFailed = false;
+    } catch (_error) {
+      assignment.operators = null;
+      assignment.loadFailed = true;
+    }
+    if (container.isConnected) renderAssignment();
+  }
+
+  renderAssignment();
+  // L'elenco serve SOLO al selettore: un agent vede il valore in sola lettura
+  // ("Tu", perche' il suo scope gli mostra solo i contatti assegnati a lui)
+  // e non chiede l'elenco degli operatori.
+  if (mayAssign) loadAssignableOperators();
+
   // P25.4: ricarica contatto+ruoli dopo una modifica (Modifica contatto,
   // aggiunta/rimozione ruolo). Stessa fonte di reloadTasksAndActivities
   // sotto (Contact 360), nessun nuovo endpoint. Aggiorna anche header e
@@ -269,6 +433,7 @@ export async function renderContattoDettaglio(container, params = []) {
       // best-effort, stesso principio di reloadTasksAndActivities.
     }
     renderRoleBadges();
+    renderAssignment();
     await showTab(activeTab);
   }
 
@@ -855,6 +1020,19 @@ function fallbackName(contact) {
   if (contact.contact_type === 'company') return contact.company_name || `Contatto #${contact.id}`;
   const parts = [contact.first_name, contact.last_name].filter(Boolean);
   return parts.length ? parts.join(' ') : `Contatto #${contact.id}`;
+}
+
+// CRM-OPS-1B: errori di PATCH /api/core/contacts/{id}/assignment
+// (core/router.py::_translate). Il 400 del server e' in inglese e
+// volutamente non nomina ne' l'operatore ne' l'agenzia: qui lo si traduce
+// senza aggiungere informazioni.
+function assignmentErrorMessage(error) {
+  const status = error && error.status;
+  if (status === 403) return (error && error.message) || 'Non hai i permessi per assegnare questo contatto.';
+  if (status === 404) return 'Contatto non più disponibile con la sessione corrente. Ricarica la pagina.';
+  if (status === 400) return 'L\'operatore scelto non è un membro attivo dell\'agenzia. Ricarica la pagina e riprova.';
+  if (status === 422) return 'Richiesta non valida: assegnazione non salvata.';
+  return (error && error.message) || 'Errore nel salvataggio dell\'assegnazione.';
 }
 
 // --- Panoramica -------------------------------------------------------

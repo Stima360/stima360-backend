@@ -135,6 +135,19 @@ A31_4_IMPORT_AMMESSI = (
     "import { todayKey } from '../agenda/agenda-model.js';",
 )
 
+# SENTINELLA AGGIORNATA DA CRM-OPS-1B (autorizzata, dichiarata nel report CRM-OPS-1B): la scheda contatto
+# mostra l'agente assegnato e, a titolare/amministratore, offre il selettore
+# per riassegnarlo. L'elenco degli operatori viene dall'UNICO client
+# dell'Agenda (`getAgents`, cosi' `/api/appointments` resta nominato solo in
+# agenda-api.js - test_a30_mount_api::test_33) e la regola del ruolo dall'UNICA
+# funzione che la rispecchia (`canAssignRecords`). Esenzione CHIUSA: una sola
+# vista, queste due righe esatte; nessun dialog, nessuna pagina dell'Agenda.
+CRM_OPS_1B_VISTA_CONTATTO = ASSETS / "views" / "contatto-dettaglio.js"
+CRM_OPS_1B_IMPORT_AMMESSI = (
+    "import { getAgents } from '../agenda/agenda-api.js';",
+    "import { canAssignRecords } from '../agenda/agenda-model.js';",
+)
+
 
 def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_agenda():
     for f in ASSETS.rglob("*.js"):
@@ -147,6 +160,10 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         if f in A31_4_VISTE_CON_DIALOG_AGENDA:
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
             assert righe == list(A31_4_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
+            continue
+        if f == CRM_OPS_1B_VISTA_CONTATTO:
+            righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
+            assert righe == list(CRM_OPS_1B_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
             continue
         assert "agenda/" not in testo, f.relative_to(ROOT)
 
