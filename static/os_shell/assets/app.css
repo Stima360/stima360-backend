@@ -819,3 +819,29 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
   .acq-form .modal-actions { flex-direction: column-reverse; }
   .acq-form .modal-actions .btn { width: 100%; }
 }
+
+/* CRM-OPS-4: Incarichi (elenco, scheda) e Storico interazioni (componente
+   condiviso da scheda Immobile e scheda Incarico). Solo regole nuove,
+   prefissi `inc-` e `int-`; su smartphone una colonna. */
+.inc-toolbar { flex-wrap: wrap; }
+.inc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 8px; }
+.inc-head h2 { margin: 0; }
+.inc-actions { flex-wrap: wrap; margin: 8px 0 16px; }
+.inc-owners { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.int-actions { flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.int-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.int-item { padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius); background: var(--surface, #fff); }
+.int-item[data-type="note"] { border-left-color: var(--muted); }
+.int-item[data-type="meeting"] { border-left-color: #2f8f5b; }
+.int-when { font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
+.int-type { font-weight: 600; margin-top: 2px; }
+.int-contact { font-size: 13px; }
+.int-note { margin: 6px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.int-author { font-size: 12px; }
+@media (max-width: 767px) {
+  .inc-toolbar { flex-direction: column; align-items: stretch; }
+  .inc-detail .detail-grid { grid-template-columns: 1fr; }
+  .inc-actions .btn, .int-actions .btn { width: 100%; }
+  .int-form .modal-actions { flex-direction: column-reverse; }
+  .int-form .modal-actions .btn { width: 100%; }
+}

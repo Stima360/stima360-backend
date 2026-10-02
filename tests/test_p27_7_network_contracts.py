@@ -470,6 +470,23 @@ def test_d3_no_page_outside_the_network_was_touched():
         # a quelle elencate.
         "static/os_shell/assets/views/acquisizioni.js",
         "static/os_shell/assets/views/acquisizione-dettaglio.js",
+        # SENTINELLA AGGIORNATA DA CRM-OPS-4 - INCARICHI E STORICO INTERAZIONI.
+        # Due viste NUOVE del CRM (elenco e scheda Incarichi, in sola lettura
+        # su `/api/property/mandates`) e UN componente NUOVO, lo storico
+        # interazioni dell'immobile (`/api/property/properties/{id}/
+        # interactions`), condiviso dalla scheda Incarico e dalla scheda
+        # Immobile. Il dialog "Nuova attivita'" e la vista Attivita' cambiano
+        # una sola etichetta: `meeting` si legge "Incontro" (era
+        # "Appuntamento", che e' dell'Agenda).
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato, e nessun'altra vista del CRM oltre
+        # a quelle elencate.
+        "static/os_shell/assets/views/incarichi.js",
+        "static/os_shell/assets/views/incarico-dettaglio.js",
+        "static/os_shell/assets/components/property-interactions.js",
+        "static/os_shell/assets/components/activity-task-dialogs.js",
+        "static/os_shell/assets/views/attivita.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

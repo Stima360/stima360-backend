@@ -4609,6 +4609,236 @@ def certify_property(report, http, cert, domain, jars, owned, context) -> None:
                 f"{other} al proprio immobile -> {response.status}",
             )
 
+    # CRM-OPS-4: INCARICHI e STORICO INTERAZIONI hanno sonde dedicate, non solo
+    # il prefisso PROPERTY.
+    certify_property_mandates(report, http, cert, jars, owned, context)
+
+
+# ---------------------------------------------------------------------------
+# CRM-OPS-4 - INCARICHI E STORICO INTERAZIONI: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+#: L'INVENTARIO delle rotte CRM-OPS-4 sotto `/api/property` (property/router.py):
+#: il giro anonimo le sonda tutte (-> 401); il prover offline le confronta con
+#: il mount vero.
+MANDATES_OPERAZIONI = (
+    ("GET", "/api/property/mandates"),
+    ("GET", "/api/property/mandates/{id}"),
+    ("GET", "/api/property/properties/{id}/interactions"),
+    ("POST", "/api/property/properties/{id}/interactions"),
+)
+
+#: I messaggi del service (property/interactions.py), letti dal sorgente: la
+#: sonda sul referente distingue il rifiuto di TENANT (referente) da quello
+#: sul contesto, che e' la rete di sicurezza contro ogni scrittura.
+MANDATES_REFERENTE_RIFIUTATO = "Il referente non e' collegato a questo immobile"
+MANDATES_SENZA_INCARICO = "L'immobile non ha un incarico"
+
+
+def _sonda_interazione(**extra) -> dict:
+    """IL CORPO DI OGNI POST OSTILE. `context: mandate` su un immobile della
+    matrice (che non e' MAI un incarico): anche se un controllo di tenant
+    regredisse, il service si fermerebbe sul contesto (400) prima di ogni
+    INSERT. La sonda non puo' scrivere, per costruzione."""
+    return {"interaction_type": "note", "note": "sonda P26-6", "context": "mandate", **extra}
+
+
+def _interazioni_fotografia(database) -> dict | None:
+    """Conteggio e massimo delle interazioni d'immobile: SOLA LETTURA. None se
+    la 082 non c'e' o non c'e' un database."""
+    if database is None:
+        return None
+    with database.read() as cur:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns"
+                    "  WHERE table_schema = 'public' AND table_name = 'activities'"
+                    "    AND column_name = 'property_id') AS interazioni_pronte")
+        riga = cur.fetchone()
+        if riga is None or not riga["interazioni_pronte"]:
+            return None
+        cur.execute("SELECT (SELECT count(*) FROM activities WHERE property_id IS NOT NULL)"
+                    "           AS interazioni_righe,"
+                    "       (SELECT coalesce(max(id), 0) FROM activities) AS interazioni_max_riga")
+        conteggi = dict(cur.fetchone())
+    return {k: int(v) for k, v in conteggi.items()}
+
+
+def _incarico_altrui(database, agency_id) -> int | None:
+    """Un incarico GIA' ESISTENTE dell'agenzia (immobile con origine da
+    acquisizione), letto e mai toccato."""
+    with database.read() as cur:
+        cur.execute(
+            "SELECT id FROM properties WHERE agency_id = %s AND acquisition_id IS NOT NULL"
+            "   AND mandate_type IS NOT NULL AND mandate_start IS NOT NULL"
+            " ORDER BY id LIMIT 1 /* incarico_altrui */", (agency_id,))
+        riga = cur.fetchone()
+    return None if riga is None else int(riga["id"])
+
+
+def _immobili_fuori_agenzia(database, ids, agency_id) -> list:
+    """Fra gli id restituiti da un elenco, quelli che NON sono dell'agenzia
+    di chi ha chiesto. Deve essere vuoto."""
+    if not ids:
+        return []
+    with database.read() as cur:
+        cur.execute("SELECT id FROM properties WHERE id = ANY(%s) AND agency_id <> %s"
+                    " /* immobili_fuori_agenzia */", (sorted(ids), agency_id))
+        return sorted(int(r["id"]) for r in cur.fetchall())
+
+
+def _interazioni_attribuibili(database, prima: dict, operatori: list) -> int:
+    """Le attivita' NATE dopo la fotografia con un'identita' del run come autore."""
+    with database.read() as cur:
+        cur.execute("SELECT count(*) AS interazioni_nuove_righe FROM activities"
+                    " WHERE id > %s AND created_by_user_id = ANY(%s)",
+                    (prima["interazioni_max_riga"], operatori))
+        return int(cur.fetchone()["interazioni_nuove_righe"])
+
+
+def _solo_dettaglio(risposta) -> bool:
+    """Un rifiuto che non porta dati: il corpo ha al piu' `detail`/`code`."""
+    corpo = risposta.json()
+    return corpo is None or (isinstance(corpo, dict) and set(corpo) <= {"detail", "code"})
+
+
+def certify_property_mandates(report, http, cert, jars, owned, context) -> None:
+    """INCARICHI e STORICO INTERAZIONI (CRM-OPS-4): HOSTILE / REJECTION ONLY.
+
+        anonimo, su tutte e quattro le rotte              -> 401
+        elenco incarichi                                  -> mai un immobile altrui
+        scheda dell'incarico altrui (esistente, letto)    -> 404, nessun dato
+        scheda di un immobile altrui che non e' incarico  -> 404, nessun dato
+        storico dell'immobile altrui (lettura)            -> 404, nessun dato
+        interazione sull'immobile altrui                  -> 404 (prima di ogni INSERT)
+        referente di un'altra agenzia sul proprio immobile -> 400, il rifiuto del
+            REFERENTE (non quello sul contesto)
+        `agency_id` nel corpo                             -> 422 (`extra=forbid`)
+        e, prima e dopo: interazioni d'immobile invariate; nessuna riga con un
+            autore del run.
+
+    Nessuna sonda puo' scrivere (vedi `_sonda_interazione`). L'incarico altrui
+    NON si crea: si cerca in sola lettura, e se manca la sonda e' BLOCKED.
+    """
+    database = context.get("database")
+    agenzie = context.get("agencies") or {}
+    operatori = context.get("operators") or {}
+
+    def agenzia(etichetta):
+        valore = agenzie.get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    prima = _interazioni_fotografia(database)
+    if prima is None:
+        report.blocked(
+            "MANDATES-fotografia",
+            "nessuna connessione al database, o 082 non applicata: non si puo' "
+            "provare che il giro ostile non scriva, e il giro non parte")
+        return
+
+    for metodo, percorso in MANDATES_OPERAZIONI:
+        risposta = http.request(metodo, percorso.replace("{id}", "1"),
+                                payload=_sonda_interazione() if metodo == "POST" else None)
+        report.check(
+            f"MANDATES-anonimo-{metodo}-{percorso.rsplit('/', 1)[-1].strip('{}') or 'root'}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        mio_immobile = owned[etichetta].get("PROPERTY")
+        suo_immobile = owned[altro].get("PROPERTY")
+        suo_contatto = owned[altro].get("CORE")
+        suo_incarico = _incarico_altrui(database, agenzia(altro))
+
+        elenco = http.request("GET", "/api/property/mandates?limit=200", jar=jar)
+        visti = [v.get("property_id") for v in elenco.items() if isinstance(v, dict)]
+        fuori = _immobili_fuori_agenzia(database, [v for v in visti if v is not None],
+                                        agenzia(etichetta))
+        report.check(
+            f"MANDATES-list-{etichetta}-non-vede-{altro}",
+            elenco.status == 200 and not fuori and suo_incarico not in visti,
+            f"{etichetta}: elenco incarichi -> {elenco.status}, {len(visti)} elementi "
+            f"osservati, fuori agenzia {fuori} (atteso 200, nessuno)",
+        )
+
+        if suo_incarico is None:
+            report.blocked(
+                f"MANDATES-dettaglio-incarico-{etichetta}-{altro}",
+                f"PREREQUISITO: l'agenzia {altro} non ha alcun incarico nato da "
+                "un'acquisizione sul TEST. La matrice non ne crea uno (un incarico "
+                "nasce solo da un'acquisizione, che non si cancella)")
+        else:
+            lettura = http.request("GET", f"/api/property/mandates/{suo_incarico}", jar=jar)
+            report.check(
+                f"MANDATES-dettaglio-incarico-{etichetta}-{altro}",
+                lettura.status == 404 and _solo_dettaglio(lettura),
+                f"{etichetta} legge l'incarico {suo_incarico} di {altro} -> "
+                f"{lettura.status} (atteso 404 senza dati)",
+            )
+
+        if suo_immobile is None:
+            report.blocked(f"MANDATES-immobile-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha un immobile della matrice: sonde non eseguibili")
+        else:
+            for nome, metodo, percorso, corpo in (
+                    ("dettaglio-immobile", "GET", f"/api/property/mandates/{suo_immobile}", None),
+                    ("storico-lettura", "GET",
+                     f"/api/property/properties/{suo_immobile}/interactions", None),
+                    ("storico-scrittura", "POST",
+                     f"/api/property/properties/{suo_immobile}/interactions", _sonda_interazione())):
+                risposta = http.request(metodo, percorso, jar=jar, payload=corpo)
+                report.check(
+                    f"MANDATES-{nome}-{etichetta}-{altro}",
+                    risposta.status == 404 and _solo_dettaglio(risposta),
+                    f"{etichetta} {metodo} {percorso} (immobile di {altro}) -> "
+                    f"{risposta.status} (atteso 404 senza dati, prima di ogni INSERT)",
+                )
+
+        if mio_immobile is None or suo_contatto is None:
+            report.blocked(f"MANDATES-referente-altrui-{etichetta}-{altro}",
+                           "manca il proprio immobile o il contatto dell'altra agenzia")
+        else:
+            risposta = http.request(
+                "POST", f"/api/property/properties/{mio_immobile}/interactions", jar=jar,
+                payload=_sonda_interazione(contact_id=suo_contatto))
+            dettaglio = (risposta.json() or {}).get("detail") if risposta.status == 400 else None
+            report.check(
+                f"MANDATES-referente-altrui-{etichetta}-{altro}",
+                risposta.status == 400 and dettaglio == MANDATES_REFERENTE_RIFIUTATO,
+                f"{etichetta} registra sul proprio immobile con il contatto "
+                f"{suo_contatto} di {altro} -> {risposta.status} "
+                f"({'rifiuto del referente' if dettaglio == MANDATES_REFERENTE_RIFIUTATO else dettaglio!r};"
+                " atteso 400 sul referente)",
+            )
+            intruso = http.request(
+                "POST", f"/api/property/properties/{mio_immobile}/interactions", jar=jar,
+                payload=_sonda_interazione(agency_id=agenzia(altro)))
+            report.check(
+                f"MANDATES-agency-nel-corpo-{etichetta}",
+                intruso.status == 422,
+                f"{etichetta} registra con `agency_id` nel corpo -> {intruso.status} "
+                "(atteso 422: `extra=forbid`, prima del service)",
+            )
+
+    dopo = _interazioni_fotografia(database)
+    if dopo is None:
+        report.fail("MANDATES-fotografia-dopo", "la fotografia finale non e' leggibile")
+        return
+    attribuibili = _interazioni_attribuibili(
+        database, prima, sorted(v for v in operatori.values() if v is not None))
+    report.check(
+        "MANDATES-nessuna-riga-del-run",
+        attribuibili == 0,
+        f"attivita' nate durante la sezione con un'identita' del run come autore: "
+        f"{attribuibili} (attese 0)",
+    )
+    report.check(
+        "MANDATES-storico-non-diminuito",
+        dopo["interazioni_righe"] >= prima["interazioni_righe"],
+        f"interazioni d'immobile prima {prima['interazioni_righe']}, dopo "
+        f"{dopo['interazioni_righe']} (lo storico non si cancella: mai meno)",
+    )
+
 
 FOLLOWUP_SCAN = "/api/followup/scan-temporal"
 

@@ -35,6 +35,8 @@ import { renderAgenda } from './views/agenda/agenda-page.js';
 // CRM-OPS-3: le Acquisizioni (elenco, creazione, scheda).
 import { renderAcquisizioni } from './views/acquisizioni.js';
 import { renderAcquisizioneDettaglio } from './views/acquisizione-dettaglio.js';
+import { renderIncarichi } from './views/incarichi.js';
+import { renderIncaricoDettaglio } from './views/incarico-dettaglio.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -42,6 +44,7 @@ const SECTIONS = [
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },
   { name: 'acquisizioni', label: 'Acquisizioni' },
+  { name: 'incarichi', label: 'Incarichi' },
   { name: 'acquirenti', label: 'Acquirenti' },
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
@@ -141,6 +144,11 @@ registerRoute('acquisizioni', (container, params = []) => {
   return params[0] && params[0] !== 'nuova'
     ? renderAcquisizioneDettaglio(container, params)
     : renderAcquisizioni(container, params);
+});
+// CRM-OPS-4: `#/incarichi` (elenco, alimentato solo dalle acquisizioni) e
+// `#/incarichi/<immobile>` (scheda). Nessuna rotta di creazione.
+registerRoute('incarichi', (container, params = []) => {
+  return params[0] ? renderIncaricoDettaglio(container, params) : renderIncarichi(container, params);
 });
 
 initRouter(contentEl, {

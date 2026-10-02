@@ -35,10 +35,12 @@ import { bindSaleDetails } from '../components/sale-detail.js';
 // messaggio esplicito di rimando alla tab Abbinamenti, senza riusare gli stessi
 // dati sotto un nome diverso.
 //
-// Attivita: core/repository.py:list_activities(limit,offset,contact_id,lead_id,
-// stima_id) NON ha un parametro property_id — verificato per grep sulla firma
-// reale. Nessuna relazione attivita<->immobile esiste oggi: si mostra stato
-// neutro, nessuna chiamata viene fatta.
+// Storico interazioni (CRM-OPS-4): telefonate, incontri e note con il
+// proprietario sono righe di `activities` con `property_id` (migration 082),
+// lette e scritte con GET/POST /api/property/properties/{id}/interactions dal
+// componente condiviso components/property-interactions.js - lo STESSO della
+// scheda Incarico: una sola fonte, due viste. La chiave del tab resta
+// 'attivita' (rotta #/immobili/<id>/attivita invariata).
 //
 // Documenti: property_documents (SELECT * FROM property_documents WHERE
 // property_id=%s, property/repository.py:68) non include alcun campo di
@@ -84,6 +86,7 @@ import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
 import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
+import { mountPropertyInteractions } from '../components/property-interactions.js';
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -170,7 +173,7 @@ const TABS = [
   { key: 'acquirenti', label: 'Acquirenti compatibili' },
   { key: 'abbinamenti', label: 'Abbinamenti' },
   { key: 'proposte', label: 'Proposte' },
-  { key: 'attivita', label: 'Attività' },
+  { key: 'attivita', label: 'Storico interazioni' },
 ];
 
 export async function renderImmobileDettaglio(container, params = []) {
@@ -392,7 +395,16 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
         case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
-        case 'attivita': contentEl.innerHTML = renderAttivita(); break;
+        case 'attivita':
+          contentEl.innerHTML = '<div id="property-interactions"></div>';
+          await mountPropertyInteractions(contentEl.querySelector('#property-interactions'), {
+            propertyId: property.id,
+            context: 'property',
+            // I referenti proponibili: i contatti DELL'immobile (property_contacts),
+            // uno per contatto. Il server verifica comunque il collegamento.
+            referents: [...new Map((property.contacts || []).map((c) => [c.contact_id, { contact_id: c.contact_id, display_name: c.display_name }])).values()],
+          });
+          break;
         case 'abbinamenti': {
           const matches = await loadMatchesLazy(property.id, lazyCache);
           contentEl.innerHTML = renderAbbinamenti(matches);
@@ -1667,7 +1679,7 @@ function renderIncaricoSection(p, editMode) {
       </div>
     `;
   }
-  const origine = `<p class="muted" id="incarico-origin">Origine: <a href="#/acquisizioni/${encodeURIComponent(p.acquisition_id)}">acquisizione #${escapeHtml(String(p.acquisition_id))}</a></p>`;
+  const origine = `<p class="muted" id="incarico-origin">Origine: <a href="#/acquisizioni/${encodeURIComponent(p.acquisition_id)}">acquisizione #${escapeHtml(String(p.acquisition_id))}</a> · <a id="incarico-open-mandate" href="#/incarichi/${encodeURIComponent(p.id)}">Apri incarico</a></p>`;
   if (!editMode) {
     return `
       <h3 class="section-title">Incarico</h3>
@@ -2191,12 +2203,6 @@ function buildProposalUpdatePayload(dialogEl) {
     expires_at: proposalExpiryToIso(dialogEl.querySelector('#proposal-expiry').value),
     notes: notes || null,
   };
-}
-
-// --- Attività: nessuna relazione attivita<->immobile nelle API esistenti ---
-
-function renderAttivita() {
-  return '<p class="muted">Non è disponibile oggi un collegamento tra Attività e Immobile nelle API esistenti (core/repository.py: list_activities non filtra per immobile).</p>';
 }
 
 // --- utility ---------------------------------------------------------------

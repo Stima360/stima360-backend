@@ -308,8 +308,11 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # di SECTIONS, subito dopo "oggi". "rete" resta assente.
     # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
     # SECTIONS, dopo "immobili"; "rete" resta assente.
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
+    # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
+    # L'elenco resta esatto.
     assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
-                                "acquirenti", "abbinamenti", "attivita", "automazioni"]
+                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni"]
 
 
 def test_a4_the_entry_disappears_when_the_session_changes(staged):

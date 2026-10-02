@@ -98,7 +98,7 @@ const TASK_STATUS_LABELS = { open: 'Da fare', in_progress: 'In corso', completed
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
 const ACTIVITY_TYPE_LABELS = {
   note: 'Nota', call: 'Chiamata', email: 'Email', whatsapp: 'WhatsApp',
-  meeting: 'Appuntamento', valuation: 'Valutazione', status_change: 'Cambio stato', system: 'Sistema',
+  meeting: 'Incontro', valuation: 'Valutazione', status_change: 'Cambio stato', system: 'Sistema',
 };
 const VISIT_STATUS_LABELS = { scheduled: 'Programmata', confirmed: 'Confermata', completed: 'Completata', cancelled: 'Annullata', no_show: 'Assente' };
 
@@ -629,6 +629,12 @@ function renderCronologiaTab(data, visibleCount, deleteConfirm) {
 function renderCronologiaActions(item, deleteConfirm) {
   if (item.kind === 'task') return renderTaskActions(item.data, deleteConfirm);
   if (item.kind === 'attivita') {
+    // CRM-OPS-4: un'interazione legata a un immobile e' storico commerciale e
+    // non si cancella (il backend risponde 409): niente "Elimina", si apre lo
+    // storico dell'immobile, dove una correzione e' una nuova interazione.
+    if (item.data.property_id) {
+      return `<a class="btn ghost" href="#/immobili/${encodeURIComponent(item.data.property_id)}/attivita">Storico immobile</a>`;
+    }
     const confirming = deleteConfirm ? deleteConfirm.has(`attivita:${item.data.id}`) : false;
     if (confirming) {
       return `

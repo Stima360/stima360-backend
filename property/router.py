@@ -3,7 +3,7 @@ from core.exceptions import NotFoundError,ConflictError,ValidationError,Permissi
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import service
+from . import interactions, mandates, service
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -64,3 +64,15 @@ def add_visit(property_id:int,p:VisitCreate,ctx:OperatorContext=Depends(legacy_b
 def update_visit(visit_id:int,p:VisitUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_visit,ctx,visit_id,p)
 @router.delete('/visits/{visit_id}',status_code=204)
 def delete_visit(visit_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_visit,ctx,visit_id);return Response(status_code=204)
+# CRM-OPS-4: INCARICHI (vista in sola lettura su properties + acquisitions:
+# nessuna entita' nuova, nessuna creazione da qui) e lo STORICO INTERAZIONI
+# dell'immobile (righe di `activities` con property_id, migration 082),
+# lo stesso per la scheda Immobile e per la scheda Incarico.
+@router.get('/mandates')
+def list_mandates(search:str|None=None,agent_id:int|None=None,city:str|None=None,mandate_type:str|None=None,commercial_status:str|None=None,expiry:str|None=None,sort:str='expiry',limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(mandates.list_mandates,ctx,search=search,agent_id=agent_id,city=city,mandate_type=mandate_type,commercial_status=commercial_status,expiry=expiry,sort=sort,limit=limit,offset=offset)
+@router.get('/mandates/{property_id}')
+def get_mandate(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(mandates.get_mandate,ctx,property_id)
+@router.get('/properties/{property_id}/interactions')
+def list_interactions(property_id:int,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(interactions.list_interactions,ctx,property_id,limit=limit,offset=offset)
+@router.post('/properties/{property_id}/interactions',status_code=201)
+def create_interaction(property_id:int,p:InteractionCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(interactions.create_interaction,ctx,property_id,p)

@@ -35,7 +35,7 @@ import { escapeHtml } from './st-table.js';
 import { createContactPicker } from './contact-picker.js';
 
 export const ACTIVITY_TYPE_LABELS = {
-  note: 'Nota', call: 'Telefonata', email: 'Email', whatsapp: 'WhatsApp', meeting: 'Appuntamento',
+  note: 'Nota', call: 'Telefonata', email: 'Email', whatsapp: 'WhatsApp', meeting: 'Incontro',
 };
 export const ACTIVITY_DIRECTION_LABELS = { in: 'In entrata', out: 'In uscita', internal: 'Interna' };
 export const TASK_PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };

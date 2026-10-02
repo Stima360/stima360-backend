@@ -33,9 +33,16 @@ REPRESENTATIVE_PATHS = (
 # 22 e il totale da 108 a 109. Stessa condizione di P26-1: la route e' sul
 # router PROPERTY dietro Depends(legacy_basic_agency_context), e test_2
 # ri-verifica il gate di sicurezza su ogni operazione, la nuova compresa.
+# SENTINELLA AGGIORNATA DA CRM-OPS-4: GET /api/property/mandates (elenco
+# Incarichi), GET /api/property/mandates/{property_id} (scheda Incarico) e
+# GET/POST /api/property/properties/{property_id}/interactions (storico
+# interazioni dell'immobile) portano PROPERTY da 22 a 26 e il totale da 109 a
+# 113. Stessa condizione di P26-1 e CRM-OPS-2: le quattro route sono sul
+# router PROPERTY dietro Depends(legacy_basic_agency_context), e test_2
+# ri-verifica il gate di sicurezza su ogni operazione, le nuove comprese.
 EXPECTED_COUNTS = {
     "/api/core": 21,
-    "/api/property": 22,
+    "/api/property": 26,
     "/api/property-watch": 12,
     "/api/buy": 23,
     "/api/match": 26,
@@ -77,12 +84,12 @@ def test_1_all_100_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 109
+    assert len(operations) == 113
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 109
+    assert len(operations) == 113
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

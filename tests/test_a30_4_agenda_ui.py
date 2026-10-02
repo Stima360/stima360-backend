@@ -91,9 +91,12 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     sezioni = main[inizio:main.index("];", inizio)]
     # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
     # SECTIONS, dopo "immobili". L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
+    # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
+    # L'elenco resta esatto.
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "immobili", "acquisizioni", "acquirenti", "abbinamenti",
-        "attivita", "automazioni"]
+        "oggi", "agenda", "contatti", "immobili", "acquisizioni", "incarichi", "acquirenti",
+        "abbinamenti", "attivita", "automazioni"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
     assert "SEZIONE_AGENDA" not in main
@@ -870,8 +873,12 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()), hash="#/oggi")
     # SENTINELLA AGGIORNATA DA CRM-OPS-3: "acquisizioni" e' una voce normale di
     # SECTIONS, dopo "immobili". L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
+    # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
+    # L'elenco resta esatto.
     assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
-                                "acquirenti", "abbinamenti", "attivita", "automazioni"], out["navRoutes"]
+                                "incarichi", "acquirenti", "abbinamenti", "attivita",
+                                "automazioni"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant

@@ -338,6 +338,34 @@ class FakeCursor:
         else:
             raise AssertionError(f"domanda delle Acquisizioni non prevista dal doppio: {upper}")
 
+    def _incarichi_execute(self, upper, params):
+        """CRM-OPS-4: le sole letture della sezione MANDATES. Incarichi e
+        interazioni sono gli stessi del doppio HTTP (`incarichi`,
+        `interazioni`): una scrittura che il doppio applicasse per un difetto
+        si vedrebbe qui."""
+        incarichi = self.state.setdefault("incarichi", {})
+        interazioni = self.state.setdefault("interazioni", {})
+        if "INTERAZIONI_PRONTE" in upper:
+            self._row = {"interazioni_pronte": self.state.get("interazioni_presenti", True)}
+        elif "INTERAZIONI_NUOVE_RIGHE" in upper:
+            massimo, autori = params
+            self._row = {"interazioni_nuove_righe": sum(
+                1 for i, r in interazioni.items()
+                if i > massimo and r.get("created_by") in set(autori))}
+        elif "INTERAZIONI_MAX_RIGA" in upper:
+            self._row = {"interazioni_righe": len(interazioni),
+                         "interazioni_max_riga": max(interazioni, default=0)}
+        elif "INCARICO_ALTRUI" in upper:
+            (agenzia,) = params
+            candidati = sorted(i for i, a in incarichi.items() if a == agenzia)
+            self._row = None if not candidati else {"id": candidati[0]}
+        elif "IMMOBILI_FUORI_AGENZIA" in upper:
+            ids, agenzia = params
+            self._rows = [{"id": i} for i in sorted(ids)
+                          if incarichi.get(i) is not None and incarichi[i] != agenzia]
+        else:
+            raise AssertionError(f"domanda degli Incarichi non prevista dal doppio: {upper}")
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
@@ -356,6 +384,11 @@ class FakeCursor:
 
         if "ACQUISIZIONI_" in upper:
             self._acquisizioni_execute(upper, params)
+            return
+
+        if ("INTERAZIONI_" in upper or "INCARICO_ALTRUI" in upper
+                or "IMMOBILI_FUORI_AGENZIA" in upper):
+            self._incarichi_execute(upper, params)
             return
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
@@ -1082,6 +1115,10 @@ class FakeHttp(cert.HttpProbe):
         self.acquisizioni: dict = {}
         self.eventi_acquisizioni: dict = {}
         self.immobili_acquisizioni: dict = {}
+        # CRM-OPS-4: gli incarichi GIA' ESISTENTI (immobile -> agenzia) e le
+        # interazioni d'immobile, condivisi con il doppio del database.
+        self.incarichi: dict = {}
+        self.interazioni: dict = {}
 
     # -- helper -----------------------------------------------------------
     def _effetto(self, tabella: str) -> int | None:
@@ -1780,6 +1817,80 @@ class FakeHttp(cert.HttpProbe):
             scrivi(ident, azione or "patch")
         return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
 
+    def _mandates(self, method, path, agency, payload):
+        """CRM-OPS-4. Il doppio riproduce il CONTRATTO REALE: lo schema vero
+        (`property.schemas.InteractionCreate`, `extra="forbid"`) decide il 422,
+        e l'ordine e' quello del service (immobile -> referente -> contesto),
+        con gli stessi messaggi. Una scrittura VALIDA sul proprio immobile il
+        doppio la ACCETTA e la registra con l'autore: e' cosi' che un
+        certificatore regredito verrebbe visto.
+
+        Difettosita' sulla superficie "mandates": `isolation` (l'immobile o
+        l'incarico altrui si leggono e si scrivono), `listing` (l'elenco mostra
+        gli incarichi altrui), `referente` (il contatto non collegato passa),
+        `write` (rifiuta con 404 e scrive comunque).
+        """
+        import json as _json
+        from urllib.parse import urlsplit
+
+        import pydantic
+
+        from property import interactions as inter
+        from property.schemas import InteractionCreate
+
+        percorso = urlsplit(path).path
+        rotto = lambda tipo: self._broken(tipo, "mandates")  # noqa: E731
+        attore = next((u for u, a in self.operatori.items() if a == agency), None)
+
+        def agenzia_di(pid):
+            if pid in self.incarichi:
+                return self.incarichi[pid]
+            riga = self.rows.get(pid)
+            return None if riga is None or riga.get("prefix") != "/api/property" else riga["agency"]
+
+        def scrivi(pid):
+            self.interazioni[max(self.interazioni, default=0) + 1] = {
+                "agency": agency, "property": pid, "created_by": attore}
+
+        if percorso == "/api/property/mandates" and method == "GET":
+            voci = [{"property_id": pid} for pid, a in sorted(self.incarichi.items())
+                    if a == agency or rotto("listing")]
+            return self._reply(method, path, 200, _json.dumps({"items": voci}).encode())
+        trovato = re.match(r"^/api/property/mandates/(\d+)$", percorso)
+        if trovato and method == "GET":
+            pid = int(trovato.group(1))
+            if pid in self.incarichi and (self.incarichi[pid] == agency or rotto("isolation")):
+                return self._reply(method, path, 200, _json.dumps(
+                    {"property_id": pid, "title": f"incarico-{pid}",
+                     "mandate_type": "Esclusiva"}).encode())
+            return self._reply(method, path, 404, b'{"detail":"mandate not found"}')
+        trovato = re.match(r"^/api/property/properties/(\d+)/interactions$", percorso)
+        pid = int(trovato.group(1))
+        suo = agenzia_di(pid) == agency
+        if method == "GET":
+            if suo or (agenzia_di(pid) is not None and rotto("isolation")):
+                return self._reply(method, path, 200, _json.dumps({"items": [
+                    {"id": i, "note": "storia"} for i, r in self.interazioni.items()
+                    if r["property"] == pid]}).encode())
+            return self._reply(method, path, 404, b'{"detail":"property not found"}')
+        try:
+            corpo = InteractionCreate.model_validate(payload if isinstance(payload, dict) else None)
+        except pydantic.ValidationError:
+            return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if not suo and not (agenzia_di(pid) is not None and rotto("isolation")):
+            if rotto("write"):
+                scrivi(pid)                          # rifiuta a parole, scrive
+            return self._reply(method, path, 404, b'{"detail":"property not found"}')
+        if (corpo.contact_id is not None and (pid, corpo.contact_id) not in self.owner_links
+                and not rotto("referente")):
+            return self._reply(method, path, 400, _json.dumps(
+                {"detail": inter.REFERENTE_NON_COLLEGATO}).encode())
+        if corpo.context == "mandate" and pid not in self.incarichi:
+            return self._reply(method, path, 400, _json.dumps(
+                {"detail": inter.SENZA_INCARICO}).encode())
+        scrivi(pid)
+        return self._reply(method, path, 201, b'{"id": 1}')
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -2035,6 +2146,12 @@ class FakeHttp(cert.HttpProbe):
                 b'exist\nLINE 3: SELECT s.id, s.note_internal"}'))
         if path.startswith("/api/property-watch/stime/"):
             return self._property_watch(method, path, agency)
+
+        # CRM-OPS-4: Incarichi e storico interazioni, PRIMA del resto di
+        # /api/property.
+        if (path.startswith("/api/property/mandates")
+                or re.match(r"^/api/property/properties/\d+/interactions", path)):
+            return self._mandates(method, path, agency, payload)
 
         found = re.match(r"^/api/property/properties/(\d+)/contacts$", path)
         if found and method == "POST":
@@ -2368,6 +2485,10 @@ IMMOBILI_ACQUISIZIONI = {
            "mandate_end": None, "commercial_status": "evaluation", "updated_at": "2026-09-02"},
 }
 
+#: CRM-OPS-4: un incarico (immobile nato da un'acquisizione) per agenzia:
+#: immobile -> agenzia.
+INCARICHI = {3101: 1, 3102: 2}
+
 #: Le nove colonne di Q10 (A30-2P), tutte 0 su un TEST allineato.
 Q10_CHIAVI = ("collegamento_senza_riga_lmc15", "stato_incompatibile",
               "scheduled_for_diverso_da_start_at", "completed_at_diverso",
@@ -2446,6 +2567,11 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     probe.eventi_acquisizioni = database.state.setdefault("eventi_acquisizioni", {})
     probe.immobili_acquisizioni = database.state.setdefault("immobili_acquisizioni", {
         i: dict(r) for i, r in IMMOBILI_ACQUISIZIONI.items()})
+    # CRM-OPS-4: un incarico GIA' ESISTENTE per agenzia (immobile -> agenzia)
+    # e le interazioni d'immobile, condivisi fra i due doppi. `incarichi={}`
+    # riproduce il TEST senza il prerequisito.
+    probe.incarichi = database.state.setdefault("incarichi", dict(INCARICHI))
+    probe.interazioni = database.state.setdefault("interazioni", {})
     # LE RIGHE DEGLI EFFETTI, materializzate come il run le crea davvero.
     #
     # Senza, l'istantanea non trova nulla, le cancellazioni degli effetti non
@@ -7648,7 +7774,10 @@ COLLOCAZIONE_SCRITTURE = {
     "owner_visit_feedback_publications": (GUARDIA, "nessuna visita, quindi nessun riscontro"),
 
     # -- fuori portata ------------------------------------------------------
-    "activities": (GUARDIA, "POST /core/activities non e' chiamato; referenzia contacts e stime, quindi il preflight la vedrebbe"),
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: anche POST /api/property/properties/
+    # {id}/interactions scrive qui (082, `property_id`); nemmeno quello e'
+    # chiamato dalla matrice.
+    "activities": (GUARDIA, "POST /core/activities e POST /property/properties/{id}/interactions non sono chiamati; referenzia contacts, stime e properties, quindi il preflight la vedrebbe"),
     "flow_rules": (FUORI, "catalogo di regole, globale: nessuna FK verso il perimetro"),
     "owner_notification_preferences": (GUARDIA,
                                        "preferenze per conto, mai scritte dalla matrice; referenzia owner_accounts"),
@@ -9467,3 +9596,143 @@ def test_crm3_10_la_sonda_status_usa_uno_stato_del_catalogo_e_prova_il_tenant():
                                    "status": "valuation_presented"})
     assert morta.status == 422 and valida.status == 404
     assert http.acquisizioni[5002] == ACQUISIZIONI[5002]
+
+
+# ---------------------------------------------------------------------------
+# CRM-OPS-4 - INCARICHI E STORICO INTERAZIONI: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+def _righe_incarichi(report):
+    return [(k, i, t) for k, i, t in report.rows if i.startswith("MANDATES-")]
+
+
+def _scritture_incarichi_riuscite(probe):
+    return [(chiamata, stato) for chiamata, stato, _ in probe.exchanges
+            if "/interactions" in chiamata and chiamata.startswith("POST")
+            and 200 <= stato < 300]
+
+
+def test_crm4_01_incarichi_e_storico_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
+    code, report, _database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    righe = _righe_incarichi(report)
+    assert righe and [r for r in righe if r[0] != cert.PASS] == [], righe
+    idents = {i for _k, i, _t in righe}
+    assert sum(1 for i in idents if i.startswith("MANDATES-anonimo-")) == len(cert.MANDATES_OPERAZIONI)
+    for a, b in (("A", "B"), ("B", "A")):
+        for nome in ("list-{a}-non-vede-{b}", "dettaglio-incarico-{a}-{b}",
+                     "dettaglio-immobile-{a}-{b}", "storico-lettura-{a}-{b}",
+                     "storico-scrittura-{a}-{b}", "referente-altrui-{a}-{b}",
+                     "agency-nel-corpo-{a}"):
+            assert "MANDATES-" + nome.format(a=a, b=b) in idents, (nome, a, b)
+    for guardia in ("nessuna-riga-del-run", "storico-non-diminuito"):
+        assert f"MANDATES-{guardia}" in idents
+    # nessuna scrittura accettata, nessuna DELETE, incarichi intatti
+    assert _scritture_incarichi_riuscite(probe) == []
+    assert probe.interazioni == {} and probe.incarichi == INCARICHI
+    assert not [c for c, _s, _b in probe.exchanges if c.startswith("DELETE") and "interactions" in c]
+    # l'elenco ha guardato righe vere (il proprio incarico c'era)
+    osservati = [t for _k, i, t in righe if "-list-" in i]
+    assert all(re.search(r"[1-9]\d* elementi osservati", t) for t in osservati), osservati
+
+
+def test_crm4_02_senza_incarico_altrui_e_BLOCKED_non_inventato(monkeypatch):
+    solo_a = {3101: 1}
+    code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME), incarichi=solo_a)
+    righe = {i: (k, t) for k, i, t in _righe_incarichi(report)}
+    assert righe["MANDATES-dettaglio-incarico-A-B"][0] == cert.BLOCKED
+    assert "PREREQUISITO" in righe["MANDATES-dettaglio-incarico-A-B"][1]
+    assert righe["MANDATES-dettaglio-incarico-B-A"][0] == cert.PASS
+    assert righe["MANDATES-referente-altrui-A-B"][0] == cert.PASS
+    assert not any(k == cert.FAIL for k, _t in righe.values())
+    assert probe.incarichi == solo_a and probe.interazioni == {}
+
+
+def test_crm4_03_senza_082_sul_database_la_sezione_e_BLOCKED(monkeypatch):
+    _code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        interazioni_presenti=False)
+    righe = {i: k for k, i, _t in _righe_incarichi(report)}
+    assert righe == {"MANDATES-fotografia": cert.BLOCKED}
+    assert not any("/api/property/mandates" in c or "/interactions" in c
+                   for c, _s, _b in probe.exchanges)
+
+
+@pytest.mark.parametrize("difetto, atteso", [
+    ("isolation", "MANDATES-dettaglio-"),
+    ("listing", "MANDATES-list-"),
+    ("referente", "MANDATES-referente-altrui-"),
+    ("write", "MANDATES-nessuna-riga-del-run"),
+])
+def test_crm4_04_ogni_difetto_degli_incarichi_fa_fallire(monkeypatch, difetto, atteso):
+    code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME,
+                                   broken={difetto}, only="mandates"))
+    falliti = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert code == 1
+    assert any(i.startswith(atteso) for i in falliti), falliti
+    if difetto == "referente":
+        # anche con il referente rotto la sonda NON ha scritto: si e' fermata
+        # sul contesto, ed e' il messaggio sbagliato a farla fallire
+        assert probe.interazioni == {}
+
+
+def test_crm4_05_le_sonde_coprono_esattamente_le_rotte_crm_ops_4():
+    montate = set()
+    for _pattern, methods, template in real_routes():
+        if template.startswith("/api/property/mandates") or (
+                template.startswith("/api/property/") and template.endswith("/interactions")):
+            for m in methods:
+                montate.add((m, template.replace("{property_id}", "{id}")))
+    assert set(cert.MANDATES_OPERAZIONI) == montate, set(cert.MANDATES_OPERAZIONI) ^ montate
+    assert not [m for m, _p in montate if m == "DELETE"]
+    # nessun dominio nuovo: le sonde vivono nel certificatore PROPERTY
+    assert "certify_property_mandates(report, http, cert, jars, owned, context)" in \
+        _function_source("certify_property")
+    assert _domain("PROPERTY").certifier == "property"
+
+
+def test_crm4_06_la_sezione_non_scrive_e_ogni_post_e_innocuo():
+    nomi = ("certify_property_mandates", "_interazioni_fotografia", "_incarico_altrui",
+            "_immobili_fuori_agenzia", "_interazioni_attribuibili", "_sonda_interazione")
+    sorgente = "\n".join(_function_source(nome) for nome in nomi)
+    for vietato in ("database.write", "commit=True", '"DELETE"', "'DELETE'", "DISABLE TRIGGER",
+                    "DELETE FROM", "UPDATE ", "INSERT INTO", '"PATCH"'):
+        assert vietato not in sorgente, vietato
+    # ogni POST passa dal corpo innocuo (context: mandate)
+    assert "'context': 'mandate'" in _function_source("_sonda_interazione")
+    corpo_sezione = _function_source("certify_property_mandates")
+    for riga in corpo_sezione.splitlines():
+        if "payload=" in riga and "_sonda_interazione" not in riga and "corpo" not in riga:
+            assert "None" in riga, riga
+    # i messaggi attesi sono quelli VERI del service
+    from property import interactions as inter
+    assert cert.MANDATES_REFERENTE_RIFIUTATO == inter.REFERENTE_NON_COLLEGATO
+    assert cert.MANDATES_SENZA_INCARICO == inter.SENZA_INCARICO
+
+
+def test_crm4_07_un_certificatore_che_scrivesse_davvero_verrebbe_visto(monkeypatch):
+    """Si simula una regressione: al primo elenco incarichi il certificatore
+    registra UNA interazione valida sul PROPRIO incarico. Il doppio la accetta
+    come il server vero, e la guardia del certificatore vero la vede."""
+    http = FakeHttp(prepopulate=DERIVED, stime=STIME)
+    originale = http.request
+    fatto = []
+
+    def con_regressione(method, path, *, jar=None, payload=None, headers=None):
+        if not fatto and jar is not None and path.startswith("/api/property/mandates?"):
+            fatto.append(1)
+            agency = http._agency_of(jar)
+            mio = next(pid for pid, a in http.incarichi.items() if a == agency)
+            esito = originale("POST", f"/api/property/properties/{mio}/interactions", jar=jar,
+                              payload={"interaction_type": "note", "note": "regressione"})
+            assert esito.status == 201, esito.status
+        return originale(method, path, jar=jar, payload=payload, headers=headers)
+
+    http.request = con_regressione
+    code, report, _db, probe, _ = working_run(monkeypatch, http=http)
+    assert fatto
+    righe = {i: k for k, i, _t in _righe_incarichi(report)}
+    assert righe["MANDATES-nessuna-riga-del-run"] == cert.FAIL, righe
+    assert code == 1

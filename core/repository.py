@@ -813,6 +813,14 @@ def create_activity_with_cursor(cur, data: dict[str, Any], *, ctx=None) -> dict[
         prepared = {**_stamp(ctx, prepared)}
         columns = ", agency_id, created_by_user_id"
         values = ", %(agency_id)s, %(created_by_user_id)s"
+        # CRM-OPS-4 (migration 082): l'immobile dell'interazione, solo quando
+        # c'e' e solo con uno scope. Senza `property_id` la statement resta
+        # quella di prima; il ramo senza scope (R-4) non lo conosce affatto.
+        # La tenancy dell'immobile la verifica chi chiama (property.interactions)
+        # e la impone il trigger `trg_activities_property_scope`.
+        if prepared.get("property_id") is not None:
+            columns += ", property_id"
+            values += ", %(property_id)s"
     cur.execute(
         f"""
         INSERT INTO activities (
@@ -984,14 +992,34 @@ def update_task(ctx, task_id: int, data: dict[str, Any]) -> dict[str, Any]:
         return _row(row)
 
 
+#: CRM-OPS-4: lo storico commerciale di un immobile non si cancella.
+ACTIVITY_ON_PROPERTY_NOT_DELETABLE = (
+    "Le interazioni registrate su un immobile fanno parte dello storico commerciale "
+    "e non si cancellano: per correggerne una registra una nuova interazione.")
+
+
 def delete_activity(ctx, activity_id: int) -> None:
     predicate, scope_params = scoped_predicate(ctx, "activities", "a")
     with core_cursor(commit=True) as (_, cur):
+        # CRM-OPS-4 (migration 082): una riga con `property_id` e' storico
+        # commerciale dell'immobile e NON si cancella - ne' da qui ne' dal
+        # database (trigger `trg_activities_property_history`). Le attivita'
+        # senza immobile restano cancellabili come prima.
         cur.execute(
-            f"DELETE FROM activities a WHERE a.id = %s AND {predicate}",
+            f"DELETE FROM activities a WHERE a.id = %s AND {predicate} AND a.property_id IS NULL",
             [activity_id] + scope_params,
         )
         if cur.rowcount == 0:
+            # Nulla cancellato: o e' storico d'immobile (409, la riga e' nello
+            # scope di chi chiede), o non esiste per chi chiede (404, D-6).
+            cur.execute(
+                f"SELECT a.property_id FROM activities a WHERE a.id = %s AND {predicate}"
+                " AND a.property_id IS NOT NULL",
+                [activity_id] + scope_params,
+            )
+            riga = cur.fetchone()
+            if riga is not None and riga.get("property_id") is not None:
+                raise ConflictError(ACTIVITY_ON_PROPERTY_NOT_DELETABLE)
             raise NotFoundError(f"activity {activity_id} not found")
 
 

@@ -806,7 +806,13 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # /api/property/form-options (cataloghi del form Immobili e agenti
         # assegnabili), dietro lo stesso legacy_basic_agency_context. Il
         # conteggio resta esatto: una ventitreesima route farebbe fallire.
-        "property": 22, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CRM-OPS-4: PROPERTY 22 -> 26 per GET
+        # /api/property/mandates, GET /api/property/mandates/{property_id} e
+        # GET/POST /api/property/properties/{property_id}/interactions
+        # (Incarichi e storico interazioni), dietro lo stesso
+        # legacy_basic_agency_context e tutte nello scope (set(routes) ==
+        # set(scoped) qui sotto). Il conteggio resta esatto.
+        "property": 26, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

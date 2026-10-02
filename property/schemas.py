@@ -209,3 +209,13 @@ class VisitUpdate(PropertyModel):
     def validate_status(cls,v):
         if v.get('status') is not None and v['status'] not in VISIT_STATUSES: raise ValueError('invalid visit status')
         return v
+
+
+# CRM-OPS-4: un'interazione con il proprietario (telefonata, incontro, nota).
+# Data, ora e autore NON sono campi: li mette il server. `extra=forbid`
+# (PropertyModel) rifiuta anche agency_id, occurred_at, created_by_user_id.
+class InteractionCreate(PropertyModel):
+    interaction_type: str = Field(..., min_length=1, max_length=30)
+    note: str = Field(..., min_length=1, max_length=5000)
+    contact_id: int | None = Field(None, ge=1)
+    context: str = Field("property", pattern="^(property|mandate)$")
