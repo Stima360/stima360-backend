@@ -644,10 +644,14 @@ def test_d11_ricerca_immobile_dal_pulsante_nuova(staged):  # noqa: F811
       bottone(C(), '+ Nuova acquisizione').dispatch('click'); await wait();
       const cerca = q('#acq-property-search'); cerca.value = 'trilo'; cerca.dispatch('input'); await wait(); await wait();
       q('[data-property-id]').dispatch('click'); await wait(); await wait();
-      report({ scelto: q('#acq-property-chosen').textContent, proprietari: opz(q('#acq-owner')) });
+      // post-commit RC-2: la scelta e' il riquadro `#acq-property-selected` con il suo id
+      const sel = q('#acq-property-selected');
+      report({ scelto: sel.textContent, id: sel.dataset.propertyId, nascosto: sel.hidden === true,
+               proprietari: opz(q('#acq-owner')) });
     """
     out = _run(staged, scenario, _rotte(), "#/acquisizioni")
-    assert out["scelto"].startswith("IMM-30") and out["proprietari"] == ["41", "42"]
+    assert "Immobile selezionato" in out["scelto"] and "IMM-30" in out["scelto"]
+    assert out["id"] == "30" and out["nascosto"] is False and out["proprietari"] == ["41", "42"]
     ricerche = [c["url"] for c in out["calls"] if c["url"].startswith("/api/property/properties?")]
     assert ricerche and "search=trilo" in ricerche[0]
     assert _scritture(out) == []

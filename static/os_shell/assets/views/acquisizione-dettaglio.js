@@ -273,7 +273,9 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
   }
 
   function apriIncarico() {
-    const oggi = new Date().toISOString().slice(0, 10);
+    // Il giorno di Roma, non quello UTC: fra mezzanotte e le 2 la data
+    // proposta sarebbe altrimenti quella di ieri.
+    const oggi = romeDateKey(new Date());
     dialogo('Genera incarico', `
       <p class="muted">L’incarico viene scritto sull’immobile e l’acquisizione diventa “Acquisita”.</p>
       <div class="form-grid-2">

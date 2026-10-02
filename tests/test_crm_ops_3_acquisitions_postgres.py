@@ -236,11 +236,11 @@ def _al_sopralluogo(k, acq, chi="giorgio"):
     return k["api"](chi).get(f"/api/acquisitions/{acq['id']}").json()
 
 
-def _nel_passato(k, acq):
+def _nel_passato(k, acq, h=10):
     """Sposta l'appuntamento (gia' creato) nel passato del database, cosi'
     l'Agenda lo lascia completare/registrare come mancato."""
     k["sql"]("UPDATE appointments SET start_at = %s, end_at = %s WHERE id = %s",
-             (ore(10), ore(11), acq["appointment_id"]))
+             (ore(h), ore(h + 1), acq["appointment_id"]))
 
 
 # ---------------------------------------------------------------------------
@@ -851,3 +851,365 @@ def test_30_riferimenti_restrict_e_compositi(k):
     composita = k["sql"]("SELECT array_length(conkey, 1) FROM pg_constraint "
                          "WHERE conname = 'properties_acquisition_same_agency_fk'")[0][0]
     assert composita == 2
+
+
+# ---------------------------------------------------------------------------
+# POST-COMMIT - le cause reali emerse su TEST (RC-1, RC-3)
+# ---------------------------------------------------------------------------
+
+def test_31_senza_la_081_le_acquisizioni_chiudono_con_503_leggibile(k):
+    """RC-1: su TEST il codice girava su un database SENZA la 081
+    (`relation "acquisitions" does not exist` -> "Errore 500"). Ora ogni
+    lettura/scrittura delle Acquisizioni risponde 503 con il suo `code`, le
+    opzioni (senza tabella) restano 200, l'Agenda continua a funzionare e
+    NIENTE viene scritto. La 081 si riapplica alla fine."""
+    sql = k["sql"]
+    _pulisci(sql)
+    giu = (MIGRAZIONI / f"{VERSIONE}_down.sql").read_text(encoding="utf-8")
+    su = (MIGRAZIONI / f"{VERSIONE}.sql").read_text(encoding="utf-8")
+    api = k["api"]("giorgio")
+    try:
+        sql(giu)
+        k["conn"].commit()
+        assert sql("SELECT to_regclass('acquisitions')")[0][0] is None
+        atteso = {"detail": "Il modulo Acquisizioni non è installato su questo database "
+                            "(migration 081 non applicata).", "code": "ACQUISITIONS_NOT_INSTALLED"}
+        r = api.get("/api/acquisitions?limit=50&offset=0")
+        assert (r.status_code, r.json()) == (503, atteso), r.text
+        assert api.get("/api/acquisitions/options").status_code == 200
+        assert api.get("/api/acquisitions/1").status_code == 503
+        r = api.post("/api/acquisitions", json=_corpo(k))
+        assert (r.status_code, r.json()["code"]) == (503, "ACQUISITIONS_NOT_INSTALLED"), r.text
+        assert _conta(k, "appointments") == 0          # la transazione e' tornata indietro
+        # l'Agenda, con gli hook a vuoto, crea e completa come prima
+        r = api.post("/api/appointments", json={**_appuntamento(k["luca"]), "end_at": futuro(11).isoformat(),
+                                                "appointment_type": "seller_meeting",
+                                                "property_id": k["casa"], "contact_id": k["mario"]})
+        assert r.status_code == 201, r.text
+    finally:
+        sql(su)
+        k["conn"].commit()
+    assert sql("SELECT to_regclass('acquisitions')")[0][0] == "acquisitions"
+    assert api.get("/api/acquisitions?limit=50&offset=0").status_code == 200
+
+
+def test_32_il_ruolo_del_contatto_non_e_un_collegamento_all_immobile(k):
+    """RC-3 (Tortoreto Alto Casa Fernando): il contatto ha il ruolo
+    «Proprietario» in `contact_roles` e un appuntamento sull'immobile, ma
+    nessuna riga in `property_contacts`. Scheda Immobile (GET dettaglio,
+    `contacts`) e Acquisizioni (`property_owners`) leggono la STESSA fonte e
+    danno lo stesso esito: nessun proprietario, niente scritto. Collegandolo
+    dalla scheda immobile (endpoint reale, ruolo owner) l'acquisizione parte."""
+    from acquisitions import repository
+    from acquisitions.enums import OWNER_ROLES
+    from core.database import core_cursor
+
+    sql = k["sql"]
+    sql(_estrai("001_core_contacts_leads.sql", "contact_roles"))
+    sql("DELETE FROM contact_roles")
+    fernando = sql("INSERT INTO contacts (agency_id, display_name) VALUES "
+                   "(%s,'Fernando Micucci') RETURNING id", (k["a"],))[0][0]
+    sql("INSERT INTO contact_roles (contact_id, role) VALUES (%s,'owner'), (%s,'seller')",
+        (fernando, fernando))
+    casa = sql("INSERT INTO properties (agency_id, title, city) VALUES "
+               "(%s,'Tortoreto Alto Casa Fernando','Tortoreto') RETURNING id", (k["a"],))[0][0]
+    api = k["api"]("giorgio")
+    r = api.post("/api/appointments", json={**_appuntamento(k["luca"], h=14), "end_at": futuro(15).isoformat(),
+                                            "appointment_type": "seller_meeting",
+                                            "property_id": casa, "contact_id": fernando})
+    assert r.status_code == 201, r.text
+    # scheda Immobile e Acquisizioni: stessa fonte, stesso esito
+    scheda = api.get(f"/api/property/properties/{casa}")
+    assert scheda.status_code == 200 and scheda.json()["contacts"] == []
+    with core_cursor() as (_, cur):
+        assert repository.property_owners(cur, k["a"], casa, OWNER_ROLES) == []
+    r = api.post("/api/acquisitions", json=_corpo(k, property_id=casa, owner_contact_id=fernando))
+    assert (r.status_code, r.json()["code"]) == (422, "PROPERTY_WITHOUT_OWNER"), r.text
+    assert _conta(k, "acquisitions") == 0
+    # il collegamento vero: «Collega contatto» dalla scheda immobile
+    r = api.post(f"/api/property/properties/{casa}/contacts",
+                 json={"contact_id": fernando, "role": "owner", "is_primary": True})
+    assert r.status_code == 201, r.text
+    assert [c["contact_id"] for c in api.get(f"/api/property/properties/{casa}").json()["contacts"]] \
+        == [fernando]
+    with core_cursor() as (_, cur):
+        proprietari = repository.property_owners(cur, k["a"], casa, OWNER_ROLES)
+    assert [(p["contact_id"], p["roles"], p["is_primary"]) for p in proprietari] \
+        == [(fernando, ["owner"], True)]
+    acq = _crea(k, property_id=casa, owner_contact_id=fernando)
+    assert (acq["property_id"], acq["owner_contact_id"]) == (casa, fernando)
+    sql("DELETE FROM contact_roles")
+
+
+# ---------------------------------------------------------------------------
+# AUDIT ACQUISIZIONE -> INCARICO (post-commit): i buchi reali dei test sopra
+# ---------------------------------------------------------------------------
+
+def _pronta(k, chi="giorgio", stato="inspection_done", h=10, **kw):
+    """Un'acquisizione al sopralluogo (o oltre, via /status), col dettaglio."""
+    acq = _crea(k, **kw)
+    _nel_passato(k, acq, h=h)
+    det = _al_sopralluogo(k, acq, chi=chi)
+    if stato != "inspection_done":
+        r = k["api"](chi).post(f"/api/acquisitions/{acq['id']}/status",
+                               json={"version": det["version"], "status": stato})
+        assert r.status_code == 200, r.text
+        det = r.json()
+    return det
+
+
+def _immobile(k, property_id=None):
+    return dict(k["sql"]("SELECT * FROM properties WHERE id = %s",
+                         (property_id or k["casa"],))[0])
+
+
+def _altro_immobile(k, titolo):
+    """Un immobile in piu' dell'agenzia A, con Mario proprietario."""
+    pid = k["sql"]("INSERT INTO properties (agency_id, title, city, asking_price) VALUES "
+                   "(%s, %s, 'Giulianova', 150000) RETURNING id", (k["a"], titolo))[0][0]
+    k["sql"]("INSERT INTO property_contacts (property_id, contact_id, role, is_primary) "
+             "VALUES (%s, %s, 'owner', TRUE)", (pid, k["mario"]))
+    return pid
+
+
+def test_33_incarico_da_valutazione_e_trattativa_mai_da_persa_o_appuntamento(k):
+    """Matrice stati: SI da inspection_done (test 23), valuation_presented,
+    mandate_negotiation; NO da appointment_set (test 22), lost, acquired."""
+    for ora, stato in ((10, "valuation_presented"), (12, "mandate_negotiation")):
+        pid = _altro_immobile(k, f"Immobile {stato}")
+        det = _pronta(k, stato=stato, h=ora, property_id=pid, appointment=_appuntamento(k["luca"], h=ora))
+        assert det["allowed_actions"]["mandate"] is True
+        r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                     json=dict(_incarico(), version=det["version"]))
+        assert r.status_code == 200, (stato, r.text)
+        d = r.json()
+        assert d["status"] == "acquired" and d["allowed_actions"]["mandate"] is False
+        assert d["allowed_actions"] == {"edit": False, "reassign": False, "transitions": [],
+                                        "lost": False, "new_appointment": False, "mandate": False}
+        ev = d["events"][-1]
+        assert (ev["event_type"], ev["from_status"], ev["to_status"]) == ("mandate_created", stato, "acquired")
+        assert _immobile(k, pid)["acquisition_id"] == det["id"]
+    # persa: niente incarico, e l'immobile resta com'era
+    det = _pronta(k, h=14, appointment=_appuntamento(k["luca"], h=14))
+    r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/lost",
+                                 json={"version": det["version"], "lost_reason": "commission"})
+    assert r.status_code == 200, r.text
+    persa = r.json()
+    assert persa["allowed_actions"]["mandate"] is False
+    r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                 json=dict(_incarico(), version=persa["version"]))
+    assert r.status_code == 409 and r.json()["code"] == "MANDATE_NOT_ALLOWED", r.text
+    p = _immobile(k)
+    assert (p["acquisition_id"], p["mandate_type"], p["commercial_status"]) == (None, None, "draft")
+    assert _eventi(k, det["id"])[-1] == "lost"
+
+
+def test_34_incarico_tenant_versione_e_dati(k):
+    det = _pronta(k)
+    url = f"/api/acquisitions/{det['id']}/mandate"
+    # altra agenzia: 404 e nulla scritto
+    r = k["api"]("estraneo").post(url, json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 404, r.text
+    # agente della stessa agenzia che NON e' l'assegnatario: non la vede (404)
+    r = k["api"]("marta").post(url, json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 404, r.text
+    # versione vecchia: 409 con la versione corrente
+    r = k["api"]("giorgio").post(url, json=dict(_incarico(), version=det["version"] - 1))
+    assert r.status_code == 409 and r.json()["code"] == "VERSION_CONFLICT"
+    assert r.json()["current_version"] == det["version"]
+    # dati: tipo obbligatorio, inizio obbligatorio, fine >= inizio, agency_id vietato
+    for corpo in (dict(_incarico(mandate_type="  "), version=det["version"]),
+                  dict(_incarico(), version=det["version"], mandate_type=None),
+                  {k2: v2 for k2, v2 in dict(_incarico(), version=det["version"]).items()
+                   if k2 != "mandate_start"},
+                  dict(_incarico(mandate_end=(date.today() - timedelta(days=1)).isoformat()),
+                       version=det["version"]),
+                  dict(_incarico(mandate_start="31/12/2026"), version=det["version"]),
+                  dict(_incarico(agreed_price="-1"), version=det["version"]),
+                  dict(_incarico(), version=det["version"], agency_id=k["a"])):
+        r = k["api"]("giorgio").post(url, json=corpo)
+        assert r.status_code == 422 and r.json()["code"] == "VALIDATION_ERROR", (corpo, r.text)
+    p = _immobile(k)
+    assert p["acquisition_id"] is None and p["commercial_status"] == "draft"
+    assert _riga(k, det["id"])["status"] == "inspection_done"
+    assert _eventi(k, det["id"]) == ["created", "appointment_completed"]
+    # senza scadenza e senza prezzo concordato: ammesso (il contratto li lascia facoltativi)
+    r = k["api"]("giorgio").post(url, json={"version": det["version"], "mandate_type": "Esclusiva",
+                                            "mandate_start": date.today().isoformat()})
+    assert r.status_code == 200, r.text
+    p = _immobile(k)
+    assert p["mandate_end"] is None and p["asking_price"] == Decimal("180000")
+    assert _conta(k, "property_price_history", "property_id = %s", (k["casa"],)) == 0
+
+
+def test_35_rollback_in_ogni_punto_della_transazione(k, monkeypatch):
+    """Failure injection: dopo il lock dell'acquisizione, dopo l'UPDATE
+    dell'immobile, prima dell'UPDATE dell'acquisizione, prima dell'evento,
+    violazione di vincolo. Sempre: nulla resta."""
+    from acquisitions import repository, service
+
+    det = _pronta(k)
+    prima_p = _immobile(k)
+    prima_a = _riga(k, det["id"])
+    eventi = _eventi(k, det["id"])
+    storico = _conta(k, "property_status_history")
+
+    def verifica_intatto(etichetta):
+        dopo_p = _immobile(k)
+        dopo_a = _riga(k, det["id"])
+        assert dopo_p == prima_p, (etichetta, "immobile cambiato")
+        assert dopo_a == prima_a, (etichetta, "acquisizione cambiata")
+        assert _eventi(k, det["id"]) == eventi, etichetta
+        assert _conta(k, "property_status_history") == storico, etichetta
+        assert _conta(k, "property_price_history") == 0, etichetta
+
+    def rotto(*a, **kw):
+        raise RuntimeError("guasto simulato")
+
+    casi = {
+        "dopo lock acquisizione": ("_blocca", service, lambda orig: (lambda *a, **kw: (orig(*a, **kw), rotto())[0])),
+        "dopo update immobile": ("write_mandate", repository, lambda orig: (lambda *a, **kw: (orig(*a, **kw), rotto())[0])),
+        "prima update acquisizione": ("update_acquisition", repository, lambda orig: rotto),
+        "prima insert evento": ("record_event", repository, lambda orig: rotto),
+    }
+    for etichetta, (nome, modulo, fabbrica) in casi.items():
+        originale = getattr(modulo, nome)
+        monkeypatch.setattr(modulo, nome, fabbrica(originale))
+        with pytest.raises(RuntimeError):
+            k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                     json=dict(_incarico(), version=det["version"]))
+        monkeypatch.setattr(modulo, nome, originale)
+        verifica_intatto(etichetta)
+    # violazione di vincolo: l'evento con un tipo fuori catalogo
+    originale = repository.record_event
+
+    def tipo_sbagliato(cur, **kw):
+        kw["event_type"] = "non_in_catalogo"
+        return originale(cur, **kw)
+
+    import psycopg2
+    monkeypatch.setattr(repository, "record_event", tipo_sbagliato)
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                 json=dict(_incarico(), version=det["version"]))
+    monkeypatch.setattr(repository, "record_event", originale)
+    verifica_intatto("violazione di vincolo")
+    # e dopo i guasti, l'operazione vera riesce
+    r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                 json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 200, r.text
+
+
+def test_36_doppio_invio_e_richieste_simultanee(k):
+    """Due POST /mandate con la stessa versione, davvero in parallelo (due
+    connessioni, lock FOR UPDATE): uno solo riesce, l'altro 409; un solo
+    incarico, un solo evento, una sola riga di storico."""
+    import threading
+
+    det = _pronta(k)
+    esiti = [None, None]
+    via = threading.Barrier(2)
+
+    def invia(i):
+        via.wait()
+        esiti[i] = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                            json=dict(_incarico(), version=det["version"]))
+
+    fili = [threading.Thread(target=invia, args=(i,)) for i in range(2)]
+    for f in fili:
+        f.start()
+    for f in fili:
+        f.join(timeout=30)
+    codici = sorted(r.status_code for r in esiti)
+    assert codici == [200, 409], [r.text for r in esiti]
+    perdente = next(r for r in esiti if r.status_code == 409).json()
+    # il lock FOR UPDATE serializza: il secondo rilegge la riga gia' acquired
+    # (version +1) e si ferma al controllo di versione, prima di qualsiasi scrittura
+    assert perdente["code"] == "VERSION_CONFLICT", perdente
+    p = _immobile(k)
+    assert p["acquisition_id"] == det["id"] and p["commercial_status"] == "mandate"
+    assert _riga(k, det["id"])["status"] == "acquired"
+    assert _eventi(k, det["id"]).count("mandate_created") == 1
+    assert _conta(k, "property_status_history", "property_id = %s AND new_value = 'mandate'",
+                  (k["casa"],)) == 1
+    assert _conta(k, "property_price_history", "property_id = %s", (k["casa"],)) == 1
+    # il doppio click "sequenziale" (stessa versione, dopo il successo): 409
+    r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                 json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 409
+
+
+def test_37_agente_proprietari_e_audit_dopo_l_incarico(k):
+    """Agente: l'immobile che ne ha gia' uno lo tiene (la riassegnazione
+    resta CRM-OPS-2); quello senza prende l'agente dell'acquisizione (test
+    23). Proprietari: invariati. Audit: evento ed eventi con attore, agenzia,
+    stati e cambi; storico immobile con nota e autore."""
+    sql = k["sql"]
+    sql("UPDATE properties SET assigned_agent_id = %s, assigned_to = 'Marta' WHERE id = %s",
+        (k["marta"], k["casa"]))
+    proprietari_prima = sql("SELECT contact_id, role, is_primary FROM property_contacts "
+                            "WHERE property_id = %s ORDER BY id", (k["casa"],))
+    det = _pronta(k, chi="luca")                    # assegnata a luca
+    assert det["assigned_agent_id"] == k["luca"]
+    r = k["api"]("luca").post(f"/api/acquisitions/{det['id']}/mandate",
+                              json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    p = _immobile(k)
+    # agente: coerenza NON forzata; divergenza dichiarata dal contratto
+    assert p["assigned_agent_id"] == k["marta"] and p["assigned_to"] == "Marta"
+    assert d["assigned_agent_id"] == k["luca"]
+    # proprietari: stessi, nessuna riga in piu'
+    assert sql("SELECT contact_id, role, is_primary FROM property_contacts "
+               "WHERE property_id = %s ORDER BY id", (k["casa"],)) == proprietari_prima
+    assert [o["contact_id"] for o in d["owners"]] == [k["mario"], k["bruno"]]
+    # evento
+    ev = dict(sql("SELECT * FROM acquisition_events WHERE acquisition_id = %s "
+                  "ORDER BY id DESC LIMIT 1", (det["id"],))[0])
+    assert ev["agency_id"] == k["a"] and ev["actor_user_id"] == k["luca"]
+    assert (ev["event_type"], ev["from_status"], ev["to_status"]) == ("mandate_created", "inspection_done", "acquired")
+    assert ev["occurred_at"] is not None
+    cambi = ev["changes"]
+    assert cambi["property_id"] == k["casa"] and cambi["mandate_type"] == "Esclusiva"
+    assert cambi["mandate_start"] == date.today().isoformat()
+    assert cambi["previous_commercial_status"] == "draft" and cambi["agreed_price"] == "179000.00"
+    assert d["events"][-1]["actor_name"]                   # risolto per la UI
+    assert d["acquired_at"] and _riga(k, det["id"])["acquired_at"] is not None
+    # storico immobile
+    st = dict(sql("SELECT * FROM property_status_history WHERE property_id = %s "
+                  "ORDER BY id DESC LIMIT 1", (k["casa"],))[0])
+    assert (st["field_name"], st["old_value"], st["new_value"]) == ("commercial_status", "draft", "mandate")
+    assert st["note"] == f"incarico generato dall'acquisizione {det['id']}"
+    assert st["changed_by"] == f"operator:{k['luca']}"
+    pr = dict(sql("SELECT * FROM property_price_history WHERE property_id = %s", (k["casa"],))[0])
+    assert (pr["old_price"], pr["new_price"]) == (Decimal("180000"), Decimal("179000"))
+    assert pr["changed_by"] == f"operator:{k['luca']}"
+    # l'evento non si tocca
+    import psycopg2
+    with pytest.raises(psycopg2.Error):
+        sql("UPDATE acquisition_events SET to_status = 'lost' WHERE id = %s", (ev["id"],))
+    k["conn"].rollback()
+
+
+def test_38_immobile_gia_in_stato_mandato_storico(k):
+    """Un immobile storico gia' in `mandate` senza acquisizione: l'incarico
+    si genera (origine nuova), lo stato non cambia e lo storico non si
+    duplica; la seconda acquisizione sullo stesso immobile e' poi rifiutata."""
+    sql = k["sql"]
+    sql("ALTER TABLE properties DISABLE TRIGGER trg_properties_mandate_origin")
+    sql("UPDATE properties SET commercial_status = 'mandate', mandate_type = 'Storico' WHERE id = %s",
+        (k["casa"],))
+    sql("ALTER TABLE properties ENABLE TRIGGER trg_properties_mandate_origin")
+    det = _pronta(k)
+    assert det["allowed_actions"]["mandate"] is True
+    r = k["api"]("giorgio").post(f"/api/acquisitions/{det['id']}/mandate",
+                                 json=dict(_incarico(), version=det["version"]))
+    assert r.status_code == 200, r.text
+    p = _immobile(k)
+    assert p["acquisition_id"] == det["id"] and p["mandate_type"] == "Esclusiva"
+    assert p["commercial_status"] == "mandate"
+    assert _conta(k, "property_status_history", "property_id = %s", (k["casa"],)) == 0
+    assert r.json()["events"][-1]["changes"]["previous_commercial_status"] == "mandate"
+    r = k["api"]("giorgio").post("/api/acquisitions", json=_corpo(
+        k, appointment=_appuntamento(k["marta"], h=17)))
+    assert r.status_code == 409 and r.json()["code"] == "MANDATE_ALREADY_EXISTS"

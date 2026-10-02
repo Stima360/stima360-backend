@@ -15,6 +15,7 @@ from datetime import datetime
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from psycopg2 import errors as _pg_errors
 from pydantic import ValidationError as PydanticValidationError
 
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
@@ -33,6 +34,12 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/acquisitions", tags=["acquisitions"])
+
+# Il driver finto dei test senza database non ha queste classi: `()` non
+# intercetta nulla (stesso idioma di property/repository.py).
+_OGGETTO_ASSENTE = tuple(c for c in (getattr(_pg_errors, "UndefinedTable", None),
+                                     getattr(_pg_errors, "UndefinedColumn", None)) if c)
+_OGGETTI_081 = ('"acquisitions"', '"acquisition_events"', '"acquisition_id"')
 
 
 class _Richiesta(Exception):
@@ -75,6 +82,11 @@ def _errore(exc):
         return _risposta(409, code or errors.INVALID_TRANSITION, str(exc), **extra)
     if isinstance(exc, ValidationError):
         return _risposta(422, code or errors.VALIDATION_ERROR, str(exc), **extra)
+    # Post-commit CRM-OPS-3 (RC-1): codice deployato prima della 081. Un
+    # 500 muto diceva solo "Errore 500"; qui si chiude in modo leggibile e
+    # l'operatore sa che manca la migration, non che ha sbagliato qualcosa.
+    if isinstance(exc, _OGGETTO_ASSENTE) and any(o in str(exc) for o in _OGGETTI_081):
+        return _risposta(503, errors.NOT_INSTALLED, errors.NOT_INSTALLED_MESSAGE)
     raise exc
 
 

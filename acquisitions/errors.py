@@ -24,6 +24,11 @@ MANDATE_NOT_ALLOWED = "MANDATE_NOT_ALLOWED"
 MANDATE_ALREADY_EXISTS = "MANDATE_ALREADY_EXISTS"
 APPOINTMENT_LINKED_TO_ACQUISITION = "APPOINTMENT_LINKED_TO_ACQUISITION"
 VALIDATION_ERROR = "VALIDATION_ERROR"
+# Post-commit CRM-OPS-3: il database non ha ancora la 081. Non e' un errore
+# dell'operatore ne' dei dati: il modulo non e' installato e lo si dice.
+NOT_INSTALLED = "ACQUISITIONS_NOT_INSTALLED"
+NOT_INSTALLED_MESSAGE = ("Il modulo Acquisizioni non è installato su questo database "
+                        "(migration 081 non applicata).")
 
 
 class _ConCodice:

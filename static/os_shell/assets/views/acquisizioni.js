@@ -225,14 +225,21 @@ export async function renderAcquisizioni(container, params = []) {
 export async function openNewAcquisition(container, opzioni, { propertyId = null } = {}) {
   const dialogEl = container.querySelector('#acq-new-dialog');
   if (!dialogEl) return;
-  const stato = { property: null, owners: [] };
+  // LO STATO DELLA MODALE, esplicito. `property` e' l'immobile SCELTO (un
+  // click su un risultato, mai il testo digitato); `owners` i suoi proprietari
+  // reali; `caricamento` il numero d'ordine dell'ultima scelta, cosi' una
+  // risposta arrivata in ritardo per una scelta precedente viene ignorata;
+  // `prezzoProposto` il prezzo precompilato dall'immobile, da togliere se
+  // l'immobile cambia e l'operatore non l'ha toccato.
+  const stato = { property: null, owners: [], caricamento: 0, prezzoProposto: null };
   dialogEl.innerHTML = `
     <form class="acq-form" novalidate>
       <h3 class="section-title">Nuova acquisizione</h3>
       <div class="form-field"><label for="acq-property-search">Immobile *</label>
-        <input id="acq-property-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…">
-        <div id="acq-property-results" class="acq-results"></div>
-        <div id="acq-property-chosen" class="muted"></div></div>
+        <input id="acq-property-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…" autocomplete="off">
+        <small class="muted" id="acq-property-hint">Cerca e poi scegli un risultato: il testo da solo non seleziona nessun immobile.</small>
+        <div id="acq-property-results" class="acq-results" role="listbox"></div>
+        <div id="acq-property-selected" class="acq-selected" hidden></div></div>
       <div class="form-field"><label>Proprietario principale *</label><div id="acq-owners" class="acq-owners"><p class="muted">Scegli prima l’immobile.</p></div></div>
       <div class="form-grid-2">
         <div class="form-field"><label for="acq-asking">Prezzo richiesto (€)</label><input id="acq-asking" class="input" type="number" min="0" step="0.01"></div>
@@ -244,32 +251,82 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
       <div class="field-error" id="acq-new-error" role="alert"></div>
       <div class="modal-actions">
         <button type="button" class="btn ghost" id="acq-new-cancel">Chiudi</button>
-        <button type="submit" class="btn primary" id="acq-new-next">Continua: fissa appuntamento</button>
+        <button type="submit" class="btn primary" id="acq-new-next" disabled>Continua: fissa appuntamento</button>
       </div>
     </form>`;
   const $ = (sel) => dialogEl.querySelector(sel);
   const errore = $('#acq-new-error');
   $('#acq-new-cancel').addEventListener('click', () => dialogEl.close());
 
+  /** L'UNICA fonte di `disabled` per «Continua»: attivo solo con un immobile
+   *  scelto e caricato, almeno un proprietario owner|seller e, nel menu, un
+   *  proprietario che appartiene alla lista corrente. Il submit ricontrolla
+   *  tutto e il backend resta autoritativo. */
+  function aggiornaContinua() {
+    const scelto = $('#acq-owner');
+    const valido = !!stato.property && stato.owners.length > 0 && !!scelto && !!scelto.value
+      && stato.owners.some((o) => String(o.contact_id) === String(scelto.value));
+    $('#acq-new-next').disabled = !valido;
+  }
+
+  /** Nessun immobile scelto: lo stato precedente non sopravvive. */
+  function azzeraSelezione() {
+    stato.property = null;
+    stato.owners = [];
+    const selezionato = $('#acq-property-selected');
+    selezionato.hidden = true;
+    selezionato.innerHTML = '';
+    delete selezionato.dataset.propertyId;
+    $('#acq-owners').innerHTML = '<p class="muted">Scegli prima l’immobile.</p>';
+    const prezzo = $('#acq-asking');
+    if (stato.prezzoProposto !== null && prezzo.value === stato.prezzoProposto) prezzo.value = '';
+    stato.prezzoProposto = null;
+    aggiornaContinua();
+  }
+
   async function scegliImmobile(id) {
     errore.textContent = '';
+    azzeraSelezione();
+    const mio = ++stato.caricamento;
     $('#acq-property-results').innerHTML = '';
     $('#acq-owners').innerHTML = '<p class="muted">Caricamento proprietari…</p>';
+    let immobile;
     try {
-      stato.property = await apiGet(`/api/property/properties/${encodeURIComponent(id)}`);
+      immobile = await apiGet(`/api/property/properties/${encodeURIComponent(id)}`);
     } catch (error) {
-      stato.property = null;
-      $('#acq-owners').innerHTML = '';
+      if (mio !== stato.caricamento) return;          // nel frattempo si e' scelto altro
+      azzeraSelezione();
       errore.textContent = error.message || 'Immobile non disponibile.';
       return;
     }
-    stato.owners = ownersFromProperty(stato.property);
-    $('#acq-property-chosen').textContent = propertyLine(stato.property);
-    if (stato.property.asking_price !== null && stato.property.asking_price !== undefined) {
-      $('#acq-asking').value = String(stato.property.asking_price);
+    if (mio !== stato.caricamento) return;            // risposta vecchia: non vale piu'
+    stato.property = immobile;
+    stato.owners = ownersFromProperty(immobile);
+    // L'immobile SCELTO, in evidenza e con il suo id: e' lui che finisce nel payload.
+    const selezionato = $('#acq-property-selected');
+    selezionato.dataset.propertyId = String(immobile.id);
+    selezionato.innerHTML = `
+      <span class="acq-selected-label">Immobile selezionato</span>
+      <strong>${escapeHtml(propertyLine(immobile))}</strong>
+      <button type="button" class="btn ghost" id="acq-property-change">Cambia immobile</button>`;
+    selezionato.hidden = false;
+    $('#acq-property-change').addEventListener('click', () => {
+      azzeraSelezione();
+      const cerca = $('#acq-property-search');
+      cerca.value = '';
+      cerca.focus();
+    });
+    if (immobile.asking_price !== null && immobile.asking_price !== undefined) {
+      stato.prezzoProposto = String(immobile.asking_price);
+      $('#acq-asking').value = stato.prezzoProposto;
     }
     if (!stato.owners.length) {
-      $('#acq-owners').innerHTML = `<p class="field-error" id="acq-no-owner">L’immobile non ha proprietari collegati: aggiungili dalla <a href="#/immobili/${encodeURIComponent(stato.property.id)}">scheda immobile</a>.</p>`;
+      aggiornaContinua();
+      // Stessa fonte della scheda Immobile (tab Proprietari = property_contacts).
+      // Il ruolo «Proprietario» sulla scheda del CONTATTO (contact_roles) non
+      // collega il contatto a nessun immobile: il collegamento si fa dalla
+      // scheda immobile con «Collega contatto» (ruolo Proprietario o Venditore).
+      $('#acq-owners').innerHTML = `<p class="field-error" id="acq-no-owner">L’immobile non ha proprietari collegati (scheda Immobile → Proprietari). Il ruolo «Proprietario» sulla scheda del contatto non basta: apri la <a href="#/immobili/${encodeURIComponent(stato.property.id)}">scheda immobile</a> e usa «Collega contatto» con ruolo Proprietario o Venditore.</p>`;
       return;
     }
     // Un menu, non dei radio: si legge e si sceglie allo stesso modo su
@@ -278,6 +335,8 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
       <select id="acq-owner" class="input">${stato.owners.map((o) => `<option value="${escapeHtml(String(o.contact_id))}">${escapeHtml(o.display_name || `Contatto #${o.contact_id}`)} — ${escapeHtml(o.roles.map((r) => ROLE_LABELS[r] || r).join(', '))}</option>`).join('')}</select>
       <ul class="acq-owners-list">${stato.owners.map((o) => `<li class="acq-owner-option"><strong>${escapeHtml(o.display_name || `Contatto #${o.contact_id}`)}</strong>
         <small class="muted">${escapeHtml(o.roles.map((r) => ROLE_LABELS[r] || r).join(', '))}${o.phone ? ` · ${escapeHtml(o.phone)}` : ''}${o.email ? ` · ${escapeHtml(o.email)}` : ''}</small></li>`).join('')}</ul>`;
+    $('#acq-owner').addEventListener('change', aggiornaContinua);
+    aggiornaContinua();
   }
 
   let giro = 0;
@@ -285,13 +344,17 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
     const testo = e.target.value.trim();
     const mio = ++giro;
     const risultati = $('#acq-property-results');
+    // Cambiare il testo riapre la scelta: l'immobile scelto prima non vale
+    // piu', e nemmeno un dettaglio ancora in arrivo per una scelta precedente.
+    stato.caricamento += 1;
+    azzeraSelezione();
     if (testo.length < 2) { risultati.innerHTML = ''; return; }
     try {
       const data = await apiGet(`/api/property/properties?${new URLSearchParams({ search: testo, limit: '10' }).toString()}`);
       if (mio !== giro) return;
       const items = Array.isArray(data?.items) ? data.items : [];
       risultati.innerHTML = items.length
-        ? items.map((p) => `<button type="button" class="btn ghost acq-result" data-property-id="${escapeHtml(String(p.id))}">${escapeHtml(propertyLine(p))}</button>`).join('')
+        ? `<p class="muted acq-results-title">Risultati: scegli l’immobile</p>` + items.map((p) => `<button type="button" class="btn ghost acq-result" role="option" data-property-id="${escapeHtml(String(p.id))}">${escapeHtml(propertyLine(p))}</button>`).join('')
         : '<p class="muted">Nessun immobile trovato.</p>';
       for (const b of risultati.querySelectorAll('[data-property-id]')) {
         b.addEventListener('click', () => scegliImmobile(b.dataset.propertyId));
@@ -307,7 +370,9 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
     if (!stato.property) { errore.textContent = 'Scegli l’immobile.'; return; }
     if (!stato.owners.length) { errore.textContent = 'L’immobile non ha proprietari collegati.'; return; }
     const scelto = $('#acq-owner');
-    if (!scelto || !scelto.value) { errore.textContent = 'Scegli il proprietario principale.'; return; }
+    if (!scelto || !scelto.value || !stato.owners.some((o) => String(o.contact_id) === String(scelto.value))) {
+      errore.textContent = 'Scegli il proprietario principale.'; aggiornaContinua(); return;
+    }
     const dati = acquisitionCreatePayload({
       propertyId: stato.property.id, ownerContactId: scelto.value,
       askingPrice: $('#acq-asking').value, valuationPrice: $('#acq-valuation').value,
@@ -329,6 +394,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
     });
   });
 
+  aggiornaContinua();
   dialogEl.showModal();
   if (propertyId) await scegliImmobile(propertyId);
 }

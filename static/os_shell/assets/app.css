@@ -798,6 +798,10 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .acq-results { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .acq-result { justify-content: flex-start; text-align: left; white-space: normal; }
 .acq-owners { display: flex; flex-direction: column; gap: 6px; }
+.acq-results-title { margin: 6px 0 2px; font-size: 12px; }
+.acq-selected { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--primary); border-left-width: 4px; border-radius: var(--radius); background: #f5f8fe; }
+.acq-selected-label { font-size: 12px; font-weight: 600; color: var(--primary); text-transform: uppercase; letter-spacing: .02em; }
+.acq-selected strong { flex: 1 1 200px; min-width: 0; }
 .acq-owner-option { display: flex; flex-direction: column; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); }
 .acq-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
 .acq-header h2 { margin: 0; }
