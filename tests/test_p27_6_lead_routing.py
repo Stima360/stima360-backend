@@ -713,7 +713,11 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
     # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni), approvata
+    # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
+    # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

@@ -5333,6 +5333,22 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("acquisitions", "created_by_user_id", "operator_users", "RESTRICT"),
     ("acquisitions", "lead_id", "leads", "SET NULL"),
     ("acquisition_events", "actor_user_id", "operator_users", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4, migration 082. Lo storico
+    # interazioni dell'immobile: UN riferimento non-CASCADE nuovo verso una
+    # tabella che il cleanup cancella. ESAMINATO.
+    #
+    #   property_id -> properties             RESTRICT  (activities)
+    #
+    # Una telefonata o una nota sull'immobile e' storia commerciale: CASCADE
+    # la cancellerebbe con l'immobile; SET NULL lascerebbe una riga che, se
+    # non ha contatto/lead/stima, violerebbe `activities_reference_chk`. Gli
+    # immobili si archiviano, non si cancellano.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: un immobile di prova con
+    # un'interazione non si cancella, e il preflight la incontra come
+    # RIFIUTO, non come cancellazione silenziosa. La matrice non chiama
+    # POST /api/property/properties/{id}/interactions: non ne crea.
+    ("activities", "property_id", "properties", "RESTRICT"),
 })
 
 

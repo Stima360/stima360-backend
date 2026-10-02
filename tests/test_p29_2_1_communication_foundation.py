@@ -142,7 +142,11 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
     # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni), approvata
+    # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
+    # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

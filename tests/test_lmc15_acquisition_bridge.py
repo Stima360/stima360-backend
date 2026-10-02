@@ -396,7 +396,11 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
     # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[-1] == 81 and numeri[-2] == 80 and numeri[-3] == 79 and numeri[-4] == 78 and numeri[-5] == 77 and numeri[-6] == 76 and numeri[-7] == 75 and numeri[-8] == 74
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni), approvata
+    # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
+    # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76 and numeri[-8] == 75 and numeri[-9] == 74
     assert len(numeri) == len(set(numeri))
 
 
@@ -645,7 +649,13 @@ def test_37_nessuna_migration_oltre_la_070():
               "migrations/080_crm_ops_2_property_form.sql",
               "migrations/080_crm_ops_2_property_form_down.sql",
               "migrations/081_crm_ops_3_acquisitions.sql",
-              "migrations/081_crm_ops_3_acquisitions_down.sql"}
+              "migrations/081_crm_ops_3_acquisitions_down.sql",
+              "migrations/082_crm_ops_4_property_interactions.sql",
+              "migrations/082_crm_ops_4_property_interactions_down.sql"}
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni); additiva,
+    # nessun backfill. Si nomina invece di smettere di guardare: qualunque
+    # ALTRA migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
     # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza

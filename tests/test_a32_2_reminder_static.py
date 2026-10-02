@@ -179,7 +179,13 @@ def test_s10_nessuna_migration_080():
     # farebbe ancora fallire.
     assert [m for m in migrazioni if m.startswith("081")] == [
         "081_crm_ops_3_acquisitions.sql", "081_crm_ops_3_acquisitions_down.sql"]
-    assert migrazioni[-1] == "081_crm_ops_3_acquisitions_down.sql"
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 (storico interazioni
+    # dell'immobile, `activities.property_id`) e' ora l'ultima, nominata per
+    # intero: qualunque ALTRA 082, o qualunque migration oltre, farebbe ancora
+    # fallire.
+    assert [m for m in migrazioni if m.startswith("082")] == [
+        "082_crm_ops_4_property_interactions.sql", "082_crm_ops_4_property_interactions_down.sql"]
+    assert migrazioni[-1] == "082_crm_ops_4_property_interactions_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

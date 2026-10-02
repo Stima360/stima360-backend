@@ -696,7 +696,11 @@ def test_g2_nessuna_migration_in_lmc3():
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
     # acquisizione"; additiva, nessun backfill. Si nomina invece di smettere di
     # guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-14:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni); additiva,
+    # nessun backfill. Si nomina invece di smettere di guardare: qualunque
+    # ALTRA migration comparisse farebbe ancora fallire.
+    assert migrazioni[-15:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -709,7 +713,8 @@ def test_g2_nessuna_migration_in_lmc3():
                                "078_a31_2_buyer_visits_projection.sql",
                                "079_a32_1_appointment_reminders.sql",
                                "080_crm_ops_2_property_form.sql",
-                               "081_crm_ops_3_acquisitions.sql"], migrazioni[-15:]
+                               "081_crm_ops_3_acquisitions.sql",
+                               "082_crm_ops_4_property_interactions.sql"], migrazioni[-15:]
 
 
 DOMINI_VIETATI_LMC3 = (

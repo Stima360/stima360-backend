@@ -106,7 +106,11 @@ def test_a03_la_081_e_valida_per_il_runner_e_l_ultima():
     assert runner.validate_migration(m) == [] and m.down_path is not None
     assert not m.non_transactional
     numeri = sorted(x.number for x in trovate.values())
-    assert numeri[-1] == 81 and numeri[-2] == 80
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni), approvata
+    # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
+    # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80
 
 
 def test_a04_la_up_e_additiva_e_la_down_rifiuta_con_dati():

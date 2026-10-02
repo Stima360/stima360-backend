@@ -566,7 +566,13 @@ def test_h1_nessuna_migration_nuova():
               "migrations/080_crm_ops_2_property_form.sql",
               "migrations/080_crm_ops_2_property_form_down.sql",
               "migrations/081_crm_ops_3_acquisitions.sql",
-              "migrations/081_crm_ops_3_acquisitions_down.sql"}
+              "migrations/081_crm_ops_3_acquisitions_down.sql",
+              "migrations/082_crm_ops_4_property_interactions.sql",
+              "migrations/082_crm_ops_4_property_interactions_down.sql"}
+    # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
+    # legame con l'immobile (`property_id`, storico interazioni); additiva,
+    # nessun backfill. Si nomina invece di smettere di guardare: qualunque
+    # ALTRA migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA CRM-OPS-3: la 081 crea `acquisitions` e
     # `acquisition_events`, aggiunge a `properties` la colonna NULLABLE
     # `acquisition_id` (FK composita) e il trigger "nessun incarico nuovo senza
