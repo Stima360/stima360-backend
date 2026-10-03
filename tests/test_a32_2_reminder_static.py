@@ -185,7 +185,12 @@ def test_s10_nessuna_migration_080():
     # fallire.
     assert [m for m in migrazioni if m.startswith("082")] == [
         "082_crm_ops_4_property_interactions.sql", "082_crm_ops_4_property_interactions_down.sql"]
-    assert migrazioni[-1] == "082_crm_ops_4_property_interactions_down.sql"
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 (edifici e unita' censite)
+    # e' ora l'ultima, nominata per intero: qualunque ALTRA 083, o qualunque
+    # migration oltre, farebbe ancora fallire.
+    assert [m for m in migrazioni if m.startswith("083")] == [
+        "083_censimento_1_buildings_units.sql", "083_censimento_1_buildings_units_down.sql"]
+    assert migrazioni[-1] == "083_censimento_1_buildings_units_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

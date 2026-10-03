@@ -717,7 +717,12 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # legame con l'immobile (`property_id`, storico interazioni), approvata
     # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
     # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80 and numeri[-5] == 79 and numeri[-6] == 78 and numeri[-7] == 77 and numeri[-8] == 76, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

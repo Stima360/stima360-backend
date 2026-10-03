@@ -146,7 +146,12 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # legame con l'immobile (`property_id`, storico interazioni), approvata
     # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
     # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80 and numeri[-5] == 79 and numeri[-6] == 78 and numeri[-7] == 77 and numeri[-8] == 76, numeri[-4:]
 
 
 def test_l4_il_ledger_resta_contiguo():

@@ -495,7 +495,7 @@ def test_f3_nessuna_migration_in_lmc2():
     # legame con l'immobile (`property_id`, storico interazioni); additiva,
     # nessun backfill. Si nomina invece di smettere di guardare: qualunque
     # ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-15:] == ["068_lmc10_owner_home_overrides.sql",
+    assert migrazioni[-16:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -509,7 +509,13 @@ def test_f3_nessuna_migration_in_lmc2():
                                "079_a32_1_appointment_reminders.sql",
                                "080_crm_ops_2_property_form.sql",
                                "081_crm_ops_3_acquisitions.sql",
-                               "082_crm_ops_4_property_interactions.sql"], migrazioni[-15:]
+                               "082_crm_ops_4_property_interactions.sql",
+                               "083_censimento_1_buildings_units.sql"], migrazioni[-16:]
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
 
 
 def test_f4_il_read_model_non_tocca_il_funnel_ne_i_domini_vicini():

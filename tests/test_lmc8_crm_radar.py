@@ -543,7 +543,14 @@ def test_h5_nessuna_migration():
               "migrations/081_crm_ops_3_acquisitions.sql",
               "migrations/081_crm_ops_3_acquisitions_down.sql",
               "migrations/082_crm_ops_4_property_interactions.sql",
-              "migrations/082_crm_ops_4_property_interactions_down.sql"}
+              "migrations/082_crm_ops_4_property_interactions_down.sql",
+              "migrations/083_censimento_1_buildings_units.sql",
+              "migrations/083_censimento_1_buildings_units_down.sql"}
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA CRM-OPS-4: la 082 aggiunge a `activities` il
     # legame con l'immobile (`property_id`, storico interazioni); additiva,
     # nessun backfill. Si nomina invece di smettere di guardare: qualunque

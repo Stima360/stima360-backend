@@ -21,8 +21,11 @@ def test_m01_la_082_e_valida_per_il_runner_e_l_ultima():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    assert tutte[-1].version == "082_crm_ops_4_property_interactions"
-    assert runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 082 resta valida ma non e' piu'
+    # l'ultima; la 083 (edifici e unita' censite) la segue e viene nominata.
+    m082 = [m for m in tutte if m.version == "082_crm_ops_4_property_interactions"][0]
+    assert tutte[-1].version == "083_censimento_1_buildings_units" and tutte[-2] is m082
+    assert runner.validate_migration(m082) == []
     # additiva: nessuna tabella nuova, nessun backfill, la down rifiuta con dati
     eseguibile = "\n".join(r for r in SU.splitlines() if not r.lstrip().startswith("--"))
     for vietato in ("CREATE TABLE", "UPDATE activities", "INSERT INTO", "DELETE FROM"):

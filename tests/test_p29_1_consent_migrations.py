@@ -176,7 +176,12 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # legame con l'immobile (`property_id`, storico interazioni), approvata
     # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
     # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert max(numeri) == 82, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert max(numeri) == 83, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

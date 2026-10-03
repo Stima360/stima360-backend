@@ -5475,6 +5475,27 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # RIFIUTO, non come cancellazione silenziosa. La matrice non chiama
     # POST /api/property/properties/{id}/interactions: non ne crea.
     ("activities", "property_id", "properties", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1, migration 083. Edifici e unita'
+    # censite: DUE riferimenti non-CASCADE nuovi verso tabelle che il cleanup
+    # cancella. ESAMINATI.
+    #
+    #   agency_id          -> agencies     RESTRICT  (buildings)
+    #   parent_property_id -> properties   RESTRICT  (properties, la pertinenza
+    #                                                 verso la sua unita')
+    #
+    # Un edificio non si cancella con l'agenzia in silenzio, e un'unita' con
+    # pertinenze collegate non si cancella lasciando le pertinenze orfane: gli
+    # immobili si archiviano. `properties.building_id -> buildings` e'
+    # anch'essa RESTRICT ma `buildings` non e' (ancora) fra i genitori del
+    # cleanup: nessuna rotta la crea in questa fase, quindi la matrice non ne
+    # produce. Quando il backend del censimento esporra' le rotte, `buildings`
+    # entrera' nel perimetro del cleanup e in questo inventario.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: la matrice non crea edifici ne'
+    # pertinenze; se un giorno ne incontrasse, il preflight li vede come
+    # RIFIUTO, non come cancellazione silenziosa.
+    ("buildings", "agency_id", "agencies", "RESTRICT"),
+    ("properties", "parent_property_id", "properties", "RESTRICT"),
 })
 
 

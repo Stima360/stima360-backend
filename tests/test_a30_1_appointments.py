@@ -84,7 +84,12 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # legame con l'immobile (`property_id`, storico interazioni), approvata
     # dal design CRM-OPS-4. Si nomina invece di smettere di guardare: la serie
     # resta contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 82 and numeri[-2] == 81 and numeri[-3] == 80 and numeri[-4] == 79 and numeri[-5] == 78 and numeri[-6] == 77 and numeri[-7] == 76 and numeri[-8] == 75 and numeri[-9] == 74
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
+    # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
+    # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
+    # backfill. Si nomina invece di smettere di guardare: la serie resta
+    # contigua e qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80 and numeri[-5] == 79 and numeri[-6] == 78 and numeri[-7] == 77 and numeri[-8] == 76 and numeri[-9] == 75 and numeri[-10] == 74
     assert len(numeri) == len(set(numeri))
 
 
