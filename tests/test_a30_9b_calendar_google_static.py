@@ -100,6 +100,56 @@ def test_37_main_solo_mount():
         assert vietato not in testo
 
 
+def test_38_callback_rifiuto_302_verso_agenda_prima_di_config_db_e_rete(monkeypatch):
+    """(7, 8, 9) Il callback che rifiuta risponde **302 Found** verso l'Agenda,
+    con il solo codice stabile nella query, e lo fa PRIMA di configurazione,
+    database e rete. Il certificatore live (CALENDAR_SYNC-callback-*) e il suo
+    doppio attendono 302: `RedirectResponse` senza `status_code` darebbe il
+    307 di default di Starlette, e questo test lo coglierebbe (fallisce sul
+    router senza `status_code`). Rotta VERA, solo l'identita' e' iniettata."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from calendar_sync import router as modulo
+    from operator_auth.context import OperatorContext
+    from operator_auth.dependencies import require_operator
+
+    monkeypatch.setenv("GOOGLE_CALENDAR_ENABLED", "true")
+    monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_ID", raising=False)      # configurazione incompleta
+
+    def mai(nome):
+        def _f(*a, **k):
+            raise AssertionError(f"{nome} non deve essere raggiunto da un callback rifiutato")
+        return _f
+    monkeypatch.setattr(modulo, "core_cursor", mai("core_cursor"))       # nessun database
+    monkeypatch.setattr(modulo.oauth, "exchange_code", mai("oauth.exchange_code"))   # nessuna rete
+    monkeypatch.setattr(modulo.repository, "consume_oauth_state", mai("consume_oauth_state"))
+
+    app = FastAPI()
+    app.include_router(modulo.router)
+    app.dependency_overrides[require_operator] = lambda: OperatorContext(
+        user_id=7, agency_id=1, role="agency_owner", is_platform_admin=False,
+        session_id=None, auth_channel="operator_session")
+    api = TestClient(app, raise_server_exceptions=False)
+
+    casi = (
+        ("", "GOOGLE_OAUTH_DENIED"),                                         # senza code/state
+        ("?state=p26-6-finto", "GOOGLE_OAUTH_DENIED"),                      # solo state
+        ("?error=access_denied&state=x", "GOOGLE_OAUTH_DENIED"),            # consenso negato
+        ("?code=p26-6-finto&state=p26-6-finto", "GOOGLE_NOT_CONFIGURED"),   # fittizi, Google non configurato
+    )
+    for query, codice in casi:
+        r = api.get("/api/calendar/google/callback" + query, follow_redirects=False)
+        assert r.status_code == 302, (query, r.status_code, r.headers.get("location"))
+        assert r.headers["location"] == f"/os/?google_calendar_error={codice}#/agenda", query
+        assert r.content == b"" and "set-cookie" not in r.headers, query
+    # platform admin senza agenzia: stesso contratto, stessa sequenza
+    app.dependency_overrides[require_operator] = lambda: OperatorContext(
+        user_id=7, agency_id=None, role="platform_admin", is_platform_admin=True,
+        session_id=None, auth_channel="operator_session")
+    r = api.get("/api/calendar/google/callback?code=x&state=y", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/os/?google_calendar_error=GOOGLE_OPERATOR_REQUIRED#/agenda"
+
+
 # ---------------------------------------------------------------------------
 # 11, 12(scope), 21, 22, 25 - OAUTH: URL, SCOPE, PKCE
 # ---------------------------------------------------------------------------

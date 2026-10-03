@@ -36,6 +36,12 @@ router = APIRouter(prefix="/api/calendar/google", tags=["calendar_sync"])
 #: la pagina stessa (`agenda-page.js`) a leggerla da `window.location.search`.
 _AGENDA_URL = "/os/#/agenda"
 _AGENDA_BASE = "/os/"
+#: Il ritorno all'Agenda e' un 302 Found: un redirect top-level del browser
+#: (GET -> GET) dopo il giro OAuth, lo stesso stato che il certificatore live
+#: (`scripts/p26_6_live_cert.py`, CALENDAR_SYNC) e il suo doppio attendono.
+#: Esplicito, perche' `RedirectResponse` senza `status_code` risponderebbe
+#: 307 (il default di Starlette), e nessun contratto di A30-9B lo ha scelto.
+_REDIRECT_STATUS = 302
 
 
 class _Richiesta(Exception):
@@ -150,7 +156,8 @@ def _redirect_errore(code: str) -> RedirectResponse:
     # utile alla UI, mai un agency_id/user_id/stato interno.
     from urllib.parse import urlencode
 
-    return RedirectResponse(f"{_AGENDA_BASE}?{urlencode({'google_calendar_error': code})}#/agenda")
+    return RedirectResponse(f"{_AGENDA_BASE}?{urlencode({'google_calendar_error': code})}#/agenda",
+                            status_code=_REDIRECT_STATUS)
 
 
 def _callback(request: Request, ctx: OperatorContext, *, id_token_verifier=None):
@@ -221,7 +228,7 @@ def _callback(request: Request, ctx: OperatorContext, *, id_token_verifier=None)
         for appointment_id in repository.future_syncable_appointment_ids(cur, agency_id, user_id):
             repository.mark_dirty_with_cursor(cur, agency_id, appointment_id,
                                               deployment_namespace=cfg.deployment_namespace)
-    return RedirectResponse(_AGENDA_URL)
+    return RedirectResponse(_AGENDA_URL, status_code=_REDIRECT_STATUS)
 
 
 @router.get("/callback")

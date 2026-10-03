@@ -132,7 +132,7 @@ def _connetti(httpg, monkeypatch, w, chi, *, subject=None):
     stato = parse_qs(urlparse(url).query)["state"][0]
     r2 = httpg(chi).get("/api/calendar/google/callback",
                         params={"code": "AUTHCODE", "state": stato}, follow_redirects=False)
-    assert r2.status_code in (302, 307), r2.text
+    assert r2.status_code == 302, r2.text       # 302 Found, mai il 307 di default
     return r2
 
 
