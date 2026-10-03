@@ -1,6 +1,6 @@
 const P='/api/property',C='/api/core',B='/api/buy';
 const PROPERTY_STATUSES=['draft','evaluation','mandate','active','reserved','under_offer','sold','withdrawn','archived'];
-const PROPERTY_TYPES=['apartment','house','villa','rustic','land','commercial','office','garage','building','other'];
+const PROPERTY_TYPES=['apartment','house','villa','rustic','land','commercial','office','garage','building','storage','other'];// CENSIMENTO-1 Fase 2: + storage (Cantina / Deposito), stesso enum del backend
 const PROPERTY_CLASSES=['A','B','C'];
 const MATCHABLE_PROPERTY_STATUSES=['mandate','active','reserved','under_offer'];
 const VISIT_OUTCOME_ACTIONS=['visited','interested','discarded','offer_candidate'];

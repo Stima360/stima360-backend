@@ -747,6 +747,30 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "application choke point and must stay uncoupled from a throwaway "
         "test database"
     ),
+    "tests/test_censimento_2_catalog_postgres.py": (
+        "TEST-only CENSIMENTO-1 Fase 2 (catalogues) proof on the COMPLETE "
+        "schema; opts in through P29_TEST_DSN and skips entirely without it, "
+        "and FAILS rather than run if the DSN is not a Unix socket or "
+        "localhost. Registered in its own right rather than reusing the Fase 1 "
+        "entry: an allow-list shared between phases would let a new entrypoint "
+        "arrive unannounced. Its module fixture rebuilds, by itself, the same "
+        "throwaway database as the Fase 1 full-schema proof (it MUST be named "
+        "stima360_db_test, skips if one already exists on the local cluster, "
+        "drops it at teardown): legacy tables through the real database.py "
+        "functions (get_connection monkeypatched onto the throwaway database "
+        "for that step only), 001..025 as on TEST, then 026, 027..082 and 083 "
+        "EXECUTED by scripts/p26_migrate.py. It then monkeypatches "
+        "get_connection in the core module onto the throwaway database so the "
+        "REAL property service and repository run against it, and proves what "
+        "a recording cursor cannot: that the new 'storage' type is created, "
+        "read, updated and isolated per agency with historical rows untouched; "
+        "that every one of the 52 cadastral catalogue codes passes the 083 "
+        "format CHECK and normalisation trigger, while catalogue membership "
+        "stays with the service; and that form-options carries the catalogue. "
+        "It must not go through database.get_connection() for the test "
+        "traffic: that is the application choke point and must stay uncoupled "
+        "from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

@@ -1,4 +1,4 @@
-PROPERTY_TYPES = {"apartment","villa","house","rustic","land","commercial","garage","office","building","other"}
+PROPERTY_TYPES = {"apartment","villa","house","rustic","land","commercial","garage","office","building","storage","other"}  # CENSIMENTO-1 Fase 2: + storage (Cantina / Deposito)
 PROPERTY_STATUSES = {"draft","evaluation","mandate","active","reserved","under_offer","sold","withdrawn","archived"}
 PROPERTY_CLASSES = {"A","B","C"}
 PROPERTY_CONTACT_ROLES = {"owner","seller","tenant","contact","professional","other"}

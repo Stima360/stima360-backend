@@ -182,11 +182,182 @@ def validate_energy_class(value: str | None) -> None:
 # --- Tipologie: etichette leggibili --------------------------------------------
 
 #: Le chiavi sono esattamente property/enums.py::PROPERTY_TYPES.
+#: CENSIMENTO-1 Fase 2: `storage` (Cantina / Deposito) e' la tipologia nuova
+#: approvata per le pertinenze autonome (decisione 1 del progetto).
 PROPERTY_TYPE_LABELS: dict[str, str] = {
     "apartment": "Appartamento", "villa": "Villa", "house": "Casa indipendente",
     "rustic": "Rustico", "land": "Terreno", "commercial": "Locale commerciale",
-    "garage": "Garage / box", "office": "Ufficio", "building": "Stabile", "other": "Altro",
+    "garage": "Garage / box", "office": "Ufficio", "building": "Stabile",
+    "storage": "Cantina / Deposito", "other": "Altro",
 }
+
+
+# --- Categorie catastali (CENSIMENTO-1 Fase 2) ----------------------------------
+
+# Il quadro generale delle categorie catastali, 52 voci: gruppi A (11), B (8),
+# C (7), D (10), E (9) e F (7).
+#
+# Fonti (verifica documentale chiusa il 2026-10-03, review della Fase 2):
+# * quadro A-E: scheda del Comune di Padova (https://padovanet.it/categorie-catastali),
+#   coincidente con l'elenco di Money.it 2025 e con il quadro riportato nelle
+#   "Linee guida operative Docfa" dell'Agenzia delle Entrate - Direzione regionale
+#   della Lombardia (v. 1.0, 16/01/2019, pubblicate dal Collegio Geometri di
+#   Milano: https://geometri.mi.it/wp-content/uploads/2022/05/vademecum-docfa-finale_compressed.pdf);
+# * F/1-F/5: D.M. 2 gennaio 1998 n. 28, art. 3 c. 2 (G.U. n. 45 del 24/02/1998,
+#   https://www.normattiva.it/eli/id/1998/02/24/098G0063/CONSOLIDATED) - unita'
+#   censite "senza attribuzione di rendita catastale"; cosi' anche MEF,
+#   Risoluzione n. 8/DF del 22/07/2013 ("ad esse non e' associabile una
+#   rendita catastale");
+# * F/6 "fabbricato in attesa di dichiarazione": Agenzia del Territorio,
+#   circolare n. 1/T dell'8 maggio 2009, prot. 25818 (Servizio di
+#   documentazione tributaria: https://def.finanze.it/DocTribFrontend/getContent.do?id=%7BCBECAA35-9690-48A6-90C3-42A8B0C4DF5E%7D):
+#   identificativo transitorio costituito all'approvazione del tipo mappale e
+#   soppresso con la dichiarazione Docfa, quindi prima di qualunque classamento;
+#   le Linee guida AdE Lombardia (p. 29) lo dicono esplicitamente: "le unita'
+#   immobiliari censite nel gruppo F, oltre a non avere alcuna rendita
+#   catastale, sono rappresentate solo sull'elaborato planimetrico";
+# * F/7 "infrastrutture di reti pubbliche di comunicazione": Agenzia delle
+#   Entrate, circolare n. 18/E dell'8 giugno 2017 (art. 12 c. 2 D.Lgs. 33/2016):
+#   "attribuzione della categoria F/7 ... senza attribuzione di rendita"
+#   (comunicato: https://www.agenziaentrate.gov.it/portale/documents/20143/313156/cs+08062017+circolare+n.+18+nuovi+profili+catastali_135_Com.+st.+Circolare+catasto+reti+di+comunicazione+08.06.17.pdf).
+#   Quindi TUTTE le sette voci del gruppo F sono senza rendita (`no_income`);
+# * A/5 e A/6 "storiche": Ministero delle Finanze - Direzione Generale del
+#   Catasto, circolare n. 5 del 14 marzo 1992 (Servizio di documentazione
+#   tributaria, copia: https://www.studiopetrillo.com/files/circ_5_14-03-1992.pdf):
+#   "non rappresentano piu' tipologie abitative ordinarie", da riclassare in A/4
+#   alla prima variazione; nota Min. Finanze 4 maggio 1994 n. C1/1022 per il
+#   trattamento delle unita' gia' censite. Restano nelle visure datate e nel
+#   quadro delle Linee guida AdE Lombardia: SELEZIONABILI, con la nota "storica";
+# * discrepanze chiuse: la stessa circolare 5/1992 dichiarava B/8 "non piu'
+#   riscontrabile nell'ordinarieta'" (resta nel quadro corrente: selezionabile)
+#   e istituiva D/10 "residence", D/11 "scuole private", D/12 "posti barca e
+#   stabilimenti balneari", mai entrate nei quadri correnti (il D/10 odierno,
+#   funzioni produttive agricole, viene dal D.P.R. 139/1998): D/11 e D/12 NON
+#   incluse. Le pagine HTML di agenziaentrate.gov.it rispondono 403 da qui: i
+#   documenti AdE sono stati letti nelle copie pubblicate sopra indicate.
+#
+# Meccanica: il database salva SOLO il codice (`properties.cadastral_category`
+# VARCHAR(5), CHECK di formato `^[A-F]/[0-9]{1,2}$` della migration 083, mai
+# un CHECK di catalogo); l'appartenenza al catalogo la giudica il service con
+# `validate_cadastral_category`. "Da verificare" e' NULL: solo un'etichetta
+# della UI, mai un codice. La categoria non viene MAI dedotta dalla tipologia:
+# `CADASTRAL_SUGGESTIONS` sono suggerimenti morbidi per il foglio di scelta,
+# con "Tutte le categorie" sempre raggiungibile.
+
+#: (codice, descrizione, note) per gruppo. Le note sono quelle che la UI
+#: mostra accanto alla voce: "storica" (A/5, A/6) e "senza rendita" (tutto il
+#: gruppo F: F/1-F/5 per il D.M. 28/1998, F/6 per la circ. 1/T 2009, F/7 per
+#: la circ. 18/E 2017).
+CADASTRAL_CATEGORIES: tuple[dict[str, Any], ...] = tuple(
+    {"code": code, "group": code[0], "label": label, "historical": code in ("A/5", "A/6"),
+     "no_income": code.startswith("F/")}
+    for code, label in (
+        # Gruppo A - abitazioni e uffici privati (11)
+        ("A/1", "Abitazioni di tipo signorile"),
+        ("A/2", "Abitazioni di tipo civile"),
+        ("A/3", "Abitazioni di tipo economico"),
+        ("A/4", "Abitazioni di tipo popolare"),
+        ("A/5", "Abitazioni di tipo ultrapopolare (categoria soppressa)"),
+        ("A/6", "Abitazioni di tipo rurale (categoria soppressa)"),
+        ("A/7", "Abitazioni in villini"),
+        ("A/8", "Abitazioni in ville"),
+        ("A/9", "Castelli, palazzi di eminenti pregi artistici o storici"),
+        ("A/10", "Uffici e studi privati"),
+        ("A/11", "Abitazioni ed alloggi tipici dei luoghi"),
+        # Gruppo B - usi collettivi senza fine di lucro (8)
+        ("B/1", "Collegi, convitti, educandati, ricoveri, orfanotrofi, ospizi, conventi, seminari, caserme"),
+        ("B/2", "Case di cura ed ospedali (senza fine di lucro)"),
+        ("B/3", "Prigioni e riformatori"),
+        ("B/4", "Uffici pubblici"),
+        ("B/5", "Scuole e laboratori scientifici"),
+        ("B/6", "Biblioteche, pinacoteche, musei, gallerie, accademie non in edifici A/9"),
+        ("B/7", "Cappelle ed oratori non destinati all'esercizio pubblico del culto"),
+        ("B/8", "Magazzini sotterranei per depositi di derrate"),
+        # Gruppo C - usi commerciali e pertinenze (7)
+        ("C/1", "Negozi e botteghe"),
+        ("C/2", "Magazzini e locali di deposito"),
+        ("C/3", "Laboratori per arti e mestieri"),
+        ("C/4", "Fabbricati e locali per esercizi sportivi (senza fine di lucro)"),
+        ("C/5", "Stabilimenti balneari e di acque curative (senza fine di lucro)"),
+        ("C/6", "Stalle, scuderie, rimesse, autorimesse (senza fine di lucro)"),
+        ("C/7", "Tettoie chiuse od aperte"),
+        # Gruppo D - immobili a destinazione speciale (10)
+        ("D/1", "Opifici"),
+        ("D/2", "Alberghi e pensioni (con fine di lucro)"),
+        ("D/3", "Teatri, cinematografi, sale per concerti e spettacoli (con fine di lucro)"),
+        ("D/4", "Case di cura ed ospedali (con fine di lucro)"),
+        ("D/5", "Istituti di credito, cambio e assicurazione (con fine di lucro)"),
+        ("D/6", "Fabbricati e locali per esercizi sportivi (con fine di lucro)"),
+        ("D/7", "Fabbricati per le speciali esigenze di un'attivita' industriale"),
+        ("D/8", "Fabbricati per le speciali esigenze di un'attivita' commerciale"),
+        ("D/9", "Edifici galleggianti o sospesi, ponti privati soggetti a pedaggio"),
+        ("D/10", "Fabbricati per funzioni produttive connesse alle attivita' agricole"),
+        # Gruppo E - immobili a destinazione particolare (9)
+        ("E/1", "Stazioni per servizi di trasporto terrestri, marittimi ed aerei"),
+        ("E/2", "Ponti comunali e provinciali soggetti a pedaggio"),
+        ("E/3", "Costruzioni e fabbricati per speciali esigenze pubbliche"),
+        ("E/4", "Recinti chiusi per speciali esigenze pubbliche"),
+        ("E/5", "Fabbricati costituenti fortificazioni e loro dipendenze"),
+        ("E/6", "Fari, semafori, torri per rendere d'uso pubblico l'orologio comunale"),
+        ("E/7", "Fabbricati destinati all'esercizio pubblico dei culti"),
+        ("E/8", "Fabbricati e costruzioni nei cimiteri, esclusi colombari, sepolcri e tombe di famiglia"),
+        ("E/9", "Edifici a destinazione particolare non compresi nelle altre categorie del gruppo E"),
+        # Gruppo F - stati particolari, tutte senza rendita (7)
+        ("F/1", "Area urbana"),
+        ("F/2", "Unita' collabente"),
+        ("F/3", "Unita' in corso di costruzione"),
+        ("F/4", "Unita' in corso di definizione"),
+        ("F/5", "Lastrico solare"),
+        ("F/6", "Fabbricato in attesa di dichiarazione (circ. 1/T 2009)"),
+        ("F/7", "Infrastrutture di reti pubbliche di comunicazione (circ. 18/E)"),
+    )
+)
+
+CADASTRAL_CATEGORY_CODES: frozenset[str] = frozenset(c["code"] for c in CADASTRAL_CATEGORIES)
+
+#: Suggerimenti per tipologia (progetto §5): "suggested" in testa al foglio di
+#: scelta, "secondary" subito dopo. Mai un'assegnazione automatica; le
+#: eccezioni reali (una villa A/3, un ufficio A/2, un rustico F/2) si
+#: raggiungono da "Tutte le categorie". Le chiavi sono tipologie di
+#: property/enums.py; una tipologia senza voce ha solo l'elenco completo.
+CADASTRAL_SUGGESTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "apartment":  {"suggested": ("A/2", "A/3", "A/4"), "secondary": ("A/1", "A/11", "A/5", "A/6")},
+    "house":      {"suggested": ("A/2", "A/3", "A/4"), "secondary": ("A/7", "A/11", "A/5", "A/6")},
+    "villa":      {"suggested": ("A/7", "A/8"),        "secondary": ("A/2", "A/3", "A/9")},
+    "rustic":     {"suggested": ("A/6", "A/11", "C/2"), "secondary": ("A/3", "A/4", "D/10")},
+    "commercial": {"suggested": ("C/1", "C/3"),        "secondary": ("C/2", "D/8")},
+    "office":     {"suggested": ("A/10",),             "secondary": ("D/5", "B/4")},
+    "garage":     {"suggested": ("C/6",),              "secondary": ("C/7",)},
+    "storage":    {"suggested": ("C/2",),              "secondary": ("C/7", "C/3")},
+    "building":   {"suggested": (),                    "secondary": ("D/1", "D/2", "D/8")},
+    "land":       {"suggested": (),                    "secondary": ("F/1",)},
+    "other":      {"suggested": (),                    "secondary": ()},
+}
+
+
+def cadastral_categories_for_form() -> list[dict[str, Any]]:
+    """Il catalogo come lo riceve il form (form-options): voci nell'ordine del
+    quadro, con gruppo ed etichetta, piu' le note che la UI deve mostrare."""
+    return [dict(c) for c in CADASTRAL_CATEGORIES]
+
+
+def cadastral_suggestions_for_form() -> dict[str, dict[str, list[str]]]:
+    return {t: {"suggested": list(v["suggested"]), "secondary": list(v["secondary"])}
+            for t, v in CADASTRAL_SUGGESTIONS.items()}
+
+
+def validate_cadastral_category(value: str | None) -> str | None:
+    """Il codice nella forma che il database salva (maiuscolo, senza spazi
+    attorno) oppure None per "Da verificare". Fuori catalogo -> ValueError;
+    il chiamante lo traduce in 400. Nessun codice viene mai dedotto."""
+    if value is None:
+        return None
+    code = value.strip().upper()
+    if code == "":
+        return None
+    if code not in CADASTRAL_CATEGORY_CODES:
+        raise ValueError(f"Categoria catastale non presente nel catalogo: {value}")
+    return code
 
 
 # --- Descrizione sintetica e codice --------------------------------------------

@@ -7,6 +7,7 @@ from . import repository
 # Acquisizioni e dell'interfaccia; il trigger della 081 resta la garanzia.
 from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
+                      cadastral_categories_for_form, cadastral_suggestions_for_form,
                       territory_tree, validate_energy_class, validate_location)
 
 # CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
@@ -71,14 +72,18 @@ def _apply_assignment(ctx, data, current_agent_id=None):
 
 def form_options(ctx):
     """Tutto cio' che il form Immobili deve offrire, deciso qui e non nel
-    browser: territorio, classi energetiche, tipologie e - solo per chi puo'
-    assegnare - gli agenti assegnabili della propria agenzia."""
+    browser: territorio, classi energetiche, tipologie, il catalogo delle
+    categorie catastali con i suggerimenti per tipologia (CENSIMENTO-1 Fase 2)
+    e - solo per chi puo' assegnare - gli agenti assegnabili della propria
+    agenzia."""
     can_assign = _may_assign(ctx)
     return {
         'territory': territory_tree(),
         'territory_sources': TERRITORY_SOURCES,
         'energy_classes': list(ENERGY_CLASSES),
         'property_types': [{'value': k, 'label': v} for k, v in PROPERTY_TYPE_LABELS.items()],
+        'cadastral_categories': cadastral_categories_for_form(),
+        'cadastral_suggestions': cadastral_suggestions_for_form(),
         'can_assign': can_assign,
         'agents': repository.list_assignable_agents(ctx) if can_assign else [],
     }
