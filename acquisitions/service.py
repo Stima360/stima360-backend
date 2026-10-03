@@ -52,6 +52,7 @@ from .enums import (
 #: Stati dell'immobile su cui non si apre un percorso d'acquisizione e non si
 #: genera un incarico.
 _IMMOBILE_CHIUSO = ("sold", "archived")
+PROPERTY_IN_CENSUS_MESSAGE = "Immobile in censimento: usa Prendi in carico"
 
 MAX_LIST_LIMIT = 200
 #: Limite di sicurezza nel seguire una catena di spostamenti dell'Agenda.
@@ -263,6 +264,9 @@ def create_acquisition(ctx, body):
                 return _dettaglio(ctx, cur, agency_id, gia), True
             if immobile["archived_at"] is not None or immobile["commercial_status"] in _IMMOBILE_CHIUSO:
                 raise errors.InvalidData("L'immobile e' venduto o archiviato")
+            # CENSIMENTO-1 Fase 3 (§7): mai un'acquisizione su una scheda di censimento
+            if immobile.get("record_kind") == "census":
+                raise errors.PropertyInCensus(PROPERTY_IN_CENSUS_MESSAGE)
             if immobile["acquisition_id"] is not None:
                 raise errors.MandateAlreadyExists(
                     "L'immobile ha gia' un incarico generato da un'acquisizione")

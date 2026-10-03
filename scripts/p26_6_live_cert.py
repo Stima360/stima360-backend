@@ -4612,6 +4612,9 @@ def certify_property(report, http, cert, domain, jars, owned, context) -> None:
     # CRM-OPS-4: INCARICHI e STORICO INTERAZIONI hanno sonde dedicate, non solo
     # il prefisso PROPERTY.
     certify_property_mandates(report, http, cert, jars, owned, context)
+    # CENSIMENTO-1 Fase 3: EDIFICI, UNITA' DI CENSIMENTO, PERTINENZE, ACCESSORI
+    # (sonde BUILDINGS-*, sullo stesso modello: hostile / rejection only).
+    certify_property_buildings(report, http, cert, jars, owned, context)
 
 
 # ---------------------------------------------------------------------------
@@ -4837,6 +4840,186 @@ def certify_property_mandates(report, http, cert, jars, owned, context) -> None:
         dopo["interazioni_righe"] >= prima["interazioni_righe"],
         f"interazioni d'immobile prima {prima['interazioni_righe']}, dopo "
         f"{dopo['interazioni_righe']} (lo storico non si cancella: mai meno)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# CENSIMENTO-1 Fase 3 - EDIFICI E CENSIMENTO: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+#: L'INVENTARIO delle rotte del censimento sotto `/api/property`
+#: (property/router.py, property/census.py): il giro anonimo le sonda tutte
+#: (-> 401); il prover offline le confronta con il mount vero. La sola
+#: DELETE (accessorio) resta FUORI dal giro, per la stessa regola delle
+#: sezioni precedenti: il run live non emette mai una DELETE prima della
+#: guardia di pulizia (CLEAN-PREFLIGHT); il suo gate di sessione e la sua
+#: tenancy sono provati offline (tests/test_next2_router_hardening.py,
+#: tests/test_censimento_3_backend_postgres.py).
+BUILDINGS_OPERAZIONI = (
+    ("GET", "/api/property/buildings"),
+    ("POST", "/api/property/buildings"),
+    ("GET", "/api/property/buildings/{id}"),
+    ("PATCH", "/api/property/buildings/{id}"),
+    ("POST", "/api/property/census/units"),
+    ("GET", "/api/property/properties/{id}/census"),
+    ("POST", "/api/property/properties/{id}/pertinenze/link"),
+    ("POST", "/api/property/properties/{id}/pertinenze/{id}/unlink"),
+    ("POST", "/api/property/properties/{id}/accessories"),
+    ("PATCH", "/api/property/properties/{id}/accessories/{id}"),
+    ("POST", "/api/property/properties/{id}/accessories/{id}/resolve"),
+    ("POST", "/api/property/properties/{id}/take-in-charge"),
+    ("POST", "/api/property/properties/{id}/undo-create"),
+)
+
+
+def _censimento_fotografia(database) -> dict | None:
+    """Conteggi del censimento: SOLA LETTURA. None se la 083 non c'e' o non
+    c'e' un database."""
+    if database is None:
+        return None
+    with database.read() as cur:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables"
+                    "  WHERE table_schema = 'public' AND table_name = 'buildings') AS censimento_pronto")
+        riga = cur.fetchone()
+        if riga is None or not riga["censimento_pronto"]:
+            return None
+        cur.execute("SELECT (SELECT count(*) FROM buildings) AS censimento_edifici_righe,"
+                    "       (SELECT coalesce(max(id), 0) FROM buildings) AS censimento_edifici_max_riga,"
+                    "       (SELECT count(*) FROM properties WHERE record_kind = 'census') AS censimento_unita_righe,"
+                    "       (SELECT coalesce(max(id), 0) FROM properties) AS censimento_immobili_max_riga,"
+                    "       (SELECT count(*) FROM property_accessories) AS censimento_accessori_righe")
+        conteggi = dict(cur.fetchone())
+    return {k: int(v) for k, v in conteggi.items()}
+
+
+def _edificio_altrui(database, agency_id) -> int | None:
+    """Un edificio GIA' ESISTENTE dell'agenzia, letto e mai toccato."""
+    with database.read() as cur:
+        cur.execute("SELECT id FROM buildings WHERE agency_id = %s AND archived_at IS NULL"
+                    " ORDER BY id LIMIT 1 /* edificio_altrui */", (agency_id,))
+        riga = cur.fetchone()
+    return None if riga is None else int(riga["id"])
+
+
+def _edifici_fuori_agenzia(database, ids, agency_id) -> list:
+    """Fra gli id restituiti da un elenco, quelli che NON sono dell'agenzia
+    di chi ha chiesto. Deve essere vuoto."""
+    if not ids:
+        return []
+    with database.read() as cur:
+        cur.execute("SELECT id FROM buildings WHERE id = ANY(%s) AND agency_id <> %s"
+                    " /* edifici_fuori_agenzia */", (sorted(ids), agency_id))
+        return sorted(int(r["id"]) for r in cur.fetchall())
+
+
+def certify_property_buildings(report, http, cert, jars, owned, context) -> None:
+    """EDIFICI e CENSIMENTO (CENSIMENTO-1 Fase 3): HOSTILE / REJECTION ONLY.
+
+        anonimo, su tredici rotte (tutte meno la DELETE)   -> 401
+        elenco edifici                                      -> mai un edificio altrui
+        scheda dell'edificio altrui (esistente, letto)      -> 404, nessun dato
+        PATCH vuota sull'edificio altrui                    -> 404, nessun dato
+        censimento dell'immobile altrui (lettura)           -> 404, nessun dato
+        presa in carico / annulla dell'immobile altrui      -> 404 (prima di ogni UPDATE)
+        `agency_id` nel corpo di una palazzina              -> 422 (`extra=forbid`)
+        e, prima e dopo: edifici, unita' census, immobili e accessori invariati.
+
+    Nessuna sonda puo' scrivere, per costruzione: la PATCH altrui ha corpo
+    vuoto (un server regredito risponderebbe con i dati, senza scrivere), la
+    presa in carico e l'annulla si rivolgono a un immobile `crm` (un server
+    regredito risponderebbe 409 NOT_CENSUS / UNDO_NOT_POSSIBLE, senza
+    scrivere), e il solo POST ha `agency_id` nel corpo (422 prima del
+    service). L'edificio altrui NON si crea: si cerca in sola lettura, e se
+    manca la sonda e' BLOCKED.
+    """
+    database = context.get("database")
+    agenzie = context.get("agencies") or {}
+
+    def agenzia(etichetta):
+        valore = agenzie.get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    prima = _censimento_fotografia(database)
+    if prima is None:
+        report.blocked(
+            "BUILDINGS-fotografia",
+            "nessuna connessione al database, o 083 non applicata: non si puo' "
+            "provare che il giro ostile non scriva, e il giro non parte")
+        return
+
+    for metodo, percorso in BUILDINGS_OPERAZIONI:
+        risposta = http.request(metodo, percorso.replace("{id}", "1"),
+                                payload={} if metodo in ("POST", "PATCH") else None)
+        etichetta = percorso.replace("/api/property/", "").replace("{id}", "id").replace("/", "-")
+        report.check(
+            f"BUILDINGS-anonimo-{metodo}-{etichetta}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+        suo_immobile = owned[altro].get("PROPERTY")
+        suo_edificio = _edificio_altrui(database, agenzia(altro))
+
+        elenco = http.request("GET", "/api/property/buildings?limit=200", jar=jar)
+        visti = [v.get("id") for v in elenco.items() if isinstance(v, dict)]
+        fuori = _edifici_fuori_agenzia(database, [v for v in visti if v is not None], agenzia(etichetta))
+        report.check(
+            f"BUILDINGS-list-{etichetta}-non-vede-{altro}",
+            elenco.status == 200 and not fuori and suo_edificio not in visti,
+            f"{etichetta}: elenco edifici -> {elenco.status}, {len(visti)} elementi "
+            f"osservati, fuori agenzia {fuori} (atteso 200, nessuno)",
+        )
+
+        if suo_edificio is None:
+            report.blocked(
+                f"BUILDINGS-dettaglio-edificio-{etichetta}-{altro}",
+                f"PREREQUISITO: l'agenzia {altro} non ha alcun edificio sul TEST. "
+                "La matrice non ne crea uno (il censimento si prova con dati veri)")
+        else:
+            for nome, metodo, corpo in (("dettaglio-edificio", "GET", None), ("patch-edificio", "PATCH", {})):
+                risposta = http.request(metodo, f"/api/property/buildings/{suo_edificio}", jar=jar, payload=corpo)
+                report.check(
+                    f"BUILDINGS-{nome}-{etichetta}-{altro}",
+                    risposta.status == 404 and _solo_dettaglio(risposta),
+                    f"{etichetta} {metodo} edificio {suo_edificio} di {altro} -> "
+                    f"{risposta.status} (atteso 404 senza dati)",
+                )
+
+        if suo_immobile is None:
+            report.blocked(f"BUILDINGS-immobile-altrui-{etichetta}-{altro}",
+                           f"{altro} non ha un immobile della matrice: sonde non eseguibili")
+        else:
+            for nome, metodo, percorso, corpo in (
+                    ("censimento-lettura", "GET", f"/api/property/properties/{suo_immobile}/census", None),
+                    ("presa-in-carico", "POST", f"/api/property/properties/{suo_immobile}/take-in-charge", {}),
+                    ("annulla", "POST", f"/api/property/properties/{suo_immobile}/undo-create", None)):
+                risposta = http.request(metodo, percorso, jar=jar, payload=corpo)
+                report.check(
+                    f"BUILDINGS-{nome}-{etichetta}-{altro}",
+                    risposta.status == 404 and _solo_dettaglio(risposta),
+                    f"{etichetta} {metodo} {percorso} (immobile di {altro}) -> "
+                    f"{risposta.status} (atteso 404 senza dati, prima di ogni UPDATE)",
+                )
+
+        intruso = http.request("POST", "/api/property/buildings", jar=jar,
+                               payload={"city": "Fermo", "agency_id": agenzia(altro)})
+        report.check(
+            f"BUILDINGS-agency-nel-corpo-{etichetta}",
+            intruso.status == 422,
+            f"{etichetta} crea una palazzina con `agency_id` nel corpo -> {intruso.status} "
+            "(atteso 422: `extra=forbid`, prima del service)",
+        )
+
+    dopo = _censimento_fotografia(database)
+    if dopo is None:
+        report.fail("BUILDINGS-fotografia-dopo", "la fotografia finale non e' leggibile")
+        return
+    report.check(
+        "BUILDINGS-nessuna-riga-del-run",
+        dopo == prima,
+        f"edifici/unita' census/immobili/accessori prima {prima}, dopo {dopo} (attesi identici)",
     )
 
 

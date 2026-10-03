@@ -812,7 +812,12 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # (Incarichi e storico interazioni), dietro lo stesso
         # legacy_basic_agency_context e tutte nello scope (set(routes) ==
         # set(scoped) qui sotto). Il conteggio resta esatto.
-        "property": 26, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CENSIMENTO-1 FASE 3: PROPERTY 26 -> 40 per le
+        # 14 route del censimento (edifici, unita', pertinenze, accessori, presa
+        # in carico, annulla: property/census.py), dietro lo stesso
+        # legacy_basic_agency_context e tutte nello scope (set(routes) ==
+        # set(scoped) qui sotto). Il conteggio resta esatto.
+        "property": 40, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

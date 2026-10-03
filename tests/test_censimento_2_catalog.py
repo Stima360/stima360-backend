@@ -203,12 +203,18 @@ def test_c02_property_admin_node_check():
 
 
 # ---------------------------------------------------------------------------
-# D. Perimetro: niente di Fase 3 in questa fase
+# D. Perimetro degli schemi
+#    (Fase 2 vietava QUALUNQUE campo della 083 negli schemi generici; la Fase
+#    3 vi porta i dati catastali e la posizione nella palazzina - sono dati
+#    della scheda - mentre collegamenti, stato census/crm e chiave di
+#    idempotenza restano fuori per sempre: passano solo dalle rotte dedicate
+#    del censimento, come decide il progetto §0 p.4-5)
 # ---------------------------------------------------------------------------
 
-def test_d01_gli_schemi_non_cambiano_in_fase_2():
+def test_d01_gli_schemi_generici_non_portano_mai_collegamenti_ne_stato_census():
     for model in (PropertyCreate, PropertyUpdate):
         fields = set(getattr(model, "model_fields", None) or model.__fields__)
-        assert not fields & {"cadastral_category", "cadastral_municipality_code", "cadastral_section",
-                             "cadastral_sheet", "cadastral_parcel", "cadastral_subunit", "record_kind",
-                             "building_id", "parent_property_id", "client_request_id"}, model.__name__
+        assert {"cadastral_category", "cadastral_municipality_code", "cadastral_section", "cadastral_sheet",
+                "cadastral_parcel", "cadastral_subunit", "staircase", "internal_number"} <= fields, model.__name__
+        assert not fields & {"record_kind", "building_id", "parent_property_id", "client_request_id",
+                             "client_request_fingerprint", "address_inherited", "whole_building", "agency_id"}, model.__name__

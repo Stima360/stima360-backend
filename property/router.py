@@ -1,13 +1,18 @@
 from fastapi import APIRouter,Depends,HTTPException,Query,Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import interactions, mandates, service
+from . import census, interactions, mandates, service
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
     try:return fn(*a,**k)
+    # CENSIMENTO-1 Fase 3: un campo della 083 inviato dove la 083 non c'e' (POST/PATCH
+    # generici su un database senza il modulo) -> 503 leggibile, prima di ogni altro caso
+    except census.CensusNotInstalled as e:raise HTTPException(503,str(e))
     except NotFoundError as e:raise HTTPException(404,str(e))
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
@@ -76,3 +81,51 @@ def get_mandate(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_
 def list_interactions(property_id:int,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(interactions.list_interactions,ctx,property_id,limit=limit,offset=offset)
 @router.post('/properties/{property_id}/interactions',status_code=201)
 def create_interaction(property_id:int,p:InteractionCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(interactions.create_interaction,ctx,property_id,p)
+# CENSIMENTO-1 Fase 3: EDIFICI, UNITA' DI CENSIMENTO, PERTINENZE, ACCESSORI,
+# PRESA IN CARICO e ANNULLA (property/census.py), dietro lo stesso
+# legacy_basic_agency_context. Gli errori portano `code` accanto a `detail`
+# (stesso idioma delle Acquisizioni): la UI distingue un avviso superabile
+# (SIMILAR_FOUND, con i candidati) da un blocco (CADASTRAL_DUPLICATE,
+# CENSUS_LOCKED, IDEMPOTENCY_KEY_REUSED, UNDO_NOT_POSSIBLE).
+# Codice deployato prima della 083 (stessa chiusura leggibile di CRM-OPS-3 RC-1):
+# ogni operazione del censimento verifica la 083 sul catalogo PRIMA di leggere
+# righe (property/census.py::_assicura_083) e risponde 503 CENSUS_NOT_INSTALLED.
+CENSUS_NOT_INSTALLED=census.CENSUS_NOT_INSTALLED_MESSAGE
+def trc(fn,*a,status=200,**k):
+    try:esito=fn(*a,**k)
+    except census.CensusNotInstalled as e:return JSONResponse(status_code=503,content={'detail':str(e),'code':e.code})
+    except (NotFoundError,ConflictError,ValidationError,PermissionDenied,PlatformAdminAgencyRequired) as e:
+        stato={NotFoundError:404,ConflictError:409,ValidationError:400,PermissionDenied:403,PlatformAdminAgencyRequired:403}
+        http=next(v for c,v in stato.items() if isinstance(e,c))
+        corpo=dict(getattr(e,'extra',None) or {});corpo.update({'detail':str(e),'code':getattr(e,'code',None) or {404:'NOT_FOUND',409:'CONFLICT',400:'VALIDATION_ERROR',403:'FORBIDDEN'}[http]})
+        return JSONResponse(status_code=http,content=jsonable_encoder(corpo))
+    if esito is None:return Response(status_code=204)
+    return JSONResponse(status_code=status,content=jsonable_encoder(esito))
+@router.get('/buildings')
+def list_buildings(search:str|None=None,city:str|None=None,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.list_buildings,ctx,search=search,city=city,limit=limit,offset=offset)
+@router.post('/buildings',status_code=201)
+def create_building(p:BuildingCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.create_building,ctx,p,status=201)
+@router.get('/buildings/{building_id}')
+def get_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.get_building,ctx,building_id)
+@router.patch('/buildings/{building_id}')
+def update_building(building_id:int,p:BuildingUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.update_building,ctx,building_id,p)
+@router.post('/census/units',status_code=201)
+def create_census_unit(p:CensusUnitCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.create_unit,ctx,p,status=201)
+@router.get('/properties/{property_id}/census')
+def get_property_census(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.get_census,ctx,property_id)
+@router.post('/properties/{property_id}/pertinenze/link')
+def link_pertinenza(property_id:int,p:PertinenzaLink,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.link_pertinenza,ctx,property_id,p)
+@router.post('/properties/{property_id}/pertinenze/{pertinenza_id}/unlink')
+def unlink_pertinenza(property_id:int,pertinenza_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.unlink_pertinenza,ctx,property_id,pertinenza_id)
+@router.post('/properties/{property_id}/accessories',status_code=201)
+def create_accessory(property_id:int,p:AccessoryCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.create_accessory,ctx,property_id,p,status=201)
+@router.patch('/properties/{property_id}/accessories/{accessory_id}')
+def update_accessory(property_id:int,accessory_id:int,p:AccessoryUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.update_accessory,ctx,property_id,accessory_id,p)
+@router.delete('/properties/{property_id}/accessories/{accessory_id}',status_code=204)
+def delete_accessory(property_id:int,accessory_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.delete_accessory,ctx,property_id,accessory_id)
+@router.post('/properties/{property_id}/accessories/{accessory_id}/resolve')
+def resolve_accessory(property_id:int,accessory_id:int,p:AccessoryResolve,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.resolve_accessory,ctx,property_id,accessory_id,p)
+@router.post('/properties/{property_id}/take-in-charge')
+def take_in_charge(property_id:int,p:TakeInCharge,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.take_in_charge,ctx,property_id,p)
+@router.post('/properties/{property_id}/undo-create')
+def undo_create(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.undo_create,ctx,property_id)

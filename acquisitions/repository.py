@@ -53,8 +53,11 @@ def _json(valore) -> str:
 
 def lock_property(cur, agency_id: int, property_id: int):
     cur.execute(
+        # CENSIMENTO-1 Fase 3: `record_kind` letto dal JSON della riga, cosi' la
+        # statement resta eseguibile anche dove la 083 non e' applicata (NULL):
+        # la guardia del censimento scatta solo quando la colonna c'e'.
         "SELECT id, agency_id, code, title, commercial_status, acquisition_id, archived_at, "
-        "       asking_price, assigned_agent_id "
+        "       asking_price, assigned_agent_id, to_jsonb(properties) ->> 'record_kind' AS record_kind "
         "  FROM properties WHERE id = %s AND agency_id = %s FOR UPDATE",
         (property_id, agency_id))
     r = cur.fetchone()

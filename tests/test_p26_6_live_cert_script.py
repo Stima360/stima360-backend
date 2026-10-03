@@ -366,6 +366,30 @@ class FakeCursor:
         else:
             raise AssertionError(f"domanda degli Incarichi non prevista dal doppio: {upper}")
 
+    def _censimento_execute(self, upper, params):
+        """CENSIMENTO-1 Fase 3: le sole letture della sezione BUILDINGS. Gli
+        edifici sono gli stessi del doppio HTTP (`edifici`): una scrittura che
+        il doppio applicasse per un difetto si vedrebbe qui."""
+        edifici = self.state.setdefault("edifici", {})
+        if "CENSIMENTO_PRONTO" in upper:
+            self._row = {"censimento_pronto": self.state.get("censimento_presente", True)}
+        elif "CENSIMENTO_EDIFICI_RIGHE" in upper:
+            self._row = {"censimento_edifici_righe": len(edifici),
+                         "censimento_edifici_max_riga": max(edifici, default=0),
+                         "censimento_unita_righe": len(self.state.setdefault("unita_census", {})),
+                         "censimento_immobili_max_riga": max(self.state.setdefault("unita_census", {}), default=0),
+                         "censimento_accessori_righe": len(self.state.setdefault("accessori", {}))}
+        elif "EDIFICIO_ALTRUI" in upper:
+            (agenzia,) = params
+            candidati = sorted(i for i, a in edifici.items() if a == agenzia)
+            self._row = None if not candidati else {"id": candidati[0]}
+        elif "EDIFICI_FUORI_AGENZIA" in upper:
+            ids, agenzia = params
+            self._rows = [{"id": i} for i in sorted(ids)
+                          if edifici.get(i) is not None and edifici[i] != agenzia]
+        else:
+            raise AssertionError(f"domanda del Censimento non prevista dal doppio: {upper}")
+
     def execute(self, sql, params=None):
         statement = " ".join(sql.split())
         self.state.setdefault("sql", []).append(statement)
@@ -389,6 +413,11 @@ class FakeCursor:
         if ("INTERAZIONI_" in upper or "INCARICO_ALTRUI" in upper
                 or "IMMOBILI_FUORI_AGENZIA" in upper):
             self._incarichi_execute(upper, params)
+            return
+
+        if ("CENSIMENTO_" in upper or "EDIFICIO_ALTRUI" in upper
+                or "EDIFICI_FUORI_AGENZIA" in upper):
+            self._censimento_execute(upper, params)
             return
 
         if upper.startswith("SELECT CURRENT_DATABASE"):
@@ -1119,6 +1148,11 @@ class FakeHttp(cert.HttpProbe):
         # interazioni d'immobile, condivisi con il doppio del database.
         self.incarichi: dict = {}
         self.interazioni: dict = {}
+        # CENSIMENTO-1 Fase 3: gli edifici GIA' ESISTENTI (edificio -> agenzia),
+        # le unita' census e gli accessori, condivisi con il doppio del database.
+        self.edifici: dict = {}
+        self.unita_census: dict = {}
+        self.accessori: dict = {}
 
     # -- helper -----------------------------------------------------------
     def _effetto(self, tabella: str) -> int | None:
@@ -1817,6 +1851,83 @@ class FakeHttp(cert.HttpProbe):
             scrivi(ident, azione or "patch")
         return self._reply(method, path, 200, _json.dumps({"id": ident}).encode())
 
+    def _buildings(self, method, path, agency, payload):
+        """CENSIMENTO-1 Fase 3. Il doppio riproduce il CONTRATTO REALE: gli
+        schemi veri (`property.schemas.BuildingCreate`, `extra="forbid"`)
+        decidono il 422; un edificio o un immobile altrui e' 404 senza dati;
+        la presa in carico e l'annulla su un immobile `crm` sono 409 (il
+        doppio non ha unita' census nella matrice, come il server vero); una
+        creazione VALIDA sul proprio tenant il doppio la ACCETTA e la
+        registra: e' cosi' che un certificatore regredito verrebbe visto.
+
+        Difettosita' sulla superficie "buildings": `isolation` (l'edificio o
+        l'immobile altrui si leggono), `listing` (l'elenco mostra gli edifici
+        altrui), `write` (il 422 sull'`agency_id` arriva ma la palazzina viene
+        scritta comunque).
+        """
+        import json as _json
+        from urllib.parse import urlsplit
+
+        import pydantic
+
+        from property.schemas import BuildingCreate, BuildingUpdate
+
+        percorso = urlsplit(path).path
+        rotto = lambda tipo: self._broken(tipo, "buildings")  # noqa: E731
+
+        def agenzia_di(pid):
+            if pid in self.incarichi:
+                return self.incarichi[pid]
+            riga = self.rows.get(pid)
+            return None if riga is None or riga.get("prefix") != "/api/property" else riga["agency"]
+
+        def crea_edificio():
+            nuovo = max(list(self.edifici) + [4100], default=4100) + 1
+            self.edifici[nuovo] = agency
+            return nuovo
+
+        if percorso == "/api/property/buildings" and method == "GET":
+            voci = [{"id": bid} for bid, a in sorted(self.edifici.items()) if a == agency or rotto("listing")]
+            return self._reply(method, path, 200, _json.dumps({"items": voci}).encode())
+        if percorso == "/api/property/buildings" and method == "POST":
+            try:
+                BuildingCreate.model_validate(payload if isinstance(payload, dict) else None)
+            except pydantic.ValidationError:
+                if rotto("write"):
+                    crea_edificio()
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            nuovo = crea_edificio()
+            return self._reply(method, path, 201, _json.dumps({"id": nuovo, "agency_id": agency}).encode())
+        trovato = re.match(r"^/api/property/buildings/(\d+)$", percorso)
+        if trovato:
+            bid = int(trovato.group(1))
+            if method == "PATCH":
+                try:
+                    BuildingUpdate.model_validate(payload if isinstance(payload, dict) else None)
+                except pydantic.ValidationError:
+                    return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            if bid in self.edifici and (self.edifici[bid] == agency or rotto("isolation")):
+                return self._reply(method, path, 200, _json.dumps(
+                    {"id": bid, "name": f"edificio-{bid}", "units": [], "propagated_units": 0}).encode())
+            return self._reply(method, path, 404, b'{"detail":"building not found"}')
+        if percorso == "/api/property/census/units":
+            return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        trovato = re.match(r"^/api/property/properties/(\d+)/(census|pertinenze|accessories|take-in-charge|undo-create)", percorso)
+        pid = int(trovato.group(1))
+        cosa = trovato.group(2)
+        suo = agenzia_di(pid) == agency or (agenzia_di(pid) is not None and rotto("isolation"))
+        if not suo:
+            return self._reply(method, path, 404, b'{"detail":"property not found"}')
+        if cosa == "census":
+            return self._reply(method, path, 200, _json.dumps(
+                {"id": pid, "record_kind": "crm", "pertinenze": [], "accessories": []}).encode())
+        if cosa == "take-in-charge":
+            return self._reply(method, path, 409, b'{"detail":"gia\' commerciale","code":"NOT_CENSUS"}')
+        if cosa == "undo-create":
+            return self._reply(method, path, 409, b'{"detail":"non annullabile","code":"UNDO_NOT_POSSIBLE"}')
+        # pertinenze e accessori sul proprio immobile: fuori dal giro ostile
+        return self._reply(method, path, 400, b'{"detail":"non previsto dal giro ostile"}')
+
     def _mandates(self, method, path, agency, payload):
         """CRM-OPS-4. Il doppio riproduce il CONTRATTO REALE: lo schema vero
         (`property.schemas.InteractionCreate`, `extra="forbid"`) decide il 422,
@@ -2153,6 +2264,12 @@ class FakeHttp(cert.HttpProbe):
                 or re.match(r"^/api/property/properties/\d+/interactions", path)):
             return self._mandates(method, path, agency, payload)
 
+        # CENSIMENTO-1 Fase 3: edifici, unita' census, pertinenze, accessori,
+        # presa in carico e annulla, PRIMA del resto di /api/property.
+        if (path.startswith("/api/property/buildings") or path.startswith("/api/property/census/")
+                or re.match(r"^/api/property/properties/\d+/(census|pertinenze|accessories|take-in-charge|undo-create)", path)):
+            return self._buildings(method, path, agency, payload)
+
         found = re.match(r"^/api/property/properties/(\d+)/contacts$", path)
         if found and method == "POST":
             return self._link_contact(method, path, agency, int(found.group(1)),
@@ -2488,6 +2605,8 @@ IMMOBILI_ACQUISIZIONI = {
 #: CRM-OPS-4: un incarico (immobile nato da un'acquisizione) per agenzia:
 #: immobile -> agenzia.
 INCARICHI = {3101: 1, 3102: 2}
+#: CENSIMENTO-1 Fase 3: gli edifici gia' esistenti (edificio -> agenzia).
+EDIFICI = {4101: 1, 4102: 2}
 
 #: Le nove colonne di Q10 (A30-2P), tutte 0 su un TEST allineato.
 Q10_CHIAVI = ("collegamento_senza_riga_lmc15", "stato_incompatibile",
@@ -2572,6 +2691,11 @@ def working_run(monkeypatch, database=None, http=None, owners=OWNERS,
     # riproduce il TEST senza il prerequisito.
     probe.incarichi = database.state.setdefault("incarichi", dict(INCARICHI))
     probe.interazioni = database.state.setdefault("interazioni", {})
+    # CENSIMENTO-1 Fase 3: un edificio GIA' ESISTENTE per agenzia, condiviso
+    # fra i due doppi. `edifici={}` riproduce il TEST senza il prerequisito.
+    probe.edifici = database.state.setdefault("edifici", dict(EDIFICI))
+    probe.unita_census = database.state.setdefault("unita_census", {})
+    probe.accessori = database.state.setdefault("accessori", {})
     # LE RIGHE DEGLI EFFETTI, materializzate come il run le crea davvero.
     #
     # Senza, l'istantanea non trova nulla, le cancellazioni degli effetti non
@@ -7799,6 +7923,11 @@ COLLOCAZIONE_SCRITTURE = {
     # {id}/interactions scrive qui (082, `property_id`); nemmeno quello e'
     # chiamato dalla matrice.
     "activities": (GUARDIA, "POST /core/activities e POST /property/properties/{id}/interactions non sono chiamati; referenzia contacts, stime e properties, quindi il preflight la vedrebbe"),
+    # CENSIMENTO-1 Fase 3 (property/census.py): la sezione BUILDINGS e' hostile /
+    # rejection only e non crea nulla; le due tabelle referenziano agencies e
+    # properties, quindi il preflight le vedrebbe.
+    "buildings": (GUARDIA, "POST /property/buildings non e' chiamato con un corpo valido dalla matrice (solo `agency_id` nel corpo -> 422); referenzia agencies"),
+    "property_accessories": (GUARDIA, "POST /property/properties/{id}/accessories non e' chiamato dalla matrice; referenzia properties con ON DELETE CASCADE"),
     "flow_rules": (FUORI, "catalogo di regole, globale: nessuna FK verso il perimetro"),
     "owner_notification_preferences": (GUARDIA,
                                        "preferenze per conto, mai scritte dalla matrice; referenzia owner_accounts"),
@@ -9757,3 +9886,105 @@ def test_crm4_07_un_certificatore_che_scrivesse_davvero_verrebbe_visto(monkeypat
     righe = {i: k for k, i, _t in _righe_incarichi(report)}
     assert righe["MANDATES-nessuna-riga-del-run"] == cert.FAIL, righe
     assert code == 1
+
+
+# ---------------------------------------------------------------------------
+# CENSIMENTO-1 Fase 3 - EDIFICI E CENSIMENTO: HOSTILE / REJECTION ONLY
+# ---------------------------------------------------------------------------
+
+def _righe_edifici(report):
+    return [(k, i, t) for k, i, t in report.rows if i.startswith("BUILDINGS-")]
+
+
+def _scritture_censimento_riuscite(probe):
+    return [(chiamata, stato) for chiamata, stato, _ in probe.exchanges
+            if ("/buildings" in chiamata or "/census" in chiamata or "/accessories" in chiamata
+                or "/pertinenze" in chiamata or "take-in-charge" in chiamata or "undo-create" in chiamata)
+            and not chiamata.startswith("GET") and 200 <= stato < 300]
+
+
+def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypatch):
+    code, report, _database, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME))
+    righe = _righe_edifici(report)
+    assert righe and [r for r in righe if r[0] != cert.PASS] == [], righe
+    idents = {i for _k, i, _t in righe}
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 13
+    for a, b in (("A", "B"), ("B", "A")):
+        for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
+                     "censimento-lettura-{a}-{b}", "presa-in-carico-{a}-{b}", "annulla-{a}-{b}",
+                     "agency-nel-corpo-{a}"):
+            assert "BUILDINGS-" + nome.format(a=a, b=b) in idents, (nome, a, b)
+    assert "BUILDINGS-nessuna-riga-del-run" in idents
+    assert _scritture_censimento_riuscite(probe) == []
+    assert probe.edifici == EDIFICI and probe.unita_census == {} and probe.accessori == {}
+    assert not [c for c, _s, _b in probe.exchanges if c.startswith("DELETE") and "accessories" in c]
+    osservati = [t for _k, i, t in righe if "-list-" in i]
+    assert all(re.search(r"[1-9]\d* elementi osservati", t) for t in osservati), osservati
+
+
+def test_cens3_02_senza_edificio_altrui_e_BLOCKED_non_inventato(monkeypatch):
+    solo_a = {4101: 1}
+    code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME), edifici=solo_a)
+    righe = {i: (k, t) for k, i, t in _righe_edifici(report)}
+    assert righe["BUILDINGS-dettaglio-edificio-A-B"][0] == cert.BLOCKED
+    assert "PREREQUISITO" in righe["BUILDINGS-dettaglio-edificio-A-B"][1]
+    assert "BUILDINGS-patch-edificio-A-B" not in righe
+    assert righe["BUILDINGS-dettaglio-edificio-B-A"][0] == cert.PASS
+    assert righe["BUILDINGS-patch-edificio-B-A"][0] == cert.PASS
+    assert not any(k == cert.FAIL for k, _t in righe.values())
+    assert probe.edifici == solo_a
+
+
+def test_cens3_03_senza_083_sul_database_la_sezione_e_BLOCKED(monkeypatch):
+    _code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME), censimento_presente=False)
+    righe = {i: k for k, i, _t in _righe_edifici(report)}
+    assert righe == {"BUILDINGS-fotografia": cert.BLOCKED}
+    assert not any("/api/property/buildings" in c or "/census" in c or "take-in-charge" in c
+                   for c, _s, _b in probe.exchanges)
+
+
+@pytest.mark.parametrize("difetto, atteso", [
+    ("isolation", "BUILDINGS-dettaglio-"),
+    ("listing", "BUILDINGS-list-"),
+    ("write", "BUILDINGS-nessuna-riga-del-run"),
+])
+def test_cens3_04_ogni_difetto_del_censimento_fa_fallire(monkeypatch, difetto, atteso):
+    code, report, _db, probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME, broken={difetto}, only="buildings"))
+    falliti = [i for k, i, _t in report.rows if k == cert.FAIL]
+    assert code == 1
+    assert any(i.startswith(atteso) for i in falliti), falliti
+
+
+def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
+    montate = set()
+    for _pattern, methods, template in real_routes():
+        if (template.startswith("/api/property/buildings") or template.startswith("/api/property/census/")
+                or re.match(r"^/api/property/properties/\{property_id\}/(census|pertinenze|accessories|take-in-charge|undo-create)", template)):
+            for m in methods:
+                montate.add((m, re.sub(r"\{[a-z_]+\}", "{id}", template)))
+    assert len(montate) == 14
+    assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
+        set(cert.BUILDINGS_OPERAZIONI) ^ montate
+    assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]
+    assert "certify_property_buildings(report, http, cert, jars, owned, context)" in \
+        _function_source("certify_property")
+
+
+def test_cens3_06_la_sezione_non_scrive_e_ogni_post_e_innocuo():
+    nomi = ("certify_property_buildings", "_censimento_fotografia", "_edificio_altrui", "_edifici_fuori_agenzia")
+    sorgente = "\n".join(_function_source(nome) for nome in nomi)
+    for vietato in ("database.write", "commit=True", '"DELETE"', "'DELETE'", "DISABLE TRIGGER",
+                    "DELETE FROM", "UPDATE ", "INSERT INTO"):
+        assert vietato not in sorgente, vietato
+    corpo_sezione = _function_source("certify_property_buildings")
+    # i soli corpi inviati: vuoti, None, oppure con `agency_id` (422 prima del service)
+    for riga in corpo_sezione.splitlines():
+        if "payload=" in riga:
+            assert any(x in riga for x in ("payload={}", "payload=None", "payload=corpo", "agency_id", "if metodo in")), riga
+    for riga in corpo_sezione.splitlines():
+        if "corpo in (" in riga or ', "PATCH", {})' in riga:
+            assert "{}" in riga or "None" in riga, riga

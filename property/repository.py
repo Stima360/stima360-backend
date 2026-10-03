@@ -26,11 +26,30 @@ from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 # Il driver finto dei test senza database non ha CheckViolation: `()` non
 # intercetta nulla.
 _CHECK_VIOLATION = getattr(errors, 'CheckViolation', ())
+# CENSIMENTO-1 Fase 3: le colonne della 083 negli schemi generici. Scritte su
+# un database senza la 083 (PROD prima della migration) la statement cade con
+# UndefinedColumn: si risponde 503 "modulo non installato", mai un 500 muto -
+# e SOLO per queste colonne, qualunque altra colonna mancante resta un errore.
+_UNDEFINED_COLUMN = getattr(errors, 'UndefinedColumn', ())
+_COLONNE_083 = ('staircase', 'internal_number', 'cadastral_municipality_code', 'cadastral_section',
+                'cadastral_sheet', 'cadastral_parcel', 'cadastral_subunit', 'cadastral_category', 'address_inherited')
+
+
+def _census_not_installed(exc):
+    if any(f'"{c}"' in str(exc) for c in _COLONNE_083):
+        from . import census as _census
+        return _census.CensusNotInstalled(_census.CENSUS_NOT_INSTALLED_MESSAGE)
+    return None
 
 
 def _mandate_origin_refused(exc):
     if 'CRM-OPS-3' in str(exc):
         return ValidationError(MANDATE_ONLY_FROM_ACQUISITION)
+    if 'CENSIMENTO-1' in str(exc):
+        # la guardia della 083 (censimento/commerciale, collegamenti): il
+        # messaggio leggibile lo da' property/census.py
+        from . import census as _census
+        return _census._tradotto(exc)
     return None
 
 def row(x): return dict(x) if x else None
@@ -120,6 +139,10 @@ def create_property(ctx,data,*,generate_identity=False):
         try:
             cur.execute(f"INSERT INTO properties ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))}) RETURNING *",vals)
         except errors.UniqueViolation as exc: raise ConflictError('property code already exists') from exc
+        except _UNDEFINED_COLUMN as exc:
+            assente=_census_not_installed(exc)
+            if assente is not None: raise assente from exc
+            raise
         except _CHECK_VIOLATION as exc:
             refused=_mandate_origin_refused(exc)
             if refused is not None: raise refused from exc
@@ -325,12 +348,25 @@ def update_property(*args, **kwargs):
                 cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *", list(data.values()) + [property_id])
         except errors.UniqueViolation as exc:
             raise ConflictError('property code already exists') from exc
+        except _UNDEFINED_COLUMN as exc:
+            assente = _census_not_installed(exc)
+            if assente is not None:
+                raise assente from exc
+            raise
         except _CHECK_VIOLATION as exc:
             refused = _mandate_origin_refused(exc)
             if refused is not None:
                 raise refused from exc
             raise
         r = row(cur.fetchone())
+        # CENSIMENTO-1 Fase 3 (§0 p.6): una pertinenza collegata che viene
+        # venduta da sola o archiviata perde il collegamento NELLA STESSA
+        # transazione, con lo storico su entrambe le schede.
+        if (ctx is not None and 'commercial_status' in data and data['commercial_status'] in ('sold', 'archived')
+                and data['commercial_status'] != old.get('commercial_status') and r.get('parent_property_id') is not None):
+            from . import census as _census
+            _census.detach_on_close(ctx, cur, r, data['commercial_status'])
+            r['parent_property_id'] = None
         if 'asking_price' in data and data['asking_price'] != old.get('asking_price'):
             cur.execute("INSERT INTO property_price_history(property_id,old_price,new_price,change_reason,changed_by) VALUES(%s,%s,%s,%s,%s)", (property_id, old.get('asking_price'), data['asking_price'], change_reason, changed_by))
         for field in ('commercial_status', 'classification'):

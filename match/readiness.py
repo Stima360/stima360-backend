@@ -4,6 +4,8 @@ from core.exceptions import ValidationError
 
 from .enums import ACTIVE_PROPERTY_STATUSES
 
+CENSUS_NOT_ELIGIBLE_REASON = "Immobile in censimento"
+
 
 BUY_NOT_READY_REASON = "Nessun criterio MATCH effettivo impostato"
 
@@ -85,6 +87,10 @@ def property_readiness(prop):
         eligibility_reasons.append("Immobile archiviato")
     if prop.get("commercial_status") not in ACTIVE_PROPERTY_STATUSES:
         eligibility_reasons.append("Stato PROPERTY non compatibile con MATCH")
+    # CENSIMENTO-1 Fase 3 (§7): cintura oltre alle bretelle - una scheda di
+    # censimento non e' mai idonea, qualunque sia il suo stato.
+    if prop.get("record_kind") == "census":
+        eligibility_reasons.append(CENSUS_NOT_ELIGIBLE_REASON)
 
     eligible = not eligibility_reasons
     return {

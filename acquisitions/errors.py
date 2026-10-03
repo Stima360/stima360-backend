@@ -22,6 +22,9 @@ VERSION_CONFLICT = "VERSION_CONFLICT"
 APPOINTMENT_STILL_OPEN = "APPOINTMENT_STILL_OPEN"
 MANDATE_NOT_ALLOWED = "MANDATE_NOT_ALLOWED"
 MANDATE_ALREADY_EXISTS = "MANDATE_ALREADY_EXISTS"
+# CENSIMENTO-1 Fase 3 (§7): una scheda di censimento non entra nel flusso
+# commerciale finche' non viene presa in carico.
+PROPERTY_IN_CENSUS = "PROPERTY_IN_CENSUS"
 APPOINTMENT_LINKED_TO_ACQUISITION = "APPOINTMENT_LINKED_TO_ACQUISITION"
 VALIDATION_ERROR = "VALIDATION_ERROR"
 # Post-commit CRM-OPS-3: il database non ha ancora la 081. Non e' un errore
@@ -99,3 +102,7 @@ class AppointmentLinkedToAcquisition(_ConCodice, ConflictError):
 
 class InvalidData(_ConCodice, ValidationError):
     code = VALIDATION_ERROR
+
+
+class PropertyInCensus(_ConCodice, ConflictError):
+    code = PROPERTY_IN_CENSUS

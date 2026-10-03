@@ -9,6 +9,7 @@ from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       cadastral_categories_for_form, cadastral_suggestions_for_form,
                       territory_tree, validate_energy_class, validate_location)
+from . import census as _census
 
 # CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
 ASSIGNMENT_DENIED_MESSAGE = (
@@ -17,6 +18,33 @@ ASSIGNMENT_DENIED_MESSAGE = (
 ASSIGNMENT_TARGET_INVALID = "L'operatore scelto non e' un membro attivo dell'agenzia."
 LOCATION_FIELDS = ('region', 'province', 'city', 'microzone')
 MANDATE_FIELDS = ('mandate_type', 'mandate_start', 'mandate_end')
+# CENSIMENTO-1 Fase 3 (§7): su una scheda `census` il service rifiuta - prima
+# del trigger della 083 - ogni stato fuori da draft/archived, i campi
+# dell'incarico e (nelle Acquisizioni) la creazione di un'acquisizione.
+ADDRESS_FIELDS = ('region', 'province', 'city', 'microzone', 'address', 'civic_number', 'postal_code')
+CENSUS_ALLOWED_STATUSES = ('draft', 'archived')
+# I campi della 083 negli schemi generici: entrano nell'INSERT solo se il
+# client li ha inviati. Cosi' una creazione ordinaria resta la statement di
+# prima anche dove la 083 non e' ancora applicata (ordine DB-first: il codice
+# non deve rompere la creazione degli immobili su un database senza di essa).
+CENSUS_SCHEMA_FIELDS = ('staircase', 'internal_number', 'cadastral_municipality_code', 'cadastral_section',
+                        'cadastral_sheet', 'cadastral_parcel', 'cadastral_subunit', 'cadastral_category')
+
+
+def _check_census_guard(data, current):
+    if (current or {}).get('record_kind') != 'census':
+        return
+    if 'commercial_status' in data and data['commercial_status'] not in CENSUS_ALLOWED_STATUSES:
+        raise _census.CensusConflict(_census.CENSUS_LOCKED, 'CENSUS_LOCKED')
+    if any(data.get(f) is not None for f in MANDATE_FIELDS):
+        raise _census.CensusConflict(_census.CENSUS_LOCKED, 'CENSUS_LOCKED')
+
+
+def _check_inherited_address(data, current):
+    """«Ingresso diverso?»: un campo di indirizzo scritto su un'unita' con
+    indirizzo ereditato dalla palazzina la rende personalizzata (§6.4)."""
+    if (current or {}).get('address_inherited') and any(f in data for f in ADDRESS_FIELDS):
+        data['address_inherited'] = False
 
 
 def _new_mandate(data, current=None):
@@ -123,7 +151,9 @@ def _check_catalog(data, current=None):
 def create_property(ctx,p):
     data=dump(p)
     sent=_fields_set(p)
+    data={k:v for k,v in data.items() if k not in CENSUS_SCHEMA_FIELDS or k in sent}
     _check_catalog({k:v for k,v in data.items() if k in sent})
+    _census._check_cadastral(data)
     # CRM-OPS-3: un immobile nuovo non nasce con un incarico.
     _check_mandate_origin(data)
     # CRM-OPS-2: un agente su un immobile nuovo e' un'assegnazione.
@@ -138,9 +168,12 @@ def update_property(ctx,i,p):
     if 'code' in data and not (data['code'] or '').strip():
         del data['code']
     current=None
-    if {'assigned_agent_id','assigned_to','region','energy_class','commercial_status',*MANDATE_FIELDS} & set(data):
+    if {'assigned_agent_id','assigned_to','region','energy_class','commercial_status',*MANDATE_FIELDS,*ADDRESS_FIELDS} & set(data):
         current=repository.get_property(ctx,i)
     _check_catalog(data,current)
+    _census._check_cadastral(data)
+    _check_census_guard(data,current)
+    _check_inherited_address(data,current)
     _check_mandate_origin(data,current)
     if 'assigned_agent_id' in data:
         _apply_assignment(ctx,data,current.get('assigned_agent_id'))

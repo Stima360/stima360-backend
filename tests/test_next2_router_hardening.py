@@ -40,9 +40,19 @@ REPRESENTATIVE_PATHS = (
 # 113. Stessa condizione di P26-1 e CRM-OPS-2: le quattro route sono sul
 # router PROPERTY dietro Depends(legacy_basic_agency_context), e test_2
 # ri-verifica il gate di sicurezza su ogni operazione, le nuove comprese.
+# SENTINELLA AGGIORNATA DA CENSIMENTO-1 FASE 3: le 14 route del censimento
+# (property/census.py, property/router.py) - GET/POST /api/property/buildings,
+# GET/PATCH /api/property/buildings/{building_id}, POST /api/property/census/units,
+# GET /api/property/properties/{property_id}/census, POST .../pertinenze/link,
+# POST .../pertinenze/{pertinenza_id}/unlink, POST/PATCH/DELETE .../accessories
+# (+ POST .../accessories/{accessory_id}/resolve), POST .../take-in-charge e
+# POST .../undo-create - portano PROPERTY da 26 a 40 e il totale da 113 a 127.
+# Stessa condizione di P26-1, CRM-OPS-2 e CRM-OPS-4: tutte sul router PROPERTY
+# dietro Depends(legacy_basic_agency_context), e test_2 ri-verifica il gate di
+# sicurezza su ogni operazione, le nuove comprese.
 EXPECTED_COUNTS = {
     "/api/core": 21,
-    "/api/property": 26,
+    "/api/property": 40,
     "/api/property-watch": 12,
     "/api/buy": 23,
     "/api/match": 26,
@@ -84,12 +94,12 @@ def test_1_all_100_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 113
+    assert len(operations) == 127
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 113
+    assert len(operations) == 127
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

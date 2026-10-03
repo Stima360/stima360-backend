@@ -2,7 +2,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
-from pydantic import BaseModel, Field, root_validator
+from uuid import UUID
+from pydantic import BaseModel, Field, model_validator, root_validator
 from .enums import *
 
 class PropertyModel(BaseModel):
@@ -51,6 +52,19 @@ class PropertyCreate(PropertyModel):
     public_notes: str | None = None
     internal_notes: str | None = None
     metadata: dict[str,Any] = Field(default_factory=dict)
+    # CENSIMENTO-1 Fase 3: dati catastali e posizione nella palazzina
+    # (migration 083). `record_kind`, `building_id`, `parent_property_id`,
+    # `address_inherited` e `client_request_id` NON sono campi di questo
+    # schema: i collegamenti e la presa in carico passano dalle rotte
+    # dedicate (property/census.py), mai da un POST/PATCH generico.
+    staircase: str | None = Field(None,max_length=10)
+    internal_number: str | None = Field(None,max_length=10)
+    cadastral_municipality_code: str | None = Field(None,max_length=4)
+    cadastral_section: str | None = Field(None,max_length=5)     # None = non conosciuta, '' = assente
+    cadastral_sheet: str | None = Field(None,max_length=10)
+    cadastral_parcel: str | None = Field(None,max_length=10)
+    cadastral_subunit: str | None = Field(None,max_length=10)
+    cadastral_category: str | None = Field(None,max_length=5)    # None = "Da verificare"
     @root_validator(skip_on_failure=True)
     def validate_values(cls,v):
         if v.get('property_type') not in PROPERTY_TYPES: raise ValueError('invalid property_type')
@@ -105,6 +119,17 @@ class PropertyUpdate(PropertyModel):
     change_reason: str | None = Field(None,max_length=200)
     changed_by: str | None = Field(None,max_length=200)
     history_note: str | None = None
+    # CENSIMENTO-1 Fase 3: vedi PropertyCreate. Un campo di indirizzo inviato
+    # su un'unita' con indirizzo ereditato dalla palazzina la rende
+    # personalizzata ("Ingresso diverso?"): lo decide il service.
+    staircase: str | None = Field(None,max_length=10)
+    internal_number: str | None = Field(None,max_length=10)
+    cadastral_municipality_code: str | None = Field(None,max_length=4)
+    cadastral_section: str | None = Field(None,max_length=5)
+    cadastral_sheet: str | None = Field(None,max_length=10)
+    cadastral_parcel: str | None = Field(None,max_length=10)
+    cadastral_subunit: str | None = Field(None,max_length=10)
+    cadastral_category: str | None = Field(None,max_length=5)
     @root_validator(skip_on_failure=True)
     def validate_update(cls,v):
         if v.get('property_type') is not None and v['property_type'] not in PROPERTY_TYPES: raise ValueError('invalid property_type')
@@ -219,3 +244,219 @@ class InteractionCreate(PropertyModel):
     note: str = Field(..., min_length=1, max_length=5000)
     contact_id: int | None = Field(None, ge=1)
     context: str = Field("property", pattern="^(property|mandate)$")
+
+
+# ---------------------------------------------------------------------------
+# CENSIMENTO-1 Fase 3 - edifici, unita' di censimento, pertinenze, accessori.
+# Contratti del progetto CENSIMENTO-0 (§0 p.5-6, §2, §4, §6, §7). Tutti
+# `extra=forbid`: `agency_id`, `record_kind`, `address_inherited`,
+# `client_request_fingerprint` e ogni altro campo deciso dal server sono
+# rifiutati con 422 prima del service.
+# ---------------------------------------------------------------------------
+
+BUILDING_TYPES = ("condominio", "villa", "rustico", "capannone", "commerciale", "misto", "altro")
+BUILDING_CENSUS_STATUSES = ("verified", "partial", "estimated")
+UNITS_DECLARED_SOURCES = ("survey", "cadastre", "owner", "unknown")
+ACCESSORY_KINDS = ("cantina", "soffitta", "posto_auto", "giardino", "terrazzo", "box", "deposito", "altro")
+ACCESSORY_STATUSES = ("included", "unknown")
+
+_CADASTRAL_UNIT_FIELDS = ("cadastral_municipality_code", "cadastral_section", "cadastral_sheet",
+                          "cadastral_parcel", "cadastral_subunit", "cadastral_category")
+
+
+def _mai_null(model, campi):
+    """PATCH: campo OMESSO = invariato; `null` ESPLICITO = azzera - ma solo
+    dove la 083 lo ammette. Su una colonna NOT NULL un `null` esplicito e'
+    un errore di validazione (422), non un 500 dal database."""
+    for campo in campi:
+        if campo in model.model_fields_set and getattr(model, campo) is None:
+            raise ValueError(f"{campo} non puo' essere null")
+    return model
+
+
+class BuildingCreate(PropertyModel):
+    client_request_id: UUID | None = None
+    confirm_similar: bool = False          # S8: "Salva comunque" sugli avvisi non bloccanti
+    building_type: str = "condominio"
+    name: str | None = Field(None, max_length=120)
+    region: str | None = Field(None, max_length=50)
+    province: str | None = Field(None, max_length=10)
+    city: str | None = Field(None, max_length=120)
+    microzone: str | None = Field(None, max_length=150)
+    address: str | None = Field(None, max_length=250)
+    civic_number: str | None = Field(None, max_length=30)
+    postal_code: str | None = Field(None, max_length=20)
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    cadastral_municipality_code: str | None = Field(None, max_length=4)
+    cadastral_section: str | None = Field(None, max_length=5)
+    cadastral_sheet: str | None = Field(None, max_length=10)
+    cadastral_parcel: str | None = Field(None, max_length=10)
+    floors_above_ground: int | None = Field(None, ge=0)
+    year_built: int | None = Field(None, ge=1000, le=2200)
+    elevator: bool | None = None
+    units_declared: int | None = Field(None, ge=0)
+    units_declared_source: str | None = None
+    census_status: str = "partial"
+    notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @root_validator(skip_on_failure=True)
+    def validate_building(cls, v):
+        if v.get("building_type") not in BUILDING_TYPES: raise ValueError("invalid building_type")
+        if v.get("census_status") not in BUILDING_CENSUS_STATUSES: raise ValueError("invalid census_status")
+        if v.get("units_declared_source") is not None and v["units_declared_source"] not in UNITS_DECLARED_SOURCES:
+            raise ValueError("invalid units_declared_source")
+        return v
+
+
+class BuildingUpdate(PropertyModel):
+    building_type: str | None = None
+    name: str | None = Field(None, max_length=120)
+    region: str | None = Field(None, max_length=50)
+    province: str | None = Field(None, max_length=10)
+    city: str | None = Field(None, max_length=120)
+    microzone: str | None = Field(None, max_length=150)
+    address: str | None = Field(None, max_length=250)
+    civic_number: str | None = Field(None, max_length=30)
+    postal_code: str | None = Field(None, max_length=20)
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    cadastral_municipality_code: str | None = Field(None, max_length=4)
+    cadastral_section: str | None = Field(None, max_length=5)
+    cadastral_sheet: str | None = Field(None, max_length=10)
+    cadastral_parcel: str | None = Field(None, max_length=10)
+    floors_above_ground: int | None = Field(None, ge=0)
+    year_built: int | None = Field(None, ge=1000, le=2200)
+    elevator: bool | None = None
+    units_declared: int | None = Field(None, ge=0)
+    units_declared_source: str | None = None
+    census_status: str | None = None
+    notes: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_building(cls, v):
+        if v.get("building_type") is not None and v["building_type"] not in BUILDING_TYPES:
+            raise ValueError("invalid building_type")
+        if v.get("census_status") is not None and v["census_status"] not in BUILDING_CENSUS_STATUSES:
+            raise ValueError("invalid census_status")
+        if v.get("units_declared_source") is not None and v["units_declared_source"] not in UNITS_DECLARED_SOURCES:
+            raise ValueError("invalid units_declared_source")
+        return v
+
+    @model_validator(mode="after")
+    def no_null_on_not_null_columns(self):
+        # NOT NULL nella 083: building_type, census_status, metadata
+        return _mai_null(self, ("building_type", "census_status", "metadata"))
+
+
+class CensusUnitCreate(PropertyModel):
+    """Una scheda di censimento (`record_kind = 'census'`): in palazzina
+    (`building_id`), come pertinenza di un'unita' (`parent_property_id`),
+    entrambe, o singola. Nessun campo obbligatorio oltre la tipologia."""
+    client_request_id: UUID | None = None
+    confirm_similar: bool = False
+    building_id: int | None = Field(None, ge=1)
+    parent_property_id: int | None = Field(None, ge=1)
+    property_type: str = "apartment"
+    whole_building: bool = False
+    floor: str | None = Field(None, max_length=50)
+    staircase: str | None = Field(None, max_length=10)
+    internal_number: str | None = Field(None, max_length=10)
+    surface_sqm: Decimal | None = Field(None, ge=0)
+    commercial_surface_sqm: Decimal | None = Field(None, ge=0)
+    rooms: int | None = Field(None, ge=0)
+    bedrooms: int | None = Field(None, ge=0)
+    bathrooms: int | None = Field(None, ge=0)
+    cadastral_municipality_code: str | None = Field(None, max_length=4)
+    cadastral_section: str | None = Field(None, max_length=5)
+    cadastral_sheet: str | None = Field(None, max_length=10)
+    cadastral_parcel: str | None = Field(None, max_length=10)
+    cadastral_subunit: str | None = Field(None, max_length=10)
+    cadastral_category: str | None = Field(None, max_length=5)
+    # indirizzo PROPRIO ("Ingresso diverso?"): se assente e c'e' la palazzina,
+    # l'indirizzo e' ereditato e materializzato dall'edificio
+    region: str | None = Field(None, max_length=50)
+    province: str | None = Field(None, max_length=10)
+    city: str | None = Field(None, max_length=120)
+    microzone: str | None = Field(None, max_length=150)
+    address: str | None = Field(None, max_length=250)
+    civic_number: str | None = Field(None, max_length=30)
+    postal_code: str | None = Field(None, max_length=20)
+    public_notes: str | None = None
+    internal_notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @root_validator(skip_on_failure=True)
+    def validate_unit(cls, v):
+        if v.get("property_type") not in PROPERTY_TYPES: raise ValueError("invalid property_type")
+        return v
+
+
+class PertinenzaLink(PropertyModel):
+    pertinenza_id: int = Field(..., ge=1)
+
+
+class AccessoryCreate(PropertyModel):
+    client_request_id: UUID | None = None
+    kind: str
+    cadastral_status: str = "included"      # "No" = included; "Non lo so" = unknown
+    surface_sqm: Decimal | None = Field(None, ge=0)
+    notes: str | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_accessory(cls, v):
+        if v.get("kind") not in ACCESSORY_KINDS: raise ValueError("invalid kind")
+        if v.get("cadastral_status") not in ACCESSORY_STATUSES: raise ValueError("invalid cadastral_status")
+        return v
+
+
+class AccessoryUpdate(PropertyModel):
+    kind: str | None = None
+    surface_sqm: Decimal | None = Field(None, ge=0)
+    notes: str | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_accessory(cls, v):
+        if v.get("kind") is not None and v["kind"] not in ACCESSORY_KINDS: raise ValueError("invalid kind")
+        return v
+
+    @model_validator(mode="after")
+    def no_null_on_not_null_columns(self):
+        return _mai_null(self, ("kind",))          # NOT NULL nella 083
+
+
+class AccessoryResolve(PropertyModel):
+    """«Chiarisci»: `included` (e' compresa) oppure `separate` (e' separata):
+    nasce la pertinenza collegata con tipo, mq e note travasati - o si collega
+    un immobile gia' censito (`existing_property_id`) - e l'accessorio viene
+    rimosso nella stessa transazione."""
+    outcome: str = Field(..., pattern="^(included|separate)$")
+    existing_property_id: int | None = Field(None, ge=1)
+    property_type: str | None = None
+    client_request_id: UUID | None = None
+    cadastral_municipality_code: str | None = Field(None, max_length=4)
+    cadastral_section: str | None = Field(None, max_length=5)
+    cadastral_sheet: str | None = Field(None, max_length=10)
+    cadastral_parcel: str | None = Field(None, max_length=10)
+    cadastral_subunit: str | None = Field(None, max_length=10)
+    cadastral_category: str | None = Field(None, max_length=5)
+
+    @root_validator(skip_on_failure=True)
+    def validate_resolve(cls, v):
+        if v.get("property_type") is not None and v["property_type"] not in PROPERTY_TYPES:
+            raise ValueError("invalid property_type")
+        if v.get("outcome") == "included" and (v.get("existing_property_id") or v.get("property_type")):
+            raise ValueError("included takes no property fields")
+        # la chiave di idempotenza vive sulla riga CREATA: solo `separate` con
+        # creazione la porta. Con `existing_property_id` o `included` nessuna
+        # riga nuova la conserverebbe, e una chiave ignorata in silenzio
+        # sarebbe un'idempotenza dichiarata e falsa: rifiutata.
+        if v.get("client_request_id") is not None and (v.get("outcome") != "separate" or v.get("existing_property_id")):
+            raise ValueError("client_request_id vale solo per `separate` con creazione di una pertinenza nuova")
+        return v
+
+
+class TakeInCharge(PropertyModel):
+    include_pertinenze: bool = True
