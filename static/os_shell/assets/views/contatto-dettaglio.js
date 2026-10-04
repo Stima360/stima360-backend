@@ -790,7 +790,9 @@ export async function renderContattoDettaglio(container, params = []) {
 
     async function loadLinked() {
       try {
-        const res = await apiGet(`/api/property/properties?lead_id=${lead.id}&limit=50`);
+        // CENSIMENTO-1 Fase 5: vista per relazione - anche le unita' censite gia'
+        // collegate (etichettate); la ricerca per collegarne una nuova resta operativa.
+        const res = await apiGet(`/api/property/properties?lead_id=${lead.id}&limit=50&record_kind=all`);
         linkedProperties = Array.isArray(res && res.items) ? res.items : [];
         loadError = null;
       } catch (error) {
@@ -808,7 +810,7 @@ export async function renderContattoDettaglio(container, params = []) {
       const linkedHtml = linkedProperties.length
         ? `<ul class="list">${linkedProperties.map((p) => `
             <li class="list-item">
-              <span><a href="#/immobili/${escapeHtml(p.id)}"><strong>${escapeHtml(propertyLabel(p))}</strong></a><br><small class="muted">${escapeHtml(p.city || '—')} · ${escapeHtml(p.commercial_status || '—')}</small></span>
+              <span><a href="#/immobili/${escapeHtml(p.id)}"><strong>${escapeHtml(propertyLabel(p))}</strong></a><br><small class="muted">${escapeHtml(p.city || '—')} · ${escapeHtml(p.record_kind === 'census' ? 'In censimento' : (p.commercial_status || '—'))}</small></span>
               <button type="button" class="btn ghost danger" data-unlink="${p.id}">${unlinkConfirm.has(p.id) ? 'Conferma scollega' : 'Scollega'}</button>
             </li>
           `).join('')}</ul>`
@@ -1046,7 +1048,10 @@ function renderPanoramica(contact, data) {
   const relCounts = [
     ['Lead', (data.leads || []).length],
     ['Richieste BUY', (data.buy_requests || []).length],
-    ['Immobili collegati', (data.properties || []).length],
+    // CENSIMENTO-1 Fase 5: le unita' censite collegate non sono immobili
+    // operativi: si contano a parte, mai sommate.
+    ['Immobili collegati', (data.properties || []).filter((p) => p.record_kind !== 'census').length],
+    ['Unità censite collegate', (data.properties || []).filter((p) => p.record_kind === 'census').length],
     ['Visite', (data.visits || []).length],
   ];
   return `
@@ -1474,7 +1479,7 @@ function renderImmobili(loaded) {
     : '';
   const table = renderTable(
     [
-      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>` },
+      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>${p.record_kind === 'census' ? ` ${renderBadge('Censimento', 'warn')}` : ''}` },
       { label: 'Città', render: (p) => escapeHtml(p.city || '—') },
       { label: 'Ruolo del contatto', render: (p) => {
         const link = (p.contacts || []).find((c) => String(c.contact_id) === String(contactId));

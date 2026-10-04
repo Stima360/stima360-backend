@@ -22,7 +22,9 @@ function normalizeGlobalSearchResults(type,items){
    if(type==='property')return {
      type,
      id:item.id,
-     typeLabel:'IMMOBILE',
+     // CENSIMENTO-1 Fase 5: la ricerca copre entrambi i tipi; una scheda di
+     // censimento non e' un immobile operativo e lo dice.
+     typeLabel:item.record_kind==='census'?'IMMOBILE · CENSIMENTO':'IMMOBILE',
      title:item.title||`Immobile #${item.id}`,
      subtitle:[item.code,item.address,item.city].filter(Boolean).join(' · '),
      status:item.commercial_status||''
@@ -56,7 +58,7 @@ export async function searchGlobal(query, api, { includeLeads = false } = {}) {
  const requests=[
    api(`/api/core/contacts?search=${encoded}&limit=5`)
      .then(data=>({type:'contact',items:data.items||[]})),
-   api(`/api/property/properties?search=${encoded}&limit=5`)
+   api(`/api/property/properties?search=${encoded}&limit=5&record_kind=all`)
      .then(data=>({type:'property',items:data.items||[]})),
    api(`/api/buy/requests?search=${encoded}&limit=5`)
      .then(data=>({type:'buy',items:data.items||[]}))

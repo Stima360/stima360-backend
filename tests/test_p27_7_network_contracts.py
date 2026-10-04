@@ -506,6 +506,13 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/census/census-sheets.js",
         "static/os_shell/assets/census/property-census-tab.js",
         "static/os_shell/assets/views/edificio-dettaglio.js",
+        # SENTINELLA AGGIORNATA DA CENSIMENTO-1 FASE 5 - CONTEGGI E LISTE.
+        # L'elenco immobili di default diventa solo operativo (`crm`); la
+        # ricerca globale chiede entrambi i tipi (`record_kind=all`, decisione
+        # 2 di CENSIMENTO-0) ed etichetta le schede di censimento. Le altre
+        # viste toccate (`immobili.js`, `contatto-dettaglio.js`, `census/`)
+        # erano gia' ammesse. Nessuna logica di Rete toccata.
+        "static/os_shell/assets/core/global-search.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

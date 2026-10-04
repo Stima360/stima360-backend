@@ -73,6 +73,10 @@ def get_contact_360(ctx, contact_id: int) -> dict:
         None,
         False,
         False,
+        # CENSIMENTO-1 Fase 5: vista per relazione - un'unita' censita gia'
+        # collegata al contatto resta visibile (ogni riga porta `record_kind`,
+        # la UI la distingue); l'elenco operativo di default e' solo `crm`.
+        record_kind="all",
     )
     buy_requests = list_requests_scoped(
         ctx, 500, 0, None, None, None, None, contact_id, None, None

@@ -58,10 +58,11 @@
 // /api/property/buildings, e il «+ Nuovo» con «Immobile singolo» /
 // «Palazzina con più unità»). Nessuna voce di menu nuova. Le etichette di
 // tipologia arrivano da form-options (decisione 1: niente valore tecnico in
-// colonna). Dipendenza dichiarata: il contatore «Censimento (N)» e il filtro
-// per record_kind dell'elenco immobili sono della Fase 5 - qui la tab elenca
-// le palazzine (dato census per natura) e le unita' singole censite restano
-// nell'elenco Commerciale finche' la Fase 5 non filtra.
+// colonna). CENSIMENTO-1 Fase 5: «Commerciale» legge l'elenco di default del
+// server, che contiene solo le schede operative (`record_kind = 'crm'`);
+// «Censimento» elenca le palazzine e le unita' censite
+// (`record_kind=census`). Una scheda passa da una lista all'altra solo con
+// «Prendi in carico» (stessa riga, stesso codice).
 import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
@@ -96,15 +97,18 @@ export async function renderImmobili(container, params = []) {
     </div>
     <div class="card panel" id="immobili-census-panel" ${modoIniziale === 'crm' ? 'hidden' : ''}>
       <div class="list-toolbar">
-        <input id="census-search" class="input" type="search" placeholder="Cerca palazzina per nome, via o comune…">
+        <input id="census-search" class="input" type="search" placeholder="Cerca palazzina o unità per nome, via o comune…">
         <button type="button" id="census-new" class="btn primary">+ Nuovo</button>
       </div>
       <div id="census-new-cards" class="census-new-cards" hidden>
         <button type="button" class="census-card" id="census-new-single"><strong>Immobile singolo</strong><span class="muted">Villa, rustico, negozio, unità senza palazzina</span></button>
         <button type="button" class="census-card" id="census-new-building"><strong>Palazzina con più unità</strong><span class="muted">Prima l'edificio, poi le unità piano per piano</span></button>
       </div>
+      <h3 class="census-section-title">Palazzine</h3>
       <div id="census-list-area"><p class="muted">Caricamento…</p></div>
-      <p class="muted census-note">Le unità singole censite restano nell'elenco «Commerciale» (filtro e contatori arrivano con la Fase 5).</p>
+      <h3 class="census-section-title">Unità censite</h3>
+      <div id="census-units-area"><p class="muted">Caricamento…</p></div>
+      <p class="muted census-note">Le unità censite non sono immobili operativi: entrano nell'elenco «Commerciale» con «Prendi in carico».</p>
     </div>
     <dialog id="new-property-dialog" class="modal modal-wide"></dialog>
     <dialog id="census-sheet" class="modal census-sheet"></dialog>
@@ -186,6 +190,7 @@ export async function renderImmobili(container, params = []) {
   const censusPanel = container.querySelector('#immobili-census-panel');
   const censusSearch = container.querySelector('#census-search');
   const censusListArea = container.querySelector('#census-list-area');
+  const censusUnitsArea = container.querySelector('#census-units-area');
   const censusSheet = container.querySelector('#census-sheet');
   const newCards = container.querySelector('#census-new-cards');
   let censusDebounce = null;
@@ -193,6 +198,7 @@ export async function renderImmobili(container, params = []) {
 
   async function loadCensus() {
     censusLoaded = true;
+    loadCensusUnits();
     censusListArea.innerHTML = '<p class="muted">Caricamento…</p>';
     let items = [];
     try {
@@ -217,6 +223,37 @@ export async function renderImmobili(container, params = []) {
       { onRowClick: true },
     );
     bindTableRowClicks(censusListArea, (id) => navigate('immobili', ['edifici', id]));
+  }
+
+  // Fase 5: le unita' censite (in palazzina o singole), dal server con
+  // `record_kind=census` - mai filtrate nel browser da un elenco misto.
+  async function loadCensusUnits() {
+    censusUnitsArea.innerHTML = '<p class="muted">Caricamento…</p>';
+    let unita = [];
+    try {
+      const data = await census.listCensusUnits({ search: censusSearch.value.trim() || undefined, limit: PAGE_SIZE });
+      unita = Array.isArray(data?.items) ? data.items : [];
+    } catch (error) {
+      censusUnitsArea.innerHTML = `<div class="error-box">${escapeHtml(errorMessage(error))}</div>`;
+      return;
+    }
+    if (!unita.length) {
+      censusUnitsArea.innerHTML = `<p class="muted">${censusSearch.value.trim() ? 'Nessuna unità censita trovata.' : 'Nessuna unità censita.'}</p>`;
+      return;
+    }
+    censusUnitsArea.innerHTML = renderTable(
+      [
+        { label: 'Unità', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
+        { label: 'Tipologia', render: (p) => escapeHtml(labelOf(tipologie, p.property_type, p.property_type || '—')) },
+        { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
+        { label: 'Collocazione', render: (p) => escapeHtml(p.building_id ? 'In palazzina' : 'Singola') },
+        { label: 'Aggiornata il', render: (p) => escapeHtml(formatDate(p.updated_at)) },
+      ],
+      unita,
+      { onRowClick: true },
+    );
+    if (unita.length === PAGE_SIZE) censusUnitsArea.insertAdjacentHTML('beforeend', `<p class="muted">Prime ${PAGE_SIZE}: affina la ricerca per vedere le altre.</p>`);
+    bindTableRowClicks(censusUnitsArea, (id) => navigate('immobili', [id]));
   }
 
   function mostraModo(modo) {

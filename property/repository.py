@@ -66,6 +66,28 @@ def _mandate_origin_refused(exc):
 
 def row(x): return dict(x) if x else None
 
+
+# CENSIMENTO-1 Fase 5: una scheda di censimento (`record_kind = 'census'`) non
+# e' un immobile operativo finche' non e' presa in carico. Elenco di default,
+# dashboard e avvisi leggono solo le operative (`crm`); le censite si chiedono
+# esplicitamente. `record_kind` e' letto dal JSON della riga (stessa scelta di
+# acquisitions/repository.py::lock_property): la statement resta eseguibile
+# dove la 083 non e' applicata, e li' ogni riga e' operativa.
+RECORD_KINDS = ('crm', 'census', 'all')
+
+
+def record_kind_sql(alias='p'):
+    return f"COALESCE(to_jsonb({alias}) ->> 'record_kind', 'crm')"
+
+
+def record_kind_filter(record_kind, alias='p'):
+    """(condizione SQL, parametri) per `crm` / `census`; None per `all`."""
+    if record_kind not in RECORD_KINDS:
+        raise ValidationError('record_kind must be crm, census or all')
+    if record_kind == 'all':
+        return None
+    return f"{record_kind_sql(alias)} = %s", [record_kind]
+
 def ensure(cur, table, id_, label):
     cur.execute(f"SELECT 1 FROM {table} WHERE id=%s",(id_,))
     if not cur.fetchone(): raise NotFoundError(f"{label} {id_} not found")
@@ -172,6 +194,9 @@ def create_property(ctx,data,*,generate_identity=False):
         return created
 
 def list_properties(*args, **kwargs):
+    # CENSIMENTO-1 Fase 5: solo per nome, cosi' le firme posizionali storiche
+    # (11 filtri, con o senza ctx) restano quelle di prima. Default: operative.
+    record_kind = kwargs.pop('record_kind', 'crm')
     if len(args) > 0 and hasattr(args[0], 'require_agency'):
         ctx = args[0]
         agency_id = ctx.require_agency()
@@ -194,6 +219,10 @@ def list_properties(*args, **kwargs):
     if agency_id is not None:
         filters.append("p.agency_id = %s")
         params.append(agency_id)
+    tipo = record_kind_filter(record_kind)
+    if tipo is not None:
+        filters.append(tipo[0])
+        params += tipo[1]
     if search:
         filters.append("(p.title ILIKE %s OR p.code ILIKE %s OR p.address ILIKE %s OR p.city ILIKE %s)")
         params += [f'%{search}%'] * 4
@@ -792,12 +821,12 @@ def dashboard(ctx=None):
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
               COALESCE(SUM(asking_price) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
-            FROM properties
-            WHERE agency_id = %s
+            FROM properties p
+            WHERE agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """, (agency_id,))
             kpi = dict(cur.fetchone())
             cur.execute("""SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id
-                WHERE p.archived_at IS NULL AND p.agency_id = %s AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))""", (agency_id,))
+                WHERE p.archived_at IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))""", (agency_id,))
             kpi['document_issues'] = cur.fetchone()['count']
             cur.execute("""SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id
                 WHERE p.archived_at IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date""", (agency_id,))
@@ -807,7 +836,7 @@ def dashboard(ctx=None):
             kpi['upcoming_visits'] = cur.fetchone()['count']
             cur.execute("""SELECT p.id,p.code,p.title,p.commercial_status,p.classification,p.mandate_end,p.asking_price,
               (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))) AS document_issues
-              FROM properties p WHERE p.archived_at IS NULL AND p.agency_id = %s ORDER BY p.updated_at DESC LIMIT 8""", (agency_id,))
+              FROM properties p WHERE p.archived_at IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""", (agency_id,))
             kpi['recent_properties'] = [dict(x) for x in cur.fetchall()]
             cur.execute("""SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id
               WHERE p.archived_at IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""", (agency_id,))
@@ -822,10 +851,11 @@ def dashboard(ctx=None):
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
               COALESCE(SUM(asking_price) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
-            FROM properties
+            FROM properties p
+            WHERE COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """)
             kpi = dict(cur.fetchone())
-            cur.execute("SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id WHERE p.archived_at IS NULL AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))")
+            cur.execute("SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))")
             kpi['document_issues'] = cur.fetchone()['count']
             cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date")
             kpi['visits_today'] = cur.fetchone()['count']
@@ -833,11 +863,19 @@ def dashboard(ctx=None):
             kpi['upcoming_visits'] = cur.fetchone()['count']
             cur.execute("""SELECT p.id,p.code,p.title,p.commercial_status,p.classification,p.mandate_end,p.asking_price,
               (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))) AS document_issues
-              FROM properties p WHERE p.archived_at IS NULL ORDER BY p.updated_at DESC LIMIT 8""")
+              FROM properties p WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""")
             kpi['recent_properties'] = [dict(x) for x in cur.fetchall()]
             cur.execute("""SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id
               WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""")
             kpi['next_visits'] = [dict(x) for x in cur.fetchall()]
+        # CENSIMENTO-1 Fase 5: le unita' censite hanno il loro contatore, mai
+        # mescolato ai KPI operativi qui sopra. Le visite restano visite
+        # (eventi dell'Agenda), qualunque sia la scheda.
+        cur.execute("SELECT count(*) AS count FROM properties p WHERE p.archived_at IS NULL"
+                    + (" AND p.agency_id = %s" if agency_id is not None else "")
+                    + " AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'census'",
+                    (agency_id,) if agency_id is not None else ())
+        kpi['census_units'] = cur.fetchone()['count']
         return kpi
 
 def alerts(ctx=None):
@@ -859,6 +897,7 @@ def alerts(ctx=None):
             FROM property_documents d JOIN properties p ON p.id=d.property_id
             WHERE p.archived_at IS NULL
               AND p.agency_id = %s
+              AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
               AND (
                  d.status IN ('missing','requested','expired','rejected')
                  OR (d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + INTERVAL '30 days')
@@ -886,7 +925,7 @@ def alerts(ctx=None):
             SELECT 'document',p.id,p.title,p.code,d.expires_at,
                    'Documento: '||d.title||' ('||d.status||')'
             FROM property_documents d JOIN properties p ON p.id=d.property_id
-            WHERE p.archived_at IS NULL AND (
+            WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (
                  d.status IN ('missing','requested','expired','rejected')
                  OR (d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + INTERVAL '30 days')
             )

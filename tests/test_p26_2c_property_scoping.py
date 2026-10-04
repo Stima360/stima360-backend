@@ -185,10 +185,12 @@ def test_dashboard_scoped_to_agency(mock_db):
         {"count": 0},
         [],
         [],
+        {"count": 3},          # CENSIMENTO-1 Fase 5: il contatore delle unita' censite
     ])
     ctx = make_ctx(AGENCY_A)
     kpis = property_repository.dashboard(ctx)
     assert kpis["total"] == 1
+    assert kpis["census_units"] == 3
     # Every query issued must filter by agency_id
     for stmt in cursor.statements:
         assert "agency_id" in stmt.sql

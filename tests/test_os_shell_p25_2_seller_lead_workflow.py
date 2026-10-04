@@ -74,7 +74,8 @@ def test_lead_workflow_uses_exact_backend_endpoints():
     text = _read(CONTATTO_JS)
     assert "apiPost('/api/core/leads'" in text
     assert re.search(r"apiPatch\(`/api/core/leads/\$\{lead\.id\}`", text)
-    assert re.search(r"apiGet\(`/api/property/properties\?lead_id=\$\{lead\.id\}&limit=50`\)", text)
+    # CENSIMENTO-1 Fase 5: vista per relazione, entrambi i tipi (le unita' censite etichettate)
+    assert re.search(r"apiGet\(`/api/property/properties\?lead_id=\$\{lead\.id\}&limit=50&record_kind=all`\)", text)
     assert re.search(r"apiGet\(`/api/property/properties\?search=\$\{encodeURIComponent\(term\)\}&limit=10`\)", text)
     assert re.search(r"apiPost\(`/api/property/properties/\$\{pickedProperty\.id\}/leads`", text)
     assert re.search(r"apiDelete\(`/api/property/properties/\$\{propertyId\}/leads/\$\{lead\.id\}`\)", text)

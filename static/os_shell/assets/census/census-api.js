@@ -203,7 +203,17 @@ export function resolveAccessory(propertyId, accessoryId, payload) {
 //
 // Nessuna rotta nuova: `GET /api/property/properties?search=` (la stessa
 // dell'elenco Immobili). Il server verifica comunque agenzia, profondita' e
-// stato al momento del collegamento.
+// stato al momento del collegamento. Fase 5: l'elenco di default e' solo
+// operativo (`crm`); qui servono ENTRAMBI i tipi (una pertinenza gia' censita
+// si collega), quindi `record_kind=all`.
 export function searchProperties(term, limit = 10) {
-  return request('GET', `/properties${query({ search: term, limit })}`);
+  return request('GET', `/properties${query({ search: term, limit, record_kind: 'all' })}`);
+}
+
+// --- Fase 5: le unita' censite (tab Censimento) ------------------------------------
+//
+// Stessa rotta dell'elenco Immobili con `record_kind=census`: le schede di
+// censimento non stanno nell'elenco Commerciale finche' non sono prese in carico.
+export function listCensusUnits({ search, limit = 50, offset = 0 } = {}) {
+  return request('GET', `/properties${query({ search, limit, offset, record_kind: 'census' })}`);
 }

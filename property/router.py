@@ -33,8 +33,12 @@ def get_alerts(ctx:OperatorContext=Depends(legacy_basic_agency_context)):return 
 def get_form_options(ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.form_options,ctx)
 @router.post('/properties',status_code=201)
 def create_property(p:PropertyCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.create_property,ctx,p)
+# CENSIMENTO-1 Fase 5: `record_kind` = crm (default: le schede operative, per
+# il tab Commerciale, i selettori operativi e property_admin) | census (le
+# unita' censite, per il tab Censimento) | all (ricerca globale, «Collega
+# esistente», viste per relazione). Valore diverso: 422.
 @router.get('/properties')
-def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,contact_id:int|None=None,lead_id:int|None=None,assigned_to:str|None=None,mandate_expiring:bool=False,missing_documents:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_properties,ctx,limit,offset,search,status,classification,city,contact_id,lead_id,assigned_to,mandate_expiring,missing_documents)}
+def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,contact_id:int|None=None,lead_id:int|None=None,assigned_to:str|None=None,mandate_expiring:bool=False,missing_documents:bool=False,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_properties,ctx,limit,offset,search,status,classification,city,contact_id,lead_id,assigned_to,mandate_expiring,missing_documents,record_kind=record_kind)}
 @router.get('/properties/{property_id}')
 def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_property,ctx,property_id)
 @router.patch('/properties/{property_id}')
