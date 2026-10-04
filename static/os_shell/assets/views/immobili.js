@@ -53,19 +53,36 @@
 // Comune -> Microzona dal catalogo del portale, classe energetica a menu,
 // "Assegnato a" con gli agenti reali. La lista identifica l'immobile da
 // indirizzo, comune e microzona, non dal titolo.
+// CENSIMENTO-1 Fase 4 (S0): due tab in testa all'elenco, «Commerciale» (la
+// lista di sempre) e «Censimento» (le palazzine censite, GET
+// /api/property/buildings, e il «+ Nuovo» con «Immobile singolo» /
+// «Palazzina con più unità»). Nessuna voce di menu nuova. Le etichette di
+// tipologia arrivano da form-options (decisione 1: niente valore tecnico in
+// colonna). Dipendenza dichiarata: il contatore «Censimento (N)» e il filtro
+// per record_kind dell'elenco immobili sono della Fase 5 - qui la tab elenca
+// le palazzine (dato census per natura) e le unita' singole censite restano
+// nell'elenco Commerciale finche' la Fase 5 non filtra.
 import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
-import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
+import { openPropertyDialog, propertyDisplayName, loadFormOptions } from '../components/property-form.js';
+import * as census from '../census/census-api.js';
+import { openBuildingSheet, openUnitSheet } from '../census/census-sheets.js';
+import { errorMessage, labelOf } from '../census/census-model.js';
 
 const PAGE_SIZE = 50;
 
 // Valori reali del CHECK constraint properties_status_check (migrations/002_property_01.sql:43).
 const STATUS_OPTIONS = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'sold', 'withdrawn', 'archived'];
 
-export async function renderImmobili(container) {
+export async function renderImmobili(container, params = []) {
+  const modoIniziale = params[0] === 'censimento' ? 'census' : 'crm';
   container.innerHTML = `
-    <div class="card panel">
+    <div class="tabs census-mode-tabs" id="immobili-mode-tabs">
+      <button type="button" class="tab-btn${modoIniziale === 'crm' ? ' active' : ''}" data-mode="crm">Commerciale</button>
+      <button type="button" class="tab-btn${modoIniziale === 'census' ? ' active' : ''}" data-mode="census">Censimento</button>
+    </div>
+    <div class="card panel" id="immobili-crm-panel" ${modoIniziale === 'census' ? 'hidden' : ''}>
       <div class="list-toolbar">
         <input id="immobili-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…">
         <select id="immobili-status" class="input">
@@ -77,7 +94,20 @@ export async function renderImmobili(container) {
       <div id="immobili-list-area"><p class="muted">Caricamento…</p></div>
       <div id="immobili-pager" class="list-pager"></div>
     </div>
+    <div class="card panel" id="immobili-census-panel" ${modoIniziale === 'crm' ? 'hidden' : ''}>
+      <div class="list-toolbar">
+        <input id="census-search" class="input" type="search" placeholder="Cerca palazzina per nome, via o comune…">
+        <button type="button" id="census-new" class="btn primary">+ Nuovo</button>
+      </div>
+      <div id="census-new-cards" class="census-new-cards" hidden>
+        <button type="button" class="census-card" id="census-new-single"><strong>Immobile singolo</strong><span class="muted">Villa, rustico, negozio, unità senza palazzina</span></button>
+        <button type="button" class="census-card" id="census-new-building"><strong>Palazzina con più unità</strong><span class="muted">Prima l'edificio, poi le unità piano per piano</span></button>
+      </div>
+      <div id="census-list-area"><p class="muted">Caricamento…</p></div>
+      <p class="muted census-note">Le unità singole censite restano nell'elenco «Commerciale» (filtro e contatori arrivano con la Fase 5).</p>
+    </div>
     <dialog id="new-property-dialog" class="modal modal-wide"></dialog>
+    <dialog id="census-sheet" class="modal census-sheet"></dialog>
   `;
 
   const searchInput = container.querySelector('#immobili-search');
@@ -88,6 +118,12 @@ export async function renderImmobili(container) {
 
   let offset = 0;
   let debounceHandle = null;
+  let tipologie = [];
+  try {
+    tipologie = (await loadFormOptions()).property_types || [];
+  } catch (_error) {
+    tipologie = [];           // etichette non disponibili: resta il valore tecnico
+  }
 
   async function load() {
     listArea.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -111,7 +147,7 @@ export async function renderImmobili(container) {
       [
         { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
-        { label: 'Tipologia', render: (p) => escapeHtml(p.property_type || '—') },
+        { label: 'Tipologia', render: (p) => escapeHtml(labelOf(tipologie, p.property_type, p.property_type || '—')) },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
         { label: 'Prezzo', render: (p) => formatPrice(p.asking_price) },
         { label: 'Aggiornato il', render: (p) => escapeHtml(formatDate(p.updated_at)) },
@@ -145,6 +181,79 @@ export async function renderImmobili(container) {
     onSaved: (created) => navigate('immobili', [created.id]),
   }));
 
+  // --- Censimento (S0 -> S1/S3) ------------------------------------------------
+  const crmPanel = container.querySelector('#immobili-crm-panel');
+  const censusPanel = container.querySelector('#immobili-census-panel');
+  const censusSearch = container.querySelector('#census-search');
+  const censusListArea = container.querySelector('#census-list-area');
+  const censusSheet = container.querySelector('#census-sheet');
+  const newCards = container.querySelector('#census-new-cards');
+  let censusDebounce = null;
+  let censusLoaded = false;
+
+  async function loadCensus() {
+    censusLoaded = true;
+    censusListArea.innerHTML = '<p class="muted">Caricamento…</p>';
+    let items = [];
+    try {
+      const data = await census.listBuildings({ search: censusSearch.value.trim() || undefined });
+      items = Array.isArray(data?.items) ? data.items : [];
+    } catch (error) {
+      censusListArea.innerHTML = `<div class="error-box">${escapeHtml(errorMessage(error))}</div>`;
+      return;
+    }
+    if (!items.length) {
+      censusListArea.innerHTML = `<p class="muted">${censusSearch.value.trim() ? 'Nessuna palazzina trovata.' : 'Nessuna palazzina censita: comincia da «+ Nuovo».'}</p>`;
+      return;
+    }
+    censusListArea.innerHTML = renderTable(
+      [
+        { label: 'Palazzina', render: (b) => `<strong>${escapeHtml(b.name || [b.address, b.civic_number].filter(Boolean).join(' ') || `Palazzina #${b.id}`)}</strong><br><small class="muted">${escapeHtml([[b.address, b.civic_number].filter(Boolean).join(' '), b.city].filter(Boolean).join(', ') || '—')}</small>` },
+        { label: 'Censite', render: (b) => `${escapeHtml(b.units_census ?? 0)}${Number.isInteger(b.units_declared) ? ` di ${escapeHtml(b.units_declared)}` : ''}` },
+        { label: 'Da chiarire', render: (b) => escapeHtml(b.accessories_unknown || 0) },
+        { label: 'Aggiornata il', render: (b) => escapeHtml(formatDate(b.updated_at)) },
+      ],
+      items,
+      { onRowClick: true },
+    );
+    bindTableRowClicks(censusListArea, (id) => navigate('immobili', ['edifici', id]));
+  }
+
+  function mostraModo(modo) {
+    container.querySelector('#immobili-mode-tabs').querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === modo));
+    crmPanel.hidden = modo !== 'crm';
+    censusPanel.hidden = modo !== 'census';
+    if (modo === 'census' && !censusLoaded) loadCensus();
+  }
+  container.querySelector('#immobili-mode-tabs').querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => mostraModo(b.dataset.mode)));
+  censusSearch.addEventListener('input', () => { clearTimeout(censusDebounce); censusDebounce = setTimeout(loadCensus, 300); });
+  container.querySelector('#census-new').addEventListener('click', () => { newCards.hidden = !newCards.hidden; });
+
+  async function opzioniForm() {
+    try {
+      return await loadFormOptions();
+    } catch (error) {
+      censusListArea.insertAdjacentHTML('afterbegin', `<div class="error-box">Impossibile caricare i dati del form: ${escapeHtml(error.message)}</div>`);
+      return null;
+    }
+  }
+  container.querySelector('#census-new-building').addEventListener('click', async () => {
+    const opzioni = await opzioniForm();
+    if (!opzioni) return;
+    newCards.hidden = true;
+    openBuildingSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('immobili', ['edifici', creato.id]) });
+  });
+  container.querySelector('#census-new-single').addEventListener('click', async () => {
+    const opzioni = await opzioniForm();
+    if (!opzioni) return;
+    newCards.hidden = true;
+    // L'unita' singola nasce census (POST /census/units senza palazzina) e si
+    // apre subito la sua scheda, dove «Annulla creazione» resta disponibile
+    // finche' il backend lo ammette (undo-create).
+    openUnitSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('immobili', [creato.id]) });
+  });
+
+  if (modoIniziale === 'census') loadCensus();
   await load();
 }
 

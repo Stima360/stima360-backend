@@ -38,7 +38,10 @@ def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),sea
 @router.get('/properties/{property_id}')
 def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_property,ctx,property_id)
 @router.patch('/properties/{property_id}')
-def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_property,ctx,property_id,p)
+# CENSIMENTO-1 Fase 4: la PATCH generica risponde con `{detail, code}` come le rotte del
+# censimento (`trc`), cosi' la guardia §7 porta `code: CENSUS_LOCKED` e non solo il testo.
+# Risposte di successo invariate; gli altri errori guadagnano solo un `code` additivo.
+def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.update_property,ctx,property_id,p)
 @router.delete('/properties/{property_id}')
 def archive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.archive_property,ctx,property_id)
 @router.post('/properties/{property_id}/contacts',status_code=201)

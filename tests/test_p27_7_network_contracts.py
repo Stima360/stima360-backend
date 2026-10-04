@@ -487,6 +487,25 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/components/property-interactions.js",
         "static/os_shell/assets/components/activity-task-dialogs.js",
         "static/os_shell/assets/views/attivita.js",
+        # SENTINELLA AGGIORNATA DA CENSIMENTO-1 FASE 4 - IL CENSIMENTO DENTRO
+        # IMMOBILI. Una cartella NUOVA `census/` (client proprio delle rotte
+        # della Fase 3 con `{detail, code}`, funzioni pure, fogli, tab della
+        # scheda), una vista NUOVA (la palazzina, `#/immobili/edifici/{id}`
+        # dentro la rotta "immobili"), l'elenco Immobili con la tab
+        # «Censimento» e la scheda Immobile con la tab «Censimento»/«Pertinenze».
+        # `main.js`, `app.css`, `immobili.js` e `immobile-dettaglio.js` erano
+        # gia' ammessi. Git elenca la cartella finche' non e' tracciata, poi i
+        # file per nome.
+        #
+        # Cio' che questo test difende resta intatto: nessuna logica di Rete e
+        # nessun contratto P27 e' toccato, e nessun'altra vista del CRM oltre
+        # a quelle elencate.
+        "static/os_shell/assets/census/",
+        "static/os_shell/assets/census/census-api.js",
+        "static/os_shell/assets/census/census-model.js",
+        "static/os_shell/assets/census/census-sheets.js",
+        "static/os_shell/assets/census/property-census-tab.js",
+        "static/os_shell/assets/views/edificio-dettaglio.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

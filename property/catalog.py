@@ -396,3 +396,33 @@ def generated_code(property_id: int, attempt: int = 0) -> str:
     un codice storico inserito a mano. Mai rigenerato dopo l'assegnazione."""
     base = f"{CODE_PREFIX}{property_id}"
     return base if attempt == 0 else f"{base}-{attempt + 1}"
+
+
+# --- Etichette del censimento (CENSIMENTO-1 Fase 4) -------------------------------
+
+# Le tre liste che il foglio «Nuova palazzina» e il foglio «Pertinenza» mostrano
+# come chips: i VALORI sono quelli che `property/schemas.py` valida
+# (BUILDING_TYPES, UNITS_DECLARED_SOURCES, ACCESSORY_KINDS), le etichette vivono
+# qui e arrivano al browser da `form-options`, come le tipologie: nessuna lista
+# scritta a mano nella Shell. Un test confronta queste chiavi con gli enum.
+BUILDING_TYPE_LABELS: dict[str, str] = {
+    "condominio": "Palazzina / Condominio", "villa": "Villa", "rustico": "Rustico",
+    "capannone": "Capannone", "commerciale": "Edificio commerciale", "misto": "Uso misto",
+    "altro": "Altro",
+}
+UNITS_DECLARED_SOURCE_LABELS: dict[str, str] = {
+    "survey": "Sopralluogo", "cadastre": "Visura", "owner": "Proprietario", "unknown": "Non so",
+}
+ACCESSORY_KIND_LABELS: dict[str, str] = {
+    "cantina": "Cantina", "soffitta": "Soffitta", "posto_auto": "Posto auto", "giardino": "Giardino",
+    "terrazzo": "Terrazzo", "box": "Box", "deposito": "Deposito", "altro": "Altro",
+}
+
+
+def census_labels_for_form() -> dict[str, list[dict[str, str]]]:
+    """Le tre liste, nella forma `{value, label}` gia' usata per `property_types`."""
+    return {
+        "building_types": [{"value": k, "label": v} for k, v in BUILDING_TYPE_LABELS.items()],
+        "units_declared_sources": [{"value": k, "label": v} for k, v in UNITS_DECLARED_SOURCE_LABELS.items()],
+        "accessory_kinds": [{"value": k, "label": v} for k, v in ACCESSORY_KIND_LABELS.items()],
+    }

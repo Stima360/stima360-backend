@@ -845,3 +845,65 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
   .int-form .modal-actions { flex-direction: column-reverse; }
   .int-form .modal-actions .btn { width: 100%; }
 }
+
+/* CENSIMENTO-1 Fase 4: edifici e unita' di censimento dentro Immobili.
+   Solo regole NUOVE (prefisso census-/chip), nessuna ridefinizione di regole
+   esistenti. Mobile-first: i fogli diventano bottom-sheet sotto i 768px. */
+.census-mode-tabs { margin-bottom: 12px; }
+.census-new-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+.census-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); cursor: pointer; font: inherit; color: var(--text); min-height: 88px; }
+.census-card:hover { border-color: var(--primary); }
+.census-card strong { font-size: 15px; }
+.census-note { margin: 12px 0 0; font-size: 12px; }
+.census-back { display: inline-block; margin-bottom: 8px; font-size: 13px; text-decoration: none; }
+.census-building-header h2 { margin-bottom: 2px; }
+.census-add-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.census-add-bar .btn.primary { min-height: 44px; font-size: 15px; }
+.census-units-panel { padding-top: 16px; }
+.census-floor { margin-bottom: 8px; }
+.census-floor-head { position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 8px 4px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); border-bottom: 1px solid var(--border); }
+.census-unit-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.census-unit-main { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; text-align: left; background: transparent; border: none; padding: 8px 4px; font: inherit; color: var(--text); cursor: pointer; min-height: 44px; border-radius: var(--radius); }
+.census-unit-main:hover { background: #eef2f9; }
+.census-unit-main .badge-row { margin-top: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.census-unit-menu { display: flex; gap: 4px; flex-shrink: 0; }
+.btn.btn-small { padding: 4px 8px; font-size: 12px; min-height: 32px; }
+.census-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.census-chips-wrap { flex-wrap: wrap; overflow: visible; }
+.chip { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 999px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; white-space: nowrap; min-height: 40px; }
+.chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.census-inline { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.census-inline .input { max-width: 220px; }
+.census-sheet-title { margin: 0 0 8px; font-size: 18px; }
+.census-sheet-actions { flex-wrap: wrap; }
+.census-check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); }
+.census-details { margin: 8px 0 14px; }
+.census-details summary { cursor: pointer; color: var(--primary); font-size: 14px; padding: 6px 0; }
+.census-category-btn { width: 100%; text-align: left; justify-content: flex-start; min-height: 44px; }
+.census-category-list .chip { display: flex; flex-direction: column; align-items: flex-start; white-space: normal; text-align: left; border-radius: var(--radius); min-width: 140px; }
+.census-category-list .chip small { font-weight: 400; font-size: 11px; opacity: .85; }
+.census-category-list .chip em { font-size: 10px; font-style: normal; opacity: .75; }
+.census-banner { background: #fdf3d8; border: 1px solid #f1d58b; color: #5c4400; border-radius: var(--radius); padding: 10px 12px; margin: 10px 0; font-size: 14px; }
+.census-banner ul { margin: 6px 0 0; padding-left: 18px; }
+.census-banner-block { background: #fdecea; border-color: #f0b7b1; color: #7a1f17; }
+.census-toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 12px; background: var(--text); color: #fff; border-radius: 999px; padding: 10px 16px; font-size: 14px; box-shadow: 0 6px 20px rgba(23, 35, 58, .25); max-width: calc(100vw - 32px); }
+.census-toast .btn { color: #fff; border-color: rgba(255,255,255,.4); padding: 4px 10px; }
+.census-toast[hidden] { display: none; }
+.census-tab .detail-grid { margin-bottom: 8px; }
+.census-list { list-style: none; margin: 0; padding: 0; }
+.census-list-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.census-results { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.census-result { text-align: left; border: 1px solid var(--border); background: var(--panel); border-radius: var(--radius); padding: 10px 12px; font: inherit; cursor: pointer; }
+.census-result:hover { border-color: var(--primary); }
+@media (max-width: 767px) {
+  dialog.modal.census-sheet { margin: auto 0 0 0; width: 100vw; max-width: 100vw; max-height: 92vh; border-radius: 16px 16px 0 0; padding: 16px; }
+  .census-sheet .form-grid-2 { grid-template-columns: 1fr; }
+  .census-sheet .form-grid-3 { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .census-sheet .modal-actions .btn { flex: 1; min-height: 44px; }
+  .census-sheet-actions [data-submit-another] { flex-basis: 100%; order: -1; }
+  .census-new-cards { grid-template-columns: 1fr; }
+  .census-unit-row { flex-direction: column; align-items: stretch; }
+  .census-unit-menu { justify-content: flex-end; }
+  .census-add-bar .btn { flex: 1; }
+  .census-tab .detail-grid { grid-template-columns: 1fr; }
+}

@@ -87,6 +87,12 @@ import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
 import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
+// CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
+// «Si' / No / Non lo so», accessori e «Chiarisci», dati catastali, presa in
+// carico, annullamento) con il client proprio del censimento. Su una scheda
+// in censimento lo stato commerciale e l'incarico non si modificano da qui
+// (§7: 409 CENSUS_LOCKED): si mostra «Prendi in carico».
+import { renderPropertyCensusTab } from '../census/property-census-tab.js';
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -166,6 +172,11 @@ const VISIT_STATUS_LABELS = {
 
 const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
+  // CENSIMENTO-1 Fase 4: su una scheda in censimento la tab e' la prima e si
+  // apre per default (vedi `tabsFor`); sulle altre resta qui, come
+  // «Pertinenze» (pertinenze e accessori seguono la scheda anche dopo la
+  // presa in carico).
+  { key: 'censimento', label: 'Censimento' },
   { key: 'proprietari', label: 'Proprietari' },
   { key: 'foto', label: 'Foto' },
   { key: 'documenti', label: 'Documenti' },
@@ -290,8 +301,19 @@ export async function renderImmobileDettaglio(container, params = []) {
   // P11: badge di stato commerciale nell'header, isolato in una funzione
   // cosi' da poter essere ri-renderizzato dopo il completamento di una
   // vendita (reloadPropertyStatus) senza toccare il resto dell'header.
+  // CENSIMENTO-1 Fase 4: piu' «Censimento» e «Indirizzo ereditato» quando valgono.
+  const isCensus = () => property.record_kind === 'census';
   function headerBadgeHtml() {
-    return renderBadge(STATUS_LABELS[property.commercial_status] || property.commercial_status || '—', statusTone(property.commercial_status));
+    const badge = [renderBadge(STATUS_LABELS[property.commercial_status] || property.commercial_status || '—', statusTone(property.commercial_status))];
+    if (isCensus()) badge.push(renderBadge('Censimento', 'warn'));
+    if (property.address_inherited === true) badge.push(renderBadge('Indirizzo ereditato dalla palazzina', 'gray'));
+    return badge.join(' ');
+  }
+  function tabsFor() {
+    const censimento = TABS.find((t) => t.key === 'censimento');
+    const altre = TABS.filter((t) => t.key !== 'censimento');
+    if (isCensus()) return [censimento, ...altre];
+    return [altre[0], { ...censimento, label: 'Pertinenze' }, ...altre.slice(1)];
   }
 
   // P11: stato locale "conferma annullamento vendita" (secondo click prima
@@ -351,10 +373,11 @@ export async function renderImmobileDettaglio(container, params = []) {
     <dialog id="contact-dialog" class="modal"></dialog>
     <dialog id="visit-dialog" class="modal"></dialog>
     <dialog id="visit-schedule-dialog" class="modal modal-wide agenda-dialog"></dialog>
+    <dialog id="census-dialog" class="modal census-sheet"></dialog>
   `;
 
   const tabsEl = container.querySelector('#property-tabs');
-  tabsEl.innerHTML = TABS.map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
+  tabsEl.innerHTML = tabsFor().map((t, i) => `<button type="button" class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('');
 
   const contentEl = container.querySelector('#property-tab-content');
 
@@ -379,6 +402,17 @@ export async function renderImmobileDettaglio(container, params = []) {
     });
   });
 
+  // CENSIMENTO-1 Fase 4 - la tab del censimento vive in un componente
+  // proprio (census/property-census-tab.js): la scheda passa solo il
+  // contesto e la funzione che la ridisegna.
+  const linkConfirm = new Set();
+  async function renderCensimentoTab(el) {
+    await renderPropertyCensusTab(el, {
+      property, container, dialogEl: container.querySelector('#census-dialog'), linkConfirm,
+      isCensus: isCensus(), showTab, navigate,
+    });
+  }
+
   async function showTab(key) {
     tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -395,6 +429,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
         case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
+        case 'censimento': await renderCensimentoTab(contentEl); break;
         case 'attivita':
           contentEl.innerHTML = '<div id="property-interactions"></div>';
           await mountPropertyInteractions(contentEl.querySelector('#property-interactions'), {
@@ -1575,7 +1610,8 @@ export async function renderImmobileDettaglio(container, params = []) {
     btn.addEventListener('click', () => showTab(btn.dataset.tab));
   });
 
-  await showTab(TABS.some((tab) => tab.key === params[1]) ? params[1] : 'panoramica');
+  // CENSIMENTO-1 Fase 4: una scheda in censimento si apre sulla sua tab.
+  await showTab(TABS.some((tab) => tab.key === params[1]) ? params[1] : tabsFor()[0].key);
   if (params[1] === 'visite' && /^\d+$/.test(params[2] || '')) {
     const row = contentEl.querySelector(`tr[data-row-id="${params[2]}"]`);
     if (row) { row.tabIndex = -1; row.focus(); row.scrollIntoView({ block: 'center' }); }
@@ -1616,6 +1652,17 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
 // testa al file per il motivo dell'esclusione di 'sold' e del trattamento
 // speciale di 'archived'.
 function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarget) {
+  // CENSIMENTO-1 Fase 4 (§7): in censimento lo stato non si cambia da qui -
+  // la PATCH risponderebbe 409 CENSUS_LOCKED - si prende in carico.
+  if (p.record_kind === 'census') {
+    return `
+      <h3 class="section-title">Stato commerciale</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS[p.commercial_status] || p.commercial_status || '—')} · in censimento</div>
+      </div>
+      <p class="muted" id="commercial-status-census">Immobile in censimento: lo stato commerciale si sblocca con «Prendi in carico» (tab Censimento).</p>
+    `;
+  }
   if (p.commercial_status === 'sold') {
     return `
       <h3 class="section-title">Stato commerciale</h3>
@@ -1659,6 +1706,13 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
 // questa sezione: resta indipendente (property/schemas.py non impone alcun
 // accoppiamento tra i campi mandate_* e commercial_status).
 function renderIncaricoSection(p, editMode) {
+  // CENSIMENTO-1 Fase 4 (§7): niente incarico ne' acquisizione in censimento.
+  if (p.record_kind === 'census') {
+    return `
+      <h3 class="section-title">Incarico</h3>
+      <p class="muted" id="incarico-census">Non disponibile finché l'immobile è in censimento: prima «Prendi in carico».</p>
+    `;
+  }
   // CRM-OPS-3: l'origine dell'incarico. Con `acquisition_id` si vede da dove
   // nasce e si modificano tipo e date; il collegamento non si toglie da qui
   // (il form non lo invia e il database lo rifiuta). Senza, i valori storici

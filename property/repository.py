@@ -42,6 +42,18 @@ def _census_not_installed(exc):
     return None
 
 
+def _cadastral_duplicate(exc):
+    """CENSIMENTO-1 Fase 4 REV 2 (R1): la PATCH generica che porta un'unita'
+    sull'identita' catastale COMPLETA di un'altra (sezione '' compresa) cade
+    sull'UNIQUE della 083: 409 CADASTRAL_DUPLICATE leggibile, non «property
+    code already exists»."""
+    vincolo = getattr(getattr(exc, 'diag', None), 'constraint_name', None) or ''
+    if vincolo == 'uq_properties_cadastral_identity':
+        from . import census as _census
+        return _census._tradotto(exc)
+    return None
+
+
 def _mandate_origin_refused(exc):
     if 'CRM-OPS-3' in str(exc):
         return ValidationError(MANDATE_ONLY_FROM_ACQUISITION)
@@ -347,6 +359,9 @@ def update_property(*args, **kwargs):
             else:
                 cur.execute(f"UPDATE properties SET {','.join(f'{k}=%s' for k in data)},updated_at=NOW() WHERE id=%s RETURNING *", list(data.values()) + [property_id])
         except errors.UniqueViolation as exc:
+            duplicato = _cadastral_duplicate(exc)
+            if duplicato is not None:
+                raise duplicato from exc
             raise ConflictError('property code already exists') from exc
         except _UNDEFINED_COLUMN as exc:
             assente = _census_not_installed(exc)

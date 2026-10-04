@@ -21,6 +21,9 @@ import { renderContatti } from './views/contatti.js';
 import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
 import { renderImmobili } from './views/immobili.js';
 import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
+// CENSIMENTO-1 Fase 4: la scheda della palazzina vive dentro la rotta "immobili"
+// (#/immobili/edifici/{id}); nessuna voce di menu nuova.
+import { renderEdificioDettaglio } from './views/edificio-dettaglio.js';
 import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
@@ -96,6 +99,10 @@ registerRoute('contatti', (container, params = []) => {
 // "immobili" copre sia la lista (#/immobili) sia il dettaglio (#/immobili/{id}),
 // stesso pattern dispatcher gia' usato per "contatti".
 registerRoute('immobili', (container, params = []) => {
+  // CENSIMENTO-1 Fase 4: "#/immobili/edifici/{id}" apre la palazzina,
+  // "#/immobili/censimento" apre l'elenco sulla tab Censimento.
+  if (params[0] === 'edifici') return renderEdificioDettaglio(container, params.slice(1));
+  if (params[0] === 'censimento') return renderImmobili(container, params);
   return params[0] ? renderImmobileDettaglio(container, params) : renderImmobili(container);
 });
 // "acquirenti" copre sia la lista richieste BUY (#/acquirenti) sia la scheda

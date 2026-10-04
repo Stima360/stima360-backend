@@ -8,7 +8,7 @@ from . import repository
 from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       cadastral_categories_for_form, cadastral_suggestions_for_form,
-                      territory_tree, validate_energy_class, validate_location)
+                      census_labels_for_form, territory_tree, validate_energy_class, validate_location)
 from . import census as _census
 
 # CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
@@ -112,6 +112,9 @@ def form_options(ctx):
         'property_types': [{'value': k, 'label': v} for k, v in PROPERTY_TYPE_LABELS.items()],
         'cadastral_categories': cadastral_categories_for_form(),
         'cadastral_suggestions': cadastral_suggestions_for_form(),
+        # CENSIMENTO-1 Fase 4: le etichette dei chips del censimento (tipo di
+        # edificio, fonte delle unita' dichiarate, tipo di accessorio).
+        **census_labels_for_form(),
         'can_assign': can_assign,
         'agents': repository.list_assignable_agents(ctx) if can_assign else [],
     }

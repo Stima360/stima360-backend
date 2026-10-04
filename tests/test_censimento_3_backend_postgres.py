@@ -451,6 +451,7 @@ def test_10_patch_di_un_unita_census_campi_consentiti_e_guardia(mondo):
     for corpo in ({"commercial_status": "active"}, {"commercial_status": "evaluation"}, {"mandate_type": "esclusiva"}):
         r = api.patch(f"/api/property/properties/{u['id']}", json=corpo)
         assert r.status_code == 409 and "Prendi in carico" in r.json()["detail"], corpo
+        assert r.json()["code"] == "CENSUS_LOCKED", corpo            # Fase 4: il residuo chiuso, sulla rotta reale
     assert api.patch(f"/api/property/properties/{u['id']}", json={"record_kind": "crm"}).status_code == 422
     assert _q(mondo, "SELECT commercial_status, record_kind FROM properties WHERE id = %s", (u["id"],))[0][:2] == ["draft", "census"]
     # archiviare resta possibile (draft -> archived)
