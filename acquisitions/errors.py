@@ -27,6 +27,9 @@ MANDATE_ALREADY_EXISTS = "MANDATE_ALREADY_EXISTS"
 PROPERTY_IN_CENSUS = "PROPERTY_IN_CENSUS"
 APPOINTMENT_LINKED_TO_ACQUISITION = "APPOINTMENT_LINKED_TO_ACQUISITION"
 VALIDATION_ERROR = "VALIDATION_ERROR"
+# VENDITORI-1 REV 2 (R2): con `source='seller_lead'` il lead deve essere
+# l'opportunita' Venditore di QUEL proprietario su QUELL'immobile.
+SELLER_LEAD_MISMATCH = "SELLER_LEAD_MISMATCH"
 # Post-commit CRM-OPS-3: il database non ha ancora la 081. Non e' un errore
 # dell'operatore ne' dei dati: il modulo non e' installato e lo si dice.
 NOT_INSTALLED = "ACQUISITIONS_NOT_INSTALLED"
@@ -102,6 +105,10 @@ class AppointmentLinkedToAcquisition(_ConCodice, ConflictError):
 
 class InvalidData(_ConCodice, ValidationError):
     code = VALIDATION_ERROR
+
+
+class SellerLeadMismatch(_ConCodice, ValidationError):
+    code = SELLER_LEAD_MISMATCH
 
 
 class PropertyInCensus(_ConCodice, ConflictError):

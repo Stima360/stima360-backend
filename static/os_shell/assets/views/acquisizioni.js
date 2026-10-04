@@ -104,6 +104,8 @@ export function acquisitionAppointmentPayload(corpo) {
 /** Il corpo della POST /api/acquisitions (senza appuntamento). */
 export function acquisitionCreatePayload(dati) {
   const corpo = { property_id: Number(dati.propertyId), owner_contact_id: Number(dati.ownerContactId) };
+  // VENDITORI-1: dall'area Venditori arriva anche il lead SELL dell'opportunita'.
+  if (dati.leadId) corpo.lead_id = Number(dati.leadId);
   if (dati.askingPrice !== '' && dati.askingPrice !== null && dati.askingPrice !== undefined) corpo.asking_price = String(dati.askingPrice);
   if (dati.valuationPrice !== '' && dati.valuationPrice !== null && dati.valuationPrice !== undefined) corpo.valuation_price = String(dati.valuationPrice);
   if (dati.saleTiming) corpo.sale_timing = dati.saleTiming;
@@ -214,7 +216,11 @@ export async function renderAcquisizioni(container, params = []) {
 
   await load();
   // `#/acquisizioni/nuova/<property_id>`: dalla scheda immobile ("Avvia acquisizione").
-  if (params[0] === 'nuova' && params[1]) openNewAcquisition(container, opzioni, { propertyId: params[1] });
+  // VENDITORI-1: `.../nuova/<property_id>/<owner_contact_id>/<lead_id>` dall'area
+  // Venditori - stesso dialog, proprietario preselezionato e lead nel payload.
+  if (params[0] === 'nuova' && params[1]) {
+    openNewAcquisition(container, opzioni, { propertyId: params[1], ownerContactId: params[2] || null, leadId: params[3] || null });
+  }
 }
 
 /**
@@ -222,7 +228,7 @@ export async function renderAcquisizioni(container, params = []) {
  * REALI, dati commerciali. Passo 2: il dialog dell'Agenda, la cui conferma
  * e' l'UNICA scrittura.
  */
-export async function openNewAcquisition(container, opzioni, { propertyId = null } = {}) {
+export async function openNewAcquisition(container, opzioni, { propertyId = null, ownerContactId = null, leadId = null } = {}) {
   const dialogEl = container.querySelector('#acq-new-dialog');
   if (!dialogEl) return;
   // LO STATO DELLA MODALE, esplicito. `property` e' l'immobile SCELTO (un
@@ -231,7 +237,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
   // risposta arrivata in ritardo per una scelta precedente viene ignorata;
   // `prezzoProposto` il prezzo precompilato dall'immobile, da togliere se
   // l'immobile cambia e l'operatore non l'ha toccato.
-  const stato = { property: null, owners: [], caricamento: 0, prezzoProposto: null };
+  const stato = { property: null, owners: [], caricamento: 0, prezzoProposto: null, leadId: null };
   dialogEl.innerHTML = `
     <form class="acq-form" novalidate>
       <h3 class="section-title">Nuova acquisizione</h3>
@@ -273,6 +279,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
   function azzeraSelezione() {
     stato.property = null;
     stato.owners = [];
+    stato.leadId = null;
     const selezionato = $('#acq-property-selected');
     selezionato.hidden = true;
     selezionato.innerHTML = '';
@@ -335,7 +342,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
       <select id="acq-owner" class="input">${stato.owners.map((o) => `<option value="${escapeHtml(String(o.contact_id))}">${escapeHtml(o.display_name || `Contatto #${o.contact_id}`)} — ${escapeHtml(o.roles.map((r) => ROLE_LABELS[r] || r).join(', '))}</option>`).join('')}</select>
       <ul class="acq-owners-list">${stato.owners.map((o) => `<li class="acq-owner-option"><strong>${escapeHtml(o.display_name || `Contatto #${o.contact_id}`)}</strong>
         <small class="muted">${escapeHtml(o.roles.map((r) => ROLE_LABELS[r] || r).join(', '))}${o.phone ? ` · ${escapeHtml(o.phone)}` : ''}${o.email ? ` · ${escapeHtml(o.email)}` : ''}</small></li>`).join('')}</ul>`;
-    $('#acq-owner').addEventListener('change', aggiornaContinua);
+    $('#acq-owner').addEventListener('change', () => { stato.leadId = null; aggiornaContinua(); });
     aggiornaContinua();
   }
 
@@ -374,7 +381,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
       errore.textContent = 'Scegli il proprietario principale.'; aggiornaContinua(); return;
     }
     const dati = acquisitionCreatePayload({
-      propertyId: stato.property.id, ownerContactId: scelto.value,
+      propertyId: stato.property.id, ownerContactId: scelto.value, leadId: stato.leadId,
       askingPrice: $('#acq-asking').value, valuationPrice: $('#acq-valuation').value,
       saleTiming: $('#acq-timing').value, source: $('#acq-source').value, notes: $('#acq-notes').value,
     });
@@ -389,7 +396,11 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
     dialogEl.close();
     openAcquisitionAppointmentDialog(container, opzioni, agenti, {
       title: 'Appuntamento di acquisizione',
-      submit: (corpo) => apiPost('/api/acquisitions', { ...dati, appointment: acquisitionAppointmentPayload(corpo) }),
+      // REV 2 (R2): il client condiviso mette il `detail` del backend nel
+      // messaggio; il dialog dell'Agenda lo legge da `detail`. Senza questo un
+      // rifiuto 422 (es. SELLER_LEAD_MISMATCH) diventava «Dati non validi».
+      submit: (corpo) => apiPost('/api/acquisitions', { ...dati, appointment: acquisitionAppointmentPayload(corpo) })
+        .catch((error) => { if (error && error.detail === undefined) error.detail = error.message; throw error; }),
       onDone: (creata) => navigate('acquisizioni', [creata.id]),
     });
   });
@@ -397,6 +408,17 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
   aggiornaContinua();
   dialogEl.showModal();
   if (propertyId) await scegliImmobile(propertyId);
+  // VENDITORI-1: il proprietario dell'opportunita', SOLO se e' davvero fra i
+  // proprietari reali dell'immobile appena caricati (mai inventato); il lead
+  // viaggia solo insieme a lui.
+  const menu = $('#acq-owner');
+  if (ownerContactId && menu && stato.owners.some((o) => String(o.contact_id) === String(ownerContactId))) {
+    menu.value = String(ownerContactId);
+    stato.leadId = leadId;
+    const fonte = $('#acq-source');
+    if (fonte && [...fonte.querySelectorAll('option')].some((o) => o.getAttribute('value') === 'seller_lead')) fonte.value = 'seller_lead';
+    aggiornaContinua();
+  }
 }
 
 /** Il dialog CONDIVISO dell'Agenda, configurato per un appuntamento

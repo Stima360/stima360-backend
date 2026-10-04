@@ -454,7 +454,11 @@ def test_d01_voce_di_menu_ed_elenco_con_colonne_e_filtri(staged):  # noqa: F811
       report({ nav, agenteVisibile: !agente.hidden, stati: opz(stato) });
     """
     out = _run(staged, scenario, _rotte(), "#/acquisizioni")
-    assert out["nav"].index("acquisizioni") == out["nav"].index("immobili") + 1
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: il flusso reale e' Immobili ->
+    # Venditori -> Acquisizioni; le Acquisizioni restano subito dopo i Venditori,
+    # che stanno subito dopo gli Immobili. Le posizioni restano esatte.
+    assert out["nav"].index("venditori") == out["nav"].index("immobili") + 1
+    assert out["nav"].index("acquisizioni") == out["nav"].index("venditori") + 1
     testo = out["content"]
     for atteso in ("IMM-30", "Mario Rossi", "Anna Agente", "Appuntamento fissato", "Ultima attività",
                    "Stato appuntamento", "Prezzo richiesto", "+ Nuova acquisizione"):

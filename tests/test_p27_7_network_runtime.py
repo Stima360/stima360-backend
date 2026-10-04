@@ -311,7 +311,9 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
     # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
     # L'elenco resta esatto.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" fra "immobili" e
+    # "acquisizioni"; "rete" resta assente. L'elenco resta esatto.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni"]
 
 

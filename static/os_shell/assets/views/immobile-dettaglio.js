@@ -93,6 +93,8 @@ import { mountPropertyInteractions } from '../components/property-interactions.j
 // in censimento lo stato commerciale e l'incarico non si modificano da qui
 // (§7: 409 CENSUS_LOCKED): si mostra «Prendi in carico».
 import { renderPropertyCensusTab } from '../census/property-census-tab.js';
+// VENDITORI-1: l'interruttore «Vende» per proprietario (sellers/seller-toggle.js).
+import { bindSellerToggles, renderSellerCell } from '../sellers/seller-toggle.js';
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -423,7 +425,7 @@ export async function renderImmobileDettaglio(container, params = []) {
           bindIncaricoSection(contentEl);
           bindCommercialStatusSection(contentEl);
           break;
-        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm) + renderLeadLinks(property.leads); bindProprietariSection(contentEl); break;
+        case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm, property) + renderLeadLinks(property.leads); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos, photoAddMode, photoRemoveConfirm); bindFotoSection(contentEl); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
@@ -666,6 +668,21 @@ export async function renderImmobileDettaglio(container, params = []) {
   // mano, stesso principio gia' applicato al match_id delle Proposte),
   // nessuna creazione di contatto in questa vista.
   function bindProprietariSection(panelEl) {
+    bindSellerToggles(panelEl, {
+      property, host: container,
+      onChanged: async (testo) => {
+        const u = await apiGet(`/api/property/properties/${property.id}`);
+        Object.assign(property, { contacts: u.contacts, leads: u.leads });
+        await showTab('proprietari');
+        const fb = contentEl.querySelector('#proprietari-feedback');
+        if (fb && testo) fb.innerHTML = `<div class="success-box">${escapeHtml(testo)}</div>`;
+      },
+      onRerender: async (testo) => {
+        await renderImmobileDettaglio(container, [params[0], 'proprietari']);
+        const fb = container.querySelector('#proprietari-feedback');
+        if (fb && testo) fb.innerHTML = `<div class="success-box">${escapeHtml(testo)}</div>`;
+      },
+    });
     const linkBtn = panelEl.querySelector('#contact-link-btn');
     if (linkBtn) {
       linkBtn.addEventListener('click', () => { openContactLinkDialog(); });
@@ -1791,12 +1808,14 @@ function renderContactActions(c, contactRemoveConfirm) {
   return `<button type="button" class="btn ghost contact-remove-btn" data-contact-key="${escapeHtml(key)}">Rimuovi</button>`;
 }
 
-function renderProprietari(items, contactRemoveConfirm) {
+function renderProprietari(items, contactRemoveConfirm, property) {
   const note = '<p class="muted">Elenco dai referenti collegati all\'immobile (property_contacts). Non riflette gli account di accesso all\'Owner Portal.</p>';
   const table = renderTable(
     [
       { label: 'Nominativo', render: (c) => `<a href="#/contatti/${escapeHtml(c.contact_id)}">${escapeHtml(c.display_name || `Contatto #${c.contact_id}`)}</a>` },
       { label: 'Ruolo', render: (c) => renderBadge(PROPERTY_ROLE_LABELS[c.role] || c.role || '—', c.role === 'owner' ? 'role' : 'gray') },
+      // VENDITORI-1: subito dopo il ruolo, visibile a 390 px senza scorrere la tabella.
+      { label: 'Vende', render: (c) => (property ? renderSellerCell(c, property) : '') },
       { label: 'Principale', render: (c) => c.is_primary ? renderBadge('Principale', 'ok') : '' },
       { label: 'Quota (%)', render: (c) => c.ownership_share != null ? escapeHtml(c.ownership_share) : '—' },
       { label: 'Email', render: (c) => escapeHtml(c.email || '—') },

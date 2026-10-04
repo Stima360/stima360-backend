@@ -271,7 +271,11 @@ def _routes(package: str) -> tuple[list[str], list[str]]:
 
 def test_1_crm_route_inventory():
     routes, _ = _routes("crm")
-    assert len(routes) == 1, sorted(routes)
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: alla vista 360 si aggiungono la
+    # worklist Venditori e l'interruttore «Vende» (GET/POST /api/crm/sellers,
+    # POST /api/crm/sellers/deactivate), dietro lo stesso
+    # legacy_basic_agency_context (test_2 qui sotto). L'elenco resta esatto.
+    assert sorted(routes) == ["activate_seller", "deactivate_seller", "get_contact_360", "list_sellers"], sorted(routes)
 
 
 def test_2_the_crm_route_declares_the_agency_dependency():
@@ -817,7 +821,10 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # in carico, annulla: property/census.py), dietro lo stesso
         # legacy_basic_agency_context e tutte nello scope (set(routes) ==
         # set(scoped) qui sotto). Il conteggio resta esatto.
-        "property": 40, "buy": 23, "match": 26, "crm": 1, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA VENDITORI-1: CRM 1 -> 4 (worklist Venditori,
+        # attiva e disattiva «Vende»), tutte nello scope (set(routes) ==
+        # set(scoped) qui sotto). Il conteggio resta esatto.
+        "property": 40, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

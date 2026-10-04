@@ -272,6 +272,13 @@ def assert_scoped(recorder: RecordingCursor, ctx) -> None:
 # D1 - the harness itself
 # ---------------------------------------------------------------------------
 
+def _sul_cursore(fn):
+    """Le funzioni `*_with_cursor` ricevono il cursore del chiamante: qui e'
+    quello registrato che i test installano al posto di `core_cursor`."""
+    with repository.core_cursor(commit=True) as (_, cur):
+        return fn(cur)
+
+
 # Every public repository function, with a call that exercises it. A new
 # function that is not listed here fails test_d1_registry_is_complete: the
 # guard fails closed on addition.
@@ -287,6 +294,13 @@ COVERAGE = {
     "set_contact_assignment": lambda ctx: repository.set_contact_assignment(ctx, 7, TARGET_AGENT),
     "set_lead_assignment": lambda ctx: repository.set_lead_assignment(ctx, 7, TARGET_AGENT),
     "create_lead": lambda ctx: repository.create_lead(ctx, {"contact_id": 1}),
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: `create_lead` ora apre il cursore e
+    # delega a `create_lead_with_cursor` (la stessa INSERT, lo stesso stamp, lo
+    # stesso controllo scoped del contatto), che l'attivazione «Vende» chiama
+    # dentro la propria transazione. Classificata scoped ed esercitata qui sul
+    # cursore registrato, come tutte le altre: nessuna eccezione al registro.
+    "create_lead_with_cursor": lambda ctx: _sul_cursore(
+        lambda cur: repository.create_lead_with_cursor(ctx, cur, {"contact_id": 1})),
     "list_leads": lambda ctx: repository.list_leads(ctx, 50, 0, None, None, None, None),
     "get_lead": lambda ctx: repository.get_lead(ctx, 1),
     "update_lead": lambda ctx: repository.update_lead(ctx, 1, {"status": "open"}),

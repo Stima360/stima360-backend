@@ -36,6 +36,7 @@ import { renderReteAgenzia } from './views/rete-agenzia.js';
 import { renderReteTerritorio } from './views/rete-territorio.js';
 import { renderAgenda } from './views/agenda/agenda-page.js';
 // CRM-OPS-3: le Acquisizioni (elenco, creazione, scheda).
+import { renderVenditori } from './views/venditori.js';
 import { renderAcquisizioni } from './views/acquisizioni.js';
 import { renderAcquisizioneDettaglio } from './views/acquisizione-dettaglio.js';
 import { renderIncarichi } from './views/incarichi.js';
@@ -46,6 +47,8 @@ const SECTIONS = [
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },
+  // VENDITORI-1: il flusso reale Immobili -> Venditori -> Acquisizioni -> Incarichi.
+  { name: 'venditori', label: 'Venditori' },
   { name: 'acquisizioni', label: 'Acquisizioni' },
   { name: 'incarichi', label: 'Incarichi' },
   { name: 'acquirenti', label: 'Acquirenti' },
@@ -144,6 +147,8 @@ registerRoute('rete', (container, params = []) => {
 });
 // A30-4: `#/agenda[/<vista>/<data>]`. Tutta la logica sta in views/agenda/.
 registerRoute('agenda', (container, params = []) => renderAgenda(container, params));
+// VENDITORI-1: la worklist delle opportunita' Venditore (persona + immobile).
+registerRoute('venditori', (container) => renderVenditori(container));
 // CRM-OPS-3: `#/acquisizioni` (elenco), `#/acquisizioni/nuova/<immobile>`
 // (elenco + creazione su quell'immobile, dalla scheda immobile) e
 // `#/acquisizioni/<id>` (scheda).

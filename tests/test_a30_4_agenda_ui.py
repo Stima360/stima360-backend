@@ -94,8 +94,11 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
     # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
     # L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" e' una voce normale di
+    # SECTIONS, fra "immobili" e "acquisizioni" (il flusso reale Immobili ->
+    # Venditori -> Acquisizioni -> Incarichi). L'elenco resta esatto.
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "immobili", "acquisizioni", "incarichi", "acquirenti",
+        "oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni", "incarichi", "acquirenti",
         "abbinamenti", "attivita", "automazioni"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
@@ -876,7 +879,9 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # SENTINELLA AGGIORNATA DA CRM-OPS-4: "incarichi" e' una voce normale di
     # SECTIONS, subito dopo "acquisizioni" (Acquisizioni -> Incarichi).
     # L'elenco resta esatto.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "acquisizioni",
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" fra "immobili" e
+    # "acquisizioni". L'elenco resta esatto.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita",
                                 "automazioni"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1

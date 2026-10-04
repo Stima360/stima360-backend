@@ -29,12 +29,18 @@ INTERACTION_LABELS_IT = {
     "call": "Telefonata", "meeting": "Incontro", "note": "Nota",
     "email": "Email", "whatsapp": "WhatsApp / Messaggio",
 }
-#: Da dove e' stata registrata: scheda Immobile o scheda Incarico. Solo
-#: contesto, in `activities.metadata`: la riga e' una sola.
-CONTEXTS = ("property", "mandate")
+#: Da dove e' stata registrata: scheda Immobile, scheda Incarico o area
+#: Venditori (VENDITORI-1). Solo contesto, in `activities.metadata`: la riga e'
+#: una sola.
+CONTEXTS = ("property", "mandate", "seller")
 MAX_NOTE = 5000
 REFERENTE_NON_COLLEGATO = "Il referente non e' collegato a questo immobile"
 SENZA_INCARICO = "L'immobile non ha un incarico"
+LEAD_NON_VENDITORE = "Il lead indicato non e' il venditore di questo immobile"
+LEAD_SOLO_VENDITORI = "Il lead si indica solo dall'area Venditori"
+#: Etichette dei tipi scritti dai processi (non registrabili a mano): solo
+#: per leggere lo storico, mai offerti nel dialog.
+SYSTEM_LABELS_IT = {"status_change": "Cambio di stato", "system": "Sistema", "valuation": "Valutazione"}
 MAX_LIST = 200
 
 NOME_OPERATORE = ("COALESCE(NULLIF(BTRIM(CONCAT_WS(' ', {a}.first_name, {a}.last_name)), ''),"
@@ -63,8 +69,8 @@ def _voce(row) -> dict:
     voce = dict(row)
     metadata = voce.pop("metadata", None) or {}
     voce["interaction_type"] = voce.pop("activity_type")
-    voce["type_label"] = INTERACTION_LABELS_IT.get(voce["interaction_type"],
-                                                   voce["interaction_type"])
+    voce["type_label"] = INTERACTION_LABELS_IT.get(
+        voce["interaction_type"], SYSTEM_LABELS_IT.get(voce["interaction_type"], voce["interaction_type"]))
     voce["note"] = voce.pop("description")
     voce["context"] = metadata.get("context")
     return voce
@@ -78,7 +84,7 @@ def list_with_cursor(ctx, cur, agency_id: int, property_id: int, *, limit: int =
     cur.execute(
         f"""
         SELECT a.id, a.activity_type, a.description, a.occurred_at, a.created_at,
-               a.created_by_user_id, a.contact_id, a.metadata,
+               a.created_by_user_id, a.contact_id, a.lead_id, a.metadata,
                {NOME_CONTATTO.format(a='c')} AS contact_name,
                {NOME_OPERATORE.format(a='u')} AS author_name
           FROM activities a
@@ -132,11 +138,33 @@ def create_interaction(ctx, property_id: int, body) -> dict:
                 raise ValidationError(REFERENTE_NON_COLLEGATO)
         if body.context == "mandate" and immobile["acquisition_id"] is None:
             raise ValidationError(SENZA_INCARICO)
+        lead_id = getattr(body, "lead_id", None)
+        contact_id = body.contact_id
+        if (lead_id is not None) != (body.context == "seller"):
+            raise ValidationError(LEAD_SOLO_VENDITORI)
+        if lead_id is not None:
+            # VENDITORI-1: il lead deve essere l'opportunita' venditore DI
+            # QUESTO immobile (sell + property_leads 'seller'), nella stessa
+            # agenzia; il referente, se indicato, e' il suo contatto. La
+            # visibilita' per ruolo la verifica la scrittura qui sotto.
+            cur.execute("SELECT l.contact_id FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
+                        "WHERE l.id = %s AND l.agency_id = %s AND l.pipeline = 'sell' "
+                        "AND pl.property_id = %s AND pl.relation_type = 'seller'",
+                        (lead_id, agency_id, property_id))
+            venditore = cur.fetchone()
+            if venditore is None or (contact_id is not None and contact_id != venditore["contact_id"]):
+                raise ValidationError(LEAD_NON_VENDITORE)
+            if contact_id is None:
+                contact_id = venditore["contact_id"]
+                cur.execute("SELECT 1 FROM property_contacts WHERE property_id = %s AND contact_id = %s",
+                            (property_id, contact_id))
+                if cur.fetchone() is None:
+                    raise ValidationError(REFERENTE_NON_COLLEGATO)
         try:
             # La stessa scrittura di POST /api/core/activities: il referente
             # passa dallo scope dei contatti (un agente nomina solo chi vede).
             riga = core_repository.create_activity_with_cursor(cur, {
-                "contact_id": body.contact_id, "lead_id": None, "stima_id": None,
+                "contact_id": contact_id, "lead_id": lead_id, "stima_id": None,
                 "property_id": property_id, "activity_type": body.interaction_type,
                 "direction": None, "channel": None, "subject": None, "description": nota,
                 "outcome": None, "occurred_at": None, "created_by": None,

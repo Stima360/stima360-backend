@@ -348,9 +348,14 @@ def test_b6_the_repository_binds_assigned_agent_id_only_from_the_scope():
                                 and ast.unparse(value.args[0]) == "ctx"), (
                             f"{fn.name}: assigned_agent_id set from {ast.unparse(value)}")
                         writers[fn.name] = ast.unparse(value)
+    # SENTINELLA AGGIORNATA DA VENDITORI-1: `create_lead` apre la transazione e
+    # delega a `create_lead_with_cursor(ctx, cur, data)`, lo STESSO INSERT sul
+    # cursore del chiamante (l'attivazione «Vende» crea lead e collegamento
+    # all'immobile in una transazione). L'assegnazione resta una sola, dallo
+    # scope: il nome della funzione che la scrive e' cambiato, la regola no.
     assert writers == {
         "create_contact": "creator_assignment(ctx, 'contacts')",
-        "create_lead": "creator_assignment(ctx, 'leads')",
+        "create_lead_with_cursor": "creator_assignment(ctx, 'leads')",
     }, writers
 
 

@@ -149,6 +149,30 @@ def _lead(ctx, cur, lead_id):
         raise NotFoundError("Lead non trovato")
 
 
+def _lead_venditore(cur, agency_id, *, source, lead_id, property_id, owner_contact_id):
+    """VENDITORI-1 REV 2 (R2). Il percorso dichiarato `source='seller_lead'`
+    non si fida del `lead_id` arrivato dal browser (il link
+    `#/acquisizioni/nuova/<immobile>/<proprietario>/<lead>`): il lead deve
+    essere l'opportunita' Venditore indicata - stessa agenzia, `pipeline='sell'`,
+    dello stesso proprietario, collegato `seller` a QUELL'immobile. La
+    visibilita' resta quella di `_lead`, chiamata prima.
+
+    Solo per `seller_lead`: gli altri flussi (lead generici, storici) restano
+    con la sola regola di visibilita'. Chiamata prima di qualunque scrittura:
+    se fallisce non esistono ne' l'acquisizione, ne' l'appuntamento, ne' gli
+    eventi."""
+    if source != "seller_lead" or lead_id is None:
+        return
+    cur.execute(
+        "SELECT 1 FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
+        " WHERE l.id = %s AND l.agency_id = %s AND l.pipeline = 'sell' AND l.contact_id = %s "
+        "   AND pl.property_id = %s AND pl.relation_type = 'seller'",
+        (lead_id, agency_id, owner_contact_id, property_id))
+    if cur.fetchone() is None:
+        raise errors.SellerLeadMismatch(
+            "Il lead scelto non e' l'opportunita' venditore di questo proprietario su questo immobile")
+
+
 def _corpo_appuntamento(appuntamento, *, agente, contact_id, property_id):
     """Il corpo dell'Agenda: tipo `seller_meeting`, referente e immobile
     dell'acquisizione, durata di default dell'Agenda se manca la fine."""
@@ -275,6 +299,8 @@ def create_acquisition(ctx, body):
                 raise errors.OpenAcquisitionExists(
                     "Per questo immobile c'e' gia' un'acquisizione aperta")
             _lead(ctx, cur, body.lead_id)
+            _lead_venditore(cur, agency_id, source=_testo(body.source), lead_id=body.lead_id,
+                            property_id=body.property_id, owner_contact_id=body.owner_contact_id)
             agente = _agente_richiesto(ctx, cur, agency_id, body.appointment.assigned_user_id)
             corpo = _corpo_appuntamento(body.appointment, agente=agente,
                                         contact_id=body.owner_contact_id,
@@ -349,6 +375,10 @@ def patch_acquisition(ctx, acquisition_id, body):
             _proprietario(cur, agency_id, row["property_id"], cambi["owner_contact_id"])
         if "lead_id" in cambi:
             _lead(ctx, cur, cambi["lead_id"])
+        if cambi.keys() & {"lead_id", "owner_contact_id", "source"}:
+            _lead_venditore(cur, agency_id, source=cambi.get("source", row["source"]),
+                            lead_id=cambi.get("lead_id", row["lead_id"]), property_id=row["property_id"],
+                            owner_contact_id=cambi.get("owner_contact_id", row["owner_contact_id"]))
         nuova = repository.update_acquisition(cur, row["id"], cambi)
         repository.record_event(
             cur, agency_id=agency_id, acquisition_id=row["id"], event_type="updated",

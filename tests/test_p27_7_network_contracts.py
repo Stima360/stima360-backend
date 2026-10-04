@@ -513,6 +513,18 @@ def test_d3_no_page_outside_the_network_was_touched():
         # viste toccate (`immobili.js`, `contatto-dettaglio.js`, `census/`)
         # erano gia' ammesse. Nessuna logica di Rete toccata.
         "static/os_shell/assets/core/global-search.js",
+        # SENTINELLA AGGIORNATA DA VENDITORI-1 - L'AREA VENDITORI. Una cartella
+        # NUOVA `sellers/` (client delle rotte /api/crm/sellers, funzioni pure,
+        # interruttore «Vende» della tab Proprietari) e una vista NUOVA
+        # (`#/venditori`). `main.js`, `app.css`, `immobile-dettaglio.js` e
+        # `acquisizioni.js` (precompilazione da Venditori) erano gia' ammessi.
+        # Git elenca la cartella finche' non e' tracciata, poi i file per nome.
+        # Nessuna logica di Rete toccata.
+        "static/os_shell/assets/sellers/",
+        "static/os_shell/assets/sellers/sellers-api.js",
+        "static/os_shell/assets/sellers/seller-model.js",
+        "static/os_shell/assets/sellers/seller-toggle.js",
+        "static/os_shell/assets/views/venditori.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)

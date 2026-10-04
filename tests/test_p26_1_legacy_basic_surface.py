@@ -602,7 +602,15 @@ AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
     # its downstream reads now taking the same context object. The count is
     # pinned at 1: CRM is a single aggregate view, and a second route here
     # would be a new tenant surface that has to be argued for.
-    "crm_router": ("crm", 1),
+    # SENTINELLA AGGIORNATA DA VENDITORI-1 (argomentata): 1 -> 4. La worklist
+    # Venditori (GET /api/crm/sellers) e l'interruttore «Vende» (POST
+    # /api/crm/sellers, POST /api/crm/sellers/deactivate) prendono lo stesso
+    # legacy_basic_agency_context (test_g5 lo verifica rotta per rotta); ogni
+    # lettura e scrittura passa da `scoped_predicate` / `create_lead_with_cursor`
+    # e dall'agency_id del contesto, e
+    # tests/test_venditori_1_postgres.py::test_h01 prova l'assenza di leak fra
+    # agenzie e la visibilita' per ruolo. Una quinta rotta fa ancora fallire.
+    "crm_router": ("crm", 4),
 }
 
 AGENCY_CONTEXT_DEPENDENCY = "legacy_basic_agency_context"

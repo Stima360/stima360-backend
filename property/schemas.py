@@ -243,7 +243,10 @@ class InteractionCreate(PropertyModel):
     interaction_type: str = Field(..., min_length=1, max_length=30)
     note: str = Field(..., min_length=1, max_length=5000)
     contact_id: int | None = Field(None, ge=1)
-    context: str = Field("property", pattern="^(property|mandate)$")
+    # VENDITORI-1: dall'area Venditori l'interazione porta anche il lead SELL
+    # dell'opportunita' (contesto 'seller'): la STESSA riga di activities.
+    lead_id: int | None = Field(None, ge=1)
+    context: str = Field("property", pattern="^(property|mandate|seller)$")
 
 
 # ---------------------------------------------------------------------------

@@ -401,28 +401,36 @@ def set_lead_assignment(ctx, lead_id: int, assigned_agent_id: int | None) -> dic
 
 
 def create_lead(ctx, data: dict[str, Any]) -> dict[str, Any]:
+    with core_cursor(commit=True) as (_, cur):
+        return create_lead_with_cursor(ctx, cur, data)
+
+
+def create_lead_with_cursor(ctx, cur, data: dict[str, Any]) -> dict[str, Any]:
+    """`create_lead` on an already-open transaction (VENDITORI-1: the seller
+    activation creates the SELL lead, links it to the property and records the
+    activity in ONE transaction). Same stamp, same assignment, same scoped
+    contact check: `create_lead` above now only opens the cursor."""
     prepared = _stamp(ctx, data)
     # CRM-OPS-1A: same rule as create_contact. The contact check below is
     # unchanged and still runs under the caller's own scope, so an `agent`
     # can only open a lead on a contact already assigned to them.
     prepared["assigned_agent_id"] = creator_assignment(ctx, "leads")
-    with core_cursor(commit=True) as (_, cur):
-        _ensure_exists_scoped(ctx, cur, "contacts", data["contact_id"], "contact")
-        cur.execute(
-            """
-            INSERT INTO leads (
-                contact_id, source, pipeline, stage, priority, status, assigned_to,
-                estimated_value, next_action_at, lost_reason, notes,
-                agency_id, created_by_user_id, assigned_agent_id
-            ) VALUES (
-                %(contact_id)s, %(source)s, %(pipeline)s, %(stage)s, %(priority)s, %(status)s,
-                %(assigned_to)s, %(estimated_value)s, %(next_action_at)s, %(lost_reason)s, %(notes)s,
-                %(agency_id)s, %(created_by_user_id)s, %(assigned_agent_id)s
-            ) RETURNING *
-            """,
-            prepared,
-        )
-        return _row(cur.fetchone())
+    _ensure_exists_scoped(ctx, cur, "contacts", data["contact_id"], "contact")
+    cur.execute(
+        """
+        INSERT INTO leads (
+            contact_id, source, pipeline, stage, priority, status, assigned_to,
+            estimated_value, next_action_at, lost_reason, notes,
+            agency_id, created_by_user_id, assigned_agent_id
+        ) VALUES (
+            %(contact_id)s, %(source)s, %(pipeline)s, %(stage)s, %(priority)s, %(status)s,
+            %(assigned_to)s, %(estimated_value)s, %(next_action_at)s, %(lost_reason)s, %(notes)s,
+            %(agency_id)s, %(created_by_user_id)s, %(assigned_agent_id)s
+        ) RETURNING *
+        """,
+        prepared,
+    )
+    return _row(cur.fetchone())
 
 
 def list_leads(ctx, limit: int, offset: int, contact_id: int | None, pipeline: str | None, stage: str | None, status: str | None):
