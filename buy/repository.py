@@ -516,9 +516,55 @@ def update_request_scoped(ctx, request_id, data):
         return result
 
 
+class ArchiveBlocked(ConflictError):
+    """DELETE-ARCH Fase 0: la richiesta ha processi aperti (proposta in corso
+    o vendita pendente). `code` e `blockers` sono esposti dal router."""
+    code = "ARCHIVE_BLOCKED"
+
+    def __init__(self, message, blockers):
+        super().__init__(message)
+        self.blockers = blockers
+
+
+def archive_blockers(cur, request_id):
+    """Processi aperti che impediscono di archiviare una richiesta acquirente:
+    proposte in bozza/inviate e vendite pendenti (nessuna colonna nuova)."""
+    blocchi = []
+    cur.execute(
+        "SELECT pp.id, pp.status, m.property_id FROM property_proposals pp "
+        "JOIN matches m ON m.id = pp.match_id "
+        "WHERE m.buy_request_id = %s AND pp.status IN ('draft', 'submitted') ORDER BY pp.id",
+        (request_id,),
+    )
+    righe = [dict(r) for r in cur.fetchall()]
+    if righe:
+        blocchi.append({"code": "open_proposal", "label": "Proposta in corso", "items": righe})
+    cur.execute(
+        "SELECT id, status, property_id FROM property_sales "
+        "WHERE buy_request_id = %s AND status = 'pending' ORDER BY id",
+        (request_id,),
+    )
+    righe = [dict(r) for r in cur.fetchall()]
+    if righe:
+        blocchi.append({"code": "pending_sale", "label": "Vendita in corso", "items": righe})
+    return blocchi
+
+
 def archive_request_scoped(ctx, request_id):
     agency_id = _agency(ctx)
     with core_cursor(commit=True) as (_, cur):
+        cur.execute(
+            "SELECT id, status FROM buy_requests WHERE id=%s AND agency_id=%s FOR UPDATE",
+            (request_id, agency_id),
+        )
+        corrente = cur.fetchone()
+        if not corrente:
+            raise NotFoundError(f"buy request {request_id} not found")
+        if corrente["status"] == "archived":
+            raise ConflictError("La richiesta è già archiviata")
+        blocchi = archive_blockers(cur, request_id)
+        if blocchi:
+            raise ArchiveBlocked("La richiesta ha processi aperti: chiudili prima di archiviare", blocchi)
         cur.execute(
             """
             UPDATE buy_requests

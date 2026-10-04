@@ -297,7 +297,8 @@ def _rotte(sessione="agency_owner", *, post_building=None, post_unit=None, undo=
         ("GET", "/api/property/properties/30/census", [rt.ok(census or CENSUS)]),
         ("GET", "/api/property/properties/30", [rt.ok(immobile or IMMOBILE_CENSUS)]),
         ("PATCH", "/api/property/properties/30", [rt.ok({**(immobile or IMMOBILE_CENSUS), "cadastral_category": "A/2"})]),
-        ("DELETE", "/api/property/properties/411", [rt.ok({**UNITA[1], "commercial_status": "archived"})]),
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (D11): l'unita' si archivia con l'azione esplicita
+        ("POST", "/api/property/properties/411/archive", [rt.ok({**UNITA[1], "commercial_status": "archived"})]),
         ("GET", "/api/property/properties?", [rt.ok({"items": [{**base.IMMOBILE, "id": 416, "code": "IMM-416", "property_type": "garage"}]})]),
         ("GET", "/api/proposals?", [rt.ok({"items": []})]),
         ("GET", "/api/sales?", [rt.ok({"items": []})]),
@@ -618,4 +619,4 @@ def test_c09_modifica_palazzina_indirizzo_conferma_propagazione_e_archivia_unita
     assert "Confermi" in out["testoBottone"]
     post = out["post"]
     assert post[0]["m"] == "PATCH" and post[0]["url"] == "/api/property/buildings/7" and post[0]["body"] == {"civic_number": "12"}
-    assert post[1]["m"] == "DELETE" and post[1]["url"] == "/api/property/properties/411"
+    assert post[1]["m"] == "POST" and post[1]["url"] == "/api/property/properties/411/archive"   # DELETE-ARCH Fase 0

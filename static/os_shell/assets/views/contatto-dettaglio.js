@@ -1479,7 +1479,9 @@ function renderImmobili(loaded) {
     : '';
   const table = renderTable(
     [
-      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>${p.record_kind === 'census' ? ` ${renderBadge('Censimento', 'warn')}` : ''}` },
+      // DELETE-ARCH Fase 0: la relazione resta visibile (e' storico) ma un
+      // immobile archiviato e' marcato come tale.
+      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>${p.record_kind === 'census' ? ` ${renderBadge('Censimento', 'warn')}` : ''}${(p.archived_at || p.commercial_status === 'archived') ? ` ${renderBadge('Archiviato', 'gray')}` : ''}` },
       { label: 'Città', render: (p) => escapeHtml(p.city || '—') },
       { label: 'Ruolo del contatto', render: (p) => {
         const link = (p.contacts || []).find((c) => String(c.contact_id) === String(contactId));

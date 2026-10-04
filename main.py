@@ -11,6 +11,9 @@ from datetime import datetime, date, timedelta, timezone
 import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
+import stime_purge
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
 from pdf_report import genera_pdf_stima
 from valuation import compute_from_payload
@@ -637,19 +640,36 @@ def admin_whatsapp_reply(data: dict):
 class DeleteRequest(BaseModel):
     ids: list[int]
 
+
+def _risposta_non_eliminabile(exc):
+    """DELETE-ARCH Fase 0: `409 NOT_PURGEABLE` con i blocchi per stima."""
+    return JSONResponse(
+        status_code=409,
+        content={"detail": str(exc), "code": exc.code, "blockers": jsonable_encoder(exc.blockers)},
+    )
+
+
 @app.post("/api/admin/stime/delete", dependencies=[Depends(require_authenticated_operator)])
 def admin_delete_stime(
     payload: DeleteRequest,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    """P26-6C: a delete bounded to this agency, and reporting what it deleted.
+    """DELETE-ARCH Fase 0 (contratto REV 2 §18.2): hard delete limitato.
 
-    The id list is client-supplied, so before this the route destroyed any row
-    whose id was named. Both statements carry the tenant - the child by its own
-    column, since 049 gives `stime_dettagliate` one - and the count returned is
-    now the number of rows actually removed rather than the number requested.
-    Reporting `len(ids)` would have told a caller its cross-agency delete
-    succeeded.
+    P26-6C aveva legato la cancellazione all'agenzia del chiamante; la
+    cascata DB pero' portava via con la stima `lead_stime`, `activities`,
+    `tasks` e gli accessi proprietario, e un'attivita' con immobile faceva
+    fallire tutto a meta' (trigger 082). Ora:
+
+      * solo il titolare dell'agenzia (403 per admin e agent);
+      * ogni stima e' eleggibile solo se nessuna riga di storico CRM la
+        referenzia (`stime_purge.STIME_REFERENCES` + FK del catalogo);
+      * tutto-o-niente: con una sola stima non eleggibile la risposta e'
+        `409 NOT_PURGEABLE` con i blocchi per stima e nessuna riga tocca
+        terra; una stima inesistente o di un'altra agenzia e' un blocco,
+        non piu' un silenzio;
+      * una transazione sola, con rollback esplicito; `stime_dettagliate`
+        e' contenuto proprio e va via con la stima.
     """
     agency_id = agency_of(ctx)
 
@@ -657,20 +677,15 @@ def admin_delete_stime(
     if not ids:
         raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
 
-    conn = get_connection(); cur = conn.cursor()
-
-    cur.execute(
-        "DELETE FROM stime_dettagliate WHERE stima_id = ANY(%s) AND agency_id = %s",
-        (ids, agency_id),
-    )
-    cur.execute(
-        "DELETE FROM stime WHERE id = ANY(%s) AND agency_id = %s",
-        (ids, agency_id),
-    )
-    deleted = cur.rowcount
-    conn.commit()
-
-    cur.close(); conn.close()
+    conn = get_connection()
+    try:
+        deleted = stime_purge.purge_stime(conn, ctx, agency_id, ids)
+    except stime_purge.StimePurgeForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except stime_purge.StimeNotPurgeable as exc:
+        return _risposta_non_eliminabile(exc)
+    finally:
+        conn.close()
     return {"ok": True, "deleted": deleted}
 
 # ---------------------------------------------------------
@@ -681,12 +696,12 @@ def admin_delete_stime_dettagliate(
     payload: DeleteRequest,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    """P26-6C: the detail rows only, and only this agency's.
+    """DELETE-ARCH Fase 0: le sole righe di dettaglio, della propria agenzia,
+    solo per il titolare, tutto-o-niente (un id inesistente o di un'altra
+    agenzia blocca l'intera richiesta con `409 NOT_PURGEABLE`).
 
-    Deleted by their own id, so the tenant cannot come from the parent even
-    when there is one - hence 049's physical column. A row whose `stima_id` is
-    NULL still has an agency, which is exactly the case a JOIN-based scope
-    would have made permanently unreachable.
+    P26-6C: deleted by their own id, so the tenant cannot come from the parent
+    even when there is one - hence 049's physical column.
     """
     agency_id = agency_of(ctx)
 
@@ -694,18 +709,15 @@ def admin_delete_stime_dettagliate(
     if not ids:
         raise HTTPException(status_code=400, detail="Nessun ID ricevuto")
 
-    conn = get_connection(); cur = conn.cursor()
-
-    # Cancella ESCLUSIVAMENTE le righe della tabella stime_dettagliate
-    cur.execute(
-        "DELETE FROM stime_dettagliate WHERE id = ANY(%s) AND agency_id = %s",
-        (ids, agency_id),
-    )
-    deleted = cur.rowcount
-
-    conn.commit()
-    cur.close(); conn.close()
-
+    conn = get_connection()
+    try:
+        deleted = stime_purge.purge_stime_dettagliate(conn, ctx, agency_id, ids)
+    except stime_purge.StimePurgeForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except stime_purge.StimeNotPurgeable as exc:
+        return _risposta_non_eliminabile(exc)
+    finally:
+        conn.close()
     return {"ok": True, "deleted": deleted}
 
 # ---------------------------------------------------------

@@ -54,7 +54,7 @@ from consent.enums import (
 )
 
 from .database import core_cursor
-from .exceptions import ConflictError, NotFoundError, ValidationError
+from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import SystemAgencyContext
 
 from .scope import (
@@ -239,6 +239,10 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
     if status:
         where.append("status = %s")
         params.append(status)
+    else:
+        # DELETE-ARCH Fase 0: gli archiviati escono dalla lista e dai
+        # selettori; si vedono solo chiedendo `status=archived`.
+        where.append("status <> 'archived'")
     if search:
         where.append(
             """(
@@ -1006,6 +1010,11 @@ ACTIVITY_ON_PROPERTY_NOT_DELETABLE = (
     "e non si cancellano: per correggerne una registra una nuova interazione.")
 
 
+TASK_NOT_OWN = "Il task è stato creato da un altro operatore: chiudilo invece di cancellarlo"
+ACTIVITY_NOT_OWN = (
+    "Si cancellano solo le attività create da te: per le altre registra una correzione.")
+
+
 def delete_activity(ctx, activity_id: int) -> None:
     predicate, scope_params = scoped_predicate(ctx, "activities", "a")
     with core_cursor(commit=True) as (_, cur):
@@ -1013,13 +1022,19 @@ def delete_activity(ctx, activity_id: int) -> None:
         # commerciale dell'immobile e NON si cancella - ne' da qui ne' dal
         # database (trigger `trg_activities_property_history`). Le attivita'
         # senza immobile restano cancellabili come prima.
+        # DELETE-ARCH Fase 0 (contratto REV 2, §15: "admin/owner come oggi sui
+        # propri"): e solo se create da chi cancella (`created_by_user_id`).
+        # Il ruolo lo filtra il service; qui resta la condizione sulla riga.
+        # Le attivita' generate (created_by NULL) non si cancellano da nessuno.
         cur.execute(
-            f"DELETE FROM activities a WHERE a.id = %s AND {predicate} AND a.property_id IS NULL",
-            [activity_id] + scope_params,
+            f"DELETE FROM activities a WHERE a.id = %s AND {predicate} AND a.property_id IS NULL"
+            " AND a.created_by_user_id = %s",
+            [activity_id] + scope_params + [ctx.user_id],
         )
         if cur.rowcount == 0:
             # Nulla cancellato: o e' storico d'immobile (409, la riga e' nello
-            # scope di chi chiede), o non esiste per chi chiede (404, D-6).
+            # scope di chi chiede), o e' di un altro (403), o non esiste per
+            # chi chiede (404, D-6).
             cur.execute(
                 f"SELECT a.property_id FROM activities a WHERE a.id = %s AND {predicate}"
                 " AND a.property_id IS NOT NULL",
@@ -1028,15 +1043,34 @@ def delete_activity(ctx, activity_id: int) -> None:
             riga = cur.fetchone()
             if riga is not None and riga.get("property_id") is not None:
                 raise ConflictError(ACTIVITY_ON_PROPERTY_NOT_DELETABLE)
+            cur.execute(
+                f"SELECT a.id FROM activities a WHERE a.id = %s AND {predicate}"
+                " AND a.created_by_user_id IS DISTINCT FROM %s",
+                [activity_id] + scope_params + [ctx.user_id],
+            )
+            riga = cur.fetchone()
+            if riga is not None and riga.get("id") == activity_id:
+                raise PermissionDenied(ACTIVITY_NOT_OWN)
             raise NotFoundError(f"activity {activity_id} not found")
 
 
 def delete_task(ctx, task_id: int) -> None:
     predicate, scope_params = scoped_predicate(ctx, "tasks", "t")
     with core_cursor(commit=True) as (_, cur):
+        # DELETE-ARCH Fase 0: come per le attivita', solo i task creati da chi
+        # cancella (il ruolo lo filtra il service). Un task di un altro
+        # operatore si chiude (PATCH status), non si cancella.
         cur.execute(
-            f"DELETE FROM tasks t WHERE t.id = %s AND {predicate}",
-            [task_id] + scope_params,
+            f"DELETE FROM tasks t WHERE t.id = %s AND {predicate} AND t.created_by_user_id = %s",
+            [task_id] + scope_params + [ctx.user_id],
         )
         if cur.rowcount == 0:
+            cur.execute(
+                f"SELECT t.id FROM tasks t WHERE t.id = %s AND {predicate}"
+                " AND t.created_by_user_id IS DISTINCT FROM %s",
+                [task_id] + scope_params + [ctx.user_id],
+            )
+            riga = cur.fetchone()
+            if riga is not None and riga.get("id") == task_id:
+                raise PermissionDenied(TASK_NOT_OWN)
             raise NotFoundError(f"task {task_id} not found")

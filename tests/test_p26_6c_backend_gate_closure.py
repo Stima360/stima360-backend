@@ -824,7 +824,11 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # SENTINELLA AGGIORNATA DA VENDITORI-1: CRM 1 -> 4 (worklist Venditori,
         # attiva e disattiva «Vende»), tutte nello scope (set(routes) ==
         # set(scoped) qui sotto). Il conteggio resta esatto.
-        "property": 40, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: property 40 -> 42
+        # (contratto REV 2, D11: `POST .../archive` e `POST .../unarchive`
+        # esplicite; la DELETE resta, deprecata). Entrambe dietro
+        # legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
+        "property": 42, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }
@@ -1073,12 +1077,19 @@ class MainConnection:
     def __init__(self, cursor):
         self._cursor = cursor
         self.commits = 0
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: la cancellazione delle
+        # stime e' una transazione con rollback esplicito (contratto §18.2);
+        # il doppio lo accetta e lo conta.
+        self.rollbacks = 0
 
     def cursor(self, *a, **k):
         return self._cursor
 
     def commit(self):
         self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
     def close(self):
         pass
@@ -1220,6 +1231,12 @@ def test_35_an_update_cannot_reach_another_agencys_stima(monkeypatch):
 
 
 def test_36_a_delete_cannot_reach_another_agencys_stima(monkeypatch):
+    """SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (contratto REV 2 §18.2,
+    brief §5): la cancellazione e' tutto-o-niente. Una stima di un'altra
+    agenzia non viene piu' saltata in silenzio con un 200: e' un blocco
+    (`not_found`), la risposta e' `409 NOT_PURGEABLE` e NESSUNA DELETE parte,
+    nemmeno per la stima propria. Cio' che il test proteggeva - la riga di B
+    non e' mai raggiunta - resta vero, in forma piu' forte."""
     client = _main_client(monkeypatch)
     cursor = MainCursor()
     with install_main_connection(cursor):
@@ -1227,16 +1244,20 @@ def test_36_a_delete_cannot_reach_another_agencys_stima(monkeypatch):
             "/api/admin/stime/delete",
             json={"ids": [STIMA_A, STIMA_B]},
         )
-    assert response.status_code == 200, response.text
-    reached = cursor.touched_ids("DELETE")
-    assert STIMA_B not in reached, cursor.statements
-    assert DETAIL_B not in reached, cursor.statements
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "NOT_PURGEABLE"
+    assert STIMA_B in {b["stima_id"] for b in response.json()["blockers"]}
+    assert cursor.touched_ids("DELETE") == [], cursor.statements
 
 
 def test_37_a_detail_delete_cannot_bypass_the_parent_scope(monkeypatch):
     """`stime_dettagliate` is deleted by its own id, so the tenant has to come
     from somewhere else: either its own column or a join to the parent stima.
-    Either way agency B's detail row must not be reachable by guessing 222."""
+    Either way agency B's detail row must not be reachable by guessing 222.
+
+    SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: stessa regola tutto-o-niente
+    della rotta madre - la riga di B e' un blocco `not_found`, 409, nessuna
+    DELETE. Da sola, la riga di A si cancella ancora (200)."""
     client = _main_client(monkeypatch)
     cursor = MainCursor()
     with install_main_connection(cursor):
@@ -1244,8 +1265,14 @@ def test_37_a_detail_delete_cannot_bypass_the_parent_scope(monkeypatch):
             "/api/admin/stime_dettagliate/delete",
             json={"ids": [DETAIL_A, DETAIL_B]},
         )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "NOT_PURGEABLE"
+    assert cursor.touched_ids("DELETE") == [], cursor.statements
+    cursor = MainCursor()
+    with install_main_connection(cursor):
+        response = client.post("/api/admin/stime_dettagliate/delete", json={"ids": [DETAIL_A]})
     assert response.status_code == 200, response.text
-    assert DETAIL_B not in cursor.touched_ids("DELETE"), cursor.statements
+    assert cursor.touched_ids("DELETE") == [DETAIL_A], cursor.statements
 
 
 def test_38_whatsapp_never_names_another_agencys_lead(monkeypatch):

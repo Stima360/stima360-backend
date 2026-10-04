@@ -1,3 +1,5 @@
+from core.exceptions import PermissionDenied, ValidationError
+from operator_auth import permissions
 from . import repository
 
 def dump(model,exclude_unset=False): return model.dict(exclude_unset=exclude_unset)
@@ -49,10 +51,46 @@ def get_request_scoped(ctx, i):
 
 
 def update_request_scoped(ctx, i, p):
-    return repository.update_request_scoped(ctx, i, dump(p, True))
+    data = dump(p, True)
+    # DELETE-ARCH Fase 0 - transizione compatibile: la scheda Acquirente
+    # archivia con `PATCH status='archived'` (P25-5 non chiama la DELETE), e
+    # quella PATCH ora E' l'azione Archivia: stesso ruolo (owner/admin),
+    # stessi blocchi (409 ARCHIVE_BLOCKED) e `archived_at` scritto nella
+    # stessa transazione, mai uno stato `archived` senza data. `archived_at`
+    # non si imposta a mano. La riattivazione (da `archived` a un altro
+    # stato) e' riservata a owner/admin e azzera `archived_at` nella stessa
+    # scrittura.
+    if "archived_at" in data:
+        raise ValidationError("archived_at non si imposta a mano: archivia con lo stato 'archived' o riattiva cambiando stato")
+    if "status" in data:
+        corrente = repository.get_request_scoped(ctx, i)
+        if data["status"] == "archived" and corrente.get("status") != "archived":
+            _require_archive_role(ctx)
+            archiviata = repository.archive_request_scoped(ctx, i)
+            resto = {k: v for k, v in data.items() if k != "status"}
+            return repository.update_request_scoped(ctx, i, resto) if resto else archiviata
+        if corrente.get("status") == "archived" and data["status"] != "archived":
+            _require_archive_role(ctx)
+            data["archived_at"] = None
+    return repository.update_request_scoped(ctx, i, data)
+
+
+# DELETE-ARCH Fase 0 (contratto REV 2, D10): sulle richieste acquirente
+# non esiste ancora un modello di assegnazione (solo `assigned_to` testuale),
+# quindi archivia/riattiva restano a owner, admin e platform admin in acting;
+# un `agent` riceve 403. Archiviare e' rifiutato con una proposta in corso o
+# una vendita pendente (`409 ARCHIVE_BLOCKED` con i blocchi).
+AGENT_CANNOT_ARCHIVE_REQUEST = "Un agente non archivia né riattiva una richiesta acquirente: chiedi a un amministratore."
+ARCHIVE_BLOCKED_MESSAGE = "La richiesta ha processi aperti: chiudili prima di archiviare"
+
+
+def _require_archive_role(ctx):
+    if not permissions.sees_all_agency_records(getattr(ctx, "role", None), getattr(ctx, "is_platform_admin", False)):
+        raise PermissionDenied(AGENT_CANNOT_ARCHIVE_REQUEST)
 
 
 def archive_request_scoped(ctx, i):
+    _require_archive_role(ctx)
     return repository.archive_request_scoped(ctx, i)
 
 

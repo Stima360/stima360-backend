@@ -308,6 +308,14 @@ def run_import(cur, *, apply: bool, today: date | None = None,
         valori = map_values(riga, istante, lead_id=lead_id, contact_id=contact_id)
         cur.execute("SAVEPOINT a30_6_record")
         try:
+            # DELETE-ARCH Fase 0: la stima letta all'inizio puo' essere stata
+            # cancellata nel frattempo. Ricontrollo con `FOR KEY SHARE`
+            # (`repository.stima_agency`), tenuto fino al commit: niente
+            # appuntamento con `stima_id` orfano, e un purge concorrente aspetta.
+            if repository.stima_agency(cur, riga["stima_id"]) != riga["agency_id"]:
+                cur.execute("RELEASE SAVEPOINT a30_6_record")
+                esito["orphan"] += 1
+                continue
             nuova = repository.insert_appointment(cur, valori, actor_user_id=None)
         except Exception as exc:  # noqa: BLE001 - contato e riportato, senza PII
             cur.execute("ROLLBACK TO SAVEPOINT a30_6_record")

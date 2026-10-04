@@ -17,6 +17,13 @@ writing any JS):
          by KPI/alerts/mandate_expiring queries in property/repository.py)
 No dedicated "unsold"/state-machine endpoint exists for commercial_status
 besides these two - nothing else is used here.
+
+SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (contratto REV 2, D11): l'archivio
+e' un'azione esplicita, `POST /api/property/properties/{id}/archive`
+(stesso effetto della DELETE, che resta deprecata; `409 ARCHIVE_BLOCKED` con
+i processi aperti), e `archived` non e' piu' una voce del selettore di stato.
+Le asserzioni che pinnavano la DELETE e la presenza di `archived` nel
+selettore seguono il contratto; la macchina a due click resta.
 """
 
 from __future__ import annotations
@@ -82,8 +89,11 @@ def test_manual_statuses_are_subset_of_real_backend_enum_and_exclude_sold():
         "'sold' non deve mai essere una transizione manuale: e' raggiunto solo "
         "come side-effect di sale/repository.py::complete_sale (soldMismatch)"
     )
-    # nessuno stato reale dimenticato per errore, a parte 'sold' (escluso di proposito)
-    assert used == (real - {"sold"}), f"differenza inattesa rispetto a PROPERTY_STATUSES: {used.symmetric_difference(real - {'sold'})}"
+    # nessuno stato reale dimenticato per errore, a parte 'sold' (escluso di
+    # proposito) e - DELETE-ARCH Fase 0 - 'archived', che e' l'azione
+    # «Archivia», non una transizione del selettore
+    assert "archived" not in used, "'archived' si raggiunge solo con «Archivia» (POST .../archive)"
+    assert used == (real - {"sold", "archived"}), f"differenza inattesa rispetto a PROPERTY_STATUSES: {used.symmetric_difference(real - {'sold', 'archived'})}"
 
 
 def test_confirm_required_statuses_are_withdrawn_and_archived():
@@ -95,13 +105,17 @@ def test_confirm_required_statuses_are_withdrawn_and_archived():
 
 
 def test_archived_transition_uses_dedicated_delete_endpoint_not_raw_patch():
-    """archive_property (DELETE) e' l'unico path che imposta anche
-    archived_at - una PATCH diretta a commercial_status='archived' non lo
-    farebbe, rompendo l'invariante usata da mandate_expiring/KPI/alerts."""
+    """archive_property e' l'unico path che imposta anche archived_at - una
+    PATCH diretta a commercial_status='archived' non lo farebbe, rompendo
+    l'invariante usata da mandate_expiring/KPI/alerts.
+
+    SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: il path dedicato e'
+    `POST .../archive` (D11), non piu' la DELETE."""
     text = _read(IMMOBILE_JS)
     save_handler = _function_block(text, "applyCommercialStatusSave")
     assert "target === 'archived'" in save_handler
-    assert re.search(r"deleteRequest\(`/api/property/properties/\$\{property\.id\}`\)", save_handler)
+    assert re.search(r"archiveRequest\(`/api/property/properties/\$\{property\.id\}/archive`\)", save_handler)
+    assert "deleteRequest" not in save_handler
     assert re.search(r"patchRequest\(`/api/property/properties/\$\{property\.id\}`, \{ commercial_status: target \}\)", save_handler)
 
 
@@ -149,8 +163,11 @@ def test_two_step_confirm_preserves_the_selected_status_across_rerender():
     """
     text = _read(IMMOBILE_JS)
     assert "commercialStatusPendingTarget" in text
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: la sezione riceve anche lo
+    # stato di «Archivia»/«Riattiva» (quinto argomento); il target pending
+    # attraversa il re-render come prima.
     render_call = re.search(
-        r"renderCommercialStatusSection\(p,\s*commercialStatusEditMode,\s*commercialStatusPendingConfirm,\s*commercialStatusPendingTarget\)",
+        r"renderCommercialStatusSection\(p,\s*commercialStatusEditMode,\s*commercialStatusPendingConfirm,\s*commercialStatusPendingTarget(,\s*lifecycle)?\)",
         text,
     )
     assert render_call, "il target pending deve attraversare il re-render"
@@ -179,23 +196,25 @@ process.stdout.write(JSON.stringify({{first, second}}));
 
 
 def test_archive_submit_calls_delete_once_and_applies_persisted_response():
+    """SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: una sola chiamata, ora
+    `POST .../archive` (D11); la risposta persistita viene applicata come prima."""
     function = _function_block(_read(IMMOBILE_JS), "applyCommercialStatusSave")
     script = f"""
 {function}
 const calls = [];
 const property = {{id: 12, commercial_status: 'draft', archived_at: null}};
-const apiDelete = async (path) => {{
-  calls.push(['DELETE', path]);
+const apiPost = async (path) => {{
+  calls.push(['POST', path]);
   return {{id: 12, commercial_status: 'archived', archived_at: '2026-09-04T22:00:00Z'}};
 }};
 const apiPatch = async (path, body) => {{ calls.push(['PATCH', path, body]); }};
-await applyCommercialStatusSave(property, 'archived', apiDelete, apiPatch);
+await applyCommercialStatusSave(property, 'archived', apiPost, apiPatch);
 process.stdout.write(JSON.stringify({{calls, property}}));
 """
     result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     outcome = json.loads(result.stdout)
-    assert outcome["calls"] == [["DELETE", "/api/property/properties/12"]]
+    assert outcome["calls"] == [["POST", "/api/property/properties/12/archive"]]
     assert outcome["property"]["commercial_status"] == "archived"
     assert outcome["property"]["archived_at"] == "2026-09-04T22:00:00Z"
 

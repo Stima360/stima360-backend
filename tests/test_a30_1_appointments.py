@@ -212,7 +212,17 @@ def test_10_il_pacchetto_non_ha_rotte_e_non_e_montato_in_main():
         "app.include_router(appointments_router, "
         "dependencies=[Depends(require_authenticated_operator)])",
     ]
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (collisione dichiarata):
+    # `stime_purge.py` nomina la TABELLA `appointments` solo per contare i
+    # riferimenti `appointments.stima_id` (riferimento morbido, test_03) e
+    # rifiutare la cancellazione di una stima con appuntamenti. Nessuna
+    # importazione del pacchetto, nessuna scrittura: lo si verifica qui.
     for file in ROOT.glob("*.py"):
+        if file.name == "stime_purge.py":
+            testo = file.read_text(encoding="utf-8")
+            assert "import appointments" not in testo and "from appointments" not in testo
+            assert not re.search(r"(INSERT INTO|UPDATE|DELETE FROM)\s+appointments", testo)
+            continue
         if file.name != "main.py":
             assert "appointments" not in file.read_text(encoding="utf-8"), file.name
 

@@ -70,6 +70,13 @@ def test_04_solo_la_patch_generica_e_passata_a_trc_nel_router():
     patch = [r for r in righe if r.startswith("def update_property(")]
     assert len(patch) == 1 and "return trc(service.update_property" in patch[0]
     # le altre rotte generiche restano su `tr`: nessun cambio di contratto fuori dal residuo
-    for nome in ("def create_property(", "def get_property(", "def archive_property(", "def list_properties("):
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: `archive_property` (la DELETE
+    # deprecata) e le azioni esplicite /archive e /unarchive rispondono con
+    # `{detail, code}` (ARCHIVE_BLOCKED + blockers, NOT_ASSIGNED, ...), quindi
+    # passano da `trc` come la PATCH; create/get/list restano su `tr`.
+    for nome in ("def create_property(", "def get_property(", "def list_properties("):
         riga = next(r for r in righe if r.startswith(nome))
         assert "tr(" in riga and "trc(" not in riga, nome
+    for nome in ("def archive_property(", "def archive_property_explicit(", "def unarchive_property("):
+        blocco = righe[next(i for i, r in enumerate(righe) if r.startswith(nome)):][:3]
+        assert any("trc(service." in r for r in blocco), nome

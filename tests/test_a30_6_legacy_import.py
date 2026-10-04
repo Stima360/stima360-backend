@@ -205,7 +205,11 @@ def test_21_nessuna_scrittura_fuori_da_appointments_e_nessun_side_effect():
 def test_22_il_modulo_scrive_solo_attraverso_il_repository():
     codice = _codice(MODULO)
     chiamate = set(re.findall(r"repository\.(\w+)\(", codice))
-    assert chiamate == {"insert_appointment", "update_appointment", "db_now"}
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: prima dell'INSERT il modulo
+    # ricontrolla la stima con `repository.stima_agency` (lettura con
+    # `FOR KEY SHARE`, nessuna scrittura) per non creare un `stima_id` orfano
+    # se la stima e' stata cancellata dopo la lettura dei candidati.
+    assert chiamate == {"insert_appointment", "update_appointment", "db_now", "stima_agency"}
     # stima_inspections: mai nominata in una query di scrittura o lettura
     assert "INTO stima_inspections" not in codice
 

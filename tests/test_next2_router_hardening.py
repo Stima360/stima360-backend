@@ -47,12 +47,17 @@ REPRESENTATIVE_PATHS = (
 # POST .../pertinenze/{pertinenza_id}/unlink, POST/PATCH/DELETE .../accessories
 # (+ POST .../accessories/{accessory_id}/resolve), POST .../take-in-charge e
 # POST .../undo-create - portano PROPERTY da 26 a 40 e il totale da 113 a 127.
+# SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: POST .../properties/{id}/archive
+# e POST .../properties/{id}/unarchive (contratto REV 2, D11: archivio e
+# riattivazione esplicite; la DELETE resta, deprecata) portano PROPERTY da 40
+# a 42 e il totale da 127 a 129. Stessa condizione: router PROPERTY dietro
+# Depends(legacy_basic_agency_context), e test_2 ri-verifica il gate.
 # Stessa condizione di P26-1, CRM-OPS-2 e CRM-OPS-4: tutte sul router PROPERTY
 # dietro Depends(legacy_basic_agency_context), e test_2 ri-verifica il gate di
 # sicurezza su ogni operazione, le nuove comprese.
 EXPECTED_COUNTS = {
     "/api/core": 21,
-    "/api/property": 40,
+    "/api/property": 42,
     "/api/property-watch": 12,
     "/api/buy": 23,
     "/api/match": 26,
@@ -94,12 +99,12 @@ def test_1_all_100_routes_are_still_mounted(app):
             if path == prefix or path.startswith(f"{prefix}/")
         )
         assert actual == expected
-    assert len(operations) == 127
+    assert len(operations) == 129
 
 
 def test_2_every_certified_admin_route_has_security_gate(app):
     operations = openapi_operations(app)
-    assert len(operations) == 127
+    assert len(operations) == 129
     missing = [f"{method} {path}" for method, path, operation in operations if not operation.get("security")]
     assert missing == []
 

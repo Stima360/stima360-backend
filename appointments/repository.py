@@ -166,8 +166,19 @@ def stima_agency(cur, stima_id: int):
     (nessuna FK, decisione Q-A6b), quindi l'appartenenza si verifica qui, una
     volta, quando il riferimento viene scritto. L'altra lettura di `stime`
     dell'Agenda e' la ricerca di `lookup_stime` (A30-5), in sola lettura.
+
+    DELETE-ARCH Fase 0: `FOR KEY SHARE`. Senza FK il database non protegge il
+    riferimento, quindi lo protegge questo lock, tenuto fino al commit della
+    scrittura dell'appuntamento: e' lo stesso lock che una FK prenderebbe, e
+    confligge con il `FOR UPDATE` del purge delle stime
+    (`stime_purge.lock_for_purge`). Writer prima -> il purge aspetta e vede
+    l'appuntamento (409); purge prima -> questa lettura aspetta, la riga non
+    c'e' piu', None, e nessun appuntamento con `stima_id` orfano. Non blocca
+    letture, altre pianificazioni sulla stessa stima ne' gli UPDATE di `stime`
+    che non toccano la chiave (KEY SHARE e' compatibile con KEY SHARE, SHARE e
+    NO KEY UPDATE; confligge solo con FOR UPDATE e DELETE).
     """
-    cur.execute("SELECT agency_id FROM stime WHERE id = %s", (stima_id,))
+    cur.execute("SELECT agency_id FROM stime WHERE id = %s FOR KEY SHARE", (stima_id,))
     riga = cur.fetchone()
     return None if riga is None else riga["agency_id"]
 

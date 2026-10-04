@@ -49,6 +49,12 @@ class FakeConnection:
         self.cursor_instance = FakeCursor()
         self.commit_count = 0
         self.closed = False
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: le rotte di
+        # cancellazione stime fanno rollback esplicito (contratto §18.2).
+        self.rollback_count = 0
+
+    def rollback(self):
+        self.rollback_count += 1
 
     # P26-6C: the admin routes now ask for a RealDictCursor in places, so this
     # accepts the kwarg. The double is shape-agnostic - it returns no rows -
@@ -185,7 +191,18 @@ def test_legacy_admin_routes_are_reachable_with_a_live_session(
     with operator_session(monkeypatch, client, agency_id=1, role="agency_owner"):
         response = _request(client, method, path, payload)
 
-    assert response.status_code == 200
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: le due rotte di
+    # cancellazione stime sono tutto-o-niente (contratto REV 2 §18.2). Il
+    # cursore finto non restituisce righe, quindi la stima 1 "non esiste" e
+    # la risposta della logica applicativa e' `409 NOT_PURGEABLE`, non piu' un
+    # 200 che fingeva una cancellazione: cio' che il test prova - la sessione
+    # viva raggiunge la logica applicativa, il Basic no - resta identico.
+    if path.endswith("/delete"):
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "NOT_PURGEABLE"
+        assert connection.commit_count == 0
+    else:
+        assert response.status_code == 200
 
     # E la stessa richiesta col solo Basic non passa piu': senza questa riga
     # l'inefficacia della vecchia credenziale non sarebbe provata da nessuna

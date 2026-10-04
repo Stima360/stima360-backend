@@ -216,8 +216,16 @@ def test_r3a_scollegato_resta_in_lista_e_si_puo_sospendere_e_chiudere_senza_rico
     mario = _contatto(m, "Mario Scollegato")
     _proprietario(m, p["id"], mario)
     lead = _attiva(m, p["id"], mario).json()["lead_id"]
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (brief §7, contratto REV 2
+    # 5.5): con l'opportunita' Vende aperta la rimozione del proprietario
+    # dall'API e' rifiutata (409 SELLER_OPPORTUNITY_OPEN, si usa prima
+    # «Smetti…»), e l'opportunita' NON viene chiusa. Lo stato "scollegato con
+    # opportunita' viva" puo' pero' esistere ancora (dati storici, D8): qui lo
+    # si produce in SQL, e la tolleranza di R3 resta provata come prima.
     r = m["api"]().delete(f"/api/property/properties/{p['id']}/contacts/{mario}/owner")
-    assert r.status_code == 204, r.text
+    assert r.status_code == 409 and r.json()["code"] == "SELLER_OPPORTUNITY_OPEN", r.text
+    assert _q(m, "SELECT status FROM leads WHERE id = %s", (lead,))[0][0] == "open"
+    _q(m, "DELETE FROM property_contacts WHERE property_id = %s AND contact_id = %s", (p["id"], mario))
     voce = _voce(m, lead)
     assert voce["still_owner"] is False and voce["status"] == "open"
     # le azioni che richiedono il collegamento restano rifiutate dal backend...

@@ -238,9 +238,26 @@ def update_task(ctx, task_id, payload):
     return repository.update_task(ctx, task_id, data)
 
 
+# DELETE-ARCH Fase 0 (contratto REV 2, sezione 18.1): la cancellazione fisica
+# di attivita' e task non e' piu' di tutta l'agenzia per chiunque.
+#   * `agent`: mai (un task si annulla, un'attivita' si corregge con una
+#     nuova registrazione; "Segna come creato per errore" arriva in Fase 1);
+#   * owner/admin: solo le attivita' e i task creati da se' (repository).
+AGENT_CANNOT_DELETE_ACTIVITY = (
+    "Un agente non cancella le attività: registra una correzione o chiedi a un amministratore.")
+AGENT_CANNOT_DELETE_TASK = "Un agente non cancella i task: annullalo (stato «cancelled»)."
+
+
+def _require_destructive_role(ctx, message):
+    if not permissions.sees_all_agency_records(ctx.role, ctx.is_platform_admin):
+        raise PermissionDenied(message)
+
+
 def delete_activity(ctx, activity_id):
+    _require_destructive_role(ctx, AGENT_CANNOT_DELETE_ACTIVITY)
     repository.delete_activity(ctx, activity_id)
 
 
 def delete_task(ctx, task_id):
+    _require_destructive_role(ctx, AGENT_CANNOT_DELETE_TASK)
     repository.delete_task(ctx, task_id)

@@ -359,7 +359,8 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
     if view not in VIEWS or status not in STATUS_FILTERS:
         raise ValidationError("Filtro non valido")
     predicato, params = scoped_predicate(ctx, "leads", "l")
-    filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'"]
+    # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
+    filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL"]
     for clausola in (VIEWS[view][1], STATUS_FILTERS[status][1]):
         if clausola:
             filtri.append(clausola)

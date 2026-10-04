@@ -101,12 +101,19 @@ def test_04_con_soli_record_crm_i_numeri_sono_identici_a_prima(mondo):
     api = mondo["api"]()
     d = api.get("/api/property/dashboard").json()
     assert d["total"] == _q(mondo, "SELECT count(*) FROM properties WHERE agency_id = 1 AND archived_at IS NULL")[0][0]
-    assert d["active"] == _q(mondo, "SELECT count(*) FROM properties WHERE agency_id = 1 AND commercial_status IN "
-                                    "('mandate','active','reserved','under_offer')")[0][0]
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (contratto REV 2, §18.3): gli
+    # archiviati (`archived_at`) escono dall'elenco operativo, dalla ricerca e
+    # dai contatori `active`; si vedono con `status=archived` o
+    # `include_archived=true`. Il confronto "identico a prima" resta sui
+    # record non archiviati, che e' cio' che la decisione 3 proteggeva.
+    assert d["active"] == _q(mondo, "SELECT count(*) FROM properties WHERE agency_id = 1 AND archived_at IS NULL "
+                                    "AND commercial_status IN ('mandate','active','reserved','under_offer')")[0][0]
     assert d["census_units"] == 0
     elenco = _ids(api.get("/api/property/properties?limit=200"))
-    assert elenco == {r[0] for r in _q(mondo, "SELECT id FROM properties WHERE agency_id = 1")}
+    assert elenco == {r[0] for r in _q(mondo, "SELECT id FROM properties WHERE agency_id = 1 AND archived_at IS NULL")}
     assert elenco == _ids(api.get("/api/property/properties?record_kind=all&limit=200"))
+    assert _ids(api.get("/api/property/properties?include_archived=true&limit=200")) == {
+        r[0] for r in _q(mondo, "SELECT id FROM properties WHERE agency_id = 1")}
 
 
 def test_05_presa_in_carico_sposta_la_stessa_riga_senza_duplicati(mondo):

@@ -51,6 +51,12 @@ async function request(path, options = {}) {
     const detail = data && typeof data.detail === 'string' ? data.detail : `Errore ${response.status}`;
     const error = new Error(detail);
     error.status = response.status;
+    // DELETE-ARCH Fase 0: le risposte 409 strutturate (archivio, scollega,
+    // stime) portano `code` e, quando ci sono, i `blockers`: la UI li mostra.
+    if (data && typeof data === 'object') {
+      if (typeof data.code === 'string') error.code = data.code;
+      error.data = data;
+    }
     throw error;
   }
 

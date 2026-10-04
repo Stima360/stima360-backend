@@ -194,7 +194,9 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
                 dipendenze = {d.call for d in r.dependant.dependencies}
                 assert legacy_basic_agency_context in dipendenze, (m, r.path)
     assert trovate == CENSUS_ROUTES
-    assert len(router.routes) == 40
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: 40 -> 42 (POST .../archive e
+    # POST .../unarchive, contratto REV 2 D11), entrambe dietro lo stesso gate.
+    assert len(router.routes) == 42
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

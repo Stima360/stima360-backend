@@ -298,8 +298,13 @@ def test_b06_assegnazione_regole(fake):
     # cambiata da un agent: 403
     with pytest.raises(PermissionDenied):
         property_service.update_property(_ctx("agent"), 5, PropertyUpdate(assigned_agent_id=8))
-    with pytest.raises(PermissionDenied):
-        property_service.create_property(_ctx("agent"), PropertyCreate(assigned_agent_id=7))
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (D19): un agent che crea un
+    # immobile lo crea assegnato a se' - il payload non comanda (un altro id
+    # nel corpo non e' un 403: viene sostituito dal proprio), e il nome e'
+    # l'istantanea del server. Owner/admin/platform restano come prima.
+    property_service.create_property(_ctx("agent", user_id=7), PropertyCreate(assigned_agent_id=8))
+    assert repo.calls[-1][1]["assigned_agent_id"] == 7
+    assert repo.calls[-1][1]["assigned_to"] == "Anna Agente"
     # owner/admin/platform admin acting: si', con istantanea del nome
     for ctx in (_ctx("agency_owner"), _ctx("agency_admin"), _ctx(None, platform=True)):
         property_service.update_property(ctx, 5, PropertyUpdate(assigned_agent_id=8))

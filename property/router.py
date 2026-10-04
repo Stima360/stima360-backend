@@ -38,7 +38,7 @@ def create_property(p:PropertyCreate,ctx:OperatorContext=Depends(legacy_basic_ag
 # unita' censite, per il tab Censimento) | all (ricerca globale, «Collega
 # esistente», viste per relazione). Valore diverso: 422.
 @router.get('/properties')
-def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,contact_id:int|None=None,lead_id:int|None=None,assigned_to:str|None=None,mandate_expiring:bool=False,missing_documents:bool=False,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_properties,ctx,limit,offset,search,status,classification,city,contact_id,lead_id,assigned_to,mandate_expiring,missing_documents,record_kind=record_kind)}
+def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,contact_id:int|None=None,lead_id:int|None=None,assigned_to:str|None=None,mandate_expiring:bool=False,missing_documents:bool=False,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_properties,ctx,limit,offset,search,status,classification,city,contact_id,lead_id,assigned_to,mandate_expiring,missing_documents,record_kind=record_kind,include_archived=include_archived)}
 @router.get('/properties/{property_id}')
 def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_property,ctx,property_id)
 @router.patch('/properties/{property_id}')
@@ -46,28 +46,39 @@ def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency
 # censimento (`trc`), cosi' la guardia §7 porta `code: CENSUS_LOCKED` e non solo il testo.
 # Risposte di successo invariate; gli altri errori guadagnano solo un `code` additivo.
 def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.update_property,ctx,property_id,p)
-@router.delete('/properties/{property_id}')
-def archive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.archive_property,ctx,property_id)
+# DELETE-ARCH Fase 0: Archivia/Riattiva sono azioni esplicite (D11). La DELETE
+# storica resta come archivio per i client esistenti, deprecata: nessun
+# caller nuovo la usa e la UI e' passata a /archive. Errori con `code`
+# (ARCHIVE_BLOCKED + blockers, NOT_ASSIGNED, ...), come il censimento.
+@router.post('/properties/{property_id}/archive')
+def archive_property_explicit(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.archive_property,ctx,property_id)
+@router.post('/properties/{property_id}/unarchive')
+def unarchive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.unarchive_property,ctx,property_id)
+@router.delete('/properties/{property_id}',deprecated=True)
+def archive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    esito=trc(service.archive_property,ctx,property_id)
+    esito.headers['Deprecation']='true';esito.headers['Link']=f'</api/property/properties/{property_id}/archive>; rel="successor-version"'
+    return esito
 @router.post('/properties/{property_id}/contacts',status_code=201)
 def add_contact(property_id:int,p:PropertyContactCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.add_contact,ctx,property_id,p)
 @router.delete('/properties/{property_id}/contacts/{contact_id}/{role}',status_code=204)
-def delete_contact(property_id:int,contact_id:int,role:str,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_contact,ctx,property_id,contact_id,role);return Response(status_code=204)
+def delete_contact(property_id:int,contact_id:int,role:str,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.delete_contact,ctx,property_id,contact_id,role)
 @router.post('/properties/{property_id}/leads',status_code=201)
 def add_lead(property_id:int,p:PropertyLeadCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.add_lead,ctx,property_id,p)
 @router.delete('/properties/{property_id}/leads/{lead_id}',status_code=204)
-def delete_lead(property_id:int,lead_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_lead,ctx,property_id,lead_id);return Response(status_code=204)
+def delete_lead(property_id:int,lead_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.delete_lead,ctx,property_id,lead_id)
 @router.post('/properties/{property_id}/documents',status_code=201)
 def add_document(property_id:int,p:DocumentCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.add_document,ctx,property_id,p)
 @router.patch('/documents/{document_id}')
 def update_document(document_id:int,p:DocumentUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_document,ctx,document_id,p)
 @router.delete('/documents/{document_id}',status_code=204)
-def delete_document(document_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_document,ctx,document_id);return Response(status_code=204)
+def delete_document(document_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.delete_document,ctx,document_id)
 @router.post('/properties/{property_id}/photos',status_code=201)
 def add_photo(property_id:int,p:PhotoCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.add_photo,ctx,property_id,p)
 @router.patch('/photos/{photo_id}')
 def update_photo(photo_id:int,p:PhotoUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_photo,ctx,photo_id,p)
 @router.delete('/photos/{photo_id}',status_code=204)
-def delete_photo(photo_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_photo,ctx,photo_id);return Response(status_code=204)
+def delete_photo(photo_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.delete_photo,ctx,photo_id)
 @router.get('/visits')
 def list_visits(limit:int=Query(100,ge=1,le=500),offset:int=Query(0,ge=0),status:str|None=None,from_date:str|None=None,to_date:str|None=None,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_visits,ctx,limit,offset,status,from_date,to_date)}
 @router.post('/properties/{property_id}/visits',status_code=201)
@@ -75,7 +86,7 @@ def add_visit(property_id:int,p:VisitCreate,ctx:OperatorContext=Depends(legacy_b
 @router.patch('/visits/{visit_id}')
 def update_visit(visit_id:int,p:VisitUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_visit,ctx,visit_id,p)
 @router.delete('/visits/{visit_id}',status_code=204)
-def delete_visit(visit_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_visit,ctx,visit_id);return Response(status_code=204)
+def delete_visit(visit_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.delete_visit,ctx,visit_id)
 # CRM-OPS-4: INCARICHI (vista in sola lettura su properties + acquisitions:
 # nessuna entita' nuova, nessuna creazione da qui) e lo STORICO INTERAZIONI
 # dell'immobile (righe di `activities` con property_id, migration 082),

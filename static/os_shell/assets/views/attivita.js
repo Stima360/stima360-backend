@@ -83,6 +83,7 @@
 // immobile-dettaglio.js (P16) e non va duplicata in questa vista.
 
 import { apiGet, apiPatch } from '../core/api-client.js';
+import { getSession } from '../core/auth.js';
 import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
 // P25.1: creazione/modifica/eliminazione task e creazione/eliminazione
 // attività, dialog condivisi con contatto-dettaglio.js (vedi
@@ -519,8 +520,18 @@ function renderDaFareItem(item, deleteConfirm) {
 // P25.1: azioni Modifica/Elimina aggiunte accanto a "Completa" (già
 // esistente). Conferma inline a due click per l'eliminazione (nessun
 // window.confirm()), chiave "task:{id}" nel Set deleteConfirm condiviso.
+// DELETE-ARCH Fase 0 (contratto REV 2, §6): un agente non cancella piu'
+// attivita' e task - il backend risponde 403 - quindi «Elimina» non compare.
+// Owner, admin e platform admin lo vedono come prima.
+export function canDeleteHistory(session) {
+  if (!session) return false;
+  if (session.is_platform_admin === true) return true;
+  return session.role === 'agency_owner' || session.role === 'agency_admin';
+}
+
 function renderTaskActions(t, deleteConfirm) {
-  const confirming = deleteConfirm ? deleteConfirm.has(`task:${t.id}`) : false;
+  const puoEliminare = canDeleteHistory(getSession());
+  const confirming = puoEliminare && deleteConfirm ? deleteConfirm.has(`task:${t.id}`) : false;
   if (confirming) {
     return `
       <button type="button" class="btn ghost" data-delete-task-confirm="${escapeHtml(t.id)}">Conferma eliminazione</button>
@@ -530,10 +541,13 @@ function renderTaskActions(t, deleteConfirm) {
   const completeBtn = OPEN_TASK_STATUSES.includes(t.status)
     ? `<button type="button" class="btn ghost" data-complete-task="${escapeHtml(t.id)}">Completa</button>`
     : '';
+  const deleteBtn = puoEliminare
+    ? `<button type="button" class="btn ghost" data-delete-task="${escapeHtml(t.id)}">Elimina</button>`
+    : '';
   return `
     ${completeBtn}
     <button type="button" class="btn ghost" data-edit-task="${escapeHtml(t.id)}">Modifica</button>
-    <button type="button" class="btn ghost" data-delete-task="${escapeHtml(t.id)}">Elimina</button>
+    ${deleteBtn}
   `;
 }
 
@@ -635,6 +649,8 @@ function renderCronologiaActions(item, deleteConfirm) {
     if (item.data.property_id) {
       return `<a class="btn ghost" href="#/immobili/${encodeURIComponent(item.data.property_id)}/attivita">Storico immobile</a>`;
     }
+    // DELETE-ARCH Fase 0: niente «Elimina» per un agente (vedi canDeleteHistory).
+    if (!canDeleteHistory(getSession())) return '';
     const confirming = deleteConfirm ? deleteConfirm.has(`attivita:${item.data.id}`) : false;
     if (confirming) {
       return `

@@ -1,4 +1,6 @@
 from fastapi import APIRouter,Depends,HTTPException,Query,Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
@@ -23,9 +25,29 @@ def list_requests(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),searc
 @router.get('/requests/{request_id}')
 def get_request(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_request_scoped,ctx,request_id)
 @router.patch('/requests/{request_id}')
-def update_request(request_id:int,p:BuyRequestUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.update_request_scoped,ctx,request_id,p)
+def update_request(request_id:int,p:BuyRequestUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    # DELETE-ARCH Fase 0: `status='archived'` e' l'azione Archivia, con i
+    # suoi blocchi strutturati (vedi archive_request).
+    try:return service.update_request_scoped(ctx,request_id,p)
+    except service.repository.ArchiveBlocked as e:
+        return JSONResponse(status_code=409,content={'detail':str(e),'code':e.code,'blockers':jsonable_encoder(e.blockers)})
+    except NotFoundError as e:raise HTTPException(404,str(e))
+    except ConflictError as e:raise HTTPException(409,str(e))
+    except ValidationError as e:raise HTTPException(400,str(e))
+    except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
+    except PermissionDenied as e:raise HTTPException(403,str(e))
+    except ValueError as e:raise HTTPException(422,str(e))
 @router.delete('/requests/{request_id}')
-def archive_request(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.archive_request_scoped,ctx,request_id)
+def archive_request(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    # DELETE-ARCH Fase 0: 409 strutturato con `code` e `blockers` quando la
+    # richiesta ha una proposta in corso o una vendita pendente.
+    try:return service.archive_request_scoped(ctx,request_id)
+    except service.repository.ArchiveBlocked as e:
+        return JSONResponse(status_code=409,content={'detail':str(e),'code':e.code,'blockers':jsonable_encoder(e.blockers)})
+    except NotFoundError as e:raise HTTPException(404,str(e))
+    except ConflictError as e:raise HTTPException(409,str(e))
+    except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
+    except PermissionDenied as e:raise HTTPException(403,str(e))
 @router.get('/requests/{request_id}/normalized')
 def normalized(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.normalized_scoped,ctx,request_id)
 @router.get('/requests/{request_id}/workflow')

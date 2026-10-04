@@ -110,12 +110,18 @@ const STATUS_LABELS = {
 // disallineamento). Tutte le altre transizioni sono ammesse dal backend
 // senza macchina a stati (PropertyUpdate.commercial_status valida solo
 // l'appartenenza a PROPERTY_STATUSES, nessun vincolo di sequenza).
-const MANUAL_COMMERCIAL_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'withdrawn', 'archived'];
+// DELETE-ARCH Fase 0 (contratto REV 2, D11): 'archived' NON e' piu' una voce
+// del selettore. Archiviare e' un'azione esplicita («Archivia», due click)
+// che chiama POST /api/property/properties/{id}/archive, e si torna
+// operativi con «Riattiva» (POST .../unarchive). Il selettore resta per le
+// transizioni di lavoro.
+const MANUAL_COMMERCIAL_STATUSES = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'withdrawn'];
 // 'withdrawn' e 'archived' sono transizioni significative (un immobile
 // ritirato/archiviato esce dai filtri operativi standard - vedi
 // property/repository.py: mandate_expiring, KPI, alerts escludono sempre
 // questi due stati): richiedono conferma inline a due click, mai
-// window.confirm().
+// window.confirm(). 'archived' resta qui perche' il bottone «Archivia» usa
+// la stessa macchina a due stadi (resolveCommercialStatusSave).
 const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
 
 // CRM-OPS-3: un incarico NUOVO nasce solo da un'acquisizione
@@ -141,13 +147,61 @@ function resolveCommercialStatusSave(currentStatus, selectedStatus, pendingTarge
   return { action: 'submit', target, pendingTarget: null };
 }
 
-async function applyCommercialStatusSave(property, target, deleteRequest = apiDelete, patchRequest = apiPatch) {
+// DELETE-ARCH Fase 0: l'archivio passa dall'azione esplicita
+// POST /api/property/properties/{id}/archive (archived_at + stato nella
+// stessa transazione, 409 ARCHIVE_BLOCKED con i blocchi se ci sono processi
+// aperti). La DELETE legacy resta solo per compatibilita' (deprecata).
+async function applyCommercialStatusSave(property, target, archiveRequest = apiPost, patchRequest = apiPatch) {
   const updated = target === 'archived'
-    ? await deleteRequest(`/api/property/properties/${property.id}`)
+    ? await archiveRequest(`/api/property/properties/${property.id}/archive`)
     : await patchRequest(`/api/property/properties/${property.id}`, { commercial_status: target });
   property.commercial_status = updated.commercial_status;
   property.archived_at = updated.archived_at;
   return updated;
+}
+
+// DELETE-ARCH Fase 0: «Riattiva». Il backend ripristina lo stato precedente
+// all'archiviazione (o 'draft') e dice cosa non ha potuto ripristinare in
+// `warnings`.
+async function applyUnarchive(property, postRequest = apiPost) {
+  const updated = await postRequest(`/api/property/properties/${property.id}/unarchive`);
+  property.commercial_status = updated.commercial_status;
+  property.archived_at = updated.archived_at;
+  return updated;
+}
+
+// Avvisi di POST .../unarchive (property/lifecycle.py::unarchive_property).
+const UNARCHIVE_WARNINGS = {
+  previous_status_not_restorable: 'Lo stato precedente non è ripristinabile: l\'immobile torna in Bozza.',
+  census_back_to_draft: 'Immobile in censimento: torna in Bozza.',
+  mandate_not_restored: 'L\'incarico non viene ripristinato (si genera da un\'acquisizione): l\'immobile torna in Bozza.',
+};
+
+export function isArchivedProperty(p) {
+  return Boolean(p && (p.archived_at || p.commercial_status === 'archived'));
+}
+
+// DELETE-ARCH Fase 0 (D10): chi puo' archiviare/riattivare. Owner, admin e
+// platform admin su tutta l'agenzia; un agent solo sull'immobile assegnato
+// a se' (`assigned_agent_id`). Stessa regola del backend
+// (property/lifecycle.py::may_manage): qui serve solo a non mostrare un
+// bottone che risponderebbe 403.
+export function canManagePropertyLifecycle(p, session) {
+  if (!session) return false;
+  if (session.is_platform_admin === true) return true;
+  if (session.role === 'agency_owner' || session.role === 'agency_admin') return true;
+  if (session.role === 'agent') {
+    return p != null && p.assigned_agent_id != null && Number(p.assigned_agent_id) === Number(session.user_id);
+  }
+  return false;
+}
+
+// Testo dei blocchi di un 409 ARCHIVE_BLOCKED, leggibile nella sezione.
+export function archiveBlockersText(error) {
+  const blockers = error && error.data && Array.isArray(error.data.blockers) ? error.data.blockers : [];
+  if (!blockers.length) return error && error.message ? error.message : 'Impossibile archiviare.';
+  const voci = blockers.map((b) => `${b.label || b.code}${b.items && b.items.length ? ` (${b.items.length})` : ''}`);
+  return `${(error && error.message) || 'Impossibile archiviare'}: ${voci.join(' · ')}`;
 }
 
 const PROPERTY_ROLE_LABELS = {
@@ -299,6 +353,10 @@ export async function renderImmobileDettaglio(container, params = []) {
   let commercialStatusEditMode = false;
   let commercialStatusPendingConfirm = false;
   let commercialStatusPendingTarget = null;
+  // DELETE-ARCH Fase 0: secondo stadio della conferma di «Archivia» e
+  // messaggio dell'ultima azione di archivio/riattivazione.
+  let archivePendingConfirm = false;
+  let lifecycleFeedback = '';
 
   // P11: badge di stato commerciale nell'header, isolato in una funzione
   // cosi' da poter essere ri-renderizzato dopo il completamento di una
@@ -421,7 +479,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     try {
       switch (key) {
         case 'panoramica':
-          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget);
+          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, { archivePendingConfirm, lifecycleFeedback, session: getSession() });
           bindIncaricoSection(contentEl);
           bindCommercialStatusSection(contentEl);
           break;
@@ -544,6 +602,61 @@ export async function renderImmobileDettaglio(container, params = []) {
   // transizioni ammesse usano la PATCH generica gia' esistente
   // (PropertyUpdate.commercial_status).
   function bindCommercialStatusSection(panelEl) {
+    // DELETE-ARCH Fase 0: «Archivia» (due click) e «Riattiva».
+    const archiveBtn = panelEl.querySelector('#property-archive-btn');
+    if (archiveBtn) {
+      archiveBtn.addEventListener('click', async () => {
+        const decision = resolveCommercialStatusSave(property.commercial_status, 'archived', archivePendingConfirm ? 'archived' : null);
+        if (decision.action === 'confirm') {
+          archivePendingConfirm = true;
+          lifecycleFeedback = '';
+          showTab('panoramica');
+          return;
+        }
+        archiveBtn.disabled = true;
+        archiveBtn.textContent = 'Archiviazione…';
+        try {
+          await applyCommercialStatusSave(property, 'archived');
+          archivePendingConfirm = false;
+          commercialStatusEditMode = false;
+          lifecycleFeedback = '';
+          const badgeEl = container.querySelector('#property-status-badge');
+          if (badgeEl) badgeEl.innerHTML = headerBadgeHtml();
+          showTab('panoramica');
+        } catch (error) {
+          archivePendingConfirm = false;
+          lifecycleFeedback = error.code === 'ARCHIVE_BLOCKED' ? archiveBlockersText(error) : (error.message || 'Impossibile archiviare.');
+          showTab('panoramica');
+        }
+      });
+    }
+    const archiveCancelBtn = panelEl.querySelector('#property-archive-cancel-btn');
+    if (archiveCancelBtn) {
+      archiveCancelBtn.addEventListener('click', () => {
+        archivePendingConfirm = false;
+        lifecycleFeedback = '';
+        showTab('panoramica');
+      });
+    }
+    const unarchiveBtn = panelEl.querySelector('#property-unarchive-btn');
+    if (unarchiveBtn) {
+      unarchiveBtn.addEventListener('click', async () => {
+        unarchiveBtn.disabled = true;
+        unarchiveBtn.textContent = 'Riattivazione…';
+        try {
+          const updated = await applyUnarchive(property);
+          const warnings = Array.isArray(updated.warnings) ? updated.warnings : [];
+          lifecycleFeedback = warnings.length ? `Riattivato. ${warnings.map((w) => UNARCHIVE_WARNINGS[w] || w).join(' ')}` : '';
+          const badgeEl = container.querySelector('#property-status-badge');
+          if (badgeEl) badgeEl.innerHTML = headerBadgeHtml();
+          showTab('panoramica');
+        } catch (error) {
+          lifecycleFeedback = error.message || 'Impossibile riattivare.';
+          showTab('panoramica');
+        }
+      });
+    }
+
     const editBtn = panelEl.querySelector('#commercial-status-edit-btn');
     if (editBtn) {
       editBtn.addEventListener('click', () => {
@@ -1637,7 +1750,7 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 // --- Panoramica -------------------------------------------------------
 
-function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget) {
+function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle = {}) {
   const fields = [
     ['Codice', p.code], ['Tipologia', p.property_type], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
@@ -1656,7 +1769,7 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
     <div class="detail-grid">
       ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
     </div>
-    ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget)}
+    ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle)}
     ${renderIncaricoSection(p, editMode)}
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(p.public_notes || p.internal_notes || 'Nessuna nota.')}</p>
@@ -1668,7 +1781,26 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
 // Vedi commenti su MANUAL_COMMERCIAL_STATUSES/CONFIRM_REQUIRED_STATUSES in
 // testa al file per il motivo dell'esclusione di 'sold' e del trattamento
 // speciale di 'archived'.
-function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarget) {
+function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarget, lifecycle = {}) {
+  const puoGestire = canManagePropertyLifecycle(p, lifecycle.session);
+  const feedback = lifecycle.lifecycleFeedback
+    ? `<div id="property-lifecycle-feedback" class="field-error">${escapeHtml(lifecycle.lifecycleFeedback)}</div>`
+    : '';
+  // DELETE-ARCH Fase 0: un immobile archiviato non cambia stato da qui: si
+  // riattiva (POST .../unarchive) e torna allo stato precedente.
+  if (isArchivedProperty(p)) {
+    return `
+      <h3 class="section-title">Stato commerciale</h3>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS.archived)}</div>
+        <div class="detail-item"><label>Archiviato il</label>${escapeHtml(formatDate(p.archived_at))}</div>
+      </div>
+      ${feedback}
+      ${puoGestire
+        ? '<div class="action-bar" style="margin-top:12px"><button type="button" id="property-unarchive-btn" class="btn ghost">Riattiva</button></div>'
+        : '<p class="muted">Immobile archiviato. Per riattivarlo chiedi a un amministratore.</p>'}
+    `;
+  }
   // CENSIMENTO-1 Fase 4 (§7): in censimento lo stato non si cambia da qui -
   // la PATCH risponderebbe 409 CENSUS_LOCKED - si prende in carico.
   if (p.record_kind === 'census') {
@@ -1678,6 +1810,8 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
         <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS[p.commercial_status] || p.commercial_status || '—')} · in censimento</div>
       </div>
       <p class="muted" id="commercial-status-census">Immobile in censimento: lo stato commerciale si sblocca con «Prendi in carico» (tab Censimento).</p>
+      ${feedback}
+      ${puoGestire ? renderArchiveButtons(lifecycle.archivePendingConfirm) : ''}
     `;
   }
   if (p.commercial_status === 'sold') {
@@ -1695,9 +1829,11 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
       <div class="detail-grid">
         <div class="detail-item"><label>Stato attuale</label>${escapeHtml(STATUS_LABELS[p.commercial_status] || p.commercial_status || '—')}</div>
       </div>
+      ${feedback}
       <div class="action-bar" style="margin-top:12px">
         <button type="button" id="commercial-status-edit-btn" class="btn ghost">Cambia stato</button>
       </div>
+      ${puoGestire ? renderArchiveButtons(lifecycle.archivePendingConfirm) : ''}
     `;
   }
   const options = selectableCommercialStatuses(p).map((s) => `<option value="${s}" ${s === (pendingTarget || p.commercial_status) ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[s] || s)}</option>`).join('');
@@ -1711,6 +1847,26 @@ function renderCommercialStatusSection(p, editMode, pendingConfirm, pendingTarge
     <div class="action-bar" style="margin-top:4px">
       <button type="button" id="commercial-status-cancel-btn" class="btn ghost">Annulla</button>
       <button type="button" id="commercial-status-save-btn" class="btn primary">${pendingConfirm ? 'Conferma' : 'Salva'}</button>
+    </div>
+  `;
+}
+
+// DELETE-ARCH Fase 0: «Archivia» a due click (secondo click = conferma), mai
+// window.confirm(). Il backend risponde 409 ARCHIVE_BLOCKED con i blocchi
+// (acquisizione aperta, appuntamento futuro, vendita in corso, proposta).
+function renderArchiveButtons(pendingConfirm) {
+  if (pendingConfirm) {
+    return `
+      <p class="field-error" id="property-archive-confirm">L'immobile uscirà dalle liste operative: premi di nuovo per confermare.</p>
+      <div class="action-bar" style="margin-top:4px">
+        <button type="button" id="property-archive-cancel-btn" class="btn ghost">Annulla</button>
+        <button type="button" id="property-archive-btn" class="btn danger">Conferma archiviazione</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="action-bar" style="margin-top:8px">
+      <button type="button" id="property-archive-btn" class="btn ghost">Archivia</button>
     </div>
   `;
 }

@@ -852,6 +852,15 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
         if "communication" in parti:
             continue
         testo = percorso.read_text(encoding="utf-8")
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (collisione dichiarata):
+        # `stime_purge.py` nomina `communication_messages` SOLO per contare i
+        # messaggi che referenziano una stima e rifiutarne la cancellazione
+        # (contratto REV 2 §18.2). Nessuna scrittura: la via di scrittura del
+        # ledger resta una sola, e lo si verifica qui riga per riga.
+        if percorso.name == "stime_purge.py" and len(parti) == len(ROOT.parts) + 1:
+            assert ATTEMPTS not in testo
+            assert not re.search(r"(INSERT INTO|UPDATE|DELETE FROM)\s+" + MESSAGES, testo)
+            continue
         for tabella in (MESSAGES, ATTEMPTS):
             assert tabella not in testo, (
                 f"{percorso.relative_to(ROOT)} nomina {tabella} fuori dal "

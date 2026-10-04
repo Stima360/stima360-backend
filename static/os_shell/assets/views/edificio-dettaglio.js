@@ -15,7 +15,7 @@
 //   DELETE /api/property/properties/{id}      -> Archivia (archiviazione generica)
 // Nessun totale di superficie della palazzina (REV 3.1 §0 p.3).
 
-import { apiDelete } from '../core/api-client.js';
+import { apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
@@ -117,7 +117,9 @@ export async function renderEdificioDettaglio(container, params = []) {
       if (archiveConfirm !== id) { archiveConfirm = id; renderUnits(); return; }
       archiveConfirm = null;
       try {
-        await apiDelete(`/api/property/properties/${id}`);
+        // DELETE-ARCH Fase 0: azione esplicita di archivio (409 ARCHIVE_BLOCKED
+        // con i blocchi; 403 se l'unita' non e' assegnata all'agente).
+        await apiPost(`/api/property/properties/${id}/archive`);
       } catch (error) {
         showToast(container, { text: errorMessage(error) });
       }

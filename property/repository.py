@@ -197,6 +197,12 @@ def list_properties(*args, **kwargs):
     # CENSIMENTO-1 Fase 5: solo per nome, cosi' le firme posizionali storiche
     # (11 filtri, con o senza ctx) restano quelle di prima. Default: operative.
     record_kind = kwargs.pop('record_kind', 'crm')
+    # DELETE-ARCH Fase 0: gli archiviati escono dalle superfici operative.
+    # Si includono solo a richiesta esplicita (`include_archived=True`), quando
+    # il filtro di stato chiede proprio `archived`, o nelle viste per
+    # relazione (contact_id / lead_id: "gli immobili di questo contatto" sono
+    # storia, e lo stato resta visibile riga per riga).
+    include_archived = kwargs.pop('include_archived', False)
     if len(args) > 0 and hasattr(args[0], 'require_agency'):
         ctx = args[0]
         agency_id = ctx.require_agency()
@@ -229,6 +235,8 @@ def list_properties(*args, **kwargs):
     if status:
         filters.append('p.commercial_status=%s')
         params.append(status)
+    if not include_archived and status != 'archived' and not contact_id and not lead_id:
+        filters.append("p.archived_at IS NULL AND p.commercial_status <> 'archived'")
     if classification:
         filters.append('p.classification=%s')
         params.append(classification)
@@ -367,7 +375,7 @@ def update_property(*args, **kwargs):
     with core_cursor(commit=True) as (_, cur):
         old_cols = 'asking_price,commercial_status,classification'
         if derive_identity:
-            old_cols += ',title,code,' + ','.join(TITLE_SOURCE_FIELDS)
+            old_cols += ',title,code,archived_at,' + ','.join(TITLE_SOURCE_FIELDS)
         if agency_id is not None:
             cur.execute(f'SELECT {old_cols} FROM properties WHERE id=%s AND agency_id = %s FOR UPDATE', (property_id, agency_id))
         else:
@@ -377,6 +385,10 @@ def update_property(*args, **kwargs):
             raise NotFoundError(f'property {property_id} not found')
         old = dict(old)
         if derive_identity:
+            # DELETE-ARCH Fase 0, review 2: la stessa regola del service, sulla
+            # riga bloccata (la PATCH generica non archivia ne' riattiva).
+            from . import lifecycle as _lifecycle
+            _lifecycle.check_status_patch(data, old)
             if ('title' not in data and old.get('title') == generated_title(old)
                     and any(f in data for f in TITLE_SOURCE_FIELDS)):
                 data['title'] = generated_title({**old, **{f: data[f] for f in TITLE_SOURCE_FIELDS if f in data}})
@@ -815,11 +827,11 @@ def dashboard(ctx=None):
             cur.execute("""
             SELECT
               COUNT(*) FILTER (WHERE archived_at IS NULL) AS total,
-              COUNT(*) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
+              COUNT(*) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='A') AS class_a,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='B') AS class_b,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
-              COALESCE(SUM(asking_price) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
+              COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
             WHERE agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
@@ -845,11 +857,11 @@ def dashboard(ctx=None):
             cur.execute("""
             SELECT
               COUNT(*) FILTER (WHERE archived_at IS NULL) AS total,
-              COUNT(*) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
+              COUNT(*) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='A') AS class_a,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='B') AS class_b,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
-              COALESCE(SUM(asking_price) FILTER (WHERE commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
+              COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
             WHERE COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'

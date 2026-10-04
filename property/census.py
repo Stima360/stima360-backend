@@ -909,7 +909,10 @@ def delete_accessory(ctx, property_id: int, accessory_id: int) -> None:
     def operazione():
         with core_cursor(commit=True) as (_, cur):
             _assicura_083(cur)
-            _unita(cur, agency_id, property_id)
+            unita = _unita(cur, agency_id, property_id)
+            # DELETE-ARCH Fase 0: stesso accesso dell'immobile (D10).
+            from . import lifecycle as _lifecycle
+            _lifecycle.require_manage(ctx, unita)
             _accessorio(cur, property_id, accessory_id, lock=True)
             cur.execute("DELETE FROM property_accessories WHERE id = %s", (accessory_id,))
 

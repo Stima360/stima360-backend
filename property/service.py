@@ -10,6 +10,7 @@ from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       cadastral_categories_for_form, cadastral_suggestions_for_form,
                       census_labels_for_form, territory_tree, validate_energy_class, validate_location)
 from . import census as _census
+from . import lifecycle as _lifecycle
 
 # CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
 ASSIGNMENT_DENIED_MESSAGE = (
@@ -160,7 +161,17 @@ def create_property(ctx,p):
     # CRM-OPS-3: un immobile nuovo non nasce con un incarico.
     _check_mandate_origin(data)
     # CRM-OPS-2: un agente su un immobile nuovo e' un'assegnazione.
-    _apply_assignment(ctx,data)
+    # DELETE-ARCH Fase 0 (D19): un `agent` crea un immobile operativo
+    # assegnato a se', come `creator_assignment` fa per contatti e lead -
+    # il valore e' `ctx.user_id`, mai il payload (che per un agente non puo'
+    # comunque assegnare: _apply_assignment risponderebbe 403). Owner, admin
+    # e platform admin in acting restano come prima: nessuna auto-assegnazione.
+    if getattr(ctx,'role',None)=='agent' and not getattr(ctx,'is_platform_admin',False):
+        data.pop('assigned_agent_id',None)
+        data['assigned_agent_id']=ctx.user_id
+        data['assigned_to']=repository.assignable_agent_name(ctx,ctx.user_id)
+    else:
+        _apply_assignment(ctx,data)
     return repository.create_property(ctx,data,generate_identity=True)
 def list_properties(*a,**k):return repository.list_properties(*a,**k)
 def get_property(ctx,i):return repository.get_property(ctx,i)
@@ -173,6 +184,12 @@ def update_property(ctx,i,p):
     current=None
     if {'assigned_agent_id','assigned_to','region','energy_class','commercial_status',*MANDATE_FIELDS,*ADDRESS_FIELDS} & set(data):
         current=repository.get_property(ctx,i)
+    # DELETE-ARCH Fase 0, review 2: nessun bypass di /archive e /unarchive.
+    # Un `archived` invariato su un immobile gia' archiviato (property_admin
+    # rimanda lo stato a ogni salvataggio) e' un no-op e si toglie.
+    _lifecycle.check_status_patch(data,current)
+    if data.get('commercial_status')=='archived' and current and current.get('commercial_status')=='archived':
+        del data['commercial_status']
     _check_catalog(data,current)
     _census._check_cadastral(data)
     _check_census_guard(data,current)
@@ -191,21 +208,24 @@ def update_property(ctx,i,p):
         # Senza ID il testo libero storico resta modificabile come prima.
         del data['assigned_to']
     return repository.update_property(ctx,i,data,derive_identity=True)
-def archive_property(ctx,i):return repository.archive_property(ctx,i)
+# DELETE-ARCH Fase 0: archivia/riattiva, rimozione collegamenti ed eliminazione
+# dei figli passano da property/lifecycle.py (accesso D10, guardie, audit).
+def archive_property(ctx,i):return _lifecycle.archive_property(ctx,i)
+def unarchive_property(ctx,i):return _lifecycle.unarchive_property(ctx,i)
 def add_contact(ctx,i,p):return repository.add_contact(ctx,i,dump(p))
-def delete_contact(ctx,i,c,r):return repository.delete_contact(ctx,i,c,r)
+def delete_contact(ctx,i,c,r):return _lifecycle.delete_contact(ctx,i,c,r)
 def add_lead(ctx,i,p):return repository.add_lead(ctx,i,dump(p))
-def delete_lead(ctx,i,l):return repository.delete_lead(ctx,i,l)
+def delete_lead(ctx,i,l):return _lifecycle.delete_lead(ctx,i,l)
 def add_document(ctx,i,p):return repository.create_child(ctx,'property_documents',i,dump(p))
 def update_document(ctx,i,p):return repository.update_child(ctx,'property_documents',i,dump(p,True),'document')
-def delete_document(ctx,i):return repository.delete_child(ctx,'property_documents',i,'document')
+def delete_document(ctx,i):return _lifecycle.delete_child(ctx,'property_documents',i)
 def add_photo(ctx,i,p):return repository.create_child(ctx,'property_photos',i,dump(p))
 def update_photo(ctx,i,p):return repository.update_child(ctx,'property_photos',i,dump(p,True),'photo')
-def delete_photo(ctx,i):return repository.delete_child(ctx,'property_photos',i,'photo')
+def delete_photo(ctx,i):return _lifecycle.delete_child(ctx,'property_photos',i)
 def list_visits(*a,**k):return repository.list_visits(*a,**k)
 def list_visits_by_contact(*a,**k):return repository.list_visits_by_contact(*a,**k)
 def add_visit(ctx,i,p):return repository.add_visit(ctx,i,dump(p))
 def update_visit(ctx,i,p):return repository.update_visit(ctx,i,dump(p,True))
-def delete_visit(ctx,i):return repository.delete_visit(ctx,i)
+def delete_visit(ctx,i):return _lifecycle.delete_child(ctx,'property_visits',i)
 def dashboard(ctx):return repository.dashboard(ctx)
 def alerts(ctx):return repository.alerts(ctx)
