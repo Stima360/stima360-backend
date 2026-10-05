@@ -463,3 +463,10 @@ class AccessoryResolve(PropertyModel):
 
 class TakeInCharge(PropertyModel):
     include_pertinenze: bool = True
+
+
+class PropertyTrash(PropertyModel):
+    """DELETE-ARCH Fase 2B1: «Sposta nel Cestino». Il motivo e' validato sul
+    catalogo dal service (400 INVALID_TRASH_REASON)."""
+    reason_code: str = Field(..., max_length=30)
+    note: str | None = Field(None, max_length=500)

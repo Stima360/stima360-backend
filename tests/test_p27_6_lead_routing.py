@@ -727,7 +727,9 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
     # Si nomina invece di smettere di guardare: la serie resta contigua e
     # qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 84 and numeri[-2] == 83 and numeri[-3] == 82 and numeri[-4] == 81 and numeri[-5] == 80 and numeri[-6] == 79 and numeri[-7] == 78 and numeri[-8] == 77 and numeri[-9] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili: properties.deleted_*,
+    # record_lifecycle_events), additiva, e' ora l'ultima; la catena si allunga di uno.
+    assert numeri[-1] == 85 and numeri[-2] == 84 and numeri[-3] == 83 and numeri[-4] == 82 and numeri[-5] == 81 and numeri[-6] == 80 and numeri[-7] == 79 and numeri[-8] == 78 and numeri[-9] == 77 and numeri[-10] == 76, numeri[-4:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

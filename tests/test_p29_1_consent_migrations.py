@@ -186,7 +186,8 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
     # Si nomina invece di smettere di guardare: la serie resta contigua e
     # qualunque ALTRA migration farebbe ancora fallire.
-    assert max(numeri) == 84, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili) segue la 084.
+    assert max(numeri) == 85, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

@@ -27,6 +27,9 @@ che il DECISION CONTRACT REV 2 fissa per la Fase 0.
 Audit minimo (Fase 0, niente tabelle nuove): `property_status_history` per
 archivia/riattiva, e per tutto il resto una riga di log strutturato
 (`stima360.lifecycle`). Il registro `record_lifecycle_events` arriva con M1.
+
+DELETE-ARCH Fase 2B1 (in fondo al modulo): il Cestino Immobili - trash,
+restore, deletion-check - con il registro `record_lifecycle_events` (085).
 """
 from __future__ import annotations
 
@@ -37,10 +40,11 @@ from datetime import datetime, timezone
 from psycopg2 import errors as _pg_errors
 
 from core.database import core_cursor
-from core.exceptions import ConflictError, NotFoundError, PermissionDenied
+from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth import permissions
 
 from . import repository
+from .census import CensusNotInstalled
 
 log = logging.getLogger("stima360.lifecycle")
 
@@ -101,6 +105,12 @@ class LifecycleConflict(_ConCodice, ConflictError):
 
 class LifecycleForbidden(_ConCodice, PermissionDenied):
     code = NOT_ASSIGNED
+
+
+class _ValidazioneCodificata(_ConCodice, ValidationError):
+    def __init__(self, message, code, **extra):
+        super().__init__(message, **extra)
+        self.code = code
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +216,7 @@ def archive_property(ctx, property_id: int) -> dict:
     with core_cursor(commit=True) as (_, cur):
         prop = _immobile(cur, agency_id, property_id, lock=True)
         require_manage(ctx, prop)
+        refuse_if_in_trash(prop)                        # DELETE-ARCH 2B1
         if prop.get("archived_at") is not None and prop.get("commercial_status") == "archived":
             raise LifecycleConflict(ALREADY_ARCHIVED_MESSAGE, ALREADY_ARCHIVED)
         blocchi = archive_blockers(cur, agency_id, prop)
@@ -246,6 +257,7 @@ def unarchive_property(ctx, property_id: int) -> dict:
     with core_cursor(commit=True) as (_, cur):
         prop = _immobile(cur, agency_id, property_id, lock=True)
         require_manage(ctx, prop)
+        refuse_if_in_trash(prop)                        # DELETE-ARCH 2B1
         if prop.get("archived_at") is None and prop.get("commercial_status") != "archived":
             raise LifecycleConflict(NOT_ARCHIVED_MESSAGE, NOT_ARCHIVED)
         avvisi = []
@@ -379,3 +391,313 @@ def delete_child(ctx, table: str, item_id: int) -> None:
         messaggio = {"property_documents": DOCUMENT_SHARED_MESSAGE, "property_visits": VISIT_HAS_FEEDBACK_MESSAGE}.get(table, CHILD_REFERENCED_MESSAGE)
         raise LifecycleConflict(messaggio, codice) from exc
     _audit("hard_delete", ctx, entity_type=label, entity_id=item_id, property_id=prop["id"])
+
+
+# ---------------------------------------------------------------------------
+# DELETE-ARCH Fase 2B1: CESTINO (trash / restore / deletion-check)
+# ---------------------------------------------------------------------------
+# Un immobile e' "nel Cestino" quando `deleted_at` e' valorizzato (085). Lo
+# stesso id, nessun figlio toccato (contatti, lead, foto, documenti, attivita',
+# storici restano); `commercial_status` e `archived_at` non cambiano ne' qui
+# ne' al ripristino. Ogni operazione scrive una riga in
+# `record_lifecycle_events` (append-only), nella stessa transazione.
+#
+# Fuori da 2B1, di proposito (Fase 2B2): chiusura/ripristino automatici
+# dell'opportunita' Venditore (qui e' un blocco), filtri delle altre letture
+# (dashboard, Agenda, Match, ...), guardie sulle tabelle collegate.
+
+TRASH_BLOCKED = "TRASH_BLOCKED"
+ALREADY_DELETED = "ALREADY_DELETED"
+NOT_DELETED = "NOT_DELETED"
+NOT_DELETED_BY_YOU = "NOT_DELETED_BY_YOU"
+RESTORE_CONFLICT = "RESTORE_CONFLICT"
+PROPERTY_IN_TRASH = "PROPERTY_IN_TRASH"
+INVALID_TRASH_REASON = "INVALID_TRASH_REASON"
+HISTORY_REQUIRES_ADMIN = "HISTORY_REQUIRES_ADMIN"
+
+TRASH_BLOCKED_MESSAGE = "L'immobile ha processi aperti: chiudili prima di spostarlo nel Cestino"
+ALREADY_DELETED_MESSAGE = "L'immobile è già nel Cestino"
+NOT_DELETED_MESSAGE = "L'immobile non è nel Cestino"
+NOT_DELETED_BY_YOU_MESSAGE = "Puoi ripristinare solo gli immobili che hai spostato tu nel Cestino: chiedi a un amministratore"
+RESTORE_CONFLICT_MESSAGE = ("Non si può ripristinare: un altro immobile attivo ha la stessa identità catastale "
+                            "o la stessa richiesta di creazione. Correggi prima l'altro immobile")
+PROPERTY_IN_TRASH_MESSAGE = "L'immobile è nel Cestino: ripristinalo prima di modificarlo"
+INVALID_TRASH_REASON_MESSAGE = "Motivo non valido"
+HISTORY_REQUIRES_ADMIN_MESSAGE = ("L'immobile ha uno storico operativo (attività, appuntamenti, acquisizioni, "
+                                  "proposte...): può spostarlo nel Cestino solo un amministratore o il titolare")
+MANDATE_PRESENT_MESSAGE = "Incarico presente"
+SELLER_OPEN_LABEL = "Opportunità Venditore aperta: chiudila prima da Venditori («Smetti…»)"
+
+TRASH_REASONS = ("created_by_mistake", "duplicate", "invalid_data", "test_record", "other")
+TRASH_NOTE_MAX = 500
+
+#: I blocchi dell'archiviazione valgono anche per il Cestino, con codici propri.
+_CODICI_CESTINO = {"sold": "PROPERTY_SOLD", "open_acquisition": "ACQUISITION_OPEN",
+                   "future_appointment": "FUTURE_APPOINTMENT", "pending_sale": "SALE_PENDING",
+                   "open_proposal": "PROPOSAL_OPEN"}
+
+
+class _NonEliminatoDaTe(LifecycleForbidden):
+    code = NOT_DELETED_BY_YOU
+
+
+class _StoricoRichiedeAdmin(LifecycleForbidden):
+    code = HISTORY_REQUIRES_ADMIN
+
+
+class TrashNotInstalled(CensusNotInstalled):
+    """503, come CENSUS_NOT_INSTALLED: `trc` la traduce con il suo `code`."""
+    code = "TRASH_NOT_INSTALLED"
+
+
+TRASH_NOT_INSTALLED_MESSAGE = ("Il Cestino non è ancora disponibile su questo database "
+                               "(migration 085 non applicata)")
+
+
+def _cestino_installato(cur) -> None:
+    """Codice deployato prima della 085 (stessa chiusura leggibile della 083,
+    property/census.py::_assicura_083): 503 TRASH_NOT_INSTALLED prima di
+    leggere o scrivere, non un 500."""
+    cur.execute("SELECT to_regclass('public.record_lifecycle_events') IS NOT NULL"
+                "   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'"
+                "                 AND table_name = 'properties' AND column_name = 'deleted_at') AS pronto")
+    if not cur.fetchone()["pronto"]:
+        raise TrashNotInstalled(TRASH_NOT_INSTALLED_MESSAGE)
+
+
+def in_trash(prop: dict | None) -> bool:
+    return bool(prop) and prop.get("deleted_at") is not None
+
+
+def refuse_if_in_trash(prop: dict | None) -> None:
+    """La guardia minima di 2B1: nessuna mutazione ordinaria (PATCH,
+    archivia, riattiva) su un immobile nel Cestino."""
+    if in_trash(prop):
+        raise LifecycleConflict(PROPERTY_IN_TRASH_MESSAGE, PROPERTY_IN_TRASH)
+
+
+def _ha_incarico(prop: dict) -> bool:
+    """Incarico reale: nato da un'acquisizione (081) o comunque con dati di
+    incarico sull'immobile. Volutamente largo: nel dubbio si blocca."""
+    return (prop.get("acquisition_id") is not None or prop.get("mandate_type") is not None
+            or prop.get("mandate_start") is not None or prop.get("commercial_status") == "mandate")
+
+
+def trash_blockers(cur, agency_id: int, prop: dict) -> list[dict]:
+    """I blocchi del Cestino, ricalcolati sulla riga letta (bloccata da chi
+    sposta nel Cestino). Ogni voce: `code`, `label`, `items`."""
+    blocchi = [{**b, "code": _CODICI_CESTINO.get(b["code"], b["code"])}
+               for b in archive_blockers(cur, agency_id, prop)]
+    if _ha_incarico(prop):
+        blocchi.append({"code": "MANDATE_PRESENT", "label": MANDATE_PRESENT_MESSAGE,
+                        "items": [{k: prop.get(k) for k in ("acquisition_id", "mandate_type", "mandate_start", "mandate_end")}]})
+    # 2B1: l'opportunita' Venditore viva BLOCCA (nessuna chiusura automatica:
+    # arriva con la Fase 2B2, insieme al ripristino).
+    cur.execute("SELECT l.id, l.status, l.contact_id FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
+                "WHERE l.agency_id = %s AND pl.property_id = %s AND l.pipeline = 'sell' "
+                "AND pl.relation_type = 'seller' AND l.status IN ('open', 'paused') ORDER BY l.id",
+                (agency_id, prop["id"]))
+    righe = [dict(r) for r in cur.fetchall()]
+    if righe:
+        blocchi.append({"code": SELLER_OPPORTUNITY_OPEN, "label": SELLER_OPEN_LABEL, "items": righe})
+    return blocchi
+
+
+def _evento(cur, ctx, agency_id: int, property_id: int, azione: str, *, reason=None, note=None,
+            before: dict) -> None:
+    cur.execute("INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action, reason_code, note, "
+                "actor_user_id, before_state, metadata) VALUES (%s, 'property', %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)",
+                (agency_id, property_id, azione, reason, note, getattr(ctx, "user_id", None),
+                 json.dumps(before, default=str),
+                 json.dumps({"actor_role": getattr(ctx, "role", None),
+                             "platform_admin": bool(getattr(ctx, "is_platform_admin", False))})))
+
+
+def _valida_motivo(reason_code, note):
+    if reason_code not in TRASH_REASONS:
+        raise _ValidazioneCodificata(INVALID_TRASH_REASON_MESSAGE, INVALID_TRASH_REASON, allowed=list(TRASH_REASONS))
+    if note is not None:
+        note = str(note).strip() or None
+    if note is not None and len(note) > TRASH_NOTE_MAX:
+        raise _ValidazioneCodificata(f"La nota supera {TRASH_NOTE_MAX} caratteri", INVALID_TRASH_REASON)
+    return reason_code, note
+
+
+def _agente_senza_privilegi(ctx) -> bool:
+    """REVIEW 2: chi deve fermarsi davanti allo storico. Owner, admin e
+    platform admin in acting vedono tutta l'agenzia e non si fermano."""
+    return not permissions.sees_all_agency_records(getattr(ctx, "role", None),
+                                                   getattr(ctx, "is_platform_admin", False))
+
+
+def protected_history(cur, agency_id: int, prop: dict) -> list[dict]:
+    """REVIEW 2 - lo STORICO OPERATIVO REALE dell'immobile: per un agent
+    richiede owner/admin (403 HISTORY_REQUIRES_ADMIN), per owner/admin non
+    blocca. I processi APERTI restano i blocchi assoluti di `trash_blockers`;
+    qui contano i fatti gia' avvenuti. Ogni voce: `code`, `label`, `count`.
+
+    NON e' storico: le righe «per errore» (appuntamento `cancelled_kind =
+    'mistake'`, acquisizione e lead `lost_reason = 'created_by_mistake'`,
+    attivita' con `metadata.mistake`), le attivita' generate dal sistema
+    (`core.repository.GENERATED_ACTIVITY_TYPES`) e le righe tecniche
+    (`property_status_history`, `property_price_history`, match calcolati,
+    foto/documenti caricati, collegamenti ai contatti)."""
+    from core import repository as core_repository
+
+    pid = prop["id"]
+    voci = []
+
+    def conta(codice, etichetta, sql, params, *, tabelle=()):
+        if any(not _presente(cur, t) for t in tabelle):
+            return
+        cur.execute(f"SELECT count(*) AS n FROM ({sql}) x", params)
+        n = cur.fetchone()["n"]
+        if n:
+            voci.append({"code": codice, "label": etichetta, "count": n})
+
+    tipi = list(core_repository.GENERATED_ACTIVITY_TYPES)
+    errore = core_repository.MISTAKE_SQL.format(a="a")
+    conta("PROPERTY_ACTIVITY", "Attività o interazioni registrate sull'immobile",
+          f"SELECT a.id FROM activities a WHERE a.agency_id = %s AND a.property_id = %s "
+          f"AND a.activity_type <> ALL(%s) AND NOT {errore}", (agency_id, pid, tipi))
+    conta("APPOINTMENT_HISTORY", "Appuntamenti avvenuti, passati o annullati",
+          "SELECT id FROM appointments WHERE agency_id = %s AND property_id = %s "
+          "AND cancelled_kind IS DISTINCT FROM 'mistake' "
+          "AND NOT (status IN ('requested', 'scheduled', 'confirmed') AND start_at >= NOW())",
+          (agency_id, pid), tabelle=("appointments",))
+    conta("ACQUISITION_HISTORY", "Acquisizioni concluse",
+          "SELECT id FROM acquisitions WHERE agency_id = %s AND property_id = %s "
+          "AND status IN ('acquired', 'lost') AND lost_reason IS DISTINCT FROM 'created_by_mistake'",
+          (agency_id, pid), tabelle=("acquisitions",))
+    conta("ACQUISITION_HISTORY", "Acquisizioni da stima",
+          "SELECT id FROM stima_acquisitions WHERE property_id = %s", (pid,), tabelle=("stima_acquisitions",))
+    conta("PROPOSAL_HISTORY", "Proposte d'acquisto concluse",
+          "SELECT pp.id FROM property_proposals pp JOIN matches mt ON mt.id = pp.match_id "
+          "WHERE mt.property_id = %s AND pp.status NOT IN ('draft', 'submitted')", (pid,))
+    conta("SALE_HISTORY", "Vendite registrate",
+          "SELECT id FROM property_sales WHERE property_id = %s AND status <> 'pending'", (pid,))
+    conta("VISIT_HISTORY", "Visite registrate (fuori Agenda)",
+          "SELECT id FROM property_visits WHERE property_id = %s AND appointment_id IS NULL", (pid,))
+    conta("BUYER_INTERACTION_HISTORY", "Interazioni con acquirenti",
+          "SELECT id FROM buy_request_interactions WHERE property_id = %s", (pid,))
+    conta("SELLER_HISTORY", "Opportunità Venditore concluse",
+          "SELECT l.id FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
+          "WHERE l.agency_id = %s AND pl.property_id = %s AND pl.relation_type = 'seller' AND l.pipeline = 'sell' "
+          "AND l.status = 'closed' AND l.lost_reason IS DISTINCT FROM 'created_by_mistake'", (agency_id, pid))
+    # I messaggi del ledger delle comunicazioni NON si leggono da qui: il ledger
+    # ha una via sola, `communication/` (sentinella P29-2.1 n4), che oggi non
+    # espone una lettura per immobile. Lasciato a 2B2.
+    conta("OWNER_PORTAL_HISTORY", "Accessi, pubblicazioni o riscontri del portale proprietario",
+          "SELECT id FROM owner_property_access WHERE property_id = %s "
+          "UNION ALL SELECT id FROM owner_publications WHERE property_id = %s "
+          "UNION ALL SELECT id FROM owner_feedback WHERE property_id = %s "
+          "UNION ALL SELECT s.id FROM owner_shared_documents s JOIN property_documents d ON d.id = s.property_document_id "
+          "WHERE d.property_id = %s", (pid, pid, pid, pid),
+          tabelle=("owner_property_access", "owner_publications", "owner_feedback", "owner_shared_documents"))
+    # la stessa voce puo' arrivare da due fonti (acquisizioni): una riga, conteggio sommato
+    unite = {}
+    for v in voci:
+        if v["code"] in unite:
+            unite[v["code"]]["count"] += v["count"]
+        else:
+            unite[v["code"]] = dict(v)
+    return list(unite.values())
+
+
+def deletion_check(ctx, property_id: int) -> dict:
+    """Si puo' spostare nel Cestino? Sola lettura; legge esplicitamente anche
+    un immobile gia' nel Cestino (blocco ALREADY_DELETED)."""
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        _cestino_installato(cur)
+        prop = _immobile(cur, agency_id, property_id)
+        require_manage(ctx, prop)
+        if in_trash(prop):
+            blocchi = [{"code": ALREADY_DELETED, "label": ALREADY_DELETED_MESSAGE, "items": []}]
+        else:
+            blocchi = trash_blockers(cur, agency_id, prop)
+            if not blocchi and _agente_senza_privilegi(ctx):
+                storia = protected_history(cur, agency_id, prop)
+                if storia:
+                    blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE,
+                                "items": storia}]
+    return {"can_trash": not blocchi, "blockers": blocchi}
+
+
+def trash_property(ctx, property_id: int, reason_code, note=None) -> dict:
+    agency_id = ctx.require_agency()
+    reason_code, note = _valida_motivo(reason_code, note)
+    with core_cursor(commit=True) as (_, cur):
+        _cestino_installato(cur)
+        prop = _immobile(cur, agency_id, property_id, lock=True)
+        require_manage(ctx, prop)
+        if in_trash(prop):
+            raise LifecycleConflict(ALREADY_DELETED_MESSAGE, ALREADY_DELETED)
+        blocchi = trash_blockers(cur, agency_id, prop)
+        if blocchi:
+            raise LifecycleConflict(TRASH_BLOCKED_MESSAGE, TRASH_BLOCKED, blockers=blocchi)
+        # REVIEW 2: un agent non manda nel Cestino un immobile con storico
+        # operativo reale; owner/admin si'. Ricalcolato sulla riga bloccata.
+        if _agente_senza_privilegi(ctx):
+            storia = protected_history(cur, agency_id, prop)
+            if storia:
+                raise _StoricoRichiedeAdmin(HISTORY_REQUIRES_ADMIN_MESSAGE, history=storia)
+        cur.execute("UPDATE properties SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "
+                    "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *",
+                    (getattr(ctx, "user_id", None), reason_code, property_id, agency_id))
+        riga = repository.row(cur.fetchone())
+        _evento(cur, ctx, agency_id, property_id, "trash", reason=reason_code, note=note,
+                before={k: prop.get(k) for k in ("commercial_status", "archived_at", "assigned_agent_id", "record_kind")})
+    _audit("trash", ctx, entity_type="property", entity_id=property_id, reason=reason_code)
+    return riga
+
+
+def _conflitti_ripristino(cur, agency_id: int, prop: dict) -> list[dict]:
+    """Gli indici unici che ignorano le righe nel Cestino (085): identita'
+    catastale COMPLETA e `client_request_id` (REVIEW 1, R1). Letti PRIMA
+    dell'UPDATE, sulla riga bloccata: un conflitto non lascia nulla a meta'.
+    `code` resta univoco anche nel Cestino, quindi non puo' entrare in
+    conflitto."""
+    conflitti = []
+    chiavi = ("cadastral_municipality_code", "cadastral_section", "cadastral_sheet", "cadastral_parcel", "cadastral_subunit")
+    if all(prop.get(k) is not None for k in chiavi):
+        cur.execute("SELECT id, code FROM properties WHERE agency_id = %s AND id <> %s AND deleted_at IS NULL "
+                    "AND cadastral_municipality_code = %s AND cadastral_section = %s AND cadastral_sheet = %s "
+                    "AND cadastral_parcel = %s AND cadastral_subunit = %s ORDER BY id",
+                    (agency_id, prop["id"], *(prop[k] for k in chiavi)))
+        conflitti += [{**dict(r), "index": "cadastral_identity"} for r in cur.fetchall()]
+    if prop.get("client_request_id") is not None:
+        cur.execute("SELECT id, code FROM properties WHERE agency_id = %s AND id <> %s AND deleted_at IS NULL "
+                    "AND client_request_id = %s ORDER BY id", (agency_id, prop["id"], prop["client_request_id"]))
+        conflitti += [{**dict(r), "index": "client_request"} for r in cur.fetchall()]
+    return conflitti
+
+
+def restore_property(ctx, property_id: int) -> dict:
+    """Ripristino: i tre campi `deleted_*` a NULL, nient'altro. Un conflitto
+    sull'identita' catastale o sulla `client_request_id` e' un 409
+    RESTORE_CONFLICT senza modifiche: il ripristino non corregge dati ne'
+    relazioni per riuscire."""
+    agency_id = ctx.require_agency()
+    with core_cursor(commit=True) as (_, cur):
+        _cestino_installato(cur)
+        prop = _immobile(cur, agency_id, property_id, lock=True)
+        if not in_trash(prop):
+            raise LifecycleConflict(NOT_DELETED_MESSAGE, NOT_DELETED)
+        if not permissions.sees_all_agency_records(getattr(ctx, "role", None), getattr(ctx, "is_platform_admin", False)):
+            # agent: solo cio' che ha spostato lui nel Cestino
+            if getattr(ctx, "role", None) != "agent" or prop.get("deleted_by_user_id") != getattr(ctx, "user_id", None):
+                raise _NonEliminatoDaTe(NOT_DELETED_BY_YOU_MESSAGE)
+        conflitti = _conflitti_ripristino(cur, agency_id, prop)
+        if conflitti:
+            raise LifecycleConflict(RESTORE_CONFLICT_MESSAGE, RESTORE_CONFLICT, conflicts=conflitti)
+        try:
+            cur.execute("UPDATE properties SET deleted_at = NULL, deleted_by_user_id = NULL, deleted_reason = NULL, "
+                        "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *", (property_id, agency_id))
+        except _pg_errors.UniqueViolation as exc:      # corsa con un inserimento concorrente
+            raise LifecycleConflict(RESTORE_CONFLICT_MESSAGE, RESTORE_CONFLICT, conflicts=[]) from exc
+        riga = repository.row(cur.fetchone())
+        _evento(cur, ctx, agency_id, property_id, "restore",
+                before={k: prop.get(k) for k in ("deleted_at", "deleted_by_user_id", "deleted_reason")})
+    _audit("restore", ctx, entity_type="property", entity_id=property_id)
+    return riga

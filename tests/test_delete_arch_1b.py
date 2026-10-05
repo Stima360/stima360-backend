@@ -17,8 +17,11 @@ def test_s01_nessuna_migration_nuova():
     import sys
     sys.path.insert(0, str(ROOT / "scripts"))
     import p26_migrate as runner
-    assert runner.discover_migrations()[-1].version == "084_delete_arch_1a_mistakes"
-    assert not list((ROOT / "migrations").glob("085*"))
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 1B resta senza migration; la 085 e' del Cestino
+    # Immobili, nominata per intero; nessuna oltre.
+    assert runner.discover_migrations()[-2].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-1].version == "085_delete_arch_2b1_property_trash"
+    assert not list((ROOT / "migrations").glob("086*"))
 
 
 def test_s02_codice_canonico_e_filtri():

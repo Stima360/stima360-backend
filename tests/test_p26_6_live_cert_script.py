@@ -5620,6 +5620,26 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # RIFIUTO, non come cancellazione silenziosa.
     ("buildings", "agency_id", "agencies", "RESTRICT"),
     ("properties", "parent_property_id", "properties", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1, migration 085. Cestino
+    # Immobili: TRE riferimenti non-CASCADE nuovi verso tabelle che il cleanup
+    # cancella. ESAMINATI.
+    #
+    #   properties.deleted_by_user_id   -> operator_users  SET NULL
+    #   record_lifecycle_events.actor_user_id -> operator_users  RESTRICT
+    #   record_lifecycle_events.agency_id     -> agencies        RESTRICT
+    #
+    # Chi ha spostato un immobile nel Cestino e' un'informazione accessoria:
+    # se l'operatore sparisce l'immobile resta (SET NULL, il motivo resta).
+    # Il registro e' APPEND-ONLY (trigger): una FK SET NULL lo riscriverebbe,
+    # quindi RESTRICT, come `acquisition_events`.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: un'agenzia o un operatore di
+    # prova con un evento di Cestino non si cancellano: il preflight li
+    # incontra come RIFIUTO, non come cancellazione silenziosa. La matrice non
+    # chiama /trash ne' /restore: non ne crea.
+    ("properties", "deleted_by_user_id", "operator_users", "SET NULL"),
+    ("record_lifecycle_events", "actor_user_id", "operator_users", "RESTRICT"),
+    ("record_lifecycle_events", "agency_id", "agencies", "RESTRICT"),
 })
 
 
@@ -7928,6 +7948,8 @@ COLLOCAZIONE_SCRITTURE = {
     # properties, quindi il preflight le vedrebbe.
     "buildings": (GUARDIA, "POST /property/buildings non e' chiamato con un corpo valido dalla matrice (solo `agency_id` nel corpo -> 422); referenzia agencies"),
     "property_accessories": (GUARDIA, "POST /property/properties/{id}/accessories non e' chiamato dalla matrice; referenzia properties con ON DELETE CASCADE"),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1 (085, property/lifecycle.py).
+    "record_lifecycle_events": (GUARDIA, "POST /property/properties/{id}/trash e /restore non sono chiamati dalla matrice; referenzia agencies e operator_users (RESTRICT), quindi il preflight la vedrebbe"),
     "flow_rules": (FUORI, "catalogo di regole, globale: nessuna FK verso il perimetro"),
     "owner_notification_preferences": (GUARDIA,
                                        "preferenze per conto, mai scritte dalla matrice; referenzia owner_accounts"),

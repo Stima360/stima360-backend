@@ -42,9 +42,12 @@ def test_m01_la_084_e_valida_per_il_runner_e_l_ultima():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    assert tutte[-1].version == VERSIONE and tutte[-2].version == "083_censimento_1_buildings_units"
-    assert tutte[-1].down_available and not tutte[-1].non_transactional
-    assert runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 084 resta valida ma non e' piu' l'ultima;
+    # la 085 (Cestino Immobili) la segue.
+    assert tutte[-1].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-2].version == VERSIONE and tutte[-3].version == "083_censimento_1_buildings_units"
+    assert tutte[-2].down_available and not tutte[-2].non_transactional
+    assert runner.validate_migration(tutte[-2]) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)
     assert re.search(r"^\s*BEGIN\s*;", GIU, re.M) and re.search(r"^\s*COMMIT\s*;", GIU, re.M)
     assert "schema_migrations" not in GIU

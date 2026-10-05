@@ -17,7 +17,10 @@ def test_b01_nessuna_migration_rotte_e_schema():
     import sys
     sys.path.insert(0, str(ROOT / "scripts"))
     import p26_migrate as runner
-    assert runner.discover_migrations()[-1].version == "084_delete_arch_1a_mistakes"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 1C resta senza migration; dopo la 084 viene la 085
+    # (Cestino Immobili).
+    assert runner.discover_migrations()[-2].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-1].version == "085_delete_arch_2b1_property_trash"
     from core.router import router
     rotte = {(m, r.path) for r in router.routes for m in r.methods}
     assert ("POST", "/api/core/tasks/{task_id}/mark-mistake") in rotte

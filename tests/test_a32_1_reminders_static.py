@@ -144,7 +144,9 @@ def test_08_la_079_e_valida_per_il_runner_e_l_ultima():
     # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
     # Si nomina invece di smettere di guardare: la serie resta contigua e
     # qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 84 and numeri[-2] == 83 and numeri[-3] == 82 and numeri[-4] == 81 and numeri[-5] == 80 and numeri[-6] == 79 and numeri[-7] == 78
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili: properties.deleted_*,
+    # record_lifecycle_events), additiva, e' ora l'ultima; la catena si allunga di uno.
+    assert numeri[-1] == 85 and numeri[-2] == 84 and numeri[-3] == 83 and numeri[-4] == 82 and numeri[-5] == 81 and numeri[-6] == 80 and numeri[-7] == 79 and numeri[-8] == 78
 
 
 def test_09_lo_storico_contatto_ha_l_etichetta_del_motivo():

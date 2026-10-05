@@ -237,6 +237,11 @@ def list_properties(*args, **kwargs):
         params.append(status)
     if not include_archived and status != 'archived' and not contact_id and not lead_id:
         filters.append("p.archived_at IS NULL AND p.commercial_status <> 'archived'")
+    # DELETE-ARCH Fase 2B1: un immobile nel Cestino non compare MAI nella lista
+    # principale (nemmeno con include_archived, per contatto o per lead).
+    # Letta da to_jsonb (stesso idioma di lost_reason in Fase 1B): il codice
+    # resta valido su un database senza la 085.
+    filters.append("(to_jsonb(p)->>'deleted_at') IS NULL")
     if classification:
         filters.append('p.classification=%s')
         params.append(classification)
@@ -342,6 +347,13 @@ def readiness_score(p):
     checks.append(bool(p.get('classification')))
     return round(sum(checks)/len(checks)*100)
 
+def _not_in_trash(p):
+    """DELETE-ARCH Fase 2B1: anche una PATCH vuota su un immobile nel Cestino
+    e' PROPERTY_IN_TRASH (non restituisce la scheda)."""
+    from . import lifecycle as _lifecycle_trash
+    _lifecycle_trash.refuse_if_in_trash(p)
+    return p
+
 def update_property(*args, **kwargs):
     # CRM-OPS-2: `derive_identity=True` (solo dal service del form) aggiorna la
     # descrizione generata quando cambiano i dati da cui dipende - mai un
@@ -363,17 +375,18 @@ def update_property(*args, **kwargs):
         raise ProgrammingError("'agency_id' is derived from the agency scope and must not be supplied")
 
     if not data:
-        return get_property(ctx, property_id) if ctx is not None else get_property(property_id)
+        return _not_in_trash(get_property(ctx, property_id) if ctx is not None else get_property(property_id))
     change_reason = data.pop('change_reason', None)
     changed_by = data.pop('changed_by', None)
     history_note = data.pop('history_note', None)
     if 'metadata' in data:
         data['metadata'] = Json(data.get('metadata') or {})
     if not data:
-        return get_property(ctx, property_id) if ctx is not None else get_property(property_id)
+        return _not_in_trash(get_property(ctx, property_id) if ctx is not None else get_property(property_id))
 
     with core_cursor(commit=True) as (_, cur):
-        old_cols = 'asking_price,commercial_status,classification'
+        # DELETE-ARCH Fase 2B1: `deleted_at` via to_jsonb, valido anche senza la 085.
+        old_cols = "asking_price,commercial_status,classification,to_jsonb(properties)->>'deleted_at' AS deleted_at"
         if derive_identity:
             old_cols += ',title,code,archived_at,' + ','.join(TITLE_SOURCE_FIELDS)
         if agency_id is not None:
@@ -384,6 +397,10 @@ def update_property(*args, **kwargs):
         if not old:
             raise NotFoundError(f'property {property_id} not found')
         old = dict(old)
+        # DELETE-ARCH Fase 2B1: guardia sulla riga bloccata (nessuna finestra
+        # con uno spostamento nel Cestino concorrente).
+        from . import lifecycle as _lifecycle_trash
+        _lifecycle_trash.refuse_if_in_trash(old)
         if derive_identity:
             # DELETE-ARCH Fase 0, review 2: la stessa regola del service, sulla
             # riga bloccata (la PATCH generica non archivia ne' riattiva).

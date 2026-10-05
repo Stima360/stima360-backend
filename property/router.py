@@ -54,6 +54,16 @@ def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends
 def archive_property_explicit(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.archive_property,ctx,property_id)
 @router.post('/properties/{property_id}/unarchive')
 def unarchive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.unarchive_property,ctx,property_id)
+# DELETE-ARCH Fase 2B1: Cestino Immobili. Azioni esplicite, errori con `code`
+# (TRASH_BLOCKED + blockers, ALREADY_DELETED, NOT_DELETED, RESTORE_CONFLICT +
+# conflicts, NOT_ASSIGNED, NOT_DELETED_BY_YOU). La DELETE storica qui sotto
+# NON cambia significato: resta l'archiviazione deprecata.
+@router.get('/properties/{property_id}/deletion-check')
+def property_deletion_check(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.deletion_check,ctx,property_id)
+@router.post('/properties/{property_id}/trash')
+def trash_property(property_id:int,p:PropertyTrash,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.trash_property,ctx,property_id,p)
+@router.post('/properties/{property_id}/restore')
+def restore_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.restore_property,ctx,property_id)
 @router.delete('/properties/{property_id}',deprecated=True)
 def archive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
     esito=trc(service.archive_property,ctx,property_id)

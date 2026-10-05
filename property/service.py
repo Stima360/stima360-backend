@@ -174,7 +174,15 @@ def create_property(ctx,p):
         _apply_assignment(ctx,data)
     return repository.create_property(ctx,data,generate_identity=True)
 def list_properties(*a,**k):return repository.list_properties(*a,**k)
-def get_property(ctx,i):return repository.get_property(ctx,i)
+def get_property(ctx,i):
+    # DELETE-ARCH Fase 2B1: il dettaglio operativo non mostra un immobile nel
+    # Cestino (404, come un id inesistente). Trash/restore/deletion-check lo
+    # leggono esplicitamente da property/lifecycle.py.
+    p=repository.get_property(ctx,i)
+    if _lifecycle.in_trash(p):
+        from core.exceptions import NotFoundError
+        raise NotFoundError(f'property {i} not found')
+    return p
 def update_property(ctx,i,p):
     data=dump(p,True)
     # CRM-OPS-2: il codice e' stabile. Un codice vuoto o nullo in modifica
@@ -184,6 +192,9 @@ def update_property(ctx,i,p):
     current=None
     if {'assigned_agent_id','assigned_to','region','energy_class','commercial_status',*MANDATE_FIELDS,*ADDRESS_FIELDS} & set(data):
         current=repository.get_property(ctx,i)
+        # DELETE-ARCH Fase 2B1: nel Cestino nessuna modifica, prima di ogni
+        # altra regola (la guardia vera e' nel repository, sotto FOR UPDATE).
+        _lifecycle.refuse_if_in_trash(current)
     # DELETE-ARCH Fase 0, review 2: nessun bypass di /archive e /unarchive.
     # Un `archived` invariato su un immobile gia' archiviato (property_admin
     # rimanda lo stato a ogni salvataggio) e' un no-op e si toglie.
@@ -212,6 +223,10 @@ def update_property(ctx,i,p):
 # dei figli passano da property/lifecycle.py (accesso D10, guardie, audit).
 def archive_property(ctx,i):return _lifecycle.archive_property(ctx,i)
 def unarchive_property(ctx,i):return _lifecycle.unarchive_property(ctx,i)
+# DELETE-ARCH Fase 2B1: Cestino Immobili (property/lifecycle.py).
+def deletion_check(ctx,i):return _lifecycle.deletion_check(ctx,i)
+def trash_property(ctx,i,p):return _lifecycle.trash_property(ctx,i,p.reason_code,p.note)
+def restore_property(ctx,i):return _lifecycle.restore_property(ctx,i)
 def add_contact(ctx,i,p):return repository.add_contact(ctx,i,dump(p))
 def delete_contact(ctx,i,c,r):return _lifecycle.delete_contact(ctx,i,c,r)
 def add_lead(ctx,i,p):return repository.add_lead(ctx,i,dump(p))

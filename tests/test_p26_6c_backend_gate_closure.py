@@ -828,7 +828,11 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # (contratto REV 2, D11: `POST .../archive` e `POST .../unarchive`
         # esplicite; la DELETE resta, deprecata). Entrambe dietro
         # legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
-        "property": 42, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: property 42 -> 45
+        # (Cestino Immobili: GET .../deletion-check, POST .../trash, POST
+        # .../restore), dietro legacy_basic_agency_context e nello scope. La
+        # DELETE resta l'archiviazione deprecata. Il conteggio resta esatto.
+        "property": 45, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

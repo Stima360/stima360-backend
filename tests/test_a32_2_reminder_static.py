@@ -194,7 +194,11 @@ def test_s10_nessuna_migration_080():
     # created_by_mistake), additiva, e' ora l'ultima, nominata per intero.
     assert [m for m in migrazioni if m.startswith("084")] == [
         "084_delete_arch_1a_mistakes.sql", "084_delete_arch_1a_mistakes_down.sql"]
-    assert migrazioni[-1] == "084_delete_arch_1a_mistakes_down.sql"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili), additiva, e' ora
+    # l'ultima, nominata per intero.
+    assert [m for m in migrazioni if m.startswith("085")] == [
+        "085_delete_arch_2b1_property_trash.sql", "085_delete_arch_2b1_property_trash_down.sql"]
+    assert migrazioni[-1] == "085_delete_arch_2b1_property_trash_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 
