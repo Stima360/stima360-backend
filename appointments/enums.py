@@ -33,6 +33,21 @@ APPOINTMENT_STATUSES = (
     "cancelled", "no_show", "rescheduled",
 )
 
+#: DELETE-ARCH Fase 1A (migration 084): la qualifica di un annullamento.
+#: Lo stato resta `cancelled`; `mistake` = creato per errore, mai esistito:
+#: fuori dall'Agenda normale e dalle liste, visibile solo col filtro esplicito.
+#: NULL solo per gli annullamenti storici (prima della 084): ogni NUOVO
+#: annullamento ha una qualifica, e senza scelta esplicita e' `agency`
+#: (REVIEW 1 Fase 1A).
+CANCELLED_KINDS = ("client", "agency", "mistake")
+CANCELLED_KIND_LABELS_IT = {
+    "client": "Annullato dal cliente",
+    "agency": "Annullato dall'agenzia",
+    "mistake": "Creato per errore",
+}
+MISTAKE_KIND = "mistake"
+DEFAULT_CANCELLED_KIND = "agency"
+
 #: Gli stati che occupano l'agenda dell'agente (decisione Q-A6). Stesso
 #: elenco della clausola WHERE del vincolo EXCLUDE.
 BLOCKING_STATUSES = ("scheduled", "confirmed", "completed", "no_show")

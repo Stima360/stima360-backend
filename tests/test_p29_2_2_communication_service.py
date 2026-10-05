@@ -562,7 +562,12 @@ def test_n7_nessuna_migration_nuova():
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
     # backfill. Si nomina invece di smettere di guardare: la serie resta
     # contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80 and numeri[-5] == 79 and numeri[-6] == 78 and numeri[-7] == 77 and numeri[-8] == 76, "la serie si e' fermata o e' andata oltre la 083"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 aggiunge
+    # `appointments.cancelled_kind` (NULLABLE, CHECK) ed estende il CHECK dei
+    # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
+    # Si nomina invece di smettere di guardare: la serie resta contigua e
+    # qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 84 and numeri[-2] == 83 and numeri[-3] == 82 and numeri[-4] == 81 and numeri[-5] == 80 and numeri[-6] == 79 and numeri[-7] == 78 and numeri[-8] == 77 and numeri[-9] == 76, "la serie si e' fermata o e' andata oltre la 084"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

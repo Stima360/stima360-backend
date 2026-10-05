@@ -115,12 +115,21 @@ def test_11_riferimenti_del_task_solo_dalla_riga_bloccata():
 def test_12_ordine_transizione_proiezione_task_evento(funzione, guardia, proiezione):
     from appointments import service
     corpo = inspect.getsource(getattr(service, funzione))
+    involucro = corpo
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: l'annullamento vive in
+    # `_annulla`, condiviso fra annullamento reale e «creato per errore» (e
+    # chiamato dalle Acquisizioni sulla riga gia' bloccata). `cancel_appointment`
+    # resta l'involucro con lock/ruolo/versione; l'ordine si verifica dove
+    # sta il lavoro, con le stesse cinque tappe.
+    if funzione == "cancel_appointment":
+        assert "_annulla(cur, agency_id, actor, row," in corpo
+        corpo = inspect.getsource(service._annulla)
     ordine = [corpo.index(s) for s in (guardia, "_prepara_follow_up(", proiezione,
                                        "_crea_follow_up(", "repository.update_appointment(")]
     assert ordine == sorted(ordine), funzione
     assert "event_extra=_extra_evento(" in corpo
-    assert '"_su_riga(ctx, appointment_id,' not in corpo           # sanita' della ricerca
-    assert "return _su_riga(ctx, appointment_id," in corpo           # lock, ruolo, version
+    assert '"_su_riga(ctx, appointment_id,' not in involucro        # sanita' della ricerca
+    assert "return _su_riga(ctx, appointment_id," in involucro       # lock, ruolo, version
 
 
 def test_13_outcome_note_solo_su_complete_e_no_show_follow_up_non_su_reschedule():

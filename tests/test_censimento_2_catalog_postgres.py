@@ -120,7 +120,9 @@ def _errore(c, sql, params=None):
 
 
 def test_01_lo_schema_completo_viene_dal_runner_fino_alla_083(completo):
-    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 57
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: il runner applica la cartella
+    # reale, che ora arriva alla 084: 57 -> 58 righe di ledger.
+    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 58
     assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE version = %s AND rolled_back_at IS NULL",
               (VERSIONE,))[0][0] == 1
     assert "~ '^[A-F]/[0-9]{1,2}$'" in _q(completo, "SELECT pg_get_constraintdef(oid) FROM pg_constraint "

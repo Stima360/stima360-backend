@@ -56,8 +56,11 @@ def test_03_il_service_chiama_gli_hook_su_ogni_mutazione():
     assert conteggi == {"on_create": 1, "on_status": 5, "on_reschedule": 1, "on_reassign": 1,
                         "before_patch": 1, "on_patch": 1}, conteggi
     # e sempre PRIMA del mark dirty Google nelle mutazioni che lo fanno
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: gli hook dell'annullamento
+    # stanno in `_annulla` (condiviso con «creato per errore»), che
+    # `cancel_appointment` chiama: la regola si verifica li'.
     for funzione in ("schedule_appointment", "reassign_appointment", "reschedule_appointment",
-                     "cancel_appointment"):
+                     "_annulla"):
         corpo = codice.split(f"def {funzione}(", 1)[1].split("\ndef ", 1)[0]
         assert corpo.index("_visite.") < corpo.index("_gcal.on_appointment_mutation"), funzione
 

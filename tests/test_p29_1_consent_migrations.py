@@ -181,7 +181,12 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
     # backfill. Si nomina invece di smettere di guardare: la serie resta
     # contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert max(numeri) == 83, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 aggiunge
+    # `appointments.cancelled_kind` (NULLABLE, CHECK) ed estende il CHECK dei
+    # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
+    # Si nomina invece di smettere di guardare: la serie resta contigua e
+    # qualunque ALTRA migration farebbe ancora fallire.
+    assert max(numeri) == 84, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 
-from .enums import BLOCKING_STATUSES
+from .enums import BLOCKING_STATUSES, DEFAULT_CANCELLED_KIND
 
 #: Le colonne restituite al chiamante. `blocked_range` resta interna.
 APPOINTMENT_COLUMNS = (
@@ -56,8 +56,17 @@ _INSERT_COLUMNS = (
 )
 
 
+#: DELETE-ARCH Fase 1A (084): restituita quando la colonna esiste. Fuori da
+#: APPOINTMENT_COLUMNS perche' un database senza la 084 non la ha.
+OPTIONAL_COLUMNS = ("cancelled_kind",)
+
+
 def _riga(riga):
-    return {c: riga[c] for c in APPOINTMENT_COLUMNS}
+    esito = {c: riga[c] for c in APPOINTMENT_COLUMNS}
+    for c in OPTIONAL_COLUMNS:
+        if c in riga:
+            esito[c] = riga[c]
+    return esito
 
 
 def record_event(cur, *, agency_id, appointment_id, event_type, from_status,
@@ -341,6 +350,12 @@ def update_appointment(cur, appointment_id: int, changes: dict, *, actor_user_id
     A30-8: `event_extra` aggiunge all'evento dati che NON sono colonne (la
     nota di esito, l'id del task di follow-up); non puo' riscrivere le chiavi
     delle colonne cambiate ne' `azione`."""
+    # DELETE-ARCH Fase 1A, REVIEW 1: nessun NUOVO annullamento senza
+    # qualifica. Rete di sicurezza per qualunque writer che porti la riga a
+    # `cancelled` senza dire perche': vale `agency`. Con la 084 assente la
+    # colonna non c'e' e nulla cambia.
+    if changes.get("status") == "cancelled" and "cancelled_kind" not in changes:
+        changes = {**changes, **cancelled_kind_changes(cur, None)}
     colonne = sorted(changes)
     cur.execute("SELECT * FROM appointments WHERE id = %s", (appointment_id,))
     prima = dict(cur.fetchone())
@@ -386,8 +401,17 @@ def agents(cur, agency_id: int) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
+#: DELETE-ARCH Fase 1A: un annullamento "creato per errore" esce dalla vista
+#: normale e si legge solo col filtro esplicito. Letta via `to_jsonb` (stesso
+#: idioma di `record_kind`, 083): la query resta valida anche su un database
+#: senza la 084, dove nessuna riga e' qualificata.
+_KIND_SQL = "(to_jsonb({a}) ->> 'cancelled_kind')"
+_FILTRO_ERRORI_SQL = (
+    "((%(mistakes)s AND {k} = 'mistake') OR (NOT %(mistakes)s AND {k} IS DISTINCT FROM 'mistake'))")
+
 _CALENDARIO_SQL = f"""
     SELECT a.id, a.status, a.appointment_type, a.start_at, a.end_at,
+           {_KIND_SQL.format(a='a')} AS cancelled_kind,
            a.assigned_user_id, a.version, a.source, a.test_run_id,
            a.stima_id, a.contact_id, a.lead_id, a.property_id, a.location_text,
            a.buffer_before_minutes, a.buffer_after_minutes,
@@ -406,6 +430,7 @@ _CALENDARIO_SQL = f"""
        AND (%(types)s::text[] IS NULL OR a.appointment_type = ANY(%(types)s::text[]))
        AND (%(agents)s::bigint[] IS NULL OR a.assigned_user_id = ANY(%(agents)s::bigint[]))
        AND (%(viewer)s::bigint IS NULL OR a.assigned_user_id = %(viewer)s::bigint)
+       AND {_FILTRO_ERRORI_SQL.format(k=_KIND_SQL.format(a='a'))}
      ORDER BY a.start_at, a.id
 """
 
@@ -424,13 +449,14 @@ _OCCUPATO_SQL = f"""
 
 
 def calendar_rows(cur, *, agency_id, date_from, date_to, statuses, types, agent_ids,
-                  only_agent_id):
+                  only_agent_id, mistakes=False):
     """UNA query per l'intervallo: nessun N+1. `only_agent_id` limita alle
     righe di quell'agente (visibilita' dell'agent, D4/D6)."""
     cur.execute(_CALENDARIO_SQL, {
         "agency": agency_id, "from": date_from, "to": date_to,
         "statuses": list(statuses), "types": list(types) if types else None,
         "agents": list(agent_ids) if agent_ids else None, "viewer": only_agent_id,
+        "mistakes": bool(mistakes),
     })
     return [dict(r) for r in cur.fetchall()]
 
@@ -542,11 +568,13 @@ def list_events(cur, appointment_id: int) -> list[dict]:
 
 
 def list_appointments(cur, *, agency_id, statuses, types, stima_id, lead_id, contact_id,
-                      property_id, date_from, date_to, only_agent_id, limit, offset):
+                      property_id, date_from, date_to, only_agent_id, limit, offset,
+                      mistakes=False):
     cur.execute(
-        """
+        f"""
         SELECT * FROM appointments
          WHERE agency_id = %(agency)s
+           AND {_FILTRO_ERRORI_SQL.format(k=_KIND_SQL.format(a='appointments'))}
            AND status = ANY(%(statuses)s)
            AND (%(types)s::text[] IS NULL OR appointment_type = ANY(%(types)s::text[]))
            AND (%(stima)s::int IS NULL OR stima_id = %(stima)s::int)
@@ -562,8 +590,24 @@ def list_appointments(cur, *, agency_id, statuses, types, stima_id, lead_id, con
         {"agency": agency_id, "statuses": list(statuses),
          "types": list(types) if types else None, "stima": stima_id, "lead": lead_id,
          "contact": contact_id, "property": property_id, "from": date_from, "to": date_to,
-         "viewer": only_agent_id, "limit": limit, "offset": offset})
+         "viewer": only_agent_id, "limit": limit, "offset": offset, "mistakes": bool(mistakes)})
     return [_riga(r) for r in cur.fetchall()]
+
+
+def cancelled_kind_installed(cur) -> bool:
+    """DELETE-ARCH Fase 1A: la 084 e' applicata (`appointments.cancelled_kind`)."""
+    cur.execute("SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'appointments' AND column_name = 'cancelled_kind'")
+    return cur.fetchone() is not None
+
+
+def cancelled_kind_changes(cur, kind) -> dict:
+    """DELETE-ARCH Fase 1A, REVIEW 1: la qualifica da scrivere insieme a
+    `status = 'cancelled'`. `None` vale `agency` (mai NULL per un nuovo
+    annullamento). Senza la 084 la colonna non esiste: `{}`."""
+    if not cancelled_kind_installed(cur):
+        return {}
+    return {"cancelled_kind": kind or DEFAULT_CANCELLED_KIND}
 
 
 def link_agency(cur, table: str, record_id: int):

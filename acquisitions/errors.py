@@ -27,6 +27,9 @@ MANDATE_ALREADY_EXISTS = "MANDATE_ALREADY_EXISTS"
 PROPERTY_IN_CENSUS = "PROPERTY_IN_CENSUS"
 APPOINTMENT_LINKED_TO_ACQUISITION = "APPOINTMENT_LINKED_TO_ACQUISITION"
 VALIDATION_ERROR = "VALIDATION_ERROR"
+#: DELETE-ARCH Fase 1A
+APPOINTMENT_ALREADY_HAPPENED = "APPOINTMENT_ALREADY_HAPPENED"
+MISTAKES_NOT_INSTALLED = "MISTAKES_NOT_INSTALLED"
 # VENDITORI-1 REV 2 (R2): con `source='seller_lead'` il lead deve essere
 # l'opportunita' Venditore di QUEL proprietario su QUELL'immobile.
 SELLER_LEAD_MISMATCH = "SELLER_LEAD_MISMATCH"
@@ -76,6 +79,17 @@ class OpenAcquisitionExists(_ConCodice, ConflictError):
 
 class InvalidTransition(_ConCodice, ConflictError):
     code = INVALID_TRANSITION
+
+
+class AppointmentAlreadyHappened(_ConCodice, ConflictError):
+    """DELETE-ARCH Fase 1A: l'incontro e' avvenuto (svolto o cliente assente,
+    anche su un appuntamento precedente) o la pipeline e' gia' andata oltre:
+    l'acquisizione e' un fatto, non un errore. Si chiude come persa."""
+    code = APPOINTMENT_ALREADY_HAPPENED
+
+
+class MistakesNotInstalled(_ConCodice, ConflictError):
+    code = MISTAKES_NOT_INSTALLED
 
 
 class LostReasonRequired(_ConCodice, ValidationError):

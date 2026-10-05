@@ -204,7 +204,10 @@ def test_06_annulla_motivo_esistente_follow_up_nessuna_nota_di_esito(staged):
     """, _rotte(azione="cancel", risposta=_rt().ok({**RIGA, "status": "cancelled"})))
     assert out["prima"]["nota"] is False and out["prima"]["toggle"] is False
     (scrittura,) = _post(out, "cancel")
-    assert scrittura["body"] == {"version": 4, "reason": "Rinviato dal cliente", "follow_up": FU}
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: l'annullamento porta il tipo
+    # (`kind`); il DOM di prova restituisce la prima scelta, «dal cliente».
+    assert scrittura["body"] == {"version": 4, "reason": "Rinviato dal cliente", "follow_up": FU,
+                                 "kind": "client"}
     assert "outcome_note" not in scrittura["body"]
     assert "Appuntamento annullato." in out["avviso"]
 
@@ -213,7 +216,8 @@ def test_07_annulla_senza_follow_up_resta_il_contratto_di_prima(staged):
     out = run(staged, "await azione('cancel'); await conferma(); report({});",
               _rotte(azione="cancel", risposta=_rt().ok({**RIGA, "status": "cancelled"})))
     (scrittura,) = _post(out, "cancel")
-    assert scrittura["body"] == {"version": 4, "reason": None}
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: + `kind` (vedi test_06).
+    assert scrittura["body"] == {"version": 4, "reason": None, "kind": "client"}
 
 
 # ---------------------------------------------------------------------------

@@ -984,8 +984,10 @@ def test_33_incarico_da_valutazione_e_trattativa_mai_da_persa_o_appuntamento(k):
         assert r.status_code == 200, (stato, r.text)
         d = r.json()
         assert d["status"] == "acquired" and d["allowed_actions"]["mandate"] is False
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: + «mistake», spenta su una chiusa.
         assert d["allowed_actions"] == {"edit": False, "reassign": False, "transitions": [],
-                                        "lost": False, "new_appointment": False, "mandate": False}
+                                        "lost": False, "mistake": False, "new_appointment": False,
+                                        "mandate": False}
         ev = d["events"][-1]
         assert (ev["event_type"], ev["from_status"], ev["to_status"]) == ("mandate_created", stato, "acquired")
         assert _immobile(k, pid)["acquisition_id"] == det["id"]

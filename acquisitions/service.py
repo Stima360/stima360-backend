@@ -32,6 +32,11 @@ from . import errors, repository
 from .enums import (
     APPOINTMENT_TYPE,
     EVENT_LABELS_IT,
+    HAPPENED_APPOINTMENT_STATUSES,
+    LOST_CANCEL_KINDS,
+    MISTAKE_LABEL_IT,
+    MISTAKE_REASON,
+    OPEN_APPOINTMENT_STATUSES,
     INITIAL_STATUS,
     LOST_REASON_LABELS_IT,
     LOST_REASONS,
@@ -415,7 +420,27 @@ def change_status(ctx, acquisition_id, body):
         return _dettaglio(ctx, cur, agency_id, nuova)
 
 
+def _blocca_con_appuntamento(ctx, cur, agency_id, acquisition_id, versione):
+    """DELETE-ARCH Fase 1A: l'appuntamento e POI l'acquisizione - lo stesso
+    ordine dei lock degli hook dell'Agenda e di `new_appointment` - per
+    poterlo annullare nella stessa transazione. `(appuntamento, riga)`."""
+    letta = repository.get_acquisition(cur, agency_id, acquisition_id)
+    if letta is None or not _visibile(ctx, letta):
+        raise errors.AcquisitionNotFound("Acquisizione non trovata")
+    attuale = _agenda_repository.lock_appointment(cur, agency_id, letta["appointment_id"])
+    row = _blocca(ctx, cur, agency_id, acquisition_id, versione)
+    if row["appointment_id"] != letta["appointment_id"]:
+        raise errors.VersionConflict(
+            "L'appuntamento di questa acquisizione e' appena cambiato: ricarica",
+            current_version=row["version"])
+    return attuale, row
+
+
 def mark_lost(ctx, acquisition_id, body):
+    """Perdita REALE. Con `cancel_appointment` (DELETE-ARCH Fase 1A) annulla
+    anche l'appuntamento ancora aperto, qualificato 'client' o 'agency':
+    stesso flusso dell'Agenda, stessa transazione. Mai 'mistake' da qui, e
+    mai `created_by_mistake` come motivo (ha la sua azione)."""
     agency_id = ctx.require_agency()
     actor = _attore(ctx)
     motivo = _testo(body.lost_reason)
@@ -423,11 +448,21 @@ def mark_lost(ctx, acquisition_id, body):
         raise errors.LostReasonRequired("Indica il motivo per cui l'acquisizione e' persa")
     if motivo not in LOST_REASONS:
         raise errors.InvalidData("Motivo non valido")
+    if body.appointment_cancelled_kind not in LOST_CANCEL_KINDS:
+        raise errors.InvalidData("Tipo di annullamento non ammesso per una perdita")
     note = _testo(body.lost_notes)
 
     with core_cursor(commit=True) as (_, cur):
-        row = _blocca(ctx, cur, agency_id, acquisition_id, body.version)
-        _aperta(row)
+        if body.cancel_appointment:
+            attuale, row = _blocca_con_appuntamento(ctx, cur, agency_id, acquisition_id, body.version)
+            _aperta(row)
+            if attuale is not None and attuale["status"] in OPEN_APPOINTMENT_STATUSES:
+                _agenda.cancel_locked(cur, agency_id, actor, attuale,
+                                      reason="Acquisizione persa",
+                                      kind=body.appointment_cancelled_kind)
+        else:
+            row = _blocca(ctx, cur, agency_id, acquisition_id, body.version)
+            _aperta(row)
         quando = repository.db_now(cur)
         nuova = repository.update_acquisition(cur, row["id"], {
             "status": "lost", "lost_reason": motivo, "lost_notes": note, "lost_at": quando})
@@ -435,6 +470,50 @@ def mark_lost(ctx, acquisition_id, body):
             cur, agency_id=agency_id, acquisition_id=row["id"], event_type="lost",
             from_status=row["status"], to_status="lost", actor_user_id=actor,
             changes={"lost_reason": motivo, "lost_notes": note})
+        return _dettaglio(ctx, cur, agency_id, nuova)
+
+
+def mark_created_by_mistake(ctx, acquisition_id, body):
+    """DELETE-ARCH Fase 1A - «Segna come creata per errore».
+
+    Un'acquisizione che non e' mai esistita: `lost` / `created_by_mistake`,
+    terminale, fuori dalla lista normale e dalle «Perse». L'appuntamento
+    ancora aperto si annulla con `cancelled_kind='mistake'` nella STESSA
+    transazione (stesso flusso dell'Agenda: visite, Google, promemoria).
+
+    Rifiutata con 409 APPOINTMENT_ALREADY_HAPPENED se l'incontro e' avvenuto:
+    appuntamento svolto o cliente assente (anche un predecessore, dal
+    registro), o pipeline gia' oltre `appointment_set`. Nessun timer.
+    Un appuntamento gia' annullato resta com'e' (era un annullamento vero).
+    Nessuna scrittura prima dei controlli; nessuna DELETE."""
+    agency_id = ctx.require_agency()
+    actor = _attore(ctx)
+    note = _testo(body.notes)
+
+    with core_cursor(commit=True) as (_, cur):
+        if not repository.mistakes_installed(cur):
+            raise errors.MistakesNotInstalled(
+                "«Creata per errore» non e' ancora disponibile: manca l'aggiornamento del database")
+        attuale, row = _blocca_con_appuntamento(ctx, cur, agency_id, acquisition_id, body.version)
+        _aperta(row)
+        stato_app = attuale["status"] if attuale is not None else None
+        if (row["status"] != INITIAL_STATUS or stato_app in HAPPENED_APPOINTMENT_STATUSES
+                or repository.appointment_happened(cur, agency_id, row["id"])):
+            raise errors.AppointmentAlreadyHappened(
+                "L'appuntamento risulta gia' avvenuto: l'acquisizione non e' un errore. "
+                "Segnala come persa con il motivo reale.")
+        if stato_app in OPEN_APPOINTMENT_STATUSES:
+            _agenda.cancel_locked(cur, agency_id, actor, attuale,
+                                  reason="Acquisizione creata per errore", kind="mistake")
+        quando = repository.db_now(cur)
+        nuova = repository.update_acquisition(cur, row["id"], {
+            "status": "lost", "lost_reason": MISTAKE_REASON, "lost_notes": note, "lost_at": quando})
+        repository.record_event(
+            cur, agency_id=agency_id, acquisition_id=row["id"], event_type="lost",
+            from_status=row["status"], to_status="lost", actor_user_id=actor,
+            changes={"lost_reason": MISTAKE_REASON, "lost_notes": note,
+                     "appointment_id": row["appointment_id"],
+                     "appointment_cancelled": stato_app in OPEN_APPOINTMENT_STATUSES})
         return _dettaglio(ctx, cur, agency_id, nuova)
 
 
@@ -561,7 +640,7 @@ def generate_mandate(ctx, acquisition_id, body):
 # ---------------------------------------------------------------------------
 
 def list_acquisitions(ctx, *, statuses=None, agent_id=None, date_from=None, date_to=None,
-                      city=None, search=None, limit=50, offset=0):
+                      city=None, search=None, limit=50, offset=0, mistakes=False):
     agency_id = ctx.require_agency()
     io = _attore(ctx)
     for s in statuses or ():
@@ -574,9 +653,11 @@ def list_acquisitions(ctx, *, statuses=None, agent_id=None, date_from=None, date
         righe = repository.list_acquisitions(
             cur, agency_id=agency_id, only_agent_id=solo, statuses=statuses,
             agent_id=agent_id, date_from=date_from, date_to=date_to,
-            city=_testo(city), search=_testo(search), limit=int(limit), offset=int(offset))
+            city=_testo(city), search=_testo(search), limit=int(limit), offset=int(offset),
+            mistakes=mistakes)
     for r in righe:
-        r["status_label"] = STATUS_LABELS_IT.get(r["status"], r["status"])
+        r["status_label"] = (MISTAKE_LABEL_IT if r.get("lost_reason") == MISTAKE_REASON
+                             else STATUS_LABELS_IT.get(r["status"], r["status"]))
     return righe
 
 
@@ -598,6 +679,10 @@ def _azioni(ctx, row, immobile, appuntamento) -> dict:
         "reassign": aperta and _puo_assegnare(ctx),
         "transitions": list(MANUAL_TRANSITIONS.get(row["status"], ())) if aperta else [],
         "lost": aperta,
+        # DELETE-ARCH Fase 1A: offerta solo finche' l'incontro non e' avvenuto
+        # (il server ricontrolla anche i predecessori dal registro).
+        "mistake": (aperta and row["status"] == INITIAL_STATUS
+                    and (appuntamento is None or appuntamento["status"] not in HAPPENED_APPOINTMENT_STATUSES)),
         "new_appointment": aperta and stato_app in REPLACEABLE_APPOINTMENT_STATUSES,
         "mandate": (row["status"] in MANDATE_FROM_STATUSES
                     and immobile is not None and immobile["acquisition_id"] is None
@@ -613,8 +698,11 @@ def _dettaglio(ctx, cur, agency_id, row) -> dict:
     appuntamento = repository.appointment_summary(cur, agency_id, row["appointment_id"])
     esito = dict(row)
     esito.update({
-        "status_label": STATUS_LABELS_IT.get(row["status"], row["status"]),
-        "lost_reason_label": LOST_REASON_LABELS_IT.get(row["lost_reason"]) if row["lost_reason"] else None,
+        "status_label": (MISTAKE_LABEL_IT if row["lost_reason"] == MISTAKE_REASON
+                         else STATUS_LABELS_IT.get(row["status"], row["status"])),
+        "lost_reason_label": (MISTAKE_LABEL_IT if row["lost_reason"] == MISTAKE_REASON
+                              else LOST_REASON_LABELS_IT.get(row["lost_reason"]) if row["lost_reason"] else None),
+        "created_by_mistake": row["lost_reason"] == MISTAKE_REASON,
         "sale_timing_label": SALE_TIMING_LABELS_IT.get(row["sale_timing"]) if row["sale_timing"] else None,
         "source_label": SOURCE_LABELS_IT.get(row["source"], row["source"]) if row["source"] else None,
         "agent_name": repository.operator_name(cur, row["assigned_agent_id"]),

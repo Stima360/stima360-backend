@@ -434,7 +434,10 @@ def rollback_untouched(cur, *, apply: bool) -> dict:
         repository.update_appointment(
             cur, appuntamento,
             {"status": "cancelled", "cancelled_at": adesso,
-             "cancelled_reason": ROLLBACK_REASON},
+             "cancelled_reason": ROLLBACK_REASON,
+             # DELETE-ARCH 1A REVIEW 1: rollback deciso dall'agenzia (mai
+             # NULL con la 084).
+             **repository.cancelled_kind_changes(cur, "agency")},
             actor_user_id=None, event_type="status_changed", from_status="requested",
             azione=ROLLBACK_ACTION)
         esito["cancelled"] += 1

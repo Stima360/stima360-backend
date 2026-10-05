@@ -236,7 +236,10 @@ def cancel_inspection(agency_id: int, *, inspection_id: int, reason, actor_user_
             actor_user_id=actor_user_id)
         nuova = repository.update_appointment(
             cur, riga["id"], {"status": "cancelled", "cancelled_at": db_now,
-                              "cancelled_reason": reason},
+                              "cancelled_reason": reason,
+                              # DELETE-ARCH 1A REVIEW 1: annullamento
+                              # dell'agenzia (mai NULL con la 084).
+                              **repository.cancelled_kind_changes(cur, "agency")},
             actor_user_id=actor_user_id, event_type="status_changed",
             from_status=riga["status"], azione="lmc15_cancel")
         # A30-9B, §20: CANCEL (matrice §18), come in

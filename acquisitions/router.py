@@ -28,6 +28,7 @@ from .schemas import (
     AcquisitionCreate,
     AcquisitionPatch,
     LostBody,
+    MistakeBody,
     MandateBody,
     NewAppointmentBody,
     StatusBody,
@@ -141,12 +142,13 @@ def list_acquisitions(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    mistakes: bool = False,
     ctx: OperatorContext = Depends(require_operator),
 ):
     try:
         args = dict(statuses=_elenco(statuses), agent_id=agent_id,
                     date_from=_istante(date_from, "from"), date_to=_istante(date_to, "to"),
-                    city=city, search=search, limit=limit, offset=offset)
+                    city=city, search=search, limit=limit, offset=offset, mistakes=mistakes)
     except _Richiesta as exc:
         return _errore(exc)
     return _x(lambda: {"items": service.list_acquisitions(ctx, **args)})
@@ -207,6 +209,17 @@ def mark_lost(acquisition_id: int, dati: dict = Body(...),
     except (_Richiesta, PydanticValidationError) as exc:
         return _errore(exc)
     return _x(service.mark_lost, ctx, acquisition_id, corpo)
+
+
+@router.post("/{acquisition_id}/mistake")
+def mark_created_by_mistake(acquisition_id: int, dati: dict = Body(...),
+                            ctx: OperatorContext = Depends(require_operator)):
+    """DELETE-ARCH Fase 1A: «Segna come creata per errore»."""
+    try:
+        corpo = _corpo(MistakeBody, dati)
+    except (_Richiesta, PydanticValidationError) as exc:
+        return _errore(exc)
+    return _x(service.mark_created_by_mistake, ctx, acquisition_id, corpo)
 
 
 @router.post("/{acquisition_id}/appointment")

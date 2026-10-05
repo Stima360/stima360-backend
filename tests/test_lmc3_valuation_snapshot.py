@@ -700,7 +700,10 @@ def test_g2_nessuna_migration_in_lmc3():
     # legame con l'immobile (`property_id`, storico interazioni); additiva,
     # nessun backfill. Si nomina invece di smettere di guardare: qualunque
     # ALTRA migration comparisse farebbe ancora fallire.
-    assert migrazioni[-16:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 (cancelled_kind,
+    # created_by_mistake), additiva, si aggiunge in coda; la finestra si
+    # allarga di uno, cosi' l'elenco nominato resta lo stesso piu' la 084.
+    assert migrazioni[-17:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -715,7 +718,8 @@ def test_g2_nessuna_migration_in_lmc3():
                                "080_crm_ops_2_property_form.sql",
                                "081_crm_ops_3_acquisitions.sql",
                                "082_crm_ops_4_property_interactions.sql",
-                               "083_censimento_1_buildings_units.sql"], migrazioni[-16:]
+                               "083_censimento_1_buildings_units.sql",
+                               "084_delete_arch_1a_mistakes.sql"], migrazioni[-17:]
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

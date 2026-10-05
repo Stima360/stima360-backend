@@ -70,10 +70,14 @@ export function ownersFromProperty(property) {
   return [...perContatto.values()].sort((a, b) => Number(b.is_primary) - Number(a.is_primary));
 }
 
+/** DELETE-ARCH Fase 1A: il filtro esplicito «Creati per errore». */
+export const MISTAKES_FILTER = 'mistakes';
+
 /** I parametri dell'elenco: solo i filtri valorizzati. */
 export function acquisitionListParams(filters = {}, offset = 0) {
   const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
-  if (filters.statuses) params.set('statuses', filters.statuses);
+  if (filters.statuses === MISTAKES_FILTER) params.set('mistakes', 'true');
+  else if (filters.statuses) params.set('statuses', filters.statuses);
   if (filters.agentId) params.set('agent_id', String(filters.agentId));
   // Giorni di Roma (stessa regola dell'Agenda): dalla mezzanotte del primo
   // alla mezzanotte del giorno dopo l'ultimo.
@@ -156,7 +160,8 @@ export async function renderAcquisizioni(container, params = []) {
   const etichette = Object.fromEntries((opzioni.statuses || []).map((s) => [s.value, s.label]));
   const aperte = (opzioni.statuses || []).filter((s) => !s.terminal).map((s) => s.value).join(',');
   $('#acq-status').innerHTML = `<option value="">Tutti gli stati</option><option value="${escapeHtml(aperte)}">Aperte</option>`
-    + (opzioni.statuses || []).map((s) => `<option value="${escapeHtml(s.value)}">${escapeHtml(s.label)}</option>`).join('');
+    + (opzioni.statuses || []).map((s) => `<option value="${escapeHtml(s.value)}">${escapeHtml(s.label)}</option>`).join('')
+    + `<option value="${MISTAKES_FILTER}">Creati per errore</option>`;
   if (opzioni.can_assign) {
     const agenti = $('#acq-agent');
     agenti.hidden = false;
@@ -191,7 +196,7 @@ export async function renderAcquisizioni(container, params = []) {
         { label: 'Agente', render: (r) => escapeHtml(r.agent_name || '—') },
         { label: 'Appuntamento', render: (r) => escapeHtml(formatDateTime(r.appointment_start_at)) },
         { label: 'Stato appuntamento', render: (r) => escapeHtml(statusLabel(r.appointment_status) || r.appointment_status || '—') },
-        { label: 'Stato', render: (r) => renderBadge(etichette[r.status] || r.status_label || r.status, statusTone(r.status)) },
+        { label: 'Stato', render: (r) => renderBadge(r.lost_reason === 'created_by_mistake' ? r.status_label : (etichette[r.status] || r.status_label || r.status), statusTone(r.status)) },
         { label: 'Prezzo richiesto', render: (r) => formatPrice(r.asking_price) },
         { label: 'Ultima attività', render: (r) => escapeHtml(formatDateTime(r.last_activity_at)) },
       ],

@@ -61,6 +61,20 @@ LOST_REASONS = (
     "other_agency", "commission", "price_disagreement", "owner_no_longer_selling",
     "unreachable", "property_or_documents_issue", "other",
 )
+#: DELETE-ARCH Fase 1A (migration 084): "creata per errore". NON e' tra i
+#: LOST_REASONS: non si sceglie da «Segna come persa», ha la sua azione
+#: (POST /{id}/mistake). Un'acquisizione cosi' e' terminale, esce dalla
+#: lista normale e dalle «Perse», e si legge solo col filtro esplicito.
+MISTAKE_REASON = "created_by_mistake"
+MISTAKE_LABEL_IT = "Creata per errore"
+#: Gli stati dell'appuntamento che dicono che l'incontro e' AVVENUTO: con uno
+#: di questi un'acquisizione non e' un errore (409 APPOINTMENT_ALREADY_HAPPENED).
+HAPPENED_APPOINTMENT_STATUSES = ("completed", "no_show")
+#: Gli stati in cui l'appuntamento e' ancora aperto e va annullato insieme.
+OPEN_APPOINTMENT_STATUSES = ("requested", "scheduled", "confirmed")
+#: Chi annulla l'appuntamento di un'acquisizione persa davvero.
+LOST_CANCEL_KINDS = ("client", "agency")
+
 LOST_REASON_LABELS_IT = {
     "other_agency": "Altra agenzia",
     "commission": "Provvigione",

@@ -27,9 +27,12 @@ def test_m01_la_083_e_valida_per_il_runner_e_l_ultima():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    assert tutte[-1].version == VERSIONE
-    assert tutte[-1].down_available and not tutte[-1].non_transactional
-    assert runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 083 resta valida ma non
+    # e' piu' l'ultima; la 084 (cancelled_kind, created_by_mistake) la segue.
+    m083 = [m for m in tutte if m.version == VERSIONE][0]
+    assert tutte[-1].version == "084_delete_arch_1a_mistakes" and tutte[-2] is m083
+    assert m083.down_available and not m083.non_transactional
+    assert runner.validate_migration(m083) == []
     # il runner possiede la transazione: nessun BEGIN/COMMIT nel file su,
     # la down si bracketta da sola
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)

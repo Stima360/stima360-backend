@@ -17,6 +17,7 @@ import { getSession, sessionEpoch } from '../../core/auth.js';
 import { navigate } from '../../core/router.js';
 import {
   ALL_STATUSES_FILTER,
+  MISTAKES_FILTER,
   DEFAULT_FILTERS,
   MOBILE_MAX_WIDTH,
   STATUS_LABELS,
@@ -313,7 +314,7 @@ export async function renderAgenda(container, params = []) {
   const selTipo = selezione('type', [['', 'Tutti i tipi'], ...Object.entries(TYPE_LABELS)], filtri.type);
   const selStato = selezione('status', [
     ['', 'Stati predefiniti'], [ALL_STATUSES_FILTER, 'Tutti gli stati'],
-    ...Object.entries(STATUS_LABELS)], filtri.status);
+    ...Object.entries(STATUS_LABELS), [MISTAKES_FILTER, 'Creati per errore']], filtri.status);
   const azzera = el('button', 'btn', 'Azzera filtri');
   azzera.type = 'button';
   const aggiornaAzzera = () => {

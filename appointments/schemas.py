@@ -13,7 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
-from .enums import APPOINTMENT_TYPES, CREATABLE_STATUSES
+from .enums import APPOINTMENT_TYPES, CANCELLED_KINDS, CREATABLE_STATUSES
 
 
 class _Corpo(BaseModel):
@@ -208,6 +208,16 @@ class FollowUpBody(_Corpo):
 class CancelBody(_ConVersione):
     reason: str | None = Field(None, max_length=300)
     follow_up: FollowUpBody | None = None
+    #: DELETE-ARCH Fase 1A: 'client' | 'agency' | 'mistake'. Facoltativo per
+    #: compatibilita' (assente = annullamento non qualificato, come prima).
+    kind: str | None = None
+
+    @field_validator("kind")
+    @classmethod
+    def _tipo_annullamento(cls, valore):
+        if valore is not None and valore not in CANCELLED_KINDS:
+            raise ValueError("tipo di annullamento non ammesso")
+        return valore
 
     @field_validator("reason")
     @classmethod

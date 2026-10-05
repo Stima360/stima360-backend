@@ -81,6 +81,8 @@ from .enums import (
     APPOINTMENT_STATUSES,
     APPOINTMENT_TYPES,
     BLOCKING_STATUSES,
+    CANCELLED_KINDS,
+    MISTAKE_KIND,
 )
 
 # A30-9B: l'hook verso la sincronizzazione del calendario esterno (Google).
@@ -953,37 +955,69 @@ def reschedule_appointment(ctx, appointment_id, payload):
     return _su_riga(ctx, appointment_id, "reschedule", versione, lavoro)
 
 
-def cancel_appointment(ctx, appointment_id, body):
-    """A30-2P F9: `cancelled_at` e' il NOW() del DATABASE della STESSA
+def _annulla(cur, agency_id, actor, row, *, reason, kind, follow_up=None):
+    """L'annullamento, sulla riga gia' bloccata dal chiamante. UNA sola
+    implementazione per l'annullamento reale e per "creato per errore"
+    (DELETE-ARCH Fase 1A): stessa transizione, stessa proiezione LMC-15,
+    stesse visite (A31-2), stesso evento d'acquisizione (CRM-OPS-3), stessa
+    marcatura Google (A30-9B); i promemoria (A32) leggono lo stato e si
+    fermano da soli. Nessuna DELETE: cambia solo la qualifica
+    (`cancelled_kind`), e con `mistake` la riga esce dall'Agenda normale.
+
+    A30-2P F9: `cancelled_at` e' il NOW() del DATABASE della STESSA
     transazione. LMC-15 registra `cancelled_at = NOW()` nella stessa
     transazione, quindi i due istanti coincidono per costruzione (Q10
     `cancelled_at_diverso` = 0). Regole invariate: motivo obbligatorio per
-    un sopralluogo con stima, permessi, versione, state machine."""
+    un sopralluogo con stima, state machine."""
+    state_machine.check_transition("cancel", row["status"])
+    if kind is not None and kind not in CANCELLED_KINDS:
+        raise ValidationError("Tipo di annullamento non ammesso")
+    # REVIEW 1: `kind` assente = `agency`; con la 084 assente `{}` (la
+    # colonna non c'e', annullamento come prima) e `mistake` e' rifiutato.
+    qualifica = repository.cancelled_kind_changes(cur, kind)
+    if not qualifica and kind == MISTAKE_KIND:
+        raise errors.MistakesNotInstalled(
+            "«Creato per errore» non e' ancora disponibile: manca l'aggiornamento del database")
+    proiettato = projection.is_projectable(row["appointment_type"], row["stima_id"])
+    if proiettato and not reason:
+        raise errors.ReasonRequired(
+            "Per annullare un sopralluogo legato a una stima serve il motivo")
+    db_now = repository.db_now(cur)
+    riferimenti = _prepara_follow_up(cur, agency_id, row, follow_up, db_now)
+    if row["stima_inspection_id"] is not None:
+        projection.on_cancel(cur, agency_id, row, reason=reason, actor_user_id=actor)
+    task = (None if riferimenti is None else
+            _crea_follow_up(cur, agency_id, actor, row, follow_up, riferimenti,
+                            esito="cancelled"))
+    cambi = {"status": "cancelled", "cancelled_at": db_now, "cancelled_reason": reason,
+             **qualifica}
+    nuova = repository.update_appointment(
+        cur, row["id"], cambi,
+        actor_user_id=actor, event_type="status_changed", from_status=row["status"],
+        azione="cancel", event_extra=_extra_evento(None, task))
+    # A31-2: CANCEL -> stato della proiezione `cancelled`.
+    _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
+    # CRM-OPS-3: CANCEL -> evento sull'acquisizione, che resta aperta.
+    _acquisizioni.on_status(cur, agency_id, nuova, actor_user_id=actor)
+    # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
+    # esiste, va rimosso).
+    _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+    return nuova
+
+
+def cancel_locked(cur, agency_id, actor, row, *, reason, kind):
+    """DELETE-ARCH Fase 1A: l'annullamento chiamato dalle Acquisizioni nella
+    LORO transazione, sulla riga che hanno gia' bloccato (ordine dei lock:
+    appuntamento -> acquisizione, lo stesso degli hook). Nessun follow-up."""
+    return _annulla(cur, agency_id, actor, row, reason=reason, kind=kind)
+
+
+def cancel_appointment(ctx, appointment_id, body):
+    """`kind` (DELETE-ARCH Fase 1A): 'client', 'agency' o 'mistake'
+    («Creato per errore»); assente = come prima."""
     def lavoro(cur, agency_id, actor, row):
-        proiettato = projection.is_projectable(row["appointment_type"], row["stima_id"])
-        if proiettato and not body.reason:
-            raise errors.ReasonRequired(
-                "Per annullare un sopralluogo legato a una stima serve il motivo")
-        db_now = repository.db_now(cur)
-        riferimenti = _prepara_follow_up(cur, agency_id, row, body.follow_up, db_now)
-        if row["stima_inspection_id"] is not None:
-            projection.on_cancel(cur, agency_id, row, reason=body.reason, actor_user_id=actor)
-        task = (None if riferimenti is None else
-                _crea_follow_up(cur, agency_id, actor, row, body.follow_up, riferimenti,
-                                esito="cancelled"))
-        nuova = repository.update_appointment(
-            cur, row["id"], {"status": "cancelled", "cancelled_at": db_now,
-                             "cancelled_reason": body.reason},
-            actor_user_id=actor, event_type="status_changed", from_status=row["status"],
-            azione="cancel", event_extra=_extra_evento(None, task))
-        # A31-2: CANCEL -> stato della proiezione `cancelled`.
-        _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
-        # CRM-OPS-3: CANCEL -> evento sull'acquisizione, che resta aperta.
-        _acquisizioni.on_status(cur, agency_id, nuova, actor_user_id=actor)
-        # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
-        # esiste, va rimosso).
-        _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
-        return nuova
+        return _annulla(cur, agency_id, actor, row, reason=body.reason, kind=body.kind,
+                        follow_up=body.follow_up)
     return _su_riga(ctx, appointment_id, "cancel", body.version, lavoro)
 
 
@@ -1147,7 +1181,7 @@ def _luogo(r):
 
 
 def calendar(ctx, *, date_from, date_to, agent_ids=None, types=None, statuses=None,
-             show_colleagues=True):
+             show_colleagues=True, mistakes=False):
     """UNA vista aggregata per l'intervallo (A30-4): appuntamenti visibili e,
     per un agent, gli impegni dei colleghi come "Occupato" (D4). NESSUNA
     visita acquirente: `property_visits` resta fuori da A30-2."""
@@ -1158,13 +1192,16 @@ def calendar(ctx, *, date_from, date_to, agent_ids=None, types=None, statuses=No
     if date_to - date_from > MAX_CALENDAR_RANGE:
         raise errors.RangeTooLarge("L'intervallo del calendario e' al massimo di 42 giorni")
     types = _valida_elenco(types, APPOINTMENT_TYPES, "Tipo")
+    # DELETE-ARCH Fase 1A: `mistakes=True` e' il filtro esplicito «Creati per
+    # errore» (solo quelli, annullati); senza, quelle righe non compaiono mai.
     statuses = _valida_elenco(statuses, APPOINTMENT_STATUSES, "Stato") or list(
-        DEFAULT_CALENDAR_STATUSES)
+        ("cancelled",) if mistakes else DEFAULT_CALENDAR_STATUSES)
     solo = _solo_agente(ctx)
     with core_cursor() as (_, cur):
         righe = repository.calendar_rows(
             cur, agency_id=agency_id, date_from=date_from, date_to=date_to,
-            statuses=statuses, types=types, agent_ids=agent_ids, only_agent_id=solo)
+            statuses=statuses, types=types, agent_ids=agent_ids, only_agent_id=solo,
+            mistakes=mistakes)
         occupati = []
         if solo is not None and show_colleagues:
             occupati = repository.colleague_busy_rows(
@@ -1180,6 +1217,7 @@ def calendar(ctx, *, date_from, date_to, agent_ids=None, types=None, statuses=No
         "is_test": r["source"] == "a30_test", "readonly": False,
         "stima_id": r["stima_id"], "contact_id": r["contact_id"],
         "lead_id": r["lead_id"], "property_id": r["property_id"],
+        "cancelled_kind": r.get("cancelled_kind"),
     } for r in righe]
     items += [{
         "kind": "busy", "agent_id": b["assigned_user_id"], "agent_name": b["agent_name"],
@@ -1196,11 +1234,11 @@ def calendar(ctx, *, date_from, date_to, agent_ids=None, types=None, statuses=No
 
 def list_appointments(ctx, *, statuses=None, types=None, stima_id=None, lead_id=None,
                       contact_id=None, property_id=None, date_from=None, date_to=None,
-                      limit=50, offset=0):
+                      limit=50, offset=0, mistakes=False):
     agency_id = ctx.require_agency()
     _attore(ctx)
     statuses = _valida_elenco(statuses, APPOINTMENT_STATUSES, "Stato") or list(
-        DEFAULT_LIST_STATUSES)
+        ("cancelled",) if mistakes else DEFAULT_LIST_STATUSES)
     types = _valida_elenco(types, APPOINTMENT_TYPES, "Tipo")
     limit = max(1, min(int(limit), MAX_LIST_LIMIT))
     with core_cursor() as (_, cur):
@@ -1208,7 +1246,7 @@ def list_appointments(ctx, *, statuses=None, types=None, stima_id=None, lead_id=
             cur, agency_id=agency_id, statuses=statuses, types=types, stima_id=stima_id,
             lead_id=lead_id, contact_id=contact_id, property_id=property_id,
             date_from=date_from, date_to=date_to, only_agent_id=_solo_agente(ctx),
-            limit=limit, offset=max(0, int(offset)))
+            limit=limit, offset=max(0, int(offset)), mistakes=mistakes)
 
 
 def get_appointment_detail(ctx, appointment_id):

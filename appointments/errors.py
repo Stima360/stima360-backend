@@ -31,6 +31,8 @@ INSPECTION_PROJECTION_NOT_ACTIVE = "INSPECTION_PROJECTION_NOT_ACTIVE"
 # disponibile".
 PUBLIC_SLOT_UNAVAILABLE = "PUBLIC_SLOT_UNAVAILABLE"
 VALIDATION_ERROR = "VALIDATION_ERROR"
+#: DELETE-ARCH Fase 1A: codice deployato prima della migration 084.
+MISTAKES_NOT_INSTALLED = "MISTAKES_NOT_INSTALLED"
 NOT_FOUND = "NOT_FOUND"
 FORBIDDEN_ROLE = "FORBIDDEN_ROLE"
 SESSION_REQUIRED = "SESSION_REQUIRED"
@@ -166,6 +168,12 @@ class InspectionProjectionNotActive(_ConCodice, ValidationError):
     """Un sopralluogo legato a una stima si fissa solo con la proiezione
     verso `stima_inspections` attiva (A30-2P)."""
     code = INSPECTION_PROJECTION_NOT_ACTIVE
+
+
+class MistakesNotInstalled(_ConCodice, ConflictError):
+    """DELETE-ARCH Fase 1A: "Creato per errore" richiede la migration 084
+    (`appointments.cancelled_kind`). Senza, nessuna scrittura."""
+    code = MISTAKES_NOT_INSTALLED
 
 
 class PublicSlotUnavailable(_ConCodice, ConflictError):

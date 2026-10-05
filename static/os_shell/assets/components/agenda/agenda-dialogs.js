@@ -1112,8 +1112,18 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
   }
 
   if (action === 'cancel') {
+    // DELETE-ARCH Fase 1A: tre esiti distinti, scelta obbligatoria.
+    // «Creato per errore» = l'appuntamento non e' mai esistito: esce
+    // dall'Agenda normale e resta solo nel filtro «Creati per errore».
     const form = preparaDialog(dialogEl, titolo, `
       <p data-question></p>
+      <fieldset class="form-field" data-cancel-kind>
+        <legend>Tipo di annullamento *</legend>
+        <label><input type="radio" name="cancel-kind" value="client"> Annullato dal cliente</label>
+        <label><input type="radio" name="cancel-kind" value="agency"> Annullato dall'agenzia</label>
+        <label><input type="radio" name="cancel-kind" value="mistake"> Creato per errore</label>
+        <small class="muted">«Creato per errore»: l'appuntamento non è mai esistito e sparisce dall'Agenda (resta nel filtro «Creati per errore»).</small>
+      </fieldset>
       <div class="form-field"><label>Motivo</label><textarea class="input" data-field="reason" maxlength="300"></textarea>
       <small class="muted">Obbligatorio per un sopralluogo collegato a una stima: se manca, il server lo segnala.</small></div>
       ${bloccoFollowUp(riga)}`);
@@ -1122,8 +1132,10 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
     form.querySelector('[data-submit]').textContent = 'Annulla appuntamento';
     montaFollowUp(form);
     collegaInvio(dialogEl, form, () => {
+      const scelto = form.querySelector('input[name="cancel-kind"]:checked');
+      if (!scelto) throw new Error('Scegli il tipo di annullamento.');
       const motivo = form.querySelector('[data-field="reason"]').value.trim();
-      const corpo = { ...versione, reason: motivo || null };
+      const corpo = { ...versione, reason: motivo || null, kind: scelto.value };
       const followUp = leggiFollowUp(form);
       if (followUp) corpo.follow_up = followUp;
       return runAction(riga.id, 'cancel', corpo);

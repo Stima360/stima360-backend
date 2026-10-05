@@ -458,7 +458,11 @@ def test_f4_nessuna_migration():
               "migrations/082_crm_ops_4_property_interactions.sql",
               "migrations/082_crm_ops_4_property_interactions_down.sql",
               "migrations/083_censimento_1_buildings_units.sql",
-              "migrations/083_censimento_1_buildings_units_down.sql"}
+              "migrations/083_censimento_1_buildings_units_down.sql",
+              # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 (cancelled_kind,
+              # created_by_mistake), additiva; nominata per intero.
+              "migrations/084_delete_arch_1a_mistakes.sql",
+              "migrations/084_delete_arch_1a_mistakes_down.sql"}
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

@@ -68,7 +68,10 @@ def on_status(cur, agency_id: int, row: dict, *, actor_user_id) -> None:
     repository.record_event(
         cur, agency_id=agency_id, acquisition_id=acq["id"], event_type=evento,
         from_status=prima, to_status=dopo, actor_user_id=actor_user_id,
-        changes={"appointment_id": row["id"], "appointment_status": row["status"]})
+        changes={"appointment_id": row["id"], "appointment_status": row["status"],
+                 # DELETE-ARCH Fase 1A: la qualifica dell'annullamento, se c'e'.
+                 **({"appointment_cancelled_kind": row["cancelled_kind"]}
+                    if row.get("cancelled_kind") else {})})
 
 
 def on_reschedule(cur, agency_id: int, old_row: dict, new_row: dict, *, actor_user_id) -> None:

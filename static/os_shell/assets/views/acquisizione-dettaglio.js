@@ -116,7 +116,7 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
         <p><a href="#/acquisizioni">← Acquisizioni</a></p>
         <div class="acq-header">
           <h2>Acquisizione #${escapeHtml(String(acq.id))}</h2>
-          ${renderBadge(etichetteStato[acq.status] || acq.status_label || acq.status, statusTone(acq.status))}
+          ${renderBadge(acq.created_by_mistake ? acq.status_label : (etichetteStato[acq.status] || acq.status_label || acq.status), statusTone(acq.status))}
           <span class="muted">Agente: ${escapeHtml(acq.agent_name || '—')}</span>
         </div>
         <div id="acq-feedback">${feedback}</div>
@@ -125,6 +125,7 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
           ${transizioni}
           ${azioni.mandate ? '<button type="button" class="btn primary" id="acq-mandate-btn">Genera incarico</button>' : ''}
           ${azioni.lost ? '<button type="button" class="btn ghost" id="acq-lost-btn">Segna come persa</button>' : ''}
+          ${azioni.mistake ? '<button type="button" class="btn ghost" id="acq-mistake-btn">Segna come creata per errore</button>' : ''}
         </div>
 
         <section class="acq-section"><h3 class="section-title">Immobile</h3>
@@ -257,18 +258,50 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
     return form;
   }
 
+  // DELETE-ARCH Fase 1A: l'appuntamento ancora aperto puo' essere annullato
+  // insieme (dal cliente / dall'agenzia): una perdita reale non e' un errore.
+  const APPUNTAMENTO_APERTO = ['requested', 'scheduled', 'confirmed'];
+
   function apriPersa() {
+    const aperto = Boolean(acq.appointment && APPUNTAMENTO_APERTO.includes(acq.appointment.status));
     dialogo('Segna come persa', `
       <div class="form-field"><label for="acq-lost-reason">Motivo *</label><select id="acq-lost-reason" class="input">${optionsHtml(opzioni.lost_reasons, '', 'Scegli il motivo')}</select></div>
-      <div class="form-field"><label for="acq-lost-notes">Note</label><textarea id="acq-lost-notes" class="input" rows="3" maxlength="5000"></textarea></div>`,
+      <div class="form-field"><label for="acq-lost-notes">Note</label><textarea id="acq-lost-notes" class="input" rows="3" maxlength="5000"></textarea></div>
+      ${aperto ? `<fieldset class="form-field" id="acq-lost-appointment">
+        <label><input type="checkbox" id="acq-lost-cancel" checked> Annulla anche l’appuntamento del ${escapeHtml(formatDateTime(acq.appointment.start_at))}</label>
+        <select id="acq-lost-cancel-kind" class="input"><option value="agency">Annullato dall’agenzia</option><option value="client">Annullato dal cliente</option></select>
+      </fieldset>` : ''}`,
     'Segna come persa', async (form) => {
       const motivo = form.querySelector('#acq-lost-reason').value;
       if (!motivo) throw new Error('Indica il motivo per cui l’acquisizione è persa.');
       const note = form.querySelector('#acq-lost-notes').value.trim();
       const corpo = { version: acq.version, lost_reason: motivo };
       if (note) corpo.lost_notes = note;
+      const annulla = form.querySelector('#acq-lost-cancel');
+      if (annulla && annulla.checked) {
+        corpo.cancel_appointment = true;
+        corpo.appointment_cancelled_kind = form.querySelector('#acq-lost-cancel-kind').value;
+      }
       await apiPost(`/api/acquisitions/${acq.id}/lost`, corpo);
       return 'Acquisizione segnata come persa.';
+    });
+  }
+
+  // DELETE-ARCH Fase 1A: «creata per errore» - l'acquisizione non e' mai
+  // esistita. Terminale; l'appuntamento aperto si annulla come «Creato per
+  // errore». Il server rifiuta (APPOINTMENT_ALREADY_HAPPENED) se l'incontro
+  // e' avvenuto.
+  function apriErrore() {
+    dialogo('Segna come creata per errore', `
+      <p>L’acquisizione non è mai esistita: sparisce dall’elenco e dalle «Perse» e non si può riaprire.
+      ${acq.appointment && APPUNTAMENTO_APERTO.includes(acq.appointment.status) ? 'Anche il suo appuntamento viene tolto dall’Agenda.' : ''}</p>
+      <div class="form-field"><label for="acq-mistake-notes">Note</label><textarea id="acq-mistake-notes" class="input" rows="3" maxlength="5000"></textarea></div>`,
+    'Conferma: creata per errore', async (form) => {
+      const note = form.querySelector('#acq-mistake-notes').value.trim();
+      const corpo = { version: acq.version };
+      if (note) corpo.notes = note;
+      await apiPost(`/api/acquisitions/${acq.id}/mistake`, corpo);
+      return 'Acquisizione segnata come creata per errore.';
     });
   }
 
@@ -352,6 +385,7 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
       });
     }
     if ($('#acq-lost-btn')) $('#acq-lost-btn').addEventListener('click', apriPersa);
+    if ($('#acq-mistake-btn')) $('#acq-mistake-btn').addEventListener('click', apriErrore);
     if ($('#acq-mandate-btn')) $('#acq-mandate-btn').addEventListener('click', apriIncarico);
     if ($('#acq-edit-btn')) $('#acq-edit-btn').addEventListener('click', () => { modifica = true; ridisegna(); });
     if ($('#acq-edit-cancel')) $('#acq-edit-cancel').addEventListener('click', () => { modifica = false; ridisegna(); });

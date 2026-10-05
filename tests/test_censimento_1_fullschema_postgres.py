@@ -224,7 +224,10 @@ def test_02_il_runner_applica_026_027_082_e_poi_la_083(completo, monkeypatch, ca
     impronte_prima = _impronte(completo)
     assert len(impronte_prima) == 25 and _q(completo, "SELECT count(*) FROM properties WHERE mandate_type IS NOT NULL")[0][0] == 12
     # 4. la 083 dal runner sulla cartella reale
-    monkeypatch.setattr(runner, "MIGRATIONS_DIR", MIGRAZIONI)
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la cartella reale ha ora
+    # anche la 084; questo test certifica la 083 sul TEST di allora, quindi
+    # la cartella si ferma alla 083 (stesso idioma dei passi 1-3).
+    monkeypatch.setattr(runner, "MIGRATIONS_DIR", _cartella_fino_a(83))
     assert runner.command_status(args) == 0
     stato = capsys.readouterr().out
     assert f"pending      {VERSIONE}" in stato and stato.count("pending") == 1 and "PROBLEM" not in stato

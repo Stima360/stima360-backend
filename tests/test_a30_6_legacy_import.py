@@ -209,7 +209,11 @@ def test_22_il_modulo_scrive_solo_attraverso_il_repository():
     # ricontrolla la stima con `repository.stima_agency` (lettura con
     # `FOR KEY SHARE`, nessuna scrittura) per non creare un `stima_id` orfano
     # se la stima e' stata cancellata dopo la lettura dei candidati.
-    assert chiamate == {"insert_appointment", "update_appointment", "db_now", "stima_agency"}
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A (REVIEW 1): il rollback
+    # qualifica l'annullamento con `repository.cancelled_kind_changes`
+    # ('agency' se la 084 c'e'; lettura dello schema, nessuna scrittura).
+    assert chiamate == {"insert_appointment", "update_appointment", "db_now", "stima_agency",
+                        "cancelled_kind_changes"}
     # stima_inspections: mai nominata in una query di scrittura o lettura
     assert "INTO stima_inspections" not in codice
 

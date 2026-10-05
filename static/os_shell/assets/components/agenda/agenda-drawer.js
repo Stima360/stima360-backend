@@ -27,6 +27,7 @@ import {
   formatTime,
   outcomeNote,
   statusLabel,
+  cancelledKindLabel,
   typeLabel,
 } from '../../agenda/agenda-model.js';
 import { getAppointment, getEvents } from '../../agenda/agenda-api.js';
@@ -184,6 +185,7 @@ export async function openAppointmentDrawer(drawerEl, {
     voce('Completato il', riga.completed_at ? formatDateTime(riga.completed_at) : null),
     voce('Non presentato il', riga.no_show_at ? formatDateTime(riga.no_show_at) : null),
     voce('Annullato il', riga.cancelled_at ? formatDateTime(riga.cancelled_at) : null),
+    voce('Tipo di annullamento', cancelledKindLabel(riga.cancelled_kind) || null),
     voce('Motivo annullamento', riga.cancelled_reason),
   );
   pannello.appendChild(dati);

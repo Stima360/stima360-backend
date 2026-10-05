@@ -115,7 +115,12 @@ def test_a03_la_081_e_valida_per_il_runner_e_l_ultima():
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
     # backfill. Si nomina invece di smettere di guardare: la serie resta
     # contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 aggiunge
+    # `appointments.cancelled_kind` (NULLABLE, CHECK) ed estende il CHECK dei
+    # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
+    # Si nomina invece di smettere di guardare: la serie resta contigua e
+    # qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 84 and numeri[-2] == 83 and numeri[-3] == 82 and numeri[-4] == 81 and numeri[-5] == 80
 
 
 def test_a04_la_up_e_additiva_e_la_down_rifiuta_con_dati():
@@ -171,7 +176,9 @@ def test_b02_l_agenda_chiama_gli_hook_nella_propria_transazione():
                  "on_patch")}
     assert conteggi == {"on_status": 3, "on_reschedule": 1, "before_patch": 1,
                         "on_create": 0, "on_reassign": 0, "on_patch": 0}
-    for funzione in ("reschedule_appointment", "cancel_appointment", "complete_appointment",
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: l'hook dell'annullamento
+    # sta in `_annulla`, condiviso da annullamento reale e «creato per errore».
+    for funzione in ("reschedule_appointment", "_annulla", "complete_appointment",
                      "no_show_appointment", "patch_appointment"):
         corpo = codice[codice.index(f"def {funzione}("):]
         corpo = corpo[:corpo.index("\ndef ", 1)]
@@ -190,8 +197,9 @@ def test_b02_l_agenda_chiama_gli_hook_nella_propria_transazione():
 
 def test_b03_nessuna_rotta_accetta_agenzia_o_attore():
     from acquisitions import schemas
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: + MistakeBody, stesse regole.
     for nome in ("AcquisitionCreate", "AcquisitionAppointment", "AcquisitionPatch", "StatusBody",
-                 "LostBody", "NewAppointmentBody", "MandateBody"):
+                 "LostBody", "NewAppointmentBody", "MandateBody", "MistakeBody"):
         modello = getattr(schemas, nome)
         assert modello.model_config.get("extra") == "forbid", nome
         campi = set(modello.model_fields)
@@ -200,8 +208,10 @@ def test_b03_nessuna_rotta_accetta_agenzia_o_attore():
     assert "status" not in schemas.AcquisitionPatch.model_fields
     router = (PACCHETTO / "router.py").read_text(encoding="utf-8")
     rotte = re.findall(r"@router\.(get|post|patch|put|delete)\(", router)
-    assert len(rotte) == 9 and "delete" not in rotte
-    assert router.count("ctx: OperatorContext = Depends(require_operator)") == 9
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: 9 -> 10, POST /{id}/mistake
+    # («Segna come creata per errore»), stesso gate, nessuna DELETE.
+    assert len(rotte) == 10 and "delete" not in rotte
+    assert router.count("ctx: OperatorContext = Depends(require_operator)") == 10
     assert 'APIRouter(prefix="/api/acquisitions"' in router
 
 
@@ -464,7 +474,9 @@ def test_d01_voce_di_menu_ed_elenco_con_colonne_e_filtri(staged):  # noqa: F811
                    "Stato appuntamento", "Prezzo richiesto", "+ Nuova acquisizione"):
         assert atteso in testo, atteso
     assert out["agenteVisibile"] is True
-    assert out["stati"][2:] == list(enums.STATUSES)
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: in coda il filtro esplicito
+    # «Creati per errore» (le acquisizioni create per errore non sono nelle altre voci).
+    assert out["stati"][2:-1] == list(enums.STATUSES) and out["stati"][-1] == "mistakes"
     elenchi = [c["url"] for c in out["calls"] if c["m"] == "GET" and c["url"].startswith("/api/acquisitions?")]
     assert "statuses=lost" in elenchi[-1] and "agent_id=4" in elenchi[-1]
     assert _scritture(out) == []
@@ -564,8 +576,11 @@ def test_d04_scheda_sezioni_azioni_e_persa_con_motivo(staged):  # noqa: F811
     assert out["motivi"] == ["", *enums.LOST_REASONS]
     scritture = _scritture(out)
     assert [c["url"] for c in scritture] == ["/api/acquisitions/501/lost"]
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: con l'appuntamento ancora
+    # aperto la perdita lo annulla insieme (casella proposta spuntata, «dall'agenzia»).
     assert scritture[0]["body"] == {"version": 2, "lost_reason": "other_agency",
-                                    "lost_notes": "Firmato con X"}
+                                    "lost_notes": "Firmato con X", "cancel_appointment": True,
+                                    "appointment_cancelled_kind": "agency"}
 
 
 @node

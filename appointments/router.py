@@ -175,12 +175,14 @@ def calendar(
     types: str | None = None,
     statuses: str | None = None,
     show_colleagues: bool = True,
+    mistakes: bool = False,
     ctx: OperatorContext = Depends(require_operator),
 ):
     try:
         args = dict(date_from=_istante(date_from, "from"), date_to=_istante(date_to, "to"),
                     agent_ids=_interi(agents, "agents"), types=_elenco(types),
-                    statuses=_elenco(statuses), show_colleagues=show_colleagues)
+                    statuses=_elenco(statuses), show_colleagues=show_colleagues,
+                    mistakes=mistakes)
     except _Richiesta as exc:
         return _errore(exc)
     return _x(service.calendar, ctx, **args)
@@ -235,13 +237,14 @@ def list_appointments(
     date_to: str | None = Query(None, alias="to"),
     limit: int = 50,
     offset: int = 0,
+    mistakes: bool = False,
     ctx: OperatorContext = Depends(require_operator),
 ):
     try:
         args = dict(statuses=_elenco(statuses), types=_elenco(types), stima_id=stima_id,
                     lead_id=lead_id, contact_id=contact_id, property_id=property_id,
                     date_from=_istante(date_from, "from"), date_to=_istante(date_to, "to"),
-                    limit=limit, offset=offset)
+                    limit=limit, offset=offset, mistakes=mistakes)
     except _Richiesta as exc:
         return _errore(exc)
     return _x(lambda: {"items": service.list_appointments(ctx, **args)})

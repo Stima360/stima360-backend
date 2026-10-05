@@ -93,6 +93,17 @@ class StatusBody(_ConVersione):
 class LostBody(_ConVersione):
     lost_reason: str | None = None
     lost_notes: str | None = Field(None, max_length=5000)
+    #: DELETE-ARCH Fase 1A: annulla anche l'appuntamento ancora aperto, nella
+    #: stessa transazione. Facoltativo: assente = come prima (resta aperto).
+    cancel_appointment: bool = False
+    #: Chi lo annulla: 'client' o 'agency' (default). Mai 'mistake': una
+    #: perdita reale non e' un errore.
+    appointment_cancelled_kind: str = "agency"
+
+
+class MistakeBody(_ConVersione):
+    """DELETE-ARCH Fase 1A: «Segna come creata per errore»."""
+    notes: str | None = Field(None, max_length=5000)
 
 
 class NewAppointmentBody(_ConVersione):

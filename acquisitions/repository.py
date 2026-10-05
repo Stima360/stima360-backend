@@ -117,6 +117,28 @@ def insert_acquisition(cur, values: dict) -> dict:
     return _riga(cur.fetchone())
 
 
+def mistakes_installed(cur) -> bool:
+    """DELETE-ARCH Fase 1A: la 084 e' applicata (il CHECK dei motivi accetta
+    `created_by_mistake`)."""
+    cur.execute("SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint "
+                "WHERE conname = 'acquisitions_lost_reason_chk' AND conrelid = 'acquisitions'::regclass")
+    riga = cur.fetchone()
+    return bool(riga and "created_by_mistake" in riga["d"])
+
+
+def appointment_happened(cur, agency_id: int, acquisition_id: int) -> bool:
+    """Un appuntamento di questa acquisizione e' AVVENUTO: un evento di
+    svolgimento o di assenza, o un appuntamento sostituito che era svolto o
+    mancato. Dal registro append-only, quindi anche dai predecessori."""
+    cur.execute(
+        "SELECT 1 FROM acquisition_events WHERE agency_id = %s AND acquisition_id = %s "
+        "AND (event_type IN ('appointment_completed', 'appointment_no_show') "
+        "     OR changes ->> 'old_appointment_status' IN ('completed', 'no_show') "
+        "     OR changes ->> 'appointment_status' IN ('completed', 'no_show')) LIMIT 1",
+        (agency_id, acquisition_id))
+    return cur.fetchone() is not None
+
+
 def installed(cur) -> bool:
     """La 081 e' applicata a QUESTO database? Lo chiedono solo gli hook
     dell'Agenda: un database senza `acquisitions` (la 081 non ancora
@@ -232,6 +254,9 @@ _ELENCO_SQL = f"""
            SELECT max(e.occurred_at) AS last_at FROM acquisition_events e
             WHERE e.acquisition_id = a.id) ev ON TRUE
      WHERE a.agency_id = %(agency)s
+       -- DELETE-ARCH Fase 1A: le «create per errore» solo col filtro esplicito
+       AND ((%(mistakes)s AND a.lost_reason = 'created_by_mistake')
+            OR (NOT %(mistakes)s AND a.lost_reason IS DISTINCT FROM 'created_by_mistake'))
        AND (%(viewer)s::bigint IS NULL OR a.assigned_agent_id = %(viewer)s::bigint)
        AND (%(statuses)s::text[] IS NULL OR a.status = ANY(%(statuses)s::text[]))
        AND (%(agent)s::bigint IS NULL OR a.assigned_agent_id = %(agent)s::bigint)
@@ -254,9 +279,9 @@ def _like(testo):
 
 
 def list_acquisitions(cur, *, agency_id, only_agent_id, statuses, agent_id, date_from, date_to,
-                      city, search, limit, offset) -> list[dict]:
+                      city, search, limit, offset, mistakes=False) -> list[dict]:
     cur.execute(_ELENCO_SQL, {
-        "agency": agency_id, "viewer": only_agent_id,
+        "agency": agency_id, "viewer": only_agent_id, "mistakes": bool(mistakes),
         "statuses": list(statuses) if statuses else None, "agent": agent_id,
         "from": date_from, "to": date_to, "city": city or None,
         "search": _like(search) if search else None, "limit": limit, "offset": offset})

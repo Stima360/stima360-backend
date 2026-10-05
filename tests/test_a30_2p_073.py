@@ -92,7 +92,12 @@ def test_01_la_073_e_valida_per_il_runner_e_in_coda_alla_serie():
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun
     # backfill. Si nomina invece di smettere di guardare: la serie resta
     # contigua e qualunque ALTRA migration farebbe ancora fallire.
-    assert numeri[-1] == 83 and numeri[-2] == 82 and numeri[-3] == 81 and numeri[-4] == 80 and numeri[-5] == 79 and numeri[-6] == 78 and numeri[-7] == 77 and numeri[-8] == 76 and numeri[-9] == 75 and len(numeri) == len(set(numeri))
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 aggiunge
+    # `appointments.cancelled_kind` (NULLABLE, CHECK) ed estende il CHECK dei
+    # motivi di perdita con `created_by_mistake`; additiva, nessun backfill.
+    # Si nomina invece di smettere di guardare: la serie resta contigua e
+    # qualunque ALTRA migration farebbe ancora fallire.
+    assert numeri[-1] == 84 and numeri[-2] == 83 and numeri[-3] == 82 and numeri[-4] == 81 and numeri[-5] == 80 and numeri[-6] == 79 and numeri[-7] == 78 and numeri[-8] == 77 and numeri[-9] == 76 and numeri[-10] == 75 and len(numeri) == len(set(numeri))
 
 
 def test_02_la_up_non_apre_transazioni_e_non_scrive_il_ledger():

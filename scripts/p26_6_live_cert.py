@@ -6197,6 +6197,9 @@ ACQUISITIONS_OPERAZIONI = (
     ("GET", "/{id}"), ("PATCH", "/{id}"),
     ("POST", "/{id}/status"), ("POST", "/{id}/lost"),
     ("POST", "/{id}/appointment"), ("POST", "/{id}/mandate"),
+    # DELETE-ARCH Fase 1A: «Segna come creata per errore», stesso gate e
+    # stesse regole di tenancy delle altre azioni (404 su un id altrui).
+    ("POST", "/{id}/mistake"),
 )
 
 
@@ -6289,7 +6292,7 @@ def certify_acquisitions(report, http, cert, domain, jars, owned, context) -> No
     CRM-OPS-3 su PostgreSQL usa-e-getta. Nessuna richiesta di questa sezione
     puo' arrivare a un percorso riuscito che scrive:
 
-        anonimo, su TUTTE le nove rotte                 -> 401 (al mount)
+        anonimo, su TUTTE le dieci rotte (Fase 1A: +mistake) -> 401 (al mount)
         HTTP Basic (P26-5 l'ha tolto)                   -> 401
         creazione con `agency_id` nel corpo             -> 422 (prima del service)
         PATCH con `agency_id` nel corpo                 -> 422 (prima del service)

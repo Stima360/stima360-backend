@@ -190,7 +190,11 @@ def test_s10_nessuna_migration_080():
     # migration oltre, farebbe ancora fallire.
     assert [m for m in migrazioni if m.startswith("083")] == [
         "083_censimento_1_buildings_units.sql", "083_censimento_1_buildings_units_down.sql"]
-    assert migrazioni[-1] == "083_censimento_1_buildings_units_down.sql"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: la 084 (cancelled_kind,
+    # created_by_mistake), additiva, e' ora l'ultima, nominata per intero.
+    assert [m for m in migrazioni if m.startswith("084")] == [
+        "084_delete_arch_1a_mistakes.sql", "084_delete_arch_1a_mistakes_down.sql"]
+    assert migrazioni[-1] == "084_delete_arch_1a_mistakes_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

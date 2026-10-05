@@ -45,6 +45,20 @@ export const STATUS_LABELS = Object.freeze({
   rescheduled: 'Spostato',
 });
 
+// DELETE-ARCH Fase 1A: specchio di appointments/enums.py::CANCELLED_KIND_LABELS_IT.
+// La qualifica di un annullamento; `mistake` = creato per errore (fuori
+// dall'Agenda normale, visibile solo col filtro «Creati per errore»).
+export const CANCELLED_KIND_LABELS = Object.freeze({
+  client: 'Annullato dal cliente',
+  agency: "Annullato dall'agenzia",
+  mistake: 'Creato per errore',
+});
+
+/** L'etichetta di una qualifica di annullamento, o '' (storico: nessuna). */
+export function cancelledKindLabel(kind) {
+  return CANCELLED_KIND_LABELS[kind] || '';
+}
+
 // Specchio di appointments/enums.py::APPOINTMENT_TYPE_LABELS_IT.
 export const TYPE_LABELS = Object.freeze({
   call: 'Telefonata',
@@ -629,6 +643,9 @@ export function canAssignRecords(session) {
 /** "Tutti gli stati", anche annullati e spostati. */
 export const ALL_STATUSES_FILTER = 'all';
 
+/** DELETE-ARCH Fase 1A: «Creati per errore» - il solo modo di vederli. */
+export const MISTAKES_FILTER = 'mistakes';
+
 export const DEFAULT_FILTERS = Object.freeze({
   agent: '', type: '', status: '', colleagues: true,
 });
@@ -641,7 +658,7 @@ export function normalizeFilters(filters) {
   return {
     agent: Number.isInteger(agente) && agente > 0 ? String(agente) : '',
     type: Object.prototype.hasOwnProperty.call(TYPE_LABELS, f.type) ? f.type : '',
-    status: f.status === ALL_STATUSES_FILTER
+    status: f.status === ALL_STATUSES_FILTER || f.status === MISTAKES_FILTER
       || Object.prototype.hasOwnProperty.call(STATUS_LABELS, f.status) ? f.status : '',
     colleagues: f.colleagues !== false,
   };
@@ -649,6 +666,7 @@ export function normalizeFilters(filters) {
 
 function statiDelFiltro(status) {
   if (status === ALL_STATUSES_FILTER) return Object.keys(STATUS_LABELS);
+  if (status === MISTAKES_FILTER) return ['cancelled'];
   return status ? [status] : undefined;
 }
 
@@ -660,6 +678,7 @@ export function calendarFilterParams(filters, { canAssign = false } = {}) {
   if (f.type) parametri.types = [f.type];
   const stati = statiDelFiltro(f.status);
   if (stati) parametri.statuses = stati;
+  if (f.status === MISTAKES_FILTER) parametri.mistakes = true;
   // Solo per chi vede i colleghi come "Occupato", e solo se li spegne: il
   // valore di partenza del server e' "si'".
   if (!canAssign && !f.colleagues) parametri.showColleagues = false;
@@ -673,6 +692,7 @@ export function listFilterParams(filters) {
   if (f.type) parametri.types = [f.type];
   const stati = statiDelFiltro(f.status);
   if (stati) parametri.statuses = stati;
+  if (f.status === MISTAKES_FILTER) parametri.mistakes = true;
   return parametri;
 }
 

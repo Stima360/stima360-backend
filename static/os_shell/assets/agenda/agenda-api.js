@@ -90,16 +90,20 @@ function query(parametri) {
 // -- letture ----------------------------------------------------------------
 
 /** GET /calendar: una chiamata aggregata per intervallo. */
-export function getCalendar({ from, to, agents, types, statuses, showColleagues } = {}) {
+export function getCalendar({ from, to, agents, types, statuses, showColleagues, mistakes } = {}) {
   return request('GET', `/calendar${query({
     from, to, agents, types, statuses,
     show_colleagues: showColleagues === undefined ? undefined : String(Boolean(showColleagues)),
+    // DELETE-ARCH Fase 1A: solo col filtro «Creati per errore».
+    mistakes: mistakes ? 'true' : undefined,
   })}`);
 }
 
 /** GET lista (la vista Lista). */
-export function getList({ from, to, statuses, types, limit = 200, offset = 0 } = {}) {
-  return request('GET', query({ from, to, statuses, types, limit, offset }));
+export function getList({ from, to, statuses, types, mistakes, limit = 200, offset = 0 } = {}) {
+  return request('GET', query({
+    from, to, statuses, types, limit, offset, mistakes: mistakes ? 'true' : undefined,
+  }));
 }
 
 export function getAgents() {
