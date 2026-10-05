@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
+from operator_auth.exceptions import PlatformAdminAgencyRequired
 
 from . import sellers, service
 from .schemas import Contact360Response, SellerActivate, SellerDeactivate
@@ -63,6 +64,9 @@ def _venditori(fn, *a, **k):
         return JSONResponse(status_code=400, content={"detail": str(exc), "code": "VALIDATION_ERROR"})
     except PermissionDenied as exc:
         return JSONResponse(status_code=403, content={"detail": str(exc), "code": "FORBIDDEN"})
+    except PlatformAdminAgencyRequired as exc:
+        # DELETE-ARCH Fase 1B: platform admin fuori acting -> 403 (prima 500).
+        return JSONResponse(status_code=403, content={"detail": str(exc), "code": "AGENCY_REQUIRED"})
     except ConflictError as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc), "code": "CONFLICT"})
     if isinstance(esito, tuple):
@@ -74,7 +78,7 @@ def _venditori(fn, *a, **k):
 @router.get("/sellers")
 def list_sellers(
     view: str = Query("all", pattern="^(all|new|contacted|qualified|ready|overdue|no_action)$"),
-    status: str = Query("active", pattern="^(active|paused|closed|all)$"),
+    status: str = Query("active", pattern="^(active|paused|closed|all|mistakes)$"),
     agent_id: int | None = Query(None, ge=0),
     city: str | None = Query(None, max_length=120),
     search: str | None = Query(None, max_length=200),

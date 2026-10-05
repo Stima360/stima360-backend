@@ -10,6 +10,8 @@
 // collegato): nessuna chiamata in piu' per disegnare gli interruttori.
 
 export const OWNER_ROLES = ['owner', 'seller'];
+/** DELETE-ARCH Fase 1B: il codice canonico di «Inserito per errore». */
+export const MISTAKE_REASON = 'created_by_mistake';
 
 const STAGE_LABELS = {
   new: 'Nuovo', contacted: 'Contattato', qualified: 'Qualificato', appointment: 'Appuntamento',
@@ -42,7 +44,9 @@ export function sellableOwners(contacts) {
 }
 
 /** Lo stato «Vende» di un contatto su questo immobile, da `property.leads`:
- *  'none' | 'open' | 'paused' | 'closed', con il lead. Se ce n'e' piu' d'uno
+ *  'none' | 'open' | 'paused' | 'closed' | 'mistake', con il lead. 'mistake'
+ *  (Fase 1B) = chiuso con `lost_reason='created_by_mistake'`: un errore, non
+ *  una vera chiusura «Non vende». Se ce n'e' piu' d'uno
  *  vince lo stesso ordine del server: aperto, sospeso, il piu' recente. */
 export function sellerState(leads, contactId) {
   const miei = (leads || []).filter((l) => l.relation_type === 'seller' && l.pipeline === 'sell'
@@ -51,7 +55,8 @@ export function sellerState(leads, contactId) {
   const peso = (l) => (l.status === 'open' ? 2 : (l.status === 'paused' ? 1 : 0));
   miei.sort((a, b) => peso(b) - peso(a) || Number(b.lead_id) - Number(a.lead_id));
   const l = miei[0];
-  const state = l.status === 'open' ? 'open' : (l.status === 'paused' ? 'paused' : 'closed');
+  const state = l.status === 'open' ? 'open' : (l.status === 'paused' ? 'paused'
+    : (l.lost_reason === MISTAKE_REASON ? 'mistake' : 'closed'));
   return { state, leadId: Number(l.lead_id), stage: l.stage };
 }
 

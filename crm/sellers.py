@@ -36,6 +36,26 @@ REGOLE
     l'elenco dei candidati: la scelta (o «lead nuovo») e' dell'operatore.
   * Censimento: una scheda `census` non entra nel flusso (409
     PROPERTY_IN_CENSUS); si passa dal «Prendi in carico» esistente.
+
+DELETE-ARCH FASE 1B - «INSERITO PER ERRORE»
+
+  * L'attivazione scrive nello storico (`activities.metadata`) da DOVE viene
+    il lead: `origin` = `created` (lead nuovo di Vende), `reused` (lead SELL
+    aperto gia' esistente), `reopened` (lead sospeso/chiuso riaperto), con lo
+    stato REALE di prima (`previous`: stage, status, lost_reason, closed_at e
+    la relazione con l'immobile) e la `lead_source`. Nessuna colonna nuova.
+  * «Inserito per errore» annulla QUELLA attivazione, e non e' piu' un testo:
+      - created            -> lead closed/lost, `lost_reason='created_by_mistake'`;
+                              la relazione seller RESTA (prova dell'errore);
+      - reused / reopened  -> il lead torna allo stato di prima e la
+                              relazione torna com'era: tolta se non c'era,
+                              riportata al tipo di prima (origin/related) se
+                              c'era, intatta se era gia' seller.
+    Attivita', task, stime e storico non si toccano mai.
+  * Un'acquisizione APERTA sullo stesso immobile e lo stesso lead blocca
+    (409 ACQUISITION_OPEN): si segna prima quella come creata per errore.
+  * I `created_by_mistake` escono da tutte le viste normali della worklist;
+    si rivedono solo col filtro «Inseriti per errore».
 """
 from __future__ import annotations
 
@@ -51,6 +71,10 @@ from seller_intent import batch as intent_batch
 OWNER_ROLES = ("owner", "seller")
 INTERACTION_TYPES = ("call", "meeting", "note", "email", "whatsapp")
 LEAD_SOURCE = "property_seller"
+#: DELETE-ARCH Fase 1B: il codice canonico (stesso valore delle acquisizioni).
+MISTAKE_REASON = "created_by_mistake"
+MISTAKE_LABEL_IT = "Inserito per errore"
+ORIGINS = ("created", "reused", "reopened")
 
 #: Le viste della worklist: poche, ciascuna un predicato SQL esplicito.
 VIEWS = {
@@ -67,7 +91,11 @@ STATUS_FILTERS = {
     "paused": ("Sospesi", "l.status = 'paused'"),
     "closed": ("Chiusi", "l.status = 'closed'"),
     "all": ("Tutti gli stati", None),
+    # DELETE-ARCH Fase 1B: l'unico filtro che mostra gli errori.
+    "mistakes": ("Inseriti per errore", f"l.lost_reason = '{MISTAKE_REASON}'"),
 }
+#: Fuori da ogni vista normale (active/paused/closed/all).
+NOT_MISTAKE_SQL = f"l.lost_reason IS DISTINCT FROM '{MISTAKE_REASON}'"
 STAGE_LABELS_IT = {
     "new": "Nuovo", "contacted": "Contattato", "qualified": "Qualificato",
     "appointment": "Appuntamento", "proposal": "Proposta", "won": "Acquisito", "lost": "Perso",
@@ -152,7 +180,8 @@ def _opportunita(cur, agency_id: int, property_id: int, contact_id: int):
     return dict(riga) if riga else None
 
 
-def _storico(cur, ctx, *, property_id: int, contact_id: int, lead_id: int, testo: str, evento: str) -> None:
+def _storico(cur, ctx, *, property_id: int, contact_id: int, lead_id: int, testo: str, evento: str,
+             extra: dict | None = None) -> None:
     # REV 2 (R3): se il contatto non e' piu' collegato all'immobile (nessuna
     # riga property_contacts) il trigger 082 rifiuterebbe una riga con
     # `property_id`. La chiusura/sospensione resta possibile: l'evento va nello
@@ -166,8 +195,27 @@ def _storico(cur, ctx, *, property_id: int, contact_id: int, lead_id: int, testo
         "property_id": property_id if collegato else None,
         "activity_type": "status_change", "direction": None, "channel": None, "subject": None,
         "description": testo, "outcome": None, "occurred_at": None, "created_by": None,
-        "metadata": {"context": "seller", "event": evento, "property_id": property_id},
+        "metadata": {"context": "seller", "event": evento, "property_id": property_id, **(extra or {})},
     }, ctx=ctx)
+
+
+def _iso(valore):
+    return valore.isoformat() if hasattr(valore, "isoformat") else valore
+
+
+def _prima(lead: dict | None, relazione: str | None) -> dict:
+    """Lo stato REALE del lead prima dell'attivazione (Fase 1B). Per un lead
+    nuovo non esisteva nulla: tutti None."""
+    lead = lead or {}
+    return {"stage": lead.get("stage"), "status": lead.get("status"), "lost_reason": lead.get("lost_reason"),
+            "closed_at": _iso(lead.get("closed_at")), "relation_type": relazione}
+
+
+def _relazione(cur, property_id: int, lead_id: int) -> str | None:
+    cur.execute("SELECT relation_type FROM property_leads WHERE property_id = %s AND lead_id = %s",
+                (property_id, lead_id))
+    riga = cur.fetchone()
+    return None if riga is None else riga["relation_type"]
 
 
 def _esito(lead: dict, property_id: int, **flag) -> dict:
@@ -278,9 +326,13 @@ def activate(ctx, body) -> tuple[dict, bool]:
                                   "SELLER_ALREADY_ACTIVE", lead_id=esistente["id"])
             if esistente["status"] == "open":
                 return _esito(esistente, body.property_id, reused=True), False
+            prima = _prima(esistente, "seller")
             riaperto = _riapri(cur, esistente["id"])
+            # Fase 1B: evento `activated` con origin `reopened` (prima: evento
+            # `reopened` senza stato precedente).
             _storico(cur, ctx, property_id=body.property_id, contact_id=body.contact_id, lead_id=riaperto["id"],
-                     testo=f"Vende: riattivato — {contatto['name']} vende di nuovo questo immobile", evento="reopened")
+                     testo=f"Vende: riattivato — {contatto['name']} vende di nuovo questo immobile", evento="activated",
+                     extra={"origin": "reopened", "previous": prima, "lead_source": esistente.get("source")})
             return _esito(riaperto, body.property_id, reused=True, reopened=True), False
 
         creato = False
@@ -290,6 +342,12 @@ def activate(ctx, body) -> tuple[dict, bool]:
             scelto = None
         else:
             scelto = _scegli_lead(cur, ctx, agency_id, body.property_id, body.contact_id)
+        prima = None
+        relazione_prima = None
+        if scelto is not None:
+            cur.execute("SELECT * FROM leads WHERE id = %s", (scelto["id"],))
+            prima = dict(cur.fetchone())
+            relazione_prima = _relazione(cur, body.property_id, scelto["id"])
         if scelto is None:
             lead = core_repository.create_lead_with_cursor(ctx, cur, {
                 "contact_id": body.contact_id, "source": LEAD_SOURCE, "pipeline": "sell", "stage": "new",
@@ -300,15 +358,17 @@ def activate(ctx, body) -> tuple[dict, bool]:
         elif scelto["status"] != "open":
             lead = _riapri(cur, scelto["id"])
         else:
-            cur.execute("SELECT * FROM leads WHERE id = %s", (scelto["id"],))
-            lead = dict(cur.fetchone())
+            lead = dict(prima)
+        origine = "created" if creato else ("reused" if prima["status"] == "open" else "reopened")
         # il collegamento: se il lead era gia' legato a questo immobile con
         # un'altra relazione (origin/related) diventa il venditore - stessa riga
         cur.execute("INSERT INTO property_leads (property_id, lead_id, relation_type) VALUES (%s, %s, 'seller') "
                     "ON CONFLICT (property_id, lead_id) DO UPDATE SET relation_type = 'seller'",
                     (body.property_id, lead["id"]))
         _storico(cur, ctx, property_id=body.property_id, contact_id=body.contact_id, lead_id=lead["id"],
-                 testo=f"Vende: attivato — {contatto['name']} vende questo immobile", evento="activated")
+                 testo=f"Vende: attivato — {contatto['name']} vende questo immobile", evento="activated",
+                 extra={"origin": origine, "previous": _prima(prima, relazione_prima),
+                        "lead_source": lead.get("source")})
         return _esito(lead, body.property_id, created=creato, reused=not creato), creato
 
 
@@ -324,6 +384,8 @@ def deactivate(ctx, body) -> dict:
         contatto = _contatto(cur, agency_id, body.contact_id)
         _blocca_coppia(cur, agency_id, body.property_id, body.contact_id)
         lead = _opportunita(cur, agency_id, body.property_id, body.contact_id)
+        if body.outcome == "mistake":
+            return _per_errore(cur, ctx, agency_id, body, contatto, lead)
         if lead is None or not _visibile(cur, ctx, "leads", lead["id"]):
             raise NotFoundError("Nessuna opportunita' venditore per questo proprietario e questo immobile")
         etichetta = OUTCOMES[body.outcome]
@@ -333,7 +395,7 @@ def deactivate(ctx, body) -> dict:
                 return _esito(lead, body.property_id)
             cur.execute("UPDATE leads SET status = 'paused', closed_at = NULL, updated_at = NOW() "
                         "WHERE id = %s RETURNING *", (lead["id"],))
-        else:
+        else:                                   # not_selling ("mistake" e' in _per_errore)
             motivo = f"{etichetta}: {nota}" if nota else etichetta
             if lead["status"] == "closed" and (lead.get("lost_reason") or "").startswith(etichetta):
                 return _esito(lead, body.property_id)
@@ -344,6 +406,116 @@ def deactivate(ctx, body) -> dict:
                  testo=f"Vende: {etichetta.lower()} — {contatto['name']}" + (f" ({nota})" if nota else ""),
                  evento=body.outcome)
         return _esito(aggiornato, body.property_id)
+
+
+# ---------------------------------------------------------------------------
+# DELETE-ARCH Fase 1B: «Inserito per errore»
+# ---------------------------------------------------------------------------
+
+_EVENTI_SQL = """
+SELECT id, metadata FROM activities
+ WHERE agency_id = %s AND activity_type = 'status_change' AND metadata->>'context' = 'seller'
+   AND {chi} AND (metadata->>'property_id')::bigint = %s AND metadata->>'event' = ANY(%s)
+ ORDER BY id DESC LIMIT 1
+"""
+
+
+def _ultimo_evento(cur, agency_id: int, property_id: int, eventi, *, lead_id=None, contact_id=None):
+    chi, valore = ("lead_id = %s", lead_id) if lead_id is not None else ("contact_id = %s", contact_id)
+    cur.execute(_EVENTI_SQL.format(chi=chi), (agency_id, valore, property_id, list(eventi)))
+    riga = cur.fetchone()
+    return None if riga is None else dict(riga)
+
+
+def _per_errore(cur, ctx, agency_id: int, body, contatto: dict, lead: dict | None) -> dict:
+    """Annulla l'ULTIMA attivazione Vende della coppia (immobile, contatto).
+
+    Deterministico e idempotente: se l'ultimo evento Vende di questo lead su
+    questo immobile e' gia' `mistake`, non si fa nulla (stessa risposta, nessuna
+    attivita' in piu'); se la relazione e' gia' stata tolta, l'ultimo evento
+    del contatto sull'immobile e' `mistake` e si risponde lo stesso."""
+    property_id = body.property_id
+    if lead is None:
+        fatto = _ultimo_evento(cur, agency_id, property_id, ("activated", "reopened", "mistake"),
+                               contact_id=body.contact_id)
+        if fatto is not None and fatto["metadata"].get("event") == "mistake" and fatto["metadata"].get("unlinked"):
+            lead_id = int(fatto["metadata"]["lead_id"])
+            if _visibile(cur, ctx, "leads", lead_id):
+                cur.execute("SELECT * FROM leads WHERE id = %s", (lead_id,))
+                return _esito(dict(cur.fetchone()), property_id, already=True, unlinked=True)
+        raise NotFoundError("Nessuna opportunita' venditore per questo proprietario e questo immobile")
+    if not _visibile(cur, ctx, "leads", lead["id"]):
+        raise NotFoundError("Nessuna opportunita' venditore per questo proprietario e questo immobile")
+
+    ultimo = _ultimo_evento(cur, agency_id, property_id, ("activated", "reopened", "mistake", "paused", "not_selling"),
+                            lead_id=lead["id"])
+    if ultimo is not None and ultimo["metadata"].get("event") == "mistake":
+        return _esito(lead, property_id, already=True, unlinked=False)
+
+    # La creazione di un'acquisizione blocca la riga dell'immobile FOR UPDATE
+    # (acquisitions/repository.py): FOR SHARE qui serializza le due cose, e
+    # il controllo sotto vede l'acquisizione appena committata.
+    cur.execute("SELECT 1 FROM properties WHERE id = %s AND agency_id = %s FOR SHARE", (property_id, agency_id))
+    cur.execute("SELECT id FROM acquisitions WHERE agency_id = %s AND property_id = %s AND lead_id = %s "
+                "AND status <> ALL(%s) ORDER BY id LIMIT 1",
+                (agency_id, property_id, lead["id"], list(ACQUISITION_TERMINAL)))
+    aperta = cur.fetchone()
+    if aperta is not None:
+        raise SellerError("Segna prima l'acquisizione come creata per errore.", "ACQUISITION_OPEN",
+                          acquisition_id=aperta["id"])
+
+    attivazione = _ultimo_evento(cur, agency_id, property_id, ("activated", "reopened"), lead_id=lead["id"])
+    meta = (attivazione or {}).get("metadata") or {}
+    origine = meta.get("origin")
+    if origine not in ORIGINS:
+        # Attivazione precedente alla Fase 1B (nessuno stato salvato): solo un
+        # lead nato da Vende si puo' chiudere come errore senza rischiare di
+        # chiudere un lead vero; per gli altri lo stato di prima non e' noto.
+        if lead.get("source") != LEAD_SOURCE:
+            raise SellerError("Questa attivazione e' precedente alla gestione degli errori: non so a che stato "
+                              "riportare il lead. Usa «Non vende più».", "SELLER_MISTAKE_ORIGIN_UNKNOWN")
+        origine = "created"
+
+    nota = (body.note or "").strip()
+    unlinked = False
+    relazione = "kept"
+    prima = meta.get("previous") or {}
+    if origine == "created":
+        cur.execute("UPDATE leads SET status = 'closed', stage = 'lost', lost_reason = %s, "
+                    "closed_at = COALESCE(closed_at, NOW()), updated_at = NOW() WHERE id = %s RETURNING *",
+                    (MISTAKE_REASON, lead["id"]))
+        azione = "closed"
+    else:
+        stato = prima.get("status") or "open"
+        chiuso = prima.get("closed_at") if stato == "closed" else None
+        cur.execute("UPDATE leads SET stage = %s, status = %s, lost_reason = %s, "
+                    "closed_at = CASE WHEN %s = 'closed' THEN COALESCE(%s::timestamptz, NOW()) ELSE NULL END, "
+                    "updated_at = NOW() WHERE id = %s RETURNING *",
+                    (prima.get("stage") or lead["stage"], stato, prima.get("lost_reason"), stato, chiuso, lead["id"]))
+        azione = "restored"
+        tipo_prima = prima.get("relation_type")
+        if tipo_prima is None:
+            relazione, unlinked = "unlinked", True
+        elif tipo_prima != "seller":
+            relazione = f"restored:{tipo_prima}"
+    aggiornato = dict(cur.fetchone())
+    # lo storico PRIMA di toccare la relazione: la riga resta sull'immobile
+    _storico(cur, ctx, property_id=property_id, contact_id=body.contact_id, lead_id=lead["id"],
+             testo=f"Vende: inserito per errore — {contatto['name']}" + (f" ({nota})" if nota else ""),
+             evento="mistake",
+             extra={"lead_id": lead["id"], "origin": origine, "action": azione, "relation": relazione,
+                    "unlinked": unlinked, "activation_activity_id": (attivazione or {}).get("id"),
+                    "restored": None if azione == "closed" else {
+                        "stage": aggiornato["stage"], "status": aggiornato["status"],
+                        "lost_reason": aggiornato["lost_reason"]},
+                    "note": nota or None})
+    if unlinked:
+        cur.execute("DELETE FROM property_leads WHERE property_id = %s AND lead_id = %s AND relation_type = 'seller'",
+                    (property_id, lead["id"]))
+    elif relazione.startswith("restored:"):
+        cur.execute("UPDATE property_leads SET relation_type = %s WHERE property_id = %s AND lead_id = %s "
+                    "AND relation_type = 'seller'", (prima["relation_type"], property_id, lead["id"]))
+    return _esito(aggiornato, property_id, already=False, unlinked=unlinked, origin=origine, action=azione)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +533,9 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
     predicato, params = scoped_predicate(ctx, "leads", "l")
     # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
     filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL"]
+    # DELETE-ARCH Fase 1B: gli inseriti per errore solo nel loro filtro.
+    if status != "mistakes":
+        filtri.append(NOT_MISTAKE_SQL)
     for clausola in (VIEWS[view][1], STATUS_FILTERS[status][1]):
         if clausola:
             filtri.append(clausola)
@@ -443,6 +618,7 @@ def _voce(r: dict, punteggio: dict | None, ctx, sees_all: bool) -> dict:
     return {
         "lead_id": r["lead_id"], "stage": r["stage"], "stage_label": STAGE_LABELS_IT.get(r["stage"], r["stage"]),
         "status": r["status"], "lost_reason": r["lost_reason"],
+        "lost_reason_label": MISTAKE_LABEL_IT if r["lost_reason"] == MISTAKE_REASON else r["lost_reason"],
         "assigned_agent_id": r["assigned_agent_id"], "agent_name": r["agent_name"],
         "contact": {"id": r["contact_id"], "name": r["contact_name"], "phone": r["phone"], "email": r["email"]},
         "property": {"id": r["property_id"], "code": r["code"], "title": r["title"], "address": r["address"],

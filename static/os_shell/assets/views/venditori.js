@@ -124,7 +124,7 @@ export async function renderVenditori(container) {
       <header class="seller-card-head">
         <a class="seller-name" href="#/contatti/${escapeHtml(String(it.contact.id))}">${escapeHtml(it.contact.name || `Contatto #${it.contact.id}`)}</a>
         ${renderBadge(it.stage_label || stageLabel(it.stage), STAGE_TONES[it.stage] || 'gray')} ${intent}
-        ${it.status === 'paused' ? renderBadge('Sospesa', 'warn') : ''}${it.status === 'closed' ? renderBadge(it.lost_reason || 'Chiusa', 'gray') : ''}
+        ${it.status === 'paused' ? renderBadge('Sospesa', 'warn') : ''}${it.status === 'closed' ? renderBadge(it.lost_reason_label || it.lost_reason || 'Chiusa', 'gray') : ''}
       </header>
       <div class="seller-line"><a href="#/immobili/${escapeHtml(String(it.property.id))}">${escapeHtml([it.property.code, propertyLine(it.property)].filter(Boolean).join(' · '))}</a>
         ${proprietario ? '' : ` ${renderBadge('Non più collegato come proprietario', 'warn')}`}</div>

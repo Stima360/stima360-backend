@@ -10,6 +10,8 @@
 //   aperta               -> «Vende ✓»       -> «Apri in Venditori» · «Smetti…»
 //   sospesa              -> «Sospesa»       -> «Riprendi»
 //   chiusa               -> «Non vende»     -> «Riattiva»
+//   inserita per errore  -> «Inserito per errore» -> «Vende?» (DELETE-ARCH 1B:
+//                           mai mostrata come una chiusura «Non vende»)
 //
 // Casi espliciti (mai una scorciatoia):
 //   * censimento: dialog «Mario vuole vendere questo immobile. Per lavorarlo
@@ -44,6 +46,10 @@ export function renderSellerCell(row, property) {
   if (s.state === 'paused') {
     return `<span class="seller-cell" data-seller-state="paused">${renderBadge('Vendita sospesa', 'warn')}
       <button type="button" class="btn btn-small" data-seller-on="${cid}">Riprendi</button></span>`;
+  }
+  if (s.state === 'mistake') {
+    return `<span class="seller-cell" data-seller-state="mistake">${renderBadge('Inserito per errore', 'gray')}
+      <button type="button" class="btn ghost btn-small" data-seller-on="${cid}">Vende?</button></span>`;
   }
   if (s.state === 'closed') {
     return `<span class="seller-cell" data-seller-state="closed">${renderBadge('Non vende', 'gray')}

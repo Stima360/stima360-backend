@@ -299,7 +299,7 @@ def get_property(*args, **kwargs):
             raise NotFoundError(f'property {property_id} not found')
         cur.execute('SELECT pc.*,c.display_name,c.email,c.phone FROM property_contacts pc JOIN contacts c ON c.id=pc.contact_id WHERE pc.property_id=%s ORDER BY pc.is_primary DESC,pc.id', (property_id,))
         p['contacts'] = [dict(x) for x in cur.fetchall()]
-        cur.execute('SELECT pl.*,l.pipeline,l.stage,l.status,l.contact_id FROM property_leads pl JOIN leads l ON l.id=pl.lead_id WHERE pl.property_id=%s ORDER BY pl.id', (property_id,))
+        cur.execute("SELECT pl.*,l.pipeline,l.stage,l.status,l.contact_id,to_jsonb(l)->>'lost_reason' AS lost_reason FROM property_leads pl JOIN leads l ON l.id=pl.lead_id WHERE pl.property_id=%s ORDER BY pl.id", (property_id,))
         p['leads'] = [dict(x) for x in cur.fetchall()]
         for table, key in [('property_documents', 'documents'), ('property_photos', 'photos'), ('property_visits', 'visits')]:
             order = 'sort_order,id' if table == 'property_photos' else ('scheduled_at DESC,id DESC' if table == 'property_visits' else 'created_at DESC,id DESC')

@@ -416,8 +416,14 @@ def test_g01_disattivare_conserva_tutto_e_la_riattivazione_riapre_lo_stesso_lead
     assert _q(m, "SELECT status, stage, lost_reason, closed_at FROM leads WHERE id = %s", (lead,))[0] == ["open", "new", None, None]
     assert _lead_sell(m, mario) == [lead] and _coppie(_worklist(m)) == {(mario, p["id"])}
 
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1B: «Inserito per errore» non
+    # scrive piu' un testo libero. Questa riattivazione ha riaperto un lead
+    # chiuso (origin `reopened`): l'errore lo riporta allo stato di PRIMA
+    # (chiuso «Non vende più»), mai `created_by_mistake`; la relazione seller
+    # esisteva gia' e resta.
     r = _disattiva(m, p["id"], mario, "mistake")
-    assert r.status_code == 200 and r.json()["lost_reason"].startswith("Inserito per errore")
+    assert r.status_code == 200 and r.json()["lost_reason"].startswith("Non vende più")
+    assert r.json()["status"] == "closed" and r.json()["origin"] == "reopened"
     assert _q(m, "SELECT count(*) FROM property_leads WHERE lead_id = %s", (lead,))[0][0] == 1
 
 
