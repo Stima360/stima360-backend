@@ -305,26 +305,32 @@ process.stdout.write(JSON.stringify({{ testo: archiveBlockersText(e), vuoto: arc
 
 
 def test_u04_l_agente_non_vede_elimina_su_attivita_e_task():
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: «Elimina» non compare piu'
+    # per nessun ruolo; al suo posto «Creato / Inserita per errore» con la
+    # regola di 6.3 (agente sui propri, owner/admin sull'agenzia).
     testo = _read(ATTIVITA_JS)
     assert "import { getSession } from '../core/auth.js';" in testo
-    blocchi = "\n".join(_function_block(testo, n) for n in ("canDeleteHistory", "renderTaskActions", "renderCronologiaActions"))
+    blocchi = "\n".join(_function_block(testo, n) for n in (
+        "isMistake", "canMarkMistake", "mistakeConfirm", "renderTaskActions", "renderCronologiaActions"))
     esito = _node(f"""
 const escapeHtml = (v) => String(v ?? '');
 const OPEN_TASK_STATUSES = ['open', 'in_progress'];
+const GENERATED_TASK_SOURCES = ['flow', 'followup', 'automated'];
+const GENERATED_ACTIVITY_TYPES = ['status_change', 'system', 'valuation'];
 let sessione = {{ role: 'agent', user_id: 3 }};
 const getSession = () => sessione;
 {blocchi}
-const task = {{ id: 5, status: 'open' }};
-const attivita = {{ kind: 'attivita', data: {{ id: 9, property_id: null }} }};
+const task = {{ id: 5, status: 'open', created_by_user_id: 4, metadata: {{}} }};
+const attivita = {{ kind: 'attivita', data: {{ id: 9, property_id: null, activity_type: 'note', created_by_user_id: 4, metadata: {{}} }} }};
 const agente = {{ task: renderTaskActions(task, new Set(['task:5'])), att: renderCronologiaActions(attivita, new Set()) }};
 sessione = {{ role: 'agency_admin', user_id: 3 }};
 const admin = {{ task: renderTaskActions(task, new Set()), att: renderCronologiaActions(attivita, new Set()) }};
 process.stdout.write(JSON.stringify({{ agente, admin }}));
 """)
-    assert "data-delete-task" not in esito["agente"]["task"] and "data-complete-task" in esito["agente"]["task"]
-    assert "data-edit-task" in esito["agente"]["task"]
-    assert esito["agente"]["att"] == ""
-    assert 'data-delete-task="5"' in esito["admin"]["task"] and 'data-delete-activity="9"' in esito["admin"]["att"]
+    assert "data-delete" not in esito["agente"]["task"] + esito["admin"]["task"] + esito["admin"]["att"]
+    assert "data-complete-task" in esito["agente"]["task"] and "data-edit-task" in esito["agente"]["task"]
+    assert "data-mistake" not in esito["agente"]["task"] and esito["agente"]["att"] == ""
+    assert 'data-mistake-task="5"' in esito["admin"]["task"] and 'data-mistake-activity="9"' in esito["admin"]["att"]
 
 
 def test_u05_edificio_archivia_con_post_e_contact_360_marca_gli_archiviati():

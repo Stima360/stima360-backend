@@ -74,10 +74,10 @@
 // tabella: sono due tab distinti, con due caricamenti indipendenti e due
 // insiemi di colonne diversi (renderDaFareTab / renderCronologiaTab).
 //
-// P25.1: creazione/modifica/eliminazione operative per Task e Attività
-// (creazione/eliminazione), tramite gli endpoint CORE già esistenti e già
-// verificati sopra (POST/PATCH/DELETE /api/core/tasks, POST/DELETE
-// /api/core/activities) — vedi components/activity-task-dialogs.js per i
+// P25.1: creazione/modifica operative per Task e Attività (creazione), tramite
+// gli endpoint CORE già esistenti (POST/PATCH /api/core/tasks, POST
+// /api/core/activities); DELETE-ARCH 1C: «per errore» con POST
+// .../mark-mistake al posto dell'eliminazione — vedi components/activity-task-dialogs.js per i
 // dettagli di contratto. Le Visite restano volutamente sola lettura qui: la
 // loro gestione (creazione/modifica/eliminazione) è già interamente in
 // immobile-dettaglio.js (P16) e non va duplicata in questa vista.
@@ -90,9 +90,11 @@ import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../compone
 // components/activity-task-dialogs.js per il razionale e i contratti
 // backend verificati). Nessun nuovo endpoint: stesso CORE già usato sopra
 // per il completamento task (PATCH /api/core/tasks/{id}).
+// DELETE-ARCH Fase 1C: niente piu' «Elimina» - «Creato per errore» (task) e
+// «Inserita per errore» (attivita'): la riga resta, marcata, nello storico.
 import {
-  openNewActivityDialog, deleteActivity,
-  openNewTaskDialog, openEditTaskDialog, deleteTask,
+  openNewActivityDialog, markActivityMistake,
+  openNewTaskDialog, openEditTaskDialog, markTaskMistake,
 } from '../components/activity-task-dialogs.js';
 
 const TASK_STATUS_LABELS = { open: 'Da fare', in_progress: 'In corso', completed: 'Completato', cancelled: 'Annullato' };
@@ -188,10 +190,9 @@ export async function renderAttivita(container) {
     activeTab: 'dafare',
     cache: { dafare: null, cronologia: null },
     cronologiaVisibleCount: 30,
-    // P25.1: conferma inline a due click prima di eliminare un task o
-    // un'attività (nessun window.confirm(), stesso principio già usato in
-    // immobile-dettaglio.js per referenti/visite/vendite). Chiave
-    // "{kind}:{id}" perché task e attività condividono lo stesso set.
+    // Conferma inline a due click (nessun window.confirm()), chiave
+    // "{kind}:{id}" condivisa da task e attività. DELETE-ARCH 1C: conferma
+    // di «per errore», non piu' di un'eliminazione.
     deleteConfirm: new Set(),
   };
 
@@ -335,7 +336,7 @@ export async function renderAttivita(container) {
     bindTaskEditDeleteActions(state.cache.dafare.tasks, loadDaFare);
   }
 
-  // P25.1: azioni Modifica/Elimina task, condivise tra "Da fare" e
+  // P25.1: azioni Modifica / «Creato per errore» (1C) dei task, condivise tra "Da fare" e
   // "Cronologia" (un task chiuso resta modificabile/eliminabile anche in
   // Cronologia). `tasks` è l'elenco già caricato per la tab corrente (nessuna
   // nuova chiamata per risolvere l'id in un oggetto task). Conferma inline a
@@ -348,72 +349,69 @@ export async function renderAttivita(container) {
         if (task) openEditTaskDialog(taskDialogEl, task, { onSuccess: reloadAfterMutation });
       });
     });
-    contentEl.querySelectorAll('[data-delete-task]').forEach((btn) => {
+    contentEl.querySelectorAll('[data-mistake-task]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        // Solo toggle dello stato di conferma: `reload` senza force=true
-        // re-renderizza dalla cache già presente (nessuna nuova chiamata di
-        // rete), esattamente come contactRemoveConfirm in
-        // immobile-dettaglio.js.
-        state.deleteConfirm.add(`task:${btn.dataset.deleteTask}`);
+        // Solo toggle dello stato di conferma: re-render dalla cache.
+        state.deleteConfirm.add(`task:${btn.dataset.mistakeTask}`);
         reload();
       });
     });
-    contentEl.querySelectorAll('[data-delete-task-back]').forEach((btn) => {
+    contentEl.querySelectorAll('[data-mistake-task-back]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.deleteConfirm.delete(`task:${btn.dataset.deleteTaskBack}`);
+        state.deleteConfirm.delete(`task:${btn.dataset.mistakeTaskBack}`);
         reload();
       });
     });
-    contentEl.querySelectorAll('[data-delete-task-confirm]').forEach((btn) => {
+    contentEl.querySelectorAll('[data-mistake-task-confirm]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const taskId = btn.dataset.deleteTaskConfirm;
+        const taskId = btn.dataset.mistakeTaskConfirm;
+        const notaEl = contentEl.querySelector(`[data-mistake-note="task:${taskId}"]`);
         btn.disabled = true;
-        btn.textContent = 'Eliminazione…';
+        btn.textContent = 'Salvataggio…';
         try {
-          await deleteTask(taskId);
+          await markTaskMistake(taskId, notaEl ? notaEl.value : '');
           state.deleteConfirm.delete(`task:${taskId}`);
           await reloadAfterMutation();
         } catch (err) {
           btn.disabled = false;
-          btn.textContent = 'Conferma eliminazione';
+          btn.textContent = 'Conferma: creato per errore';
           const feedbackEl = container.querySelector('#attivita-action-feedback');
-          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile eliminare il task: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
+          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile segnare il task: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
         }
       });
     });
   }
 
-  // P25.1: azioni Elimina attività (activities non ha PATCH lato backend,
-  // vedi components/activity-task-dialogs.js: solo creazione ed eliminazione).
-  function bindActivityDeleteActions(activities) {
-    contentEl.querySelectorAll('[data-delete-activity]').forEach((btn) => {
+  // DELETE-ARCH Fase 1C: «Inserita per errore» (prima: Elimina). La riga
+  // resta nello storico con il suo testo; cambia solo il segno d'errore.
+  function bindActivityMistakeActions() {
+    contentEl.querySelectorAll('[data-mistake-activity]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        // Solo toggle: re-render dalla cache, nessuna chiamata di rete
-        // (stesso principio del toggle task sopra).
-        state.deleteConfirm.add(`attivita:${btn.dataset.deleteActivity}`);
+        state.deleteConfirm.add(`attivita:${btn.dataset.mistakeActivity}`);
         loadCronologia();
       });
     });
-    contentEl.querySelectorAll('[data-delete-activity-back]').forEach((btn) => {
+    contentEl.querySelectorAll('[data-mistake-activity-back]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.deleteConfirm.delete(`attivita:${btn.dataset.deleteActivityBack}`);
+        state.deleteConfirm.delete(`attivita:${btn.dataset.mistakeActivityBack}`);
         loadCronologia();
       });
     });
-    contentEl.querySelectorAll('[data-delete-activity-confirm]').forEach((btn) => {
+    contentEl.querySelectorAll('[data-mistake-activity-confirm]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const activityId = btn.dataset.deleteActivityConfirm;
+        const activityId = btn.dataset.mistakeActivityConfirm;
+        const notaEl = contentEl.querySelector(`[data-mistake-note="attivita:${activityId}"]`);
         btn.disabled = true;
-        btn.textContent = 'Eliminazione…';
+        btn.textContent = 'Salvataggio…';
         try {
-          await deleteActivity(activityId);
+          await markActivityMistake(activityId, notaEl ? notaEl.value : '');
           state.deleteConfirm.delete(`attivita:${activityId}`);
           await reloadAfterMutation();
         } catch (err) {
           btn.disabled = false;
-          btn.textContent = 'Conferma eliminazione';
+          btn.textContent = 'Conferma: inserita per errore';
           const feedbackEl = container.querySelector('#attivita-action-feedback');
-          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile eliminare l'attività: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
+          if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">Impossibile segnare l'attività: ${escapeHtml(err && err.message ? err.message : 'errore sconosciuto')}</div>`;
         }
       });
     });
@@ -429,7 +427,7 @@ export async function renderAttivita(container) {
       });
     }
     bindTaskEditDeleteActions(state.cache.cronologia.tasks, loadCronologia);
-    bindActivityDeleteActions(state.cache.cronologia.activities);
+    bindActivityMistakeActions();
   }
 
   await showTab('dafare');
@@ -517,37 +515,50 @@ function renderDaFareItem(item, deleteConfirm) {
   return renderVisitItem(item.data);
 }
 
-// P25.1: azioni Modifica/Elimina aggiunte accanto a "Completa" (già
-// esistente). Conferma inline a due click per l'eliminazione (nessun
-// window.confirm()), chiave "task:{id}" nel Set deleteConfirm condiviso.
-// DELETE-ARCH Fase 0 (contratto REV 2, §6): un agente non cancella piu'
-// attivita' e task - il backend risponde 403 - quindi «Elimina» non compare.
-// Owner, admin e platform admin lo vedono come prima.
-export function canDeleteHistory(session) {
-  if (!session) return false;
+// DELETE-ARCH Fase 1C: niente «Elimina». Un task o un'attività sbagliati si
+// segnano «per errore» (contratto REV 2, 6.3, nessun timer): l'agente sui
+// propri (`created_by_user_id`), owner/admin e platform admin in acting su
+// tutta l'agenzia - la stessa regola che applica il backend.
+export const GENERATED_TASK_SOURCES = ['flow', 'followup', 'automated'];
+export const GENERATED_ACTIVITY_TYPES = ['status_change', 'system', 'valuation'];
+
+export function isMistake(record) {
+  return Boolean(record && record.metadata && record.metadata.mistake === true);
+}
+
+export function canMarkMistake(session, record) {
+  if (!session || !record) return false;
   if (session.is_platform_admin === true) return true;
-  return session.role === 'agency_owner' || session.role === 'agency_admin';
+  if (session.role === 'agency_owner' || session.role === 'agency_admin') return true;
+  return record.created_by_user_id != null && String(record.created_by_user_id) === String(session.user_id);
+}
+
+function mistakeConfirm(kind, id, label) {
+  const chiave = `${kind}:${id}`;
+  return `
+      <input class="input" maxlength="500" placeholder="Nota (facoltativa)" data-mistake-note="${escapeHtml(chiave)}">
+      <button type="button" class="btn ghost" data-mistake-${kind === 'task' ? 'task' : 'activity'}-confirm="${escapeHtml(id)}">${escapeHtml(label)}</button>
+      <button type="button" class="btn ghost" data-mistake-${kind === 'task' ? 'task' : 'activity'}-back="${escapeHtml(id)}">Indietro</button>
+    `;
 }
 
 function renderTaskActions(t, deleteConfirm) {
-  const puoEliminare = canDeleteHistory(getSession());
-  const confirming = puoEliminare && deleteConfirm ? deleteConfirm.has(`task:${t.id}`) : false;
-  if (confirming) {
-    return `
-      <button type="button" class="btn ghost" data-delete-task-confirm="${escapeHtml(t.id)}">Conferma eliminazione</button>
-      <button type="button" class="btn ghost" data-delete-task-back="${escapeHtml(t.id)}">Indietro</button>
-    `;
+  if (isMistake(t)) return '';            // chiuso cosi': nessuna azione
+  const generato = t.metadata && GENERATED_TASK_SOURCES.includes(t.metadata.source);
+  const puoSegnare = OPEN_TASK_STATUSES.includes(t.status) && !generato && canMarkMistake(getSession(), t);
+  if (puoSegnare && deleteConfirm && deleteConfirm.has(`task:${t.id}`)) {
+    return mistakeConfirm('task', t.id, 'Conferma: creato per errore');
   }
   const completeBtn = OPEN_TASK_STATUSES.includes(t.status)
     ? `<button type="button" class="btn ghost" data-complete-task="${escapeHtml(t.id)}">Completa</button>`
     : '';
-  const deleteBtn = puoEliminare
-    ? `<button type="button" class="btn ghost" data-delete-task="${escapeHtml(t.id)}">Elimina</button>`
+  const mistakeBtn = puoSegnare
+    ? `<button type="button" class="btn ghost" data-mistake-task="${escapeHtml(t.id)}">Creato per errore</button>`
     : '';
   return `
     ${completeBtn}
     <button type="button" class="btn ghost" data-edit-task="${escapeHtml(t.id)}">Modifica</button>
-    ${deleteBtn}
+    ${mistakeBtn}
   `;
 }
 
@@ -636,42 +647,48 @@ function renderCronologiaTab(data, visibleCount, deleteConfirm) {
   `;
 }
 
-// P25.1: azioni Modifica/Elimina per un task chiuso, Elimina per un'attività
-// (nessuna azione per le visite: la loro gestione resta in
-// immobile-dettaglio.js, P16, non duplicata qui). Stesso principio di
-// conferma inline a due click di renderTaskActions sopra.
+// Azioni della Cronologia: Modifica per un task chiuso, «Inserita per
+// errore» per un'attività (DELETE-ARCH 1C, prima Elimina). Nessuna azione per
+// le visite: la loro gestione resta in immobile-dettaglio.js (P16).
 function renderCronologiaActions(item, deleteConfirm) {
   if (item.kind === 'task') return renderTaskActions(item.data, deleteConfirm);
   if (item.kind === 'attivita') {
-    // CRM-OPS-4: un'interazione legata a un immobile e' storico commerciale e
-    // non si cancella (il backend risponde 409): niente "Elimina", si apre lo
-    // storico dell'immobile, dove una correzione e' una nuova interazione.
-    if (item.data.property_id) {
-      return `<a class="btn ghost" href="#/immobili/${encodeURIComponent(item.data.property_id)}/attivita">Storico immobile</a>`;
+    const a = item.data;
+    // CRM-OPS-4: un'interazione d'immobile resta nello storico dell'immobile.
+    const storico = a.property_id
+      ? `<a class="btn ghost" href="#/immobili/${encodeURIComponent(a.property_id)}/attivita">Storico immobile</a>`
+      : '';
+    if (isMistake(a) || GENERATED_ACTIVITY_TYPES.includes(a.activity_type) || !canMarkMistake(getSession(), a)) {
+      return storico;
     }
-    // DELETE-ARCH Fase 0: niente «Elimina» per un agente (vedi canDeleteHistory).
-    if (!canDeleteHistory(getSession())) return '';
-    const confirming = deleteConfirm ? deleteConfirm.has(`attivita:${item.data.id}`) : false;
-    if (confirming) {
-      return `
-        <button type="button" class="btn ghost" data-delete-activity-confirm="${escapeHtml(item.data.id)}">Conferma eliminazione</button>
-        <button type="button" class="btn ghost" data-delete-activity-back="${escapeHtml(item.data.id)}">Indietro</button>
-      `;
+    if (deleteConfirm && deleteConfirm.has(`attivita:${a.id}`)) {
+      return mistakeConfirm('attivita', a.id, 'Conferma: inserita per errore');
     }
-    return `<button type="button" class="btn ghost" data-delete-activity="${escapeHtml(item.data.id)}">Elimina</button>`;
+    return `${storico}<button type="button" class="btn ghost" data-mistake-activity="${escapeHtml(a.id)}">Inserita per errore</button>`;
   }
   return '';
 }
 
 function renderCronologiaTypeBadge(item) {
+  // DELETE-ARCH 1C: un errore non si confonde con un annullamento reale.
+  if (item.kind === 'task' && isMistake(item.data)) return renderBadge('Task · Creato per errore', 'gray');
   if (item.kind === 'task') return renderBadge(`Task · ${TASK_STATUS_LABELS[item.data.status] || item.data.status}`, item.data.status === 'completed' ? 'ok' : 'danger');
-  if (item.kind === 'attivita') return renderBadge(ACTIVITY_TYPE_LABELS[item.data.activity_type] || item.data.activity_type || 'Attività', 'gray');
+  if (item.kind === 'attivita') {
+    const tipo = renderBadge(ACTIVITY_TYPE_LABELS[item.data.activity_type] || item.data.activity_type || 'Attività', 'gray');
+    return isMistake(item.data) ? `${tipo} ${renderBadge('Inserita per errore', 'warn')}` : tipo;
+  }
   return renderBadge(`Visita · ${VISIT_STATUS_LABELS[item.data.status] || item.data.status}`, item.data.status === 'completed' ? 'ok' : 'danger');
 }
 
 function renderCronologiaDescription(item) {
   if (item.kind === 'task') return escapeHtml(item.data.title || `Task #${item.data.id}`);
-  if (item.kind === 'attivita') return escapeHtml(item.data.subject || item.data.description || '—');
+  if (item.kind === 'attivita') {
+    // il testo originale resta com'era; l'errore e' detto accanto, con la nota
+    const testo = escapeHtml(item.data.subject || item.data.description || '—');
+    if (!isMistake(item.data)) return testo;
+    const nota = item.data.metadata.mistake_note;
+    return `${testo}<div class="muted">Inserita per errore${nota ? ` — ${escapeHtml(nota)}` : ''}</div>`;
+  }
   return escapeHtml(item.data.property_title ? `Visita: ${item.data.property_title}` : `Visita #${item.data.id}`);
 }
 

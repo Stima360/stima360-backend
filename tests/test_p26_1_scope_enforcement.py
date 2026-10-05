@@ -1007,11 +1007,18 @@ FROZEN_CORE_ROUTES = {
     ("DELETE", "/api/core/leads/{lead_id}/stime/{stima_id}", 204),
     ("POST", "/api/core/activities", 201),
     ("GET", "/api/core/activities", 200),
-    ("DELETE", "/api/core/activities/{activity_id}", 204),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: le DELETE di attivita' e
+    # task restano solo per compatibilita' e rispondono sempre 405
+    # (HARD_DELETE_DISABLED): nessun 204 dichiarato.
+    ("DELETE", "/api/core/activities/{activity_id}", 200),
     ("POST", "/api/core/tasks", 201),
     ("GET", "/api/core/tasks", 200),
     ("PATCH", "/api/core/tasks/{task_id}", 200),
-    ("DELETE", "/api/core/tasks/{task_id}", 204),
+    ("DELETE", "/api/core/tasks/{task_id}", 200),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: «creato per errore» per
+    # task e attivita' (scope d'agenzia nel repository, ruolo nel service).
+    ("POST", "/api/core/tasks/{task_id}/mark-mistake", 200),
+    ("POST", "/api/core/activities/{activity_id}/mark-mistake", 200),
 }
 
 

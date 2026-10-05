@@ -669,14 +669,16 @@ def test_j01_un_agente_non_cancella_attivita_e_task_owner_solo_le_proprie(mondo)
     task_agente = _q(mondo, "INSERT INTO tasks (agency_id, title, contact_id, created_by_user_id) VALUES (1, 'T', %s, %s) RETURNING id", (cid, uid_a))[0][0]
     task_owner = _q(mondo, "INSERT INTO tasks (agency_id, title, contact_id, created_by_user_id) VALUES (1, 'T', %s, %s) RETURNING id", (cid, uid_o))[0][0]
     agente, owner = mondo["api"]("agent_a"), mondo["api"]("owner_a")
-    assert agente.delete(f"/api/core/activities/{att_agente}").status_code == 403
-    assert agente.delete(f"/api/core/tasks/{task_agente}").status_code == 403
-    assert owner.delete(f"/api/core/activities/{att_agente}").status_code == 403
-    assert owner.delete(f"/api/core/tasks/{task_agente}").status_code == 403
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: la cancellazione fisica di
+    # attivita' e task non esiste piu' per nessuno (405 HARD_DELETE_DISABLED),
+    # nemmeno per il titolare sui propri record: si usa «per errore».
+    for api, rid, tipo in ((agente, att_agente, "activities"), (agente, task_agente, "tasks"),
+                           (owner, att_agente, "activities"), (owner, task_agente, "tasks"),
+                           (owner, att_owner, "activities"), (owner, task_owner, "tasks"),
+                           (owner, 999999, "activities")):
+        r = api.delete(f"/api/core/{tipo}/{rid}")
+        assert r.status_code == 405 and r.json()["code"] == "HARD_DELETE_DISABLED", (tipo, rid, r.text)
     assert _q(mondo, "SELECT count(*) FROM activities")[0][0] == 2 and _q(mondo, "SELECT count(*) FROM tasks")[0][0] == 2
-    assert owner.delete(f"/api/core/activities/{att_owner}").status_code == 204
-    assert owner.delete(f"/api/core/tasks/{task_owner}").status_code == 204
-    assert owner.delete("/api/core/activities/999999").status_code == 404
 
 
 def test_j02_richiesta_acquirente_archivio_riservato_e_bloccato_dai_processi(mondo):

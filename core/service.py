@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from operator_auth import permissions
 
 from . import repository
-from .exceptions import PermissionDenied
+from .exceptions import PermissionDenied, ValidationError
 from .normalization import normalize_email, normalize_phone
 
 ASSIGNMENT_DENIED_MESSAGE = (
@@ -210,27 +210,38 @@ def unlink_stima(ctx, lead_id, stima_id):
     repository.unlink_stima(ctx, lead_id, stima_id)
 
 
+def _reject_mistake_keys(metadata) -> None:
+    """DELETE-ARCH Fase 1C: il segno d'errore lo scrive solo il server
+    (mark-mistake), mai il corpo di una creazione o di una PATCH."""
+    if isinstance(metadata, dict) and any(k in metadata for k in repository.MISTAKE_KEYS):
+        raise ValidationError("metadata.mistake e' gestito dal server: usa «Segna come creato per errore»")
+
+
 def create_activity(ctx, payload):
-    return repository.create_activity(ctx, _dump(payload))
+    data = _dump(payload)
+    _reject_mistake_keys(data.get("metadata"))
+    return repository.create_activity(ctx, data)
 
 
-def list_activities(ctx, limit, offset, contact_id, lead_id, stima_id):
-    return repository.list_activities(ctx, limit, offset, contact_id, lead_id, stima_id)
+def list_activities(ctx, limit, offset, contact_id, lead_id, stima_id, mistakes=None):
+    return repository.list_activities(ctx, limit, offset, contact_id, lead_id, stima_id, mistakes)
 
 
 def create_task(ctx, payload):
     data = _dump(payload)
+    _reject_mistake_keys(data.get("metadata"))
     if data.get("status") == "completed" and data.get("completed_at") is None:
         data["completed_at"] = datetime.now(timezone.utc)
     return repository.create_task(ctx, data)
 
 
-def list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status):
-    return repository.list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status)
+def list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status, mistakes=None):
+    return repository.list_tasks(ctx, limit, offset, contact_id, lead_id, stima_id, status, mistakes)
 
 
 def update_task(ctx, task_id, payload):
     data = _dump(payload, exclude_unset=True)
+    _reject_mistake_keys(data.get("metadata"))
     if data.get("status") == "completed" and "completed_at" not in data:
         data["completed_at"] = datetime.now(timezone.utc)
     elif data.get("status") in {"open", "in_progress", "cancelled"} and "completed_at" not in data:
@@ -261,3 +272,26 @@ def delete_activity(ctx, activity_id):
 def delete_task(ctx, task_id):
     _require_destructive_role(ctx, AGENT_CANNOT_DELETE_TASK)
     repository.delete_task(ctx, task_id)
+
+
+# DELETE-ARCH Fase 1C - «Creato per errore» per task e attivita' (contratto
+# REV 2, sezione 6.3, senza alcun timer): il record resta, segnato.
+#   * agent: solo i propri (`created_by_user_id = se'`);
+#   * owner/admin e platform admin in acting: tutta l'agenzia;
+#   * platform admin fuori acting: 403 (`require_agency`).
+# Lo scope d'agenzia (404 fuori) lo applica il repository.
+def mark_task_mistake(ctx, task_id, payload):
+    return repository.mark_task_mistake(
+        ctx, task_id, _nota(payload),
+        sees_all=permissions.sees_all_agency_records(ctx.role, ctx.is_platform_admin))
+
+
+def mark_activity_mistake(ctx, activity_id, payload):
+    return repository.mark_activity_mistake(
+        ctx, activity_id, _nota(payload),
+        sees_all=permissions.sees_all_agency_records(ctx.role, ctx.is_platform_admin))
+
+
+def _nota(payload):
+    nota = (getattr(payload, "note", None) or "").strip()
+    return nota or None

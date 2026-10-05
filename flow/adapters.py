@@ -4,6 +4,12 @@ from core.database import core_cursor
 from core.exceptions import NotFoundError
 
 
+# DELETE-ARCH Fase 1C: un'attivita' «inserita per errore» non e' un contatto
+# avvenuto: non ferma le regole che guardano `activity_count`.
+_ACTIVITY_COUNT_SQL = ("SELECT COUNT(*) AS n FROM activities WHERE lead_id=%s "
+                       "AND COALESCE((metadata->>'mistake')::boolean, FALSE) = FALSE")
+
+
 def _one(cur, sql, params, label):
     cur.execute(sql, params)
     row = cur.fetchone()
@@ -15,7 +21,7 @@ def load_entity(entity_type: str, entity_id: int) -> dict:
     with core_cursor() as (_, cur):
         if entity_type == "lead":
             x = _one(cur, "SELECT * FROM leads WHERE id=%s", (entity_id,), f"lead {entity_id} not found")
-            cur.execute("SELECT COUNT(*) AS n FROM activities WHERE lead_id=%s", (entity_id,)); x["activity_count"] = cur.fetchone()["n"]
+            cur.execute(_ACTIVITY_COUNT_SQL, (entity_id,)); x["activity_count"] = cur.fetchone()["n"]
             cur.execute("SELECT COUNT(*) AS n FROM tasks WHERE lead_id=%s AND status IN ('open','in_progress')", (entity_id,)); x["open_task_count"] = cur.fetchone()["n"]
             x["entity_type"]="lead"; x["entity_id"]=entity_id; return x
         if entity_type == "property":
@@ -338,7 +344,7 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
                 (entity_id, agency_id),
                 f"lead {entity_id} not found",
             )
-            cur.execute("SELECT COUNT(*) AS n FROM activities WHERE lead_id=%s", (entity_id,))
+            cur.execute(_ACTIVITY_COUNT_SQL, (entity_id,))
             x["activity_count"] = cur.fetchone()["n"]
             cur.execute(
                 "SELECT COUNT(*) AS n FROM tasks WHERE lead_id=%s "

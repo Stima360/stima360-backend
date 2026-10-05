@@ -98,7 +98,8 @@ _LAST_ACTIVITY_EXPR_SQL = """
     GREATEST(
         COALESCE(
             (SELECT MAX(a.occurred_at) FROM activities a
-             WHERE a.lead_id = l.id OR a.contact_id = l.contact_id),
+             WHERE (a.lead_id = l.id OR a.contact_id = l.contact_id)
+               AND COALESCE((a.metadata->>'mistake')::boolean, FALSE) = FALSE),
             l.created_at
         ),
         COALESCE(
@@ -272,7 +273,8 @@ _LAST_ACTIVITY_EXPR_SQL_SCOPED = """
         COALESCE(
             (SELECT MAX(a.occurred_at) FROM activities a
              WHERE (a.lead_id = l.id OR a.contact_id = l.contact_id)
-               AND a.agency_id = %(agency_id)s),
+               AND a.agency_id = %(agency_id)s
+               AND COALESCE((a.metadata->>'mistake')::boolean, FALSE) = FALSE),
             l.created_at
         ),
         COALESCE(

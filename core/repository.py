@@ -855,13 +855,37 @@ def create_activity(ctx, data: dict[str, Any]) -> dict[str, Any]:
         return create_activity_with_cursor(cur, data, ctx=ctx)
 
 
-def list_activities(ctx, limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None):
+# ---------------------------------------------------------------------------
+# DELETE-ARCH Fase 1C - task e attivita' «creati per errore»
+# ---------------------------------------------------------------------------
+#: Le chiavi di `metadata` che scrive SOLO il server (mark_*_mistake): mai dal
+#: corpo di una creazione o di una PATCH.
+MISTAKE_KEYS = ("mistake", "mistake_at", "mistake_by_user_id", "mistake_note", "mistake_previous_status")
+#: Predicato unico: la riga e' segnata come errore.
+MISTAKE_SQL = "COALESCE(({a}.metadata->>'mistake')::boolean, FALSE)"
+#: Task generati da un processo: non li ha creati una persona, si annullano.
+GENERATED_TASK_SOURCES = ("flow", "followup", "automated")
+#: Attivita' generate (cambio di stato, sistema, stima): fatti di processo.
+GENERATED_ACTIVITY_TYPES = ("status_change", "system", "valuation")
+
+
+def _mistakes_filter(alias: str, mistakes: bool | None) -> str | None:
+    """None: tutte (storico); False: senza errori; True: solo errori."""
+    if mistakes is None:
+        return None
+    return f"{MISTAKE_SQL.format(a=alias)} = {'TRUE' if mistakes else 'FALSE'}"
+
+
+def list_activities(ctx, limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None,
+                    mistakes: bool | None = None):
     source, params = scoped_source(ctx, "activities", "a")
     filters = []
     for column, value in (("contact_id", contact_id), ("lead_id", lead_id), ("stima_id", stima_id)):
         if value is not None:
             filters.append(f"{column} = %s")
             params.append(value)
+    if _mistakes_filter("a", mistakes):
+        filters.append(_mistakes_filter("a", mistakes))
     clause = " AND " + " AND ".join(filters) if filters else ""
     params.extend([limit, offset])
     with core_cursor() as (_, cur):
@@ -963,13 +987,16 @@ def create_task(ctx, data: dict[str, Any]) -> dict[str, Any]:
         return create_task_with_cursor(cur, data, ctx=ctx)
 
 
-def list_tasks(ctx, limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None, status: str | None):
+def list_tasks(ctx, limit: int, offset: int, contact_id: int | None, lead_id: int | None, stima_id: int | None, status: str | None,
+               mistakes: bool | None = None):
     source, params = scoped_source(ctx, "tasks", "t")
     filters = []
     for column, value in (("contact_id", contact_id), ("lead_id", lead_id), ("stima_id", stima_id), ("status", status)):
         if value is not None:
             filters.append(f"{column} = %s")
             params.append(value)
+    if _mistakes_filter("t", mistakes):
+        filters.append(_mistakes_filter("t", mistakes))
     clause = " AND " + " AND ".join(filters) if filters else ""
     params.extend([limit, offset])
     with core_cursor() as (_, cur):
@@ -993,6 +1020,13 @@ def update_task(ctx, task_id: int, data: dict[str, Any]) -> dict[str, Any]:
     assignments = [f"{key} = %s" for key in data]
     params = list(data.values()) + [task_id] + scope_params
     with core_cursor(commit=True) as (_, cur):
+        # DELETE-ARCH Fase 1C: un task «creato per errore» e' chiuso cosi';
+        # nessuna PATCH lo riapre o lo riscrive in silenzio.
+        cur.execute(f"SELECT {MISTAKE_SQL.format(a='t')} AS mistake FROM tasks t "
+                    f"WHERE t.id = %s AND {predicate} FOR UPDATE", [task_id] + scope_params)
+        riga = cur.fetchone()
+        if riga is not None and riga.get("mistake"):
+            raise ConflictError(TASK_IS_MISTAKE)
         cur.execute(
             f"UPDATE tasks t SET {', '.join(assignments)}, updated_at = NOW() "
             f"WHERE t.id = %s AND {predicate} RETURNING *",
@@ -1002,6 +1036,73 @@ def update_task(ctx, task_id: int, data: dict[str, Any]) -> dict[str, Any]:
         if not row:
             raise NotFoundError(f"task {task_id} not found")
         return _row(row)
+
+
+TASK_IS_MISTAKE = "Il task è segnato come creato per errore: non si modifica."
+TASK_MISTAKE_NOT_OWN = "Puoi segnare come creati per errore solo i task creati da te."
+ACTIVITY_MISTAKE_NOT_OWN = "Puoi segnare come inserite per errore solo le attività registrate da te."
+TASK_MISTAKE_COMPLETED = "Un task completato non è un errore: riaprilo se serve."
+TASK_MISTAKE_CANCELLED = "Il task è già annullato."
+TASK_MISTAKE_GENERATED = "Questo task è generato automaticamente: annullalo invece di segnarlo come errore."
+ACTIVITY_MISTAKE_GENERATED = "Le attività generate dal sistema non si segnano come errore."
+
+
+def _mistake_json() -> str:
+    return ("jsonb_build_object('mistake', TRUE, 'mistake_at', NOW(), 'mistake_by_user_id', %s::bigint, "
+            "'mistake_note', %s::text")
+
+
+def mark_task_mistake(ctx, task_id: int, note: str | None, *, sees_all: bool) -> dict[str, Any]:
+    """DELETE-ARCH Fase 1C. Il task resta: `cancelled` + `metadata.mistake`,
+    con chi, quando, nota e stato di prima. Idempotente. Nessuna DELETE."""
+    ctx.require_agency()
+    predicate, scope_params = scoped_predicate(ctx, "tasks", "t")
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(f"SELECT * FROM tasks t WHERE t.id = %s AND {predicate} FOR UPDATE", [task_id] + scope_params)
+        riga = cur.fetchone()
+        if riga is None:
+            raise NotFoundError(f"task {task_id} not found")
+        if not sees_all and riga.get("created_by_user_id") != ctx.user_id:
+            raise PermissionDenied(TASK_MISTAKE_NOT_OWN)
+        meta = riga.get("metadata") or {}
+        if meta.get("mistake") is True:
+            return dict(riga)
+        if riga.get("status") == "completed":
+            raise ConflictError(TASK_MISTAKE_COMPLETED)
+        if riga.get("status") == "cancelled":
+            raise ConflictError(TASK_MISTAKE_CANCELLED)
+        if meta.get("source") in GENERATED_TASK_SOURCES:
+            raise ConflictError(TASK_MISTAKE_GENERATED)
+        cur.execute(
+            "UPDATE tasks t SET status = 'cancelled', completed_at = NULL, updated_at = NOW(), "
+            f"metadata = t.metadata || {_mistake_json()}, 'mistake_previous_status', %s::text) "
+            f"WHERE t.id = %s AND {predicate} RETURNING *",
+            [ctx.user_id, note, riga.get("status"), task_id] + scope_params)
+        return _row(cur.fetchone())
+
+
+def mark_activity_mistake(ctx, activity_id: int, note: str | None, *, sees_all: bool) -> dict[str, Any]:
+    """DELETE-ARCH Fase 1C. Stessa riga, testo originale intatto: cambia solo
+    `metadata` (mistake, chi, quando, nota). Vale anche per un'interazione
+    d'immobile (storico non cancellabile). Idempotente. Nessuna DELETE."""
+    ctx.require_agency()
+    predicate, scope_params = scoped_predicate(ctx, "activities", "a")
+    with core_cursor(commit=True) as (_, cur):
+        cur.execute(f"SELECT * FROM activities a WHERE a.id = %s AND {predicate} FOR UPDATE",
+                    [activity_id] + scope_params)
+        riga = cur.fetchone()
+        if riga is None:
+            raise NotFoundError(f"activity {activity_id} not found")
+        if not sees_all and riga.get("created_by_user_id") != ctx.user_id:
+            raise PermissionDenied(ACTIVITY_MISTAKE_NOT_OWN)
+        if (riga.get("metadata") or {}).get("mistake") is True:
+            return dict(riga)
+        if riga.get("activity_type") in GENERATED_ACTIVITY_TYPES:
+            raise ConflictError(ACTIVITY_MISTAKE_GENERATED)
+        cur.execute(f"UPDATE activities a SET metadata = a.metadata || {_mistake_json()}) "
+                    f"WHERE a.id = %s AND {predicate} RETURNING *",
+                    [ctx.user_id, note, activity_id] + scope_params)
+        return _row(cur.fetchone())
 
 
 #: CRM-OPS-4: lo storico commerciale di un immobile non si cancella.

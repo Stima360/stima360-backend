@@ -252,6 +252,12 @@ class TaskCreate(CoreModel):
         return values
 
 
+class MistakeMark(CoreModel):
+    """DELETE-ARCH Fase 1C: «Segna come creato per errore» (task o attivita').
+    Solo una nota facoltativa: chi e quando li decide il server."""
+    note: str | None = Field(default=None, max_length=500)
+
+
 class TaskUpdate(CoreModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None

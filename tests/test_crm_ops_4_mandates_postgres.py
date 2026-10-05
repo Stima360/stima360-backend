@@ -475,33 +475,20 @@ def test_13_interazione_d_immobile_non_si_cancella_le_altre_si(m):
     nota = _nota(m, m["casa"], interaction_type="note", note="sbagliata").json()
     legacy = sql("INSERT INTO activities (contact_id, activity_type, description) "
                  "VALUES (%s, 'call', 'legacy') RETURNING id", (m["mario"],))[0][0]
-    # API: 409 con il messaggio, la riga resta
-    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: un agente (marta) non
-    # cancella attivita' - 403 prima di qualunque lettura della riga; per il
-    # titolare lo storico d'immobile resta un 409 con lo stesso messaggio.
-    r = _api_core(m, "giorgio").delete(f"/api/core/activities/{nota['id']}")
-    assert r.status_code == 409, r.text
-    assert "storico commerciale" in r.json()["detail"] and "nuova interazione" in r.json()["detail"]
-    r = _api_core(m, "marta").delete(f"/api/core/activities/{nota['id']}")
-    assert r.status_code == 403, r.text
-    assert _conta(m, "activities", "id = %s", (nota["id"],)) == 1
-    # un'altra agenzia: non si rivela la riga (D-6). DELETE-ARCH Fase 0: per un
-    # agente - estraneo lo e' - il rifiuto e' 403 PRIMA di qualunque lettura, e
-    # identico per un id inesistente: la riga non viene rivelata comunque.
-    assert _api_core(m, "estraneo").delete(f"/api/core/activities/{nota['id']}").status_code == 403
-    assert _api_core(m, "estraneo").delete("/api/core/activities/999999").status_code == 403
-    assert _api_core(m).delete("/api/core/activities/999999").status_code == 404
-    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0 (contratto REV 2, §15: owner e
-    # admin cancellano "sui propri"): un'attivita' legacy senza autore
-    # (`created_by_user_id` NULL) non e' di nessuno e risponde 403, con la riga
-    # che resta; una senza immobile creata da chi cancella si cancella ancora.
-    r = _api_core(m).delete(f"/api/core/activities/{legacy}")
-    assert r.status_code == 403, r.text
-    assert _conta(m, "activities", "id = %s", (legacy,)) == 1
+    # API: la riga resta.
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C (prima: Fase 0, 409/403/204):
+    # nessuna DELETE di attivita' via API, per nessun ruolo e per nessuna riga
+    # (d'immobile, legacy senza autore, propria, altrui, inesistente): 405
+    # HARD_DELETE_DISABLED che indica «Inserita per errore». Nulla sparisce.
     propria = sql("INSERT INTO activities (contact_id, activity_type, description, created_by_user_id) "
                   "VALUES (%s, 'call', 'propria', %s) RETURNING id", (m["mario"], m["giorgio"]))[0][0]
-    assert _api_core(m).delete(f"/api/core/activities/{propria}").status_code == 204
-    assert _conta(m, "activities", "id = %s", (propria,)) == 0
+    for chi, rid in (("giorgio", nota["id"]), ("marta", nota["id"]), ("estraneo", nota["id"]),
+                     ("estraneo", 999999), ("giorgio", 999999), ("giorgio", legacy), ("giorgio", propria)):
+        r = _api_core(m, chi).delete(f"/api/core/activities/{rid}")
+        assert r.status_code == 405, (chi, rid, r.text)
+        assert r.json()["code"] == "HARD_DELETE_DISABLED" and "Inserita per errore" in r.json()["detail"]
+    for rid in (nota["id"], legacy, propria):
+        assert _conta(m, "activities", "id = %s", (rid,)) == 1
     # e la correzione e' una nuova interazione: lo storico ne conta due
     r = _nota(m, m["casa"], interaction_type="note", note="correzione: la nota precedente era errata")
     assert r.status_code == 201

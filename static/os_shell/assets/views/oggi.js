@@ -2,7 +2,8 @@
 // Pagina "Oggi": sola lettura, dati reali dalle API esistenti.
 // Endpoint usati (verificati nei router prima di scrivere questo file):
 //   GET /api/core/tasks?limit=200          (core/router.py)
-//   GET /api/core/activities?limit=20      (core/router.py)
+//   GET /api/core/activities?limit=20&mistakes=false (core/router.py; DELETE-ARCH 1C:
+//       le attivita' «inserite per errore» non sono attivita' recenti)
 //   GET /api/property/visits?limit=20      (property/router.py)
 //   GET /api/next-best-action?limit=20     (next_best_action/router.py, P23)
 // Nessuna nuova API oltre a P23. Nessun dato inventato: se una chiamata
@@ -17,7 +18,7 @@ export async function renderOggi(container) {
 
   const [tasksResult, activitiesResult, visitsResult, nbaResult] = await Promise.allSettled([
     apiGet('/api/core/tasks?limit=200'),
-    apiGet('/api/core/activities?limit=20'),
+    apiGet('/api/core/activities?limit=20&mistakes=false'),
     apiGet('/api/property/visits?limit=20'),
     apiGet('/api/next-best-action?limit=20'),
   ]);

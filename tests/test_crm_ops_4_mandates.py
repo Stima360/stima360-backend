@@ -363,7 +363,10 @@ def test_k06_lo_storico_d_immobile_non_si_cancella():
     assert "DROP TRIGGER IF EXISTS trg_activities_property_history ON activities;" in GIU
     attivita = (ASSETS / "views" / "attivita.js").read_text(encoding="utf-8")
     blocco = attivita.split("function renderCronologiaActions(")[1].split("\nfunction ")[0]
-    assert blocco.index("if (item.data.property_id)") < blocco.index("data-delete-activity")
-    assert "Storico immobile" in blocco
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: nessuna «Elimina» per
+    # nessuna attivita'; l'interazione d'immobile mantiene il link allo storico
+    # e puo' solo essere segnata «Inserita per errore» (la riga resta).
+    assert "data-delete-activity" not in blocco and "Elimina" not in blocco
+    assert "a.property_id" in blocco and "Storico immobile" in blocco
     # il componente condiviso non cancella mai
     assert "apiDelete" not in COMPONENTE and "DELETE" not in COMPONENTE

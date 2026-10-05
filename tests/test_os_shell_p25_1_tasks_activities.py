@@ -59,9 +59,11 @@ def test_new_component_files_exist():
 
 def test_dialogs_component_exports_expected_functions():
     text = _read(DIALOGS_JS)
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: niente piu' cancellazione
+    # dalla UI; «per errore» con mark*Mistake (la riga resta, marcata).
     for fn in (
-        "openNewActivityDialog", "deleteActivity",
-        "openNewTaskDialog", "openEditTaskDialog", "deleteTask",
+        "openNewActivityDialog", "markActivityMistake",
+        "openNewTaskDialog", "openEditTaskDialog", "markTaskMistake",
     ):
         assert f"export function {fn}(" in text or f"export async function {fn}(" in text, (
             f"activity-task-dialogs.js non esporta {fn}()"
@@ -81,10 +83,12 @@ def test_picker_component_exports_expected_function():
 def test_dialogs_use_exact_backend_endpoints():
     text = _read(DIALOGS_JS)
     assert "apiPost('/api/core/activities'" in text
-    assert re.search(r"apiDelete\(`/api/core/activities/\$\{.*?\}`\)", text)
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: mark-mistake al posto di DELETE.
+    assert re.search(r"apiPost\(`/api/core/activities/\$\{.*?\}/mark-mistake`", text)
     assert "apiPost('/api/core/tasks'" in text
     assert re.search(r"apiPatch\(`/api/core/tasks/\$\{.*?\}`", text)
-    assert re.search(r"apiDelete\(`/api/core/tasks/\$\{.*?\}`\)", text)
+    assert re.search(r"apiPost\(`/api/core/tasks/\$\{.*?\}/mark-mistake`", text)
+    assert "apiDelete" not in text
     assert re.search(r"apiGet\(`/api/core/leads\?contact_id=\$\{.*?\}&limit=50`\)", text)
 
 
@@ -123,8 +127,9 @@ def test_attivita_js_wires_create_edit_delete_task_and_create_delete_activity():
     assert "openNewActivityDialog" in text
     assert "openNewTaskDialog" in text
     assert "openEditTaskDialog" in text
-    assert "deleteTask" in text
-    assert "deleteActivity" in text
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C
+    assert "markTaskMistake" in text and "deleteTask" not in text
+    assert "markActivityMistake" in text and "deleteActivity" not in text
     # La sola azione preesistente (completamento task) deve restare intatta.
     assert "status: 'completed'" in text
 
@@ -151,8 +156,10 @@ def test_attivita_js_has_no_more_window_alert_than_baseline():
 def test_attivita_js_delete_actions_use_inline_confirm_not_window_confirm():
     code_only = _strip_js_line_comments(_read(ATTIVITA_JS))
     assert "window.confirm(" not in code_only, "window.confirm() non deve essere usato: conferma inline a due click richiesta"
-    assert "data-delete-task-confirm" in code_only
-    assert "data-delete-activity-confirm" in code_only
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: la conferma inline e' ora
+    # quella di «per errore».
+    assert "data-mistake-task-confirm" in code_only
+    assert "data-mistake-activity-confirm" in code_only
 
 
 def test_contatto_dettaglio_js_is_no_longer_read_only():

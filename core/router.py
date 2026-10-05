@@ -17,6 +17,7 @@ tasks.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_operator
@@ -38,6 +39,7 @@ from .schemas import (
     LeadCreate,
     LeadStimaLinkCreate,
     LeadUpdate,
+    MistakeMark,
     TaskCreate,
     TaskUpdate,
 )
@@ -186,10 +188,35 @@ def create_activity(payload: ActivityCreate, ctx: OperatorContext = Depends(requ
     return _translate(service.create_activity, ctx, payload)
 
 
-@router.delete("/activities/{activity_id}", status_code=204)
+# DELETE-ARCH Fase 1C: nessuna cancellazione fisica di attivita' e task via
+# API. Le rotte restano per compatibilita' (un client vecchio riceve una
+# risposta chiara, non un 404 ambiguo) e rispondono SEMPRE 405, senza
+# toccare il database: un errore si corregge con «per errore» (mark-mistake),
+# un task anche annullandolo. L'autenticazione resta (401 prima di tutto).
+ACTIVITY_DELETE_DISABLED = (
+    "Le attività non si cancellano: se è stata registrata per errore usa "
+    "«Inserita per errore» (POST /api/core/activities/{id}/mark-mistake).")
+TASK_DELETE_DISABLED = (
+    "I task non si cancellano: annullalo (PATCH status «cancelled») oppure, se è stato "
+    "creato per errore, usa «Creato per errore» (POST /api/core/tasks/{id}/mark-mistake).")
+
+
+def _delete_disabled(message: str, use: str, allow: str) -> JSONResponse:
+    return JSONResponse(status_code=405, headers={"Allow": allow},
+                        content={"detail": message, "code": "HARD_DELETE_DISABLED", "use": use})
+
+
+@router.delete("/activities/{activity_id}")
 def delete_activity(activity_id: int, ctx: OperatorContext = Depends(require_operator)):
-    _translate(service.delete_activity, ctx, activity_id)
-    return Response(status_code=204)
+    return _delete_disabled(ACTIVITY_DELETE_DISABLED,
+                            f"/api/core/activities/{activity_id}/mark-mistake", "")
+
+
+@router.post("/activities/{activity_id}/mark-mistake")
+def mark_activity_mistake(activity_id: int, payload: MistakeMark,
+                          ctx: OperatorContext = Depends(require_operator)):
+    """DELETE-ARCH Fase 1C: la riga resta, segnata «Inserita per errore»."""
+    return _translate(service.mark_activity_mistake, ctx, activity_id, payload)
 
 
 @router.get("/activities")
@@ -199,11 +226,14 @@ def list_activities(
     contact_id: int | None = None,
     lead_id: int | None = None,
     stima_id: int | None = None,
+    mistakes: bool | None = None,
     ctx: OperatorContext = Depends(require_operator),
 ):
+    # DELETE-ARCH 1C: `mistakes` assente = storico completo (righe marcate
+    # comprese); false = senza errori (viste operative); true = solo errori.
     return {
         "items": _translate(
-            service.list_activities, ctx, limit, offset, contact_id, lead_id, stima_id
+            service.list_activities, ctx, limit, offset, contact_id, lead_id, stima_id, mistakes
         )
     }
 
@@ -213,10 +243,15 @@ def create_task(payload: TaskCreate, ctx: OperatorContext = Depends(require_oper
     return _translate(service.create_task, ctx, payload)
 
 
-@router.delete("/tasks/{task_id}", status_code=204)
+@router.delete("/tasks/{task_id}")
 def delete_task(task_id: int, ctx: OperatorContext = Depends(require_operator)):
-    _translate(service.delete_task, ctx, task_id)
-    return Response(status_code=204)
+    return _delete_disabled(TASK_DELETE_DISABLED, f"/api/core/tasks/{task_id}/mark-mistake", "PATCH")
+
+
+@router.post("/tasks/{task_id}/mark-mistake")
+def mark_task_mistake(task_id: int, payload: MistakeMark, ctx: OperatorContext = Depends(require_operator)):
+    """DELETE-ARCH Fase 1C: il task resta, `cancelled` e segnato «Creato per errore»."""
+    return _translate(service.mark_task_mistake, ctx, task_id, payload)
 
 
 @router.get("/tasks")
@@ -227,11 +262,12 @@ def list_tasks(
     lead_id: int | None = None,
     stima_id: int | None = None,
     status: str | None = None,
+    mistakes: bool | None = None,
     ctx: OperatorContext = Depends(require_operator),
 ):
     return {
         "items": _translate(
-            service.list_tasks, ctx, limit, offset, contact_id, lead_id, stima_id, status
+            service.list_tasks, ctx, limit, offset, contact_id, lead_id, stima_id, status, mistakes
         )
     }
 

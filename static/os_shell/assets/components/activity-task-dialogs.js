@@ -10,10 +10,13 @@
 // core/enums.py prima di scrivere questo file (nessun valore/endpoint
 // inventato):
 //   POST   /api/core/activities   (ActivityCreate, extra="forbid")
-//   DELETE /api/core/activities/{id}   (hard delete, nessun soft-delete)
+//   POST   /api/core/activities/{id}/mark-mistake   (DELETE-ARCH 1C, MistakeMark)
 //   POST   /api/core/tasks        (TaskCreate, extra="forbid")
 //   PATCH  /api/core/tasks/{id}   (TaskUpdate, extra="forbid")
-//   DELETE /api/core/tasks/{id}   (hard delete, nessun soft-delete)
+//   POST   /api/core/tasks/{id}/mark-mistake        (DELETE-ARCH 1C, MistakeMark)
+// DELETE-ARCH Fase 1C: dalla UI nessuna cancellazione fisica. Un task o
+// un'attivita' sbagliati si segnano «Creato / Inserita per errore»: la riga
+// resta, marcata, nello storico.
 //   GET    /api/core/leads?contact_id=&limit=   (core/router.py:76-89, usato
 //          SOLO quando non e' gia' disponibile un elenco lead preesistente
 //          per il contatto selezionato — vedi presetLeads sotto)
@@ -30,7 +33,7 @@
 // che un agente crea davvero a mano (note/call/email/whatsapp/meeting): sono
 // comunque valori reali e validi dell'enum, non e' un sottoinsieme inventato.
 
-import { apiGet, apiDelete, apiPatch, apiPost } from '../core/api-client.js';
+import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { escapeHtml } from './st-table.js';
 import { createContactPicker } from './contact-picker.js';
 
@@ -195,8 +198,15 @@ export function openNewActivityDialog(dialogEl, { presetContact = null, presetLe
   dialogEl.showModal();
 }
 
-export async function deleteActivity(activityId) {
-  await apiDelete(`/api/core/activities/${activityId}`);
+function mistakeBody(note) {
+  const testo = (note || '').trim();
+  return testo ? { note: testo } : {};
+}
+
+/** DELETE-ARCH Fase 1C: l'attivita' resta (stesso id, testo invariato),
+ *  segnata «Inserita per errore». */
+export async function markActivityMistake(activityId, note = '') {
+  return apiPost(`/api/core/activities/${activityId}/mark-mistake`, mistakeBody(note));
 }
 
 export function openNewTaskDialog(dialogEl, { presetContact = null, presetLeads = null, onSuccess } = {}) {
@@ -378,8 +388,9 @@ export function openEditTaskDialog(dialogEl, task, { onSuccess } = {}) {
   dialogEl.showModal();
 }
 
-export async function deleteTask(taskId) {
-  await apiDelete(`/api/core/tasks/${taskId}`);
+/** DELETE-ARCH Fase 1C: il task resta, `cancelled` e segnato «Creato per errore». */
+export async function markTaskMistake(taskId, note = '') {
+  return apiPost(`/api/core/tasks/${taskId}/mark-mistake`, mistakeBody(note));
 }
 
 function toDatetimeLocalValue(value) {

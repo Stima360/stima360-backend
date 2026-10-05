@@ -313,6 +313,11 @@ COVERAGE = {
     "update_task": lambda ctx: repository.update_task(ctx, 1, {"status": "open"}),
     "delete_activity": lambda ctx: repository.delete_activity(ctx, 1),
     "delete_task": lambda ctx: repository.delete_task(ctx, 1),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: «creato per errore» per
+    # task e attivita'. Classificate scoped (lock della riga con id + scope
+    # d'agenzia, poi UPDATE per id della riga gia' bloccata).
+    "mark_task_mistake": lambda ctx: repository.mark_task_mistake(ctx, 1, None, sees_all=True),
+    "mark_activity_mistake": lambda ctx: repository.mark_activity_mistake(ctx, 1, None, sees_all=True),
 }
 
 # Public functions that legitimately do not take ctx, each with its reason.
@@ -884,11 +889,14 @@ ROUTER_CALLS = {
     # reaches the handler rather than stopping at a 422.
     "create_activity": ("post", "/api/core/activities", {"json": {"activity_type": "note", "contact_id": 1}}),
     "list_activities": ("get", "/api/core/activities", {}),
-    "delete_activity": ("delete", "/api/core/activities/7", {}),
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: DELETE attivita'/task non
+    # raggiungono piu' il service (405 fisso, vedi test_d15_35); al loro posto
+    # le due rotte «per errore», che portano lo scope come tutte le altre.
+    "mark_activity_mistake": ("post", "/api/core/activities/7/mark-mistake", {"json": {}}),
     "create_task": ("post", "/api/core/tasks", {"json": {"title": "t", "contact_id": 1}}),
     "list_tasks": ("get", "/api/core/tasks", {}),
     "update_task": ("patch", "/api/core/tasks/7", {"json": {"title": "t2"}}),
-    "delete_task": ("delete", "/api/core/tasks/7", {}),
+    "mark_task_mistake": ("post", "/api/core/tasks/7/mark-mistake", {"json": {}}),
 }
 
 
@@ -1623,8 +1631,10 @@ def _install_store(monkeypatch, store: AgencyStore, *, leaky_search: bool = Fals
     fakes = {
         "list_contacts": list_contacts,
         "list_leads": list_leads,
-        "list_activities": lambda ctx, l, o, c, ld, s: _list_pivot("activities")(ctx, l, o, c, ld, s),
-        "list_tasks": _list_pivot("tasks"),
+        # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: il service passa anche
+        # il filtro `mistakes` (None di default); il doppio lo accetta e lo ignora.
+        "list_activities": lambda ctx, l, o, c, ld, s, mistakes=None: _list_pivot("activities")(ctx, l, o, c, ld, s),
+        "list_tasks": lambda ctx, l, o, c, ld, s, st, mistakes=None: _list_pivot("tasks")(ctx, l, o, c, ld, s, st),
         "get_contact": get_contact,
         "get_lead": get_lead,
         "update_contact": _update("contacts", "contact"),
@@ -1884,9 +1894,14 @@ def test_d15_33_the_stima_pivot_does_not_cross_agencies(collection, hostile):
 def test_d15_35_a_cross_agency_delete_is_404_and_the_row_survives(
     collection, table, entity_id, hostile
 ):
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1C: nessuna DELETE di
+    # attivita'/task arriva piu' al database, per nessuno: 405 fisso, uguale
+    # per una riga propria, altrui o inesistente (nulla viene rivelato) e la
+    # riga sopravvive comunque.
     before = _snapshot(hostile.store, table, entity_id)
     response = hostile.as_operator("owner_a").delete(f"/api/core/{collection}/{entity_id}")
-    assert response.status_code == 404, response.text
+    assert response.status_code == 405, response.text
+    assert response.json()["code"] == "HARD_DELETE_DISABLED"
     assert _snapshot(hostile.store, table, entity_id) == before
 
 
