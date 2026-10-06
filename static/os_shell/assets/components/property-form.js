@@ -143,6 +143,12 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
   const types = options.property_types || [];
   const energy = options.energy_classes || [];
   const agents = Array.isArray(options.agents) ? options.agents : [];
+  // CATALOGO-CANONICO-1: stato, posizione e distanza dal mare dal catalogo
+  // canonico (property/site_catalog.py, via form-options).
+  const conditions = options.conditions || [];
+  const seaPositions = options.sea_positions || [];
+  const seaDistances = options.sea_distances || [];
+  const YES_NO = [{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }];
   const canAssign = options.can_assign === true;
 
   // Stato del territorio: parte dai valori salvati, anche se storici.
@@ -208,12 +214,40 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
       <div class="form-grid-2">
         <div class="form-field"><label for="pf-surface">Superficie (mq)</label><input type="number" id="pf-surface" class="input" min="0" step="any" value="${escapeHtml(str(p.surface_sqm))}"></div>
         <div class="form-field"><label for="pf-commercial-surface">Superficie commerciale (mq)</label><input type="number" id="pf-commercial-surface" class="input" min="0" step="any" value="${escapeHtml(str(p.commercial_surface_sqm))}"></div>
-        <div class="form-field"><label for="pf-condition">Condizione</label><input type="text" id="pf-condition" class="input" maxlength="80" value="${escapeHtml(str(p.condition))}"></div>
+        <div class="form-field"><label for="pf-floor">Piano</label><input type="text" id="pf-floor" class="input" maxlength="50" placeholder="T, R, S, 1, 2… o Ultimo" value="${escapeHtml(str(p.floor))}"></div>
+        <div class="form-field"><label for="pf-year">Anno di costruzione</label><input type="number" id="pf-year" class="input" min="1000" max="2200" step="1" value="${escapeHtml(str(p.year_built))}"></div>
+        <div class="form-field"><label for="pf-condition">Stato</label>
+          <select id="pf-condition" class="input">${optionsHtml(conditions, str(p.condition), { placeholder: 'Non indicato', historical: true })}</select></div>
         <div class="form-field"><label for="pf-energy">Classe energetica</label>
           <select id="pf-energy" class="input">${optionsHtml(energy, str(p.energy_class), { placeholder: 'Non indicata', historical: true })}</select></div>
         <div class="form-field"><label for="pf-elevator">Ascensore</label>
-          <select id="pf-elevator" class="input">${optionsHtml([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }], str(p.elevator), { placeholder: '—' })}</select></div>
+          <select id="pf-elevator" class="input">${optionsHtml(YES_NO, str(p.elevator), { placeholder: 'Non indicato' })}</select></div>
       </div>
+
+      <h3 class="section-title">Mare</h3>
+      <div class="form-grid-2">
+        <div class="form-field"><label for="pf-sea-position">Posizione</label>
+          <select id="pf-sea-position" class="input">${optionsHtml(seaPositions, str(p.sea_position), { placeholder: 'Non indicata', historical: true })}</select></div>
+        <div class="form-field"><label for="pf-sea-distance">Distanza dal mare</label>
+          <select id="pf-sea-distance" class="input">${optionsHtml(seaDistances, str(p.sea_distance), { placeholder: 'Non indicata', historical: true })}</select></div>
+        <div class="form-field"><label for="pf-sea-barrier">Ferrovia o strada verso il mare</label>
+          <select id="pf-sea-barrier" class="input">${optionsHtml(YES_NO, str(p.sea_barrier), { placeholder: 'Non indicato' })}</select></div>
+        <div class="form-field"><label for="pf-sea-view">Vista mare</label>
+          <select id="pf-sea-view" class="input">${optionsHtml(YES_NO, str(p.sea_view), { placeholder: 'Non indicato' })}</select></div>
+        <div class="form-field"><label for="pf-sea-view-detail">Dettaglio vista mare</label><input type="text" id="pf-sea-view-detail" class="input" maxlength="200" value="${escapeHtml(str(p.sea_view_detail))}"></div>
+        <div class="form-field"><label for="pf-sea-band">Fascia mare (dal sito)</label><input type="text" id="pf-sea-band" class="input" maxlength="32" value="${escapeHtml(str(p.sea_band))}"></div>
+      </div>
+
+      <h3 class="section-title">Impianti e dotazioni</h3>
+      <div class="form-grid-2">
+        <div class="form-field"><label for="pf-heating">Riscaldamento</label><input type="text" id="pf-heating" class="input" maxlength="120" value="${escapeHtml(str(p.heating))}"></div>
+        <div class="form-field"><label for="pf-air">Climatizzazione</label><input type="text" id="pf-air" class="input" maxlength="120" value="${escapeHtml(str(p.air_conditioning))}"></div>
+        <div class="form-field"><label for="pf-air-type">Tipo di climatizzazione</label><input type="text" id="pf-air-type" class="input" maxlength="120" value="${escapeHtml(str(p.air_conditioning_type))}"></div>
+        <div class="form-field"><label for="pf-exposure">Esposizione</label><input type="text" id="pf-exposure" class="input" maxlength="120" value="${escapeHtml(str(p.exposure))}"></div>
+        <div class="form-field"><label for="pf-furnishing">Arredamento</label><input type="text" id="pf-furnishing" class="input" maxlength="120" value="${escapeHtml(str(p.furnishing))}"></div>
+        <div class="form-field"><label for="pf-condo-fees">Spese condominiali (€)</label><input type="number" id="pf-condo-fees" class="input" min="0" step="any" value="${escapeHtml(str(p.condo_fees))}"></div>
+      </div>
+      <div class="form-field"><label for="pf-other-features">Altre caratteristiche</label><textarea id="pf-other-features" class="input" rows="2">${escapeHtml(str(p.other_features))}</textarea></div>
 
       <h3 class="section-title">Commerciale</h3>
       <div class="form-grid-2">
@@ -283,14 +317,30 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
     ['bathrooms', '#pf-bathrooms', intOrNull],
     ['surface_sqm', '#pf-surface', numberOrNull],
     ['commercial_surface_sqm', '#pf-commercial-surface', numberOrNull],
+    ['floor', '#pf-floor', textOrNull],
+    ['year_built', '#pf-year', intOrNull],
     ['condition', '#pf-condition', textOrNull],
     ['energy_class', '#pf-energy', textOrNull],
+    // CATALOGO-CANONICO-1 (migration 087): in creazione viaggiano solo se compilati
+    ['sea_position', '#pf-sea-position', textOrNull],
+    ['sea_distance', '#pf-sea-distance', textOrNull],
+    ['sea_view_detail', '#pf-sea-view-detail', textOrNull],
+    ['sea_band', '#pf-sea-band', textOrNull],
+    ['heating', '#pf-heating', textOrNull],
+    ['air_conditioning', '#pf-air', textOrNull],
+    ['air_conditioning_type', '#pf-air-type', textOrNull],
+    ['exposure', '#pf-exposure', textOrNull],
+    ['furnishing', '#pf-furnishing', textOrNull],
+    ['condo_fees', '#pf-condo-fees', numberOrNull],
+    ['other_features', '#pf-other-features', textOrNull],
     ['asking_price', '#pf-price', numberOrNull],
     ['internal_notes', '#pf-notes', textOrNull],
   ];
   // Valori iniziali COME LI MOSTRA IL FORM, per confrontare senza falsi cambi.
   const initialField = Object.fromEntries(FIELDS.map(([key, id]) => [key, fieldValue(id)]));
-  const initialElevator = fieldValue('#pf-elevator');
+  // Si' / No / Non indicato: tre stati, mai "no" per "non so".
+  const BOOL_FIELDS = [['elevator', '#pf-elevator'], ['sea_barrier', '#pf-sea-barrier'], ['sea_view', '#pf-sea-view']];
+  const initialBool = Object.fromEntries(BOOL_FIELDS.map(([key, id]) => [key, fieldValue(id)]));
 
   function buildPayload() {
     const payload = {};
@@ -302,8 +352,10 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
         payload[key] = convert(raw);
       }
     }
-    const elevator = fieldValue('#pf-elevator');
-    if (isEdit ? elevator !== initialElevator : elevator !== '') payload.elevator = elevator === '' ? null : elevator === 'true';
+    for (const [key, id] of BOOL_FIELDS) {
+      const value = fieldValue(id);
+      if (isEdit ? value !== initialBool[key] : value !== '') payload[key] = value === '' ? null : value === 'true';
+    }
 
     const locChanged = LEVELS.some((k) => loc[k] !== initialLoc[k]);
     if (isEdit ? locChanged : Object.values(loc).some(Boolean)) {
@@ -343,7 +395,7 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
       submitBtn.disabled = false;
       submitBtn.textContent = isEdit ? 'Salva modifiche' : 'Crea immobile';
       errorEl.textContent = error.status === 422
-        ? 'Alcuni valori non sono validi: controlla territorio e classe energetica.'
+        ? 'Alcuni valori non sono validi: controlla territorio, classe energetica e anno.'
         : (error.message || 'Errore nel salvataggio dell’immobile.');
       return;
     }

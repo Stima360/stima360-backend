@@ -417,9 +417,14 @@ UNITS_DECLARED_SOURCE_LABELS: dict[str, str] = {
 BUILDING_CENSUS_STATUS_LABELS: dict[str, str] = {
     "verified": "Verificato", "partial": "Parziale", "estimated": "Stimato",
 }
+#: CATALOGO-CANONICO-1: + i tipi del sito (taverna, balcone, piscina, posto
+#: moto, posto bici; migration 087). Il "garage" del sito e' il `box`: stessa
+#: rimessa chiusa, etichetta "Garage / box" come la tipologia `garage`.
 ACCESSORY_KIND_LABELS: dict[str, str] = {
     "cantina": "Cantina", "soffitta": "Soffitta", "posto_auto": "Posto auto", "giardino": "Giardino",
-    "terrazzo": "Terrazzo", "box": "Box", "deposito": "Deposito", "altro": "Altro",
+    "terrazzo": "Terrazzo", "box": "Garage / box", "deposito": "Deposito", "altro": "Altro",
+    "taverna": "Taverna", "balcone": "Balcone", "piscina": "Piscina", "posto_moto": "Posto moto",
+    "posto_bici": "Posto bici",
 }
 
 

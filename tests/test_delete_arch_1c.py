@@ -20,9 +20,11 @@ def test_b01_nessuna_migration_rotte_e_schema():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 1C resta senza migration; dopo la 084 viene la 085
     # (Cestino Immobili).
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: poi la 086.
-    assert runner.discover_migrations()[-3].version == "084_delete_arch_1a_mistakes"
-    assert runner.discover_migrations()[-2].version == "085_delete_arch_2b1_property_trash"
-    assert runner.discover_migrations()[-1].version == "086_delete_arch_2b2_property_trash_guards"
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 e' degli attributi del sito, nominata; nessuna oltre.
+    assert runner.discover_migrations()[-4].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-3].version == "085_delete_arch_2b1_property_trash"
+    assert runner.discover_migrations()[-2].version == "086_delete_arch_2b2_property_trash_guards"
+    assert runner.discover_migrations()[-1].version == "087_catalogo_canonico_1_site_attributes"
     from core.router import router
     rotte = {(m, r.path) for r in router.routes for m in r.methods}
     assert ("POST", "/api/core/tasks/{task_id}/mark-mistake") in rotte

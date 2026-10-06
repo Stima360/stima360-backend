@@ -11,6 +11,7 @@ from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       census_labels_for_form, territory_tree, validate_energy_class, validate_location)
 from . import census as _census
 from . import lifecycle as _lifecycle
+from . import site_catalog as _site_catalog
 
 # CRM-OPS-2: stesso testo del rifiuto di assegnazione di CORE.
 ASSIGNMENT_DENIED_MESSAGE = (
@@ -30,6 +31,9 @@ CENSUS_ALLOWED_STATUSES = ('draft', 'archived')
 # non deve rompere la creazione degli immobili su un database senza di essa).
 CENSUS_SCHEMA_FIELDS = ('staircase', 'internal_number', 'cadastral_municipality_code', 'cadastral_section',
                         'cadastral_sheet', 'cadastral_parcel', 'cadastral_subunit', 'cadastral_category')
+# CATALOGO-CANONICO-1: le colonne della 087, con la stessa regola (solo se
+# inviate): senza la 087 una creazione ordinaria resta la statement di prima.
+SITE_SCHEMA_FIELDS = _site_catalog.SITE_PROPERTY_FIELDS
 
 
 def _check_census_guard(data, current):
@@ -128,6 +132,9 @@ def form_options(ctx):
         # CENSIMENTO-1 Fase 4: le etichette dei chips del censimento (tipo di
         # edificio, fonte delle unita' dichiarate, tipo di accessorio).
         **census_labels_for_form(),
+        # CATALOGO-CANONICO-1: stato, posizione e distanza dal mare (catalogo
+        # canonico del sito, property/site_catalog.py).
+        **_site_catalog.labels_for_form(),
         'can_assign': can_assign,
         'agents': repository.list_assignable_agents(ctx) if can_assign else [],
     }
@@ -160,6 +167,12 @@ def _check_catalog(data, current=None):
             validate_location(merged['region'], merged['province'], merged['city'], merged['microzone'])
         if 'energy_class' in data and data['energy_class'] != current.get('energy_class'):
             validate_energy_class(data['energy_class'])
+        # CATALOGO-CANONICO-1: posizione e distanza dal mare sono codici del
+        # catalogo; si giudica solo un valore NUOVO (come la classe energetica).
+        for field, catalog in (('sea_position', _site_catalog.SEA_POSITIONS),
+                               ('sea_distance', _site_catalog.SEA_DISTANCES)):
+            if data.get(field) is not None and data[field] != current.get(field) and data[field] not in catalog:
+                raise ValueError(f"{_site_catalog.FIELD_LABELS[field]}: valore non presente nel catalogo")
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
 
@@ -167,7 +180,7 @@ def _check_catalog(data, current=None):
 def create_property(ctx,p):
     data=dump(p)
     sent=_fields_set(p)
-    data={k:v for k,v in data.items() if k not in CENSUS_SCHEMA_FIELDS or k in sent}
+    data={k:v for k,v in data.items() if k not in (*CENSUS_SCHEMA_FIELDS,*SITE_SCHEMA_FIELDS) or k in sent}
     _check_catalog({k:v for k,v in data.items() if k in sent})
     _census._check_cadastral(data)
     # CRM-OPS-3: un immobile nuovo non nasce con un incarico.

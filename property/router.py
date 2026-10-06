@@ -6,7 +6,7 @@ from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import census, interactions, mandates, service
+from . import census, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -162,3 +162,14 @@ def resolve_accessory(property_id:int,accessory_id:int,p:AccessoryResolve,ctx:Op
 def take_in_charge(property_id:int,p:TakeInCharge,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.take_in_charge,ctx,property_id,p)
 @router.post('/properties/{property_id}/undo-create')
 def undo_create(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.undo_create,ctx,property_id)
+# CATALOGO-CANONICO-1: provenienza dal sito stima360.it (property/site_sync.py).
+# Lettura con la visibilita' della scheda; scritture con l'accesso di gestione
+# dell'immobile (lifecycle.require_manage), nella stessa agenzia.
+@router.get('/properties/{property_id}/site-sources')
+def list_site_sources(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.list_sources,ctx,property_id)
+@router.post('/properties/{property_id}/site-sources/{source_id}/conflicts')
+def resolve_site_conflict(property_id:int,source_id:int,p:SiteConflictResolve,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.resolve_conflict,ctx,property_id,source_id,p)
+@router.post('/properties/{property_id}/site-sources/{source_id}/duplicates/{other_id}/dismiss')
+def dismiss_site_duplicate(property_id:int,source_id:int,other_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.dismiss_duplicate,ctx,property_id,source_id,other_id)
+@router.post('/properties/{property_id}/site-sources/{source_id}/relink')
+def relink_site_source(property_id:int,source_id:int,p:SiteRelink,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.relink,ctx,property_id,source_id,p)

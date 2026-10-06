@@ -97,7 +97,8 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili: properties.deleted_*,
     # record_lifecycle_events), additiva, e' ora l'ultima; la catena si allunga di uno.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 (guardie del Cestino Immobili), additiva, e' ora l'ultima.
-    assert numeri[-1] == 86 and numeri[-2] == 85 and numeri[-3] == 84 and numeri[-4] == 83 and numeri[-5] == 82 and numeri[-6] == 81 and numeri[-7] == 80 and numeri[-8] == 79 and numeri[-9] == 78 and numeri[-10] == 77 and numeri[-11] == 76 and numeri[-12] == 75 and numeri[-13] == 74
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito, provenienza), additiva, e' ora l'ultima.
+    assert numeri[-1] == 87 and numeri[-2] == 86 and numeri[-3] == 85 and numeri[-4] == 84 and numeri[-5] == 83 and numeri[-6] == 82 and numeri[-7] == 81 and numeri[-8] == 80 and numeri[-9] == 79 and numeri[-10] == 78 and numeri[-11] == 77 and numeri[-12] == 76 and numeri[-13] == 75 and numeri[-14] == 74
     assert len(numeri) == len(set(numeri))
 
 

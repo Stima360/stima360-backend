@@ -39,6 +39,7 @@ from sale.router import router as sale_router
 from owner.router_admin import router as owner_admin_router
 from owner.router_portal import router as owner_portal_router
 from owner import provisioning as owner_provisioning
+from property import site_sync as property_site_sync  # CATALOGO-CANONICO-1
 from acquisition.router import router as acquisition_router
 from acquisitions.router import router as acquisitions_router
 from appointments.router import router as appointments_router
@@ -975,6 +976,20 @@ async def salva_stima(request: Request):
         bridge_result=bridge_result,
     )
 
+    # --- CATALOGO-CANONICO-1: la scheda immobile dal sito (additive,
+    # non-blocking) ---
+    # Solo con contatto e lead (esito del bridge): la scheda nasce in
+    # censimento, senza incarico ne' agente, con i valori che il form ha
+    # davvero inviato (`raw`), mai i default scritti qui sopra in `stime`.
+    # Il wrapper `safe_*` assorbe ogni errore: la logica sta in
+    # property/site_sync.py, qui c'e' solo la chiamata.
+    property_site_sync.safe_sync_public_stima(
+        bridge_ctx,
+        stima_id=new_id,
+        raw=raw,
+        bridge_result=bridge_result,
+    )
+
     # --- P17 Seller Intelligence: stima_richiesta (additive, non-blocking) ---
     # Registrato dopo che la riga stime esiste e il bridge CORE e' stato
     # tentato (sopra), indipendentemente dal suo esito. Non puo' mai
@@ -1653,6 +1668,7 @@ async def salva_stima_dettagliata(request: Request):
                 %s,%s,%s,%s,%s,
                 %s
             )
+            RETURNING id
         """, (
             # agency_id (server-derived: parent stima, else public-STIMA system context)
             detail_agency_id,
@@ -1713,6 +1729,9 @@ async def salva_stima_dettagliata(request: Request):
             to_int_safe(data.get("mqTerrazzo") or data.get("mqterrazzo")),
             to_int_safe(data.get("numBalconi") or data.get("numbalconi")),
         ))
+        # CATALOGO-CANONICO-1: l'id della riga, per l'aggiornamento della scheda
+        detail_row = cur.fetchone()
+        detail_id = detail_row[0] if detail_row else None
 
         conn.commit()
 
@@ -1727,6 +1746,18 @@ async def salva_stima_dettagliata(request: Request):
             conn.close()
         except:
             pass
+
+    # --- CATALOGO-CANONICO-1: la stessa scheda immobile della stima (additive,
+    # non-blocking) ---
+    # Il dettaglio aggiorna la scheda nata dalla stima `stima_id`, se c'e', con
+    # la regola per campo di property/site_sync.py (mai sopra un dato corretto
+    # dall'agente). Un dettaglio orfano non tocca nessuna scheda. Il wrapper
+    # `safe_*` assorbe ogni errore: la risposta al sito non cambia.
+    property_site_sync.safe_sync_detail(
+        stima_id=stima_id_value,
+        detail_id=detail_id,
+        raw=data,
+    )
 
     return {"ok": True}
 

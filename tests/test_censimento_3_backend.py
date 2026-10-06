@@ -206,7 +206,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     # .../deletion-check, POST .../trash, POST .../restore), stesso gate.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: 45 -> 46 (GET
     # /api/property/trash, l'elenco della pagina «Cestino»), stesso gate.
-    assert len(router.routes) == 46
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: 46 -> 50 (provenienza dal
+    # sito: site-sources, conflicts, dismiss, relink), stesso gate (verificato qui sotto).
+    from operator_auth.dependencies import legacy_basic_agency_context as _gate
+    nuove = [r for r in router.routes if "/site-sources" in r.path]
+    assert len(nuove) == 4 and all(_gate in {d.call for d in r.dependant.dependencies} for r in nuove)
+    assert len(router.routes) == 50
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

@@ -815,6 +815,21 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "application choke point and must stay uncoupled from a throwaway "
         "test database"
     ),
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: un sito di connessione di
+    # TEST nuovo, registrato con la sua giustificazione (nessun accesso
+    # applicativo nuovo: la sincronizzazione dal sito usa core_cursor).
+    "tests/test_catalogo_canonico_1_postgres.py": (
+        "TEST-only CATALOGO-CANONICO-1 proof of the site -> property sync on the "
+        "COMPLETE schema (migration 087 included), reusing the CENSIMENTO-1 Fase "
+        "3 module fixture (throwaway stima360_db_test, opt-in through "
+        "P29_TEST_DSN, local DSN only, dropped at teardown). Registered in its "
+        "own right: it points the REAL public endpoints main.salva_stima and "
+        "main.salva_stima_dettagliata (main.get_connection, and database.py's "
+        "legacy helper for the detail columns) at the throwaway database, so the real CORE bridge and property/site_sync.py "
+        "run end to end. It must not go through database.get_connection() for "
+        "the test traffic: that is the application choke point and must stay "
+        "uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

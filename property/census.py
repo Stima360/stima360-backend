@@ -1084,6 +1084,8 @@ def _accessori(cur, property_id) -> list[dict]:
 def create_accessory(ctx, property_id: int, body) -> dict:
     agency_id = ctx.require_agency()
     data = body.model_dump()
+    if data.get("quantity") is None:
+        data.pop("quantity", None)          # CATALOGO-CANONICO-1: impronta invariata senza quantita'
     chiave = data.pop("client_request_id", None)
     impronta = _fingerprint(data) if chiave is not None else None
 
@@ -1094,10 +1096,13 @@ def create_accessory(ctx, property_id: int, body) -> dict:
             replica = _replica_in(cur, "property_accessories", agency_id, chiave, impronta, property_id=property_id)
             if replica is not None:
                 return {**replica, "replica": True}
+            # CATALOGO-CANONICO-1: `quantity` (087) entra nella statement solo se indicata.
+            extra_col, extra_val = ((", quantity", [data["quantity"]]) if data.get("quantity") is not None else ("", []))
             cur.execute("INSERT INTO property_accessories (property_id, kind, cadastral_status, surface_sqm, notes, "
-                        "client_request_id, client_request_fingerprint) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-                        (property_id, data["kind"], data["cadastral_status"], data.get("surface_sqm"), data.get("notes"),
-                         str(chiave) if chiave else None, impronta))
+                        f"client_request_id, client_request_fingerprint{extra_col}) "
+                        f"VALUES (%s,%s,%s,%s,%s,%s,%s{',%s' * len(extra_val)}) RETURNING *",
+                        [property_id, data["kind"], data["cadastral_status"], data.get("surface_sqm"), data.get("notes"),
+                         str(chiave) if chiave else None, impronta, *extra_val])
             return {**repository.row(cur.fetchone()), "replica": False}
 
     def leggi_replica():

@@ -835,7 +835,11 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: property 45 -> 46
         # (GET /api/property/trash, elenco del Cestino in sola lettura),
         # dietro legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
-        "property": 46, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: property 46 -> 50
+        # (provenienza dal sito: GET .../site-sources, POST .../conflicts,
+        # POST .../duplicates/{other_id}/dismiss, POST .../relink), dietro
+        # legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
+        "property": 50, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

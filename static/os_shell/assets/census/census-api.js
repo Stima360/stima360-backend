@@ -219,3 +219,23 @@ export function searchProperties(term, limit = 10) {
 export function listCensusUnits({ search, limit = 50, offset = 0 } = {}) {
   return request('GET', `/properties${query({ search, limit, offset, record_kind: 'census' })}`);
 }
+
+// --- CATALOGO-CANONICO-1: provenienza dal sito stima360.it ----------------------
+// (property/site_sync.py: lettura con la visibilita' della scheda; Applica/Ignora,
+// «Non e' lo stesso» e «Collega a…» con l'accesso di gestione dell'immobile).
+
+export function getSiteSources(propertyId) {
+  return request('GET', `/properties/${id(propertyId)}/site-sources`);
+}
+
+export function resolveSiteConflict(propertyId, sourceId, conflictId, action) {
+  return request('POST', `/properties/${id(propertyId)}/site-sources/${id(sourceId)}/conflicts`, { conflict_id: conflictId, action });
+}
+
+export function dismissSiteDuplicate(propertyId, sourceId, otherId) {
+  return request('POST', `/properties/${id(propertyId)}/site-sources/${id(sourceId)}/duplicates/${id(otherId)}/dismiss`);
+}
+
+export function relinkSiteSource(propertyId, sourceId, target) {
+  return request('POST', `/properties/${id(propertyId)}/site-sources/${id(sourceId)}/relink`, target);
+}

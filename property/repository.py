@@ -44,6 +44,12 @@ def _census_not_installed(exc):
     if any(f'"{c}"' in str(exc) for c in _COLONNE_083):
         from . import census as _census
         return _census.CensusNotInstalled(_census.CENSUS_NOT_INSTALLED_MESSAGE)
+    # CATALOGO-CANONICO-1: un campo della 087 inviato dove la 087 non c'e'
+    # (codice rilasciato prima dello schema): 409 leggibile, non un 500.
+    from .site_catalog import SITE_PROPERTY_FIELDS
+    if any(f'"{c}"' in str(exc) for c in SITE_PROPERTY_FIELDS):
+        return ConflictError("I dati del sito (mare, impianti, altre caratteristiche) non sono ancora "
+                             "disponibili su questo database: migration 087 non applicata.")
     return None
 
 

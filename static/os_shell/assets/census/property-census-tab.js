@@ -23,6 +23,7 @@ import {
   openTakeInChargeDialog, sectionFieldHtml, showToast,
 } from './census-sheets.js';
 import { errorMessage as censusErrorMessage, labelOf, sectionLabel } from './census-model.js';
+import { renderSiteProvenance } from './site-provenance.js';
 
 /**
  * @param {HTMLElement} el   il contenitore della tab
@@ -65,6 +66,7 @@ export async function renderPropertyCensusTab(el, ctx) {
     <div class="census-tab">
       ${isCensus() ? `<div class="census-banner" data-census-state><strong>Scheda in censimento</strong> — senza proprietario, incarico o stato commerciale. Per lavorarla commercialmente usa «Prendi in carico» (stessa scheda, stesso codice).
         <div class="action-bar"><button type="button" class="btn primary" id="census-take">Prendi in carico</button><button type="button" class="btn ghost" id="census-undo">Annulla creazione</button></div></div>` : ''}
+      <div id="site-provenance-slot"></div>
       <h3 class="section-title">Collocazione</h3>
       <div class="detail-grid">
         <div class="detail-item"><label>Palazzina</label>${edificio ? `<a href="#/edifici/${escapeHtml(edificio.id)}" id="census-open-building">${escapeHtml(edificio.name || [edificio.address, edificio.civic_number].filter(Boolean).join(' ') || `#${edificio.id}`)}</a>` : '—'}</div>
@@ -83,8 +85,13 @@ export async function renderPropertyCensusTab(el, ctx) {
         <button type="button" class="btn ghost" id="census-link-existing">Collega esistente</button>
       </div>
       <h3 class="section-title">Accessori${censimento.accessories_unknown ? ` · ${escapeHtml(String(censimento.accessories_unknown))} da chiarire` : ''}</h3>
-      ${censimento.accessories.length ? `<ul class="census-list">${censimento.accessories.map((a) => `<li class="census-list-item" data-accessory-id="${escapeHtml(a.id)}"><strong>${escapeHtml(labelOf(kinds, a.kind, a.kind))}</strong> <span class="muted">${escapeHtml([a.surface_sqm ? `${a.surface_sqm} m²` : null, a.notes].filter(Boolean).join(' · '))}</span> ${a.cadastral_status === 'unknown' ? renderBadge('Da chiarire', 'warn') : renderBadge('Compreso', 'gray')} ${a.cadastral_status === 'unknown' ? `<button type="button" class="btn btn-small" data-resolve="${escapeHtml(a.id)}">Chiarisci</button>` : ''}<button type="button" class="btn ghost btn-small" data-edit-accessory="${escapeHtml(a.id)}">Modifica</button></li>`).join('')}</ul>` : '<p class="muted">Nessun accessorio. Gli accessori compresi non contano mai come unità.</p>'}
+      ${censimento.accessories.length ? `<ul class="census-list">${censimento.accessories.map((a) => `<li class="census-list-item" data-accessory-id="${escapeHtml(a.id)}"><strong>${escapeHtml(labelOf(kinds, a.kind, a.kind))}</strong> <span class="muted">${escapeHtml([a.quantity ? `× ${a.quantity}` : null, a.surface_sqm ? `${a.surface_sqm} m²` : null, a.notes].filter(Boolean).join(' · '))}</span> ${a.cadastral_status === 'unknown' ? renderBadge('Da chiarire', 'warn') : renderBadge('Compreso', 'gray')}${a.source === 'stima360' ? ` ${renderBadge('Dal sito', 'gray')}` : ''} ${a.cadastral_status === 'unknown' ? `<button type="button" class="btn btn-small" data-resolve="${escapeHtml(a.id)}">Chiarisci</button>` : ''}<button type="button" class="btn ghost btn-small" data-edit-accessory="${escapeHtml(a.id)}">Modifica</button></li>`).join('')}</ul>` : '<p class="muted">Nessun accessorio. Gli accessori compresi non contano mai come unità.</p>'}
     </div>`;
+
+  // CATALOGO-CANONICO-1: «Dal sito Stima360» (stime, valori dichiarati, da
+  // verificare, differenze, possibili doppioni). Indipendente: se non c'e',
+  // la tab resta com'era.
+  renderSiteProvenance(el.querySelector('#site-provenance-slot'), { property, options: opzioni, onChanged: ricarica, navigate });
 
   const take = el.querySelector('#census-take');
   if (take) take.addEventListener('click', () => openTakeInChargeDialog(dialogEl, { property, pertinenze: censimento.pertinenze, onDone: dopoPresa }));

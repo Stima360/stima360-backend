@@ -662,6 +662,7 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
         <div class="form-field"><label>Che cos'è?</label>${chipsHtml('kind', kinds, '', { multiline: true })}</div>
         <div class="form-grid-2">
           ${fieldHtml('pa-surface', 'mq (facoltativi)', inputHtml('pa-surface', '', { type: 'number', inputmode: 'decimal', min: 0, step: 'any' }))}
+          ${fieldHtml('pa-quantity', 'Quanti (facoltativo)', inputHtml('pa-quantity', '', { type: 'number', inputmode: 'numeric', min: 1, step: 1 }))}
           ${fieldHtml('pa-notes', 'Note', inputHtml('pa-notes', '', { maxlength: 250 }))}
         </div>
         <p class="muted" data-accessory-hint></p>
@@ -706,6 +707,9 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
     const payload = { kind: kind.get(), cadastral_status: v === 'no' ? 'included' : 'unknown', client_request_id: clientRequestId };
     const mq = Number(dialogEl.querySelector('#pa-surface').value);
     if (dialogEl.querySelector('#pa-surface').value.trim() && !Number.isNaN(mq)) payload.surface_sqm = mq;
+    // CATALOGO-CANONICO-1: quanti (es. 2 balconi); vuoto = non indicato, mai 0
+    const quanti = Number(dialogEl.querySelector('#pa-quantity').value);
+    if (Number.isInteger(quanti) && quanti >= 1) payload.quantity = quanti;
     const note = dialogEl.querySelector('#pa-notes').value.trim();
     if (note) payload.notes = note;
     let accessorio;
@@ -890,6 +894,7 @@ export function openAccessorySheet(dialogEl, { options: opzioni, property, acces
       <div class="form-field"><label>Che cos'è?</label>${chipsHtml('kind', kinds, str(accessory.kind), { multiline: true })}</div>
       <div class="form-grid-2">
         ${fieldHtml('ae-surface', 'mq', inputHtml('ae-surface', accessory.surface_sqm, { type: 'number', inputmode: 'decimal', min: 0, step: 'any' }))}
+        ${fieldHtml('ae-quantity', 'Quanti', inputHtml('ae-quantity', accessory.quantity, { type: 'number', inputmode: 'numeric', min: 1, step: 1 }))}
         ${fieldHtml('ae-notes', 'Note', inputHtml('ae-notes', accessory.notes, { maxlength: 250 }))}
       </div>
       <p class="muted">${accessory.cadastral_status === 'unknown' ? 'Da chiarire: usa «Chiarisci» per dire se è separata o compresa.' : 'Accessorio compreso nell\'unità.'}</p>
@@ -918,6 +923,12 @@ export function openAccessorySheet(dialogEl, { options: opzioni, property, acces
     if (kind.get() && kind.get() !== accessory.kind) payload.kind = kind.get();
     const mq = dialogEl.querySelector('#ae-surface').value.trim();
     if (mq !== str(accessory.surface_sqm)) payload.surface_sqm = mq === '' ? null : Number(mq);
+    const quanti = dialogEl.querySelector('#ae-quantity') ? dialogEl.querySelector('#ae-quantity').value.trim() : str(accessory.quantity);
+    if (quanti !== str(accessory.quantity)) {
+      const n = Number(quanti);
+      if (quanti !== '' && !(Number.isInteger(n) && n >= 1)) { setError(dialogEl, 'Quanti: un numero intero da 1 in su, oppure vuoto.'); return; }
+      payload.quantity = quanti === '' ? null : n;
+    }
     const note = dialogEl.querySelector('#ae-notes').value.trim();
     if (note !== str(accessory.notes)) payload.notes = note || null;
     if (!Object.keys(payload).length) { dialogEl.close(); return; }

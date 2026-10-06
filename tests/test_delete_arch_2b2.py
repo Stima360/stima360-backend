@@ -223,6 +223,8 @@ def test_06_migration_086_valida_per_il_runner():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    assert tutte[-1].version == "086_delete_arch_2b2_property_trash_guards"
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 086 resta valida; la 087 (attributi del sito) la segue.
+    assert tutte[-2].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-1].version == "087_catalogo_canonico_1_site_attributes"
     assert tutte[-1].down_available and not tutte[-1].non_transactional
     assert runner.validate_migration(tutte[-1]) == []

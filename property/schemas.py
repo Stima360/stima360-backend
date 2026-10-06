@@ -65,6 +65,23 @@ class PropertyCreate(PropertyModel):
     cadastral_parcel: str | None = Field(None,max_length=10)
     cadastral_subunit: str | None = Field(None,max_length=10)
     cadastral_category: str | None = Field(None,max_length=5)    # None = "Da verificare"
+    # CATALOGO-CANONICO-1 (migration 087): i dati del sito stima360.it che non
+    # avevano una colonna. NULL = non dichiarato; i valori di catalogo
+    # (posizione e distanza dal mare) li giudica il service. Entrano
+    # nell'INSERT solo se inviati (property/service.py::SITE_SCHEMA_FIELDS).
+    sea_position: str | None = Field(None,max_length=30)
+    sea_distance: str | None = Field(None,max_length=30)
+    sea_band: str | None = Field(None,max_length=32)
+    sea_barrier: bool | None = None
+    sea_view: bool | None = None
+    sea_view_detail: str | None = Field(None,max_length=200)
+    heating: str | None = Field(None,max_length=120)
+    air_conditioning: str | None = Field(None,max_length=120)
+    air_conditioning_type: str | None = Field(None,max_length=120)
+    exposure: str | None = Field(None,max_length=120)
+    furnishing: str | None = Field(None,max_length=120)
+    condo_fees: Decimal | None = Field(None,ge=0)
+    other_features: str | None = None
     @root_validator(skip_on_failure=True)
     def validate_values(cls,v):
         if v.get('property_type') not in PROPERTY_TYPES: raise ValueError('invalid property_type')
@@ -130,6 +147,23 @@ class PropertyUpdate(PropertyModel):
     cadastral_parcel: str | None = Field(None,max_length=10)
     cadastral_subunit: str | None = Field(None,max_length=10)
     cadastral_category: str | None = Field(None,max_length=5)
+    # CATALOGO-CANONICO-1 (migration 087): i dati del sito stima360.it che non
+    # avevano una colonna. NULL = non dichiarato; i valori di catalogo
+    # (posizione e distanza dal mare) li giudica il service. Entrano
+    # nell'INSERT solo se inviati (property/service.py::SITE_SCHEMA_FIELDS).
+    sea_position: str | None = Field(None,max_length=30)
+    sea_distance: str | None = Field(None,max_length=30)
+    sea_band: str | None = Field(None,max_length=32)
+    sea_barrier: bool | None = None
+    sea_view: bool | None = None
+    sea_view_detail: str | None = Field(None,max_length=200)
+    heating: str | None = Field(None,max_length=120)
+    air_conditioning: str | None = Field(None,max_length=120)
+    air_conditioning_type: str | None = Field(None,max_length=120)
+    exposure: str | None = Field(None,max_length=120)
+    furnishing: str | None = Field(None,max_length=120)
+    condo_fees: Decimal | None = Field(None,ge=0)
+    other_features: str | None = None
     @root_validator(skip_on_failure=True)
     def validate_update(cls,v):
         if v.get('property_type') is not None and v['property_type'] not in PROPERTY_TYPES: raise ValueError('invalid property_type')
@@ -260,7 +294,9 @@ class InteractionCreate(PropertyModel):
 BUILDING_TYPES = ("condominio", "villa", "rustico", "capannone", "commerciale", "misto", "altro")
 BUILDING_CENSUS_STATUSES = ("verified", "partial", "estimated")
 UNITS_DECLARED_SOURCES = ("survey", "cadastre", "owner", "unknown")
-ACCESSORY_KINDS = ("cantina", "soffitta", "posto_auto", "giardino", "terrazzo", "box", "deposito", "altro")
+# CATALOGO-CANONICO-1 (migration 087): + i tipi del sito. Il "garage" del sito e' il `box`.
+ACCESSORY_KINDS = ("cantina", "soffitta", "posto_auto", "giardino", "terrazzo", "box", "deposito", "altro",
+                   "taverna", "balcone", "piscina", "posto_moto", "posto_bici")
 ACCESSORY_STATUSES = ("included", "unknown")
 
 _CADASTRAL_UNIT_FIELDS = ("cadastral_municipality_code", "cadastral_section", "cadastral_sheet",
@@ -417,6 +453,7 @@ class AccessoryCreate(PropertyModel):
     kind: str
     cadastral_status: str = "included"      # "No" = included; "Non lo so" = unknown
     surface_sqm: Decimal | None = Field(None, ge=0)
+    quantity: int | None = Field(None, ge=1)        # CATALOGO-CANONICO-1: NULL = non indicata
     notes: str | None = None
 
     @root_validator(skip_on_failure=True)
@@ -429,6 +466,7 @@ class AccessoryCreate(PropertyModel):
 class AccessoryUpdate(PropertyModel):
     kind: str | None = None
     surface_sqm: Decimal | None = Field(None, ge=0)
+    quantity: int | None = Field(None, ge=1)
     notes: str | None = None
 
     @root_validator(skip_on_failure=True)
@@ -481,3 +519,25 @@ class PropertyTrash(PropertyModel):
     catalogo dal service (400 INVALID_TRASH_REASON)."""
     reason_code: str = Field(..., max_length=30)
     note: str | None = Field(None, max_length=500)
+
+
+# ---------------------------------------------------------------------------
+# CATALOGO-CANONICO-1: provenienza dal sito (property/site_sync.py)
+# ---------------------------------------------------------------------------
+
+class SiteConflictResolve(PropertyModel):
+    """«Applica» (scrive il valore del sito) o «Ignora» (lo lascia com'e')."""
+    conflict_id: str = Field(..., min_length=1, max_length=40)
+    action: str = Field(..., pattern="^(apply|ignore)$")
+
+
+class SiteRelink(PropertyModel):
+    """«Collega questa stima a un altro immobile»: per id o per codice IMM."""
+    target_property_id: int | None = Field(None, ge=1)
+    target_code: str | None = Field(None, min_length=1, max_length=50)
+
+    @root_validator(skip_on_failure=True)
+    def one_target(cls, v):
+        if (v.get("target_property_id") is None) == (v.get("target_code") is None):
+            raise ValueError("indica target_property_id oppure target_code")
+        return v

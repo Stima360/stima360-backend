@@ -85,7 +85,7 @@ import { getAgents } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
-import { openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
+import { loadFormOptions, openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
 // CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
 // «Si' / No / Non lo so», accessori e «Chiarisci», dati catastali, presa in
@@ -483,11 +483,16 @@ export async function renderImmobileDettaglio(container, params = []) {
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
       switch (key) {
-        case 'panoramica':
-          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, { archivePendingConfirm, lifecycleFeedback, session: getSession() });
+        case 'panoramica': {
+          // CATALOGO-CANONICO-1: le etichette di catalogo (stato, mare) da
+          // form-options; se non arrivano si mostrano i valori salvati.
+          let catalogo = {};
+          try { catalogo = (await loadFormOptions()) || {}; } catch (_error) { catalogo = {}; }
+          contentEl.innerHTML = renderPanoramica(property, incaricoEditMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, { archivePendingConfirm, lifecycleFeedback, session: getSession(), catalogo });
           bindIncaricoSection(contentEl);
           bindCommercialStatusSection(contentEl);
           break;
+        }
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm, property) + renderLeadLinks(property.leads); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos, photoAddMode, photoRemoveConfirm); bindFotoSection(contentEl); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
@@ -1755,6 +1760,14 @@ export async function renderImmobileDettaglio(container, params = []) {
 
 // --- Panoramica -------------------------------------------------------
 
+/** CATALOGO-CANONICO-1: l'etichetta di un codice di catalogo (form-options),
+ *  oppure il valore salvato se il catalogo non c'e' o non lo conosce. */
+function catalogLabel(catalogo, lista, valore) {
+  if (valore === null || valore === undefined || valore === '') return null;
+  const voce = ((catalogo || {})[lista] || []).find((x) => x && x.value === valore);
+  return voce ? voce.label : valore;
+}
+
 function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle = {}) {
   const fields = [
     ['Codice', p.code], ['Tipologia', p.property_type], ['Classificazione', p.classification],
@@ -1764,16 +1777,33 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
     ['Locali', p.rooms], ['Camere', p.bedrooms], ['Bagni', p.bathrooms],
     ['Piano', p.floor], ['Piani totali', p.total_floors],
     ['Ascensore', p.elevator === null || p.elevator === undefined ? null : (p.elevator ? 'Sì' : 'No')],
-    ['Anno costruzione', p.year_built], ['Condizione', p.condition], ['Classe energetica', p.energy_class],
+    ['Anno costruzione', p.year_built], ['Stato', catalogLabel(lifecycle.catalogo, 'conditions', p.condition)], ['Classe energetica', p.energy_class],
     ['Prezzo richiesto', formatPrice(p.asking_price)], ['Prezzo minimo', formatPrice(p.minimum_price)],
     ['Assegnato a', p.assigned_to], ['Fonte', p.source],
     ['Punteggio completezza', p.readiness_score != null ? `${p.readiness_score}%` : null],
   ];
+  // CATALOGO-CANONICO-1: mare, impianti e altre caratteristiche (migration 087),
+  // con «—» per «non indicato» e Si'/No solo quando dichiarati.
+  const yesNo = (v) => (v === null || v === undefined ? null : (v ? 'Sì' : 'No'));
+  const extra = [
+    ['Posizione mare', catalogLabel(lifecycle.catalogo, 'sea_positions', p.sea_position)],
+    ['Distanza dal mare', catalogLabel(lifecycle.catalogo, 'sea_distances', p.sea_distance)],
+    ['Ferrovia o strada verso il mare', yesNo(p.sea_barrier)], ['Vista mare', yesNo(p.sea_view)],
+    ['Dettaglio vista mare', p.sea_view_detail], ['Fascia mare (dal sito)', p.sea_band],
+    ['Riscaldamento', p.heating], ['Climatizzazione', [p.air_conditioning, p.air_conditioning_type].filter(Boolean).join(' · ')],
+    ['Esposizione', p.exposure], ['Arredamento', p.furnishing], ['Spese condominiali (€)', p.condo_fees],
+  ];
+  const cell = ([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`;
   return `
     <h3 class="section-title">Dati immobile</h3>
     <div class="detail-grid">
-      ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`).join('')}
+      ${fields.map(cell).join('')}
     </div>
+    <h3 class="section-title">Mare e dotazioni</h3>
+    <div class="detail-grid" id="property-site-attributes">
+      ${extra.map(cell).join('')}
+    </div>
+    ${p.other_features ? `<h3 class="section-title">Altre caratteristiche</h3><p>${escapeHtml(p.other_features)}</p>` : ''}
     ${renderCommercialStatusSection(p, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle)}
     ${renderIncaricoSection(p, editMode)}
     <h3 class="section-title">Note</h3>

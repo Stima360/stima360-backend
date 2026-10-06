@@ -1037,3 +1037,20 @@ a.census-unit-main { text-decoration: none; }
   .census-wizard .modal-actions { flex-wrap: wrap; }
   .census-wizard .modal-actions .btn { flex: 1 1 140px; min-height: 44px; }
 }
+
+/* CATALOGO-CANONICO-1: il pannello «Dal sito Stima360» nella tab Censimento /
+   Pertinenze (stime, valori dichiarati, da verificare, differenze, possibili
+   doppioni). Solo regole NUOVE (prefisso site-). */
+.site-provenance { margin-bottom: 12px; }
+.site-source { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 8px 0; background: var(--bg); overflow-wrap: anywhere; }
+.site-source-closed { opacity: .8; }
+.site-source-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.site-conflicts, .site-unmapped, .site-duplicates, .site-relink { margin-top: 8px; }
+.site-source .census-list-item { flex-wrap: wrap; gap: 6px; }
+.site-declared summary { cursor: pointer; margin-top: 8px; }
+.site-relink .action-bar { flex-wrap: wrap; }
+.site-relink .input { flex: 1 1 160px; min-width: 0; }
+@media (max-width: 767px) {
+  .site-source .census-list-item { flex-direction: column; align-items: stretch; }
+  .site-source .btn, .site-relink .input { width: 100%; min-height: 44px; }
+}
