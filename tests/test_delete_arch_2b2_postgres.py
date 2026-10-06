@@ -225,7 +225,10 @@ def test_a_black_box_sparisce_da_ogni_superficie(banco):
     visibili = sorted(n for n, r in dopo.items() if _mostra(r, s))
     assert visibili == [], f"l'immobile nel Cestino compare ancora in: {visibili}"
     rotte = sorted(p for p, t in _scansione_get(b).items() if s["marca"] in t)
-    assert rotte == [], f"GET che mostrano ancora l'immobile nel Cestino: {rotte}"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: la pagina «Cestino»
+    # (GET /api/property/trash) e' l'UNICA superficie che deve mostrare
+    # l'immobile nel Cestino; ogni altra GET resta senza.
+    assert rotte == ["/api/property/trash"], f"GET che mostrano ancora l'immobile nel Cestino: {rotte}"
     # dettagli per id: 404
     assert dopo["owner_portal_property"].status_code == 404
     assert dopo["acquisition_detail"].status_code == 404

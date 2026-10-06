@@ -227,6 +227,8 @@ def unarchive_property(ctx,i):return _lifecycle.unarchive_property(ctx,i)
 def deletion_check(ctx,i):return _lifecycle.deletion_check(ctx,i)
 def trash_property(ctx,i,p):return _lifecycle.trash_property(ctx,i,p.reason_code,p.note)
 def restore_property(ctx,i):return _lifecycle.restore_property(ctx,i)
+# DELETE-ARCH Fase 2B3: l'elenco del Cestino (pagina «Cestino» della Shell).
+def list_trash(ctx,limit,offset):return _lifecycle.list_trash(ctx,limit=limit,offset=offset)
 def add_contact(ctx,i,p):return repository.add_contact(ctx,i,dump(p))
 def delete_contact(ctx,i,c,r):return _lifecycle.delete_contact(ctx,i,c,r)
 def add_lead(ctx,i,p):return repository.add_lead(ctx,i,dump(p))

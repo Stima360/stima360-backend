@@ -97,9 +97,11 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" e' una voce normale di
     # SECTIONS, fra "immobili" e "acquisizioni" (il flusso reale Immobili ->
     # Venditori -> Acquisizioni -> Incarichi). L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" e' l'ultima voce
+    # normale di SECTIONS (discreta, in fondo alla sidebar). L'elenco resta esatto.
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
         "oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni", "incarichi", "acquirenti",
-        "abbinamenti", "attivita", "automazioni"]
+        "abbinamenti", "attivita", "automazioni", "cestino"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
     assert "SEZIONE_AGENDA" not in main
@@ -881,9 +883,11 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" fra "immobili" e
     # "acquisizioni". L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" ultima voce,
+    # discreta. L'elenco resta esatto.
     assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita",
-                                "automazioni"], out["navRoutes"]
+                                "automazioni", "cestino"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant

@@ -313,8 +313,10 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA VENDITORI-1: "venditori" fra "immobili" e
     # "acquisizioni"; "rete" resta assente. L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" e' l'ultima voce
+    # di SECTIONS (discreta, in fondo); "rete" resta assente. L'elenco resta esatto.
     assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni"]
+                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "cestino"]
 
 
 def test_a4_the_entry_disappears_when_the_session_changes(staged):

@@ -63,6 +63,7 @@
 // «Censimento» elenca le palazzine e le unita' censite
 // (`record_kind=census`). Una scheda passa da una lista all'altra solo con
 // «Prendi in carico» (stessa riga, stesso codice).
+// DELETE-ARCH Fase 2B3: link discreto «Cestino» nella barra dell'elenco Commerciale.
 import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
@@ -91,6 +92,7 @@ export async function renderImmobili(container, params = []) {
           ${STATUS_OPTIONS.map((s) => `<option value="${s}">${escapeHtml(s)}</option>`).join('')}
         </select>
         <button type="button" id="immobili-new" class="btn primary">+ Nuovo immobile</button>
+        <a href="#/cestino" class="btn ghost trash-link" id="immobili-trash-link">Cestino</a>
       </div>
       <div id="immobili-list-area"><p class="muted">Caricamento…</p></div>
       <div id="immobili-pager" class="list-pager"></div>

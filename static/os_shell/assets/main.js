@@ -41,6 +41,8 @@ import { renderAcquisizioni } from './views/acquisizioni.js';
 import { renderAcquisizioneDettaglio } from './views/acquisizione-dettaglio.js';
 import { renderIncarichi } from './views/incarichi.js';
 import { renderIncaricoDettaglio } from './views/incarico-dettaglio.js';
+// DELETE-ARCH Fase 2B3: il Cestino (solo immobili).
+import { renderCestino } from './views/cestino.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -55,6 +57,8 @@ const SECTIONS = [
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
   { name: 'automazioni', label: 'Automazioni' },
+  // DELETE-ARCH Fase 2B3: in fondo, voce discreta (app.css); dentro solo immobili.
+  { name: 'cestino', label: 'Cestino' },
 ];
 
 // P27-7 - la sezione RETE, che NON sta in SECTIONS.
@@ -162,6 +166,8 @@ registerRoute('acquisizioni', (container, params = []) => {
 registerRoute('incarichi', (container, params = []) => {
   return params[0] ? renderIncaricoDettaglio(container, params) : renderIncarichi(container, params);
 });
+// DELETE-ARCH Fase 2B3: `#/cestino` (elenco + «Ripristina»). Nessun dettaglio.
+registerRoute('cestino', (container) => renderCestino(container));
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.

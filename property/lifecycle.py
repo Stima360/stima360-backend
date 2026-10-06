@@ -709,3 +709,53 @@ def restore_property(ctx, property_id: int) -> dict:
                 before={k: prop.get(k) for k in ("deleted_at", "deleted_by_user_id", "deleted_reason")})
     _audit("restore", ctx, entity_type="property", entity_id=property_id)
     return riga
+
+
+# ---------------------------------------------------------------------------
+# DELETE-ARCH Fase 2B3: ELENCO DEL CESTINO (sola lettura, per la pagina «Cestino»)
+# ---------------------------------------------------------------------------
+TRASH_LIST_MAX = 200
+
+
+def list_trash(ctx, *, limit: int = 50, offset: int = 0) -> dict:
+    """Gli immobili nel Cestino dell'agenzia di chi chiede, dal piu' recente.
+
+    Stessa regola del ripristino (`restore_property`): owner, admin e platform
+    admin in acting vedono tutto il Cestino dell'agenzia; un `agent` solo cio'
+    che ha spostato lui; ogni altro ruolo nulla. Nessun dato corretto o
+    ricalcolato: e' la riga cosi' com'e', piu' chi l'ha eliminata e la nota
+    dell'ultimo evento `trash` del registro (085)."""
+    from .interactions import NOME_OPERATORE
+
+    agency_id = ctx.require_agency()
+    limit = max(1, min(int(limit), TRASH_LIST_MAX))
+    offset = max(0, int(offset))
+    vuoto = {"items": [], "has_more": False, "limit": limit, "offset": offset}
+    tutti = permissions.sees_all_agency_records(getattr(ctx, "role", None), getattr(ctx, "is_platform_admin", False))
+    if not tutti and getattr(ctx, "role", None) != "agent":
+        return vuoto
+    filtri, params = ["p.agency_id = %s", "p.deleted_at IS NOT NULL"], [agency_id]
+    if not tutti:
+        filtri.append("p.deleted_by_user_id = %s")
+        params.append(getattr(ctx, "user_id", None))
+    with core_cursor() as (_, cur):
+        _cestino_installato(cur)
+        cur.execute(
+            f"""SELECT p.id, p.code, p.title, p.address, p.civic_number, p.city, p.province,
+                       p.property_type, p.commercial_status, p.archived_at,
+                       p.deleted_at, p.deleted_reason, p.deleted_by_user_id,
+                       {NOME_OPERATORE.format(a='u')} AS deleted_by_name,
+                       ev.note AS deleted_note
+                  FROM properties p
+                  LEFT JOIN operator_users u ON u.id = p.deleted_by_user_id
+                  LEFT JOIN LATERAL (
+                        SELECT e.note FROM record_lifecycle_events e
+                         WHERE e.agency_id = p.agency_id AND e.entity_type = 'property'
+                           AND e.entity_id = p.id AND e.action = 'trash'
+                         ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1) ev ON TRUE
+                 WHERE {' AND '.join(filtri)}
+                 ORDER BY p.deleted_at DESC, p.id DESC
+                 LIMIT %s OFFSET %s""",
+            params + [limit + 1, offset])
+        righe = [dict(r) for r in cur.fetchall()]
+    return {"items": righe[:limit], "has_more": len(righe) > limit, "limit": limit, "offset": offset}

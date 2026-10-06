@@ -198,7 +198,9 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     # POST .../unarchive, contratto REV 2 D11), entrambe dietro lo stesso gate.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: 42 -> 45 (GET
     # .../deletion-check, POST .../trash, POST .../restore), stesso gate.
-    assert len(router.routes) == 45
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: 45 -> 46 (GET
+    # /api/property/trash, l'elenco della pagina «Cestino»), stesso gate.
+    assert len(router.routes) == 46
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

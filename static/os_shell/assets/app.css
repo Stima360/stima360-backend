@@ -936,3 +936,46 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
   dialog.modal.seller-sheet { margin: auto 0 0 0; width: 100vw; max-width: 100vw; border-radius: 16px 16px 0 0; }
   .seller-actions .btn { flex: 1 1 calc(50% - 8px); justify-content: center; text-align: center; }
 }
+
+/* DELETE-ARCH Fase 2B3: Cestino Immobili - il foglio «Elimina…», la pagina
+   «Cestino» e la sua voce discreta in fondo alla sidebar. Solo regole NUOVE
+   (prefisso trash-), nessuna ridefinizione. Mobile-first: bottom-sheet,
+   card a una colonna, azioni toccabili da 44px. */
+.nav-item[data-route="cestino"] { margin-top: auto; font-size: 13px; color: var(--muted); border-top: 1px solid var(--border); }
+.trash-open { color: var(--danger); }
+.trash-link { font-size: 13px; }
+dialog.modal.trash-sheet { max-width: 520px; }
+.trash-title { margin: 0 0 4px; font-size: 18px; }
+.trash-subject { margin: 0 0 12px; overflow-wrap: anywhere; }
+.trash-lead { margin: 0 0 6px; font-weight: 600; }
+.trash-blockers { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.trash-blockers li, .trash-history li { overflow-wrap: anywhere; }
+.trash-history { margin: 4px 0 0; padding-left: 16px; font-size: 13px; }
+.trash-reasons { border: none; margin: 0 0 10px; padding: 0; display: grid; gap: 2px; }
+.trash-reasons legend { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.trash-reason { display: flex; align-items: center; gap: 8px; min-height: 40px; cursor: pointer; }
+.trash-hint { font-size: 13px; }
+.trash-page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.trash-intro { margin: 0; flex: 1 1 240px; }
+.trash-cards { display: grid; gap: 12px; }
+.trash-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.trash-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.trash-line { font-size: 14px; overflow-wrap: anywhere; }
+.trash-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 2px 0 0; font-size: 14px; }
+.trash-facts dt { color: var(--muted); }
+.trash-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.trash-card-error { margin-top: 0; }
+.trash-conflicts { margin: 4px 0 0; padding-left: 18px; }
+.trash-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.trash-card-actions .btn, .trash-actions .btn { min-height: 44px; }
+@media (min-width: 900px) {
+  .trash-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .nav-item[data-route="cestino"] { margin-top: 0; border-top: none; }
+}
+@media (max-width: 767px) {
+  dialog.modal.trash-sheet { margin: auto 0 0 0; width: 100vw; max-width: 100vw; max-height: 92vh; border-radius: 16px 16px 0 0; padding: 16px; }
+  .trash-actions { flex-direction: column-reverse; }
+  .trash-actions .btn, .trash-card-actions .btn { width: 100%; }
+}

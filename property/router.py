@@ -66,6 +66,9 @@ def property_deletion_check(property_id:int,ctx:OperatorContext=Depends(legacy_b
 def trash_property(property_id:int,p:PropertyTrash,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.trash_property,ctx,property_id,p)
 @router.post('/properties/{property_id}/restore')
 def restore_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.restore_property,ctx,property_id)
+# DELETE-ARCH Fase 2B3: elenco del Cestino (sola lettura, agency-scoped; agent: solo i propri).
+@router.get('/trash')
+def list_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.list_trash,ctx,limit,offset)
 @router.delete('/properties/{property_id}',deprecated=True)
 def archive_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
     esito=trc(service.archive_property,ctx,property_id)

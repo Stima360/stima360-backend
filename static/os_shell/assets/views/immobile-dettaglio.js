@@ -95,6 +95,7 @@ import { mountPropertyInteractions } from '../components/property-interactions.j
 import { renderPropertyCensusTab } from '../census/property-census-tab.js';
 // VENDITORI-1: l'interruttore «Vende» per proprietario (sellers/seller-toggle.js).
 import { bindSellerToggles, renderSellerCell } from '../sellers/seller-toggle.js';
+import { bindTrashButton, trashButtonHtml } from '../trash/trash-dialog.js'; // DELETE-ARCH 2B3
 
 const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -423,6 +424,7 @@ export async function renderImmobileDettaglio(container, params = []) {
       <div class="badge-row" id="property-status-badge">${headerBadgeHtml()}</div>
       <div class="action-bar" style="margin-top:8px">
         <button type="button" id="property-edit-btn" class="btn ghost">Modifica immobile</button>
+        ${trashButtonHtml(canManagePropertyLifecycle(property, getSession()))}
       </div>
     </div>
     <dialog id="property-edit-dialog" class="modal modal-wide"></dialog>
@@ -461,6 +463,8 @@ export async function renderImmobileDettaglio(container, params = []) {
       },
     });
   });
+
+  bindTrashButton(container, property, () => navigate('immobili')); // DELETE-ARCH 2B3: «Elimina…»
 
   // CENSIMENTO-1 Fase 4 - la tab del censimento vive in un componente
   // proprio (census/property-census-tab.js): la scheda passa solo il
