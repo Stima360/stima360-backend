@@ -379,7 +379,8 @@ export function openCategoryPicker(dialogEl, { options: opzioni, propertyType, c
  *   seed      -> «Duplica» (S6) o la tipologia scelta dal bottone
  *   onSaved(unit, {another}) -> chi chiama mostra il toast con «Annulla»
  */
-export function openUnitSheet(dialogEl, { options: opzioni, building = null, parent = null, seed = {}, lastFloor = '', onSaved } = {}) {
+export function openUnitSheet(dialogEl, { options: opzioni, building = null, parent = null, seed = {}, lastFloor = '', onSaved,
+  recordKind = 'census', onBack = null } = {}) {
   const tree = opzioni.territory || [];
   const tipi = opzioni.property_types || [];
   const inPalazzina = !!building;
@@ -387,6 +388,9 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
   const s = seed || {};
   const titolo = s.duplicate_of ? `Copia di ${s.duplicate_of} — completa interno e categoria`
     : (isPertinenza ? `Nuova pertinenza di ${parent.code || `#${parent.id}`}` : (inPalazzina ? 'Nuova unità' : 'Nuovo immobile singolo'));
+  // CREAZIONE-GUIDATA-1: scheda commerciale o di censimento, deciso da chi apre
+  const commerciale = recordKind === 'crm';
+  const agenti = commerciale && opzioni.can_assign === true && Array.isArray(opzioni.agents) ? opzioni.agents : [];
   let clientRequestId = api.newClientRequestId();
   let categoria = str(s.cadastral_category) || '';
   let ownAddress = !inPalazzina;       // fuori palazzina l'indirizzo e' sempre proprio
@@ -407,6 +411,7 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
     <form data-unit-form novalidate>
       <h2 class="census-sheet-title">${escapeHtml(titolo)}</h2>
       ${inPalazzina ? `<p class="muted">${escapeHtml([building.name, [building.address, building.civic_number].filter(Boolean).join(' ')].filter(Boolean).join(' · '))}</p>` : ''}
+      <p class="muted census-kind-note" data-record-kind="${commerciale ? 'crm' : 'census'}">${commerciale ? 'Scheda commerciale: entra subito nell’elenco Immobili.' : 'Scheda di censimento: entra nel lavoro commerciale con «Prendi in carico».'} Categoria e dati catastali si completano anche dopo.</p>
       <div class="form-field"><label>Tipologia</label>${chipsHtml('property_type', tipi, str(s.property_type) || 'apartment', { multiline: true })}</div>
       <div class="form-field"><label>Piano</label>${chipsHtml('floor', FLOOR_CHIPS, str(s.floor) || str(lastFloor))}
         <div class="census-inline"><button type="button" class="chip" data-floor-other>Altro…</button>${inputHtml('us-floor-other', (s.floor && !FLOOR_CHIPS.some((f) => f.value === String(s.floor))) ? s.floor : '', { maxlength: 50, placeholder: 'es. T+1 duplex' })}</div></div>
@@ -432,11 +437,13 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
         ${sectionFieldHtml('us', null)}
       </details>
       ${inPalazzina ? '<div class="form-field"><label class="census-check"><input type="checkbox" data-own-address> Ingresso diverso? (via o civico propri)</label></div>' : ''}
-      <div data-address-block ${inPalazzina ? 'hidden' : ''}>${territoryHtml('us', { address: '', civic_number: '' })}</div>
+      <div data-address-block ${inPalazzina ? 'hidden' : ''}>${territoryHtml('us', inPalazzina ? { address: '', civic_number: '' } : { address: s.address, civic_number: s.civic_number })}</div>
+      ${agenti.length ? fieldHtml('us-agent', 'Assegnato a', `<select id="us-agent" class="input"><option value="">Nessuno</option>${agenti.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || `Operatore #${a.id}`)}${a.is_me ? ' (tu)' : ''}</option>`).join('')}</select>`) : ''}
       ${fieldHtml('us-notes', 'Note', `<textarea id="us-notes" class="input" rows="2"></textarea>`)}
       <div data-banner></div>
       <div class="field-error" data-error></div>
       <div class="modal-actions census-sheet-actions">
+        ${onBack ? '<button type="button" class="btn ghost" data-back>← Indietro</button>' : ''}
         <button type="button" class="btn ghost" data-cancel>Annulla</button>
         <button type="submit" class="btn" data-submit>Salva</button>
         ${inPalazzina ? '<button type="button" class="btn primary" data-submit-another>Salva e aggiungine un\'altra</button>' : ''}
@@ -456,6 +463,8 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
   if (spunta) spunta.addEventListener('change', () => { ownAddress = !!spunta.checked; blocco.hidden = !ownAddress; });
   const sezione = bindSectionField(dialogEl, 'us', null);
   dialogEl.querySelector('[data-cancel]').addEventListener('click', () => dialogEl.close());
+  const indietro = dialogEl.querySelector('[data-back]');
+  if (indietro) indietro.addEventListener('click', () => { if (!saving) { dialogEl.close(); onBack(); } });
   const bottoneCategoria = dialogEl.querySelector('[data-category-btn]');
   bottoneCategoria.addEventListener('click', () => openCategoryPicker(childDialog(dialogEl, 'categoria'), {
     options: opzioni, propertyType: tipo.get(), current: categoria,
@@ -476,6 +485,7 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
       cadastral_municipality_code: v('#us-belfiore'), cadastral_section_mode: sezione.mode(), cadastral_section: sezione.text(),
       cadastral_sheet: v('#us-sheet'), cadastral_parcel: v('#us-parcel'), cadastral_subunit: v('#us-subunit'), internal_notes: v('#us-notes'),
       own_address: ownAddress, ...territorio.get(), confirm_similar: confirmSimilar,
+      record_kind: commerciale ? 'crm' : 'census', assigned_agent_id: dialogEl.querySelector('#us-agent') ? v('#us-agent') : '',
     };
   }
 

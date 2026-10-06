@@ -122,10 +122,16 @@ def test_a05_catasto_validato_prima_del_database():
 # B. schemi: campi protetti e cataloghi
 # ---------------------------------------------------------------------------
 
+# SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: CensusUnitCreate accetta
+# `record_kind` ('census' | 'crm') per decisione esplicita della fase C («il tipo
+# di scheda lo decide l'ingresso»: dall'elenco Commerciale le unita' in palazzina
+# nascono commerciali). Restano rifiutati: un valore diverso, l'assegnazione su
+# una scheda di censimento, e `record_kind` su presa in carico, POST e PATCH generici.
 @pytest.mark.parametrize("modello,corpo", [
     (BuildingCreate, {"agency_id": 1}), (BuildingCreate, {"client_request_fingerprint": "a" * 64}),
     (BuildingCreate, {"archived_at": None}), (BuildingUpdate, {"agency_id": 1}), (BuildingUpdate, {"client_request_id": str(uuid.uuid4())}),
-    (CensusUnitCreate, {"record_kind": "crm"}), (CensusUnitCreate, {"agency_id": 1}), (CensusUnitCreate, {"address_inherited": True}),
+    (CensusUnitCreate, {"record_kind": "listing"}), (CensusUnitCreate, {"assigned_agent_id": 3}),
+    (CensusUnitCreate, {"agency_id": 1}), (CensusUnitCreate, {"address_inherited": True}),
     (CensusUnitCreate, {"commercial_status": "active"}), (CensusUnitCreate, {"mandate_type": "esclusiva"}),
     (CensusUnitCreate, {"title": "x"}), (CensusUnitCreate, {"code": "IMM-1"}),
     (AccessoryCreate, {"kind": "box", "property_id": 1}), (AccessoryResolve, {"outcome": "separate", "agency_id": 1}),

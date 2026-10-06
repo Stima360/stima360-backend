@@ -1017,3 +1017,23 @@ a.census-unit-main { text-decoration: none; }
   .building-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .property-building-link { display: flex; }
 }
+
+/* CREAZIONE-GUIDATA-1: la procedura guidata (passi, percorsi, candidati) e la
+   barra «salvata» nella scheda edificio. Solo regole NUOVE (prefisso
+   census-wizard / census-candidate / census-saved / census-kind). */
+.census-wizard-step { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.census-wizard-note { font-size: 12px; margin: 4px 0 0; }
+.census-wizard-paths { grid-template-columns: 1fr; }
+.census-wizard-paths .census-card.active { border-color: var(--primary); }
+.census-candidates .census-list-item { justify-content: space-between; }
+.census-candidate-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; overflow-wrap: anywhere; }
+.census-candidates .btn { min-height: 40px; }
+.census-saved-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.census-saved-bar[hidden] { display: none; }
+.census-kind-note { font-size: 12px; margin: 0 0 8px; }
+@media (max-width: 767px) {
+  .census-candidates .census-list-item { flex-direction: column; align-items: stretch; }
+  .census-candidates .btn, .census-saved-bar .btn { width: 100%; min-height: 44px; }
+  .census-wizard .modal-actions { flex-wrap: wrap; }
+  .census-wizard .modal-actions .btn { flex: 1 1 140px; min-height: 44px; }
+}

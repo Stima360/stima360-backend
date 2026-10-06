@@ -67,9 +67,9 @@
 import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
-import { openPropertyDialog, propertyDisplayName, loadFormOptions } from '../components/property-form.js';
+import { propertyDisplayName, loadFormOptions } from '../components/property-form.js';
 import * as census from '../census/census-api.js';
-import { openBuildingSheet, openUnitSheet } from '../census/census-sheets.js';
+import { startCreation } from '../census/census-wizard.js';
 import { errorMessage, labelOf } from '../census/census-model.js';
 
 const PAGE_SIZE = 50;
@@ -101,10 +101,6 @@ export async function renderImmobili(container, params = []) {
       <div class="list-toolbar">
         <input id="census-search" class="input" type="search" placeholder="Cerca palazzina o unità per nome, via o comune…">
         <button type="button" id="census-new" class="btn primary">+ Nuovo</button>
-      </div>
-      <div id="census-new-cards" class="census-new-cards" hidden>
-        <button type="button" class="census-card" id="census-new-single"><strong>Immobile singolo</strong><span class="muted">Villa, rustico, negozio, unità senza palazzina</span></button>
-        <button type="button" class="census-card" id="census-new-building"><strong>Palazzina con più unità</strong><span class="muted">Prima l'edificio, poi le unità piano per piano</span></button>
       </div>
       <h3 class="census-section-title">Palazzine</h3>
       <div id="census-list-area"><p class="muted">Caricamento…</p></div>
@@ -180,12 +176,24 @@ export async function renderImmobili(container, params = []) {
     debounceHandle = setTimeout(load, 300);
   });
   statusSelect.addEventListener('change', () => { offset = 0; load(); });
-  // Creazione riuscita: si apre subito la scheda del nuovo immobile (stesso
-  // pattern di prima); la lista, rivisitata, rifa' sempre la GET.
-  container.querySelector('#immobili-new').addEventListener('click', () => openPropertyDialog(dialogEl, {
-    mode: 'create',
-    onSaved: (created) => navigate('immobili', [created.id]),
-  }));
+  // CREAZIONE-GUIDATA-1: «+ Nuovo immobile» parte dalla procedura guidata
+  // (territorio -> percorso -> edificio). Da qui le schede nascono COMMERCIALI:
+  // l'unita' autonoma apre il form di sempre (POST /properties) con il
+  // territorio gia' compilato; in palazzina le unita' nascono `crm`.
+  // Creazione riuscita: si apre la scheda del nuovo immobile, come prima.
+  container.querySelector('#immobili-new').addEventListener('click', async () => {
+    const opzioni = await opzioniCreazione(listArea);
+    if (opzioni) startCreation({ wizardDialog: container.querySelector('#census-sheet'), formDialog: dialogEl, options: opzioni, recordKind: 'crm' });
+  });
+
+  async function opzioniCreazione(area) {
+    try {
+      return await loadFormOptions();
+    } catch (error) {
+      area.insertAdjacentHTML('afterbegin', `<div class="error-box">Impossibile caricare i dati del form: ${escapeHtml(error.message)}</div>`);
+      return null;
+    }
+  }
 
   // --- Censimento (S0 -> S1/S3) ------------------------------------------------
   const crmPanel = container.querySelector('#immobili-crm-panel');
@@ -194,7 +202,6 @@ export async function renderImmobili(container, params = []) {
   const censusListArea = container.querySelector('#census-list-area');
   const censusUnitsArea = container.querySelector('#census-units-area');
   const censusSheet = container.querySelector('#census-sheet');
-  const newCards = container.querySelector('#census-new-cards');
   let censusDebounce = null;
   let censusLoaded = false;
 
@@ -268,30 +275,11 @@ export async function renderImmobili(container, params = []) {
   }
   container.querySelector('#immobili-mode-tabs').querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => mostraModo(b.dataset.mode)));
   censusSearch.addEventListener('input', () => { clearTimeout(censusDebounce); censusDebounce = setTimeout(loadCensus, 300); });
-  container.querySelector('#census-new').addEventListener('click', () => { newCards.hidden = !newCards.hidden; });
-
-  async function opzioniForm() {
-    try {
-      return await loadFormOptions();
-    } catch (error) {
-      censusListArea.insertAdjacentHTML('afterbegin', `<div class="error-box">Impossibile caricare i dati del form: ${escapeHtml(error.message)}</div>`);
-      return null;
-    }
-  }
-  container.querySelector('#census-new-building').addEventListener('click', async () => {
-    const opzioni = await opzioniForm();
-    if (!opzioni) return;
-    newCards.hidden = true;
-    openBuildingSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('edifici', [creato.id]) });
-  });
-  container.querySelector('#census-new-single').addEventListener('click', async () => {
-    const opzioni = await opzioniForm();
-    if (!opzioni) return;
-    newCards.hidden = true;
-    // L'unita' singola nasce census (POST /census/units senza palazzina) e si
-    // apre subito la sua scheda, dove «Annulla creazione» resta disponibile
-    // finche' il backend lo ammette (undo-create).
-    openUnitSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('immobili', [creato.id]) });
+  // CREAZIONE-GUIDATA-1: «+ Nuovo» del Censimento apre la stessa procedura
+  // guidata; da qui le schede nascono di censimento.
+  container.querySelector('#census-new').addEventListener('click', async () => {
+    const opzioni = await opzioniCreazione(censusListArea);
+    if (opzioni) startCreation({ wizardDialog: censusSheet, options: opzioni, recordKind: 'census' });
   });
 
   if (modoIniziale === 'census') loadCensus();

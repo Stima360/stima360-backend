@@ -176,6 +176,13 @@ export function buildUnitPayload(stato) {
       if (str(s[k])) corpo[k] = str(s[k]);
     }
   }
+  // CREAZIONE-GUIDATA-1: scheda commerciale (ingresso dall'elenco Commerciale)
+  // e, solo per quella, l'agente scelto da chi puo' assegnare.
+  if (s.record_kind === 'crm') {
+    corpo.record_kind = 'crm';
+    const agente = Number.parseInt(s.assigned_agent_id, 10);
+    if (Number.isInteger(agente) && agente > 0) corpo.assigned_agent_id = agente;
+  }
   if (s.confirm_similar === true) corpo.confirm_similar = true;
   return corpo;
 }
@@ -377,7 +384,8 @@ export function catalogMunicipalities(tree) {
   for (const regione of tree || []) {
     for (const provincia of regione.provinces || []) {
       for (const comune of provincia.municipalities || []) {
-        out.push({ name: comune.name, microzones: [...(comune.microzones || [])] });
+        // CREAZIONE-GUIDATA-1: regione e provincia del comune, dal catalogo
+        out.push({ name: comune.name, microzones: [...(comune.microzones || [])], region: regione.name, province: provincia.code });
       }
     }
   }
@@ -422,4 +430,85 @@ export function unitRelationText(u) {
   if (u && u.parent_property_id) return 'Pertinenza (unità principale non disponibile)';
   const n = Number(u && u.pertinenze_count) || 0;
   return n > 0 ? `Con ${plurale(n, 'pertinenza', 'pertinenze')}` : '';
+}
+
+
+// --- CREAZIONE-GUIDATA-1: la procedura guidata (territorio -> percorso -> edificio) ------
+//
+// Funzioni pure: lo stato della procedura e' un oggetto semplice che resta
+// in memoria fra i passaggi («Indietro» non perde nulla); niente rete qui.
+
+/** Lo stato iniziale della procedura. */
+export function wizardInitialState() {
+  return { city: '', microzone: '', address: '', civic_number: '', units_declared: '', units_unknown: false,
+    building_name: '', path: '', search: null, building: null, building_saved: false };
+}
+
+/** Il totale dichiarato: intero >= 0, oppure null con «Non so» (mai 0 o 1 per difetto). */
+export function wizardDeclared(stato) {
+  if (stato.units_unknown) return { value: null, error: '' };
+  const t = str(stato.units_declared);
+  if (!t) return { value: null, error: 'Indica quante unità ci sono nell’edificio, oppure «Non so».' };
+  if (!/^\d+$/.test(t)) return { value: null, error: 'Il numero di unità deve essere un intero (0 o più).' };
+  return { value: Number.parseInt(t, 10), error: '' };
+}
+
+/** Gli errori del primo passaggio (nessun valore inventato per riempire un campo). */
+export function wizardStep1Errors(stato, municipalities) {
+  const errori = [];
+  const comune = (municipalities || []).find((m) => m.name === stato.city);
+  if (!comune) errori.push('Scegli il Comune.');
+  else if (stato.microzone && !comune.microzones.includes(stato.microzone)) errori.push('La microzona non appartiene al Comune scelto.');
+  const d = wizardDeclared(stato);
+  if (d.error) errori.push(d.error);
+  return errori;
+}
+
+/** Territorio completo per il backend: regione e provincia dal catalogo del Comune. */
+export function wizardLocation(stato, municipalities) {
+  const comune = (municipalities || []).find((m) => m.name === stato.city);
+  const loc = { region: comune ? comune.region : '', province: comune ? comune.province : '', city: comune ? comune.name : '' };
+  if (comune && str(stato.microzone) && comune.microzones.includes(stato.microzone)) loc.microzone = stato.microzone;
+  if (str(stato.address)) loc.address = str(stato.address);
+  if (str(stato.civic_number)) loc.civic_number = str(stato.civic_number);
+  return loc;
+}
+
+const PAROLE_GENERICHE = new Set(['via', 'viale', 'v.', 'piazza', 'p.zza', 'piazzale', 'corso', 'c.so', 'contrada', 'c.da',
+  'vicolo', 'largo', 'strada', 'localita', 'località', 'loc.', 'lungomare', 'traversa', 'del', 'della', 'dei', 'delle', 'di', 'da']);
+
+/** Le parole utili per cercare edifici sulla stessa via (senza «via», «piazza»…). */
+export function candidateSearch(address) {
+  return str(address).split(/\s+/).filter((w) => w.length >= 2 && !PAROLE_GENERICHE.has(w.toLowerCase())).join(' ');
+}
+
+/** Stesso civico, normalizzato («10», «10 », «10/B» vs «10b»). */
+export function sameCivic(a, b) {
+  const n = (x) => str(x).toLowerCase().replace(/[\s/]+/g, '');
+  return Boolean(n(a)) && n(a) === n(b);
+}
+
+/** I candidati in ordine: stesso civico prima, poi gli altri della via. */
+export function rankCandidates(items, civic) {
+  const lista = Array.isArray(items) ? items : [];
+  return [...lista.filter((b) => sameCivic(b.civic_number, civic)), ...lista.filter((b) => !sameCivic(b.civic_number, civic))]
+    .map((b) => ({ ...b, same_civic: sameCivic(b.civic_number, civic) }));
+}
+
+/** POST /api/property/buildings dalla procedura: solo i dati del primo passaggio. */
+export function wizardBuildingPayload(stato, municipalities, { clientRequestId, confirmSimilar = false } = {}) {
+  const corpo = { building_type: stato.building_type || 'condominio', client_request_id: clientRequestId, ...wizardLocation(stato, municipalities) };
+  if (str(stato.building_name)) corpo.name = str(stato.building_name);
+  const d = wizardDeclared(stato);
+  if (d.value !== null) corpo.units_declared = d.value;
+  if (confirmSimilar) corpo.confirm_similar = true;
+  return corpo;
+}
+
+/** Il totale indicato ora, confrontato con quello gia' salvato sull'edificio scelto. */
+export function declaredMismatchText(stato, building) {
+  const d = wizardDeclared(stato);
+  const salvato = building ? building.units_declared : null;
+  if (d.value === null || salvato === null || salvato === undefined || Number(salvato) === d.value) return '';
+  return `Hai indicato ${d.value} unità, l’edificio ne ha già ${salvato} dichiarate: il dato dell’edificio resta invariato (si cambia da «Modifica palazzina»).`;
 }

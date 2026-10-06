@@ -377,7 +377,10 @@ def test_07_unita_relazioni_mancanti_altrui_e_campi_protetti(mondo):
     assert api.post("/api/property/census/units", json={"building_id": 999999}).status_code == 404
     assert api.post("/api/property/census/units", json={"building_id": e_b["id"]}).status_code == 404
     assert api.post("/api/property/census/units", json={"parent_property_id": 999999}).status_code == 404
-    for corpo in ({"record_kind": "crm"}, {"agency_id": 1}, {"address_inherited": True}, {"commercial_status": "active"},
+    # SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: `record_kind` 'crm' e' ora
+    # ammesso (unita' commerciale in palazzina, decisione della fase C); restano
+    # rifiutati un tipo inesistente e l'assegnazione su una scheda di censimento.
+    for corpo in ({"record_kind": "listing"}, {"assigned_agent_id": 1}, {"agency_id": 1}, {"address_inherited": True}, {"commercial_status": "active"},
                   {"client_request_fingerprint": "a" * 64}, {"property_type": "cantina"}, {"surface_sqm": -1}):
         assert api.post("/api/property/census/units", json=corpo).status_code == 422, corpo
     r = api.post("/api/property/census/units", json={"cadastral_category": "A/99"})

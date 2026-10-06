@@ -22,7 +22,7 @@ import { sessionEpoch } from '../core/auth.js';
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
-import { openBuildingSheet } from '../census/census-sheets.js';
+import { startCreation } from '../census/census-wizard.js';
 import {
   buildingListQuery, buildingPlace, buildingStreet, buildingTitle, catalogMunicipalities, coherentFilters,
   errorMessage, labelOf, summaryView,
@@ -80,7 +80,7 @@ export async function renderEdifici(container) {
         <select id="buildings-city" class="input" aria-label="Comune"></select>
         <select id="buildings-microzone" class="input" aria-label="Microzona"></select>
         <button type="button" id="buildings-reset" class="btn ghost" hidden>Azzera filtri</button>
-        <button type="button" id="buildings-new" class="btn primary">+ Nuova palazzina</button>
+        <button type="button" id="buildings-new" class="btn primary">+ Nuovo</button>
       </div>
       <div id="buildings-area" aria-live="polite"><p class="muted">Caricamento…</p></div>
       <div id="buildings-pager" class="list-pager"></div>
@@ -145,7 +145,7 @@ export async function renderEdifici(container) {
     if (!items.length) {
       area.innerHTML = filtrato
         ? '<p class="muted">Nessun edificio per questi filtri. Prova ad azzerarli.</p>'
-        : '<p class="muted">Nessun edificio censito. Comincia da «+ Nuova palazzina».</p>';
+        : '<p class="muted">Nessun edificio censito. Comincia da «+ Nuovo».</p>';
       return;
     }
     area.innerHTML = `<div class="building-cards">${items.map((b) => buildingCardHtml(b, tipi)).join('')}</div>`;
@@ -177,7 +177,8 @@ export async function renderEdifici(container) {
       area.insertAdjacentHTML('afterbegin', '<div class="error-box">Impossibile caricare i dati del form: riprova tra poco.</div>');
       return;
     }
-    openBuildingSheet($('#buildings-sheet'), { options: opzioni, onSaved: (creato) => navigate('edifici', [creato.id]) });
+    // CREAZIONE-GUIDATA-1: la procedura guidata (territorio -> percorso -> edificio), censimento
+    startCreation({ wizardDialog: $('#buildings-sheet'), options: opzioni, recordKind: 'census' });
   });
 
   cerca.value = filtri.search;

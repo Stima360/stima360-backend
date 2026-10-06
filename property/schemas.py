@@ -391,9 +391,20 @@ class CensusUnitCreate(PropertyModel):
     internal_notes: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # CREAZIONE-GUIDATA-1: la stessa creazione (palazzina, indirizzo ereditato,
+    # duplicati, idempotenza) anche per una scheda COMMERCIALE quando si parte
+    # dall'elenco Commerciale. Default `census`: i client esistenti non cambiano.
+    # L'assegnazione vale solo per la scheda commerciale, con le regole di
+    # `POST /properties` (agente -> se stesso; titolare/admin -> agente attivo).
+    record_kind: str = "census"
+    assigned_agent_id: int | None = Field(None, gt=0)
+
     @root_validator(skip_on_failure=True)
     def validate_unit(cls, v):
         if v.get("property_type") not in PROPERTY_TYPES: raise ValueError("invalid property_type")
+        if v.get("record_kind") not in ("census", "crm"): raise ValueError("invalid record_kind")
+        if v.get("record_kind") == "census" and v.get("assigned_agent_id") is not None:
+            raise ValueError("assigned_agent_id is only for commercial (crm) units")
         return v
 
 

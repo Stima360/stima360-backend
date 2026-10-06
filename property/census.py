@@ -793,7 +793,8 @@ def _inserisci_unita(ctx, cur, agency_id, data, *, chiave, impronta, conferma) -
     simili = _simili_unita(cur, agency_id, data)
     if simili and not conferma:
         raise CensusConflict("Esiste gia' un'unita' simile: aprila o salva comunque", "SIMILAR_FOUND", similar=simili)
-    colonne = {**data, "agency_id": agency_id, "record_kind": "census", "commercial_status": "draft",
+    tipo_scheda = data.pop("record_kind", None) or "census"            # CREAZIONE-GUIDATA-1
+    colonne = {**data, "agency_id": agency_id, "record_kind": tipo_scheda, "commercial_status": "draft",
                "metadata": Json(data.get("metadata") or {}),
                "client_request_id": str(chiave) if chiave else None, "client_request_fingerprint": impronta}
     colonne["title"] = generated_title(colonne)
@@ -804,8 +805,28 @@ def _inserisci_unita(ctx, cur, agency_id, data, *, chiave, impronta, conferma) -
     riga = repository.row(cur.fetchone())
     riga = repository._assign_generated_code(cur, riga["id"], agency_id) or riga
     cur.execute("INSERT INTO property_status_history(property_id,field_name,new_value,note) VALUES(%s,'commercial_status',%s,%s)",
-                (riga["id"], "draft", "initial status (census)"))
+                (riga["id"], "draft", "initial status (census)" if tipo_scheda == "census" else "initial status"))
     return {**riga, "similar": simili}
+
+
+def _assegnazione_commerciale(ctx, data) -> None:
+    """CREAZIONE-GUIDATA-1: una scheda COMMERCIALE nata dal censimento segue la
+    regola di `POST /api/property/properties` (property/service.py::
+    create_property): un agente se la assegna da se' (mai dal payload); chi puo'
+    assegnare sceglie un agente attivo della stessa agenzia. Una scheda di
+    censimento non porta assegnazione (lo rifiuta lo schema)."""
+    from . import service as _service
+    if data.get("record_kind") != "crm":
+        data.pop("assigned_agent_id", None)
+        return
+    if getattr(ctx, "role", None) == "agent" and not getattr(ctx, "is_platform_admin", False):
+        data["assigned_agent_id"] = ctx.user_id
+        data["assigned_to"] = repository.assignable_agent_name(ctx, ctx.user_id)
+        return
+    if data.get("assigned_agent_id") is None:
+        data.pop("assigned_agent_id", None)
+        return
+    _service._apply_assignment(ctx, data)
 
 
 def _prepara_unita(cur, agency_id, data) -> None:
@@ -836,6 +857,7 @@ def create_unit(ctx, body) -> dict:
     impronta = _fingerprint(data) if chiave is not None else None
     _check_location(data)
     _check_cadastral(data)
+    _assegnazione_commerciale(ctx, data)          # 403/400 PRIMA di scrivere, come POST /properties
 
     def operazione():
         with core_cursor(commit=True) as (_, cur):

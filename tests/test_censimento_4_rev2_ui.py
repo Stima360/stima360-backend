@@ -366,17 +366,22 @@ def test_r6_apri_nei_simili_edificio_e_immobile_con_destinazione_esatta(staged):
     scenario = r"""
       await wait(); await wait();
       C().querySelector('#immobili-mode-tabs').querySelectorAll('.tab-btn').find((b) => b.dataset.mode === 'census').dispatch('click'); await wait();
-      C().querySelector('#census-new').dispatch('click'); await wait();
-      C().querySelector('#census-new-building').dispatch('click'); await wait(); await wait();
-      await selezionaTerritorio('bs');
-      campo('#bs-address', 'Via Roma'); campo('#bs-civic', '10');
-      q('[data-building-form]').dispatch('submit'); await wait(); await wait();
-      const apri = D().querySelectorAll('[data-open-similar]').map((b) => b.dataset.openSimilar);
+      // SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: la palazzina nasce dalla
+      // procedura guidata; fra i simili «Usa questo» sceglie l'edificio esistente
+      // senza scrivere, e si apre la sua scheda.
+      C().querySelector('#census-new').dispatch('click'); await wait(); await wait();
+      await proceduraPasso1({ via: 'Via Roma', civico: '10', unita: '6' });
+      q('[data-path="building"]').dispatch('click'); await wait(); await wait();
+      q('[data-create-building]').dispatch('click'); await wait();
+      q('[data-save-building]').dispatch('click'); await wait(); await wait();
+      const apri = D().querySelectorAll('[data-use-similar]').map((b) => b.dataset.useSimilar);
       const salvaComunque = !!D().querySelector('[data-save-anyway]');
-      D().querySelector('[data-open-similar]').dispatch('click'); await wait(); await wait();
+      D().querySelector('[data-use-similar]').dispatch('click'); await wait(); await wait();
+      q('[data-finish]').dispatch('click'); await wait();
       report({ apri, salvaComunque, post: scritture() });
     """
-    out = _run(staged, scenario, _rotte(post_building=(simili_edificio,)), "#/immobili")
+    vuota = f"__route('GET', '/api/property/buildings?', ...{json.dumps([rt.ok({'items': [], 'total': 0})])});\n"
+    out = _run(staged, scenario, vuota + _rotte(post_building=(simili_edificio,)), "#/immobili")
     assert out["apri"] == ["7"] and out["salvaComunque"]
     assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
     assert len(out["post"]) == 1                                   # «Apri» non scrive

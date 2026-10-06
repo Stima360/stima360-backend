@@ -324,6 +324,15 @@ const chipAttivo = (nome) => (D().querySelectorAll(`[data-chip="${nome}"]`).find
 const campo = (sel, v, ev = 'input') => { const e = q(sel); e.value = v; e.dispatch(ev); };
 const testoToast = () => { const t = C().querySelector('[data-census-toast]'); return t && !t.hidden ? t.visibleText() : null; };
 const bottoneToast = () => { const t = C().querySelector('[data-census-toast]'); return t ? t.querySelector('[data-toast-action]') : null; };
+// SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: «+ Nuovo» apre la procedura
+// guidata (passo 1: Comune, Microzona, Via, Civico, unita' dell'edificio, nome).
+async function proceduraPasso1({ city = 'Tortoreto', zona = '', via = '', civico = '', unita = '', nonSo = false, nome = '' } = {}) {
+  const c = q('#wz-city'); c.value = city; c.dispatch('change'); await wait();
+  if (zona) { const z = q('#wz-microzone'); z.value = zona; z.dispatch('change'); }
+  campo('#wz-address', via); campo('#wz-civic', civico); campo('#wz-declared', unita); campo('#wz-name', nome);
+  if (nonSo) { q('#wz-unknown').checked = true; q('#wz-unknown').dispatch('change'); }
+  q('[data-wizard-step="1"]').dispatch('submit'); await wait();
+}
 async function selezionaTerritorio(prefix) {
   campo(`#${prefix}-region`, 'Abruzzo', 'change'); await wait();
   campo(`#${prefix}-province`, 'TE', 'change'); await wait();
@@ -360,16 +369,22 @@ def test_c01_s0_elenco_con_due_tab_la_tab_censimento_elenca_le_palazzine(staged)
       const censusVisibile = !C().querySelector('#immobili-census-panel').hidden;
       const crmNascosto = C().querySelector('#immobili-crm-panel').hidden;
       const righe = C().querySelector('#census-list-area').querySelectorAll('tr.row-clickable').map((r) => r.dataset.rowId);
-      C().querySelector('#census-new').dispatch('click'); await wait();
-      const card = C().querySelectorAll('.census-card').map((b) => b.textContent.trim());
+      C().querySelector('#census-new').dispatch('click'); await wait(); await wait();
+      // SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: prima il passo 1, poi i percorsi
+      const passo1 = !!q('[data-wizard-step="1"]');
+      await proceduraPasso1({ via: 'Via Roma', civico: '10', unita: '6' });
+      const card = D().querySelectorAll('.census-card').map((b) => b.textContent.trim());
+      q('[data-cancel]').dispatch('click'); await wait();
       C().querySelector('#census-list-area').querySelector('tr.row-clickable').dispatch('click'); await wait();
-      report({ tabs, primaDellaTab, censusVisibile, crmNascosto, righe, card, contenuto: C().visibleText() });
+      report({ tabs, primaDellaTab, censusVisibile, crmNascosto, righe, card, passo1, contenuto: C().visibleText() });
     """
     out = _run(staged, scenario, _rotte(), "#/immobili")
     assert out["tabs"] == ["Commerciale", "Censimento"]
     assert out["primaDellaTab"] == 0                     # le palazzine si leggono solo aprendo la tab
     assert out["censusVisibile"] and out["crmNascosto"] and out["righe"] == ["7"]
-    assert any("Immobile singolo" in c for c in out["card"]) and any("Palazzina" in c for c in out["card"])
+    assert out["passo1"] is True
+    assert any("Unità autonoma" in c for c in out["card"]) and any("Palazzina con più unità" in c for c in out["card"])
+    assert any("Una sola unità in una palazzina" in c for c in out["card"])
     assert "Palazzina via Roma 10" in out["contenuto"] and "2 di 6" in out["contenuto"]
     assert "Garage / box" in out["contenuto"] and "garage" not in out["contenuto"].replace("Garage", "")   # etichetta italiana nell'elenco commerciale (decisione 1)
     assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
@@ -378,26 +393,33 @@ def test_c01_s0_elenco_con_due_tab_la_tab_censimento_elenca_le_palazzine(staged)
 
 @node
 def test_c02_s1_nuova_palazzina_simili_salva_comunque_stessa_chiave(staged):  # noqa: F811
+    # SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: la palazzina nasce dalla
+    # procedura guidata (passo 4 «Salva edificio»), con le stesse garanzie:
+    # stessa chiave nel retry, `confirm_similar` solo dopo il banner, territorio
+    # completo dal catalogo, nessun agency_id, solo cookie.
     simili = {"status": 409, "body": {"detail": "Edifici simili", "code": "SIMILAR_FOUND",
                                       "similar": [{"id": 7, "name": "Palazzina via Roma 10", "address": "Via Roma", "civic_number": "10", "city": "Tortoreto"}]}}
     scenario = r"""
       await wait(); await wait();
       C().querySelector('#immobili-mode-tabs').querySelectorAll('.tab-btn').find((b) => b.dataset.mode === 'census').dispatch('click'); await wait();
-      C().querySelector('#census-new').dispatch('click'); await wait();
-      C().querySelector('#census-new-building').dispatch('click'); await wait(); await wait();
+      C().querySelector('#census-new').dispatch('click'); await wait(); await wait();
       const aperto = !!D();
-      await selezionaTerritorio('bs');
-      campo('#bs-address', 'Via Roma'); campo('#bs-civic', '10'); campo('#bs-declared', '6');
-      CH('units_declared_source', 'survey').dispatch('click');
-      q('[data-building-form]').dispatch('submit'); await wait(); await wait();
+      await proceduraPasso1({ via: 'Via Roma', civico: '10', unita: '6' });
+      q('[data-path="building"]').dispatch('click'); await wait(); await wait();
+      q('[data-create-building]').dispatch('click'); await wait();
+      q('[data-save-building]').dispatch('click'); await wait(); await wait();
       const banner = D().querySelector('[data-similar-banner]') ? D().querySelector('[data-similar-banner]').visibleText() : null;
       const ancoraAperto = !!(D() && D()._open);
       D().querySelector('[data-save-anyway]').dispatch('click'); await wait(); await wait();
-      report({ aperto, banner, ancoraAperto, post: scritture() });
+      const pronto = q('[data-building-ready]') ? q('[data-building-ready]').visibleText() : null;
+      q('[data-finish]').dispatch('click'); await wait();
+      report({ aperto, banner, ancoraAperto, pronto, post: scritture() });
     """
-    out = _run(staged, scenario, _rotte(post_building=(simili, {"status": 201, "body": {**DETTAGLIO, "replica": False, "similar": []}})), "#/immobili")
+    vuota = f"__route('GET', '/api/property/buildings?', ...{json.dumps([rt.ok({'items': [], 'total': 0})])});\n"
+    out = _run(staged, scenario, vuota + _rotte(post_building=(simili, {"status": 201, "body": {**DETTAGLIO, "replica": False, "similar": []}})), "#/immobili")
     assert out["aperto"] and out["ancoraAperto"]
-    assert "Possibile doppione" in out["banner"] and "Palazzina via Roma 10" in out["banner"]
+    assert "Esiste già un edificio" in out["banner"] and "Palazzina via Roma 10" in out["banner"]
+    assert "Edificio salvato" not in (out["banner"] or "") and "Salvato ora" in (out["pronto"] or "")
     post = out["post"]
     assert [c["url"] for c in post] == ["/api/property/buildings", "/api/property/buildings"]
     primo, secondo = post[0]["body"], post[1]["body"]
@@ -405,7 +427,7 @@ def test_c02_s1_nuova_palazzina_simili_salva_comunque_stessa_chiave(staged):  # 
     assert "confirm_similar" not in primo and secondo["confirm_similar"] is True
     assert primo["city"] == "Tortoreto" and primo["region"] == "Abruzzo" and primo["province"] == "TE"
     assert primo["address"] == "Via Roma" and primo["civic_number"] == "10" and primo["units_declared"] == 6
-    assert primo["units_declared_source"] == "survey" and primo["building_type"] == "condominio"
+    assert primo["building_type"] == "condominio"
     assert "agency_id" not in primo and all(c["cred"] == "include" and "Authorization" not in c["headers"] for c in post)
     assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
 

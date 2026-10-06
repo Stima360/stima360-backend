@@ -54,6 +54,12 @@ export async function renderEdificioDettaglio(container, params = []) {
 
   let lastFloor = '';
   let archiveConfirm = null;
+  // CREAZIONE-GUIDATA-1: arrivando dalla procedura guidata (#/edifici/{id}/
+  // aggiungi/crm|censimento) il foglio dell'unita' si apre subito e le unita'
+  // nascono del tipo deciso dall'ingresso; altrimenti, come prima, censimento.
+  const dallaProcedura = params[1] === 'aggiungi';
+  const modo = dallaProcedura && params[2] === 'crm' ? 'crm' : 'census';
+  let ultimaSalvata = null;
 
   container.innerHTML = `
     <div class="contact-header card census-building-header">
@@ -76,9 +82,11 @@ export async function renderEdificioDettaglio(container, params = []) {
     </div>
     <div class="card panel census-units-panel">
       <div class="census-add-bar">
-        <button type="button" class="btn primary" id="unit-add-apartment">+ Appartamento</button>
+        <button type="button" class="btn primary" id="unit-add-apartment">+ Aggiungi unità</button>
         <button type="button" class="btn" id="unit-add-other">Altro tipo…</button>
       </div>
+      ${modo === 'crm' ? '<p class="muted census-kind-note" id="unit-add-mode" data-record-kind="crm">Le unità che aggiungi ora nascono come schede commerciali (procedura da Immobili).</p>' : ''}
+      <div id="unit-saved-bar" class="census-banner census-saved-bar" hidden></div>
       <div id="unit-type-chips" class="census-chips census-chips-wrap" hidden></div>
       <div id="building-units"></div>
       <div id="building-archived"></div>
@@ -201,18 +209,38 @@ export async function renderEdificioDettaglio(container, params = []) {
   // S3 -> S5: il foglio, poi il toast con «Annulla» (undo-create) e la
   // ricarica della palazzina; «Salva e aggiungine un'altra» riapre il foglio
   // con edificio, piano e tipologia gia' impostati.
+  // CREAZIONE-GUIDATA-1: dopo il salvataggio, sempre visibili «Aggiungi
+  // un'altra unita'» e «Apri scheda» (il toast con «Annulla» resta com'era).
+  const barra = container.querySelector('#unit-saved-bar');
+  function mostraSalvata() {
+    if (!ultimaSalvata) { barra.hidden = true; barra.innerHTML = ''; return; }
+    const u = ultimaSalvata;
+    barra.innerHTML = `<span data-saved-text>${escapeHtml(`${u.code || `Unità #${u.id}`} salvata${u.record_kind === 'crm' ? ' (scheda commerciale)' : ''}.`)}</span>
+      <span class="action-bar"><button type="button" class="btn primary btn-small" data-add-another>Aggiungi un’altra unità</button>
+      <a class="btn btn-small" href="#/immobili/${escapeHtml(u.id)}" data-open-saved>Apri scheda</a></span>`;
+    barra.hidden = false;
+    barra.querySelector('[data-add-another]').addEventListener('click', () => apriFoglio({ property_type: u.property_type || 'apartment', floor: u.floor || lastFloor, staircase: u.staircase || '' }));
+    barra.querySelector('[data-open-saved]').addEventListener('click', (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      navigate('immobili', [u.id]);
+    });
+  }
+
   function apriFoglio(seed) {
     openUnitSheet(unitSheet, {
-      options: opzioni, building: edificio, seed, lastFloor,
+      options: opzioni, building: edificio, seed, lastFloor, recordKind: modo,
       onSaved: async (unita, { another, floor }) => {
         lastFloor = floor || lastFloor;
+        ultimaSalvata = unita;
         await ricarica();
+        mostraSalvata();
         showToast(container, {
           text: createdToastText(unita), actionLabel: 'Annulla',
           onAction: async () => {
             try {
               await api.undoCreate(unita.id);
               showToast(container, { text: `${unita.code || 'Unità'} annullata.` });
+              if (ultimaSalvata && ultimaSalvata.id === unita.id) { ultimaSalvata = null; mostraSalvata(); }
             } catch (error) {
               showToast(container, { text: errorMessage(error), actionLabel: 'Apri la scheda', onAction: () => navigate('immobili', [unita.id]) });
               return;
@@ -247,4 +275,11 @@ export async function renderEdificioDettaglio(container, params = []) {
 
   renderHeader();
   renderUnits();
+  if (dallaProcedura) {
+    // l'indirizzo torna quello della scheda: un ricaricamento non riapre il foglio
+    if (window.history && typeof window.history.replaceState === 'function') {
+      window.history.replaceState(null, '', `#/edifici/${edificio.id}`);
+    }
+    apriFoglio({ property_type: 'apartment' });
+  }
 }

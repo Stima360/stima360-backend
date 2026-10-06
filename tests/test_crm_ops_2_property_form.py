@@ -815,32 +815,38 @@ def test_e01_creazione_senza_titolo_ne_codice_con_cascata(staged):  # noqa: F811
     scenario = r"""
       await wait();
       bottone(__dom.byId['content'], '+ Nuovo immobile').dispatch('click'); await wait(); await wait();
+      // SENTINELLA AGGIORNATA DA CREAZIONE-GUIDATA-1: «+ Nuovo immobile» apre la
+      // procedura guidata; «Unita' autonoma» porta al form di sempre (POST
+      // /properties, scheda commerciale) con il territorio gia' compilato.
+      const passo1 = !!q('[data-wizard-step="1"]');
+      await scegli('#wz-city', 'Fermo'); await scegli('#wz-microzone', 'Casabianca');
+      await scrivi('#wz-address', 'Via Roma'); await scrivi('#wz-civic', '12');
+      q('#wz-unknown').checked = true; q('#wz-unknown').dispatch('change');
+      q('[data-wizard-step="1"]').dispatch('submit'); await wait();
+      q('[data-path="autonomous"]').dispatch('click'); await wait(); await wait();
       const ids = D().querySelectorAll('input').map((i) => i.id);
       const campi = { titolo: ids.some((x) => /title/.test(x)), codice: ids.some((x) => /code/.test(x)), n: ids.length };
-      const provSenzaRegione = { disabled: q('#pf-province').disabled, opz: opz('#pf-province') };
-      await scegli('#pf-region', 'Marche');
+      const precompilato = { r: q('#pf-region').value, p: q('#pf-province').value, c: q('#pf-city').value,
+                             z: q('#pf-microzone').value, via: q('#pf-address').value, civico: q('#pf-civic').value };
       const provMarche = opz('#pf-province');
-      await scegli('#pf-province', 'FM');
       const comuniFM = opz('#pf-city');
-      await scegli('#pf-city', 'Fermo');
       const zoneFermo = opz('#pf-microzone');
-      await scegli('#pf-microzone', 'Casabianca');
       // cambio provincia: comune e microzona incompatibili si azzerano, la regione resta
       await scegli('#pf-province', 'AP');
       const dopoCambio = { r: q('#pf-region').value, p: q('#pf-province').value, c: q('#pf-city').value, z: q('#pf-microzone').value };
       await scegli('#pf-city', 'Grottammare'); await scegli('#pf-microzone', 'Ascolani');
-      await scrivi('#pf-address', 'Via Roma'); await scrivi('#pf-civic', '12');
       await scegli('#pf-energy', 'A3'); await scegli('#pf-agent', 4);
       const energia = opz('#pf-energy');
       // doppio invio prima della risposta: una sola POST
       q('#property-form').dispatch('submit'); q('#property-form').dispatch('submit');
       await wait(); await wait();
-      report({ campi, provSenzaRegione, provMarche, comuniFM, zoneFermo, dopoCambio, energia });
+      report({ campi, passo1, precompilato, provMarche, comuniFM, zoneFermo, dopoCambio, energia });
     """
     out = _run(staged, scenario, _rotte(), "#/immobili")
     assert out["campi"]["titolo"] is False and out["campi"]["codice"] is False
     assert out["campi"]["n"] >= 8                   # il form e' stato davvero letto
-    assert out["provSenzaRegione"] == {"disabled": True, "opz": [""]}
+    assert out["passo1"] is True
+    assert out["precompilato"] == {"r": "Marche", "p": "FM", "c": "Fermo", "z": "Casabianca", "via": "Via Roma", "civico": "12"}
     assert out["provMarche"] == ["", "AP", "FM", "MC"]
     assert out["comuniFM"] == ["", "Altidona", "Campofilone", "Fermo", "Pedaso", "Porto San Giorgio", "Porto Sant’Elpidio"]
     assert out["zoneFermo"][1:] == PORTALE["zone"]["Fermo"]

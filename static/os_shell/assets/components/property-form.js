@@ -116,11 +116,14 @@ const str = (v) => (v === null || v === undefined ? '' : String(v));
 
 /**
  * @param {HTMLDialogElement} dialogEl
- * @param {{mode?: 'create'|'edit', property?: object, onSaved?: Function}} opts
+ * @param {{mode?: 'create'|'edit', property?: object, onSaved?: Function, seed?: object, onBack?: Function}} opts
+ *   seed   -> CREAZIONE-GUIDATA-1: in creazione, i dati gia' scelti nel primo
+ *             passaggio (territorio, via, civico); restano modificabili
+ *   onBack -> «← Indietro» torna al passaggio precedente senza salvare
  */
-export async function openPropertyDialog(dialogEl, { mode = 'create', property = null, onSaved } = {}) {
+export async function openPropertyDialog(dialogEl, { mode = 'create', property = null, onSaved, seed = null, onBack = null } = {}) {
   const isEdit = mode === 'edit' && property;
-  const p = isEdit ? property : {};
+  const p = isEdit ? property : (seed || {});
   dialogEl.classList.add('property-form-dialog');
   dialogEl.innerHTML = '<p class="muted">Caricamento…</p>';
   if (!dialogEl.open) dialogEl.showModal();
@@ -222,6 +225,7 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
 
       <div id="property-form-error" class="field-error"></div>
       <div class="modal-actions">
+        ${!isEdit && onBack ? '<button type="button" id="property-form-back" class="btn ghost">← Indietro</button>' : ''}
         <button type="button" id="property-form-cancel" class="btn ghost">Annulla</button>
         <button type="submit" id="property-form-submit" class="btn primary">${isEdit ? 'Salva modifiche' : 'Crea immobile'}</button>
       </div>
@@ -261,6 +265,7 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
   renderLocation();
 
   $('#property-form-cancel').addEventListener('click', () => dialogEl.close());
+  if ($('#property-form-back')) $('#property-form-back').addEventListener('click', () => { if (!saving) { dialogEl.close(); onBack(); } });
 
   const fieldValue = (id) => ($(id) ? $(id).value : '');
   const textOrNull = (v) => (String(v ?? '').trim() === '' ? null : String(v).trim());
