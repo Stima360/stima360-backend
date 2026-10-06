@@ -322,3 +322,104 @@ export function propagationConfirmText(counters) {
   const poi = proprie ? `; ${proprie} con ingresso personalizzato ${proprie === 1 ? 'resta' : 'restano'} come ${proprie === 1 ? 'è' : 'sono'}` : '';
   return `${prima}${poi}.`;
 }
+
+// --- EDIFICI-1: la sezione Edifici (lista e scheda) ---------------------------------
+//
+// Le regole dei contatori le decide il SERVER (`census_summary`,
+// property/census.py): qui solo come si leggono. Dichiarate NULL = «non
+// nota», mai 0; da completare NULL = non calcolabile; mai numeri negativi.
+
+/** «Via Roma 10» (via e civico), stringa vuota se mancano. */
+export function buildingStreet(b) {
+  return [b && b.address, b && b.civic_number].filter((x) => x && String(x).trim()).join(' ');
+}
+
+/** Il nome mostrato: nome facoltativo, altrimenti la via, altrimenti #id. */
+export function buildingTitle(b) {
+  if (!b) return '';
+  return (b.name && String(b.name).trim()) || buildingStreet(b) || `Palazzina #${b.id}`;
+}
+
+/** «Tortoreto · Alto» (comune e microzona del catalogo). */
+export function buildingPlace(b) {
+  return [b && b.city, b && b.microzone].filter((x) => x && String(x).trim()).join(' · ');
+}
+
+const plurale = (n, uno, molti) => `${n} ${n === 1 ? uno : molti}`;
+
+/** Come si leggono i contatori di un edificio (lista e scheda). */
+export function summaryView(summary) {
+  const s = summary || {};
+  const num = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+  const dichiarate = num(s.units_declared);
+  const censite = num(s.units_counted) ?? 0;
+  const archiviate = num(s.units_archived) ?? 0;
+  const daCompletare = num(s.units_to_complete);
+  const oltre = num(s.units_over_declared) ?? 0;
+  return {
+    declared: dichiarate === null ? 'Non note' : String(dichiarate),
+    declaredKnown: dichiarate !== null,
+    counted: String(censite),
+    countedNote: archiviate > 0 ? `di cui ${plurale(archiviate, 'archiviata', 'archiviate')}` : '',
+    toComplete: daCompletare === null ? '—' : String(daCompletare),
+    toCompleteNote: daCompletare === null ? 'Indica quante unità risultano per calcolarle' : '',
+    over: oltre > 0 ? `${plurale(oltre, 'unità censita', 'unità censite')} oltre le dichiarate: verifica il totale dichiarato` : '',
+    split: `${plurale(num(s.units_main) ?? 0, 'principale', 'principali')} + ${plurale(num(s.units_pertinenze) ?? 0, 'pertinenza', 'pertinenze')}`,
+    unknownAccessories: num(s.accessories_unknown) ? plurale(s.accessories_unknown, 'accessorio da chiarire', 'accessori da chiarire') : '',
+    categoryToVerify: num(s.category_to_verify) ? plurale(s.category_to_verify, 'categoria da verificare', 'categorie da verificare') : '',
+  };
+}
+
+/** Comuni del catalogo territoriale (form-options `territory`), in ordine
+ *  alfabetico, ciascuno con le sue microzone. Nessun elenco scritto qui. */
+export function catalogMunicipalities(tree) {
+  const out = [];
+  for (const regione of tree || []) {
+    for (const provincia of regione.provinces || []) {
+      for (const comune of provincia.municipalities || []) {
+        out.push({ name: comune.name, microzones: [...(comune.microzones || [])] });
+      }
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+}
+
+/** I filtri coerenti: una microzona vale solo se appartiene al comune scelto. */
+export function coherentFilters(filters, municipalities) {
+  const f = { search: str(filters && filters.search), city: str(filters && filters.city), microzone: str(filters && filters.microzone) };
+  const comune = (municipalities || []).find((m) => m.name === f.city);
+  if (!f.city || !comune || !comune.microzones.includes(f.microzone)) f.microzone = '';
+  return f;
+}
+
+/** I parametri di GET /api/property/buildings dalla lista Edifici. */
+export function buildingListQuery(filters, offset = 0, limit = 25) {
+  const q = { sort: 'address', limit, offset };
+  if (filters && str(filters.search)) q.search = str(filters.search);
+  if (filters && str(filters.city)) q.city = str(filters.city);
+  if (filters && str(filters.city) && str(filters.microzone)) q.microzone = str(filters.microzone);
+  return q;
+}
+
+/** La riga di un'unita' nella scheda edificio: codice, tipologia, scala,
+ *  piano, interno, mq (solo cio' che c'e'). */
+export function unitFacts(u, propertyTypes) {
+  const parti = [labelOf(propertyTypes, u.property_type, u.property_type || 'Unità')];
+  if (u.staircase) parti.push(`scala ${u.staircase}`);
+  if (u.floor !== null && u.floor !== undefined && String(u.floor).trim() !== '') parti.push(`piano ${floorLabel(u.floor)}`);
+  if (u.internal_number) parti.push(`int. ${u.internal_number}`);
+  const superficie = mq(u.surface_sqm);
+  if (superficie) parti.push(superficie);
+  return parti.join(' · ');
+}
+
+/** La relazione principale/pertinenza dell'unita', dai dati reali. */
+export function unitRelationText(u) {
+  if (u && u.parent) {
+    const di = u.parent.code || `#${u.parent.id}`;
+    return u.parent.same_building ? `Pertinenza di ${di}` : `Pertinenza di ${di} (in un altro edificio)`;
+  }
+  if (u && u.parent_property_id) return 'Pertinenza (unità principale non disponibile)';
+  const n = Number(u && u.pertinenze_count) || 0;
+  return n > 0 ? `Con ${plurale(n, 'pertinenza', 'pertinenze')}` : '';
+}

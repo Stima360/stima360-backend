@@ -22,8 +22,10 @@ import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
 import { renderImmobili } from './views/immobili.js';
 import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
 // CENSIMENTO-1 Fase 4: la scheda della palazzina vive dentro la rotta "immobili"
-// (#/immobili/edifici/{id}); nessuna voce di menu nuova.
+// (#/immobili/edifici/{id}). EDIFICI-1: «Edifici» diventa una sezione propria
+// (#/edifici, #/edifici/{id}); il vecchio indirizzo resta valido.
 import { renderEdificioDettaglio } from './views/edificio-dettaglio.js';
+import { renderEdifici } from './views/edifici.js';
 import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
@@ -48,6 +50,9 @@ const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
+  // EDIFICI-1: subito sopra Immobili (Edificio -> Immobili/Unita', come il
+  // modello), senza separare Immobili da Venditori (flusso di VENDITORI-1).
+  { name: 'edifici', label: 'Edifici' },
   { name: 'immobili', label: 'Immobili' },
   // VENDITORI-1: il flusso reale Immobili -> Venditori -> Acquisizioni -> Incarichi.
   { name: 'venditori', label: 'Venditori' },
@@ -111,6 +116,10 @@ registerRoute('immobili', (container, params = []) => {
   if (params[0] === 'edifici') return renderEdificioDettaglio(container, params.slice(1));
   if (params[0] === 'censimento') return renderImmobili(container, params);
   return params[0] ? renderImmobileDettaglio(container, params) : renderImmobili(container);
+});
+// EDIFICI-1: "edifici" copre la lista (#/edifici) e la scheda (#/edifici/{id}).
+registerRoute('edifici', (container, params = []) => {
+  return params[0] ? renderEdificioDettaglio(container, params) : renderEdifici(container);
 });
 // "acquirenti" copre sia la lista richieste BUY (#/acquirenti) sia la scheda
 // (#/acquirenti/{buy_request_id}), stesso pattern dispatcher gia' usato per

@@ -130,8 +130,10 @@ export function newClientRequestId() {
 
 // --- Edifici ---------------------------------------------------------------------
 
-export function listBuildings({ search, city, limit = 50, offset = 0 } = {}) {
-  return request('GET', `/buildings${query({ search, city, limit, offset })}`);
+// EDIFICI-1: anche `microzone` e `sort` ('recent' | 'address'); la risposta
+// porta `total` e, per ogni edificio, `census_summary`.
+export function listBuildings({ search, city, microzone, sort, limit = 50, offset = 0 } = {}) {
+  return request('GET', `/buildings${query({ search, city, microzone, sort, limit, offset })}`);
 }
 
 export function getBuilding(buildingId) {

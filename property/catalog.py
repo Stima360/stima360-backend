@@ -413,6 +413,10 @@ BUILDING_TYPE_LABELS: dict[str, str] = {
 UNITS_DECLARED_SOURCE_LABELS: dict[str, str] = {
     "survey": "Sopralluogo", "cadastre": "Visura", "owner": "Proprietario", "unknown": "Non so",
 }
+#: EDIFICI-1: lo stato del censimento dell'edificio (`buildings.census_status`).
+BUILDING_CENSUS_STATUS_LABELS: dict[str, str] = {
+    "verified": "Verificato", "partial": "Parziale", "estimated": "Stimato",
+}
 ACCESSORY_KIND_LABELS: dict[str, str] = {
     "cantina": "Cantina", "soffitta": "Soffitta", "posto_auto": "Posto auto", "giardino": "Giardino",
     "terrazzo": "Terrazzo", "box": "Box", "deposito": "Deposito", "altro": "Altro",
@@ -420,9 +424,11 @@ ACCESSORY_KIND_LABELS: dict[str, str] = {
 
 
 def census_labels_for_form() -> dict[str, list[dict[str, str]]]:
-    """Le tre liste, nella forma `{value, label}` gia' usata per `property_types`."""
+    """Le liste (tre di Fase 4, piu' lo stato del censimento di EDIFICI-1),
+    nella forma `{value, label}` gia' usata per `property_types`."""
     return {
         "building_types": [{"value": k, "label": v} for k, v in BUILDING_TYPE_LABELS.items()],
         "units_declared_sources": [{"value": k, "label": v} for k, v in UNITS_DECLARED_SOURCE_LABELS.items()],
         "accessory_kinds": [{"value": k, "label": v} for k, v in ACCESSORY_KIND_LABELS.items()],
+        "building_census_statuses": [{"value": k, "label": v} for k, v in BUILDING_CENSUS_STATUS_LABELS.items()],
     }

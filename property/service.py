@@ -194,6 +194,10 @@ def get_property(ctx,i):
     if _lifecycle.in_trash(p):
         from core.exceptions import NotFoundError
         raise NotFoundError(f'property {i} not found')
+    # EDIFICI-1: l'edificio di appartenenza (relazione reale `building_id`,
+    # nella stessa agenzia), per il collegamento evidente nella scheda.
+    if p.get('building_id') is not None:
+        p['building']=_census.building_summary(p['agency_id'],p['building_id'])
     return p
 def update_property(ctx,i,p):
     data=dump(p,True)

@@ -99,8 +99,10 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # Venditori -> Acquisizioni -> Incarichi). L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" e' l'ultima voce
     # normale di SECTIONS (discreta, in fondo alla sidebar). L'elenco resta esatto.
+    # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili"
+    # (palazzine ed edifici con le loro unita'). L'elenco resta esatto.
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni", "incarichi", "acquirenti",
+        "oggi", "agenda", "contatti", "edifici", "immobili", "venditori", "acquisizioni", "incarichi", "acquirenti",
         "abbinamenti", "attivita", "automazioni", "cestino"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
@@ -885,7 +887,8 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # "acquisizioni". L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" ultima voce,
     # discreta. L'elenco resta esatto.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
+    # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "edifici", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita",
                                 "automazioni", "cestino"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1

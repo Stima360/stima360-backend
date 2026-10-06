@@ -310,7 +310,7 @@ export function openBuildingSheet(dialogEl, { options: opzioni, building = null,
       setBusy(submit, false, isEdit ? 'Salva' : (error.code === 'NETWORK' ? 'Riprova' : 'Crea palazzina'));
       if (error.code === 'SIMILAR_FOUND' && error.similar.length) {
         dialogEl.querySelector('[data-banner]').innerHTML = similarBannerHtml(error.similar);
-        bindSimilarBanner(dialogEl, () => salva(true), (id) => { dialogEl.close(); navigate('immobili', ['edifici', id]); });
+        bindSimilarBanner(dialogEl, () => salva(true), (id) => { dialogEl.close(); navigate('edifici', [id]); });
         return;
       }
       setError(dialogEl, errorMessage(error));

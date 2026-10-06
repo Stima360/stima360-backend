@@ -13,7 +13,11 @@ def run_js(view, expression):
     script += 'let source=' + json.dumps(source) + ';\n'
     script += "source=source.replace(/^import [\\s\\S]*?;$/mg,'').replace(/export /g,'');\n"
     script += "vm.runInNewContext(source + '\\n' + " + json.dumps(expression) + ", {assert, console, Date, Set, Map, process});"
-    result = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+    # EDIFICI-1: lo script passa da stdin, non da argv. Con `-e` il sorgente
+    # di immobile-dettaglio.js (incorporato come stringa JSON) era a ~600 byte
+    # dal limite del kernel per un singolo argomento (MAX_ARG_STRLEN, 128 KiB):
+    # E2BIG = errore d'ambiente, non del codice. Asserzioni invariate.
+    result = subprocess.run(['node', '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 

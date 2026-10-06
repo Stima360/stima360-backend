@@ -386,18 +386,24 @@ _UNITA_COLONNE = ("id, code, title, property_type, commercial_status, record_kin
                   "internal_number, surface_sqm, rooms, bathrooms, cadastral_category, "
                   "cadastral_municipality_code, cadastral_section, cadastral_sheet, cadastral_parcel, "
                   "cadastral_subunit, parent_property_id, building_id, whole_building, address_inherited, "
-                  "address, civic_number, city, created_at, updated_at")
+                  "address, civic_number, city, created_at, updated_at, assigned_agent_id, archived_at")
 
 
 def _unita_dell_edificio(cur, building_id) -> list[dict]:
     """Le unita' della palazzina, ordinate per piano (numerico dove possibile,
-    poi testuale), scala, interno. Il raggruppamento per piano lo fa la UI."""
+    con Seminterrato / Terra / Rialzato al loro posto; poi testuale), scala,
+    interno. Il raggruppamento per piano lo fa la UI."""
     cur.execute(f"""
         SELECT {_UNITA_COLONNE},
                (SELECT count(*) FROM property_accessories a WHERE a.property_id = p.id
                    AND a.cadastral_status = 'unknown') AS accessories_unknown
           FROM properties p WHERE p.building_id = %s AND p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
-         ORDER BY CASE WHEN p.floor ~ '^-?[0-9]+$' THEN p.floor::int END NULLS LAST,
+           AND p.commercial_status IS DISTINCT FROM 'archived'
+         ORDER BY CASE WHEN p.floor ~ '^-?[0-9]+$' THEN p.floor::numeric
+                       -- EDIFICI-1: i piani a lettera dei chips (Sem, T, R) al loro posto
+                       WHEN upper(btrim(p.floor)) = 'S' THEN -0.5
+                       WHEN upper(btrim(p.floor)) IN ('T', 'PT') THEN 0
+                       WHEN upper(btrim(p.floor)) = 'R' THEN 0.5 END NULLS LAST,
                   p.floor NULLS LAST, p.staircase NULLS FIRST,
                   CASE WHEN p.internal_number ~ '^[0-9]+$' THEN p.internal_number::int END NULLS LAST,
                   p.internal_number NULLS FIRST, p.id""", (building_id,))
@@ -405,8 +411,148 @@ def _unita_dell_edificio(cur, building_id) -> list[dict]:
 
 
 def _dettaglio_edificio(cur, edificio) -> dict:
+    unita = _unita_dell_edificio(cur, edificio["id"])
+    _relazioni(cur, unita)
+    archiviate = _unita_archiviate(cur, edificio["id"])
+    _relazioni(cur, archiviate)
+    riepilogo = _riepiloghi(cur, [edificio])[edificio["id"]]
     return {**edificio, "counters": _contatori_edificio(cur, edificio["id"]),
-            "units": _unita_dell_edificio(cur, edificio["id"])}
+            "census_summary": riepilogo, "units": unita, "archived_units": archiviate,
+            "staircases": sorted({str(u["staircase"]) for u in unita if u.get("staircase")}, key=str.casefold)}
+
+
+# ---------------------------------------------------------------------------
+# EDIFICI-1 - IL RIEPILOGO DEL CENSIMENTO DI UN EDIFICIO
+#
+# Le regole, in un posto solo (lista Edifici e scheda edificio le leggono da
+# qui, con le stesse query; nessun conteggio nel browser):
+#
+#   * UNITA' = una riga `properties` con `building_id` = l'edificio. Solo la
+#     relazione reale: mai dedotta dall'indirizzo. Gli ACCESSORI
+#     (`property_accessories`, compresi o «da chiarire») non sono righe di
+#     `properties` e non contano MAI come unita'. Una riga si conta una volta
+#     sola: principale o pertinenza lo dice `parent_property_id` (relazione
+#     corrente), non un secondo conteggio;
+#   * DICHIARATE = `buildings.units_declared` (principali + pertinenze con
+#     subalterno proprio: decisione 5 di CENSIMENTO-0). NULL = NON NOTO,
+#     diverso da 0;
+#   * CESTINO: un'unita' nel Cestino non conta e non si elenca; i suoi
+#     collegamenti (`building_id`, `parent_property_id`) restano intatti per
+#     il ripristino;
+#   * ARCHIVIATE: archiviata non vuol dire fisicamente inesistente (un
+#     appartamento venduto e archiviato sta ancora nella palazzina). Restano
+#     CENSITE, contate a parte («di cui archiviate») ed elencate a parte.
+#     Fa eccezione la sola unita' annullata subito dopo la creazione
+#     («Annulla» del toast, undo-create: CENSIMENTO-0 S5, «contatore
+#     corretto»): era un inserimento sbagliato, non un'unita';
+#   * CENSITE = attive + archiviate (eccezione sopra);
+#   * DA COMPLETARE = dichiarate - censite, solo se le dichiarate sono note
+#     (altrimenti NON NOTO, mai 0) e mai negativo: se le censite superano le
+#     dichiarate lo dice `units_over_declared`, senza correggere nulla.
+# ---------------------------------------------------------------------------
+
+_ARCHIVIATA = "(u.archived_at IS NOT NULL OR u.commercial_status = 'archived')"
+_ANNULLATA = ("(SELECT h.note FROM property_status_history h WHERE h.property_id = u.id "
+              "AND h.field_name = 'commercial_status' ORDER BY h.id DESC LIMIT 1) = 'undo-create'")
+
+
+def summary_from_counts(declared, active: int, main: int, pertinenze: int, archived: int) -> dict:
+    """Il riepilogo dai conteggi grezzi (funzione pura: le regole sopra)."""
+    censite = active + archived
+    noto = declared is not None
+    return {
+        "units_declared": declared,
+        "units_declared_known": noto,
+        "units_counted": censite,
+        "units_active": active,
+        "units_main": main,
+        "units_pertinenze": pertinenze,
+        "units_archived": archived,
+        "units_to_complete": max(declared - censite, 0) if noto else None,
+        "units_over_declared": max(censite - declared, 0) if noto else 0,
+    }
+
+
+def _riepiloghi(cur, edifici: list[dict]) -> dict:
+    """Il riepilogo di PIU' edifici con due query aggregate (mai una per
+    edificio): {building_id: riepilogo}."""
+    ids = [e["id"] for e in edifici]
+    conteggi = {i: {"active": 0, "main": 0, "pertinenze": 0, "archived": 0, "census": 0,
+                    "category_missing": 0, "accessories_unknown": 0} for i in ids}
+    if ids:
+        cur.execute(f"""
+            SELECT u.building_id,
+                   count(*) FILTER (WHERE NOT {_ARCHIVIATA}) AS active,
+                   count(*) FILTER (WHERE NOT {_ARCHIVIATA} AND u.parent_property_id IS NULL) AS main,
+                   count(*) FILTER (WHERE NOT {_ARCHIVIATA} AND u.parent_property_id IS NOT NULL) AS pertinenze,
+                   count(*) FILTER (WHERE {_ARCHIVIATA} AND NOT coalesce({_ANNULLATA}, FALSE)) AS archived,
+                   count(*) FILTER (WHERE NOT {_ARCHIVIATA} AND u.record_kind = 'census') AS census,
+                   count(*) FILTER (WHERE NOT {_ARCHIVIATA} AND u.cadastral_category IS NULL) AS category_missing
+              FROM properties u
+             WHERE u.building_id = ANY(%s) AND {_property_trash.live('u')}
+             GROUP BY u.building_id""", (ids,))
+        for r in cur.fetchall():
+            conteggi[r["building_id"]].update({k: int(r[k]) for k in
+                                               ("active", "main", "pertinenze", "archived", "census", "category_missing")})
+        cur.execute(f"""
+            SELECT u.building_id, count(*) AS n
+              FROM property_accessories a JOIN properties u ON u.id = a.property_id
+             WHERE u.building_id = ANY(%s) AND NOT {_ARCHIVIATA} AND {_property_trash.live('u')}
+               AND a.cadastral_status = 'unknown'
+             GROUP BY u.building_id""", (ids,))
+        for r in cur.fetchall():
+            conteggi[r["building_id"]]["accessories_unknown"] = int(r["n"])
+    esito = {}
+    for e in edifici:
+        c = conteggi[e["id"]]
+        esito[e["id"]] = {**summary_from_counts(e.get("units_declared"), c["active"], c["main"],
+                                                 c["pertinenze"], c["archived"]),
+                          "units_declared_source": e.get("units_declared_source"),
+                          "units_in_census": c["census"], "category_to_verify": c["category_missing"],
+                          "accessories_unknown": c["accessories_unknown"]}
+    return esito
+
+
+def _relazioni(cur, unita: list[dict]) -> None:
+    """Sulle righe dell'elenco: di chi e' pertinenza (codice del principale,
+    se vivo) e quante pertinenze correnti ha un principale (ovunque si
+    trovino: il garage nella palazzina di fronte resta suo). Due query."""
+    ids = [u["id"] for u in unita]
+    genitori = sorted({u["parent_property_id"] for u in unita if u.get("parent_property_id")})
+    codici, figlie = {}, {}
+    if genitori:
+        cur.execute(f"SELECT id, code, building_id FROM properties u WHERE id = ANY(%s) AND {_property_trash.live('u')}",
+                    (genitori,))
+        codici = {r["id"]: dict(r) for r in cur.fetchall()}
+    if ids:
+        cur.execute(f"SELECT parent_property_id AS id, count(*) AS n FROM properties u WHERE parent_property_id = ANY(%s) "
+                    f"AND NOT {_ARCHIVIATA} AND {_property_trash.live('u')} GROUP BY parent_property_id", (ids,))
+        figlie = {r["id"]: int(r["n"]) for r in cur.fetchall()}
+    for u in unita:
+        g = codici.get(u.get("parent_property_id"))
+        u["parent"] = None if g is None else {"id": g["id"], "code": g.get("code"),
+                                              "same_building": g.get("building_id") == u.get("building_id")}
+        u["pertinenze_count"] = figlie.get(u["id"], 0)
+
+
+def _unita_archiviate(cur, building_id) -> list[dict]:
+    """Le unita' archiviate della palazzina (non nel Cestino, non annullate
+    alla creazione): censite, elencate a parte."""
+    cur.execute(f"""
+        SELECT {_UNITA_COLONNE}, 0 AS accessories_unknown
+          FROM properties u WHERE u.building_id = %s AND {_ARCHIVIATA} AND {_property_trash.live('u')}
+           AND NOT coalesce({_ANNULLATA}, FALSE)
+         ORDER BY u.archived_at DESC NULLS LAST, u.id""", (building_id,))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def building_summary(agency_id: int, building_id: int) -> dict | None:
+    """L'edificio di appartenenza per la scheda immobile (collegamento e
+    indirizzo), nell'agenzia dell'immobile. None se non esiste."""
+    with core_cursor() as (_, cur):
+        cur.execute("SELECT id, name, building_type, city, microzone, address, civic_number, archived_at "
+                    "FROM buildings WHERE id = %s AND agency_id = %s", (building_id, agency_id))
+        return repository.row(cur.fetchone())
 
 
 # ---------------------------------------------------------------------------
@@ -446,27 +592,59 @@ def _unita_ereditate(cur, building_id) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
-def list_buildings(ctx, *, search=None, city=None, limit=50, offset=0) -> dict:
+#: Ordinamenti della lista: `recent` (il default storico, per aggiornamento)
+#: e `address` (comune, via, civico: la lista Edifici di EDIFICI-1).
+BUILDING_SORTS = {
+    "recent": "b.updated_at DESC, b.id DESC",
+    "address": ("lower(coalesce(b.city, '')), lower(coalesce(b.address, '')), "
+                "CASE WHEN b.civic_number ~ '^[0-9]+' THEN substring(b.civic_number FROM '^[0-9]+')::int END NULLS LAST, "
+                "lower(coalesce(b.civic_number, '')), b.id"),
+}
+
+
+def _like(parola: str) -> str:
+    """Una parola cercata come testo, non come pattern (% e _ letterali)."""
+    return "%" + parola.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def list_buildings(ctx, *, search=None, city=None, microzone=None, sort="recent", limit=50, offset=0) -> dict:
+    """La lista Edifici. Ricerca per PAROLE (ciascuna su nome, via, civico,
+    comune o microzona: «roma 10» trova via Roma 10); Comune e Microzona sono
+    filtri esatti sui valori del catalogo territoriale. Paginata, con il
+    totale e il riepilogo del censimento di ogni riga calcolati con query
+    aggregate sull'intera pagina."""
     agency_id = ctx.require_agency()
     if not 1 <= int(limit) <= 200 or int(offset) < 0:
         raise ValidationError("Paginazione non valida")
+    if sort not in BUILDING_SORTS:
+        raise ValidationError("Ordinamento non valido")
     with core_cursor() as (_, cur):
         _assicura_083(cur)
         condizioni, params = ["b.agency_id = %s", "b.archived_at IS NULL"], [agency_id]
-        if search:
-            condizioni.append("(b.name ILIKE %s OR b.address ILIKE %s OR b.city ILIKE %s)")
-            params += [f"%{search}%"] * 3
+        for parola in (search or "").split()[:8]:
+            condizioni.append("concat_ws(' ', b.name, b.address, b.civic_number, b.city, b.microzone) ILIKE %s")
+            params.append(_like(parola))
         if city:
             condizioni.append("b.city = %s")
             params.append(city)
+        if microzone:
+            condizioni.append("b.microzone = %s")
+            params.append(microzone)
+        dove = " AND ".join(condizioni)
+        cur.execute(f"SELECT count(*) AS n FROM buildings b WHERE {dove}", params)
+        totale = int(cur.fetchone()["n"])
         cur.execute(f"""
             SELECT b.*,
                    (SELECT count(*) FROM properties p WHERE p.building_id = b.id AND p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL) AS units_census,
                    (SELECT count(*) FROM property_accessories a JOIN properties u ON u.id = a.property_id
                      WHERE u.building_id = b.id AND u.archived_at IS NULL AND (to_jsonb(u)->>'deleted_at') IS NULL AND a.cadastral_status = 'unknown') AS accessories_unknown
-              FROM buildings b WHERE {' AND '.join(condizioni)}
-             ORDER BY b.updated_at DESC, b.id DESC LIMIT %s OFFSET %s""", params + [limit, offset])
-        return {"items": [dict(r) for r in cur.fetchall()]}
+              FROM buildings b WHERE {dove}
+             ORDER BY {BUILDING_SORTS[sort]} LIMIT %s OFFSET %s""", params + [limit, offset])
+        righe = [dict(r) for r in cur.fetchall()]
+        riepiloghi = _riepiloghi(cur, righe)
+        for r in righe:
+            r["census_summary"] = riepiloghi[r["id"]]
+        return {"items": righe, "total": totale, "limit": int(limit), "offset": int(offset)}
 
 
 def get_building(ctx, building_id: int) -> dict:

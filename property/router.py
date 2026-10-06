@@ -135,7 +135,7 @@ def trc(fn,*a,status=200,**k):
     if esito is None:return Response(status_code=204)
     return JSONResponse(status_code=status,content=jsonable_encoder(esito))
 @router.get('/buildings')
-def list_buildings(search:str|None=None,city:str|None=None,limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.list_buildings,ctx,search=search,city=city,limit=limit,offset=offset)
+def list_buildings(search:str|None=None,city:str|None=None,microzone:str|None=None,sort:str=Query('recent',pattern='^(recent|address)$'),limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.list_buildings,ctx,search=search,city=city,microzone=microzone,sort=sort,limit=limit,offset=offset)
 @router.post('/buildings',status_code=201)
 def create_building(p:BuildingCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.create_building,ctx,p,status=201)
 @router.get('/buildings/{building_id}')

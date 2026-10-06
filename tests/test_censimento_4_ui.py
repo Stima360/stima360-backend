@@ -175,7 +175,11 @@ def test_b03_main_js_nessuna_voce_di_menu_nuova_e_la_palazzina_dentro_immobili()
     main = _testo("static/os_shell/assets/main.js")
     inizio = main.index("const SECTIONS = [")
     sezioni = main[inizio:main.index("];", inizio)]
-    assert "censimento" not in sezioni.lower() and "edific" not in sezioni.lower()
+    # SENTINELLA AGGIORNATA DA EDIFICI-1: «Edifici» e' ora una voce propria
+    # (sezione navigabile, richiesta di EDIFICI-1); il censimento resta senza
+    # voce di menu e il vecchio indirizzo della palazzina dentro Immobili resta valido.
+    assert "censimento" not in sezioni.lower()
+    assert sezioni.count("{ name: 'edifici', label: 'Edifici' },") == 1
     assert "if (params[0] === 'edifici') return renderEdificioDettaglio(container, params.slice(1));" in main
     assert main.count("registerRoute('immobili'") == 1
 
@@ -258,7 +262,14 @@ UNITA = [
      "record_kind": "census", "address_inherited": True, "accessories_unknown": 0, "commercial_status": "draft"},
 ]
 DETTAGLIO = {**EDIFICIO, "counters": {"units_census": 3, "units_main": 3, "units_pertinenze": 0, "units_address_inherited": 2,
-                                      "units_address_custom": 1, "accessories_unknown": 1}, "units": UNITA}
+                                      "units_address_custom": 1, "accessories_unknown": 1}, "units": UNITA,
+             # SENTINELLA AGGIORNATA DA EDIFICI-1: il dettaglio porta anche il
+             # riepilogo del censimento (property/census.py::_riepiloghi).
+             "census_summary": {"units_declared": 6, "units_declared_known": True, "units_counted": 3, "units_active": 3,
+                                "units_main": 3, "units_pertinenze": 0, "units_archived": 0, "units_to_complete": 3,
+                                "units_over_declared": 0, "units_declared_source": "survey", "units_in_census": 3,
+                                "category_to_verify": 1, "accessories_unknown": 1},
+             "archived_units": [], "staircases": ["B"]}
 CREATA = {**UNITA[2], "id": 413, "code": "IMM-413", "internal_number": "3", "replica": False, "similar": []}
 IMMOBILE_CENSUS = {**base.IMMOBILE, "record_kind": "census", "commercial_status": "draft", "building_id": 7, "parent_property_id": None,
                    "address_inherited": True, "floor": "2", "staircase": "B", "internal_number": "2", "cadastral_category": None,
@@ -361,7 +372,7 @@ def test_c01_s0_elenco_con_due_tab_la_tab_censimento_elenca_le_palazzine(staged)
     assert any("Immobile singolo" in c for c in out["card"]) and any("Palazzina" in c for c in out["card"])
     assert "Palazzina via Roma 10" in out["contenuto"] and "2 di 6" in out["contenuto"]
     assert "Garage / box" in out["contenuto"] and "garage" not in out["contenuto"].replace("Garage", "")   # etichetta italiana nell'elenco commerciale (decisione 1)
-    assert out["hash"] == "#/immobili/edifici/7"
+    assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
     assert _scritture(out) == []
 
 
@@ -396,7 +407,7 @@ def test_c02_s1_nuova_palazzina_simili_salva_comunque_stessa_chiave(staged):  # 
     assert primo["address"] == "Via Roma" and primo["civic_number"] == "10" and primo["units_declared"] == 6
     assert primo["units_declared_source"] == "survey" and primo["building_type"] == "condominio"
     assert "agency_id" not in primo and all(c["cred"] == "include" and "Authorization" not in c["headers"] for c in post)
-    assert out["hash"] == "#/immobili/edifici/7"
+    assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
 
 
 @node
@@ -404,7 +415,10 @@ def test_c03_s2_palazzina_per_piano_contatori_e_s3_s5_unita_con_toast_e_annulla(
     scenario = r"""
       await wait(); await wait();
       const piani = C().querySelectorAll('.census-floor-head').map((h) => h.visibleText().trim());
-      const contatori = C().querySelector('#building-counters').visibleText();
+      // SENTINELLA AGGIORNATA DA EDIFICI-1: dichiarate / censite / da completare
+      // nel riquadro dei contatori, la scomposizione e i segnali sotto.
+      const contatori = [C().querySelector('#building-counters').visibleText(), C().querySelector('#building-split').visibleText(),
+                         C().querySelector('#building-signals').visibleText()].join(' | ');
       const badgeDaChiarire = C().querySelectorAll('.census-unit-row').map((r) => r.visibleText());
       C().querySelector('#unit-add-apartment').dispatch('click'); await wait(); await wait();
       const titolo = D().querySelector('.census-sheet-title').textContent;
@@ -422,7 +436,8 @@ def test_c03_s2_palazzina_per_piano_contatori_e_s3_s5_unita_con_toast_e_annulla(
     """
     out = _run(staged, scenario, _rotte(), "#/immobili/edifici/7")
     assert out["piani"] == ["Terra 1", "1º 1", "2º 1"]
-    assert "Censite 3 di 6 dichiarate — 3 principali + 0 pertinenze" in out["contatori"] and "1 da chiarire" in out["contatori"]
+    assert "Dichiarate6" in out["contatori"] and "Censite3" in out["contatori"] and "Da completare3" in out["contatori"]
+    assert "3 principali + 0 pertinenze" in out["contatori"] and "1 accessorio da chiarire" in out["contatori"]
     assert any("IMM-411" in r and "Da verificare" in r and "1 da chiarire" in r and "Ingresso proprio" in r for r in out["badgeDaChiarire"])
     assert any("IMM-412" in r and "A/3" in r and "int. 2" in r and "scala B" in r and "85" in r for r in out["badgeDaChiarire"])
     assert out["titolo"] == "Nuova unità" and out["tipoAttivo"] == "apartment"

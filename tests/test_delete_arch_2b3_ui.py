@@ -546,7 +546,11 @@ def test_g2_ripristino_di_un_altro_agente_rifiutato_dal_backend(staged):  # noqa
 
 def test_h01_css_mobile_bottom_sheet_e_azioni_toccabili():
     css = (ASSETS / "app.css").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA EDIFICI-1: il blocco 2B3 finisce dove comincia
+    # quello di EDIFICI-1 (aggiunto dopo, con regole proprie building-*).
     blocco = css[css.index("/* DELETE-ARCH Fase 2B3"):]
+    if "/* EDIFICI-1" in blocco:
+        blocco = blocco[:blocco.index("/* EDIFICI-1")]
     assert "@media (max-width: 767px)" in blocco
     assert "dialog.modal.trash-sheet { margin: auto 0 0 0; width: 100vw; max-width: 100vw;" in blocco
     assert ".trash-card-actions .btn, .trash-actions .btn { min-height: 44px; }" in blocco

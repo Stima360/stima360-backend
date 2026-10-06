@@ -67,7 +67,7 @@ export async function renderPropertyCensusTab(el, ctx) {
         <div class="action-bar"><button type="button" class="btn primary" id="census-take">Prendi in carico</button><button type="button" class="btn ghost" id="census-undo">Annulla creazione</button></div></div>` : ''}
       <h3 class="section-title">Collocazione</h3>
       <div class="detail-grid">
-        <div class="detail-item"><label>Palazzina</label>${edificio ? `<a href="#/immobili/edifici/${escapeHtml(edificio.id)}" id="census-open-building">${escapeHtml(edificio.name || [edificio.address, edificio.civic_number].filter(Boolean).join(' ') || `#${edificio.id}`)}</a>` : '—'}</div>
+        <div class="detail-item"><label>Palazzina</label>${edificio ? `<a href="#/edifici/${escapeHtml(edificio.id)}" id="census-open-building">${escapeHtml(edificio.name || [edificio.address, edificio.civic_number].filter(Boolean).join(' ') || `#${edificio.id}`)}</a>` : '—'}</div>
         <div class="detail-item"><label>Indirizzo</label>${escapeHtml(censimento.address_inherited ? 'Ereditato dalla palazzina' : 'Proprio')}</div>
         <div class="detail-item"><label>Unità principale</label>${genitore ? `<a href="#/immobili/${escapeHtml(genitore.id)}" id="census-open-parent">${escapeHtml(genitore.code || `#${genitore.id}`)}</a>${genitore.archived_at ? ' <small class="muted">(archiviata)</small>' : ''}` : '—'}</div>
         <div class="detail-item"><label>Piano · scala · interno</label>${escapeHtml([property.floor, property.staircase ? `scala ${property.staircase}` : null, property.internal_number ? `int. ${property.internal_number}` : null].filter(Boolean).join(' · ') || '—')}</div>
@@ -181,4 +181,17 @@ export async function renderPropertyCensusTab(el, ctx) {
       }
     });
   });
+}
+
+// EDIFICI-1: il collegamento evidente all'edificio di appartenenza, dalla
+// relazione reale (`building_id` -> `building` nella risposta del dettaglio).
+// Nessun collegamento per un immobile autonomo.
+export function buildingLinkHtml(p) {
+  const b = p && p.building;
+  if (!b || !b.id) return '';
+  const via = [b.address, b.civic_number].filter((x) => x && String(x).trim()).join(' ');
+  const nome = (b.name && String(b.name).trim()) || via || `Palazzina #${b.id}`;
+  const dove = [b.name ? via : '', b.city].filter(Boolean).join(', ');
+  return `<a class="property-building-link" id="property-building-link" href="#/edifici/${escapeHtml(b.id)}">`
+    + `<span class="muted">Nell'edificio</span> <strong>${escapeHtml(nome)}</strong>${dove ? ` <span class="muted">${escapeHtml(dove)}</span>` : ''} ›</a>`;
 }

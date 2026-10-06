@@ -92,12 +92,12 @@ import { mountPropertyInteractions } from '../components/property-interactions.j
 // carico, annullamento) con il client proprio del censimento. Su una scheda
 // in censimento lo stato commerciale e l'incarico non si modificano da qui
 // (§7: 409 CENSUS_LOCKED): si mostra «Prendi in carico».
-import { renderPropertyCensusTab } from '../census/property-census-tab.js';
+import { buildingLinkHtml, renderPropertyCensusTab } from '../census/property-census-tab.js';
 // VENDITORI-1: l'interruttore «Vende» per proprietario (sellers/seller-toggle.js).
 import { bindSellerToggles, renderSellerCell } from '../sellers/seller-toggle.js';
 import { bindTrashButton, trashButtonHtml } from '../trash/trash-dialog.js'; // DELETE-ARCH 2B3
 
-const STATUS_LABELS = {
+export const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
   reserved: 'Riservato', under_offer: 'Sotto offerta', sold: 'Venduto',
   withdrawn: 'Ritirato', archived: 'Archiviato',
@@ -421,6 +421,7 @@ export async function renderImmobileDettaglio(container, params = []) {
     <div class="contact-header card">
       <h2 id="property-header-title">${escapeHtml(propertyDisplayName(property))}</h2>
       <div class="muted" id="property-header-subtitle">${escapeHtml(headerSubtitle())}</div>
+      ${buildingLinkHtml(property)}
       <div class="badge-row" id="property-status-badge">${headerBadgeHtml()}</div>
       <div class="action-bar" style="margin-top:8px">
         <button type="button" id="property-edit-btn" class="btn ghost">Modifica immobile</button>

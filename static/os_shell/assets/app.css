@@ -979,3 +979,41 @@ dialog.modal.trash-sheet { max-width: 520px; }
   .trash-actions { flex-direction: column-reverse; }
   .trash-actions .btn, .trash-card-actions .btn { width: 100%; }
 }
+
+/* EDIFICI-1: la sezione Edifici (lista a card, scheda con contatori) e il
+   collegamento all'edificio nella scheda immobile. Solo regole NUOVE (prefisso
+   building-/buildings-/property-building-), nessuna ridefinizione. Mobile-first:
+   card a una colonna, tocchi da 44 px, nessuno scorrimento orizzontale. */
+.buildings-intro { margin: 0 0 10px; font-size: 13px; }
+.buildings-toolbar { flex-wrap: wrap; }
+.buildings-toolbar #buildings-search { flex: 2 1 220px; }
+.buildings-toolbar select { flex: 1 1 160px; }
+.building-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.building-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); text-decoration: none; min-width: 0; }
+.building-card:hover, .building-card:focus-visible { border-color: var(--primary); }
+.building-card-title { font-size: 16px; overflow-wrap: anywhere; }
+.building-card-sub { font-size: 13px; overflow-wrap: anywhere; }
+.building-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.building-count { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: var(--radius); background: var(--bg); min-width: 0; }
+.building-count small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.building-count b { font-size: 18px; }
+.building-count em { font-size: 11px; font-style: normal; color: var(--muted); overflow-wrap: anywhere; }
+.building-counts-large .building-count b { font-size: 24px; }
+.building-summary-panel .building-split { margin: 8px 0 4px; font-size: 13px; }
+.building-rules p { font-size: 13px; margin: 6px 0 0; }
+.building-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px 16px; margin: 10px 0 4px; }
+.building-facts div { min-width: 0; }
+.building-facts dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.building-facts dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+a.census-unit-main { text-decoration: none; }
+.building-unit-meta { flex-basis: 100%; font-size: 12px; }
+.building-archived { margin-top: 12px; }
+.property-building-link { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: baseline; margin-top: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); text-decoration: none; font-size: 14px; max-width: 100%; }
+.property-building-link:hover { border-color: var(--primary); }
+@media (max-width: 767px) {
+  .buildings-toolbar { flex-direction: column; align-items: stretch; }
+  .buildings-toolbar #buildings-search, .buildings-toolbar select, .buildings-toolbar .btn { flex: 0 0 auto; width: 100%; min-height: 44px; }
+  .building-cards { grid-template-columns: 1fr; }
+  .building-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .property-building-link { display: flex; }
+}

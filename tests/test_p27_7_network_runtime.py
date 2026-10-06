@@ -315,7 +315,8 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # "acquisizioni"; "rete" resta assente. L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" e' l'ultima voce
     # di SECTIONS (discreta, in fondo); "rete" resta assente. L'elenco resta esatto.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "venditori", "acquisizioni",
+    # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "edifici", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "cestino"]
 
 

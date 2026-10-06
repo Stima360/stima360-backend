@@ -378,7 +378,7 @@ def test_r6_apri_nei_simili_edificio_e_immobile_con_destinazione_esatta(staged):
     """
     out = _run(staged, scenario, _rotte(post_building=(simili_edificio,)), "#/immobili")
     assert out["apri"] == ["7"] and out["salvaComunque"]
-    assert out["hash"] == "#/immobili/edifici/7"
+    assert out["hash"] == "#/edifici/7"  # SENTINELLA AGGIORNATA DA EDIFICI-1: sezione Edifici
     assert len(out["post"]) == 1                                   # «Apri» non scrive
 
     simili_unita = {"status": 409, "body": {"detail": "Unita' simili", "code": "SIMILAR_FOUND",

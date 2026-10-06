@@ -217,14 +217,16 @@ export async function renderImmobili(container, params = []) {
     censusListArea.innerHTML = renderTable(
       [
         { label: 'Palazzina', render: (b) => `<strong>${escapeHtml(b.name || [b.address, b.civic_number].filter(Boolean).join(' ') || `Palazzina #${b.id}`)}</strong><br><small class="muted">${escapeHtml([[b.address, b.civic_number].filter(Boolean).join(' '), b.city].filter(Boolean).join(', ') || '—')}</small>` },
-        { label: 'Censite', render: (b) => `${escapeHtml(b.units_census ?? 0)}${Number.isInteger(b.units_declared) ? ` di ${escapeHtml(b.units_declared)}` : ''}` },
+        // EDIFICI-1: le censite del riepilogo condiviso con la sezione Edifici
+        // (archiviate comprese), se il server lo manda.
+        { label: 'Censite', render: (b) => `${escapeHtml((b.census_summary && Number.isInteger(b.census_summary.units_counted)) ? b.census_summary.units_counted : (b.units_census ?? 0))}${Number.isInteger(b.units_declared) ? ` di ${escapeHtml(b.units_declared)}` : ''}` },
         { label: 'Da chiarire', render: (b) => escapeHtml(b.accessories_unknown || 0) },
         { label: 'Aggiornata il', render: (b) => escapeHtml(formatDate(b.updated_at)) },
       ],
       items,
       { onRowClick: true },
     );
-    bindTableRowClicks(censusListArea, (id) => navigate('immobili', ['edifici', id]));
+    bindTableRowClicks(censusListArea, (id) => navigate('edifici', [id]));
   }
 
   // Fase 5: le unita' censite (in palazzina o singole), dal server con
@@ -280,7 +282,7 @@ export async function renderImmobili(container, params = []) {
     const opzioni = await opzioniForm();
     if (!opzioni) return;
     newCards.hidden = true;
-    openBuildingSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('immobili', ['edifici', creato.id]) });
+    openBuildingSheet(censusSheet, { options: opzioni, onSaved: (creato) => navigate('edifici', [creato.id]) });
   });
   container.querySelector('#census-new-single').addEventListener('click', async () => {
     const opzioni = await opzioniForm();
