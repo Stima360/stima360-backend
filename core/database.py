@@ -17,8 +17,14 @@ def core_cursor(*, commit: bool = False):
         yield conn, cur
         if commit:
             conn.commit()
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        # DELETE-ARCH Fase 2B2: il rifiuto di una guardia della 086 (un nuovo
+        # collegamento verso un immobile nel Cestino) arriva qui come errore
+        # del database; diventa il 409 PROPERTY_IN_TRASH del dominio.
+        from .property_trash import PropertyInTrash, is_trash_db_error
+        if not isinstance(exc, PropertyInTrash) and is_trash_db_error(exc):
+            raise PropertyInTrash() from exc
         raise
     finally:
         cur.close()

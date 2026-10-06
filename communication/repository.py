@@ -30,9 +30,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from core.property_trash import refuse_if_in_trash as core_refuse_if_property_in_trash
 from core.scope import scoped_predicate as core_scoped_predicate
 
-from .enums import CANCELLABLE_STATUSES, INITIAL_STATUS, STATUS_CANCELLED
+from .enums import CANCELLABLE_STATUSES, INITIAL_STATUS, STATUS_CANCELLED, STATUS_SUPPRESSED
 from .exceptions import ConflictError, NotFoundError
 from .scope import ProgrammingError, communication_scoped_source
 
@@ -101,6 +102,14 @@ def insert_message(cur, ctx, prepared: dict[str, Any]) -> tuple[dict[str, Any], 
     esistente, letta nello scope: l'operazione e' ripetibile per costruzione e
     non per disciplina del chiamante.
 
+    DELETE-ARCH Fase 2B2: e' l'UNICO punto che inserisce nel ledger, quindi la
+    guardia del Cestino Immobili sta qui. Un messaggio legato (`property_id`)
+    a un immobile nel Cestino e' rifiutato PRIMA della INSERT con
+    `core.exceptions.PropertyInTrash` (409 `PROPERTY_IN_TRASH`): nessuna riga
+    scritta. La regola su cosa sia "nel Cestino" passa da `core`, come quella
+    sui contatti passa da `core.scope`; la riga dell'immobile resta bloccata
+    in condivisione fino al commit, cosi' un trash concorrente attende.
+
     La chiave e' unica PER TENANT e non globalmente, quindi la stessa stringa in
     un'altra agenzia non e' un conflitto e produce un secondo messaggio. E' la
     decisione C3 del design, ed e' il motivo per cui il ramo "chiave gia' usata
@@ -108,6 +117,7 @@ def insert_message(cur, ctx, prepared: dict[str, Any]) -> tuple[dict[str, Any], 
     globale - qui non puo' verificarsi: se la INSERT non ha scritto, la riga
     esistente e' necessariamente di questa agenzia, e quindi leggibile.
     """
+    core_refuse_if_property_in_trash(cur, prepared.get("property_id"), lock=True)
     attive = [c for c in INSERTABLE_COLUMNS
               if c not in PROVENANCE_COLUMNS or prepared.get(c) is not None]
     colonne = ", ".join(attive)
@@ -169,6 +179,30 @@ def list_by_contact(cur, ctx, contact_id: int, *, limit: int) -> list[dict[str, 
         params + [contact_id, limit],
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+def property_has_message_history(cur, ctx, property_id: int) -> bool:
+    """DELETE-ARCH Fase 2B2 - la sola domanda che il Cestino Immobili fa al
+    ledger: questo immobile ha uno storico di comunicazioni REALE?
+
+    Si' se esiste, nello scope dell'agenzia, un messaggio in arrivo o un
+    messaggio in uscita che e' entrato nel flusso: tutto tranne `cancelled`
+    (annullato prima di partire) e `suppressed` (fermato dal consenso, mai
+    uscito). Una risposta booleana e nient'altro: il contenuto dei messaggi
+    non esce da questo package e non viene toccato.
+    """
+    cur.execute("SELECT to_regclass('public.communication_messages') IS NOT NULL AS presente")
+    riga = cur.fetchone()
+    if not (riga["presente"] if isinstance(riga, dict) else riga[0]):
+        return False                                   # ledger non installato (064)
+    source, params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(
+        f"SELECT EXISTS (SELECT 1 FROM {source} AND m.property_id = %s "
+        "AND (m.direction = 'inbound' OR m.status NOT IN (%s, %s))) AS esiste",
+        params + [property_id, STATUS_CANCELLED, STATUS_SUPPRESSED],
+    )
+    riga = cur.fetchone()
+    return bool(riga["esiste"] if isinstance(riga, dict) else riga[0])
 
 
 def reschedule_queued(cur, ctx, message_id: int, *, quando) -> dict[str, Any] | None:

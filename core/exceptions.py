@@ -13,6 +13,16 @@ class ConflictError(CoreError):
     pass
 
 
+class PropertyInTrash(ConflictError):
+    """DELETE-ARCH Fase 2B2: nuovo collegamento verso un immobile nel Cestino
+    (409 PROPERTY_IN_TRASH). Vedi core/property_trash.py."""
+    code = "PROPERTY_IN_TRASH"
+
+    def __init__(self, message: str = "PROPERTY_IN_TRASH: l'immobile è nel Cestino e non accetta nuovi collegamenti"):
+        super().__init__(message)
+        self.extra = {}
+
+
 class ValidationError(CoreError):
     pass
 

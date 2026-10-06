@@ -8,6 +8,7 @@ from psycopg2 import errors
 from buy.repository import history
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, ValidationError
+from core.exceptions import PropertyInTrash
 
 from .enums import PROPOSAL_TRANSITIONS, TERMINAL_PROPOSAL_STATUSES
 
@@ -23,7 +24,8 @@ def _relation(cur, match_id: int, *, lock: bool = False):
             b.id AS buy_request_id,b.title AS buy_title,b.contact_id,b.lead_id,
             b.archived_at AS buy_archived_at,c.display_name AS contact_name,
             p.id AS property_id,p.title AS property_title,p.code AS property_code,
-            p.archived_at AS property_archived_at
+            p.archived_at AS property_archived_at,
+            (to_jsonb(p)->>'deleted_at') AS property_deleted_at
             FROM matches m
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
@@ -40,6 +42,9 @@ def _relation(cur, match_id: int, *, lock: bool = False):
         raise ValidationError("buy request is archived")
     if relation.get("property_archived_at") is not None:
         raise ValidationError("property is archived")
+    # DELETE-ARCH Fase 2B2: nessuna proposta nuova su un immobile nel Cestino.
+    if relation.pop("property_deleted_at", None) is not None:
+        raise PropertyInTrash()
     return relation
 
 
@@ -55,7 +60,7 @@ def _proposal(cur, proposal_id: int, *, lock: bool = False):
             JOIN matches m ON m.id=pp.match_id
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
-            JOIN properties p ON p.id=m.property_id
+            JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
             WHERE pp.id=%s{suffix}""",
         (proposal_id,),
     )
@@ -191,7 +196,7 @@ def list_proposals(
                 JOIN matches m ON m.id=pp.match_id
                 JOIN buy_requests b ON b.id=m.buy_request_id
                 JOIN contacts c ON c.id=b.contact_id
-                JOIN properties p ON p.id=m.property_id
+                JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                 WHERE {' AND '.join(filters)}
                 ORDER BY pp.created_at DESC,pp.id DESC LIMIT %s OFFSET %s""",
             params,
@@ -303,8 +308,9 @@ _CHAIN_JOIN = """
             JOIN matches m ON m.id=pp.match_id
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
-            JOIN properties p ON p.id=m.property_id
+            JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
 """
+# DELETE-ARCH 2B2: le proposte di un immobile nel Cestino escono da ogni lettura.
 _CHAIN_SCOPE = "b.agency_id=%s AND p.agency_id=%s"
 
 
@@ -320,7 +326,8 @@ def _scoped_relation(cur, match_id: int, agency_id: int, *, lock: bool = False):
             b.id AS buy_request_id,b.title AS buy_title,b.contact_id,b.lead_id,
             b.archived_at AS buy_archived_at,c.display_name AS contact_name,
             p.id AS property_id,p.title AS property_title,p.code AS property_code,
-            p.archived_at AS property_archived_at
+            p.archived_at AS property_archived_at,
+            (to_jsonb(p)->>'deleted_at') AS property_deleted_at
             FROM matches m
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
@@ -337,6 +344,9 @@ def _scoped_relation(cur, match_id: int, agency_id: int, *, lock: bool = False):
         raise ValidationError("buy request is archived")
     if relation.get("property_archived_at") is not None:
         raise ValidationError("property is archived")
+    # DELETE-ARCH Fase 2B2: nessuna proposta nuova su un immobile nel Cestino.
+    if relation.pop("property_deleted_at", None) is not None:
+        raise PropertyInTrash()
     return relation
 
 

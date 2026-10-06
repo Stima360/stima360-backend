@@ -38,7 +38,9 @@ OGGI_ROMA = "(NOW() AT TIME ZONE 'Europe/Rome')::date"
 
 #: La definizione di incarico, in un solo posto.
 E_UN_INCARICO = ("p.acquisition_id IS NOT NULL AND p.mandate_type IS NOT NULL "
-                 "AND p.mandate_start IS NOT NULL")
+                 "AND p.mandate_start IS NOT NULL "
+                 # Cestino Immobili (fase 2B2): un immobile nel Cestino non e' un incarico operativo
+                 "AND (to_jsonb(p)->>'deleted_at') IS NULL")
 
 
 def _base(ctx) -> tuple[str, list]:

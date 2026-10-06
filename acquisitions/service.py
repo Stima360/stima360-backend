@@ -692,6 +692,10 @@ def _azioni(ctx, row, immobile, appuntamento) -> dict:
 
 def _dettaglio(ctx, cur, agency_id, row) -> dict:
     immobile = repository.property_summary(cur, agency_id, row["property_id"])
+    if immobile is None:
+        # DELETE-ARCH Fase 2B2: l'immobile e' nel Cestino -> anche la sua
+        # acquisizione (sempre conclusa: una aperta blocca il Cestino) sparisce.
+        raise errors.AcquisitionNotFound("Acquisizione non trovata")
     proprietari = repository.property_owners(cur, agency_id, row["property_id"], OWNER_ROLES)
     for p in proprietari:
         p["is_main"] = p["contact_id"] == row["owner_contact_id"]

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
+from core import property_trash as _property_trash
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.scope import ProgrammingError
 
@@ -93,12 +94,19 @@ def ensure(cur, table, id_, label):
     if not cur.fetchone(): raise NotFoundError(f"{label} {id_} not found")
 
 def ensure_scoped(cur, table, id_, agency_id, label):
+    # DELETE-ARCH Fase 2B2: per l'immobile la stessa lettura porta anche
+    # `deleted_at` -> nessun nuovo collegamento verso un immobile nel Cestino
+    # (409 PROPERTY_IN_TRASH; la 086 lo ripete nel database).
+    colonne = f"{_property_trash.deleted_at_sql(table)} AS deleted_at" if table == 'properties' else "1"
     if agency_id is not None:
-        cur.execute(f"SELECT 1 FROM {table} WHERE id=%s AND agency_id=%s", (id_, agency_id))
+        cur.execute(f"SELECT {colonne} FROM {table} WHERE id=%s AND agency_id=%s", (id_, agency_id))
     else:
-        cur.execute(f"SELECT 1 FROM {table} WHERE id=%s", (id_,))
-    if not cur.fetchone():
+        cur.execute(f"SELECT {colonne} FROM {table} WHERE id=%s", (id_,))
+    riga = cur.fetchone()
+    if not riga:
         raise NotFoundError(f"{label} {id_} not found")
+    if table == 'properties' and hasattr(riga, 'get') and riga.get('deleted_at') is not None:
+        raise _property_trash.PropertyInTrash()
 
 def _free_generated_code(cur, property_id):
     """Il primo IMM-<id>[-n] non occupato. `code` e' UNIQUE su tutta la
@@ -241,7 +249,7 @@ def list_properties(*args, **kwargs):
     # principale (nemmeno con include_archived, per contatto o per lead).
     # Letta da to_jsonb (stesso idioma di lost_reason in Fase 1B): il codice
     # resta valido su un database senza la 085.
-    filters.append("(to_jsonb(p)->>'deleted_at') IS NULL")
+    filters.append(_property_trash.live('p'))
     if classification:
         filters.append('p.classification=%s')
         params.append(classification)
@@ -572,7 +580,7 @@ def update_child(*args, **kwargs):
     if not data:
         with core_cursor() as (_, cur):
             if agency_id is not None:
-                cur.execute(f"SELECT c.* FROM {table} c JOIN properties p ON p.id=c.property_id WHERE c.id=%s AND p.agency_id=%s", (item_id, agency_id))
+                cur.execute(f"SELECT c.* FROM {table} c JOIN properties p ON p.id=c.property_id WHERE c.id=%s AND p.agency_id=%s AND {_property_trash.live('p')}", (item_id, agency_id))
             else:
                 cur.execute(f'SELECT * FROM {table} WHERE id=%s', (item_id,))
             r = cur.fetchone()
@@ -583,7 +591,8 @@ def update_child(*args, **kwargs):
     with core_cursor(commit=True) as (_, cur):
         if agency_id is not None:
             cur.execute(
-                f"SELECT c.* FROM {table} c JOIN properties p ON p.id=c.property_id WHERE c.id=%s AND p.agency_id=%s FOR UPDATE",
+                f"SELECT c.*, {_property_trash.deleted_at_sql('p')} AS property_deleted_at "
+                f"FROM {table} c JOIN properties p ON p.id=c.property_id WHERE c.id=%s AND p.agency_id=%s FOR UPDATE",
                 (item_id, agency_id),
             )
         else:
@@ -592,6 +601,8 @@ def update_child(*args, **kwargs):
         if not current:
             raise NotFoundError(f'{label} {item_id} not found')
         current = dict(current)
+        if current.pop('property_deleted_at', None) is not None:   # DELETE-ARCH 2B2: congelato
+            raise _property_trash.PropertyInTrash()
         if table == 'property_documents':
             if _binary_document_change(current, data) and _document_has_published_owner_share(cur, item_id):
                 raise ConflictError('Il file di un documento già pubblicato in OWNER è immutabile; creare una nuova versione')
@@ -626,7 +637,7 @@ def list_visits(*args, **kwargs):
         agency_id = None
 
     limit, offset, status, from_date, to_date = args
-    filters = []
+    filters = [_property_trash.live('p')]          # DELETE-ARCH 2B2
     params = []
     if agency_id is not None:
         filters.append('p.agency_id = %s')
@@ -665,7 +676,7 @@ def list_visits_by_contact(*args, **kwargs):
                    FROM property_visits v
                    JOIN properties p ON p.id=v.property_id
                    LEFT JOIN contacts c ON c.id=v.contact_id
-                   WHERE v.contact_id=%s AND p.agency_id=%s
+                   WHERE v.contact_id=%s AND p.agency_id=%s AND (to_jsonb(p)->>'deleted_at') IS NULL
                    ORDER BY v.scheduled_at DESC,v.id DESC""",
                 (contact_id, agency_id),
             )
@@ -675,7 +686,7 @@ def list_visits_by_contact(*args, **kwargs):
                    FROM property_visits v
                    JOIN properties p ON p.id=v.property_id
                    LEFT JOIN contacts c ON c.id=v.contact_id
-                   WHERE v.contact_id=%s
+                   WHERE v.contact_id=%s AND (to_jsonb(p)->>'deleted_at') IS NULL
                    ORDER BY v.scheduled_at DESC,v.id DESC""",
                 (contact_id,),
             )
@@ -757,7 +768,7 @@ def update_visit(*args, **kwargs):
         with core_cursor() as (_, cur):
             if agency_id is not None:
                 cur.execute(
-                    "SELECT v.* FROM property_visits v JOIN properties p ON p.id = v.property_id WHERE v.id = %s AND p.agency_id = %s",
+                    f"SELECT v.* FROM property_visits v JOIN properties p ON p.id = v.property_id WHERE v.id = %s AND p.agency_id = %s AND {_property_trash.live('p')}",
                     (visit_id, agency_id),
                 )
             else:
@@ -770,12 +781,16 @@ def update_visit(*args, **kwargs):
     with core_cursor(commit=True) as (_, cur):
         if agency_id is not None:
             cur.execute(
-                "SELECT v.* FROM property_visits v JOIN properties p ON p.id = v.property_id WHERE v.id = %s AND p.agency_id = %s FOR UPDATE",
+                f"SELECT v.*, {_property_trash.deleted_at_sql('p')} AS property_deleted_at "
+                "FROM property_visits v JOIN properties p ON p.id = v.property_id WHERE v.id = %s AND p.agency_id = %s FOR UPDATE",
                 (visit_id, agency_id),
             )
             current = cur.fetchone()
             if not current:
                 raise NotFoundError(f'visit {visit_id} not found')
+            current = dict(current)
+            if current.pop('property_deleted_at', None) is not None:   # DELETE-ARCH 2B2: congelato
+                raise _property_trash.PropertyInTrash()
             # A31-3 (D5/D6 + regola A31-1): prima di scrivere, sulla riga bloccata.
             _visite_regole.check_patch(dict(current), data, datetime.now(timezone.utc))
             if data.get('contact_id') is not None:
@@ -810,12 +825,15 @@ def delete_child(*args, **kwargs):
     with core_cursor(commit=True) as (_, cur):
         if agency_id is not None:
             cur.execute(
-                f"SELECT c.id, c.property_id FROM {table} c JOIN properties p ON p.id = c.property_id WHERE c.id = %s AND p.agency_id = %s",
+                f"SELECT c.id, c.property_id, {_property_trash.deleted_at_sql('p')} AS property_deleted_at "
+                f"FROM {table} c JOIN properties p ON p.id = c.property_id WHERE c.id = %s AND p.agency_id = %s",
                 (item_id, agency_id),
             )
             rec = cur.fetchone()
             if not rec:
                 raise NotFoundError(f'{label} {item_id} not found')
+            if hasattr(rec, 'get') and rec.get('property_deleted_at') is not None:   # DELETE-ARCH 2B2: congelato
+                raise _property_trash.PropertyInTrash()
         if table == 'property_documents' and _document_has_published_owner_share(cur, item_id):
             raise ConflictError('Un documento già pubblicato in OWNER non può essere eliminato')
         if table == 'property_visits':
@@ -851,24 +869,24 @@ def dashboard(ctx=None):
               COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
-            WHERE agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
+            WHERE agency_id = %s AND (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """, (agency_id,))
             kpi = dict(cur.fetchone())
             cur.execute("""SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id
-                WHERE p.archived_at IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))""", (agency_id,))
+                WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))""", (agency_id,))
             kpi['document_issues'] = cur.fetchone()['count']
             cur.execute("""SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id
-                WHERE p.archived_at IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date""", (agency_id,))
+                WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date""", (agency_id,))
             kpi['visits_today'] = cur.fetchone()['count']
             cur.execute("""SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id
-                WHERE p.archived_at IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at > NOW()""", (agency_id,))
+                WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at > NOW()""", (agency_id,))
             kpi['upcoming_visits'] = cur.fetchone()['count']
             cur.execute("""SELECT p.id,p.code,p.title,p.commercial_status,p.classification,p.mandate_end,p.asking_price,
               (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))) AS document_issues
-              FROM properties p WHERE p.archived_at IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""", (agency_id,))
+              FROM properties p WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""", (agency_id,))
             kpi['recent_properties'] = [dict(x) for x in cur.fetchall()]
             cur.execute("""SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id
-              WHERE p.archived_at IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""", (agency_id,))
+              WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""", (agency_id,))
             kpi['next_visits'] = [dict(x) for x in cur.fetchall()]
         else:
             cur.execute("""
@@ -881,26 +899,26 @@ def dashboard(ctx=None):
               COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
-            WHERE COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
+            WHERE (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """)
             kpi = dict(cur.fetchone())
-            cur.execute("SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))")
+            cur.execute("SELECT COUNT(*) AS count FROM property_documents d JOIN properties p ON p.id=d.property_id WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))")
             kpi['document_issues'] = cur.fetchone()['count']
-            cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date")
+            cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND v.status IN ('scheduled','confirmed') AND (v.scheduled_at AT TIME ZONE 'Europe/Rome')::date=(NOW() AT TIME ZONE 'Europe/Rome')::date")
             kpi['visits_today'] = cur.fetchone()['count']
-            cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at > NOW()")
+            cur.execute("SELECT COUNT(*) AS count FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at > NOW()")
             kpi['upcoming_visits'] = cur.fetchone()['count']
             cur.execute("""SELECT p.id,p.code,p.title,p.commercial_status,p.classification,p.mandate_end,p.asking_price,
               (SELECT COUNT(*) FROM property_documents d WHERE d.property_id=p.id AND (d.status IN ('missing','requested','expired','rejected') OR (d.expires_at IS NOT NULL AND d.expires_at < CURRENT_DATE))) AS document_issues
-              FROM properties p WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""")
+              FROM properties p WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' ORDER BY p.updated_at DESC LIMIT 8""")
             kpi['recent_properties'] = [dict(x) for x in cur.fetchall()]
             cur.execute("""SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id
-              WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""")
+              WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""")
             kpi['next_visits'] = [dict(x) for x in cur.fetchall()]
         # CENSIMENTO-1 Fase 5: le unita' censite hanno il loro contatore, mai
         # mescolato ai KPI operativi qui sopra. Le visite restano visite
         # (eventi dell'Agenda), qualunque sia la scheda.
-        cur.execute("SELECT count(*) AS count FROM properties p WHERE p.archived_at IS NULL"
+        cur.execute("SELECT count(*) AS count FROM properties p WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL"
                     + (" AND p.agency_id = %s" if agency_id is not None else "")
                     + " AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'census'",
                     (agency_id,) if agency_id is not None else ())
@@ -915,7 +933,7 @@ def alerts(ctx=None):
             SELECT 'mandate' AS alert_type,p.id AS property_id,p.title,p.code,p.mandate_end AS due_date,
                    'Incarico in scadenza' AS message
             FROM properties p
-            WHERE p.archived_at IS NULL
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.agency_id = %s
               AND p.commercial_status NOT IN ('sold','withdrawn','archived')
               AND p.mandate_end IS NOT NULL
@@ -924,7 +942,7 @@ def alerts(ctx=None):
             SELECT 'document',p.id,p.title,p.code,d.expires_at,
                    'Documento: '||d.title||' ('||d.status||')'
             FROM property_documents d JOIN properties p ON p.id=d.property_id
-            WHERE p.archived_at IS NULL
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.agency_id = %s
               AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
               AND (
@@ -935,7 +953,7 @@ def alerts(ctx=None):
             SELECT 'visit',p.id,p.title,p.code,v.scheduled_at::date,
                    'Visita '||v.status||' alle '||to_char(v.scheduled_at,'DD/MM/YYYY HH24:MI')
             FROM property_visits v JOIN properties p ON p.id=v.property_id
-            WHERE p.archived_at IS NULL
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.agency_id = %s
               AND v.status IN ('scheduled','confirmed')
               AND v.scheduled_at BETWEEN NOW() AND NOW()+INTERVAL '7 days'
@@ -946,7 +964,7 @@ def alerts(ctx=None):
             SELECT 'mandate' AS alert_type,p.id AS property_id,p.title,p.code,p.mandate_end AS due_date,
                    'Incarico in scadenza' AS message
             FROM properties p
-            WHERE p.archived_at IS NULL
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.commercial_status NOT IN ('sold','withdrawn','archived')
               AND p.mandate_end IS NOT NULL
               AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days'
@@ -954,7 +972,7 @@ def alerts(ctx=None):
             SELECT 'document',p.id,p.title,p.code,d.expires_at,
                    'Documento: '||d.title||' ('||d.status||')'
             FROM property_documents d JOIN properties p ON p.id=d.property_id
-            WHERE p.archived_at IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm' AND (
                  d.status IN ('missing','requested','expired','rejected')
                  OR (d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + INTERVAL '30 days')
             )
@@ -962,7 +980,7 @@ def alerts(ctx=None):
             SELECT 'visit',p.id,p.title,p.code,v.scheduled_at::date,
                    'Visita '||v.status||' alle '||to_char(v.scheduled_at,'DD/MM/YYYY HH24:MI')
             FROM property_visits v JOIN properties p ON p.id=v.property_id
-            WHERE p.archived_at IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at BETWEEN NOW() AND NOW()+INTERVAL '7 days'
+            WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND v.status IN ('scheduled','confirmed') AND v.scheduled_at BETWEEN NOW() AND NOW()+INTERVAL '7 days'
             ORDER BY due_date NULLS LAST
             """)
         return {'items': [dict(x) for x in cur.fetchall()]}

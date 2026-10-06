@@ -302,6 +302,7 @@ def delete_contact(ctx, property_id: int, contact_id: int, role: str) -> None:
     with core_cursor(commit=True) as (_, cur):
         prop = _immobile(cur, agency_id, property_id, lock=True)
         require_manage(ctx, prop)
+        refuse_if_in_trash(prop)                        # DELETE-ARCH 2B2: congelato
         cur.execute("SELECT * FROM property_contacts WHERE property_id = %s AND contact_id = %s AND role = %s FOR UPDATE",
                     (property_id, contact_id, role))
         link = repository.row(cur.fetchone())
@@ -346,6 +347,7 @@ def delete_lead(ctx, property_id: int, lead_id: int) -> None:
     with core_cursor(commit=True) as (_, cur):
         prop = _immobile(cur, agency_id, property_id, lock=True)
         require_manage(ctx, prop)
+        refuse_if_in_trash(prop)                        # DELETE-ARCH 2B2: congelato
         cur.execute("SELECT pl.relation_type, l.status, l.pipeline FROM property_leads pl JOIN leads l ON l.id = pl.lead_id "
                     "WHERE pl.property_id = %s AND pl.lead_id = %s FOR UPDATE OF pl", (property_id, lead_id))
         link = cur.fetchone()
@@ -374,6 +376,7 @@ def delete_child(ctx, table: str, item_id: int) -> None:
         if prop is None:
             raise NotFoundError(f"{label} {item_id} not found")
         require_manage(ctx, prop)
+        refuse_if_in_trash(prop)                        # DELETE-ARCH 2B2: congelato
         if table == "property_documents":
             cur.execute("SELECT 1 FROM owner_shared_documents WHERE property_document_id = %s LIMIT 1", (item_id,))
             if cur.fetchone():
@@ -530,7 +533,7 @@ def _agente_senza_privilegi(ctx) -> bool:
                                                    getattr(ctx, "is_platform_admin", False))
 
 
-def protected_history(cur, agency_id: int, prop: dict) -> list[dict]:
+def protected_history(cur, agency_id: int, prop: dict, ctx=None) -> list[dict]:
     """REVIEW 2 - lo STORICO OPERATIVO REALE dell'immobile: per un agent
     richiede owner/admin (403 HISTORY_REQUIRES_ADMIN), per owner/admin non
     blocca. I processi APERTI restano i blocchi assoluti di `trash_blockers`;
@@ -584,9 +587,14 @@ def protected_history(cur, agency_id: int, prop: dict) -> list[dict]:
           "SELECT l.id FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
           "WHERE l.agency_id = %s AND pl.property_id = %s AND pl.relation_type = 'seller' AND l.pipeline = 'sell' "
           "AND l.status = 'closed' AND l.lost_reason IS DISTINCT FROM 'created_by_mistake'", (agency_id, pid))
-    # I messaggi del ledger delle comunicazioni NON si leggono da qui: il ledger
-    # ha una via sola, `communication/` (sentinella P29-2.1 n4), che oggi non
-    # espone una lettura per immobile. Lasciato a 2B2.
+    # DELETE-ARCH 2B2: il ledger delle comunicazioni si interroga SOLO dalla
+    # sua funzione pubblica (sentinella P29-2.1 n4: nessuna tabella privata
+    # nominata qui), con lo scope dell'agenzia di chi chiede.
+    if ctx is not None:
+        from communication import repository as _communication
+        if _communication.property_has_message_history(cur, ctx, pid):
+            voci.append({"code": "COMMUNICATION_HISTORY", "label": "Messaggi inviati o ricevuti sull'immobile",
+                         "count": 1})
     conta("OWNER_PORTAL_HISTORY", "Accessi, pubblicazioni o riscontri del portale proprietario",
           "SELECT id FROM owner_property_access WHERE property_id = %s "
           "UNION ALL SELECT id FROM owner_publications WHERE property_id = %s "
@@ -617,7 +625,7 @@ def deletion_check(ctx, property_id: int) -> dict:
         else:
             blocchi = trash_blockers(cur, agency_id, prop)
             if not blocchi and _agente_senza_privilegi(ctx):
-                storia = protected_history(cur, agency_id, prop)
+                storia = protected_history(cur, agency_id, prop, ctx)
                 if storia:
                     blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE,
                                 "items": storia}]
@@ -639,7 +647,7 @@ def trash_property(ctx, property_id: int, reason_code, note=None) -> dict:
         # REVIEW 2: un agent non manda nel Cestino un immobile con storico
         # operativo reale; owner/admin si'. Ricalcolato sulla riga bloccata.
         if _agente_senza_privilegi(ctx):
-            storia = protected_history(cur, agency_id, prop)
+            storia = protected_history(cur, agency_id, prop, ctx)
             if storia:
                 raise _StoricoRichiedeAdmin(HISTORY_REQUIRES_ADMIN_MESSAGE, history=storia)
         cur.execute("UPDATE properties SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "

@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.database import core_cursor
+from core import property_trash as _property_trash
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from seller_intelligence import repository as si_repository
 
@@ -187,11 +188,15 @@ def record_mandate(agency_id, *, acquisition_id, signed_at, reference, actor_use
     Un mandato gia' registrato non si sovrascrive in silenzio: il predicato
     esige `mandate_signed_at IS NULL`, e il chiamante distingue "non trovato"
     da "gia' registrato" rileggendo la riga.
+
+    DELETE-ARCH Fase 2B2: un immobile nel Cestino non riceve un incarico
+    nuovo: la riga non si aggiorna e `_rifiuto_mandato` risponde 409
+    PROPERTY_IN_TRASH.
     """
     with core_cursor(commit=True) as (_, cur):
         _blocca_stima_dell_acquisizione(cur, agency_id, acquisition_id)
         cur.execute(
-            """
+            f"""
             UPDATE stima_acquisitions a
                SET mandate_signed_at = %s,
                    mandate_recorded_at = NOW(),
@@ -206,6 +211,7 @@ def record_mandate(agency_id, *, acquisition_id, signed_at, reference, actor_use
                AND s.id = a.stima_id
                AND s.agency_id = %s
                AND p.agency_id = s.agency_id
+               AND {_property_trash.live('p')}
             RETURNING a.*
             """,
             (signed_at, actor_user_id, reference, acquisition_id, agency_id),
@@ -225,7 +231,8 @@ def record_mandate(agency_id, *, acquisition_id, signed_at, reference, actor_use
 def _rifiuto_mandato(cur, agency_id, acquisition_id):
     """Perche' l'UPDATE non ha trovato niente. Solleva sempre."""
     cur.execute(
-        """SELECT a.link_status, a.mandate_signed_at
+        f"""SELECT a.link_status, a.mandate_signed_at,
+                  {_property_trash.deleted_at_sql('p')} AS property_deleted_at
              FROM stima_acquisitions a
              JOIN properties p ON p.id = a.property_id
             WHERE a.id = %s AND p.agency_id = %s""",
@@ -234,6 +241,8 @@ def _rifiuto_mandato(cur, agency_id, acquisition_id):
     r = cur.fetchone()
     if r is None:
         raise NotFoundError("Risorsa non trovata")
+    if r.get("property_deleted_at") is not None:
+        raise _property_trash.PropertyInTrash()
     if r["mandate_signed_at"] is not None:
         raise ConflictError("Incarico gia' registrato su questo collegamento")
     raise ConflictError("Collegamento revocato: nessun incarico registrabile")

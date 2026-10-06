@@ -2,6 +2,7 @@ from fastapi import APIRouter,Depends,HTTPException,Query,Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
+from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -11,6 +12,7 @@ router=APIRouter(prefix='/api/buy',tags=['buy'])
 def tr(fn,*a,**k):
     try:return fn(*a,**k)
     except NotFoundError as e:raise HTTPException(404,str(e))
+    except PropertyInTrash as e:return trash_409(e)      # DELETE-ARCH 2B2: {detail, code}
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))

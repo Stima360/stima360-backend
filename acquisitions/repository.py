@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 
 from core.scope import scoped_source
+from core.property_trash import PropertyInTrash
 
 #: Le colonne di `acquisitions` restituite al chiamante.
 COLUMNS = (
@@ -57,11 +58,19 @@ def lock_property(cur, agency_id: int, property_id: int):
         # statement resta eseguibile anche dove la 083 non e' applicata (NULL):
         # la guardia del censimento scatta solo quando la colonna c'e'.
         "SELECT id, agency_id, code, title, commercial_status, acquisition_id, archived_at, "
-        "       asking_price, assigned_agent_id, to_jsonb(properties) ->> 'record_kind' AS record_kind "
+        "       asking_price, assigned_agent_id, to_jsonb(properties) ->> 'record_kind' AS record_kind, "
+        "       to_jsonb(properties) ->> 'deleted_at' AS deleted_at "
         "  FROM properties WHERE id = %s AND agency_id = %s FOR UPDATE",
         (property_id, agency_id))
     r = cur.fetchone()
-    return None if r is None else dict(r)
+    if r is None:
+        return None
+    r = dict(r)
+    # DELETE-ARCH Fase 2B2: nessuna acquisizione (ne' incarico) su un immobile
+    # nel Cestino: 409 PROPERTY_IN_TRASH (la 086 lo ripete nel database).
+    if r.pop("deleted_at") is not None:
+        raise PropertyInTrash()
+    return r
 
 
 def property_owners(cur, agency_id: int, property_id: int, roles) -> list[dict]:
@@ -247,6 +256,7 @@ _ELENCO_SQL = f"""
            GREATEST(a.updated_at, COALESCE(ev.last_at, a.updated_at)) AS last_activity_at
       FROM acquisitions a
       JOIN properties p        ON p.id = a.property_id AND p.agency_id = a.agency_id
+                              AND (to_jsonb(p)->>'deleted_at') IS NULL   -- DELETE-ARCH 2B2
       JOIN contacts c          ON c.id = a.owner_contact_id AND c.agency_id = a.agency_id
       JOIN operator_users u    ON u.id = a.assigned_agent_id
       JOIN appointments ap     ON ap.id = a.appointment_id AND ap.agency_id = a.agency_id
@@ -299,7 +309,8 @@ def property_summary(cur, agency_id: int, property_id: int):
         "SELECT id, code, title, address, civic_number, city, province, microzone, "
         "       property_type, commercial_status, acquisition_id, asking_price, "
         "       mandate_type, mandate_start, mandate_end "
-        "  FROM properties WHERE id = %s AND agency_id = %s",
+        "  FROM properties WHERE id = %s AND agency_id = %s "
+        "   AND (to_jsonb(properties)->>'deleted_at') IS NULL",   # DELETE-ARCH 2B2
         (property_id, agency_id))
     r = cur.fetchone()
     return None if r is None else dict(r)

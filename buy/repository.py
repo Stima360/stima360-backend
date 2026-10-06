@@ -4,6 +4,7 @@ from datetime import date, datetime
 from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
+from core import property_trash as _property_trash
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 
 RELEVANT_FIELDS={'budget_min','budget_target','budget_max','budget_flexibility_percent','includes_agency_fees','includes_renovation','finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','surface_min','surface_target','surface_max','rooms_min','bedrooms_min','bathrooms_min','status','urgency','target_purchase_date'}
@@ -124,7 +125,7 @@ def list_matches(request_id):
         cur.execute("""SELECT m.*,COALESCE(m.manual_score,m.score_total) effective_score,p.title property_title,p.code property_code,p.city,p.microzone,p.asking_price,p.classification,p.commercial_status property_status,
         (SELECT i.interaction_type FROM buy_request_interactions i WHERE i.buy_request_id=m.buy_request_id AND i.match_id=m.id ORDER BY i.occurred_at DESC,i.id DESC LIMIT 1) last_interaction,
         (SELECT i.reason_code FROM buy_request_interactions i WHERE i.buy_request_id=m.buy_request_id AND i.match_id=m.id ORDER BY i.occurred_at DESC,i.id DESC LIMIT 1) last_reason
-        FROM matches m JOIN properties p ON p.id=m.property_id WHERE m.buy_request_id=%s AND m.archived_at IS NULL ORDER BY effective_score DESC,m.updated_at DESC""",(request_id,))
+        FROM matches m JOIN properties p ON p.id=m.property_id WHERE m.buy_request_id=%s AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL ORDER BY effective_score DESC,m.updated_at DESC""",(request_id,))
         return [dict(x) for x in cur.fetchall()]
 
 def add_interaction(request_id,data):
@@ -222,8 +223,8 @@ def add_note(request_id,description,created_by=None):
 def workflow(request_id):
     data=get_request(request_id)
     with core_cursor() as (_,cur):
-        cur.execute("""SELECT i.*,p.title property_title,p.code property_code FROM buy_request_interactions i LEFT JOIN properties p ON p.id=i.property_id WHERE i.buy_request_id=%s ORDER BY i.occurred_at DESC,i.id DESC""",(request_id,));data['interactions']=[dict(x) for x in cur.fetchall()]
-        cur.execute("""SELECT h.*,p.title property_title,t.title task_title FROM buy_request_history h LEFT JOIN properties p ON p.id=h.property_id LEFT JOIN tasks t ON t.id=h.task_id WHERE h.buy_request_id=%s ORDER BY h.created_at DESC,h.id DESC LIMIT 200""",(request_id,));data['history']=[dict(x) for x in cur.fetchall()]
+        cur.execute("""SELECT i.*,p.title property_title,p.code property_code FROM buy_request_interactions i LEFT JOIN properties p ON p.id=i.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL WHERE i.buy_request_id=%s ORDER BY i.occurred_at DESC,i.id DESC""",(request_id,));data['interactions']=[dict(x) for x in cur.fetchall()]
+        cur.execute("""SELECT h.*,p.title property_title,t.title task_title FROM buy_request_history h LEFT JOIN properties p ON p.id=h.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL LEFT JOIN tasks t ON t.id=h.task_id WHERE h.buy_request_id=%s ORDER BY h.created_at DESC,h.id DESC LIMIT 200""",(request_id,));data['history']=[dict(x) for x in cur.fetchall()]
     data['matches']=list_matches(request_id);data['tasks']=list_tasks(request_id);return data
 
 def dashboard():
@@ -265,6 +266,10 @@ def _ensure_agency_row(cur, table, item_id, agency_id, label):
     )
     if not cur.fetchone():
         raise NotFoundError(f"{label} {item_id} not found")
+    if table == "properties":
+        # DELETE-ARCH Fase 2B2: nessun nuovo riferimento verso un immobile nel
+        # Cestino (409 PROPERTY_IN_TRASH; la 086 lo ripete nel database).
+        _property_trash.refuse_if_in_trash(cur, item_id)
 
 
 def _ensure_buy(cur, request_id, agency_id, *, for_update=False):
@@ -283,7 +288,8 @@ def _ensure_match(cur, request_id, match_id, agency_id, *, for_update=False):
     suffix = " FOR UPDATE OF m" if for_update else ""
     cur.execute(
         f"""
-        SELECT m.*, p.agency_id AS property_agency_id
+        SELECT m.*, p.agency_id AS property_agency_id,
+               (to_jsonb(p)->>'deleted_at') AS property_deleted_at
         FROM matches m
         JOIN properties p ON p.id=m.property_id
         WHERE m.id=%s
@@ -296,7 +302,12 @@ def _ensure_match(cur, request_id, match_id, agency_id, *, for_update=False):
     result = cur.fetchone()
     if not result:
         raise NotFoundError(f"match {match_id} not found")
-    return dict(result)
+    result = dict(result)
+    # DELETE-ARCH Fase 2B2: ogni uso e' una scrittura (storico, interazione,
+    # visita) -> nessun nuovo riferimento verso un immobile nel Cestino.
+    if result.pop("property_deleted_at") is not None:
+        raise _property_trash.PropertyInTrash()
+    return result
 
 
 _legacy_history = history
@@ -415,11 +426,13 @@ def list_requests_scoped(
               (SELECT COUNT(*) FROM matches m
                 JOIN properties mp ON mp.id=m.property_id
                WHERE m.buy_request_id=b.id AND m.archived_at IS NULL
-                 AND mp.agency_id=b.agency_id) matches_count,
+                 AND mp.agency_id=b.agency_id
+                 AND (to_jsonb(mp)->>'deleted_at') IS NULL) matches_count,
               (SELECT COUNT(*) FROM matches m
                 JOIN properties mp ON mp.id=m.property_id
                WHERE m.buy_request_id=b.id AND m.archived_at IS NULL
                  AND mp.agency_id=b.agency_id
+                 AND (to_jsonb(mp)->>'deleted_at') IS NULL
                  AND m.match_class IN ('excellent','strong')) strong_matches_count,
               (SELECT COUNT(*) FROM buy_request_task_links lnk
                 JOIN tasks t ON t.id=lnk.task_id
@@ -680,6 +693,7 @@ def list_matches_scoped(ctx, request_id):
             WHERE m.buy_request_id=%s
               AND p.agency_id=%s
               AND m.archived_at IS NULL
+              AND (to_jsonb(p)->>'deleted_at') IS NULL
             ORDER BY effective_score DESC,m.updated_at DESC
             """,
             (request_id, agency_id),
@@ -931,6 +945,7 @@ def update_interaction_scoped(ctx, interaction_id, data):
             visit = cur.fetchone()
             if not visit:
                 raise NotFoundError(f"property visit {data['property_visit_id']} not found")
+            _property_trash.refuse_if_in_trash(cur, visit["property_id"])   # DELETE-ARCH 2B2
             if visit["property_id"] != current["property_id"]:
                 raise ValidationError("property visit does not belong to interaction property")
 
@@ -1074,6 +1089,7 @@ def workflow_scoped(ctx, request_id):
             FROM buy_request_interactions i
             LEFT JOIN properties p
               ON p.id=i.property_id AND p.agency_id=%s
+             AND (to_jsonb(p)->>'deleted_at') IS NULL
             WHERE i.buy_request_id=%s
               AND (i.property_id IS NULL OR p.id IS NOT NULL)
             ORDER BY i.occurred_at DESC,i.id DESC
@@ -1087,6 +1103,7 @@ def workflow_scoped(ctx, request_id):
             FROM buy_request_history h
             LEFT JOIN properties p
               ON p.id=h.property_id AND p.agency_id=%s
+             AND (to_jsonb(p)->>'deleted_at') IS NULL
             LEFT JOIN tasks t
               ON t.id=h.task_id AND t.agency_id=%s
             WHERE h.buy_request_id=%s

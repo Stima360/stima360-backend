@@ -500,7 +500,8 @@ def test_N4_nessuna_migration_nuova():
     # qualunque ALTRA migration farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili: properties.deleted_*,
     # record_lifecycle_events), additiva, e' ora l'ultima; la catena si allunga di uno.
-    assert numeri[-1] == 85 and numeri[-2] == 84 and numeri[-3] == 83 and numeri[-4] == 82 and numeri[-5] == 81 and numeri[-6] == 80 and numeri[-7] == 79 and numeri[-8] == 78 and numeri[-9] == 77 and numeri[-10] == 76, "la serie si e' fermata o e' andata oltre la 085"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 (guardie del Cestino Immobili), additiva, e' ora l'ultima.
+    assert numeri[-1] == 86 and numeri[-2] == 85 and numeri[-3] == 84 and numeri[-4] == 83 and numeri[-5] == 82 and numeri[-6] == 81 and numeri[-7] == 80 and numeri[-8] == 79 and numeri[-9] == 78 and numeri[-10] == 77 and numeri[-11] == 76, "la serie si e' fermata o e' andata oltre la 086"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

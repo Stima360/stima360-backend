@@ -211,6 +211,7 @@ def count_internal_supply(cur: Any, comune: str, microzona: str) -> int:
         WHERE city = %s
           AND microzone = %s
           AND archived_at IS NULL
+          AND (to_jsonb(properties)->>'deleted_at') IS NULL
           AND commercial_status IN (%s, %s, %s, %s)
         """,
         (comune, microzona, *ACTIVE_PROPERTY_STATUSES),
@@ -994,6 +995,7 @@ def count_internal_supply_for_agency(
           AND microzone = %s
           AND agency_id = %s
           AND archived_at IS NULL
+          AND (to_jsonb(properties)->>'deleted_at') IS NULL
           AND commercial_status IN (%s, %s, %s, %s)
         """,
         (comune, microzona, agency_id, *ACTIVE_PROPERTY_STATUSES),

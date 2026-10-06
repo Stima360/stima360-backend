@@ -37,7 +37,7 @@ def _sale(cur, sale_id: int, *, lock: bool = False):
             b.title AS buy_title,b.contact_id,
             pr.amount AS proposal_amount,pr.status AS proposal_status
             FROM property_sales ps
-            JOIN properties p ON p.id=ps.property_id
+            JOIN properties p ON p.id=ps.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
             JOIN buy_requests b ON b.id=ps.buy_request_id
             JOIN property_proposals pr ON pr.id=ps.proposal_id
             WHERE ps.id=%s{suffix}""",
@@ -208,7 +208,7 @@ def list_sales(
                 b.title AS buy_title,b.contact_id,
                 pr.amount AS proposal_amount,pr.status AS proposal_status
                 FROM property_sales ps
-                JOIN properties p ON p.id=ps.property_id
+                JOIN properties p ON p.id=ps.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                 JOIN buy_requests b ON b.id=ps.buy_request_id
                 JOIN property_proposals pr ON pr.id=ps.proposal_id
                 WHERE {' AND '.join(filters)}
@@ -375,7 +375,7 @@ def cancel_sale(sale_id: int, actor: str):
 # ---------------------------------------------------------------------------
 
 _SALE_JOIN = """
-            JOIN properties p ON p.id=ps.property_id
+            JOIN properties p ON p.id=ps.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
             JOIN buy_requests b ON b.id=ps.buy_request_id
             JOIN property_proposals pr ON pr.id=ps.proposal_id
 """

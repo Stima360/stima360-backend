@@ -56,6 +56,8 @@ from core import repository as core_repository
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
+from core import property_trash as _property_trash
+
 from . import repository
 from .catalog import generated_title, validate_cadastral_category, validate_location
 
@@ -289,7 +291,10 @@ def _replica_in(cur, tabella, agency_id, chiave, impronta, *, property_id=None):
         cur.execute("SELECT * FROM property_accessories WHERE property_id = %s AND client_request_id = %s",
                     (property_id, str(chiave)))
     else:
-        cur.execute(f"SELECT * FROM {tabella} WHERE agency_id = %s AND client_request_id = %s",
+        # DELETE-ARCH 2B2: un immobile nel Cestino non e' la replica di nessuna
+        # richiesta (la sua client_request_id e' libera dalla 085).
+        filtro = f" AND {_property_trash.live(tabella)}" if tabella == "properties" else ""
+        cur.execute(f"SELECT * FROM {tabella} WHERE agency_id = %s AND client_request_id = %s{filtro}",
                     (agency_id, str(chiave)))
     riga = repository.row(cur.fetchone())
     if riga is None:
@@ -340,6 +345,12 @@ def _unita(cur, agency_id, property_id, *, lock=False, archiviata_ok=False):
     riga = repository.row(cur.fetchone())
     if riga is None:
         raise NotFoundError(f"property {property_id} not found")
+    if riga.get("deleted_at") is not None:
+        # DELETE-ARCH 2B2: un'unita' nel Cestino non si legge (404) e non si
+        # modifica (409 PROPERTY_IN_TRASH) dal censimento.
+        if lock:
+            raise _property_trash.PropertyInTrash()
+        raise NotFoundError(f"property {property_id} not found")
     return riga
 
 
@@ -360,9 +371,9 @@ def _contatori_edificio(cur, building_id) -> dict:
                count(*) FILTER (WHERE address_inherited) AS units_address_inherited,
                count(*) FILTER (WHERE NOT address_inherited) AS units_address_custom,
                (SELECT count(*) FROM property_accessories a JOIN properties u ON u.id = a.property_id
-                 WHERE u.building_id = p.building_id AND u.archived_at IS NULL
+                 WHERE u.building_id = p.building_id AND u.archived_at IS NULL AND (to_jsonb(u)->>'deleted_at') IS NULL
                    AND a.cadastral_status = 'unknown') AS accessories_unknown
-          FROM properties p WHERE p.building_id = %s AND p.archived_at IS NULL
+          FROM properties p WHERE p.building_id = %s AND p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
          GROUP BY p.building_id""", (building_id,))
     riga = cur.fetchone()
     if riga is None:
@@ -385,7 +396,7 @@ def _unita_dell_edificio(cur, building_id) -> list[dict]:
         SELECT {_UNITA_COLONNE},
                (SELECT count(*) FROM property_accessories a WHERE a.property_id = p.id
                    AND a.cadastral_status = 'unknown') AS accessories_unknown
-          FROM properties p WHERE p.building_id = %s AND p.archived_at IS NULL
+          FROM properties p WHERE p.building_id = %s AND p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
          ORDER BY CASE WHEN p.floor ~ '^-?[0-9]+$' THEN p.floor::int END NULLS LAST,
                   p.floor NULLS LAST, p.staircase NULLS FIRST,
                   CASE WHEN p.internal_number ~ '^[0-9]+$' THEN p.internal_number::int END NULLS LAST,
@@ -430,7 +441,7 @@ def _unita_ereditate(cur, building_id) -> list[dict]:
     personalizzata nel frattempo non e' piu' nell'insieme (READ COMMITTED
     rivaluta il predicato dopo l'attesa)."""
     cur.execute("SELECT id, title, property_type, city, microzone, address, civic_number "
-                "FROM properties WHERE building_id = %s AND address_inherited AND archived_at IS NULL "
+                "FROM properties WHERE building_id = %s AND address_inherited AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL "
                 "ORDER BY id FOR UPDATE", (building_id,))
     return [dict(r) for r in cur.fetchall()]
 
@@ -450,9 +461,9 @@ def list_buildings(ctx, *, search=None, city=None, limit=50, offset=0) -> dict:
             params.append(city)
         cur.execute(f"""
             SELECT b.*,
-                   (SELECT count(*) FROM properties p WHERE p.building_id = b.id AND p.archived_at IS NULL) AS units_census,
+                   (SELECT count(*) FROM properties p WHERE p.building_id = b.id AND p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL) AS units_census,
                    (SELECT count(*) FROM property_accessories a JOIN properties u ON u.id = a.property_id
-                     WHERE u.building_id = b.id AND u.archived_at IS NULL AND a.cadastral_status = 'unknown') AS accessories_unknown
+                     WHERE u.building_id = b.id AND u.archived_at IS NULL AND (to_jsonb(u)->>'deleted_at') IS NULL AND a.cadastral_status = 'unknown') AS accessories_unknown
               FROM buildings b WHERE {' AND '.join(condizioni)}
              ORDER BY b.updated_at DESC, b.id DESC LIMIT %s OFFSET %s""", params + [limit, offset])
         return {"items": [dict(r) for r in cur.fetchall()]}
@@ -534,7 +545,7 @@ def update_building(ctx, building_id: int, body) -> dict:
                                     [dopo.get(k) for k in _INDIRIZZO] + [titolo, u["id"]])
                         propagate += 1
                     cur.execute("SELECT count(*) AS n FROM properties WHERE building_id = %s AND NOT address_inherited "
-                                "AND archived_at IS NULL", (building_id,))
+                                "AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL", (building_id,))
                     custom = int(cur.fetchone()["n"])
             else:
                 dopo = prima
@@ -557,7 +568,9 @@ def _duplicato_catastale(cur, agency_id, data, escluso=None):
     """L'identita' catastale COMPLETA gia' censita: il solo blocco vero."""
     if not _identita_completa(data):
         return None
+    # DELETE-ARCH 2B2: un immobile nel Cestino non occupa l'identita' (indice 085)
     cur.execute("SELECT id, code, title FROM properties WHERE agency_id = %s AND id IS DISTINCT FROM %s "
+                "AND (to_jsonb(properties)->>'deleted_at') IS NULL "
                 "AND cadastral_municipality_code = %s AND cadastral_section = %s AND cadastral_sheet = %s "
                 "AND cadastral_parcel = %s AND cadastral_subunit = %s LIMIT 1",
                 (agency_id, escluso, _norm(data["cadastral_municipality_code"]), _norm(data["cadastral_section"]),
@@ -571,7 +584,7 @@ def _simili_unita(cur, agency_id, data, escluso=None) -> list[dict]:
     simili = []
     if data.get("building_id") and (data.get("floor") or data.get("internal_number")):
         cur.execute("SELECT id, code, title, floor, staircase, internal_number FROM properties "
-                    "WHERE agency_id = %s AND building_id = %s AND archived_at IS NULL AND id IS DISTINCT FROM %s "
+                    "WHERE agency_id = %s AND building_id = %s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL AND id IS DISTINCT FROM %s "
                     "AND coalesce(upper(btrim(staircase)), '') = coalesce(upper(btrim(%s)), '') "
                     "AND coalesce(upper(btrim(floor)), '') = coalesce(upper(btrim(%s)), '') "
                     "AND coalesce(upper(btrim(internal_number)), '') = coalesce(upper(btrim(%s)), '') ORDER BY id LIMIT 10",
@@ -582,6 +595,7 @@ def _simili_unita(cur, agency_id, data, escluso=None) -> list[dict]:
             _norm(data.get(k)) not in (None, "") for k in
             ("cadastral_municipality_code", "cadastral_sheet", "cadastral_parcel", "cadastral_subunit")):
         cur.execute("SELECT id, code, title, cadastral_section FROM properties WHERE agency_id = %s AND id IS DISTINCT FROM %s "
+                    "AND (to_jsonb(properties)->>'deleted_at') IS NULL "
                     "AND cadastral_municipality_code = %s AND cadastral_sheet = %s AND cadastral_parcel = %s "
                     "AND cadastral_subunit = %s ORDER BY id LIMIT 10",
                     (agency_id, escluso, _norm(data["cadastral_municipality_code"]), _norm(data["cadastral_sheet"]),
@@ -667,7 +681,8 @@ def create_unit(ctx, body) -> dict:
 
     def leggi_replica():
         with core_cursor() as (_, cur):
-            cur.execute("SELECT * FROM properties WHERE agency_id = %s AND client_request_id = %s", (agency_id, str(chiave)))
+            cur.execute("SELECT * FROM properties WHERE agency_id = %s AND client_request_id = %s "
+                        "AND (to_jsonb(properties)->>'deleted_at') IS NULL", (agency_id, str(chiave)))
             return repository.row(cur.fetchone())
 
     return _con_replica(ctx, chiave, leggi_replica, operazione, impronta)
@@ -686,10 +701,11 @@ def get_census(ctx, property_id: int) -> dict:
                         (unita["building_id"],))
             edificio = repository.row(cur.fetchone())
         if unita.get("parent_property_id") is not None:
-            cur.execute("SELECT id, code, title, property_type, record_kind, commercial_status, archived_at FROM properties WHERE id = %s",
+            cur.execute("SELECT id, code, title, property_type, record_kind, commercial_status, archived_at FROM properties WHERE id = %s "
+                        "AND (to_jsonb(properties)->>'deleted_at') IS NULL",
                         (unita["parent_property_id"],))
             genitore = repository.row(cur.fetchone())
-        cur.execute(f"SELECT {_UNITA_COLONNE} FROM properties p WHERE parent_property_id = %s AND archived_at IS NULL ORDER BY id",
+        cur.execute(f"SELECT {_UNITA_COLONNE} FROM properties p WHERE parent_property_id = %s AND archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL ORDER BY id",
                     (property_id,))
         pertinenze = [dict(r) for r in cur.fetchall()]
         cur.execute("SELECT * FROM property_accessories WHERE property_id = %s ORDER BY id", (property_id,))
@@ -721,7 +737,7 @@ def link_pertinenza(ctx, property_id: int, body) -> dict:
             if figlia.get("parent_property_id") is not None:
                 raise CensusConflict(f"{_etichetta(figlia)} e' gia' pertinenza di un'altra unita': scollegala prima",
                                      "ALREADY_LINKED")
-            cur.execute("SELECT 1 FROM properties WHERE parent_property_id = %s AND archived_at IS NULL LIMIT 1", (pertinenza_id,))
+            cur.execute("SELECT 1 FROM properties WHERE parent_property_id = %s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL LIMIT 1", (pertinenza_id,))
             if cur.fetchone():
                 raise CensusInvalid("L'immobile ha pertinenze collegate: non puo' diventare una pertinenza", "LINK_INVALID")
             cur.execute("UPDATE properties SET parent_property_id = %s, updated_at = NOW() WHERE id = %s RETURNING *",
@@ -735,11 +751,16 @@ def link_pertinenza(ctx, property_id: int, body) -> dict:
 
 
 def _scollega(ctx, cur, genitore, figlia, motivo: str) -> dict:
-    """Azzera la relazione corrente e scrive lo storico su entrambe."""
+    """Azzera la relazione corrente e scrive lo storico su entrambe.
+
+    DELETE-ARCH 2B2 (REVIEW 1): un genitore nel Cestino e' congelato e non
+    riceve attivita' nuove; lo storico dello scollegamento resta sulla
+    pertinenza, che e' viva."""
     cur.execute("UPDATE properties SET parent_property_id = NULL, updated_at = NOW() WHERE id = %s RETURNING *", (figlia["id"],))
     aggiornata = repository.row(cur.fetchone())
-    _attivita_sistema(ctx, cur, genitore["id"], f"Pertinenza {_etichetta(figlia)} scollegata: {motivo}",
-                      pertinenza_id=figlia["id"], reason=motivo)
+    if genitore.get("deleted_at") is None:
+        _attivita_sistema(ctx, cur, genitore["id"], f"Pertinenza {_etichetta(figlia)} scollegata: {motivo}",
+                          pertinenza_id=figlia["id"], reason=motivo)
     _attivita_sistema(ctx, cur, figlia["id"], f"Scollegata da {_etichetta(genitore)}: {motivo}",
                       parent_id=genitore["id"], reason=motivo)
     return aggiornata
@@ -766,7 +787,10 @@ def detach_on_close(ctx, cur, riga: dict, nuovo_stato: str) -> None:
     archiviata (§0 p.6): la relazione corrente non mente mai."""
     if riga.get("parent_property_id") is None:
         return
-    cur.execute("SELECT id, code FROM properties WHERE id = %s", (riga["parent_property_id"],))
+    # Anche un genitore nel Cestino: la pertinenza viva si scollega comunque
+    # (DELETE-ARCH 2B2, REVIEW 1), senza scrivere sul genitore congelato.
+    cur.execute(f"SELECT id, code, {_property_trash.deleted_at_sql('properties')} AS deleted_at "
+                "FROM properties WHERE id = %s", (riga["parent_property_id"],))
     genitore = repository.row(cur.fetchone())
     if genitore is None:
         return
@@ -796,7 +820,7 @@ def take_in_charge(ctx, property_id: int, body) -> dict:
             prese = []
             if body.include_pertinenze:
                 cur.execute("SELECT id, code FROM properties WHERE parent_property_id = %s AND record_kind = 'census' "
-                            "AND archived_at IS NULL ORDER BY id FOR UPDATE", (property_id,))
+                            "AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL ORDER BY id FOR UPDATE", (property_id,))
                 for figlia in [dict(r) for r in cur.fetchall()]:
                     cur.execute("UPDATE properties SET record_kind = 'crm', updated_at = NOW() WHERE id = %s", (figlia["id"],))
                     _attivita_sistema(ctx, cur, figlia["id"], f"Presa in carico insieme a {_etichetta(aggiornata)}",
@@ -992,7 +1016,7 @@ def resolve_accessory(ctx, property_id: int, accessory_id: int, body) -> dict:
                 if figlia.get("parent_property_id") not in (None, property_id):
                     raise CensusConflict(f"{_etichetta(figlia)} e' gia' pertinenza di un'altra unita': scollegala prima",
                                          "ALREADY_LINKED")
-                cur.execute("SELECT 1 FROM properties WHERE parent_property_id = %s AND archived_at IS NULL LIMIT 1", (figlia["id"],))
+                cur.execute("SELECT 1 FROM properties WHERE parent_property_id = %s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL LIMIT 1", (figlia["id"],))
                 if cur.fetchone():
                     raise CensusInvalid("L'immobile ha pertinenze collegate: non puo' diventare una pertinenza", "LINK_INVALID")
                 note = "\n".join(x for x in (figlia.get("internal_notes"), accessorio.get("notes")) if x) or None
@@ -1020,7 +1044,8 @@ def resolve_accessory(ctx, property_id: int, accessory_id: int, body) -> dict:
     def leggi_replica():
         with core_cursor() as (_, cur):
             _unita(cur, agency_id, property_id)                                 # autorizzazione anche qui
-            cur.execute("SELECT * FROM properties WHERE agency_id = %s AND client_request_id = %s", (agency_id, str(chiave)))
+            cur.execute("SELECT * FROM properties WHERE agency_id = %s AND client_request_id = %s "
+                        "AND (to_jsonb(properties)->>'deleted_at') IS NULL", (agency_id, str(chiave)))
             riga = repository.row(cur.fetchone())
             return None if riga is None else {"accessory": None, "pertinenza": riga,
                                               "client_request_fingerprint": riga["client_request_fingerprint"]}

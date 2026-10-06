@@ -45,7 +45,7 @@ def _buy(cur, request_id):
 
 
 def _property(cur, property_id):
-    cur.execute("SELECT * FROM properties WHERE id=%s AND archived_at IS NULL", (property_id,))
+    cur.execute("SELECT * FROM properties WHERE id=%s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL", (property_id,))
     row = cur.fetchone()
     if not row:
         raise NotFoundError(f"property {property_id} not found")
@@ -72,7 +72,7 @@ def _buy_for_readiness(cur, request_id):
 
 
 def _property_for_readiness(cur, property_id):
-    cur.execute("SELECT * FROM properties WHERE id=%s", (property_id,))
+    cur.execute("SELECT * FROM properties WHERE id=%s AND (to_jsonb(properties)->>'deleted_at') IS NULL", (property_id,))
     row = cur.fetchone()
     if not row:
         raise NotFoundError(f"property {property_id} not found")
@@ -225,7 +225,7 @@ def calculate_for_buy(request_id, created_by=None):
         buy = _buy(cur, request_id)
         require_ready(buy=buy)
         cur.execute(
-            "SELECT id FROM properties WHERE archived_at IS NULL AND commercial_status=ANY(%s) ORDER BY id",
+            "SELECT id FROM properties WHERE archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL AND commercial_status=ANY(%s) ORDER BY id",
             (list(ACTIVE_PROPERTY_STATUSES),),
         )
         ids = [x["id"] for x in cur.fetchall()]
@@ -300,7 +300,7 @@ def list_matches(
                 FROM matches m
                 JOIN buy_requests b ON b.id=m.buy_request_id
                 JOIN contacts c ON c.id=b.contact_id
-                JOIN properties p ON p.id=m.property_id
+                JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                 WHERE {' AND '.join(filters)}
                 ORDER BY effective_score DESC,m.updated_at DESC LIMIT %s OFFSET %s""",
             params,
@@ -318,7 +318,7 @@ def get_match(match_id):
                 FROM matches m
                 JOIN buy_requests b ON b.id=m.buy_request_id
                 JOIN contacts c ON c.id=b.contact_id
-                JOIN properties p ON p.id=m.property_id
+                JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                 WHERE m.id=%s""",
             (match_id,),
         )
@@ -418,7 +418,7 @@ def list_exclusions():
             """SELECT e.*,b.title AS buy_title,p.title AS property_title
                FROM match_exclusions e
                JOIN buy_requests b ON b.id=e.buy_request_id
-               JOIN properties p ON p.id=e.property_id
+               JOIN properties p ON p.id=e.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                ORDER BY e.created_at DESC"""
         )
         return [dict(x) for x in cur.fetchall()]
@@ -694,7 +694,7 @@ def dashboard():
                 COUNT(*) FILTER(WHERE match_class='excellent') AS excellent,
                 COUNT(*) FILTER(WHERE match_class='incompatible') AS incompatible,
                 COALESCE(AVG(score_total),0) AS average_score
-                FROM matches WHERE archived_at IS NULL"""
+                FROM matches m WHERE m.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM properties p WHERE p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NOT NULL)"""
         )
         result = dict(cur.fetchone())
         cur.execute(
@@ -703,7 +703,7 @@ def dashboard():
                 m.freshness_status,m.review_required
                 FROM matches m
                 JOIN buy_requests b ON b.id=m.buy_request_id
-                JOIN properties p ON p.id=m.property_id
+                JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                 WHERE m.archived_at IS NULL
                 ORDER BY COALESCE(m.manual_score,m.score_total) DESC LIMIT 10"""
         )
@@ -711,7 +711,7 @@ def dashboard():
         cur.execute(
             """SELECT m.id,b.title AS buy_title,p.title AS property_title,m.stale_since,m.stale_reason
                FROM matches m JOIN buy_requests b ON b.id=m.buy_request_id
-               JOIN properties p ON p.id=m.property_id
+               JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE m.archived_at IS NULL AND m.freshness_status='stale'
                ORDER BY m.stale_since ASC NULLS FIRST LIMIT 10"""
         )
@@ -719,14 +719,14 @@ def dashboard():
         cur.execute(
             """SELECT m.id,b.title AS buy_title,p.title AS property_title,m.last_failed_run_at,m.recalculation_error
                FROM matches m JOIN buy_requests b ON b.id=m.buy_request_id
-               JOIN properties p ON p.id=m.property_id
+               JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE m.archived_at IS NULL AND m.freshness_status='failed'
                ORDER BY m.last_failed_run_at DESC NULLS LAST LIMIT 10"""
         )
         result["error_items"] = [dict(x) for x in cur.fetchall()]
         cur.execute(
             """SELECT COUNT(*) AS count FROM matches m
-               WHERE m.archived_at IS NULL AND m.match_class IN ('excellent','strong')
+               WHERE m.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM properties p WHERE p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NOT NULL) AND m.match_class IN ('excellent','strong')
                  AND m.commercial_status IN ('new','to_review','approved')"""
         )
         result["strong_not_proposed"] = cur.fetchone()["count"]
@@ -777,8 +777,10 @@ def dashboard_review(limit=100):
 # every read below carries the same predicate.
 _PAIR_JOIN = """
         JOIN buy_requests b ON b.id=m.buy_request_id
-        JOIN properties p ON p.id=m.property_id
+        JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
 """
+# DELETE-ARCH 2B2: ogni lettura scoped di un abbinamento passa da qui; un
+# immobile nel Cestino non abbina, non si ricalcola, non compare.
 _PAIR_SCOPE = "b.agency_id=%s AND p.agency_id=%s"
 
 
@@ -810,7 +812,7 @@ def _scoped_buy(cur, request_id, agency_id, *, active=True):
 
 def _scoped_property(cur, property_id, agency_id, *, matchable=True):
     cur.execute(
-        "SELECT * FROM properties WHERE id=%s AND agency_id=%s AND archived_at IS NULL",
+        "SELECT * FROM properties WHERE id=%s AND agency_id=%s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL",
         (property_id, agency_id),
     )
     row = cur.fetchone()
@@ -875,6 +877,7 @@ def calculate_for_buy_scoped(ctx, request_id, created_by=None):
         cur.execute(
             """SELECT id FROM properties
                WHERE agency_id=%s AND archived_at IS NULL
+                 AND (to_jsonb(properties)->>'deleted_at') IS NULL
                  AND commercial_status=ANY(%s) ORDER BY id""",
             (agency_id, list(ACTIVE_PROPERTY_STATUSES)),
         )
@@ -1081,7 +1084,7 @@ def list_exclusions_scoped(ctx):
             """SELECT e.*,b.title AS buy_title,p.title AS property_title
                FROM match_exclusions e
                JOIN buy_requests b ON b.id=e.buy_request_id
-               JOIN properties p ON p.id=e.property_id
+               JOIN properties p ON p.id=e.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE b.agency_id=%s AND p.agency_id=%s
                ORDER BY e.created_at DESC""",
             (agency_id, agency_id),

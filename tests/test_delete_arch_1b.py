@@ -19,9 +19,11 @@ def test_s01_nessuna_migration_nuova():
     import p26_migrate as runner
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 1B resta senza migration; la 085 e' del Cestino
     # Immobili, nominata per intero; nessuna oltre.
-    assert runner.discover_migrations()[-2].version == "084_delete_arch_1a_mistakes"
-    assert runner.discover_migrations()[-1].version == "085_delete_arch_2b1_property_trash"
-    assert not list((ROOT / "migrations").glob("086*"))
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 e' delle guardie del Cestino, nominata; nessuna oltre.
+    assert runner.discover_migrations()[-3].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-2].version == "085_delete_arch_2b1_property_trash"
+    assert runner.discover_migrations()[-1].version == "086_delete_arch_2b2_property_trash_guards"
+    assert not list((ROOT / "migrations").glob("087*"))
 
 
 def test_s02_codice_canonico_e_filtri():

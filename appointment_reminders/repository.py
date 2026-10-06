@@ -57,6 +57,7 @@ SELECT {", ".join(f"a.{c}" for c in APPOINTMENT_COLUMNS)},
   FROM appointments a
   LEFT JOIN contacts c   ON c.id = a.contact_id  AND c.agency_id = a.agency_id
   LEFT JOIN properties p ON p.id = a.property_id AND p.agency_id = a.agency_id
+                         AND (to_jsonb(p)->>'deleted_at') IS NULL
  WHERE a.agency_id = %(agency_id)s
    AND a.status = ANY(%(statuses)s)
    AND a.appointment_type = ANY(%(types)s)

@@ -26,9 +26,11 @@ def test_m01_la_082_e_valida_per_il_runner_e_l_ultima():
     m082 = [m for m in tutte if m.version == "082_crm_ops_4_property_interactions"][0]
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A: dopo la 083 viene la 084.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: dopo la 084 viene la 085.
-    assert tutte[-3].version == "083_censimento_1_buildings_units" and tutte[-4] is m082
-    assert tutte[-2].version == "084_delete_arch_1a_mistakes"
-    assert tutte[-1].version == "085_delete_arch_2b1_property_trash"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: dopo la 085 viene la 086.
+    assert tutte[-4].version == "083_censimento_1_buildings_units" and tutte[-5] is m082
+    assert tutte[-3].version == "084_delete_arch_1a_mistakes"
+    assert tutte[-2].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-1].version == "086_delete_arch_2b2_property_trash_guards"
     assert runner.validate_migration(m082) == []
     # additiva: nessuna tabella nuova, nessun backfill, la down rifiuta con dati
     eseguibile = "\n".join(r for r in SU.splitlines() if not r.lstrip().startswith("--"))

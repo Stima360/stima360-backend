@@ -72,7 +72,7 @@ def lookup_account_properties(agency_id: int, owner_account_id: int) -> list[dic
         cur.execute(
             """SELECT DISTINCT p.id,p.code,p.title,p.address,p.city
                FROM property_contacts pc
-               JOIN properties p ON p.id=pc.property_id
+               JOIN properties p ON p.id=pc.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE pc.contact_id=%s AND pc.role=%s AND p.agency_id=%s
                ORDER BY p.title NULLS LAST,p.id""",
             (account["contact_id"], "owner", agency_id),
@@ -94,7 +94,7 @@ def _ensure_owner_eligible_property(
            FROM owner_accounts oa
            JOIN contacts ct ON ct.id=oa.contact_id
            JOIN property_contacts pc ON pc.contact_id=oa.contact_id
-           JOIN properties p ON p.id=pc.property_id
+           JOIN properties p ON p.id=pc.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
            WHERE oa.id=%s AND pc.property_id=%s AND pc.role=%s
              AND ct.agency_id=%s AND p.agency_id=%s
            LIMIT 1""",
@@ -118,7 +118,7 @@ def lookup_property_documents(
             """SELECT id,title,document_type,status,expires_at
                FROM property_documents
                WHERE property_id=%s
-                 AND property_id IN (SELECT id FROM properties WHERE agency_id=%s)
+                 AND property_id IN (SELECT id FROM properties WHERE agency_id=%s AND (to_jsonb(properties)->>'deleted_at') IS NULL)
                ORDER BY created_at DESC,id DESC""",
             (property_id, agency_id),
         )
@@ -135,7 +135,7 @@ def lookup_property_visits(
             """SELECT id,scheduled_at,status
                FROM property_visits
                WHERE property_id=%s
-                 AND property_id IN (SELECT id FROM properties WHERE agency_id=%s)
+                 AND property_id IN (SELECT id FROM properties WHERE agency_id=%s AND (to_jsonb(properties)->>'deleted_at') IS NULL)
                ORDER BY scheduled_at DESC,id DESC""",
             (property_id, agency_id),
         )

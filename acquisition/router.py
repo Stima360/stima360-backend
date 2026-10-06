@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
+from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -39,6 +40,8 @@ def _x(funzione, *args):
         return funzione(*args)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=NOT_FOUND_MESSAGE) from exc
+    except PropertyInTrash as exc:                     # DELETE-ARCH 2B2: {detail, code}
+        return trash_409(exc)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValidationError as exc:

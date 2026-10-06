@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 
+from core.exceptions import PropertyInTrash
+
 from .enums import BLOCKING_STATUSES, DEFAULT_CANCELLED_KIND
 
 #: Le colonne restituite al chiamante. `blocked_range` resta interna.
@@ -413,7 +415,9 @@ _CALENDARIO_SQL = f"""
     SELECT a.id, a.status, a.appointment_type, a.start_at, a.end_at,
            {_KIND_SQL.format(a='a')} AS cancelled_kind,
            a.assigned_user_id, a.version, a.source, a.test_run_id,
-           a.stima_id, a.contact_id, a.lead_id, a.property_id, a.location_text,
+           a.stima_id, a.contact_id, a.lead_id,
+           p.id AS property_id,   -- DELETE-ARCH 2B2: un immobile nel Cestino non si vede
+           a.location_text,
            a.buffer_before_minutes, a.buffer_after_minutes,
            COALESCE({_NOME_OPERATORE.format(a='u')}, split_part(u.email, '@', 1)) AS agent_name,
            COALESCE(c.display_name,
@@ -423,7 +427,7 @@ _CALENDARIO_SQL = f"""
       FROM appointments a
       LEFT JOIN operator_users u ON u.id = a.assigned_user_id
       LEFT JOIN contacts c       ON c.id = a.contact_id
-      LEFT JOIN properties p     ON p.id = a.property_id
+      LEFT JOIN properties p     ON p.id = a.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
      WHERE a.agency_id = %(agency)s
        AND a.start_at < %(to)s AND a.end_at > %(from)s
        AND a.status = ANY(%(statuses)s)
@@ -535,7 +539,9 @@ def detail_links(cur, row: dict) -> dict:
         esito["lead"] = None if r is None else dict(r)
     if row["property_id"] is not None:
         cur.execute("SELECT id, title, address, civic_number, city FROM properties "
-                    "WHERE id = %s AND agency_id = %s", (row["property_id"], agenzia))
+                    "WHERE id = %s AND agency_id = %s "
+                    "AND (to_jsonb(properties)->>'deleted_at') IS NULL",   # DELETE-ARCH 2B2
+                    (row["property_id"], agenzia))
         r = cur.fetchone()
         esito["property"] = None if r is None else dict(r)
     if row["stima_id"] is not None:
@@ -616,9 +622,18 @@ def link_agency(cur, table: str, record_id: int):
     if table not in ("contacts", "leads", "properties"):
         raise ValueError(table)
     colonne = "agency_id, contact_id" if table == "leads" else "agency_id"
+    if table == "properties":
+        colonne += ", to_jsonb(properties)->>'deleted_at' AS deleted_at"
     cur.execute(f"SELECT {colonne} FROM {table} WHERE id = %s", (record_id,))
     riga = cur.fetchone()
-    return None if riga is None else dict(riga)
+    if riga is None:
+        return None
+    riga = dict(riga)
+    if table == "properties" and riga.pop("deleted_at") is not None:
+        # DELETE-ARCH Fase 2B2: nessun appuntamento nuovo (ne' spostato) verso
+        # un immobile nel Cestino; la 086 lo ripete nel database.
+        raise PropertyInTrash()
+    return riga
 
 
 def set_inspection_link(cur, appointment_id: int, inspection_id: int | None) -> None:

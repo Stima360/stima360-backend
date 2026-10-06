@@ -64,6 +64,7 @@ from typing import Any
 from acquisitions.enums import TERMINAL_STATUSES as ACQUISITION_TERMINAL
 from core import repository as core_repository
 from core.database import core_cursor
+from core.property_trash import PropertyInTrash
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.scope import scoped_predicate
 from seller_intent import batch as intent_batch
@@ -139,12 +140,18 @@ def _blocca_coppia(cur, agency_id: int, property_id: int, contact_id: int) -> No
 
 def _immobile(cur, agency_id: int, property_id: int) -> dict:
     cur.execute("SELECT id, code, title, archived_at, commercial_status, "
-                "COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') AS record_kind "
+                "COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') AS record_kind, "
+                "(to_jsonb(p) ->> 'deleted_at') AS deleted_at "
                 "FROM properties p WHERE p.id = %s AND p.agency_id = %s", (property_id, agency_id))
     riga = cur.fetchone()
     if riga is None:
         raise NotFoundError(f"property {property_id} not found")
-    return dict(riga)
+    riga = dict(riga)
+    # DELETE-ARCH Fase 2B2: «Vende» non si attiva ne' si chiude su un immobile
+    # nel Cestino (congelato): 409 PROPERTY_IN_TRASH.
+    if riga.pop("deleted_at") is not None:
+        raise PropertyInTrash()
+    return riga
 
 
 def _contatto(cur, agency_id: int, contact_id: int) -> dict:
@@ -573,6 +580,7 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
               FROM property_leads pl
               JOIN leads l ON l.id = pl.lead_id
               JOIN properties p ON p.id = pl.property_id AND p.agency_id = l.agency_id
+                              AND (to_jsonb(p)->>'deleted_at') IS NULL   -- DELETE-ARCH 2B2
               JOIN contacts c ON c.id = l.contact_id AND c.agency_id = l.agency_id
               LEFT JOIN operator_users u ON u.id = l.assigned_agent_id
               LEFT JOIN LATERAL (

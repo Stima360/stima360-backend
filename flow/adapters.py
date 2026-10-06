@@ -25,7 +25,7 @@ def load_entity(entity_type: str, entity_id: int) -> dict:
             cur.execute("SELECT COUNT(*) AS n FROM tasks WHERE lead_id=%s AND status IN ('open','in_progress')", (entity_id,)); x["open_task_count"] = cur.fetchone()["n"]
             x["entity_type"]="lead"; x["entity_id"]=entity_id; return x
         if entity_type == "property":
-            x = _one(cur, "SELECT * FROM properties WHERE id=%s AND archived_at IS NULL", (entity_id,), f"property {entity_id} not found")
+            x = _one(cur, "SELECT * FROM properties WHERE id=%s AND archived_at IS NULL AND (to_jsonb(properties)->>'deleted_at') IS NULL", (entity_id,), f"property {entity_id} not found")
             cur.execute("SELECT COUNT(*) AS n FROM property_documents WHERE property_id=%s AND (status IN ('missing','requested','expired','rejected') OR (expires_at IS NOT NULL AND expires_at<CURRENT_DATE))", (entity_id,)); x["document_issue_count"] = cur.fetchone()["n"]
             cur.execute("SELECT contact_id FROM property_contacts WHERE property_id=%s ORDER BY is_primary DESC,id LIMIT 1", (entity_id,)); r=cur.fetchone(); x["contact_id"] = r["contact_id"] if r else None
             cur.execute("SELECT lead_id FROM property_leads WHERE property_id=%s ORDER BY id LIMIT 1", (entity_id,)); r=cur.fetchone(); x["lead_id"] = r["lead_id"] if r else None
@@ -36,11 +36,11 @@ def load_entity(entity_type: str, entity_id: int) -> dict:
         if entity_type == "match":
             x = _one(cur, """SELECT m.*,b.contact_id,b.lead_id,b.title AS buy_title,p.title AS property_title
                 FROM matches m JOIN buy_requests b ON b.id=m.buy_request_id JOIN properties p ON p.id=m.property_id
-                WHERE m.id=%s AND m.archived_at IS NULL""", (entity_id,), f"match {entity_id} not found")
+                WHERE m.id=%s AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL""", (entity_id,), f"match {entity_id} not found")
             cur.execute("SELECT COUNT(*) AS n FROM buy_request_interactions WHERE match_id=%s AND interaction_type='proposed'", (entity_id,)); x["proposed_count"] = cur.fetchone()["n"]
             x["entity_type"]="match"; x["entity_id"]=entity_id; return x
         if entity_type == "property_visit":
-            x = _one(cur, """SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE v.id=%s""", (entity_id,), f"visit {entity_id} not found")
+            x = _one(cur, """SELECT v.*,p.title AS property_title FROM property_visits v JOIN properties p ON p.id=v.property_id WHERE v.id=%s AND (to_jsonb(p)->>'deleted_at') IS NULL""", (entity_id,), f"visit {entity_id} not found")
             cur.execute("SELECT COUNT(*) AS n FROM buy_request_interactions WHERE property_visit_id=%s AND interaction_type IN ('visited','interested','discarded','offer_candidate')", (entity_id,)); x["feedback_count"] = cur.fetchone()["n"]
             x["entity_type"]="property_visit"; x["entity_id"]=entity_id; return x
         if entity_type == "owner_feedback":
@@ -112,6 +112,7 @@ _SCANS = {
         "select": ("id", "id"),
         "where": (
             "archived_at IS NULL "
+            "AND (to_jsonb(properties)->>'deleted_at') IS NULL "   # DELETE-ARCH 2B2
             "AND commercial_status NOT IN ('sold','withdrawn','archived') "
             "AND mandate_end IS NOT NULL "
             "AND mandate_end<=CURRENT_DATE+(%s||' days')::interval"
@@ -129,6 +130,7 @@ _SCANS = {
         "select": ("DISTINCT p.id", "DISTINCT p.id"),
         "where": (
             "p.archived_at IS NULL "
+            "AND (to_jsonb(p)->>'deleted_at') IS NULL "   # DELETE-ARCH 2B2
             "AND (d.status IN ('missing','requested','expired','rejected') "
             "OR (d.expires_at IS NOT NULL AND d.expires_at<CURRENT_DATE))"
         ),
@@ -159,7 +161,7 @@ _SCANS = {
         "source": (
             "matches",
             "matches m JOIN buy_requests b ON b.id=m.buy_request_id "
-            "JOIN properties p ON p.id=m.property_id",
+            "JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL",
         ),
         "select": ("id", "m.id"),
         "where": (
@@ -180,7 +182,7 @@ _SCANS = {
         "source": (
             "matches",
             "matches m JOIN buy_requests b ON b.id=m.buy_request_id "
-            "JOIN properties p ON p.id=m.property_id",
+            "JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL",
         ),
         "select": ("id", "m.id"),
         "where": "archived_at IS NULL AND review_required=TRUE",
@@ -197,7 +199,7 @@ _SCANS = {
         "entity": "property_visit",
         "source": (
             "property_visits",
-            "property_visits v JOIN properties p ON p.id=v.property_id",
+            "property_visits v JOIN properties p ON p.id=v.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL",
         ),
         "select": ("id", "v.id"),
         "where": (
@@ -358,7 +360,7 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
         if entity_type == "property":
             x = _one(
                 cur,
-                "SELECT * FROM properties WHERE id=%s AND archived_at IS NULL AND agency_id=%s",
+                "SELECT * FROM properties WHERE id=%s AND archived_at IS NULL AND agency_id=%s AND (to_jsonb(properties)->>'deleted_at') IS NULL",
                 (entity_id, agency_id),
                 f"property {entity_id} not found",
             )
@@ -401,7 +403,7 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
                     JOIN buy_requests b ON b.id=m.buy_request_id
                     JOIN properties p ON p.id=m.property_id
                     WHERE m.id=%s AND b.agency_id=%s AND p.agency_id=%s
-                      AND m.archived_at IS NULL""",
+                      AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL""",
                 (entity_id, agency_id, agency_id),
                 f"match {entity_id} not found",
             )
@@ -419,7 +421,7 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
                 cur,
                 """SELECT v.*,p.title AS property_title
                     FROM property_visits v JOIN properties p ON p.id=v.property_id
-                    WHERE v.id=%s AND p.agency_id=%s""",
+                    WHERE v.id=%s AND p.agency_id=%s AND (to_jsonb(p)->>'deleted_at') IS NULL""",
                 (entity_id, agency_id),
                 f"visit {entity_id} not found",
             )
@@ -446,7 +448,7 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
                 JOIN owner_accounts oa ON oa.id=f.owner_account_id
                 JOIN contacts c ON c.id=oa.contact_id
                 JOIN properties p ON p.id=f.property_id
-                WHERE f.id=%s AND c.agency_id=%s AND p.agency_id=%s""",
+                WHERE f.id=%s AND c.agency_id=%s AND p.agency_id=%s AND (to_jsonb(p)->>'deleted_at') IS NULL""",
             (entity_id, agency_id, agency_id),
             f"owner feedback {entity_id} not found",
         )

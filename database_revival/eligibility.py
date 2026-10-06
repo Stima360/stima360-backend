@@ -60,12 +60,14 @@ _ELIGIBILITY_PREDICATE_SQL = """
         SELECT 1 FROM property_leads pl
         JOIN properties p ON p.id = pl.property_id
         WHERE pl.lead_id = l.id AND p.commercial_status = 'sold'
+          AND (to_jsonb(p)->>'deleted_at') IS NULL
     )
     AND NOT EXISTS (
         SELECT 1 FROM property_leads pl
         JOIN properties p ON p.id = pl.property_id
         WHERE pl.lead_id = l.id
           AND p.commercial_status IN ('mandate', 'active', 'reserved', 'under_offer')
+          AND (to_jsonb(p)->>'deleted_at') IS NULL
     )
     AND NOT EXISTS (
         SELECT 1 FROM property_leads pl
@@ -228,6 +230,7 @@ _ELIGIBILITY_PREDICATE_SQL_SCOPED = """
         SELECT 1 FROM property_leads pl
         JOIN properties p ON p.id = pl.property_id
         WHERE pl.lead_id = l.id AND p.commercial_status = 'sold'
+          AND (to_jsonb(p)->>'deleted_at') IS NULL
           AND p.agency_id = %(agency_id)s
     )
     AND NOT EXISTS (
@@ -235,6 +238,7 @@ _ELIGIBILITY_PREDICATE_SQL_SCOPED = """
         JOIN properties p ON p.id = pl.property_id
         WHERE pl.lead_id = l.id
           AND p.commercial_status IN ('mandate', 'active', 'reserved', 'under_offer')
+          AND (to_jsonb(p)->>'deleted_at') IS NULL
           AND p.agency_id = %(agency_id)s
     )
     AND NOT EXISTS (

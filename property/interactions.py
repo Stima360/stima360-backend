@@ -19,6 +19,7 @@ from __future__ import annotations
 from core import repository as core_repository
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ValidationError
+from core.property_trash import PropertyInTrash
 from core.scope import scoped_predicate
 
 #: I tipi che un operatore registra a mano: un sottoinsieme ESATTO di
@@ -55,14 +56,22 @@ def options() -> dict:
             "contexts": list(CONTEXTS)}
 
 
-def immobile_nello_scope(cur, agency_id: int, property_id: int) -> dict:
-    """L'immobile nell'agenzia dello scope; altrove = inesistente (404)."""
-    cur.execute("SELECT id, acquisition_id, mandate_type, mandate_start FROM properties "
+def immobile_nello_scope(cur, agency_id: int, property_id: int, *, scrittura: bool = False) -> dict:
+    """L'immobile nell'agenzia dello scope; altrove = inesistente (404).
+    DELETE-ARCH 2B2: nel Cestino e' inesistente per chi legge (404) e chiuso
+    per chi scrive (409 PROPERTY_IN_TRASH)."""
+    cur.execute("SELECT id, acquisition_id, mandate_type, mandate_start, "
+                "(to_jsonb(properties)->>'deleted_at') AS deleted_at FROM properties "
                 "WHERE id = %s AND agency_id = %s", (property_id, agency_id))
     row = cur.fetchone()
     if row is None:
         raise NotFoundError(f"property {property_id} not found")
-    return dict(row)
+    row = dict(row)
+    if row.pop("deleted_at") is not None:
+        if scrittura:
+            raise PropertyInTrash()
+        raise NotFoundError(f"property {property_id} not found")
+    return row
 
 
 def _voce(row) -> dict:
@@ -128,7 +137,7 @@ def create_interaction(ctx, property_id: int, body) -> dict:
         # mandate` su immobili che non sono incarichi: se un controllo di
         # tenant regredisse, la richiesta si fermerebbe comunque sul contesto
         # (400) senza scrivere, e la sonda lo vedrebbe dal messaggio.
-        immobile = immobile_nello_scope(cur, agency_id, property_id)
+        immobile = immobile_nello_scope(cur, agency_id, property_id, scrittura=True)
         if body.contact_id is not None:
             # Il referente e' un contatto DELL'immobile (property_contacts):
             # un contatto di un'altra agenzia non puo' esserlo per costruzione.

@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from psycopg2.extras import Json
 from core.database import core_cursor
+from core import property_trash as _property_trash
 from core.repository import create_activity_with_cursor
 from integration_owner_request import record_owner_request_event_with_cursor, process_saved_owner_request_event
 from core.exceptions import NotFoundError, ConflictError, ValidationError
@@ -53,11 +54,14 @@ def _require_property_in_agency(c,agency_id,property_id):
  """
  c.execute(_PROPERTY_TENANT+"FOR SHARE",(property_id,agency_id))
  if not c.fetchone():raise NotFoundError(NF)
+ # DELETE-ARCH Fase 2B2: niente pubblicazioni, documenti o riscontri nuovi
+ # verso un immobile nel Cestino (409 PROPERTY_IN_TRASH).
+ _property_trash.refuse_if_in_trash(c,property_id)
 
 def _publication_in_agency(c,agency_id,publication_id,*,for_update=False):
  """The publication, resolved through its property. Raises the neutral 404."""
  c.execute(
-     "SELECT pub.* FROM owner_publications pub JOIN properties p ON p.id=pub.property_id "
+     "SELECT pub.* FROM owner_publications pub JOIN properties p ON p.id=pub.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL "
      "WHERE pub.id=%s AND p.agency_id=%s "
      +("FOR UPDATE OF pub FOR SHARE OF p" if for_update else "FOR SHARE OF pub,p"),
      (publication_id,agency_id),
@@ -123,8 +127,10 @@ def create_access(agency_id,d):
  # trigger on this table plus those guards; none of it is in this patch.
  with core_cursor(commit=True) as(_,c):
   c.execute("SELECT ct.agency_id FROM owner_accounts oa JOIN contacts ct ON ct.id=oa.contact_id WHERE oa.id=%s FOR SHARE OF oa,ct",(d['owner_account_id'],));a=c.fetchone()
-  c.execute('SELECT agency_id FROM properties WHERE id=%s FOR SHARE',(d['property_id'],));p=c.fetchone()
+  c.execute("SELECT agency_id, (to_jsonb(properties)->>'deleted_at') AS deleted_at FROM properties WHERE id=%s FOR SHARE",(d['property_id'],));p=c.fetchone()
   if not a or not p:raise NotFoundError(NF)
+  # DELETE-ARCH 2B2: nessun accesso nuovo verso un immobile nel Cestino
+  if hasattr(p,'get') and p.get('deleted_at') is not None:raise _property_trash.PropertyInTrash()
   # Each side is rejected on its own BEFORE the two are compared: NULL is not a
   # value, and `None != None` is False, so a single equality test would accept
   # the one case where neither agency is known.
@@ -152,7 +158,7 @@ def list_access(agency_id):
            FROM owner_property_access x
            JOIN owner_accounts oa ON oa.id=x.owner_account_id
            JOIN contacts ct ON ct.id=oa.contact_id
-           JOIN properties p ON p.id=x.property_id
+           JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
           WHERE ct.agency_id=%s AND p.agency_id=%s
           ORDER BY x.created_at DESC""",
       (agency_id, agency_id),
@@ -170,7 +176,7 @@ def revoke_access(agency_id,i):
            FROM owner_property_access x
            JOIN owner_accounts oa ON oa.id=x.owner_account_id
            JOIN contacts ct ON ct.id=oa.contact_id
-           JOIN properties p ON p.id=x.property_id
+           JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
           WHERE x.id=%s AND ct.agency_id=%s AND p.agency_id=%s
             FOR UPDATE OF x FOR SHARE OF oa,ct,p""",
       (i,agency_id,agency_id),
@@ -216,14 +222,14 @@ def revoke_session(raw):
 _COHERENT_GRANT = """
            JOIN owner_accounts oa_g ON oa_g.id=x.owner_account_id
            JOIN contacts ct_g ON ct_g.id=oa_g.contact_id
-           JOIN properties p_g ON p_g.id=x.property_id"""
+           JOIN properties p_g ON p_g.id=x.property_id AND (to_jsonb(p_g)->>'deleted_at') IS NULL"""
 _GRANT_ROOTS_AGREE = " AND ct_g.agency_id=p_g.agency_id"
 
 
 def require_property(a,p):
- with core_cursor() as(_,c):c.execute("SELECT x.*,p.title,p.address,p.city FROM owner_property_access x JOIN properties p ON p.id=x.property_id"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s AND x.property_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW())",(a,p));return one(c)
+ with core_cursor() as(_,c):c.execute("SELECT x.*,p.title,p.address,p.city FROM owner_property_access x JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s AND x.property_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW())",(a,p));return one(c)
 def portal_properties(a):
- with core_cursor() as(_,c):c.execute("SELECT p.id,p.title,p.address,p.city,x.access_role,x.is_primary FROM owner_property_access x JOIN properties p ON p.id=x.property_id"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW()) ORDER BY x.is_primary DESC",(a,));return[dict(x) for x in c.fetchall()]
+ with core_cursor() as(_,c):c.execute("SELECT p.id,p.title,p.address,p.city,x.access_role,x.is_primary FROM owner_property_access x JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL"+_COHERENT_GRANT+" WHERE x.owner_account_id=%s"+_GRANT_ROOTS_AGREE+" AND x.access_status='active' AND x.revoked_at IS NULL AND (x.valid_until IS NULL OR x.valid_until>NOW()) ORDER BY x.is_primary DESC",(a,));return[dict(x) for x in c.fetchall()]
 def create_publication(agency_id,d):
  with core_cursor(commit=True) as(_,c):
   _require_property_in_agency(c,agency_id,d['property_id'])
@@ -235,7 +241,7 @@ def list_publications(agency_id):
  with core_cursor() as(_,c):
   c.execute(
       """SELECT pub.* FROM owner_publications pub
-           JOIN properties p ON p.id=pub.property_id
+           JOIN properties p ON p.id=pub.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
           WHERE p.agency_id=%s
           ORDER BY pub.created_at DESC""",
       (agency_id,),
@@ -315,7 +321,7 @@ def create_feedback(a,p,d):
            FROM owner_accounts oa
            JOIN owner_property_access x ON x.owner_account_id=oa.id
            JOIN contacts ct_g ON ct_g.id=oa.contact_id
-           JOIN properties p_g ON p_g.id=x.property_id
+           JOIN properties p_g ON p_g.id=x.property_id AND (to_jsonb(p_g)->>'deleted_at') IS NULL
           WHERE oa.id=%s AND oa.status='active' AND x.property_id=%s
             AND ct_g.agency_id=p_g.agency_id
             AND x.access_status='active' AND x.revoked_at IS NULL
@@ -395,7 +401,7 @@ def admin_list_feedback(agency_id):
       """SELECT f.* FROM owner_feedback f
            JOIN owner_accounts oa ON oa.id=f.owner_account_id
            JOIN contacts ct ON ct.id=oa.contact_id
-           JOIN properties p ON p.id=f.property_id
+           JOIN properties p ON p.id=f.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
           WHERE ct.agency_id=%s AND p.agency_id=%s
           ORDER BY f.submitted_at DESC""",
       (agency_id,agency_id),
@@ -433,16 +439,16 @@ def dashboard(agency_id):
            (SELECT COUNT(*) FROM owner_property_access x
               JOIN owner_accounts oa ON oa.id=x.owner_account_id
               JOIN contacts ct ON ct.id=oa.contact_id
-              JOIN properties p ON p.id=x.property_id
+              JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
              WHERE x.access_status='active'
                AND ct.agency_id=%s AND p.agency_id=%s) active_access,
            (SELECT COUNT(*) FROM owner_publications pub
-              JOIN properties p ON p.id=pub.property_id
+              JOIN properties p ON p.id=pub.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
              WHERE pub.status='published' AND p.agency_id=%s) published,
            (SELECT COUNT(*) FROM owner_feedback f
               JOIN owner_accounts oa ON oa.id=f.owner_account_id
               JOIN contacts ct ON ct.id=oa.contact_id
-              JOIN properties p ON p.id=f.property_id
+              JOIN properties p ON p.id=f.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
              WHERE f.status='new'
                AND ct.agency_id=%s AND p.agency_id=%s) new_feedback""",
       (agency_id,)*6,
@@ -496,7 +502,11 @@ def _property_for_document(c, agency_id, document_id, *, for_update=False):
            WHERE pd.id=%s AND p.agency_id=%s""" + suffix,
         (document_id, agency_id),
     )
-    return one(c)
+    riga = one(c)
+    # DELETE-ARCH Fase 2B2: ogni uso condivide (o riversiona) un documento:
+    # nessuna condivisione nuova da un immobile nel Cestino.
+    _property_trash.refuse_if_in_trash(c, riga["property_id"])
+    return riga
 
 
 def _property_for_visit(c, agency_id, visit_id):
@@ -509,7 +519,11 @@ def _property_for_visit(c, agency_id, visit_id):
            WHERE pv.id=%s AND p.agency_id=%s""",
         (visit_id, agency_id),
     )
-    return one(c)
+    riga = one(c)
+    # DELETE-ARCH Fase 2B2: nessun riscontro di visita pubblicato per un
+    # immobile nel Cestino.
+    _property_trash.refuse_if_in_trash(c, riga["property_id"])
+    return riga
 
 
 def _validate_target_account(c, agency_id, account_id, property_id):
@@ -527,7 +541,7 @@ def _validate_target_account(c, agency_id, account_id, property_id):
            FROM owner_property_access x
            JOIN owner_accounts oa ON oa.id=x.owner_account_id
            JOIN contacts ct ON ct.id=oa.contact_id
-           JOIN properties p ON p.id=x.property_id
+           JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
            WHERE x.owner_account_id=%s AND x.property_id=%s
              AND ct.agency_id=%s AND p.agency_id=%s
              AND x.access_status='active' AND x.revoked_at IS NULL
@@ -554,7 +568,7 @@ def _shared_document_with_source(c, agency_id, item_id, *, for_update=False):
                   pd.metadata AS source_metadata
            FROM owner_shared_documents sd
            JOIN property_documents pd ON pd.id=sd.property_document_id
-           JOIN properties p ON p.id=pd.property_id
+           JOIN properties p ON p.id=pd.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
            WHERE sd.id=%s AND p.agency_id=%s""" + suffix,
         (item_id, agency_id),
     )
@@ -705,6 +719,7 @@ def create_uploaded_shared_document(agency_id, d, staged, storage=None):
             c.execute("SELECT id FROM properties WHERE id=%s", (d["property_id"],))
             if not c.fetchone():
                 raise NotFoundError(NF)
+            _property_trash.refuse_if_in_trash(c, d["property_id"])   # DELETE-ARCH 2B2
 
             previous_id = d.get("supersedes_shared_document_id")
             target_account = d.get("owner_account_id")
@@ -856,7 +871,7 @@ def list_shared_documents(
                       pd.expires_at AS source_expires_at,pd.storage_key
                FROM owner_shared_documents sd
                JOIN property_documents pd ON pd.id=sd.property_document_id
-               JOIN properties p ON p.id=pd.property_id"""
+               JOIN properties p ON p.id=pd.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL"""
             + where
             + " ORDER BY sd.created_at DESC LIMIT %s OFFSET %s",
             values,
@@ -1355,7 +1370,7 @@ def shared_document_reads(agency_id, i):
                  ON x.owner_account_id=dr.owner_account_id AND x.property_id=%s
                JOIN owner_accounts oa ON oa.id=dr.owner_account_id
                JOIN contacts ct ON ct.id=oa.contact_id
-               JOIN properties p ON p.id=x.property_id
+               JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE dr.shared_document_id=%s
                  AND ct.agency_id=%s AND p.agency_id=%s
                ORDER BY dr.first_viewed_at""",
@@ -1418,7 +1433,7 @@ def _visit_feedback_for_update(c, agency_id, i):
         """SELECT vf.*,pv.property_id
            FROM owner_visit_feedback_publications vf
            JOIN property_visits pv ON pv.id=vf.property_visit_id
-           JOIN properties p ON p.id=pv.property_id
+           JOIN properties p ON p.id=pv.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
            WHERE vf.id=%s AND p.agency_id=%s
            FOR UPDATE OF vf""",
         (i, agency_id),
@@ -1503,7 +1518,7 @@ def list_visit_feedback_publications(
             """SELECT vf.*,pv.property_id
                FROM owner_visit_feedback_publications vf
                JOIN property_visits pv ON pv.id=vf.property_visit_id
-               JOIN properties p ON p.id=pv.property_id"""
+               JOIN properties p ON p.id=pv.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL"""
             + where
             + " ORDER BY vf.created_at DESC LIMIT %s OFFSET %s",
             values,
@@ -1517,7 +1532,7 @@ def get_visit_feedback_publication(agency_id, i):
             """SELECT vf.*,pv.property_id
                FROM owner_visit_feedback_publications vf
                JOIN property_visits pv ON pv.id=vf.property_visit_id
-               JOIN properties p ON p.id=pv.property_id
+               JOIN properties p ON p.id=pv.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE vf.id=%s AND p.agency_id=%s""",
             (i, agency_id),
         )
@@ -1768,7 +1783,7 @@ def update_feedback_status(agency_id,i,d):
       """SELECT f.* FROM owner_feedback f
            JOIN owner_accounts oa ON oa.id=f.owner_account_id
            JOIN contacts ct ON ct.id=oa.contact_id
-           JOIN properties p ON p.id=f.property_id
+           JOIN properties p ON p.id=f.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
           WHERE f.id=%s AND ct.agency_id=%s AND p.agency_id=%s
             FOR UPDATE OF f FOR SHARE OF oa,ct,p""",
       (i,agency_id,agency_id),
@@ -1851,7 +1866,7 @@ def _emit_notification_event(
         FROM owner_property_access x
         JOIN owner_accounts oa ON oa.id=x.owner_account_id
         JOIN contacts ct ON ct.id=oa.contact_id
-        JOIN properties p ON p.id=x.property_id
+        JOIN properties p ON p.id=x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
         LEFT JOIN owner_notification_preferences np
           ON np.owner_account_id=x.owner_account_id
         WHERE x.property_id=%s
@@ -1970,7 +1985,7 @@ def mark_notification_read(a, i):
                FROM owner_property_access x
                JOIN owner_accounts oa_g ON oa_g.id=x.owner_account_id
                JOIN contacts ct_g ON ct_g.id=oa_g.contact_id
-               JOIN properties p_g ON p_g.id=x.property_id
+               JOIN properties p_g ON p_g.id=x.property_id AND (to_jsonb(p_g)->>'deleted_at') IS NULL
                WHERE n.id=%s AND n.owner_account_id=%s
                  AND ct_g.agency_id=p_g.agency_id
                  AND x.owner_account_id=n.owner_account_id
@@ -2183,7 +2198,7 @@ SELECT oa.id AS owner_account_id, ct.id AS contact_id, ct.agency_id AS agency_id
                    AND s.agency_id = ct.agency_id
                    AND {_GRANT_VALIDO})
      OR EXISTS (SELECT 1 FROM owner_property_access x
-                  JOIN properties p ON p.id = x.property_id
+                  JOIN properties p ON p.id = x.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                  WHERE x.owner_account_id = oa.id
                    AND p.agency_id = ct.agency_id
                    AND {_GRANT_VALIDO})
@@ -3054,6 +3069,7 @@ mandated AS (
       JOIN properties pr
         ON pr.id = a.property_id
        AND pr.agency_id = %(agency_id)s
+       AND (to_jsonb(pr)->>'deleted_at') IS NULL
 )"""
 
 _HOME_METRICS_SELECT = """

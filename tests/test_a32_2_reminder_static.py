@@ -198,7 +198,10 @@ def test_s10_nessuna_migration_080():
     # l'ultima, nominata per intero.
     assert [m for m in migrazioni if m.startswith("085")] == [
         "085_delete_arch_2b1_property_trash.sql", "085_delete_arch_2b1_property_trash_down.sql"]
-    assert migrazioni[-1] == "085_delete_arch_2b1_property_trash_down.sql"
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 (guardie del Cestino), additiva, e' ora l'ultima.
+    assert [m for m in migrazioni if m.startswith("086")] == [
+        "086_delete_arch_2b2_property_trash_guards.sql", "086_delete_arch_2b2_property_trash_guards_down.sql"]
+    assert migrazioni[-1] == "086_delete_arch_2b2_property_trash_guards_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

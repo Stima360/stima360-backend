@@ -122,7 +122,8 @@ def test_a03_la_081_e_valida_per_il_runner_e_l_ultima():
     # qualunque ALTRA migration farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili: properties.deleted_*,
     # record_lifecycle_events), additiva, e' ora l'ultima; la catena si allunga di uno.
-    assert numeri[-1] == 85 and numeri[-2] == 84 and numeri[-3] == 83 and numeri[-4] == 82 and numeri[-5] == 81 and numeri[-6] == 80
+    # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 (guardie del Cestino Immobili), additiva, e' ora l'ultima.
+    assert numeri[-1] == 86 and numeri[-2] == 85 and numeri[-3] == 84 and numeri[-4] == 83 and numeri[-5] == 82 and numeri[-6] == 81 and numeri[-7] == 80
 
 
 def test_a04_la_up_e_additiva_e_la_down_rifiuta_con_dati():

@@ -68,7 +68,8 @@ def _venditori(fn, *a, **k):
         # DELETE-ARCH Fase 1B: platform admin fuori acting -> 403 (prima 500).
         return JSONResponse(status_code=403, content={"detail": str(exc), "code": "AGENCY_REQUIRED"})
     except ConflictError as exc:
-        return JSONResponse(status_code=409, content={"detail": str(exc), "code": "CONFLICT"})
+        # DELETE-ARCH 2B2: un conflitto con codice proprio (PROPERTY_IN_TRASH) lo porta.
+        return JSONResponse(status_code=409, content={"detail": str(exc), "code": getattr(exc, "code", None) or "CONFLICT"})
     if isinstance(esito, tuple):
         esito, creato = esito
         http = 201 if creato else 200
