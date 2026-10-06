@@ -1,7 +1,9 @@
 // STIMA360 OS — incarichi.js
 // CRM-OPS-4: l'elenco INCARICHI. Una vista, non un archivio: compaiono da
 // soli gli immobili il cui incarico e' nato da un'acquisizione
-// (`properties.acquisition_id` con tipo e data di inizio). Nessun
+// (`properties.acquisition_id`; FIX-MANDATE-1: anche con tipo o inizio
+// mancanti, segnalati «Dati da completare» - la definizione e' quella
+// canonica del backend, core/property_mandate.py). Nessun
 // "Nuovo incarico" qui: l'incarico si genera SOLO dalla scheda Acquisizione.
 //
 // Fonti, tutte del backend:
@@ -124,7 +126,7 @@ export async function renderIncarichi(container) {
         { label: 'Immobile', render: (r) => `<strong>${escapeHtml(r.code || `#${r.property_id}`)}</strong><br><small class="muted">${escapeHtml([r.title, [r.address, r.civic_number].filter(Boolean).join(' '), r.city].filter(Boolean).join(' · '))}</small>` },
         { label: 'Proprietario', render: (r) => `${escapeHtml(r.main_owner_name || '—')}${r.other_owners && r.other_owners.length ? `<br><small class="muted">+ ${escapeHtml(r.other_owners.map((o) => o.display_name).join(', '))}</small>` : ''}` },
         { label: 'Agente', render: (r) => escapeHtml(r.agent_name || '—') },
-        { label: 'Tipo', render: (r) => escapeHtml(r.mandate_type || '—') },
+        { label: 'Tipo', render: (r) => `${escapeHtml(r.mandate_type || '—')}${r.missing_fields && r.missing_fields.length ? ` ${renderBadge('Dati da completare', 'warn')}` : ''}` },
         { label: 'Inizio', render: (r) => escapeHtml(formatDate(r.mandate_start)) },
         { label: 'Scadenza', render: (r) => `${escapeHtml(formatDate(r.mandate_end))}<br>${renderBadge(expiryText(r.days_to_expiry), expiryTone(r.days_to_expiry))}` },
         { label: 'Prezzo', render: (r) => `${formatPrice(r.asking_price)}${r.minimum_price ? `<br><small class="muted">min ${formatPrice(r.minimum_price)}</small>` : ''}` },

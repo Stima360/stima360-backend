@@ -52,7 +52,7 @@ function blockersHtml(blockers) {
   const voci = blockerView(blockers);
   if (!voci.length) return '';
   return `<ul class="trash-blockers" data-trash-blockers>${voci.map((v) => `
-      <li data-blocker="${escapeHtml(v.code)}"><span class="trash-blocker-label">${escapeHtml(v.label)}</span>${v.count ? ` <span class="muted">(${v.count})</span>` : ''}${v.history && v.history.length ? `
+      <li data-blocker="${escapeHtml(v.code)}"><span class="trash-blocker-label">${escapeHtml(v.label)}</span>${v.count && !v.link ? ` <span class="muted">(${v.count})</span>` : ''}${v.link ? ` <a class="trash-blocker-link" data-blocker-link href="${escapeHtml(v.link.href)}">${escapeHtml(v.link.label)}</a>` : ''}${v.history && v.history.length ? `
         <ul class="trash-history">${v.history.map((h) => `<li>${escapeHtml(h.label)}${h.count ? ` <span class="muted">(${h.count})</span>` : ''}</li>`).join('')}</ul>` : ''}</li>`).join('')}
     </ul>`;
 }

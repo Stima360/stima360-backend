@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 
 from psycopg2 import errors as _pg_errors
 
+from core import property_mandate as _mandato
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth import permissions
@@ -326,7 +327,7 @@ def delete_contact(ctx, property_id: int, contact_id: int, role: str) -> None:
                 cur.execute("SELECT COUNT(*) AS n FROM property_contacts WHERE property_id = %s AND role = ANY(%s) "
                             "AND NOT (contact_id = %s)", (property_id, list(OWNER_ROLES), contact_id))
                 altri_proprietari = cur.fetchone()["n"]
-                incarico = prop.get("acquisition_id") is not None or prop.get("mandate_type") is not None
+                incarico = _mandato.is_real_mandate(_con_firma(cur, prop))  # FIX-MANDATE-1: definizione canonica
                 if altri_proprietari == 0 and incarico and prop.get("commercial_status") not in ("sold", "withdrawn", "archived"):
                     raise LifecycleConflict(LAST_OWNER_WITH_MANDATE_MESSAGE, LAST_OWNER_WITH_MANDATE)
         cur.execute("DELETE FROM property_contacts WHERE property_id = %s AND contact_id = %s AND role = %s",
@@ -428,7 +429,6 @@ PROPERTY_IN_TRASH_MESSAGE = "L'immobile è nel Cestino: ripristinalo prima di mo
 INVALID_TRASH_REASON_MESSAGE = "Motivo non valido"
 HISTORY_REQUIRES_ADMIN_MESSAGE = ("L'immobile ha uno storico operativo (attività, appuntamenti, acquisizioni, "
                                   "proposte...): può spostarlo nel Cestino solo un amministratore o il titolare")
-MANDATE_PRESENT_MESSAGE = "Incarico presente"
 SELLER_OPEN_LABEL = "Opportunità Venditore aperta: chiudila prima da Venditori («Smetti…»)"
 
 TRASH_REASONS = ("created_by_mistake", "duplicate", "invalid_data", "test_record", "other")
@@ -479,11 +479,63 @@ def refuse_if_in_trash(prop: dict | None) -> None:
         raise LifecycleConflict(PROPERTY_IN_TRASH_MESSAGE, PROPERTY_IN_TRASH)
 
 
-def _ha_incarico(prop: dict) -> bool:
-    """Incarico reale: nato da un'acquisizione (081) o comunque con dati di
-    incarico sull'immobile. Volutamente largo: nel dubbio si blocca."""
-    return (prop.get("acquisition_id") is not None or prop.get("mandate_type") is not None
-            or prop.get("mandate_start") is not None or prop.get("commercial_status") == "mandate")
+# FIX-MANDATE-1: l'incarico che blocca il Cestino e' quello della definizione
+# canonica (core/property_mandate.py), di QUALUNQUE stato: un incarico
+# scaduto, venduto, ritirato o archiviato non perde la protezione. La
+# motivazione dice quale incarico e dove trovarlo.
+_STATO_INCARICO = {
+    _mandato.STATE_ACTIVE: "in corso",
+    _mandato.STATE_SOLD: "concluso con la vendita",
+    _mandato.STATE_WITHDRAWN: "ritirato",
+    _mandato.STATE_ARCHIVED: "su immobile archiviato",
+}
+
+
+def _con_firma(cur, prop: dict) -> dict:
+    """La riga con la firma LMC-15 (origine `signed_link`) allegata, se serve:
+    la firma non sta su `properties`. Copia: la riga del chiamante non cambia."""
+    if "signed_mandate" in prop or _mandato.mandate_origin(prop) is not None:
+        return prop
+    return {**prop, "signed_mandate": _mandato.signed_link_mandate(cur, prop["id"])}
+
+
+def _blocco_incarico(prop: dict) -> dict:
+    origine = _mandato.mandate_origin(prop)
+    stato = _mandato.mandate_state(prop)
+    if stato == _mandato.STATE_EXPIRED:
+        testo_stato = f"scaduto il {_mandato.as_date(prop.get('mandate_end')).strftime('%d/%m/%Y')}"
+    else:
+        testo_stato = _STATO_INCARICO[stato]
+    if origine == _mandato.ORIGIN_ACQUISITION:
+        etichetta = f"Incarico {testo_stato}."
+        etichetta += (" In Incarichi si vede con il filtro «Archiviato»." if stato == _mandato.STATE_ARCHIVED
+                      else " È nella sezione Incarichi.")
+        if _mandato.missing_fields(prop):
+            etichetta += " Dati dell'incarico incompleti: completali dalla scheda dell'incarico."
+    elif origine == _mandato.ORIGIN_SIGNED_LINK:
+        firma = prop["signed_mandate"]
+        dettagli = [f"stima n. {firma.get('stima_id_snapshot')}"]
+        if firma.get("mandate_reference"):
+            dettagli.append(f"rif. {firma['mandate_reference']}")
+        if firma.get("link_status") == "revoked":
+            dettagli.append("collegamento poi revocato")
+        etichetta = (f"Incarico firmato il {_mandato.as_date(firma.get('mandate_signed_at')).strftime('%d/%m/%Y')} "
+                     f"({', '.join(dettagli)}) {testo_stato}. Registrato nel collegamento con la stima, "
+                     "non compare in Incarichi.")
+    else:
+        etichetta = (f"Incarico storico (registrato prima delle Acquisizioni) {testo_stato}. "
+                     "Non compare in Incarichi: i dati sono nella sezione Incarico della scheda immobile.")
+    voce = {"property_id": prop.get("id"), "origin": origine, "state": stato,
+            **{k: prop.get(k) for k in ("acquisition_id", "mandate_type", "mandate_start", "mandate_end")}}
+    if origine == _mandato.ORIGIN_SIGNED_LINK:
+        firma = prop["signed_mandate"]
+        voce.update({"stima_acquisition_id": firma.get("id"), "stima_id": firma.get("stima_id_snapshot"),
+                     "link_status": firma.get("link_status"), "mandate_reference": firma.get("mandate_reference"),
+                     "mandate_signed_at": _mandato.as_date(firma.get("mandate_signed_at")).isoformat()})
+    blocco = {"code": "MANDATE_PRESENT", "label": etichetta, "items": [voce]}
+    if origine == _mandato.ORIGIN_ACQUISITION:
+        blocco["link"] = {"href": f"#/incarichi/{prop.get('id')}", "label": "Apri incarico"}
+    return blocco
 
 
 def trash_blockers(cur, agency_id: int, prop: dict) -> list[dict]:
@@ -491,9 +543,9 @@ def trash_blockers(cur, agency_id: int, prop: dict) -> list[dict]:
     sposta nel Cestino). Ogni voce: `code`, `label`, `items`."""
     blocchi = [{**b, "code": _CODICI_CESTINO.get(b["code"], b["code"])}
                for b in archive_blockers(cur, agency_id, prop)]
-    if _ha_incarico(prop):
-        blocchi.append({"code": "MANDATE_PRESENT", "label": MANDATE_PRESENT_MESSAGE,
-                        "items": [{k: prop.get(k) for k in ("acquisition_id", "mandate_type", "mandate_start", "mandate_end")}]})
+    prop = _con_firma(cur, prop)
+    if _mandato.is_real_mandate(prop):
+        blocchi.append(_blocco_incarico(prop))
     # 2B1: l'opportunita' Venditore viva BLOCCA (nessuna chiusura automatica:
     # arriva con la Fase 2B2, insieme al ripristino).
     cur.execute("SELECT l.id, l.status, l.contact_id FROM leads l JOIN property_leads pl ON pl.lead_id = l.id "
@@ -602,6 +654,12 @@ def protected_history(cur, agency_id: int, prop: dict, ctx=None) -> list[dict]:
           "UNION ALL SELECT s.id FROM owner_shared_documents s JOIN property_documents d ON d.id = s.property_document_id "
           "WHERE d.property_id = %s", (pid, pid, pid, pid),
           tabelle=("owner_property_access", "owner_publications", "owner_feedback", "owner_shared_documents"))
+    # FIX-MANDATE-1: dati d'incarico parziali (senza acquisizione, senza tipo +
+    # inizio) non sono un incarico e non bloccano il Cestino; restano storia
+    # dell'immobile, quindi un agente passa da un amministratore.
+    if _mandato.has_partial_mandate_data(_con_firma(cur, prop)):
+        voci.append({"code": "MANDATE_DATA", "label": "Dati di incarico incompleti (senza acquisizione d'origine)",
+                     "count": 1})
     # la stessa voce puo' arrivare da due fonti (acquisizioni): una riga, conteggio sommato
     unite = {}
     for v in voci:

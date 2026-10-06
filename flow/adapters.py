@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+from core import property_mandate as _mandato
 from core.database import core_cursor
 from core.exceptions import NotFoundError
 
@@ -114,6 +115,8 @@ _SCANS = {
             "archived_at IS NULL "
             "AND (to_jsonb(properties)->>'deleted_at') IS NULL "   # DELETE-ARCH 2B2
             "AND commercial_status NOT IN ('sold','withdrawn','archived') "
+            # FIX-MANDATE-1: «incarico in scadenza» solo per un incarico reale
+            f"AND {_mandato.real_mandate_sql('properties')} "
             "AND mandate_end IS NOT NULL "
             "AND mandate_end<=CURRENT_DATE+(%s||' days')::interval"
         ),

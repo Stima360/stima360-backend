@@ -21,6 +21,7 @@ fino a mezzanotte italiana, non fino a quella UTC.
 """
 from __future__ import annotations
 
+from core import property_mandate as _mandato
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ValidationError
 from core.scope import scoped_predicate
@@ -36,9 +37,15 @@ SORTS = {
 MAX_LIMIT = 200
 OGGI_ROMA = "(NOW() AT TIME ZONE 'Europe/Rome')::date"
 
-#: La definizione di incarico, in un solo posto.
-E_UN_INCARICO = ("p.acquisition_id IS NOT NULL AND p.mandate_type IS NOT NULL "
-                 "AND p.mandate_start IS NOT NULL "
+#: FIX-MANDATE-1: la vista Incarichi = la definizione CANONICA di incarico
+#: (core/property_mandate.py, la stessa del Cestino) ristretta all'origine
+#: «acquisizione», l'unica che questa sezione gestisce. Un incarico nato da
+#: un'acquisizione con tipo o inizio azzerati resta un incarico e si vede,
+#: con i dati da completare (`missing_fields`); gli incarichi storici (pre-081)
+#: e le firme del ponte LMC-15 restano fuori, come deciso da CRM-OPS-4 (sono
+#: protetti dal Cestino, che dice dove consultarli). Nessun filtro di stato
+#: qui: scaduti, venduti e archiviati sono incarichi (i filtri sono a parte).
+E_UN_INCARICO = (f"{_mandato.acquisition_mandate_sql('p')} "
                  # Cestino Immobili (fase 2B2): un immobile nel Cestino non e' un incarico operativo
                  "AND (to_jsonb(p)->>'deleted_at') IS NULL")
 
@@ -120,6 +127,7 @@ def _riga(ctx, r, proprietari) -> dict:
     vede = (getattr(ctx, "sees_all_agency_records", False)
             or voce["acquisition_agent_id"] == getattr(ctx, "user_id", None))
     voce["owners"] = proprietari.get(voce["property_id"], [])
+    voce["missing_fields"] = _mandato.missing_fields(voce)          # FIX-MANDATE-1
     voce["other_owners"] = [o for o in voce["owners"] if not o["is_main"]]
     voce["acquisition"] = {
         "id": voce.pop("acquisition_id"), "status": voce.pop("acquisition_status"),

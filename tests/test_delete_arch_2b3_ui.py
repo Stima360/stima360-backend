@@ -91,9 +91,11 @@ def test_m02_blocchi_mostrati_come_arrivano_e_storico_con_la_sua_frase():
       e409: m.errorBlockers({ status: 409, code: 'TRASH_BLOCKED', data: { blockers: [{ code: 'SALE_PENDING', label: 'Vendita' }] } }),
       altro: m.trashErrorText({ status: 403, code: 'NOT_ASSIGNED', message: 'Questo immobile non è assegnato a te' }),
     })""")
+    # SENTINELLA AGGIORNATA DA FIX-MANDATE-1: ogni voce porta anche `link`
+    # (il collegamento interno che il backend puo' indicare; qui nessuno).
     assert out["blocchi"] == [
-        {"code": "ACQUISITION_OPEN", "label": "Acquisizione aperta", "count": 2, "history": None},
-        {"code": "X_NUOVO", "label": "Blocco che la UI non conosce", "count": None, "history": None}]
+        {"code": "ACQUISITION_OPEN", "label": "Acquisizione aperta", "count": 2, "history": None, "link": None},
+        {"code": "X_NUOVO", "label": "Blocco che la UI non conosce", "count": None, "history": None, "link": None}]
     assert out["storico"] == [{"code": "HISTORY_REQUIRES_ADMIN", "label": HISTORY_TEXT, "count": None,
                                "history": [{"label": "Attività registrate", "count": 3}]}]
     assert out["e403"] == HISTORY_TEXT

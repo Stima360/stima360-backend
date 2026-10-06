@@ -54,7 +54,12 @@ def test_k03_nessuna_entita_incarico_e_nessuna_scrittura_dagli_incarichi():
     sorgente = (ROOT / "property" / "mandates.py").read_text(encoding="utf-8")
     for vietato in ("INSERT", "UPDATE ", "DELETE", "core_cursor(commit=True)", "CREATE TABLE"):
         assert vietato not in sorgente, vietato
-    assert "p.acquisition_id IS NOT NULL AND p.mandate_type IS NOT NULL" in mandates.E_UN_INCARICO
+    # SENTINELLA AGGIORNATA DA FIX-MANDATE-1: la vista Incarichi e' la
+    # definizione canonica (core/property_mandate.py) con origine acquisizione;
+    # tipo e inizio mancanti non la escludono piu' (dati da completare).
+    from core import property_mandate
+    assert mandates.E_UN_INCARICO.startswith(property_mandate.acquisition_mandate_sql("p"))
+    assert "p.mandate_type IS NOT NULL" not in mandates.E_UN_INCARICO
     assert not (ROOT / "mandates").exists()
     assert not any("mandates" in p.name for p in (ROOT / "migrations").glob("*.sql"))
     # le note non toccano audit ne' Agenda

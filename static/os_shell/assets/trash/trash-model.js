@@ -50,7 +50,11 @@ export function blockerView(blockers) {
         history: items.map((h) => ({ label: h.label || h.code, count: h.count ?? null })),
       };
     }
-    return { code: b.code, label: b.label || b.code, count: items.length || null, history: null };
+    // FIX-MANDATE-1: il backend puo' indicare dove trovare l'oggetto del
+    // blocco (es. «Apri incarico»): solo collegamenti interni della Shell.
+    const link = b.link && typeof b.link.href === 'string' && b.link.href.startsWith('#/')
+      ? { href: b.link.href, label: b.link.label || 'Apri' } : null;
+    return { code: b.code, label: b.label || b.code, count: items.length || null, history: null, link };
   });
 }
 

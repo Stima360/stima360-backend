@@ -61,9 +61,21 @@ def _new_mandate(data, current=None):
     return data.get('commercial_status') == 'mandate' and current.get('commercial_status') != 'mandate'
 
 
+#: FIX-MANDATE-1: un incarico nato da un'acquisizione resta un incarico
+#: (definizione canonica, core/property_mandate.py). Tipo e data d'inizio si
+#: possono cambiare, non svuotare: svuotarli lo faceva sparire dalla sezione
+#: Incarichi mentre il Cestino lo vedeva ancora. La scadenza resta facoltativa.
+MANDATE_FIELDS_REQUIRED = ("Un incarico generato da un'acquisizione resta un incarico: "
+                           "tipo e data d'inizio si possono modificare, non svuotare")
+
+
 def _check_mandate_origin(data, current=None):
     if _new_mandate(data, current) and (current or {}).get('acquisition_id') is None:
         raise ValidationError(MANDATE_ONLY_FROM_ACQUISITION)
+    if (current or {}).get('acquisition_id') is not None:
+        for field in ('mandate_type', 'mandate_start'):
+            if field in data and (data[field] is None or not str(data[field]).strip()):
+                raise ValidationError(MANDATE_FIELDS_REQUIRED)
 
 
 def _may_assign(ctx):

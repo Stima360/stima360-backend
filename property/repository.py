@@ -4,6 +4,10 @@ from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core import property_trash as _property_trash
+from core import property_mandate as _mandato
+#: FIX-MANDATE-1: «incarico in scadenza» (KPI, avvisi, filtro elenco) vale solo per
+#: un incarico reale, con la definizione canonica: dati parziali non scadono.
+_INCARICO = _mandato.real_mandate_sql('p')
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.scope import ProgrammingError
 
@@ -268,7 +272,7 @@ def list_properties(*args, **kwargs):
         filters.append('pl_filter.lead_id=%s')
         params.append(lead_id)
     if mandate_expiring:
-        filters.append("p.archived_at IS NULL AND p.mandate_end IS NOT NULL AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND p.commercial_status NOT IN ('sold','withdrawn','archived')")
+        filters.append(f"p.archived_at IS NULL AND {_INCARICO} AND p.mandate_end IS NOT NULL AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND p.commercial_status NOT IN ('sold','withdrawn','archived')")
     if missing_documents:
         filters.append("EXISTS (SELECT 1 FROM property_documents pd WHERE pd.property_id=p.id AND (pd.status IN ('missing','requested','expired','rejected') OR (pd.expires_at IS NOT NULL AND pd.expires_at < CURRENT_DATE)))")
     where = ' WHERE ' + ' AND '.join(filters) if filters else ''
@@ -859,7 +863,7 @@ def dashboard(ctx=None):
     agency_id = ctx.require_agency() if ctx is not None and hasattr(ctx, 'require_agency') else None
     with core_cursor() as (_, cur):
         if agency_id is not None:
-            cur.execute("""
+            cur.execute(f"""
             SELECT
               COUNT(*) FILTER (WHERE archived_at IS NULL) AS total,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
@@ -867,7 +871,7 @@ def dashboard(ctx=None):
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='B') AS class_b,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
               COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
-              COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
+              COUNT(*) FILTER (WHERE archived_at IS NULL AND {_INCARICO} AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
             WHERE agency_id = %s AND (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """, (agency_id,))
@@ -889,7 +893,7 @@ def dashboard(ctx=None):
               WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND p.agency_id = %s AND v.status IN ('scheduled','confirmed') AND v.scheduled_at>=NOW() ORDER BY v.scheduled_at LIMIT 8""", (agency_id,))
             kpi['next_visits'] = [dict(x) for x in cur.fetchall()]
         else:
-            cur.execute("""
+            cur.execute(f"""
             SELECT
               COUNT(*) FILTER (WHERE archived_at IS NULL) AS total,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')) AS active,
@@ -897,7 +901,7 @@ def dashboard(ctx=None):
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='B') AS class_b,
               COUNT(*) FILTER (WHERE archived_at IS NULL AND classification='C') AS class_c,
               COALESCE(SUM(asking_price) FILTER (WHERE archived_at IS NULL AND commercial_status IN ('mandate','active','reserved','under_offer')),0) AS active_value,
-              COUNT(*) FILTER (WHERE archived_at IS NULL AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
+              COUNT(*) FILTER (WHERE archived_at IS NULL AND {_INCARICO} AND mandate_end IS NOT NULL AND mandate_end <= CURRENT_DATE + INTERVAL '30 days' AND commercial_status NOT IN ('sold','withdrawn','archived')) AS expiring_mandates
             FROM properties p
             WHERE (to_jsonb(p)->>'deleted_at') IS NULL AND COALESCE(to_jsonb(p) ->> 'record_kind', 'crm') = 'crm'
             """)
@@ -929,13 +933,14 @@ def alerts(ctx=None):
     agency_id = ctx.require_agency() if ctx is not None and hasattr(ctx, 'require_agency') else None
     with core_cursor() as (_, cur):
         if agency_id is not None:
-            cur.execute("""
+            cur.execute(f"""
             SELECT 'mandate' AS alert_type,p.id AS property_id,p.title,p.code,p.mandate_end AS due_date,
                    'Incarico in scadenza' AS message
             FROM properties p
             WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.agency_id = %s
               AND p.commercial_status NOT IN ('sold','withdrawn','archived')
+              AND {_INCARICO}
               AND p.mandate_end IS NOT NULL
               AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days'
             UNION ALL
@@ -960,12 +965,13 @@ def alerts(ctx=None):
             ORDER BY due_date NULLS LAST
             """, (agency_id, agency_id, agency_id))
         else:
-            cur.execute("""
+            cur.execute(f"""
             SELECT 'mandate' AS alert_type,p.id AS property_id,p.title,p.code,p.mandate_end AS due_date,
                    'Incarico in scadenza' AS message
             FROM properties p
             WHERE p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
               AND p.commercial_status NOT IN ('sold','withdrawn','archived')
+              AND {_INCARICO}
               AND p.mandate_end IS NOT NULL
               AND p.mandate_end <= CURRENT_DATE + INTERVAL '30 days'
             UNION ALL
