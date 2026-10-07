@@ -731,3 +731,28 @@ Suite intera su PostgreSQL locale (`P29_TEST_DSN`), albero di lavoro finale prim
   - **1 test fragile preesistente:** `test_lmc3_valuation_snapshot_postgres::test_19`. Cerca la stringa «82» dentro un dizionario che contiene un timestamp; in quel run i microsecondi erano 482885. Ripetuto da solo: 21/21 verdi. È un problema dell'ambiente di prova, non del codice.
 
 Le 11 sentinelle git-status e il test fragile si rieseguono dopo il commit. L'esito è nella copia di questo report nel Project e nella consegna della fase.
+
+## Dopo il commit `92a2dc7` (push normale su `core-0.1-test`)
+
+- **Le 11 sentinelle git-status passano.** a32_2, lmc2, lmc7, lmc8, lmc9, lmc11, lmc13 e lmc15 rieseguiti: 334 verdi.
+- **Restano rossi solo 2 fallimenti, entrambi già nella base:** lmc15 test_41 e test_42.
+- **Test fragile:** `test_lmc3_valuation_snapshot_postgres` rieseguito da solo, 21/21 verdi.
+- **Deploy Render TEST:** avviato dal push, **non verificato** da qui.
+- **Migration 087 su TEST:** **da applicare**, vedi §7.
+
+## Dopo il commit `2624d5a` del completamento (push normale su `core-0.1-test`)
+
+**Suite completa su PostgreSQL locale, albero pulito:** 23 failed, 10906 passed, 115 skipped, 49 errors (19:50).
+
+- **Contro la base dopo CREAZIONE-GUIDATA-1 (24 failed, 49 errors):**
+  - errori identici;
+  - nessun fallimento nuovo dal codice di questa fase;
+  - 3 fallimenti della base ora verdi (a32_2 s14, p27_7 d3, p29_3g test_18), perché l'albero è pulito.
+- **Le 6 sentinelle git-status del run prima del commit passano.**
+- **2 rossi in più, entrambi fragili e già presenti su `92a2dc7`:**
+  - `test_lmc3_valuation_snapshot_postgres::test_19`: il timestamp contiene «82»;
+  - `test_p29_3e_cron_integration_postgres::test_07` (due giri di cron simultanei, finalizzazione annullata dopo l'invio). Riprodotto **sul commit `92a2dc7`, senza questo completamento**: 1 rosso su 12 ripetizioni; sul commit nuovo 2 su 14. Non tocca nulla di questa fase.
+- **Deploy Render TEST:** avviato dal push, **non verificato** da qui.
+- **Migration 087 e 088 su TEST:** **da applicare** con `roadmap/CATALOGO-CANONICO-1_TEST_RUNBOOK.md`.
+- **Collaudo live:** pendente. Dettagliata **non** certificata live.
+- **Frontend del sito:** contratto pronto (§10.2), non implementato (fuori repository).
