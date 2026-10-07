@@ -230,6 +230,17 @@ def update_property(ctx,i,p):
     _lifecycle.check_status_patch(data,current)
     if data.get('commercial_status')=='archived' and current and current.get('commercial_status')=='archived':
         del data['commercial_status']
+    # CATALOGO-CANONICO-1: scegliere la tipologia (anche «Altro») chiude il suo
+    # «Da verificare» arrivato dal sito; il resto di `metadata` resta com'e'.
+    if data.get('property_type') is not None and 'metadata' not in data:
+        attuale=current if current is not None else repository.get_property(ctx,i)
+        metadata=dict((attuale or {}).get('metadata') or {})
+        sospesi=dict(metadata.get('site_unverified') or {})
+        if 'property_type' in sospesi:
+            sospesi.pop('property_type')
+            if sospesi: metadata['site_unverified']=sospesi
+            else: metadata.pop('site_unverified',None)
+            data['metadata']=metadata
     _check_catalog(data,current)
     _census._check_cadastral(data)
     _check_census_guard(data,current)

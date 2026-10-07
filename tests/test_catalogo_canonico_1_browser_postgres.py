@@ -7,8 +7,9 @@ servita da uvicorn (stesso server di EDIFICI-1, solo l'autenticazione
 sostituita). A 1280 px e 390 px:
 
   b01  la scheda nata dalla stima si apre sulla tab Censimento con «Dal sito
-       Stima360»: stima, dettagliata, valore da verificare, differenza;
-       «Applica» scrive il valore del sito;
+       Stima360»: stima, dettagliata (dal prefill, con i campi lasciati come
+       precompilati), valore da verificare, differenza; «Applica» scrive il
+       valore del sito;
   b02  «Modifica immobile»: Stato dal catalogo, Vista mare «Non indicato»
        (null, non "No"), salvataggio e riapertura con i valori salvati;
   b03  Panoramica «Mare e dotazioni»; nessuno scorrimento orizzontale.
@@ -44,7 +45,8 @@ def test_b01_b02_b03_dal_sito_alla_scheda_in_chromium(sito, server, larghezza):
     sid = s.stima({**COMPLETA, **_persona(), "pertinenze": "garage, posto barca, balconi"})["id"]
     pid = s.scheda_di(sid)
     assert s.api().patch(f"/api/property/properties/{pid}", json={"rooms": 4}).status_code == 200
-    s.dettaglio({"stima_id": sid, "locali": "3", "classe": "C", "riscaldamento": "Autonomo"})
+    # la dettagliata dal prefill: il cliente cambia i locali (3 -> 2) e aggiunge classe e riscaldamento
+    s.dettaglio_dal_prefill(sid, locali="2", classe="C", riscaldamento="Autonomo")
     cartella = Path(os.environ.get("EDIFICI1_SHOTS") or (Path("/tmp") / "edifici1_shots"))
     cartella.mkdir(parents=True, exist_ok=True)
     mobile = larghezza < 768
@@ -61,14 +63,15 @@ def test_b01_b02_b03_dal_sito_alla_scheda_in_chromium(sito, server, larghezza):
             page.wait_for_selector("#site-provenance")
             testo = page.text_content("#site-provenance")
             for atteso in ("Dal sito Stima360", f"Stima n. {sid}", "stima dettagliata", "Da verificare", "posto barca",
-                           "Locali", "sito: 3", "scheda: 4", "Applica", "Ignora"):
+                           "Locali", "sito: 2", "scheda: 4", "Applica", "Ignora",
+                           "Lasciati come il sito li aveva precompilati"):
                 assert atteso in testo, atteso
             assert "Dal sito" in page.inner_text("#property-tab-content")       # badge sugli accessori
             misure.append(_sfora(page))
             page.screenshot(path=str(cartella / f"catalogo_provenienza_{larghezza}.png"), full_page=True)
             page.click("[data-conflict-apply]")
             page.wait_for_function("() => !document.querySelector('[data-conflict-apply]')")
-            assert _q(m, "SELECT rooms FROM properties WHERE id = %s", (pid,))[0][0] == 3
+            assert _q(m, "SELECT rooms FROM properties WHERE id = %s", (pid,))[0][0] == 2
 
             # --- b02: «Modifica immobile» ----------------------------------------------
             page.click("#property-edit-btn")

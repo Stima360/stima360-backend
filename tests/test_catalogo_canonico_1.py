@@ -1,4 +1,4 @@
-"""CATALOGO-CANONICO-1 (FASE D) - catalogo canonico, migration 087, aggancio al sito.
+"""CATALOGO-CANONICO-1 (FASE D) - catalogo canonico, migration 087 e 088, aggancio al sito.
 
 Senza database: il catalogo (`property/site_catalog.py`) contro le sue fonti
 nel codice (motore, `home_profile`, `owner/home_update`, schemi), la
@@ -16,6 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SU = (ROOT / "migrations" / "087_catalogo_canonico_1_site_attributes.sql").read_text(encoding="utf-8")
 GIU = (ROOT / "migrations" / "087_catalogo_canonico_1_site_attributes_down.sql").read_text(encoding="utf-8")
+SU88 = (ROOT / "migrations" / "088_catalogo_canonico_1b_site_inbox.sql").read_text(encoding="utf-8")
+GIU88 = (ROOT / "migrations" / "088_catalogo_canonico_1b_site_inbox_down.sql").read_text(encoding="utf-8")
 
 
 def _cat():
@@ -100,12 +102,13 @@ def test_p03_impronta_stabile_e_sensibile():
 
 # --- migration 087 ---------------------------------------------------------------------
 
-def test_m01_la_087_e_valida_per_il_runner_additiva_e_l_ultima():
+def test_m01_la_087_e_valida_per_il_runner_e_additiva():
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 non e' piu' l'ultima (088)
     sys.path.insert(0, str(ROOT / "scripts"))
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m087 = tutte[-1]
+    m087 = next(m for m in tutte if m.version.startswith("087_"))
     assert m087.version == "087_catalogo_canonico_1_site_attributes"
     assert m087.down_available and not m087.non_transactional and runner.validate_migration(m087) == []
     eseguibile = "\n".join(r for r in SU.splitlines() if not r.strip().startswith("--"))
@@ -162,12 +165,30 @@ def test_h03_i_wrapper_non_lasciano_uscire_eccezioni(monkeypatch):
     assert site_sync.safe_sync_detail(stima_id=1, detail_id=2, raw={}) is None
 
 
-def test_h04_senza_contatto_e_lead_nessuna_scheda():
+def test_h04_senza_contatto_e_lead_nessuna_scheda(monkeypatch):
+    """Il bridge senza contatto o lead: l'invio si conserva comunque (prima di
+    ogni trasferimento) e il contatto/lead si cerca in `lead_stime`; se non
+    c'e', nessuna scheda (`no_contact_lead`, verificato su PostgreSQL nel 09)."""
     from property import site_sync
-    for esito in (None, {"status": "conflict"}, {"status": "skipped", "contact_id": 3},
-                  {"status": "linked", "contact_id": 3, "lead_id": None}):
-        assert site_sync.sync_public_stima(None, stima_id=1, raw={}, bridge_result=esito) == {
-            "status": "skipped", "reason": "no_contact_lead"}
+
+    class Cursore:
+        def __init__(self):
+            self.sql = []
+
+        def execute(self, sql, params=None):
+            self.sql.append(sql)
+
+        def fetchone(self):
+            return None
+
+    for esito in ({"status": "linked", "contact_id": 3, "lead_id": None}, {"status": "skipped", "contact_id": 3}, {}):
+        cur = Cursore()
+        sub = {"stima_id": 1, "agency_id": 1, "contact_id": esito.get("contact_id"), "lead_id": esito.get("lead_id")}
+        assert site_sync._contatto_e_lead(cur, sub) == (None, None) and "lead_stime" in cur.sql[0]
+    # senza 087/088 (o senza la stima) nessun trasferimento, e nessuna eccezione
+    monkeypatch.setattr(site_sync, "record_public_stima", lambda **k: {"status": "not_installed"})
+    assert site_sync.sync_public_stima(None, stima_id=1, raw={}, bridge_result=None) == {
+        "status": "skipped", "reason": "not_installed"}
 
 
 def test_h05_il_motore_non_cambia():
@@ -182,3 +203,125 @@ def test_h05_il_motore_non_cambia():
     assert valuation.compute_from_payload(completo) == {
         "base_mq": 1650.0, "eur_mq_finale": 2504.4, "valore_pertinenze": 30000.0, "price_exact": 244126.0,
         "mq_calcolati": 86.0}
+
+
+# --- completamento: prefill, identita' della richiesta, tipologia da verificare ---------
+
+def test_s01_dettagliata_precompilata_uguale_non_e_una_dichiarazione():
+    cat = _cat()
+    rapida = {"comune": "Tortoreto", "mq": "85,5", "tipologia": "Appartamento"}
+    # cio' che /api/prefill serve: `stime`, con mq intero e i default del backend
+    servito = {"comune": "Tortoreto", "mq": 86, "tipologia": "Appartamento", "piano": "1", "locali": 3,
+               "anno": 2000, "via": "Zona", "pertinenze": "garage", "mqGarage": 18, "numBalconi": 0}
+    assert "piano" not in cat.map_site_payload(rapida).fields
+    pre = cat.map_site_payload(servito, detailed=True)
+    # rimandato tale e quale: nulla da dichiarare
+    d = cat.map_site_payload(dict(servito), detailed=True)
+    tolti = cat.separate_prefilled(d, pre, None)
+    assert d.fields == {} or set(d.fields) <= {"city", "region", "province"}
+    assert {"surface_sqm", "floor", "rooms", "year_built", "accessory:box"} <= set(tolti)
+    assert d.pertinenze_declared is False                     # elenco invariato: nessuna pertinenza tolta
+    # cambiato dal cliente: correzione esplicita
+    d = cat.map_site_payload({**servito, "mq": "90", "piano": "2", "mqGarage": "20"}, detailed=True)
+    cat.separate_prefilled(d, pre, None)
+    assert (d.fields["surface_sqm"], d.fields["floor"]) == (Decimal("90.00"), "2")
+    assert d.accessories["box"]["surface_sqm"] == Decimal("20.00") and "rooms" not in d.fields
+    # confermato (campi_dichiarati): vale anche se uguale; lista o stringa
+    for dichiarati in (["locali", "anno"], cat.declared_fields({"campi_dichiarati": "locali, anno"})):
+        d = cat.map_site_payload(dict(servito), detailed=True)
+        cat.separate_prefilled(d, pre, dichiarati)
+        assert (d.fields["rooms"], d.fields["year_built"]) == (3, 2000) and "floor" not in d.fields
+    # senza prefill conservato (stima senza riga `stime`): nulla si toglie
+    d = cat.map_site_payload(dict(servito), detailed=True)
+    assert cat.separate_prefilled(d, None, None) == [] and d.fields["floor"] == "1"
+
+
+def test_s02_invio_conservato_senza_dati_di_contatto_e_identita_della_richiesta():
+    cat = _cat()
+    chiave = "4b0f3a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
+    valori, altre = cat.declared_payload({"mq": "85,5", "nome": "Mario", "email": "m@example.test",
+                                          "telefono": "333", "consenso_marketing": True, "note": "privata",
+                                          "client_request_id": chiave, "campi_dichiarati": ["mq"], "stima_id": 5,
+                                          "pertinenze": "garage", "mqGarage": "18,5"})
+    assert valori == {"mq": "85,5", "pertinenze": "garage", "mqGarage": "18,5"}       # COME inviati
+    assert altre == ["consenso_marketing", "email", "nome", "note", "telefono"]       # solo i nomi
+    assert str(cat.request_id({"client_request_id": chiave})) == chiave
+    for non_valida in (None, "", "abc", 12):
+        assert cat.request_id({"client_request_id": non_valida}) is None
+    assert cat.declared_fields({}) is None and cat.declared_fields({"campi_dichiarati": "mq;piano anno"}) == ["anno", "mq", "piano"]
+
+
+def test_s03_le_chiavi_del_prefill_coincidono_con_main():
+    """`PREFILL_KEYS` e' la copia di cio' che `/api/prefill` restituisce: se
+    il sorgente cambia, questa sentinella lo dice."""
+    cat = _cat()
+    sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
+    corpo = sorgente[sorgente.index("async def prefill(t: str):"):]
+    corpo = corpo[: corpo.index("return dict(zip(keys, row))")]
+    chiavi = re.findall(r'"(\w+)"', corpo[corpo.index("keys = ["):])
+    colonne = re.findall(r"s\.(\w+)", corpo[corpo.index("SELECT"): corpo.index("FROM stime s")])
+    coppie = dict(zip(chiavi, colonne))
+    attese = {k: c for k, c in coppie.items() if k not in ("id", "nome", "cognome", "email", "telefono")}
+    assert dict(cat.PREFILL_KEYS) == attese
+
+
+def test_s04_tipologia_sconosciuta_da_verificare_mai_altro():
+    cat = _cat()
+    from property import catalog
+    e = cat.map_site_payload({"tipologia": "Loft"})
+    assert "property_type" not in e.fields
+    assert e.unverified["property_type"] == {"raw": "Loft", "reason": "Tipologia non presente nel catalogo"}
+    # «Altro» scelto esplicitamente resta una scelta: nessun «da verificare»
+    assert cat.map_site_payload({"tipologia": "Altro"}).fields["property_type"] == "other"
+    assert cat.map_site_payload({"tipologia": "Altro"}).unverified == {}
+    da_verificare = {"property_type": "other", "city": "Tortoreto",
+                     "metadata": {"site_unverified": {"property_type": {"raw": "Loft"}}}}
+    assert catalog.type_to_verify(da_verificare)
+    assert catalog.generated_title(da_verificare) == "Tipologia da verificare · Tortoreto"
+    assert catalog.generated_title({"property_type": "other", "city": "Tortoreto"}).startswith("Altro")
+    assert not catalog.type_to_verify({**da_verificare, "property_type": "villa"})
+
+
+def test_m02_la_088_e_l_ultima_additiva_e_con_i_tipi_di_database_py():
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 e' l'ultima
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import p26_migrate as runner
+    tutte = runner.discover_migrations()
+    runner.verify_contiguous(tutte)
+    m088 = tutte[-1]
+    assert m088.version == "088_catalogo_canonico_1b_site_inbox"
+    assert m088.down_available and not m088.non_transactional and runner.validate_migration(m088) == []
+    eseguibile = "\n".join(r for r in SU88.splitlines() if not r.strip().startswith("--"))
+    assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", eseguibile, re.M)
+    assert not re.search(r"\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\bDROP\s+TABLE\b|\bDROP\s+COLUMN\b|"
+                         r"\bTRUNCATE\b|\bALTER\s+COLUMN\b", eseguibile, re.I)
+    # le 28 colonne: le stesse, con gli STESSI tipi, di database.py (mai eseguito sul TEST)
+    legacy = (ROOT / "database.py").read_text(encoding="utf-8")
+    legacy = legacy[legacy.index("def migrazione_stime_dettagliate_completa"):]
+    legacy = legacy[: legacy.index('""")')]
+    attese = {n.lower(): t for n, t in re.findall(r"ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?)", legacy)}
+    blocco = eseguibile[eseguibile.index("ALTER TABLE stime_dettagliate"): eseguibile.index("CREATE TABLE")]
+    trovate = {n: t for n, t in re.findall(r"ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?)", blocco)}
+    assert len(attese) == 28 and trovate == attese
+    assert "CREATE TABLE IF NOT EXISTS site_submissions" in eseguibile
+    assert "uq_site_submissions_quick" in eseguibile and "uq_site_submissions_detail" in eseguibile
+    # la down: transazione propria, si ferma con invii non trasferiti, NON toglie le colonne
+    assert re.search(r"^\s*BEGIN\s*;", GIU88, re.M) and re.search(r"^\s*COMMIT\s*;", GIU88, re.M)
+    assert "RAISE EXCEPTION" in GIU88 and "'pending', 'failed'" in GIU88
+    eseguibile_giu = "\n".join(r for r in GIU88.splitlines() if not r.strip().startswith("--"))
+    assert "stime_dettagliate" not in eseguibile_giu and "DROP COLUMN" not in eseguibile_giu
+
+
+def test_r01_lo_script_di_recupero_e_chiuso_fuori_dal_test(monkeypatch, capsys):
+    import importlib
+    script = importlib.import_module("scripts.site_sync_recover")
+    for nome in (None, "", "stima360_db", "stima360_db_prod", "altro_test_qualsiasi"):
+        if nome is None:
+            monkeypatch.delenv("DB_NAME", raising=False)
+        else:
+            monkeypatch.setenv("DB_NAME", nome)
+        assert script.main(["--census"]) == 2
+    monkeypatch.setenv("DB_NAME", "stima360_db_test")
+    assert script.main(["--apply"]) == 2
+    assert script.main(["--apply", "--confirm-database", "stima360_db"]) == 2
+    assert "BLOCKED" in capsys.readouterr().err

@@ -373,6 +373,8 @@ def generated_title(data: dict[str, Any]) -> str:
     "Appartamento · Tortoreto (Lido Sud) · Via Roma 12".
     """
     label = PROPERTY_TYPE_LABELS.get(data.get("property_type") or "apartment", "Immobile")
+    if type_to_verify(data):
+        label = TYPE_TO_VERIFY_LABEL
     parts = [label]
     city = (data.get("city") or "").strip()
     microzone = (data.get("microzone") or "").strip()
@@ -383,6 +385,20 @@ def generated_title(data: dict[str, Any]) -> str:
     if street:
         parts.append(street)
     return " · ".join(parts)[:TITLE_MAX]
+
+
+#: CATALOGO-CANONICO-1: una tipologia arrivata dal sito e non riconosciuta (o
+#: non dichiarata) si salva con il valore TECNICO `other` (la colonna e' NOT
+#: NULL) e `metadata.site_unverified.property_type`: la scheda la mostra «Da
+#: verificare», mai come una scelta esplicita «Altro».
+TYPE_TO_VERIFY_LABEL = "Tipologia da verificare"
+
+
+def type_to_verify(data: dict) -> bool:
+    metadata = data.get("metadata") or {}
+    metadata = getattr(metadata, "adapted", metadata)
+    return (data.get("property_type") or "other") == "other" and bool(
+        isinstance(metadata, dict) and (metadata.get("site_unverified") or {}).get("property_type"))
 
 
 #: Campi da cui dipende la descrizione: se nessuno cambia, non la si tocca.

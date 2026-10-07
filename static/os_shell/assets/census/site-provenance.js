@@ -16,8 +16,9 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as censusApi from './census-api.js';
 import { errorMessage, labelOf } from './census-model.js';
 
-const ORIGINI = { auto: 'Scheda nata dalla stima', retry: 'Stesso invio ripetuto', manual_link: 'Collegata a mano' };
-const MOTIVI = { same_contact: 'stesso contatto', same_address: 'stesso indirizzo' };
+const ORIGINI = { auto: 'Scheda nata dalla stima', retry: 'Stessa richiesta ripetuta', manual_link: 'Collegata a mano' };
+const MOTIVI = { same_submission_data: 'stesso contatto e stessi dati (forse un nuovo invio della stessa stima)',
+  same_contact: 'stesso contatto', same_address: 'stesso indirizzo' };
 
 /** Il valore come lo legge l'operatore: Si'/No, etichette di catalogo, m². */
 export function siteValueText(campo, valore, opzioni = {}) {
@@ -78,6 +79,7 @@ function voceHtml(v, ctx) {
   const aperti = (v.conflicts || []).filter((c) => c.status === 'open');
   const doppioni = (v.duplicates || []).filter((d) => !d.dismissed);
   const righe = declaredRows(v.declared, etichette, opzioni);
+  const precompilati = ((v.declared || {}).prefilled_unchanged || []).map((c) => siteFieldLabel(c, etichette, opzioni));
   return `
     <div class="site-source${attiva ? '' : ' site-source-closed'}" data-site-source="${escapeHtml(v.id)}">
       <div class="site-source-head"><strong>Stima n. ${escapeHtml(v.stima_id)}</strong>
@@ -97,6 +99,7 @@ function voceHtml(v, ctx) {
         <li class="census-list-item" data-duplicate="${escapeHtml(d.property_id)}"><a href="#/immobili/${escapeHtml(d.property_id)}">${escapeHtml(d.code || `#${d.property_id}`)}</a>
           <span class="muted">${escapeHtml((d.reasons || []).map((r) => MOTIVI[r] || r).join(', '))}</span>
           ${canManage ? `<button type="button" class="btn btn-small" data-relink-to="${escapeHtml(d.property_id)}">Collega questa stima a ${escapeHtml(d.code || `#${d.property_id}`)}</button><button type="button" class="btn ghost btn-small" data-dismiss="${escapeHtml(d.property_id)}">Non è lo stesso</button>` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${precompilati.length ? `<p class="muted site-prefilled">Lasciati come il sito li aveva precompilati (non sono una nuova dichiarazione del cliente): ${escapeHtml(precompilati.join(', '))}.</p>` : ''}
       ${righe.length ? `<details class="site-declared"><summary>Valori dichiarati (${righe.length})</summary><div class="detail-grid">${righe.map((r) => `
         <div class="detail-item"><label>${escapeHtml(r.label)}</label>${escapeHtml(r.text)}${r.raw ? ` <small class="muted">sito: «${escapeHtml(r.raw)}»</small>` : ''}</div>`).join('')}</div></details>` : ''}
       ${attiva && canManage ? `<div class="site-relink"><label for="site-relink-${escapeHtml(v.id)}" class="muted">Collega questa stima a un altro immobile</label>

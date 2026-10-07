@@ -406,7 +406,7 @@ def update_property(*args, **kwargs):
         # DELETE-ARCH Fase 2B1: `deleted_at` via to_jsonb, valido anche senza la 085.
         old_cols = "asking_price,commercial_status,classification,to_jsonb(properties)->>'deleted_at' AS deleted_at"
         if derive_identity:
-            old_cols += ',title,code,archived_at,' + ','.join(TITLE_SOURCE_FIELDS)
+            old_cols += ',title,code,archived_at,metadata,' + ','.join(TITLE_SOURCE_FIELDS)
         if agency_id is not None:
             cur.execute(f'SELECT {old_cols} FROM properties WHERE id=%s AND agency_id = %s FOR UPDATE', (property_id, agency_id))
         else:
@@ -426,7 +426,11 @@ def update_property(*args, **kwargs):
             _lifecycle.check_status_patch(data, old)
             if ('title' not in data and old.get('title') == generated_title(old)
                     and any(f in data for f in TITLE_SOURCE_FIELDS)):
-                data['title'] = generated_title({**old, **{f: data[f] for f in TITLE_SOURCE_FIELDS if f in data}})
+                # CATALOGO-CANONICO-1: anche `metadata` (la tipologia «Da verificare»)
+                nuovi = {f: data[f] for f in TITLE_SOURCE_FIELDS if f in data}
+                if 'metadata' in data:
+                    nuovi['metadata'] = getattr(data['metadata'], 'adapted', data['metadata'])
+                data['title'] = generated_title({**old, **nuovi})
             if not (old.get('code') or '').strip() and not (data.get('code') or '').strip():
                 data['code'] = _free_generated_code(cur, property_id)
         try:

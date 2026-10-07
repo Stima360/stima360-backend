@@ -110,7 +110,7 @@ FIELD_LABELS: dict[str, str] = {
     "sea_band": "Fascia mare (sito)", "sea_barrier": "Ferrovia o strada verso il mare",
     "sea_view": "Vista mare", "sea_view_detail": "Dettaglio vista mare", "heating": "Riscaldamento",
     "air_conditioning": "Climatizzazione", "air_conditioning_type": "Tipo di climatizzazione",
-    "exposure": "Esposizione", "furnishing": "Arredamento", "condo_fees": "Spese condominiali (€)",
+    "exposure": "Esposizione", "furnishing": "Arredamento", "condo_fees": "Spese condominiali (€, periodicità non specificata)",
     "other_features": "Altre caratteristiche",
 }
 
@@ -170,6 +170,9 @@ class Esito:
         self.declared: dict[str, Any] = {}
         self.unmapped: list[dict[str, Any]] = []
         self.pertinenze_declared = False     # il payload portava la lista delle pertinenze
+        #: campi che la scheda deve mostrare «Da verificare» anche se la colonna
+        #: ha un valore tecnico (oggi solo la tipologia, NOT NULL nel database)
+        self.unverified: dict[str, dict[str, Any]] = {}
 
     def metti(self, campo: str, valore, grezzo) -> None:
         if valore is None:
@@ -427,6 +430,9 @@ def map_site_payload(raw: dict | None, *, comune: str | None = None, detailed: b
     alias = property_type_aliases()
     _campo(e, raw, "property_type", ("tipologia",),
            lambda g: (alias.get(_chiave(str(g))), _chiave(str(g)) in alias), "Tipologia non presente nel catalogo")
+    _nome, tip = _primo(raw, "tipologia")
+    if tip is not None and "property_type" not in e.fields:
+        e.unverified["property_type"] = {"raw": _testo(tip), "reason": "Tipologia non presente nel catalogo"}
     _campo(e, raw, "surface_sqm", ("mq",), lambda g: parse_decimal(g, zero_is_unknown=True), "Superficie non valida")
     _campo(e, raw, "floor", ("piano",), parse_floor, "Piano non riconosciuto")
     _campo(e, raw, "rooms", ("locali",), parse_rooms, "Locali non riconosciuti")
@@ -508,3 +514,174 @@ def fingerprint(esito: Esito) -> str:
 def engine_tokens_covered() -> bool:
     """Ogni token che il motore riconosce ha un tipo di accessorio."""
     return all(any(t in d["site_tokens"] for d in ACCESSORY_KINDS.values()) for t in PERTINENZE_TOKENS)
+
+
+# ---------------------------------------------------------------------------
+# Cio' che si conserva di un invio (senza dati di contatto)
+# ---------------------------------------------------------------------------
+
+#: Le chiavi del payload del sito che descrivono l'immobile: le sole lette da
+#: `map_site_payload`. Si conservano COME il form le ha inviate.
+SITE_DECLARED_KEYS: tuple[str, ...] = (
+    "comune", "microzona", "via", "civico", "tipologia", "mq", "piano", "locali", "bagni", "ascensore",
+    "anno", "stato", "posizioneMare", "posizionemare", "distanzaMare", "distanzamare", "fascia_mare",
+    "barrieraMare", "barrieramare", "vistaMareYN", "vistamareyn", "vistaMareDettaglio", "vistamaredettaglio",
+    "vistaMare", "vistamare", "altroDescrizione", "altrodescrizione", "classe", "riscaldamento",
+    "condizionatore", "condiz_tipo", "esposizione", "arredo", "spese_cond", "indirizzo", "pertinenze",
+    *(d[k] for d in ACCESSORY_KINDS.values() for k in ("mq", "qty") if d.get(k)),
+    *(d[k].lower() for d in ACCESSORY_KINDS.values() for k in ("mq", "qty") if d.get(k)),
+)
+
+#: Chiavi di servizio del sito: l'identita' della richiesta e i campi che il
+#: cliente ha dichiarato (modificato o confermato) nella dettagliata.
+REQUEST_ID_KEY = "client_request_id"
+DECLARED_FIELDS_KEY = "campi_dichiarati"
+
+
+def declared_payload(raw: dict | None) -> tuple[dict, list[str]]:
+    """(valori dell'immobile come inviati, nomi delle altre chiavi).
+
+    Nessun dato di contatto: nome, email, telefono, consensi, note restano
+    dove sono gia' (`stime`, `stime_dettagliate`, contatti). Delle chiavi che
+    il catalogo non conosce si conserva solo il NOME: dice che il sito manda
+    qualcosa che il CRM non legge ancora, senza copiarne il contenuto."""
+    raw = dict(raw or {})
+    conosciute = set(SITE_DECLARED_KEYS)
+    valori = {k: _json(v) if not isinstance(v, (dict, list)) else v for k, v in raw.items() if k in conosciute}
+    altre = sorted(k for k in raw if k not in conosciute and k not in (REQUEST_ID_KEY, DECLARED_FIELDS_KEY, "stima_id"))
+    return valori, altre
+
+
+def request_id(raw: dict | None):
+    """L'identita' stabile della richiesta, se il sito la manda (UUID)."""
+    import uuid as _uuid
+    valore = (raw or {}).get(REQUEST_ID_KEY)
+    if valore in (None, ""):
+        return None
+    try:
+        return _uuid.UUID(str(valore))
+    except ValueError:
+        return None
+
+
+def declared_fields(raw: dict | None) -> list[str] | None:
+    """`campi_dichiarati` della dettagliata: lista di chiavi del payload (o
+    stringa separata da virgole). None = il sito non lo manda (client attuale)."""
+    valore = (raw or {}).get(DECLARED_FIELDS_KEY)
+    if valore is None:
+        return None
+    if isinstance(valore, str):
+        valore = [v for v in re.split(r"[,;\s]+", valore) if v]
+    if not isinstance(valore, (list, tuple)):
+        return None
+    return sorted({str(v).strip() for v in valore if str(v).strip()})
+
+
+# ---------------------------------------------------------------------------
+# La dettagliata arriva PRECOMPILATA da /api/prefill
+# ---------------------------------------------------------------------------
+
+#: `/api/prefill` (main.py): chiave della risposta -> colonna di `stime`. Le
+#: stesse, nello stesso ordine; un test lo riconfronta con il sorgente.
+PREFILL_KEYS: tuple[tuple[str, str], ...] = (
+    ("comune", "comune"), ("microzona", "microzona"), ("via", "via"), ("civico", "civico"),
+    ("tipologia", "tipologia"), ("mq", "mq"), ("piano", "piano"), ("locali", "locali"), ("bagni", "bagni"),
+    ("pertinenze", "pertinenze"), ("ascensore", "ascensore"), ("anno", "anno"), ("stato", "stato"),
+    ("posizioneMare", "posizionemare"), ("distanzaMare", "distanzamare"), ("barrieraMare", "barrieramare"),
+    ("vistaMareYN", "vistamareyn"), ("vistaMareDettaglio", "vistamaredettaglio"), ("vistaMare", "vistamare"),
+    ("mqGiardino", "mqgiardino"), ("mqGarage", "mqgarage"), ("mqCantina", "mqcantina"),
+    ("mqPostoAuto", "mqpostoauto"), ("mqTaverna", "mqtaverna"), ("mqSoffitta", "mqsoffitta"),
+    ("mqTerrazzo", "mqterrazzo"), ("numBalconi", "numbalconi"), ("altroDescrizione", "altrodescrizione"),
+)
+
+#: Le chiavi del payload da cui nasce ciascun campo della scheda.
+FIELD_SOURCE_KEYS: dict[str, tuple[str, ...]] = {
+    "property_type": ("tipologia",), "surface_sqm": ("mq",), "floor": ("piano",), "rooms": ("locali",),
+    "bathrooms": ("bagni",), "elevator": ("ascensore",), "year_built": ("anno",), "condition": ("stato",),
+    "sea_position": ("posizioneMare", "posizionemare"), "sea_distance": ("distanzaMare", "distanzamare"),
+    "sea_band": ("fascia_mare",), "sea_barrier": ("barrieraMare", "barrieramare"),
+    "sea_view": ("vistaMareYN", "vistamareyn", "vistaMareDettaglio", "vistamaredettaglio", "vistaMare", "vistamare"),
+    "sea_view_detail": ("vistaMareDettaglio", "vistamaredettaglio", "vistaMare", "vistamare"),
+    "other_features": ("altroDescrizione", "altrodescrizione"), "energy_class": ("classe",),
+    "heating": ("riscaldamento",), "air_conditioning": ("condizionatore",), "air_conditioning_type": ("condiz_tipo",),
+    "exposure": ("esposizione",), "furnishing": ("arredo",), "condo_fees": ("spese_cond",),
+}
+
+
+def canon(valore):
+    """Confronto fra valore del database, del sito e salvato in JSON."""
+    if valore is None:
+        return None
+    if isinstance(valore, bool):
+        return ("b", valore)
+    if isinstance(valore, (int, float, Decimal)):
+        return ("n", Decimal(str(valore)).normalize())
+    testo = str(valore).strip()
+    if testo == "":
+        return None
+    try:
+        numero = Decimal(testo)
+        if numero.is_finite():
+            return ("n", numero.normalize())
+    except InvalidOperation:
+        pass
+    return ("s", testo)
+
+
+def same(a, b) -> bool:
+    return canon(a) == canon(b)
+
+
+def _dichiarato_da(chiavi: tuple[str, ...], dichiarati: set[str]) -> bool:
+    return any(_chiave(k) in dichiarati for k in chiavi)
+
+
+def separate_prefilled(dettaglio: Esito, precompilato: Esito | None, dichiarati: list[str] | None) -> list[str]:
+    """Toglie dalla dettagliata i valori RIMASTI COME IL SITO LI AVEVA
+    PRECOMPILATI e restituisce i nomi dei campi tolti.
+
+    `/api/prefill` legge `stime`, cioe' i default del backend (piano 1,
+    3 locali, anno 2000...) e i metri quadri ridotti a intero: un valore
+    rimandato tale e quale NON e' una dichiarazione del cliente, e
+    trattarlo come tale inventerebbe dati o perderebbe i decimali della
+    stima rapida. Il form attuale non dice quali campi il cliente ha
+    toccato, quindi la regola e' conservativa: uguale al precompilato =
+    nessuna informazione nuova. Un valore DIVERSO e' una correzione
+    esplicita.
+
+    `dichiarati` (`campi_dichiarati`, quando il sito lo manda) vince: un
+    campo li' elencato e' una dichiarazione anche se coincide con il
+    precompilato (il cliente l'ha confermato)."""
+    if precompilato is None:
+        return []
+    scelti = {_chiave(k) for k in (dichiarati or [])}
+    tolti: list[str] = []
+    for campo in list(dettaglio.fields):
+        if campo not in precompilato.fields or _dichiarato_da(FIELD_SOURCE_KEYS.get(campo, ()), scelti):
+            continue
+        if same(dettaglio.fields[campo], precompilato.fields[campo]):
+            dettaglio.fields.pop(campo)
+            dettaglio.declared.pop(campo, None)
+            tolti.append(campo)
+    for kind in list(dettaglio.accessories):
+        definizione = ACCESSORY_KINDS[kind]
+        chiavi = ("pertinenze", *(definizione[k] for k in ("mq", "qty") if definizione.get(k)))
+        prima = precompilato.accessories.get(kind)
+        if prima is None or _dichiarato_da(chiavi, scelti):
+            continue
+        voce = dettaglio.accessories[kind]
+        if all(same(voce.get(k), prima.get(k)) for k in ("surface_sqm", "quantity")):
+            dettaglio.accessories.pop(kind)
+            tolti.append(f"accessory:{kind}")
+    if dettaglio.pertinenze_declared and precompilato.pertinenze_declared and "pertinenze" not in scelti:
+        if set(dettaglio.declared.get("pertinenze", {}).get("value") or []) \
+                == set(precompilato.declared.get("pertinenze", {}).get("value") or []):
+            dettaglio.pertinenze_declared = False          # elenco invariato: nessuna pertinenza tolta
+    ignoti_prima = {(_chiave(u["site_field"]), _chiave(str(u["raw"]))) for u in precompilato.unmapped}
+    dettaglio.unmapped = [u for u in dettaglio.unmapped
+                          if (_chiave(u["site_field"]), _chiave(str(u["raw"]))) not in ignoti_prima
+                          or _chiave(u["site_field"]) in scelti]
+    if "property_type" in dettaglio.unverified and "property_type" in precompilato.unverified \
+            and same(dettaglio.unverified["property_type"]["raw"], precompilato.unverified["property_type"]["raw"]):
+        dettaglio.unverified.pop("property_type")
+    return tolti

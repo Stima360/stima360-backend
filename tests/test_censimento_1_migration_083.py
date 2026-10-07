@@ -33,10 +33,12 @@ def test_m01_la_083_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: poi la 085 (Cestino Immobili).
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: poi la 086 (guardie del Cestino).
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 087 (attributi del sito).
-    assert tutte[-2].version == "086_delete_arch_2b2_property_trash_guards"
-    assert tutte[-1].version == "087_catalogo_canonico_1_site_attributes"
-    assert tutte[-3].version == "085_delete_arch_2b1_property_trash"
-    assert tutte[-4].version == "084_delete_arch_1a_mistakes" and tutte[-5] is m083
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito), che ora e' l'ultima.
+    assert tutte[-3].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-2].version == "087_catalogo_canonico_1_site_attributes"
+    assert tutte[-4].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-5].version == "084_delete_arch_1a_mistakes" and tutte[-6] is m083
+    assert tutte[-1].version == "088_catalogo_canonico_1b_site_inbox"
     assert m083.down_available and not m083.non_transactional
     assert runner.validate_migration(m083) == []
     # il runner possiede la transazione: nessun BEGIN/COMMIT nel file su,

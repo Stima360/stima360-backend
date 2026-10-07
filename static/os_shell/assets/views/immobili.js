@@ -67,10 +67,10 @@
 import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
-import { propertyDisplayName, loadFormOptions } from '../components/property-form.js';
+import { propertyDisplayName, propertyTypeLabel, loadFormOptions } from '../components/property-form.js';
 import * as census from '../census/census-api.js';
 import { startCreation } from '../census/census-wizard.js';
-import { errorMessage, labelOf } from '../census/census-model.js';
+import { errorMessage } from '../census/census-model.js';
 
 const PAGE_SIZE = 50;
 
@@ -149,7 +149,7 @@ export async function renderImmobili(container, params = []) {
       [
         { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
-        { label: 'Tipologia', render: (p) => escapeHtml(labelOf(tipologie, p.property_type, p.property_type || '—')) },
+        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie)) },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
         { label: 'Prezzo', render: (p) => formatPrice(p.asking_price) },
         { label: 'Aggiornato il', render: (p) => escapeHtml(formatDate(p.updated_at)) },
@@ -255,7 +255,7 @@ export async function renderImmobili(container, params = []) {
     censusUnitsArea.innerHTML = renderTable(
       [
         { label: 'Unità', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
-        { label: 'Tipologia', render: (p) => escapeHtml(labelOf(tipologie, p.property_type, p.property_type || '—')) },
+        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie)) },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Collocazione', render: (p) => escapeHtml(p.building_id ? 'In palazzina' : 'Singola') },
         { label: 'Aggiornata il', render: (p) => escapeHtml(formatDate(p.updated_at)) },

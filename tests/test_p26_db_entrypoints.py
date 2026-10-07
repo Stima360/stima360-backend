@@ -817,15 +817,17 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
     ),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: un sito di connessione di
     # TEST nuovo, registrato con la sua giustificazione (nessun accesso
-    # applicativo nuovo: la sincronizzazione dal sito usa core_cursor).
+    # applicativo nuovo: la sincronizzazione dal sito usa core_cursor). Il
+    # completamento: le colonne della dettagliata le crea la 088, non piu'
+    # l'helper di database.py.
     "tests/test_catalogo_canonico_1_postgres.py": (
         "TEST-only CATALOGO-CANONICO-1 proof of the site -> property sync on the "
-        "COMPLETE schema (migration 087 included), reusing the CENSIMENTO-1 Fase "
+        "COMPLETE schema (migrations 087 and 088 included), reusing the CENSIMENTO-1 Fase "
         "3 module fixture (throwaway stima360_db_test, opt-in through "
         "P29_TEST_DSN, local DSN only, dropped at teardown). Registered in its "
-        "own right: it points the REAL public endpoints main.salva_stima and "
-        "main.salva_stima_dettagliata (main.get_connection, and database.py's "
-        "legacy helper for the detail columns) at the throwaway database, so the real CORE bridge and property/site_sync.py "
+        "own right: it points the REAL public endpoints main.salva_stima, "
+        "main.salva_stima_dettagliata and main.prefill (main.get_connection) "
+        "at the throwaway database, so the real CORE bridge and property/site_sync.py "
         "run end to end. It must not go through database.get_connection() for "
         "the test traffic: that is the application choke point and must stay "
         "uncoupled from a throwaway test database"

@@ -189,7 +189,8 @@ def test_m1_numerazione_contigua_e_non_sovrascrive_nulla(runner):
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: la 085 (Cestino Immobili) segue la 084.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 segue la 085.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito, provenienza), additiva, e' ora l'ultima.
-    assert max(numeri) == 87, "la serie non e' piu' contigua in coda"
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito), additiva, e' ora l'ultima.
+    assert max(numeri) == 88, "la serie non e' piu' contigua in coda"
 
 
 def test_m1_era_027_nessuna_transazione_nel_file_up(runner):

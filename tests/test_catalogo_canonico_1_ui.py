@@ -14,6 +14,9 @@ tests/test_catalogo_canonico_1_browser_postgres.py.
        stesso»); nessun nome di codice mostrato
   u04  chi non gestisce l'immobile vede la provenienza ma nessun bottone
   u05  accessori: quantita' in creazione e in modifica, badge «Dal sito»
+  u06  tipologia del sito non riconosciuta: «Da verificare (sito: «X»)» in
+       lista, Panoramica e «Modifica immobile», mai «Altro»; si chiude solo
+       scegliendo; i campi lasciati come precompilati sono elencati
   s01  contratti statici: nessuna lista di valori del sito scritta a mano
 """
 from __future__ import annotations
@@ -221,6 +224,64 @@ def test_u05_accessori_quantita_e_badge_dal_sito(staged):  # noqa: F811
     post = out["post"]
     assert post[0]["url"] == "/api/property/properties/30/accessories/5" and post[0]["body"] == {"quantity": 3}
     assert post[1]["url"] == "/api/property/properties/30/accessories" and post[1]["body"]["quantity"] == 2
+
+
+DA_VERIFICARE = {**IMMOBILE, "property_type": "other", "title": "Tipologia da verificare · Tortoreto",
+                 "metadata": {"origin": "stima360", "site_unverified": {"property_type": {"raw": "Loft", "reason": "x"}}}}
+
+
+@node
+def test_u06_tipologia_da_verificare_mai_altro_e_precompilati(staged):  # noqa: F811
+    tipi = [{"value": "apartment", "label": "Appartamento"}, {"value": "other", "label": "Altro"}]
+    pure = _js("static/os_shell/assets/components/property-form.js", f"""[
+      m.propertyTypeLabel({json.dumps(DA_VERIFICARE)}, {json.dumps(tipi)}),
+      m.propertyTypeLabel({{property_type: 'other', metadata: {{site_unverified: {{property_type: {{raw: null}}}}}}}}, {json.dumps(tipi)}),
+      m.propertyTypeLabel({{property_type: 'other', metadata: {{}}}}, {json.dumps(tipi)}),
+      m.propertyTypeLabel({{property_type: 'apartment', metadata: {{site_unverified: {{property_type: {{raw: 'Loft'}}}}}}}}, {json.dumps(tipi)})]""")
+    assert pure == ["Da verificare (sito: «Loft»)", "Da verificare (non dichiarata dal sito)", "Altro", "Appartamento"]
+    scenario = r"""
+      await wait(); await wait(); await wait();
+      C().querySelectorAll('.tab-btn').find((b) => b.dataset.tab === 'panoramica').dispatch('click'); await wait(); await wait();
+      const panoramica = C().querySelector('#property-tab-content').visibleText();
+      C().querySelector('#property-edit-btn').dispatch('click'); await wait(); await wait();
+      const tipo = q('#pf-type').value;
+      campo('#pf-floor', '4');
+      q('#property-form').dispatch('submit'); await wait(); await wait();
+      const primo = scritture().length;
+      C().querySelector('#property-edit-btn').dispatch('click'); await wait(); await wait();
+      campo('#pf-type', 'apartment', 'change');
+      q('#property-form').dispatch('submit'); await wait(); await wait();
+      report({ panoramica, tipo, primo, post: scritture() });
+    """
+    patch = ("PATCH", "/api/property/properties/30", [rt.ok({**DA_VERIFICARE, "floor": "4"}),
+                                                     rt.ok({**DA_VERIFICARE, "property_type": "apartment", "metadata": {}})])
+    rotte = _prima(("GET", "/api/property/form-options", [rt.ok(OPZIONI_CC)]),
+                   ("GET", "/api/property/properties/30/census", [rt.ok(CENSUS)]),
+                   ("GET", "/api/property/properties/30/site-sources",
+                    [rt.ok(_fonti(items=[{**FONTE, "declared": {**FONTE["declared"],
+                                                                 "prefilled_unchanged": ["surface_sqm", "rooms"]}}]))]),
+                   patch) + _rotte(immobile=DA_VERIFICARE)
+    out = _run(staged, scenario, rotte, "#/immobili/30")
+    assert "Da verificare (sito: «Loft»)" in out["panoramica"] and "Altro" not in out["panoramica"]
+    assert out["tipo"] == "__da_verificare__"
+    corpi = [c["body"] for c in out["post"] if c["url"] == "/api/property/properties/30"]
+    assert corpi[0] == {"floor": "4"}                         # «Da verificare» non viaggia: resta finche' non si sceglie
+    assert corpi[1]["property_type"] == "apartment"
+
+
+@node
+def test_u07_provenienza_precompilati_e_motivi_nuovi(staged):  # noqa: F811
+    scenario = r"""
+      await wait(); await wait(); await wait(); await wait();
+      report({ testo: C().querySelector('#site-provenance').visibleText() });
+    """
+    voce = {**FONTE, "origin": "retry", "declared": {**FONTE["declared"], "prefilled_unchanged": ["surface_sqm", "rooms"]},
+            "duplicates": [{"property_id": 12, "code": "IMM-12", "reasons": ["same_submission_data", "same_contact"], "dismissed": False}]}
+    out = _run(staged, scenario, _base(fonti=[rt.ok(_fonti(items=[voce]))]), "#/immobili/30")
+    t = out["testo"]
+    assert "Lasciati come il sito li aveva precompilati" in t and "Superficie (m²), Locali" in t
+    assert "stesso contatto e stessi dati" in t and "Stessa richiesta ripetuta" in t
+    assert "same_submission_data" not in t and "surface_sqm" not in t
 
 
 def test_s01_nessuna_lista_di_valori_del_sito_scritta_a_mano():

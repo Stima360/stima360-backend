@@ -50,6 +50,25 @@ export function propertyDisplayName(p) {
   return label || p.title || p.code || `Immobile #${p.id}`;
 }
 
+/** CATALOGO-CANONICO-1: la tipologia arrivata dal sito e non riconosciuta (o
+ *  non dichiarata) e' salvata con il valore tecnico `other` e
+ *  `metadata.site_unverified.property_type`: si mostra «Da verificare», con il
+ *  valore del sito, mai come la scelta esplicita «Altro». */
+export function siteTypeToVerify(p) {
+  const voce = p && p.property_type === 'other' && p.metadata && p.metadata.site_unverified
+    ? p.metadata.site_unverified.property_type : null;
+  return voce || null;
+}
+
+export function propertyTypeLabel(p, types) {
+  const daVerificare = siteTypeToVerify(p);
+  if (daVerificare) return daVerificare.raw ? `Da verificare (sito: «${daVerificare.raw}»)` : 'Da verificare (non dichiarata dal sito)';
+  const voce = (types || []).find((t) => t && t.value === (p && p.property_type));
+  return voce ? voce.label : ((p && p.property_type) || '—');
+}
+
+const TYPE_TO_VERIFY = '__da_verificare__';
+
 let optionsPromise = null;
 /** Le opzioni del form, una richiesta per pagina (si ricarica dopo un errore). */
 export function loadFormOptions(get = apiGet) {
@@ -186,7 +205,9 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
 
       <div class="form-grid-2">
         <div class="form-field"><label for="pf-type">Tipologia</label>
-          <select id="pf-type" class="input">${optionsHtml(types, str(p.property_type) || 'apartment', { placeholder: '—', historical: true }).replace('<option value="">—</option>', '')}</select></div>
+          <select id="pf-type" class="input">${siteTypeToVerify(p)
+            ? `<option value="${TYPE_TO_VERIFY}" selected>${escapeHtml(propertyTypeLabel(p, types))}</option>${optionsHtml(types, '', { placeholder: '—' }).replace('<option value="">—</option>', '')}`
+            : optionsHtml(types, str(p.property_type) || 'apartment', { placeholder: '—', historical: true }).replace('<option value="">—</option>', '')}</select></div>
         ${isEdit ? '' : `<div class="form-field"><label for="pf-status">Stato commerciale</label>
           <select id="pf-status" class="input">${CREATE_STATUSES.map((s) => `<option value="${s}"${s === 'draft' ? ' selected' : ''}>${escapeHtml(STATUS_LABELS[s])}</option>`).join('')}</select></div>`}
         <div class="form-field"><label for="pf-class">Classe</label>
@@ -245,7 +266,7 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
         <div class="form-field"><label for="pf-air-type">Tipo di climatizzazione</label><input type="text" id="pf-air-type" class="input" maxlength="120" value="${escapeHtml(str(p.air_conditioning_type))}"></div>
         <div class="form-field"><label for="pf-exposure">Esposizione</label><input type="text" id="pf-exposure" class="input" maxlength="120" value="${escapeHtml(str(p.exposure))}"></div>
         <div class="form-field"><label for="pf-furnishing">Arredamento</label><input type="text" id="pf-furnishing" class="input" maxlength="120" value="${escapeHtml(str(p.furnishing))}"></div>
-        <div class="form-field"><label for="pf-condo-fees">Spese condominiali (€)</label><input type="number" id="pf-condo-fees" class="input" min="0" step="any" value="${escapeHtml(str(p.condo_fees))}"></div>
+        <div class="form-field"><label for="pf-condo-fees">Spese condominiali (€, periodicità non specificata)</label><input type="number" id="pf-condo-fees" class="input" min="0" step="any" value="${escapeHtml(str(p.condo_fees))}"></div>
       </div>
       <div class="form-field"><label for="pf-other-features">Altre caratteristiche</label><textarea id="pf-other-features" class="input" rows="2">${escapeHtml(str(p.other_features))}</textarea></div>
 
@@ -308,7 +329,8 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
 
   // Ogni campo: [chiave, selettore, conversione, valore iniziale come stringa].
   const FIELDS = [
-    ['property_type', '#pf-type', textOrNull],
+    // «Da verificare» (tipologia dal sito non riconosciuta) non si invia: resta finche' non si sceglie
+    ['property_type', '#pf-type', (v) => (v === TYPE_TO_VERIFY ? null : textOrNull(v))],
     ['classification', '#pf-class', textOrNull],
     ['address', '#pf-address', textOrNull],
     ['civic_number', '#pf-civic', textOrNull],

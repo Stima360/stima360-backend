@@ -5662,6 +5662,28 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("property_site_sources", "contact_id", "contacts", "SET NULL"),
     ("property_site_sources", "lead_id", "leads", "SET NULL"),
     ("property_site_sources", "relinked_to_property_id", "properties", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1, migration 088. Ricezione
+    # degli invii del sito (`site_submissions`): QUATTRO riferimenti
+    # non-CASCADE nuovi verso tabelle che il cleanup cancella. ESAMINATI.
+    #
+    #   agency_id   -> agencies    RESTRICT
+    #   contact_id  -> contacts    SET NULL
+    #   lead_id     -> leads       SET NULL
+    #   property_id -> properties  SET NULL
+    #
+    # La riga e' figlia della stima o della stima dettagliata (CASCADE); il
+    # contatto, il lead e la scheda sono riferimenti accessori (l'invio resta:
+    # e' la copia dei valori dichiarati). L'agenzia non si cancella sotto un
+    # invio (RESTRICT, come `property_site_sources`).
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: la scrive solo il funnel
+    # pubblico (/api/salva_stima, /api/salva_stima_dettagliata) e lo script di
+    # recupero, che la matrice non percorre; se un'agenzia di prova ne avesse,
+    # il preflight la incontra come RIFIUTO.
+    ("site_submissions", "agency_id", "agencies", "RESTRICT"),
+    ("site_submissions", "contact_id", "contacts", "SET NULL"),
+    ("site_submissions", "lead_id", "leads", "SET NULL"),
+    ("site_submissions", "property_id", "properties", "SET NULL"),
 })
 
 
@@ -7974,6 +7996,8 @@ COLLOCAZIONE_SCRITTURE = {
     "record_lifecycle_events": (GUARDIA, "POST /property/properties/{id}/trash e /restore non sono chiamati dalla matrice; referenzia agencies e operator_users (RESTRICT), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (087, property/site_sync.py).
     "property_site_sources": (GUARDIA, "provenienza dal sito, scritta solo dal funnel pubblico (/api/salva_stima, /api/salva_stima_dettagliata) e dalle rotte site-sources, che la matrice non percorre; referenzia agencies (RESTRICT), stime e properties (CASCADE), contacts, leads e properties (SET NULL), quindi il preflight la vedrebbe"),
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (088, property/site_sync.py).
+    "site_submissions": (GUARDIA, "invii del sito conservati prima del trasferimento, scritti solo dal funnel pubblico (/api/salva_stima, /api/salva_stima_dettagliata) e da scripts/site_sync_recover.py, che la matrice non percorre; referenzia agencies (RESTRICT), stime e stime_dettagliate (CASCADE), contacts, leads e properties (SET NULL), quindi il preflight la vedrebbe"),
     "flow_rules": (FUORI, "catalogo di regole, globale: nessuna FK verso il perimetro"),
     "owner_notification_preferences": (GUARDIA,
                                        "preferenze per conto, mai scritte dalla matrice; referenzia owner_accounts"),

@@ -1,13 +1,23 @@
 # CATALOGO-CANONICO-1 — Catalogo canonico Stima360 e allineamento sito → CRM (FASE D)
 
-Base: `core-0.1-test` @ `3d3c3c7` (CREAZIONE-GUIDATA-1). Il commit contiene anche questo report.
+Base: `core-0.1-test` @ `3d3c3c7` (CREAZIONE-GUIDATA-1), primo commit `92a2dc7`. Il **completamento mirato** (§10, prima di PERTINENZE) è un secondo commit sopra `92a2dc7`. Ogni commit contiene anche questo report.
 
-- **Migration nuova: 087** (additiva). Va applicata su TEST: vedi «Rilascio su TEST».
+- **Migration nuove: 087 e 088** (additive). Vanno applicate su TEST: comandi completi in `roadmap/CATALOGO-CANONICO-1_TEST_RUNBOOK.md`.
 - Nessun dato esistente modificato, nessun backfill delle stime storiche.
 - PROD e sito pubblico non toccati.
 - Motore di valutazione invariato.
 
 Il push su `core-0.1-test` avvia il deploy automatico di Render TEST. Deploy, migration e smoke live **non verificati** da qui: non ho accesso autorizzato a TEST.
+
+**Stato in sintesi** (dettaglio in §10):
+
+| | Stato |
+|---|---|
+| Codice (backend, Shell) | **implementato e testato localmente** su PostgreSQL vero e in Chromium |
+| Migration 087 e 088 su TEST | **da applicare** (runbook pronto, non eseguito) |
+| Confronto con i form reali del sito | **incompleto**: sorgente del sito non accessibile, elenco delle opzioni non verificate in §10.6 |
+| Frontend del sito (`client_request_id`, `campi_dichiarati`) | **contratto pronto, non implementato**: il sito non è in un repository accessibile (§10.2) |
+| Collaudo live | **pendente** |
 
 ## Decisione funzionale (Giorgio, 6 ottobre 2026)
 
@@ -83,8 +93,8 @@ Legenda:
 
 | Voce sito | Payload | Prima | Ora | Trasformazione |
 |---|---|---|---|---|
-| Tipologia | `tipologia` | solo `stime` | `property_type` ✓ | Appartamento / Villa / Rustico (parole del motore) e le etichette del CRM. Sconosciuta → `other` + «Da verificare»; non inviata → `other` + «Tipologia non dichiarata» |
-| Mq | `mq` | `stime.mq` intero | `surface_sqm` ✓ | due decimali; 0 = non dichiarato. Resta distinta da `commercial_surface_sqm`, che non si tocca |
+| Tipologia | `tipologia` | solo `stime` | `property_type` ✓ | Appartamento / Villa / Rustico (parole del motore) e le etichette del CRM, compreso «Altro» scelto davvero. **Sconosciuta o non inviata → «Da verificare»**: valore tecnico `other` (la colonna è NOT NULL) più `metadata.site_unverified.property_type` con il valore del sito; scheda, elenco, descrizione e form mostrano «Da verificare (sito: «X»)», **mai «Altro»** (§10.5) |
+| Mq | `mq` | `stime.mq` intero | `surface_sqm` ✓ (superficie principale) | due decimali; 0 = non dichiarato. Separata da `commercial_surface_sqm`, che non si tocca. Il sito non dice di che superficie si tratti: non la si chiama «calpestabile» |
 | Piano | `piano` | default «1» | `floor` ✓ | terra → T, rialzato → R, seminterrato → S, ultimo / attico come testo, numeri |
 | Locali | `locali` | «Trilocale» → default 3 | `rooms` ✓ | numero o Mono/Bi/Tri/Quadri/Pentalocale |
 | Bagni | `bagni` | default 1 | `bathrooms` ✓ | intero 0-50 |
@@ -128,14 +138,14 @@ Legenda:
 
 | Voce sito | Payload | Prima | Ora |
 |---|---|---|---|
-| Ripetizione delle caratteristiche | tipologia, mq, piano, locali, bagni, ascensore, stato, anno, mare, pertinenze e mq, `altroDescrizione` | solo `stime_dettagliate` | la **stessa** scheda, con la regola per campo (§4) |
+| Ripetizione delle caratteristiche | tipologia, mq, piano, locali, bagni, ascensore, stato, anno, mare, pertinenze e mq, `altroDescrizione` | solo `stime_dettagliate` (su TEST le colonne mancano: le crea la 088) | la **stessa** scheda, con la regola per campo (§4). Un valore **uguale al precompilato** di `/api/prefill` non è una dichiarazione (§10.1) |
 | Classe energetica | `classe` | solo `stime_dettagliate` | `energy_class` ✓ (catalogo A4…G; «non so» = NULL; fuori catalogo «Da verificare») |
 | Riscaldamento | `riscaldamento` | | `heating` ✓ (087), testo del cliente |
 | Climatizzazione | `condizionatore` | | `air_conditioning` ✓ (087), testo del cliente |
 | Tipo di climatizzazione | `condiz_tipo` | | `air_conditioning_type` ✓ (087), testo del cliente |
 | Esposizione | `esposizione` | | `exposure` ✓ (087), testo del cliente |
 | Arredamento | `arredo` | | `furnishing` ✓ (087), testo del cliente |
-| Spese condominiali | `spese_cond` | | `condo_fees` ✓ (087), euro; 0 = dichiarato zero |
+| Spese condominiali | `spese_cond` | | `condo_fees` ✓ (087): l'importo com'è, **periodicità non specificata** (l'etichetta lo dice); 0 = dichiarato zero |
 | Indirizzo | `indirizzo` (testo libero) | | «Da verificare», non spezzato a indovinare |
 | Note, canale preferito, sopralluogo | `note`, `contatto`, `sopralluogo` | | non sono dati dell'immobile: restano in `stime_dettagliate` (il sopralluogo è il percorso Agenda A30-6/7) |
 
@@ -197,20 +207,21 @@ Avviene in `salva_stima`, dopo il bridge e il provisioning e prima degli eventi 
 
 ### Ritentativo dello stesso invio
 
-Il sito non ha una chiave: un doppio invio è una seconda stima con un secondo lead. Si riconosce così:
+*Sostituito dal completamento (§10.2): la finestra di 24 ore non c'è più.*
 
-- stessa agenzia;
-- stesso contatto;
-- stessa impronta dei valori dichiarati;
-- entro 24 ore;
-- scheda ancora fuori dal Cestino.
+- **Ritentativo riconosciuto solo con l'identità stabile della richiesta** (`client_request_id`, UUID scelto dal sito e riusato nei ritentativi). Condizioni:
+  - stessa agenzia;
+  - stessa identità;
+  - scheda ancora fuori dal Cestino.
 
-In quel caso la stima si collega alla scheda già nata (`origin = 'retry'`, lead `related`) e nessuna scheda nuova nasce. Un lock transazionale per contatto serializza due invii contemporanei.
+  Vale senza limite di tempo. La stima si collega alla scheda già nata (`origin = 'retry'`, lead `related`). Un lock transazionale sull'identità serializza le richieste contemporanee.
+- **Senza identità (il sito di oggi).** Contatto e dati uguali sono un **possibile** doppione, non una prova: nasce una scheda nuova, segnalata «stesso contatto e stessi dati», mai unita.
 
 ### Stime diverse
 
 Nasce una scheda nuova. I **possibili doppioni** si segnalano nella provenienza:
 
+- stesso contatto e stessi dati dichiarati (forse un nuovo invio della stessa stima);
 - stesso contatto;
 - stesso comune + via + civico.
 
@@ -255,7 +266,10 @@ Collegamento esplicito, da un doppione segnalato o per codice, con due clic.
 
 ### Fail-open
 
-`safe_sync_*` non lascia uscire eccezioni: la risposta al sito non cambia mai. Senza la 087 non scrive nulla.
+`safe_sync_*` non lascia uscire eccezioni: la risposta al sito non cambia mai.
+
+- **Senza 087 o 088** non scrive nulla.
+- **Con la 088** l'invio si conserva **prima** del trasferimento: un errore lascia l'invio `failed`, recuperabile (§10.3).
 
 ## 5. Interfaccia (scheda Immobile)
 
@@ -325,14 +339,15 @@ Collegamento esplicito, da un doppione segnalato o per codice, con due clic.
   - down e up di nuovo;
   - codice nuovo su un database **senza** 087: la stima risponde e non scrive schede; le schede si creano e si leggono; la provenienza risponde «non installata»; un campo della 087 in PATCH dà un 409 leggibile, non un 500.
 
-**Ordine di rilascio (DB-first):**
+**Ordine di rilascio.** Sostituito dal completamento: 087 e 088 insieme, con i comandi completi in `roadmap/CATALOGO-CANONICO-1_TEST_RUNBOOK.md` (§10.4). Le istruzioni sintetiche che erano qui («gli stessi parametri della 086») non bastavano.
 
-1. Sulla shell del servizio TEST: `python scripts/p26_migrate.py status --operator "giorgio.larasa"`, poi `plan`, poi `apply`, con gli stessi parametri di baseline usati per la 086. Il piano deve mostrare la sola 087.
-2. Poi il deploy del codice.
+**Stato attuale di TEST, codice prima dello schema.** Il codice di `92a2dc7` è già in deploy:
 
-Il push di questa fase avvia il deploy subito: se la 087 non è ancora applicata, TEST resta nello stato «codice prima dello schema» descritto sopra. È innocuo: nessuna scheda dal sito, campi nuovi rifiutati in modo leggibile. Si sistema applicando la 087.
+- nessuna scheda nasce dal sito;
+- i campi nuovi della scheda sono rifiutati in modo leggibile;
+- `stime` e il contatto/lead si salvano come sempre, ma **il payload originale delle stime ricevute in questo intervallo non si conserva** (§10.3).
 
-**Nota TEST (P30-0).** Su TEST mancano le 28 colonne di `stime_dettagliate`: lì l'INSERT della stima dettagliata fallisce già prima di questa fase. Finché non vengono create, la dettagliata su TEST non può aggiornare la scheda. Lo schema reale del sito è un tema P30 e non è stato toccato.
+**Nota TEST.** Le 28 colonne di `stime_dettagliate` mancano su TEST: lo si **deduce** dallo snapshot certificato P26-0 e da P30-0, ma **non è verificato** sul TEST di oggi. Le crea la 088 (§10.4).
 
 ## 8. Test
 
@@ -390,17 +405,279 @@ Il push di questa fase avvia il deploy subito: se la 087 non è ancora applicata
 1. **Etichette e opzioni dei form del sito non verificate dal vivo.**
    - Valori come «fronte» (presente nelle fixture dei test LMC) o «abitabile» restano «Da verificare».
    - Se il sito li manda davvero, servirà una decisione su cosa significano: il motore oggi li tratta come «altro».
-2. **`mq` del sito: superficie calpestabile o commerciale?** Il motore lo usa come superficie principale; la scheda lo mette in `surface_sqm`. `commercial_surface_sqm` non si tocca.
-3. **Spese condominiali: periodo non dichiarato dal sito** (mensili? annue?). Il valore si conserva com'è.
+2. **`mq` del sito.** *Deciso:* superficie principale (`surface_sqm`), separata dalla commerciale, senza chiamarla «calpestabile».
+3. **Spese condominiali.** *Deciso:* si conserva l'importo, «periodicità non specificata».
 4. **`fascia_mare` vs `distanzaMare`.** Due campi del sito con vocabolari diversi; il motore usa solo `distanzaMare`. `fascia_mare` si conserva come testo.
-5. **La dettagliata arriva precompilata da `/api/prefill`, cioè da `stime` con i suoi default e i decimali troncati.**
-   - Un «piano 1» inviato senza correzioni viene trattato come dichiarato.
-   - Un mq 85,5 della rapida può tornare 86 o 85 dalla dettagliata e aggiornare la scheda, se l'agente non l'ha corretto.
-   - Lo si vede dalla provenienza.
+5. **La dettagliata arriva precompilata da `/api/prefill`.** *Risolto* nel completamento (§10.1): un valore uguale al precompilato non è una dichiarazione.
 6. **`altroDescrizione`.** È descrizione libera dell'immobile (il motore la legge per «lusso» o «da ristrutturare»), non una pertinenza «Altro»: va in «Altre caratteristiche».
-7. **Contatto con ruolo neutro `contact`.** La stima non prova la proprietà: «Proprietario» lo decide l'agente.
-8. **Finestra del ritentativo: 24 ore.** Oltre, lo stesso invio crea una scheda nuova, segnalata come possibile doppione per contatto.
+7. **Contatto con ruolo neutro `contact`.** *Confermato:* la stima non prova la proprietà, «Proprietario» lo decide l'agente.
+8. **Ritentativi.** *Risolto* nel completamento (§10.2): identità stabile della richiesta, nessuna finestra di tempo.
 9. **Le stime storiche non generano schede** (nessun backfill). Una dettagliata di una stima precedente al deploy non crea nulla.
+10. **Alias ambigui.** *Confermato:* restano «Da verificare».
+
+## 10. Completamento mirato (prima di PERTINENZE)
+
+Correzioni tecniche sopra `92a2dc7`, senza ripartire da zero. Restano valide le decisioni già prese:
+
+- contatto con ruolo neutro;
+- superficie principale separata dalla commerciale;
+- spese condominiali con «periodicità non specificata»;
+- alias ambigui «Da verificare».
+
+### 10.1 Prefill: niente precisione persa, niente default dichiarati
+
+**Il percorso reale.**
+
+1. Stima rapida: 85,5 m², piano/locali/anno non inviati.
+2. `stime`: 86 (INTEGER), piano «1», 3 locali, anno 2000, via «Zona» (i default del backend).
+3. `/api/prefill` serve proprio quei valori.
+4. Il form della dettagliata li rimanda come se fossero del cliente.
+
+Il payload attuale **non distingue** un campo precompilato da uno modificato. Distinguerli è quindi compito del backend, in modo esplicito e conservativo:
+
+- **Il prefill si conserva.** Alla ricezione della dettagliata si salvano in `site_submissions.prefill` i valori che `/api/prefill` serve per quella stima: le stesse colonne di `stime`, senza i dati di contatto. Un test confronta l'elenco con il sorgente di `main.prefill`.
+- **Uguale al precompilato → non è una dichiarazione.** Il campo si toglie dal dettaglio prima della regola per campo e si elenca in `prefilled_unchanged` («Lasciati come il sito li aveva precompilati»). Lo stesso vale:
+  - per le pertinenze: superficie e numero uguali al precompilato;
+  - per l'elenco delle pertinenze: se è invariato, non toglie nulla;
+  - per i valori «Da verificare» già presenti nel precompilato.
+- **Diverso dal precompilato → correzione esplicita del cliente.** Entra con la regola per campo di sempre: si scrive dove il sito aveva scritto, è un conflitto dove l'agente ha corretto.
+- **`campi_dichiarati` vince sempre.** Se il sito la manda (lista di chiavi o stringa separata da virgole), un campo lì elencato è una dichiarazione anche se coincide con il precompilato: il cliente l'ha confermato.
+- **Limite dichiarato.** Senza `campi_dichiarati` (il sito di oggi), un cliente che conferma un valore *uguale* al default (per esempio piano 1) non lo dichiara. È la scelta conservativa: un default non diventa mai un dato.
+
+**Provato su PostgreSQL**, con gli endpoint veri `salva_stima` → `prefill` → `salva_stima_dettagliata` (test 03, 05, 11 e browser):
+
+- 85,5 resta 85,50 dopo una dettagliata che rimanda 86;
+- piano, locali e anno mai inviati restano vuoti;
+- una modifica voluta (90 m², piano 2) si scrive;
+- un secondo invio del prefill (86, piano 1) non annulla la correzione;
+- `campi_dichiarati = ["locali", "anno"]` li scrive anche se uguali al precompilato.
+
+Il motore non è toccato.
+
+### 10.2 Ritentativi: identità stabile della richiesta
+
+- **Niente più finestra di 24 ore.** Il ritentativo si riconosce **solo** con `client_request_id`: un UUID nel corpo JSON di `/api/salva_stima`, conservato in `site_submissions.client_request_id`.
+- **Stessa agenzia + stessa identità → la stessa scheda, senza limite di tempo.** La provenienza è `retry`, il lead `related`, il motivo dell'invio `same_request`.
+- **Concorrenza.** Un `pg_advisory_xact_lock` sull'identità serializza le richieste contemporanee.
+- **Compatibilità.** Un valore non UUID vale come assente.
+- **Client senza identità (il sito di oggi).** Contatto e dati uguali sono una **possibile duplicazione, non una prova**: nasce una scheda nuova, segnalata «stesso contatto e stessi dati (forse un nuovo invio della stessa stima)», mai unita. «Collega» resta il gesto esplicito.
+
+**Provato su PostgreSQL** (test 04, 04b):
+
+- stessa identità dopo 30 giorni (righe invecchiate) → la stessa scheda;
+- tre richieste concorrenti con la stessa identità → una scheda e tre invii `synced`;
+- due richieste davvero distinte con dati uguali → due schede, doppione segnalato;
+- sito senza identità → due schede, segnalate con `same_submission_data`, `same_contact` e `same_address`.
+
+**Adeguamento del frontend del sito: contratto pronto, non implementato.**
+
+Il sito (`index.html`, `stima_dettagliata.html`, `dati_personali.html`) **non è in nessun repository accessibile** a questa sessione: i repository disponibili sono `stima360-backend`, `stima360-pdf` e `stima360-whatsapp-webhook-test`. P30-0 e P30-D1 lo confermano fuori repo. Non è quindi stato modificato né preparato su TEST.
+
+Il contratto:
+
+- `client_request_id`:
+  - generato **una volta** quando il cliente invia la stima rapida;
+  - **riusato identico** in ogni ritentativo dello stesso invio (errore di rete, doppio clic, ricarica con lo stato conservato);
+  - **nuovo** per una stima nuova.
+- `campi_dichiarati` (solo dettagliata, facoltativo): le chiavi del payload che il cliente ha **modificato o confermato**.
+
+```js
+// stima rapida: un'identita' per invio, riusata nei ritentativi
+let richiesta = sessionStorage.getItem('stima360_req') || crypto.randomUUID();
+sessionStorage.setItem('stima360_req', richiesta);
+payload.client_request_id = richiesta;
+// ...dopo una risposta 200: sessionStorage.removeItem('stima360_req');
+
+// stima dettagliata: i campi toccati dal cliente
+const toccati = new Set();
+form.addEventListener('change', (e) => e.target.name && toccati.add(e.target.name));
+payload.campi_dichiarati = [...toccati];
+```
+
+**Rilascio coordinato:**
+
+1. backend (già compatibile: i due campi sono facoltativi);
+2. migration 087 e 088 su TEST;
+3. sito TEST con i due campi;
+4. collaudo.
+
+Senza il punto 3 vale il comportamento conservativo descritto sopra.
+
+### 10.3 Sincronizzazione fallita o schema non pronto: nessuna perdita silenziosa
+
+**Ricezione prima del trasferimento (migration 088, `site_submissions`).**
+
+- **Prima di ogni trasferimento** si conserva una riga per invio:
+  - stima rapida: una per `stima_id`;
+  - dettagliata: una per riga di `stime_dettagliate`.
+- **Cosa contiene:**
+  - i soli valori dell'immobile **come il form li ha inviati**;
+  - delle altre chiavi, solo i **nomi**;
+  - nessun dato di contatto, consenso o nota.
+- Il trasferimento nella scheda e lo stato `synced` sono **nella stessa transazione**.
+
+| Situazione | Cosa resta | Recupero |
+|---|---|---|
+| Errore durante il trasferimento | invio `failed` con tipo di errore e tentativi; `stime` e contatto/lead come sempre | `site_sync_recover.py`, con i valori conservati |
+| Dettagliata prima che la rapida sia nella scheda | invio `pending`, motivo `waiting_quick` | ripreso dopo la rapida |
+| Rapida senza contatto/lead | invio `skipped`, motivo `no_contact_lead` | ripreso se il lead compare dopo (bridge idempotente) |
+| Dettagliata rimasta senza scheda perché la rapida era saltata | `skipped`, motivo `no_source` | ripresa quando la rapida viene trasferita |
+| Scheda nel Cestino, dettagliata orfana, agenzia diversa | `skipped` con il motivo | nessuno: è voluto |
+| **Senza 087 o 088** (oggi su TEST) | solo `stime` (default, interi) e contatto/lead; **il payload originale non si conserva** | **nessuno, limite dichiarato** |
+| Errore nello scrivere l'invio stesso (database giù) | solo il log `site_sync … error_type`, la risposta al sito non cambia | nessuno, limite dichiarato |
+
+**`scripts/site_sync_recover.py`** (osservabile e idempotente; solo TEST certificato):
+
+- **`--census`** (sola lettura):
+  - invii per tipo, stato e motivo;
+  - stime **senza** invio conservato, cioè le precedenti alla 088, non recuperabili con precisione.
+- **`--dry-run`**: l'elenco degli invii che verrebbero ripresi.
+- **`--apply --confirm-database "$DB_NAME"`**:
+  - ordine: prima le rapide, poi le dettagliate;
+  - una transazione per invio;
+  - ignora gli invii più recenti di 120 s;
+  - ripeterlo non duplica nulla.
+- **Non è un backfill dello storico.** Non legge mai i valori da `stime`. Per i casi passati senza payload originale il limite è dichiarato: non si ricostruiscono.
+
+**Provato su PostgreSQL** (test 12):
+
+1. guasto simulato nella creazione → invio `failed` e risposta al sito invariata;
+2. la dettagliata attende (`waiting_quick`);
+3. `recover` in sola lettura non tocca nulla;
+4. `--apply` crea la scheda con 85,50 (non 86) e aggiorna la dettagliata;
+5. ripetuto, non trova nulla;
+6. le guardie dello script rifiutano i nomi non TEST (test r01).
+
+### 10.4 Schema della dettagliata su TEST
+
+- **Verificato o dedotto?** **Dedotto, non verificato sul TEST di oggi.** Le fonti:
+  - lo snapshot certificato P26-0 (`reports/p26_baseline_TEST_20260905T174620Z.json`) mostra 13 colonne in `stime_dettagliate`;
+  - la 049 aggiunge solo `agency_id`;
+  - nessuna migration successiva aggiunge le 28 colonne che `salva_stima_dettagliata` scrive;
+  - P30-0 lo riporta.
+
+  Le colonne esistono solo in `database.py::migrazione_stime_dettagliate_completa()`, che non è nel ledger e non risulta eseguita su TEST.
+- **Migration nuova 088** (`088_catalogo_canonico_1b_site_inbox.sql`, additiva). Nessuna migration applicata e nessuna colonna esistente sono modificate. Cosa fa:
+  - `ADD COLUMN IF NOT EXISTS` delle 28 colonne con gli **stessi tipi** di `database.py` (un test li confronta);
+  - una colonna già presente non si tocca, né il tipo né i dati;
+  - crea `site_submissions`, con:
+    - indici UNIQUE parziali per stima rapida e per dettaglio;
+    - un trigger di coerenza d'agenzia che controlla solo i riferimenti che cambiano;
+    - FK: agenzia RESTRICT; stima e dettaglio CASCADE; contatto, lead e scheda SET NULL.
+- **Down della 088:**
+  - si ferma se ci sono invii `pending` o `failed`;
+  - toglie `site_submissions`;
+  - **lascia** le 28 colonne, perché non può sapere quali esistessero già.
+- **Provato su PostgreSQL temporaneo:**
+  - schema completo dal runner vero (62 righe di ledger);
+  - down rifiutata con un invio `failed`, poi eseguita dopo il recupero;
+  - dopo la down, colonne presenti, dettagliata salvata, stima senza scheda;
+  - up di nuovo (test 13);
+  - codice nuovo senza 087 (test 99).
+- **Comandi.** `roadmap/CATALOGO-CANONICO-1_TEST_RUNBOOK.md`, presi dal runner reale `scripts/p26_migrate.py` (`status` / `plan` / `apply --operator`):
+  - verifica di `$RENDER_GIT_COMMIT`;
+  - fotografia in sola lettura, prima e dopo, con le colonne della dettagliata e i loro tipi;
+  - `status`, che deve mostrare in sospeso solo 087 e/o 088;
+  - `apply`;
+  - census degli invii.
+- **Cosa resta:** eseguire il runbook su TEST (non ho accesso a Render), poi il collaudo live. **La dettagliata non è certificata live.**
+
+### 10.5 Valori sconosciuti: mai «Altro»
+
+Una tipologia non riconosciuta (o non inviata) non diventa «Altro»:
+
+- **Valore tecnico.** `property_type = 'other'`, perché la colonna è NOT NULL.
+- **Metadato.** `metadata.site_unverified.property_type = {raw, reason}`, con il valore originale del sito conservato.
+- **Interfaccia.** Elenco Immobili, unità del censimento, Panoramica e «Modifica immobile» mostrano **«Da verificare (sito: «Loft»)»** o «Da verificare (non dichiarata dal sito)».
+- **Descrizione generata.** «Tipologia da verificare · Tortoreto…».
+- **Nel form.** L'opzione «Da verificare» resta selezionata e **non viaggia** nel salvataggio.
+- **Chiusura.** Scegliere una tipologia, compreso «Altro» scelto davvero, toglie il metadato e rigenera la descrizione.
+- **Dettagliate successive.** Una dettagliata che porta una tipologia riconosciuta la scrive sopra il valore tecnico. Una tipologia uguale a quella precompilata non conta.
+- **Altri campi.** Stato, posizione mare, pertinenze e gli altri valori sconosciuti restano come in §3: non scritti, grezzi e «Da verificare».
+
+### 10.6 Confronto con i form reali: incompleto
+
+Il sorgente dei form non è accessibile (§10.2). La lettura web di stima360.it richiede un'autorizzazione che questa sessione non ha (PROVENANCE_REQUIRED): non è stata aggirata. Il confronto resta **incompleto**.
+
+**Opzioni ancora non verificate contro i form reali:**
+
+- **Tipologia:** valori oltre Appartamento / Villa / Rustico.
+- **Stato:** le etichette reali; per esempio «abitabile» è oggi «Da verificare».
+- **Posizione mare:** «fronte» o altre varianti di «frontemare».
+- **Distanza mare:** fasce oltre 1000 m o con altre scritture.
+- **Piano:** le voci reali (terra, rialzato, seminterrato, ultimo, attico, numeri).
+- **Locali:** «5+» o voci oltre il pentalocale.
+- **Pertinenze:** l'elenco delle caselle e i loro testi esatti.
+- **Vista mare (dettaglio):** le scelte.
+- **Dettagliata:** le opzioni di classe energetica, riscaldamento, climatizzazione e tipo, esposizione, arredo, canale preferito.
+- **`fascia_mare`:** il vocabolario.
+
+Ognuna, se diversa da quanto il catalogo conosce, oggi si conserva grezza e «Da verificare»: non si perde e non si inventa. Per chiudere il confronto serve una delle due cose:
+
+- il sorgente del sito;
+- l'URL incollato da Giorgio nella conversazione, che autorizza la lettura.
+
+### 10.7 Limite trovato durante la verifica (087, non corretto)
+
+La 087 dichiara `relinked_to_property_id … ON DELETE SET NULL`, ma il CHECK `property_site_sources_relinked_chk` pretende il collegamento quando lo stato è `relinked`. Di conseguenza la **cancellazione fisica** della scheda di destinazione fallisce finché la provenienza spostata esiste.
+
+- **Effetto sull'applicazione:** nessun percorso cancella fisicamente una scheda (il Cestino è logico).
+- **Dove è emerso:** solo nella pulizia di massa dei test, a seconda dell'ordine fisico delle righe.
+- **Scelta:** il test di questa fase pulisce le provenienze prima della pulizia comune. Lo schema non è stato cambiato per non toccare una migration forse già applicata.
+- **Correzione proposta:** in una fase futura, una nuova migration che sostituisca la FK con RESTRICT o che rilasci il CHECK.
+
+### 10.8 Test del completamento
+
+- **`tests/test_catalogo_canonico_1_postgres.py`: 15 test**, PostgreSQL vero ed endpoint veri del sito. Rispetto alla prima versione:
+  - 03 e 05 passano dal prefill;
+  - 04 è riscritto sull'identità della richiesta;
+  - nuovi 04b (concorrenza), 11 (percorso prefill completo), 12 (guasto e recupero), 13 (down e up della 088);
+  - la fixture non esegue più `database.py`: lo schema viene dalla 088.
+- **`tests/test_catalogo_canonico_1.py`: 17 test, senza database.** Nuovi:
+  - s01: precompilato, correzione, `campi_dichiarati`;
+  - s02: payload conservato senza dati di contatto, identità;
+  - s03: le chiavi del prefill coincidono con `main.prefill`;
+  - s04: tipologia «Da verificare», mai «Altro»;
+  - m02: 088 per il runner, additiva, tipi uguali a `database.py`, down che non toglie colonne;
+  - r01: guardie dello script di recupero.
+
+  Riscritto h04: senza contatto/lead nessuna scheda.
+- **`tests/test_catalogo_canonico_1_ui.py`: 9 test**, stub DOM. Nuovi:
+  - u06: «Da verificare (sito: «Loft»)» in Panoramica e nel form, non inviato, chiuso scegliendo;
+  - u07: campi «lasciati come precompilati» e motivi nuovi, senza codici a vista.
+- **Browser** (Chromium, 1280 e 390 px): la dettagliata passa dal prefill, la differenza è sui locali cambiati, e il pannello elenca i precompilati.
+- **Sentinelle aggiornate** (marcatore «SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1»):
+  - **la 088 è l'ultima migration:**
+    - catene numeriche: a30_1, a30_2p, a32_1, crm_ops_3, lmc15, lmc1b, p27_6, p29_2_1…5e, p29_3;
+    - p29_1 (max = 88);
+    - a32_2 (inventario);
+    - censimento_1, crm_ops_4, delete_arch 1a / 1b (`089*` assente) / 1c / 2b2;
+    - lmc2 e lmc3 (finestra `[-21:]`);
+    - censimento_2 (ledger 61 → 62);
+  - **inventario della certificazione live** (p26_6): `site_submissions` GUARDIA, FK agenzia RESTRICT, contatto / lead / scheda SET NULL;
+  - **sito di connessione di test** (p26_db_entrypoints): descrizione aggiornata, niente più helper di `database.py`.
+- **Nessuna rotta nuova.**
+- **Suite completa su PostgreSQL locale, prima del commit:** 44 failed, 10885 passed, 115 skipped, 49 errors (19:20).
+  - **Rispetto al run finale della prima versione: nessun fallimento sparito, 20 nuovi.**
+  - **13 catene di sentinelle numeriche.** Un errore di uno nell'aggiornamento automatico: corretto e rieseguito, tutte verdi.
+  - **6 sentinelle git-status:** lmc7 h5, lmc8 h5, lmc9 f4, lmc11 h1, lmc13 e1, lmc15 test_37. Vedono i file 088 non ancora tracciati: si riverificano dopo il commit.
+  - **1 test fragile preesistente:** lmc3 test_19.
+- **Dopo il run:** rieseguiti i 4 file della fase (43 verdi) e tutti i file di sentinelle toccati, con censimento_3/4 e p26_6c: 1176 verdi, 5 rossi, tutti già nella base o git-status.
+
+### 10.9 Dove siamo
+
+- **Implementato e testato localmente:**
+  - prefill;
+  - identità della richiesta e concorrenza;
+  - ricezione e recupero;
+  - 088 (up, down e codice senza schema);
+  - tipologia «Da verificare»;
+  - etichetta delle spese condominiali;
+  - interfaccia.
+- **Migration da applicare su TEST:** 087 e 088, con il runbook.
+- **Confronto sito ancora incompleto:** §10.6; adeguamento del frontend del sito da fare fuori da questo repository (§10.2).
+- **Collaudo live pendente:** runbook §6 e smoke qui sotto. La dettagliata **non** è certificata live.
+- **PERTINENZE:** non iniziata.
 
 ## Smoke live ancora pendenti (cumulativi, A–D)
 
@@ -421,10 +698,13 @@ Il push di questa fase avvia il deploy subito: se la 087 non è ancora applicata
   - unità commerciale in palazzina con assegnazione;
   - ritentativo dopo errore di rete;
   - smartphone.
-- **CATALOGO-CANONICO-1** (dopo la 087 su TEST):
-  - una stima di prova sul **sito di TEST** con contatto → scheda in Censimento con «Dal sito Stima360»;
-  - stesso invio ripetuto → nessuna seconda scheda;
-  - correzione di un campo e dettagliata (se `stime_dettagliate` su TEST ha le colonne) → differenza con Applica / Ignora;
+- **CATALOGO-CANONICO-1** (dopo la 087 e la 088 su TEST, runbook §6):
+  - una stima di prova sul **sito di TEST** con contatto e decimali → scheda in Censimento con «Dal sito Stima360» e i decimali;
+  - dettagliata lasciata come precompilata → i decimali restano, «lasciati come precompilati» elencati;
+  - stesso invio ripetuto → con il sito di oggi (senza identità) una seconda scheda **segnalata** «stesso contatto e stessi dati»; con `client_request_id` (dopo l'adeguamento del sito) nessuna seconda scheda;
+  - correzione di un campo e dettagliata → differenza con Applica / Ignora;
+  - tipologia non riconosciuta → «Da verificare (sito: «…»)», mai «Altro»;
+  - `scripts/site_sync_recover.py --census` e `--dry-run` senza invii in sospeso;
   - «Collega a IMM-x»;
   - Modifica immobile: Mare e impianti;
   - smartphone.

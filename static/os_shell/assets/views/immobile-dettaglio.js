@@ -85,7 +85,7 @@ import { getAgents } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
-import { loadFormOptions, openPropertyDialog, propertyDisplayName } from '../components/property-form.js';
+import { loadFormOptions, openPropertyDialog, propertyDisplayName, propertyTypeLabel } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
 // CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
 // «Si' / No / Non lo so», accessori e «Chiarisci», dati catastali, presa in
@@ -1770,7 +1770,7 @@ function catalogLabel(catalogo, lista, valore) {
 
 function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle = {}) {
   const fields = [
-    ['Codice', p.code], ['Tipologia', p.property_type], ['Classificazione', p.classification],
+    ['Codice', p.code], ['Tipologia', propertyTypeLabel(p, (lifecycle.catalogo || {}).property_types)], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
     ['Regione', p.region], ['Provincia', p.province], ['Comune', p.city], ['Microzona', p.microzone], ['CAP', p.postal_code],
     ['Superficie (mq)', p.surface_sqm], ['Superficie commerciale (mq)', p.commercial_surface_sqm],
@@ -1791,7 +1791,7 @@ function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatu
     ['Ferrovia o strada verso il mare', yesNo(p.sea_barrier)], ['Vista mare', yesNo(p.sea_view)],
     ['Dettaglio vista mare', p.sea_view_detail], ['Fascia mare (dal sito)', p.sea_band],
     ['Riscaldamento', p.heating], ['Climatizzazione', [p.air_conditioning, p.air_conditioning_type].filter(Boolean).join(' · ')],
-    ['Esposizione', p.exposure], ['Arredamento', p.furnishing], ['Spese condominiali (€)', p.condo_fees],
+    ['Esposizione', p.exposure], ['Arredamento', p.furnishing], ['Spese condominiali (€, periodicità non specificata)', p.condo_fees],
   ];
   const cell = ([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value === null || value === undefined || value === '' ? '—' : value)}</div>`;
   return `

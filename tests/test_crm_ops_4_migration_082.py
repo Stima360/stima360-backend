@@ -28,11 +28,13 @@ def test_m01_la_082_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1: dopo la 084 viene la 085.
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: dopo la 085 viene la 086.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: dopo la 086 viene la 087.
-    assert tutte[-5].version == "083_censimento_1_buildings_units" and tutte[-6] is m082
-    assert tutte[-4].version == "084_delete_arch_1a_mistakes"
-    assert tutte[-3].version == "085_delete_arch_2b1_property_trash"
-    assert tutte[-2].version == "086_delete_arch_2b2_property_trash_guards"
-    assert tutte[-1].version == "087_catalogo_canonico_1_site_attributes"
+    # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito), che ora e' l'ultima.
+    assert tutte[-6].version == "083_censimento_1_buildings_units" and tutte[-7] is m082
+    assert tutte[-5].version == "084_delete_arch_1a_mistakes"
+    assert tutte[-4].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-3].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-2].version == "087_catalogo_canonico_1_site_attributes"
+    assert tutte[-1].version == "088_catalogo_canonico_1b_site_inbox"
     assert runner.validate_migration(m082) == []
     # additiva: nessuna tabella nuova, nessun backfill, la down rifiuta con dati
     eseguibile = "\n".join(r for r in SU.splitlines() if not r.lstrip().startswith("--"))
