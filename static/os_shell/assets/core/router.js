@@ -10,6 +10,8 @@ let onNavigateCallback = null;
 let epochFn = null;
 // P28: la guardia. Vedi `renderCurrentRoute`.
 let guardFn = null;
+// COLLAUDO-FINALE-A-H: la pagina della rotta corrente (vedi `renderCurrentRoute`).
+let paginaCorrente = null;
 
 export function registerRoute(name, renderFn) {
   routes.set(name, renderFn);
@@ -29,6 +31,36 @@ export function initRouter(contentContainer, { onNavigate, epoch, guard } = {}) 
 /** Svuota la superficie applicativa. Chiamata quando la sessione finisce. */
 export function clearRoute() {
   if (container) container.innerHTML = '';
+  paginaCorrente = null;
+}
+
+/**
+ * COLLAUDO-FINALE-A-H. Ogni rotta disegna in una PROPRIA pagina, figlia di
+ * `#content`, e la navigazione successiva la stacca. Le viste sono asincrone e
+ * scrivono `container.innerHTML` dopo i loro `await`: senza questo, una vista
+ * piu' lenta della rotta PRECEDENTE (es. la scheda di un edificio) finiva di
+ * caricare dopo la nuova e la sovrascriveva - URL e titolo di una sezione, il
+ * contenuto di un'altra. Una scrittura tardiva ora cade in una pagina staccata,
+ * che non si vede piu'. Il toast (`showToast` su `container.parentElement`, ora
+ * `#content`) sopravvive alla navigazione come prima, quando viveva in <main>.
+ */
+function nuovaPagina() {
+  // un contenitore senza DOM completo (prove del solo router): come prima
+  const dom = typeof document !== 'undefined' && document && typeof document.createElement === 'function'
+    && typeof container.appendChild === 'function' && typeof container.querySelector === 'function';
+  if (!dom) {
+    container.innerHTML = '';
+    paginaCorrente = container;
+    return container;
+  }
+  const toast = container.querySelector('[data-census-toast]');
+  container.innerHTML = '';
+  if (toast) container.appendChild(toast);
+  const pagina = document.createElement('div');
+  pagina.setAttribute('data-route-page', '');
+  container.appendChild(pagina);
+  paginaCorrente = pagina;
+  return pagina;
 }
 
 export function navigate(name, params = []) {
@@ -99,9 +131,9 @@ export async function renderCurrentRoute() {
   const renderFn = routes.get(name);
   const params = currentRouteParams();
   if (onNavigateCallback) onNavigateCallback(name, params);
-  container.innerHTML = '';
+  const pagina = nuovaPagina();
   if (!renderFn) {
-    container.textContent = 'Pagina non trovata. Seleziona una sezione dal menu.';
+    pagina.textContent = 'Pagina non trovata. Seleziona una sezione dal menu.';
     return;
   }
   // P26-4. Le view sono asincrone: `container.innerHTML = ...` avviene dopo
@@ -112,17 +144,20 @@ export async function renderCurrentRoute() {
   // se non coincide, il risultato viene buttato invece che dipinto.
   const started = epochFn ? epochFn() : null;
   const stale = () => started !== null && epochFn() !== started;
+  // COLLAUDO-FINALE-A-H: una navigazione piu' recente ha gia' sostituito la pagina
+  const superata = () => paginaCorrente !== pagina;
 
   try {
-    await renderFn(container, params);
+    await renderFn(pagina, params);
     if (stale()) container.innerHTML = '';
   } catch (error) {
     if (stale()) {
       container.innerHTML = '';
       return;
     }
+    if (superata()) return;
     const message = (error && error.message) ? error.message : 'errore sconosciuto';
-    container.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(message)}</div>`;
+    pagina.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(message)}</div>`;
   }
 }
 
