@@ -57,15 +57,20 @@ def sync_for_session(ctx) -> dict:
         raise errors.ForbiddenRole(
             "Solo titolare e amministratori possono aggiornare le richieste dal sito")
     with core_cursor(commit=True) as (_, cur):
-        esito = legacy.run_import(cur, apply=True, agency_id=agency_id)
+        # STIMA-CRM-AGENDA-1: una sola richiesta aperta per stima, come
+        # l'aggancio del modulo pubblico (vedi `run_import`).
+        esito = legacy.run_import(cur, apply=True, agency_id=agency_id,
+                                  una_aperta_per_stima=True)
     return {
         "imported": esito["inserted"],
-        "already_present": esito["already_imported"],
+        # un record della stessa stima con un sopralluogo gia' aperto e' "gia'
+        # presente" per l'Agenda: la richiesta da smistare c'e' gia'.
+        "already_present": esito["already_imported"] + esito["open_request_exists"],
         "excluded": sum(esito[k] for k in ESCLUSE),
         "counts": {k: esito[k] for k in (
             "eligible", "inserted", "already_imported", "past", "today", "future",
             "orphan", "dst_nonexistent", "dst_ambiguous", "missing_agency",
-            "zero_lead", "one_lead", "multiple_leads", "errors")},
+            "zero_lead", "one_lead", "multiple_leads", "open_request_exists", "errors")},
     }
 
 

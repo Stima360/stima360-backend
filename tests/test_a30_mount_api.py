@@ -242,13 +242,22 @@ def test_30_main_nomina_l_agenda_solo_per_import_e_mount():
 
 
 def test_30b_main_nomina_il_router_legacy_solo_per_import_e_mount():
-    """A30-7: la sincronizzazione delle richieste dal sito, stesso modello."""
+    """A30-7: la sincronizzazione delle richieste dal sito, stesso modello.
+
+    SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: oltre al router, `main.py`
+    importa dal package legacy UNA funzione, l'adattatore fail-open
+    `safe_import_for_detail` (`appointments_legacy/site_hook.py`), chiamato
+    dopo il commit della dettagliata. Nessun'altra riga nomina il package: la
+    logica resta nell'import A30-6."""
     sorgente = MAIN.read_text(encoding="utf-8")
     assert _righe_codice_legacy(sorgente) == [
         "from appointments_legacy.router import router as appointments_legacy_router",
+        "from appointments_legacy.site_hook import safe_import_for_detail",
         "app.include_router(appointments_legacy_router, "
         "dependencies=[Depends(require_authenticated_operator)])",
     ]
+    # e la funzione importata e' chiamata una volta sola, fuori dalla ricevuta
+    assert sorgente.count("safe_import_for_detail(") == 1
 
 
 def test_31_main_non_importa_altro_dal_dominio_agenda():
@@ -259,9 +268,13 @@ def test_31_main_non_importa_altro_dal_dominio_agenda():
             importati.append((nodo.module, [(a.name, a.asname) for a in nodo.names]))
         elif isinstance(nodo, ast.Import):
             assert not any(a.name.startswith("appointments") for a in nodo.names)
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: l'adattatore fail-open del
+    # modulo pubblico (vedi test_30b).
     assert importati == [("appointments.router", [("router", "appointments_router")]),
                          ("appointments_legacy.router",
-                          [("router", "appointments_legacy_router")])]
+                          [("router", "appointments_legacy_router")]),
+                         ("appointments_legacy.site_hook",
+                          [("safe_import_for_detail", None)])]
 
 
 def test_32_appointments_router_usato_una_volta_sola_e_solo_nel_mount():

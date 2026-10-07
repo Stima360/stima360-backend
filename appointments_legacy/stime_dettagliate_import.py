@@ -51,7 +51,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from appointments import repository
+from appointments import repository, state_machine
 
 SOURCE = "legacy_stime_dettagliate"
 KEY_PREFIX = "stime_dettagliate:"
@@ -78,6 +78,7 @@ REPORT_KEYS = (
     "past", "today", "future",
     "orphan", "dst_nonexistent", "dst_ambiguous", "missing_agency",
     "zero_lead", "one_lead", "multiple_leads", "contact_not_linked",
+    "open_request_exists",
     "errors",
 )
 
@@ -181,6 +182,7 @@ SELECT d.id, d.agency_id, d.stima_id, d.sopralluogo,
   LEFT JOIN stime s ON s.id = d.stima_id
  WHERE d.sopralluogo IS NOT NULL
    AND (%s::bigint IS NULL OR d.agency_id = %s::bigint)
+   AND (%s::bigint IS NULL OR d.id = %s::bigint)
  ORDER BY d.id
 """
 
@@ -253,13 +255,32 @@ def _report(apply: bool) -> dict:
 
 
 def run_import(cur, *, apply: bool, today: date | None = None,
-               agency_id: int | None = None) -> dict:
+               agency_id: int | None = None, record_id: int | None = None,
+               una_aperta_per_stima: bool = False) -> dict:
     """Classifica ogni record con un sopralluogo e, con `apply=True`, inserisce
     gli idonei nella transazione del chiamante (nessun commit qui).
 
     `agency_id` (A30-7): se dato, SOLO i record legacy di quell'agenzia - la
     sincronizzazione dall'Agenda lo prende dalla sessione. Senza, tutto il
     database, come la CLI esplicita (A30-6).
+
+    `record_id` (STIMA-CRM-AGENDA-1): se dato, SOLO quel record
+    `stime_dettagliate` - e' il filtro con cui il salvataggio del modulo
+    pubblico porta nell'Agenda la sola richiesta appena scritta
+    (`appointments_legacy.site_hook`). Stesse regole, stessa chiave, stesso
+    INSERT ... ON CONFLICT: il filtro restringe l'insieme, non cambia nulla di
+    cio' che si fa a ogni record. I due filtri si sommano.
+
+    `una_aperta_per_stima` (STIMA-CRM-AGENDA-1): con `apply=True`, prima di
+    inserire si applica la regola GIA' dell'Agenda "un solo sopralluogo aperto
+    per stima" (D5 di A30-7): `repository.lock_stima` (FOR UPDATE, tenuto fino
+    al commit) e poi `repository.open_inspection_for_stima` con
+    `state_machine.OPEN_STATUSES`. Se la stima ha gia' un sopralluogo aperto
+    (di qualunque fonte) il record NON si importa e si conta in
+    `open_request_exists`; un sopralluogo in stato terminale non conta, quindi
+    la richiesta nuova si importa. Lo usano i percorsi dell'app (l'aggancio del
+    modulo pubblico e la sincronizzazione dall'Agenda); la CLI di A30-6 resta
+    com'era (default False).
 
     Con `apply=False` e' SOLA LETTURA: nessuna scrittura, solo il piano.
     Ogni INSERT sta in un SAVEPOINT: un errore inatteso su un record si conta
@@ -271,10 +292,13 @@ def run_import(cur, *, apply: bool, today: date | None = None,
     esito = _report(apply)
 
     esito["agency_id"] = agency_id
+    esito["record_id"] = record_id
     cur.execute("SELECT count(*) AS n FROM stime_dettagliate WHERE sopralluogo IS NULL "
-                "AND (%s::bigint IS NULL OR agency_id = %s::bigint)", (agency_id, agency_id))
+                "AND (%s::bigint IS NULL OR agency_id = %s::bigint) "
+                "AND (%s::bigint IS NULL OR id = %s::bigint)",
+                (agency_id, agency_id, record_id, record_id))
     esito["without_sopralluogo"] = cur.fetchone()["n"]
-    cur.execute(_CANDIDATI, (SOURCE, KEY_PREFIX, agency_id, agency_id))
+    cur.execute(_CANDIDATI, (SOURCE, KEY_PREFIX, agency_id, agency_id, record_id, record_id))
     righe = [dict(r) for r in cur.fetchall()]
     esito["with_sopralluogo"] = len(righe)
 
@@ -308,6 +332,30 @@ def run_import(cur, *, apply: bool, today: date | None = None,
         valori = map_values(riga, istante, lead_id=lead_id, contact_id=contact_id)
         cur.execute("SAVEPOINT a30_6_record")
         try:
+            if una_aperta_per_stima:
+                # STIMA-CRM-AGENDA-1: la stessa guardia di `schedule_appointment`
+                # (lock della stima, poi ricerca degli aperti sotto il lock): due
+                # import concorrenti sulla stessa stima si serializzano qui e il
+                # secondo vede la riga del primo. Il FOR UPDATE si prende PRIMA
+                # di ogni altro lock sulla stima: partire dal FOR KEY SHARE di
+                # `stima_agency` e poi salire a FOR UPDATE farebbe andare in
+                # deadlock due corse sulla stessa stima. `lock_stima` vale anche
+                # come controllo d'agenzia (falso = stima assente in agenzia).
+                if not repository.lock_stima(cur, riga["agency_id"], riga["stima_id"]):
+                    cur.execute("RELEASE SAVEPOINT a30_6_record")
+                    esito["orphan"] += 1
+                    continue
+                if repository.open_inspection_for_stima(
+                        cur, riga["agency_id"], riga["stima_id"],
+                        statuses=state_machine.OPEN_STATUSES) is not None:
+                    cur.execute("RELEASE SAVEPOINT a30_6_record")
+                    # l'aperto trovato sotto il lock puo' essere la riga di QUESTO
+                    # record, importata nel frattempo da un'altra corsa
+                    if repository.find_by_source_key(cur, SOURCE, valori["source_record_id"]) is not None:
+                        esito["already_imported"] += 1
+                    else:
+                        esito["open_request_exists"] += 1
+                    continue
             # DELETE-ARCH Fase 0: la stima letta all'inizio puo' essere stata
             # cancellata nel frattempo. Ricontrollo con `FOR KEY SHARE`
             # (`repository.stima_agency`), tenuto fino al commit: niente

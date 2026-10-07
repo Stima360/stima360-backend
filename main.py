@@ -47,6 +47,9 @@ from acquisition.router import router as acquisition_router
 from acquisitions.router import router as acquisitions_router
 from appointments.router import router as appointments_router
 from appointments_legacy.router import router as appointments_legacy_router
+# STIMA-CRM-AGENDA-1: la richiesta di sopralluogo della dettagliata entra in
+# Agenda da sola (adattatore fail-open sull'import A30-6, nessuna logica qui).
+from appointments_legacy.site_hook import safe_import_for_detail
 # A30-12: il booking pubblico. Router PUBBLICO separato (stessa forma di
 # communication_public_router), montato piu' sotto senza
 # require_authenticated_operator: qui non c'e' un operatore, c'e' il client
@@ -1878,6 +1881,14 @@ def _save_detail_submission(data, receipt):
             conn.close()
         except:
             pass
+
+    # STIMA-CRM-AGENDA-1: la riga e' committata. Se porta un sopralluogo, la
+    # richiesta `requested` entra in Agenda ORA con l'import A30-6 limitato a
+    # questo record (chiave `stime_dettagliate:<id>`, UNIQUE della 072: una
+    # ripresa o un sync manuale contemporaneo non ne fanno una seconda).
+    # Fail-open e fuori dalla ricevuta: un guasto Agenda si logga e il record
+    # resta per la sincronizzazione manuale; al cliente non arriva un errore.
+    safe_import_for_detail(detail_id, connection_factory=get_connection)
 
     # No orphan/skip is reported as a completed CRM synchronization.
     receipt.step("property_detail", lambda: property_site_sync.sync_detail(

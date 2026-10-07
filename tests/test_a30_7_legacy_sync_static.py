@@ -60,12 +60,16 @@ def _sync(monkeypatch, ctx, esito=None):
 
     monkeypatch.setattr(modulo, "core_cursor", lambda commit=False: _Cursore())
 
-    def finto(cur, *, apply, agency_id, today=None):
-        chiamate.append({"apply": apply, "agency_id": agency_id})
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la sincronizzazione chiede
+    # all'import la regola "una sola richiesta aperta per stima" e ne riceve il
+    # contatore `open_request_exists`.
+    def finto(cur, *, apply, agency_id, today=None, una_aperta_per_stima=False):
+        chiamate.append({"apply": apply, "agency_id": agency_id,
+                         "una_aperta_per_stima": una_aperta_per_stima})
         base = {k: 0 for k in ("eligible", "inserted", "already_imported", "past", "today",
                                "future", "orphan", "dst_nonexistent", "dst_ambiguous",
                                "missing_agency", "zero_lead", "one_lead", "multiple_leads",
-                               "errors")}
+                               "open_request_exists", "errors")}
         base.update(esito or {})
         return base
 
@@ -76,9 +80,11 @@ def _sync(monkeypatch, ctx, esito=None):
 def test_03_owner_admin_importano_solo_la_propria_agenzia(monkeypatch):
     esito, chiamate = _sync(monkeypatch, _Ctx(agency_id=42),
                             {"inserted": 2, "already_imported": 3, "orphan": 1,
-                             "dst_ambiguous": 1, "errors": 1})
-    assert chiamate == [{"apply": True, "agency_id": 42}]
-    assert (esito["imported"], esito["already_present"], esito["excluded"]) == (2, 3, 3)
+                             "dst_ambiguous": 1, "errors": 1, "open_request_exists": 2})
+    assert chiamate == [{"apply": True, "agency_id": 42, "una_aperta_per_stima": True}]
+    # gia' presenti = gia' importati + record di una stima con un sopralluogo gia' aperto
+    assert (esito["imported"], esito["already_present"], esito["excluded"]) == (2, 5, 3)
+    assert esito["counts"]["open_request_exists"] == 2
 
 
 @pytest.mark.parametrize("ctx,errore", [

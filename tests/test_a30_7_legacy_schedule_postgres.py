@@ -135,18 +135,23 @@ def test_01_sync_agenzia_a_importa_solo_a(http, w):
 
 
 def test_02_03_04_sync_idempotente_e_nuovo_record_al_giro_dopo(http, w):
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la sincronizzazione applica la regola
+    # "una sola richiesta aperta per stima" (D5 riusata: lock_stima + open_inspection_for_stima).
+    # Due record della STESSA stima: il primo diventa la richiesta, il secondo e'
+    # "gia' presente" (la stima ha gia' un sopralluogo aperto) e non nasce.
     for delta in (+1, +2):
         w["dettaglio"](w["s_un_lead"], w["giorno"](delta))
     w["dettaglio"](None, w["giorno"](+3))                          # orfano: escluso
     primo = _sync(http).json()
-    assert (primo["imported"], primo["already_present"], primo["excluded"]) == (2, 0, 1)
+    assert (primo["imported"], primo["already_present"], primo["excluded"]) == (1, 1, 1)
+    assert primo["counts"]["open_request_exists"] == 1
     eventi = _conta(w, "appointment_events")
     secondo = _sync(http).json()
     assert (secondo["imported"], secondo["already_present"], secondo["excluded"]) == (0, 2, 1)
-    assert _conta(w, "appointment_events") == eventi == 2          # nessun evento nuovo
+    assert _conta(w, "appointment_events") == eventi == 1          # nessun evento nuovo
     nuovo = w["dettaglio"](w["s_zero_lead"], w["giorno"](+9))
     terzo = _sync(http).json()
-    assert (terzo["imported"], terzo["already_present"]) == (1, 2)
+    assert (terzo["imported"], terzo["already_present"]) == (1, 2)   # stima diversa: nasce
     assert _richiesta(w, nuovo)["status"] == "requested"
     assert set(terzo) == {"imported", "already_present", "excluded", "counts"}
 
@@ -163,8 +168,11 @@ def test_05_sync_solo_owner_admin_403_per_agent(http, w):
 
 
 def test_06_sync_nessun_side_effect_ne_scrittura_legacy(http, w):
-    for delta in (-3, +3):
-        w["dettaglio"](w["s_un_lead"], w["giorno"](delta), pii=True)
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la sincronizzazione applica la regola
+    # "una sola richiesta aperta per stima" (D5 riusata: lock_stima + open_inspection_for_stima).
+    # Due stime diverse, cosi' i due record diventano due richieste.
+    for stima, delta in ((w["s_un_lead"], -3), (w["s_zero_lead"], +3)):
+        w["dettaglio"](stima, w["giorno"](delta), pii=True)
     prima = _fotografia(w, escluse=("appointments", "appointment_events"))
     r = _sync(http)
     assert r.status_code == 200 and r.json()["imported"] == 2
@@ -395,7 +403,12 @@ def _importa_diretto(w, *stime):
 # ---------------------------------------------------------------------------
 
 def test_40_secondo_sopralluogo_aperto_409_con_id_per_chi_lo_vede(http, w, proiezione_accesa):
-    (r1, r2), _ = _importa(w, http, w["s_un_lead"], w["s_un_lead"])
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la sincronizzazione applica la regola
+    # "una sola richiesta aperta per stima" (D5 riusata: lock_stima + open_inspection_for_stima).
+    # Due richieste aperte della stessa stima non nascono piu' dalla sync: si
+    # costruiscono con l'import diretto (CLI A30-6, senza la regola) per
+    # continuare a provare la guardia D5 al momento di fissare.
+    (r1, r2), _ = _importa_diretto(w, w["s_un_lead"], w["s_un_lead"])
     # due richieste aperte della stessa stima: nessuna si fissa finche' l'altra e' aperta
     r = _pianifica(http, r1, w["luca"], futuro(10), futuro(11))
     assert r.status_code == 409 and r.json()["code"] == "STIMA_INSPECTION_ALREADY_OPEN"
@@ -407,17 +420,19 @@ def test_40_secondo_sopralluogo_aperto_409_con_id_per_chi_lo_vede(http, w, proie
                              json={"version": r2["version"], "reason": "Doppione del sito"})
     assert c.status_code == 200, c.text
     assert _pianifica(http, r1, w["marta"], futuro(10), futuro(11)).status_code == 200
-    # una richiesta nuova della stessa stima ora trova quella FISSATA
+    # una richiesta nuova della stessa stima ora trova quella FISSATA: la sync
+    # non la fa nascere (sopralluogo aperto), e il dettaglio resta dov'e'
     nuovo = w["dettaglio"](w["s_un_lead"], w["giorno"](+12))
-    _sync(http)
-    r3 = _richiesta(w, nuovo)
-    r = _pianifica(http, r3, w["luca"], futuro(14), futuro(15))
-    assert r.status_code == 409 and r.json()["existing_appointment_id"] == r1["id"]
+    esito = _sync(http).json()
+    assert esito["counts"]["open_request_exists"] == 1
+    assert _richiesta(w, nuovo) is None
     assert _conta(w, "stima_inspections") == 1
 
 
 def test_41_un_agent_non_riceve_l_id_che_non_puo_vedere(http, w, proiezione_accesa):
-    (r1, r2), _ = _importa(w, http, w["s_un_lead"], w["s_un_lead"])
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la sincronizzazione applica la regola
+    # "una sola richiesta aperta per stima" (D5 riusata: lock_stima + open_inspection_for_stima).
+    (r1, r2), _ = _importa_diretto(w, w["s_un_lead"], w["s_un_lead"])
     # r2 assegnata a luca (resta una richiesta), r1 resta senza agente: per
     # luca r1 non esiste
     a = http("giorgio").post(f"/api/appointments/{r2['id']}/reassign",
@@ -526,8 +541,15 @@ def test_53_404_richiesta_inesistente(http, w):
 
 
 def test_54_il_form_pubblico_e_il_legacy_restano_intatti():
-    """Nessuna modifica al funnel pubblico: `salva_stima_dettagliata` non
-    nomina l'Agenda, e nessun codice A30-7 scrive su `stime_dettagliate`."""
+    """Il funnel pubblico non costruisce appuntamenti e nessun codice del
+    package legacy scrive su `stime_dettagliate`.
+
+    SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la D2 di A30-7 ("nessun hook
+    nel form pubblico") e' superata per il solo salvataggio riuscito della
+    dettagliata, che chiama UNA volta l'adattatore fail-open
+    `safe_import_for_detail` (import A30-6 limitato al record). Il handler
+    continua a non nominare il dominio `appointments` ne' a scrivere nulla
+    dell'Agenda in proprio."""
     import re
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
@@ -535,6 +557,8 @@ def test_54_il_form_pubblico_e_il_legacy_restano_intatti():
     funzione = main[main.index("async def salva_stima_dettagliata"):]
     funzione = funzione[:funzione.index("\n@app.")]
     assert "appointments" not in funzione
+    assert funzione.count("safe_import_for_detail(") == 1
+    assert "insert_appointment" not in funzione and "run_import" not in funzione
     for file in (root / "appointments_legacy").glob("*.py"):
         codice = re.sub(r'""".*?"""', "", file.read_text(encoding="utf-8"), flags=re.S)
         for vietato in (r"INSERT\s+INTO\s+stime", r"UPDATE\s+stime", r"DELETE\s+FROM\s+stime"):

@@ -212,8 +212,14 @@ def test_22_il_modulo_scrive_solo_attraverso_il_repository():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 1A (REVIEW 1): il rollback
     # qualifica l'annullamento con `repository.cancelled_kind_changes`
     # ('agency' se la 084 c'e'; lettura dello schema, nessuna scrittura).
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: con `una_aperta_per_stima` il
+    # modulo applica la guardia D5 gia' dell'Agenda (`lock_stima`, poi
+    # `open_inspection_for_stima`, e `find_by_source_key` per distinguere la riga
+    # dello stesso record importata da una corsa concorrente): un lock e due
+    # letture, nessuna scrittura.
     assert chiamate == {"insert_appointment", "update_appointment", "db_now", "stima_agency",
-                        "cancelled_kind_changes"}
+                        "cancelled_kind_changes", "lock_stima", "open_inspection_for_stima",
+                        "find_by_source_key"}
     # stima_inspections: mai nominata in una query di scrittura o lettura
     assert "INTO stima_inspections" not in codice
 
@@ -285,11 +291,15 @@ def test_34_il_package_legacy_non_e_montato_ne_importato_dall_app():
     # SENTINELLA AGGIORNATA DA A30-7: `main.py` monta SOLO il router della
     # sincronizzazione (import + mount, tests/test_a30_mount_api.py test_30b);
     # l'import e lo script restano fuori dall'app.
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: piu' l'adattatore fail-open
+    # `site_hook.safe_import_for_detail`, chiamato dal salvataggio della
+    # dettagliata. Il modulo dell'import e lo script restano fuori da `main.py`.
     main = (ROOT / "main.py").read_text(encoding="utf-8")
     righe = [r.strip() for r in main.splitlines()
              if "appointments_legacy" in r.split("#", 1)[0]]
     assert righe == [
         "from appointments_legacy.router import router as appointments_legacy_router",
+        "from appointments_legacy.site_hook import safe_import_for_detail",
         "app.include_router(appointments_legacy_router, "
         "dependencies=[Depends(require_authenticated_operator)])",
     ]
