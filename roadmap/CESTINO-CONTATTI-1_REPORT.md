@@ -241,4 +241,16 @@ Le 49 `ERROR` (import legacy A30-6/A30-7 su PostgreSQL) sono le stesse della bas
 
 ## 10. Dopo il commit
 
-(compilato dopo il push)
+Commit `dd9a88f`, spinto su `core-0.1-test`: deploy automatico su Render TEST. Ho rieseguito, a working tree pulito, i 38 test falliti nella suite completa:
+- **17 ora passano**: le 7 sentinelle `git diff` di §7, le sentinelle d'inventario «nessuna migration» e git-status, e `lmc3 test_19` (instabile).
+- **21 restano**, e sono tutti nella lista della base di FASE E:
+  - P29-3 «file toccati» e «documento di design» (cercano `P29_2_0_COMMUNICATION_DESIGN.md`, che c'è solo sul Mac);
+  - lmc15 41/42;
+  - appuntamenti A30-1/2/8 su PostgreSQL;
+  - next2 router;
+  - followup isolation;
+  - agenda realapp.
+
+**Nessun fallimento fuori dalla base.**
+
+Su Render TEST le migration sono ancora **fino alla 088**: **089 e 090 da applicare**, collaudi live E e F pendenti (§0, runbook).
