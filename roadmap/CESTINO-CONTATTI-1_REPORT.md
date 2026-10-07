@@ -1,5 +1,7 @@
 # CESTINO-CONTATTI-1 (FASE F) — Cestino e Ripristino dei Contatti
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Branch `core-0.1-test`. Base: `bf6dae8` (PERTINENZE-1, risultati post-commit). Solo TEST: PROD esclusa.
 
 ## 0. Stato da conservare (da riportare finché non cambia)
@@ -7,10 +9,10 @@ Branch `core-0.1-test`. Base: `bf6dae8` (PERTINENZE-1, risultati post-commit). S
 | Cosa | Stato |
 |---|---|
 | Migration applicate su Render TEST | fino alla **088** |
-| **089** `089_pertinenze_1_unit_nature` (FASE E) | **NON applicata** |
-| Collaudo live della FASE E (pertinenze) | **pendente** |
-| **090** `090_cestino_contatti_1_contact_trash` (questa fase) | nuova, **NON applicata** |
-| Collaudo live della FASE F (Cestino Contatti) | **pendente** |
+| **089** `089_pertinenze_1_unit_nature` (FASE E) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudo live della FASE E (pertinenze) | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
+| **090** `090_cestino_contatti_1_contact_trash` (questa fase) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudo live della FASE F (Cestino Contatti) | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 
 Il runner applica le pendenti **in ordine**: su TEST un solo `apply` porta prima la 089, poi la 090. Il runbook `roadmap/CESTINO-CONTATTI-1_TEST_RUNBOOK.md` copre entrambe. Le due sono additive e indipendenti.
 
@@ -253,4 +255,4 @@ Commit `dd9a88f`, spinto su `core-0.1-test`: deploy automatico su Render TEST. H
 
 **Nessun fallimento fuori dalla base.**
 
-Su Render TEST le migration sono ancora **fino alla 088**: **089 e 090 da applicare**, collaudi live E e F pendenti (§0, runbook).
+Aggiornamento 07/10/2026: su Render TEST **089 e 090 sono applicate**; collaudi live E e F eseguiti (`roadmap/COLLAUDO-FINALE-A-H_REPORT.md`).

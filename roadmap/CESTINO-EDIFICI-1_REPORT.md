@@ -1,5 +1,7 @@
 # CESTINO-EDIFICI-1 (FASE G) — Cestino e Ripristino degli Edifici
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Branch `core-0.1-test`. Base: `4833eae` (CESTINO-CONTATTI-1, risultati post-commit), verificata come ultimo commit: nessun lavoro successivo da conservare. Solo TEST: PROD esclusa. Sito pubblico non toccato.
 
 ## 0. Stato da conservare (da riportare finché non cambia)
@@ -7,10 +9,10 @@ Branch `core-0.1-test`. Base: `4833eae` (CESTINO-CONTATTI-1, risultati post-comm
 | Cosa | Stato |
 |---|---|
 | Migration applicate su Render TEST | fino alla **088** |
-| **089** `089_pertinenze_1_unit_nature` (FASE E) | **NON applicata** |
-| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **NON applicata** |
-| **091** `091_cestino_edifici_1_building_trash` (questa fase) | nuova, **NON applicata** |
-| Collaudi live delle FASI E, F e G | **pendenti** |
+| **089** `089_pertinenze_1_unit_nature` (FASE E) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **091** `091_cestino_edifici_1_building_trash` (questa fase) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudi live delle FASI E, F e G | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 
 Il runner applica le pendenti **in ordine**: su TEST un solo `apply` porta la 089, poi la 090, poi la 091. Il runbook `roadmap/CESTINO-EDIFICI-1_TEST_RUNBOOK.md` copre tutte e tre. La 091 dipende dalla 090 (estende il CHECK del registro che la 090 scrive) e il runner la mette dopo.
 
@@ -204,4 +206,4 @@ Commit `fb4ab29`, spinto su `core-0.1-test`: deploy automatico su Render TEST. H
 
 **Nessun fallimento fuori dalla base.**
 
-Su Render TEST le migration sono ancora **fino alla 088**: **089, 090 e 091 da applicare**, collaudi live E, F e G pendenti (§0, §10, runbook).
+Aggiornamento 07/10/2026: su Render TEST **089, 090 e 091 sono applicate**; collaudi live E, F e G eseguiti (`roadmap/COLLAUDO-FINALE-A-H_REPORT.md`).

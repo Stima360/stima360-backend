@@ -1,5 +1,7 @@
 # PERTINENZE-1 — Pertinenze nel percorso palazzina / unità (FASE E)
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Base: `core-0.1-test` @ `744dad3` (CATALOGO-CANONICO-1, completamento). Il commit di questa fase contiene anche questo report.
 
 **Stato verificato all'inizio:**
@@ -10,8 +12,8 @@ Base: `core-0.1-test` @ `744dad3` (CATALOGO-CANONICO-1, completamento). Il commi
 | | Stato |
 |---|---|
 | Codice (backend, Shell) | **implementato e testato localmente**: PostgreSQL vero, stub DOM, Chromium a 390 e 1280 px |
-| Migration 089 su TEST | **da applicare**: `roadmap/PERTINENZE-1_TEST_RUNBOOK.md` |
-| Collaudo live | **pendente** (runbook §5) |
+| Migration 089 su TEST | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudo live | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 | PROD | esclusa |
 
 ## 1. Cosa c'era e cosa mancava
@@ -207,6 +209,6 @@ Nessuna decisione funzionale è rimasta aperta; le scelte tecniche:
 - **I 9 controlli sul working tree passano** ad albero pulito: a32_2 s14, lmc7 h5, lmc8 h5, lmc9 f4, lmc11 h1, lmc13 e1, lmc15 test_37, p27_7 d3, p29_3g test_18. Rieseguiti con i loro file: 374 verdi.
 - **Restano rossi solo 4 fallimenti, già presenti nella base:** lmc15 test_41 e test_42, p29_3g test_20 e test_21.
 - **Deploy Render TEST:** avviato dal push, **non verificato** da qui. Finché la 089 non è applicata, TEST resta nello stato «codice prima dello schema» (§3): tutto come prima, una pertinenza dichiarata rifiutata in modo leggibile.
-- **Migration 089 su TEST:** **da applicare** con `roadmap/PERTINENZE-1_TEST_RUNBOOK.md`.
-- **Collaudo live:** **pendente** (runbook §5), smartphone compreso.
+- **Migration 089 su TEST:** **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita).
+- **Collaudo live:** **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`.
 - **Fase E chiusa qui.** Nessuna attività successiva iniziata.

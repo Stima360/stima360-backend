@@ -1,5 +1,7 @@
 # CESTINO-RICHIESTE-1 — runbook TEST: migration 089 → 092 e collaudi live E/F/G/H
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa: il runner rifiuta qualunque database che non sia un TEST. Sito pubblico non coinvolto.
 
 ## Stato di partenza
@@ -7,11 +9,11 @@ Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa: il runne
 | Cosa | Stato |
 |---|---|
 | Migration applicate | fino alla **088** |
-| **089** `089_pertinenze_1_unit_nature` (FASE E) | **non applicata** |
-| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **non applicata** |
-| **091** `091_cestino_edifici_1_building_trash` (FASE G) | **non applicata** |
-| **092** `092_cestino_richieste_1_buy_request_trash` (FASE H) | **non applicata** |
-| Collaudi live FASE E, F, G e H | **pendenti** |
+| **089** `089_pertinenze_1_unit_nature` (FASE E) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **091** `091_cestino_edifici_1_building_trash` (FASE G) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **092** `092_cestino_richieste_1_buy_request_trash` (FASE H) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudi live FASE E, F, G e H | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 
 **Ordine delle migration pendenti:** 089 → 090 → 091 → 092. Il runner le applica in quest'ordine con un solo `apply`, ciascuna nella sua transazione. Sono additive.
 

@@ -1,5 +1,7 @@
 # PERTINENZE-1 — runbook TEST: migration 089
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa: il runner rifiuta qualunque database che non sia un TEST.
 
 La 089 è additiva: due colonne su `properties` (`is_pertinenza` con default `FALSE`, `pertinenza_kind`), un CHECK sulle sole righe nuove e un indice parziale piccolo. Non fa nessun backfill e nessuna riga esistente cambia.
@@ -11,6 +13,7 @@ La 089 è additiva: due colonne su `properties` (`is_pertinenza` con default `FA
 Si sistema applicando la 089.
 
 > Stato al momento della consegna: **non eseguito**. Da qui non c'è accesso a Render.
+> Aggiornamento 07/10/2026: migration applicate da Giorgio; collaudo live in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`.
 
 ## 0. Commit del servizio
 

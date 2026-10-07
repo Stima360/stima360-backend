@@ -1,5 +1,7 @@
 # CESTINO-RICHIESTE-1 (FASE H) — Cestino e Ripristino delle Richieste acquirente
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Branch `core-0.1-test`. Base: `f7251ac` (CESTINO-EDIFICI-1, risultati post-commit), verificata come ultimo commit: nessun lavoro successivo da conservare. Solo TEST: PROD esclusa. Sito pubblico non toccato. Ultima fase della roadmap: nessuna fase nuova aggiunta.
 
 ## 0. Stato da conservare (da riportare finché non cambia)
@@ -7,11 +9,11 @@ Branch `core-0.1-test`. Base: `f7251ac` (CESTINO-EDIFICI-1, risultati post-commi
 | Cosa | Stato |
 |---|---|
 | Migration applicate su Render TEST | fino alla **088** |
-| **089** `089_pertinenze_1_unit_nature` (FASE E) | **NON applicata** |
-| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **NON applicata** |
-| **091** `091_cestino_edifici_1_building_trash` (FASE G) | **NON applicata** |
-| **092** `092_cestino_richieste_1_buy_request_trash` (questa fase) | nuova, **NON applicata** |
-| Collaudi live delle FASI E, F, G e H | **pendenti** |
+| **089** `089_pertinenze_1_unit_nature` (FASE E) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **090** `090_cestino_contatti_1_contact_trash` (FASE F) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **091** `091_cestino_edifici_1_building_trash` (FASE G) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **092** `092_cestino_richieste_1_buy_request_trash` (questa fase) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudi live delle FASI E, F, G e H | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 
 **Ordine:** 089 → 090 → 091 → 092, con un solo `apply` del runner (`roadmap/CESTINO-RICHIESTE-1_TEST_RUNBOOK.md`). La 092 estende il CHECK del registro scritto da 090 e 091: va per ultima, e il runner la mette per ultima.
 
@@ -254,7 +256,7 @@ Commit `33a3e9c`, spinto su `core-0.1-test`: deploy automatico su Render TEST. H
 
 **Nessun fallimento fuori dalla base.**
 
-Su Render TEST le migration sono ancora **fino alla 088**: **089, 090, 091 e 092 da applicare**, in quest'ordine; collaudi live E, F, G e H pendenti (§0, §10, runbook).
+Aggiornamento 07/10/2026: su Render TEST **089, 090, 091 e 092 sono applicate**; collaudi live eseguiti (`roadmap/COLLAUDO-FINALE-A-H_REPORT.md`).
 
 ## 12. Riepilogo finale A–H
 
@@ -266,10 +268,10 @@ Tutte le fasi sono su `core-0.1-test`, pushate (deploy automatico Render TEST). 
 | **B** EDIFICI-1 | Sezione Edifici | `80b047d` | PostgreSQL, UI, Chromium 1280/390/320 | nessuna | **pendente** (voce, lista e filtri, contatori, unità → immobile → edificio, ritorno con filtri, smartphone) |
 | **C** CREAZIONE-GUIDATA-1 | Creazione guidata immobile / censimento | `3d3c3c7` | PostgreSQL, UI, Chromium | nessuna | **pendente** (tre percorsi, riuso edificio, unità commerciale con assegnazione, ritentativo, smartphone) |
 | **D** CATALOGO-CANONICO-1 | Catalogo canonico e allineamento sito → CRM | `92a2dc7`, `2624d5a` (+ docs `744dad3`) | PostgreSQL, UI, Chromium | **087 e 088 applicate** (comunicazione di Giorgio) | **pendente** (runbook D §6) |
-| **E** PERTINENZE-1 | Pertinenze autonome | `bf1d163` (+ docs `bf6dae8`) | PostgreSQL, UI, Chromium | **089 da applicare** | **pendente** |
-| **F** CESTINO-CONTATTI-1 | Cestino Contatti | `dd9a88f` (+ docs `4833eae`) | PostgreSQL 11, UI 16, statici | **090 da applicare** | **pendente** |
-| **G** CESTINO-EDIFICI-1 | Cestino Edifici | `fb4ab29` (+ docs `f7251ac`) | PostgreSQL 7, browser 2, UI 13, statici 6 | **091 da applicare** | **pendente** |
-| **H** CESTINO-RICHIESTE-1 | Cestino Richieste acquirente | `33a3e9c` (+ docs) | PostgreSQL 7, browser 2, UI 12, statici 6 | **092 da applicare** | **pendente** |
+| **E** PERTINENZE-1 | Pertinenze autonome | `bf1d163` (+ docs `bf6dae8`) | PostgreSQL, UI, Chromium | **089 applicata** | vedi COLLAUDO-FINALE-A-H |
+| **F** CESTINO-CONTATTI-1 | Cestino Contatti | `dd9a88f` (+ docs `4833eae`) | PostgreSQL 11, UI 16, statici | **090 applicata** | vedi COLLAUDO-FINALE-A-H |
+| **G** CESTINO-EDIFICI-1 | Cestino Edifici | `fb4ab29` (+ docs `f7251ac`) | PostgreSQL 7, browser 2, UI 13, statici 6 | **091 applicata** | vedi COLLAUDO-FINALE-A-H |
+| **H** CESTINO-RICHIESTE-1 | Cestino Richieste acquirente | `33a3e9c` (+ docs) | PostgreSQL 7, browser 2, UI 12, statici 6 | **092 applicata** | vedi COLLAUDO-FINALE-A-H |
 
 **Integrazione col sito: rimandata** (dalla fase D):
 - il sito pubblico non è collegato a TEST;

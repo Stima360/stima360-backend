@@ -1,5 +1,7 @@
 # CESTINO-CONTATTI-1 — runbook TEST: migration 089 + 090 e collaudi live E/F
 
+> **AGGIORNAMENTO COLLAUDO-FINALE-A-H (07/10/2026).** Le migration 089, 090, 091 e 092 sono **applicate** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita). Il collaudo live è stato eseguito: esiti PASS / FAIL / NON VERIFICATO in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md`. Le righe «non applicata» / «pendente» qui sotto descrivevano lo stato alla consegna e sono state aggiornate.
+
 Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa: il runner rifiuta qualunque database che non sia un TEST.
 
 ## Stato di partenza
@@ -7,9 +9,9 @@ Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa: il runne
 | Cosa | Stato |
 |---|---|
 | Migration applicate | fino alla **088** |
-| **089** (pertinenze, FASE E) | **non applicata** |
-| **090** (Cestino contatti, FASE F) | **non applicata** |
-| Collaudi live FASE E e FASE F | **pendenti** |
+| **089** (pertinenze, FASE E) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| **090** (Cestino contatti, FASE F) | **applicata** su `stima360_db_test` (comunicazione di Giorgio, verifica SQL riuscita) |
+| Collaudi live FASE E e FASE F | **eseguito** il 07/10/2026: esiti in `roadmap/COLLAUDO-FINALE-A-H_REPORT.md` |
 
 Il runner applica le pendenti **in ordine**: un solo `apply` porta la 089 e poi la 090. Sono additive e indipendenti. Nessun backfill, nessuna riga esistente cambia valore.
 
