@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from core.exceptions import NotFoundError, ConflictError, ValidationError
+from core.buy_trash import BuyRequestInTrash
+from core.property_trash import trash_409
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -15,6 +17,8 @@ def tr(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except NotFoundError as exc:
         raise HTTPException(404, str(exc))
+    except BuyRequestInTrash as exc:   # CESTINO-RICHIESTE-1: {detail, code}
+        return trash_409(exc)
     except ConflictError as exc:
         raise HTTPException(409, str(exc))
     except ValidationError as exc:

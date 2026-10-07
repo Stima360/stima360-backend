@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
 from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
 from core.contact_trash import ContactInTrash  # CESTINO-CONTATTI-1: stessa forma {detail, code}
+from core.buy_trash import BuyRequestInTrash  # CESTINO-RICHIESTE-1: stessa forma {detail, code}
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -13,7 +14,7 @@ router=APIRouter(prefix='/api/buy',tags=['buy'])
 def tr(fn,*a,**k):
     try:return fn(*a,**k)
     except NotFoundError as e:raise HTTPException(404,str(e))
-    except (PropertyInTrash, ContactInTrash) as e:return trash_409(e)      # DELETE-ARCH 2B2: {detail, code}
+    except (PropertyInTrash, ContactInTrash, BuyRequestInTrash) as e:return trash_409(e)      # DELETE-ARCH 2B2: {detail, code}
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
@@ -35,6 +36,7 @@ def update_request(request_id:int,p:BuyRequestUpdate,ctx:OperatorContext=Depends
     except service.repository.ArchiveBlocked as e:
         return JSONResponse(status_code=409,content={'detail':str(e),'code':e.code,'blockers':jsonable_encoder(e.blockers)})
     except NotFoundError as e:raise HTTPException(404,str(e))
+    except BuyRequestInTrash as e:return trash_409(e)   # CESTINO-RICHIESTE-1
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
@@ -48,6 +50,7 @@ def archive_request(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agen
     except service.repository.ArchiveBlocked as e:
         return JSONResponse(status_code=409,content={'detail':str(e),'code':e.code,'blockers':jsonable_encoder(e.blockers)})
     except NotFoundError as e:raise HTTPException(404,str(e))
+    except BuyRequestInTrash as e:return trash_409(e)   # CESTINO-RICHIESTE-1
     except ConflictError as e:raise HTTPException(409,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
     except PermissionDenied as e:raise HTTPException(403,str(e))
@@ -85,3 +88,54 @@ def delete_typology(typology_id:int,ctx:OperatorContext=Depends(legacy_basic_age
 def add_feature(request_id:int,p:FeatureCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.add_feature_scoped,ctx,request_id,p)
 @router.delete('/features/{feature_id}',status_code=204)
 def delete_feature(feature_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):tr(service.delete_feature_scoped,ctx,feature_id);return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# CESTINO-RICHIESTE-1: Cestino delle richieste acquirente. Stessa forma di
+# risposta degli altri Cestini (`{detail, code, ...}`: blocchi, storico,
+# effetti) - per QUESTE rotte soltanto; `tr` resta quello che e' per le altre.
+# ---------------------------------------------------------------------------
+from . import lifecycle as buy_lifecycle
+
+
+def tr_trash(fn, *a, **k):
+    def corpo(http, exc, codice):
+        dati = dict(getattr(exc, 'extra', None) or {})
+        dati.update({'detail': str(exc), 'code': getattr(exc, 'code', None) or codice})
+        return JSONResponse(status_code=http, content=jsonable_encoder(dati))
+    try:
+        esito = fn(*a, **k)
+    except NotFoundError as e:
+        return JSONResponse(status_code=404, content={'detail': str(e), 'code': 'NOT_FOUND'})
+    except buy_lifecycle.BuyTrashNotInstalled as e:
+        return corpo(503, e, 'TRASH_NOT_INSTALLED')
+    except ConflictError as e:
+        return corpo(409, e, 'CONFLICT')
+    except ValidationError as e:
+        return corpo(400, e, 'VALIDATION_ERROR')
+    except PlatformAdminAgencyRequired as e:
+        return corpo(403, e, 'AGENCY_REQUIRED')
+    except PermissionDenied as e:
+        return corpo(403, e, 'FORBIDDEN')
+    return JSONResponse(status_code=200, content=jsonable_encoder(esito))
+
+
+@router.get('/requests/{request_id}/deletion-check')
+def buy_request_deletion_check(request_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return tr_trash(buy_lifecycle.deletion_check, ctx, request_id)
+
+
+@router.post('/requests/{request_id}/trash')
+def trash_buy_request(request_id: int, p: BuyRequestTrash, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return tr_trash(buy_lifecycle.trash_request, ctx, request_id, p.reason_code, p.note)
+
+
+@router.post('/requests/{request_id}/restore')
+def restore_buy_request(request_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return tr_trash(buy_lifecycle.restore_request, ctx, request_id)
+
+
+@router.get('/trash/requests')
+def list_buy_request_trash(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                           ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return tr_trash(buy_lifecycle.list_trash, ctx, limit=limit, offset=offset)

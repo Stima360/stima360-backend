@@ -272,8 +272,11 @@ def trash_blockers(cur, ctx, agency_id: int, contact: dict) -> list[dict]:
                         "items": righe})
 
     # 5. richieste d'acquisto aperte
-    righe = _righe(cur, "SELECT id, status, title FROM buy_requests WHERE agency_id = %s AND contact_id = %s "
-                        "AND status = ANY(%s) ORDER BY id", (agency_id, cid, list(BUY_OPEN)))
+    #    CESTINO-RICHIESTE-1: una richiesta gia' nel Cestino non e' un processo
+    #    aperto (non e' operativa); per ripristinarla servira' prima il contatto
+    righe = _righe(cur, "SELECT id, status, title FROM buy_requests b WHERE agency_id = %s AND contact_id = %s "
+                        "AND status = ANY(%s) AND (to_jsonb(b)->>'deleted_at') IS NULL ORDER BY id",
+                   (agency_id, cid, list(BUY_OPEN)))
     if righe:
         for r in righe:
             r["label"] = (f"Richiesta #{r['id']}" + (f" · {r['title']}" if r.get("title") else "")

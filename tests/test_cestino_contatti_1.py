@@ -161,7 +161,9 @@ def test_c01_import_e_forma_dei_rifiuti():
                    "sale/router.py", "property/router.py"):
         testo = (ROOT / router).read_text(encoding="utf-8")
         # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: il router Immobili traduce anche BuildingInTrash
+        # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: buy, proposte e vendite traducono anche BuyRequestInTrash
         assert ("except (PropertyInTrash, ContactInTrash) as " in testo
-                or "except (PropertyInTrash, ContactInTrash, BuildingInTrash) as " in testo), router
+                or "except (PropertyInTrash, ContactInTrash, BuildingInTrash) as " in testo
+                or "except (PropertyInTrash, ContactInTrash, BuyRequestInTrash) as " in testo), router
     database = (ROOT / "core" / "database.py").read_text(encoding="utf-8")
     assert "raise ContactInTrash() from exc" in database

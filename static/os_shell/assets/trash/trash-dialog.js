@@ -22,13 +22,14 @@
 import { escapeHtml } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import {
-  buildingDeletionCheck, contactDeletionCheck, deletionCheck, disableOwnerAccount, trashBuilding, trashContact,
-  trashProperty,
+  buildingDeletionCheck, buyRequestDeletionCheck, contactDeletionCheck, deletionCheck, disableOwnerAccount,
+  trashBuilding, trashBuyRequest, trashContact, trashProperty,
 } from './trash-api.js';
 import {
-  BUILDING_TRASHED_TOAST, CONTACT_TRASHED_TOAST, TRASHED_TOAST, TRASH_NOTE_MAX, TRASH_REASONS, blockerView,
-  buildingLine, buildingName, buildingTrashErrorText, contactBlockerView, contactEffectsText, contactLine,
-  contactName, contactTrashErrorText, errorBlockers, propertyLine, trashErrorText,
+  BUILDING_TRASHED_TOAST, BUY_TRASHED_TOAST, CONTACT_TRASHED_TOAST, TRASHED_TOAST, TRASH_NOTE_MAX, TRASH_REASONS,
+  blockerView, buildingLine, buildingName, buildingTrashErrorText, buyBlockerView, buyEffectsText, buyRequestLine,
+  buyRequestName, buyTrashErrorText, contactBlockerView, contactEffectsText, contactLine, contactName,
+  contactTrashErrorText, errorBlockers, propertyLine, trashErrorText,
 } from './trash-model.js';
 
 /**
@@ -227,8 +228,8 @@ export function bindContactTrashButton(container, contact, dopo) {
   }));
 }
 
-function contactBlockersHtml(blockers) {
-  const voci = contactBlockerView(blockers);
+function contactBlockersHtml(blockers, vista = contactBlockerView) {
+  const voci = vista(blockers);
   if (!voci.length) return '';
   return `<ul class="trash-blockers" data-trash-blockers>${voci.map((v) => `
       <li data-blocker="${escapeHtml(v.code)}"><span class="trash-blocker-label">${escapeHtml(v.label)}</span>${v.link ? ` <a class="trash-blocker-link" data-blocker-link href="${escapeHtml(v.link.href)}">${escapeHtml(v.link.label)}</a>` : ''}${v.items.length ? `
@@ -334,6 +335,68 @@ export async function openBuildingTrashDialog(dialogEl, building, { onTrashed } 
     check: () => buildingDeletionCheck(building.id),
     trash: (motivo, nota) => trashBuilding(building.id, motivo, nota),
     errorText: buildingTrashErrorText,
+    onTrashed,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CESTINO-RICHIESTE-1: «Elimina…» dalla scheda richiesta acquirente
+// ---------------------------------------------------------------------------
+
+/** Il bottone «Elimina…» della scheda richiesta e il suo foglio. Blocchi,
+ *  storico ed effetti li decide il backend. */
+export function buyTrashButtonHtml() {
+  return '<button type="button" id="buy-trash-btn" class="btn ghost trash-open">Elimina…</button>'
+    + '<dialog id="buy-trash-dialog" class="modal trash-sheet"></dialog>';
+}
+
+/** Collega «Elimina…» della scheda richiesta. Dopo il 200: toast e `dopo()`. */
+export function bindBuyTrashButton(container, request, dopo) {
+  const bottone = container.querySelector('#buy-trash-btn');
+  if (!bottone) return;
+  bottone.addEventListener('click', () => openBuyTrashDialog(container.querySelector('#buy-trash-dialog'), request, {
+    onTrashed: () => {
+      showToast(container.parentElement || container, { text: BUY_TRASHED_TOAST });
+      if (dopo) dopo();
+    },
+  }));
+}
+
+/** I blocchi di una richiesta, con le loro voci e i collegamenti (esportato per la scheda). */
+export function buyBlockersHtml(blockers) {
+  return contactBlockersHtml(blockers, buyBlockerView);
+}
+
+/** Il corpo del foglio richiesta per ogni stato: 'loading' | 'blocked' | 'confirm' | 'error'. */
+export function buyTrashDialogHtml(request, state = {}) {
+  const fase = state.phase || 'loading';
+  let corpo = '<p class="muted" data-trash-loading>Verifica in corso…</p>';
+  if (fase === 'blocked') {
+    const soloStorico = (state.blockers || []).every((b) => b.code === 'HISTORY_REQUIRES_ADMIN');
+    corpo = `${soloStorico ? '' : '<p class="trash-lead">Non si può spostare nel Cestino:</p>'}${buyBlockersHtml(state.blockers)}`;
+  } else if (fase === 'confirm') {
+    const esito = state.check || {};
+    const effetti = buyEffectsText(esito.effects);
+    const storia = Array.isArray(esito.history) ? esito.history : [];
+    corpo = `${motiviHtml()}
+      ${storia.length ? `<div class="trash-kept" data-trash-history-kept><p class="muted">Lo storico resta consultabile dalla scheda:</p>
+        <ul class="trash-history">${storia.map((h) => `<li>${escapeHtml(h.label || h.code)}${h.count ? ` <span class="muted">(${h.count})</span>` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${effetti.length ? `<ul class="trash-effects" data-trash-effects>${effetti.map((f) => `<li>${escapeHtml(f)}</li>`).join('')}</ul>` : ''}
+      <p class="muted trash-hint">La richiesta esce da Acquirenti, ricerche, selettori, abbinamenti e suggerimenti. Potrai ripristinarla dal Cestino: il ripristino non invia messaggi e non riapre nulla.</p>`;
+  } else if (fase === 'error') {
+    corpo = buyBlockersHtml(state.blockers);
+  }
+  const riga = [buyRequestName(request), buyRequestLine(request)].filter(Boolean).join(' · ');
+  return formHtml('Elimina richiesta', riga, corpo, state.error);
+}
+
+/** Apre il foglio «Elimina…» per `request` (stesso comportamento degli altri). */
+export async function openBuyTrashDialog(dialogEl, request, { onTrashed } = {}) {
+  return apriFoglio(dialogEl, {
+    html: (stato) => buyTrashDialogHtml(request, stato),
+    check: () => buyRequestDeletionCheck(request.id),
+    trash: (motivo, nota) => trashBuyRequest(request.id, motivo, nota),
+    errorText: buyTrashErrorText,
     onTrashed,
   });
 }

@@ -6,6 +6,7 @@ from time import monotonic
 from psycopg2.extras import Json
 
 from core import contact_trash as _contact_trash
+from core import buy_trash as _buy_trash
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from core.scope import ProgrammingError
@@ -33,6 +34,9 @@ def _buy(cur, request_id):
     if not row:
         raise NotFoundError(f"buy request {request_id} not found")
     data = dict(row)
+    if data.get("deleted_at") is not None:
+        # CESTINO-RICHIESTE-1: una richiesta nel Cestino non abbina
+        raise _buy_trash.BuyRequestInTrash()
     if data["status"] != "active":
         raise ValidationError("buy request must be active")
     for key, table in (
@@ -777,9 +781,13 @@ def dashboard_review(limit=100):
 # Both roots of a pair must resolve inside the caller's agency. Written once so
 # every read below carries the same predicate.
 _PAIR_JOIN = """
-        JOIN buy_requests b ON b.id=m.buy_request_id
+        JOIN buy_requests b ON b.id=m.buy_request_id AND (to_jsonb(b)->>'deleted_at') IS NULL
         JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
 """
+# CESTINO-RICHIESTE-1: lo stesso per una richiesta nel Cestino: i suoi
+# abbinamenti non compaiono, non si ricalcolano, non si modificano (404 come
+# per l'immobile nel Cestino). Restano nella scheda della richiesta, in sola
+# lettura (buy/repository.py::list_matches_scoped).
 # DELETE-ARCH 2B2: ogni lettura scoped di un abbinamento passa da qui; un
 # immobile nel Cestino non abbina, non si ricalcola, non compare.
 _PAIR_SCOPE = "b.agency_id=%s AND p.agency_id=%s"
@@ -799,6 +807,8 @@ def _scoped_buy(cur, request_id, agency_id, *, active=True):
     if not row:
         raise NotFoundError(f"buy request {request_id} not found")
     data = dict(row)
+    if data.get("deleted_at") is not None:
+        raise _buy_trash.BuyRequestInTrash()      # CESTINO-RICHIESTE-1
     if active and data["status"] != "active":
         raise ValidationError("buy request must be active")
     for key, table in (
@@ -900,8 +910,9 @@ def calculate_for_property_scoped(ctx, property_id, created_by=None):
         prop = _scoped_property(cur, property_id, agency_id)
         require_ready(prop=prop)
         cur.execute(
-            """SELECT id FROM buy_requests
-               WHERE agency_id=%s AND status='active' AND archived_at IS NULL ORDER BY id""",
+            f"""SELECT id FROM buy_requests b
+               WHERE agency_id=%s AND status='active' AND archived_at IS NULL
+                 AND {_buy_trash.live('b')} ORDER BY id""",
             (agency_id,),
         )
         ids = [x["id"] for x in cur.fetchall()]
@@ -1088,7 +1099,7 @@ def list_exclusions_scoped(ctx):
         cur.execute(
             """SELECT e.*,b.title AS buy_title,p.title AS property_title
                FROM match_exclusions e
-               JOIN buy_requests b ON b.id=e.buy_request_id
+               JOIN buy_requests b ON b.id=e.buy_request_id AND (to_jsonb(b)->>'deleted_at') IS NULL
                JOIN properties p ON p.id=e.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL
                WHERE b.agency_id=%s AND p.agency_id=%s
                ORDER BY e.created_at DESC""",
@@ -1101,6 +1112,12 @@ def delete_exclusion_scoped(ctx, exclusion_id):
     """The agency is derived through the pair, never from the id alone."""
     agency_id = _agency(ctx)
     with core_cursor(commit=True) as (_, cur):
+        # CESTINO-RICHIESTE-1: l'esclusione di una richiesta nel Cestino resta
+        # com'e' (toglierla riaprirebbe i suoi abbinamenti): 409
+        cur.execute("SELECT e.buy_request_id FROM match_exclusions e WHERE e.id=%s", (exclusion_id,))
+        esclusione = cur.fetchone()
+        if esclusione is not None:
+            _buy_trash.refuse_if_request_in_trash(cur, esclusione["buy_request_id"], lock=True)
         cur.execute(
             """DELETE FROM match_exclusions e
                USING buy_requests b, properties p
@@ -1326,6 +1343,13 @@ def delete_feedback_scoped(ctx, feedback_id):
     """The agency is derived through the match, never from the id alone."""
     agency_id = _agency(ctx)
     with core_cursor(commit=True) as (_, cur):
+        # CESTINO-RICHIESTE-1: lo storico di un abbinamento di una richiesta
+        # nel Cestino non si tocca: 409
+        cur.execute("SELECT m.buy_request_id FROM match_feedback f JOIN matches m ON m.id=f.match_id "
+                    "WHERE f.id=%s", (feedback_id,))
+        riscontro = cur.fetchone()
+        if riscontro is not None:
+            _buy_trash.refuse_if_request_in_trash(cur, riscontro["buy_request_id"], lock=True)
         cur.execute(
             """DELETE FROM match_feedback f
                USING matches m, buy_requests b, properties p

@@ -58,6 +58,7 @@ def list_eligible_buy_snapshot() -> list[dict[str, Any]]:
                 )) AS last_activity_at
                FROM buy_requests b
                WHERE b.status = 'active' AND b.archived_at IS NULL
+                  AND (to_jsonb(b)->>'deleted_at') IS NULL  /* CESTINO-RICHIESTE-1 */
                ORDER BY b.id"""
         )
         buys = [_row(row) for row in cur.fetchall()]
@@ -95,6 +96,9 @@ def get_invisible_sale_for_stima(stima_id: int) -> dict[str, Any]:
             """SELECT buy_request_id, score_total, compatibility_status, reason_codes,
                       last_activity_at, budget_reference, match_algorithm_version, status
                FROM invisible_sale_candidates WHERE opportunity_id = %s
+                 AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash
+                                  WHERE br_trash.id = invisible_sale_candidates.buy_request_id
+                                    AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)  /* CESTINO-RICHIESTE-1 */
                ORDER BY CASE WHEN status = 'stale' THEN 1 ELSE 0 END,
                         score_total DESC, last_activity_at DESC, buy_request_id ASC""",
             (opportunity["id"],),
@@ -335,6 +339,7 @@ def list_eligible_buy_snapshot_for_agency(agency_id: int) -> list[dict[str, Any]
                 )) AS last_activity_at
                FROM buy_requests b
                WHERE b.status = 'active' AND b.archived_at IS NULL
+                  AND (to_jsonb(b)->>'deleted_at') IS NULL  /* CESTINO-RICHIESTE-1 */
                  AND b.agency_id = %s
                ORDER BY b.id""",
             (agency_id,),
@@ -397,9 +402,13 @@ def get_invisible_sale_for_stima_scoped(ctx, stima_id: int) -> dict[str, Any]:
             """SELECT buy_request_id, score_total, compatibility_status, reason_codes,
                       last_activity_at, budget_reference, match_algorithm_version, status
                FROM invisible_sale_candidates WHERE opportunity_id = %s
+                 AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash
+                                  WHERE br_trash.id = invisible_sale_candidates.buy_request_id
+                                    AND br_trash.agency_id = %s
+                                    AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)  /* CESTINO-RICHIESTE-1 */
                ORDER BY CASE WHEN status = 'stale' THEN 1 ELSE 0 END,
                         score_total DESC, last_activity_at DESC, buy_request_id ASC""",
-            (opportunity["id"],),
+            (opportunity["id"], agency_id),
         )
         return {
             "status": opportunity["status"],
@@ -447,7 +456,8 @@ def set_candidate_review_status_scoped(
     with property_watch_cursor(commit=True) as (_, cur):
         opportunity = _scoped_opportunity_for_update(cur, stima_id, agency_id)
         cur.execute(
-            "SELECT id FROM buy_requests WHERE id=%s AND agency_id=%s",
+            # CESTINO-RICHIESTE-1: una richiesta nel Cestino non si rivede qui
+            "SELECT id FROM buy_requests WHERE id=%s AND agency_id=%s AND (to_jsonb(buy_requests)->>'deleted_at') IS NULL",
             (buy_request_id, agency_id),
         )
         if cur.fetchone() is None:

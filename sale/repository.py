@@ -7,6 +7,7 @@ from psycopg2 import errors
 from buy.repository import history
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError
+from core import buy_trash as _buy_trash  # CESTINO-RICHIESTE-1
 
 
 def _row(value):
@@ -401,6 +402,9 @@ def _scoped_proposal_for_sale(cur, proposal_id: int, agency_id: int, *, lock: bo
     result = _row(cur.fetchone())
     if not result:
         raise NotFoundError(f"proposal {proposal_id} not found")
+    # CESTINO-RICHIESTE-1: nessuna vendita nuova su una richiesta nel Cestino
+    # (la 092 lo ripete nel database). Lock condiviso come le guardie.
+    _buy_trash.refuse_if_request_in_trash(cur, result["buy_request_id"], lock=True)
     return result
 
 

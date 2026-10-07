@@ -9,6 +9,7 @@ from buy.repository import history
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.exceptions import PropertyInTrash
+from core.exceptions import BuyRequestInTrash  # CESTINO-RICHIESTE-1
 
 from .enums import PROPOSAL_TRANSITIONS, TERMINAL_PROPOSAL_STATUSES
 
@@ -25,7 +26,8 @@ def _relation(cur, match_id: int, *, lock: bool = False):
             b.archived_at AS buy_archived_at,c.display_name AS contact_name,
             p.id AS property_id,p.title AS property_title,p.code AS property_code,
             p.archived_at AS property_archived_at,
-            (to_jsonb(p)->>'deleted_at') AS property_deleted_at
+            (to_jsonb(p)->>'deleted_at') AS property_deleted_at,
+            (to_jsonb(b)->>'deleted_at') AS buy_deleted_at
             FROM matches m
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
@@ -38,6 +40,10 @@ def _relation(cur, match_id: int, *, lock: bool = False):
         raise NotFoundError(f"match {match_id} not found")
     if relation.get("match_archived_at") is not None:
         raise ValidationError("match is archived")
+    # CESTINO-RICHIESTE-1: nessuna proposta nuova o transizione su una
+    # richiesta nel Cestino (la 092 lo ripete nel database).
+    if relation.pop("buy_deleted_at", None) is not None:
+        raise BuyRequestInTrash()
     if relation.get("buy_archived_at") is not None:
         raise ValidationError("buy request is archived")
     if relation.get("property_archived_at") is not None:
@@ -327,7 +333,8 @@ def _scoped_relation(cur, match_id: int, agency_id: int, *, lock: bool = False):
             b.archived_at AS buy_archived_at,c.display_name AS contact_name,
             p.id AS property_id,p.title AS property_title,p.code AS property_code,
             p.archived_at AS property_archived_at,
-            (to_jsonb(p)->>'deleted_at') AS property_deleted_at
+            (to_jsonb(p)->>'deleted_at') AS property_deleted_at,
+            (to_jsonb(b)->>'deleted_at') AS buy_deleted_at
             FROM matches m
             JOIN buy_requests b ON b.id=m.buy_request_id
             JOIN contacts c ON c.id=b.contact_id
@@ -340,6 +347,10 @@ def _scoped_relation(cur, match_id: int, agency_id: int, *, lock: bool = False):
         raise NotFoundError(f"match {match_id} not found")
     if relation.get("match_archived_at") is not None:
         raise ValidationError("match is archived")
+    # CESTINO-RICHIESTE-1: nessuna proposta nuova o transizione su una
+    # richiesta nel Cestino (la 092 lo ripete nel database).
+    if relation.pop("buy_deleted_at", None) is not None:
+        raise BuyRequestInTrash()
     if relation.get("buy_archived_at") is not None:
         raise ValidationError("buy request is archived")
     if relation.get("property_archived_at") is not None:

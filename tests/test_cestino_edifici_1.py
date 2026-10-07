@@ -36,8 +36,10 @@ def test_m01_la_091_e_l_ultima_valida_e_additiva():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m091 = tutte[-1]
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste) la segue; la 091 resta valida e additiva.
+    m091 = tutte[-2]
     assert m091.version == "091_cestino_edifici_1_building_trash"
+    assert tutte[-1].version == "092_cestino_richieste_1_buy_request_trash"
     assert m091.down_available and not m091.non_transactional and runner.validate_migration(m091) == []
     su = _eseguibile(SU)
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", su, re.M)

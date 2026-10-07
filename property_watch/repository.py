@@ -332,6 +332,7 @@ def get_buyer_pressure_inputs(stima_id: int) -> dict[str, Any] | None:
                 FROM buy_requests b
                 LEFT JOIN buy_request_interactions i ON i.buy_request_id = b.id
                 WHERE b.status = 'active' AND b.archived_at IS NULL
+                  AND (to_jsonb(b)->>'deleted_at') IS NULL  /* CESTINO-RICHIESTE-1 */
                 GROUP BY b.id
                 ORDER BY b.id ASC
             """
@@ -1068,6 +1069,7 @@ def get_buyer_pressure_inputs_for_agency(stima_id: int, agency_id: int) -> dict[
                 FROM buy_requests b
                 LEFT JOIN buy_request_interactions i ON i.buy_request_id = b.id
                 WHERE b.status = 'active' AND b.archived_at IS NULL
+                  AND (to_jsonb(b)->>'deleted_at') IS NULL  /* CESTINO-RICHIESTE-1 */
                   AND b.agency_id = %s
                 GROUP BY b.id
                 ORDER BY b.id ASC

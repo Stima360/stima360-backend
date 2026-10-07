@@ -356,7 +356,8 @@ def test_d04_pagina_cestino_scheda_edifici_e_ripristino(staged):  # noqa: F811
                avviso: avviso ? avviso.visibleText() : null, t: btoast() });
     """
     out = _run(staged, scenario, _rotte(), "#/cestino")
-    assert out["tabs"] == ["immobili", "contatti", "edifici"]
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la quarta scheda, «Richieste», dopo «Edifici»
+    assert out["tabs"] == ["immobili", "contatti", "edifici", "richieste"]
     assert out["iniziale"] == {"immobili": True, "edifici": False, "letture": 0}     # Immobili resta la predefinita
     assert [c[0] for c in out["carte"]] == ["7", "9"]
     uno = out["carte"][0][1]

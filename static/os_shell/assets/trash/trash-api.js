@@ -6,8 +6,9 @@
 // il «Disattiva» dell'accesso al portale proprietario che un blocco propone
 // (owner/router_admin.py, la rotta esistente: nessuna nuova).
 // CESTINO-EDIFICI-1: anche le rotte del Cestino Edifici (property/router.py).
+// CESTINO-RICHIESTE-1: anche le rotte del Cestino Richieste acquirente (buy/router.py).
 import { apiGet, apiPost } from '../core/api-client.js';
-import { buildingTrashListPath, contactTrashListPath, trashListPath } from './trash-model.js';
+import { buildingTrashListPath, buyTrashListPath, contactTrashListPath, trashListPath } from './trash-model.js';
 
 export function deletionCheck(propertyId) {
   return apiGet(`/api/property/properties/${propertyId}/deletion-check`);
@@ -73,4 +74,25 @@ export function listBuildingTrash(offset = 0, limit = 50) {
 
 export function restoreBuilding(buildingId) {
   return apiPost(`/api/property/buildings/${buildingId}/restore`);
+}
+
+// --- CESTINO-RICHIESTE-1 ----------------------------------------------------
+
+export function buyRequestDeletionCheck(requestId) {
+  return apiGet(`/api/buy/requests/${requestId}/deletion-check`);
+}
+
+export function trashBuyRequest(requestId, reasonCode, note) {
+  const corpo = { reason_code: reasonCode };
+  const testo = typeof note === 'string' ? note.trim() : '';
+  if (testo) corpo.note = testo;
+  return apiPost(`/api/buy/requests/${requestId}/trash`, corpo);
+}
+
+export function listBuyRequestTrash(offset = 0, limit = 50) {
+  return apiGet(buyTrashListPath(offset, limit));
+}
+
+export function restoreBuyRequest(requestId) {
+  return apiPost(`/api/buy/requests/${requestId}/restore`);
 }

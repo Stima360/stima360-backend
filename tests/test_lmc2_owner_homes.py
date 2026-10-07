@@ -507,7 +507,8 @@ def test_f3_nessuna_migration_in_lmc2():
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza); la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: poi la 090 (Cestino contatti); la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: poi la 091 (Cestino edifici); la finestra si allarga di uno.
-    assert migrazioni[-24:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: poi la 092 (Cestino richieste); la finestra si allarga di uno.
+    assert migrazioni[-25:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -530,7 +531,8 @@ def test_f3_nessuna_migration_in_lmc2():
                                "088_catalogo_canonico_1b_site_inbox.sql",
                                "089_pertinenze_1_unit_nature.sql",
                                "090_cestino_contatti_1_contact_trash.sql",
-                               "091_cestino_edifici_1_building_trash.sql"], migrazioni[-24:]
+                               "091_cestino_edifici_1_building_trash.sql",
+                               "092_cestino_richieste_1_buy_request_trash.sql"], migrazioni[-25:]
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

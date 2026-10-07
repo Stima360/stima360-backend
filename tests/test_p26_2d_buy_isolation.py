@@ -59,7 +59,9 @@ def install(monkeypatch, responses=None):
 
 def test_all_buy_routes_resolve_legacy_agency_context():
     source = inspect.getsource(router)
-    assert source.count("Depends(legacy_basic_agency_context)") == 23
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: 23 -> 27 (Cestino Richieste: deletion-check, trash, restore,
+    # elenco), tutte dietro lo stesso legacy_basic_agency_context.
+    assert source.count("Depends(legacy_basic_agency_context)") == 27
 
 
 def test_legacy_public_signatures_remain_compatible():

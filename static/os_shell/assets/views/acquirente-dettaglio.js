@@ -85,6 +85,17 @@ import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
 import { getAgents } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
+// CESTINO-RICHIESTE-1: «Elimina…» (foglio condiviso del Cestino) e, per una
+// richiesta nel Cestino, la scheda in sola lettura con «Ripristina». Le rotte
+// le nomina solo trash/trash-api.js; blocchi, storico, effetti e permessi li
+// decide il backend.
+import { bindBuyTrashButton, buyBlockersHtml, buyTrashButtonHtml } from '../trash/trash-dialog.js';
+import { restoreBuyRequest } from '../trash/trash-api.js';
+import {
+  BUY_RESTORED_TOAST, buyDuplicatesView, buyRequestName, buyRestoreErrorView, reasonLabel,
+} from '../trash/trash-model.js';
+import { showToast } from '../census/census-sheets.js';
+import { duplicatesNoticeHtml } from './cestino.js';
 
 const STATUS_LABELS = { draft: 'Bozza', active: 'Attiva', paused: 'In pausa', satisfied: 'Soddisfatta', closed: 'Chiusa', archived: 'Archiviata' };
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
@@ -240,8 +251,12 @@ export async function renderAcquirenteDettaglio(container, params = []) {
   const saleCancelConfirm = new Set();
 
   const leadId = data.lead_id;
+  // CESTINO-RICHIESTE-1: nel Cestino la richiesta e' congelata (il backend
+  // rifiuta ogni scrittura): scheda e storico consultabili, nessun comando.
+  const inTrash = Boolean(data.deleted_at);
 
   container.innerHTML = `
+    ${inTrash ? buyTrashBannerHtml(data) : ''}
     <div class="contact-header card">
       <h2 id="acquirente-header-title">${escapeHtml(data.title || `Richiesta #${data.id}`)}</h2>
       <div class="muted">
@@ -253,11 +268,12 @@ export async function renderAcquirenteDettaglio(container, params = []) {
         ${renderBadge(PRIORITY_LABELS[data.priority] || data.priority || '—', priorityTone(data.priority))}
         ${renderBadge(URGENCY_LABELS[data.urgency] || data.urgency || '—', 'gray')}
       </div>
-      <div class="action-bar" style="margin-top:8px">
+      ${inTrash ? '' : `<div class="action-bar" style="margin-top:8px">
         <button type="button" id="request-edit-btn" class="btn ghost">Modifica richiesta</button>
         <button type="button" id="request-quick-activity" class="btn ghost">+ Nuova attività</button>
         <button type="button" id="request-quick-task" class="btn ghost">+ Nuovo task</button>
-      </div>
+        ${buyTrashButtonHtml()}
+      </div>`}
       <div id="request-quick-feedback"></div>
     </div>
     <div class="tabs" id="request-tabs"></div>
@@ -305,14 +321,14 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     if (fb) fb.innerHTML = `<div class="success-box">${escapeHtml(message)}</div>`;
   }
 
-  container.querySelector('#request-quick-activity').addEventListener('click', () => {
+  container.querySelector('#request-quick-activity')?.addEventListener('click', () => {
     openNewActivityDialog(container.querySelector('#contact-activity-dialog'), {
       presetContact: { id: contactId, label: contactName },
       presetLeads: leadId ? [{ id: leadId, pipeline: data.lead_pipeline, stage: data.lead_stage }] : [],
       onSuccess: async () => { showQuickFeedback('Attività registrata.'); },
     });
   });
-  container.querySelector('#request-quick-task').addEventListener('click', () => {
+  container.querySelector('#request-quick-task')?.addEventListener('click', () => {
     openNewTaskDialog(container.querySelector('#contact-task-dialog'), {
       presetContact: { id: contactId, label: contactName },
       presetLeads: leadId ? [{ id: leadId, pipeline: data.lead_pipeline, stage: data.lead_stage }] : [],
@@ -320,9 +336,16 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     });
   });
 
-  container.querySelector('#request-edit-btn').addEventListener('click', () => {
+  container.querySelector('#request-edit-btn')?.addEventListener('click', () => {
     openEditRequestDialog();
   });
+
+  if (inTrash) {
+    bindBuyRestore(container, data);
+  } else {
+    // CESTINO-RICHIESTE-1: dopo lo spostamento si torna ad Acquirenti
+    bindBuyTrashButton(container, data, () => navigate('acquirenti'));
+  }
 
   // --- P25.5: Modifica richiesta (BuyRequestUpdate) -------------------------
   // Copre i campi realmente mostrati in Panoramica (title/status/priority/
@@ -502,6 +525,10 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     } catch (error) {
       contentEl.innerHTML = `<div class="error-box">Errore nel caricamento della sezione: ${escapeHtml(error.message)}</div>`;
     }
+    // CESTINO-RICHIESTE-1: in sola lettura ogni tab perde i suoi comandi
+    // (criteri, ricalcolo, esiti, visite, proposte, vendite, «Apri match»):
+    // restano dati e storico; i collegamenti alle schede degli immobili restano.
+    if (inTrash) contentEl.querySelectorAll('button, form').forEach((el) => el.remove());
     contentEl.querySelectorAll('.visit-outcome-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const match = (data.matches || []).find((m) => String(m.id) === btn.dataset.matchId);
@@ -1707,4 +1734,56 @@ function matchClassTone(matchClass) {
   if (['good', 'possible'].includes(matchClass)) return 'warn';
   if (['weak', 'poor', 'incompatible'].includes(matchClass)) return 'danger';
   return 'gray';
+}
+
+// --- CESTINO-RICHIESTE-1: richiesta nel Cestino -------------------------------
+
+function buyTrashBannerHtml(x) {
+  const info = x.trash || {};
+  const chi = info.deleted_by_name ? ` da ${info.deleted_by_name}` : '';
+  const quando = formatDateTime(info.deleted_at || x.deleted_at);
+  const motivo = reasonLabel(info.deleted_reason || x.deleted_reason) + (info.deleted_note ? ` — ${info.deleted_note}` : '');
+  const contatto = info.contact_in_trash
+    ? `<p class="muted" data-buy-contact-in-trash>Anche il contatto è nel Cestino: per ripristinare la richiesta, <a href="#/contatti/${Number(x.contact_id)}">ripristina prima il contatto</a>.</p>`
+    : '';
+  const azione = info.can_restore
+    ? '<button type="button" class="btn primary" data-buy-restore-btn>Ripristina</button>'
+    : '<span class="muted">Può ripristinarla chi l’ha spostata o un amministratore.</span>';
+  return `
+    <div class="card trash-banner" data-buy-in-trash role="status">
+      <p><strong>Nel Cestino</strong> dal ${escapeHtml(quando)}${escapeHtml(chi)}. Motivo: ${escapeHtml(motivo)}.</p>
+      <p class="muted">La richiesta non compare in Acquirenti, negli abbinamenti né nei suggerimenti e non si modifica. Dati, abbinamenti e storico restano. Il ripristino non invia messaggi e non riapre nulla.</p>
+      ${contatto}
+      <div class="field-error" data-buy-restore-error role="alert"></div>
+      <div class="trash-banner-actions">
+        ${azione}
+        <a class="btn ghost" href="#/cestino/richieste">Apri il Cestino</a>
+      </div>
+    </div>`;
+}
+
+/** «Ripristina» dalla scheda: poi la scheda si ridisegna (stesso id) e le altre
+ *  richieste aperte dello stesso contatto si segnalano; nulla si unisce o chiude.
+ *  Con il contatto nel Cestino il backend si ferma: il motivo e il collegamento. */
+function bindBuyRestore(container, x) {
+  const bottone = container.querySelector('[data-buy-restore-btn]');
+  if (!bottone) return;
+  bottone.addEventListener('click', async () => {
+    const errore = container.querySelector('[data-buy-restore-error]');
+    bottone.disabled = true;
+    bottone.textContent = 'Ripristino…';
+    errore.innerHTML = '';
+    try {
+      const riga = await restoreBuyRequest(x.id);
+      showToast(container.parentElement || container, { text: BUY_RESTORED_TOAST });
+      await renderAcquirenteDettaglio(container, [String(x.id)]);
+      const avviso = duplicatesNoticeHtml(buyRequestName(riga), buyDuplicatesView(riga), { kind: 'buy' });
+      if (avviso) container.insertAdjacentHTML('afterbegin', avviso);
+    } catch (error) {
+      const vista = buyRestoreErrorView(error);
+      errore.innerHTML = `${escapeHtml(vista.text)}${vista.blockers.length ? buyBlockersHtml(error.data.blockers) : ''}`;
+      bottone.textContent = 'Ripristina';
+      bottone.disabled = false;
+    }
+  });
 }

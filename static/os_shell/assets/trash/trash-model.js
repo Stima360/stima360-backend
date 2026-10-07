@@ -260,3 +260,93 @@ export function buildingDuplicatesView(restored) {
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// CESTINO-RICHIESTE-1: le traduzioni per le RICHIESTE ACQUIRENTE
+// (buy/lifecycle.py). Stessi motivi, stessa nota, stessa regola: blocchi,
+// storico, effetti e possibili doppioni arrivano dal backend; qui diventano
+// solo frasi e collegamenti. Le comunicazioni del contatto non cambiano.
+// ---------------------------------------------------------------------------
+
+export const BUY_HISTORY_REQUIRES_ADMIN_TEXT =
+  'Questa richiesta ha uno storico operativo. Serve un amministratore per spostarla nel Cestino.';
+export const BUY_TRASHED_TOAST = 'Richiesta spostata nel Cestino';
+export const BUY_RESTORED_TOAST = 'Richiesta ripristinata';
+
+export const BUY_STATUS_LABELS = Object.freeze({
+  draft: 'Bozza', active: 'Attiva', paused: 'In pausa', satisfied: 'Soddisfatta', closed: 'Chiusa', archived: 'Archiviata',
+});
+
+/** I blocchi della richiesta: la stessa vista per voci dei contatti, con il
+ *  testo dello storico della richiesta. */
+export function buyBlockerView(blockers) {
+  return contactBlockerView(blockers).map((v) => (v.code === 'HISTORY_REQUIRES_ADMIN'
+    ? { ...v, label: BUY_HISTORY_REQUIRES_ADMIN_TEXT } : v));
+}
+
+/** Il messaggio di un errore di deletion-check o di POST .../trash di una richiesta. */
+export function buyTrashErrorText(error) {
+  if (!error) return 'Operazione non riuscita.';
+  if (error.code === 'HISTORY_REQUIRES_ADMIN') return BUY_HISTORY_REQUIRES_ADMIN_TEXT;
+  if (error.status === 404) return 'Richiesta non trovata.';
+  return error.message || 'Operazione non riuscita.';
+}
+
+/** Il titolo della richiesta; mai vuoto. */
+export function buyRequestName(r) {
+  if (!r) return '';
+  return r.title || `Richiesta #${r.id}`;
+}
+
+function euro(valore) {
+  const n = Number(valore);
+  if (valore === null || valore === undefined || valore === '' || !Number.isFinite(n)) return '';
+  return `${n.toLocaleString('it-IT', { maximumFractionDigits: 0 })} €`;
+}
+
+/** Contatto e budget, quando ci sono. */
+export function buyRequestLine(r) {
+  if (!r) return '';
+  const budget = euro(r.budget_target ?? r.budget_max);
+  return [r.contact_name, budget ? `budget ${budget}` : ''].filter(Boolean).join(' · ');
+}
+
+export function buyTrashListPath(offset = 0, limit = 50) {
+  return `/api/buy/trash/requests?limit=${Number(limit)}&offset=${Number(offset)}`;
+}
+
+/** Cosa fara' lo spostamento (deletion-check, `effects`): detto prima della conferma. */
+export function buyEffectsText(effects) {
+  const e = effects || {};
+  const frasi = [];
+  const stato = BUY_STATUS_LABELS[e.status] || e.status_label || '';
+  if (stato) frasi.push(`Lo stato resta «${stato}»: la richiesta non viene chiusa né sospesa.`);
+  const n = Number(e.matches) || 0;
+  if (n === 1) frasi.push('1 abbinamento esce dalle liste e dai calcoli (resta nella scheda).');
+  else if (n > 1) frasi.push(`${n} abbinamenti escono dalle liste e dai calcoli (restano nella scheda).`);
+  const altre = Number(e.other_open_requests) || 0;
+  const chi = e.contact_name ? `${e.contact_name}` : 'Il contatto';
+  if (altre === 1) frasi.push(`${chi} resta attivo, con la sua altra richiesta aperta.`);
+  else if (altre > 1) frasi.push(`${chi} resta attivo, con le sue altre ${altre} richieste aperte.`);
+  else frasi.push(`${chi} resta attivo.`);
+  if (e.communications_unchanged) frasi.push('Le comunicazioni del contatto non vengono sospese né annullate.');
+  return frasi;
+}
+
+/** Le altre richieste aperte dello stesso contatto, segnalate dal ripristino. */
+export function buyDuplicatesView(restored) {
+  const lista = restored && Array.isArray(restored.possible_duplicates) ? restored.possible_duplicates : [];
+  return lista.map((d) => ({
+    id: Number(d.id),
+    name: buyRequestName(d),
+    reason: ['stesso contatto', (BUY_STATUS_LABELS[d.status] || '').toLowerCase()].filter(Boolean).join(', '),
+  }));
+}
+
+/** Il rifiuto di un ripristino: il testo e, se il contatto e' nel Cestino, i suoi collegamenti. */
+export function buyRestoreErrorView(error) {
+  if (!error) return { text: 'Ripristino non riuscito.', blockers: [] };
+  const blocchi = error.code === 'RESTORE_BLOCKED' ? buyBlockerView(errorBlockers(error)) : [];
+  const text = error.status === 404 ? 'Richiesta non trovata.' : (error.message || 'Ripristino non riuscito.');
+  return { text, blockers: blocchi };
+}

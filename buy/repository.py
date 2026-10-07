@@ -6,6 +6,7 @@ from psycopg2.extras import Json
 from core.database import core_cursor
 from core import property_trash as _property_trash
 from core import contact_trash as _contact_trash
+from core import buy_trash as _buy_trash
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 
 RELEVANT_FIELDS={'budget_min','budget_target','budget_max','budget_flexibility_percent','includes_agency_fees','includes_renovation','finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','surface_min','surface_target','surface_max','rooms_min','bedrooms_min','bathrooms_min','status','urgency','target_purchase_date'}
@@ -273,8 +274,13 @@ def _ensure_agency_row(cur, table, item_id, agency_id, label):
         _property_trash.refuse_if_in_trash(cur, item_id)
 
 
-def _ensure_buy(cur, request_id, agency_id, *, for_update=False):
-    suffix = " FOR UPDATE" if for_update else ""
+def _ensure_buy(cur, request_id, agency_id, *, for_update=False, trashed_ok=False):
+    """La richiesta nell'agenzia. CESTINO-RICHIESTE-1: ogni scrittura passa da
+    qui e una richiesta nel Cestino la rifiuta (409 BUY_REQUEST_IN_TRASH); le
+    sole letture della scheda (`trashed_ok=True`) la vedono. Una scrittura
+    senza `for_update` tiene la riga FOR SHARE (lo stesso lock delle guardie
+    della 092): uno spostamento nel Cestino concorrente aspetta, o viene visto."""
+    suffix = " FOR UPDATE" if for_update else ("" if trashed_ok else " FOR SHARE")
     cur.execute(
         f"SELECT * FROM buy_requests WHERE id=%s AND agency_id=%s{suffix}",
         (request_id, agency_id),
@@ -282,7 +288,27 @@ def _ensure_buy(cur, request_id, agency_id, *, for_update=False):
     result = cur.fetchone()
     if not result:
         raise NotFoundError(f"buy request {request_id} not found")
-    return dict(result)
+    result = dict(result)
+    if not trashed_ok and result.get("deleted_at") is not None:
+        raise _buy_trash.BuyRequestInTrash()
+    return result
+
+
+def _refuse_child_of_trashed(cur, table, item_id, agency_id, *, column="buy_request_id", key="id"):
+    """CESTINO-RICHIESTE-1: una riga figlia (criterio, interazione,
+    collegamento a un task) di una richiesta nel Cestino non si modifica ne'
+    si toglie: 409 BUY_REQUEST_IN_TRASH. FOR SHARE sulla richiesta, come le
+    guardie della 092. Una riga inesistente prosegue: il 404 resta quello
+    della scrittura. Le DELETE escludono gia' la richiesta nel Cestino e
+    chiamano questa funzione solo se non hanno tolto nulla (409 invece di 404)."""
+    cur.execute(
+        f"SELECT {_buy_trash.deleted_at_sql('b')} AS deleted_at FROM {table} x "
+        f"JOIN buy_requests b ON b.id = x.{column} WHERE x.{key}=%s AND b.agency_id=%s FOR SHARE OF b",
+        (item_id, agency_id),
+    )
+    riga = cur.fetchone()
+    if riga is not None and riga["deleted_at"] is not None:
+        raise _buy_trash.BuyRequestInTrash()
 
 
 def _ensure_match(cur, request_id, match_id, agency_id, *, for_update=False):
@@ -395,7 +421,9 @@ def list_requests_scoped(
     contact_id, lead_id, assigned_to
 ):
     agency_id = _agency(ctx)
-    filters = ["b.archived_at IS NULL", "b.agency_id=%s"]
+    # CESTINO-RICHIESTE-1: una richiesta nel Cestino esce da OGNI elenco
+    # operativo (Acquirenti, ricerca, selettori, scheda del contatto)
+    filters = ["b.archived_at IS NULL", "b.agency_id=%s", _buy_trash.live("b")]
     params = [agency_id]
     if search:
         filters.append(
@@ -476,6 +504,10 @@ def get_request_scoped(ctx, request_id):
         if not result:
             raise NotFoundError(f"buy request {request_id} not found")
         data = dict(result)
+        # CESTINO-RICHIESTE-1: la scheda resta leggibile; dice chi, quando e
+        # perche', e se chi guarda puo' ripristinarla
+        from . import lifecycle as _ciclo
+        data["trash"] = _ciclo.trash_info(cur, ctx, data)
         for key, table in (
             ("locations", "buy_request_locations"),
             ("typologies", "buy_request_typologies"),
@@ -578,6 +610,7 @@ def archive_request_scoped(ctx, request_id):
         corrente = cur.fetchone()
         if not corrente:
             raise NotFoundError(f"buy request {request_id} not found")
+        _buy_trash.refuse_if_request_in_trash(cur, request_id)   # CESTINO-RICHIESTE-1 (riga gia' FOR UPDATE)
         if corrente["status"] == "archived":
             raise ConflictError("La richiesta è già archiviata")
         blocchi = archive_blockers(cur, request_id)
@@ -636,12 +669,14 @@ def delete_child_scoped(ctx, table, item_id, label):
             WHERE c.buy_request_id=b.id
               AND c.id=%s
               AND b.agency_id=%s
+              AND {_buy_trash.live('b')}
             RETURNING c.buy_request_id
             """,
             (item_id, agency_id),
         )
         result = cur.fetchone()
         if not result:
+            _refuse_child_of_trashed(cur, table, item_id, agency_id)   # CESTINO-RICHIESTE-1: 409, non 404
             raise NotFoundError(f"{label} {item_id} not found")
         cur.execute(
             "UPDATE buy_requests SET match_relevant_updated_at=NOW(),updated_at=NOW() "
@@ -679,7 +714,7 @@ def normalized_scoped(ctx, request_id):
 def list_matches_scoped(ctx, request_id):
     agency_id = _agency(ctx)
     with core_cursor() as (_, cur):
-        _ensure_buy(cur, request_id, agency_id)
+        _ensure_buy(cur, request_id, agency_id, trashed_ok=True)   # lettura: anche dal Cestino
         cur.execute(
             """
             SELECT m.*,COALESCE(m.manual_score,m.score_total) effective_score,
@@ -914,6 +949,7 @@ def update_interaction_scoped(ctx, interaction_id, data):
     if not data:
         raise ValidationError("no fields to update")
     with core_cursor(commit=True) as (_, cur):
+        _refuse_child_of_trashed(cur, "buy_request_interactions", interaction_id, agency_id)
         cur.execute(
             """
             SELECT i.*,b.agency_id
@@ -970,17 +1006,19 @@ def delete_interaction_scoped(ctx, interaction_id):
     agency_id = _agency(ctx)
     with core_cursor(commit=True) as (_, cur):
         cur.execute(
-            """
+            f"""
             DELETE FROM buy_request_interactions i
             USING buy_requests b
             WHERE i.buy_request_id=b.id
               AND i.id=%s
               AND b.agency_id=%s
+              AND {_buy_trash.live('b')}
             RETURNING i.buy_request_id
             """,
             (interaction_id, agency_id),
         )
         if not cur.fetchone():
+            _refuse_child_of_trashed(cur, "buy_request_interactions", interaction_id, agency_id)   # 409, non 404
             raise NotFoundError(f"interaction {interaction_id} not found")
 
 
@@ -1029,7 +1067,7 @@ def create_task_scoped(ctx, request_id, data):
 def list_tasks_scoped(ctx, request_id):
     agency_id = _agency(ctx)
     with core_cursor() as (_, cur):
-        _ensure_buy(cur, request_id, agency_id)
+        _ensure_buy(cur, request_id, agency_id, trashed_ok=True)   # lettura: anche dal Cestino
         cur.execute(
             """
             SELECT l.id link_id,t.*
@@ -1052,7 +1090,7 @@ def unlink_task_scoped(ctx, link_id):
     agency_id = _agency(ctx)
     with core_cursor(commit=True) as (_, cur):
         cur.execute(
-            """
+            f"""
             DELETE FROM buy_request_task_links l
             USING buy_requests b, tasks t
             WHERE l.buy_request_id=b.id
@@ -1060,12 +1098,14 @@ def unlink_task_scoped(ctx, link_id):
               AND l.id=%s
               AND b.agency_id=%s
               AND t.agency_id=%s
+              AND {_buy_trash.live('b')}
             RETURNING l.buy_request_id,l.task_id
             """,
             (link_id, agency_id, agency_id),
         )
         result = cur.fetchone()
         if not result:
+            _refuse_child_of_trashed(cur, "buy_request_task_links", link_id, agency_id)   # 409, non 404
             raise NotFoundError(f"task link {link_id} not found")
         history(
             cur, result["buy_request_id"], "task_unlinked", "Task scollegato",
@@ -1145,7 +1185,9 @@ def dashboard_scoped(ctx):
             FROM buy_requests
             WHERE agency_id=%s
               AND {vivo}
-            """.format(vivo=_contact_trash.live_contact_id("buy_requests.contact_id")),
+              AND {viva}
+            """.format(vivo=_contact_trash.live_contact_id("buy_requests.contact_id"),
+                       viva=_buy_trash.live("buy_requests")),
             (agency_id,),
         )
         kpi = dict(cur.fetchone())
@@ -1156,8 +1198,9 @@ def dashboard_scoped(ctx):
             JOIN buy_requests b ON b.id=i.buy_request_id
             WHERE b.agency_id=%s
               AND {vivo}
+              AND {viva}
             GROUP BY i.interaction_type
-            """.format(vivo=_contact_trash.live_contact_id("b.contact_id")),
+            """.format(vivo=_contact_trash.live_contact_id("b.contact_id"), viva=_buy_trash.live("b")),
             (agency_id,),
         )
         kpi["interaction_counts"] = {
@@ -1171,10 +1214,11 @@ def dashboard_scoped(ctx):
             JOIN contacts c ON c.id=b.contact_id AND c.agency_id=b.agency_id
             WHERE b.archived_at IS NULL AND b.agency_id=%s
               AND {vivo}
+              AND {viva}
             ORDER BY CASE WHEN b.next_action_at IS NOT NULL AND b.next_action_at<NOW()
                           THEN 0 ELSE 1 END,
                      b.next_action_at NULLS LAST,b.updated_at DESC LIMIT 12
-            """.format(vivo=_contact_trash.live("c")),
+            """.format(vivo=_contact_trash.live("c"), viva=_buy_trash.live("b")),
             (agency_id,),
         )
         kpi["recent"] = [dict(x) for x in cur.fetchall()]

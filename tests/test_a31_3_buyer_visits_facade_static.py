@@ -117,7 +117,9 @@ def test_03_url_e_router_invariati():
     buy = _testo("buy/router.py")
     assert "@router.post('/requests/{request_id}/matches/{match_id}/decision',status_code=201)" in buy
     assert "@router.post('/requests/{request_id}/interactions',status_code=201)" in buy
-    assert buy.count("Depends(legacy_basic_agency_context)") == 23
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: 23 -> 27, le quattro rotte del Cestino Richieste (deletion-check,
+    # trash, restore, elenco), stesso contesto di agenzia; le rotte della visita restano quelle sopra.
+    assert buy.count("Depends(legacy_basic_agency_context)") == 27
     immobili = _testo("property/router.py")
     for rotta in ("@router.post('/properties/{property_id}/visits',status_code=201)",
                   "@router.patch('/visits/{visit_id}')",

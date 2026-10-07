@@ -211,9 +211,18 @@ _SELECT_WITH_CONTACT_LABEL_SCOPED = """
           AND c.agency_id = %s
     WHERE nba.agency_id = %s
       AND (c.id IS NULL OR (to_jsonb(c)->>'deleted_at') IS NULL)
+      AND NOT EXISTS (
+          SELECT 1 FROM buy_requests br_trash
+           WHERE (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL
+             AND ((nba.subject_type = 'buy_request' AND br_trash.id = nba.subject_id)
+               OR (nba.subject_type = 'match'
+                   AND br_trash.id = (SELECT m.buy_request_id FROM matches m WHERE m.id = nba.subject_id))))
 """
 # CESTINO-CONTATTI-1: l'azione consigliata di un contatto nel Cestino non
 # compare in «Oggi» (to_jsonb: valido anche senza la migration 090).
+# CESTINO-RICHIESTE-1: nemmeno quella di una richiesta acquirente nel Cestino
+# o di un suo abbinamento (e il prossimo refresh non la ricrea: FLOW-R004/R005
+# escludono le richieste nel Cestino).
 
 
 def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:

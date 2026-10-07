@@ -90,6 +90,12 @@ CONSAPEVOLI = {
         "rimozione di una esclusione esistente (relazione esistente); nessun nuovo riferimento",
     ("match/repository.py", "delete_feedback_scoped"):
         "rimozione di un riscontro esistente (relazione esistente); nessun nuovo riferimento",
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: i blocchi del Cestino Richieste elencano TUTTE le righe aperte
+    # (proposte, vendite, visite) con il loro immobile; una riga aperta su un immobile
+    # nel Cestino non puo' esistere (lo blocca il Cestino Immobili), e il blocco non
+    # deve comunque nasconderne nessuna.
+    ("buy/lifecycle.py", "trash_blockers"):
+        "blocchi del Cestino Richieste: elenco completo dei processi aperti, sola lettura, nessun nuovo riferimento",
 }
 
 
@@ -226,13 +232,15 @@ def test_06_migration_086_valida_per_il_runner():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 086 resta valida; la 087 (attributi del sito) la segue.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito), che ora e' l'ultima.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
-    assert tutte[-6].version == "086_delete_arch_2b2_property_trash_guards"
-    assert tutte[-5].version == "087_catalogo_canonico_1_site_attributes"
-    assert tutte[-5].down_available and not tutte[-5].non_transactional
-    assert runner.validate_migration(tutte[-5]) == []
-    assert tutte[-4].version == "088_catalogo_canonico_1b_site_inbox"
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: finestra spostata di uno, poi la 092 (Cestino richieste), che ora e' l'ultima.
+    assert tutte[-7].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-6].version == "087_catalogo_canonico_1_site_attributes"
+    assert tutte[-6].down_available and not tutte[-6].non_transactional
+    assert runner.validate_migration(tutte[-6]) == []
+    assert tutte[-5].version == "088_catalogo_canonico_1b_site_inbox"
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: poi la 090 (Cestino contatti), che ora e' l'ultima.
-    assert tutte[-3].version == "089_pertinenze_1_unit_nature"
+    assert tutte[-4].version == "089_pertinenze_1_unit_nature"
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: poi la 091 (Cestino edifici), che ora e' l'ultima.
-    assert tutte[-2].version == "090_cestino_contatti_1_contact_trash"
-    assert tutte[-1].version == "091_cestino_edifici_1_building_trash"
+    assert tutte[-3].version == "090_cestino_contatti_1_contact_trash"
+    assert tutte[-2].version == "091_cestino_edifici_1_building_trash"
+    assert tutte[-1].version == "092_cestino_richieste_1_buy_request_trash"

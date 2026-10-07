@@ -43,6 +43,16 @@ class BuildingInTrash(ConflictError):
         self.extra = {}
 
 
+class BuyRequestInTrash(ConflictError):
+    """CESTINO-RICHIESTE-1: nuova operazione o collegamento verso una richiesta
+    acquirente nel Cestino (409 BUY_REQUEST_IN_TRASH). Vedi buy/lifecycle.py."""
+    code = "BUY_REQUEST_IN_TRASH"
+
+    def __init__(self, message: str = "La richiesta è nel Cestino: ripristinala prima di usarla"):
+        super().__init__(message)
+        self.extra = {}
+
+
 class ValidationError(CoreError):
     pass
 

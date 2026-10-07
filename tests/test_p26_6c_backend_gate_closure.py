@@ -844,7 +844,11 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # /buildings/{id}/trash, POST /buildings/{id}/restore, GET
         # /trash/buildings), dietro legacy_basic_agency_context e nello scope
         # (set(routes) == set(scoped) qui sotto). Il conteggio resta esatto.
-        "property": 54, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: buy 23 -> 27 (Cestino Richieste: GET
+        # /requests/{id}/deletion-check, POST /requests/{id}/trash, POST
+        # /requests/{id}/restore, GET /trash/requests), dietro
+        # legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
+        "property": 54, "buy": 27, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }

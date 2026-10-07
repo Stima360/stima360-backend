@@ -32,12 +32,12 @@ def load_entity(entity_type: str, entity_id: int) -> dict:
             cur.execute("SELECT lead_id FROM property_leads WHERE property_id=%s ORDER BY id LIMIT 1", (entity_id,)); r=cur.fetchone(); x["lead_id"] = r["lead_id"] if r else None
             x["entity_type"]="property"; x["entity_id"]=entity_id; return x
         if entity_type == "buy_request":
-            x = _one(cur, "SELECT * FROM buy_requests WHERE id=%s AND archived_at IS NULL", (entity_id,), f"buy request {entity_id} not found")
+            x = _one(cur, "SELECT * FROM buy_requests WHERE id=%s AND archived_at IS NULL AND (to_jsonb(buy_requests)->>'deleted_at') IS NULL", (entity_id,), f"buy request {entity_id} not found")
             x["entity_type"]="buy_request"; x["entity_id"]=entity_id; return x
         if entity_type == "match":
             x = _one(cur, """SELECT m.*,b.contact_id,b.lead_id,b.title AS buy_title,p.title AS property_title
                 FROM matches m JOIN buy_requests b ON b.id=m.buy_request_id JOIN properties p ON p.id=m.property_id
-                WHERE m.id=%s AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL""", (entity_id,), f"match {entity_id} not found")
+                WHERE m.id=%s AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL AND (to_jsonb(b)->>'deleted_at') IS NULL""", (entity_id,), f"match {entity_id} not found")
             cur.execute("SELECT COUNT(*) AS n FROM buy_request_interactions WHERE match_id=%s AND interaction_type='proposed'", (entity_id,)); x["proposed_count"] = cur.fetchone()["n"]
             x["entity_type"]="match"; x["entity_id"]=entity_id; return x
         if entity_type == "property_visit":
@@ -147,6 +147,8 @@ _SCANS = {
         "select": ("id", "id"),
         "where": (
             "status='active' AND archived_at IS NULL "
+            # CESTINO-RICHIESTE-1: una richiesta nel Cestino non genera lavoro
+            "AND (to_jsonb(buy_requests)->>'deleted_at') IS NULL "
             "AND next_action_at IS NOT NULL "
             "AND next_action_at<=NOW()-(%s||' hours')::interval"
         ),
@@ -169,11 +171,16 @@ _SCANS = {
         "select": ("id", "m.id"),
         "where": (
             "archived_at IS NULL AND freshness_status='fresh' "
-            "AND score_total>=%s AND commercial_status IN ('new','to_review')"
+            "AND score_total>=%s AND commercial_status IN ('new','to_review') "
+            # CESTINO-RICHIESTE-1: non gli abbinamenti di una richiesta nel Cestino
+            "AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash WHERE br_trash.id=buy_request_id "
+            "AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)"
         ),
         "where_scoped": (
             "m.archived_at IS NULL AND m.freshness_status='fresh' "
-            "AND m.score_total>=%s AND m.commercial_status IN ('new','to_review')"
+            "AND m.score_total>=%s AND m.commercial_status IN ('new','to_review') "
+            "AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash WHERE br_trash.id=m.buy_request_id "
+            "AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)"
         ),
         "tenant": "b.agency_id=%s AND p.agency_id=%s",
         "order": "score_total DESC",
@@ -188,8 +195,13 @@ _SCANS = {
             "JOIN properties p ON p.id=m.property_id AND (to_jsonb(p)->>'deleted_at') IS NULL",
         ),
         "select": ("id", "m.id"),
-        "where": "archived_at IS NULL AND review_required=TRUE",
-        "where_scoped": "m.archived_at IS NULL AND m.review_required=TRUE",
+        # CESTINO-RICHIESTE-1: non gli abbinamenti di una richiesta nel Cestino
+        "where": ("archived_at IS NULL AND review_required=TRUE "
+                  "AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash WHERE br_trash.id=buy_request_id "
+                  "AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)"),
+        "where_scoped": ("m.archived_at IS NULL AND m.review_required=TRUE "
+                         "AND NOT EXISTS (SELECT 1 FROM buy_requests br_trash WHERE br_trash.id=m.buy_request_id "
+                         "AND (to_jsonb(br_trash)->>'deleted_at') IS NOT NULL)"),
         "tenant": "b.agency_id=%s AND p.agency_id=%s",
         "order": "updated_at",
         "order_scoped": "m.updated_at",
@@ -391,7 +403,8 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
         if entity_type == "buy_request":
             x = _one(
                 cur,
-                "SELECT * FROM buy_requests WHERE id=%s AND agency_id=%s AND archived_at IS NULL",
+                "SELECT * FROM buy_requests WHERE id=%s AND agency_id=%s AND archived_at IS NULL "
+                "AND (to_jsonb(buy_requests)->>'deleted_at') IS NULL",
                 (entity_id, agency_id),
                 f"buy request {entity_id} not found",
             )
@@ -406,7 +419,8 @@ def load_entity_for_agency(agency_id: int, entity_type: str, entity_id: int) -> 
                     JOIN buy_requests b ON b.id=m.buy_request_id
                     JOIN properties p ON p.id=m.property_id
                     WHERE m.id=%s AND b.agency_id=%s AND p.agency_id=%s
-                      AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL""",
+                      AND m.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL
+                      AND (to_jsonb(b)->>'deleted_at') IS NULL""",
                 (entity_id, agency_id, agency_id),
                 f"match {entity_id} not found",
             )

@@ -2,8 +2,11 @@
 // DELETE-ARCH Fase 2B3: la pagina «Cestino», nata con i soli immobili.
 // CESTINO-CONTATTI-1: due schede, «Immobili» (predefinita, invariata) e
 // «Contatti» (caricata al primo tocco, o subito con `#/cestino/contatti`);
-// CESTINO-EDIFICI-1: la terza, «Edifici» (`#/cestino/edifici`),
+// CESTINO-EDIFICI-1: la terza, «Edifici» (`#/cestino/edifici`);
+// CESTINO-RICHIESTE-1: la quarta, «Richieste» acquirente (`#/cestino/richieste`),
 // con le stesse card, lo stesso «Ripristina» e lo stesso «Carica altri».
+// Il ripristino di una richiesta il cui contatto e' nel Cestino si ferma: la
+// card mostra il motivo e il collegamento al contatto da ripristinare prima.
 // Per i contatti il ripristino puo' segnalare POSSIBILI DOPPIONI attivi
 // (stessa email o telefono): solo un avviso con i collegamenti, nessuna
 // fusione e nessuna modifica dell'altro contatto.
@@ -24,8 +27,13 @@ import { escapeHtml, formatDateTime } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import { COMMERCIAL_STATUS_LABELS } from './incarichi.js';
 import {
-  listBuildingTrash, listContactTrash, listTrash, restoreBuilding, restoreContact, restoreProperty,
+  listBuildingTrash, listBuyRequestTrash, listContactTrash, listTrash, restoreBuilding, restoreBuyRequest,
+  restoreContact, restoreProperty,
 } from '../trash/trash-api.js';
+import {
+  BUY_RESTORED_TOAST, BUY_STATUS_LABELS, buyDuplicatesView, buyRequestLine, buyRequestName, buyRestoreErrorView,
+} from '../trash/trash-model.js';
+import { buyBlockersHtml } from '../trash/trash-dialog.js';
 import {
   BUILDING_RESTORED_TOAST, CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST, buildingDuplicatesView,
   buildingLine, buildingName, contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
@@ -96,13 +104,21 @@ export function contactTrashCardHtml(item) {
  */
 export function duplicatesNoticeHtml(nome, doppioni, { kind = 'contact' } = {}) {
   if (!doppioni.length) return '';
-  const edificio = kind === 'building';
-  const href = (id) => (edificio ? `#/edifici/${Number(id)}` : `#/contatti/${Number(id)}`);
-  const attributo = edificio ? 'data-building-duplicates' : 'data-contact-duplicates';
-  return `<div class="trash-notice" ${attributo} role="status">
-      <p><strong>${escapeHtml(nome)}</strong> è di nuovo ${edificio ? 'fra gli edifici' : 'fra i contatti'}. Possibili doppioni attivi, da controllare:</p>
-      <ul>${doppioni.map((d) => `<li><a href="${href(d.id)}">${escapeHtml(d.name)}</a>${d.reason ? ` — ${escapeHtml(d.reason)}` : ''}</li>`).join('')}</ul>
-      <p class="muted">${edificio ? 'Nessun edificio è stato unito o modificato.' : 'Nessun contatto è stato unito o modificato.'}</p>
+  // CESTINO-RICHIESTE-1: e le richieste acquirente (le altre aperte dello stesso contatto)
+  const testi = {
+    contact: { href: (id) => `#/contatti/${Number(id)}`, attr: 'data-contact-duplicates', dove: 'fra i contatti',
+               nulla: 'Nessun contatto è stato unito o modificato.', lista: 'Possibili doppioni attivi, da controllare:' },
+    building: { href: (id) => `#/edifici/${Number(id)}`, attr: 'data-building-duplicates', dove: 'fra gli edifici',
+                nulla: 'Nessun edificio è stato unito o modificato.', lista: 'Possibili doppioni attivi, da controllare:' },
+    buy: { href: (id) => `#/acquirenti/${Number(id)}`, attr: 'data-buy-duplicates', dove: 'fra le richieste',
+           nulla: 'Nessuna richiesta è stata unita, chiusa o modificata.',
+           lista: 'Lo stesso contatto ha altre richieste aperte, da controllare:' },
+  };
+  const t = testi[kind] || testi.contact;
+  return `<div class="trash-notice" ${t.attr} role="status">
+      <p><strong>${escapeHtml(nome)}</strong> è di nuovo ${t.dove}. ${t.lista}</p>
+      <ul>${doppioni.map((d) => `<li><a href="${t.href(d.id)}">${escapeHtml(d.name)}</a>${d.reason ? ` — ${escapeHtml(d.reason)}` : ''}</li>`).join('')}</ul>
+      <p class="muted">${t.nulla}</p>
     </div>`;
 }
 
@@ -135,6 +151,41 @@ export function buildingTrashCardHtml(item) {
         <button type="button" class="btn primary" data-building-restore="${id}">Ripristina</button>
       </div>
     </article>`;
+}
+
+/** Una card del Cestino Richieste (esportata per le prove). */
+export function buyTrashCardHtml(item) {
+  const chi = item.deleted_by_name ? ` · da ${item.deleted_by_name}` : '';
+  const motivo = reasonLabel(item.deleted_reason) + (item.deleted_note ? ` — ${item.deleted_note}` : '');
+  const id = Number(item.id);
+  const contatto = item.contact_in_trash
+    ? `${escapeHtml(item.contact_name || `Contatto #${Number(item.contact_id)}`)} <span class="muted">(nel Cestino)</span>`
+    : `<a href="#/contatti/${Number(item.contact_id)}">${escapeHtml(item.contact_name || `Contatto #${Number(item.contact_id)}`)}</a>`;
+  return `
+    <article class="trash-card" data-buy-trash-item="${id}">
+      <div class="trash-card-head">
+        <strong class="trash-code">${escapeHtml(buyRequestName(item))}</strong>
+        <span class="muted trash-type">Richiesta acquirente</span>
+      </div>
+      <div class="trash-line">${escapeHtml(buyRequestLine({ ...item, contact_name: '' }) || '—')}</div>
+      <dl class="trash-facts">
+        <dt>Contatto</dt><dd data-trash-contact>${contatto}</dd>
+        <dt>Eliminata</dt><dd data-trash-when>${escapeHtml(formatDateTime(item.deleted_at))}${escapeHtml(chi)}</dd>
+        <dt>Motivo</dt><dd data-trash-reason>${escapeHtml(motivo)}</dd>
+        <dt>Stato</dt><dd data-trash-status>${escapeHtml(BUY_STATUS_LABELS[item.status] || item.status || '—')}</dd>
+      </dl>
+      <div class="field-error trash-card-error" data-trash-card-error role="alert"></div>
+      <div class="trash-card-actions">
+        <a class="btn ghost" href="#/acquirenti/${id}" data-buy-trash-open>Apri scheda</a>
+        <button type="button" class="btn primary" data-buy-restore="${id}">Ripristina</button>
+      </div>
+    </article>`;
+}
+
+/** Il rifiuto di un ripristino di richiesta: il testo e i collegamenti (contatto nel Cestino). */
+export function buyRestoreErrorHtml(error) {
+  const vista = buyRestoreErrorView(error);
+  return `${escapeHtml(vista.text)}${vista.blockers.length ? buyBlockersHtml(error.data.blockers) : ''}`;
 }
 
 /**
@@ -205,16 +256,20 @@ function listaCestino(listEl, pagerEl, toastHost, cfg) {
 
 export async function renderCestino(container) {
   const hash = window.location.hash || '';
-  // CESTINO-EDIFICI-1: `#/cestino/contatti` e `#/cestino/edifici` aprono la loro scheda
-  const iniziale = /^#\/cestino\/contatti\b/.test(hash) ? 'contatti' : (/^#\/cestino\/edifici\b/.test(hash) ? 'edifici' : 'immobili');
+  // CESTINO-EDIFICI-1 / CESTINO-RICHIESTE-1: `#/cestino/contatti`,
+  // `#/cestino/edifici` e `#/cestino/richieste` aprono la loro scheda
+  const scheda = (hash.match(/^#\/cestino\/(contatti|edifici|richieste)\b/) || [])[1];
+  const iniziale = scheda || 'immobili';
   const contatti = iniziale === 'contatti';
   const edifici = iniziale === 'edifici';
+  const richieste = iniziale === 'richieste';
   container.innerHTML = `
     <div class="card panel trash-page">
       <div class="tabs trash-tabs" data-trash-tabs>
         <button type="button" class="tab-btn${iniziale === 'immobili' ? ' active' : ''}" data-trash-tab="immobili">Immobili</button>
         <button type="button" class="tab-btn${contatti ? ' active' : ''}" data-trash-tab="contatti">Contatti</button>
         <button type="button" class="tab-btn${edifici ? ' active' : ''}" data-trash-tab="edifici">Edifici</button>
+        <button type="button" class="tab-btn${richieste ? ' active' : ''}" data-trash-tab="richieste">Richieste</button>
       </div>
       <section class="trash-panel" data-trash-panel="immobili"${iniziale === 'immobili' ? '' : ' hidden'}>
         <div class="trash-page-head">
@@ -242,6 +297,15 @@ export async function renderCestino(container) {
         <div class="trash-cards" data-building-trash-list>${edifici ? '<p class="muted">Caricamento…</p>' : ''}</div>
         <div class="list-pager" data-building-trash-pager></div>
       </section>
+      <section class="trash-panel" data-trash-panel="richieste"${richieste ? '' : ' hidden'}>
+        <div class="trash-page-head">
+          <p class="muted trash-intro">Richieste acquirente spostate nel Cestino: non compaiono in Acquirenti, negli abbinamenti né nei suggerimenti finché non le ripristini. Il ripristino non invia messaggi e non riapre nulla.</p>
+          <a href="#/acquirenti" class="btn ghost" data-buy-trash-back>← Acquirenti</a>
+        </div>
+        <div data-buy-trash-notice></div>
+        <div class="trash-cards" data-buy-trash-list>${richieste ? '<p class="muted">Caricamento…</p>' : ''}</div>
+        <div class="list-pager" data-buy-trash-pager></div>
+      </section>
     </div>
   `;
   const toastHost = container.parentElement || container;
@@ -249,7 +313,9 @@ export async function renderCestino(container) {
     immobili: container.querySelector('[data-trash-panel="immobili"]'),
     contatti: container.querySelector('[data-trash-panel="contatti"]'),
     edifici: container.querySelector('[data-trash-panel="edifici"]'),
+    richieste: container.querySelector('[data-trash-panel="richieste"]'),
   };
+  const buyNoticeEl = container.querySelector('[data-buy-trash-notice]');
   const buildingNoticeEl = container.querySelector('[data-building-trash-notice]');
   const noticeEl = container.querySelector('[data-contact-trash-notice]');
   const caricaImmobili = listaCestino(container.querySelector('[data-trash-list]'),
@@ -277,7 +343,17 @@ export async function renderCestino(container) {
         buildingNoticeEl.innerHTML = duplicatesNoticeHtml(buildingName(riga), buildingDuplicatesView(riga), { kind: 'building' });
       },
     });
-  const caricati = { immobili: false, contatti: false, edifici: false };
+  const caricaRichieste = listaCestino(container.querySelector('[data-buy-trash-list]'),
+    container.querySelector('[data-buy-trash-pager]'), toastHost, {
+      itemAttr: 'data-buy-trash-item', restoreAttr: 'data-buy-restore', restoreKey: 'buyRestore',
+      card: buyTrashCardHtml, list: listBuyRequestTrash, restore: restoreBuyRequest, toast: BUY_RESTORED_TOAST,
+      errorHtml: buyRestoreErrorHtml,
+      moreError: 'Impossibile caricare altre richieste.',
+      afterRestore: (riga) => {
+        buyNoticeEl.innerHTML = duplicatesNoticeHtml(buyRequestName(riga), buyDuplicatesView(riga), { kind: 'buy' });
+      },
+    });
+  const caricati = { immobili: false, contatti: false, edifici: false, richieste: false };
 
   async function mostra(scheda) {
     for (const [nome, el] of Object.entries(pannelli)) el.hidden = nome !== scheda;
@@ -286,7 +362,8 @@ export async function renderCestino(container) {
     }
     if (caricati[scheda]) return;
     caricati[scheda] = true;
-    const carica = { immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici }[scheda];
+    const carica = { immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici,
+                     richieste: caricaRichieste }[scheda];
     await carica();
   }
 

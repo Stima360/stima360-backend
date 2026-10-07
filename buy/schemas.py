@@ -192,3 +192,10 @@ class BuyTaskCreate(BuyModel):
 class HistoryNoteCreate(BuyModel):
     description: str = Field(...,min_length=1)
     created_by: str | None = Field(None,max_length=200)
+
+
+class BuyRequestTrash(BuyModel):
+    """CESTINO-RICHIESTE-1: «Sposta nel Cestino» una richiesta acquirente. Il
+    motivo e' validato sul catalogo dal servizio (400 INVALID_TRASH_REASON)."""
+    reason_code: str = Field(..., max_length=30)
+    note: str | None = Field(default=None, max_length=500)

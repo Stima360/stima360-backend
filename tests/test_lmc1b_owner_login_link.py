@@ -500,7 +500,8 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
-    assert numeri[-1] == 91 and numeri[-2] == 90 and numeri[-3] == 89 and numeri[-4] == 88 and numeri[-5] == 87 and numeri[-6] == 86 and numeri[-7] == 85 and numeri[-8] == 84 and numeri[-9] == 83 and numeri[-10] == 82 and numeri[-11] == 81 and numeri[-12] == 80 and numeri[-13] == 79 and numeri[-14] == 78 and numeri[-15] == 77 and numeri[-16] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
+    assert numeri[-1] == 92 and numeri[-2] == 91 and numeri[-3] == 90 and numeri[-4] == 89 and numeri[-5] == 88 and numeri[-6] == 87 and numeri[-7] == 86 and numeri[-8] == 85 and numeri[-9] == 84 and numeri[-10] == 83 and numeri[-11] == 82 and numeri[-12] == 81 and numeri[-13] == 80 and numeri[-14] == 79 and numeri[-15] == 78 and numeri[-16] == 77 and numeri[-17] == 76, numeri[-4:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

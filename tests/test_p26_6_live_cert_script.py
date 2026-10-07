@@ -5667,6 +5667,16 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # 091 ammette proprio questa azione della FK). La matrice non chiama le
     # rotte del Cestino Edifici: non ne crea.
     ("buildings", "deleted_by_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1, migration 092. Cestino Richieste acquirente: UN
+    # riferimento non-CASCADE nuovo verso una tabella che il cleanup cancella.
+    # ESAMINATO.
+    #
+    #   buy_requests.deleted_by_user_id -> operator_users  SET NULL
+    #
+    # Stessa scelta degli altri Cestini (la guardia di congelamento della 092
+    # ammette proprio questa azione della FK). La matrice non chiama le rotte
+    # del Cestino Richieste: non ne crea.
+    ("buy_requests", "deleted_by_user_id", "operator_users", "SET NULL"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1, migration 087. Provenienza
     # dal sito (`property_site_sources`): QUATTRO riferimenti non-CASCADE nuovi
     # verso tabelle che il cleanup cancella. ESAMINATI.

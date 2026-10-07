@@ -33,6 +33,10 @@ def core_cursor(*, commit: bool = False):
         from .building_trash import BuildingInTrash, is_building_trash_db_error
         if not isinstance(exc, BuildingInTrash) and is_building_trash_db_error(exc):
             raise BuildingInTrash() from exc
+        # CESTINO-RICHIESTE-1: lo stesso per una richiesta acquirente nel Cestino (092).
+        from .buy_trash import BuyRequestInTrash, is_buy_trash_db_error
+        if not isinstance(exc, BuyRequestInTrash) and is_buy_trash_db_error(exc):
+            raise BuyRequestInTrash() from exc
         raise
     finally:
         cur.close()

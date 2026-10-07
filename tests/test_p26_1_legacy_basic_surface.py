@@ -578,7 +578,10 @@ FROZEN_LEGACY_BASIC_CORE_READERS = set()
 AGENCY_SCOPED_LEGACY_BASIC_ROUTERS = {
     # P26-2D. 23 routes, each taking legacy_basic_agency_context; the CORE read
     # is core.repository.create_task_with_cursor called *with* that ctx.
-    "buy_router": ("buy", 23),
+    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: 23 -> 27, le quattro rotte del Cestino Richieste
+    # (deletion-check, trash, restore, elenco), tutte agency-scoped con
+    # Depends(legacy_basic_agency_context) (verificato da test_p26_2d e p26_6c).
+    "buy_router": ("buy", 27),
     # P26-6A. One route, taking legacy_basic_agency_context, whose scan is
     # bounded to ctx.require_agency() in SQL rather than filtered afterwards.
     #
