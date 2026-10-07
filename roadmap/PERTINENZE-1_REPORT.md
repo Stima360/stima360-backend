@@ -201,3 +201,12 @@ Nessuna decisione funzionale è rimasta aperta; le scelte tecniche:
 
   Si riverificano dopo il commit (sezione sotto).
 - **I 2 test fragili del run precedente** (lmc3 test_19, p29_3e test_07) questa volta sono verdi.
+
+## Dopo il commit `bf1d163` (push normale su `core-0.1-test`)
+
+- **I 9 controlli sul working tree passano** ad albero pulito: a32_2 s14, lmc7 h5, lmc8 h5, lmc9 f4, lmc11 h1, lmc13 e1, lmc15 test_37, p27_7 d3, p29_3g test_18. Rieseguiti con i loro file: 374 verdi.
+- **Restano rossi solo 4 fallimenti, già presenti nella base:** lmc15 test_41 e test_42, p29_3g test_20 e test_21.
+- **Deploy Render TEST:** avviato dal push, **non verificato** da qui. Finché la 089 non è applicata, TEST resta nello stato «codice prima dello schema» (§3): tutto come prima, una pertinenza dichiarata rifiutata in modo leggibile.
+- **Migration 089 su TEST:** **da applicare** con `roadmap/PERTINENZE-1_TEST_RUNBOOK.md`.
+- **Collaudo live:** **pendente** (runbook §5), smartphone compreso.
+- **Fase E chiusa qui.** Nessuna attività successiva iniziata.
