@@ -1,5 +1,12 @@
 # COLLAUDO-FINALE-A-H — Collaudo live delle fasi A–H su Render TEST
 
+> **Aggiornamento 07/10/2026, completamento.** I punti aperti sono stati ripresi in `roadmap/COLLAUDO-FINALE-A-H_COMPLETAMENTO_REPORT.md`:
+> - possibili doppioni Contatti ed Edifici ora **PASS** dal vivo;
+> - nessuna regressione (254 prove locali A–H passate);
+> - restano NON VERIFICATO permessi agente, separazione tra agenzie, incarico da acquisizione, portale proprietario e registro / migration letti da SQL; il sito resta RINVIATO.
+>
+> Per lo stato corrente vale quel documento.
+
 Data: 7 ottobre 2026. Ambiente: **solo TEST**, `https://stima360-backend-test.onrender.com/os/` (badge «AMBIENTE TEST»), database `stima360_db_test`. PROD mai aperta. Sito pubblico non toccato, nessun lead inviato.
 
 > **Questo documento dice che cosa è collaudato su TEST. Non è un'approvazione al rilascio in produzione.** La produzione richiede una decisione separata, con le migration 087–092 da applicare lì e i punti NON VERIFICATO di §4 da chiudere o accettare.
