@@ -245,7 +245,16 @@ Nella base delle fasi E/F/G, invariati:
 
 ## 11. Dopo il commit
 
-POST_COMMIT
+Commit `33a3e9c`, spinto su `core-0.1-test`: deploy automatico su Render TEST. Ho rieseguito, a working tree pulito, i 41 test falliti nella suite completa:
+- **20 ora passano**:
+  - le 17 sentinelle `git status` / `git diff` di §7.3;
+  - le 2 sentinelle superate (già corrette prima del commit);
+  - `lmc1b test_9e` (intermittente).
+- **21 restano**, e sono esattamente la lista post-commit della FASE G, cioè la base (§8).
+
+**Nessun fallimento fuori dalla base.**
+
+Su Render TEST le migration sono ancora **fino alla 088**: **089, 090, 091 e 092 da applicare**, in quest'ordine; collaudi live E, F, G e H pendenti (§0, §10, runbook).
 
 ## 12. Riepilogo finale A–H
 
@@ -260,7 +269,7 @@ Tutte le fasi sono su `core-0.1-test`, pushate (deploy automatico Render TEST). 
 | **E** PERTINENZE-1 | Pertinenze autonome | `bf1d163` (+ docs `bf6dae8`) | PostgreSQL, UI, Chromium | **089 da applicare** | **pendente** |
 | **F** CESTINO-CONTATTI-1 | Cestino Contatti | `dd9a88f` (+ docs `4833eae`) | PostgreSQL 11, UI 16, statici | **090 da applicare** | **pendente** |
 | **G** CESTINO-EDIFICI-1 | Cestino Edifici | `fb4ab29` (+ docs `f7251ac`) | PostgreSQL 7, browser 2, UI 13, statici 6 | **091 da applicare** | **pendente** |
-| **H** CESTINO-RICHIESTE-1 | Cestino Richieste acquirente | questo commit (§11) | PostgreSQL 7, browser 2, UI 12, statici 6 | **092 da applicare** | **pendente** |
+| **H** CESTINO-RICHIESTE-1 | Cestino Richieste acquirente | `33a3e9c` (+ docs) | PostgreSQL 7, browser 2, UI 12, statici 6 | **092 da applicare** | **pendente** |
 
 **Integrazione col sito: rimandata** (dalla fase D):
 - il sito pubblico non è collegato a TEST;
