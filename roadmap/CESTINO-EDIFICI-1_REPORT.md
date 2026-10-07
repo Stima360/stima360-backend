@@ -192,3 +192,16 @@ Già nella base delle fasi E/F, invariati:
 3. Collaudo live **FASE F** (Cestino Contatti): `roadmap/CESTINO-CONTATTI-1_TEST_RUNBOOK.md` §5.
 4. Collaudo live **FASE G** (Cestino Edifici): runbook §5, desktop e smartphone.
 5. PROD: esclusa.
+
+## 11. Dopo il commit
+
+Commit `fb4ab29`, spinto su `core-0.1-test`: deploy automatico su Render TEST. Ho rieseguito, a working tree pulito, i 33 test falliti nella suite completa:
+- **12 ora passano**:
+  - le 9 sentinelle `git status` di §7;
+  - le 2 sentinelle del conteggio rotte (già corrette prima del commit);
+  - la prova in browser a 1280 px (resa stabile prima del commit).
+- **21 restano**, e sono esattamente la lista post-commit della FASE F, cioè la base (§8).
+
+**Nessun fallimento fuori dalla base.**
+
+Su Render TEST le migration sono ancora **fino alla 088**: **089, 090 e 091 da applicare**, collaudi live E, F e G pendenti (§0, §10, runbook).
