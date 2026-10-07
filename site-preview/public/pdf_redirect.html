@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta name="referrer" content="no-referrer" />
+  <script src="preview-config.js"></script>
+  <meta charset="UTF-8" />
+  <title>Stima360 - Elaborazione Stima...</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+
+    body {
+      font-family: 'Montserrat', sans-serif;
+      margin: 0;
+      padding: 60px 20px;
+      text-align: center;
+    
+    background: linear-gradient(
+      180deg,
+      #ffffff 0%,        /* luce totale */
+      #faffff 12%,       /* ghiaccio */
+      #e9f8ff 25%,       /* leggero azzurro */
+      #bfe8ff 40%,       /* centro molto azzurro */
+      #8ed7ff 55%,       /* mare azzurro vivo */
+      #7acfff 65%,       /* mare brillante */
+      #ffe9bd 80%,       /* oro alba reintrodotto (SOFT) */
+      #ffdba3 90%,       /* oro pesca più caldo */
+      #f4f8ff 100%       /* chiusura chiara */
+    );
+    background-attachment: fixed;
+
+    
+      color: #19546a;
+      overflow-x: hidden;
+    }
+
+
+
+    /* NUVOLE ANIMATE */
+    .cloud {
+      position: fixed;
+      width: 300px;
+      height: 300px;
+      background-size: contain;
+      background-repeat: no-repeat;
+      opacity: 0.5;
+      animation: float 22s ease-in-out infinite;
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    /* NUVOLE ESISTENTI RIPOSIZIONATE */
+.c1 { 
+  top: 18%; 
+  left: 50%; 
+  transform: translateX(-50%);
+  background-image: url('cloud/cloud1.png');
+}
+
+.c2 { 
+  top: 10%; 
+  right: 10%; 
+  background-image: url('cloud/cloud2.png'); 
+}
+
+.c3 { 
+  bottom: 20%; 
+  left: 50%; 
+  transform: translateX(-50%);
+  background-image: url('cloud/cloud3.png');
+}
+
+    /* NUVOLE EXTRA (inizialmente nascoste) */
+    .c4, .c5, .c6, .c7 {
+      display: none; /* nascoste su mobile */
+      position: fixed;
+      width: 300px;
+      height: 300px;
+      background-size: contain;
+      background-repeat: no-repeat;
+      opacity: 0.45;
+      animation: float 28s ease-in-out infinite;
+      pointer-events: none;
+      z-index: -1;
+    }
+    
+    .c4 { top: 25%; left: 10%; background-image: url('cloud/cloud2.png'); }
+    .c5 { top: 35%; right: 12%; background-image: url('cloud/cloud1.png'); }
+    .c6 { bottom: 10%; right: 25%; background-image: url('cloud/cloud3.png'); }
+    .c7 { bottom: 30%; left: 20%; background-image: url('cloud/cloud1.png'); }
+
+    @keyframes float {
+      0%   { transform: translate(0, 0); }
+      50%  { transform: translate(25px, -20px); }
+      100% { transform: translate(0, 0); }
+    }
+
+    /* LOGO */
+    .logo {
+      width: 85%;
+      max-width: 850px;
+      margin: 0 auto 25px;
+      display: block;
+    }
+
+    /* BOX TESTO */
+    .box {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 35px 28px;
+      border-radius: 22px;
+    
+      /* 🍏 Effetto vetro stile Apple */
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+    
+      /* Bordo Apple “frosted” */
+      border: 1px solid rgba(255, 255, 255, 0.35);
+    
+      /* Ombra morbida e sospesa */
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.15);
+    }
+
+
+    h1 {
+      font-size: 26px;
+      color: #168c70;
+      margin-bottom: 14px;
+    }
+
+    p {
+      font-size: 17px;
+      line-height: 1.55;
+      margin-top: 15px;
+    }
+
+    /* --- BOTTONE STIMA360 --- */
+    .stima360-btn {
+      position: relative;
+      overflow: hidden;
+      z-index: 0;
+      background: linear-gradient(
+        135deg,
+        #0028a6,#2d1f8a,#2a0064,
+        #009c78,#007f8f,#ffd500,
+        #ff7a00,#ff0000,#1faa2c
+      );
+      background-size: 300% 300%;
+      animation: rainbowShift 6s ease infinite;
+      color: #fff;
+      font-weight: 600;
+      border: none;
+      border-radius: 14px;
+      padding: 18px;
+      font-size: 2rem;
+      cursor: pointer;
+      box-shadow:
+        0 1px 1px rgba(255,255,255,0.65),
+        0 1px 2px rgba(0,0,0,0.08);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    .stima360-btn:hover {
+      transform: scale(1.02);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+    }
+    .stima360-btn:active { transform: scale(0.96); }
+
+    .stima360-btn::before {
+      content: "";
+      position: absolute;
+      top: 6px;
+      left: 10px;
+      right: 10px;
+      height: 45%;
+      border-radius: 10px;
+      background: linear-gradient(
+        to bottom,
+        rgba(255,255,255,0.85),
+        rgba(255,255,255,0.15),
+        rgba(255,255,255,0)
+      );
+      opacity: 0.9;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .stima360-btn::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+      border-radius: 14px;
+      background: radial-gradient(
+        circle,
+        rgba(255,255,255,0.55),
+        rgba(255,255,255,0) 70%
+      );
+      filter: blur(8px);
+      opacity: 0.75;
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    @keyframes rainbowShift {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .bv-box { margin-top: 28px; }
+    .bv-img {
+      width: 70%;
+      max-width: 420px;
+      border-radius: 14px;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.10);
+    }
+   /* 🖥️ VERSIONE DESKTOP — form più grande, testi più grandi, card più alta */
+@media (min-width: 992px) {
+
+  /* FORM */
+  .box {
+    max-width: 950px;          /* più largo */
+    padding: 70px 60px;        /* molto più alto + largo = più respiro */
+    border-radius: 30px;
+
+    /* vetro Apple intensificato */
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    background: rgba(255, 255, 255, 0.20);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 25px 55px rgba(0,0,0,0.18);
+  }
+
+  /* LOGO grande, proporzionato */
+  .logo {
+    width: 80%;
+    max-width: 1050px;
+  }
+
+  /* TITOLI più grandi */
+  h1 {
+    font-size: 44px;       /* prima 36 → ora MOLTO impattante */
+    margin-bottom: 28px;
+  }
+
+  /* PARAGRAFI più grandi e leggibili */
+  p {
+    font-size: 22px;       /* prima 20 */
+    line-height: 1.75;     /* più arioso */
+    margin-top: 22px;
+  }
+
+  /* BOTTONE più grande */
+  .stima360-btn {
+    font-size: 2.6rem;
+    padding: 26px 34px;
+    border-radius: 20px;
+  }
+
+  /* Biglietto visita più grande */
+  .bv-img {
+    max-width: 550px;
+    margin-top: 40px;
+  }
+}
+
+@media (min-width: 992px) {
+  .c4, .c5, .c6, .c7 {
+    display: block;
+  }
+}
+/* 📱 MOBILE → mostra solo c1 */
+@media (max-width: 991px) {
+  .cloud {
+    display: none;
+  }
+  .c1 {
+    display: block;
+  }
+}
+
+    
+  </style>
+</head>
+<body>
+
+  <!-- NUVOLE -->
+  <div class="cloud c1"></div>
+  <div class="cloud c2"></div>
+  <div class="cloud c3"></div>
+  <div class="cloud c4"></div>
+  <div class="cloud c5"></div>
+  <div class="cloud c6"></div>
+  <div class="cloud c7"></div>
+
+
+  <!-- LOGO -->
+  <img src="Sfondo_trasparente_Stima360.png" class="logo" alt="Stima360">
+
+  <!-- TESTO PRINCIPALE -->
+  <div class="box">
+    <h1>Stima360 in arrivo!</h1>
+    <p>⏳ Stiamo elaborando il PDF con il valore del tuo immobile.</p>
+<p>
+  Questa valutazione è generata da algoritmi di livelli avanzati di 
+  <strong style="color:#53219e;">intelligenza artificiale</strong> 
+  accuratamente implementati da 
+  <strong style="color:#084c9a;">Stima360</strong>.
+</p>
+
+<p>
+  Tuttavia, alcuni elementi fondamentali — come lo 
+  <strong style="color:#0f6f78;">stato reale dell'immobile</strong>, 
+  la <strong style="color:#0e6b4d;">vista</strong>, 
+  la <strong style="color:#b58a1e;">micro-posizione</strong> 
+  e la <strong style="color:#cc5f00;">dinamica del mercato locale</strong> — 
+  non possono essere interpretati con precisione da una AI.
+</p>
+
+<p>
+  Per ottenere una 
+  <strong style="color:#0e6b4d;">stima professionale</strong> 
+  accurata e verificata da un agente immobiliare abilitato, puoi prenotare un appuntamento 
+  cliccando sul pulsante qui sotto scrivendoci o chiamandoci al numero telefonico qui sotto dal Lunedi al Sabato in orari di ufficio.
+</p>
+
+    <button id="stimaPro" class="stima360-btn" onclick="vaiAStimaDettagliataConParametri()">
+      Stima360 Pro
+    </button>
+
+    <div id="pdfControls" hidden>
+      <p id="pdfStatus" role="status" aria-live="polite" hidden></p>
+      <button id="pdfRetry" class="stima360-btn" type="button" hidden>Recupera il PDF</button>
+      <p id="pdfDownloadBox" hidden><a id="pdfDownload" download>Scarica il PDF</a></p>
+    </div>
+
+    <div class="bv-box">
+      <img src="Biglietto_visita.jpeg" class="bv-img" alt="Biglietto da visita Stima360">
+    </div>
+  </div>
+
+  <script>
+    const redirectParams = new URLSearchParams(location.search);
+    const redirectToken = redirectParams.get("token");
+    const detailButton = document.getElementById('stimaPro');
+    const pdfControls = document.getElementById('pdfControls');
+    const pdfStatus = document.getElementById('pdfStatus');
+    const pdfRetry = document.getElementById('pdfRetry');
+    const pdfDownloadBox = document.getElementById('pdfDownloadBox');
+    const pdfDownload = document.getElementById('pdfDownload');
+    let detailReady = false;
+    let authorisedStimaId = null;
+    let pdfPending = false;
+    let retryAllowed = false;
+    let pdfObjectUrl = null;
+    let linkVersion = 0;
+    detailButton.disabled = true;
+
+    function revokePdf() {
+      if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
+      pdfObjectUrl = null;
+      pdfDownload.removeAttribute('href');
+      pdfDownloadBox.hidden = true;
+    }
+
+    function bloccaLink() {
+      detailReady = false;
+      authorisedStimaId = null;
+      detailButton.disabled = true;
+      retryAllowed = false;
+      pdfRetry.hidden = true;
+      revokePdf();
+      pdfControls.hidden = false;
+      pdfStatus.hidden = false;
+      pdfStatus.textContent = 'Link non valido o scaduto. Non è possibile aprire il PDF.';
+    }
+
+    async function riceviPdf(retry = false, version = linkVersion) {
+      if (!detailReady || !authorisedStimaId || !redirectToken || pdfPending
+          || version !== linkVersion || (retry && !retryAllowed)) return;
+      pdfPending = true;
+      retryAllowed = false;
+      pdfRetry.disabled = true;
+      try {
+        const res = await fetch(Stima360Preview.pdfUrl(authorisedStimaId, redirectToken, retry), {
+          method: retry ? 'POST' : 'GET', cache: 'no-store'
+        });
+        if (version !== linkVersion) return;
+        if ([401, 403, 404].includes(res.status)) {
+          bloccaLink();
+          return;
+        }
+        if (!res.ok) {
+          retryAllowed = res.status === 503;
+          throw new Error('PDF non disponibile');
+        }
+        if ((res.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/pdf') {
+          throw new Error('Risposta PDF non valida');
+        }
+        const pdf = await res.blob();
+        if (!pdf.size || new TextDecoder().decode(await pdf.slice(0, 5).arrayBuffer()) !== '%PDF-') {
+          throw new Error('Risposta PDF non valida');
+        }
+        if (version !== linkVersion) return;
+        revokePdf();
+        pdfObjectUrl = URL.createObjectURL(pdf);
+        pdfDownload.href = pdfObjectUrl;
+        pdfDownload.download = 'stima_' + authorisedStimaId + '.pdf';
+        pdfControls.hidden = false;
+        pdfStatus.hidden = true;
+        pdfRetry.hidden = true;
+        pdfDownloadBox.hidden = false;
+      } catch {
+        if (version !== linkVersion) return;
+        pdfControls.hidden = false;
+        pdfStatus.hidden = false;
+        pdfStatus.textContent = retryAllowed
+          ? 'PDF non disponibile. Puoi recuperarlo senza inviare una nuova stima.'
+          : 'PDF non disponibile. Riprova ad aprire questo link più tardi.';
+        pdfRetry.hidden = !retryAllowed;
+      } finally {
+        if (version === linkVersion) {
+          pdfPending = false;
+          pdfRetry.disabled = !retryAllowed;
+        }
+      }
+    }
+
+    async function verificaLinkDettagliato() {
+      const version = ++linkVersion;
+      if (!redirectToken) {
+        bloccaLink();
+        return;
+      }
+      try {
+        const res = await fetch(Stima360Preview.apiUrl('/api/prefill?t=' + encodeURIComponent(redirectToken)), { cache: 'no-store' });
+        if (version !== linkVersion) return;
+        if (!res.ok) {
+          bloccaLink();
+          return;
+        }
+        const prefill = await res.json();
+        if (version !== linkVersion) return;
+        if (!prefill || !Number.isSafeInteger(prefill.id) || prefill.id <= 0) {
+          bloccaLink();
+          return;
+        }
+        authorisedStimaId = prefill.id;
+        detailReady = true;
+        detailButton.disabled = false;
+        await riceviPdf(false, version);
+      } catch {
+        if (version !== linkVersion) return;
+        // No query/localStorage fallback can authorise this link.
+        bloccaLink();
+      }
+    }
+
+    function vaiAStimaDettagliataConParametri() {
+      if (!detailReady || !redirectToken) return;
+      const target = new URL('stima_dettagliata.html', location.href);
+      target.search = new URLSearchParams({ token: redirectToken }).toString();
+      window.open(target.href, '_blank', 'noopener');
+    }
+
+    function resetCachedLink() {
+      linkVersion++;
+      pdfPending = false;
+      detailReady = false;
+      authorisedStimaId = null;
+      detailButton.disabled = true;
+      retryAllowed = false;
+      pdfRetry.hidden = true;
+      pdfRetry.disabled = true;
+      revokePdf();
+      pdfControls.hidden = true;
+      pdfStatus.hidden = true;
+    }
+
+    pdfRetry.addEventListener('click', () => riceviPdf(true));
+    window.addEventListener('pagehide', resetCachedLink);
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) {
+        resetCachedLink();
+        verificaLinkDettagliato();
+      }
+    });
+    verificaLinkDettagliato();
+  </script>
+
+</body>
+</html>

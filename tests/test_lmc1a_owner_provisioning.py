@@ -172,35 +172,56 @@ def _main_source() -> str:
     return (ROOT / "main.py").read_text(encoding="utf-8")
 
 
+# SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04, ricevute pubbliche).
+# `salva_stima` delega a `_receive_submission`; la pipeline del funnel vive in
+# `_save_quick_submission(raw, receipt)` e il provisioning e' il passo
+# `receipt.step("owner", ...)`: ripetibile dalla ripresa, `not_applicable`
+# quando l'account e' disattivato, e - se fallisce - ricevuta `partial` senza
+# consegne, non piu' "fail-open" con falso successo. La logica owner resta
+# fuori da `main.py`, dopo il bridge e prima di P17, con il contesto letto
+# dalla stima e senza `agency_id` passato a mano: quello che LMC-1A pretendeva.
+
+def _pipeline() -> str:
+    source = _main_source()
+    body = source[source.index("\ndef _save_quick_submission(") + 1:]
+    return body[: body.index("\ndef ")]
+
+
 def test_d1_main_chiama_solo_il_wrapper_safe_e_dopo_il_bridge():
     source = _main_source()
     handler = source[source.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("@app.", 10)]
-    assert "owner_provisioning.safe_provision_for_public_stima(" in handler
-    assert "provision_for_public_stima(" not in handler.replace(
-        "safe_provision_for_public_stima(", "")
-    bridge = handler.index("bridge_result = core_service.bridge_public_stima")
-    hook = handler.index("owner_provisioning.safe_provision_for_public_stima(")
-    p17 = handler.index("safe_record_event(")
+    handler = handler[: handler.index("\n@app.", 10)]
+    assert '_receive_submission(request, "quick")' in handler and "provision" not in handler
+    pipeline = _pipeline()
+    assert "owner_provisioning.provision_for_public_stima(" in pipeline
+    assert "safe_provision_for_public_stima(" not in pipeline, "il fail-open ora e' la ricevuta"
+    assert pipeline.count("provision_for_public_stima(") == 1
+    bridge = pipeline.index("bridge_result = receipt.step(\"bridge\", lambda: core_service.bridge_public_stima")
+    hook = pipeline.index("owner_provisioning.provision_for_public_stima(")
+    p17 = pipeline.index("seller_intelligence_service.record_event(")
     assert bridge < hook < p17, "il provisioning sta fra il bridge e gli eventi P17"
+    passo = pipeline.rindex("receipt.step(", 0, hook)
+    assert 'receipt.step("owner"' in pipeline[passo:hook]
 
 
 def test_d2_main_non_passa_un_agency_id_e_non_ramifica_sull_esito():
-    source = _main_source()
-    call = source[source.index("owner_provisioning.safe_provision_for_public_stima("):]
+    pipeline = _pipeline()
+    call = pipeline[pipeline.index("owner_provisioning.provision_for_public_stima("):]
     call = call[: call.index(")") + 1]
     assert "agency_id" not in call, call
     assert "bridge_ctx" in call and "bridge_result=bridge_result" in call and "stima_id=new_id" in call
-    handler = source[source.index('@app.post("/api/salva_stima")'):]
-    assert "provision_result[" not in handler and "provisioning_result[" not in handler
+    assert "provision_result[" not in pipeline and "provisioning_result[" not in pipeline
+    # l'esito del dominio e' letto SOLO dalla ricevuta: accettato, oppure
+    # `not_applicable` per un account disattivato (nessuna ramificazione del funnel)
+    passo = pipeline[pipeline.index('receipt.step("owner"'):]
+    passo = passo[: passo.index("account_disabled") + len("account_disabled")]
+    assert '"provisioned", "already_provisioned"' in passo and "not_applicable=" in passo
 
 
 def test_d3_nessuna_logica_owner_dentro_main():
     """Guarda il codice, non i commenti: il commento sopra la chiamata nomina
     le tabelle di proposito, per dire dove sta la logica."""
-    source = _main_source()
-    handler = source[source.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("@app.", 10)]
+    handler = _pipeline()
     codice = "\n".join(l for l in handler.splitlines() if not l.strip().startswith("#"))
     assert "owner_accounts" not in codice
     assert "owner_stima_access" not in codice
@@ -215,10 +236,14 @@ def _import_main():
     return importlib.import_module("main")
 
 
-def _run_funnel(monkeypatch, main_module, *, bridge_result, provisioning_impl):
+def _run_funnel(monkeypatch, main_module, *, bridge_result, provisioning_impl, fermo_a="valuation"):
     """Il funnel fino a `compute_from_payload`, che qui esplode di proposito:
     tutto cio' che sta PRIMA - stima, bridge, provisioning, P17, P18 - deve
-    essere gia' passato. Stessi doppi di tests/test_p20_property_watch.py."""
+    essere gia' passato. Stessi doppi di tests/test_p20_property_watch.py.
+
+    F04: l'esplosione non esce dall'endpoint; diventa una ricevuta `partial`
+    ferma al passo `fermo_a`. Ritorna (chiamate al provisioning, corpo)."""
+    from tests.public_submission_fakes import ReceiptStore, identity_fields, response_body
     calls = []
 
     class Request:
@@ -227,7 +252,8 @@ def _run_funnel(monkeypatch, main_module, *, bridge_result, provisioning_impl):
         async def json(self):
             return {"comune": "Alba Adriatica", "microzona": "Centro", "mq": 90,
                     "nome": "Mario", "email": "mario@example.com",
-                    "telefono": "+39 333 123 4567", "prezzo_mq_base": 1500}
+                    "telefono": "+39 333 123 4567", "prezzo_mq_base": 1500,
+                    **identity_fields()}
 
     class Cursor:
         def __init__(self, connessione, dict_rows=False):
@@ -265,48 +291,58 @@ def _run_funnel(monkeypatch, main_module, *, bridge_result, provisioning_impl):
         calls.append({"ctx": bridge_ctx, "stima_id": stima_id, "bridge_result": bridge_result})
         return provisioning_impl(bridge_ctx, stima_id=stima_id, bridge_result=bridge_result)
 
-    monkeypatch.setattr(main_module, "get_connection", Connection)
+    connessione = Connection()
+    monkeypatch.setattr(main_module, "get_connection", ReceiptStore().factory(lambda: connessione))
     monkeypatch.setattr(main_module.core_service, "bridge_public_stima",
                         lambda *_a, **_k: bridge_result)
-    monkeypatch.setattr(main_module.owner_provisioning, "safe_provision_for_public_stima", spy)
-    monkeypatch.setattr(main_module.seller_intelligence_service, "safe_record_event",
-                        lambda **_k: None)
-    monkeypatch.setattr(main_module.followup_service, "safe_run_followup", lambda **_k: None)
+    monkeypatch.setattr(main_module.owner_provisioning, "provision_for_public_stima", spy)
+    monkeypatch.setattr(main_module.property_site_sync, "sync_public_stima", lambda ctx, **_k: {"property_id": 71})
+    monkeypatch.setattr(main_module.seller_intelligence_service, "record_event", lambda **_k: {"recorded": True})
+    monkeypatch.setattr(main_module.followup_service, "run_followup", lambda **_k: {"action_id": 1})
     monkeypatch.setattr(main_module, "compute_from_payload",
                         lambda _p: (_ for _ in ()).throw(RuntimeError("calculation failed")))
 
-    with pytest.raises(RuntimeError, match="calculation failed"):
-        asyncio.run(main_module.salva_stima(Request()))
-    return calls
+    response = asyncio.run(main_module.salva_stima(Request()))
+    body = response_body(response)
+    assert response.status_code == 202 and body["receipt"]["status"] == "partial", body
+    assert body["receipt"]["steps"][fermo_a] == "failed", body["receipt"]["steps"]
+    return calls, body
 
 
 def test_d4_il_funnel_consegna_al_wrapper_il_contesto_letto_dalla_stima(monkeypatch):
     main_module = _import_main()
     bridge = {"status": "linked", "stima_id": 501, "contact_id": 31, "lead_id": 41}
-    calls = _run_funnel(monkeypatch, main_module, bridge_result=bridge,
-                        provisioning_impl=lambda *_a, **_k: {"status": "provisioned"})
+    calls, body = _run_funnel(monkeypatch, main_module, bridge_result=bridge,
+                              provisioning_impl=lambda *_a, **_k: {"status": "provisioned"})
     assert len(calls) == 1
     assert calls[0]["stima_id"] == 501
-    assert calls[0]["bridge_result"] is bridge
+    assert calls[0]["bridge_result"] == bridge
     assert type(calls[0]["ctx"]) is SystemAgencyContext
     assert calls[0]["ctx"].origin == "public_stima"
     assert calls[0]["ctx"].agency_id == 1
+    assert body["receipt"]["steps"]["owner"] == "succeeded"
+    assert body["receipt"]["errors"]["valuation"]["error_type"] == "RuntimeError"
 
 
-def test_d5_un_bridge_fallito_arriva_al_wrapper_come_none(monkeypatch):
-    """Il doppio del bridge risponde None: in `main.py` il log dell'esito
-    esplode dentro il `try` e `bridge_result` resta None - lo stesso stato del
-    percorso d'errore reale. Il wrapper deve riceverlo cosi', non un dict."""
+def test_d5_un_bridge_fallito_ferma_la_ricevuta_prima_del_provisioning(monkeypatch):
+    """Prima di F04 un bridge fallito arrivava al wrapper come `None`. Con F04
+    il bridge e' un passo che precede il provisioning: senza un esito accettato
+    la ricevuta si ferma li' (`partial`) e il provisioning NON riceve nulla -
+    ne' un dict ne' None. La ripresa lo eseguira' con l'esito vero."""
     main_module = _import_main()
-    calls = _run_funnel(monkeypatch, main_module, bridge_result=None,
-                        provisioning_impl=lambda _c, *, stima_id, bridge_result: None)
-    assert len(calls) == 1
-    assert calls[0]["bridge_result"] is None
+    calls, body = _run_funnel(monkeypatch, main_module, bridge_result=None,
+                              provisioning_impl=lambda _c, *, stima_id, bridge_result: None,
+                              fermo_a="bridge")
+    assert calls == []
+    assert "owner" not in body["receipt"]["steps"]
 
 
 def test_d6_un_errore_owner_non_ferma_il_funnel(monkeypatch):
-    """Il wrapper vero, con il repository che esplode: il funnel prosegue fino
-    a `compute_from_payload` come se niente fosse."""
+    """Il wrapper vero del dominio (`provision_for_public_stima`), con il
+    repository che esplode. F04: l'errore owner non costa la stima ne' il
+    bridge, non esce come eccezione e non produce un falso successo: la
+    ricevuta e' `partial` al passo `owner`, riprendibile; il calcolo e le
+    consegne aspettano la ripresa."""
     main_module = _import_main()
 
     def esplode(*_a, **_k):
@@ -314,9 +350,12 @@ def test_d6_un_errore_owner_non_ferma_il_funnel(monkeypatch):
 
     monkeypatch.setattr(owner_repository, "provision_stima_access", esplode)
     bridge = {"status": "linked", "stima_id": 501, "contact_id": 31, "lead_id": 41}
-    calls = _run_funnel(monkeypatch, main_module, bridge_result=bridge,
-                        provisioning_impl=provisioning.safe_provision_for_public_stima)
+    calls, body = _run_funnel(monkeypatch, main_module, bridge_result=bridge,
+                              provisioning_impl=provisioning.provision_for_public_stima,
+                              fermo_a="owner")
     assert len(calls) == 1
+    assert body["receipt"]["steps"]["bridge"] == "succeeded" and body["receipt"]["stima_id"] == 501
+    assert "valuation" not in body["receipt"]["steps"]
 
 
 # ---------------------------------------------------------------------------

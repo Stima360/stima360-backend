@@ -506,8 +506,8 @@ def test_N4_nessuna_migration_nuova():
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
-    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
-    assert numeri[-1] == 92 and numeri[-2] == 91 and numeri[-3] == 90 and numeri[-4] == 89 and numeri[-5] == 88 and numeri[-6] == 87 and numeri[-7] == 86 and numeri[-8] == 85 and numeri[-9] == 84 and numeri[-10] == 83 and numeri[-11] == 82 and numeri[-12] == 81 and numeri[-13] == 80 and numeri[-14] == 79 and numeri[-15] == 78 and numeri[-16] == 77 and numeri[-17] == 76, "la serie si e' fermata o e' andata oltre la 087"
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: 093 (PDF privato, F07) e 094 (ricevute, F04/F06), additive, seguono la 092 (Cestino richieste).
+    assert numeri[-19:] == list(range(76, 95)), "la coda contiene migrazioni diverse da quelle autorizzate fino alla 094"
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 

@@ -127,32 +127,71 @@ def test_m01_la_087_e_valida_per_il_runner_e_additiva():
 # --- aggancio al sito: fail-open, dopo il bridge, solo `raw` ------------------------
 
 def _handler(nome):
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: il handler finisce alla prima
+    # definizione successiva (la pipeline `_save_*_submission` lo segue senza
+    # decoratore), non alla prossima rotta.
     sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
     corpo = sorgente[sorgente.index(f'@app.post("/api/{nome}")'):]
-    return corpo[: corpo.index("@app.", 10)]
+    inizio = re.search(r"^(async )?def ", corpo, re.M).end()
+    fine = re.search(r"^(def |async def |@app\.|class )", corpo[inizio:], re.M)
+    return corpo[: inizio + fine.start()]
+
+
+def _pipeline(nome_funzione):
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: con F04 (ricevute pubbliche) il
+    # handler e' un involucro di `_receive_submission`; la pipeline vive in
+    # `_save_quick_submission` / `_save_detail_submission`. Si legge quella.
+    sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
+    corpo = sorgente[sorgente.index(f"\ndef {nome_funzione}(") + 1:]
+    fine = re.search(r"^(def |async def |@app\.|class )", corpo[10:], re.M)
+    return corpo[: 10 + fine.start()]
 
 
 def test_h01_salva_stima_chiama_solo_il_wrapper_dopo_il_bridge_con_raw():
-    h = _handler("salva_stima")
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: il handler delega alla ricevuta;
+    # la pipeline quick e' in `_save_quick_submission`, dove il passo "property"
+    # e' un `receipt.step` (idempotente, ripetibile dal resume) e non il wrapper
+    # fail-open `safe_sync_public_stima`. L'ordine bridge < owner < property < P17
+    # e la firma (solo `raw`, mai `agency_id`/`data[`) restano quelli di
+    # CATALOGO-CANONICO-1.
+    handler = _handler("salva_stima")
+    assert '_receive_submission(request, "quick")' in handler
+    assert "bridge_public_stima" not in handler and "sync_public_stima" not in handler
+    h = _pipeline("_save_quick_submission")
     codice = "\n".join(r for r in h.splitlines() if not r.strip().startswith("#"))
-    bridge = codice.index("bridge_result = core_service.bridge_public_stima")
-    provisioning = codice.index("owner_provisioning.safe_provision_for_public_stima(")
-    hook = codice.index("property_site_sync.safe_sync_public_stima(")
-    p17 = codice.index("safe_record_event(")
+    bridge = codice.index("bridge_result = receipt.step(\"bridge\", lambda: core_service.bridge_public_stima(")
+    provisioning = codice.index("owner_provisioning.provision_for_public_stima(")
+    hook = codice.index("property_site_sync.sync_public_stima(")
+    p17 = codice.index("seller_intelligence_service.record_event(")
     assert bridge < provisioning < hook < p17
+    passo = codice.rindex("receipt.step(", 0, hook)
+    assert 'receipt.step("property"' in codice[passo:hook]
     chiamata = codice[hook:codice.index(")", hook) + 1]
     assert "raw=raw" in chiamata and "bridge_result=bridge_result" in chiamata and "bridge_ctx" in chiamata
     assert "agency_id" not in chiamata and "data[" not in chiamata
-    assert "sync_public_stima(" not in codice.replace("safe_sync_public_stima(", "")
+    assert codice.count("sync_public_stima(") == 1          # una sola chiamata, dentro il passo
+    assert "safe_sync_public_stima(" not in codice           # il fail-open e' la ricevuta, non il wrapper
 
 
 def test_h02_dettagliata_dopo_il_commit_con_l_id_della_riga():
-    h = _handler("salva_stima_dettagliata")
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: pipeline in `_save_detail_submission`;
+    # `sync_detail` sta in `receipt.step("property_detail", ...)` dopo il commit
+    # della riga e prima della risposta, con l'id della riga (`RETURNING id`).
+    handler = _handler("salva_stima_dettagliata")
+    assert '_receive_submission(request, "detail")' in handler
+    assert "sync_detail" not in handler and "INSERT INTO stime_dettagliate" not in handler
+    h = _pipeline("_save_detail_submission")
     codice = "\n".join(r for r in h.splitlines() if not r.strip().startswith("#"))
     assert "RETURNING id" in codice
-    assert codice.index("conn.commit()") < codice.index("property_site_sync.safe_sync_detail(")
-    assert codice.index("property_site_sync.safe_sync_detail(") < codice.index('return {"ok": True}')
-    assert "sync_detail(" not in codice.replace("safe_sync_detail(", "")
+    hook = codice.index("property_site_sync.sync_detail(")
+    assert codice.index("conn.commit()") < hook
+    assert hook < codice.index('return {"ok": True')
+    passo = codice.rindex("receipt.step(", 0, hook)
+    assert 'receipt.step("property_detail"' in codice[passo:hook]
+    chiamata = codice[hook:codice.index(")", hook) + 1]
+    assert "detail_id=detail_id" in chiamata and "stima_id=stima_id_value" in chiamata
+    assert codice.count("sync_detail(") == 1
+    assert "safe_sync_detail(" not in codice
 
 
 def test_h03_i_wrapper_non_lasciano_uscire_eccezioni(monkeypatch):

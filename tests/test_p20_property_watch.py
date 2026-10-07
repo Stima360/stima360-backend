@@ -251,10 +251,16 @@ def test_read_model_derives_simple_state_from_history(monkeypatch):
 
 
 def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypatch):
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): il watch e' il
+    # passo `receipt.step("watch", ...)` della pipeline `_save_quick_submission`,
+    # dopo `valuation`. Un calcolo fallito non esce piu' come eccezione: la
+    # ricevuta e' 202 `partial` ferma a `valuation`, e il watch non parte.
+    from tests.public_submission_fakes import ReceiptStore, identity_fields, response_body
     main_module = import_project_module("main")
     calls = []
 
-    monkeypatch.setattr(main_module.property_watch_service, "safe_ensure_watch_for_stima", lambda stima_id: calls.append(stima_id))
+    monkeypatch.setattr(main_module.property_watch_service, "ensure_watch_for_stima",
+                        lambda stima_id: calls.append(stima_id) or {"watch_id": 1})
     monkeypatch.setattr(main_module, "compute_from_payload", lambda _payload: (_ for _ in ()).throw(RuntimeError("calculation failed")))
 
     class Request:
@@ -269,6 +275,7 @@ def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypat
                 "email": "mario@example.com",
                 "telefono": "+39 333 123 4567",
                 "prezzo_mq_base": 1500,
+                **identity_fields(),
             }
 
     class Cursor:
@@ -331,14 +338,30 @@ def test_public_stima_starts_watch_only_after_a_successful_calculation(monkeypat
         def close(self):
             pass
 
-    monkeypatch.setattr(main_module, "get_connection", Connection)
-    monkeypatch.setattr(main_module.core_service, "bridge_public_stima", lambda *_args, **_kwargs: {"status": "skipped"})
-    monkeypatch.setattr(main_module.seller_intelligence_service, "safe_record_event", lambda **_kwargs: None)
-    monkeypatch.setattr(main_module.followup_service, "safe_run_followup", lambda **_kwargs: None)
+    connessione = Connection()
+    monkeypatch.setattr(main_module, "get_connection", ReceiptStore().factory(lambda: connessione))
+    # i passi prima del calcolo riescono (un bridge `skipped` fermerebbe la
+    # ricevuta gia' li', e il test non direbbe piu' nulla sul watch)
+    monkeypatch.setattr(main_module.core_service, "bridge_public_stima",
+                        lambda *_args, **_kwargs: {"status": "linked", "contact_id": 31, "lead_id": 41})
+    monkeypatch.setattr(main_module.owner_provisioning, "provision_for_public_stima", lambda ctx, **_k: {"status": "provisioned"})
+    monkeypatch.setattr(main_module.property_site_sync, "sync_public_stima", lambda ctx, **_k: {"property_id": 71})
+    monkeypatch.setattr(main_module.seller_intelligence_service, "record_event", lambda **_kwargs: {"recorded": True})
+    monkeypatch.setattr(main_module.followup_service, "run_followup", lambda **_kwargs: {"action_id": 1})
 
-    with pytest.raises(RuntimeError, match="calculation failed"):
-        asyncio.run(main_module.salva_stima(Request()))
+    response = asyncio.run(main_module.salva_stima(Request()))
+    body = response_body(response)
+    assert response.status_code == 202 and body["receipt"]["status"] == "partial"
+    assert body["receipt"]["steps"]["valuation"] == "failed"
+    assert body["receipt"]["errors"]["valuation"]["error_type"] == "RuntimeError"
+    assert "watch" not in body["receipt"]["steps"]
     assert calls == []
+    # e nella pipeline il watch viene DOPO il calcolo riuscito
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    pipeline = source[source.index("\ndef _save_quick_submission("):]
+    pipeline = pipeline[: pipeline.index("\ndef ", 10)]
+    assert pipeline.index('receipt.step("valuation"') < pipeline.index('receipt.step("watch"')
+    assert "safe_ensure_watch_for_stima(" not in pipeline
 
 
 def test_property_watch_routes_are_registered_and_admin_protected():

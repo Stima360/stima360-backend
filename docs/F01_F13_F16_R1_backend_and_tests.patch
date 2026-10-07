@@ -1,0 +1,1932 @@
+diff --git a/main.py b/main.py
+index f77d00b..9649324 100644
+--- a/main.py
++++ b/main.py
+@@ -73,6 +73,7 @@ REPORTS_DIR = Path("/var/tmp/reports")
+ os.makedirs(REPORTS_DIR, exist_ok=True)
+ 
+ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
++PUBLIC_SITE_BASE_URL = os.getenv("PUBLIC_SITE_BASE_URL", "https://www.stima360.it").rstrip("/")
+ WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+ logger = logging.getLogger(__name__)
+ 
+@@ -1093,13 +1094,14 @@ async def salva_stima(request: Request):
+             WHERE id=%s
+         """, (token, expires, data["prezzo_mq_base"], new_id))
+         conn.commit()
+-    except:
+-        pass
++    except Exception:
++        conn.rollback()
++        raise HTTPException(status_code=500, detail="Errore creazione collegamento stima")
+     finally:
+         try: cur.close(); conn.close()
+         except: pass
+         
+-    link_token = f"https://www.stima360.it/stima_dettagliata.html?token={token}"
++    link_token = f"{PUBLIC_SITE_BASE_URL}/stima_dettagliata.html?" + urlencode({"token": token})
+     
+     # --- 6. Stima completa (engine ufficiale) ---
+     # Usa i valori "grezzi" del form dove serve (es. locali in testo)
+@@ -1250,7 +1252,7 @@ async def salva_stima(request: Request):
+ 
+     # URL intermedio con pagina "La tua stima è in arrivo..."
+     loader_url = (
+-        "https://www.stima360.it/pdf_redirect.html?"
++        f"{PUBLIC_SITE_BASE_URL}/pdf_redirect.html?"
+         + urlencode({"pdf": pdf_url_finale, "token": token})
+     )
+ 
+@@ -1267,10 +1269,7 @@ async def salva_stima(request: Request):
+     if raw.get("vistaMareDettaglio"):
+         clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
+ 
+-    url_stima_completa = (
+-      "https://www.stima360.it/stima_dettagliata.html?"
+-      + urlencode({"token": token})
+-    )
++    url_stima_completa = link_token
+ 
+     # --- 9. Email ---
+     try:
+@@ -1507,6 +1506,9 @@ async def salva_stima(request: Request):
+         "success": True,
+         "id": new_id,
+         "pdf_url": pdf_url_finale,
++        "token": token,
++        "detail_url": link_token,
++        "pdf_redirect_url": loader_url,
+         "price_exact": price_exact,
+         "eur_mq_finale": eur_mq_finale,
+         "valore_pertinenze": valore_pertinenze,
+@@ -1518,6 +1520,10 @@ async def salva_stima(request: Request):
+ # ---------------------------------------------------------
+ @app.get("/api/prefill")
+ async def prefill(t: str):
++    try:
++        t = str(uuid.UUID(t.strip()))
++    except (ValueError, AttributeError, TypeError):
++        raise HTTPException(status_code=404, detail="Token non valido")
+     try:
+         conn = get_connection()
+         cur = conn.cursor()
+@@ -1553,7 +1559,11 @@ async def prefill(t: str):
+               s.altrodescrizione
+             FROM stime s
+             WHERE s.token = %s
+-            AND (s.token_expires IS NULL OR s.token_expires > NOW())
++            AND NOT EXISTS (
++              SELECT 1 FROM stime other
++              WHERE other.token = s.token AND other.id <> s.id
++            )
++            AND s.token_expires > NOW()
+             LIMIT 1;
+         """, (t,))
+ 
+@@ -1610,37 +1620,38 @@ async def salva_stima_dettagliata(request: Request):
+ 
+     conn = get_connection(); cur = conn.cursor()
+ 
+-    # P26-6C: the detail row carries its own agency from 049 on, so this system
+-    # writer has to supply one. Two sources, in this order:
+-    #
+-    #   the parent estimation, when the payload names one - it is the row this
+-    #   detail describes, and 051's trigger requires the two to agree;
+-    #
+-    #   otherwise the public-STIMA system context, resolved server-side exactly
+-    #   as `salva_stima` resolves it. That branch is what makes an orphan detail
+-    #   a legal row with an explicit owner rather than an unassignable one.
+-    #
+-    # Nothing here reads an agency from the request. `stima_id` is client-
+-    # supplied, but it is used as a lookup key against a server-side table, and
+-    # a value naming another agency's estimation simply files the detail with
+-    # that estimation - which is where it belongs, and what the trigger checks.
+-    stima_id_value = to_int_safe(data.get("stima_id"))
+-    detail_agency_id = None
+-    if stima_id_value is not None:
++    # Public detail writes use the same capability as prefill. Resolve the
++    # parent and agency on this transaction; the browser never chooses them.
++    try:
++        token = data.get("token")
++        if not isinstance(token, str) or not token.strip():
++            raise HTTPException(status_code=403, detail="Token non valido o scaduto")
++        try:
++            token = str(uuid.UUID(token.strip()))
++        except ValueError:
++            raise HTTPException(status_code=403, detail="Token non valido o scaduto")
++        # A token must name exactly one parent, including expired matches.
+         parent_cur = conn.cursor(cursor_factory=RealDictCursor)
+         try:
+             parent_cur.execute(
+-                "SELECT agency_id FROM stime WHERE id = %s", (stima_id_value,)
++                "SELECT s.id, s.agency_id FROM stime s WHERE s.token = %s "
++                "AND NOT EXISTS (SELECT 1 FROM stime other "
++                "WHERE other.token = s.token AND other.id <> s.id) "
++                "AND s.token_expires > NOW() FOR SHARE OF s", (token,)
+             )
+             parent = parent_cur.fetchone()
+-            detail_agency_id = parent["agency_id"] if parent else None
+         finally:
+-            try: parent_cur.close()
+-            except: pass
+-    if detail_agency_id is None:
+-        detail_agency_id = _public_stima_system_context(conn).agency_id
++            parent_cur.close()
++        if parent is None:
++            raise HTTPException(status_code=403, detail="Token non valido o scaduto")
++        stima_id_value = parent["id"]
++        detail_agency_id = parent["agency_id"]
++        for key in ("stima_id", "id"):
++            if data.get(key) not in (None, "") and to_int_safe(data[key]) != stima_id_value:
++                raise HTTPException(status_code=403, detail="Token non valido o scaduto")
++        data["stima_id"] = stima_id_value
++        data["id"] = stima_id_value
+ 
+-    try:
+         cur.execute("""
+             INSERT INTO stime_dettagliate (
+                 agency_id,
+@@ -1670,7 +1681,7 @@ async def salva_stima_dettagliata(request: Request):
+             )
+             RETURNING id
+         """, (
+-            # agency_id (server-derived: parent stima, else public-STIMA system context)
++            # agency_id (server-derived from the token-authorized parent stima)
+             detail_agency_id,
+ 
+             # stima_id
+@@ -1735,7 +1746,11 @@ async def salva_stima_dettagliata(request: Request):
+ 
+         conn.commit()
+ 
++    except HTTPException:
++        conn.rollback()
++        raise
+     except Exception as e:
++        conn.rollback()
+         # QUI, SE VUOI DEBUG SERIO:
+         print("ERRORE /api/salva_stima_dettagliata:", e)
+         raise HTTPException(status_code=500, detail=f"Errore INSERT: {e}")
+diff --git a/tests/test_catalogo_canonico_1_postgres.py b/tests/test_catalogo_canonico_1_postgres.py
+index 764336a..8100e5f 100644
+--- a/tests/test_catalogo_canonico_1_postgres.py
++++ b/tests/test_catalogo_canonico_1_postgres.py
+@@ -14,7 +14,7 @@ della stima). Le rotte della scheda sono quelle vere (router Immobili).
+       anno... restano NULL); 0 nelle superfici = non dichiarato;
+   03  stima dettagliata: la STESSA scheda; campi vuoti completati, valori del
+       sito non toccati aggiornati, dato corretto dall'agente -> conflitto;
+-      dettaglio ripetuto = nessun effetto; dettaglio orfano = nessuna scheda;
++      dettaglio ripetuto = nessun effetto; dettaglio pubblico orfano = rifiutato;
+   04  ritentativo con la stessa identita' della richiesta, anche dopo 30
+       giorni -> la stessa scheda; identita' diverse con dati uguali -> due
+       schede, doppione segnalato; client senza identita' -> mai unito, solo
+@@ -44,6 +44,7 @@ from decimal import Decimal
+ from types import SimpleNamespace
+ 
+ import pytest
++from fastapi import HTTPException
+ 
+ from tests.test_censimento_3_backend_postgres import DSN, _q, completo, mondo  # noqa: F401
+ 
+@@ -126,16 +127,18 @@ def sito(mondo, monkeypatch):
+     def dettaglio(payload):
+         return asyncio.run(main.salva_stima_dettagliata(JsonRequest(dict(payload))))
+ 
++    def token(stima_id):
++        return str(_q(m, "SELECT token FROM stime WHERE id = %s", (stima_id,))[0][0])
++
+     def prefill(stima_id):
+-        token = _q(m, "SELECT token FROM stime WHERE id = %s", (stima_id,))[0][0]
+-        return asyncio.run(main.prefill(t=str(token)))
++        return asyncio.run(main.prefill(t=token(stima_id)))
+ 
+     def dettaglio_dal_prefill(stima_id, **modifiche):
+         """Cio' che il form della dettagliata invia quando il cliente non
+         tocca i campi precompilati: i valori di /api/prefill (senza i dati di
+         contatto), con eventuali modifiche."""
+         base = {k: v for k, v in prefill(stima_id).items() if k not in ("id", "nome", "cognome", "email", "telefono")}
+-        return dettaglio({**{k: ("" if v is None else v) for k, v in base.items()}, "stima_id": stima_id, **modifiche})
++        return dettaglio({**{k: ("" if v is None else v) for k, v in base.items()}, "stima_id": stima_id, "token": token(stima_id), **modifiche})
+ 
+     def invio(kind, chiave):
+         colonna = "stima_id" if kind == "quick" else "detail_id"
+@@ -152,7 +155,7 @@ def sito(mondo, monkeypatch):
+ 
+     yield SimpleNamespace(m=m, main=main, stima=stima, dettaglio=dettaglio, scheda_di=scheda_di, scheda=scheda,
+                           motore=motore, api=m["api"], prefill=prefill, dettaglio_dal_prefill=dettaglio_dal_prefill,
+-                          invio=invio)
++                          invio=invio, token=token)
+     # Pulizia PRIMA di quella della fixture `mondo` (DELETE di tutte le schede
+     # di prova in un solo statement): nella 087 la provenienza `relinked` ha
+     # `relinked_to_property_id` ON DELETE SET NULL ma il CHECK pretende il
+@@ -299,11 +302,13 @@ def test_03_dettagliata_aggiorna_la_stessa_scheda_senza_toccare_le_correzioni(si
+     invio = s.invio("detail", detail_id)
+     assert invio["status"] == "synced" and invio["prefill"]["mq"] == 86 and "nome" not in invio["declared"]
+     assert "note" not in invio["declared"] and "note" in invio["declared"]["_altre_chiavi"]
+-    # lo stesso dettaglio ripetuto (stessa riga) non fa nulla; un dettaglio orfano non tocca schede
++    # Lo stesso dettaglio ripetuto (stessa riga) non fa nulla; il pubblico senza token non scrive.
+     assert s.main.property_site_sync.sync_detail(stima_id=sid, detail_id=detail_id, raw={"locali": "5"})["status"] == "replica"
+-    assert s.dettaglio({"locali": "5", "nome": "Orfano"}) == {"ok": True}
+-    orfano = _q(s.m, "SELECT max(id) FROM stime_dettagliate")[0][0]
+-    assert s.invio("detail", orfano)["reason"] == "orphan_detail"
++    prima = _q(s.m, "SELECT count(*) FROM stime_dettagliate")[0][0]
++    with pytest.raises(HTTPException) as exc:
++        s.dettaglio({"locali": "5", "nome": "Orfano"})
++    assert exc.value.status_code == 403
++    assert _q(s.m, "SELECT count(*) FROM stime_dettagliate")[0][0] == prima
+     assert s.scheda(pid)["rooms"] == 4
+ 
+ 
+@@ -408,7 +413,7 @@ def test_06_collega_a_un_altro_immobile(sito):
+     vecchia = _fonti(s, auto)["items"][0]
+     assert (vecchia["status"], vecchia["relinked_to"]["id"]) == ("relinked", vero)
+     # il dettaglio successivo aggiorna la scheda collegata
+-    s.dettaglio({"stima_id": sid, "classe": "B"})
++    s.dettaglio({"stima_id": sid, "token": s.token(sid), "classe": "B"})
+     assert s.scheda(vero)["energy_class"] == "B" and s.scheda(auto)["energy_class"] is None
+     # un'opportunita' Venditore sul lead blocca un nuovo spostamento
+     _q(s.m, "UPDATE property_leads SET relation_type = 'seller' WHERE lead_id = %s", (lead,))
+@@ -615,7 +620,7 @@ def test_13_down_e_up_della_088(sito, monkeypatch):
+         prima = _q(s.m, "SELECT count(*) FROM properties")[0][0]
+         nuova = s.stima({**COMPLETA, **_persona()})
+         assert nuova["success"] is True and _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
+-        assert s.dettaglio({"stima_id": nuova["id"], "classe": "A1", "mq": "70"}) == {"ok": True}
++        assert s.dettaglio({"stima_id": nuova["id"], "token": s.token(nuova["id"]), "classe": "A1", "mq": "70"}) == {"ok": True}
+         assert sync.census() == {"installed": False}
+         # la provenienza gia' scritta si legge ancora (basta la 087)
+         assert _fonti(s, s.scheda_di(sid))["installed"] is True
+diff --git a/tests/test_followup_p18c_integration.py b/tests/test_followup_p18c_integration.py
+index 0302371..4232c53 100644
+--- a/tests/test_followup_p18c_integration.py
++++ b/tests/test_followup_p18c_integration.py
+@@ -29,6 +29,8 @@ from __future__ import annotations
+ import asyncio
+ import copy
+ import re
++import uuid
++from urllib.parse import urlencode
+ from contextlib import contextmanager
+ from datetime import datetime, timezone
+ 
+@@ -156,7 +158,9 @@ def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, ema
+     monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: whatsapp.append(args))
+ 
+ 
+-def expected_success_response(main_module):
++def expected_success_response(main_module, response):
++    token = str(uuid.UUID(response["token"]))
++    pdf_url = f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf"
+     return {
+         "success": True,
+         "id": 501,
+@@ -165,6 +169,9 @@ def expected_success_response(main_module):
+         "eur_mq_finale": 2000,
+         "valore_pertinenze": 5000,
+         "base_mq": 1500,
++        "token": token,
++        "detail_url": main_module.PUBLIC_SITE_BASE_URL + "/stima_dettagliata.html?" + urlencode({"token": token}),
++        "pdf_redirect_url": main_module.PUBLIC_SITE_BASE_URL + "/pdf_redirect.html?" + urlencode({"pdf": pdf_url, "token": token}),
+     }
+ 
+ 
+@@ -302,7 +309,7 @@ def test_stima_richiesta_calls_safe_run_followup_exactly_once_with_correct_argum
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(followup_calls) == 1, "safe_run_followup deve essere chiamato esattamente una volta"
+ 
+     call = followup_calls[0]
+@@ -340,7 +347,7 @@ def test_stima_richiesta_followup_uses_bridge_result_or_empty_dict_when_bridge_f
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(followup_calls) == 1
+     assert followup_calls[0]["contact_id"] is None
+     assert followup_calls[0]["lead_id"] is None
+@@ -357,7 +364,7 @@ def test_salva_stima_continues_when_followup_fails_completely(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module), (
++    assert response == expected_success_response(main_module, response), (
+         "la response pubblica non deve cambiare di una virgola per un guasto P18"
+     )
+     assert len(followup_calls) == 1, "il tentativo deve comunque avvenire"
+@@ -397,7 +404,7 @@ def test_salva_stima_continues_when_repository_task_creation_fails(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(pdf_calls) == 1
+     assert len(emails) == 1  # P29 cutover: solo l'alert amministratore
+     assert len(whatsapp) == 1
+@@ -418,7 +425,7 @@ def test_salva_stima_does_not_run_temporal_scan_logic(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(followup_calls) == 1
+     assert temporal_calls == []
+ 
+diff --git a/tests/test_p27_6_lead_routing.py b/tests/test_p27_6_lead_routing.py
+index 808c1a5..1675f97 100644
+--- a/tests/test_p27_6_lead_routing.py
++++ b/tests/test_p27_6_lead_routing.py
+@@ -575,14 +575,30 @@ def test_g7_the_routing_decision_is_not_written_to_platform_audit_log():
+     assert "platform_audit_log" not in istruzioni
+ 
+ 
+-def test_g8_the_detail_funnel_still_uses_the_default_factory():
+-    """`salva_stima_dettagliata` non viene instradata: non fa nascere un lead
+-    e nel caso orfano non ha un comune proprio su cui decidere."""
+-    sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
+-    inizio = sorgente.index("if detail_agency_id is None:")
+-    blocco = sorgente[inizio:inizio + 200]
+-    assert "_public_stima_system_context(conn)" in blocco
+-    assert "_routed" not in blocco
++def test_g8_detail_without_capability_never_uses_the_default_factory(monkeypatch):
++    """F01: il pubblico orfano viene rifiutato, senza scegliere un'agenzia."""
++    import asyncio
++    from types import SimpleNamespace
++    from fastapi import HTTPException
++    from integration_p2_support import import_project_module
++    from tests.test_public_stima_core_crm_bridge import JsonRequest
++
++    main = import_project_module("main")
++    calls = []
++    cursor = SimpleNamespace(close=lambda: None, execute=lambda *args: calls.append("sql"))
++    connection = SimpleNamespace(cursor=lambda **kwargs: cursor, close=lambda: None,
++                                 rollback=lambda: calls.append("rollback"),
++                                 commit=lambda: calls.append("commit"))
++    monkeypatch.setattr(main, "get_connection", lambda: connection)
++
++    def forbidden_default(*args):
++        pytest.fail("Un dettaglio pubblico senza token non sceglie l'agenzia default")
++
++    monkeypatch.setattr(main, "_public_stima_system_context", forbidden_default)
++    with pytest.raises(HTTPException) as caught:
++        asyncio.run(main.salva_stima_dettagliata(JsonRequest({"classe": "A4"})))
++    assert caught.value.status_code == 403
++    assert calls == ["rollback"]
+ 
+ 
+ # ---------------------------------------------------------------------------
+diff --git a/tests/test_public_stima_core_crm_bridge.py b/tests/test_public_stima_core_crm_bridge.py
+index 55d93de..db52f7e 100644
+--- a/tests/test_public_stima_core_crm_bridge.py
++++ b/tests/test_public_stima_core_crm_bridge.py
+@@ -591,7 +591,8 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
+         )
+     )
+ 
+-    assert response == {
++    legacy_fields = {"success", "id", "pdf_url", "price_exact", "eur_mq_finale", "valore_pertinenze", "base_mq"}
++    assert {key: response[key] for key in legacy_fields} == {
+         "success": True,
+         "id": 501,
+         "pdf_url": f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf",
+@@ -600,6 +601,9 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
+         "valore_pertinenze": 5000,
+         "base_mq": 1500,
+     }
++    assert response["token"]
++    assert response["detail_url"].endswith("?token=" + response["token"])
++    assert "token=" + response["token"] in response["pdf_redirect_url"]
+     assert bridge_calls[0][0] == 501
+     assert bridge_calls[0][1]["first_name"] == "Mario"
+     assert len(pdf_calls) == 1
+diff --git a/tests/test_seller_intelligence_p17b1_integration.py b/tests/test_seller_intelligence_p17b1_integration.py
+index 457f6d2..96b27c8 100644
+--- a/tests/test_seller_intelligence_p17b1_integration.py
++++ b/tests/test_seller_intelligence_p17b1_integration.py
+@@ -29,6 +29,8 @@ from __future__ import annotations
+ import asyncio
+ import copy
+ import re
++import uuid
++from urllib.parse import urlencode
+ from contextlib import contextmanager
+ from datetime import datetime, timezone
+ 
+@@ -262,13 +264,15 @@ def install_pdf_email_whatsapp_mocks(monkeypatch, main_module, *, pdf_calls, ema
+     monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: whatsapp.append(args))
+ 
+ 
+-def expected_success_response(main_module):
++def expected_success_response(main_module, response):
+     # Rispecchia esattamente il return statement reale di salva_stima
+     # (main.py, blocco "11. Risposta JSON al frontend"): success, id,
+-    # pdf_url, price_exact, eur_mq_finale, valore_pertinenze, base_mq.
++    # pdf_url, price_exact, eur_mq_finale, valore_pertinenze, base_mq e link autorizzati.
+     # genera_pdf_stima e' mockata per restituire "reports/stima_501.pdf",
+     # che non inizia con "http" - main.py lo antepone con PUBLIC_BASE_URL
+     # esattamente come fa gia' tests/test_public_stima_core_crm_bridge.py.
++    token = str(uuid.UUID(response["token"]))
++    pdf_url = f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf"
+     return {
+         "success": True,
+         "id": 501,
+@@ -277,6 +281,9 @@ def expected_success_response(main_module):
+         "eur_mq_finale": 2000,
+         "valore_pertinenze": 5000,
+         "base_mq": 1500,
++        "token": token,
++        "detail_url": main_module.PUBLIC_SITE_BASE_URL + "/stima_dettagliata.html?" + urlencode({"token": token}),
++        "pdf_redirect_url": main_module.PUBLIC_SITE_BASE_URL + "/pdf_redirect.html?" + urlencode({"pdf": pdf_url, "token": token}),
+     }
+ 
+ 
+@@ -336,7 +343,7 @@ def test_salva_stima_continues_when_seller_intelligence_fails_completely(monkeyp
+     # esattamente come se Seller Intelligence non esistesse.
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module), (
++    assert response == expected_success_response(main_module, response), (
+         "la response pubblica non deve cambiare di una virgola per un guasto Seller Intelligence"
+     )
+     assert bridge_calls and bridge_calls[0][0] == 501, "il bridge CORE deve essere eseguito normalmente"
+@@ -388,7 +395,7 @@ def test_salva_stima_continues_when_seller_intelligence_fails_even_if_bridge_als
+     # Il funnel pubblico e' invariato: risposta, PDF, alert amministratore e
+     # WhatsApp proseguono esattamente come nel comportamento legacy, nonostante
+     # Seller Intelligence sia completamente KO.
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(pdf_calls) == 1
+     assert len(emails) == 1  # solo l'alert amministratore
+     assert len(whatsapp) == 1
+@@ -429,7 +436,7 @@ def test_salva_stima_records_exactly_one_stima_richiesta_event_on_success(monkey
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload(comune="Alba Adriatica", tipologia="Appartamento", mq=90))))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     # P29 cutover: dal producer nascono DUE eventi, stima_richiesta e
+     # stima_completata. `email_stima_inviata` non nasce piu' qui perche' qui la
+     # mail non e' ancora partita - e' in coda. Qui si verifica, come in P17-B1,
+@@ -471,7 +478,8 @@ def test_salva_stima_retry_with_same_stima_id_does_not_duplicate_the_event(monke
+     monkeypatch.setattr(main_module, "get_connection", lambda: LegacyConnection(stima_id=501))
+     second_response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert first_response == second_response == expected_success_response(main_module)
++    assert first_response == expected_success_response(main_module, first_response)
++    assert second_response == expected_success_response(main_module, second_response)
+     # P29 cutover: 2 richieste identiche devono produrre 2 righe totali (una per
+     # ciascuno dei 2 event_type del producer), non 4 - l'idempotency_key
+     # deterministica deduplica ciascun tipo di evento indipendentemente.
+@@ -528,7 +536,7 @@ def test_p17b2_happy_path_produces_exactly_one_of_each_producer_event(monkeypatc
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(si_db.rows) == 2
+     by_type = {r["event_type"]: r for r in si_db.rows}
+     assert set(by_type) == {"stima_richiesta", "stima_completata"}
+@@ -620,7 +628,7 @@ def test_p29_la_mail_cliente_e_accodata_e_non_spedita_dallendpoint(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert len(whatsapp) == 1
+ 
+     # UN solo invio diretto, e non e' al cliente.
+@@ -696,7 +704,7 @@ def test_p17b2_stima_completata_failure_does_not_block_funnel(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module), "nessun HTTP 500, response invariata"
++    assert response == expected_success_response(main_module, response), "nessun HTTP 500, response invariata"
+     assert len(pdf_calls) == 1, "il PDF continua"
+     assert len(emails) == 1, "l'alert amministratore continua"
+     assert len(whatsapp) == 1, "il WhatsApp continua"
+@@ -734,7 +742,7 @@ def test_p29_il_producer_non_chiede_mai_email_stima_inviata(monkeypatch):
+ 
+     response = asyncio.run(main_module.salva_stima(JsonRequest(base_payload())))
+ 
+-    assert response == expected_success_response(main_module)
++    assert response == expected_success_response(main_module, response)
+     assert richiesti == ["stima_richiesta", "stima_completata"], richiesti
+     assert "email_stima_inviata" not in richiesti
+ 
+diff --git a/tests/test_public_detail_token_postgres.py b/tests/test_public_detail_token_postgres.py
+new file mode 100644
+index 0000000..fdfaefa
+--- /dev/null
++++ b/tests/test_public_detail_token_postgres.py
+@@ -0,0 +1,183 @@
++"""F01/F16: public capabilities on a disposable, local PostgreSQL only.
++
++Reuses the real complete-schema fixture, writer, bridge and property sync.
++Only external PDF delivery, mail and WhatsApp are substituted by the fixture.
++"""
++from __future__ import annotations
++
++import asyncio
++from urllib.parse import parse_qs, urlparse
++
++import pytest
++from fastapi import HTTPException
++
++from tests.test_catalogo_canonico_1_postgres import (
++    COMPLETA, DSN, JsonRequest, _persona, completo, mondo, sito,
++)
++from tests.test_censimento_3_backend_postgres import _q
++
++pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN not set: isolated PostgreSQL required")
++
++
++def _quick(s, *, agency=1):
++    return s.stima({**COMPLETA, **_persona()}, agency=agency)
++
++
++def _token(s, sid):
++    return str(_q(s.m, "SELECT token FROM stime WHERE id = %s", (sid,))[0][0])
++
++
++def _counts(s):
++    return tuple(_q(s.m, f"SELECT count(*) FROM {table}")[0][0]
++                 for table in ("stime_dettagliate", "properties", "property_site_sources", "site_submissions"))
++
++
++@pytest.mark.parametrize("failure", ["missing", "empty", "unknown", "expired", "no_expiry", "other_stima", "forged_id", "malformed", "token_number", "token_list", "token_object"])
++def test_unauthorized_detail_changes_no_rows(sito, failure):
++    s = sito
++    response = _quick(s)
++    sid = response["id"]
++    raw = {"stima_id": sid, "token": _token(s, sid), "classe": "A4"}
++    if failure == "missing":
++        raw.pop("token")
++    elif failure == "empty":
++        raw["token"] = ""
++    elif failure == "unknown":
++        raw["token"] = "00000000-0000-4000-8000-000000000001"
++    elif failure == "expired":
++        _q(s.m, "UPDATE stime SET token_expires = NOW() - INTERVAL '1 minute' WHERE id = %s", (sid,))
++    elif failure == "no_expiry":
++        _q(s.m, "UPDATE stime SET token_expires = NULL WHERE id = %s", (sid,))
++    elif failure == "other_stima":
++        other = _quick(s, agency=2)
++        raw["token"] = _token(s, other["id"])
++    elif failure == "forged_id":
++        raw["id"] = sid + 100000
++    elif failure == "malformed":
++        raw["token"] = "not-a-uuid"
++    elif failure == "token_number":
++        raw["token"] = 123
++    elif failure == "token_list":
++        raw["token"] = ["invalid"]
++    elif failure == "token_object":
++        raw["token"] = {"invalid": True}
++    before = _counts(s)
++    pid = s.scheda_di(sid)
++    energy_before = s.scheda(pid)["energy_class"]
++    with pytest.raises(HTTPException) as caught:
++        s.dettaglio(raw)
++    assert caught.value.status_code == 403
++    assert _counts(s) == before
++    assert s.scheda(pid)["energy_class"] == energy_before
++
++
++@pytest.mark.parametrize("supplied_id", [False, True])
++@pytest.mark.parametrize("agency", [1, 2])
++def test_valid_token_derives_parent_and_updates_the_existing_property(sito, supplied_id, agency):
++    s = sito
++    response = _quick(s, agency=agency)
++    sid, pid = response["id"], s.scheda_di(response["id"])
++    before_properties = _q(s.m, "SELECT count(*) FROM properties")[0][0]
++    raw = {"token": _token(s, sid), "agency_id": 999999, "classe": "A4", "riscaldamento": "Autonomo"}
++    if supplied_id:
++        raw["stima_id"] = sid
++    assert s.dettaglio(raw) == {"ok": True}
++    detail = _q(s.m, "SELECT id, stima_id, agency_id FROM stime_dettagliate ORDER BY id DESC LIMIT 1")[0]
++    assert tuple(detail[1:]) == (sid, agency)
++    assert s.scheda_di(sid) == pid
++    assert _q(s.m, "SELECT count(*) FROM properties")[0][0] == before_properties
++    assert s.scheda(pid)["energy_class"] == "A4"
++    assert s.scheda(pid)["heating"] == "Autonomo"
++    assert s.invio("detail", detail[0])["status"] == "synced"
++
++
++@pytest.mark.parametrize("expiry", ["expired", "null", "malformed"])
++def test_prefill_refuses_non_current_capabilities(sito, expiry):
++    s = sito
++    sid = _quick(s)["id"]
++    token = _token(s, sid)
++    if expiry == "malformed":
++        token = "not-a-uuid"
++    else:
++        _q(s.m, "UPDATE stime SET token_expires = " + ("NULL" if expiry == "null" else "NOW() - INTERVAL '1 minute'") + " WHERE id = %s", (sid,))
++    with pytest.raises(HTTPException) as caught:
++        asyncio.run(s.main.prefill(t=token))
++    assert caught.value.status_code == 404
++
++
++def test_browser_pdf_email_and_whatsapp_share_one_server_capability(sito, monkeypatch):
++    s = sito
++    mails, whatsapp, outbox = [], [], []
++    monkeypatch.setattr(s.main, "invia_mail", lambda *args, **kwargs: mails.append((args, kwargs)))
++    monkeypatch.setattr(s.main, "invia_whatsapp", lambda *args: whatsapp.append(args))
++    monkeypatch.setattr(s.main.communication_service, "enqueue", lambda *args, **kwargs: outbox.append(kwargs))
++    response = _quick(s)
++    sid = response["id"]
++    token = _token(s, sid)
++    assert response["token"] == token
++    detail_query = parse_qs(urlparse(response["detail_url"]).query)
++    redirect_query = parse_qs(urlparse(response["pdf_redirect_url"]).query)
++    assert detail_query == {"token": [token]}
++    assert redirect_query == {"pdf": [response["pdf_url"]], "token": [token]}
++    assert whatsapp[0][3] == response["detail_url"]
++    assert mails
++    assert outbox[0]["stima_id"] == sid
++    assert response["pdf_redirect_url"] in outbox[0]["rendered_body"]
++    assert any(response["detail_url"] in str(item) for item in mails)
++    # Consumer-visible prefill chooses the server estimation, not a client ST id.
++    prefilled = asyncio.run(s.main.prefill(t=token))
++    assert prefilled["id"] == sid
++    assert s.dettaglio({"token": token, "stima_id": prefilled["id"], "classe": "B"}) == {"ok": True}
++    assert s.scheda(s.scheda_di(sid))["energy_class"] == "B"
++
++
++@pytest.mark.parametrize("transport", ["json", "form"])
++def test_http_detail_uses_the_token_for_json_and_browser_form(sito, transport):
++    from fastapi.testclient import TestClient
++    s = sito
++    sid = _quick(s)["id"]
++    raw = {"token": _token(s, sid), "stima_id": str(sid), "classe": "B"}
++    with TestClient(s.main.app) as client:
++        response = client.post("/api/salva_stima_dettagliata", **({"json": raw} if transport == "json" else {"data": raw}))
++        assert response.status_code == 200, response.text
++        assert response.json() == {"ok": True}
++        rejected = client.post("/api/salva_stima_dettagliata", json={"stima_id": sid, "classe": "A4"})
++        assert rejected.status_code == 403
++    assert s.scheda(s.scheda_di(sid))["energy_class"] == "B"
++
++
++@pytest.mark.parametrize("other_agency", [1, 2])
++@pytest.mark.parametrize("other_expired", [False, True])
++def test_ambiguous_token_cannot_prefill_an_arbitrary_stima(sito, other_agency, other_expired):
++    s = sito
++    first, second = _quick(s), _quick(s, agency=other_agency)
++    token = _token(s, first["id"])
++    _q(s.m, "UPDATE stime SET token=%s, token_expires="
++       + ("NOW() - INTERVAL '1 minute'" if other_expired else "NOW() + INTERVAL '1 day'")
++       + " WHERE id=%s", (token, second["id"]))
++    with pytest.raises(HTTPException) as caught:
++        asyncio.run(s.main.prefill(t=token))
++    assert caught.value.status_code == 404
++
++
++@pytest.mark.parametrize("other_agency", [1, 2])
++@pytest.mark.parametrize("other_expired", [False, True])
++def test_ambiguous_token_changes_neither_stima_nor_property(sito, other_agency, other_expired):
++    s = sito
++    first, second = _quick(s), _quick(s, agency=other_agency)
++    token = _token(s, first["id"])
++    _q(s.m, "UPDATE stime SET token=%s, token_expires="
++       + ("NOW() - INTERVAL '1 minute'" if other_expired else "NOW() + INTERVAL '1 day'")
++       + " WHERE id=%s", (token, second["id"]))
++    counts = _counts(s)
++    property_ids = [s.scheda_di(row["id"]) for row in (first, second)]
++    before = [s.scheda(pid)["energy_class"] for pid in property_ids]
++    for sid in (None, first["id"], second["id"]):
++        raw = {"token": token, "classe": "A4"}
++        if sid is not None:
++            raw["stima_id"] = sid
++        with pytest.raises(HTTPException) as caught:
++            s.dettaglio(raw)
++        assert caught.value.status_code == 403
++        assert _counts(s) == counts
++        assert [s.scheda(pid)["energy_class"] for pid in property_ids] == before
+diff --git a/tests/test_public_detail_latest_crm_postgres.py b/tests/test_public_detail_latest_crm_postgres.py
+new file mode 100644
+index 0000000..aec4b3f
+--- /dev/null
++++ b/tests/test_public_detail_latest_crm_postgres.py
+@@ -0,0 +1,70 @@
++"""F01/F16 su upstream CESTINO-CONTATTI-1: identita' nel Cestino e tenant altrui.
++
++Usa il ciclo di vita CORE e la sincronizzazione del sito reali; il database
++usa-e-getta e i trasporti esterni isolati sono quelli delle fixture esistenti.
++"""
++from __future__ import annotations
++
++import pytest
++
++from tests.test_catalogo_canonico_1_postgres import COMPLETA, _persona, sito  # noqa: F401
++from tests.test_censimento_3_backend_postgres import DSN, _q, completo, mondo  # noqa: F401
++from tests.test_cestino_contatti_1_postgres import _contatto, _sposta, k  # noqa: F401
++
++pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
++
++
++def test_public_detail_uses_new_live_contact_in_its_server_agency(k, sito):
++    """Riusare il contatto nel Cestino o l'identita' dell'altro tenant deve fallire."""
++    s = sito
++    assert k["dsn"] == s.m["dsn"]
++    persona = _persona()
++    campi = {"display_name": "Mario Rossi", "first_name": persona["nome"],
++             "last_name": persona["cognome"], "email": persona["email"], "phone": persona["telefono"]}
++    vecchio = _contatto(k, **campi)
++    spostato = _sposta(k, vecchio)
++    assert spostato.status_code == 200, spostato.text
++    altrui = _contatto(k, "owner_b", **campi)
++
++    # La stessa identita' e' attiva anche in un'altra agenzia, con una scheda.
++    altra_stima = s.stima({**COMPLETA, **persona}, agency=2)
++    altro_sid = altra_stima["id"]
++    altro_pid = s.scheda_di(altro_sid)
++    assert altro_pid is not None
++    assert _q(s.m, "SELECT l.contact_id, l.agency_id FROM lead_stime ls JOIN leads l ON l.id = ls.lead_id "
++                    "WHERE ls.stima_id = %s", (altro_sid,)) == [[altrui, 2]]
++    contatti_prima = _q(s.m, "SELECT c.id, to_jsonb(c) FROM contacts c WHERE c.id = ANY(%s) ORDER BY c.id",
++                       ([vecchio, altrui],))
++    assert contatti_prima[0][1]["deleted_at"] is not None
++    assert contatti_prima[1][1]["deleted_at"] is None
++    immobili_prima = _q(s.m, "SELECT p.id, to_jsonb(p) FROM properties p ORDER BY p.id")
++    altra_stima_prima = _q(s.m, "SELECT to_jsonb(s) FROM stime s WHERE s.id = %s", (altro_sid,))
++
++    nuova = s.stima({**COMPLETA, **persona}, agency=1)
++    sid, pid = nuova["id"], s.scheda_di(nuova["id"])
++    assert nuova["success"] is True and pid is not None and pid != altro_pid
++    collegamenti = _q(s.m, "SELECT c.id, c.agency_id, c.deleted_at, l.id, l.agency_id, p.id, p.agency_id "
++                          "FROM lead_stime ls JOIN leads l ON l.id = ls.lead_id "
++                          "JOIN contacts c ON c.id = l.contact_id "
++                          "JOIN property_site_sources ps ON ps.stima_id = ls.stima_id AND ps.status = 'active' "
++                          "JOIN properties p ON p.id = ps.property_id WHERE ls.stima_id = %s", (sid,))
++    assert len(collegamenti) == 1
++    nuovo_cid, contact_agency, deleted_at, lead_id, lead_agency, property_id, property_agency = collegamenti[0]
++    assert nuovo_cid not in (vecchio, altrui) and lead_id is not None
++    assert (contact_agency, deleted_at, lead_agency, property_id, property_agency) == (1, None, 1, pid, 1)
++    assert _q(s.m, "SELECT contact_id FROM property_contacts WHERE property_id = %s", (pid,)) == [[nuovo_cid]]
++
++    assert nuova["token"] == s.token(sid)
++    prefill = s.prefill(sid)
++    assert prefill["id"] == sid and prefill["email"] == persona["email"]
++    assert s.dettaglio({"token": nuova["token"], "stima_id": prefill["id"],
++                       "agency_id": 2, "classe": "A4"}) == {"ok": True}
++    assert _q(s.m, "SELECT stima_id, agency_id FROM stime_dettagliate WHERE stima_id = %s", (sid,)) == [[sid, 1]]
++    assert s.scheda_di(sid) == pid and s.scheda(pid)["energy_class"] == "A4"
++
++    # Ne' il contatto nel Cestino ne' quello altrui vengono riusati o modificati.
++    assert _q(s.m, "SELECT c.id, to_jsonb(c) FROM contacts c WHERE c.id = ANY(%s) ORDER BY c.id",
++              ([vecchio, altrui],)) == contatti_prima
++    assert _q(s.m, "SELECT p.id, to_jsonb(p) FROM properties p WHERE p.id <> %s ORDER BY p.id", (pid,)) == immobili_prima
++    assert _q(s.m, "SELECT to_jsonb(s) FROM stime s WHERE s.id = %s", (altro_sid,)) == altra_stima_prima
++    assert _q(s.m, "SELECT count(*) FROM stime_dettagliate WHERE stima_id = %s", (altro_sid,))[0][0] == 0
+diff --git a/tests/test_public_link_token_failure.py b/tests/test_public_link_token_failure.py
+new file mode 100644
+index 0000000..fa0e676
+--- /dev/null
++++ b/tests/test_public_link_token_failure.py
+@@ -0,0 +1,120 @@
++"""F16: a token persistence failure must stop delivery of unusable links.
++
++No database or external provider is used. Set STIMA360_TOKEN_FAILURE_BASELINE
++to a Git ref to replay only the old writer in memory for the RED check.
++Earlier committed writes remain outside this token-delivery regression (F04/F06).
++"""
++from __future__ import annotations
++
++import ast
++import asyncio
++import os
++import subprocess
++from pathlib import Path
++from types import SimpleNamespace
++
++from fastapi import HTTPException
++
++from integration_p2_support import import_project_module
++from tests.test_public_stima_core_crm_bridge import (
++    JsonRequest, LegacyConnection, LegacyCursor, PUBLIC_WRITER_CTX,
++)
++
++
++class TokenUpdateFailureCursor(LegacyCursor):
++    def execute(self, query, params=None):
++        super().execute(query, params)
++        if " ".join(query.split()).lower().startswith("update stime set token="):
++            self.connection.token_update_attempts += 1
++            raise RuntimeError("synthetic-token-write-failure")
++
++
++class TokenUpdateFailureConnection(LegacyConnection):
++    def __init__(self):
++        super().__init__()
++        self.rollback_count = 0
++        self.token_update_attempts = 0
++
++    def cursor(self, **kwargs):
++        return TokenUpdateFailureCursor(self, dict_rows="cursor_factory" in kwargs)
++
++    def rollback(self):
++        self.rollback_count += 1
++
++
++def _writer(main):
++    baseline = os.getenv("STIMA360_TOKEN_FAILURE_BASELINE")
++    if not baseline:
++        return main.salva_stima
++    source = subprocess.check_output(
++        ["git", "show", f"{baseline}:main.py"],
++        cwd=Path(__file__).resolve().parents[1], text=True,
++    )
++    function = next(node for node in ast.parse(source).body
++                    if isinstance(node, ast.AsyncFunctionDef) and node.name == "salva_stima")
++    function.decorator_list = []
++    module = ast.Module(body=[function], type_ignores=[])
++    namespace = dict(main.__dict__)
++    exec(compile(ast.fix_missing_locations(module), f"main.py@{baseline}", "exec"), namespace)
++    return namespace["salva_stima"]
++
++
++def test_token_persistence_failure_returns_generic_error_before_pdf_or_delivery(monkeypatch):
++    main = import_project_module("main")
++    connections = []
++    deliveries = {"pdf": [], "email": [], "whatsapp": [], "outbox": []}
++
++    def connection_factory():
++        connection = TokenUpdateFailureConnection()
++        connections.append(connection)
++        return connection
++
++    monkeypatch.setattr(main, "get_connection", connection_factory)
++    monkeypatch.setattr(main, "_routed_public_stima_system_context", lambda conn, *, comune: (
++        PUBLIC_WRITER_CTX,
++        SimpleNamespace(agency_id=1, source="synthetic_fixture", matched_value=comune),
++    ))
++    monkeypatch.setattr(main.core_service, "bridge_public_stima", lambda *a, **k: {
++        "status": "linked", "contact_id": 31, "lead_id": 41,
++    })
++    for target, method in (
++        (main.owner_provisioning, "safe_provision_for_public_stima"),
++        (main.property_site_sync, "safe_sync_public_stima"),
++        (main.seller_intelligence_service, "safe_record_event"),
++        (main.followup_service, "safe_run_followup"),
++        (main.property_watch_service, "safe_ensure_watch_for_stima"),
++    ):
++        monkeypatch.setattr(target, method, lambda *a, **k: None)
++    monkeypatch.setattr(main, "compute_from_payload", lambda payload: {
++        "price_exact": 180000, "eur_mq_finale": 2000,
++        "valore_pertinenze": 5000, "base_mq": 1500,
++    })
++    monkeypatch.setattr(main, "genera_pdf_stima", lambda *a, **k:
++                        deliveries["pdf"].append((a, k)) or "reports/stima_501.pdf")
++    monkeypatch.setattr(main, "invia_mail", lambda *a, **k: deliveries["email"].append((a, k)))
++    monkeypatch.setattr(main, "invia_whatsapp", lambda *a, **k: deliveries["whatsapp"].append((a, k)))
++    monkeypatch.setattr(main.communication_service, "enqueue", lambda *a, **k:
++                        deliveries["outbox"].append((a, k)))
++
++    failure = None
++    try:
++        asyncio.run(_writer(main)(JsonRequest({
++            "comune": "Alba Adriatica", "microzona": "Centro", "mq": 90,
++            "nome": "Test", "cognome": "Locale", "email": "test@example.invalid",
++            "telefono": "+39 333 123 4567", "prezzo_mq_base": 1500,
++        })))
++    except HTTPException as exc:
++        failure = exc
++
++    delivery_counts = {key: len(value) for key, value in deliveries.items()}
++    assert failure is not None, (
++        "The writer returned success after token persistence failed; "
++        f"delivery counts: {delivery_counts}"
++    )
++    assert failure.status_code == 500
++    assert failure.detail == "Errore creazione collegamento stima"
++    assert deliveries == {"pdf": [], "email": [], "whatsapp": [], "outbox": []}
++    token_connection = next(conn for conn in connections if conn.token_update_attempts)
++    assert token_connection.commit_count == 0
++    assert token_connection.rollback_count == 1
++    assert token_connection.closed_cursor and token_connection.closed
+diff --git a/tests/test_public_site_frontend.mjs b/tests/test_public_site_frontend.mjs
+new file mode 100644
+index 0000000..af1b0d2
+--- /dev/null
++++ b/tests/test_public_site_frontend.mjs
+@@ -0,0 +1,490 @@
++import assert from 'node:assert/strict';
++import { before, after, test } from 'node:test';
++import { createRequire } from 'node:module';
++import { readFile } from 'node:fs/promises';
++import { dirname, resolve } from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const require = createRequire(import.meta.url);
++const { chromium } = require('playwright');
++const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
++const siteDir = process.env.STIMA360_SITE_DIR || resolve(repo, 'site-preview/public');
++const origin = 'http://127.0.0.1:4173';
++const marker = '<b data-injection="yes">F13 harmless marker</b>';
++const oldState = { id: 999, token: 'token-other-estimate', via: 'Other estimate' };
++const prefill = {
++  id: 101, nome: 'Test', cognome: 'Locale', email: 'test@example.invalid',
++  telefono: '3331234567', comune: 'San Benedetto del Tronto', microzona: 'Centro',
++  via: 'Via test', civico: '1', tipologia: 'Appartamento', mq: '80', piano: '2',
++  locali: '3', bagni: '1', pertinenze: 'Garage', ascensore: 'Sì', anno: '2000',
++  stato: 'Buono', posizioneMare: 'Oltre ferrovia', distanzaMare: '500', barrieraMare: '',
++  vistaMareYN: 'no', vistaMareDettaglio: '', vistaMare: '', mqGiardino: '', mqGarage: '18',
++  mqCantina: '', mqPostoAuto: '', mqTaverna: '', mqSoffitta: '', mqTerrazzo: '',
++  numBalconi: '', altroDescrizione: ''
++};
++const response = {
++  id: 101, token: 'token-current-estimate', pdf_url: '',
++  detail_url: 'https://www.stima360.it/stima_dettagliata.html?token=token-current-estimate',
++  pdf_redirect_url: 'https://www.stima360.it/pdf_redirect.html?token=token-current-estimate',
++  stima_uuid: 'STclient-generated', price_exact: 240000, eur_mq_finale: 3000,
++  valore_pertinenze: 10000, base_mq: 3000
++};
++let browser;
++
++before(async () => {
++  const options = { headless: true };
++  if (process.env.STIMA360_CHROMIUM_PATH) options.executablePath = process.env.STIMA360_CHROMIUM_PATH;
++  browser = await chromium.launch(options);
++});
++after(async () => { await browser?.close(); });
++
++function multipartFields(request) {
++  const body = request.postData() || '';
++  const fields = {};
++  for (const match of body.matchAll(/name="([^"]+)"\r\n\r\n([^]*?)\r\n--/g)) fields[match[1]] = match[2];
++  return fields;
++}
++
++async function openPage(t, name, query = {}, options = {}) {
++  const context = await browser.newContext();
++  t.after(() => context.close());
++  const requests = [];
++  const documents = [];
++  const page = await context.newPage();
++  if (options.clock) await page.clock.install();
++  page.setDefaultTimeout(4000);
++  await page.addInitScript(({ state, apiBase }) => {
++    if (state) localStorage.setItem('stimaBase', JSON.stringify(state));
++    if (apiBase) window.STIMA360_PREVIEW_API_BASE = apiBase;
++    window.saveDispatches = 0;
++    const originalFetch = window.fetch;
++    window.fetch = (...args) => {
++      if (String(args[0]).includes('/api/salva_stima') && args[1]?.method === 'POST') window.saveDispatches++;
++      return originalFetch(...args);
++    };
++    window.openedUrls = [];
++    window.open = (url) => { window.openedUrls.push(String(url)); return null; };
++  }, { state: options.state, apiBase: options.apiBase });
++  page.on('dialog', (dialog) => dialog.dismiss());
++  await context.route('**/*', async (route) => {
++    const request = route.request();
++    const url = new URL(request.url());
++    if (url.pathname.startsWith('/api/')) {
++      requests.push(request);
++      const value = await options.api?.(request, url);
++      if (value?.abort) {
++        await route.abort(value.abort);
++        return;
++      }
++      const status = value?.status ?? 200;
++      const data = value?.data ?? (url.pathname === '/api/prefill' ? prefill : url.pathname === '/api/salva_stima' ? response : { count: 0 });
++      await route.fulfill({ status, contentType: 'application/json', body: value?.rawBody ?? JSON.stringify(data) });
++      return;
++    }
++    // No request reaches the public site, analytics, messaging or other external service.
++    const basename = url.pathname.split('/').pop() || 'index.html';
++    if (['index.html', 'dati_personali.html', 'stima_dettagliata.html', 'pdf_redirect.html', 'preview-config.js'].includes(basename)) {
++      try {
++        if (request.isNavigationRequest()) documents.push(request.url());
++        await route.fulfill({ contentType: basename.endsWith('.js') ? 'text/javascript' : 'text/html', body: await readFile(resolve(siteDir, basename), 'utf8') });
++        return;
++      } catch { /* A missing preview file remains a real failure. */ }
++    }
++    await route.abort();
++  });
++  const search = Object.entries(query).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
++  await page.goto(`${origin}/${name}?${search}`);
++  await page.waitForLoadState('networkidle');
++  return { page, requests, documents };
++}
++
++async function fillPersonal(page) {
++  await page.locator('#nome').fill('Test');
++  await page.locator('#cognome').fill('Locale');
++  await page.locator('#email').fill('test@example.invalid');
++  await page.locator('#telefono').fill('3331234567');
++  await page.locator('#privacy').check();
++}
++
++async function submitPersonal(page) {
++  await fillPersonal(page);
++  await page.locator('button[type="submit"]').click();
++}
++
++async function submitDetails(page, force = false) {
++  if (force) {
++    await page.evaluate(() => document.getElementById('dettaglioForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
++    await page.waitForLoadState('networkidle');
++    return;
++  }
++  const values = { classe: 'D', riscaldamento: 'Autonomo', condizionatore: 'No', spese_cond_flag: 'No', esposizione: 'Sud', arredo: 'Vuoto', contatto: 'No' };
++  for (const [id, value] of Object.entries(values)) await page.locator('#'+id).selectOption(value);
++  await page.locator('button[type="submit"]').click();
++}
++
++test('personal summary displays query HTML as literal text', async (t) => {
++  const { page } = await openPage(t, 'dati_personali.html', { comune: marker, via: marker, pertinenze: 'Altro', altroDescrizione: marker });
++  assert.equal(await page.locator('#riepilogoGrid [data-injection]').count(), 0);
++  assert.ok((await page.locator('#riepilogoGrid').textContent()).includes(marker));
++  assert.ok(await page.locator('#riepilogoGrid strong').count());
++});
++
++test('personal result displays address HTML as literal text', async (t) => {
++  const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated', comune: marker, via: marker });
++  await submitPersonal(page);
++  await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
++  assert.equal(await page.locator('#testo-stima [data-injection]').count(), 0);
++  assert.ok((await page.locator('#testo-stima').textContent()).includes(marker));
++});
++
++test('personal page never persists the client ST id while the save response is pending', async (t) => {
++  let release;
++  const pending = new Promise((resolve) => { release = resolve; });
++  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, {
++    state: oldState,
++    api: async (_, url) => { if (url.pathname === '/api/salva_stima') await pending; }
++  });
++  t.after(() => release());
++  const started = page.waitForRequest('**/api/salva_stima');
++  await submitPersonal(page);
++  await started;
++  assert.equal(requests.filter((request) => new URL(request.url()).pathname === '/api/salva_stima').length, 1);
++  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('stimaBase')));
++  assert.notEqual(stored?.id, 'STclient-generated');
++  release();
++});
++
++test('personal page persists the server id and token after a valid save response', async (t) => {
++  const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' });
++  await submitPersonal(page);
++  await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
++  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('stimaBase')));
++  assert.equal(stored.id, 101);
++  assert.equal(stored.token, 'token-current-estimate');
++});
++
++test('personal save without a token fails closed and stores no unauthorised detail state', async (t) => {
++  const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: (_, url) => url.pathname === '/api/salva_stima' ? { data: { ...response, token: undefined } } : undefined });
++  await submitPersonal(page);
++  await page.waitForFunction(() => !document.querySelector('.puntini'));
++  assert.equal(await page.evaluate(() => localStorage.getItem('stimaBase')), null);
++  assert.equal(new URL(page.url()).pathname, '/dati_personali.html');
++  assert.ok(!(await page.locator('#testo-stima').textContent()).includes('Valore totale'));
++});
++
++test('personal save opens the local tokenised PDF redirect returned by the server', async (t) => {
++  const data = { ...response, pdf_url: origin+'/report.pdf', pdf_redirect_url: 'https://www.stima360.it/pdf_redirect.html?token=token-current-estimate&pdf='+encodeURIComponent(origin+'/report.pdf') };
++  const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: (_, url) => url.pathname === '/api/salva_stima' ? { data } : undefined });
++  await submitPersonal(page);
++  await page.waitForURL('**/pdf_redirect.html?*');
++  const url = new URL(page.url());
++  assert.equal(url.origin, origin);
++  assert.equal(url.searchParams.get('token'), 'token-current-estimate');
++  assert.equal(url.searchParams.get('pdf'), origin+'/report.pdf');
++});
++
++test('PDF redirect uses its URL token instead of another estimate in localStorage', async (t) => {
++  const { page } = await openPage(t, 'pdf_redirect.html', { token: 'token-current-estimate' }, { state: oldState });
++  await page.evaluate(() => vaiAStimaDettagliataConParametri());
++  const opened = await page.evaluate(() => window.openedUrls);
++  assert.equal(opened.length, 1);
++  const url = new URL(opened[0], origin);
++  assert.equal(url.origin, origin);
++  assert.equal(url.pathname, '/stima_dettagliata.html');
++  assert.equal(url.searchParams.get('token'), 'token-current-estimate');
++  assert.equal(url.searchParams.has('id'), false);
++});
++
++test('PDF redirect without a URL token cannot reopen a stored estimate', async (t) => {
++  const { page } = await openPage(t, 'pdf_redirect.html', {}, { state: oldState });
++  await page.evaluate(() => vaiAStimaDettagliataConParametri());
++  assert.deepEqual(await page.evaluate(() => window.openedUrls), []);
++  assert.equal(await page.locator('.stima360-btn').isDisabled(), true);
++});
++
++test('detailed summary displays prefill HTML as literal text while preserving bold labels', async (t) => {
++  const unsafe = { ...prefill, via: marker, nome: marker, mqGarage: marker, email: marker };
++  const { page } = await openPage(t, 'stima_dettagliata.html', { token: 'valid-token' }, { api: (_, url) => url.pathname === '/api/prefill' ? { data: unsafe } : undefined });
++  await page.waitForFunction(() => document.getElementById('infoImmobile').textContent.includes('Indirizzo'));
++  assert.equal(await page.locator('#infoImmobile [data-injection]').count(), 0);
++  assert.ok((await page.locator('#infoImmobile').textContent()).includes(marker));
++  assert.ok(await page.locator('#infoImmobile b').count());
++});
++
++test('detailed summary also displays fallback pertinenze as literal text', async (t) => {
++  const { page } = await openPage(t, 'stima_dettagliata.html', { token: 'valid-token' }, { api: (_, url) => url.pathname === '/api/prefill' ? { data: { ...prefill, mqGarage: '', pertinenze: marker } } : undefined });
++  await page.waitForFunction(() => document.getElementById('infoImmobile').textContent.includes('Pertinenze'));
++  assert.equal(await page.locator('#infoImmobile [data-injection]').count(), 0);
++  assert.ok((await page.locator('#infoImmobile').textContent()).includes(marker));
++});
++
++test('detailed request without a token never uses query data or submits an orphan', async (t) => {
++  const { page, requests } = await openPage(t, 'stima_dettagliata.html', { id: 'STorphan', via: marker, comune: 'Query fallback' });
++  await submitDetails(page, true);
++  assert.equal(requests.filter((request) => request.method() === 'POST').length, 0);
++  assert.equal(await page.locator('button[type="submit"]').isDisabled(), true);
++  assert.ok(!(await page.locator('#infoImmobile').textContent()).includes('Query fallback'));
++});
++
++for (const status of [401, 404, 500]) {
++  test(`detailed request with rejected prefill ${status} remains disabled and cannot submit`, async (t) => {
++    const { page, requests } = await openPage(t, 'stima_dettagliata.html', { token: 'expired-or-invalid', id: 'STorphan', via: 'Query fallback' }, { api: (_, url) => url.pathname === '/api/prefill' ? { status, data: { detail: 'Token non valido' } } : undefined });
++    await submitDetails(page, true);
++    assert.equal(requests.filter((request) => request.method() === 'POST').length, 0);
++    assert.equal(await page.locator('button[type="submit"]').isDisabled(), true);
++    assert.ok(!(await page.locator('#infoImmobile').textContent()).includes('Query fallback'));
++  });
++}
++
++test('detailed request with malformed prefill id fails closed', async (t) => {
++  const { page, requests } = await openPage(t, 'stima_dettagliata.html', { token: 'valid-token' }, { api: (_, url) => url.pathname === '/api/prefill' ? { data: { ...prefill, id: 'STorphan' } } : undefined });
++  await submitDetails(page, true);
++  assert.equal(requests.filter((request) => request.method() === 'POST').length, 0);
++});
++
++test('valid detailed request sends URL token and prefill server id despite forged query and hidden id', async (t) => {
++  const { page, requests } = await openPage(t, 'stima_dettagliata.html', { token: 'valid-token', id: 'STorphan', stima_id: '999', via: 'Query fallback' });
++  await page.waitForFunction(() => document.getElementById('infoImmobile').textContent.includes('Via test'));
++  await page.locator('input[name="id"]').evaluate((input) => { input.value = 'STforged-hidden'; });
++  await submitDetails(page);
++  await page.waitForFunction(() => document.getElementById('esito').textContent.includes('Richiesta inviata'));
++  const request = requests.find((request) => request.method() === 'POST');
++  const fields = multipartFields(request);
++  assert.equal(fields.token, 'valid-token');
++  assert.equal(fields.stima_id, '101');
++  assert.ok(!fields.id || fields.id === '101');
++  assert.equal(fields.via, 'Via test');
++});
++
++test('preview submits only to the configured local backend', async (t) => {
++  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { apiBase: 'http://127.0.0.1:8123' });
++  await submitPersonal(page);
++  await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
++  const request = requests.find((request) => request.method() === 'POST');
++  assert.equal(new URL(request.url()).origin, 'http://127.0.0.1:8123');
++});
++
++test('preview rejects an external backend configuration before any submit', async (t) => {
++  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { apiBase: 'https://stima360-backend.onrender.com' });
++  await submitPersonal(page);
++  await page.waitForFunction(() => !document.querySelector('.puntini'));
++  assert.equal(requests.filter((request) => request.method() === 'POST').length, 0);
++});
++
++for (const status of [401, 404]) {
++  test(`PDF redirect rejects prefill ${status} despite a stored estimate`, async (t) => {
++    const { page } = await openPage(t, 'pdf_redirect.html', { token: 'expired-or-invalid' }, { state: oldState, api: (_, url) => url.pathname === '/api/prefill' ? { status, data: { detail: 'Token non valido' } } : undefined });
++    await page.evaluate(() => vaiAStimaDettagliataConParametri());
++    assert.deepEqual(await page.evaluate(() => window.openedUrls), []);
++    assert.equal(await page.locator('.stima360-btn').isDisabled(), true);
++  });
++}
++
++for (const changes of [{ id: 'STclient-generated' }, { detail_url: 'https://www.stima360.it/stima_dettagliata.html?token=token-other-estimate' }]) {
++  test(`personal save rejects an inconsistent detail response ${Object.keys(changes)[0]}`, async (t) => {
++    const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: (_, url) => url.pathname === '/api/salva_stima' ? { data: { ...response, ...changes } } : undefined });
++    await submitPersonal(page);
++    await page.waitForFunction(() => !document.querySelector('.puntini'));
++    assert.equal(await page.evaluate(() => localStorage.getItem('stimaBase')), null);
++    assert.ok(!(await page.locator('#testo-stima').textContent()).includes('Valore totale'));
++  });
++}
++
++test('detailed request disables the form when a previously valid token is rejected at submit with 403', async (t) => {
++  const { page } = await openPage(t, 'stima_dettagliata.html', { token: 'valid-then-expired' }, { api: (_, url) => url.pathname === '/api/salva_stima_dettagliata' ? { status: 403, data: { detail: 'Token non valido o scaduto' } } : undefined });
++  const failureDialog = page.waitForEvent('dialog');
++  await submitDetails(page);
++  await failureDialog;
++  assert.equal(await page.locator('button[type="submit"]').isDisabled(), true);
++  assert.equal(await page.locator('#esito').isVisible(), true);
++  assert.ok((await page.locator('#esito').textContent()).includes('Link non valido o scaduto'));
++});
++
++async function openReleaseConfig(t) {
++  const context = await browser.newContext();
++  t.after(() => context.close());
++  await context.route('**/*', (route) => route.abort());
++  const page = await context.newPage();
++  const source = await readFile(resolve(repo, 'site-preview/release/preview-config.js'), 'utf8').catch((error) => {
++    if (error.code === 'ENOENT') return '';
++    throw error;
++  });
++  await page.setContent('<html><head><script>window.analyticsCalls=[];window.fbq=(...args)=>window.analyticsCalls.push(args);</script></head><body></body></html>');
++  if (source) await page.addScriptTag({ content: source });
++  assert.equal(await page.evaluate(() => typeof window.Stima360Preview), 'object', 'release helper contract is available');
++  return page;
++}
++
++test('release configuration resolves the explicit public API and matching tokenised site URL', async (t) => {
++  const page = await openReleaseConfig(t);
++  const result = await page.evaluate(() => ({
++    api: Stima360Preview.apiUrl('/api/prefill?t=valid-token'),
++    detail: Stima360Preview.pageUrl('https://www.stima360.it/stima_dettagliata.html?token=valid-token&id=untrusted', 'stima_dettagliata.html', 'valid-token')
++  }));
++  assert.equal(result.api, 'https://stima360-backend.onrender.com/api/prefill?t=valid-token');
++  assert.equal(result.detail, 'https://www.stima360.it/stima_dettagliata.html?token=valid-token');
++});
++
++test('release configuration rejects unexpected site origin, page, token and API origin', async (t) => {
++  const page = await openReleaseConfig(t);
++  const result = await page.evaluate(() => {
++    const calls = [
++      () => Stima360Preview.pageUrl('https://example.invalid/stima_dettagliata.html?token=valid-token', 'stima_dettagliata.html', 'valid-token'),
++      () => Stima360Preview.pageUrl('https://www.stima360.it/index.html?token=valid-token', 'stima_dettagliata.html', 'valid-token'),
++      () => Stima360Preview.pageUrl('https://www.stima360.it/stima_dettagliata.html?token=other', 'stima_dettagliata.html', 'valid-token'),
++      () => Stima360Preview.apiUrl('https://example.invalid/api/salva_stima')
++    ];
++    return calls.map((call) => { try { call(); return false; } catch { return true; } });
++  });
++  assert.deepEqual(result, [true, true, true, true]);
++});
++
++test('release configuration preserves existing PDF providers and analytics', async (t) => {
++  const page = await openReleaseConfig(t);
++  const result = await page.evaluate(() => {
++    fbq('track', 'Lead');
++    return {
++      pdf: Stima360Preview.localHttpUrl('https://stima360-backend.onrender.com/pdf/stima_101.pdf').href,
++      otherProvider: Stima360Preview.localHttpUrl('https://example.invalid/report.pdf?signature=synthetic').href,
++      analytics: window.analyticsCalls
++    };
++  });
++  assert.equal(result.pdf, 'https://stima360-backend.onrender.com/pdf/stima_101.pdf');
++  assert.equal(result.otherProvider, 'https://example.invalid/report.pdf?signature=synthetic');
++  assert.deepEqual(result.analytics, [['track', 'Lead']]);
++});
++
++const r1Failures = [
++  ['network', { abort: 'failed' }],
++  ['invalid JSON', { rawBody: '{invalid-json' }],
++  ['missing token', { data: { ...response, token: undefined } }],
++  ['HTTP non-OK', { status: 503, data: { detail: 'Synthetic unavailable' } }],
++  ['missing server id', { data: { ...response, id: undefined } }],
++  ['inconsistent capability URL', { data: { ...response, detail_url: 'https://www.stima360.it/stima_dettagliata.html?token=other-token' } }]
++];
++
++async function personalValues(page) {
++  return page.evaluate(() => Object.fromEntries(['nome', 'cognome', 'email', 'telefono', 'privacy'].map((id) => {
++    const input = document.getElementById(id);
++    return [id, input.type === 'checkbox' ? input.checked : input.value];
++  })));
++}
++
++async function buttonAppearance(button) {
++  return button.evaluate((node) => {
++    const properties = ['backgroundImage', 'backgroundSize', 'animationName', 'borderRadius', 'borderStyle', 'color', 'fontFamily', 'fontSize', 'fontWeight', 'padding', 'position', 'overflow'];
++    const result = { button: Object.fromEntries(properties.map((name) => [name, getComputedStyle(node)[name]])) };
++    for (const pseudo of ['::before', '::after']) {
++      const css = getComputedStyle(node, pseudo);
++      result[pseudo] = Object.fromEntries(['content', 'backgroundImage', 'borderRadius', 'opacity', 'position', 'filter'].map((name) => [name, css[name]]));
++    }
++    return result;
++  });
++}
++
++for (const [kind, failure] of r1Failures) {
++  test(`R1 ${kind} leaves an uncertain outcome and the same styled reload-only button`, async (t) => {
++    const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { clock: true, api: (_, url) => url.pathname === '/api/salva_stima' ? failure : undefined });
++    await fillPersonal(page);
++    const values = await personalValues(page);
++    const button = page.locator('#personalForm button');
++    const originalButton = await button.elementHandle();
++    const appearance = await buttonAppearance(button);
++    if (kind === 'network') await button.screenshot({ path: '/tmp/stima360-r1-normal-button.png', animations: 'disabled' });
++    await button.click();
++    await page.waitForFunction(() => !document.querySelector('.puntini'));
++    const text = await page.locator('#testo-stima').textContent();
++    assert.ok(text.includes('NON CONFERMATO'));
++    assert.ok(/già.*salvat/i.test(text));
++    assert.ok(/email/i.test(text) && /WhatsApp/i.test(text));
++    assert.equal(await button.isVisible(), true);
++    assert.equal(await button.getAttribute('type'), 'button');
++    assert.equal(await button.textContent(), 'Ricarica la pagina');
++    assert.equal(await page.evaluate((node) => node === document.querySelector('#personalForm button'), originalButton), true);
++    assert.deepEqual(await buttonAppearance(button), appearance);
++    assert.deepEqual(await personalValues(page), values);
++    assert.equal(await page.evaluate(() => localStorage.getItem('stimaBase')), null);
++    assert.equal(requests.filter((request) => request.method() === 'POST').length, 1);
++    if (kind === 'network') await button.screenshot({ path: '/tmp/stima360-r1-recovery-button.png', animations: 'disabled' });
++  });
++}
++
++test('R1 recovery button reloads only after the explicit click and sends no new POST', async (t) => {
++  const { page, requests, documents } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { clock: true, api: (_, url) => url.pathname === '/api/salva_stima' ? { abort: 'failed' } : undefined });
++  await submitPersonal(page);
++  await page.waitForFunction(() => !document.querySelector('.puntini'));
++  await page.clock.fastForward(5000);
++  assert.equal(documents.length, 1);
++  const navigation = page.waitForEvent('domcontentloaded');
++  await page.getByRole('button', { name: 'Ricarica la pagina', exact: true }).click();
++  await navigation;
++  await page.waitForLoadState('networkidle');
++  assert.equal(documents.length, 2);
++  assert.equal(requests.filter((request) => request.method() === 'POST').length, 1);
++  assert.equal(await page.evaluate(() => window.saveDispatches), 0);
++});
++
++test('R1 HTTP non-OK never reloads automatically past the former 1800ms timer', async (t) => {
++  const { page, documents } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { clock: true, api: (_, url) => url.pathname === '/api/salva_stima' ? { status: 503, data: { detail: 'Synthetic unavailable' } } : undefined });
++  await submitPersonal(page);
++  await page.waitForFunction(() => !document.querySelector('.puntini'));
++  await page.clock.fastForward(5000);
++  await page.waitForLoadState('networkidle');
++  assert.equal(documents.length, 1);
++  assert.equal(await page.locator('#personalForm button').getAttribute('type'), 'button');
++});
++
++test('R1 pending save blocks Enter and programmatic duplicate submits', async (t) => {
++  let release;
++  const pending = new Promise((resolve) => { release = resolve; });
++  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: async (_, url) => { if (url.pathname === '/api/salva_stima') await pending; } });
++  t.after(() => release());
++  const started = page.waitForRequest('**/api/salva_stima');
++  await submitPersonal(page);
++  await started;
++  await page.locator('#email').press('Enter');
++  await page.evaluate(() => document.getElementById('personalForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
++  assert.equal(await page.evaluate(() => window.saveDispatches), 1);
++  assert.equal(requests.filter((request) => request.method() === 'POST').length, 1);
++  release();
++});
++
++for (const state of ['success', 'uncertain']) {
++  test(`R1 ${state} save blocks Enter and programmatic duplicate submits`, async (t) => {
++    const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: (_, url) => state === 'uncertain' && url.pathname === '/api/salva_stima' ? { abort: 'failed' } : undefined });
++    await submitPersonal(page);
++    await page.waitForFunction(() => !document.querySelector('.puntini'));
++    await page.locator('#email').press('Enter');
++    await page.evaluate(() => document.getElementById('personalForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
++    assert.equal(await page.evaluate(() => window.saveDispatches), 1);
++    assert.equal(requests.filter((request) => request.method() === 'POST').length, 1);
++  });
++}
++
++test('R1 validation failures consume no dispatch attempts before one valid save', async (t) => {
++  const { page } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' });
++  await fillPersonal(page);
++  for (const invalid of ['privacy', 'email', 'phone']) {
++    await page.locator('#privacy').setChecked(invalid !== 'privacy');
++    await page.locator('#email').fill(invalid === 'email' ? 'invalid-email' : 'test@example.invalid');
++    await page.locator('#telefono').fill(invalid === 'phone' ? '123' : '3331234567');
++    const dialog = page.waitForEvent('dialog');
++    await page.evaluate(() => document.getElementById('personalForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
++    await dialog;
++  }
++  assert.equal(await page.evaluate(() => window.saveDispatches), 0);
++  await submitPersonal(page);
++  assert.equal(await page.evaluate(() => window.saveDispatches), 1);
++});
++
++test('R1 an invalid current token does not persist new identity or authorise an old stored estimate', async (t) => {
++  const { page, documents } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { state: oldState, api: (_, url) => url.pathname === '/api/salva_stima' ? { data: { ...response, token: undefined } } : undefined });
++  await submitPersonal(page);
++  await page.waitForFunction(() => !document.querySelector('.puntini'));
++  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('stimaBase'))), oldState);
++  const dialog = page.waitForEvent('dialog');
++  await page.evaluate(() => vaiStimaDettagliata());
++  await dialog;
++  assert.equal(documents.length, 1);
++  assert.equal(await page.locator('#personalForm button').getAttribute('type'), 'button');
++});
+diff --git a/tests/test_public_site_journey_postgres.py b/tests/test_public_site_journey_postgres.py
+new file mode 100644
+index 0000000..c6db748
+--- /dev/null
++++ b/tests/test_public_site_journey_postgres.py
+@@ -0,0 +1,286 @@
++"""Public browser journey against the real backend and disposable PostgreSQL.
++
++Opt-in: P29_TEST_DSN and STIMA360_RUN_PUBLIC_JOURNEY=1. No shared database,
++external SMTP/WhatsApp/GitHub transport or public browser request is permitted.
++The break caught here is loss of the server capability between quick valuation,
++PDF/email/WhatsApp entry points and the existing CRM property.
++"""
++from __future__ import annotations
++
++import importlib
++import json
++import os
++import socket
++import subprocess
++import threading
++import time
++from email import message_from_string
++from html.parser import HTMLParser
++from pathlib import Path
++from types import SimpleNamespace
++from urllib.parse import parse_qs, urlparse
++from urllib.request import urlopen
++
++import pytest
++
++from tests.test_catalogo_canonico_1_postgres import DSN, completo, mondo  # noqa: F401
++from tests.test_censimento_3_backend_postgres import _q
++
++pytestmark = pytest.mark.skipif(
++    not DSN or os.getenv("STIMA360_RUN_PUBLIC_JOURNEY") != "1",
++    reason="opt-in disposable PostgreSQL/browser journey required",
++)
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def _journey_quantities(m):
++    return {table: _q(m, f"SELECT count(*) FROM {table}")[0][0]
++            for table in ("stime", "contacts", "properties")}
++
++
++@pytest.fixture(scope="module", autouse=True)
++def _only_the_disposable_cluster():
++    """Run before the reused schema fixture can create its test database."""
++    from psycopg2.extensions import parse_dsn
++    params = parse_dsn(DSN)
++    assert params.get("host", "").startswith("/private/tmp/stima360-isolated-pg.")
++    assert params["host"].endswith("/socket") and params.get("port") == "55473"
++    assert os.getenv("PYTHON_DOTENV_DISABLED") == "1", "use the documented offline journey guard"
++
++
++class _Links(HTMLParser):
++    def __init__(self, html):
++        super().__init__()
++        self.links = []
++        self.feed(html)
++
++    def handle_starttag(self, tag, attrs):
++        if tag == "a":
++            self.links.extend(value for key, value in attrs if key == "href")
++
++
++@pytest.fixture
++def journey(mondo, monkeypatch, tmp_path):
++    """Real persistence and providers, with external transport captured locally."""
++    import uvicorn
++    import database
++    import pdf_report
++    from communication import database as communication_database
++    from fastapi.staticfiles import StaticFiles
++    from operator_auth.context import SystemAgencyContext
++    from operator_auth.dependencies import (
++        legacy_basic_agency_context, require_authenticated_operator, require_operator,
++    )
++
++    main = importlib.import_module("main")
++    m = mondo
++    monkeypatch.setattr(main, "get_connection", lambda: m["psycopg2"].connect(m["dsn"]))
++    monkeypatch.setattr(communication_database, "get_connection", lambda: m["psycopg2"].connect(m["dsn"]))
++    monkeypatch.setitem(main.core_service.repository.core_cursor.__wrapped__.__globals__,
++                        "get_connection", lambda: m["psycopg2"].connect(m["dsn"]))
++    monkeypatch.setattr(main, "_routed_public_stima_system_context", lambda conn, *, comune: (
++        SystemAgencyContext(agency_id=1, origin="public_stima"),
++        SimpleNamespace(agency_id=1, source="journey_fixture", matched_value=comune),
++    ))
++    for obj, method in (
++        (main.seller_intelligence_service, "safe_record_event"),
++        (main.followup_service, "safe_run_followup"),
++        (main.property_watch_service, "safe_ensure_watch_for_stima"),
++        (main.owner_provisioning, "safe_provision_for_public_stima"),
++    ):
++        monkeypatch.setattr(obj, method, lambda *a, **k: None)
++
++    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
++    listener.bind(("127.0.0.1", 0))
++    origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
++    artifacts = Path(os.getenv("STIMA360_JOURNEY_ARTIFACTS", str(tmp_path)))
++    artifacts.mkdir(parents=True, exist_ok=True)
++    reports = artifacts / "reports"
++    reports.mkdir(exist_ok=True)
++    captures = {"smtp": [], "whatsapp": [], "github": []}
++
++    # The real ReportLab renderer has a legacy absolute output path. Redirect
++    # only its document destination; its content/build/upload invocation stays real.
++    document = pdf_report.SimpleDocTemplate
++    monkeypatch.setattr(pdf_report, "SimpleDocTemplate", lambda filename, *a, **k:
++                        document(str(reports / Path(filename).name), *a, **k))
++
++    def upload(local_path, filename):
++        pdf = reports / filename
++        assert pdf.read_bytes().startswith(b"%PDF-")
++        captures["github"].append({"filename": filename, "bytes": pdf.stat().st_size})
++        return f"{origin}/reports/{filename}"
++
++    monkeypatch.setattr(pdf_report, "_upload_pdf_to_github", upload)
++    monkeypatch.setattr(main, "genera_pdf_stima", pdf_report.genera_pdf_stima)
++    monkeypatch.setattr(main, "REPORTS_DIR", reports)
++    monkeypatch.setattr(main, "PUBLIC_BASE_URL", origin)
++    monkeypatch.setattr(main, "PUBLIC_SITE_BASE_URL", origin + "/preview")
++    monkeypatch.setattr(main, "WHATSAPP_SERVICE_URL", origin + "/fake-whatsapp-provider")
++
++    class LocalSMTP:
++        def __init__(self, host, port):
++            assert (host, port) == ("smtp.example.invalid", 587)
++
++        def ehlo(self):
++            pass
++
++        def starttls(self):
++            pass
++
++        def login(self, username, password):
++            assert (username, password) == ("synthetic@example.invalid", "synthetic-fixture")
++
++        def sendmail(self, sender, recipient, raw):
++            message = message_from_string(raw)
++            html = next(part.get_payload(decode=True).decode("utf-8")
++                        for part in message.walk() if part.get_content_type() == "text/html")
++            captures["smtp"].append({"to": recipient, "html": html, "links": _Links(html).links})
++
++        def quit(self):
++            pass
++
++    monkeypatch.setattr(database.smtplib, "SMTP", LocalSMTP)
++    for name, value in {"SMTP_HOST": "smtp.example.invalid", "SMTP_PORT": "587",
++                        "SMTP_USER": "synthetic@example.invalid", "SMTP_PASS": "synthetic-fixture",
++                        "ADMIN_EMAIL": "admin@example.invalid"}.items():
++        monkeypatch.setenv(name, value)
++
++    def whatsapp_post(url, *, json, timeout):
++        assert url == origin + "/fake-whatsapp-provider" and timeout == 10
++        captures["whatsapp"].append(json)
++        return SimpleNamespace(status_code=200, text="synthetic provider accepted")
++
++    monkeypatch.setattr(main, "requests", SimpleNamespace(post=whatsapp_post))
++    monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
++    for route in main.app.routes:
++        if getattr(route, "path", None) == "/reports":
++            monkeypatch.setattr(route.app, "directory", str(reports))
++            monkeypatch.setattr(route.app, "all_directories", [str(reports)])
++    site_directory = Path(os.getenv("STIMA360_SITE_DIR", str(ROOT / "site-preview/public")))
++    main.app.mount("/preview", StaticFiles(directory=str(site_directory), html=True))
++    # Test-only read endpoint lets the browser observe the committed quantities
++    # before its accepted quick response is deliberately dropped. No tokens,
++    # identities or production endpoint behavior are substituted here.
++    main.app.add_api_route("/__journey_proof/quantities", lambda: _journey_quantities(m), methods=["GET"])
++    overrides = dict(main.app.dependency_overrides)
++    for dependency in (legacy_basic_agency_context, require_authenticated_operator, require_operator):
++        overrides[dependency] = m["ctx"]
++    monkeypatch.setattr(main.app, "dependency_overrides", overrides)
++
++    server = uvicorn.Server(uvicorn.Config(main.app, log_level="warning", lifespan="off"))
++    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
++    thread.start()
++    deadline = time.monotonic() + 10
++    while not server.started and thread.is_alive() and time.monotonic() < deadline:
++        threading.Event().wait(0.01)
++    assert server.started, "local backend did not start"
++
++    def browser(phase, input_data):
++        input_file, output_file = artifacts / f"{phase}-input.json", artifacts / f"{phase}-output.json"
++        input_file.write_text(json.dumps({"origin": origin, **input_data}), encoding="utf-8")
++        node = os.getenv("STIMA360_NODE", "node")
++        run = subprocess.run([node, str(ROOT / "tests/public_site_journey.mjs"), phase,
++                              str(input_file), str(output_file)], text=True, capture_output=True, timeout=120)
++        (artifacts / f"{phase}-browser.log").write_text(run.stdout + run.stderr, encoding="utf-8")
++        assert run.returncode == 0, run.stdout + run.stderr
++        return json.loads(output_file.read_text(encoding="utf-8"))
++
++    try:
++        yield SimpleNamespace(m=m, origin=origin, artifacts=artifacts, captures=captures, browser=browser)
++    finally:
++        server.should_exit = True
++        thread.join(timeout=10)
++        listener.close()
++        assert not thread.is_alive(), "local backend thread did not stop"
++        _q(m, "DELETE FROM property_site_sources")
++
++
++def test_public_capability_reaches_the_same_crm_property_from_pdf_email_and_whatsapp(journey):
++    j = journey
++    quick = j.browser("initial", {})
++    sid = quick["quick"]["id"]
++    token = quick["quick"]["token"]
++    assert isinstance(sid, int) and sid > 0
++    assert quick["stored"]["id"] == sid and quick["stored"]["token"] == token
++    assert quick["pdf_bytes"] > 1000
++    assert quick["prefill"]["id"] == sid
++    assert quick["detail"]["token"] == token and int(quick["detail"]["stima_id"]) == sid
++    property_id = _q(j.m, "SELECT property_id FROM property_site_sources WHERE stima_id=%s AND status='active'", (sid,))[0][0]
++    before = _q(j.m, "SELECT count(*) FROM properties")[0][0]
++
++    # Enqueue and dispatcher are real. The SMTP primitive receives only the
++    # synthetic provider; 'sent' here means fake-provider acceptance, not delivery.
++    from communication import dispatcher
++    from communication.providers import email_smtp
++    queued = _q(j.m, "SELECT id, status, destination_snapshot, rendered_body FROM communication_messages "
++                    "WHERE stima_id=%s AND reason_code='stima_pdf'", (sid,))
++    assert len(queued) == 1 and queued[0][1] == "queued"
++    assert queued[0][2] == "journey@example.invalid"
++    outbox_links = _Links(queued[0][3]).links
++    email_link = next(link for link in outbox_links if "/pdf_redirect.html?" in link)
++    whatsapp = j.captures["whatsapp"]
++    assert len(whatsapp) == 1 and whatsapp[0]["to"] == "393331234567"
++    whatsapp_link = whatsapp[0]["p3"]
++    assert email_link == quick["quick"]["pdf_redirect_url"]
++    assert parse_qs(urlparse(email_link).query) == {"token": [token], "pdf": [quick["quick"]["pdf_url"]]}
++    for link in (whatsapp_link, quick["quick"]["detail_url"]):
++        assert link.startswith(j.origin + "/preview/stima_dettagliata.html?")
++        assert parse_qs(urlparse(link).query) == {"token": [token]}
++    dispatched = dispatcher.dispatch_batch(j.m["ctx"](), channel="email", provider=email_smtp)
++    assert dispatched["sent"] == 1, dispatched
++    smtp_client = [message for message in j.captures["smtp"] if message["to"] == "journey@example.invalid"]
++    assert len(smtp_client) == 1 and email_link in smtp_client[0]["links"]
++    linked = j.browser("links", {"links": [email_link, whatsapp_link], "id": sid, "token": token})
++    assert len(linked["submissions"]) == 2
++    assert all(row["prefill_id"] == sid and row["token"] == token for row in linked["submissions"])
++    assert _q(j.m, "SELECT count(*) FROM properties")[0][0] == before
++    assert _q(j.m, "SELECT DISTINCT property_id FROM property_site_sources WHERE stima_id=%s AND status='active'", (sid,)) == [[property_id]]
++    assert _q(j.m, "SELECT DISTINCT stima_id, agency_id FROM stime_dettagliate WHERE stima_id=%s", (sid,)) == [[sid, 1]]
++    assert _q(j.m, "SELECT energy_class, heating FROM properties WHERE id=%s", (property_id,)) == [["D", "Autonomo"]]
++    relation = _q(j.m, "SELECT p.agency_id, pl.relation_type, pc.role, l.agency_id, c.agency_id "
++                      "FROM properties p JOIN property_leads pl ON pl.property_id=p.id "
++                      "JOIN leads l ON l.id=pl.lead_id JOIN property_contacts pc ON pc.property_id=p.id "
++                      "JOIN contacts c ON c.id=pc.contact_id WHERE p.id=%s", (property_id,))
++    assert relation == [[1, "origin", "contact", 1, 1]]
++    with urlopen(j.origin + f"/api/property/properties/{property_id}", timeout=10) as response:
++        property_data = json.load(response)
++    assert property_data["id"] == property_id and property_data["energy_class"] == "D"
++    assert property_data["record_kind"] == "census" and property_data["commercial_status"] == "draft"
++    crm = j.browser("crm", {"property_id": property_id, "stima_id": sid,
++        "session": {"user_id": j.m["ids"]["owner_a"], "agency_id": 1, "agency_name": "Agenzia Uno",
++                    "role": "agency_owner", "is_platform_admin": False, "expires_at": "2030-01-01T00:00:00Z"}})
++    assert crm["energy_class"] == "D" and crm["heating"] == "Autonomo"
++    result = {"stima_id": sid, "property_id": property_id, "capability_entry_points": ["pdf", "email", "whatsapp"],
++              "smtp_messages_captured": len(j.captures["smtp"]), "whatsapp_messages_captured": len(whatsapp),
++              "pdf": j.captures["github"], "outbox_fake_provider_sent": dispatched["sent"],
++              "crm_property_api": "verified", "crm_database_relationships": "verified",
++              "operator_crm_ui": "verified with synthetic session and real APIs", "external_delivery": "not attempted",
++              "fixture_limitations": ["/api/successi requires case_vendute absent from the reused legacy fixture"]}
++    (j.artifacts / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
++
++
++def test_lost_accepted_quick_response_recovers_without_another_post_or_row(journey):
++    """A committed quick response lost in transit must never cause a retry."""
++    j = journey
++    before = _journey_quantities(j.m)
++    lost = j.browser("lost-response", {})
++    expected = {table: quantity + 1 for table, quantity in before.items()}
++    assert lost["server_status"] == 200 and isinstance(lost["accepted_stima_id"], int)
++    assert lost["after_commit"] == expected
++    assert lost["after_terminal_submit"] == lost["after_reload"] == expected
++    assert _journey_quantities(j.m) == expected
++    assert lost["quick_posts"] == 1
++    assert lost["reload_button_type"] == "button" and lost["reload_completed"]
++    sid = lost["accepted_stima_id"]
++    assert _q(j.m, "SELECT id FROM stime WHERE id=%s AND email='r1-lost-response@example.invalid'", (sid,)) == [[sid]]
++    submission = _q(j.m, "SELECT status, property_id FROM site_submissions WHERE kind='quick' AND stima_id=%s", (sid,))
++    assert len(submission) == 1 and submission[0][0] == "synced" and submission[0][1] is not None
++    assert len(j.captures["whatsapp"]) == 1 and len(j.captures["github"]) == 1
++    result = {"before": before, "after_commit": lost["after_commit"],
++              "after_terminal_submit": lost["after_terminal_submit"], "after_reload": lost["after_reload"],
++              "quick_posts": lost["quick_posts"], "server_status": lost["server_status"],
++              "response_deliberately_lost": True, "reload_completed": True,
++              "reload_button_type": "button", "duplicate_rows_created_after_commit": 0,
++              "external_delivery": "not attempted"}
++    (j.artifacts / "lost-response-proof.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+diff --git a/tests/public_site_journey.mjs b/tests/public_site_journey.mjs
+new file mode 100644
+index 0000000..e62a172
+--- /dev/null
++++ b/tests/public_site_journey.mjs
+@@ -0,0 +1,230 @@
++import assert from 'node:assert/strict';
++import { createRequire } from 'node:module';
++import { readFile, writeFile } from 'node:fs/promises';
++
++const require = createRequire(import.meta.url);
++const { chromium } = require('playwright');
++const [phase, inputFile, outputFile] = process.argv.slice(2);
++const input = JSON.parse(await readFile(inputFile, 'utf8'));
++const origin = new URL(input.origin);
++assert.equal(origin.hostname, '127.0.0.1');
++const browser = await chromium.launch({ headless: true, executablePath: process.env.STIMA360_CHROMIUM_PATH });
++const context = await browser.newContext({ serviceWorkers: 'block' });
++const responses = [];
++const blocked = [];
++const errors = [];
++let quickPosts = 0;
++let accepted;
++await context.addInitScript((apiBase) => { window.STIMA360_PREVIEW_API_BASE = apiBase; }, origin.origin);
++await context.route('**/*', async (route) => {
++  const url = new URL(route.request().url());
++  if (phase === 'lost-response' && url.origin === origin.origin && url.pathname === '/api/salva_stima'
++      && route.request().method() === 'POST') {
++    quickPosts++;
++    const serverResponse = await route.fetch({ maxRetries: 0 });
++    assert.equal(serverResponse.status(), 200, await serverResponse.text());
++    const saved = await serverResponse.json();
++    assert.ok(Number.isSafeInteger(saved.id) && saved.id > 0);
++    const proof = await context.request.get(origin.origin + '/__journey_proof/quantities');
++    assert.equal(proof.status(), 200);
++    accepted = { id: saved.id, status: serverResponse.status(), quantities: await proof.json() };
++    await writeFile(outputFile + '.accepted.json', JSON.stringify(accepted, null, 2));
++    // This is a real accepted request: drop only its browser response, after
++    // the server has committed and the independent DB read has completed.
++    await route.abort('failed');
++    return;
++  }
++  if (phase === 'crm' && url.origin === origin.origin && url.pathname === '/api/operator-auth/me') {
++    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(input.session) });
++  }
++  if (url.origin === origin.origin) return route.continue();
++  blocked.push(url.origin + url.pathname);
++  await route.abort();
++});
++context.on('page', (page) => {
++  page.setDefaultTimeout(15000);
++  page.on('pageerror', (error) => errors.push(error.message));
++  page.on('dialog', (dialog) => dialog.dismiss());
++});
++context.on('response', (response) => {
++  const url = new URL(response.url());
++  if (url.pathname === '/api/prefill') responses.push({ url: url.pathname, status: response.status(), body: response.json().catch(() => null) });
++});
++
++function detailFields(request) {
++  const body = request.postDataBuffer()?.toString('utf8') || '';
++  const fields = {};
++  for (const match of body.matchAll(/name="([^\"]+)"\r\n\r\n([^]*?)\r\n--/g)) fields[match[1]] = match[2];
++  return fields;
++}
++
++async function fillDetails(page) {
++  await page.waitForFunction(() => !document.querySelector('#classe').disabled);
++  const summary = await page.locator('#infoImmobile').textContent();
++  assert.ok(summary.includes('Via Sintetica'), summary);
++  for (const [field, value] of Object.entries({ classe: 'D', riscaldamento: 'Autonomo', condizionatore: 'No',
++    spese_cond_flag: 'No', esposizione: 'Sud', arredo: 'Vuoto', contatto: 'No' })) {
++    await page.locator('#' + field).selectOption(value);
++  }
++  await page.locator('#note').fill('Percorso sintetico locale senza invii esterni');
++  const requestPromise = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/salva_stima_dettagliata');
++  const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/salva_stima_dettagliata');
++  await page.locator('button[type="submit"]').click();
++  const request = await requestPromise;
++  const response = await responsePromise;
++  assert.equal(response.status(), 200, await response.text());
++  assert.deepEqual(await response.json(), { ok: true });
++  await page.waitForFunction(() => document.getElementById('esito').textContent.includes('Richiesta inviata'));
++  return detailFields(request);
++}
++
++async function openDetailsFromRedirect(page) {
++  await page.waitForFunction(() => !document.querySelector('.stima360-btn').disabled);
++  const popupPromise = context.waitForEvent('page');
++  await page.locator('.stima360-btn').click();
++  const detailPage = await popupPromise;
++  await detailPage.waitForURL('**/stima_dettagliata.html?*');
++  return detailPage;
++}
++
++try {
++  let result;
++  if (phase === 'initial') {
++    const page = await context.newPage();
++    await page.goto(origin.origin + '/preview/index.html');
++    await page.locator('#regione').selectOption('Abruzzo');
++    await page.locator('#comune').selectOption('Tortoreto');
++    await page.locator('#microzona').selectOption('Lido Sud');
++    await page.locator('#via').fill('Via Sintetica');
++    await page.locator('#civico').fill('12');
++    await page.locator('#tipologia').selectOption('Appartamento');
++    await page.locator('#mq').fill('85');
++    await page.locator('#piano').selectOption('3');
++    const baseResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/stima_base');
++    await page.locator('#btnAvanti').click();
++    assert.equal((await baseResponse).status(), 200);
++    await page.locator('#locali').selectOption('Trilocale');
++    await page.locator('#bagni').fill('2');
++    await page.locator('#ascensore').selectOption('Sì');
++    await page.locator('#anno').fill('1998');
++    await page.locator('#stato').selectOption('ristrutturato');
++    await page.locator('#garageChk').check();
++    await page.locator('#mqGarage').fill('18');
++    await page.locator('#posizioneMare').selectOption('Oltre la seconda fila');
++    await page.locator('#distanzaMare').selectOption('100–300 m');
++    await page.locator('#barrieraMare').selectOption('no');
++    await page.locator('#vistaMareYN').selectOption('no');
++    await page.locator('#btnSubmit').click();
++    await page.waitForURL('**/dati_personali.html?*');
++    assert.match(new URL(page.url()).searchParams.get('id'), /^ST/);
++    for (const [field, value] of Object.entries({ nome: 'Cliente', cognome: 'Sintetico', email: 'journey@example.invalid', telefono: '3331234567' })) {
++      await page.locator('#' + field).fill(value);
++    }
++    await page.locator('#privacy').check();
++    const quickResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/salva_stima');
++    await page.locator('button[type="submit"]').click();
++    const quickHttp = await quickResponse;
++    assert.equal(quickHttp.status(), 200, await quickHttp.text());
++    const quick = await quickHttp.json();
++    await page.waitForURL('**/pdf_redirect.html?*');
++    const redirect = new URL(page.url());
++    assert.equal(redirect.searchParams.get('token'), quick.token);
++    assert.equal(redirect.searchParams.get('pdf'), quick.pdf_url);
++    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('stimaBase')));
++    const detailPage = await openDetailsFromRedirect(page);
++    assert.equal(new URL(detailPage.url()).searchParams.get('token'), quick.token);
++    const detail = await fillDetails(detailPage);
++    const pdfResponse = await context.request.get(quick.pdf_url);
++    assert.equal(pdfResponse.status(), 200);
++    assert.match(pdfResponse.headers()['content-type'], /application\/pdf/);
++    const pdf = await pdfResponse.body();
++    assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
++    const prefillResponses = await Promise.all(responses.filter((response) => response.url === '/api/prefill' && response.status === 200).map((response) => response.body));
++    assert.ok(prefillResponses.length >= 2);
++    result = { quick, stored, detail, prefill: prefillResponses.at(-1), pdf_bytes: pdf.length, redirect: redirect.href };
++  } else if (phase === 'links') {
++    const submissions = [];
++    for (const link of input.links) {
++      assert.equal(new URL(link).origin, origin.origin);
++      const page = await context.newPage();
++      await page.goto(link);
++      const detailPage = new URL(link).pathname.endsWith('/pdf_redirect.html') ? await openDetailsFromRedirect(page) : page;
++      const fields = await fillDetails(detailPage);
++      assert.equal(fields.token, input.token);
++      assert.equal(Number(fields.stima_id), input.id);
++      submissions.push({ token: fields.token, prefill_id: Number(fields.stima_id) });
++      if (detailPage !== page) await detailPage.close();
++      await page.close();
++    }
++    result = { submissions };
++  } else if (phase === 'crm') {
++    const page = await context.newPage();
++    await page.goto(origin.origin + '/os/#/immobili/' + input.property_id);
++    const provenance = page.locator('#site-provenance');
++    await provenance.waitFor({ state: 'visible' });
++    const text = await provenance.textContent();
++    assert.ok(text.includes('Stima n. ' + input.stima_id), text);
++    assert.match(text, /dettagliata/i);
++    await page.screenshot({ path: outputFile + '.png', fullPage: true });
++    await page.locator('#property-edit-btn').click();
++    assert.equal(await page.locator('#pf-energy').inputValue(), 'D');
++    assert.equal(await page.locator('#pf-heating').inputValue(), 'Autonomo');
++    await page.screenshot({ path: outputFile + '.edit.png', fullPage: true });
++    result = { property_id: input.property_id, stima_id: input.stima_id, provenance: text,
++      energy_class: 'D', heating: 'Autonomo', authentication: 'synthetic fixture session only', property_api: 'real backend' };
++  } else if (phase === 'lost-response') {
++    const page = await context.newPage();
++    const query = new URLSearchParams({ id: 'STr1-lost-response', comune: 'Tortoreto', microzona: 'Lido Sud',
++      via: 'Via Sintetica R1', civico: '14', tipologia: 'Appartamento', mq: '85', piano: '3',
++      locali: 'Trilocale', bagni: '2', ascensore: 'Sì', anno: '1998', stato: 'ristrutturato' });
++    await page.goto(origin.origin + '/preview/dati_personali.html?' + query.toString());
++    for (const [field, value] of Object.entries({ nome: 'Cliente', cognome: 'Sintetico R1',
++      email: 'r1-lost-response@example.invalid', telefono: '3331234568' })) {
++      await page.locator('#' + field).fill(value);
++    }
++    await page.locator('#privacy').check();
++    await page.locator('#personalForm button[type="submit"]').click();
++    await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('NON CONFERMATO'));
++    assert.ok(accepted, 'backend acceptance was not observed before losing the response');
++    const recovery = page.getByRole('button', { name: 'Ricarica la pagina', exact: true });
++    await recovery.waitFor({ state: 'visible' });
++    const reloadButtonType = await recovery.getAttribute('type');
++    assert.equal(reloadButtonType, 'button');
++    assert.equal(await page.evaluate(() => localStorage.getItem('stimaBase')), null);
++    await page.screenshot({ path: outputFile + '.error.png', fullPage: true });
++    // Even a second submit event cannot escape the terminal uncertain state.
++    await page.evaluate(() => document.getElementById('personalForm').dispatchEvent(
++      new Event('submit', { bubbles: true, cancelable: true })));
++    const afterTerminal = await context.request.get(origin.origin + '/__journey_proof/quantities');
++    const afterTerminalSubmit = await afterTerminal.json();
++    assert.equal(quickPosts, 1);
++    const reload = page.waitForEvent('framenavigated', (frame) => frame === page.mainFrame());
++    await recovery.click();
++    await reload;
++    await page.waitForLoadState('load');
++    await page.locator('#personalForm button[type="submit"]').waitFor({ state: 'visible' });
++    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
++    const afterReloadHttp = await context.request.get(origin.origin + '/__journey_proof/quantities');
++    const afterReload = await afterReloadHttp.json();
++    assert.equal(quickPosts, 1, 'recovery reload must not post the form');
++    result = { accepted_stima_id: accepted.id, server_status: accepted.status,
++      after_commit: accepted.quantities, after_terminal_submit: afterTerminalSubmit, after_reload: afterReload,
++      quick_posts: quickPosts, reload_button_type: reloadButtonType, reload_completed: true };
++  } else {
++    throw new Error('Unknown phase: ' + phase);
++  }
++  assert.deepEqual(errors, [], 'unexpected page script failures');
++  await writeFile(outputFile, JSON.stringify({ ...result, external_requests_blocked: blocked }, null, 2));
++  console.log(phase + ': real browser/backend journey verified; external requests blocked=' + blocked.length);
++} catch (error) {
++  const page = context.pages().at(-1);
++  if (page) {
++    await page.screenshot({ path: outputFile + '.failure.png', fullPage: true }).catch(() => {});
++    console.error('Failure URL:', page.url());
++    console.error('Browser script errors:', errors);
++  }
++  throw error;
++} finally {
++  await context.close();
++  await browser.close();
++}

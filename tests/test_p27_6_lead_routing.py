@@ -575,14 +575,41 @@ def test_g7_the_routing_decision_is_not_written_to_platform_audit_log():
     assert "platform_audit_log" not in istruzioni
 
 
-def test_g8_the_detail_funnel_still_uses_the_default_factory():
-    """`salva_stima_dettagliata` non viene instradata: non fa nascere un lead
-    e nel caso orfano non ha un comune proprio su cui decidere."""
-    sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
-    inizio = sorgente.index("if detail_agency_id is None:")
-    blocco = sorgente[inizio:inizio + 200]
-    assert "_public_stima_system_context(conn)" in blocco
-    assert "_routed" not in blocco
+def test_g8_detail_without_capability_never_uses_the_default_factory(monkeypatch):
+    """F01: il pubblico orfano viene rifiutato, senza scegliere un'agenzia."""
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from integration_p2_support import import_project_module
+    from tests.test_public_stima_core_crm_bridge import JsonRequest
+
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): la richiesta
+    # porta l'identita' dell'invio, cosi' il rifiuto che si misura e' quello
+    # della capability (403 da `authorize_detail`, prima di scrivere la
+    # ricevuta), non il 400 dell'identita' mancante. Le sole istruzioni che
+    # toccano la connessione sono quelle del lucchetto della ricevuta.
+    from tests.public_submission_fakes import ReceiptStore, identity_fields
+
+    main = import_project_module("main")
+    calls = []
+    cursor = SimpleNamespace(close=lambda: None, execute=lambda *args: calls.append("sql"),
+                             fetchone=lambda: None)
+    connection = SimpleNamespace(cursor=lambda **kwargs: cursor, close=lambda: None,
+                                 rollback=lambda: calls.append("rollback"),
+                                 commit=lambda: calls.append("commit"))
+    store = ReceiptStore()
+    monkeypatch.setattr(main, "get_connection", store.factory(lambda: connection))
+
+    def forbidden_default(*args):
+        pytest.fail("Un dettaglio pubblico senza token non sceglie l'agenzia default")
+
+    monkeypatch.setattr(main, "_public_stima_system_context", forbidden_default)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(main.salva_stima_dettagliata(JsonRequest({"classe": "A4", **identity_fields()})))
+    assert caught.value.status_code == 403
+    assert "sql" not in calls, "nessuna lettura di `stime` senza un token"
+    assert "rollback" in calls
+    assert store.rows == {}, "nessuna ricevuta per un dettaglio non autorizzato"
 
 
 # ---------------------------------------------------------------------------
@@ -735,8 +762,8 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
-    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
-    assert numeri[-1] == 92 and numeri[-2] == 91 and numeri[-3] == 90 and numeri[-4] == 89 and numeri[-5] == 88 and numeri[-6] == 87 and numeri[-7] == 86 and numeri[-8] == 85 and numeri[-9] == 84 and numeri[-10] == 83 and numeri[-11] == 82 and numeri[-12] == 81 and numeri[-13] == 80 and numeri[-14] == 79 and numeri[-15] == 78 and numeri[-16] == 77 and numeri[-17] == 76, numeri[-5:]
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: 093 (PDF privato, F07) e 094 (ricevute, F04/F06), additive, seguono la 092 (Cestino richieste).
+    assert numeri[-19:] == list(range(76, 95)), numeri[-19:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]
@@ -1251,9 +1278,12 @@ def test_j9_the_funnel_builds_the_bridge_context_from_the_persisted_row():
     c'e' sopra resterebbe vero e inutile - il retry userebbe comunque la strada
     sbagliata, perche' nessuno si ricorderebbe di usare l'altra.
     """
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): la pipeline
+    # quick vive in `_save_quick_submission`; il follow-up e' il passo
+    # `run_followup` della ricevuta.
     sorgente = (ROOT / "main.py").read_text(encoding="utf-8")
-    handler = sorgente[sorgente.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("safe_run_followup")]
+    handler = sorgente[sorgente.index("\ndef _save_quick_submission("):]
+    handler = handler[: handler.index("followup_service.run_followup(")]
 
     commit = handler.index("conn.commit()")
     lettura = handler.index("_persisted_public_stima_system_context(")

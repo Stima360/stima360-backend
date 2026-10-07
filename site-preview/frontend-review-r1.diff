@@ -1,0 +1,629 @@
+--- baseline/index.html
++++ public/index.html
+@@ -1,6 +1,7 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
+ <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"/>
+ <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
+@@ -2219,7 +2220,7 @@
+       const anno      = document.getElementById("anno").value || "2010"; 
+ 
+       try {
+-        const response = await fetch("https://stima360-backend.onrender.com/api/stima_base", {
++        const response = await fetch(Stima360Preview.apiUrl("/api/stima_base"), {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           body: JSON.stringify({ comune, microzona, tipologia, mq, anno })
+@@ -2298,7 +2299,7 @@
+ 
+   if (comune && microzona) {
+     try {
+-      const response = await fetch(`https://stima360-backend.onrender.com/api/seo/data?comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}`);
++      const response = await fetch(Stima360Preview.apiUrl(`/api/seo/data?comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}`));
+       const seoData = await response.json();
+ 
+       if (seoData.success) {
+@@ -2326,7 +2327,7 @@
+     if (!container) return;
+ 
+     try {
+-        const response = await fetch("https://stima360-backend.onrender.com/api/successi");
++        const response = await fetch(Stima360Preview.apiUrl("/api/successi"));
+         const result = await response.json();
+ 
+         if (result.success && result.data && result.data.length > 0) {
+--- baseline/dati_personali.html
++++ public/dati_personali.html
+@@ -1,6 +1,7 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
+   <meta charset="UTF-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+   <script>
+@@ -221,7 +222,7 @@
+     }
+ 
+     /* 🌈 PULSANTE STIMA360 */
+-    button[type="submit"]{
++    button[type="submit"], #personalForm button[type="button"]{
+       position: relative;
+       overflow: hidden;
+       z-index: 1;
+@@ -240,22 +241,22 @@
+       margin-top: 10px;
+     }
+ 
+-    button[type="submit"]:hover{
++    button[type="submit"]:hover, #personalForm button[type="button"]:hover{
+       transform: translateY(-2px);
+       box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+     }
+ 
+-    button[type="submit"]:active{
++    button[type="submit"]:active, #personalForm button[type="button"]:active{
+       transform: scale(0.97);
+     }
+ 
+-    button[type="submit"]::before{
++    button[type="submit"]::before, #personalForm button[type="button"]::before{
+       content:""; position:absolute; top:6px; left:10px; right:10px; height:45%; border-radius:10px;
+       background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.15), rgba(255,255,255,0));
+       opacity:.9; pointer-events:none; z-index:2;
+     }
+ 
+-    button[type="submit"]::after{
++    button[type="submit"]::after, #personalForm button[type="button"]::after{
+       content:""; position:absolute; inset:-8px; border-radius:14px;
+       background: radial-gradient(circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70%);
+       filter: blur(8px); opacity:.75; pointer-events:none; z-index:-1;
+@@ -512,6 +513,7 @@
+   }
+   
+   const dati = getQueryParams();
++  let stimaSalvata = null;
+   
+   (function(){
+     const p = new URLSearchParams(location.search);
+@@ -562,7 +564,7 @@
+     const box = document.getElementById("riepilogoGrid");
+     if (!box) return;
+   
+-    box.innerHTML = "";
++    box.replaceChildren();
+     righe.forEach(([k,v])=>{
+       if(!v || v===" ") return; // Non mostrare righe vuote
+       const d = document.createElement("div");
+@@ -571,23 +573,26 @@
+       d.style.border = "1px solid #e2e8f0";
+       d.style.borderRadius = "10px";
+       d.style.fontSize = "0.95rem";
+-      d.innerHTML = `<span style="color:#64748b; font-size:0.85em; display:block; margin-bottom:3px;">${k}</span><strong style="color:#1e293b;">${v}</strong>`;
++      const label = document.createElement("span");
++      label.style.cssText = "color:#64748b; font-size:0.85em; display:block; margin-bottom:3px;";
++      label.textContent = k;
++      const value = document.createElement("strong");
++      value.style.color = "#1e293b";
++      value.textContent = v;
++      d.append(label, value);
+       box.appendChild(d);
+     });
+   })();
+   
+   function vaiStimaDettagliata() {
+-    dati.nome = document.getElementById('nome').value;
+-    dati.cognome = document.getElementById('cognome').value;
+-    dati.email = document.getElementById('email').value;
+-    dati.telefono = document.getElementById('telefono').value;
+-  
+-    const params = new URLSearchParams(dati).toString();
+-    window.location.href = 'stima_dettagliata.html?' + params;
++    if (!stimaSalvata) {
++      alert("Link non valido o scaduto");
++      return;
++    }
++    window.location.href = stimaSalvata.detail_url;
+   }
+   
+-  let submitCount = 0;
+-  const MAX_SUBMIT = 2;
++  let submissionState = 'ready';
+   
+   function isValidEmail(email) {
+     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+@@ -600,12 +605,7 @@
+   
+   document.getElementById('personalForm').addEventListener('submit', async function(event) {
+     event.preventDefault();
+-    submitCount++;
+-    
+-    if (submitCount > MAX_SUBMIT) {
+-      alert("Hai già inviato la richiesta.\nPer motivi di sicurezza puoi effettuare massimo 2 invii per pagina.\n\n🔄 Ricarica la pagina se necessario.");
+-      return;
+-    }
++    if (submissionState !== 'ready') return;
+ 
+     if (!document.getElementById('privacy').checked) {
+       alert("Devi accettare la privacy!");
+@@ -650,23 +650,21 @@
+       numBalconi: dati.numBalconi || ""
+     };
+ 
+-    const urlStimaDettagliata = 'https://www.stima360.it/stima_dettagliata.html?' + new URLSearchParams(datiFinali).toString();
+-
+     const fascia = document.getElementById('fascia-stima');
+     const testoStima = document.getElementById('testo-stima');
+   
++    submissionState = 'pending';
++    const submitButton = this.querySelector('button');
+     fascia.style.display = "block";
+     testoStima.innerHTML = "Sto calcolando la tua stima <span class='puntini'>...</span>";
+-    document.querySelector("button[type='submit']").style.display = "none"; // Nasconde il pulsante per evitare doppi click
++    submitButton.style.display = "none"; // Nasconde il pulsante durante l'invio
+   
+     let puntini = document.querySelector(".puntini");
+     let dots = 0;
+     let anim = setInterval(() => { dots = (dots + 1) % 4; puntini.textContent = '.'.repeat(dots); }, 320);
+   
+     try {
+-      localStorage.setItem('stimaBase', JSON.stringify(datiFinali));
+-  
+-      const risposta = await fetch('https://stima360-backend.onrender.com/api/salva_stima', {
++      const risposta = await fetch(Stima360Preview.apiUrl('/api/salva_stima'), {
+         method: 'POST',
+         headers: {'Content-Type': 'application/json'},
+         body: JSON.stringify(datiFinali)
+@@ -674,26 +672,30 @@
+   
+       clearInterval(anim);
+   
+-      if (!risposta.ok) {
+-        testoStima.textContent = "Errore nell'invio, riprova!";
+-        setTimeout(() => location.reload(), 1800);
+-        return;
++      if (!risposta.ok) throw new Error("Risposta non confermata");
++
++      const resJson = await risposta.json();
++      if (!Number.isSafeInteger(resJson.id) || resJson.id <= 0
++          || typeof resJson.token !== 'string' || !resJson.token.trim()) {
++        throw new Error("Risposta senza autorizzazione al dettaglio");
+       }
+-
+-      if (window.fbq) {
+-        fbq('track', 'Lead');
+-      }
+-
+-      let resJson = {};
+-      try { resJson = await risposta.json(); } catch (_) {}
++      const detailUrl = Stima360Preview.pageUrl(resJson.detail_url, 'stima_dettagliata.html', resJson.token);
++      const loaderUrl = Stima360Preview.pageUrl(resJson.pdf_redirect_url, 'pdf_redirect.html', resJson.token);
+ 
+       const stimaUuid = dati.id || dati.stima_uuid || "";
+       datiFinali.stima_uuid = stimaUuid;
+       datiFinali.id = resJson.id;
+-
+-      if (resJson?.pdf_url) {
+-        const pdfUrl = resJson.pdf_url.trim();
+-        const loaderUrl = "https://www.stima360.it/pdf_redirect.html?" + new URLSearchParams({ pdf: pdfUrl }).toString();
++      datiFinali.token = resJson.token;
++      stimaSalvata = { ...datiFinali, detail_url: detailUrl, pdf_redirect_url: loaderUrl };
++      submissionState = 'success';
++      try {
++        localStorage.setItem('stimaBase', JSON.stringify(stimaSalvata));
++      } catch (_) {
++        // The authorised URL works even when browser storage is unavailable.
++      }
++
++      if (window.fbq) fbq('track', 'Lead');
++      if (resJson.pdf_url) {
+         setTimeout(() => { window.location.href = loaderUrl; }, 1200);
+       }
+   
+@@ -704,25 +706,27 @@
+         const itMoney2 = v => v.toLocaleString('it-IT',{style:'currency',currency:'EUR',minimumFractionDigits:2,maximumFractionDigits:2});
+   
+         testoStima.innerHTML = `
+-          ✅ Valore totale: <span style="color:#168364;font-size:1.35em;">${itMoney0(prezzo)}</span><br>
+-          <span style="font-size:.95em;">€/mq finale: <b>${itMoney2(eurMq)}</b></span><br>
+-          <span style="font-size:.93em;">📍 ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''}</span>
++          ✅ Valore totale: <span data-result="price" style="color:#168364;font-size:1.35em;"></span><br>
++          <span style="font-size:.95em;">€/mq finale: <b data-result="eur-mq"></b></span><br>
++          <span data-result="address" style="font-size:.93em;"></span>
+           <br><br><span style="font-size:.98em;">Ti arriverà subito una mail e un WhatsApp</span>
+         `;
++        testoStima.querySelector('[data-result="price"]').textContent = itMoney0(prezzo);
++        testoStima.querySelector('[data-result="eur-mq"]').textContent = itMoney2(eurMq);
++        testoStima.querySelector('[data-result="address"]').textContent = `📍 ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''}`;
+       }, 900);
+   
+ } catch (e) {
+       clearInterval(anim);
+       console.error("Errore JS rilevato:", e);
+       
+-      // Invece di bloccare tutto per un falso allarme, mostriamo comunque il successo se l'API ha risposto
+-      testoStima.innerHTML = `
+-          ✅ Stima generata e inviata!<br>
+-          <span style="font-size:.98em;">Ti abbiamo appena inviato un'email e un WhatsApp con il tuo Report Completo.</span>
+-      `;
+-      
+-      // Opzionale: de-commenta la riga sotto se vuoi vedere l'errore esatto a schermo per investigare
+-      // testoStima.innerHTML += `<br><small style="color:red;">(Dettaglio: ${e.message})</small>`;
++      submissionState = 'uncertain';
++      stimaSalvata = null;
++      testoStima.textContent = "Esito NON CONFERMATO: la richiesta potrebbe essere già stata salvata. Prima di inviare una nuova richiesta, controlla email e WhatsApp. Puoi ricaricare la pagina per ripartire.";
++      submitButton.type = 'button';
++      submitButton.textContent = 'Ricarica la pagina';
++      submitButton.style.display = '';
++      submitButton.addEventListener('click', () => location.reload(), { once: true });
+     }
+   });
+   
+@@ -783,7 +787,7 @@
+     if (!el) return;
+     async function refresh(){
+       try{
+-        const r = await fetch("https://stima360-backend.onrender.com/api/public/contatore_oggi", { cache: "no-store" });
++        const r = await fetch(Stima360Preview.apiUrl("/api/public/contatore_oggi"), { cache: "no-store" });
+         if(!r.ok) throw new Error("bad status");
+         const js = await r.json();
+         el.textContent = Number(js.count || 0);
+--- baseline/stima_dettagliata.html
++++ public/stima_dettagliata.html
+@@ -1,6 +1,7 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
+ <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+   <meta charset="UTF-8" />
+   <title>Stima dettagliata – Stima360</title>
+@@ -355,35 +356,45 @@
+ 
+ <script>
+ /* ===============================
+-   CARICAMENTO DATI (TOKEN / FALLBACK)
++   CARICAMENTO DATI AUTORIZZATI
+ ================================ */
+ const params = new URLSearchParams(location.search);
+ const token = params.get("token");
+ let dati = {};
+-
+-function getParams() {
+-  const p = {};
+-  location.search.replace(/[?&]+([^=&]+)=([^&]*)/gi, (_, k, v) => {
+-    p[k] = decodeURIComponent((v || '').replace(/\+/g, ' '));
++let prefillValido = false;
++let serverStimaId = null;
++
++function abilitaForm(enabled) {
++  Array.from(document.getElementById("dettaglioForm").elements).forEach(el => {
++    el.disabled = !enabled;
+   });
+-  return p;
+-}
++}
++
++function bloccaRichiesta() {
++  prefillValido = false;
++  serverStimaId = null;
++  abilitaForm(false);
++  const esito = document.getElementById("esito");
++  esito.textContent = "Link non valido o scaduto";
++  esito.style.display = "block";
++}
++
++abilitaForm(false);
+ 
+ async function caricaDati() {
+   try {
+-    if (token) {
+-      const res = await fetch(
+-        "https://stima360-backend.onrender.com/api/prefill?t=" + token
+-      );
+-      if (!res.ok) throw new Error();
+-      dati = await res.json();
+-    } else {
+-      dati = getParams(); // fallback SOLO per test
+-    }
+-
++    if (!token) throw new Error();
++    const res = await fetch(Stima360Preview.apiUrl("/api/prefill?t=" + encodeURIComponent(token)));
++    if (!res.ok) throw new Error();
++    dati = await res.json();
++    if (!dati || !Number.isSafeInteger(dati.id) || dati.id <= 0) throw new Error();
++
++    serverStimaId = String(dati.id);
+     inizializzaPagina();
++    prefillValido = true;
++    abilitaForm(true);
+   } catch {
+-    alert("Link non valido o scaduto");
++    bloccaRichiesta();
+   }
+ }
+ 
+@@ -418,40 +429,50 @@
+   if (dati.mqTerrazzo)  pert.push(`🌅 Terrazzo: ${dati.mqTerrazzo} mq`);
+   if (dati.numBalconi)  pert.push(`🚪 Balconi: ${dati.numBalconi}`);
+ 
+-    let pertHtml = 'Nessuna';
+-    
+-    if (pert.length) {
+-      pertHtml = pert.join('<br>');
+-    } else if (dati.pertinenze) {
+-      pertHtml = dati.pertinenze
+-        .split(',')
+-        .map(p => '• ' + p.trim())
+-        .join('<br>');
+-    }
+-
+-
+-  // --- RIEPILOGO ---
+-  document.getElementById("infoImmobile").innerHTML = `
+-    <b>🏠 ${dati.tipologia || '-'} ${dati.mq || ''} mq</b><br>
+-    📍 <b>Indirizzo:</b> ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''} ${dati.microzona ? '('+dati.microzona+')' : ''}<br>
+-    🧱 <b>Piano:</b> ${dati.piano || '-'} |
+-    <b>Locali:</b> ${dati.locali || '-'} |
+-    <b>Bagni:</b> ${dati.bagni || '-'}<br>
+-    🛗 <b>Ascensore:</b> ${dati.ascensore || '-'}<br>
+-    🏗️ <b>Stato:</b> ${dati.stato || '-'} |
+-    <b>Anno:</b> ${dati.anno || '-'}<br>
+-    🌊 <b>Posizione mare:</b> ${dati.posizioneMare || '-'} |
+-    <b>Distanza:</b> ${dati.distanzaMare || '-'}<br>
+-    👁️ <b>Vista mare:</b> ${vistaMareLabel} |
+-    🚧 <b>Barriera:</b> ${dati.barrieraMare || '-'}<br>
++  const pertRighe = pert.length ? pert : dati.pertinenze
++    ? dati.pertinenze.split(',').map(p => '• ' + p.trim()) : ['Nessuna'];
++
++  // Static markup keeps the existing labels and styling; values are text nodes.
++  const info = document.getElementById("infoImmobile");
++  info.innerHTML = `
++    <b data-value="immobile"></b><br>
++    📍 <b>Indirizzo:</b> <span data-value="indirizzo"></span><br>
++    🧱 <b>Piano:</b> <span data-value="piano"></span> |
++    <b>Locali:</b> <span data-value="locali"></span> |
++    <b>Bagni:</b> <span data-value="bagni"></span><br>
++    🛗 <b>Ascensore:</b> <span data-value="ascensore"></span><br>
++    🏗️ <b>Stato:</b> <span data-value="stato"></span> |
++    <b>Anno:</b> <span data-value="anno"></span><br>
++    🌊 <b>Posizione mare:</b> <span data-value="posizioneMare"></span> |
++    <b>Distanza:</b> <span data-value="distanzaMare"></span><br>
++    👁️ <b>Vista mare:</b> <span data-value="vistaMare"></span> |
++    🚧 <b>Barriera:</b> <span data-value="barrieraMare"></span><br>
+     
+     📁 <b>Pertinenze:</b><br>
+-    ${pertHtml}<br>
++    <span data-value="pertinenze"></span><br>
+     
+-    👤 <b>Contatto:</b> ${dati.nome || ''} ${dati.cognome || ''} – ${dati.telefono || ''}<br>
+-
+-    ✉️ <b>Email:</b> ${dati.email || ''}
++    👤 <b>Contatto:</b> <span data-value="contatto"></span><br>
++
++    ✉️ <b>Email:</b> <span data-value="email"></span>
+   `;
++  const values = {
++    immobile: `🏠 ${dati.tipologia || '-'} ${dati.mq || ''} mq`,
++    indirizzo: `${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''} ${dati.microzona ? '('+dati.microzona+')' : ''}`,
++    piano: dati.piano || '-', locali: dati.locali || '-', bagni: dati.bagni || '-',
++    ascensore: dati.ascensore || '-', stato: dati.stato || '-', anno: dati.anno || '-',
++    posizioneMare: dati.posizioneMare || '-', distanzaMare: dati.distanzaMare || '-',
++    vistaMare: vistaMareLabel, barrieraMare: dati.barrieraMare || '-',
++    contatto: `${dati.nome || ''} ${dati.cognome || ''} – ${dati.telefono || ''}`,
++    email: dati.email || ''
++  };
++  Object.entries(values).forEach(([key, value]) => {
++    info.querySelector(`[data-value="${key}"]`).textContent = value;
++  });
++  const pertBox = info.querySelector('[data-value="pertinenze"]');
++  pertRighe.forEach((line, index) => {
++    if (index) pertBox.appendChild(document.createElement('br'));
++    pertBox.appendChild(document.createTextNode(line));
++  });
+ 
+   // --- RIEMPI HIDDEN ---
+   const f = document.getElementById("dettaglioForm");
+@@ -499,6 +520,8 @@
+ document.getElementById("dettaglioForm").addEventListener("submit", async function(e){
+   e.preventDefault();
+ 
++  if (!prefillValido || !token || !serverStimaId) return;
++
+   const form = e.target;
+   const fd = new FormData(form);
+ 
+@@ -509,22 +532,27 @@
+     fd.set("spese_cond", fd.get("spese_cond_mensili") || null);
+   }
+ 
+-  // id stima (OBBLIGATORIO)
+-  fd.set("stima_id", fd.get("id"));
++  // Authorisation and relational id come from the validated token/prefill.
++  fd.set("token", token);
++  fd.set("stima_id", serverStimaId);
++  fd.set("id", serverStimaId);
+ 
+   try {
+     const res = await fetch(
+-      "https://stima360-backend.onrender.com/api/salva_stima_dettagliata",
++      Stima360Preview.apiUrl("/api/salva_stima_dettagliata"),
+       {
+         method: "POST",
+         body: fd
+       }
+     );
+ 
+-    if (!res.ok) throw new Error();
++    if (!res.ok) {
++      if (res.status === 401 || res.status === 403 || res.status === 404) bloccaRichiesta();
++      throw new Error();
++    }
+ 
+     document.getElementById("esito").style.display = "block";
+-    document.getElementById("esito").innerHTML =
++    document.getElementById("esito").textContent =
+       "✅ Richiesta inviata correttamente. Ti contatteremo a breve.";
+     form.style.display = "none";
+ 
+--- baseline/pdf_redirect.html
++++ public/pdf_redirect.html
+@@ -1,6 +1,7 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
+   <meta charset="UTF-8" />
+   <title>Stima360 - Elaborazione Stima...</title>
+   <meta name="viewport" content="width=device-width, initial-scale=1" />
+@@ -352,27 +353,40 @@
+   </div>
+ 
+   <script>
+-    // Legge il parametro "pdf" dalla query string
++    const redirectParams = new URLSearchParams(location.search);
++    const redirectToken = redirectParams.get("token");
++    const detailButton = document.querySelector('.stima360-btn');
++    let detailReady = false;
++    detailButton.disabled = true;
++
+     function getPdfUrl() {
+-      const p = new URLSearchParams(location.search);
+-      return p.get("pdf");
+-    }
+-
+-    // Usa i dati salvati da dati_personali (se ci sono)
++      const pdf = redirectParams.get("pdf");
++      if (!pdf) return null;
++      try { return Stima360Preview.localHttpUrl(pdf).href; } catch { return null; }
++    }
++
++    async function verificaLinkDettagliato() {
++      if (!redirectToken) return;
++      try {
++        const res = await fetch(Stima360Preview.apiUrl('/api/prefill?t=' + encodeURIComponent(redirectToken)));
++        if (!res.ok) return;
++        const prefill = await res.json();
++        if (!prefill || !Number.isSafeInteger(prefill.id) || prefill.id <= 0) return;
++        detailReady = true;
++        detailButton.disabled = false;
++      } catch {
++        // No query/localStorage fallback can authorise this link.
++      }
++    }
++
+     function vaiAStimaDettagliataConParametri() {
+-      try {
+-        const s = localStorage.getItem('stimaBase');
+-        if (!s) {
+-          window.open("https://www.stima360.it/stima_dettagliata.html", "_blank");
+-          return;
+-        }
+-        const dati = JSON.parse(s);
+-        const params = new URLSearchParams(dati).toString();
+-        window.open("https://www.stima360.it/stima_dettagliata.html?" + params, "_blank");
+-      } catch (e) {
+-        window.open("https://www.stima360.it/stima_dettagliata.html", "_blank");
+-      }
+-    }
++      if (!detailReady || !redirectToken) return;
++      const target = new URL('stima_dettagliata.html', location.href);
++      target.search = new URLSearchParams({ token: redirectToken }).toString();
++      window.open(target.href, '_blank', 'noopener');
++    }
++
++    verificaLinkDettagliato();
+ 
+     // Dopo un attimo apre il PDF vero
+     window.addEventListener("DOMContentLoaded", () => {
+--- /dev/null
++++ public/preview-config.js
+@@ -0,0 +1,38 @@
++/* Local review configuration. This file is deliberately unsuitable for public deployment. */
++(() => {
++  const apiBase = window.STIMA360_PREVIEW_API_BASE || 'http://127.0.0.1:8000';
++  const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
++
++  function localHttpUrl(value) {
++    const url = new URL(value, location.href);
++    if (!['http:', 'https:'].includes(url.protocol) || !loopbackHosts.has(url.hostname)) {
++      throw new Error('La copia di verifica usa soltanto servizi locali');
++    }
++    return url;
++  }
++
++  function apiUrl(path) {
++    const base = localHttpUrl(apiBase);
++    return new URL(path, base).href;
++  }
++
++  function pageUrl(serverUrl, pageName, token) {
++    const supplied = new URL(serverUrl, location.href);
++    if (!['http:', 'https:'].includes(supplied.protocol)
++        || supplied.pathname.split('/').pop() !== pageName
++        || !token || supplied.searchParams.get('token') !== token) {
++      throw new Error('Link di dettaglio non valido');
++    }
++    const local = new URL(pageName, location.href);
++    local.search = '';
++    local.searchParams.set('token', token);
++    if (pageName === 'pdf_redirect.html' && supplied.searchParams.has('pdf')) {
++      local.searchParams.set('pdf', supplied.searchParams.get('pdf'));
++    }
++    return local.href;
++  }
++
++  window.Stima360Preview = Object.freeze({ apiUrl, pageUrl, localHttpUrl });
++  // The copied preview does not send analytics events.
++  window.fbq = () => {};
++})();
+--- /dev/null
++++ release/preview-config.js
+@@ -0,0 +1,44 @@
++/* Candidate for a future coordinated release. Not loaded by the local preview. */
++(() => {
++  const apiBase = 'https://stima360-backend.onrender.com';
++  const publicSiteOrigin = 'https://www.stima360.it';
++  const detailPages = new Set(['stima_dettagliata.html', 'pdf_redirect.html']);
++
++  function httpUrl(value, base) {
++    const url = new URL(value, base);
++    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('URL non valido');
++    return url;
++  }
++
++  function apiUrl(path) {
++    const url = httpUrl(path, apiBase);
++    if (url.origin !== apiBase || !url.pathname.startsWith('/api/')) {
++      throw new Error('Endpoint non valido');
++    }
++    return url.href;
++  }
++
++  function pageUrl(serverUrl, pageName, token) {
++    const supplied = httpUrl(serverUrl, publicSiteOrigin);
++    if (!detailPages.has(pageName) || supplied.origin !== publicSiteOrigin
++        || supplied.pathname !== '/' + pageName
++        || typeof token !== 'string' || !token.trim()
++        || supplied.searchParams.get('token') !== token) {
++      throw new Error('Link di dettaglio non valido');
++    }
++    const target = new URL('/' + pageName, publicSiteOrigin);
++    target.searchParams.set('token', token);
++    if (pageName === 'pdf_redirect.html' && supplied.searchParams.has('pdf')) {
++      target.searchParams.set('pdf', supplied.searchParams.get('pdf'));
++    }
++    return target.href;
++  }
++
++  // Same helper interface as the preview. Production keeps current PDF providers.
++  // PDF access policy and storage are outside F13/F16 (F07 remains open).
++  function localHttpUrl(value) {
++    return httpUrl(value, apiBase);
++  }
++
++  window.Stima360Preview = Object.freeze({ apiUrl, pageUrl, localHttpUrl });
++})();

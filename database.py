@@ -283,7 +283,7 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
             print("⚠️ Errore allegato:", e)
 
     try:
-        server = smtplib.SMTP(smtp_host, smtp_port)
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
         server.ehlo()
         server.starttls()
         server.login(smtp_user, smtp_pass)

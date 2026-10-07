@@ -43,6 +43,8 @@ def run_followup(
     lead_id: int | None = None,
     stima_id: int | None = None,
     created_by: str | None = None,
+    recover: bool = False,
+    due_at_override: datetime | str | None = None,
 ) -> dict[str, Any]:
     """Validate inputs against the named rule, then execute it.
 
@@ -88,7 +90,18 @@ def run_followup(
             f"{rule.trigger_type!r} (only 'event' is implemented in P18-B)"
         )
 
-    due_at = datetime.now(timezone.utc) + timedelta(hours=rule.due_hours)
+    # A durable public submission retains the first deadline across recovery.
+    # The normal entry point continues to apply the existing rule unchanged.
+    if due_at_override is None:
+        due_at = datetime.now(timezone.utc) + timedelta(hours=rule.due_hours)
+    else:
+        try:
+            due_at = (datetime.fromisoformat(due_at_override)
+                      if isinstance(due_at_override, str) else due_at_override)
+        except ValueError as exc:
+            raise ValidationError("due_at_override must be a timezone-aware datetime") from exc
+        if not isinstance(due_at, datetime) or due_at.tzinfo is None or due_at.utcoffset() is None:
+            raise ValidationError("due_at_override must be a timezone-aware datetime")
 
     return repository.execute_followup_action(
         rule_code=rule.rule_code,
@@ -103,6 +116,7 @@ def run_followup(
         priority=rule.priority,
         due_at=due_at,
         created_by=created_by or "FOLLOWUP",
+        recover=recover,
     )
 
 

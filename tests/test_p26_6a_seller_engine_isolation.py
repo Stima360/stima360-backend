@@ -409,10 +409,17 @@ def test_system_events_refuse_an_ambiguous_or_absent_agency():
 
 
 def test_the_public_funnel_still_calls_the_never_raising_wrapper():
-    """main.py must keep working unchanged: the funnel swallows failures."""
+    """main.py must keep working: a failure of the observer never raises to
+    the client.
+
+    SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): il confine che
+    non solleva e' la ricevuta pubblica - P17 e P18 sono `receipt.step(...)`
+    e un passo fallito diventa una ricevuta `partial` (vedi
+    test_seller_intelligence_isolation / test_followup_isolation)."""
     main = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert "seller_intelligence_service.safe_record_event(" in main
-    assert "followup_service.safe_run_followup(" in main
+    assert 'receipt.step("event_requested", lambda: seller_intelligence_service.record_event(' in main
+    assert 'receipt.step("followup", lambda: followup_service.run_followup(' in main
+    assert "safe_record_event(" not in main and "safe_run_followup(" not in main
 
 
 # ---------------------------------------------------------------------------

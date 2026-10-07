@@ -59,7 +59,7 @@ STIME_REFERENCES = (
 )
 
 #: Contenuto proprio della stima: va via con lei, non la blocca.
-OWN_CONTENT = frozenset({"stime_dettagliate"})
+OWN_CONTENT = frozenset({"stime_dettagliate", "stima_pdf_artifacts", "public_submission_receipts"})
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 

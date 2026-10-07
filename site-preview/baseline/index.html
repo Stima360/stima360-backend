@@ -1,0 +1,2424 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"/>
+<script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="google-site-verification" content="OmkQnXNgazVUg5owOB6UNHm18MS1CTndf0vwoRkpdXY" />
+  <title>Stima360 – Valutazione Immobiliare</title>
+  <meta name="facebook-domain-verification" content="z9c5ltw2sjr080b8can7d5r55cwu4q" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  
+  <script>
+  !function(f,b,e,v,n,t,s)
+  {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+  n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+  if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+  n.queue=[];t=b.createElement(e);t.async=!0;
+  t.src=v;s=b.getElementsByTagName(e)[0];
+  s.parentNode.insertBefore(t,s)}(window, document,'script',
+  'https://connect.facebook.net/en_US/fbevents.js');
+  fbq('init', '1458312815299195');
+  fbq('track', 'PageView');
+  </script>
+  <noscript><img height="1" width="1" style="display:none"
+  src="https://www.facebook.com/tr?id=1458312815299195&ev=PageView&noscript=1"
+  /></noscript>
+  <style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&display=swap');
+
+  body {
+    font-family: 'Nunito', sans-serif;
+    background: #fff;
+    margin: 0;
+    padding: 0;
+    color: #2a2a2a;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 1000px; 
+    background: linear-gradient(
+      to bottom,
+      rgba(0,255,213,0.2) 0%,      
+      rgba(66,133,255,0.15) 40%,   
+      rgba(186,0,255,0.12) 70%,    
+      rgba(255,255,255,0) 100%     
+    );
+    z-index: -2;                   
+    animation: glowShift 25s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+
+  @media (max-width: 700px) {
+    .container {
+      max-width: 95vw;
+      padding: 20px;
+    }
+  }
+
+  .logo {
+    width: calc(100% + 44px) !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    margin: -10px -22px 14px -22px !important;
+    height: auto !important;
+    display: block !important;
+
+    -webkit-mask-image: radial-gradient(
+      ellipse 26% 72% at 100% 0%,
+      transparent 0%,
+      rgba(0,0,0,0.18) 10%,
+      rgba(0,0,0,0.55) 24%,
+      black 48%,
+      black 100%
+    );
+
+    mask-image: radial-gradient(
+      ellipse 26% 82% at 100% 0%,
+      transparent 0%,
+      rgba(0,0,0,0.18) 10%,
+      rgba(0,0,0,0.55) 24%,
+      black 48%,
+      black 100%
+    );
+  }
+    
+  img.logo { object-fit: contain; transition: width 0.3s ease; }
+
+  form { display: flex; flex-direction: column; gap: 24px; }
+  
+  label {
+    font-family: 'Montserrat', sans-serif;
+    font-weight: 600;
+    color: #19546a;
+    margin-bottom: 10px;
+    font-size: 1.4rem;
+  }
+
+  input, select {
+    font-family: 'Montserrat', sans-serif;
+    padding: 18px;
+    font-size: 1.2rem;
+    border-radius: 14px;
+    border: 1.5px solid #dfe6eb;
+    background: #fafafa;
+    transition: all .25s ease-in-out;
+  }
+
+  input:focus, select:focus {
+    border-color: #0044cc;
+    background: #fff;
+    box-shadow: 0 0 8px rgba(0,68,204,0.3);
+    outline: none;
+  }
+
+  button {
+    position: relative;
+    overflow: hidden;
+    z-index: 0;
+    background: linear-gradient(
+      135deg,
+      #0028a6,#2d1f8a,#2a0064,
+      #009c78,#007f8f,#ffd500,
+      #ff7a00,#ff0000,#1faa2c
+    );
+    background-size: 300% 300%;
+    animation: rainbowShift 6s ease infinite;
+    color: #fff;
+    font-weight: 600;
+    border: none;
+    border-radius: 14px;
+    padding: 18px;
+    font-size: 2rem;
+    cursor: pointer;
+    box-shadow: 0 1px 1px rgba(255,255,255,0.65), 0 1px 2px rgba(0,0,0,0.08);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+  }
+
+  button:hover {
+    transform: scale(1.02);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+  }
+
+  button:active {
+    transform: scale(0.96);
+  }
+
+  button[type="submit"], #btnAvanti {
+    position: relative;
+    overflow: hidden;
+  }
+
+  button[type="submit"]::before, #btnAvanti::before {
+    content: "";
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    right: 10px;
+    height: 45%;
+    border-radius: 10px;
+    background: linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.85),
+      rgba(255,255,255,0.15),
+      rgba(255,255,255,0)
+    );
+    opacity: 0.9;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  button[type="submit"]::after, #btnAvanti::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: 14px;
+    background: radial-gradient(
+      circle,
+      rgba(255,255,255,0.55),
+      rgba(255,255,255,0) 70%
+    );
+    filter: blur(8px);
+    opacity: 0.75;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  button:active { transform: scale(0.97); }
+
+  .form-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .form-group { flex: 1; display: flex; flex-direction: column; }
+  .input-lungo { width: 100%; }
+  .input-via { flex: 2; }
+  .input-civico { flex: 0.5; max-width: 120px; }
+
+  .pertinenze { display: flex; flex-direction: column; gap: 18px; }
+  .pertinenze-riga {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 20px;
+    row-gap: 10px;
+  }
+
+  .pert-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap; 
+  }
+
+  .pertinenze input[type="checkbox"] {
+    appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.25s ease-in-out;
+    position: relative;   
+    overflow: hidden;     
+  }
+
+  .pertinenze input[value="Garage"]{border:3px solid #0028a6;}
+  .pertinenze input[value="Garage"]:hover{box-shadow:0 0 6px rgba(0,40,166,0.4);}
+  .pertinenze input[value="Garage"]:checked{background:#0028a6;box-shadow:0 0 10px rgba(0,40,166,0.7);filter:brightness(1);}
+
+  .pertinenze input[value="Posto Auto"]{border:3px solid #2d1f8a;}
+  .pertinenze input[value="Posto Auto"]:hover{box-shadow:0 0 6px rgba(45,31,138,0.45);}
+  .pertinenze input[value="Posto Auto"]:checked{background:#2d1f8a;box-shadow:0 0 10px rgba(45,31,138,0.7);filter:brightness(1.23);}
+
+  .pertinenze input[value="Cantina"]{border:3px solid #2a0064;background:#ffffff;}
+  .pertinenze input[value="Cantina"]:hover{box-shadow:0 0 6px rgba(42,0,100,0.45);}
+  .pertinenze input[value="Cantina"]:checked{background:#2a0064;border-color:#2a0064;box-shadow:0 0 12px rgba(42,0,100,0.75);filter:brightness(1.28);}
+
+  .pertinenze input[value="Soffitta"]{border:3px solid #009c78;}
+  .pertinenze solid #009c78:hover{box-shadow:0 0 6px rgba(0,156,120,0.4);}
+  .pertinenze input[value="Soffitta"]:checked{background:#009c78;box-shadow:0 0 8px rgba(0,156,120,0.6);}
+
+  .pertinenze input[value="Taverna"]{border:3px solid #007f8f;}
+  .pertinenze input[value="Taverna"]:hover{box-shadow:0 0 6px rgba(0,127,143,0.4);}
+  .pertinenze input[value="Taverna"]:checked{background:#007f8f;box-shadow:0 0 8px rgba(0,127,143,0.65);}
+
+  .pertinenze input[value="Balconi"]{border:3px solid #ffd500;}
+  .pertinenze input[value="Balconi"]:hover{box-shadow:0 0 6px rgba(255,213,0,0.4);}
+  .pertinenze input[value="Balconi"]:checked{background:#ffd500;box-shadow:0 0 8px rgba(255,213,0,0.6);}
+
+  .pertinenze input[value="Terrazzo"]{border:3px solid #ff7a00;}
+  .pertinenze input[value="Terrazzo"]:hover{box-shadow:0 0 6px rgba(255,122,0,0.4);}
+  .pertinenze input[value="Terrazzo"]:checked{background:#ff7a00;box-shadow:0 0 8px rgba(255,122,0,0.6);}
+
+  .pertinenze input[value="Altro"]{border:3px solid #ff0000;}
+  .pertinenze input[value="Altro"]:hover{box-shadow:0 0 6px rgba(255,0,0,.4);}
+  .pertinenze input[value="Altro"]:checked{background:#ff0000;box-shadow:0 0 8px rgba(255,0,0,.6);}
+
+  #giardinoLabel input[type="checkbox"]{border:3px solid #1faa2c;}
+  #giardinoLabel input[type="checkbox"]:hover{box-shadow:0 0 6px rgba(31,170,44,0.4);}
+  #giardinoLabel input[type="checkbox"]:checked{background:#1faa2c;box-shadow:0 0 8px rgba(31,170,44,0.65);}
+
+  .pertinenze input[type="checkbox"]:checked {
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
+
+  .pertinenze input[type="checkbox"]:checked::before {
+    content: ""; position: absolute; top: 2px; left: 3px; right: 3px; height: 45%; border-radius: 6px;
+    background: linear-gradient( to bottom, rgba(255,255,255,0.9), rgba(255,255,255,0.2), rgba(255,255,255,0) );
+    pointer-events: none; opacity: 0.9;
+  }
+
+  .pertinenze label {
+    font-size: 1.8rem; font-family: 'Montserrat', sans-serif; font-weight: 600; color: #19546a; display: flex; align-items: center; gap: 10px;
+  }
+    
+  .quote-modern {
+    position: relative; max-width: 100%; margin: 40px auto; padding: 24px 32px; background: #ffffff;
+    font-family: 'Montserrat', sans-serif; font-size: 2.5rem; font-weight: 700; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.3; overflow: visible; border-radius: 14px; box-shadow: 0 0 18px rgba(0, 255, 255, 0.25);
+  }
+
+  .quote-modern span {
+    font-size: inherit !important; transform: scale(0.9); position: relative; padding: 6px 16px;
+    background: linear-gradient( to right, #ff00ff, #ff0000, #ff8c00, #ffff00, #00ff00, #00ffff, #0044ff, #ff00ff );
+    background-size: 400% 400%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: textRainbow 6s linear infinite alternate;
+  }
+
+  .quote-modern span::after {
+    content: ""; position: absolute; left: -6px; top: -6px; right: -6px; bottom: -6px; border-radius: 8px; background: inherit; filter: blur(10px); z-index: -1;
+  }
+
+  @keyframes textRainbow {
+    0%   { background-position: 0% 0%; }
+    50%  { background-position: 100% 0%; }
+    100% { background-position: 0% 0%; }
+  }
+
+  @keyframes rainbowFlow {
+    0%   { background-position: 0% 0%; }
+    100% { background-position: 0% 100%; }
+  }
+
+  .quote-modern span::before {
+    content: none; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(120deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 80%); transform: skewX(-20deg); animation: shine 4s ease-in-out infinite;
+  }
+
+  .quote-modern span {
+    animation: textRainbow 6s linear infinite alternate, pulse 3s ease-in-out infinite; transform: scale(0.95); 
+  }
+
+  .quote-modern { cursor: pointer; position: relative; }
+
+  .quote-modern::after {
+    content: "▶ Guarda il video"; position: absolute; bottom: -40px; left: 50%; transform: translateX(-50%) scale(0.9); background: rgba(0, 68, 204, 0.9); color: #fff; font-size: 0.9rem; font-weight: 600; padding: 6px 14px; border-radius: 6px; opacity: 0; white-space: nowrap; pointer-events: none; transition: opacity 0.3s ease, transform 0.3s ease; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  }
+
+  .quote-modern:hover::after { opacity: 1; transform: translateX(-50%) scale(1); }
+
+  @keyframes shine { 0% { left: -100%; } 50% { left: 100%; } 100% { left: 100%; } }
+  @keyframes pulse { 0%, 100% { transform: scale(0.95); } 50% { transform: scale(1); } }
+
+  #arcobaleno-bg {
+    position: fixed; bottom: 0; right: 0; width: 500px; height: auto; z-index: 0; opacity: 0.9; pointer-events: none;
+  }
+
+  .sidebar {
+    position: fixed; top: 47px; left: 60px; width: 400px; max-height: 94vh; overflow-y: auto; background: rgba(255, 255, 255, 0.55); backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%); border-radius: 18px; border: 1px solid rgba(255,255,255,0.4); box-shadow: 0 10px 40px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.6); padding: 20px; box-sizing: border-box; z-index: 10;
+  }
+
+  @media (max-width: 1200px) { .sidebar { max-height: 80vh; } }
+  @media (max-width: 900px) { .sidebar { max-height: 70vh; width: 90vw; left: 5vw; } }
+
+  .idea-box a::before {
+    content: ""; position: absolute; top: 4px; left: 6px; right: 6px; height: 45%; border-radius: 6px; background: linear-gradient( to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.18), rgba(255,255,255,0) ); opacity: 0.9; pointer-events: none; z-index: 3;
+  }
+
+  .idea-box a::after {
+    content: ""; position: absolute; inset: -6px; border-radius: 10px; background: radial-gradient( circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70% ); filter: blur(8px); opacity: 0.65; pointer-events: none; z-index: 1;
+  }
+
+  .idea-box a:hover { transform: scale(1.03); box-shadow: 0 8px 26px rgba(0,0,0,0.22); }
+  .idea-box a:active { transform: scale(0.96); }
+
+  .idea-box {
+    background: transparent; border-radius: 12px; padding: 20px; margin-bottom: 18px; color: #333; transition: transform 0.3s ease, box-shadow 0.3s ease; box-shadow: 0 2px 10px rgba(0,0,0,0.1); position: relative; padding-bottom: 55px; 
+  }
+
+  .idea-box:hover { transform: translateY(-5px); box-shadow: 0 4px 15px rgba(0,0,0,0.15); }
+  .idea-box h3 { font-size: 1.5rem; margin-bottom: 10px; }
+  .idea-box p { font-size: 1.2rem; line-height: 1.5; color: #555; }
+
+  .idea-box a {
+    position: absolute; bottom: 18px; right: 18px; display: inline-block; font-size: 1.2rem; padding: 8px 14px; color: #fff; border-radius: 6px; text-decoration: none; font-weight: bold; z-index: 2; 
+  }
+
+  .idea-box:nth-of-type(1) a { background: #1da184; }
+  .idea-box:nth-of-type(1) a:hover { background: #148a6d; }
+  .idea-box:nth-of-type(2) a { background: #007bff; }
+  .idea-box:nth-of-type(2) a:hover { background: #0056b3; }
+
+  .container {
+    position: relative; max-width: 750px; width: 100%; margin: 0 auto; background: #fff; border-radius: 20px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06); padding: 45px 25px; z-index: 1; box-sizing: border-box;
+  }
+
+  .layout { display: block; padding-top: 100px; }
+  @media (max-width: 1400px) { .sidebar { width: 560px; } }
+  @media (max-width: 1200px) { .sidebar { width: 480px; } }
+
+  .sidebar, .sidebar h2, .sidebar .idea-box, .sidebar .idea-box h3, .sidebar .idea-box p, .sidebar .idea-box a {
+    font-family: 'Nunito', sans-serif;
+  }
+
+  @keyframes flowBar { 0% { background-position: 0% 50%; } 100% { background-position: 100% 50%; } }
+  
+  .sidebar h2 {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-family: 'Nunito', sans-serif; font-weight: 800; color: #222; margin-bottom: 25px; text-shadow: 0 0 6px rgba(0,255,255,0.1);
+  }
+
+  #sidebar-title {
+    font-size: 1.5rem; font-family: 'Nunito', sans-serif; font-weight: 900; text-align: center; letter-spacing: 2px; line-height: 1.1; margin: 0;
+  }
+
+  .sidebar h2 img.ai-logo {
+    width: 120px !important; height: 120px !important; min-width: 70px !important; min-height: 70px !important; max-width: 120px; max-height: 120px; vertical-align: middle; margin-right: 10px; display: inline-block; aspect-ratio: 1/1;
+  }
+  
+  .animated-logo { opacity: 0; transition: opacity 0.3s; transform: scale(0.2); }
+  .animated-logo.show { opacity: 1; animation: bounceIn 0.7s cubic-bezier(0.57,1.39,0.58,0.89) 1; transform: scale(1); }
+
+  @keyframes bounceIn {
+    0% { opacity: 0; transform: scale(0.2) translateY(60px); }
+    60% { opacity: 1; transform: scale(1.1) translateY(-14px);}
+    80% { transform: scale(0.93) translateY(3px);}
+    100% { opacity: 1; transform: scale(1) translateY(0);}
+  }
+  
+  .ai-logo.show { opacity: 1 !important; }
+
+  @media (max-width: 900px) {
+    .layout { background-color: transparent; display: flex; flex-direction: column-reverse; padding-left: 0; }
+    .sidebar { background-color: transparent; width: 90%; max-height: none; overflow: visible; position: static; left: 0; transform: none; margin: 0 auto 30px; }
+  }
+
+  .green-theme .button { background-color: #1faa2c; }
+  .green-theme .button:hover { background-color: #178f24; }
+  .blue-theme .button { background-color: #1976d2; }
+  .blue-theme .button:hover { background-color: #0d47a1; }
+  .gold-theme .button { background-color: #fbc02d; color: #ffffff; }
+  .gold-theme .button:hover { background-color: #f9a825; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition-duration: 0s !important; }
+    body::before { animation: none !important; }
+    body::after  { animation: none !important; }
+    .quote-modern span { animation: none !important; }
+  }
+  
+  body::after       { z-index: -3; }
+  #arcobaleno-bg { z-index: -2; }
+  body::before      { z-index: -1; }
+
+  @media (max-width: 600px) {
+    .logo { width: calc(100% + 52px) !important; margin: -10px -26px -105px -26px !important; }
+    .hero-btn { padding: 10px 12px !important; border-radius: 14px !important; gap: 10px !important; }
+    .hero-btn-icon { width: 34px !important; height: 34px !important; flex: 0 0 34px !important; border-radius: 10px !important; font-size: 0.95rem !important; }
+    .hero-btn-text strong { font-size: 1.05rem !important; line-height: 1.05 !important; }
+    .hero-btn-text small { font-size: 0.72rem !important; line-height: 1.15 !important; }
+  }
+
+  @media (min-width: 901px) { #toggleSidebar { display: none; } }
+
+  @media (max-width: 900px) {
+    .sidebar { background: transparent; position: fixed; top: 0; left: 0; width: 85%; height: 100vh; border-radius: 0; padding: 25px; overflow-y: auto; transform: translateX(-110%); transition: transform .35s ease; z-index: 9999; }
+    body::after { background: radial-gradient( circle at top left, rgba(0,255,213,0.18), rgba(0,0,0,0) 60% ); }
+    .sidebar.show { transform: translateX(0); }
+    #toggleSidebar { display: flex !important; align-items: center; justify-content: center; }
+  }
+
+  @media (max-width: 900px) {
+    #sidebar-title { font-size: 1.6rem !important; line-height: 1.4 !important; }
+    .sidebar h2 img.ai-logo { width: 45px !important; height: 80px !important; }
+  }
+
+  .cloud { position: absolute; width: 320px; height: 320px; background-size: contain; background-repeat: no-repeat; opacity: 0.45; animation: float 18s ease-in-out infinite; pointer-events: none; z-index: -1; }
+  .c1 { top: 25%; left: calc(50% - 100px); width: 350px; height: 350px; background-image: url("cloud/cloud8.png"); animation: moveAcrossSmooth 105s linear infinite; opacity: 0.50; }
+  .c2 { top: 30%; left: 12%; background-image: url("cloud/cloud5.png"); animation: randomFloat 28s ease-in-out infinite, breathe 12s ease-in-out infinite; }
+  .c3 { top: 5%; left: 75%; background-image: url("cloud/cloud7.png"); animation: orbit 22s ease-in-out infinite, breathe 14s ease-in-out infinite; }
+  .c4 { top: 50%; left: 65%; background-image: url("cloud/cloud3.png"); animation: randomFloat 32s ease-in-out infinite; }
+  .c5 { top: 9%; left: 22%; background-image: url("cloud/cloud4.png"); animation: orbit 28s ease-in-out infinite; }
+  .c6 { top: 22%; left: 82%; background-image: url("cloud/cloud8.png"); animation: randomFloat 20s ease-in-out infinite; }
+  .c7 { top: 46%; left: 20%; background-image: url("cloud/cloud6.png"); animation: orbit 35s ease-in-out infinite; }
+  .c8 { top: 60%; left: 25%; background-image: url("cloud/cloud.png"); animation: randomFloat 27s ease-in-out infinite; }
+  .c9 { top: 12%; left: 88%; background-image: url("cloud/cloud2.png"); animation: orbit 16s ease-in-out infinite; }
+  .c10 { top: 18%; left: 5%; background-image: url("cloud/cloud5.png"); animation: randomFloat 26s ease-in-out infinite; opacity: 0.45; }
+  .c11 { top: 8%; left: 55%; background-image: url("cloud/Cloud.png"); animation: orbit 30s ease-in-out infinite; opacity: 0.35; }
+  .c12 { top: 42%; left: 85%; background-image: url("cloud/cloud1.png"); animation: randomFloat 34s ease-in-out infinite; opacity: 0.40; }
+
+  @keyframes moveAcrossSmooth {
+    0%   { transform: translate(-45vw, 0px); }
+    50%  { transform: translate(55vw, -50px); }
+    100% { transform: translate(-45vw, 0px); }
+  }
+  @keyframes randomFloat {
+    0%   { transform: translate(0px, 0px); }
+    50%  { transform: translate(55px, -10px); }
+    100% { transform: translate(0px, 0px); }
+  }
+  @keyframes orbit {
+    0%   { transform: translate(0px, 0px); }
+    50%  { transform: translate(0px, -35px); }
+    100% { transform: translate(0px, 0px); }
+  }
+  @keyframes breathe { 0% { opacity: 0.40; } 50% { opacity: 0.58; } 100% { opacity: 0.40; } }
+  
+  @media (min-width: 1200px) { .container { margin-top: 80px !important; } }
+
+  @media (max-width: 900px) {
+    .sidebar { transition: none !important; }
+    .sidebar.show { transition: transform .35s ease !important; }
+    html, body { width: 100%; max-width: 100%; overflow-x: hidden; position: relative; touch-action: auto !important; overscroll-behavior: auto !important; overflow-y: auto !important; }
+    .container { max-width: 100%; }
+    .cloud, .cloud-n, #arcobaleno-bg { display: none; }
+  }
+
+  .title-crystal{ font-weight: 800; letter-spacing: 0.3px; text-shadow: 0 1px 0 rgba(255,255,255,0.6); }
+  .title-crystal.green{ color: #1da184; }
+  .title-crystal.blue{ color: #007bff; }
+  .title-crystal.gold{ color: #fbc02d; }
+  
+  .cv-card{ margin: 18px auto 10px; text-align: center; }
+  .cv-card img{ width: 100%; max-width: 350px; border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.6); background: rgba(255,255,255,0.6); backdrop-filter: blur(10px); }
+  .cv-btn{ bottom: 14px !important; }
+  .idea-box.gold-theme a { background: #fbc02d !important; }
+  .idea-box.gold-theme a:hover { background: #f9a825 !important; }
+  
+  .sidebar-image{ width: 100%; margin: 14px 0 18px; display: flex; justify-content: center; }
+  .sidebar-image img{ width: 100%; max-width: 360px; height: auto; border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.6); background: rgba(255,255,255,0.6); backdrop-filter: blur(8px); }
+  
+  .form-banner{ display: block; margin: 20px auto 30px auto; width: 100%; max-width: 720px; height: auto; border-radius: 14px; }
+  
+  /* ===== HERO NUOVA STIMA360 ===== */
+  .mobile-hero-stima { margin: 8px auto 34px; position: relative; z-index: 2; }
+  .hero-pill { display: flex; align-items: center; justify-content: center; gap: 10px; background: #e9f7f4; border-radius: 16px; padding: 14px 18px; color: #15957f; font-family: 'Montserrat', sans-serif; font-weight: 700; font-size: 1.7rem; margin-bottom: 26px; box-shadow: 0 2px 12px rgba(0,0,0,0.04); text-align: center; }
+  .hero-pill-icon { font-size: 2rem; line-height: 2; }
+  .hero-main { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: stretch; }
+  .hero-copy h1 { margin: 0 0 18px; font-family: 'Montserrat', sans-serif; font-size: 4rem; line-height: 1.02; letter-spacing: -1px; color: #112a63; }
+  .hero-copy h1 span { display: inline; color: #10a39c; }
+  .hero-copy > p { margin: 0 0 30px; font-size: 1.55rem; line-height: 1.55; color: #1c2b59; }
+  .hero-copy > p strong { font-weight: 800; }
+  .hero-benefits { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 28px; }
+  
+  .form-title-box { text-align: center; margin-top: 15px; margin-bottom: 26px; position: relative; z-index: 3; }
+  .form-title-box h2 { margin: 0 0 3px !important; font-family: 'Montserrat', sans-serif; font-size: 2.4rem; line-height: 1.1; font-weight: 800; color: #112a63; }
+  .form-title-box p { margin: 0 !important; font-size: 1.2rem; color: #66708c; }
+  
+
+  
+
+  
+  .mobile-hero-stima, #stimaForm { position: relative; z-index: 1; }
+
+  @media (max-width: 900px) {
+    .form-title-box h2 { font-size: 1.9rem; margin-top: 10px !important; margin-bottom: 10px !important; line-height: 1.05 !important; }
+    .form-title-box p { font-size: 1rem; }
+  }
+  
+  .hero-benefit { text-align: center; }
+  .hero-benefit-icon { width: 78px; height: 78px; margin: 0 auto 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.9rem; color: #fff; box-shadow: inset 0 0 0 6px rgba(255,255,255,0.6), 0 8px 18px rgba(0,0,0,0.08); }
+  .hero-benefit-icon.green { background: #18c19a; }
+  .hero-benefit-icon.blue { background: #2b97f0; }
+  .hero-benefit-icon.purple { background: #8b54f7; }
+  .hero-benefit h3 { margin: 0 0 8px; font-family: 'Montserrat', sans-serif; font-size: 1.5rem; color: #112a63; }
+  .hero-benefit p { margin: 0; font-size: 1.1rem; line-height: 1.45; color: #30406f; }
+
+  .hero-cta-stack { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+  .hero-btn { display: flex; align-items: center; gap: 18px; text-decoration: none; border-radius: 22px; padding: 20px 24px; transition: transform .2s ease, box-shadow .2s ease; box-shadow: 0 10px 24px rgba(0,0,0,0.07); }
+  .hero-btn:hover { transform: translateY(-1px); }
+  .hero-btn-primary { background: linear-gradient(135deg, #1ca6a0, #13958f); color: #fff; }
+  .hero-btn-secondary { background: #fff; border: 2px solid #dfe4ee; color: #112a63; }
+  .hero-btn-icon { width: 58px; height: 58px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 1.7rem; flex: 0 0 58px; }
+  .hero-btn-primary .hero-btn-icon { background: rgba(255,255,255,0.14); color: #fff; }
+  .hero-btn-secondary .hero-btn-icon { background: #eef8f6; color: #15957f; }
+  .hero-btn-text { display: flex; flex-direction: column; gap: 2px; }
+  .hero-btn-text strong { font-family: 'Montserrat', sans-serif; font-size: 1.9rem; line-height: 1.1; font-weight: 800; }
+  .hero-btn-text small { font-size: 1.15rem; opacity: 0.95; }
+
+  .hero-proof { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
+  .hero-proof-avatars { display: flex; align-items: center;margin-top: -20px !important; text-align: center; }
+  .hero-proof-avatars img { width: 400px; height: auto; display: block; }
+  
+  .hero-btn-new { position: relative; overflow: visible; border: 2px solid rgba(255, 208, 0, 0.9); animation: newPulse 1.7s ease-in-out infinite; }
+  .hero-btn-new::before { content: "NOVITÀ ASSOLUTA"; position: absolute; top: -14px; right: 22px; background: linear-gradient(135deg, #ffd000, #ff7a00); color: #112a63; font-family: 'Montserrat', sans-serif; font-size: 0.78rem; font-weight: 900; letter-spacing: 0.5px; padding: 6px 12px; border-radius: 999px; box-shadow: 0 8px 20px rgba(255, 122, 0, 0.35); z-index: 5; }
+  .hero-btn-new::after { content: ""; position: absolute; inset: -8px; border-radius: 26px; background: rgba(255, 208, 0, 0.28); filter: blur(14px); opacity: 0; z-index: -1; animation: newGlow 1.7s ease-in-out infinite; }
+
+  @keyframes newPulse { 0%, 100% { transform: scale(1); box-shadow: 0 10px 24px rgba(0,0,0,0.07); } 50% { transform: scale(1.025); box-shadow: 0 14px 34px rgba(255,122,0,0.30); } }
+  @keyframes newGlow { 0%, 100% { opacity: 0.25; transform: scale(0.98); } 50% { opacity: 0.85; transform: scale(1.04); } }
+  
+  @media (max-width: 900px) { .hero-proof-avatars img { width: 160px; max-width: 100%; } }
+
+  .hero-stars { color: #f4c430; font-size: 1.4rem; letter-spacing: 2px; margin-bottom: 4px; }
+  .hero-side-image { display: none !important; min-height: 760px; border-radius: 0 24px 24px 0; background: linear-gradient(to left, rgba(255,255,255,0.05), rgba(255,255,255,0.95)), url("FamilyIndex.png") center right / cover no-repeat; opacity: 0.92; }
+
+  #stimaForm * { position: relative; z-index: 1; }
+  .form-banner { display: none !important; }
+  .quote-modern { display: none !important; }
+
+  /* ===== WHATSAPP STICKY ===== */
+  .stima-whatsapp-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; width: min(92%, 860px); background: linear-gradient(135deg, #12a39c, #0f8f89); border-radius: 22px; padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; z-index: 9998; box-shadow: 0 12px 30px rgba(0,0,0,0.18); }
+  .stima-wa-left { display: flex; align-items: center; gap: 14px; color: #fff; }
+  .stima-wa-icon { width: 58px; height: 58px; border-radius: 50%; background: #2fd163; display: flex; align-items: center; justify-content: center; font-size: 2rem; flex: 0 0 58px; }
+  .stima-wa-text strong { display: block; font-family: 'Montserrat', sans-serif; font-size: 1.15rem; }
+  .stima-wa-text span { font-size: 1.45rem; font-weight: 800; line-height: 1.1; }
+  .stima-wa-right { flex: 0 0 auto; }
+  .stima-wa-right a { display: inline-flex; align-items: center; justify-content: center; background: #fff; color: #0f8f89; text-decoration: none; font-family: 'Montserrat', sans-serif; font-weight: 800; font-size: 1.2rem; border-radius: 16px; padding: 18px 28px; min-width: 180px; }
+
+  @media (min-width: 901px) {
+    .stima-whatsapp-bar { top: 22px !important; right: 24px !important; bottom: auto !important; left: auto !important; transform: none !important; width: auto !important; max-width: 360px !important; padding: 12px 14px !important; border-radius: 18px !important; gap: 12px !important; }
+    .stima-wa-icon { width: 42px !important; height: 42px !important; flex: 0 0 42px !important; font-size: 1.25rem !important; }
+    .stima-wa-text strong { font-size: 0.82rem !important; line-height: 1 !important; }
+    .stima-wa-text span { font-size: 1rem !important; line-height: 1.05 !important; white-space: nowrap !important; }
+    .stima-wa-right a { min-width: auto !important; padding: 11px 14px !important; font-size: 0.9rem !important; border-radius: 13px !important; white-space: nowrap !important; }
+  }
+
+  /* ===== MOBILE ===== */
+  @media (max-width: 900px) {
+    .logo { width: calc(100% + 44px) !important; max-width: none !important; min-width: 0 !important; margin: -10px -22px -55px -22px !important; height: auto !important; display: block !important; }
+    .mobile-hero-stima { margin: 0 auto 10px !important; padding: 0 !important; }
+    .hero-main { grid-template-columns: 1fr; gap: 0 !important; }
+    .hero-copy { margin: 0 !important; padding: 0 !important; }
+    .hero-side-image { display: none; }
+    .hero-cta-stack { gap: 8px !important; margin-top: 150px !important; margin-bottom: 12px !important; }
+    .hero-btn { border-radius: 18px; padding: 16px 16px; gap: 14px; }
+    .hero-btn-icon { width: 46px; height: 46px; font-size: 1.25rem; border-radius: 12px; flex: 0 0 46px; }
+    .hero-btn-text strong { font-size: 1.25rem; }
+    .hero-btn-text small { font-size: 0.92rem; }
+    .hero-proof { gap: 12px; margin-bottom: 8px; }
+    .hero-proof-avatars img { width: 160px; max-width: 100%; }
+    .hero-proof-text { font-size: 1.6rem !important; font-weight: 800 !important; }
+    .hero-stars { font-size: 1.1rem; margin-bottom: 2px; }
+    #stimaForm { border-radius: 24px; padding: 8px 18px 18px; }
+    .form-title-box { margin-top: 10px; margin-bottom: 20px; }
+    .stima-whatsapp-bar { width: calc(100% - 34px) !important; max-width: 430px !important; min-width: 0 !important; bottom: 12px !important; padding: 7px 9px !important; border-radius: 18px !important; gap: 8px !important; min-height: 54px !important; }
+    .stima-wa-icon { width: 34px !important; height: 34px !important; font-size: 1rem !important; flex: 0 0 34px !important; }
+    .stima-wa-text strong { font-size: 0.68rem !important; line-height: 1 !important; }
+    .stima-wa-text span { font-size: 0.82rem !important; line-height: 1.05 !important; white-space: nowrap !important; }
+    .stima-wa-right a { min-width: 82px !important; padding: 8px 10px !important; font-size: 0.72rem !important; border-radius: 12px !important; white-space: nowrap !important; }
+    .container { padding-bottom: 110px !important; }
+  }
+
+  .hero-proof-text .proof-main { font-family: 'Montserrat', sans-serif !important; font-size: 20px !important; font-weight: 500 !important; line-height: 1.05 !important; color: #112a63 !important; }
+  @media (max-width: 900px) { .hero-proof-text .proof-main { font-size: 0.82rem !important; line-height: 1.1 !important; font-weight: 700 !important; } }
+
+  .hero-btn-stima360, #stimaForm button[type="submit"] { position: relative; z-index: 0; background: linear-gradient( 135deg, #0028a6,#2d1f8a,#2a0064, #009c78,#007f8f,#ffd500, #ff7a00,#ff0000,#1faa2c ); background-size: 300% 300%; animation: rainbowShift 6s ease infinite; color: #fff; border: none; box-shadow: 0 1px 1px rgba(255,255,255,0.65), 0 8px 24px rgba(0,0,0,0.16); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .hero-btn-stima360::before, #stimaForm button[type="submit"]::before { content: ""; position: absolute; top: 6px; left: 12px; right: 12px; height: 45%; border-radius: 16px; background: linear-gradient( to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.16), rgba(255,255,255,0) ); opacity: 0.9; pointer-events: none; z-index: 1; }
+  .hero-btn-stima360::after, #stimaForm button[type="submit"]::after { content: ""; position: absolute; inset: -8px; border-radius: 22px; background: radial-gradient( circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70% ); filter: blur(8px); opacity: 0.75; pointer-events: none; z-index: -1; }
+  .hero-btn-stima360:hover, #stimaForm button[type="submit"]:hover { transform: scale(1.02); box-shadow: 0 8px 28px rgba(0,0,0,0.22); }
+  .hero-btn-stima360:active, #stimaForm button[type="submit"]:active { transform: scale(0.96); }
+
+  #stimaForm button[type="submit"] { width: 100%; font-family: 'Montserrat', sans-serif; font-size: 1.7rem !important; font-weight: 900 !important; border-radius: 18px !important; padding: 20px 22px !important; margin-top: 10px !important; cursor: pointer; }
+  .hero-btn-stima360 .hero-btn-icon { background: rgba(255,255,255,0.18); color: #fff; z-index: 2; }
+  .hero-btn-stima360 .hero-btn-text { position: relative; z-index: 2; }
+
+  .hero-btn-piano { position: relative; z-index: 0; background: linear-gradient(135deg, #063f37 0%, #087d78 48%, #139f98 100%) !important; color: #fff !important; border: 2px solid rgba(255, 208, 0, 0.82); box-shadow: 0 12px 30px rgba(7, 59, 52, 0.34), 0 0 24px rgba(18,145,127,0.30), inset 0 1px 0 rgba(255,255,255,0.28); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .hero-btn-piano::before { content: "PER CHI VUOLE VENDERE"; position: absolute; top: -14px; right: 22px; background: linear-gradient(135deg, #ffd000, #ff9a00); color: #112a63; font-family: 'Montserrat', sans-serif; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.5px; padding: 6px 12px; border-radius: 999px; box-shadow: 0 8px 20px rgba(255, 122, 0, 0.32), 0 0 14px rgba(255, 208, 0, 0.35); z-index: 5; }
+  .hero-btn-piano::after { content: ""; position: absolute; top: 7px; left: 14px; right: 14px; height: 34%; border-radius: 16px; background: linear-gradient( to bottom, rgba(255,255,255,0.45), rgba(255,255,255,0.12), rgba(255,255,255,0) ); opacity: 0.55; pointer-events: none; z-index: 1; }
+  .hero-btn-piano .hero-btn-icon { background: rgba(255,255,255,0.16); color: #ffd000; position: relative; z-index: 2; box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 0 14px rgba(255,208,0,0.22); }
+  .hero-btn-piano .hero-btn-text { position: relative; z-index: 2; }
+  .hero-btn-piano:hover { transform: scale(1.02); box-shadow: 0 16px 38px rgba(7, 59, 52, 0.42), 0 0 32px rgba(18,145,127,0.42), 0 0 20px rgba(255,208,0,0.22), inset 0 1px 0 rgba(255,255,255,0.30); }
+  .hero-btn-piano:active { transform: scale(0.96); }
+
+  @media (max-width: 900px) {
+    .hero-cta-stack { gap: 7px !important; margin-top: 70px !important; margin-bottom: 12px !important; }
+    .hero-btn { height: 44px !important; min-height: 44px !important; max-height: 44px !important; box-sizing: border-box !important; padding: 5px 9px !important; }
+    .hero-btn-icon { width: 26px !important; height: 26px !important; flex: 0 0 26px !important; border-radius: 8px !important; font-size: 0.75rem !important; }
+    .hero-btn-text { min-width: 0 !important; overflow: hidden !important; gap: 0 !important; }
+    .hero-btn-text strong { font-size: 0.88rem !important; line-height: 1 !important; }
+    .hero-btn-text small { font-size: 0.60rem !important; line-height: 1.02 !important; }
+    .hero-btn-new::before, .hero-btn-piano::before { top: -9px !important; right: 10px !important; font-size: 0.48rem !important; padding: 3px 7px !important; }
+  }
+  
+  .hero-btn-new::before, .hero-btn-piano::before { top: -10px !important; right: 14px !important; font-size: 0.55rem !important; padding: 4px 9px !important; border-radius: 999px !important; }
+  .hero-btn-stima360::before, .hero-btn-piano::after { top: 4px !important; left: 8px !important; right: 8px !important; height: 35% !important; border-radius: 12px !important; opacity: 0.55 !important; }
+  
+  .hero-subtitle { text-align: center; }
+  @media (max-width: 900px) { .hero-copy h1 { font-size: 2.2rem !important; line-height: 1.08 !important; letter-spacing: -0.5px !important; margin-bottom: 14px !important; transform: translateY(10px); } }
+  @media (max-width: 900px) { .form-title-box h2 { font-size: 1.25rem !important; line-height: 1.15 !important; } .form-title-box p { font-size: 0.9rem !important; } }
+  
+  @media (max-width: 900px) {
+    .pertinenze-riga { display: grid !important; grid-template-columns: 1fr !important; gap: 18px !important; }
+    .pert-cell { display: flex !important; align-items: center !important; gap: 12px !important; }
+    .pertinenze label { font-size: 1.35rem !important; line-height: 1.1 !important; white-space: nowrap !important; }
+    .pertinenze input[type="checkbox"] { width: 38px !important; height: 38px !important; min-width: 38px !important; flex: 0 0 38px !important; border-radius: 9px !important; }
+  }
+
+  @media (max-width: 900px) {
+    #toggleSidebar {
+      width: 64px !important; height: 64px !important; padding: 0 !important; border-radius: 50% !important; position: fixed !important; top: 20px !important; right: 20px !important; z-index: 10000 !important; display: flex !important; align-items: center !important; justify-content: center !important; border: none !important; overflow: visible !important; isolation: isolate !important; background: radial-gradient(circle at 50% 22%, rgba(255,255,255,1) 0%, rgba(255,255,255,0.98) 34%, rgba(226,242,255,0.92) 62%, rgba(198,220,245,0.82) 100% ) !important; color: #112a63 !important; box-shadow: 0 8px 18px rgba(0,0,0,0.22), 0 0 10px rgba(0,180,255,0.65), 0 0 20px rgba(0,180,255,0.45), 0 0 30px rgba(255,122,0,0.32), 0 0 42px rgba(255,0,120,0.24), inset 0 4px 8px rgba(255,255,255,1), inset 0 -7px 14px rgba(17,42,99,0.18), inset 0 0 16px rgba(180,220,255,0.75) !important;
+    }
+    #toggleSidebar::before {
+      content: "" !important; position: absolute !important; inset: -6px !important; border-radius: 50% !important; background: conic-gradient( from 0deg, #0028a6, #2d1f8a, #2a0064, #009c78, #007f8f, #ffd500, #ff7a00, #ff0000, #1faa2c, #0028a6 ) !important; animation: hamburgerRingSpin 3s linear infinite !important; z-index: 0 !important; -webkit-mask: radial-gradient(circle, transparent 0 57%, black 58% 100%) !important; mask: radial-gradient(circle, transparent 0 57%, black 58% 100%) !important; filter: drop-shadow(0 0 8px rgba(0,180,255,0.95)) drop-shadow(0 0 15px rgba(255,122,0,0.70)) drop-shadow(0 0 22px rgba(255,0,120,0.50)) !important;
+    }
+    #toggleSidebar::after {
+      content: "" !important; position: absolute !important; top: 8px !important; left: 12px !important; right: 12px !important; height: 23px !important; border-radius: 999px !important; background: linear-gradient( to bottom, rgba(255,255,255,1), rgba(255,255,255,0.72), rgba(255,255,255,0.10), rgba(255,255,255,0) ) !important; filter: blur(0.2px) !important; opacity: 1 !important; z-index: 1 !important; pointer-events: none !important;
+    }
+    #toggleSidebar .icon-hamb { position: relative !important; z-index: 2 !important; width: 28px !important; height: 20px !important; display: flex !important; flex-direction: column !important; justify-content: space-between !important; align-items: center !important; transform: none !important; }
+    #toggleSidebar .icon-hamb span { display: block !important; width: 28px !important; height: 3px !important; border-radius: 999px !important; background: #112a63 !important; transition: transform 0.25s ease, opacity 0.2s ease !important; transform-origin: center !important; }
+    #toggleSidebar.open .icon-hamb span:nth-child(1) { transform: translateY(8.5px) rotate(45deg) !important; }
+    #toggleSidebar.open .icon-hamb span:nth-child(2) { opacity: 0 !important; }
+    #toggleSidebar.open .icon-hamb span:nth-child(3) { transform: translateY(-8.5px) rotate(-45deg) !important; }
+  }
+
+  @media (min-width: 901px) { #toggleSidebar { display: none !important; } }
+  @keyframes hamburgerRingSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  .trust-banner-wrapper { width: 100%; margin: -20px auto 0; display: flex; justify-content: center; position: relative; z-index: 3; }
+  .trust-banner { width: 100%; max-width: 1050px; height: 200px !important; object-fit: fill; display: block; border-radius: 18px; }
+
+@media (max-width: 900px) {
+  /* CAMBIA SOLO QUESTA RIGA: il -18px sposta il banner troppo in alto, mettilo a 0 o riducilo */
+  .trust-banner-wrapper { margin: -35 auto 0 !important; padding: 0; }
+  .trust-banner { height: 80px !important; object-fit: fill; }
+}
+
+  .hero-proof { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
+  .hero-proof-text { display: flex; align-items: center; gap: 12px; }
+  .proof-number { font-family: 'Montserrat', sans-serif; font-size: 2.2rem; font-weight: 900; line-height: 1; background: linear-gradient(135deg, #0028a6, #009c78, #ff7a00); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero-proof-text .proof-main { font-family: 'Montserrat', sans-serif; font-size: 1.25rem !important; font-weight: 800 !important; line-height: 1.15 !important; color: #112a63 !important; letter-spacing: -0.2px; }
+
+  @media (max-width: 900px) {
+    .hero-proof-text { gap: 8px; }
+    .proof-number { font-size: 1.45rem; }
+    .hero-proof-text .proof-main { font-size: 0.82rem !important; line-height: 1.1 !important; }
+    .form-title-box { margin-top: -20px !important; margin-bottom: 10px !important; }
+    .form-title-box h2 { margin: 0 0 3px 0 !important; line-height: 1.05 !important; }
+    .form-title-box p { margin: 0 !important; line-height: 1.1 !important; }
+  }
+
+  @keyframes rainbowShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+  
+  @media (max-width: 900px) {
+    #stimaForm input, #stimaForm select { font-size: 1rem !important; padding: 12px !important; border-radius: 12px !important; }
+    #stimaForm label { font-size: 1.05rem !important; margin-bottom: 6px !important; }
+    #stimaForm { gap: 16px !important; }
+  }
+
+  #step1, #step2 { animation: fadeInStep 0.4s ease-in-out; }
+  @keyframes fadeInStep { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .form-nav-buttons { display: flex; gap: 15px; margin-top: 20px; }
+  
+  .btn-indietro {
+    background: #f0f4f8; color: #112a63; border: 2px solid #dfe6eb; border-radius: 18px; padding: 18px; font-size: 1.4rem; font-family: 'Montserrat', sans-serif; font-weight: 700; cursor: pointer; flex: 0 0 35%; transition: all 0.2s;
+  }
+  .btn-indietro:hover { background: #e1e8f0; transform: scale(0.98); }
+  #btnAvanti { width: 100%; margin-top: 20px; }
+  #btnSubmit { flex: 1; }
+
+  @media (max-width: 900px) { .btn-indietro { font-size: 1.1rem; padding: 14px; flex: 0 0 40%; } }
+
+  .form-progress-container { margin-bottom: 25px; text-align: center; }
+  .form-progress-text { font-family: 'Montserrat', sans-serif; font-size: 1.1rem; color: #15957f; font-weight: 800; margin-bottom: 10px; transition: all 0.3s ease; }
+  .form-progress-track { width: 100%; height: 12px; background: #eef8f6; border-radius: 10px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05); }
+  .form-progress-fill { height: 100%; background: linear-gradient(135deg, #1ca6a0, #13958f); border-radius: 10px; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+
+  input.valid-input, select.valid-input { border-color: #2fd163 !important; box-shadow: 0 0 6px rgba(47, 209, 99, 0.2) !important; }
+  input.invalid-input, select.invalid-input { border-color: #ff3333 !important; box-shadow: 0 0 6px rgba(255, 51, 51, 0.2) !important; }
+  @media (min-width: 768px) and (max-width: 1024px) { html { font-size: 14px !important; } }
+/* =========================================================
+     INIZIO CSS: CASE VENDUTE (DESKTOP + MOBILE) PREMIUM
+     ========================================================= */
+  
+  #sezione-successi-stima360 .form-title-box {
+    text-align: center;
+    margin-bottom: 30px;
+  }
+
+  /* 1. CARD BASE PREMIUM */
+  #sezione-successi-stima360 .successi-card {
+    background: #ffffff;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px -5px rgba(17, 42, 99, 0.12); 
+    transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.4s ease;
+    border: 1px solid rgba(0,0,0,0.04);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  #sezione-successi-stima360 .successi-card:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 24px 40px -10px rgba(17, 42, 99, 0.2);
+  }
+
+  /* IL BADGE "VENDUTO" STILE BRAND */
+  #sezione-successi-stima360 .badge-venduto {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    background: linear-gradient(135deg, #1ca6a0, #13958f); 
+    color: #ffffff;
+    padding: 8px 16px;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 900;
+    border-radius: 12px;
+    z-index: 10;
+    letter-spacing: 0.5px;
+    box-shadow: 0 8px 16px rgba(19, 149, 143, 0.4), inset 0 2px 0 rgba(255,255,255,0.3);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* TESTO ELEGANTE */
+  #sezione-successi-stima360 .card-info {
+    padding: 24px;
+    text-align: left;
+    position: relative;
+    z-index: 5;
+    background: #fff;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+
+  #sezione-successi-stima360 .card-info .tipologia {
+    display: block;
+    color: #10a39c; 
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 6px;
+  }
+
+  #sezione-successi-stima360 .card-info h3 {
+    margin: 0;
+    font-family: 'Montserrat', sans-serif;
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: #112a63;
+    letter-spacing: -0.5px;
+  }
+
+  /* =========================================
+     FIX DEFINITIVO SWIPER: SIGILLA LE FOTO 
+  ========================================= */
+  #sezione-successi-stima360 .swiper {
+    overflow: hidden !important;
+    position: relative;
+    border-radius: 20px 20px 0 0; 
+    width: 100% !important;
+    flex-shrink: 0 !important;
+  }
+
+  #sezione-successi-stima360 .swiper-wrapper {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    height: 100% !important;
+  }
+
+  #sezione-successi-stima360 .swiper-slide {
+    height: 100% !important;
+    overflow: hidden !important;
+    flex-shrink: 0 !important;
+    background-color: #ffffff !important;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  #sezione-successi-stima360 .swiper-slide img {
+    display: block !important; 
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important; 
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    transform: translateZ(0); 
+    transition: transform 0.8s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  #sezione-successi-stima360 .successi-card:hover .swiper-slide img {
+    transform: scale(1.06);
+  }
+
+  /* Ombra interna e Pallini */
+  .swiper::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 35%;
+    background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+    z-index: 2;
+    pointer-events: none;
+  }
+  .swiper-pagination { z-index: 3 !important; }
+  .swiper-pagination-bullet { background: #ffffff !important; opacity: 0.5; }
+  .swiper-pagination-bullet-active { background: #1ca6a0 !important; opacity: 1; transform: scale(1.2); }
+
+
+  /* =========================================
+     LAYOUT DESKTOP (Griglia Allineata)
+     ========================================= */
+  @media (min-width: 901px) {
+    #sezione-successi-stima360 {
+      max-width: 850px !important; 
+      margin: 0 auto 20px auto !important;
+      padding: 40px 0 !important;
+    }
+
+    #sezione-successi-stima360 .successi-carousel {
+      display: grid !important; 
+      grid-template-columns: repeat(3, 1fr) !important; 
+      gap: 24px !important;
+      padding: 15px 5px 30px 5px !important; 
+      overflow: visible !important;
+    }
+
+    #sezione-successi-stima360 .swiper {
+      height: 200px !important; 
+    }
+  }
+
+  /* =========================================
+     LAYOUT MOBILE (Carosello scorrevole)
+     ========================================= */
+  @media (max-width: 900px) {
+    #sezione-successi-stima360 { 
+      padding: 20px 0 !important; 
+      margin: 0 !important; 
+      width: 100% !important; 
+      max-width: 100% !important;
+    }
+    
+    #sezione-successi-stima360 .form-title-box { 
+      margin-top: 10px; 
+      margin-bottom: 20px; 
+    }
+    
+    #sezione-successi-stima360 .successi-carousel {
+      display: flex !important; 
+      flex-direction: row !important; 
+      flex-wrap: nowrap !important;   
+      overflow-x: auto !important; 
+      overflow-y: hidden !important;
+      scroll-snap-type: x mandatory; 
+      gap: 20px !important; 
+      padding-bottom: 30px !important; 
+      margin: 0 !important;
+      scrollbar-width: none;
+    }
+    
+    #sezione-successi-stima360 .successi-carousel::-webkit-scrollbar { display: none; }
+    
+    #sezione-successi-stima360 .successi-card { 
+      flex: 0 0 100% !important; 
+      min-width: 100% !important;
+      margin: 0 !important; 
+      scroll-snap-align: center; 
+    }
+  }
+  /* =========================================================
+     FINE CSS: CASE VENDUTE
+     ========================================================= */
+   
+   /* Forza lo sfondo bianco su tutte le slide */
+.swiper-slide {
+    background-color: #ffffff !important;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Gestione foto (per riempire bene lo spazio) */
+.swiper-slide img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important; /* Mantiene la foto intera e la centra */
+}
+/* =========================================
+   🚨 FIX DEFINITIVO: SIGILLA LE FOTO 🚨
+   Evita che le foto "sbuchino" da sotto
+========================================= */
+
+/* 1. Il contenitore non fa uscire MAI nulla */
+#sezione-successi-stima360 .swiper {
+    overflow: hidden !important;
+    position: relative;
+    border-radius: 20px 20px 0 0; /* Arrotonda perfettamente gli angoli in alto */
+}
+
+/* 2. Impedisce alle foto di impilarsi in verticale */
+#sezione-successi-stima360 .swiper-wrapper {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    height: 100% !important;
+}
+
+/* 3. Blocca l'altezza della singola slide */
+#sezione-successi-stima360 .swiper-slide {
+    height: 100% !important;
+    overflow: hidden !important;
+    flex-shrink: 0 !important;
+}
+
+/* 4. Rimuove gli spazi fantasma sotto le foto */
+#sezione-successi-stima360 .swiper-slide img {
+    display: block !important; /* Regola d'oro: uccide lo spazio bianco sotto */
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    transform: translateZ(0); /* Previene glitch grafici su iPhone */
+}
+/* =========================================
+     LIGHTBOX (Immagine a tutto schermo)
+     ========================================= */
+  #stima-lightbox {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.85); /* Sfondo nero semi-trasparente */
+    z-index: 100000;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  #stima-lightbox.active {
+    display: flex;
+    opacity: 1;
+  }
+
+  #stima-lightbox img {
+    max-width: 95vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    transform: scale(0.95);
+    transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  #stima-lightbox.active img {
+    transform: scale(1);
+  }
+
+  #stima-lightbox-close {
+    position: absolute;
+    top: 20px;
+    right: 25px;
+    color: #ffffff;
+    font-size: 45px;
+    cursor: pointer;
+    line-height: 1;
+    font-family: 'Nunito', sans-serif;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    z-index: 100001;
+    transition: transform 0.2s ease;
+  }
+
+  #stima-lightbox-close:hover {
+    transform: scale(1.1);
+  }
+
+  /* Cursore per far capire che l'immagine si può ingrandire */
+  #sezione-successi-stima360 .swiper-slide img {
+    cursor: zoom-in;
+  }
+  #sezione-successi-stima360 .swiper-slide img {
+    cursor: zoom-in;
+  }
+  
+/* =========================================
+   RECENSIONI GOOGLE MINIMALI (GRIGLIA A 3)
+   ========================================= */
+#google-reviews-stima360 {
+  position: relative; z-index: 3;
+  margin: 10px auto 20px auto; padding: 0 20px;
+  max-width: 900px; box-sizing: border-box;
+}
+.google-review-wrapper {
+  display: flex; justify-content: center; flex-wrap: wrap; gap: 16px;
+}
+.google-review-card {
+  background: #ffffff; border-radius: 16px; padding: 16px; 
+  box-sizing: border-box; box-shadow: 0 8px 24px -5px rgba(17, 42, 99, 0.08);
+  border: 1px solid rgba(0,0,0,0.04); flex: 1 1 250px; 
+  max-width: 290px; text-align: left; font-family: 'Nunito', sans-serif;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.google-review-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px -5px rgba(17, 42, 99, 0.12); }
+.google-review-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.google-review-avatar {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, #1ca6a0, #13958f); color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; font-weight: 800; font-family: 'Montserrat', sans-serif; flex-shrink: 0;
+}
+.google-review-name { font-family: 'Montserrat', sans-serif; font-weight: 800; color: #112a63; font-size: 0.95rem; margin: 0 0 2px 0; line-height: 1.1; }
+.google-review-stars { color: #fbc02d; font-size: 1rem; letter-spacing: 1px; line-height: 1; }
+.google-review-text { font-size: 0.9rem; color: #30406f; line-height: 1.45; margin: 0; font-style: italic; }
+.google-icon-badge { width: 20px; height: 20px; margin-left: auto; flex-shrink: 0; }
+
+/* COMPRESSIONE SPAZI DESKTOP */
+@media (min-width: 901px) {
+  .mobile-hero-stima { margin-bottom: 10px !important; }
+  #google-reviews-stima360 { margin-top: 0 !important; margin-bottom: 15px !important; }
+  #sezione-successi-stima360 { padding-top: 10px !important; padding-bottom: 20px !important; }
+}
+
+
+/* =========================================
+   HEADER RECENSIONI (DESIGN PRO E PREMIUM)
+   ========================================= */
+
+.stima-section-header {
+  text-align: center;
+  max-width: 720px; 
+  margin: 0 auto 35px auto;
+  padding: 0 15px;
+  font-family: 'Montserrat', sans-serif;
+  position: relative;
+  z-index: 3;
+}
+
+/* =========================================
+   NUOVO HEADER RECENSIONI (DESIGN PRO E PREMIUM)
+   ========================================= */
+
+.stima-section-header {
+  text-align: center;
+  max-width: 720px; 
+  margin: 0 auto 35px auto;
+  padding: 0 15px;
+  font-family: 'Montserrat', sans-serif;
+  position: relative;
+  z-index: 3;
+}
+
+/* BADGE FIDUCIA "LIBERO" (Senza ovale) */
+.stima-sh-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px; 
+  margin-bottom: 24px;
+  background: transparent; 
+  border: none; 
+  padding: 0; 
+  box-shadow: none; 
+}
+
+.stima-sh-avatars {
+  width: auto;
+  height: 48px; 
+  border-radius: 50px;
+  filter: drop-shadow(0 6px 14px rgba(17, 42, 99, 0.15));
+}
+
+.stima-sh-stars {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.stima-sh-stars .stars {
+  color: #fbc02d;
+  font-size: 1.25rem; 
+  letter-spacing: 2px;
+  filter: drop-shadow(0 2px 4px rgba(251, 192, 45, 0.25)); 
+}
+
+.stima-sh-stars .text {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #112a63; 
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+  opacity: 0.9;
+}
+
+/* TITOLO E SOTTOTITOLO (Colori ripristinati) */
+.stima-sh-title {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #112a63; /* Il blu elegante */
+  line-height: 1.25;
+  margin: 0 0 16px 0;
+  letter-spacing: -0.5px;
+}
+
+.stima-sh-highlight {
+  display: block;
+  font-size: 2.1rem; 
+  font-weight: 900;
+  line-height: 1.1;
+  margin-top: 6px; 
+  /* Il gradiente verde acqua */
+  background: linear-gradient(135deg, #10a39c, #13958f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.stima-sh-subtitle {
+  font-family: 'Nunito', sans-serif;
+  font-size: 1.2rem;
+  color: #30406f; /* Il grigio-blu */
+  line-height: 1.5;
+  margin: 0 auto;
+  max-width: 90%;
+  font-weight: 500;
+}
+
+/* === RESPONSIVE MOBILE === */
+@media (max-width: 900px) {
+  .stima-section-header {
+    margin: 0 auto 28px auto;
+  }
+  .stima-sh-trust {
+    margin-bottom: 20px;
+    gap: 12px;
+  }
+  .stima-sh-avatars {
+    height: 40px; 
+  }
+  .stima-sh-stars .stars { font-size: 1.1rem; }
+  .stima-sh-stars .text { font-size: 0.7rem; }
+  
+  .stima-sh-title {
+    font-size: 1.45rem; 
+  }
+  .stima-sh-highlight {
+    font-size: 1.6rem;
+    margin-top: 6px;
+  }
+  .stima-sh-subtitle {
+    font-size: 1rem;
+    padding: 0 5px;
+  }
+}
+  
+  .mobile-hero-stima { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+  #google-reviews-stima360 { margin-top: 0 !important; padding: 0 !important; margin-bottom: 25px !important; width: 100%; overflow: hidden; }
+
+  /* 2. IL SALVAVITA: flex-start e scroll-padding */
+  .google-review-wrapper {
+    display: flex !important;
+    flex-direction: row !important; 
+    flex-wrap: nowrap !important; 
+    justify-content: flex-start !important; 
+    align-self: flex-start !important; /* <--- AGGIUNGI QUESTA RIGA */
+    overflow-x: auto !important; /* <--- QUESTO IMPEDISCE ALLA CARD DI ESSERE TAGLIATA A SINISTRA */
+    overflow-x: auto !important; 
+    scroll-snap-type: x mandatory !important; 
+    scrollbar-width: none !important; 
+    -webkit-overflow-scrolling: touch !important; 
+    gap: 15px !important; 
+    padding: 10px 20px 25px 20px !important; 
+    margin: 0 !important;
+    scroll-padding-left: 20px !important; /* Calamita lo scorrimento esattamente a filo col padding */
+  }
+  .google-review-wrapper::-webkit-scrollbar { display: none !important; }
+
+  /* 3. Card dimensionata per vedersi intera + l'inizio della successiva */
+.google-review-card {
+  flex: 0 0 75% !important; 
+  max-width: 75% !important;
+  scroll-snap-align: start !important; 
+  padding: 12px 14px !important; 
+  height: auto !important; /* L'altezza ora si adatta al contenuto */
+  min-height: 135px !important; /* Mantiene un minimo di decenza visiva se il testo è cortissimo */
+  overflow: hidden !important;
+}
+  /* 4. Testi miniaturizzati */
+  .google-review-header { margin-bottom: 6px !important; }
+  .google-review-avatar { width: 30px !important; height: 30px !important; font-size: 0.9rem !important; }
+  .google-review-name { font-size: 0.85rem !important; margin-bottom: 0 !important; }
+  .google-review-stars { font-size: 0.9rem !important; }
+  
+  .google-review-text {
+    font-size: 0.8rem !important; 
+    line-height: 1.3 !important;
+    white-space: normal !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 3 !important; 
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin-top: 4px !important;
+  }
+}
+/* === FIX BADGE E TESTI PER I PULSANTI AFFIANCATI (MOBILE) === */
+  @media (max-width: 900px) {
+    .nascondi-testo { 
+      display: none !important; 
+    }
+    
+    /* Ridimensiona e accorcia i testi dei badge gialli per metà schermo */
+    .hero-btn-piano::before { 
+      content: "VENDITA" !important; 
+      right: 5px !important; 
+      font-size: 0.45rem !important; 
+      top: -10px !important; 
+    }
+    .hero-btn-new::before { 
+      content: "NOVITÀ" !important; 
+      right: 5px !important; 
+      font-size: 0.45rem !important; 
+      top: -10px !important; 
+    }
+  }
+  </style>
+</head>
+<body>
+
+<div class="cloud c1"></div><div class="cloud c2"></div><div class="cloud c3"></div><div class="cloud c4"></div>
+<div class="cloud c5"></div><div class="cloud c6"></div><div class="cloud c7"></div><div class="cloud c8"></div>
+<div class="cloud c9"></div><div class="cloud c10"></div><div class="cloud c11"></div><div class="cloud c12"></div>
+
+<button id="toggleSidebar">
+  <span class="icon-hamb">
+    <span></span><span></span><span></span>
+  </span>
+</button>  
+
+<div class="sidebar">
+  <h2>
+    <span id="sidebar-title"></span>
+    <img src="IconaAi.png" alt="Stima360 icon" class="ai-logo animated-logo" style="opacity:0;">
+  </h2>
+  
+  <div class="idea-box ai-theme">
+    <h3 class="title-crystal green">Perché ci scelgono i nostri clienti</h3>
+<p>Abbiamo eliminato uffici costosi, passaggi inutili e provvigioni gonfiate.<br><br>Lavoriamo online, diretti sui territori di <strong>Marche e Abruzzo</strong>.<br><strong>0% Provvigione per chi vende.</strong> Lavoriamo gratis per il venditore, prendendo in carico in esclusiva solo immobili valutati e selezionati dal nostro algoritmo. Zero costi, massima velocità.</p>    <a href="Vendere.html" class="button">Scopri come funziona</a>
+  </div>
+
+  <div class="idea-box red-theme">
+    <h3 class="title-crystal blue">Fondatore</h3>
+    <p><strong>- Agente immobiliare</strong> con oltre 15 anni di esperienza sul territorio<br><strong>- Programmatore in ambiente web</strong><br><strong>- Competenze in sviluppo web</strong> con <strong>AI applicata al mercato immobiliare</strong></p>
+    <p id="cio-che-crea-valore"><strong>Stima360 nasce dall'esigenza di</strong> unire esperienza sul campo, metodo e tecnologia al fine di dare a ogni immobile <strong>il valore che merita davvero</strong>.</p>
+    <p>Crediamo in un <strong>agente immobiliare moderno</strong>: digitale, senza uffici fisici, a <strong>basso impatto ambientale</strong>, focalizzato solo su ciò che crea valore concreto e conta davvero</p>
+    <div class="cv-card"><img src="IMGVendere/Fondatore.png" alt="Biglietto da visita Stima360"></div>
+    <a href="cv-giorgio-censori.html" class="button cv-btn">Curriculum</a>
+  </div>
+
+  <div class="idea-box gold-theme">
+    <h3 class="title-crystal gold">Lavora con noi</h3>
+    <p><strong>Crediamo nell’agente immobiliare del futuro</strong>: libero da uffici fisici e da vincoli stressanti.</p>
+    <p>Il nostro modello digitale, mira in primis al benessere delle nostre risorse, per migliorare la qualità dei servizi per i nostri clienti.</p>
+    <p><abbr title="Intelligenza Artificiale">AI</abbr> sempre operative. <strong>Persone sempre più libere.</strong></p>
+    <p><strong>Stima360</strong> nasce per costruire un lavoro <em>sostenibile</em>, che lasci tempo per vivere e stare con chi conta davvero.</p>
+    <div class="sidebar-image"><img src="IMGVendere/LavoraConNoi.png" alt="Lavora con noi Stima360"></div>
+    <a href="candidati.html" class="button">Candidati</a>
+  </div>
+</div>
+
+<div class="container">
+  <img src="Stima360index.png" alt="Logo Stima360" class="logo animated-stima" />
+  <img src="FamilyIndex.png" alt="Immagine descrittiva" class="form-banner" />
+  
+  <section class="mobile-hero-stima">
+    <div class="hero-main">
+      <div class="hero-copy">
+        <div class="hero-cta-stack">
+          <a href="#stimaForm" class="hero-btn hero-btn-primary hero-btn-stima360">
+            <span class="hero-btn-icon">▦</span>
+            <span class="hero-btn-text"><strong>Fai la Diagnosi Vendita gratuita</strong><small>Valore, vendibilità e strategia</small></span>
+          </a>
+<div style="display: flex !important; flex-direction: row !important; gap: 8px !important; width: 100% !important;">
+            <a href="https://www.stima360.it/PianoVenditaStima360.html" class="hero-btn hero-btn-piano" style="flex: 1 !important; width: 50% !important; padding: 4px 6px !important; min-width: 0 !important; justify-content: center !important;">
+              <span class="hero-btn-icon" style="margin-right: 6px !important; flex-shrink: 0 !important;">⌂</span>
+              <span class="hero-btn-text" style="overflow: hidden !important;">
+                <strong style="font-size: 0.75rem !important; white-space: nowrap !important;">0 Provvigioni</strong>
+                <small class="nascondi-testo">Scopri idoneità</small>
+              </span>
+            </a>
+            
+            <a href="https://www.stima360.it/Test-vendita-invisibile-stima360.html" class="hero-btn hero-btn-secondary hero-btn-new" style="flex: 1 !important; width: 50% !important; padding: 4px 6px !important; min-width: 0 !important; justify-content: center !important;">
+              <span class="hero-btn-icon" style="margin-right: 6px !important; flex-shrink: 0 !important;">◔</span>
+              <span class="hero-btn-text" style="overflow: hidden !important;">
+                <strong style="font-size: 0.75rem !important; white-space: nowrap !important;">Invisibile</strong>
+                <small class="nascondi-testo">Testa interesse</small>
+              </span>
+            </a>
+          </div>
+        </div>
+        
+        <div class="trust-banner-wrapper">
+          <img src="banner-fiducia-giorgio.png" alt="Fidati di chi ci mette la faccia - Giorgio Censori Stima360" class="trust-banner">
+        </div>
+
+      <div class="hero-side-image"></div>
+    </div>
+  </section>
+
+
+<!-- INIZIO SEZIONE RECENSIONI GOOGLE (3 CARD) -->
+ <section id="google-reviews-stima360" style="margin-top: 20px; padding: 0 10px;">
+<div class="stima-section-header">
+  
+  <div class="stima-sh-trust">
+    <img src="facce-clienti.png" alt="Proprietari soddisfatti" class="stima-sh-avatars">
+    <div class="stima-sh-stars">
+      <span class="stars">★★★★★</span>
+      <span class="text">Scelto dai proprietari</span>
+    </div>
+  </div>
+
+  <h2 class="stima-sh-title">
+    Sempre più proprietari scelgono il metodo Stima360.<br>
+    <span class="stima-sh-highlight">0% Provvigioni per chi Vende.</span>
+  </h2>
+  
+  <p class="stima-sh-subtitle">
+    Tu incassi il massimo. Noi lavoriamo smart, senza uffici e costi inutili.
+  </p>
+
+</div>
+  
+  <div class="google-review-wrapper" style="cursor: pointer;" onclick="window.open('https://www.google.com/search?sca_esv=22393a5d7ff37691&rlz=1C5CHFA_enIT1044IT1044&sxsrf=APpeQntyrUMWTL9yVWVILEfa0TJaRojikA:1782758775953&q=stima+360+alba+adriatica&si=APenkKm7iecQ4G6P-TsbSMFKIQtv3EFIqRAFw-i8uEbk55Z-_7PIAOhfAVCSQLWt8L6eJqN-NJKoIfZtEW8Q3P8FExP5gKmetX36KE3Jn4PrA2mYjNvLpmk%3D&uds=AJ5uw19wG8C0rPbrw45nTId3Hj48v3aD2s-4Sngf1MxOg_x0Bt00l-4K_nV0SsJazXB2jPnqPXLaWcQdiOciTew7K-qG39hqiKe9WeLcLbrg_Mz5x1qrqc9h0pTFHHqBfHeZk_CsbSVY&sa=X&ved=2ahUKEwj18L38ja2VAxVX3QIHHcQ-JTAQ3PALegQIHBAE&biw=1520&bih=662&dpr=2.5', '_blank')">
+    
+    <div class="google-review-card">
+      <div class="google-review-header">
+        <div class="google-review-avatar">L</div>
+        <div>
+          <h4 class="google-review-name">Lorenzo S.</h4>
+          <div class="google-review-stars">★★★★★</div>
+        </div>
+        <svg class="google-icon-badge" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      </div>
+      <p class="google-review-text">"Giorgio È il massimo della professionalità nel settore immobiliare. COMPLIMENTI!"</p>
+    </div>
+
+    <div class="google-review-card">
+      <div class="google-review-header">
+        <div class="google-review-avatar" style="background: linear-gradient(135deg, #007bff, #0056b3);">P</div>
+        <div>
+          <h4 class="google-review-name">Paolo R.</h4>
+          <div class="google-review-stars">★★★★★</div>
+        </div>
+        <svg class="google-icon-badge" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      </div>
+      <p class="google-review-text">"Devo dire che sono sbalordito, il sito mi ha dato una stima perfetta, inoltre lui è una persona serissima, vera"</p>
+    </div>
+
+    <div class="google-review-card">
+      <div class="google-review-header">
+        <div class="google-review-avatar" style="background: linear-gradient(135deg, #ff7a00, #d96500);">A</div>
+        <div>
+          <h4 class="google-review-name">Ameba</h4>
+          <div class="google-review-stars">★★★★★</div>
+        </div>
+        <svg class="google-icon-badge" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      </div>
+      <p class="google-review-text">"Servizio impeccabile, seri ed efficienti come pochi."</p>
+    </div>
+
+  </div>
+</section>
+  <!-- FINE SEZIONE RECENSIONI GOOGLE -->
+
+
+
+<section id="sezione-successi-stima360">
+  <div class="form-title-box">
+    <h2>I nostri recenti successi</h2>
+    <p>Valutati coi dati, venduti col metodo Stima360.</p>
+  </div>
+  
+  <div class="successi-carousel" id="successi-carousel-container" style="display: flex; gap: 20px; overflow-x: auto;">
+    </div>
+</section>
+  <form id="stimaForm">
+    <div class="form-progress-container">
+      <div class="form-progress-text" id="progressText">0% Analisi Iniziale</div>
+      <div class="form-progress-track">
+        <div class="form-progress-fill" id="progressFill" style="width: 0%;"></div>
+      </div>
+    </div>
+
+<div id="step1">
+  <div class="form-title-box">
+    <h2>Inserisci i dati della tua casa</h2>
+    <p>Passo 1: Informazioni di base</p>
+    <p style="font-size: 0.95rem; color: #1ca6a0; margin-top: 8px; font-weight: 600;"><em>Metodo sviluppato dalle più potenti AI. <br> Valuta in tempo reale i dati della tua zona.</em></p>
+  </div>
+
+      <div class="form-group input-lungo">
+        <label for="regione">Regione</label>
+        <select id="regione" required>
+          <option value="">Scegli...</option>
+          <option value="Abruzzo">Abruzzo</option>
+          <option value="Marche">Marche</option>
+        </select>
+      </div>
+      <div class="form-group input-lungo">
+        <label for="comune">Comune</label>
+        <select id="comune" required disabled>
+          <option value="">Seleziona prima la regione</option>
+        </select>
+      </div>
+      <div class="form-group input-lungo">
+        <label for="microzona">Micro-zona (obbligatorio)</label>
+        <select id="microzona" disabled required>
+          <option value="">Seleziona il comune prima</option>
+        </select>
+      </div>      
+      <div class="form-row">
+        <div class="form-group input-via"><label for="via">Via</label><input type="text" id="via" required></div>
+        <div class="form-group input-civico"><label for="civico">Civico</label><input type="text" id="civico" required></div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group"><label for="tipologia">Tipologia</label>
+          <select id="tipologia" required>
+            <option value="">Scegli...</option>
+            <option>Appartamento</option>
+            <option>Villa</option>
+            <option>Rustico</option>
+            <option>Altro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="mq">Superficie</label>
+          <input type="number" id="mq" min="10" max="1000" placeholder="mq" required>
+        </div>
+        <div class="form-group"><label for="piano">Piano</label>
+          <select id="piano" required>
+            <option value="">Scegli...</option>
+            <option value="Terra">Piano Terra</option>
+            <option value="1">Piano 1</option>
+            <option value="2">Piano 2</option>
+            <option value="3">Piano 3</option>
+            <option value="4">Piano 4</option>
+            <option value="5">Piano 5</option>
+            <option value="6">Piano 6</option>
+            <option value="7">Piano 7</option>
+            <option value="8">Piano 8</option>
+            <option value="9">Piano 9</option>
+            <option value="ultimo">Ultimo</option>
+          </select>
+        </div>
+      </div>
+      
+      <button type="button" id="btnAvanti" class="hero-btn-stima360">Continua &rarr;</button>
+    </div>
+
+    <div id="step2" style="display: none;">
+      
+      <div id="stimaPreliminareBox" style="background: #eef8f6; border: 2px dashed #139f98; padding: 25px; border-radius: 16px; margin-bottom: 30px; text-align: center; box-shadow: 0 6px 20px rgba(15,143,137,0.06);">
+        <h4 style="margin: 0 0 5px 0; font-family: 'Montserrat', sans-serif; color: #087d78; font-size: 1.4rem; font-weight: 800;">🎉 Prima stima base calcolata!</h4>
+        <div id="valorePreliminareText" style="font-size: 2.8rem; font-weight: 900; color: #10245a; font-family: 'Montserrat', sans-serif; margin: 8px 0; letter-spacing: 0.5px;">0 €</div>
+        <p style="margin: 0; font-size: 1.1rem; color: #19546a; line-height: 1.4;">
+          Valore iniziale stimato per <strong><span id="mqPreliminareText">0</span> mq</strong> a <span id="comunePreliminareText"></span> (<span id="microzonaPreliminareText"></span>).<br>
+          <strong style="color: #ff7a00;">Completa le ultime informazioni sotto</strong> per calcolare l'impatto di pertinenze, vista mare e stato conservativo sul Report finale!
+        </p>
+      </div>
+
+      <div class="form-title-box">
+        <h2>Dettagli e Pertinenze</h2>
+        <p>Passo 2: Completa il profilo dell'immobile</p>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="locali">Locali</label>
+          <select id="locali" required>
+            <option value="">Scegli...</option>
+            <option value="Monolocale">Monolocale</option>
+            <option value="Bilocale">Bilocale</option>
+            <option value="Trilocale">Trilocale</option>
+            <option value="Quadrilocale">Quadrilocale</option>
+            <option value="Pentalocale">Pentalocale</option>
+            <option value="Abitazione con 6+ locali">Abitazione con 6+ locali</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="bagni">Bagni</label>
+          <input type="number" id="bagni" min="1" max="10" required>
+        </div>
+        <div class="form-group">
+          <label for="ascensore">Ascensore</label>
+          <select id="ascensore" required>
+            <option value="">Scegli...</option>
+            <option>Sì</option>
+            <option>No</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="anno">Anno</label>
+          <input type="number" id="anno" min="1950" max="2026" placeholder="es. 2005" required>
+        </div>
+        <div class="form-group">
+          <label for="stato">Stato immobile</label>
+          <select id="stato" required>
+            <option value="">Scegli...</option>
+            <option value="nuovo">Nuovo</option>
+            <option value="ristrutturato">Ristrutturato</option>
+            <option value="buono">Buono</option>
+            <option value="scarso">Scarso</option>
+            <option value="grezzo">Grezzo</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label>Pertinenze</label>
+        <div class="pertinenze">
+          <div class="pertinenze-riga">
+            <div class="pert-cell">
+              <label><input id="cantinaChk" type="checkbox" name="pertinenze" value="Cantina"> Cantina</label>
+              <input type="number" id="mqCantina" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+            <div class="pert-cell">
+              <label><input id="postoAutoChk" type="checkbox" name="pertinenze" value="Posto Auto"> Posto Auto</label>
+              <input type="number" id="mqPostoAuto" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+            <div class="pert-cell">
+              <label id="garageLabel" style="display:inline-flex; align-items:center; gap:10px;"><input id="garageChk" type="checkbox" name="pertinenze" value="Garage"> Garage</label>
+              <input type="number" id="mqGarage" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+          </div>
+        
+          <div class="pertinenze-riga">
+             <div class="pert-cell">
+              <label><input id="tavernaChk" type="checkbox" name="pertinenze" value="Taverna"> Taverna</label>
+              <input type="number" id="mqTaverna" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+            <div class="pert-cell">
+              <label><input id="soffittaChk" type="checkbox" name="pertinenze" value="Soffitta"> Soffitta</label>
+              <input type="number" id="mqSoffitta" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+            <div class="pert-cell">
+              <label id="giardinoLabel" style="display:inline-flex; align-items:center; gap:10px;"><input id="giardinoChk" type="checkbox" name="pertinenze" value="Giardino"> Giardino</label>
+              <input type="number" id="mqGiardino" min="1" max="5000" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+          </div>
+        
+          <div class="pertinenze-riga">
+            <div class="pert-cell">
+              <label><input id="balconiChk" type="checkbox" name="pertinenze" value="Balconi"> Balconi</label>
+              <select id="numBalconi" style="display:none; width:63px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;">
+                <option value="">n°</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option>
+              </select>
+            </div>
+            <div class="pert-cell">
+              <label><input id="terrazzoChk" type="checkbox" name="pertinenze" value="Terrazzo"> Terrazzo</label>
+              <input type="number" id="mqTerrazzo" min="1" max="500" placeholder="mq" style="display:none; width:50px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+            <div class="pert-cell">
+              <label id="altroLabel" style="display:inline-flex; align-items:center; gap:10px;"><input id="altroChk" type="checkbox" name="pertinenze" value="Altro"> Altro</label>
+              <input type="text" id="altroDescrizione" placeholder="es. corte" maxlength="50" style="display:none; width:110px; padding:8px; border-radius:10px; border:1.5px solid #dfe6eb; background:#fafafa;" />
+            </div>
+          </div>
+        
+          <div class="form-group">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="posizioneMare">Posizione rispetto al mare</label>
+                <select id="posizioneMare" required>
+                  <option value="">Scegli...</option>
+                  <option value="Frontemare (1ª fila)">Frontemare (1ª fila)</option>
+                  <option value="Seconda fila">Seconda fila</option>
+                  <option value="Oltre la seconda fila">Oltre la seconda fila</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="distanzaMare">Distanza dalla spiaggia</label>
+                <select id="distanzaMare" required>
+                  <option value="">Scegli...</option>
+                  <option value="0–100 m">0–100 m</option>
+                  <option value="100–300 m">100–300 m</option>
+                  <option value="300–500 m">300–500 m</option>
+                  <option value="500–1000 m">500–1000 m</option>
+                  <option value=">1000 m">&gt;1000 m</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="barrieraMare">Ferrovia/strada principale?</label>
+                <select id="barrieraMare" required>
+                  <option value="">Scegli...</option>
+                  <option value="si">Sì</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+              <div class="form-group" id="vistaMareStep1" style="margin-top:12px;">
+                <label for="vistaMareYN">Vista mare?</label>
+                <select id="vistaMareYN" required>
+                  <option value="">Scegli...</option>
+                  <option value="si">Sì</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+              <div class="form-group" id="vistaMareBox" style="margin-top:12px; display:none;">
+                <label for="vistaMare">Dettaglio vista mare</label>
+                <select id="vistaMare">
+                  <option value="">Scegli...</option>
+                  <option value="panoramica">Panoramica</option>
+                  <option value="parziale">Parziale</option>
+                  <option value="scarsa">Scarsa</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+        
+      <div class="quote-modern">
+        <span>L’unione tra programmatori IA e agenti immobiliari</span>
+      </div>
+
+      <div class="form-nav-buttons">
+        <button type="button" id="btnIndietro" class="btn-indietro">Indietro</button>
+        <button type="submit" id="btnSubmit">Stima360</button>
+      </div>
+    </div>
+  </form>
+
+  <div id="videoBox" style="display:none; margin-top:60px; text-align:center;">
+    <iframe id="youtubeFrame" width="100%" height="315" style="max-width:560px; border-radius:12px; border:none;" allowfullscreen></iframe>
+  </div>
+</div>
+
+<img src="arcobaleno2.png" id="arcobaleno-bg" alt="arcobaleno" />
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const regioneSelect = document.getElementById("regione");
+  const comuneSelect = document.getElementById("comune");
+  const microzonaSelect = document.getElementById("microzona");
+
+  const zone = {
+    "Alba Adriatica": ["Nord", "Villa Fiore", "Zona Basciani"],
+    "Tortoreto": ["Lido Sud", "Lido Centro", "Lido Nord", "Alto"],
+    "Martinsicuro": ["Centro", "Villarosa", "Alto"],
+    "Colonnella": ["Bivio", "Centro storico", "Contrade"],
+    "Controguerra": ["Centro storico", "Contrade"],
+    "Corropoli": ["Centro storico", "Bivio", "Contrade"],
+    "Nereto": ["Centro storico", "Bivio", "Contrade"],
+    "Ancarano": ["Centro storico", "Contrade"],
+    "Civitella del Tronto": ["Centro storico", "Contrade"],
+    "Sant’Egidio alla Vibrata": ["Centro", "Bivio", "Contrade"],
+    "Sant’Omero": ["Centro storico", "Contrade"],
+    "Torano Nuovo": ["Centro storico", "Contrade"],
+    "San Benedetto del Tronto": ["Sentina", "Porto d’Ascoli", "Centro / Lungomare", "Paese Alto", "Agraria", "Ponterotto"],
+    "Grottammare": ["Centro / Lungomare", "Ascolani", "Valtesino", "Vecchio Incasato"],
+    "Cupra Marittima": ["Marina / Lungomare", "Centro", "Castello"],
+    "Massignano": ["Marina di Massignano", "Centro / Collina"],
+    "Pedaso": ["Centro-Mare / Lungomare", "Collina"],
+    "Campofilone": ["Marina di Campofilone", "Borgo"],
+    "Altidona": ["Marina", "Borgo"],
+    "Fermo": ["Marina Palmense", "Lido di Fermo", "Casabianca", "Lido Tre Archi", "San Tommaso", "Torre di Palme", "Ponte Nina", "Tre Camini", "Santa Maria a Mare"],
+    "Porto San Giorgio": ["Centro", "Lungomare Nord", "Lungomare Sud", "Ovest"],
+    "Porto Sant’Elpidio": ["Centro", "Faleriense", "Corva", "Lungomare"],
+    "Potenza Picena": ["Porto Potenza Picena (zona mare)", "Centro"],
+    "Porto Recanati": ["Centro / Lungomare", "Scossicci", "Montarice"],
+    "Civitanova Marche": ["Sud", "Centro", "Nord / Fontespina", "San Marone", "Civitanova Alta"],
+  };
+
+  function aggiornaComuni() {
+    const regione = regioneSelect.value;
+    comuneSelect.innerHTML = "";
+    microzonaSelect.innerHTML = '<option value="">Seleziona il comune prima</option>';
+    microzonaSelect.disabled = true;
+
+    if (regione === "Abruzzo") {
+      const comuniAbruzzo = ["Alba Adriatica", "Ancarano", "Civitella del Tronto", "Colonnella", "Controguerra", "Corropoli", "Martinsicuro", "Nereto", "Sant’Egidio alla Vibrata", "Sant’Omero", "Torano Nuovo", "Tortoreto"];
+      comuneSelect.innerHTML = '<option value="">Scegli...</option>';
+      comuniAbruzzo.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c; opt.textContent = c;
+        comuneSelect.appendChild(opt);
+      });
+      comuneSelect.disabled = false;
+    } else if (regione === "Marche") {
+      const comuniMarche = ["San Benedetto del Tronto", "Grottammare", "Cupra Marittima", "Massignano", "Pedaso", "Campofilone", "Altidona", "Fermo", "Porto San Giorgio", "Porto Sant’Elpidio", "Potenza Picena", "Porto Recanati", "Civitanova Marche"];
+      comuneSelect.innerHTML = '<option value="">Scegli...</option>';
+      comuniMarche.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c; opt.textContent = c;
+        comuneSelect.appendChild(opt);
+      });
+      comuneSelect.disabled = false;
+    }
+  }
+
+  regioneSelect.addEventListener("change", aggiornaComuni);
+
+  comuneSelect.addEventListener("change", () => {
+    const comune = comuneSelect.value;
+    microzonaSelect.innerHTML = "";
+    if (zone[comune]) {
+      microzonaSelect.disabled = false;
+      microzonaSelect.innerHTML = '<option value="">Scegli la micro-zona...</option>';
+      zone[comune].forEach(z => {
+        const opt = document.createElement("option");
+        opt.value = z; opt.textContent = z;
+        microzonaSelect.appendChild(opt);
+      });
+    } else {
+      microzonaSelect.disabled = true;
+      microzonaSelect.innerHTML = '<option value="">Seleziona il comune prima</option>';
+    }
+  });
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const giardinoChk = document.getElementById('giardinoChk');
+  const mqGiardino  = document.getElementById('mqGiardino');
+  function toggleMqGiardino() {
+    if (giardinoChk.checked) { mqGiardino.style.display = "inline-block"; mqGiardino.required = true; } 
+    else { mqGiardino.style.display = "none"; mqGiardino.required = false; mqGiardino.value = ""; }
+  }
+  giardinoChk.addEventListener('change', toggleMqGiardino);
+  toggleMqGiardino();
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const vistaYN = document.getElementById("vistaMareYN");
+  const vistaBox = document.getElementById("vistaMareBox");
+  const vistaDett = document.getElementById("vistaMare");
+  vistaYN.addEventListener("change", () => {
+    if (vistaYN.value === "si") { vistaBox.style.display = "block"; vistaDett.required = true; } 
+    else { vistaBox.style.display = "none"; vistaDett.required = false; vistaDett.value = ""; }
+  });
+});
+
+document.getElementById('stimaForm').addEventListener('submit', function(event) {
+  event.preventDefault();
+  const form = this;
+  if (!form.checkValidity()) { form.reportValidity(); return; }
+
+  const comune = document.getElementById('comune').value;
+  const microzona = document.getElementById('microzona').value;
+  const via = document.getElementById('via').value;
+  const civico = document.getElementById('civico').value;
+  const tipologia = document.getElementById('tipologia').value;
+  const mq = document.getElementById('mq').value;
+  const piano = document.getElementById('piano').value;
+  const locales = document.getElementById('locali').value;
+  const bagni = document.getElementById('bagni').value;
+  const ascensore = document.getElementById('ascensore').value;
+  const anno = document.getElementById('anno').value;
+  const stato = document.getElementById('stato').value;
+  const posizioneMare = document.getElementById('posizioneMare').value;
+  const distanzaMare  = document.getElementById('distanzaMare').value;
+  const barrieraMare  = document.getElementById('barrieraMare').value;
+  const vistaMareYN = document.getElementById('vistaMareYN').value;
+  const vistaMareDettaglio = (vistaMareYN === "si") ? document.getElementById('vistaMare').value : "";
+  const altroChk = document.getElementById('altroChk');
+  const altroDescrizione = (altroChk.checked) ? document.getElementById('altroDescrizione').value.trim() : "";
+
+  let pertinenze = [];
+  document.querySelectorAll('input[name="pertinenze"]:checked').forEach(el => {
+    if (el.value === "Altro") {
+      const descr = document.getElementById('altroDescrizione').value.trim();
+      if (descr !== "") pertinenze.push("Altro: " + descr);
+    } else { pertinenze.push(el.value); }
+  });
+
+  const mqGiardino = document.getElementById('giardinoChk').checked ? (document.getElementById('mqGiardino').value || "") : "";
+  const mqCantina   = document.getElementById('cantinaChk').checked   ? (document.getElementById('mqCantina').value || "")   : "";
+  const mqPostoAuto = document.getElementById('postoAutoChk').checked ? (document.getElementById('mqPostoAuto').value || "") : "";
+  const mqTaverna   = document.getElementById('tavernaChk').checked   ? (document.getElementById('mqTaverna').value || "")   : "";
+  const mqSoffitta  = document.getElementById('soffittaChk').checked  ? (document.getElementById('mqSoffitta').value || "")  : "";
+  const mqTerrazzo  = document.getElementById('terrazzoChk').checked  ? (document.getElementById('mqTerrazzo').value || "")  : "";
+  const numBalconi  = document.getElementById('balconiChk').checked   ? (document.getElementById('numBalconi').value || "")  : "";
+  const mqGarage = document.getElementById('garageChk').checked ? (document.getElementById('mqGarage').value || "") : "";
+  const stimaId = 'ST' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+  const stimaBase = {
+    id: stimaId, comune, microzona, via, civico, tipologia, mq, piano, locali: locales, bagni, ascensore, anno, stato, posizioneMare, distanzaMare, barrieraMare, vistaMareYN, vistaMareDettaglio, pertinenze: pertinenze.join(','), mqGiardino, mqGarage, altroDescrizione, mqCantina, mqPostoAuto, mqTaverna, mqSoffitta, mqTerrazzo, numBalconi
+  };
+  localStorage.setItem('stimaBase', JSON.stringify(stimaBase));
+
+  const query = `id=${encodeURIComponent(stimaId)}&comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}&via=${encodeURIComponent(via)}&civico=${encodeURIComponent(civico)}&tipologia=${encodeURIComponent(tipologia)}&mq=${encodeURIComponent(mq)}&piano=${encodeURIComponent(piano)}&locali=${encodeURIComponent(locales)}&bagni=${encodeURIComponent(bagni)}&ascensore=${encodeURIComponent(ascensore)}&pertinenze=${encodeURIComponent(pertinenze.join(','))}&anno=${encodeURIComponent(anno)}&stato=${encodeURIComponent(stato)}&posizioneMare=${encodeURIComponent(posizioneMare)}&distanzaMare=${encodeURIComponent(distanzaMare)}&barrieraMare=${encodeURIComponent(barrieraMare)}&vistaMareYN=${encodeURIComponent(vistaMareYN)}&vistaMareDettaglio=${encodeURIComponent(vistaMareDettaglio)}&mqGiardino=${encodeURIComponent(mqGiardino)}&mqGarage=${encodeURIComponent(mqGarage)}&mqCantina=${encodeURIComponent(mqCantina)}&mqPostoAuto=${encodeURIComponent(mqPostoAuto)}&mqTaverna=${encodeURIComponent(mqTaverna)}&mqSoffitta=${encodeURIComponent(mqSoffitta)}&mqTerrazzo=${encodeURIComponent(mqTerrazzo)}&numBalconi=${encodeURIComponent(numBalconi)}&altroDescrizione=${encodeURIComponent(altroDescrizione)}`;
+  window.location.href = `dati_personali.html?${query}`;
+});
+
+const videoLinkQuote = document.querySelector('.quote-modern');
+if(videoLinkQuote) {
+  videoLinkQuote.addEventListener('click', () => {
+    const video = document.getElementById('videoBox');
+    const frame = document.getElementById('youtubeFrame');
+    frame.src = "https://www.youtube-nocookie.com/embed/60W_mF6_1BY?autoplay=1";
+    video.style.display = "block";
+    video.scrollIntoView({behavior: "smooth"});
+  });
+}
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  const text = "AGENTI IMMOBILIARI, INGEGNERI, ARCHITETTI, IMPRESE EDILI E PROGRAMMATORI AI";
+  const target = document.getElementById("sidebar-title");
+  const logo = document.querySelector(".animated-logo");
+  let i = 0;
+  function typeLetter() {
+    if (i <= text.length) {
+      target.textContent = text.substring(0, i); i++;
+      setTimeout(typeLetter, 38);
+    } else {
+      setTimeout(() => { if(logo) logo.classList.add("show"); }, 180);
+    }
+  }
+  typeLetter();
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  function setupToggle(chkId, inputId) {
+    const chk   = document.getElementById(chkId);
+    const input = document.getElementById(inputId);
+    if (!chk || !input) return;
+    function toggle() {
+      if (chk.checked) { input.style.display = "inline-block"; input.required = true; } 
+      else { input.style.display = "none"; input.required = false; input.value = ""; }
+    }
+    chk.addEventListener("change", toggle);
+    toggle(); 
+  }
+  setupToggle("cantinaChk",   "mqCantina");
+  setupToggle("postoAutoChk", "mqPostoAuto");
+  setupToggle("garageChk",    "mqGarage");
+  setupToggle("tavernaChk",   "mqTaverna");
+  setupToggle("soffittaChk",  "mqSoffitta");
+  setupToggle("giardinoChk",  "mqGiardino");
+  setupToggle("terrazzoChk",  "mqTerrazzo");
+
+  const balconiChk = document.getElementById("balconiChk");
+  const numBalconi = document.getElementById("numBalconi");
+  if (balconiChk && numBalconi) {
+    function toggleBalconi() {
+      if (balconiChk.checked) { numBalconi.style.display = "inline-block"; numBalconi.required = true; } 
+      else { numBalconi.style.display = "none"; numBalconi.required = false; numBalconi.value = ""; }
+    }
+    balconiChk.addEventListener("change", toggleBalconi);
+    toggleBalconi();
+  }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("toggleSidebar");
+  const sidebar = document.querySelector(".sidebar");
+  const icon = btn ? btn.querySelector(".icon-hamb") : null;
+  if (!btn || !sidebar) return;
+  let visible = false;
+  btn.addEventListener("click", () => {
+    visible = !visible;
+    if (visible) { sidebar.classList.add("show"); btn.classList.add("open"); } 
+    else { sidebar.classList.remove("show"); btn.classList.remove("open"); }
+  });
+});
+</script>
+  
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const icon = document.querySelector("#toggleSidebar .icon-hamb");
+  if (isAndroid && icon) { icon.style.fontSize = "2.5rem"; icon.style.transform = "translateY(1px)"; }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const posizioneMare = document.getElementById("posizioneMare");
+  const distanzaMare  = document.getElementById("distanzaMare");
+  if (!posizioneMare || !distanzaMare) return;
+  function syncDistanzaMare() {
+    const pos = posizioneMare.value;
+    if (pos === "Frontemare (1ª fila)" || pos === "Seconda fila") { distanzaMare.value = "0–100 m"; distanzaMare.disabled = true; } 
+    else {
+      distanzaMare.disabled = false;
+      if (distanzaMare.value === "0–100 m") { distanzaMare.value = ""; }
+    }
+  }
+  posizioneMare.addEventListener("change", syncDistanzaMare);
+  syncDistanzaMare(); 
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const anno  = document.getElementById("anno");
+  const stato = document.getElementById("stato");
+  if (!anno || !stato) return;
+  const nuovoOpt = stato.querySelector('option[value="nuovo"]');
+  function aggiornaStato() {
+    const year = parseInt(anno.value, 10);
+    if (isNaN(year)) { stato.disabled = false; if (nuovoOpt) nuovoOpt.disabled = false; return; }
+    if (year >= 2020) { if (nuovoOpt) nuovoOpt.disabled = false; stato.value = "nuovo"; stato.disabled = true; return; }
+    stato.disabled = false;
+    if (nuovoOpt) nuovoOpt.disabled = true;
+    if (stato.value === "nuovo") { stato.value = "buono"; }
+  }
+  anno.addEventListener("input", aggiornaStato);
+  anno.addEventListener("change", aggiornaStato);
+  stato.addEventListener("change", () => {
+    const year = parseInt(anno.value, 10);
+    if (!isNaN(year) && year >= 2020) { stato.value = "nuovo"; }
+  });
+  aggiornaStato(); 
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const comuneSelect     = document.getElementById("comune");
+  const microzonaSelect  = document.getElementById("microzona");
+  const posizioneMare    = document.getElementById("posizioneMare");
+  const distanzaMare     = document.getElementById("distanzaMare");
+  if (!comuneSelect || !microzonaSelect || !posizioneMare || !distanzaMare) return;
+
+  function aggiornaDistanzaMare() {
+    const comune    = comuneSelect.value;
+    const microzona = microzonaSelect.value;
+    const pos       = posizioneMare.value;
+
+    const isLontano =
+      (comune === "Alba Adriatica" && microzona === "Zona Basciani") ||
+      (comune === "Tortoreto"      && microzona === "Alto") ||
+      (comune === "Martinsicuro"   && microzona === "Alto") ||
+    (comune === "Colonnella") || (comune === "Controguerra") || (comune === "Corropoli") || (comune === "Nereto") || (comune === "Ancarano") || (comune === "Civitella del Tronto") || (comune === "Sant’Egidio alla Vibrata") || (comune === "Sant’Omero") || (comune === "Torano Nuovo");
+    if (isLontano) {
+      posizioneMare.value = "Oltre la seconda fila"; posizioneMare.disabled = true;
+      distanzaMare.value = ">1000 m"; distanzaMare.disabled = true;
+      return; 
+    }
+    posizioneMare.disabled = false;
+    if (pos === "Frontemare (1ª fila)" || pos === "Seconda fila") { distanzaMare.value = "0–100 m"; distanzaMare.disabled = true; } 
+    else {
+      distanzaMare.disabled = false;
+      if (distanzaMare.value === "0–100 m" || distanzaMare.value === ">1000 m") { distanzaMare.value = ""; }
+    }
+  }
+  posizioneMare.addEventListener("change", aggiornaDistanzaMare);
+  comuneSelect.addEventListener("change", aggiornaDistanzaMare);
+  microzonaSelect.addEventListener("change", aggiornaDistanzaMare);
+  aggiornaDistanzaMare(); 
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  if (!isMobile) {
+    // 🧠 Creiamo una funzione riutilizzabile che gira in tempo reale
+    function gestisciLayoutDinamico() {
+      const width = window.innerWidth;
+      let zoomFactor = 1;
+      
+      const sidebar = document.querySelector(".sidebar");
+      const toggle = document.getElementById("toggleSidebar");
+      const container = document.querySelector(".container");
+
+      // 🖥️ 1. MONITOR GRANDE (es. 32")
+      if (width >= 1650) {
+        zoomFactor = 0.6;
+        if (container) {
+          container.style.marginLeft = "1300px";
+          container.style.marginRight = "auto";
+        }
+      } 
+      // 💻 LAPTOP / SCHERMI MEDI (es. MacBook Pro 14")
+      else if (width >= 901 && width < 1650) {
+        zoomFactor = 0.75;
+        if (container) {
+          container.style.marginLeft = "650px";
+          container.style.marginRight = "auto";
+        }
+      } 
+      // 📱 SMARTPHONE / TABLET (Sotto i 900px)
+      else {
+        // Se l'utente restringe troppo la pagina, resettiamo tutto a valori nativi.
+        // In questo modo le tue regole CSS @media mobile riprendono il controllo senza conflitti!
+        zoomFactor = 1;
+        if (container) {
+          container.style.marginLeft = "auto";
+          container.style.marginRight = "auto";
+        }
+      }
+
+      // Applichiamo lo zoom calcolato al body
+      document.body.style.zoom = zoomFactor;
+
+      // Gestiamo l'anti-zoom per sidebar e hamburger per non farli sgranare
+      if (sidebar) {
+        sidebar.style.zoom = 1 / zoomFactor;
+        // Se siamo in modalità mobile rimuoviamo la larghezza fissa per farla flettere
+        sidebar.style.width = width <= 900 ? "90vw" : "400px";   
+      }
+
+      if (toggle) { 
+        toggle.style.zoom = (1 / zoomFactor); 
+      }
+    }
+
+    // 🚀 Lanciamo la funzione subito all'avvio della pagina
+    gestisciLayoutDinamico();
+
+    // 🔄 REATTIVITÀ: Ripetiamo il calcolo ogni volta che la finestra viene ristretta o allargata
+    window.addEventListener("resize", gestisciLayoutDinamico);
+  }
+});
+</script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const params = new URLSearchParams(window.location.search);
+  const regione   = params.get("regione");
+  const comune    = params.get("comune");
+  const microzona = params.get("microzona");
+  const mq        = params.get("mq");
+  const anno      = params.get("anno");
+  const tipologia = params.get("tipologia");
+
+  const regioneSelect   = document.getElementById("regione");
+  const comuneSelect    = document.getElementById("comune");
+  const microzonaSelect = document.getElementById("microzona");
+  const mqInput         = document.getElementById("mq");
+  const annoInput       = document.getElementById("anno");
+  const tipologiaSelect = document.getElementById("tipologia");
+
+  if (mq && mqInput) mqInput.value = mq;
+  if (anno && annoInput) annoInput.value = anno;
+  if (tipologia && tipologiaSelect) tipologiaSelect.value = tipologia;
+  if (regione && regioneSelect) { regioneSelect.value = regione; regioneSelect.dispatchEvent(new Event("change")); }
+  if (comune && comuneSelect) {
+    setTimeout(() => {
+      comuneSelect.value = comune; comuneSelect.dispatchEvent(new Event("change"));
+      if (microzona && microzonaSelect) { setTimeout(() => { microzonaSelect.value = microzona; }, 50); }
+    }, 50);
+  }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const isIPad = (navigator.userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1) || navigator.userAgent.includes("iPad");
+  const isAndroidTablet = /Android/i.test(navigator.userAgent) && !/Mobile/i.test(navigator.userAgent);
+  if (isIPad || isAndroidTablet) {
+    document.documentElement.style.fontSize = "13.5px";
+    document.body.style.transform = "scale(0.98)";
+    document.body.style.transformOrigin = "top center";
+  }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const btnAvanti = document.getElementById("btnAvanti");
+  const btnIndietro = document.getElementById("btnIndietro");
+  const step1 = document.getElementById("step1");
+  const step2 = document.getElementById("step2");
+  const formElement = document.getElementById("stimaForm");
+  const progressFill = document.getElementById("progressFill");
+  const progressText = document.getElementById("progressText");
+
+  // 🧮 3. FUNZIONE DI CALCOLO AVANZAMENTO DINAMICO (Mano a mano)
+  function aggiornaAvanzamentoProgressBar() {
+    // Troviamo quanti campi "required" (obbligatori) ci sono in TUTTO il form
+    const campiObbligatori = formElement.querySelectorAll("input[required], select[required]");
+    let compilati = 0;
+
+    campiObbligatori.forEach(campo => {
+      // Se il campo ha un valore valido ed è visibile (o compilato), lo contiamo
+      if (campo.value.trim() !== "") {
+        compilati++;
+      }
+    });
+
+    // Calcolo matematico preciso della percentuale
+    const percentuale = Math.round((compilati / campiObbligatori.length) * 100);
+
+    // Muoviamo la linea verde del CSS
+    progressFill.style.width = `${percentuale}%`;
+
+    // Aggiorna il testo con messaggi contestuali ingaggianti
+    if (percentuale === 0) {
+      progressText.innerText = "0% - Inizia l'analisi";
+    } else if (percentuale > 0 && percentuale < 50) {
+      progressText.innerText = `${percentuale}% - Raccolta dati iniziali...`;
+    } else if (percentuale >= 50 && percentuale < 90) {
+      progressText.innerText = `${percentuale}% - Ottimo, rifinitura dettagli tecnici...`;
+    } else if (percentuale >= 90 && percentuale < 100) {
+      progressText.innerText = `${percentuale}% - Quasi pronto per l'elaborazione finale!`;
+    } else if (percentuale === 100) {
+      progressText.innerText = "100% Completato! Pronto a scoprire il valore.";
+    }
+  }
+
+  // Monitoriamo la scrittura e i click sui select all'interno del form per aggiornare la barra
+  formElement.addEventListener("input", aggiornaAvanzamentoProgressBar);
+  formElement.addEventListener("change", aggiornaAvanzamentoProgressBar);
+
+
+  // === 1. VALIDAZIONE VISIVA IN TEMPO REALE ===
+  const allFormInputs = document.querySelectorAll('#stimaForm input, #stimaForm select');
+  allFormInputs.forEach(el => {
+    el.addEventListener('blur', () => {
+      if (el.hasAttribute('required') && !el.checkValidity()) { el.classList.add('invalid-input'); el.classList.remove('valid-input'); } 
+      else if (el.value.trim() !== "") { el.classList.add('valid-input'); el.classList.remove('invalid-input'); }
+    });
+    const eventType = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(eventType, () => {
+      if (el.checkValidity() && el.value.trim() !== "") { el.classList.add('valid-input'); el.classList.remove('invalid-input'); }
+    });
+  });
+
+  // === 2. CLIC SUL TASTO CONTINUA (STEP 1 -> STEP 2) ===
+  btnAvanti.addEventListener("click", async () => {
+    const step1Inputs = step1.querySelectorAll("input[required], select[required]");
+    let step1Valido = true;
+
+    for (let input of step1Inputs) {
+      if (!input.checkValidity()) {
+        input.reportValidity();
+        input.classList.add('invalid-input');
+        step1Valido = false;
+        break; 
+      }
+    }
+
+    if (step1Valido) {
+      // Bottone in stato "Elaborazione IA"
+      const testoOriginaleBtn = btnAvanti.innerHTML;
+      btnAvanti.disabled = true;
+      btnAvanti.innerHTML = `⏳ Interrogando IA Stima360...`;
+
+      const comune    = document.getElementById("comune").value;
+      const microzona = document.getElementById("microzona").value;
+      const tipologia = document.getElementById("tipologia").value;
+      const mq        = document.getElementById("mq").value;
+      const anno      = document.getElementById("anno").value || "2010"; 
+
+      try {
+        const response = await fetch("https://stima360-backend.onrender.com/api/stima_base", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comune, microzona, tipologia, mq, anno })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          document.getElementById("valorePreliminareText").innerText = `${data.valore_riferimento.toLocaleString("it-IT")} €`;
+          document.getElementById("mqPreliminareText").innerText = mq;
+          document.getElementById("comunePreliminareText").innerText = comune;
+          document.getElementById("microzonaPreliminareText").innerText = microzona;
+        }
+      } catch (err) {
+        console.error("Chiamata asincrona fallita:", err);
+        document.getElementById("valorePreliminareText").innerText = "Calcolata!";
+      } finally {
+        btnAvanti.disabled = false;
+        btnAvanti.innerHTML = testoOriginaleBtn;
+
+        // Passaggio visivo
+        step1.style.display = "none";
+        step2.style.display = "block";
+        
+        // Eseguiamo un ricalcolo immediato per lo step 2
+        aggiornaAvanzamentoProgressBar();
+        formElement.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+  });
+
+  btnIndietro.addEventListener("click", () => {
+    step2.style.display = "none";
+    step1.style.display = "block";
+    aggiornaAvanzamentoProgressBar();
+    formElement.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  // Avvio iniziale per caricare la percentuale se ci sono parametri nell'URL
+  setTimeout(aggiornaAvanzamentoProgressBar, 300);
+});
+</script>
+
+<div class="stima-whatsapp-bar">
+  <div class="stima-wa-left">
+    <div class="stima-wa-icon">✆</div>
+    <div class="stima-wa-text"><strong>Hai domande?</strong><span>Scrivici su WhatsApp</span></div>
+  </div>
+  <div class="stima-wa-right">
+    <a href="https://wa.me/393925172478?text=Ciao%2C%20vorrei%20parlare%20con%20un%20esperto%20di%20Stima360" target="_blank">Parla ora</a>
+  </div>
+</div>
+
+<script>
+if (/Android/i.test(navigator.userAgent)) { document.body.classList.add("android-device"); }
+</script>
+<script>
+/* 🔒 BLOCCO DI SICUREZZA */
+(function () {
+  let submitCount = 0;
+  const MAX_SUBMIT = 2;
+  document.addEventListener("submit", function (e) {
+    submitCount++;
+    if (submitCount > MAX_SUBMIT) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      alert("Hai già effettuato il numero massimo di richieste.\n\n🔒 Operazione bloccata per sicurezza.");
+      return false;
+    }
+  }, true);
+})();
+</script>
+<script>
+// Questa funzione interroga l'API per i meta tag SEO
+async function aggiornaMetaSEO() {
+  const comune = document.getElementById("comune").value;
+  const microzona = document.getElementById("microzona").value;
+
+  if (comune && microzona) {
+    try {
+      const response = await fetch(`https://stima360-backend.onrender.com/api/seo/data?comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}`);
+      const seoData = await response.json();
+
+      if (seoData.success) {
+        document.title = seoData.h1 + " | Stima360";
+
+        let metaDesc = document.querySelector('meta[name="description"]');
+        if (!metaDesc) {
+          metaDesc = document.createElement('meta');
+          metaDesc.name = "description";
+          document.head.appendChild(metaDesc);
+        }
+        metaDesc.content = seoData.descrizione;
+      }
+    } catch(e) {
+      console.error("Errore recupero SEO:", e);
+      document.title = `Valutazione Immobiliare a ${comune} - ${microzona} | Stima360`;
+    }
+  }
+}
+document.getElementById("microzona").addEventListener("change", aggiornaMetaSEO);
+</script>
+<script>
+document.addEventListener("DOMContentLoaded", async () => {
+    const container = document.getElementById("successi-carousel-container");
+    if (!container) return;
+
+    try {
+        const response = await fetch("https://stima360-backend.onrender.com/api/successi");
+        const result = await response.json();
+
+        if (result.success && result.data && result.data.length > 0) {
+            let htmlHTML = "";
+            result.data.forEach((casa, index) => {
+                
+                let slides = "";
+                if (casa.foto1_url) slides += `<div class="swiper-slide"><img src="${casa.foto1_url}"></div>`;
+                if (casa.foto2_url) slides += `<div class="swiper-slide"><img src="${casa.foto2_url}"></div>`;
+                if (casa.foto3_url) slides += `<div class="swiper-slide"><img src="${casa.foto3_url}"></div>`;
+                if (casa.piantina_url) slides += `<div class="swiper-slide"><img src="${casa.piantina_url}" style="object-fit: contain !important; background: #ffffff;"></div>`;
+                
+                if (slides === "") {
+                    slides = `<div class="swiper-slide"><img src="https://www.stima360.it/FamilyIndex.png"></div>`;
+                }
+
+                htmlHTML += `
+                <div class="successi-card">
+                    <div class="badge-venduto">
+                        <span style="font-size:1.1rem; line-height: 0;">⚡</span> VENDUTO IN ${casa.giorni_vendita} GG
+                    </div>
+                    <div class="swiper swiper-${index}" style="height: 280px;">
+                        <div class="swiper-wrapper">
+                            ${slides}
+                        </div>
+                        <div class="swiper-pagination"></div>
+                    </div>
+                    <div class="card-info">
+                        <span class="tipologia">${casa.tipologia}</span>
+                        <h3>📍 ${casa.comune}</h3>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = htmlHTML;
+
+            result.data.forEach((_, index) => {
+                new Swiper(`.swiper-${index}`, {
+                    pagination: { el: '.swiper-pagination', clickable: true },
+                    loop: true,
+                });
+            });
+        }
+    } catch (err) {
+        console.error("Errore carosello:", err);
+    }
+});
+</script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    // 1. Creiamo la struttura della Lightbox e la inseriamo nella pagina
+    const lightboxHTML = `
+        <div id="stima-lightbox">
+            <span id="stima-lightbox-close">&times;</span>
+            <img id="stima-lightbox-img" src="" alt="Zoom Immobile">
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', lightboxHTML);
+
+    const lightbox = document.getElementById("stima-lightbox");
+    const lightboxImg = document.getElementById("stima-lightbox-img");
+    const closeBtn = document.getElementById("stima-lightbox-close");
+
+    // Funzione per chiudere l'immagine
+    const chiudiLightbox = () => {
+        lightbox.classList.remove("active");
+        setTimeout(() => { lightbox.style.display = "none"; }, 300); // Attende la fine dell'animazione
+    };
+
+    // Chiudi cliccando sulla "X" o da qualsiasi parte sullo sfondo nero
+    closeBtn.addEventListener("click", chiudiLightbox);
+    lightbox.addEventListener("click", (e) => {
+        // Se clicco fuori dall'immagine, si chiude
+        if (e.target !== lightboxImg) {
+            chiudiLightbox();
+        }
+    });
+
+    // 2. Intercettiamo il click sulle foto dentro lo Swiper
+    // Usiamo il body così funziona anche per le foto caricate dinamicamente dal database
+    document.body.addEventListener("click", (e) => {
+        if (e.target && e.target.tagName === "IMG" && e.target.closest(".swiper-slide")) {
+            // Prende il link della foto cliccata e lo passa alla lightbox
+            lightboxImg.src = e.target.src;
+            lightbox.style.display = "flex";
+            
+            // Piccolo ritardo per attivare l'animazione CSS fluida
+            setTimeout(() => {
+                lightbox.classList.add("active");
+            }, 10);
+        }
+    });
+});
+</script>
+</body>
+</html>

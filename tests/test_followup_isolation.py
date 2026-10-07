@@ -147,12 +147,24 @@ def test_main_py_references_followup_only_through_the_p18c_contract():
     # public-funnel entry point). Same pattern already used for
     # seller_intelligence in
     # test_seller_intelligence_isolation.py::test_main_py_references_seller_intelligence_only_through_the_p17b1_contract.
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): il punto di
+    # ingresso autorizzato dal funnel pubblico e' `run_followup(...,
+    # recover=True, due_at_override=...)` dentro `receipt.step("followup", ...)`:
+    # il confine che non solleva e' la ricevuta (passo fallito -> ricevuta
+    # `partial`, riprendibile), non piu' il wrapper `safe_run_followup`. Resta
+    # UNA chiamata, in `_save_quick_submission`, e nessun accesso ai moduli
+    # interni; `get_rule` serve solo a congelare la scadenza sulla ricevuta.
     main_source = MAIN_PY.read_text(encoding="utf-8")
     assert "from followup import service as followup_service" in main_source
-    assert "followup_service.safe_run_followup(" in main_source
+    assert main_source.count("followup_service.run_followup(") == 1
+    assert "followup_service.safe_run_followup(" not in main_source
+    pipeline = main_source[main_source.index("\ndef _save_quick_submission("):]
+    pipeline = pipeline[: pipeline.index("\ndef ", 10)]
+    chiamata = pipeline[pipeline.rindex("receipt.step(", 0, pipeline.index("followup_service.run_followup(")):]
+    assert chiamata.startswith('receipt.step("followup", lambda: followup_service.run_followup(')
+    assert "recover=True" in chiamata[: chiamata.index("))")]
     for forbidden in ("followup.repository", "followup.rules", "followup.exceptions", "followup.database"):
         assert forbidden not in main_source, f"main.py non deve accedere direttamente a {forbidden}"
-    assert "followup_service.run_followup(" not in main_source
     assert "from followup.router import router as followup_router" in main_source
     assert "app.include_router(followup_router, dependencies=[Depends(require_authenticated_operator)])" in main_source
 

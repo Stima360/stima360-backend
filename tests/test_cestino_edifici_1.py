@@ -36,10 +36,12 @@ def test_m01_la_091_e_l_ultima_valida_e_additiva():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste) la segue; la 091 resta valida e additiva.
-    m091 = tutte[-2]
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la 093 (PDF privato, F07) e la 094 (ricevute, F04/F06) seguono la 092 (Cestino richieste); la 091 resta valida e additiva.
+    assert tutte[-1].version == "094_public_submission_receipts"
+    assert tutte[-2].version == "093_stima_private_pdf"
+    assert tutte[-3].version == "092_cestino_richieste_1_buy_request_trash"
+    m091 = tutte[-4]
     assert m091.version == "091_cestino_edifici_1_building_trash"
-    assert tutte[-1].version == "092_cestino_richieste_1_buy_request_trash"
     assert m091.down_available and not m091.non_transactional and runner.validate_migration(m091) == []
     su = _eseguibile(SU)
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", su, re.M)

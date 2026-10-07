@@ -37,6 +37,12 @@ class FakeCursor:
         sql = " ".join(str(query).split()).lower()
         self.database.sql.append((sql, params))
 
+        if sql.startswith("select agency_id from ") and "for share" in sql:
+            table = sql.split()[3]
+            agency_id = getattr(self.database, "reference_agencies", {}).get((table, params[0]), 1)
+            self.rows = [{"agency_id": agency_id}]
+            return
+
         if "insert into followup_actions" in sql:
             self._handle_insert(params)
             return
@@ -47,6 +53,11 @@ class FakeCursor:
                 (r for r in self.database.actions if r["idempotency_key"] == key),
                 None,
             )
+            self.rows = [copy.deepcopy(match)] if match else []
+            return
+
+        if "from followup_actions where id =" in sql and "for update" in sql:
+            match = next((r for r in self.database.actions if r["id"] == params[0]), None)
             self.rows = [copy.deepcopy(match)] if match else []
             return
 
@@ -86,6 +97,7 @@ class FakeCursor:
             "status": "pending",
             "error_message": None,
             "created_at": datetime.now(timezone.utc),
+            "agency_id": params.get("agency_id"),
         }
         self.database.next_action_id += 1
         self.database.actions.append(row)
@@ -244,6 +256,7 @@ def test_pending_prior_attempt_raises_conflict_error_without_retrying(fake_db, f
         "idempotency_key": "followup:stima_richiesta:501", "task_id": None,
         "status": "pending", "error_message": None,
         "created_at": datetime.now(timezone.utc),
+        "agency_id": 1,
     })
 
     with pytest.raises(ConflictError):
@@ -259,6 +272,7 @@ def test_failed_prior_attempt_raises_conflict_error_without_retrying(fake_db, fa
         "idempotency_key": "followup:stima_richiesta:501", "task_id": None,
         "status": "failed", "error_message": "boom",
         "created_at": datetime.now(timezone.utc),
+        "agency_id": 1,
     })
 
     with pytest.raises(ConflictError):

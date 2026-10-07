@@ -2,11 +2,9 @@
 
 import os
 import sys
-import json
-import base64
+from io import BytesIO
+from xml.sax.saxutils import escape
 import datetime
-import urllib.request
-import urllib.error
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -29,20 +27,6 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 from valuation import compute_from_payload  # noqa: E402
-
-# ---------------------------------------------------------------------
-# CONFIG GITHUB
-# ---------------------------------------------------------------------
-
-GITHUB_USER = os.getenv("GITHUB_USER")
-GITHUB_REPO = os.getenv("GITHUB_REPO")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
-
-GITHUB_PDF_BASE_URL = os.getenv(
-    "GITHUB_PDF_BASE_URL",
-    f"https://raw.githubusercontent.com/{GITHUB_USER or 'Stima360'}/{GITHUB_REPO or 'stima360-pdf'}/{GITHUB_BRANCH}"
-)
 
 # ---------------------------------------------------------------------
 # LOGO UTILITY
@@ -215,64 +199,6 @@ def _parse_comparabili(raw):
     return nums or [140, 150, 160, 155, 165]
 
 # ---------------------------------------------------------------------
-# UPLOAD SU GITHUB
-# ---------------------------------------------------------------------
-
-def _upload_pdf_to_github(local_path: str, filename: str):
-    if not (GITHUB_USER and GITHUB_REPO and GITHUB_TOKEN):
-        print("[GITHUB] Variabili mancanti, salto upload.")
-        return None
-
-    api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
-
-    try:
-        with open(local_path, "rb") as f:
-            content_b64 = base64.b64encode(f.read()).decode("utf-8")
-    except Exception as e:
-        print(f"[GITHUB] Errore lettura file {local_path}: {e}")
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "stima360-backend"
-    }
-
-    sha = None
-    req_get = urllib.request.Request(api_url, headers=headers, method="GET")
-    try:
-        resp = urllib.request.urlopen(req_get)
-        info = json.loads(resp.read().decode("utf-8"))
-        sha = info.get("sha")
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            print(f"[GITHUB] Errore GET {e}")
-            return None
-    except Exception as e:
-        print(f"[GITHUB] Errore GET generico: {e}")
-
-    payload = {
-        "message": f"Add report {filename}",
-        "content": content_b64,
-        "branch": GITHUB_BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
-
-    data_bytes = json.dumps(payload).encode("utf-8")
-    req_put = urllib.request.Request(api_url, data=data_bytes, headers=headers, method="PUT")
-
-    try:
-        resp = urllib.request.urlopen(req_put)
-        _ = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print(f"[GITHUB] Errore PUT: {e}")
-        return None
-
-    raw_base = GITHUB_PDF_BASE_URL
-    return f"{raw_base.rstrip('/')}/{filename}"
-
-# ---------------------------------------------------------------------
 # FUNZIONE PRINCIPALE
 # ---------------------------------------------------------------------
 
@@ -282,9 +208,8 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     base_dir = BASE_DIR
     logo_path = _logo_path(base_dir)
 
-    REPORTS_DIR = "/var/tmp/reports"
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-    pdf_fs_path = os.path.join(REPORTS_DIR, nome_file)
+    # No report file or public upload: callers persist bytes privately.
+    pdf_stream = BytesIO()
 
     ss = getSampleStyleSheet()
     H2 = ParagraphStyle(
@@ -363,7 +288,7 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     )
 
     doc = SimpleDocTemplate(
-        pdf_fs_path, pagesize=A4,
+        pdf_stream, pagesize=A4,
         rightMargin=2*cm, leftMargin=2*cm,
         topMargin=0.1*cm, bottomMargin=1.8*cm
     )
@@ -491,9 +416,9 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
     
     cliente_table = Table(
         [
-            [Paragraph(full_name, CLIENTE_NAME)],
-            [Paragraph(f"<b>{indirizzo}</b>", CLIENTE_ADDR)],
-            [Paragraph(f"Tel: {telefono} • Email: {email}", CLIENTE_CONT)],
+            [Paragraph(escape(str(full_name)), CLIENTE_NAME)],
+            [Paragraph(f"<b>{escape(str(indirizzo))}</b>", CLIENTE_ADDR)],
+            [Paragraph(f"Tel: {escape(str(telefono))} • Email: {escape(str(email))}", CLIENTE_CONT)],
         ],
         colWidths=[doc.width]  # ← QUESTA È LA CHIAVE
     )
@@ -600,21 +525,6 @@ def genera_pdf_stima(dati: dict, nome_file: str = "stima360.pdf"):
         canvas.drawRightString(w-2*cm, 1.2*cm, f"Pagina {doc_obj.page}")
         canvas.restoreState()
 
-    try:
-        doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
-    except Exception as e:
-        print({"detail": f"Errore generazione REPORT: {e}"})
-    
-    # -------------------------------------------------------------
-    # Upload su GitHub (obbligatorio)
-    # -------------------------------------------------------------
-    github_url = _upload_pdf_to_github(pdf_fs_path, nome_file)
-    
-    if not github_url:
-        # niente PDF su Render, niente fallback
-        raise RuntimeError(
-            f"ERRORE: Upload su GitHub fallito. "
-            f"Il PDF {nome_file} non può essere servito dal backend."
-        )
-    
-    return github_url
+    # A build failure propagates; a partial stream must never become a report.
+    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    return pdf_stream.getvalue()

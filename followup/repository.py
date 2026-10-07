@@ -48,6 +48,27 @@ def _row(row):
     return dict(row) if row else None
 
 
+def _agency_from_references(cur, *, contact_id, lead_id, stima_id):
+    """Resolve the single owner required by 045, without a caller selector.
+
+    That migration validates the explicit agency; unlike CORE's task trigger,
+    it does not fill a missing one. Keep each referenced parent stable through
+    the action INSERT and refuse a missing or contradictory relationship.
+    """
+    agencies = set()
+    for table, value in (("contacts", contact_id), ("leads", lead_id), ("stime", stima_id)):
+        if value is None:
+            continue
+        cur.execute(f"SELECT agency_id FROM {table} WHERE id = %s FOR SHARE", (value,))
+        parent = cur.fetchone()
+        if parent is None or parent["agency_id"] is None:
+            raise ValidationError("followup references do not determine an agency")
+        agencies.add(parent["agency_id"])
+    if len(agencies) != 1:
+        raise ValidationError("followup references do not determine one coherent agency")
+    return agencies.pop()
+
+
 def _find_task_by_idempotency_key(cur, idempotency_key: str) -> int | None:
     """Best-effort duplicate check against CORE tasks.metadata, mirroring
     the exact lookup flow/repository.py already performs before creating a
@@ -76,14 +97,15 @@ def _insert_pending_action(
     already there (any status).
     """
     with followup_cursor(commit=True) as (_, cur):
+        agency_id = _agency_from_references(cur, contact_id=contact_id, lead_id=lead_id, stima_id=stima_id)
         cur.execute(
             """
             INSERT INTO followup_actions (
                 rule_code, trigger_type, contact_id, lead_id, stima_id,
-                idempotency_key, status
+                idempotency_key, status, agency_id
             ) VALUES (
                 %(rule_code)s, %(trigger_type)s, %(contact_id)s, %(lead_id)s,
-                %(stima_id)s, %(idempotency_key)s, 'pending'
+                %(stima_id)s, %(idempotency_key)s, 'pending', %(agency_id)s
             )
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
@@ -95,6 +117,7 @@ def _insert_pending_action(
                 "lead_id": lead_id,
                 "stima_id": stima_id,
                 "idempotency_key": idempotency_key,
+                "agency_id": agency_id,
             },
         )
         row = _row(cur.fetchone())
@@ -111,6 +134,8 @@ def _insert_pending_action(
                 f"followup_actions insert conflicted on idempotency_key="
                 f"{idempotency_key!r} but no existing row was found"
             )
+        if existing["agency_id"] != agency_id:
+            raise ConflictError("followup action belongs to a different agency")
         return {**existing, "_created": False}
 
 
@@ -145,6 +170,7 @@ def execute_followup_action(
     priority: str,
     due_at,
     created_by: str | None,
+    recover: bool = False,
 ) -> dict[str, Any]:
     """Create one CORE task for a follow-up rule, idempotently.
 
@@ -166,6 +192,14 @@ def execute_followup_action(
         stima_id=stima_id,
     )
 
+    if recover and not action["_created"]:
+        expected = {
+            "rule_code": rule_code, "trigger_type": trigger_type,
+            "contact_id": contact_id, "lead_id": lead_id, "stima_id": stima_id,
+        }
+        if any(action.get(field) != value for field, value in expected.items()):
+            raise ConflictError("followup recovery references differ from the original action")
+
     if not action["_created"]:
         if action["status"] == "completed":
             return {
@@ -173,13 +207,14 @@ def execute_followup_action(
                 "followup_action_id": action["id"],
                 "status": "already_completed",
             }
-        # 'pending' or 'failed': deliberately not auto-retried in P18-B -
-        # see followup/exceptions.py::ConflictError.
-        raise ConflictError(
-            f"followup_actions {idempotency_key!r} already exists with "
-            f"status={action['status']!r} (id={action['id']}) - not "
-            "retrying automatically"
-        )
+        # Legacy callers still refuse an ambiguous prior attempt. The durable
+        # public workflow opts in after retaining the same request and IDs.
+        if not recover:
+            raise ConflictError(
+                f"followup_actions {idempotency_key!r} already exists with "
+                f"status={action['status']!r} (id={action['id']}) - not "
+                "retrying automatically"
+            )
 
     task_metadata = {
         "source": "followup",
@@ -190,6 +225,21 @@ def execute_followup_action(
 
     try:
         with followup_cursor(commit=True) as (_, cur):
+            # Lock also for the initial worker: a recovery may arrive while
+            # that worker is still creating its task. Task + completion remain
+            # in this existing transaction, so a lost receipt can be replayed.
+            cur.execute("SELECT * FROM followup_actions WHERE id = %s FOR UPDATE", (action["id"],))
+            locked = _row(cur.fetchone())
+            if locked is None:
+                raise ConflictError("followup action not found")
+            if locked["status"] == "completed":
+                return {
+                    "task_id": locked["task_id"],
+                    "followup_action_id": locked["id"],
+                    "status": "already_completed",
+                }
+            if locked["status"] not in {"pending", "failed"}:
+                raise ConflictError("followup action cannot be recovered")
             existing_task_id = _find_task_by_idempotency_key(cur, idempotency_key)
             if existing_task_id is not None:
                 task = {"id": existing_task_id}

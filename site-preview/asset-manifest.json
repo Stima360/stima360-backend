@@ -1,0 +1,166 @@
+{
+  "source": "https://www.stima360.it/",
+  "method": "GET",
+  "assets": [
+    {
+      "url": "https://www.stima360.it/3.png",
+      "path": "public/3.png",
+      "SHA256": "4c922a0eeb509fa43b199e885eb223f2707dc6506d0af3f2882d5f6d48d6efbc",
+      "bytes": 165034,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/Biglietto_visita.jpeg",
+      "path": "public/Biglietto_visita.jpeg",
+      "SHA256": "b8c15d8f7e51e242fb1c92ecc63f6942d7d59a5308049c4b4744312fc186e05d",
+      "bytes": 324225,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/FamilyIndex.png",
+      "path": "public/FamilyIndex.png",
+      "SHA256": "406046b74e2541db8ec1b6ed9b60a29e165666fcaf30dc1f7593984455a0c076",
+      "bytes": 320347,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/IMGVendere/Fondatore.png",
+      "path": "public/IMGVendere/Fondatore.png",
+      "SHA256": "aea401486945f47a087ef3d05241d07386f3a087a398673fbb5419c194f1683c",
+      "bytes": 12053500,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/IMGVendere/LavoraConNoi.png",
+      "path": "public/IMGVendere/LavoraConNoi.png",
+      "SHA256": "04d3412e2a9b328abf0314da367e6ffb082097c0873971eb290cad04e9966b47",
+      "bytes": 645161,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/IMGVendere/Team.png",
+      "path": "public/IMGVendere/Team.png",
+      "SHA256": "a52f06c0fc7880bd9f8e7fc62f16c950607f8bf2328347532f1d3de6e9a827d8",
+      "bytes": 1767313,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/IconaAi.png",
+      "path": "public/IconaAi.png",
+      "SHA256": "f45be44ef4c6cc31fbe7b18bdeaa368dc2584fffd9e16bf6d08d956ef02977c9",
+      "bytes": 342386,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/Sfondo_trasparente_Stima360.png",
+      "path": "public/Sfondo_trasparente_Stima360.png",
+      "SHA256": "73694ad775096efe4e297f9bfc15c004b65c98b0ac23b3283ac424e37967b612",
+      "bytes": 1372008,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/Stima360index.png",
+      "path": "public/Stima360index.png",
+      "SHA256": "20baa4d72f84135e3c418dea2807f6216063ec16a174475f9bc620ba16654a56",
+      "bytes": 2467957,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/arcobaleno2.png",
+      "path": "public/arcobaleno2.png",
+      "SHA256": "4febd05a7942f4d668cf3e41df4cd8e246e004c55c71ea9b60957eee5e851405",
+      "bytes": 3118824,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/banner-fiducia-giorgio.png",
+      "path": "public/banner-fiducia-giorgio.png",
+      "SHA256": "d8d76655d10b5b892d69b45eff817ddb01dae73eab113424b29b1566cff47608",
+      "bytes": 345831,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/Cloud.png",
+      "path": "public/cloud/Cloud.png",
+      "SHA256": "21524685c3ae1a4df84b1ec1bf14f689707ee77f06e0f4832c62e252cdd1b00f",
+      "bytes": 755923,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud1.png",
+      "path": "public/cloud/cloud1.png",
+      "SHA256": "44da186aac1d13961c278486fc33d1c4a9ab6032e344226a29ced11d09525b10",
+      "bytes": 648134,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud2.png",
+      "path": "public/cloud/cloud2.png",
+      "SHA256": "849031c1ac94fc5078442594668128ef07f5424d812dd3b05777fd78aceac2e4",
+      "bytes": 588423,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud3.png",
+      "path": "public/cloud/cloud3.png",
+      "SHA256": "b3a6d3d30529ba36176fd746137a3c3e5f75d0636978a714bbfc536319b697a8",
+      "bytes": 830674,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud4.png",
+      "path": "public/cloud/cloud4.png",
+      "SHA256": "44c8c6192bdd4941e9fbd35220b90838657086dbfacbd8e621811d89f3d4b232",
+      "bytes": 435108,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud6.png",
+      "path": "public/cloud/cloud6.png",
+      "SHA256": "5ae1fec532fb53e5b95dbc57d7ef9792e791be441f036b6a4681717ab3107dcd",
+      "bytes": 625854,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud7.png",
+      "path": "public/cloud/cloud7.png",
+      "SHA256": "560fdc51eeebeef73567f98b467ed427adbf5b65d4fc2489103dca5f392a67f0",
+      "bytes": 401013,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud8.png",
+      "path": "public/cloud/cloud8.png",
+      "SHA256": "0c7ba8ed87554ac8f40dbaef69a3c48d0a17f4a43720eafd97f4adab16a957fd",
+      "bytes": 456349,
+      "copy_status": "copied"
+    },
+    {
+      "url": "https://www.stima360.it/facce-clienti.png",
+      "path": "public/facce-clienti.png",
+      "SHA256": "dd5afaf7b6a2a1b992184ce6090c9aec7720e96b8925f5536d1463cc814cc582",
+      "bytes": 328967,
+      "copy_status": "copied"
+    }
+  ],
+  "failures": [
+    {
+      "url": "https://www.stima360.it/cloud/cloud.png",
+      "path": "public/cloud/cloud.png",
+      "status": 404,
+      "error": "HTTP GET failed"
+    },
+    {
+      "url": "https://www.stima360.it/cloud/cloud5.png",
+      "path": "public/cloud/cloud5.png",
+      "status": 404,
+      "error": "HTTP GET failed"
+    },
+    {
+      "url": "https://www.stima360.it/nuvole.png",
+      "path": "public/nuvole.png",
+      "status": 404,
+      "error": "HTTP GET failed"
+    }
+  ]
+}

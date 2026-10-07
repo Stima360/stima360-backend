@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <title>Stima dettagliata – Stima360</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Meta Pixel Code -->
+<script>
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '1458312815299195');
+fbq('track', 'PageView');
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=1458312815299195ev=PageView&noscript=1"
+/></noscript>
+<!-- End Meta Pixel Code -->
+  <style>
+    @keyframes moveClouds { 0%{transform:translateX(0)} 50%{transform:translateX(-30%)} 100%{transform:translateX(0)} }
+    @keyframes glowShift { 0%{transform:translateY(0) scale(1);opacity:.5} 100%{transform:translateY(-20px) scale(1.1);opacity:.7} }
+
+    body{
+      font-family:'Nunito',sans-serif; background:#fff; margin:0; color:#2a2a2a;
+    }
+    /* sfondo come index */
+    body::before{
+      content:""; position:fixed; top:-100px; left:0; width:5000px; height:300px;
+      background:url("nuvole.png") repeat-x; background-size:contain; opacity:.4; z-index:0;
+      animation:moveClouds 50s ease-in-out infinite;
+    }
+    body::after{
+      content:""; position:fixed; top:0; left:0; width:100%; height:1000px;
+      background:linear-gradient(to bottom, rgba(0,255,213,.2) 0%, rgba(66,133,255,.15) 40%, rgba(186,0,255,.12) 70%, rgba(255,255,255,0) 100%);
+      z-index:-2; animation:glowShift 25s ease-in-out infinite alternate; pointer-events:none;
+    }
+
+    /* container come index (più largo) */
+    .container{
+      position:relative; max-width:850px; width:90%; margin:50px auto; background:#fff;
+      border-radius:20px; box-shadow:0 8px 30px rgba(0,0,0,.06); padding:45px 25px; z-index:1; box-sizing:border-box;
+    }
+
+    /* logo grande come index */
+    .logo{ display:block; margin:0 auto 0px; width:95%; max-width:720px; min-width:240px; height:auto; transition:width .25s ease-in-out;margin-bottom: 0; }
+
+    /* titolo come index */
+    h2{ text-align:center; color:#19546a; margin-bottom:24px; font-weight:800; }
+    
+    .titolo-underline{
+      font-size:0;
+      line-height:0;
+      margin-top:-11px;
+    }
+
+    .immobile{
+      background:#eef7fa; border-radius:12px; padding:14px; margin-bottom:22px; color:#174459; font-size:1.05rem; line-height:1.5;
+    }
+
+    form{ display:flex; flex-direction:column; gap:18px; }
+    label{ font-family:'Montserrat',sans-serif; font-weight:600; color:#19546a; font-size:1.1rem; }
+
+    input,select,textarea{
+      font-family:'Montserrat',sans-serif; padding:16px; font-size:1.05rem; border-radius:14px;
+      border:1.5px solid #dfe6eb; background:#fafafa; transition:all .25s ease-in-out;
+    }
+    input:focus,select:focus,textarea:focus{ border-color:#0044cc; background:#fff; box-shadow:0 0 8px rgba(0,68,204,.3); outline:none; }
+
+    button{
+      background:linear-gradient(135deg,#f843f5,#4ca4fc,#42dfd2,#51c57f,#bedf77,#eeb94f,#ed4402);
+      color:#fff; font-weight:700; border:none; border-radius:14px; padding:18px; font-size:1.3rem; cursor:pointer;
+      box-shadow:0 5px 20px rgba(0,0,0,.15); transition:all .25s ease;
+    }
+    button:hover{ box-shadow:0 5px 25px rgba(0,68,204,.4); }
+    button:active{ transform:scale(.97); }
+
+    .flexrow{ display:flex; gap:12px; }
+    .flexrow>div{ flex:1; }
+    @media (max-width:700px){ .container{ max-width:95vw; padding:20px } .flexrow{ flex-direction:column } }
+    
+    .titolo-underline {
+      font: 800 2.3rem 'Montserrat', sans-serif;
+      color: #19546a;
+      text-align: center;
+      margin-bottom: 28px;
+      position: relative;
+    }
+
+    .titolo-underline::after {
+      content: "";
+      display: block;
+      height: 4px;
+      border-radius: 6px;
+      margin: 10px auto 0;
+      width: 80%;
+      max-width: 600px;
+      transform: translateX(4px);
+      background: linear-gradient(
+        90deg,
+        #6a00ff,
+        #0076ff,
+        #18a558,
+        #ffd400,
+        #ff7a00,
+        #ff2a00,
+        #6a00ff
+      );
+      background-size: 300% 100%;
+      animation: rainbowFlow 14s linear infinite, pulseGlow 3s ease-in-out infinite alternate;
+      box-shadow: 0 0 12px rgba(255, 200, 0, 0.5),
+                  0 0 20px rgba(255, 0, 200, 0.3);
+    }
+
+    @keyframes rainbowFlow {
+      from { background-position: 0 0; }
+      to   { background-position: 300% 0; }
+    }
+
+    @keyframes pulseGlow {
+      from { opacity: 0.75; }
+      to   { opacity: 1; }
+    }
+
+    @keyframes rainbowMove {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 100% 50%; }
+    }
+    /* 🌈 PULSANTE STIMA360 – IDENTICO ALLA LANDING */
+button[type="submit"]{
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+
+  /* Gradient animato IDENTICO */
+  background: linear-gradient(
+    135deg,
+    #0028a6,#2d1f8a,#2a0064,
+    #009c78,#007f8f,#ffd500,
+    #ff7a00,#ff0000,#1faa2c
+  );
+  background-size: 300% 300%;
+  animation: rainbowShift 6s ease infinite;
+
+  color: #fff;
+  font-weight: 700;
+  border: none;
+  border-radius: 14px;
+  padding: 20px;
+  font-size: 1.35rem;
+  cursor: pointer;
+
+  /* Effetto vetro */
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+
+  box-shadow:
+    0 1px 1px rgba(255,255,255,0.65),
+    0 6px 25px rgba(0,0,0,0.18);
+
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+
+/* Hover: SOLO più glow, niente cambio colore */
+button[type="submit"]:hover{
+  transform: scale(1.03);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.28);
+}
+
+button[type="submit"]:active{
+  transform: scale(0.96);
+}
+
+/* 💎 Riflesso specchio iOS */
+button[type="submit"]::before{
+  content:"";
+  position:absolute;
+  top:6px;
+  left:10px;
+  right:10px;
+  height:45%;
+  border-radius:10px;
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.85),
+    rgba(255,255,255,0.15),
+    rgba(255,255,255,0)
+  );
+  opacity:.9;
+  pointer-events:none;
+  z-index:2;
+}
+
+/* ✨ Glow esterno */
+button[type="submit"]::after{
+  content:"";
+  position:absolute;
+  inset:-8px;
+  border-radius:14px;
+  background: radial-gradient(
+    circle,
+    rgba(255,255,255,0.55),
+    rgba(255,255,255,0) 70%
+  );
+  filter: blur(8px);
+  opacity:.75;
+  pointer-events:none;
+  z-index:-1;
+}
+
+/* Animazione gradient */
+@keyframes rainbowShift{
+  0%{background-position:0% 50%}
+  50%{background-position:100% 50%}
+  100%{background-position:0% 50%}
+}
+
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="IMGVendere/Team.png" alt="Logo Stima360" class="logo">
+
+    <div class="titolo-underline"></div>
+
+    <!-- riepilogo immobile e utente (solo lettura) -->
+    <div id="infoImmobile" class="immobile"></div>
+
+    <form id="dettaglioForm">
+      <!-- campi base nascosti (già raccolti) -->
+      <input type="hidden" name="id">
+      <input type="hidden" name="nome">
+      <input type="hidden" name="cognome">
+      <input type="hidden" name="email">
+      <input type="hidden" name="telefono">
+      <input type="hidden" name="comune">
+      <input type="hidden" name="microzona">
+      <input type="hidden" name="via">
+      <input type="hidden" name="civico">
+      <input type="hidden" name="tipologia">
+      <input type="hidden" name="mq">
+      <input type="hidden" name="piano">
+      <input type="hidden" name="locali">
+      <input type="hidden" name="bagni">
+      <input type="hidden" name="ascensore">
+      <input type="hidden" name="pertinenze">
+      <input type="hidden" name="stato">
+      <input type="hidden" name="anno">
+
+      <!-- nuovi campi provenienti da dati_personali -->
+      <input type="hidden" name="posizioneMare">
+      <input type="hidden" name="distanzaMare">
+      <input type="hidden" name="barrieraMare">
+      <input type="hidden" name="mqGiardino">
+      <input type="hidden" name="mqGarage">
+      <input type="hidden" name="vistaMare">
+      <input type="hidden" name="altroDescrizione">
+      <input type="hidden" name="mqCantina">
+      <input type="hidden" name="mqPostoAuto">
+      <input type="hidden" name="mqTaverna">
+      <input type="hidden" name="mqSoffitta">
+      <input type="hidden" name="mqTerrazzo">
+      <input type="hidden" name="numBalconi">
+
+      <!-- SOLO nuovi campi da chiedere ora -->
+      <label for="classe">Classe energetica</label>
+      <select id="classe" name="classe" required>
+        <option value="">Scegli...</option>
+        <option>A4</option><option>A3</option><option>A2</option><option>A1</option>
+        <option>B</option><option>C</option><option>D</option>
+        <option>E</option><option>F</option><option>G</option>
+      </select>
+
+      <label for="riscaldamento">Riscaldamento</label>
+      <select id="riscaldamento" name="riscaldamento" required>
+        <option value="">Scegli...</option>
+        <option>Autonomo</option><option>Centralizzato</option>
+        <option>Pompa di calore</option><option>Assente</option><option>Altro</option>
+      </select>
+
+      <div class="flexrow">
+        <div>
+          <label for="condizionatore">Condizionatore</label>
+          <select id="condizionatore" name="condizionatore" required>
+            <option value="">Scegli...</option>
+            <option value="No">No</option>
+            <option value="Sì">Sì</option>
+          </select>
+        </div>
+        <div id="wrap_condiz_tipo" style="display:none;">
+          <label for="condiz_tipo">Tipo condizionatore</label>
+          <select id="condiz_tipo" name="condiz_tipo">
+            <option value="">Scegli...</option>
+            <option value="Solo freddo">Solo freddo</option>
+            <option value="Caldo/Freddo">Caldo/Freddo</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="flexrow">
+        <div>
+          <label for="spese_cond_flag">Spese condominiali</label>
+          <select id="spese_cond_flag" name="spese_cond_flag" required>
+            <option value="">Scegli...</option>
+            <option value="No">No</option>
+            <option value="Sì">Sì</option>
+          </select>
+        </div>
+        <div id="wrap_spese_mensili" style="display:none;">
+          <label for="spese_cond_mensili">Spese condominiali mensili €</label>
+          <input type="number" id="spese_cond_mensili" name="spese_cond_mensili" min="0" step="1" inputmode="numeric" pattern="[0-9]*">
+        </div>
+      </div>
+
+      <label for="esposizione">Esposizione</label>
+      <select id="esposizione" name="esposizione" required>
+        <option value="">Scegli...</option>
+        <option>Nord</option>
+        <option>Sud</option>
+        <option>Est</option>
+        <option>Ovest</option>
+        <option>Doppia</option>
+        <option>Tripla</option>
+        <option>Quattro lati</option>
+      </select>
+
+      <label for="arredo">Stato arredamento</label>
+      <select id="arredo" name="arredo" required>
+        <option value="">Scegli...</option>
+        <option>Vuoto</option><option>Parzialmente arredato</option><option>Completamente arredato</option>
+      </select>
+
+      <label for="note">Note aggiuntive</label>
+      <textarea id="note" name="note" placeholder="Es: Vista mare, lavori recenti, caratteristiche speciali..."></textarea>
+
+      <label for="contatto">Hai già preso contatto con noi?</label>
+      <select id="contatto" name="contatto" required>
+        <option value="">Scegli...</option>
+        <option>Sì</option><option>No</option>
+      </select>
+
+      <label for="sopralluogo">Disponibilità per sopralluogo</label>
+      <input type="datetime-local" id="sopralluogo" name="sopralluogo">
+
+      <button type="submit">Invia richiesta dettagliata</button>
+    </form>
+
+    <div id="esito" style="display:none;margin-top:20px;color:#168364;text-align:center;"></div>
+  </div>
+
+<script>
+/* ===============================
+   CARICAMENTO DATI (TOKEN / FALLBACK)
+================================ */
+const params = new URLSearchParams(location.search);
+const token = params.get("token");
+let dati = {};
+
+function getParams() {
+  const p = {};
+  location.search.replace(/[?&]+([^=&]+)=([^&]*)/gi, (_, k, v) => {
+    p[k] = decodeURIComponent((v || '').replace(/\+/g, ' '));
+  });
+  return p;
+}
+
+async function caricaDati() {
+  try {
+    if (token) {
+      const res = await fetch(
+        "https://stima360-backend.onrender.com/api/prefill?t=" + token
+      );
+      if (!res.ok) throw new Error();
+      dati = await res.json();
+    } else {
+      dati = getParams(); // fallback SOLO per test
+    }
+
+    inizializzaPagina();
+  } catch {
+    alert("Link non valido o scaduto");
+  }
+}
+
+/* ===============================
+   INIZIALIZZAZIONE PAGINA
+================================ */
+function inizializzaPagina() {
+
+  // --- Vista mare label ---
+  let vistaMareLabel = "-";
+  const vistaYN   = (dati.vistaMareYN || "").toLowerCase();
+  const vistaDett = dati.vistaMareDettaglio || "";
+
+  if (vistaYN === "si" || vistaYN === "sì") {
+    if (vistaDett === "panoramica") vistaMareLabel = "Vista mare panoramica";
+    else if (vistaDett === "parziale") vistaMareLabel = "Vista mare parziale";
+    else if (vistaDett === "scarsa") vistaMareLabel = "Vista mare limitata";
+    else vistaMareLabel = "Vista mare";
+  }
+  if (vistaYN === "no") vistaMareLabel = "Nessuna vista mare";
+
+  dati.vistaMare = vistaMareLabel;
+    // --- PERTINENZE (AGGIUNTA) ---
+  const pert = [];
+
+  if (dati.mqGiardino)   pert.push(`🌱 Giardino: ${dati.mqGiardino} mq`);
+  if (dati.mqGarage)    pert.push(`🚗 Garage: ${dati.mqGarage} mq`);
+  if (dati.mqPostoAuto) pert.push(`🅿️ Posto auto: ${dati.mqPostoAuto} mq`);
+  if (dati.mqCantina)   pert.push(`📦 Cantina: ${dati.mqCantina} mq`);
+  if (dati.mqTaverna)   pert.push(`🍽️ Taverna: ${dati.mqTaverna} mq`);
+  if (dati.mqSoffitta)  pert.push(`🧳 Soffitta: ${dati.mqSoffitta} mq`);
+  if (dati.mqTerrazzo)  pert.push(`🌅 Terrazzo: ${dati.mqTerrazzo} mq`);
+  if (dati.numBalconi)  pert.push(`🚪 Balconi: ${dati.numBalconi}`);
+
+    let pertHtml = 'Nessuna';
+    
+    if (pert.length) {
+      pertHtml = pert.join('<br>');
+    } else if (dati.pertinenze) {
+      pertHtml = dati.pertinenze
+        .split(',')
+        .map(p => '• ' + p.trim())
+        .join('<br>');
+    }
+
+
+  // --- RIEPILOGO ---
+  document.getElementById("infoImmobile").innerHTML = `
+    <b>🏠 ${dati.tipologia || '-'} ${dati.mq || ''} mq</b><br>
+    📍 <b>Indirizzo:</b> ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''} ${dati.microzona ? '('+dati.microzona+')' : ''}<br>
+    🧱 <b>Piano:</b> ${dati.piano || '-'} |
+    <b>Locali:</b> ${dati.locali || '-'} |
+    <b>Bagni:</b> ${dati.bagni || '-'}<br>
+    🛗 <b>Ascensore:</b> ${dati.ascensore || '-'}<br>
+    🏗️ <b>Stato:</b> ${dati.stato || '-'} |
+    <b>Anno:</b> ${dati.anno || '-'}<br>
+    🌊 <b>Posizione mare:</b> ${dati.posizioneMare || '-'} |
+    <b>Distanza:</b> ${dati.distanzaMare || '-'}<br>
+    👁️ <b>Vista mare:</b> ${vistaMareLabel} |
+    🚧 <b>Barriera:</b> ${dati.barrieraMare || '-'}<br>
+    
+    📁 <b>Pertinenze:</b><br>
+    ${pertHtml}<br>
+    
+    👤 <b>Contatto:</b> ${dati.nome || ''} ${dati.cognome || ''} – ${dati.telefono || ''}<br>
+
+    ✉️ <b>Email:</b> ${dati.email || ''}
+  `;
+
+  // --- RIEMPI HIDDEN ---
+  const f = document.getElementById("dettaglioForm");
+  Object.keys(f.elements).forEach(k => {
+    if (f.elements[k] && dati[k] !== undefined) {
+      f.elements[k].value = dati[k] ?? "";
+    }
+  });
+
+  // --- TOGGLE CONDIZIONATORE ---
+  const selCond = document.getElementById('condizionatore');
+  const boxTipo = document.getElementById('wrap_condiz_tipo');
+  const selTipo = document.getElementById('condiz_tipo');
+
+  selCond.addEventListener('change', () => {
+    boxTipo.style.display = selCond.value === 'Sì' ? 'block' : 'none';
+    selCond.value === 'Sì'
+      ? selTipo.setAttribute('required','required')
+      : selTipo.removeAttribute('required');
+  });
+
+  // --- TOGGLE SPESE ---
+  const selSpese = document.getElementById('spese_cond_flag');
+  const boxSpese = document.getElementById('wrap_spese_mensili');
+  const inpSpese = document.getElementById('spese_cond_mensili');
+
+  selSpese.addEventListener('change', () => {
+    boxSpese.style.display = selSpese.value === 'Sì' ? 'block' : 'none';
+    selSpese.value === 'Sì'
+      ? inpSpese.setAttribute('required','required')
+      : inpSpese.removeAttribute('required');
+  });
+
+  selCond.dispatchEvent(new Event('change'));
+  selSpese.dispatchEvent(new Event('change'));
+}
+
+/* ===============================
+   AVVIO
+================================ */
+caricaDati();
+</script>
+
+<script>
+document.getElementById("dettaglioForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+
+  const form = e.target;
+  const fd = new FormData(form);
+
+  // normalizza spese condominiali
+  if (fd.get("spese_cond_flag") === "No") {
+    fd.set("spese_cond", null);
+  } else {
+    fd.set("spese_cond", fd.get("spese_cond_mensili") || null);
+  }
+
+  // id stima (OBBLIGATORIO)
+  fd.set("stima_id", fd.get("id"));
+
+  try {
+    const res = await fetch(
+      "https://stima360-backend.onrender.com/api/salva_stima_dettagliata",
+      {
+        method: "POST",
+        body: fd
+      }
+    );
+
+    if (!res.ok) throw new Error();
+
+    document.getElementById("esito").style.display = "block";
+    document.getElementById("esito").innerHTML =
+      "✅ Richiesta inviata correttamente. Ti contatteremo a breve.";
+    form.style.display = "none";
+
+  } catch {
+    alert("Errore invio dati. Riprova.");
+  }
+});
+</script>
+
+</body>
+</html>

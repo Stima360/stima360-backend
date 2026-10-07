@@ -34,6 +34,8 @@ from __future__ import annotations
 import inspect
 from contextlib import contextmanager
 
+import re
+
 import pytest
 
 from core import repository
@@ -354,67 +356,101 @@ def _main_source() -> str:
     return (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
 
 
-def test_j5_the_bridge_is_called_inside_a_try_that_absorbs_everything():
-    """Spec 11.3: a bridge failure must not change the public response."""
+# SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04, ricevute pubbliche).
+# `salva_stima` e' un involucro di `_receive_submission`; la pipeline vive in
+# `_save_quick_submission(raw, receipt)`. Il confine che "assorbe tutto" non e'
+# piu' un try/except attorno al bridge con risposta di successo: ogni passo a
+# valle della INSERT e' un `receipt.step(...)`, e un passo fallito diventa una
+# ricevuta `partial` (202, riprendibile) in `_execute_submission`, mai un 500 e
+# mai un falso successo. Cio' che P26-1 pretendeva resta vero e si legge qui:
+# la stima si scrive prima del bridge, nessun selettore di agenzia del client
+# arriva al bridge, P17 e P18 ricevono gli id del bridge in modo difensivo e
+# nessun errore del bridge o dei consumatori raggiunge il client come eccezione.
+
+def _quick_pipeline() -> str:
     source = _main_source()
-    block = source[source.index("bridge_result = None"): source.index("safe_record_event")]
-    assert "try:" in block and "except" in block, block[:400]
-    assert "raise" not in block.split("except")[1][:400], "a bridge failure escapes"
+    body = source[source.index("\ndef _save_quick_submission(") + 1:]
+    return body[: body.index("\ndef ")]
+
+
+def test_j5_the_bridge_is_called_inside_a_try_that_absorbs_everything():
+    """Spec 11.3, forma F04: il bridge e' un passo della ricevuta; il solo
+    `except` attorno rilancia `PartialSubmission`, che `_execute_submission`
+    trasforma nella ricevuta parziale. Nessuna eccezione esce verso il client."""
+    source = _main_source()
+    pipeline = _quick_pipeline()
+    block = pipeline[pipeline.index("bridge_result = None"): pipeline.index("owner_provisioning.provision_for_public_stima(")]
+    assert 'bridge_result = receipt.step("bridge", lambda: core_service.bridge_public_stima(' in block
+    assert "try:" in block and "except public_submissions.PartialSubmission:" in block
+    assert block.split("except public_submissions.PartialSubmission:")[1].strip().startswith("raise")
+    executor = source[source.index("\ndef _execute_submission("):]
+    executor = executor[: executor.index("\ndef ", 10)]
+    assert "except public_submissions.PartialSubmission:" in executor
+    assert "return receipt.envelope()" in executor.split("except public_submissions.PartialSubmission:")[1]
+    handler = source[source.index('@app.post("/api/salva_stima")'):]
+    handler = handler[: handler.index("\n@app.", 10)]
+    assert '_receive_submission(request, "quick")' in handler
 
 
 def test_j5_the_endpoint_never_forwards_a_client_agency_id():
     """The public request has no say in where its rows land."""
-    source = _main_source()
-    call = source[source.index("bridge_result = core_service.bridge_public_stima"):]
-    call = call[: call.index(")") + 1]
+    pipeline = _quick_pipeline()
+    call = pipeline[pipeline.index("core_service.bridge_public_stima("):]
+    call = call[: call.index("), accepts=") + 1]
     assert "agency_id" not in call, call
 
 
 def test_j6_the_stima_row_is_written_before_the_bridge_runs():
     """So a bridge failure cannot cost the estimation itself."""
-    source = _main_source()
-    handler = source[source.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("safe_run_followup")]
+    handler = _quick_pipeline()
+    handler = handler[: handler.index("followup_service.run_followup(")]
     insert = handler.lower().index("insert into stime")
     bridge_call = handler.index("bridge_public_stima")
     assert insert < bridge_call, "the bridge runs before the stima row is stored"
+    assert handler.index("conn.commit()", insert) < bridge_call, "the stima is committed before the bridge"
 
 
 def test_j7_p17_and_p18_receive_the_bridge_ids_defensively():
     """`(bridge_result or {}).get(...)` - the error path passes None, not a crash."""
-    source = _main_source()
-    for consumer in ("safe_record_event", "safe_run_followup"):
-        block = source[source.index(consumer):]
-        block = block[: block.index(")\n")]
+    pipeline = _quick_pipeline()
+    for consumer in ("seller_intelligence_service.record_event(", "followup_service.run_followup("):
+        block = pipeline[pipeline.index(consumer):]
+        block = block[: block.index("))\n")]
         assert "(bridge_result or {}).get" in block, (consumer, block[:300])
 
 
 def test_j7_both_downstream_calls_are_the_non_raising_wrappers():
-    source = _main_source()
-    assert "safe_record_event(" in source
-    assert "safe_run_followup(" in source
-    # The raising variants must not be called from the public path.
-    handler = source[source.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("@app.", 10)]
-    assert "record_event(" not in handler.replace("safe_record_event(", "")
-    assert "run_followup(" not in handler.replace("safe_run_followup(", "")
+    """F04: il confine che non solleva e' la ricevuta. Ogni chiamata a P17 e
+    P18 nella pipeline pubblica sta dentro `receipt.step(...)`; i wrapper
+    `safe_*` (fail-open con falso successo) non sono piu' usati qui."""
+    pipeline = _quick_pipeline()
+    codice = "\n".join(r for r in pipeline.splitlines() if not r.strip().startswith("#"))
+    assert "safe_record_event(" not in codice and "safe_run_followup(" not in codice
+    for consumer in ("seller_intelligence_service.record_event(", "followup_service.run_followup("):
+        posizioni = [i for i in range(len(codice)) if codice.startswith(consumer, i)]
+        assert posizioni, consumer
+        for pos in posizioni:
+            passo = codice.rindex("receipt.step(", 0, pos)
+            fra = codice[passo:pos]
+            # nessuna istruzione nuova a livello di funzione fra il passo e la chiamata
+            assert not re.search(r"\n {4}\S", fra), (consumer, fra)
+            assert "lambda:" in fra, (consumer, fra)
 
 
 @pytest.mark.parametrize("outcome", ["conflict", "skipped", "error"])
 def test_j5_every_bridge_outcome_leaves_the_public_contract_intact(outcome):
-    """Asserted structurally: the response is built after the try/except and
-    does not read bridge_result's status.
-
-    Driving the real endpoint would need the whole estimation pipeline and a
-    database; what matters for P26-1 is narrower and provable here - the
-    response shape does not branch on what the bridge said.
+    """Asserted structurally: the response is built after the receipt steps
+    and does not branch on bridge_result's status. F04: an outcome the step
+    does not accept (`conflict`, `skipped`) or an error becomes a `partial`
+    receipt through the same single path - never a differently shaped
+    success response.
     """
-    source = _main_source()
-    handler = source[source.index('@app.post("/api/salva_stima")'):]
-    handler = handler[: handler.index("safe_run_followup")]
+    handler = _quick_pipeline()
+    handler = handler[: handler.index("followup_service.run_followup(")]
     for guard in ("if bridge_result[\"status\"] ==", "if bridge_result['status'] =="):
         assert guard not in handler, "the response branches on the bridge outcome"
     assert "bridge_status" in handler, "the outcome is logged, which is the intent"
+    assert 'accepts=lambda r: r.get("status") in {"linked", "already_linked"}' in handler
 
 
 def test_j7_the_followup_task_can_resolve_an_agency_from_a_stima_alone():

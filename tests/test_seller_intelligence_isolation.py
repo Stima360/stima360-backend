@@ -135,14 +135,21 @@ def test_main_py_references_seller_intelligence_only_through_the_p17b1_contract(
     assert "from seller_intelligence import service as seller_intelligence_service" in main_source
     assert "from seller_intelligence.router import router as seller_intelligence_router" in main_source
     assert "app.include_router(seller_intelligence_router, dependencies=[Depends(require_authenticated_operator)])" in main_source
-    assert "seller_intelligence_service.safe_record_event(" in main_source
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): i due eventi
+    # del producer (`stima_richiesta`, `stima_completata`) sono passi della
+    # ricevuta (`receipt.step("event_requested"/"event_completed", ...)`): il
+    # confine che non solleva e' la ricevuta, non piu' `safe_record_event`.
+    # Due chiamate, entrambe in `_save_quick_submission`, nessun'altra.
+    assert main_source.count("seller_intelligence_service.record_event(") == 2
+    assert "seller_intelligence_service.safe_record_event(" not in main_source
+    pipeline = main_source[main_source.index("\ndef _save_quick_submission("):]
+    pipeline = pipeline[: pipeline.index("\ndef ", 10)]
+    assert pipeline.count("seller_intelligence_service.record_event(") == 2
+    for nome in ("event_requested", "event_completed"):
+        assert f'receipt.step("{nome}", lambda: seller_intelligence_service.record_event(' in pipeline
     # Nessun accesso diretto a repository/schemas/exceptions del modulo da main.py.
     for forbidden in ("seller_intelligence.repository", "seller_intelligence.schemas", "seller_intelligence.exceptions"):
         assert forbidden not in main_source, f"main.py non deve accedere direttamente a {forbidden}"
-    # record_event() non va mai chiamato direttamente da main.py: solo il
-    # wrapper non-bloccante safe_record_event() e' un punto di ingresso
-    # autorizzato dal funnel pubblico.
-    assert "seller_intelligence_service.record_event(" not in main_source
 
 
 #: LMC-7 (collisione autorizzata). Fino a qui solo `main.py` - il funnel

@@ -35,18 +35,21 @@ def test_m01_la_083_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 087 (attributi del sito).
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito), che ora e' l'ultima.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
-    assert tutte[-7].version == "086_delete_arch_2b2_property_trash_guards"
-    assert tutte[-6].version == "087_catalogo_canonico_1_site_attributes"
-    assert tutte[-8].version == "085_delete_arch_2b1_property_trash"
-    assert tutte[-9].version == "084_delete_arch_1a_mistakes" and tutte[-10] is m083
-    assert tutte[-5].version == "088_catalogo_canonico_1b_site_inbox"
+    assert tutte[-9].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-8].version == "087_catalogo_canonico_1_site_attributes"
+    assert tutte[-10].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-11].version == "084_delete_arch_1a_mistakes" and tutte[-12] is m083
+    assert tutte[-7].version == "088_catalogo_canonico_1b_site_inbox"
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: poi la 090 (Cestino contatti), che ora e' l'ultima.
-    assert tutte[-4].version == "089_pertinenze_1_unit_nature"
+    assert tutte[-6].version == "089_pertinenze_1_unit_nature"
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: poi la 091 (Cestino edifici), che ora e' l'ultima.
-    assert tutte[-3].version == "090_cestino_contatti_1_contact_trash"
-    assert tutte[-2].version == "091_cestino_edifici_1_building_trash"
+    assert tutte[-5].version == "090_cestino_contatti_1_contact_trash"
+    assert tutte[-4].version == "091_cestino_edifici_1_building_trash"
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: poi la 092 (Cestino richieste), che ora e' l'ultima.
-    assert tutte[-1].version == "092_cestino_richieste_1_buy_request_trash"
+    assert tutte[-3].version == "092_cestino_richieste_1_buy_request_trash"
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: finestra spostata di due, poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
+    assert tutte[-2].version == "093_stima_private_pdf"
+    assert tutte[-1].version == "094_public_submission_receipts"
     assert m083.down_available and not m083.non_transactional
     assert runner.validate_migration(m083) == []
     # il runner possiede la transazione: nessun BEGIN/COMMIT nel file su,

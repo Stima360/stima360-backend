@@ -1,0 +1,40 @@
+{
+  "source_base_url": "https://www.stima360.it/",
+  "method": "GET",
+  "verified_date": "2026-10-07",
+  "backend_base_commit": "744dad3122de965d112a45dd1b79121e8859bfb2",
+  "source_kind": "received original Stima360.zip; main HTML byte-identical to served baseline",
+  "pages": [
+    {
+      "url": "https://www.stima360.it/index.html",
+      "baseline_path": "baseline/index.html",
+      "bytes": 117261,
+      "sha256": "d1364ea8a0fef2aab120b60b160ba80fdbc30e3a00fece09457d2cb61870c04d",
+      "audit_match": true
+    },
+    {
+      "url": "https://www.stima360.it/dati_personali.html",
+      "baseline_path": "baseline/dati_personali.html",
+      "bytes": 26158,
+      "sha256": "283b4564fb2e4d8432a238726e9610180441ddf0aa4501f3356103ab8d4ea7d6",
+      "audit_match": true
+    },
+    {
+      "url": "https://www.stima360.it/stima_dettagliata.html",
+      "baseline_path": "baseline/stima_dettagliata.html",
+      "bytes": 17923,
+      "sha256": "bb0fc10b19e661352184b858794ce6304a21683327200dc226824f19a3bd116b",
+      "audit_match": true
+    },
+    {
+      "url": "https://www.stima360.it/pdf_redirect.html",
+      "baseline_path": "baseline/pdf_redirect.html",
+      "bytes": 10258,
+      "sha256": "d2c230a0e6f4d88794d912c069443d9ae72c0514af853a86d95a6a5edb8f18e2",
+      "audit_match": true
+    }
+  ],
+  "received_archive_sha256": "4bf8578da798c2207ab766259479cffd65afbbc49e9ca12642d4ddf7cea27e54",
+  "candidate_backend_commit": "4833eae619d1ef8c1847f1c266e87790ea882a55",
+  "original_source_manifest": "original-source-manifest.json"
+}

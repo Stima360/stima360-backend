@@ -1,0 +1,58 @@
+diff --git a/dati_personali.html b/dati_personali.html
+index 2273058..b6fbf2f 100644
+--- a/dati_personali.html
++++ b/dati_personali.html
+@@ -658,7 +658,7 @@
+     recoveryButton('Riprova la stessa richiesta', () => recoverSubmission(false, true));
+   }
+ 
+-  function acceptCompleted(resJson, datiFinali) {
++  function acceptCompleted(resJson, datiFinali, notificationsPending = false) {
+     if (!Number.isSafeInteger(resJson.id) || resJson.id <= 0
+         || typeof resJson.token !== 'string' || !resJson.token.trim()
+         || resJson.receipt.stima_id !== resJson.id) {
+@@ -691,8 +691,12 @@
+         ✅ Valore totale: <span data-result="price" style="color:#168364;font-size:1.35em;"></span><br>
+         <span style="font-size:.95em;">€/mq finale: <b data-result="eur-mq"></b></span><br>
+         <span data-result="address" style="font-size:.93em;"></span>
+-        <br><br><span style="font-size:.98em;">Ti arriverà subito una mail e un WhatsApp</span>
++        <br><br><span data-result="notice" style="font-size:.98em;"></span>
+       `;
++      // Uncertain or failed notifications are not reported as delivered.
++      testoStima.querySelector('[data-result="notice"]').textContent = notificationsPending
++        ? 'Il risultato e il PDF sono disponibili qui. La conferma via email e WhatsApp è in verifica: non serve inviare di nuovo la richiesta.'
++        : 'Ti arriverà subito una mail e un WhatsApp';
+       testoStima.querySelector('[data-result="price"]').textContent = itMoney0(prezzo);
+       testoStima.querySelector('[data-result="eur-mq"]').textContent = itMoney2(eurMq);
+       testoStima.querySelector('[data-result="address"]').textContent = `📍 ${datiFinali.via || ''} ${datiFinali.civico || ''}, ${datiFinali.comune || ''}`;
+@@ -702,6 +706,9 @@
+   function handleReceipt(body) {
+     if (body.receipt.status === 'completed') {
+       acceptCompleted(body, Stima360Submission.record(submissionIntent).payload);
++    } else if (body.receipt.result_available === true) {
++      // Server-certified stored result: only accessory notifications remain.
++      acceptCompleted(body, Stima360Submission.record(submissionIntent).payload, true);
+     } else {
+       showPartial(body);
+     }
+diff --git a/submission.js b/submission.js
+index 584d615..f85d085 100644
+--- a/submission.js
++++ b/submission.js
+@@ -127,6 +127,16 @@
+         && (!Number.isSafeInteger(receipt.stima_id) || receipt.stima_id <= 0)) {
+       throw new Error('Ricevuta senza collegamento valido alla stima');
+     }
++    // Server certification that a stored result is readable even though an
++    // accessory notification is still uncertain or failed.
++    if (receipt.result_available !== undefined && typeof receipt.result_available !== 'boolean') {
++      throw new Error('Risposta senza una ricevuta verificabile');
++    }
++    if (receipt.result_available === true && (receipt.kind !== 'quick'
++        || !['completed', 'attention', 'partial'].includes(receipt.status)
++        || !Number.isSafeInteger(receipt.stima_id) || receipt.stima_id <= 0)) {
++      throw new Error('Risposta senza una ricevuta verificabile');
++    }
+     return body;
+   }
+ 

@@ -1,0 +1,111 @@
+--- before/dati_personali.html
++++ after/dati_personali.html
+@@ -222,7 +222,7 @@
+     }
+ 
+     /* 🌈 PULSANTE STIMA360 */
+-    button[type="submit"]{
++    button[type="submit"], #personalForm button[type="button"]{
+       position: relative;
+       overflow: hidden;
+       z-index: 1;
+@@ -241,22 +241,22 @@
+       margin-top: 10px;
+     }
+ 
+-    button[type="submit"]:hover{
++    button[type="submit"]:hover, #personalForm button[type="button"]:hover{
+       transform: translateY(-2px);
+       box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+     }
+ 
+-    button[type="submit"]:active{
++    button[type="submit"]:active, #personalForm button[type="button"]:active{
+       transform: scale(0.97);
+     }
+ 
+-    button[type="submit"]::before{
++    button[type="submit"]::before, #personalForm button[type="button"]::before{
+       content:""; position:absolute; top:6px; left:10px; right:10px; height:45%; border-radius:10px;
+       background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.15), rgba(255,255,255,0));
+       opacity:.9; pointer-events:none; z-index:2;
+     }
+ 
+-    button[type="submit"]::after{
++    button[type="submit"]::after, #personalForm button[type="button"]::after{
+       content:""; position:absolute; inset:-8px; border-radius:14px;
+       background: radial-gradient(circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70%);
+       filter: blur(8px); opacity:.75; pointer-events:none; z-index:-1;
+@@ -592,8 +592,7 @@
+     window.location.href = stimaSalvata.detail_url;
+   }
+   
+-  let submitCount = 0;
+-  const MAX_SUBMIT = 2;
++  let submissionState = 'ready';
+   
+   function isValidEmail(email) {
+     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+@@ -606,12 +605,7 @@
+   
+   document.getElementById('personalForm').addEventListener('submit', async function(event) {
+     event.preventDefault();
+-    submitCount++;
+-    
+-    if (submitCount > MAX_SUBMIT) {
+-      alert("Hai già inviato la richiesta.\nPer motivi di sicurezza puoi effettuare massimo 2 invii per pagina.\n\n🔄 Ricarica la pagina se necessario.");
+-      return;
+-    }
++    if (submissionState !== 'ready') return;
+ 
+     if (!document.getElementById('privacy').checked) {
+       alert("Devi accettare la privacy!");
+@@ -659,9 +653,11 @@
+     const fascia = document.getElementById('fascia-stima');
+     const testoStima = document.getElementById('testo-stima');
+   
++    submissionState = 'pending';
++    const submitButton = this.querySelector('button');
+     fascia.style.display = "block";
+     testoStima.innerHTML = "Sto calcolando la tua stima <span class='puntini'>...</span>";
+-    document.querySelector("button[type='submit']").style.display = "none"; // Nasconde il pulsante per evitare doppi click
++    submitButton.style.display = "none"; // Nasconde il pulsante durante l'invio
+   
+     let puntini = document.querySelector(".puntini");
+     let dots = 0;
+@@ -676,11 +672,7 @@
+   
+       clearInterval(anim);
+   
+-      if (!risposta.ok) {
+-        testoStima.textContent = "Errore nell'invio, riprova!";
+-        setTimeout(() => location.reload(), 1800);
+-        return;
+-      }
++      if (!risposta.ok) throw new Error("Risposta non confermata");
+ 
+       const resJson = await risposta.json();
+       if (!Number.isSafeInteger(resJson.id) || resJson.id <= 0
+@@ -695,6 +687,7 @@
+       datiFinali.id = resJson.id;
+       datiFinali.token = resJson.token;
+       stimaSalvata = { ...datiFinali, detail_url: detailUrl, pdf_redirect_url: loaderUrl };
++      submissionState = 'success';
+       try {
+         localStorage.setItem('stimaBase', JSON.stringify(stimaSalvata));
+       } catch (_) {
+@@ -727,8 +720,13 @@
+       clearInterval(anim);
+       console.error("Errore JS rilevato:", e);
+       
++      submissionState = 'uncertain';
+       stimaSalvata = null;
+-      testoStima.textContent = "Errore nell'invio, riprova!";
++      testoStima.textContent = "Esito NON CONFERMATO: la richiesta potrebbe essere già stata salvata. Prima di inviare una nuova richiesta, controlla email e WhatsApp. Puoi ricaricare la pagina per ripartire.";
++      submitButton.type = 'button';
++      submitButton.textContent = 'Ricarica la pagina';
++      submitButton.style.display = '';
++      submitButton.addEventListener('click', () => location.reload(), { once: true });
+     }
+   });
+   

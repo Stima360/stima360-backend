@@ -1,0 +1,279 @@
+diff --git a/pdf_redirect.html b/pdf_redirect.html
+--- a/pdf_redirect.html
++++ b/pdf_redirect.html
+@@ -1,27 +1,11 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <meta name="referrer" content="no-referrer" />
+   <script src="preview-config.js"></script>
+   <meta charset="UTF-8" />
+   <title>Stima360 - Elaborazione Stima...</title>
+   <meta name="viewport" content="width=device-width, initial-scale=1" />
+-  <!-- Meta Pixel Code -->
+-<script>
+-!function(f,b,e,v,n,t,s)
+-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+-n.queue=[];t=b.createElement(e);t.async=!0;
+-t.src=v;s=b.getElementsByTagName(e)[0];
+-s.parentNode.insertBefore(t,s)}(window, document,'script',
+-'https://connect.facebook.net/en_US/fbevents.js');
+-fbq('init', '1458312815299195');
+-fbq('track', 'PageView');
+-</script>
+-<noscript><img height="1" width="1" style="display:none"
+-src="https://www.facebook.com/tr?id=1703044517728181&ev=PageView&noscript=1"
+-/></noscript>
+-<!-- End Meta Pixel Code -->
+   <style>
+     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+ 
+@@ -343,9 +327,15 @@
+   cliccando sul pulsante qui sotto scrivendoci o chiamandoci al numero telefonico qui sotto dal Lunedi al Sabato in orari di ufficio.
+ </p>
+ 
+-    <button class="stima360-btn" onclick="vaiAStimaDettagliataConParametri()">
++    <button id="stimaPro" class="stima360-btn" onclick="vaiAStimaDettagliataConParametri()">
+       Stima360 Pro
+     </button>
++
++    <div id="pdfControls" hidden>
++      <p id="pdfStatus" role="status" aria-live="polite" hidden></p>
++      <button id="pdfRetry" class="stima360-btn" type="button" hidden>Recupera il PDF</button>
++      <p id="pdfDownloadBox" hidden><a id="pdfDownload" download>Scarica il PDF</a></p>
++    </div>
+ 
+     <div class="bv-box">
+       <img src="Biglietto_visita.jpeg" class="bv-img" alt="Biglietto da visita Stima360">
+@@ -355,27 +345,117 @@
+   <script>
+     const redirectParams = new URLSearchParams(location.search);
+     const redirectToken = redirectParams.get("token");
+-    const detailButton = document.querySelector('.stima360-btn');
++    const detailButton = document.getElementById('stimaPro');
++    const pdfControls = document.getElementById('pdfControls');
++    const pdfStatus = document.getElementById('pdfStatus');
++    const pdfRetry = document.getElementById('pdfRetry');
++    const pdfDownloadBox = document.getElementById('pdfDownloadBox');
++    const pdfDownload = document.getElementById('pdfDownload');
+     let detailReady = false;
++    let authorisedStimaId = null;
++    let pdfPending = false;
++    let retryAllowed = false;
++    let pdfObjectUrl = null;
++    let linkVersion = 0;
+     detailButton.disabled = true;
+ 
+-    function getPdfUrl() {
+-      const pdf = redirectParams.get("pdf");
+-      if (!pdf) return null;
+-      try { return Stima360Preview.localHttpUrl(pdf).href; } catch { return null; }
++    function revokePdf() {
++      if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
++      pdfObjectUrl = null;
++      pdfDownload.removeAttribute('href');
++      pdfDownloadBox.hidden = true;
++    }
++
++    function bloccaLink() {
++      detailReady = false;
++      authorisedStimaId = null;
++      detailButton.disabled = true;
++      retryAllowed = false;
++      pdfRetry.hidden = true;
++      revokePdf();
++      pdfControls.hidden = false;
++      pdfStatus.hidden = false;
++      pdfStatus.textContent = 'Link non valido o scaduto. Non è possibile aprire il PDF.';
++    }
++
++    async function riceviPdf(retry = false, version = linkVersion) {
++      if (!detailReady || !authorisedStimaId || !redirectToken || pdfPending
++          || version !== linkVersion || (retry && !retryAllowed)) return;
++      pdfPending = true;
++      retryAllowed = false;
++      pdfRetry.disabled = true;
++      try {
++        const res = await fetch(Stima360Preview.pdfUrl(authorisedStimaId, redirectToken, retry), {
++          method: retry ? 'POST' : 'GET', cache: 'no-store'
++        });
++        if (version !== linkVersion) return;
++        if ([401, 403, 404].includes(res.status)) {
++          bloccaLink();
++          return;
++        }
++        if (!res.ok) {
++          retryAllowed = res.status === 503;
++          throw new Error('PDF non disponibile');
++        }
++        if ((res.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/pdf') {
++          throw new Error('Risposta PDF non valida');
++        }
++        const pdf = await res.blob();
++        if (!pdf.size || new TextDecoder().decode(await pdf.slice(0, 5).arrayBuffer()) !== '%PDF-') {
++          throw new Error('Risposta PDF non valida');
++        }
++        if (version !== linkVersion) return;
++        revokePdf();
++        pdfObjectUrl = URL.createObjectURL(pdf);
++        pdfDownload.href = pdfObjectUrl;
++        pdfDownload.download = 'stima_' + authorisedStimaId + '.pdf';
++        pdfControls.hidden = false;
++        pdfStatus.hidden = true;
++        pdfRetry.hidden = true;
++        pdfDownloadBox.hidden = false;
++      } catch {
++        if (version !== linkVersion) return;
++        pdfControls.hidden = false;
++        pdfStatus.hidden = false;
++        pdfStatus.textContent = retryAllowed
++          ? 'PDF non disponibile. Puoi recuperarlo senza inviare una nuova stima.'
++          : 'PDF non disponibile. Riprova ad aprire questo link più tardi.';
++        pdfRetry.hidden = !retryAllowed;
++      } finally {
++        if (version === linkVersion) {
++          pdfPending = false;
++          pdfRetry.disabled = !retryAllowed;
++        }
++      }
+     }
+ 
+     async function verificaLinkDettagliato() {
+-      if (!redirectToken) return;
++      const version = ++linkVersion;
++      if (!redirectToken) {
++        bloccaLink();
++        return;
++      }
+       try {
+-        const res = await fetch(Stima360Preview.apiUrl('/api/prefill?t=' + encodeURIComponent(redirectToken)));
+-        if (!res.ok) return;
++        const res = await fetch(Stima360Preview.apiUrl('/api/prefill?t=' + encodeURIComponent(redirectToken)), { cache: 'no-store' });
++        if (version !== linkVersion) return;
++        if (!res.ok) {
++          bloccaLink();
++          return;
++        }
+         const prefill = await res.json();
+-        if (!prefill || !Number.isSafeInteger(prefill.id) || prefill.id <= 0) return;
++        if (version !== linkVersion) return;
++        if (!prefill || !Number.isSafeInteger(prefill.id) || prefill.id <= 0) {
++          bloccaLink();
++          return;
++        }
++        authorisedStimaId = prefill.id;
+         detailReady = true;
+         detailButton.disabled = false;
++        await riceviPdf(false, version);
+       } catch {
++        if (version !== linkVersion) return;
+         // No query/localStorage fallback can authorise this link.
++        bloccaLink();
+       }
+     }
+ 
+@@ -386,18 +466,29 @@
+       window.open(target.href, '_blank', 'noopener');
+     }
+ 
++    function resetCachedLink() {
++      linkVersion++;
++      pdfPending = false;
++      detailReady = false;
++      authorisedStimaId = null;
++      detailButton.disabled = true;
++      retryAllowed = false;
++      pdfRetry.hidden = true;
++      pdfRetry.disabled = true;
++      revokePdf();
++      pdfControls.hidden = true;
++      pdfStatus.hidden = true;
++    }
++
++    pdfRetry.addEventListener('click', () => riceviPdf(true));
++    window.addEventListener('pagehide', resetCachedLink);
++    window.addEventListener('pageshow', (event) => {
++      if (event.persisted) {
++        resetCachedLink();
++        verificaLinkDettagliato();
++      }
++    });
+     verificaLinkDettagliato();
+-
+-    // Dopo un attimo apre il PDF vero
+-    window.addEventListener("DOMContentLoaded", () => {
+-      const pdfUrl = getPdfUrl();
+-      if (!pdfUrl) return;
+-
+-      setTimeout(() => {
+-        window.location.href = pdfUrl;   // stesso TAB
+-        // oppure: window.open(pdfUrl, "_blank"); // se vuoi nuova scheda
+-      }, 600);
+-    });
+   </script>
+ 
+ </body>
+diff --git a/stima_dettagliata.html b/stima_dettagliata.html
+--- a/stima_dettagliata.html
++++ b/stima_dettagliata.html
+@@ -1,28 +1,12 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <meta name="referrer" content="no-referrer" />
+   <script src="preview-config.js"></script>
+ <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+   <meta charset="UTF-8" />
+   <title>Stima dettagliata – Stima360</title>
+   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-  <!-- Meta Pixel Code -->
+-<script>
+-!function(f,b,e,v,n,t,s)
+-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+-n.queue=[];t=b.createElement(e);t.async=!0;
+-t.src=v;s=b.getElementsByTagName(e)[0];
+-s.parentNode.insertBefore(t,s)}(window, document,'script',
+-'https://connect.facebook.net/en_US/fbevents.js');
+-fbq('init', '1458312815299195');
+-fbq('track', 'PageView');
+-</script>
+-<noscript><img height="1" width="1" style="display:none"
+-src="https://www.facebook.com/tr?id=1458312815299195ev=PageView&noscript=1"
+-/></noscript>
+-<!-- End Meta Pixel Code -->
+   <style>
+     @keyframes moveClouds { 0%{transform:translateX(0)} 50%{transform:translateX(-30%)} 100%{transform:translateX(0)} }
+     @keyframes glowShift { 0%{transform:translateY(0) scale(1);opacity:.5} 100%{transform:translateY(-20px) scale(1.1);opacity:.7} }
+diff --git a/preview-config.js b/preview-config.js
+--- a/preview-config.js
++++ b/preview-config.js
+@@ -28,17 +28,17 @@
+     }
+     const target = new URL('/' + pageName, publicSiteOrigin);
+     target.searchParams.set('token', token);
+-    if (pageName === 'pdf_redirect.html' && supplied.searchParams.has('pdf')) {
+-      target.searchParams.set('pdf', supplied.searchParams.get('pdf'));
+-    }
+     return target.href;
+   }
+ 
+-  // Same helper interface as the preview. Production keeps current PDF providers.
+-  // PDF access policy and storage are outside F13/F16 (F07 remains open).
+-  function localHttpUrl(value) {
+-    return httpUrl(value, apiBase);
++  function pdfUrl(stimaId, token, retry = false) {
++    if (!Number.isSafeInteger(stimaId) || stimaId <= 0
++        || typeof token !== 'string' || !token.trim() || typeof retry !== 'boolean') {
++      throw new Error('Link PDF non valido');
++    }
++    return apiUrl('/api/stime/' + stimaId + '/pdf' + (retry ? '/retry' : '')
++      + '?t=' + encodeURIComponent(token));
+   }
+ 
+-  window.Stima360Preview = Object.freeze({ apiUrl, pageUrl, localHttpUrl });
++  window.Stima360Preview = Object.freeze({ apiUrl, pageUrl, pdfUrl });
+ })();

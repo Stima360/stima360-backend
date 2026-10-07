@@ -20,6 +20,14 @@ class FakeCursor:
         sql = " ".join(str(query).split()).lower()
         self.db.sql.append((sql, params))
 
+        # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04): prima di inserire
+        # un'azione il repository ricava l'agenzia dai riferimenti con
+        # `SELECT agency_id FROM <tabella> WHERE id = %s FOR SHARE` (come gia'
+        # risponde il doppio di tests/test_followup_repository.py).
+        if sql.startswith("select agency_id from ") and "for share" in sql:
+            self.rows = [{"agency_id": 1}]
+            return
+
         if "insert into followup_actions" in sql:
             key = params["idempotency_key"]
             existing = next((x for x in self.db.actions if x["idempotency_key"] == key), None)

@@ -1,0 +1,26 @@
+{
+  "index.html": {
+    "static_references_equal": true,
+    "static_text_equal": true,
+    "css_equal_after_removing_recovery_selectors": true,
+    "raw_css_equal": true
+  },
+  "dati_personali.html": {
+    "static_references_equal": true,
+    "static_text_equal": true,
+    "css_equal_after_removing_recovery_selectors": true,
+    "raw_css_equal": false
+  },
+  "stima_dettagliata.html": {
+    "static_references_equal": true,
+    "static_text_equal": true,
+    "css_equal_after_removing_recovery_selectors": true,
+    "raw_css_equal": true
+  },
+  "pdf_redirect.html": {
+    "static_references_equal": true,
+    "static_text_equal": true,
+    "css_equal_after_removing_recovery_selectors": true,
+    "raw_css_equal": true
+  }
+}

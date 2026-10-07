@@ -12,6 +12,9 @@ import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 import stime_purge
+import stima_pdf
+import public_submissions
+from starlette.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
@@ -69,10 +72,9 @@ from platform_admin.router import router as platform_router
 # CONFIG
 # ---------------------------------------------------------
 BASE_DIR = Path(__file__).parent
-REPORTS_DIR = Path("/var/tmp/reports")
-os.makedirs(REPORTS_DIR, exist_ok=True)
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
+PUBLIC_SITE_BASE_URL = os.getenv("PUBLIC_SITE_BASE_URL", "https://www.stima360.it").rstrip("/")
 WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
 logger = logging.getLogger(__name__)
 
@@ -373,9 +375,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static (PDF)
-app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
-
 # Additive STIMA360 OS App Shell (unified internal frontend), isolated from
 # the 6 legacy admin UIs above, which remain unchanged and fully functional.
 OS_SHELL_DIR = BASE_DIR / "static" / "os_shell"
@@ -414,28 +413,18 @@ def verify_whatsapp_signature(raw_body: bytes, signature: str | None) -> None:
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
-    print("WA URL:", WHATSAPP_SERVICE_URL)
-    print("WA raw telefono:", repr(numero))
-
     dest = normalizza_numero_whatsapp(numero)
-    print("WA dest:", repr(dest))
-
     if not dest:
-        print("WA SKIP: numero non valido")
-        return
-
+        return False
     try:
-        r = requests.post(
+        response = requests.post(
             WHATSAPP_SERVICE_URL,
-            json={"to": dest, "p1": p1, "p2": p2, "p3": p3},
-            timeout=10
+            json={"to": dest, "p1": p1, "p2": p2, "p3": p3}, timeout=10,
         )
-        print("WA HTTP:", r.status_code, r.text[:200])
-
-        if r.status_code >= 300:
-            print("WA ERROR:", r.status_code, r.text)
-    except Exception as e:
-        print("WA EXC:", e)
+        return 200 <= response.status_code < 300
+    except Exception as exc:
+        logger.warning("public_whatsapp_transport_uncertain error_type=%s", type(exc).__name__)
+        return False
 
 def to_int(v): 
     try: return int(v)
@@ -454,10 +443,6 @@ def to_bool(v):
 def format_indirizzo(via, civico, comune):
     via_civ = " ".join(p for p in [via or "", civico or ""] if p).strip()
     return ", ".join([via_civ, comune]) if comune else via_civ
-
-def web_to_fs(path: str) -> str:
-    name = path.split("/")[-1]
-    return str((REPORTS_DIR / name).resolve())
 
 def normalizza_comune(v: str | None) -> str | None:
     if not v:
@@ -770,23 +755,120 @@ async def stima_base(request: Request):
 # ---------------------------------------------------------
 # ENDPOINT: SALVA STIMA
 # ---------------------------------------------------------
+async def _submission_body(request):
+    try:
+        raw = await request.json() if "application/json" in (request.headers.get("content-type") or "") else dict(await request.form())
+    except Exception:
+        raise HTTPException(400, "Payload non valido") from None
+    if not isinstance(raw, dict):
+        raise HTTPException(400, "Payload non valido")
+    return raw
+
+
+def _execute_submission(receipt):
+    if receipt.row["status"] in {"completed", "attention"}:
+        return receipt.envelope()
+    raw = dict(receipt.row["request_payload"])
+    if receipt.row["kind"] == "quick":
+        raw["client_request_id"] = receipt.request_id
+    try:
+        result = (_save_quick_submission(raw, receipt) if receipt.row["kind"] == "quick"
+                  else _save_detail_submission(raw, receipt))
+        return receipt.finish(result)
+    except public_submissions.PartialSubmission:
+        return receipt.envelope()
+    except HTTPException as exc:
+        if exc.status_code in {403, 404}:
+            raise
+        receipt.reload()
+        if receipt.row["status"] in {"completed", "attention"}:
+            return receipt.envelope()
+        receipt.checkpoint("pipeline", "failed", error="HTTPException")
+        receipt._save("status", "partial")
+        return receipt.envelope()
+    except Exception as exc:
+        # The business INSERT can already have committed; expose a recoverable
+        # receipt instead of inducing another anonymous request.
+        receipt.reload()
+        if receipt.row["status"] in {"completed", "attention"}:
+            return receipt.envelope()
+        receipt.checkpoint("pipeline", "failed", error=type(exc).__name__)
+        receipt._save("status", "partial")
+        logger.warning("public_submission_partial request_id=%s error_type=%s", receipt.request_id, type(exc).__name__)
+        return receipt.envelope()
+
+
+def _submission_response(result):
+    return JSONResponse(result, status_code=200 if result["receipt"]["status"] == "completed" else 202,
+                        headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+async def _receive_submission(request, kind):
+    raw = await _submission_body(request)
+    request_id, proof_hash = public_submissions.identity(raw, request.headers)
+    def receive():
+        with public_submissions.open_receipt(get_connection, request_id, proof_hash, kind=kind, raw=raw) as receipt:
+            return _submission_response(_execute_submission(receipt))
+    return await run_in_threadpool(receive)
+
+
 @app.post("/api/salva_stima")
 async def salva_stima(request: Request):
+    return await _receive_submission(request, "quick")
 
-    # --- 1. Leggi body ---
+
+@app.get("/api/submissions/{request_id}")
+def public_submission_receipt(request_id: str, request: Request):
+    rid, proof = public_submissions.identity({"request_id": request_id}, request.headers)
+    with public_submissions.open_receipt(get_connection, rid, proof) as receipt:
+        return JSONResponse(receipt.envelope(), headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.post("/api/submissions/{request_id}/resume")
+async def public_submission_resume(request_id: str, request: Request):
+    rid, proof = public_submissions.identity({"request_id": request_id}, request.headers)
+    def resume():
+        with public_submissions.open_receipt(get_connection, rid, proof) as receipt:
+            return _submission_response(_execute_submission(receipt))
+    return await run_in_threadpool(resume)
+
+
+@app.get("/api/admin/submissions/{request_id}", dependencies=[Depends(require_authenticated_operator)])
+def operator_submission_receipt(request_id: str, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
     try:
-        if "application/json" in (request.headers.get("content-type") or ""):
-            raw = await request.json()
-        else:
-            raw = dict(await request.form())
-    except:
-        raw = {}
+        rid = str(uuid.UUID(request_id))
+    except ValueError:
+        raise HTTPException(404, "Ricevuta non disponibile") from None
+    with public_submissions.open_receipt(get_connection, rid, None, agency_id=agency_of(ctx)) as receipt:
+        return JSONResponse(receipt.envelope(), headers={"Cache-Control": "private, no-store"})
         
+
+@app.post("/api/admin/submissions/{request_id}/resume", dependencies=[Depends(require_authenticated_operator)])
+def operator_submission_resume(request_id: str, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    try:
+        rid = str(uuid.UUID(request_id))
+    except ValueError:
+        raise HTTPException(404, "Ricevuta non disponibile") from None
+    with public_submissions.open_receipt(get_connection, rid, None, agency_id=agency_of(ctx)) as receipt:
+        return _submission_response(_execute_submission(receipt))
+
+
+def _public_admin_mail_ready():
+    # This check is entirely before transport; failure is safe to resume.
+    try:
+        port = int(os.getenv("SMTP_PORT", "587"))
+    except (ValueError, TypeError):
+        return False
+    return bool(os.getenv("SMTP_HOST", "mail.stima360.it") and os.getenv("SMTP_USER")
+                and os.getenv("SMTP_PASS") and 0 < port <= 65535)
+
+
+def _save_quick_submission(raw, receipt):
     # --------------------------
     # CONSENSO MARKETING (GDPR)
     # --------------------------
     consenso_marketing = bool(raw.get("consenso_marketing", False))
-    consenso_marketing_at = datetime.now(timezone.utc) if consenso_marketing else None
+    consenso_marketing_at = receipt.row["created_at"] if consenso_marketing else None
         
     # --- 2. Normalizza (CON VALORI DI DEFAULT PER FORM LEGGERO) ---
     data = {
@@ -844,92 +926,107 @@ async def salva_stima(request: Request):
             try: cur.close(); conn.close()
             except: pass
 
-    # --- 4. Salva stima base ---
-    conn = get_connection(); cur = conn.cursor()
-    try:
-        # P26-2B2B: this endpoint is anonymous, so the owning agency cannot come
-        # from the caller. It is resolved server-side from the Default Agency
-        # slug by the factory already certified in P26-1 - the same factory the
-        # CORE bridge below resolves through, so the stima and the contact and
-        # lead it produces cannot end up in different agencies.
-        #
-        # Resolved on this connection, therefore inside the transaction the
-        # INSERT below commits: the agency is proven to exist and to be active
-        # at the moment the row is written, not merely at some earlier point.
-        #
-        # P27-6: l'agenzia non e' piu' sempre quella predefinita.
-        #
-        # Si cerca prima chi presidia il comune (`network_territories` +
-        # `agency_territory_assignments`, entrambi attivi); solo se nessuno lo
-        # presidia si ricade sullo slug costante, che e' esattamente il
-        # comportamento congelato da P26-1. Il ripiego non e' un ramo di
-        # cortesia: e' la stessa risoluzione di prima, spostata dopo la domanda
-        # sul territorio.
-        #
-        # `comune_db` e NON `data["comune"]`: si instrada sullo stesso valore
-        # che finisce nella riga. Instradare sul grezzo e scrivere il
-        # normalizzato vorrebbe dire che la stima dice di stare in un posto e
-        # il lead e' stato deciso da un altro.
-        comune_db = normalizza_comune(data["comune"]) or data["comune"]
+    data = receipt.frozen("normalized", lambda: data)
+    if receipt.row["stima_id"] is None:
+        # --- 4. Salva stima base ---
+        conn = get_connection(); cur = conn.cursor()
+        try:
+            # P26-2B2B: this endpoint is anonymous, so the owning agency cannot come
+            # from the caller. It is resolved server-side from the Default Agency
+            # slug by the factory already certified in P26-1 - the same factory the
+            # CORE bridge below resolves through, so the stima and the contact and
+            # lead it produces cannot end up in different agencies.
+            #
+            # Resolved on this connection, therefore inside the transaction the
+            # INSERT below commits: the agency is proven to exist and to be active
+            # at the moment the row is written, not merely at some earlier point.
+            #
+            # P27-6: l'agenzia non e' piu' sempre quella predefinita.
+            #
+            # Si cerca prima chi presidia il comune (`network_territories` +
+            # `agency_territory_assignments`, entrambi attivi); solo se nessuno lo
+            # presidia si ricade sullo slug costante, che e' esattamente il
+            # comportamento congelato da P26-1. Il ripiego non e' un ramo di
+            # cortesia: e' la stessa risoluzione di prima, spostata dopo la domanda
+            # sul territorio.
+            #
+            # `comune_db` e NON `data["comune"]`: si instrada sullo stesso valore
+            # che finisce nella riga. Instradare sul grezzo e scrivere il
+            # normalizzato vorrebbe dire che la stima dice di stare in un posto e
+            # il lead e' stato deciso da un altro.
+            comune_db = normalizza_comune(data["comune"]) or data["comune"]
 
-        # Through the module's single call site - see
-        # _routed_public_stima_system_context for why there is exactly one.
-        system_ctx, routing_decision = _routed_public_stima_system_context(
-            conn, comune=comune_db
-        )
+            # Through the module's single call site - see
+            # _routed_public_stima_system_context for why there is exactly one.
+            system_ctx, routing_decision = _routed_public_stima_system_context(
+                conn, comune=comune_db
+            )
 
-        cur.execute("""
-             INSERT INTO stime
-             (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
-              bagni, pertinenze, ascensore, nome, cognome, email, telefono,
-              consenso_marketing, consenso_marketing_at, agency_id)
-              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-              RETURNING id
-        """, (
-            comune_db, data["microzona"], data["fascia_mare"],
-            data["via"], data["civico"], data["tipologia"],
-            data["mq"], data["piano"], data["locali"], data["bagni"],
-            data["pertinenze"], data["ascensore"],
-            data["nome"], data["cognome"], data["email"], data["telefono"],
-            consenso_marketing, consenso_marketing_at,
-            system_ctx.require_agency()
-        ))
-        new_id = cur.fetchone()[0]
-        conn.commit()
+            cur.execute("""
+                 INSERT INTO stime
+                 (comune, microzona, fascia_mare, via, civico, tipologia, mq, piano, locali,
+                  bagni, pertinenze, ascensore, nome, cognome, email, telefono,
+                  consenso_marketing, consenso_marketing_at, agency_id)
+                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  RETURNING id
+            """, (
+                comune_db, data["microzona"], data["fascia_mare"],
+                data["via"], data["civico"], data["tipologia"],
+                data["mq"], data["piano"], data["locali"], data["bagni"],
+                data["pertinenze"], data["ascensore"],
+                data["nome"], data["cognome"], data["email"], data["telefono"],
+                consenso_marketing, consenso_marketing_at,
+                system_ctx.require_agency()
+            ))
+            new_id = cur.fetchone()[0]
+            receipt.attach_on_cursor(cur, new_id, system_ctx.require_agency())
+            conn.commit()
+            receipt.reload()
 
-        # DA QUI IN POI LA DECISIONE E' QUELLA SCRITTA, non quella in memoria.
-        # Il contesto che andra' al bridge viene riletto dalla stima appena
-        # committata: e' la stessa agenzia, ma per la strada che vale anche al
-        # secondo passaggio. Vedi _persisted_public_stima_system_context.
-        bridge_ctx = _persisted_public_stima_system_context(conn, stima_id=new_id)
-        # P27-6: la decisione di routing nel log applicativo, e NON in
-        # `platform_audit_log`. Quella tabella registra gli atti amministrativi
-        # di chi governa la rete - creare un'agenzia, assegnare un territorio -
-        # ed e' append-only: scriverci una riga per ogni stima pubblica la
-        # trasformerebbe in un registro di traffico in cui gli atti
-        # amministrativi diventano introvabili.
-        #
-        # Nessun dato personale: id della stima, agenzia scelta, come. Il
-        # comune compare solo nella forma canonica gia' cercata, che e' un
-        # nome di luogo e non un indirizzo.
-        logger.info(
-            "public_stima_routing stima_id=%s agency_id=%s source=%s valore=%s",
-            new_id,
-            routing_decision.agency_id,
-            routing_decision.source,
-            routing_decision.matched_value,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore INSERT DB: {e}")
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
+            # DA QUI IN POI LA DECISIONE E' QUELLA SCRITTA, non quella in memoria.
+            # Il contesto che andra' al bridge viene riletto dalla stima appena
+            # committata: e' la stessa agenzia, ma per la strada che vale anche al
+            # secondo passaggio. Vedi _persisted_public_stima_system_context.
+            bridge_ctx = _persisted_public_stima_system_context(conn, stima_id=new_id)
+            # P27-6: la decisione di routing nel log applicativo, e NON in
+            # `platform_audit_log`. Quella tabella registra gli atti amministrativi
+            # di chi governa la rete - creare un'agenzia, assegnare un territorio -
+            # ed e' append-only: scriverci una riga per ogni stima pubblica la
+            # trasformerebbe in un registro di traffico in cui gli atti
+            # amministrativi diventano introvabili.
+            #
+            # Nessun dato personale: id della stima, agenzia scelta, come. Il
+            # comune compare solo nella forma canonica gia' cercata, che e' un
+            # nome di luogo e non un indirizzo.
+            logger.info(
+                "public_stima_routing stima_id=%s agency_id=%s source=%s valore=%s",
+                new_id,
+                routing_decision.agency_id,
+                routing_decision.source,
+                routing_decision.matched_value,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Errore salvataggio stima") from None
+        finally:
+            try: cur.close(); conn.close()
+            except: pass
+
+    else:
+        new_id = receipt.row["stima_id"]
+        conn = get_connection()
+        try:
+            bridge_ctx = _persisted_public_stima_system_context(conn, stima_id=new_id)
+        finally:
+            conn.close()
+
+    if bridge_ctx.require_agency() != receipt.row["agency_id"]:
+        raise HTTPException(404, "Ricevuta non disponibile")
 
     bridge_result = None
     try:
-        bridge_result = core_service.bridge_public_stima(
+        bridge_result = receipt.step("bridge", lambda: core_service.bridge_public_stima(
             new_id,
             first_name=data["nome"],
             last_name=data["cognome"],
@@ -945,7 +1042,7 @@ async def salva_stima(request: Request):
             # chiamata come testo grezzo per accertarsi che nessun selettore di
             # agenzia vi transiti, e non distingue codice da prosa.)
             system_ctx=bridge_ctx,
-        )
+        ), accepts=lambda r: r.get("status") in {"linked", "already_linked"} and r.get("contact_id") and r.get("lead_id"))
         bridge_log = logger.warning if bridge_result["status"] in {"conflict", "skipped"} else logger.info
         bridge_log(
             "public_stima_crm_bridge bridge_status=%s stima_id=%s contact_id=%s lead_id=%s reason=%s",
@@ -955,47 +1052,27 @@ async def salva_stima(request: Request):
             bridge_result.get("lead_id"),
             bridge_result.get("reason"),
         )
-    except Exception as exc:
-        logger.error(
-            "public_stima_crm_bridge bridge_status=error stima_id=%s contact_id=None lead_id=None error_type=%s",
-            new_id,
-            type(exc).__name__,
-        )
+    except public_submissions.PartialSubmission:
+        raise
 
-    # --- LMC-1A Owner provisioning: contact -> owner_account -> owner_stima_access
-    # (additive, non-blocking) ---
-    # Subito dopo il bridge, perche' e' del bridge che vive: senza un contatto
-    # collegato (linked/already_linked) il servizio non scrive niente. Stesso
-    # contesto LETTO dalla stima che e' andato al bridge, quindi account e grant
-    # non possono finire in un'agenzia diversa da contatto e lead. Il wrapper
-    # `safe_*` non lascia uscire nessuna eccezione e la logica sta in
-    # owner/provisioning.py: qui c'e' solo la chiamata.
-    owner_provisioning.safe_provision_for_public_stima(
+    # Resume existing owner grant using the persisted stima agency.
+    receipt.step("owner", lambda: owner_provisioning.provision_for_public_stima(
         bridge_ctx,
         stima_id=new_id,
         bridge_result=bridge_result,
-    )
+    ), accepts=lambda r: r.get("status") in {"provisioned", "already_provisioned"},
+                 not_applicable=lambda r: isinstance(r, dict) and r.get("status") == "account_disabled")
 
-    # --- CATALOGO-CANONICO-1: la scheda immobile dal sito (additive,
-    # non-blocking) ---
-    # Solo con contatto e lead (esito del bridge): la scheda nasce in
-    # censimento, senza incarico ne' agente, con i valori che il form ha
-    # davvero inviato (`raw`), mai i default scritti qui sopra in `stime`.
-    # Il wrapper `safe_*` assorbe ogni errore: la logica sta in
-    # property/site_sync.py, qui c'e' solo la chiamata.
-    property_site_sync.safe_sync_public_stima(
+    # The property inbox/sync has its own atomic, idempotent transaction.
+    receipt.step("property", lambda: property_site_sync.sync_public_stima(
         bridge_ctx,
         stima_id=new_id,
         raw=raw,
         bridge_result=bridge_result,
-    )
+    ), accepts=lambda r: bool(r.get("property_id")))
 
-    # --- P17 Seller Intelligence: stima_richiesta (additive, non-blocking) ---
-    # Registrato dopo che la riga stime esiste e il bridge CORE e' stato
-    # tentato (sopra), indipendentemente dal suo esito. Non puo' mai
-    # alterare la request/response di questo endpoint: safe_record_event
-    # non solleva mai eccezioni (vedi seller_intelligence/service.py).
-    seller_intelligence_service.safe_record_event(
+    # Existing event keys remain deterministic on the original stima.
+    receipt.step("event_requested", lambda: seller_intelligence_service.record_event(
         event_type="stima_richiesta",
         event_source="stima360_it",
         stima_id=new_id,
@@ -1007,99 +1084,101 @@ async def salva_stima(request: Request):
             "mq": data["mq"],
         },
         idempotency_key=f"stima_richiesta:{new_id}",
-    )
+    ))
 
-    # --- P18 Follow-up Engine: FOLLOWUP_STIMA_RICHIESTA (additive,
-    # non-blocking) ---
-    # Registrato subito dopo l'evento P17 stima_richiesta, con lo stesso
-    # pattern (bridge_result or {}).get(...) gia' usato sopra: il bridge
-    # CORE puo' essere fallito o non aver trovato contact_id/lead_id, ma
-    # stima_id=new_id e' sempre disponibile e da solo soddisfa il
-    # constraint CORE tasks_reference_chk (vedi followup/service.py). Usa
-    # ESCLUSIVAMENTE safe_run_followup(): non solleva mai eccezioni (vedi
-    # followup/service.py) e usa una propria transazione locale P18,
-    # separata da quella della stima, del bridge e di Seller Intelligence -
-    # nessun failure qui puo' mai alterare la request/response di questo
-    # endpoint.
-    followup_service.safe_run_followup(
+    # Recover the existing action/task; keep the first rule deadline.
+    receipt.step("followup", lambda: followup_service.run_followup(
         rule_code="FOLLOWUP_STIMA_RICHIESTA",
         trigger_type="event",
         stima_id=new_id,
         contact_id=(bridge_result or {}).get("contact_id"),
         lead_id=(bridge_result or {}).get("lead_id"),
         created_by="FOLLOWUP",
-    )
-
-    # --- 5. TOKEN e prezzo base ---
-    conn = get_connection(); cur = conn.cursor()
-    cur.execute("""
-    UPDATE stime SET
-      anno=%s,
-      stato=%s,
-    
-      posizionemare=%s,
-      distanzamare=%s,
-      barrieramare=%s,
-    
-      vistamareyn=%s,
-      vistamaredettaglio=%s,
-      vistamare=%s,
-    
-      mqgiardino=%s,
-      mqgarage=%s,
-      mqcantina=%s,
-      mqpostoauto=%s,
-      mqtaverna=%s,
-      mqsoffitta=%s,
-      mqterrazzo=%s,
-      numbalconi=%s,
-    
-      altrodescrizione=%s
-    WHERE id=%s
-    """, (
-      data["anno"],
-      data["stato"],
-    
-      data["posizioneMare"],
-      data["distanzaMare"],
-      data["barrieraMare"],
-    
-      data["vistaMareYN"],
-      data["vistaMareDettaglio"],
-      data["vistaMare"],
-    
-      to_int(data["mqGiardino"]),
-      to_int(data["mqGarage"]),
-      to_int(data["mqCantina"]),
-      to_int(data["mqPostoAuto"]),
-      to_int(data["mqTaverna"]),
-      to_int(data["mqSoffitta"]),
-      to_int(data["mqTerrazzo"]),
-      to_int(data["numBalconi"]),
-    
-      data["altroDescrizione"],
-      new_id
+        recover=True,
+        due_at_override=receipt.frozen("followup_due", lambda: receipt.row["created_at"] + timedelta(
+            hours=followup_service.get_rule("FOLLOWUP_STIMA_RICHIESTA").due_hours)),
     ))
-    conn.commit()
-    cur.close(); conn.close()
-    
-    token = str(uuid.uuid4())
-    expires = datetime.now(timezone.utc) + timedelta(days=7)
 
-    conn = get_connection(); cur = conn.cursor()
-    try:
-        cur.execute("""
-            UPDATE stime SET token=%s, token_expires=%s, prezzo_mq_base=%s
-            WHERE id=%s
-        """, (token, expires, data["prezzo_mq_base"], new_id))
-        conn.commit()
-    except:
-        pass
-    finally:
-        try: cur.close(); conn.close()
-        except: pass
+    capability = receipt.frozen("capability", lambda: {
+        "token": str(uuid.uuid4()), "expires": (receipt.row["created_at"] + timedelta(days=7)).isoformat()})
+    token = capability["token"]
+    expires = datetime.fromisoformat(capability["expires"])
+    
+    def persist_fields_and_capability():
+        # --- 5. TOKEN e prezzo base ---
+        conn = get_connection(); cur = conn.cursor()
+        try:
+            cur.execute("""
+            UPDATE stime SET
+              anno=%s,
+              stato=%s,
+    
+              posizionemare=%s,
+              distanzamare=%s,
+              barrieramare=%s,
+    
+              vistamareyn=%s,
+              vistamaredettaglio=%s,
+              vistamare=%s,
+    
+              mqgiardino=%s,
+              mqgarage=%s,
+              mqcantina=%s,
+              mqpostoauto=%s,
+              mqtaverna=%s,
+              mqsoffitta=%s,
+              mqterrazzo=%s,
+              numbalconi=%s,
+    
+              altrodescrizione=%s
+            WHERE id=%s AND agency_id=%s
+            """, (
+              data["anno"],
+              data["stato"],
+    
+              data["posizioneMare"],
+              data["distanzaMare"],
+              data["barrieraMare"],
+    
+              data["vistaMareYN"],
+              data["vistaMareDettaglio"],
+              data["vistaMare"],
+    
+              to_int(data["mqGiardino"]),
+              to_int(data["mqGarage"]),
+              to_int(data["mqCantina"]),
+              to_int(data["mqPostoAuto"]),
+              to_int(data["mqTaverna"]),
+              to_int(data["mqSoffitta"]),
+              to_int(data["mqTerrazzo"]),
+              to_int(data["numBalconi"]),
+    
+              data["altroDescrizione"],
+              new_id, receipt.row["agency_id"]
+            ))
+            if cur.rowcount != 1:
+                raise HTTPException(404, "Ricevuta non disponibile")
+
+            cur.execute("""
+                UPDATE stime SET token=%s, token_expires=%s, prezzo_mq_base=%s
+                WHERE id=%s AND agency_id=%s
+            """, (token, expires, data["prezzo_mq_base"], new_id, receipt.row["agency_id"]))
+            if cur.rowcount != 1:
+                raise HTTPException(404, "Ricevuta non disponibile")
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail="Errore creazione collegamento stima")
+        finally:
+            try: cur.close(); conn.close()
+            except: pass
+
+    receipt.step("fields_token", persist_fields_and_capability, allow_none=True)
         
-    link_token = f"https://www.stima360.it/stima_dettagliata.html?token={token}"
+    link_token = f"{PUBLIC_SITE_BASE_URL}/stima_dettagliata.html?" + urlencode({"token": token})
     
     # --- 6. Stima completa (engine ufficiale) ---
     # Usa i valori "grezzi" del form dove serve (es. locali in testo)
@@ -1149,7 +1228,7 @@ async def salva_stima(request: Request):
         "altroDescrizione": data["altroDescrizione"],
     }
 
-    calc = compute_from_payload(payload_rules)
+    calc = receipt.step("valuation", lambda: compute_from_payload(payload_rules))
 
     price_exact = calc["price_exact"]
     eur_mq_finale = calc["eur_mq_finale"]
@@ -1170,7 +1249,7 @@ async def salva_stima(request: Request):
     # farlo) e P17 resta additivo - la persistenza per Seller Intelligence
     # e' il payload di questo stesso evento, non una modifica allo schema
     # legacy.
-    seller_intelligence_service.safe_record_event(
+    receipt.step("event_completed", lambda: seller_intelligence_service.record_event(
         event_type="stima_completata",
         event_source="stima360_it",
         stima_id=new_id,
@@ -1182,11 +1261,10 @@ async def salva_stima(request: Request):
             "base_mq": base_mq,
         },
         idempotency_key=f"stima_completata:{new_id}",
-    )
+    ))
 
-    # P20-A starts only after the valuation result exists. Its service owns a
-    # separate fail-open transaction, so an outage cannot affect PDF/email.
-    property_watch_service.safe_ensure_watch_for_stima(new_id)
+    # Watch creation resumes idempotently after the valuation event exists.
+    receipt.step("watch", lambda: property_watch_service.ensure_watch_for_stima(new_id))
 
     indirizzo = format_indirizzo(data["via"], data["civico"], data["comune"])
     
@@ -1195,64 +1273,63 @@ async def salva_stima(request: Request):
     if data.get("vistaMareYN") and str(data["vistaMareYN"]).lower() in {"si","sì","yes","true","1"}:
         vista_mare_finale = data.get("vistaMareDettaglio") or "Sì"
 
-    # --- 7. PDF ---
+    # --- 7. Private PDF: durable snapshot precedes generation ---
+    pdf_payload = {
+        "id_stima": new_id,
+
+        # CLIENTE
+        "nome": data["nome"],
+        "cognome": data["cognome"],
+        "telefono": data["telefono"],
+        "email": data["email"],
+
+        # INDIRIZZO
+        "indirizzo": indirizzo,
+        "comune": data["comune"],
+        "microzona": data["microzona"],
+
+        # IMMOBILE
+        "tipologia": data["tipologia"],
+        "mq": data["mq"],
+        "piano": data["piano"],
+        "locali": raw.get("locali"),   # <-- TESTUALE (Trilocale)
+        "bagni": data["bagni"],
+        "ascensore": "Sì" if data["ascensore"] else "No",
+        "anno": data["anno"],
+        "stato": data["stato"],
+
+        # MARE
+        "posizioneMare": data["posizioneMare"],
+        "distanzaMare": data["distanzaMare"],
+        "barrieraMare": data["barrieraMare"],
+        "vistaMare": vista_mare_finale,
+
+        # PERTINENZE
+        "pertinenze": data["pertinenze"],
+
+        # VALORI
+        "stima": f"{price_exact:,.0f} €".replace(",", "."),
+        "price_exact": price_exact,
+        "eur_mq_finale": eur_mq_finale,
+        "valore_pertinenze": valore_pertinenze,
+        "base_mq": base_mq,
+
+    }
+    receipt.step("pdf_snapshot", lambda: stima_pdf.prepare(new_id, bridge_ctx.require_agency(), pdf_payload,
+                      connection_factory=get_connection), allow_none=True)
+    pdf_status = "ready"
     try:
-        pdf_web_path = genera_pdf_stima({
-            "id_stima": new_id,
-        
-            # CLIENTE
-            "nome": data["nome"],
-            "cognome": data["cognome"],
-            "telefono": data["telefono"],
-            "email": data["email"],
-        
-            # INDIRIZZO
-            "indirizzo": indirizzo,
-            "comune": data["comune"],
-            "microzona": data["microzona"],
-        
-            # IMMOBILE
-            "tipologia": data["tipologia"],
-            "mq": data["mq"],
-            "piano": data["piano"],
-            "locali": raw.get("locali"),   # <-- TESTUALE (Trilocale)
-            "bagni": data["bagni"],
-            "ascensore": "Sì" if data["ascensore"] else "No",
-            "anno": data["anno"],
-            "stato": data["stato"],
-        
-            # MARE
-            "posizioneMare": data["posizioneMare"],
-            "distanzaMare": data["distanzaMare"],
-            "barrieraMare": data["barrieraMare"],
-            "vistaMare": vista_mare_finale,
-        
-            # PERTINENZE
-            "pertinenze": data["pertinenze"],
-        
-            # VALORI
-            "stima": f"{price_exact:,.0f} €".replace(",", "."),
-            "price_exact": price_exact,
-            "eur_mq_finale": eur_mq_finale,
-            "valore_pertinenze": valore_pertinenze,
-            "base_mq": base_mq,
-        
-        }, nome_file=f"stima_{new_id}.pdf")
+        receipt.step("pdf", lambda: stima_pdf.generate(new_id, token=token if receipt.operator_agency is None else None,
+                           agency_id=receipt.operator_agency, renderer=genera_pdf_stima,
+                           connection_factory=get_connection) and {"ready": True})
+    except public_submissions.PartialSubmission:
+        # The stima and original rendering snapshot already exist. The loader
+        # offers explicit recovery of this report, without another submission.
+        pdf_status = "failed"
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore PDF: {e}")
-
-    # --- 8. URL PDF finale ---
-    if pdf_web_path.startswith("http"):
-        pdf_url_finale = pdf_web_path
-    else:
-        pdf_url_finale = f"{PUBLIC_BASE_URL}/{pdf_web_path.lstrip('/')}"
-
-    # URL intermedio con pagina "La tua stima è in arrivo..."
-    loader_url = (
-        "https://www.stima360.it/pdf_redirect.html?"
-        + urlencode({"pdf": pdf_url_finale, "token": token})
-    )
+    # --- 8. Same stima capability in every delivery channel ---
+    pdf_url_finale = f"{PUBLIC_BASE_URL.rstrip('/')}/api/stime/{new_id}/pdf?" + urlencode({"t": token})
+    loader_url = f"{PUBLIC_SITE_BASE_URL}/pdf_redirect.html?" + urlencode({"token": token})
 
     det_link = f"{PUBLIC_BASE_URL}/static/dati_personali.html?t={token}"
 
@@ -1267,10 +1344,7 @@ async def salva_stima(request: Request):
     if raw.get("vistaMareDettaglio"):
         clean["vistaMareDettaglio"] = raw.get("vistaMareDettaglio")
 
-    url_stima_completa = (
-      "https://www.stima360.it/stima_dettagliata.html?"
-      + urlencode({"token": token})
-    )
+    url_stima_completa = link_token
 
     # --- 9. Email ---
     try:
@@ -1410,7 +1484,7 @@ async def salva_stima(request: Request):
         # `communication/integrations.py`, nella stessa transazione di quel
         # `sent`. Accodare non e' aver mandato.
         try:
-            communication_service.enqueue(
+            receipt.step("email_queue", lambda: communication_service.enqueue(
                 bridge_ctx,
                 channel="email",
                 communication_type="service",
@@ -1424,17 +1498,9 @@ async def salva_stima(request: Request):
                 lead_id=(bridge_result or {}).get("lead_id"),
                 idempotency_key=f"stima_email_cliente:{new_id}",
                 metadata={"pdf_url": pdf_url_finale},
-            )
-        except Exception as exc:
-            # Il suo `except`, e non quello grande la' sotto: un accodamento che
-            # fallisce non deve saltare l'alert all'amministratore, che prima
-            # partiva comunque perche' `invia_mail` non solleva mai. La stima e'
-            # salvata e il PDF c'e': questo non e' un errore da mostrare a chi
-            # ha compilato il modulo.
-            logger.error(
-                "public_stima_email_enqueue_failed stima_id=%s error_type=%s error=%s",
-                new_id, type(exc).__name__, exc,
-            )
+            ))
+        except public_submissions.PartialSubmission:
+            raise
 
         # =========================================================
         # 2. INVIA ALERT DI DEFAULT ALL'AMMINISTRATORE
@@ -1486,27 +1552,34 @@ async def salva_stima(request: Request):
         """
         
         # Invia la notifica interna
-        invia_mail(admin_email, oggetto_admin, corpo_admin)
+        receipt.direct_once("admin_email", lambda: invia_mail(admin_email, oggetto_admin, corpo_admin),
+                            preflight=_public_admin_mail_ready)
         
-    except Exception as e:
-        print("MAIL EXC:", e)
+    except public_submissions.PartialSubmission:
+        raise
+    except Exception:
+        raise
 
     # --- 10. WhatsApp ---
     try:
-        invia_whatsapp(
+        receipt.direct_once("whatsapp", lambda: invia_whatsapp(
             data["telefono"],
             data["nome"],          # p1
             indirizzo,             # p2
             link_token             # p3
-        )
-    except Exception as e:
-        print("WA EXC:", e)
+        ), preflight=lambda: bool(WHATSAPP_SERVICE_URL and normalizza_numero_whatsapp(data["telefono"])))
+    except Exception:
+        raise
 
     # --- 11. Risposta JSON al frontend ---
     return {
         "success": True,
         "id": new_id,
         "pdf_url": pdf_url_finale,
+        "pdf_status": pdf_status,
+        "token": token,
+        "detail_url": link_token,
+        "pdf_redirect_url": loader_url,
         "price_exact": price_exact,
         "eur_mq_finale": eur_mq_finale,
         "valore_pertinenze": valore_pertinenze,
@@ -1514,10 +1587,52 @@ async def salva_stima(request: Request):
     }
 
 # ---------------------------------------------------------
+# PRIVATE PDF ACCESS (public capability or existing operator agency scope)
+# ---------------------------------------------------------
+def _pdf_response(pdf: bytes, stima_id: int):
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="stima_{stima_id}.pdf"',
+        "Cache-Control": "private, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Vary": "Cookie, Authorization",
+    })
+
+
+@app.get("/api/stime/{stima_id}/pdf")
+def public_stima_pdf(stima_id: int, t: str = ""):
+    return _pdf_response(stima_pdf.download(stima_id, token=t,
+                          connection_factory=get_connection), stima_id)
+
+
+@app.post("/api/stime/{stima_id}/pdf/retry")
+def public_stima_pdf_retry(stima_id: int, t: str = ""):
+    return _pdf_response(stima_pdf.generate(stima_id, token=t,
+                          renderer=genera_pdf_stima, connection_factory=get_connection), stima_id)
+
+
+@app.get("/api/admin/stime/{stima_id}/pdf", dependencies=[Depends(require_authenticated_operator)])
+def operator_stima_pdf(stima_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return _pdf_response(stima_pdf.download(stima_id, agency_id=agency_of(ctx),
+                          connection_factory=get_connection), stima_id)
+
+
+@app.post("/api/admin/stime/{stima_id}/pdf/retry", dependencies=[Depends(require_authenticated_operator)])
+def operator_stima_pdf_retry(stima_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return _pdf_response(stima_pdf.generate(stima_id, agency_id=agency_of(ctx),
+                          renderer=genera_pdf_stima, connection_factory=get_connection), stima_id)
+
+
+# ---------------------------------------------------------
 # PREFILL TOKEN
 # ---------------------------------------------------------
 @app.get("/api/prefill")
 async def prefill(t: str):
+    try:
+        t = str(uuid.UUID(t.strip()))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=404, detail="Token non valido")
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -1553,7 +1668,11 @@ async def prefill(t: str):
               s.altrodescrizione
             FROM stime s
             WHERE s.token = %s
-            AND (s.token_expires IS NULL OR s.token_expires > NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM stime other
+              WHERE other.token = s.token AND other.id <> s.id
+            )
+            AND s.token_expires > NOW()
             LIMIT 1;
         """, (t,))
 
@@ -1591,15 +1710,10 @@ async def prefill(t: str):
 # ---------------------------------------------------------
 @app.post("/api/salva_stima_dettagliata")
 async def salva_stima_dettagliata(request: Request):
+    return await _receive_submission(request, "detail")
 
-    try:
-        if "application/json" in (request.headers.get("content-type") or ""):
-            data = await request.json()
-        else:
-            data = dict(await request.form())
-    except:
-        raise HTTPException(status_code=400, detail="Payload non valido")
 
+def _save_detail_submission(data, receipt):
     def to_int_safe(v):
         if v in (None, "", " "):
             return None
@@ -1610,135 +1724,153 @@ async def salva_stima_dettagliata(request: Request):
 
     conn = get_connection(); cur = conn.cursor()
 
-    # P26-6C: the detail row carries its own agency from 049 on, so this system
-    # writer has to supply one. Two sources, in this order:
-    #
-    #   the parent estimation, when the payload names one - it is the row this
-    #   detail describes, and 051's trigger requires the two to agree;
-    #
-    #   otherwise the public-STIMA system context, resolved server-side exactly
-    #   as `salva_stima` resolves it. That branch is what makes an orphan detail
-    #   a legal row with an explicit owner rather than an unassignable one.
-    #
-    # Nothing here reads an agency from the request. `stima_id` is client-
-    # supplied, but it is used as a lookup key against a server-side table, and
-    # a value naming another agency's estimation simply files the detail with
-    # that estimation - which is where it belongs, and what the trigger checks.
-    stima_id_value = to_int_safe(data.get("stima_id"))
-    detail_agency_id = None
-    if stima_id_value is not None:
-        parent_cur = conn.cursor(cursor_factory=RealDictCursor)
-        try:
-            parent_cur.execute(
-                "SELECT agency_id FROM stime WHERE id = %s", (stima_id_value,)
-            )
-            parent = parent_cur.fetchone()
-            detail_agency_id = parent["agency_id"] if parent else None
-        finally:
-            try: parent_cur.close()
-            except: pass
-    if detail_agency_id is None:
-        detail_agency_id = _public_stima_system_context(conn).agency_id
-
+    # Public detail writes use the same capability as prefill. Resolve the
+    # parent and agency on this transaction; the browser never chooses them.
     try:
-        cur.execute("""
-            INSERT INTO stime_dettagliate (
-                agency_id,
-                stima_id,
-                nome, cognome, email, telefono,
-                indirizzo, stato, anno,
-                classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
-                esposizione, arredo, note, contatto, sopralluogo,
-                ascensore, pertinenze,
-                tipologia, mq, piano, locali, bagni,
-                microzona, posizionemare, distanzamare, barrieramare,
-                mqgiardino, mqgarage, vistamare, altrodescrizione,
-                mqcantina, mqpostoauto, mqtaverna, mqsoffitta, mqterrazzo,
-                numbalconi
-            )
-            VALUES (
-                %s,%s,%s,%s,%s,%s,
-                %s,%s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,
-                %s,%s,%s,%s,
-                %s,%s,%s,%s,%s,
-                %s
-            )
-            RETURNING id
-        """, (
-            # agency_id (server-derived: parent stima, else public-STIMA system context)
-            detail_agency_id,
+        if receipt.operator_agency is not None:
+            parent = {"id": receipt.row["stima_id"], "agency_id": receipt.operator_agency}
+            cur.execute("SELECT 1 FROM stime WHERE id=%s AND agency_id=%s FOR SHARE",
+                        (parent["id"], parent["agency_id"]))
+            if cur.fetchone() is None:
+                raise HTTPException(404, "Ricevuta non disponibile")
+            stima_id_value, detail_agency_id = parent["id"], parent["agency_id"]
+        else:
+            token = data.get("token")
+            if not isinstance(token, str) or not token.strip():
+                raise HTTPException(status_code=403, detail="Token non valido o scaduto")
+            try:
+                token = str(uuid.UUID(token.strip()))
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Token non valido o scaduto")
+            # A token must name exactly one parent, including expired matches.
+            parent_cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                parent_cur.execute(
+                    "SELECT s.id, s.agency_id FROM stime s WHERE s.token = %s "
+                    "AND NOT EXISTS (SELECT 1 FROM stime other "
+                    "WHERE other.token = s.token AND other.id <> s.id) "
+                    "AND s.token_expires > clock_timestamp() FOR SHARE OF s", (token,)
+                )
+                parent = parent_cur.fetchone()
+            finally:
+                parent_cur.close()
+            if parent is None:
+                raise HTTPException(status_code=403, detail="Token non valido o scaduto")
+            stima_id_value = parent["id"]
+            detail_agency_id = parent["agency_id"]
+        for key in ("stima_id", "id"):
+            if data.get(key) not in (None, "") and to_int_safe(data[key]) != stima_id_value:
+                raise HTTPException(status_code=403, detail="Token non valido o scaduto")
+        data["stima_id"] = stima_id_value
+        data["id"] = stima_id_value
 
-            # stima_id
-            stima_id_value,
+        if receipt.row["detail_id"] is None:
+            cur.execute("""
+                INSERT INTO stime_dettagliate (
+                    agency_id,
+                    stima_id,
+                    nome, cognome, email, telefono,
+                    indirizzo, stato, anno,
+                    classe, riscaldamento, condizionatore, condiz_tipo, spese_cond,
+                    esposizione, arredo, note, contatto, sopralluogo,
+                    ascensore, pertinenze,
+                    tipologia, mq, piano, locali, bagni,
+                    microzona, posizionemare, distanzamare, barrieramare,
+                    mqgiardino, mqgarage, vistamare, altrodescrizione,
+                    mqcantina, mqpostoauto, mqtaverna, mqsoffitta, mqterrazzo,
+                    numbalconi
+                )
+                VALUES (
+                    %s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,
+                    %s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s
+                )
+                RETURNING id
+            """, (
+                # agency_id (server-derived from the token-authorized parent stima)
+                detail_agency_id,
 
-            # anagrafica
-            data.get("nome") or None,
-            data.get("cognome") or None,
-            data.get("email") or None,
-            data.get("telefono") or None,
+                # stima_id
+                stima_id_value,
 
-            # immobile base
-            data.get("indirizzo") or None,
-            data.get("stato") or None,
-            data.get("anno") or None,  # anno è TEXT nel DB
+                # anagrafica
+                data.get("nome") or None,
+                data.get("cognome") or None,
+                data.get("email") or None,
+                data.get("telefono") or None,
 
-            # impianti / classe
-            data.get("classe") or None,
-            data.get("riscaldamento") or None,
-            data.get("condizionatore") or None,
-            data.get("condiz_tipo") or None,
-            to_int_safe(data.get("spese_cond")),
+                # immobile base
+                data.get("indirizzo") or None,
+                data.get("stato") or None,
+                data.get("anno") or None,  # anno è TEXT nel DB
 
-            data.get("esposizione") or None,
-            data.get("arredo") or None,
-            data.get("note") or None,
-            data.get("contatto") or None,
-            data.get("sopralluogo") or None,  # stringa ISO o None
+                # impianti / classe
+                data.get("classe") or None,
+                data.get("riscaldamento") or None,
+                data.get("condizionatore") or None,
+                data.get("condiz_tipo") or None,
+                to_int_safe(data.get("spese_cond")),
 
-            # ascensore e pertinenze (testuali)
-            data.get("ascensore") or None,
-            data.get("pertinenze") or None,
+                data.get("esposizione") or None,
+                data.get("arredo") or None,
+                data.get("note") or None,
+                data.get("contatto") or None,
+                data.get("sopralluogo") or None,  # stringa ISO o None
 
-            # dati tecnici
-            data.get("tipologia") or None,
-            to_int_safe(data.get("mq")),
-            data.get("piano") or None,
-            to_int_safe(data.get("locali")),
-            to_int_safe(data.get("bagni")),
+                # ascensore e pertinenze (testuali)
+                data.get("ascensore") or None,
+                data.get("pertinenze") or None,
 
-            data.get("microzona") or None,
-            data.get("posizioneMare") or data.get("posizionemare") or None,
-            data.get("distanzaMare") or data.get("distanzamare") or None,
-            data.get("barrieraMare") or data.get("barrieramare") or None,
+                # dati tecnici
+                data.get("tipologia") or None,
+                to_int_safe(data.get("mq")),
+                data.get("piano") or None,
+                to_int_safe(data.get("locali")),
+                to_int_safe(data.get("bagni")),
 
-            # QUI gestisco sia mqGiardino che mqgiardino
-            to_int_safe(data.get("mqGiardino") or data.get("mqgiardino")),
-            to_int_safe(data.get("mqGarage") or data.get("mqgarage")),
-            data.get("vistaMare") or data.get("vistamare") or None,
-            data.get("altroDescrizione") or data.get("altrodescrizione") or None,
+                data.get("microzona") or None,
+                data.get("posizioneMare") or data.get("posizionemare") or None,
+                data.get("distanzaMare") or data.get("distanzamare") or None,
+                data.get("barrieraMare") or data.get("barrieramare") or None,
 
-            to_int_safe(data.get("mqCantina") or data.get("mqcantina")),
-            to_int_safe(data.get("mqPostoAuto") or data.get("mqpostoauto")),
-            to_int_safe(data.get("mqTaverna") or data.get("mqtaverna")),
-            to_int_safe(data.get("mqSoffitta") or data.get("mqsoffitta")),
-            to_int_safe(data.get("mqTerrazzo") or data.get("mqterrazzo")),
-            to_int_safe(data.get("numBalconi") or data.get("numbalconi")),
-        ))
-        # CATALOGO-CANONICO-1: l'id della riga, per l'aggiornamento della scheda
-        detail_row = cur.fetchone()
-        detail_id = detail_row[0] if detail_row else None
+                # QUI gestisco sia mqGiardino che mqgiardino
+                to_int_safe(data.get("mqGiardino") or data.get("mqgiardino")),
+                to_int_safe(data.get("mqGarage") or data.get("mqgarage")),
+                data.get("vistaMare") or data.get("vistamare") or None,
+                data.get("altroDescrizione") or data.get("altrodescrizione") or None,
 
-        conn.commit()
+                to_int_safe(data.get("mqCantina") or data.get("mqcantina")),
+                to_int_safe(data.get("mqPostoAuto") or data.get("mqpostoauto")),
+                to_int_safe(data.get("mqTaverna") or data.get("mqtaverna")),
+                to_int_safe(data.get("mqSoffitta") or data.get("mqsoffitta")),
+                to_int_safe(data.get("mqTerrazzo") or data.get("mqterrazzo")),
+                to_int_safe(data.get("numBalconi") or data.get("numbalconi")),
+            ))
+            # CATALOGO-CANONICO-1: l'id della riga, per l'aggiornamento della scheda
+            detail_row = cur.fetchone()
+            detail_id = detail_row[0] if detail_row else None
 
+            receipt.attach_on_cursor(cur, stima_id_value, detail_agency_id, detail_id)
+            conn.commit()
+            receipt.reload()
+        else:
+            detail_id = receipt.row["detail_id"]
+            conn.commit()
+
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
+        conn.rollback()
         # QUI, SE VUOI DEBUG SERIO:
-        print("ERRORE /api/salva_stima_dettagliata:", e)
-        raise HTTPException(status_code=500, detail=f"Errore INSERT: {e}")
+        raise HTTPException(status_code=500, detail="Errore salvataggio dettagliata") from None
 
     finally:
         try:
@@ -1747,19 +1879,14 @@ async def salva_stima_dettagliata(request: Request):
         except:
             pass
 
-    # --- CATALOGO-CANONICO-1: la stessa scheda immobile della stima (additive,
-    # non-blocking) ---
-    # Il dettaglio aggiorna la scheda nata dalla stima `stima_id`, se c'e', con
-    # la regola per campo di property/site_sync.py (mai sopra un dato corretto
-    # dall'agente). Un dettaglio orfano non tocca nessuna scheda. Il wrapper
-    # `safe_*` assorbe ogni errore: la risposta al sito non cambia.
-    property_site_sync.safe_sync_detail(
+    # No orphan/skip is reported as a completed CRM synchronization.
+    receipt.step("property_detail", lambda: property_site_sync.sync_detail(
         stima_id=stima_id_value,
         detail_id=detail_id,
         raw=data,
-    )
+    ), accepts=lambda r: bool(r.get("property_id")))
 
-    return {"ok": True}
+    return {"ok": True, "id": stima_id_value, "detail_id": detail_id}
 
 # ---------------------------------------------------------
 # ADMIN STIME PRO

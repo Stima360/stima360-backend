@@ -219,7 +219,12 @@ def test_s10_nessuna_migration_080():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     assert [m for m in migrazioni if m.startswith("092")] == [
         "092_cestino_richieste_1_buy_request_trash.sql", "092_cestino_richieste_1_buy_request_trash_down.sql"]
-    assert migrazioni[-1] == "092_cestino_richieste_1_buy_request_trash_down.sql"
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la 093 (PDF privato, F07) e la 094 (ricevute F04/F06), additive, seguono la 092.
+    assert [m for m in migrazioni if m.startswith("093")] == [
+        "093_stima_private_pdf.sql", "093_stima_private_pdf_down.sql"]
+    assert [m for m in migrazioni if m.startswith("094")] == [
+        "094_public_submission_receipts.sql", "094_public_submission_receipts_down.sql"]
+    assert migrazioni[-1] == "094_public_submission_receipts_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

@@ -786,12 +786,27 @@ def test_27_the_public_funnel_routes_are_not_counted_as_a_tenant_surface():
         name for name, (dependencies, _) in found.items()
         if "require_admin" not in dependencies
     }
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04): `salva_stima`
+    # e' un involucro di `_receive_submission` senza SQL proprio; la sua
+    # pipeline (`_save_quick_submission`) non e' una rotta e si misura sotto,
+    # con la stessa regola (INSERT con agency_id, UPDATE sull'id restituito e
+    # sull'agenzia della ricevuta).
     assert public == {
-        "salva_stima",         # INSERT carries agency_id; the two UPDATEs that
-                               # follow are keyed on the id it returned
         "prefill",             # keyed on the single-use token
         "api_contatore_oggi",  # a platform-wide public count, category D
     }, sorted(public)
+    assert "salva_stima" not in public
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    pipeline = source[source.index("\ndef _save_quick_submission("):]
+    pipeline = pipeline[: pipeline.index("\ndef ", 10)]
+    statements = [" ".join(raw.strip('"\'').split()) for raw in _EXECUTE.findall(pipeline)]
+    tenant = [f for f in statements if re.search(r"\bstime\b", f, re.I)]
+    assert tenant, "la pipeline non scrive piu' su `stime`?"
+    for flat in tenant:
+        if flat.upper().startswith("INSERT INTO STIME"):
+            assert "agency_id" in flat
+        elif flat.upper().startswith("UPDATE STIME"):
+            assert "WHERE id=%s AND agency_id=%s" in flat, flat
     # `salva_stima_dettagliata` used to be on this list. It has left it, not by
     # being reclassified but by changing: since 049 the detail row carries its
     # own agency, so the writer stamps one and the statement names a tenant.

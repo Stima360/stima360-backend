@@ -129,7 +129,8 @@ def test_a03_la_081_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
-    assert numeri[-1] == 92 and numeri[-2] == 91 and numeri[-3] == 90 and numeri[-4] == 89 and numeri[-5] == 88 and numeri[-6] == 87 and numeri[-7] == 86 and numeri[-8] == 85 and numeri[-9] == 84 and numeri[-10] == 83 and numeri[-11] == 82 and numeri[-12] == 81 and numeri[-13] == 80
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
+    assert numeri[-1] == 94 and numeri[-2] == 93 and numeri[-3] == 92 and numeri[-4] == 91 and numeri[-5] == 90 and numeri[-6] == 89 and numeri[-7] == 88 and numeri[-8] == 87 and numeri[-9] == 86 and numeri[-10] == 85 and numeri[-11] == 84 and numeri[-12] == 83 and numeri[-13] == 82 and numeri[-14] == 81 and numeri[-15] == 80
 
 
 def test_a04_la_up_e_additiva_e_la_down_rifiuta_con_dati():

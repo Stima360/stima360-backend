@@ -1,0 +1,1330 @@
+diff --git a/index.html b/index.html
+index da73281..3378d2d 100644
+--- a/index.html
++++ b/index.html
+@@ -1,6 +1,8 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
++  <script src="submission.js"></script>
+ <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"/>
+ <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
+@@ -1855,10 +1857,18 @@ document.getElementById('stimaForm').addEventListener('submit', function(event)
+   const stimaBase = {
+     id: stimaId, comune, microzona, via, civico, tipologia, mq, piano, locali: locales, bagni, ascensore, anno, stato, posizioneMare, distanzaMare, barrieraMare, vistaMareYN, vistaMareDettaglio, pertinenze: pertinenze.join(','), mqGiardino, mqGarage, altroDescrizione, mqCantina, mqPostoAuto, mqTaverna, mqSoffitta, mqTerrazzo, numBalconi
+   };
+-  localStorage.setItem('stimaBase', JSON.stringify(stimaBase));
++  let requestIntent;
++  try {
++    requestIntent = Stima360Submission.create('quick', stimaId);
++    stimaBase.request_id = requestIntent.request_id;
++    localStorage.setItem('stimaBase', JSON.stringify(stimaBase));
++  } catch {
++    alert('Impossibile conservare la richiesta in questo browser. Abilita la memoria locale prima di procedere.');
++    return;
++  }
+ 
+   const query = `id=${encodeURIComponent(stimaId)}&comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}&via=${encodeURIComponent(via)}&civico=${encodeURIComponent(civico)}&tipologia=${encodeURIComponent(tipologia)}&mq=${encodeURIComponent(mq)}&piano=${encodeURIComponent(piano)}&locali=${encodeURIComponent(locales)}&bagni=${encodeURIComponent(bagni)}&ascensore=${encodeURIComponent(ascensore)}&pertinenze=${encodeURIComponent(pertinenze.join(','))}&anno=${encodeURIComponent(anno)}&stato=${encodeURIComponent(stato)}&posizioneMare=${encodeURIComponent(posizioneMare)}&distanzaMare=${encodeURIComponent(distanzaMare)}&barrieraMare=${encodeURIComponent(barrieraMare)}&vistaMareYN=${encodeURIComponent(vistaMareYN)}&vistaMareDettaglio=${encodeURIComponent(vistaMareDettaglio)}&mqGiardino=${encodeURIComponent(mqGiardino)}&mqGarage=${encodeURIComponent(mqGarage)}&mqCantina=${encodeURIComponent(mqCantina)}&mqPostoAuto=${encodeURIComponent(mqPostoAuto)}&mqTaverna=${encodeURIComponent(mqTaverna)}&mqSoffitta=${encodeURIComponent(mqSoffitta)}&mqTerrazzo=${encodeURIComponent(mqTerrazzo)}&numBalconi=${encodeURIComponent(numBalconi)}&altroDescrizione=${encodeURIComponent(altroDescrizione)}`;
+-  window.location.href = `dati_personali.html?${query}`;
++  window.location.href = `dati_personali.html?${query}&request_id=${encodeURIComponent(requestIntent.request_id)}`;
+ });
+ 
+ const videoLinkQuote = document.querySelector('.quote-modern');
+@@ -2219,7 +2229,7 @@ document.addEventListener("DOMContentLoaded", () => {
+       const anno      = document.getElementById("anno").value || "2010"; 
+ 
+       try {
+-        const response = await fetch("https://stima360-backend.onrender.com/api/stima_base", {
++        const response = await fetch(Stima360Preview.apiUrl("/api/stima_base"), {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           body: JSON.stringify({ comune, microzona, tipologia, mq, anno })
+@@ -2298,7 +2308,7 @@ async function aggiornaMetaSEO() {
+ 
+   if (comune && microzona) {
+     try {
+-      const response = await fetch(`https://stima360-backend.onrender.com/api/seo/data?comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}`);
++      const response = await fetch(Stima360Preview.apiUrl(`/api/seo/data?comune=${encodeURIComponent(comune)}&microzona=${encodeURIComponent(microzona)}`));
+       const seoData = await response.json();
+ 
+       if (seoData.success) {
+@@ -2326,7 +2336,7 @@ document.addEventListener("DOMContentLoaded", async () => {
+     if (!container) return;
+ 
+     try {
+-        const response = await fetch("https://stima360-backend.onrender.com/api/successi");
++        const response = await fetch(Stima360Preview.apiUrl("/api/successi"));
+         const result = await response.json();
+ 
+         if (result.success && result.data && result.data.length > 0) {
+diff --git a/dati_personali.html b/dati_personali.html
+index 3275108..2273058 100644
+--- a/dati_personali.html
++++ b/dati_personali.html
+@@ -1,6 +1,8 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <script src="preview-config.js"></script>
++  <script src="submission.js"></script>
+   <meta charset="UTF-8" />
+   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+   <script>
+@@ -221,7 +223,7 @@
+     }
+ 
+     /* 🌈 PULSANTE STIMA360 */
+-    button[type="submit"]{
++    button[type="submit"], #personalForm button[type="button"]{
+       position: relative;
+       overflow: hidden;
+       z-index: 1;
+@@ -240,22 +242,22 @@
+       margin-top: 10px;
+     }
+ 
+-    button[type="submit"]:hover{
++    button[type="submit"]:hover, #personalForm button[type="button"]:hover{
+       transform: translateY(-2px);
+       box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+     }
+ 
+-    button[type="submit"]:active{
++    button[type="submit"]:active, #personalForm button[type="button"]:active{
+       transform: scale(0.97);
+     }
+ 
+-    button[type="submit"]::before{
++    button[type="submit"]::before, #personalForm button[type="button"]::before{
+       content:""; position:absolute; top:6px; left:10px; right:10px; height:45%; border-radius:10px;
+       background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.15), rgba(255,255,255,0));
+       opacity:.9; pointer-events:none; z-index:2;
+     }
+ 
+-    button[type="submit"]::after{
++    button[type="submit"]::after, #personalForm button[type="button"]::after{
+       content:""; position:absolute; inset:-8px; border-radius:14px;
+       background: radial-gradient(circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70%);
+       filter: blur(8px); opacity:.75; pointer-events:none; z-index:-1;
+@@ -481,6 +483,8 @@
+     <div id="fascia-stima">
+       <span id="testo-stima">Sto calcolando la tua stima <span class="puntini">...</span></span>
+     </div>
++    <p id="submissionReceipt" role="status" aria-live="polite" hidden></p>
++    <p id="newEvaluation" hidden><a href="index.html">Avvia una nuova valutazione</a></p>
+   </div>
+ 
+   <img src="arcobaleno2.png" id="arcobaleno-bg" alt="arcobaleno" />
+@@ -512,6 +516,7 @@
+   }
+   
+   const dati = getQueryParams();
++  let stimaSalvata = null;
+   
+   (function(){
+     const p = new URLSearchParams(location.search);
+@@ -562,7 +567,7 @@
+     const box = document.getElementById("riepilogoGrid");
+     if (!box) return;
+   
+-    box.innerHTML = "";
++    box.replaceChildren();
+     righe.forEach(([k,v])=>{
+       if(!v || v===" ") return; // Non mostrare righe vuote
+       const d = document.createElement("div");
+@@ -571,23 +576,186 @@
+       d.style.border = "1px solid #e2e8f0";
+       d.style.borderRadius = "10px";
+       d.style.fontSize = "0.95rem";
+-      d.innerHTML = `<span style="color:#64748b; font-size:0.85em; display:block; margin-bottom:3px;">${k}</span><strong style="color:#1e293b;">${v}</strong>`;
++      const label = document.createElement("span");
++      label.style.cssText = "color:#64748b; font-size:0.85em; display:block; margin-bottom:3px;";
++      label.textContent = k;
++      const value = document.createElement("strong");
++      value.style.color = "#1e293b";
++      value.textContent = v;
++      d.append(label, value);
+       box.appendChild(d);
+     });
+   })();
+   
+   function vaiStimaDettagliata() {
+-    dati.nome = document.getElementById('nome').value;
+-    dati.cognome = document.getElementById('cognome').value;
+-    dati.email = document.getElementById('email').value;
+-    dati.telefono = document.getElementById('telefono').value;
+-  
+-    const params = new URLSearchParams(dati).toString();
+-    window.location.href = 'stima_dettagliata.html?' + params;
++    if (!stimaSalvata) {
++      alert("Link non valido o scaduto");
++      return;
++    }
++    window.location.href = stimaSalvata.detail_url;
+   }
+   
+-  let submitCount = 0;
+-  const MAX_SUBMIT = 2;
++  let submissionState = 'initialising';
++  let submissionIntent = null;
++  const personalButton = document.querySelector('#personalForm button');
++  const receiptBox = document.getElementById('submissionReceipt');
++  const newEvaluation = document.getElementById('newEvaluation');
++
++  function showReceipt(body) {
++    receiptBox.hidden = false;
++    receiptBox.textContent = 'Ricevuta verificata: ' + body.receipt.request_id
++      + (body.receipt.stima_id ? '. Stima n. ' + body.receipt.stima_id + '.' : '.');
++    newEvaluation.hidden = false;
++  }
++
++  function recoveryButton(label, action) {
++    personalButton.type = 'button';
++    personalButton.textContent = label;
++    personalButton.style.display = '';
++    personalButton.onclick = () => {
++      if (submissionState !== 'recoverable' && submissionState !== 'uncertain') return;
++      action();
++    };
++  }
++
++  function showUncertain() {
++    submissionState = 'uncertain';
++    stimaSalvata = null;
++    document.getElementById('fascia-stima').style.display = 'block';
++    document.getElementById('testo-stima').textContent = 'Esito NON CONFERMATO: la richiesta potrebbe essere già stata salvata. Puoi controllare email e WhatsApp e ricaricare la pagina per verificare la ricevuta della stessa richiesta.';
++    newEvaluation.hidden = false;
++    recoveryButton('Ricarica la pagina', () => location.reload());
++  }
++
++  function showGone() {
++    submissionState = 'unavailable';
++    stimaSalvata = null;
++    personalButton.style.display = 'none';
++    personalButton.onclick = null;
++    receiptBox.hidden = true;
++    document.getElementById('fascia-stima').style.display = 'block';
++    document.getElementById('testo-stima').textContent = 'Questa richiesta è stata rimossa e non può essere reinviata. Avvia una nuova valutazione dalla pagina iniziale.';
++    newEvaluation.hidden = false;
++  }
++
++  function showPartial(body) {
++    showReceipt(body);
++    submissionState = 'recoverable';
++    stimaSalvata = null;
++    document.getElementById('fascia-stima').style.display = 'block';
++    document.getElementById('testo-stima').textContent = body.receipt.resumable
++      ? 'Richiesta ricevuta: alcune operazioni devono ancora essere completate. Recupera la stessa richiesta senza inviarne una nuova.'
++      : 'Richiesta ricevuta: è necessaria una verifica del servizio. Puoi verificare nuovamente la ricevuta.';
++    recoveryButton(body.receipt.resumable ? 'Recupera la richiesta' : 'Verifica ricevuta',
++      () => recoverSubmission(body.receipt.resumable));
++  }
++
++  function showNotReceived() {
++    submissionState = 'recoverable';
++    document.getElementById('fascia-stima').style.display = 'block';
++    document.getElementById('testo-stima').textContent = 'La ricevuta non è ancora disponibile. Puoi riprovare la stessa richiesta conservando i dati originali.';
++    newEvaluation.hidden = false;
++    recoveryButton('Riprova la stessa richiesta', () => recoverSubmission(false, true));
++  }
++
++  function acceptCompleted(resJson, datiFinali) {
++    if (!Number.isSafeInteger(resJson.id) || resJson.id <= 0
++        || typeof resJson.token !== 'string' || !resJson.token.trim()
++        || resJson.receipt.stima_id !== resJson.id) {
++      throw new Error('Risposta senza autorizzazione al dettaglio');
++    }
++    const detailUrl = Stima360Preview.pageUrl(resJson.detail_url, 'stima_dettagliata.html', resJson.token);
++    const loaderUrl = Stima360Preview.pageUrl(resJson.pdf_redirect_url, 'pdf_redirect.html', resJson.token);
++    const firstCompletion = Stima360Submission.complete(submissionIntent);
++    const stimaUuid = datiFinali.id || datiFinali.stima_uuid || '';
++    stimaSalvata = { ...datiFinali, stima_uuid: stimaUuid, id: resJson.id, token: resJson.token,
++      detail_url: detailUrl, pdf_redirect_url: loaderUrl };
++    submissionState = 'success';
++    personalButton.style.display = 'none';
++    personalButton.onclick = null;
++    showReceipt(resJson);
++    try {
++      localStorage.setItem('stimaBase', JSON.stringify(stimaSalvata));
++    } catch (_) {
++      // The verified receipt and authorised URL remain available.
++    }
++    if (firstCompletion && window.fbq) fbq('track', 'Lead');
++    if (resJson.pdf_url) setTimeout(() => { window.location.href = loaderUrl; }, 1200);
++    setTimeout(() => {
++      const prezzo = Number(resJson.price_exact || 0);
++      const eurMq = Number(resJson.eur_mq_finale || 0);
++      const itMoney0 = v => v.toLocaleString('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
++      const itMoney2 = v => v.toLocaleString('it-IT', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
++      const testoStima = document.getElementById('testo-stima');
++      testoStima.innerHTML = `
++        ✅ Valore totale: <span data-result="price" style="color:#168364;font-size:1.35em;"></span><br>
++        <span style="font-size:.95em;">€/mq finale: <b data-result="eur-mq"></b></span><br>
++        <span data-result="address" style="font-size:.93em;"></span>
++        <br><br><span style="font-size:.98em;">Ti arriverà subito una mail e un WhatsApp</span>
++      `;
++      testoStima.querySelector('[data-result="price"]').textContent = itMoney0(prezzo);
++      testoStima.querySelector('[data-result="eur-mq"]').textContent = itMoney2(eurMq);
++      testoStima.querySelector('[data-result="address"]').textContent = `📍 ${datiFinali.via || ''} ${datiFinali.civico || ''}, ${datiFinali.comune || ''}`;
++    }, 900);
++  }
++
++  function handleReceipt(body) {
++    if (body.receipt.status === 'completed') {
++      acceptCompleted(body, Stima360Submission.record(submissionIntent).payload);
++    } else {
++      showPartial(body);
++    }
++  }
++
++  async function recoverSubmission(resume = false, resend = false) {
++    if (submissionState !== 'recoverable') return;
++    submissionState = 'pending';
++    personalButton.style.display = 'none';
++    try {
++      const body = resend
++        ? await Stima360Submission.submit(submissionIntent, Stima360Submission.record(submissionIntent).payload)
++        : resume ? await Stima360Submission.resume(submissionIntent) : await Stima360Submission.receipt(submissionIntent);
++      if (body) handleReceipt(body);
++      else showNotReceived();
++    } catch (error) {
++      if (error.status === 410) showGone();
++      else showUncertain();
++    }
++  }
++
++  (async () => {
++    try {
++      submissionIntent = Stima360Submission.quickIntent(dati);
++      dati.request_id = submissionIntent.request_id;
++      const record = Stima360Submission.record(submissionIntent);
++      if (!record.payload) {
++        submissionState = 'ready';
++        return;
++      }
++      for (const field of ['nome', 'cognome', 'email', 'telefono']) {
++        document.getElementById(field).value = record.payload[field] || '';
++      }
++      document.getElementById('privacy').checked = true;
++      document.getElementById('marketing').checked = record.payload.consenso_marketing === true;
++      document.getElementById('fascia-stima').style.display = 'block';
++      document.getElementById('testo-stima').textContent = 'Verifico la ricevuta della richiesta...';
++      personalButton.style.display = 'none';
++      const body = await Stima360Submission.receipt(submissionIntent);
++      if (body) handleReceipt(body);
++      else showNotReceived();
++    } catch (error) {
++      if (error.status === 410) showGone();
++      else if (submissionIntent?.payload) showUncertain();
++      else {
++        submissionState = 'unavailable';
++        personalButton.type = 'button';
++        personalButton.style.display = 'none';
++        document.getElementById('fascia-stima').style.display = 'block';
++        document.getElementById('testo-stima').textContent = 'Impossibile recuperare la richiesta in questo browser. Abilita la memoria locale e avvia una nuova valutazione dalla pagina iniziale.';
++        newEvaluation.hidden = false;
++      }
++    }
++  })();
+   
+   function isValidEmail(email) {
+     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+@@ -600,12 +768,7 @@
+   
+   document.getElementById('personalForm').addEventListener('submit', async function(event) {
+     event.preventDefault();
+-    submitCount++;
+-    
+-    if (submitCount > MAX_SUBMIT) {
+-      alert("Hai già inviato la richiesta.\nPer motivi di sicurezza puoi effettuare massimo 2 invii per pagina.\n\n🔄 Ricarica la pagina se necessario.");
+-      return;
+-    }
++    if (submissionState !== 'ready') return;
+ 
+     if (!document.getElementById('privacy').checked) {
+       alert("Devi accettare la privacy!");
+@@ -650,79 +813,43 @@
+       numBalconi: dati.numBalconi || ""
+     };
+ 
+-    const urlStimaDettagliata = 'https://www.stima360.it/stima_dettagliata.html?' + new URLSearchParams(datiFinali).toString();
++    try {
++      Stima360Submission.freeze(submissionIntent, datiFinali);
++    } catch {
++      submissionState = 'unavailable';
++      document.getElementById('fascia-stima').style.display = 'block';
++      document.getElementById('testo-stima').textContent = 'Impossibile conservare i dati originali della richiesta. Nessun nuovo invio è stato effettuato.';
++      personalButton.style.display = 'none';
++      newEvaluation.hidden = false;
++      return;
++    }
+ 
+     const fascia = document.getElementById('fascia-stima');
+     const testoStima = document.getElementById('testo-stima');
+   
++    submissionState = 'pending';
++    const submitButton = this.querySelector('button');
+     fascia.style.display = "block";
+     testoStima.innerHTML = "Sto calcolando la tua stima <span class='puntini'>...</span>";
+-    document.querySelector("button[type='submit']").style.display = "none"; // Nasconde il pulsante per evitare doppi click
++    submitButton.style.display = "none"; // Nasconde il pulsante durante l'invio
+   
+     let puntini = document.querySelector(".puntini");
+     let dots = 0;
+     let anim = setInterval(() => { dots = (dots + 1) % 4; puntini.textContent = '.'.repeat(dots); }, 320);
+   
+     try {
+-      localStorage.setItem('stimaBase', JSON.stringify(datiFinali));
+-  
+-      const risposta = await fetch('https://stima360-backend.onrender.com/api/salva_stima', {
+-        method: 'POST',
+-        headers: {'Content-Type': 'application/json'},
+-        body: JSON.stringify(datiFinali)
+-      });
++      const resJson = await Stima360Submission.submit(submissionIntent, datiFinali);
+   
+       clearInterval(anim);
+   
+-      if (!risposta.ok) {
+-        testoStima.textContent = "Errore nell'invio, riprova!";
+-        setTimeout(() => location.reload(), 1800);
+-        return;
+-      }
+-
+-      if (window.fbq) {
+-        fbq('track', 'Lead');
+-      }
+-
+-      let resJson = {};
+-      try { resJson = await risposta.json(); } catch (_) {}
+-
+-      const stimaUuid = dati.id || dati.stima_uuid || "";
+-      datiFinali.stima_uuid = stimaUuid;
+-      datiFinali.id = resJson.id;
+-
+-      if (resJson?.pdf_url) {
+-        const pdfUrl = resJson.pdf_url.trim();
+-        const loaderUrl = "https://www.stima360.it/pdf_redirect.html?" + new URLSearchParams({ pdf: pdfUrl }).toString();
+-        setTimeout(() => { window.location.href = loaderUrl; }, 1200);
+-      }
+-  
+-      setTimeout(() => {
+-        const prezzo = Number(resJson.price_exact || 0);
+-        const eurMq  = Number(resJson.eur_mq_finale || 0);
+-        const itMoney0 = v => v.toLocaleString('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0});
+-        const itMoney2 = v => v.toLocaleString('it-IT',{style:'currency',currency:'EUR',minimumFractionDigits:2,maximumFractionDigits:2});
+-  
+-        testoStima.innerHTML = `
+-          ✅ Valore totale: <span style="color:#168364;font-size:1.35em;">${itMoney0(prezzo)}</span><br>
+-          <span style="font-size:.95em;">€/mq finale: <b>${itMoney2(eurMq)}</b></span><br>
+-          <span style="font-size:.93em;">📍 ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''}</span>
+-          <br><br><span style="font-size:.98em;">Ti arriverà subito una mail e un WhatsApp</span>
+-        `;
+-      }, 900);
++      handleReceipt(resJson);
+   
+ } catch (e) {
+       clearInterval(anim);
+       console.error("Errore JS rilevato:", e);
+       
+-      // Invece di bloccare tutto per un falso allarme, mostriamo comunque il successo se l'API ha risposto
+-      testoStima.innerHTML = `
+-          ✅ Stima generata e inviata!<br>
+-          <span style="font-size:.98em;">Ti abbiamo appena inviato un'email e un WhatsApp con il tuo Report Completo.</span>
+-      `;
+-      
+-      // Opzionale: de-commenta la riga sotto se vuoi vedere l'errore esatto a schermo per investigare
+-      // testoStima.innerHTML += `<br><small style="color:red;">(Dettaglio: ${e.message})</small>`;
++      if (e.status === 410) showGone();
++      else showUncertain();
+     }
+   });
+   
+@@ -783,7 +910,7 @@
+     if (!el) return;
+     async function refresh(){
+       try{
+-        const r = await fetch("https://stima360-backend.onrender.com/api/public/contatore_oggi", { cache: "no-store" });
++        const r = await fetch(Stima360Preview.apiUrl("/api/public/contatore_oggi"), { cache: "no-store" });
+         if(!r.ok) throw new Error("bad status");
+         const js = await r.json();
+         el.textContent = Number(js.count || 0);
+@@ -796,4 +923,4 @@
+   });
+   </script>
+ </body>
+-</html>
+\ No newline at end of file
++</html>
+diff --git a/stima_dettagliata.html b/stima_dettagliata.html
+index 83590f6..ee7fea8 100644
+--- a/stima_dettagliata.html
++++ b/stima_dettagliata.html
+@@ -1,27 +1,13 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <meta name="referrer" content="no-referrer" />
++  <script src="preview-config.js"></script>
++  <script src="submission.js"></script>
+ <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700&family=Montserrat:wght@400;600;800;900&display=swap" rel="stylesheet">
+   <meta charset="UTF-8" />
+   <title>Stima dettagliata – Stima360</title>
+   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-  <!-- Meta Pixel Code -->
+-<script>
+-!function(f,b,e,v,n,t,s)
+-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+-n.queue=[];t=b.createElement(e);t.async=!0;
+-t.src=v;s=b.getElementsByTagName(e)[0];
+-s.parentNode.insertBefore(t,s)}(window, document,'script',
+-'https://connect.facebook.net/en_US/fbevents.js');
+-fbq('init', '1458312815299195');
+-fbq('track', 'PageView');
+-</script>
+-<noscript><img height="1" width="1" style="display:none"
+-src="https://www.facebook.com/tr?id=1458312815299195ev=PageView&noscript=1"
+-/></noscript>
+-<!-- End Meta Pixel Code -->
+   <style>
+     @keyframes moveClouds { 0%{transform:translateX(0)} 50%{transform:translateX(-30%)} 100%{transform:translateX(0)} }
+     @keyframes glowShift { 0%{transform:translateY(0) scale(1);opacity:.5} 100%{transform:translateY(-20px) scale(1.1);opacity:.7} }
+@@ -132,7 +118,7 @@ src="https://www.facebook.com/tr?id=1458312815299195ev=PageView&noscript=1"
+       100% { background-position: 100% 50%; }
+     }
+     /* 🌈 PULSANTE STIMA360 – IDENTICO ALLA LANDING */
+-button[type="submit"]{
++button[type="submit"], #dettaglioForm button[type="button"]{
+   position: relative;
+   overflow: hidden;
+   z-index: 1;
+@@ -167,17 +153,17 @@ button[type="submit"]{
+ }
+ 
+ /* Hover: SOLO più glow, niente cambio colore */
+-button[type="submit"]:hover{
++button[type="submit"]:hover, #dettaglioForm button[type="button"]:hover{
+   transform: scale(1.03);
+   box-shadow: 0 10px 32px rgba(0,0,0,0.28);
+ }
+ 
+-button[type="submit"]:active{
++button[type="submit"]:active, #dettaglioForm button[type="button"]:active{
+   transform: scale(0.96);
+ }
+ 
+ /* 💎 Riflesso specchio iOS */
+-button[type="submit"]::before{
++button[type="submit"]::before, #dettaglioForm button[type="button"]::before{
+   content:"";
+   position:absolute;
+   top:6px;
+@@ -197,7 +183,7 @@ button[type="submit"]::before{
+ }
+ 
+ /* ✨ Glow esterno */
+-button[type="submit"]::after{
++button[type="submit"]::after, #dettaglioForm button[type="button"]::after{
+   content:"";
+   position:absolute;
+   inset:-8px;
+@@ -351,39 +337,69 @@ button[type="submit"]::after{
+     </form>
+ 
+     <div id="esito" style="display:none;margin-top:20px;color:#168364;text-align:center;"></div>
++    <p id="detailReceipt" role="status" aria-live="polite" hidden></p>
++    <p id="detailNewIntent" hidden><a href="#dettaglioForm" id="detailEdit">Aggiorna i dettagli</a></p>
+   </div>
+ 
+ <script>
+ /* ===============================
+-   CARICAMENTO DATI (TOKEN / FALLBACK)
++   CARICAMENTO DATI AUTORIZZATI
+ ================================ */
+ const params = new URLSearchParams(location.search);
+ const token = params.get("token");
+ let dati = {};
+-
+-function getParams() {
+-  const p = {};
+-  location.search.replace(/[?&]+([^=&]+)=([^&]*)/gi, (_, k, v) => {
+-    p[k] = decodeURIComponent((v || '').replace(/\+/g, ' '));
++let prefillValido = false;
++let serverStimaId = null;
++let detailSubmissionState = 'initialising';
++let detailSubmissionIntent = null;
++
++function abilitaForm(enabled) {
++  Array.from(document.getElementById("dettaglioForm").elements).forEach(el => {
++    el.disabled = !enabled;
+   });
+-  return p;
+ }
+ 
++function bloccaRichiesta() {
++  prefillValido = false;
++  serverStimaId = null;
++  abilitaForm(false);
++  const esito = document.getElementById("esito");
++  esito.textContent = "Link non valido o scaduto";
++  esito.style.display = "block";
++}
++
++abilitaForm(false);
++
+ async function caricaDati() {
+   try {
+-    if (token) {
+-      const res = await fetch(
+-        "https://stima360-backend.onrender.com/api/prefill?t=" + token
+-      );
+-      if (!res.ok) throw new Error();
+-      dati = await res.json();
+-    } else {
+-      dati = getParams(); // fallback SOLO per test
+-    }
++    if (!token) throw new Error();
++    const res = await fetch(Stima360Preview.apiUrl("/api/prefill?t=" + encodeURIComponent(token)));
++    if (!res.ok) throw new Error();
++    dati = await res.json();
++    if (!dati || !Number.isSafeInteger(dati.id) || dati.id <= 0) throw new Error();
+ 
++    serverStimaId = String(dati.id);
+     inizializzaPagina();
+-  } catch {
+-    alert("Link non valido o scaduto");
++    detailSubmissionIntent = await Stima360Submission.detailIntent(token);
++    prefillValido = true;
++    abilitaForm(true);
++    const record = Stima360Submission.record(detailSubmissionIntent);
++    if (record.payload) {
++      for (const [name, value] of Object.entries(record.payload)) {
++        const field = document.getElementById('dettaglioForm').elements.namedItem(name);
++        if (field && field.type !== 'hidden') field.value = value;
++      }
++      abilitaForm(false);
++      const body = await Stima360Submission.receipt(detailSubmissionIntent);
++      if (body) handleDetailReceipt(body);
++      else showDetailNotReceived();
++    } else {
++      detailSubmissionState = 'ready';
++    }
++  } catch (error) {
++    if (error.status === 410) showDetailGone();
++    else if (prefillValido && detailSubmissionIntent?.payload && ![401, 403].includes(error.status)) showDetailUncertain();
++    else bloccaRichiesta();
+   }
+ }
+ 
+@@ -418,40 +434,50 @@ function inizializzaPagina() {
+   if (dati.mqTerrazzo)  pert.push(`🌅 Terrazzo: ${dati.mqTerrazzo} mq`);
+   if (dati.numBalconi)  pert.push(`🚪 Balconi: ${dati.numBalconi}`);
+ 
+-    let pertHtml = 'Nessuna';
+-    
+-    if (pert.length) {
+-      pertHtml = pert.join('<br>');
+-    } else if (dati.pertinenze) {
+-      pertHtml = dati.pertinenze
+-        .split(',')
+-        .map(p => '• ' + p.trim())
+-        .join('<br>');
+-    }
+-
+-
+-  // --- RIEPILOGO ---
+-  document.getElementById("infoImmobile").innerHTML = `
+-    <b>🏠 ${dati.tipologia || '-'} ${dati.mq || ''} mq</b><br>
+-    📍 <b>Indirizzo:</b> ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''} ${dati.microzona ? '('+dati.microzona+')' : ''}<br>
+-    🧱 <b>Piano:</b> ${dati.piano || '-'} |
+-    <b>Locali:</b> ${dati.locali || '-'} |
+-    <b>Bagni:</b> ${dati.bagni || '-'}<br>
+-    🛗 <b>Ascensore:</b> ${dati.ascensore || '-'}<br>
+-    🏗️ <b>Stato:</b> ${dati.stato || '-'} |
+-    <b>Anno:</b> ${dati.anno || '-'}<br>
+-    🌊 <b>Posizione mare:</b> ${dati.posizioneMare || '-'} |
+-    <b>Distanza:</b> ${dati.distanzaMare || '-'}<br>
+-    👁️ <b>Vista mare:</b> ${vistaMareLabel} |
+-    🚧 <b>Barriera:</b> ${dati.barrieraMare || '-'}<br>
++  const pertRighe = pert.length ? pert : dati.pertinenze
++    ? dati.pertinenze.split(',').map(p => '• ' + p.trim()) : ['Nessuna'];
++
++  // Static markup keeps the existing labels and styling; values are text nodes.
++  const info = document.getElementById("infoImmobile");
++  info.innerHTML = `
++    <b data-value="immobile"></b><br>
++    📍 <b>Indirizzo:</b> <span data-value="indirizzo"></span><br>
++    🧱 <b>Piano:</b> <span data-value="piano"></span> |
++    <b>Locali:</b> <span data-value="locali"></span> |
++    <b>Bagni:</b> <span data-value="bagni"></span><br>
++    🛗 <b>Ascensore:</b> <span data-value="ascensore"></span><br>
++    🏗️ <b>Stato:</b> <span data-value="stato"></span> |
++    <b>Anno:</b> <span data-value="anno"></span><br>
++    🌊 <b>Posizione mare:</b> <span data-value="posizioneMare"></span> |
++    <b>Distanza:</b> <span data-value="distanzaMare"></span><br>
++    👁️ <b>Vista mare:</b> <span data-value="vistaMare"></span> |
++    🚧 <b>Barriera:</b> <span data-value="barrieraMare"></span><br>
+     
+     📁 <b>Pertinenze:</b><br>
+-    ${pertHtml}<br>
++    <span data-value="pertinenze"></span><br>
+     
+-    👤 <b>Contatto:</b> ${dati.nome || ''} ${dati.cognome || ''} – ${dati.telefono || ''}<br>
++    👤 <b>Contatto:</b> <span data-value="contatto"></span><br>
+ 
+-    ✉️ <b>Email:</b> ${dati.email || ''}
++    ✉️ <b>Email:</b> <span data-value="email"></span>
+   `;
++  const values = {
++    immobile: `🏠 ${dati.tipologia || '-'} ${dati.mq || ''} mq`,
++    indirizzo: `${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''} ${dati.microzona ? '('+dati.microzona+')' : ''}`,
++    piano: dati.piano || '-', locali: dati.locali || '-', bagni: dati.bagni || '-',
++    ascensore: dati.ascensore || '-', stato: dati.stato || '-', anno: dati.anno || '-',
++    posizioneMare: dati.posizioneMare || '-', distanzaMare: dati.distanzaMare || '-',
++    vistaMare: vistaMareLabel, barrieraMare: dati.barrieraMare || '-',
++    contatto: `${dati.nome || ''} ${dati.cognome || ''} – ${dati.telefono || ''}`,
++    email: dati.email || ''
++  };
++  Object.entries(values).forEach(([key, value]) => {
++    info.querySelector(`[data-value="${key}"]`).textContent = value;
++  });
++  const pertBox = info.querySelector('[data-value="pertinenze"]');
++  pertRighe.forEach((line, index) => {
++    if (index) pertBox.appendChild(document.createElement('br'));
++    pertBox.appendChild(document.createTextNode(line));
++  });
+ 
+   // --- RIEMPI HIDDEN ---
+   const f = document.getElementById("dettaglioForm");
+@@ -499,6 +525,8 @@ caricaDati();
+ document.getElementById("dettaglioForm").addEventListener("submit", async function(e){
+   e.preventDefault();
+ 
++  if (!prefillValido || !token || !serverStimaId || detailSubmissionState !== 'ready') return;
++
+   const form = e.target;
+   const fd = new FormData(form);
+ 
+@@ -509,27 +537,140 @@ document.getElementById("dettaglioForm").addEventListener("submit", async functi
+     fd.set("spese_cond", fd.get("spese_cond_mensili") || null);
+   }
+ 
+-  // id stima (OBBLIGATORIO)
+-  fd.set("stima_id", fd.get("id"));
++  // Authorisation and relational id come from the validated token/prefill.
++  fd.set("token", token);
++  fd.set("stima_id", serverStimaId);
++  fd.set("id", serverStimaId);
+ 
++  const payload = Object.fromEntries(fd.entries());
+   try {
+-    const res = await fetch(
+-      "https://stima360-backend.onrender.com/api/salva_stima_dettagliata",
+-      {
+-        method: "POST",
+-        body: fd
+-      }
+-    );
++    Stima360Submission.freeze(detailSubmissionIntent, payload);
++  } catch {
++    detailSubmissionState = 'unavailable';
++    abilitaForm(false);
++    const esito = document.getElementById('esito');
++    esito.textContent = 'Impossibile conservare i dati originali della richiesta. Nessun nuovo invio è stato effettuato.';
++    esito.style.display = 'block';
++    return;
++  }
++  detailSubmissionState = 'pending';
++  abilitaForm(false);
+ 
+-    if (!res.ok) throw new Error();
++  try {
++    handleDetailReceipt(await Stima360Submission.submit(detailSubmissionIntent, payload));
++
++  } catch (error) {
++    if (error.status === 410) showDetailGone();
++    else if (error.status === 401 || error.status === 403 || error.status === 404) bloccaRichiesta();
++    else showDetailUncertain();
++    alert("Errore invio dati. Riprova.");
++  }
++});
++
++function detailRecoveryButton(label, action) {
++  const button = document.querySelector('#dettaglioForm button');
++  button.type = 'button';
++  button.textContent = label;
++  button.disabled = false;
++  button.onclick = () => {
++    if (detailSubmissionState !== 'recoverable' && detailSubmissionState !== 'uncertain') return;
++    action();
++  };
++}
++
++function showDetailUncertain() {
++  detailSubmissionState = 'uncertain';
++  const esito = document.getElementById('esito');
++  esito.style.display = 'block';
++  esito.textContent = 'Esito NON CONFERMATO: la richiesta potrebbe essere già stata salvata. Ricarica la pagina per verificarne la ricevuta.';
++  detailRecoveryButton('Ricarica la pagina', () => location.reload());
++}
++
++function showDetailGone() {
++  detailSubmissionState = 'unavailable';
++  abilitaForm(false);
++  document.getElementById('detailReceipt').hidden = true;
++  document.getElementById('detailNewIntent').hidden = true;
++  const esito = document.getElementById('esito');
++  esito.style.display = 'block';
++  esito.textContent = 'Questa richiesta è stata rimossa e non può essere reinviata. ';
++  const start = document.createElement('a');
++  start.href = 'index.html';
++  start.textContent = 'Avvia una nuova valutazione dalla pagina iniziale.';
++  esito.appendChild(start);
++}
+ 
+-    document.getElementById("esito").style.display = "block";
+-    document.getElementById("esito").innerHTML =
+-      "✅ Richiesta inviata correttamente. Ti contatteremo a breve.";
+-    form.style.display = "none";
++function showDetailNotReceived() {
++  detailSubmissionState = 'recoverable';
++  const esito = document.getElementById('esito');
++  esito.style.display = 'block';
++  esito.textContent = 'La ricevuta non è ancora disponibile. Puoi riprovare la stessa richiesta conservando i dati originali.';
++  detailRecoveryButton('Riprova la stessa richiesta', () => recoverDetails(false, true));
++}
++
++function handleDetailReceipt(body) {
++  if (body.receipt.stima_id !== null && body.receipt.stima_id !== undefined
++      && body.receipt.stima_id !== Number(serverStimaId)) throw new Error('Ricevuta collegata a un’altra stima');
++  const esito = document.getElementById('esito');
++  esito.style.display = 'block';
++  const receiptBox = document.getElementById('detailReceipt');
++  receiptBox.hidden = false;
++  receiptBox.textContent = 'Ricevuta verificata: ' + body.receipt.request_id + '. Stima n. ' + serverStimaId + '.';
++  if (body.receipt.status === 'completed') {
++    if (body.ok !== true || body.receipt.stima_id !== Number(serverStimaId)
++        || !Number.isSafeInteger(body.receipt.detail_id) || body.receipt.detail_id <= 0) {
++      throw new Error('Ricevuta senza collegamento valido al dettaglio');
++    }
++    Stima360Submission.complete(detailSubmissionIntent);
++    detailSubmissionState = 'success';
++    esito.textContent = '✅ Richiesta inviata correttamente. Ti contatteremo a breve.';
++    document.getElementById('dettaglioForm').style.display = 'none';
++    document.getElementById('detailNewIntent').hidden = false;
++  } else {
++    detailSubmissionState = 'recoverable';
++    esito.textContent = body.receipt.resumable
++      ? 'Richiesta ricevuta: alcune operazioni devono ancora essere completate. Recupera la stessa richiesta senza inviarne una nuova.'
++      : 'Richiesta ricevuta: è necessaria una verifica del servizio. Puoi verificare nuovamente la ricevuta.';
++    detailRecoveryButton(body.receipt.resumable ? 'Recupera la richiesta' : 'Verifica ricevuta',
++      () => recoverDetails(body.receipt.resumable));
++  }
++}
+ 
++async function recoverDetails(resume = false, resend = false) {
++  if (!prefillValido || detailSubmissionState !== 'recoverable') return;
++  detailSubmissionState = 'pending';
++  abilitaForm(false);
++  try {
++    const body = resend
++      ? await Stima360Submission.submit(detailSubmissionIntent, Stima360Submission.record(detailSubmissionIntent).payload)
++      : resume ? await Stima360Submission.resume(detailSubmissionIntent) : await Stima360Submission.receipt(detailSubmissionIntent);
++    if (body) handleDetailReceipt(body);
++    else showDetailNotReceived();
++  } catch (error) {
++    if (error.status === 410) showDetailGone();
++    else if ([401, 403].includes(error.status)) bloccaRichiesta();
++    else showDetailUncertain();
++  }
++}
++
++document.getElementById('detailEdit').addEventListener('click', async (event) => {
++  event.preventDefault();
++  if (!prefillValido || detailSubmissionState !== 'success') return;
++  detailSubmissionState = 'initialising';
++  try {
++    detailSubmissionIntent = await Stima360Submission.detailIntent(token, true);
++    const button = document.querySelector('#dettaglioForm button');
++    button.type = 'submit';
++    button.textContent = 'Invia richiesta dettagliata';
++    button.onclick = null;
++    document.getElementById('dettaglioForm').style.display = '';
++    document.getElementById('detailNewIntent').hidden = true;
++    document.getElementById('detailReceipt').hidden = true;
++    document.getElementById('esito').style.display = 'none';
++    abilitaForm(true);
++    detailSubmissionState = 'ready';
+   } catch {
+-    alert("Errore invio dati. Riprova.");
++    bloccaRichiesta();
+   }
+ });
+ </script>
+diff --git a/pdf_redirect.html b/pdf_redirect.html
+index 57bb1d7..06cb8c7 100644
+--- a/pdf_redirect.html
++++ b/pdf_redirect.html
+@@ -1,26 +1,11 @@
+ <!DOCTYPE html>
+ <html lang="it">
+ <head>
++  <meta name="referrer" content="no-referrer" />
++  <script src="preview-config.js"></script>
+   <meta charset="UTF-8" />
+   <title>Stima360 - Elaborazione Stima...</title>
+   <meta name="viewport" content="width=device-width, initial-scale=1" />
+-  <!-- Meta Pixel Code -->
+-<script>
+-!function(f,b,e,v,n,t,s)
+-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+-n.queue=[];t=b.createElement(e);t.async=!0;
+-t.src=v;s=b.getElementsByTagName(e)[0];
+-s.parentNode.insertBefore(t,s)}(window, document,'script',
+-'https://connect.facebook.net/en_US/fbevents.js');
+-fbq('init', '1458312815299195');
+-fbq('track', 'PageView');
+-</script>
+-<noscript><img height="1" width="1" style="display:none"
+-src="https://www.facebook.com/tr?id=1703044517728181&ev=PageView&noscript=1"
+-/></noscript>
+-<!-- End Meta Pixel Code -->
+   <style>
+     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+ 
+@@ -342,48 +327,168 @@ src="https://www.facebook.com/tr?id=1703044517728181&ev=PageView&noscript=1"
+   cliccando sul pulsante qui sotto scrivendoci o chiamandoci al numero telefonico qui sotto dal Lunedi al Sabato in orari di ufficio.
+ </p>
+ 
+-    <button class="stima360-btn" onclick="vaiAStimaDettagliataConParametri()">
++    <button id="stimaPro" class="stima360-btn" onclick="vaiAStimaDettagliataConParametri()">
+       Stima360 Pro
+     </button>
+ 
++    <div id="pdfControls" hidden>
++      <p id="pdfStatus" role="status" aria-live="polite" hidden></p>
++      <button id="pdfRetry" class="stima360-btn" type="button" hidden>Recupera il PDF</button>
++      <p id="pdfDownloadBox" hidden><a id="pdfDownload" download>Scarica il PDF</a></p>
++    </div>
++
+     <div class="bv-box">
+       <img src="Biglietto_visita.jpeg" class="bv-img" alt="Biglietto da visita Stima360">
+     </div>
+   </div>
+ 
+   <script>
+-    // Legge il parametro "pdf" dalla query string
+-    function getPdfUrl() {
+-      const p = new URLSearchParams(location.search);
+-      return p.get("pdf");
++    const redirectParams = new URLSearchParams(location.search);
++    const redirectToken = redirectParams.get("token");
++    const detailButton = document.getElementById('stimaPro');
++    const pdfControls = document.getElementById('pdfControls');
++    const pdfStatus = document.getElementById('pdfStatus');
++    const pdfRetry = document.getElementById('pdfRetry');
++    const pdfDownloadBox = document.getElementById('pdfDownloadBox');
++    const pdfDownload = document.getElementById('pdfDownload');
++    let detailReady = false;
++    let authorisedStimaId = null;
++    let pdfPending = false;
++    let retryAllowed = false;
++    let pdfObjectUrl = null;
++    let linkVersion = 0;
++    detailButton.disabled = true;
++
++    function revokePdf() {
++      if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
++      pdfObjectUrl = null;
++      pdfDownload.removeAttribute('href');
++      pdfDownloadBox.hidden = true;
+     }
+ 
+-    // Usa i dati salvati da dati_personali (se ci sono)
+-    function vaiAStimaDettagliataConParametri() {
++    function bloccaLink() {
++      detailReady = false;
++      authorisedStimaId = null;
++      detailButton.disabled = true;
++      retryAllowed = false;
++      pdfRetry.hidden = true;
++      revokePdf();
++      pdfControls.hidden = false;
++      pdfStatus.hidden = false;
++      pdfStatus.textContent = 'Link non valido o scaduto. Non è possibile aprire il PDF.';
++    }
++
++    async function riceviPdf(retry = false, version = linkVersion) {
++      if (!detailReady || !authorisedStimaId || !redirectToken || pdfPending
++          || version !== linkVersion || (retry && !retryAllowed)) return;
++      pdfPending = true;
++      retryAllowed = false;
++      pdfRetry.disabled = true;
+       try {
+-        const s = localStorage.getItem('stimaBase');
+-        if (!s) {
+-          window.open("https://www.stima360.it/stima_dettagliata.html", "_blank");
++        const res = await fetch(Stima360Preview.pdfUrl(authorisedStimaId, redirectToken, retry), {
++          method: retry ? 'POST' : 'GET', cache: 'no-store'
++        });
++        if (version !== linkVersion) return;
++        if ([401, 403, 404].includes(res.status)) {
++          bloccaLink();
+           return;
+         }
+-        const dati = JSON.parse(s);
+-        const params = new URLSearchParams(dati).toString();
+-        window.open("https://www.stima360.it/stima_dettagliata.html?" + params, "_blank");
+-      } catch (e) {
+-        window.open("https://www.stima360.it/stima_dettagliata.html", "_blank");
++        if (!res.ok) {
++          retryAllowed = res.status === 503;
++          throw new Error('PDF non disponibile');
++        }
++        if ((res.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/pdf') {
++          throw new Error('Risposta PDF non valida');
++        }
++        const pdf = await res.blob();
++        if (!pdf.size || new TextDecoder().decode(await pdf.slice(0, 5).arrayBuffer()) !== '%PDF-') {
++          throw new Error('Risposta PDF non valida');
++        }
++        if (version !== linkVersion) return;
++        revokePdf();
++        pdfObjectUrl = URL.createObjectURL(pdf);
++        pdfDownload.href = pdfObjectUrl;
++        pdfDownload.download = 'stima_' + authorisedStimaId + '.pdf';
++        pdfControls.hidden = false;
++        pdfStatus.hidden = true;
++        pdfRetry.hidden = true;
++        pdfDownloadBox.hidden = false;
++      } catch {
++        if (version !== linkVersion) return;
++        pdfControls.hidden = false;
++        pdfStatus.hidden = false;
++        pdfStatus.textContent = retryAllowed
++          ? 'PDF non disponibile. Puoi recuperarlo senza inviare una nuova stima.'
++          : 'PDF non disponibile. Riprova ad aprire questo link più tardi.';
++        pdfRetry.hidden = !retryAllowed;
++      } finally {
++        if (version === linkVersion) {
++          pdfPending = false;
++          pdfRetry.disabled = !retryAllowed;
++        }
+       }
+     }
+ 
+-    // Dopo un attimo apre il PDF vero
+-    window.addEventListener("DOMContentLoaded", () => {
+-      const pdfUrl = getPdfUrl();
+-      if (!pdfUrl) return;
++    async function verificaLinkDettagliato() {
++      const version = ++linkVersion;
++      if (!redirectToken) {
++        bloccaLink();
++        return;
++      }
++      try {
++        const res = await fetch(Stima360Preview.apiUrl('/api/prefill?t=' + encodeURIComponent(redirectToken)), { cache: 'no-store' });
++        if (version !== linkVersion) return;
++        if (!res.ok) {
++          bloccaLink();
++          return;
++        }
++        const prefill = await res.json();
++        if (version !== linkVersion) return;
++        if (!prefill || !Number.isSafeInteger(prefill.id) || prefill.id <= 0) {
++          bloccaLink();
++          return;
++        }
++        authorisedStimaId = prefill.id;
++        detailReady = true;
++        detailButton.disabled = false;
++        await riceviPdf(false, version);
++      } catch {
++        if (version !== linkVersion) return;
++        // No query/localStorage fallback can authorise this link.
++        bloccaLink();
++      }
++    }
+ 
+-      setTimeout(() => {
+-        window.location.href = pdfUrl;   // stesso TAB
+-        // oppure: window.open(pdfUrl, "_blank"); // se vuoi nuova scheda
+-      }, 600);
++    function vaiAStimaDettagliataConParametri() {
++      if (!detailReady || !redirectToken) return;
++      const target = new URL('stima_dettagliata.html', location.href);
++      target.search = new URLSearchParams({ token: redirectToken }).toString();
++      window.open(target.href, '_blank', 'noopener');
++    }
++
++    function resetCachedLink() {
++      linkVersion++;
++      pdfPending = false;
++      detailReady = false;
++      authorisedStimaId = null;
++      detailButton.disabled = true;
++      retryAllowed = false;
++      pdfRetry.hidden = true;
++      pdfRetry.disabled = true;
++      revokePdf();
++      pdfControls.hidden = true;
++      pdfStatus.hidden = true;
++    }
++
++    pdfRetry.addEventListener('click', () => riceviPdf(true));
++    window.addEventListener('pagehide', resetCachedLink);
++    window.addEventListener('pageshow', (event) => {
++      if (event.persisted) {
++        resetCachedLink();
++        verificaLinkDettagliato();
++      }
+     });
++    verificaLinkDettagliato();
+   </script>
+ 
+ </body>
+diff --git a/preview-config.js b/preview-config.js
+new file mode 100644
+index 0000000..6961a62
+--- /dev/null
++++ b/preview-config.js
+@@ -0,0 +1,44 @@
++/* Candidate for a future coordinated release. Not loaded by the local preview. */
++(() => {
++  const apiBase = 'https://stima360-backend.onrender.com';
++  const publicSiteOrigin = 'https://www.stima360.it';
++  const detailPages = new Set(['stima_dettagliata.html', 'pdf_redirect.html']);
++
++  function httpUrl(value, base) {
++    const url = new URL(value, base);
++    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('URL non valido');
++    return url;
++  }
++
++  function apiUrl(path) {
++    const url = httpUrl(path, apiBase);
++    if (url.origin !== apiBase || !url.pathname.startsWith('/api/')) {
++      throw new Error('Endpoint non valido');
++    }
++    return url.href;
++  }
++
++  function pageUrl(serverUrl, pageName, token) {
++    const supplied = httpUrl(serverUrl, publicSiteOrigin);
++    if (!detailPages.has(pageName) || supplied.origin !== publicSiteOrigin
++        || supplied.pathname !== '/' + pageName
++        || typeof token !== 'string' || !token.trim()
++        || supplied.searchParams.get('token') !== token) {
++      throw new Error('Link di dettaglio non valido');
++    }
++    const target = new URL('/' + pageName, publicSiteOrigin);
++    target.searchParams.set('token', token);
++    return target.href;
++  }
++
++  function pdfUrl(stimaId, token, retry = false) {
++    if (!Number.isSafeInteger(stimaId) || stimaId <= 0
++        || typeof token !== 'string' || !token.trim() || typeof retry !== 'boolean') {
++      throw new Error('Link PDF non valido');
++    }
++    return apiUrl('/api/stime/' + stimaId + '/pdf' + (retry ? '/retry' : '')
++      + '?t=' + encodeURIComponent(token));
++  }
++
++  window.Stima360Preview = Object.freeze({ apiUrl, pageUrl, pdfUrl });
++})();
+diff --git a/submission.js b/submission.js
+new file mode 100644
+index 0000000..584d615
+--- /dev/null
++++ b/submission.js
+@@ -0,0 +1,182 @@
++/* Request identity and receipt recovery shared by the copied public forms. */
++(() => {
++  const prefix = 'stima360:submission:v1:';
++  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
++  const proof = /^[0-9a-f]{64}$/;
++
++  function read(requestId) {
++    if (!uuid.test(requestId || '')) throw new Error('Identità della richiesta non valida');
++    const raw = localStorage.getItem(prefix + requestId);
++    if (!raw) return null;
++    const record = JSON.parse(raw);
++    if (record.version !== 1 || record.request_id !== requestId || !proof.test(record.receipt_key || '')
++        || !['quick', 'detail'].includes(record.kind) || typeof record.scope !== 'string') {
++      throw new Error('Ricevuta locale non valida');
++    }
++    return record;
++  }
++
++  function store(record) {
++    const raw = JSON.stringify(record);
++    localStorage.setItem(prefix + record.request_id, raw);
++    if (localStorage.getItem(prefix + record.request_id) !== raw) {
++      throw new Error('Impossibile conservare la ricevuta della richiesta');
++    }
++    return record;
++  }
++
++  function create(kind, scope) {
++    if (!['quick', 'detail'].includes(kind) || typeof scope !== 'string' || !scope) {
++      throw new Error('Richiesta non valida');
++    }
++    const bytes = crypto.getRandomValues(new Uint8Array(32));
++    return store({ version: 1, request_id: crypto.randomUUID(),
++      receipt_key: Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join(''),
++      kind, scope, payload: null, completed: false });
++  }
++
++  function requireRecord(intent) {
++    const record = read(intent.request_id);
++    if (!record || record.receipt_key !== intent.receipt_key || record.kind !== intent.kind || record.scope !== intent.scope) {
++      throw new Error('La richiesta non è disponibile in questo browser');
++    }
++    return record;
++  }
++
++  function setPageIdentity(requestId) {
++    const page = new URL(location.href);
++    page.searchParams.set('request_id', requestId);
++    history.replaceState(history.state, '', page);
++  }
++
++  function quickIntent(draft) {
++    const requestId = new URLSearchParams(location.search).get('request_id');
++    const scope = String(draft.id || draft.stima_uuid || 'direct-personal');
++    let intent;
++    if (requestId) {
++      intent = read(requestId);
++      if (!intent || intent.kind !== 'quick' || intent.scope !== scope) {
++        throw new Error('La richiesta non è disponibile in questo browser');
++      }
++    } else {
++      intent = create('quick', scope);
++      setPageIdentity(intent.request_id);
++    }
++    return intent;
++  }
++
++  async function detailIntent(token, fresh = false) {
++    const pointer = prefix + 'detail:' + token;
++    const select = () => {
++      const supplied = new URLSearchParams(location.search).get('request_id');
++      const requestId = fresh ? null : supplied || localStorage.getItem(pointer);
++      let intent = requestId ? read(requestId) : null;
++      if (supplied && !fresh && !intent) throw new Error('La richiesta non è disponibile in questo browser');
++      if (intent && (intent.kind !== 'detail' || intent.scope !== token)) throw new Error('Ricevuta non collegata al dettaglio');
++      if (!intent) intent = create('detail', token);
++      localStorage.setItem(pointer, intent.request_id);
++      if (localStorage.getItem(pointer) !== intent.request_id) throw new Error('Impossibile conservare la ricevuta');
++      setPageIdentity(intent.request_id);
++      return intent;
++    };
++    // A shared token opened concurrently must initialise one local request and
++    // proof. Existing copied URLs already identify the persisted request.
++    if (navigator.locks) return navigator.locks.request(pointer, select);
++    if (!fresh && (new URLSearchParams(location.search).get('request_id') || localStorage.getItem(pointer))) return select();
++    throw new Error('Il browser non consente il recupero sicuro della richiesta');
++  }
++
++  function canonical(value) {
++    if (Array.isArray(value)) return value.map(canonical);
++    if (value && typeof value === 'object') {
++      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
++    }
++    return value;
++  }
++
++  function freeze(intent, payload) {
++    const record = requireRecord(intent);
++    const candidate = JSON.parse(JSON.stringify(payload));
++    if (record.payload !== null) {
++      if (JSON.stringify(canonical(record.payload)) !== JSON.stringify(canonical(candidate))) {
++        throw new Error('Questa richiesta contiene già dati diversi. Avvia una nuova valutazione intenzionale.');
++      }
++      return record.payload;
++    }
++    record.payload = candidate;
++    store(record); // A failed write stops the first network dispatch.
++    return record.payload;
++  }
++
++  function headers(intent, json = false) {
++    const record = requireRecord(intent);
++    return { 'Idempotency-Key': record.request_id, 'X-Receipt-Key': record.receipt_key,
++      ...(json ? { 'Content-Type': 'application/json' } : {}) };
++  }
++
++  function validateEnvelope(intent, body, status) {
++    const receipt = body?.receipt;
++    if (!receipt || receipt.request_id !== intent.request_id || receipt.kind !== intent.kind
++        || !['received', 'completed', 'partial', 'attention'].includes(receipt.status)
++        || typeof receipt.resumable !== 'boolean' || !receipt.steps || typeof receipt.steps !== 'object'
++        || Array.isArray(receipt.steps)
++        || (receipt.status === 'completed' && (receipt.resumable || status !== 200))) {
++      throw new Error('Risposta senza una ricevuta verificabile');
++    }
++    if (receipt.stima_id !== null && receipt.stima_id !== undefined
++        && (!Number.isSafeInteger(receipt.stima_id) || receipt.stima_id <= 0)) {
++      throw new Error('Ricevuta senza collegamento valido alla stima');
++    }
++    return body;
++  }
++
++  async function response(intent, result, allowMissing = false) {
++    if (result.status === 404 && allowMissing) return null;
++    if (![200, 202].includes(result.status)) {
++      const error = new Error('Ricevuta non disponibile o richiesta non autorizzata');
++      error.status = result.status;
++      throw error;
++    }
++    return validateEnvelope(intent, await result.json(), result.status);
++  }
++
++  async function receipt(intent) {
++    const result = await fetch(Stima360Preview.apiUrl('/api/submissions/' + intent.request_id), {
++      headers: headers(intent), cache: 'no-store'
++    });
++    return response(intent, result, true);
++  }
++
++  async function submit(intent, payload) {
++    const frozen = freeze(intent, payload);
++    const isQuick = intent.kind === 'quick';
++    const body = isQuick ? JSON.stringify(frozen) : Object.entries(frozen).reduce((form, [key, value]) => {
++      form.append(key, value);
++      return form;
++    }, new FormData());
++    const result = await fetch(Stima360Preview.apiUrl(isQuick ? '/api/salva_stima' : '/api/salva_stima_dettagliata'), {
++      method: 'POST', headers: headers(intent, isQuick), body, cache: 'no-store'
++    });
++    return response(intent, result);
++  }
++
++  async function resume(intent) {
++    const record = requireRecord(intent);
++    if (!record.payload) throw new Error('Richiesta originale non disponibile');
++    const result = await fetch(Stima360Preview.apiUrl('/api/submissions/' + intent.request_id + '/resume'), {
++      method: 'POST', headers: headers(intent), cache: 'no-store'
++    });
++    return response(intent, result);
++  }
++
++  function complete(intent) {
++    const record = requireRecord(intent);
++    const first = !record.completed;
++    record.completed = true;
++    store(record);
++    return first;
++  }
++
++  window.Stima360Submission = Object.freeze({ create, quickIntent, detailIntent, freeze,
++    receipt, submit, resume, complete, record: requireRecord });
++})();

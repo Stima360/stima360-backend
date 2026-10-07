@@ -91,6 +91,21 @@ PUBLIC_BY_DESIGN = {
     ("GET", "/api/public/booking/{token}"),
     ("GET", "/api/public/booking/{token}/slots"),
     ("POST", "/api/public/booking/{token}/submit"),
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04/F07, `public_submissions`,
+    # `stima_pdf`). Le ricevute degli invii pubblici: autenticate dall'identita'
+    # dell'invio (UUID) piu' la prova `X-Receipt-Key`, di cui nel database vive
+    # SOLO lo SHA-256 (`public_submission_receipts.proof_sha256`,
+    # confronto a tempo costante); nessuna sessione, nessun operatore. La
+    # ripresa riesegue solo i passi della propria ricevuta, nell'agenzia che
+    # la stima porta scritta; mai un `agency_id` dal client.
+    ("GET", "/api/submissions/{request_id}"),
+    ("POST", "/api/submissions/{request_id}/resume"),
+    # Il PDF privato della stima (F07): autenticato dalla capability della
+    # stima (`stime.token`, vivo, univoco e nell'agenzia della riga), lo stesso
+    # token che gia' apre la dettagliata e il prefill. Il retry rigenera SOLO
+    # il PDF della propria stima; nessun dato di altre stime o agenzie.
+    ("GET", "/api/stime/{stima_id}/pdf"),
+    ("POST", "/api/stime/{stima_id}/pdf/retry"),
 }
 
 # L'UNICO INGRESSO BASIC RESIDUO.

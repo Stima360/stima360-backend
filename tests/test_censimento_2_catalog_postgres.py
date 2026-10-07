@@ -131,7 +131,8 @@ def test_01_lo_schema_completo_viene_dal_runner_fino_alla_083(completo):
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la cartella arriva alla 090: 63 -> 64 righe di ledger.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la cartella arriva alla 091: 64 -> 65 righe di ledger.
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la cartella arriva alla 092: 65 -> 66 righe di ledger.
-    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 66
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la cartella arriva alla 094 (093 PDF privato, 094 ricevute): 66 -> 68 righe di ledger.
+    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 68
     assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE version = %s AND rolled_back_at IS NULL",
               (VERSIONE,))[0][0] == 1
     assert "~ '^[A-F]/[0-9]{1,2}$'" in _q(completo, "SELECT pg_get_constraintdef(oid) FROM pg_constraint "

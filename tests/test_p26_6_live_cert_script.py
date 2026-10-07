@@ -5721,6 +5721,27 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("site_submissions", "contact_id", "contacts", "SET NULL"),
     ("site_submissions", "lead_id", "leads", "SET NULL"),
     ("site_submissions", "property_id", "properties", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1, migration 093 (PDF privato
+    # della stima, F07) e 094 (ricevute degli invii pubblici, F04): DUE
+    # riferimenti non-CASCADE nuovi verso una tabella che il cleanup cancella.
+    # ESAMINATI.
+    #
+    #   stima_pdf_artifacts.agency_id         -> agencies  NO ACTION
+    #   public_submission_receipts.agency_id  -> agencies  NO ACTION
+    #
+    # Entrambe le righe sono figlie della stima (`stima_id` CASCADE): il PDF e
+    # la ricevuta seguono la stima quando questa viene cancellata dal cleanup
+    # (`DELETE FROM stime`). L'agenzia e' il tenant del dato privato e non si
+    # cancella sotto un PDF o una ricevuta (NO ACTION, cioe' lo stesso rifiuto
+    # di RESTRICT a fine istruzione), come per `site_submissions`.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: le scrive solo il funnel
+    # pubblico (/api/salva_stima, /api/salva_stima_dettagliata e le rotte di
+    # ripresa/PDF), che la matrice non percorre; se un'agenzia di prova ne
+    # avesse, il preflight la incontra come RIFIUTO, non come cancellazione
+    # silenziosa.
+    ("stima_pdf_artifacts", "agency_id", "agencies", "NO ACTION"),
+    ("public_submission_receipts", "agency_id", "agencies", "NO ACTION"),
 })
 
 

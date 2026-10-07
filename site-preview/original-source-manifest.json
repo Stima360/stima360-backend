@@ -1,0 +1,721 @@
+{
+  "archive_sha256": "4bf8578da798c2207ab766259479cffd65afbbc49e9ca12642d4ddf7cea27e54",
+  "files": 137,
+  "uncompressed_bytes": 128435468,
+  "originals_directory": "/private/tmp/stima360-r1-originals-20261007",
+  "main_html_equal_baseline": {
+    "index.html": true,
+    "dati_personali.html": true,
+    "stima_dettagliata.html": true,
+    "pdf_redirect.html": true
+  },
+  "unchanged_preview_assets": [
+    "arcobaleno2.png",
+    "IconaAi.png",
+    "Sfondo_trasparente_Stima360.png",
+    "banner-fiducia-giorgio.png",
+    "FamilyIndex.png",
+    "Biglietto_visita.jpeg",
+    "Stima360index.png",
+    "3.png",
+    "facce-clienti.png",
+    "IMGVendere/Team.png",
+    "IMGVendere/LavoraConNoi.png",
+    "IMGVendere/Fondatore.png",
+    "cloud/cloud3.png",
+    "cloud/cloud2.png",
+    "cloud/cloud1.png",
+    "cloud/cloud4.png",
+    "cloud/cloud6.png",
+    "cloud/cloud7.png",
+    "cloud/cloud8.png",
+    "cloud/Cloud.png"
+  ],
+  "manifest": [
+    {
+      "path": "assets/sannicolo/foto1.jpg",
+      "bytes": 135848,
+      "sha256": "6c2259f6ee05c738bf9f5ef33c03bb99d6b44a91f8380841a93b6932c9fc4bb5"
+    },
+    {
+      "path": "assets/sannicolo/foto3.jpg",
+      "bytes": 81949,
+      "sha256": "ecfd9e78188a7c927fb67bbaf0914c717abbe50e1de40d9777c9754466024792"
+    },
+    {
+      "path": "assets/sannicolo/foto2.jpg",
+      "bytes": 149962,
+      "sha256": "7d672301deabadfc1aabe9fa7a385d7c176f9b2a911067b4a385ee7835fe17cc"
+    },
+    {
+      "path": "assets/sannicolo/piantina.jpg",
+      "bytes": 109016,
+      "sha256": "81a2efade9521974a1dc5a701581407c8bafe60b1bb7e54038c8809c47dd3504"
+    },
+    {
+      "path": "piano-vendita-stima360.png",
+      "bytes": 835679,
+      "sha256": "4ad0b4d01ecb046762b6fb7cac9663d489f798e63d463421e8bf9d97709e786e"
+    },
+    {
+      "path": "admin_whatsapp.html",
+      "bytes": 7921,
+      "sha256": "e1dab0b206ac8818b603319eea37eb2f3ad9f2329c106e53396c5d7064012141"
+    },
+    {
+      "path": "admin_stime.html",
+      "bytes": 12408,
+      "sha256": "7e95c10a812cc7e3af6bddf21d4a9431a3e031cb134b506c2e54fac16cda9ffb"
+    },
+    {
+      "path": "stima_dettagliata.html",
+      "bytes": 17923,
+      "sha256": "bb0fc10b19e661352184b858794ce6304a21683327200dc226824f19a3bd116b"
+    },
+    {
+      "path": "Stimalandingprova.html",
+      "bytes": 73001,
+      "sha256": "12f7b6561ef85608570c103d936a6fce9e25a90e0c8206719c70b4d0b0095614"
+    },
+    {
+      "path": "valutazione-immobile-alba-adriatica.html",
+      "bytes": 31966,
+      "sha256": "bd305a7b0501c5c64155299e903014a275310ca3bbca75f3f06fabdef2dd5bf9"
+    },
+    {
+      "path": "pdf_redirect.html",
+      "bytes": 10258,
+      "sha256": "d2c230a0e6f4d88794d912c069443d9ae72c0514af853a86d95a6a5edb8f18e2"
+    },
+    {
+      "path": "admin_stime_pro.html",
+      "bytes": 11649,
+      "sha256": "dca861511fdc0bcf3f9ae88fec894ded201cb4def2662678f803acf6ce7b6d11"
+    },
+    {
+      "path": "Vendibilita.png",
+      "bytes": 3373297,
+      "sha256": "f1dcf7fd876679ae8b9c09890ab330bb8d8512270db93d44822c082b9718a69c"
+    },
+    {
+      "path": "sitemap.xml",
+      "bytes": 12210,
+      "sha256": "c0b9ba1cfc71385b401cca9ceaa84651fa72c86962a4eab72650fb2b39170cb3"
+    },
+    {
+      "path": "Vendere-ricomprare-senza-errori.html",
+      "bytes": 22155,
+      "sha256": "6d4488c2c324c7a73e4d78c775aae2b47c8c807808f163b0fe164bf7e9a0e902"
+    },
+    {
+      "path": "PianoVenditaStima360.html",
+      "bytes": 48636,
+      "sha256": "7776dda563d6bf4455399ad042b069c242f65f9ef3fd999f6bcbcf8aa3dec408"
+    },
+    {
+      "path": "stima360_landing.html",
+      "bytes": 62392,
+      "sha256": "95d97af450a95185acf253623635d0b6da92c0141fbb87acef62894c7fa04566"
+    },
+    {
+      "path": "eliminazionedati.html",
+      "bytes": 2217,
+      "sha256": "2e16646e7565d1bd63011819bfa93818b1419a5ae9fb32e6170c315e0d520e3a"
+    },
+    {
+      "path": "Stima360index.png",
+      "bytes": 2467957,
+      "sha256": "20baa4d72f84135e3c418dea2807f6216063ec16a174475f9bc620ba16654a56"
+    },
+    {
+      "path": "Famigliaalmareindex.png",
+      "bytes": 2077398,
+      "sha256": "9b4be740ec2821351b5d2d571dfa936c4862eb0edddbf952636cc11ade1ea58d"
+    },
+    {
+      "path": "divano.png",
+      "bytes": 921150,
+      "sha256": "0b9dd9250b9d049059c944d02aff95bb9d6169cec508e9e9a31f52a8d38227a2"
+    },
+    {
+      "path": "3.png",
+      "bytes": 165034,
+      "sha256": "4c922a0eeb509fa43b199e885eb223f2707dc6506d0af3f2882d5f6d48d6efbc"
+    },
+    {
+      "path": "vendere-casa-alba-adriatica.html",
+      "bytes": 13015,
+      "sha256": "633ae7f7c4187fd07d4b647441cbd03980374d382cbe8f7594fbf120d10bb7cb"
+    },
+    {
+      "path": "robots.txt",
+      "bytes": 92,
+      "sha256": "e298113a41bdc91ae56e5ba2ad8ed989335454f3629885e1cf62e1c20bd29eef"
+    },
+    {
+      "path": "prezzi-case-alba-adriatica.html",
+      "bytes": 31574,
+      "sha256": "db09bac8ec29130c98c73e6fd34cf340cd6c5b202da4f4f12e6032a015085f87"
+    },
+    {
+      "path": "banner-fiducia-giorgio.png",
+      "bytes": 345831,
+      "sha256": "d8d76655d10b5b892d69b45eff817ddb01dae73eab113424b29b1566cff47608"
+    },
+    {
+      "path": "cloud/cloud 5.png",
+      "bytes": 391372,
+      "sha256": "4ab15dedefc4a1a9d9da54f98d32205a1ef9783ca6078ee3c50349fa686041fc"
+    },
+    {
+      "path": "cloud/cloud4.png",
+      "bytes": 435108,
+      "sha256": "44c8c6192bdd4941e9fbd35220b90838657086dbfacbd8e621811d89f3d4b232"
+    },
+    {
+      "path": "cloud/cloud3.png",
+      "bytes": 830674,
+      "sha256": "b3a6d3d30529ba36176fd746137a3c3e5f75d0636978a714bbfc536319b697a8"
+    },
+    {
+      "path": "cloud/cloud2.png",
+      "bytes": 588423,
+      "sha256": "849031c1ac94fc5078442594668128ef07f5424d812dd3b05777fd78aceac2e4"
+    },
+    {
+      "path": "cloud/cloud1.png",
+      "bytes": 648134,
+      "sha256": "44da186aac1d13961c278486fc33d1c4a9ab6032e344226a29ced11d09525b10"
+    },
+    {
+      "path": "cloud/Cloud.png",
+      "bytes": 755923,
+      "sha256": "21524685c3ae1a4df84b1ec1bf14f689707ee77f06e0f4832c62e252cdd1b00f"
+    },
+    {
+      "path": "cloud/cloud6.png",
+      "bytes": 625854,
+      "sha256": "5ae1fec532fb53e5b95dbc57d7ef9792e791be441f036b6a4681717ab3107dcd"
+    },
+    {
+      "path": "cloud/cloud7.png",
+      "bytes": 401013,
+      "sha256": "560fdc51eeebeef73567f98b467ed427adbf5b65d4fc2489103dca5f392a67f0"
+    },
+    {
+      "path": "cloud/cloud8.png",
+      "bytes": 456349,
+      "sha256": "0c7ba8ed87554ac8f40dbaef69a3c48d0a17f4a43720eafd97f4adab16a957fd"
+    },
+    {
+      "path": "index.html",
+      "bytes": 117261,
+      "sha256": "d1364ea8a0fef2aab120b60b160ba80fdbc30e3a00fece09457d2cb61870c04d"
+    },
+    {
+      "path": "Biglietto_visita.jpeg",
+      "bytes": 324225,
+      "sha256": "b8c15d8f7e51e242fb1c92ecc63f6942d7d59a5308049c4b4744312fc186e05d"
+    },
+    {
+      "path": "termini.html",
+      "bytes": 4241,
+      "sha256": "0a16cab52179823e57211fdb8bd138fe06586fdc4a9a2f0f7aa1c0212214a3c8"
+    },
+    {
+      "path": "stimacentrato.jpg",
+      "bytes": 165034,
+      "sha256": "4c922a0eeb509fa43b199e885eb223f2707dc6506d0af3f2882d5f6d48d6efbc"
+    },
+    {
+      "path": "Landing.png",
+      "bytes": 5534257,
+      "sha256": "a8caae2f719fcd4398f2f567d3915559bdd5a3c84f08519152a5a703cf6d3976"
+    },
+    {
+      "path": "piano_vendita_stima360.pdf",
+      "bytes": 2641025,
+      "sha256": "8f84c5e6e4fb024a6ec522ca7a5d320f00f46323f5120beb2e695b486320b524"
+    },
+    {
+      "path": "arcobaleno2.png",
+      "bytes": 3118824,
+      "sha256": "4febd05a7942f4d668cf3e41df4cd8e246e004c55c71ea9b60957eee5e851405"
+    },
+    {
+      "path": "staging/cloud/cloud 5.png",
+      "bytes": 391372,
+      "sha256": "4ab15dedefc4a1a9d9da54f98d32205a1ef9783ca6078ee3c50349fa686041fc"
+    },
+    {
+      "path": "staging/cloud/cloud4.png",
+      "bytes": 435108,
+      "sha256": "44c8c6192bdd4941e9fbd35220b90838657086dbfacbd8e621811d89f3d4b232"
+    },
+    {
+      "path": "staging/cloud/cloud3.png",
+      "bytes": 830674,
+      "sha256": "b3a6d3d30529ba36176fd746137a3c3e5f75d0636978a714bbfc536319b697a8"
+    },
+    {
+      "path": "staging/cloud/cloud2.png",
+      "bytes": 588423,
+      "sha256": "849031c1ac94fc5078442594668128ef07f5424d812dd3b05777fd78aceac2e4"
+    },
+    {
+      "path": "staging/cloud/cloud1.png",
+      "bytes": 648134,
+      "sha256": "44da186aac1d13961c278486fc33d1c4a9ab6032e344226a29ced11d09525b10"
+    },
+    {
+      "path": "staging/cloud/Cloud.png",
+      "bytes": 755923,
+      "sha256": "21524685c3ae1a4df84b1ec1bf14f689707ee77f06e0f4832c62e252cdd1b00f"
+    },
+    {
+      "path": "staging/cloud/cloud6.png",
+      "bytes": 625854,
+      "sha256": "5ae1fec532fb53e5b95dbc57d7ef9792e791be441f036b6a4681717ab3107dcd"
+    },
+    {
+      "path": "staging/cloud/cloud7.png",
+      "bytes": 401013,
+      "sha256": "560fdc51eeebeef73567f98b467ed427adbf5b65d4fc2489103dca5f392a67f0"
+    },
+    {
+      "path": "staging/cloud/cloud8.png",
+      "bytes": 456349,
+      "sha256": "0c7ba8ed87554ac8f40dbaef69a3c48d0a17f4a43720eafd97f4adab16a957fd"
+    },
+    {
+      "path": "staging/admin_stime_pro.html",
+      "bytes": 11649,
+      "sha256": "dca861511fdc0bcf3f9ae88fec894ded201cb4def2662678f803acf6ce7b6d11"
+    },
+    {
+      "path": "staging/pdf_redirect.html",
+      "bytes": 9591,
+      "sha256": "488adff63484376a46b4790e5606fe1bddc340d42f76d8352ba91abdb55d9342"
+    },
+    {
+      "path": "staging/stima360_landing.html",
+      "bytes": 52501,
+      "sha256": "70c5764463f99a230493ab0dd832b2aa507f5755095dd2bd88842248e3ae1c19"
+    },
+    {
+      "path": "staging/privacy.html",
+      "bytes": 3740,
+      "sha256": "d615e05d94bac3816b089c077b6b7249c8d43f5957b48011cff0f06cb8b75d15"
+    },
+    {
+      "path": "staging/Landing.png",
+      "bytes": 1611470,
+      "sha256": "ca33c3efb620508e7b16036ab2c2f301086ab60db5c2773a75fd86d28dbb938f"
+    },
+    {
+      "path": "staging/robots.txt",
+      "bytes": 92,
+      "sha256": "e298113a41bdc91ae56e5ba2ad8ed989335454f3629885e1cf62e1c20bd29eef"
+    },
+    {
+      "path": "staging/3.png",
+      "bytes": 165034,
+      "sha256": "4c922a0eeb509fa43b199e885eb223f2707dc6506d0af3f2882d5f6d48d6efbc"
+    },
+    {
+      "path": "staging/cloud_natale/Cloudn1.png",
+      "bytes": 522164,
+      "sha256": "ae89f38dafca2a1714ee1ea7f934e6f7037feb9444dc8cbb1e53c8ef4b996734"
+    },
+    {
+      "path": "staging/cloud_natale/Cloudn2.png",
+      "bytes": 1706295,
+      "sha256": "33daec361ef23ef2a96f52b13300c13cdbeb1916cc907bb13b2057db53417f09"
+    },
+    {
+      "path": "staging/cloud_natale/Cloiudn4.png",
+      "bytes": 714644,
+      "sha256": "4c4e016d76d3358ca586caaeb8765c3cb501f44aa642e3178285caf81a0022df"
+    },
+    {
+      "path": "staging/cloud_natale/Cloudn3.png",
+      "bytes": 628403,
+      "sha256": "acabe3f3e74bba1bf370e0b6bb372aa3e3783ecfaec3a20ff3f74844adc85791"
+    },
+    {
+      "path": "staging/cloud_natale/Cloudn5.png",
+      "bytes": 576939,
+      "sha256": "53aea343241a3b28fabc9f2459f167cafe1e09d91916c785c9ca1ab24364196a"
+    },
+    {
+      "path": "staging/stimacentrato.jpg",
+      "bytes": 165034,
+      "sha256": "4c922a0eeb509fa43b199e885eb223f2707dc6506d0af3f2882d5f6d48d6efbc"
+    },
+    {
+      "path": "staging/dati_personali.html",
+      "bytes": 23359,
+      "sha256": "6e2c4ed5542eec9779a5ad506918820b1eb1e911720d91e1505fcba2b678b07c"
+    },
+    {
+      "path": "staging/Biglietto_visita.jpeg",
+      "bytes": 324225,
+      "sha256": "b8c15d8f7e51e242fb1c92ecc63f6942d7d59a5308049c4b4744312fc186e05d"
+    },
+    {
+      "path": "staging/termini.html",
+      "bytes": 4241,
+      "sha256": "0a16cab52179823e57211fdb8bd138fe06586fdc4a9a2f0f7aa1c0212214a3c8"
+    },
+    {
+      "path": "staging/eliminazionedati.html",
+      "bytes": 2217,
+      "sha256": "2e16646e7565d1bd63011819bfa93818b1419a5ae9fb32e6170c315e0d520e3a"
+    },
+    {
+      "path": "staging/Stimasenzasfondo.png",
+      "bytes": 1252991,
+      "sha256": "0809359a647bf6ffca52efd05f1bcaf7896da1586753664cf3c4f4c92e6a885b"
+    },
+    {
+      "path": "staging/IconaAi.png",
+      "bytes": 342386,
+      "sha256": "f45be44ef4c6cc31fbe7b18bdeaa368dc2584fffd9e16bf6d08d956ef02977c9"
+    },
+    {
+      "path": "staging/admin_stime.html",
+      "bytes": 12408,
+      "sha256": "7e95c10a812cc7e3af6bddf21d4a9431a3e031cb134b506c2e54fac16cda9ffb"
+    },
+    {
+      "path": "staging/Sfondo_trasparente_Stima360.png",
+      "bytes": 1372008,
+      "sha256": "73694ad775096efe4e297f9bfc15c004b65c98b0ac23b3283ac424e37967b612"
+    },
+    {
+      "path": "staging/Vendere.html",
+      "bytes": 21747,
+      "sha256": "656df839e17f4cb7b8bca39509ccf53337c29074d6a509e3e4eae5f76dd98796"
+    },
+    {
+      "path": "staging/Stimaevalore.jpeg",
+      "bytes": 68948,
+      "sha256": "f94e495acbd4f8443914ca0c82e355fea4758a09bf689dad880c74f0367dec6a"
+    },
+    {
+      "path": "staging/cv-giorgio-censori.html",
+      "bytes": 25034,
+      "sha256": "1edfda945f44de085d581644f826fcf4addbd440b613f25ccad9a4c7e31aa094"
+    },
+    {
+      "path": "staging/IMGVendere/VendereConStima360.png",
+      "bytes": 2923149,
+      "sha256": "49b497bc09aacf5ad956d02acc56f759f33c1d9283c7ce196eafe93e352999f2"
+    },
+    {
+      "path": "staging/IMGVendere/StimeAI.png",
+      "bytes": 719723,
+      "sha256": "e2343cbebe7907272bd912a94e0c4a83bb067d530b47581b9362de06aaf4dedd"
+    },
+    {
+      "path": "staging/IMGVendere/Collaboriamo.png",
+      "bytes": 743353,
+      "sha256": "c3457a469977cd86d04e445fa1d29b8f3f59cfd9c4a2a4bebb6ab2b31082ad2f"
+    },
+    {
+      "path": "staging/IMGVendere/Provvigione.png",
+      "bytes": 695275,
+      "sha256": "61112e97b9c75fcef915548686f8d9e0e0b1b3de45d085ac2a6ee29972aeb040"
+    },
+    {
+      "path": "staging/IMGVendere/NienteUffici.png",
+      "bytes": 2866225,
+      "sha256": "c0a6797863d220295ee16062421fcf615feed9468b0f99aec6368b30000faec9"
+    },
+    {
+      "path": "staging/IMGVendere/PerchèVendere.png",
+      "bytes": 3807490,
+      "sha256": "b4de7c19cec0d023c0bd71d17d52aeab95d7b55f50d26fcf1111f29051e3a2eb"
+    },
+    {
+      "path": "staging/IMGVendere/SideBarClienti.png",
+      "bytes": 311383,
+      "sha256": "77f8aca42ff3c02dbb577ebdbcfb2efd1f7fad0e6ae949eb0e98e1b65f16ccc5"
+    },
+    {
+      "path": "staging/IMGVendere/LavoraConNoi.png",
+      "bytes": 645161,
+      "sha256": "04d3412e2a9b328abf0314da367e6ffb082097c0873971eb290cad04e9966b47"
+    },
+    {
+      "path": "staging/IMGVendere/Team.png",
+      "bytes": 1767313,
+      "sha256": "a52f06c0fc7880bd9f8e7fc62f16c950607f8bf2328347532f1d3de6e9a827d8"
+    },
+    {
+      "path": "staging/IMGVendere/Fondatore.png",
+      "bytes": 12053500,
+      "sha256": "aea401486945f47a087ef3d05241d07386f3a087a398673fbb5419c194f1683c"
+    },
+    {
+      "path": "staging/candidati.html",
+      "bytes": 6643,
+      "sha256": "946dcc8c2cf6f01954b2d67ca305f34448df3ff571b711c032259fb77882a2b5"
+    },
+    {
+      "path": "staging/giorgio.png",
+      "bytes": 6767301,
+      "sha256": "9d1dc52f2ce10dff1d981edb2c8c231883469ed494cced29cbd0f14dec269813"
+    },
+    {
+      "path": "staging/admin_whatsapp.html",
+      "bytes": 7921,
+      "sha256": "e1dab0b206ac8818b603319eea37eb2f3ad9f2329c106e53396c5d7064012141"
+    },
+    {
+      "path": "staging/arcobaleno2.png",
+      "bytes": 3118824,
+      "sha256": "4febd05a7942f4d668cf3e41df4cd8e246e004c55c71ea9b60957eee5e851405"
+    },
+    {
+      "path": "staging/fascia_mare_test.html",
+      "bytes": 7817,
+      "sha256": "594bd007e90c74b065a7c78ebd1b93a4ca17bd404782ca146aff1b30ef69222e"
+    },
+    {
+      "path": "staging/stimacentrato1.jpg",
+      "bytes": 219930,
+      "sha256": "430f0281c83a90bce610accce37ec47c51c34e2aa84722e0aeae4cd18c9c0f03"
+    },
+    {
+      "path": "staging/ai_spiegazione.html",
+      "bytes": 5916,
+      "sha256": "2abceef612cf78990c47912ce50ab248695cc58fc1765bce587102741758ab68"
+    },
+    {
+      "path": "staging/stima_dettagliata.html",
+      "bytes": 17257,
+      "sha256": "00db24b47ab84ec3479570c2122be7a8b4b7be15195921d23db9450e0d212444"
+    },
+    {
+      "path": "staging/index.html",
+      "bytes": 64857,
+      "sha256": "521aec33217ec8e18814653ec9f629ccc7b6bc6868c1e903d78f51d40b9b8a13"
+    },
+    {
+      "path": "staging/Stima360index.png",
+      "bytes": 1464170,
+      "sha256": "da9b72c208a08c6ebf0f075d7228a61b30ab09c5ecd3a7d93c091a268f4697ee"
+    },
+    {
+      "path": "Test-vendita-invisibile-stima360.html",
+      "bytes": 36330,
+      "sha256": "41195530859d21436c0b5396ca7fb24b45980c9cb6184c2492ac97e03dc81d8e"
+    },
+    {
+      "path": "Landingstima360.png",
+      "bytes": 1060446,
+      "sha256": "a147865f9605578d125b599659dc714700214f7193286f823a235bd9fca442f3"
+    },
+    {
+      "path": "facce-clienti.png",
+      "bytes": 328967,
+      "sha256": "dd5afaf7b6a2a1b992184ce6090c9aec7720e96b8925f5536d1463cc814cc582"
+    },
+    {
+      "path": "come-vendere-casa-alba-adriatica.html",
+      "bytes": 27621,
+      "sha256": "24e8d40502be7b6b3b245faf65e2b2b6fcf7a5360bdc2b154037ff23347c6048"
+    },
+    {
+      "path": "IconaAi.png",
+      "bytes": 342386,
+      "sha256": "f45be44ef4c6cc31fbe7b18bdeaa368dc2584fffd9e16bf6d08d956ef02977c9"
+    },
+    {
+      "path": "candidati.html",
+      "bytes": 6643,
+      "sha256": "946dcc8c2cf6f01954b2d67ca305f34448df3ff571b711c032259fb77882a2b5"
+    },
+    {
+      "path": "template-microzona.php",
+      "bytes": 36050,
+      "sha256": "9581b3cbcae2f6cc7b1cea2b199a81d0b7c93819b1be7f9bf718fd2b4a20fc0c"
+    },
+    {
+      "path": "Stimasenzasfondo.png",
+      "bytes": 1252991,
+      "sha256": "0809359a647bf6ffca52efd05f1bcaf7896da1586753664cf3c4f4c92e6a885b"
+    },
+    {
+      "path": "fascia_mare_test.html",
+      "bytes": 7817,
+      "sha256": "594bd007e90c74b065a7c78ebd1b93a4ca17bd404782ca146aff1b30ef69222e"
+    },
+    {
+      "path": "vendibilita.html",
+      "bytes": 12403,
+      "sha256": "0ee495badc10e2b91d34025099af9c5675897dbe21e0fd6fd8481ce0b59511d6"
+    },
+    {
+      "path": "FamilyIndex.png",
+      "bytes": 320347,
+      "sha256": "406046b74e2541db8ec1b6ed9b60a29e165666fcaf30dc1f7593984455a0c076"
+    },
+    {
+      "path": "dati.csv",
+      "bytes": 46709,
+      "sha256": "beadbd6804f0af3d87b7dae40b30c1d8e6356eeb02a644d9fc58187f593aa9cf"
+    },
+    {
+      "path": "Vendere.html",
+      "bytes": 21747,
+      "sha256": "656df839e17f4cb7b8bca39509ccf53337c29074d6a509e3e4eae5f76dd98796"
+    },
+    {
+      "path": "privacy.html",
+      "bytes": 3740,
+      "sha256": "d615e05d94bac3816b089c077b6b7249c8d43f5957b48011cff0f06cb8b75d15"
+    },
+    {
+      "path": "quanto-vale-casa-alba-adriatica-2026-prezzi-mq.html",
+      "bytes": 29975,
+      "sha256": "bacea7bc862171181592b654c5243eca8c8b8bfa0ed201e75b073db2a598c23d"
+    },
+    {
+      "path": "giorgio.png",
+      "bytes": 6767301,
+      "sha256": "9d1dc52f2ce10dff1d981edb2c8c231883469ed494cced29cbd0f14dec269813"
+    },
+    {
+      "path": "error_log",
+      "bytes": 1257691,
+      "sha256": "1b9ec6c2e531b21eb1338e6198c7bc0b531c89ed2aac00ab0829b74129176c49"
+    },
+    {
+      "path": "dati_personali.html",
+      "bytes": 26158,
+      "sha256": "283b4564fb2e4d8432a238726e9610180441ddf0aa4501f3356103ab8d4ea7d6"
+    },
+    {
+      "path": "LandingVendere.png",
+      "bytes": 1016322,
+      "sha256": "71e7bf786eea7a7571e70126886075a7d8645fa6dd6f29185e8d9dffa6c564ea"
+    },
+    {
+      "path": "IMGVendere/VendereConStima360.png",
+      "bytes": 2923149,
+      "sha256": "49b497bc09aacf5ad956d02acc56f759f33c1d9283c7ce196eafe93e352999f2"
+    },
+    {
+      "path": "IMGVendere/StimeAI.png",
+      "bytes": 719723,
+      "sha256": "e2343cbebe7907272bd912a94e0c4a83bb067d530b47581b9362de06aaf4dedd"
+    },
+    {
+      "path": "IMGVendere/Collaboriamo.png",
+      "bytes": 743353,
+      "sha256": "c3457a469977cd86d04e445fa1d29b8f3f59cfd9c4a2a4bebb6ab2b31082ad2f"
+    },
+    {
+      "path": "IMGVendere/Provvigione.png",
+      "bytes": 695275,
+      "sha256": "61112e97b9c75fcef915548686f8d9e0e0b1b3de45d085ac2a6ee29972aeb040"
+    },
+    {
+      "path": "IMGVendere/NienteUffici.png",
+      "bytes": 2866225,
+      "sha256": "c0a6797863d220295ee16062421fcf615feed9468b0f99aec6368b30000faec9"
+    },
+    {
+      "path": "IMGVendere/PerchèVendere.png",
+      "bytes": 3807490,
+      "sha256": "b4de7c19cec0d023c0bd71d17d52aeab95d7b55f50d26fcf1111f29051e3a2eb"
+    },
+    {
+      "path": "IMGVendere/SideBarClienti.png",
+      "bytes": 311383,
+      "sha256": "77f8aca42ff3c02dbb577ebdbcfb2efd1f7fad0e6ae949eb0e98e1b65f16ccc5"
+    },
+    {
+      "path": "IMGVendere/LavoraConNoi.png",
+      "bytes": 645161,
+      "sha256": "04d3412e2a9b328abf0314da367e6ffb082097c0873971eb290cad04e9966b47"
+    },
+    {
+      "path": "IMGVendere/Team.png",
+      "bytes": 1767313,
+      "sha256": "a52f06c0fc7880bd9f8e7fc62f16c950607f8bf2328347532f1d3de6e9a827d8"
+    },
+    {
+      "path": "IMGVendere/Fondatore.png",
+      "bytes": 12053500,
+      "sha256": "aea401486945f47a087ef3d05241d07386f3a087a398673fbb5419c194f1683c"
+    },
+    {
+      "path": "sitemap.php",
+      "bytes": 1174,
+      "sha256": "f44cf962689235fc0940548009bf973d6d69878e0812625ea78d4362c981fa47"
+    },
+    {
+      "path": "ai_spiegazione.html",
+      "bytes": 5916,
+      "sha256": "2abceef612cf78990c47912ce50ab248695cc58fc1765bce587102741758ab68"
+    },
+    {
+      "path": "Sfondo_trasparente_Stima360.png",
+      "bytes": 1372008,
+      "sha256": "73694ad775096efe4e297f9bfc15c004b65c98b0ac23b3283ac424e37967b612"
+    },
+    {
+      "path": "mockup-test-vendita-invisibile.png",
+      "bytes": 2438364,
+      "sha256": "402d62aabf1d349cbdd5782d96e92c4494c45a1778eb6bc0fb641dbcc2a20a02"
+    },
+    {
+      "path": "Immobiliaris.html",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "cloud_natale/Cloudn1.png",
+      "bytes": 522164,
+      "sha256": "ae89f38dafca2a1714ee1ea7f934e6f7037feb9444dc8cbb1e53c8ef4b996734"
+    },
+    {
+      "path": "cloud_natale/Cloudn2.png",
+      "bytes": 1706295,
+      "sha256": "33daec361ef23ef2a96f52b13300c13cdbeb1916cc907bb13b2057db53417f09"
+    },
+    {
+      "path": "cloud_natale/Cloiudn4.png",
+      "bytes": 714644,
+      "sha256": "4c4e016d76d3358ca586caaeb8765c3cb501f44aa642e3178285caf81a0022df"
+    },
+    {
+      "path": "cloud_natale/Cloudn3.png",
+      "bytes": 628403,
+      "sha256": "acabe3f3e74bba1bf370e0b6bb372aa3e3783ecfaec3a20ff3f74844adc85791"
+    },
+    {
+      "path": "cloud_natale/Cloudn5.png",
+      "bytes": 576939,
+      "sha256": "53aea343241a3b28fabc9f2459f167cafe1e09d91916c785c9ca1ab24364196a"
+    },
+    {
+      "path": "stimacentrato1.jpg",
+      "bytes": 219930,
+      "sha256": "430f0281c83a90bce610accce37ec47c51c34e2aa84722e0aeae4cd18c9c0f03"
+    },
+    {
+      "path": "cv-giorgio-censori.html",
+      "bytes": 25034,
+      "sha256": "1edfda945f44de085d581644f826fcf4addbd440b613f25ccad9a4c7e31aa094"
+    },
+    {
+      "path": "Stimaevalore.jpeg",
+      "bytes": 68948,
+      "sha256": "f94e495acbd4f8443914ca0c82e355fea4758a09bf689dad880c74f0367dec6a"
+    }
+  ]
+}

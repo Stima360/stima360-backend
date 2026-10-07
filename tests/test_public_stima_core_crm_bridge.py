@@ -525,26 +525,48 @@ class JsonRequest:
         return self.payload
 
 
-def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(monkeypatch, caplog):
+def test_bridge_failure_leaves_a_partial_receipt_and_the_resume_completes_the_flow_once(monkeypatch, caplog):
+    # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04). Prima della
+    # ricevuta pubblica un bridge guasto era "fail-open": risposta di successo,
+    # PDF, alert e WhatsApp partivano lo stesso. Con F04 il bridge e' un passo
+    # della ricevuta: se fallisce, la stima resta scritta UNA volta, la
+    # risposta e' 202 `partial` (nessun falso successo), nessuna consegna parte
+    # e la stessa identita' riprende il lavoro dal passo fallito senza
+    # duplicare stima, PDF, alert, WhatsApp o coda email.
+    from tests.public_submission_fakes import ReceiptStore, identity_fields, response_body
+
     main_module = import_project_module("main")
-    connections = []
     emails = []
     whatsapp = []
     pdf_calls = []
     bridge_calls = []
+    store = ReceiptStore()
+    # Un solo doppio `stime` per tutte le connessioni della prova: la riga
+    # scritta al primo passaggio deve essere rileggibile al secondo.
+    connection = LegacyConnection()
+    monkeypatch.setattr(main_module, "get_connection", store.factory(lambda: connection))
 
-    def connection_factory():
-        connection = LegacyConnection()
-        connections.append(connection)
-        return connection
+    bridge_working = {"on": False}
 
-    def failing_bridge(stima_id, **data):
+    def bridge(stima_id, **data):
         bridge_calls.append((stima_id, data))
-        assert connections[0].commit_count == 1
-        raise RuntimeError("controlled bridge failure")
+        inserts = [q for q, _ in connection.executions if q.startswith("INSERT INTO stime")]
+        assert len(inserts) == 1 and connection.commit_count >= 1, "la stima e' committata prima del bridge"
+        if not bridge_working["on"]:
+            raise RuntimeError("controlled bridge failure")
+        return {"status": "linked", "contact_id": 31, "lead_id": 41}
 
-    monkeypatch.setattr(main_module, "get_connection", connection_factory)
-    monkeypatch.setattr(main_module.core_service, "bridge_public_stima", failing_bridge)
+    monkeypatch.setattr(main_module.core_service, "bridge_public_stima", bridge)
+    monkeypatch.setattr(main_module.owner_provisioning, "provision_for_public_stima",
+                        lambda ctx, **k: {"status": "provisioned"})
+    monkeypatch.setattr(main_module.property_site_sync, "sync_public_stima",
+                        lambda ctx, **k: {"property_id": 71})
+    monkeypatch.setattr(main_module.seller_intelligence_service, "record_event",
+                        lambda **k: {"recorded": True})
+    monkeypatch.setattr(main_module.followup_service, "run_followup",
+                        lambda **k: {"action_id": 1})
+    monkeypatch.setattr(main_module.property_watch_service, "ensure_watch_for_stima",
+                        lambda stima_id: {"watch_id": 1})
     monkeypatch.setattr(
         main_module,
         "compute_from_payload",
@@ -558,14 +580,17 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
     monkeypatch.setattr(
         main_module,
         "genera_pdf_stima",
-        lambda payload, nome_file: pdf_calls.append((payload, nome_file)) or "reports/stima_501.pdf",
+        lambda payload, nome_file: pdf_calls.append((payload, nome_file)) or b"%PDF-synthetic\n%%EOF",
     )
-    monkeypatch.setattr(main_module, "invia_mail", lambda *args: emails.append(args))
-    monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: whatsapp.append(args))
+    from tests.private_pdf_fakes import install_private_pdf_fake
+    install_private_pdf_fake(monkeypatch, main_module)
+    monkeypatch.setattr(main_module, "invia_mail", lambda *args: emails.append(args) or True)
+    monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: whatsapp.append(args) or True)
+    for name, value in {"SMTP_HOST": "127.0.0.1", "SMTP_PORT": "587", "SMTP_USER": "synthetic@example.invalid",
+                        "SMTP_PASS": "synthetic-fixture"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(main_module, "WHATSAPP_SERVICE_URL", "http://127.0.0.1:55888/fake-whatsapp-provider")
 
-    # P29 cutover: la mail al cliente si accoda, e va accodata ANCHE quando il
-    # bridge fallisce. Senza contatto e senza lead - il bridge non li ha
-    # prodotti - ma con la stima, che e' il riferimento che esiste sempre.
     accodate = []
 
     def finto_enqueue(ctx, **kwargs):
@@ -574,55 +599,83 @@ def test_bridge_failure_preserves_public_response_and_pdf_email_whatsapp_flow(mo
 
     monkeypatch.setattr(main_module.communication_service, "enqueue", finto_enqueue)
 
-    response = asyncio.run(
-        main_module.salva_stima(
-            JsonRequest(
-                {
-                    "comune": "Alba Adriatica",
-                    "microzona": "Centro",
-                    "mq": 90,
-                    "nome": "Mario",
-                    "cognome": "Rossi",
-                    "email": "mario@example.com",
-                    "telefono": "+39 333 123 4567",
-                    "prezzo_mq_base": 1500,
-                }
-            )
-        )
-    )
+    payload = {
+        "comune": "Alba Adriatica",
+        "microzona": "Centro",
+        "mq": 90,
+        "nome": "Mario",
+        "cognome": "Rossi",
+        "email": "mario@example.com",
+        "telefono": "+39 333 123 4567",
+        "prezzo_mq_base": 1500,
+        **identity_fields(),
+    }
 
-    assert response == {
+    # --- 1. bridge guasto: ricevuta parziale, niente consegne, stima scritta ---
+    first = asyncio.run(main_module.salva_stima(JsonRequest(payload)))
+    body = response_body(first)
+    assert first.status_code == 202
+    assert body["success"] is False and body["ok"] is False
+    assert body["id"] == 501
+    ricevuta = body["receipt"]
+    assert ricevuta["request_id"] == payload["request_id"]
+    assert ricevuta["status"] == "partial" and ricevuta["resumable"] is True
+    assert ricevuta["steps"]["bridge"] == "failed"
+    assert ricevuta["errors"]["bridge"]["error_type"] == "RuntimeError"
+    assert ricevuta["stima_id"] == 501 and ricevuta["contact_id"] is None and ricevuta["lead_id"] is None
+    assert "token" not in body and "pdf_url" not in body, "nessun collegamento prima che il lavoro sia completo"
+    assert bridge_calls[0][0] == 501
+    assert bridge_calls[0][1]["first_name"] == "Mario"
+    assert pdf_calls == [] and emails == [] and whatsapp == [] and accodate == []
+
+    log_text = caplog.text
+    assert "public_submission_step_failed" in log_text and "step=bridge" in log_text
+    assert "mario@example.com" not in log_text
+    assert "+39 333 123 4567" not in log_text
+
+    # --- 2. stessa identita', bridge riparato: il flusso si completa UNA volta ---
+    bridge_working["on"] = True
+    second = asyncio.run(main_module.salva_stima(JsonRequest(payload)))
+    response = response_body(second)
+    assert second.status_code == 200
+    legacy_fields = {"success", "id", "pdf_url", "price_exact", "eur_mq_finale", "valore_pertinenze", "base_mq"}
+    assert {key: response[key] for key in legacy_fields} == {
         "success": True,
         "id": 501,
-        "pdf_url": f"{main_module.PUBLIC_BASE_URL}/reports/stima_501.pdf",
+        "pdf_url": f"{main_module.PUBLIC_BASE_URL.rstrip('/')}/api/stime/501/pdf?t={response['token']}",
         "price_exact": 180000,
         "eur_mq_finale": 2000,
         "valore_pertinenze": 5000,
         "base_mq": 1500,
     }
-    assert bridge_calls[0][0] == 501
-    assert bridge_calls[0][1]["first_name"] == "Mario"
+    assert response["token"]
+    assert response["detail_url"].endswith("?token=" + response["token"])
+    assert "token=" + response["token"] in response["pdf_redirect_url"]
+    assert response["receipt"]["status"] == "completed"
+    assert response["receipt"]["steps"]["bridge"] == "succeeded"
+    # (contact_id/lead_id della ricevuta si leggono da `lead_stime`, che il
+    # doppio non ha: qui valgono i riferimenti passati alla coda, sotto.)
+
+    inserts = [q for q, _ in connection.executions if q.startswith("INSERT INTO stime")]
+    assert len(inserts) == 1, "la ripresa non scrive una seconda stima"
+    assert len(bridge_calls) == 2
     assert len(pdf_calls) == 1
     # UN solo invio diretto, ed e' l'alert amministratore: la mail al cliente e'
     # nella coda, non nel socket.
     assert len(emails) == 1
     assert emails[0][0] == "info@stima360.it"
     assert len(whatsapp) == 1
-
-    # E la mail al cliente e' stata accodata comunque, con i riferimenti che il
-    # bridge fallito NON ha potuto dare lasciati vuoti invece che inventati.
     assert len(accodate) == 1
     _ctx, accodato = accodate[0]
     assert accodato["destination_snapshot"] == "mario@example.com"
     assert accodato["stima_id"] == 501
-    assert accodato["contact_id"] is None and accodato["lead_id"] is None
+    assert accodato["contact_id"] == 31 and accodato["lead_id"] == 41
     assert accodato["communication_type"] == "service"
 
-    log_text = caplog.text
-    assert "bridge_status=error" in log_text
-    assert "stima_id=501" in log_text
-    assert "mario@example.com" not in log_text
-    assert "+39 333 123 4567" not in log_text
+    # --- 3. terzo invio identico: la ricevuta completa risponde senza rifare nulla ---
+    third = response_body(asyncio.run(main_module.salva_stima(JsonRequest(payload))))
+    assert third["receipt"]["status"] == "completed" and third["id"] == 501
+    assert len(bridge_calls) == 2 and len(pdf_calls) == 1 and len(emails) == 1 and len(whatsapp) == 1 and len(accodate) == 1
 
 
 def test_public_stima_remains_anonymous_and_core_routes_remain_protected():

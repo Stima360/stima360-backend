@@ -37,6 +37,19 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_AGENCY_SLUG = "stima360"
+# SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (contratto F04, ricevute pubbliche).
+# `salva_stima` e' un involucro di `_receive_submission`; la pipeline del writer
+# vive in `_save_quick_submission(raw, receipt)`. I doppi di questo file
+# raggiungono l'endpoint vero con l'identita' dell'invio, attraverso la tabella
+# ricevute emulata (tests/public_submission_fakes.py); le analisi AST leggono la
+# pipeline. Le proprieta' di P26-2B non cambiano: una sola risoluzione per
+# richiesta, prima della INSERT e nella sua transazione; nessun selettore di
+# agenzia del client; fail-closed senza agenzia (ora: nessuna riga e ricevuta
+# `partial`, non un 500 anonimo); stima, contatto e lead con una sola agenzia.
+from tests.public_submission_fakes import ReceiptStore, identity_fields, response_body
+
+PIPELINE = "_save_quick_submission"
+
 # Deliberately not 1: a hardcoded id would pass a test that used 1.
 RESOLVED_AGENCY_ID = 77
 FORGED_AGENCY_ID = 999
@@ -155,6 +168,48 @@ BASE_PAYLOAD = {
 }
 
 
+def _install_pipeline_doubles(monkeypatch, main_module):
+    """F04: i passi della ricevuta estranei a questo blocco riescono; PDF, mail
+    e WhatsApp sono doppi (il provider reale risponde con un bool)."""
+    monkeypatch.setattr(
+        main_module, "compute_from_payload",
+        lambda _payload: {
+            "price_exact": 180000, "eur_mq_finale": 2000,
+            "valore_pertinenze": 5000, "base_mq": 1500,
+        },
+    )
+    monkeypatch.setattr(main_module, "genera_pdf_stima", lambda payload, nome_file: b"%PDF-synthetic\n%%EOF")
+    from tests.private_pdf_fakes import install_private_pdf_fake
+    install_private_pdf_fake(monkeypatch, main_module)
+    monkeypatch.setattr(main_module, "invia_mail", lambda *args: True)
+    monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: True)
+    monkeypatch.setattr(main_module.owner_provisioning, "provision_for_public_stima",
+                        lambda ctx, **k: {"status": "provisioned"})
+    monkeypatch.setattr(main_module.property_site_sync, "sync_public_stima",
+                        lambda ctx, **k: {"property_id": 71})
+    monkeypatch.setattr(main_module.seller_intelligence_service, "record_event", lambda **k: {"recorded": True})
+    monkeypatch.setattr(main_module.followup_service, "run_followup", lambda **k: {"action_id": 1})
+    monkeypatch.setattr(main_module.property_watch_service, "ensure_watch_for_stima",
+                        lambda stima_id: {"watch_id": 1})
+    monkeypatch.setattr(main_module.communication_service, "enqueue",
+                        lambda ctx, **k: {"message": {"id": 1}, "created": True})
+    for name, value in {"SMTP_HOST": "127.0.0.1", "SMTP_PORT": "587", "SMTP_USER": "synthetic@example.invalid",
+                        "SMTP_PASS": "synthetic-fixture"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(main_module, "WHATSAPP_SERVICE_URL", "http://127.0.0.1:55888/fake-whatsapp-provider")
+
+
+def _pipeline_node():
+    import ast
+
+    tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+    return next(
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == PIPELINE
+    )
+
+
 @pytest.fixture
 def public_stima(monkeypatch):
     """Drive POST /api/salva_stima against a recording connection."""
@@ -166,21 +221,8 @@ def public_stima(monkeypatch):
     def _run(payload_overrides=None, *, agency_row=RESOLVED_AGENCY_ID):
         connection = RecordingConnection(agency_row=agency_row)
         state["connection"] = connection
-        monkeypatch.setattr(main_module, "get_connection", lambda: connection)
-
-        monkeypatch.setattr(
-            main_module, "compute_from_payload",
-            lambda _payload: {
-                "price_exact": 180000, "eur_mq_finale": 2000,
-                "valore_pertinenze": 5000, "base_mq": 1500,
-            },
-        )
-        monkeypatch.setattr(
-            main_module, "genera_pdf_stima",
-            lambda payload, nome_file: "reports/stima_501.pdf",
-        )
-        monkeypatch.setattr(main_module, "invia_mail", lambda *args: None)
-        monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: None)
+        monkeypatch.setattr(main_module, "get_connection", ReceiptStore().factory(lambda: connection))
+        _install_pipeline_doubles(monkeypatch, main_module)
 
         def _bridge(stima_id, **kwargs):
             # The real bridge resolves its own SystemAgencyContext from the
@@ -195,17 +237,11 @@ def public_stima(monkeypatch):
             }
 
         monkeypatch.setattr(main_module.core_service, "bridge_public_stima", _bridge)
-        monkeypatch.setattr(
-            main_module.seller_intelligence_service, "safe_record_event",
-            lambda **kwargs: None,
-        )
-        monkeypatch.setattr(
-            main_module.followup_service, "safe_run_followup",
-            lambda **kwargs: None,
-        )
 
-        payload = {**BASE_PAYLOAD, **(payload_overrides or {})}
-        return asyncio.run(main_module.salva_stima(JsonRequest(payload)))
+        payload = {**BASE_PAYLOAD, **identity_fields(), **(payload_overrides or {})}
+        response = asyncio.run(main_module.salva_stima(JsonRequest(payload)))
+        state["status_code"] = response.status_code
+        return response_body(response)
 
     return type("Harness", (), {
         "run": staticmethod(_run),
@@ -312,7 +348,10 @@ def _handler_source() -> str:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "salva_stima"
     )
-    return ast.unparse(handler)
+    # F04: il handler delega; la pipeline e' quella che si legge.
+    assert '_receive_submission(request, "quick")' in ast.unparse(handler) or \
+        "_receive_submission(request, 'quick')" in ast.unparse(handler)
+    return ast.unparse(_pipeline_node())
 
 
 def test_b2_the_writer_never_reads_an_agency_key_from_client_data():
@@ -326,17 +365,19 @@ def test_b2_the_writer_never_reads_an_agency_key_from_client_data():
     """
     import ast
 
-    tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
-    handler = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "salva_stima"
-    )
+    handler = _pipeline_node()
+
+    def _receipt_row(node) -> bool:
+        # F04: `receipt.row[...]` e' la riga della ricevuta scritta dal server
+        # (agenzia incisa dalla INSERT), non un dato del client.
+        base = node.value
+        return (isinstance(base, ast.Attribute) and base.attr == "row"
+                and isinstance(base.value, ast.Name) and base.value.id == "receipt")
 
     read_keys: list[str] = []
     for node in ast.walk(handler):
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-            if isinstance(node.slice.value, str):
+            if isinstance(node.slice.value, str) and not _receipt_row(node):
                 read_keys.append(node.slice.value)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if node.func.attr in {"get", "pop", "setdefault"}:
@@ -359,12 +400,7 @@ def test_b2_the_agency_is_never_chosen_arbitrarily():
     """
     import ast
 
-    tree = ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
-    handler = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "salva_stima"
-    )
+    handler = _pipeline_node()
 
     for node in ast.walk(handler):
         if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
@@ -403,19 +439,24 @@ def test_b3_no_default_agency_means_no_stima_is_written(public_stima):
     exactly why this has to be enforced by the writer rather than by the schema
     in this block.
     """
-    with pytest.raises(Exception):
-        public_stima.run(agency_row=None)
+    body = public_stima.run(agency_row=None)
 
     connection = public_stima.state["connection"]
     assert connection.stima_insert is None, (
         "a stima was written without an agency"
     )
+    assert body["receipt"]["stima_id"] is None
 
 
 def test_b3_the_failure_is_not_silently_absorbed(public_stima):
-    with pytest.raises(Exception) as failure:
-        public_stima.run(agency_row=None)
-    assert failure.value is not None
+    """F04: niente 500 anonimo e niente falso successo: la ricevuta e' 202
+    `partial`, con il fallimento della pipeline registrato e riprendibile."""
+    body = public_stima.run(agency_row=None)
+    assert public_stima.state["status_code"] == 202
+    assert body["success"] is False and body["ok"] is False
+    assert body["receipt"]["status"] == "partial" and body["receipt"]["resumable"] is True
+    assert body["receipt"]["steps"]["pipeline"] == "failed"
+    assert "token" not in body and "pdf_url" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +619,10 @@ def test_b5_the_historical_backfill_is_a_migration_not_runtime_code():
 def test_b6_the_endpoint_still_returns_its_contract(public_stima):
     result = public_stima.run()
     assert isinstance(result, dict), result
+    assert public_stima.state["status_code"] == 200
     assert result.get("id") == NEW_STIMA_ID or result.get("stima_id") == NEW_STIMA_ID, result
+    assert result["success"] is True and result["receipt"]["status"] == "completed"
+    assert result["receipt"]["stima_id"] == NEW_STIMA_ID
 
 
 def test_b6_the_bridge_and_downstream_still_run(public_stima):
@@ -699,30 +743,12 @@ def public_stima_real_bridge(monkeypatch):
             yield (None, bridge_cursor)
 
         monkeypatch.setattr(core_repository, "core_cursor", _core_cursor)
-        monkeypatch.setattr(main_module, "get_connection", lambda: connection)
-        monkeypatch.setattr(
-            main_module, "compute_from_payload",
-            lambda _payload: {
-                "price_exact": 180000, "eur_mq_finale": 2000,
-                "valore_pertinenze": 5000, "base_mq": 1500,
-            },
-        )
-        monkeypatch.setattr(
-            main_module, "genera_pdf_stima",
-            lambda payload, nome_file: "reports/stima_501.pdf",
-        )
-        monkeypatch.setattr(main_module, "invia_mail", lambda *args: None)
-        monkeypatch.setattr(main_module, "invia_whatsapp", lambda *args: None)
-        monkeypatch.setattr(
-            main_module.seller_intelligence_service, "safe_record_event",
-            lambda **kwargs: None,
-        )
-        monkeypatch.setattr(
-            main_module.followup_service, "safe_run_followup",
-            lambda **kwargs: None,
-        )
+        monkeypatch.setattr(main_module, "get_connection", ReceiptStore().factory(lambda: connection))
+        _install_pipeline_doubles(monkeypatch, main_module)
 
-        return asyncio.run(main_module.salva_stima(JsonRequest(dict(BASE_PAYLOAD))))
+        response = asyncio.run(main_module.salva_stima(JsonRequest({**BASE_PAYLOAD, **identity_fields()})))
+        state["status_code"] = response.status_code
+        return response_body(response)
 
     return type("Harness", (), {"run": staticmethod(_run), "state": state})()
 

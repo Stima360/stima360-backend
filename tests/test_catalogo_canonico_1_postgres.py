@@ -14,7 +14,7 @@ della stima). Le rotte della scheda sono quelle vere (router Immobili).
       anno... restano NULL); 0 nelle superfici = non dichiarato;
   03  stima dettagliata: la STESSA scheda; campi vuoti completati, valori del
       sito non toccati aggiornati, dato corretto dall'agente -> conflitto;
-      dettaglio ripetuto = nessun effetto; dettaglio orfano = nessuna scheda;
+      dettaglio ripetuto = nessun effetto; dettaglio pubblico orfano = rifiutato;
   04  ritentativo con la stessa identita' della richiesta, anche dopo 30
       giorni -> la stessa scheda; identita' diverse con dati uguali -> due
       schede, doppione segnalato; client senza identita' -> mai unito, solo
@@ -39,22 +39,30 @@ della stima). Le rotte della scheda sono quelle vere (router Immobili).
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from tests.test_censimento_3_backend_postgres import DSN, _q, completo, mondo  # noqa: F401
 
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
 
+_RECEIPT_PROOFS = {}
+
+
 class JsonRequest:
     headers = {"content-type": "application/json"}
 
     def __init__(self, payload):
-        self.payload = payload
+        self.payload = dict(payload)
+        request_id = self.payload.get("request_id") or self.payload.get("client_request_id") or str(uuid.uuid4())
+        self.payload.setdefault("request_id", request_id)
+        self.payload.setdefault("receipt_key", _RECEIPT_PROOFS.setdefault(request_id, uuid.uuid4().hex + uuid.uuid4().hex))
 
     async def json(self):
         return self.payload
@@ -94,10 +102,17 @@ def sito(mondo, monkeypatch):
     # fixture ha gia' puntato li': qui lo si dichiara, non lo si cambia)
     monkeypatch.setitem(main.core_service.repository.core_cursor.__wrapped__.__globals__, "get_connection",
                         lambda: psycopg2.connect(dsn))
-    monkeypatch.setattr(main, "genera_pdf_stima", lambda *a, **k: "reports/stima_test.pdf")
+    monkeypatch.setattr(main, "genera_pdf_stima", lambda *a, **k: b"%PDF-1.4\nsynthetic-private-report\n%%EOF\n")
     monkeypatch.setattr(main, "invia_mail", lambda *a, **k: True)
-    monkeypatch.setattr(main, "invia_whatsapp", lambda *a, **k: None)
-    monkeypatch.setattr(main.communication_service, "enqueue", lambda *a, **k: None)
+    monkeypatch.setattr(main, "invia_whatsapp", lambda *a, **k: True)
+    monkeypatch.setattr(main.communication_service, "enqueue", lambda *a, **k:
+                        {"message": {"id": 1}, "created": True})
+    for name in ("communication.database", "followup.database", "seller_intelligence.database", "property_watch.database"):
+        monkeypatch.setattr(importlib.import_module(name), "get_connection", lambda: psycopg2.connect(dsn))
+    for name, value in {"SMTP_HOST": "127.0.0.1", "SMTP_PORT": "587", "SMTP_USER": "synthetic@example.invalid",
+                        "SMTP_PASS": "synthetic-fixture", "ADMIN_EMAIL": "admin@example.invalid"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(main, "WHATSAPP_SERVICE_URL", "http://127.0.0.1:55888/fake-whatsapp-provider")
     monkeypatch.setattr(main.seller_intelligence_service, "safe_record_event", lambda **k: None)
     monkeypatch.setattr(main.followup_service, "safe_run_followup", lambda **k: None)
     monkeypatch.setattr(main.property_watch_service, "safe_ensure_watch_for_stima", lambda *a, **k: None)
@@ -119,23 +134,42 @@ def sito(mondo, monkeypatch):
 
     monkeypatch.setattr(main, "_routed_public_stima_system_context", instradamento)
 
+    def decoded(response):
+        return json.loads(response.body) if hasattr(response, "body") else response
+
     def stima(payload, *, agency=1):
         agenzia["id"] = agency
-        return asyncio.run(main.salva_stima(JsonRequest(dict(payload))))
+        return decoded(asyncio.run(main.salva_stima(JsonRequest(dict(payload)))))
 
     def dettaglio(payload):
-        return asyncio.run(main.salva_stima_dettagliata(JsonRequest(dict(payload))))
+        result = decoded(asyncio.run(main.salva_stima_dettagliata(JsonRequest(dict(payload)))))
+        # This established catalog helper exposes the legacy detail outcome;
+        # receipt/HTTP/additive fields are asserted by their dedicated tests.
+        if result.get("receipt", {}).get("status") == "completed":
+            return {"ok": result.get("ok")}
+        return result
+
+    def resume(result):
+        from fastapi.testclient import TestClient
+        request_id = result["receipt"]["request_id"]
+        with TestClient(main.app) as client:
+            response = client.post(f"/api/submissions/{request_id}/resume",
+                                   headers={"X-Receipt-Key": _RECEIPT_PROOFS[request_id]})
+            assert response.status_code in (200, 202), response.text
+            return response.json()
+
+    def token(stima_id):
+        return str(_q(m, "SELECT token FROM stime WHERE id = %s", (stima_id,))[0][0])
 
     def prefill(stima_id):
-        token = _q(m, "SELECT token FROM stime WHERE id = %s", (stima_id,))[0][0]
-        return asyncio.run(main.prefill(t=str(token)))
+        return asyncio.run(main.prefill(t=token(stima_id)))
 
     def dettaglio_dal_prefill(stima_id, **modifiche):
         """Cio' che il form della dettagliata invia quando il cliente non
         tocca i campi precompilati: i valori di /api/prefill (senza i dati di
         contatto), con eventuali modifiche."""
         base = {k: v for k, v in prefill(stima_id).items() if k not in ("id", "nome", "cognome", "email", "telefono")}
-        return dettaglio({**{k: ("" if v is None else v) for k, v in base.items()}, "stima_id": stima_id, **modifiche})
+        return dettaglio({**{k: ("" if v is None else v) for k, v in base.items()}, "stima_id": stima_id, "token": token(stima_id), **modifiche})
 
     def invio(kind, chiave):
         colonna = "stima_id" if kind == "quick" else "detail_id"
@@ -152,7 +186,7 @@ def sito(mondo, monkeypatch):
 
     yield SimpleNamespace(m=m, main=main, stima=stima, dettaglio=dettaglio, scheda_di=scheda_di, scheda=scheda,
                           motore=motore, api=m["api"], prefill=prefill, dettaglio_dal_prefill=dettaglio_dal_prefill,
-                          invio=invio)
+                          invio=invio, token=token, resume=resume)
     # Pulizia PRIMA di quella della fixture `mondo` (DELETE di tutte le schede
     # di prova in un solo statement): nella 087 la provenienza `relinked` ha
     # `relinked_to_property_id` ON DELETE SET NULL ma il CHECK pretende il
@@ -299,11 +333,13 @@ def test_03_dettagliata_aggiorna_la_stessa_scheda_senza_toccare_le_correzioni(si
     invio = s.invio("detail", detail_id)
     assert invio["status"] == "synced" and invio["prefill"]["mq"] == 86 and "nome" not in invio["declared"]
     assert "note" not in invio["declared"] and "note" in invio["declared"]["_altre_chiavi"]
-    # lo stesso dettaglio ripetuto (stessa riga) non fa nulla; un dettaglio orfano non tocca schede
+    # Lo stesso dettaglio ripetuto (stessa riga) non fa nulla; il pubblico senza token non scrive.
     assert s.main.property_site_sync.sync_detail(stima_id=sid, detail_id=detail_id, raw={"locali": "5"})["status"] == "replica"
-    assert s.dettaglio({"locali": "5", "nome": "Orfano"}) == {"ok": True}
-    orfano = _q(s.m, "SELECT max(id) FROM stime_dettagliate")[0][0]
-    assert s.invio("detail", orfano)["reason"] == "orphan_detail"
+    prima = _q(s.m, "SELECT count(*) FROM stime_dettagliate")[0][0]
+    with pytest.raises(HTTPException) as exc:
+        s.dettaglio({"locali": "5", "nome": "Orfano"})
+    assert exc.value.status_code == 403
+    assert _q(s.m, "SELECT count(*) FROM stime_dettagliate")[0][0] == prima
     assert s.scheda(pid)["rooms"] == 4
 
 
@@ -317,12 +353,12 @@ def test_04_ritentativi_con_identita_della_richiesta_e_invii_distinti(sito):
     _q(s.m, "UPDATE site_submissions SET created_at = NOW() - interval '30 days' WHERE stima_id = %s", (primo,))
     _q(s.m, "UPDATE property_site_sources SET created_at = NOW() - interval '30 days' WHERE stima_id = %s", (primo,))
     secondo = s.stima({**COMPLETA, **persona, "client_request_id": chiave})["id"]
-    assert s.scheda_di(secondo) == pid
+    assert secondo == primo and s.scheda_di(secondo) == pid
     assert [r[0] for r in _q(s.m, "SELECT origin FROM property_site_sources WHERE property_id = %s ORDER BY id", (pid,))] \
-        == ["auto", "retry"]
+        == ["auto"]
     assert sorted(r[0] for r in _q(s.m, "SELECT relation_type FROM property_leads WHERE property_id = %s", (pid,))) \
-        == ["origin", "related"]
-    assert s.invio("quick", secondo)["reason"] == "same_request"
+        == ["origin"]
+    assert _q(s.m, "SELECT count(*) FROM site_submissions WHERE stima_id=%s", (primo,)) == [[1]]
     # due richieste DISTINTE con dati uguali (chiavi diverse): due schede, doppione segnalato, mai unito
     terzo = s.stima({**COMPLETA, **persona, "client_request_id": str(uuid.uuid4())})["id"]
     altra = s.scheda_di(terzo)
@@ -355,7 +391,7 @@ def test_04b_richieste_concorrenti_con_la_stessa_identita(sito):
     schede = {s.scheda_di(e["id"]) for e in esiti}
     assert len(schede) == 1 and None not in schede
     assert _q(s.m, "SELECT count(*) FROM site_submissions WHERE client_request_id = %s AND status = 'synced'",
-              (chiave,))[0][0] == 3
+              (chiave,))[0][0] == 1
 
 
 def test_05_applica_e_ignora(sito):
@@ -408,7 +444,7 @@ def test_06_collega_a_un_altro_immobile(sito):
     vecchia = _fonti(s, auto)["items"][0]
     assert (vecchia["status"], vecchia["relinked_to"]["id"]) == ("relinked", vero)
     # il dettaglio successivo aggiorna la scheda collegata
-    s.dettaglio({"stima_id": sid, "classe": "B"})
+    s.dettaglio({"stima_id": sid, "token": s.token(sid), "classe": "B"})
     assert s.scheda(vero)["energy_class"] == "B" and s.scheda(auto)["energy_class"] is None
     # un'opportunita' Venditore sul lead blocca un nuovo spostamento
     _q(s.m, "UPDATE property_leads SET relation_type = 'seller' WHERE lead_id = %s", (lead,))
@@ -460,13 +496,14 @@ def test_08_agenzie_separate_e_permessi(sito):
     assert r.status_code == 403
 
 
-def test_09_senza_lead_niente_scheda_cestino_e_fail_open(sito, monkeypatch):
+def test_09_senza_lead_niente_scheda_cestino_e_ricevuta_parziale(sito, monkeypatch):
     s = sito
     prima = _q(s.m, "SELECT count(*) FROM properties")[0][0]
     risposta = s.stima({**COMPLETA, "nome": None, "cognome": None, "email": None, "telefono": None})
-    assert risposta["success"] is True
+    assert risposta["success"] is False and risposta["receipt"]["status"] == "partial"
+    assert risposta["receipt"]["steps"]["bridge"] == "failed"
     assert s.scheda_di(risposta["id"]) is None and _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
-    assert s.invio("quick", risposta["id"])["reason"] == "no_contact_lead"      # conservato, saltato con motivo
+    assert s.invio("quick", risposta["id"]) is None  # request ledger retains the partial request before property sync
     # scheda nel Cestino: il dettaglio non la tocca (l'invio resta, con il motivo)
     sid = s.stima({**COMPLETA, **_persona()})["id"]
     pid = s.scheda_di(sid)
@@ -476,11 +513,12 @@ def test_09_senza_lead_niente_scheda_cestino_e_fail_open(sito, monkeypatch):
     dettaglio = _q(s.m, "SELECT max(id) FROM stime_dettagliate")[0][0]
     assert s.invio("detail", dettaglio)["reason"] == "property_in_trash"
     assert s.scheda(pid)["energy_class"] is None
-    # fail-open: un errore della sincronizzazione non cambia la risposta del sito
+    # F06: persisted partial receipt exposes synchronization failure, without a second estimation
     def guasto(*a, **k):
         raise RuntimeError("boom")
     monkeypatch.setattr(s.main.property_site_sync, "sync_public_stima", guasto)
-    assert s.stima({**COMPLETA, **_persona()})["success"] is True
+    parziale = s.stima({**COMPLETA, **_persona()})
+    assert parziale["success"] is False and parziale["receipt"]["steps"]["property"] == "failed"
 
 
 def test_10_scheda_campi_nuovi_catalogo_e_accessori(sito):
@@ -550,14 +588,17 @@ def test_12_trasferimento_fallito_resta_visibile_e_si_recupera(sito, monkeypatch
 
     monkeypatch.setattr(sync._census, "_inserisci_unita", guasto)
     risposta = s.stima({**COMPLETA, **_persona()})
-    assert risposta["success"] is True                                      # il sito risponde come sempre
+    assert risposta["success"] is False and risposta["receipt"]["status"] == "partial"
     sid = risposta["id"]
     assert s.scheda_di(sid) is None
     rapida = s.invio("quick", sid)
     assert (rapida["status"], rapida["reason"], rapida["attempts"], rapida["last_error"]) == ("failed", "error", 1, "RuntimeError")
     assert rapida["declared"]["mq"] == "85,5" and "email" not in rapida["declared"]   # il valore COME inviato
-    # la dettagliata arriva prima del recupero: conservata, in attesa della rapida
-    s.dettaglio_dal_prefill(sid, classe="B", locali="4")
+    # Synthetic existing-parent capability exercises the legacy inbox's
+    # waiting_quick path. New partial quick replies expose no detail link.
+    _q(s.m, "UPDATE stime SET token=%s, token_expires=NOW()+INTERVAL '1 day' WHERE id=%s", (str(uuid.uuid4()), sid))
+    dettagliata = s.dettaglio_dal_prefill(sid, classe="B", locali="4")
+    assert dettagliata["receipt"]["status"] == "partial"
     dettaglio = _q(s.m, "SELECT max(id) FROM stime_dettagliate")[0][0]
     assert (s.invio("detail", dettaglio)["status"], s.invio("detail", dettaglio)["reason"]) == ("pending", "waiting_quick")
     monkeypatch.setattr(sync._census, "_inserisci_unita", originale)
@@ -577,6 +618,9 @@ def test_12_trasferimento_fallito_resta_visibile_e_si_recupera(sito, monkeypatch
     # idempotente: ripetere non trova nulla e non duplica
     assert sid not in [v["stima_id"] for v in sync.recover(apply=True, min_age_seconds=0)["items"]]
     assert _q(s.m, "SELECT count(*) FROM property_site_sources WHERE stima_id = %s", (sid,))[0][0] == 1
+    completata = s.resume(risposta)
+    assert completata["success"] is True and completata["id"] == sid
+    assert s.scheda_di(sid) == pid
     # lo script: census in sola lettura, --apply solo con il database confermato
     import importlib
     script = importlib.import_module("scripts.site_sync_recover")
@@ -614,8 +658,9 @@ def test_13_down_e_up_della_088(sito, monkeypatch):
         assert {"tipologia", "mq", "pertinenze", "numbalconi", "altrodescrizione"} <= colonne
         prima = _q(s.m, "SELECT count(*) FROM properties")[0][0]
         nuova = s.stima({**COMPLETA, **_persona()})
-        assert nuova["success"] is True and _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
-        assert s.dettaglio({"stima_id": nuova["id"], "classe": "A1", "mq": "70"}) == {"ok": True}
+        assert nuova["success"] is False and nuova["receipt"]["status"] == "partial"
+        assert _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
+        assert "token" not in nuova and "detail_url" not in nuova
         assert sync.census() == {"installed": False}
         # la provenienza gia' scritta si legge ancora (basta la 087)
         assert _fonti(s, s.scheda_di(sid))["installed"] is True
@@ -624,7 +669,9 @@ def test_13_down_e_up_della_088(sito, monkeypatch):
             cur.execute("BEGIN")
             cur.execute(su)
             cur.execute("COMMIT")
-    sid = s.stima({**COMPLETA, **_persona()})["id"]
+    ripresa = s.resume(nuova)
+    assert ripresa["success"] is True and ripresa["id"] == nuova["id"]
+    sid = ripresa["id"]
     assert s.scheda_di(sid) is not None and s.invio("quick", sid)["status"] == "synced"
 
 
@@ -652,7 +699,8 @@ def test_99_ordine_di_rilascio_down_e_up_della_087(sito):
         assert _q(s.m, "SELECT to_regclass('public.property_site_sources')")[0][0] is None
         prima = _q(s.m, "SELECT count(*) FROM properties")[0][0]
         risposta = s.stima({**COMPLETA, **_persona()})
-        assert risposta["success"] is True and _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
+        assert risposta["success"] is False and risposta["receipt"]["status"] == "partial"
+        assert _q(s.m, "SELECT count(*) FROM properties")[0][0] == prima
         r = s.api().post("/api/property/properties", json={"property_type": "villa", "rooms": 5})
         assert r.status_code == 201, r.text
         assert s.api().get(f"/api/property/properties/{r.json()['id']}").status_code == 200
@@ -667,5 +715,7 @@ def test_99_ordine_di_rilascio_down_e_up_della_087(sito):
             cur.execute(su)
             cur.execute("COMMIT")
     assert _q(s.m, "SELECT to_regclass('public.property_site_sources') IS NOT NULL")[0][0] is True
-    sid = s.stima({**COMPLETA, **_persona()})["id"]
+    ripresa = s.resume(risposta)
+    assert ripresa["success"] is True and ripresa["id"] == risposta["id"]
+    sid = ripresa["id"]
     assert s.scheda_di(sid) is not None
