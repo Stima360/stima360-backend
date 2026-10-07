@@ -27,6 +27,7 @@ scrittura un claim puo' essersi preso il messaggio.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -203,6 +204,81 @@ def property_has_message_history(cur, ctx, property_id: int) -> bool:
     )
     riga = cur.fetchone()
     return bool(riga["esiste"] if isinstance(riga, dict) else riga[0])
+
+
+# ---------------------------------------------------------------------------
+# CESTINO-CONTATTI-1 - le domande e la sola scrittura che il Cestino Contatti
+# chiede al ledger. Come per gli immobili: il ledger si interroga e si scrive
+# SOLO da qui (sentinella P29-2.1 n4), nello scope dell'agenzia di chi chiede.
+# ---------------------------------------------------------------------------
+
+#: Il prefisso del rifiuto: lo stesso codice delle guardie della 090.
+CONTACT_IN_TRASH_MESSAGE = "CONTACT_IN_TRASH: il contatto è nel Cestino: nessun nuovo messaggio"
+#: La ragione scritta nei metadata dei `queued` annullati dal Cestino
+#: (`journey_repository.cancel_queued_for_contact`). Un messaggio nuovo non puo'
+#: nascere dopo (rifiuto in `enqueue`, con la riga del contatto in FOR KEY
+#: SHARE: attende uno spostamento in corso e lo vede), quindi il dispatcher non
+#: ha nulla da sopprimere.
+REASON_CONTACT_TRASHED = "contact_trashed"
+
+
+def _ledger_presente(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.communication_messages') IS NOT NULL AS presente")
+    riga = cur.fetchone()
+    return bool(riga["presente"] if isinstance(riga, dict) else riga[0])
+
+
+def ledger_installed(cur) -> bool:
+    """Il ledger (064) c'e' su QUESTO database?"""
+    return _ledger_presente(cur)
+
+
+def count_queued_for_contact(cur, ctx, contact_id: int) -> int:
+    """Quanti messaggi del contatto sono ancora in coda (detto PRIMA dello
+    spostamento nel Cestino, che li annullera')."""
+    if not _ledger_presente(cur):
+        return 0
+    source, params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(f"SELECT count(*) AS n FROM {source} AND m.contact_id = %s AND m.status = 'queued'",
+                params + [contact_id])
+    riga = cur.fetchone()
+    return int(riga["n"] if isinstance(riga, dict) else riga[0])
+
+
+def contact_has_message_history(cur, ctx, contact_id: int) -> bool:
+    """Questo contatto ha uno storico di comunicazioni REALE? Stessa regola di
+    `property_has_message_history`: un messaggio in arrivo, o uno in uscita
+    entrato nel flusso (non `cancelled`, non `suppressed`). Solo un booleano."""
+    if not _ledger_presente(cur):
+        return False
+    source, params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(
+        f"SELECT EXISTS (SELECT 1 FROM {source} AND m.contact_id = %s "
+        "AND (m.direction = 'inbound' OR m.status NOT IN (%s, %s))) AS esiste",
+        params + [contact_id, STATUS_CANCELLED, STATUS_SUPPRESSED],
+    )
+    riga = cur.fetchone()
+    return bool(riga["esiste"] if isinstance(riga, dict) else riga[0])
+
+
+def contact_in_trash(cur, contact_id: int | None, *, lock: bool = False) -> bool:
+    """Il contatto e' nel Cestino? Letto via `to_jsonb` (valido anche senza la
+    090). `lock=True`: FOR KEY SHARE, come le guardie della 090."""
+    if contact_id is None:
+        return False
+    cur.execute("SELECT (to_jsonb(c)->>'deleted_at') IS NOT NULL AS nel_cestino FROM contacts c WHERE c.id = %s"
+                + (" FOR KEY SHARE" if lock else ""), (contact_id,))
+    riga = cur.fetchone()
+    if riga is None:
+        return False
+    return bool(riga["nel_cestino"] if isinstance(riga, dict) else riga[0])
+
+
+def refuse_if_contact_in_trash(cur, contact_id: int | None) -> None:
+    """Nessun messaggio nuovo, nessuna automazione ripresa, nessuna iscrizione
+    per un contatto nel Cestino: ConflictError con il codice nel messaggio."""
+    if contact_in_trash(cur, contact_id, lock=True):
+        raise ConflictError(CONTACT_IN_TRASH_MESSAGE)
 
 
 def reschedule_queued(cur, ctx, message_id: int, *, quando) -> dict[str, Any] | None:

@@ -539,7 +539,9 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
         raise ValidationError("Filtro non valido")
     predicato, params = scoped_predicate(ctx, "leads", "l")
     # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
-    filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL"]
+    filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL",
+              # CESTINO-CONTATTI-1: un venditore nel Cestino esce dalla worklist.
+              "(to_jsonb(c)->>'deleted_at') IS NULL"]
     # DELETE-ARCH Fase 1B: gli inseriti per errore solo nel loro filtro.
     if status != "mistakes":
         filtri.append(NOT_MISTAKE_SQL)

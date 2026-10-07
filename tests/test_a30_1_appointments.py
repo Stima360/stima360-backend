@@ -100,7 +100,8 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito, provenienza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito, colonne della dettagliata), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
-    assert numeri[-1] == 89 and numeri[-2] == 88 and numeri[-3] == 87 and numeri[-4] == 86 and numeri[-5] == 85 and numeri[-6] == 84 and numeri[-7] == 83 and numeri[-8] == 82 and numeri[-9] == 81 and numeri[-10] == 80 and numeri[-11] == 79 and numeri[-12] == 78 and numeri[-13] == 77 and numeri[-14] == 76 and numeri[-15] == 75 and numeri[-16] == 74
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
+    assert numeri[-1] == 90 and numeri[-2] == 89 and numeri[-3] == 88 and numeri[-4] == 87 and numeri[-5] == 86 and numeri[-6] == 85 and numeri[-7] == 84 and numeri[-8] == 83 and numeri[-9] == 82 and numeri[-10] == 81 and numeri[-11] == 80 and numeri[-12] == 79 and numeri[-13] == 78 and numeri[-14] == 77 and numeri[-15] == 76 and numeri[-16] == 75 and numeri[-17] == 74
     assert len(numeri) == len(set(numeri))
 
 

@@ -53,6 +53,7 @@ from consent.enums import (
     SOURCE_PUBLIC_STIMA as CONSENT_SOURCE_PUBLIC_STIMA,
 )
 
+from . import contact_trash
 from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import SystemAgencyContext
@@ -191,8 +192,22 @@ def _ensure_exists_scoped(ctx, cur, table: str, entity_id: int, label: str) -> N
     primary keys.
     """
     source, params = scoped_source(ctx, table, "s")
-    cur.execute(f"SELECT 1 FROM {source} AND s.id = %s", params + [entity_id])
+    if table != "contacts":
+        cur.execute(f"SELECT 1 FROM {source} AND s.id = %s", params + [entity_id])
+        if cur.fetchone() is None:
+            raise NotFoundError(f"{label} {entity_id} not found")
+        return
+    # CESTINO-CONTATTI-1: un contatto nel Cestino non riceve nulla di nuovo
+    # (lead, ruoli, attivita' e task dell'operatore). Stessa statement, con il
+    # contatto fuori dal Cestino e FOR KEY SHARE (attende uno spostamento in
+    # corso e poi lo vede); solo se non c'e' si distingue il 409
+    # CONTACT_IN_TRASH dal 404.
+    cur.execute(f"SELECT 1 FROM {source} AND s.id = %s AND {contact_trash.live('s')} FOR KEY SHARE",
+                params + [entity_id])
     if cur.fetchone() is None:
+        cur.execute(f"SELECT 1 FROM {source} AND s.id = %s", params + [entity_id])
+        if cur.fetchone() is not None:
+            raise contact_trash.ContactInTrash()
         raise NotFoundError(f"{label} {entity_id} not found")
 
 
@@ -243,6 +258,9 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
         # DELETE-ARCH Fase 0: gli archiviati escono dalla lista e dai
         # selettori; si vedono solo chiedendo `status=archived`.
         where.append("status <> 'archived'")
+    # CESTINO-CONTATTI-1: un contatto nel Cestino non e' mai nella lista, nella
+    # ricerca globale o nei selettori; si vede solo dal Cestino.
+    where.append(contact_trash.live("c"))
     if search:
         where.append(
             """(
@@ -317,6 +335,8 @@ def delete_contact_role(ctx, contact_id: int, role: str) -> None:
     # produces the same "not found" as an absent one.
     predicate, scope_params = scoped_predicate(ctx, "contacts", "c")
     with core_cursor(commit=True) as (_, cur):
+        # CESTINO-CONTATTI-1: i ruoli di un contatto nel Cestino non cambiano.
+        _ensure_exists_scoped(ctx, cur, "contacts", contact_id, "contact")
         cur.execute(
             "DELETE FROM contact_roles cr USING contacts c "
             f"WHERE cr.contact_id = c.id AND cr.contact_id = %s AND cr.role = %s AND {predicate}",
@@ -646,7 +666,8 @@ def bridge_public_stima(
         email_matches = []
         if contact_data.get("email_normalized"):
             cur.execute(
-                f"SELECT * FROM {contact_source} AND c.email_normalized=%s ORDER BY c.id FOR UPDATE",
+                f"SELECT * FROM {contact_source} AND c.email_normalized=%s AND {contact_trash.live('c')} "
+                "ORDER BY c.id FOR UPDATE",
                 contact_scope + [contact_data["email_normalized"]],
             )
             email_matches = [dict(item) for item in cur.fetchall()]
@@ -654,7 +675,8 @@ def bridge_public_stima(
         phone_matches = []
         if contact_data.get("phone_normalized"):
             cur.execute(
-                f"SELECT * FROM {contact_source} AND c.phone_normalized=%s ORDER BY c.id FOR UPDATE",
+                f"SELECT * FROM {contact_source} AND c.phone_normalized=%s AND {contact_trash.live('c')} "
+                "ORDER BY c.id FOR UPDATE",
                 contact_scope + [contact_data["phone_normalized"]],
             )
             phone_matches = [dict(item) for item in cur.fetchall()]

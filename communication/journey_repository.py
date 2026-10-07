@@ -414,6 +414,29 @@ def cancel_queued_journey_messages(cur, ctx, enrollment_id: int, *, reason: str,
     return cur.rowcount
 
 
+def cancel_queued_for_contact(cur, ctx, contact_id: int, *, actor_user_id: int | None) -> int:
+    """CESTINO-CONTATTI-1 - tutti i `queued` del contatto (di journey, manuali,
+    di sistema) -> `cancelled`, con la ragione nei metadata: la stessa forma di
+    `cancel_queued_journey_messages`, allargata al contatto. Compare-and-set
+    sullo stato: un messaggio gia' reclamato (`sending`) e' in consegna e non
+    si tocca. La chiama solo `core.contact_lifecycle`, nella transazione dello
+    spostamento nel Cestino, dopo «Sospendi automazioni»."""
+    from .repository import REASON_CONTACT_TRASHED, ledger_installed
+    if not ledger_installed(cur):
+        return 0
+    cur.execute(
+        """
+        UPDATE communication_messages
+           SET status = 'cancelled', updated_at = NOW(),
+               metadata = metadata || %s::jsonb
+         WHERE agency_id = %s AND contact_id = %s AND status = 'queued'
+        """,
+        (json.dumps({"cancel_reason": REASON_CONTACT_TRASHED,
+                     "cancelled_by": str(actor_user_id) if actor_user_id else "system"}),
+         ctx.require_agency(), contact_id))
+    return cur.rowcount
+
+
 # ===========================================================================
 # P29-3C - IL MOTORE
 #
@@ -737,11 +760,14 @@ def facts_leads_closed(cur, ctx, lead_ids: list[int]) -> set[int]:
 
 
 def facts_contacts_not_active(cur, ctx, contact_ids: list[int]) -> set[int]:
-    """`inactive` e `archived`: un contatto che non e' piu' attivo non riceve."""
+    """`inactive` e `archived` (e nel Cestino, CESTINO-CONTATTI-1): un contatto
+    che non e' piu' attivo non riceve."""
     if not contact_ids:
         return set()
+    # CESTINO-CONTATTI-1: un contatto nel Cestino conta come non attivo.
     cur.execute("SELECT id FROM contacts WHERE agency_id = %s AND id = ANY(%s) "
-                "AND status <> 'active'", (ctx.require_agency(), contact_ids))
+                "AND (status <> 'active' OR (to_jsonb(contacts)->>'deleted_at') IS NOT NULL)",
+                (ctx.require_agency(), contact_ids))
     return {r["id"] for r in cur.fetchall()}
 
 
@@ -900,7 +926,8 @@ def fresh_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: int 
             UNION ALL
             SELECT %(r_contatto)s::text WHERE EXISTS (
                 SELECT 1 FROM contacts c
-                 WHERE c.agency_id = %(agency)s AND c.id = %(contact)s AND c.status <> 'active')
+                 WHERE c.agency_id = %(agency)s AND c.id = %(contact)s
+                   AND (c.status <> 'active' OR (to_jsonb(c)->>'deleted_at') IS NOT NULL))
         ),
         vincente AS (
             SELECT f.reason FROM fatti f JOIN prio p ON p.reason = f.reason

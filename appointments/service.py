@@ -591,6 +591,9 @@ def _contatto_pubblico_coerente(cur, agency_id, contact_data):
     aprirebbe una seconda transazione che quel lock non protegge piu'.
 
     Restituisce `(contact_id, creato: bool)`.
+
+    CESTINO-CONTATTI-1: un contatto nel Cestino non si ricollega (come un
+    archiviato): la prenotazione crea un contatto nuovo.
     """
     sys_ctx = _ContattoScope(agency_id)
 
@@ -606,7 +609,8 @@ def _contatto_pubblico_coerente(cur, agency_id, contact_data):
     if contact_data.get("email_normalized"):
         source, params = scoped_source(sys_ctx, "contacts", "c")
         cur.execute(f"SELECT * FROM {source} AND c.email_normalized = %s "
-                    f"AND c.status <> 'archived' ORDER BY c.id FOR UPDATE",
+                    f"AND c.status <> 'archived' AND (to_jsonb(c)->>'deleted_at') IS NULL "
+                    f"ORDER BY c.id FOR UPDATE",
                     params + [contact_data["email_normalized"]])
         email_matches = [dict(r) for r in cur.fetchall()]
 
@@ -614,7 +618,8 @@ def _contatto_pubblico_coerente(cur, agency_id, contact_data):
     if contact_data.get("phone_normalized"):
         source, params = scoped_source(sys_ctx, "contacts", "c")
         cur.execute(f"SELECT * FROM {source} AND c.phone_normalized = %s "
-                    f"AND c.status <> 'archived' ORDER BY c.id FOR UPDATE",
+                    f"AND c.status <> 'archived' AND (to_jsonb(c)->>'deleted_at') IS NULL "
+                    f"ORDER BY c.id FOR UPDATE",
                     params + [contact_data["phone_normalized"]])
         phone_matches = [dict(r) for r in cur.fetchall()]
 

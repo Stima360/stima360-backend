@@ -162,7 +162,8 @@ def test_l3_064_esiste_segue_063_e_non_e_piu_la_piu_alta():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito, provenienza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito, colonne della dettagliata), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
-    assert numeri[-1] == 89 and numeri[-2] == 88 and numeri[-3] == 87 and numeri[-4] == 86 and numeri[-5] == 85 and numeri[-6] == 84 and numeri[-7] == 83 and numeri[-8] == 82 and numeri[-9] == 81 and numeri[-10] == 80 and numeri[-11] == 79 and numeri[-12] == 78 and numeri[-13] == 77 and numeri[-14] == 76, numeri[-5:]
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
+    assert numeri[-1] == 90 and numeri[-2] == 89 and numeri[-3] == 88 and numeri[-4] == 87 and numeri[-5] == 86 and numeri[-6] == 85 and numeri[-7] == 84 and numeri[-8] == 83 and numeri[-9] == 82 and numeri[-10] == 81 and numeri[-11] == 80 and numeri[-12] == 79 and numeri[-13] == 78 and numeri[-14] == 77 and numeri[-15] == 76, numeri[-5:]
 
 
 def test_l4_il_ledger_resta_contiguo():

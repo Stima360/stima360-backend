@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from operator_auth import permissions
 
-from . import repository
+from . import contact_lifecycle, repository
 from .exceptions import PermissionDenied, ValidationError
 from .normalization import normalize_email, normalize_phone
 
@@ -53,7 +53,30 @@ def list_contacts(ctx, limit, offset, search, status):
 
 
 def get_contact(ctx, contact_id):
-    return repository.get_contact(ctx, contact_id)
+    contatto = repository.get_contact(ctx, contact_id)
+    # CESTINO-CONTATTI-1: la scheda di un contatto nel Cestino resta leggibile
+    # (storico) e dice chi, quando, perche' e se chi guarda puo' ripristinarlo.
+    if contatto.get("deleted_at") is not None:
+        contatto["trash"] = contact_lifecycle.trash_info(ctx, contatto)
+    return contatto
+
+
+# CESTINO-CONTATTI-1: Cestino dei contatti (core/contact_lifecycle.py).
+def contact_deletion_check(ctx, contact_id):
+    return contact_lifecycle.deletion_check(ctx, contact_id)
+
+
+def trash_contact(ctx, contact_id, payload):
+    data = _dump(payload)
+    return contact_lifecycle.trash_contact(ctx, contact_id, data.get("reason_code"), data.get("note"))
+
+
+def restore_contact(ctx, contact_id):
+    return contact_lifecycle.restore_contact(ctx, contact_id)
+
+
+def list_contact_trash(ctx, limit, offset):
+    return contact_lifecycle.list_trash(ctx, limit=limit, offset=offset)
 
 
 def update_contact(ctx, contact_id, payload):

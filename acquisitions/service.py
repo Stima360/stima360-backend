@@ -19,6 +19,7 @@ from datetime import timedelta
 
 from pydantic import ValidationError as _SchemaError
 
+from core import contact_trash as _contact_trash
 from core.database import core_cursor
 from core.exceptions import NotFoundError
 
@@ -140,6 +141,9 @@ def _aperta(row):
 
 
 def _proprietario(cur, agency_id, property_id, contact_id):
+    # CESTINO-CONTATTI-1: un contatto nel Cestino non diventa referente
+    # (409 CONTACT_IN_TRASH, prima del messaggio generico «non e' un proprietario»).
+    _contact_trash.refuse_if_in_trash(cur, contact_id, lock=True)
     proprietari = repository.property_owners(cur, agency_id, property_id, OWNER_ROLES)
     if not proprietari:
         raise errors.PropertyWithoutOwner(

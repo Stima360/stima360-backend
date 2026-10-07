@@ -48,6 +48,18 @@ import { mountCommunications } from '../components/communications.js';
 import { getSession } from '../core/auth.js';
 import { getAgents } from '../agenda/agenda-api.js';
 import { canAssignRecords } from '../agenda/agenda-model.js';
+// CESTINO-CONTATTI-1: «Elimina…» (foglio condiviso con gli immobili) e, per un
+// contatto nel Cestino, la scheda in sola lettura con «Ripristina». Le rotte
+// le nomina solo trash/trash-api.js; blocchi, storico e permessi li decide il
+// backend (core/contact_lifecycle.py).
+import { bindContactTrashButton, contactTrashButtonHtml } from '../trash/trash-dialog.js';
+import { restoreContact } from '../trash/trash-api.js';
+import {
+  CONTACT_RESTORED_TOAST, contactName, duplicatesView, reasonLabel, restoreErrorView,
+} from '../trash/trash-model.js';
+import { showToast } from '../census/census-sheets.js';
+import { navigate } from '../core/router.js';
+import { duplicatesNoticeHtml } from './cestino.js';
 
 const ROLE_LABELS = {
   owner: 'Proprietario', seller: 'Venditore', buyer: 'Acquirente', prospect: 'Potenziale cliente',
@@ -157,18 +169,23 @@ export async function renderContattoDettaglio(container, params = []) {
   // lo referenziano (es. i listener quick-activity/quick-task sotto) lo
   // rileggono al momento del click, non alla definizione.
   let name = contact.display_name || fallbackName(contact);
+  // CESTINO-CONTATTI-1: un contatto nel Cestino e' congelato (il backend
+  // rifiuta ogni modifica): la scheda resta consultabile, senza comandi.
+  const inTrash = Boolean(contact.deleted_at);
 
   container.innerHTML = `
+    ${inTrash ? contactTrashBannerHtml(contact) : ''}
     <div class="contact-header card">
       <h2 id="contact-header-title">${escapeHtml(name)}</h2>
       <div class="muted" id="contact-header-subtitle">Contatto #${escapeHtml(contact.id)} · ${escapeHtml(contact.contact_type === 'company' ? 'Azienda' : 'Persona')}</div>
       <div id="contact-role-badges" class="badge-row"></div>
       <div id="contact-assignment"></div>
-      <div class="action-bar" style="margin-top:8px">
+      ${inTrash ? '' : `<div class="action-bar" style="margin-top:8px">
         <button type="button" id="contact-edit-btn" class="btn ghost">Modifica contatto</button>
         <button type="button" id="contact-quick-activity" class="btn ghost">+ Nuova attività</button>
         <button type="button" id="contact-quick-task" class="btn ghost">+ Nuovo task</button>
-      </div>
+        ${contactTrashButtonHtml()}
+      </div>`}
     </div>
     <div class="tabs" id="contact-tabs"></div>
     <div id="contact-tab-content" class="card panel"></div>
@@ -193,6 +210,10 @@ export async function renderContattoDettaglio(container, params = []) {
 
   function renderRoleBadgesHtml() {
     const roles = Array.isArray(data.roles) ? data.roles : [];
+    if (inTrash) {
+      return roles.length ? roles.map((r) => renderBadge(ROLE_LABELS[r.role] || r.role, 'role')).join(' ')
+        : '<span class="muted">Nessun ruolo assegnato</span>';
+    }
     const badgesHtml = roles.length
       ? roles.map((r) => `
           <span class="role-badge-editable">
@@ -337,6 +358,8 @@ export async function renderContattoDettaglio(container, params = []) {
       }
     }
 
+    // CESTINO-CONTATTI-1: un contatto nel Cestino e' congelato: sola lettura.
+    if (inTrash) control = '';
     assignmentBox.innerHTML = `
       <div style="margin-top:6px">
         <span class="muted">Agente assegnato:</span>
@@ -455,14 +478,22 @@ export async function renderContattoDettaglio(container, params = []) {
     await showTab(activeTab);
   }
 
-  container.querySelector('#contact-quick-activity').addEventListener('click', () => {
+  if (inTrash) {
+    bindContactRestore(container, contact, params);
+  } else {
+    // CESTINO-CONTATTI-1: dopo lo spostamento la scheda torna all'elenco
+    // Contatti (che rifa' la sua GET normale: il contatto non c'e' piu').
+    bindContactTrashButton(container, contact, () => navigate('contatti'));
+  }
+
+  container.querySelector('#contact-quick-activity')?.addEventListener('click', () => {
     openNewActivityDialog(container.querySelector('#contact-activity-dialog'), {
       presetContact: { id: contact.id, label: name },
       presetLeads: data.leads,
       onSuccess: reloadTasksAndActivities,
     });
   });
-  container.querySelector('#contact-quick-task').addEventListener('click', () => {
+  container.querySelector('#contact-quick-task')?.addEventListener('click', () => {
     openNewTaskDialog(container.querySelector('#contact-task-dialog'), {
       presetContact: { id: contact.id, label: name },
       presetLeads: data.leads,
@@ -499,7 +530,7 @@ export async function renderContattoDettaglio(container, params = []) {
   // Solo i campi realmente modificati entrano nel payload (PATCH usa
   // exclude_unset lato backend, core/service.py::update_contact), stesso
   // principio di bindIncaricoSection in immobile-dettaglio.js.
-  container.querySelector('#contact-edit-btn').addEventListener('click', () => {
+  container.querySelector('#contact-edit-btn')?.addEventListener('click', () => {
     openEditContactDialog();
   });
 
@@ -972,13 +1003,14 @@ export async function renderContattoDettaglio(container, params = []) {
           break;
         }
         case 'lead':
-          contentEl.innerHTML = renderLeadTab(data.leads);
+          contentEl.innerHTML = renderLeadTab(data.leads, { readOnly: inTrash });
           bindLeadTabActions();
           break;
         case 'comunicazioni':
           // Carico posticipato come le altre tab pesanti: le due chiamate
           // partono al primo click, non all'apertura della scheda.
-          await mountCommunications(contentEl, contact.id);
+          if (inTrash) await mountCommunications(contentEl, contact.id, { readOnly: true });
+          else await mountCommunications(contentEl, contact.id);
           break;
         case 'richieste': contentEl.innerHTML = renderRichieste(data.buy_requests); break;
         case 'abbinamenti': contentEl.innerHTML = renderAbbinamenti(data.matches); break;
@@ -1336,11 +1368,56 @@ async function hydrateSellerIntent(contentEl, data, cache) {
   }
 }
 
+// --- CESTINO-CONTATTI-1: contatto nel Cestino --------------------------------
+
+function contactTrashBannerHtml(contact) {
+  const info = contact.trash || {};
+  const chi = info.deleted_by_name ? ` da ${info.deleted_by_name}` : '';
+  const motivo = reasonLabel(info.deleted_reason || contact.deleted_reason)
+    + (info.deleted_note ? ` — ${info.deleted_note}` : '');
+  return `
+    <div class="card trash-banner" data-contact-in-trash role="status">
+      <p><strong>Nel Cestino</strong> dal ${escapeHtml(formatDateTime(info.deleted_at || contact.deleted_at))}${escapeHtml(chi)}.
+        Motivo: ${escapeHtml(motivo)}.</p>
+      <p class="muted">Il contatto non compare in elenchi, ricerche e selettori e non si modifica. Lo storico resta consultabile.
+        Il ripristino non riattiva automazioni né messaggi.</p>
+      <div class="field-error" data-contact-restore-error role="alert"></div>
+      <div class="trash-banner-actions">
+        ${info.can_restore ? '<button type="button" class="btn primary" data-contact-restore-btn>Ripristina</button>' : '<span class="muted">Può ripristinarlo chi lo ha spostato o un amministratore.</span>'}
+        <a class="btn ghost" href="#/cestino/contatti">Apri il Cestino</a>
+      </div>
+    </div>`;
+}
+
+/** «Ripristina» dalla scheda: poi la scheda si ridisegna (stesso id) e, se il
+ *  backend segnala possibili doppioni attivi, li mostra; nulla si unisce. */
+function bindContactRestore(container, contact, params) {
+  const bottone = container.querySelector('[data-contact-restore-btn]');
+  if (!bottone) return;
+  bottone.addEventListener('click', async () => {
+    const errore = container.querySelector('[data-contact-restore-error]');
+    bottone.disabled = true;
+    bottone.textContent = 'Ripristino…';
+    errore.textContent = '';
+    try {
+      const riga = await restoreContact(contact.id);
+      showToast(container.parentElement || container, { text: CONTACT_RESTORED_TOAST });
+      await renderContattoDettaglio(container, params);
+      const avviso = duplicatesNoticeHtml(contactName(riga), duplicatesView(riga));
+      if (avviso) container.insertAdjacentHTML('afterbegin', avviso);
+    } catch (error) {
+      errore.textContent = restoreErrorView(error).text;
+      bottone.textContent = 'Ripristina';
+      bottone.disabled = false;
+    }
+  });
+}
+
 // --- Lead (P25.2) ----------------------------------------------------------
 
-function renderLeadTab(leads) {
+function renderLeadTab(leads, { readOnly = false } = {}) {
   const items = Array.isArray(leads) ? leads : [];
-  const actionBar = `
+  const actionBar = readOnly ? '' : `
     <div class="action-bar" style="margin-bottom:12px">
       <button type="button" id="lead-new-btn" class="btn primary">+ Nuovo lead</button>
     </div>
@@ -1353,10 +1430,10 @@ function renderLeadTab(leads) {
       { label: 'Priorità', render: (l) => renderBadge(LEAD_PRIORITY_LABELS[l.priority] || l.priority || '—', statusTone(l.priority)) },
       { label: 'Prossima azione', render: (l) => escapeHtml(formatDateTime(l.next_action_at)) },
       { label: 'Assegnato a', render: (l) => escapeHtml(l.assigned_to || '—') },
-      { label: 'Azioni', render: (l) => `
+      ...(readOnly ? [] : [{ label: 'Azioni', render: (l) => `
         <button type="button" class="btn ghost" data-lead-edit="${l.id}">Modifica</button>
         <button type="button" class="btn ghost" data-lead-properties="${l.id}">Immobili collegati</button>
-      ` },
+      ` }]),
     ],
     items,
     { emptyMessage: 'Nessun lead collegato a questo contatto.' },

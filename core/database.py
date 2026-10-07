@@ -25,6 +25,10 @@ def core_cursor(*, commit: bool = False):
         from .property_trash import PropertyInTrash, is_trash_db_error
         if not isinstance(exc, PropertyInTrash) and is_trash_db_error(exc):
             raise PropertyInTrash() from exc
+        # CESTINO-CONTATTI-1: lo stesso per un contatto nel Cestino (090).
+        from .contact_trash import ContactInTrash, is_contact_trash_db_error
+        if not isinstance(exc, ContactInTrash) and is_contact_trash_db_error(exc):
+            raise ContactInTrash() from exc
         raise
     finally:
         cur.close()

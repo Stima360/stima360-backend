@@ -75,7 +75,9 @@ def lock_property(cur, agency_id: int, property_id: int):
 
 def property_owners(cur, agency_id: int, property_id: int, roles) -> list[dict]:
     """I proprietari REALI dell'immobile (`property_contacts`), uno per
-    contatto: se un contatto e' sia owner sia seller compare una volta."""
+    contatto: se un contatto e' sia owner sia seller compare una volta.
+    CESTINO-CONTATTI-1: un contatto nel Cestino non e' un proprietario
+    selezionabile (ne' referente)."""
     cur.execute(
         f"""
         SELECT c.id AS contact_id,
@@ -86,6 +88,7 @@ def property_owners(cur, agency_id: int, property_id: int, roles) -> list[dict]:
           FROM property_contacts pc
           JOIN contacts c ON c.id = pc.contact_id AND c.agency_id = %s
          WHERE pc.property_id = %s AND pc.role = ANY(%s)
+           AND (to_jsonb(c)->>'deleted_at') IS NULL
          GROUP BY c.id
          ORDER BY bool_or(pc.is_primary) DESC, c.id
         """,

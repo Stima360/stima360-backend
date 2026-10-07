@@ -5640,6 +5640,22 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("properties", "deleted_by_user_id", "operator_users", "SET NULL"),
     ("record_lifecycle_events", "actor_user_id", "operator_users", "RESTRICT"),
     ("record_lifecycle_events", "agency_id", "agencies", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1, migration 090. Cestino
+    # Contatti: UN riferimento non-CASCADE nuovo verso una tabella che il
+    # cleanup cancella. ESAMINATO.
+    #
+    #   contacts.deleted_by_user_id -> operator_users  SET NULL
+    #
+    # Stessa scelta di `properties.deleted_by_user_id`: chi ha spostato un
+    # contatto nel Cestino e' un'informazione accessoria; se l'operatore
+    # sparisce il contatto resta nel Cestino con il suo motivo (la guardia di
+    # congelamento della 090 ammette proprio questa azione della FK). Gli
+    # eventi `contact` del registro usano le FK RESTRICT gia' esaminate qui
+    # sopra.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: la matrice non chiama le rotte
+    # del Cestino Contatti: non ne crea.
+    ("contacts", "deleted_by_user_id", "operator_users", "SET NULL"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1, migration 087. Provenienza
     # dal sito (`property_site_sources`): QUATTRO riferimenti non-CASCADE nuovi
     # verso tabelle che il cleanup cancella. ESAMINATI.

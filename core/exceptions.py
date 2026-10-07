@@ -23,6 +23,16 @@ class PropertyInTrash(ConflictError):
         self.extra = {}
 
 
+class ContactInTrash(ConflictError):
+    """CESTINO-CONTATTI-1: nuovo collegamento o modifica verso un contatto nel
+    Cestino (409 CONTACT_IN_TRASH). Vedi core/contact_trash.py."""
+    code = "CONTACT_IN_TRASH"
+
+    def __init__(self, message: str = "CONTACT_IN_TRASH: il contatto è nel Cestino: ripristinalo prima di usarlo"):
+        super().__init__(message)
+        self.extra = {}
+
+
 class ValidationError(CoreError):
     pass
 

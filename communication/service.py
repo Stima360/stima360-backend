@@ -301,6 +301,8 @@ def _enqueue_with_cursor(cur, ctx, prepared: dict[str, Any]) -> dict[str, Any]:
     """
     if prepared["contact_id"] is not None:
         repository.contact_in_scope(cur, ctx, prepared["contact_id"])
+        # CESTINO-CONTATTI-1: un contatto nel Cestino non riceve messaggi nuovi.
+        repository.refuse_if_contact_in_trash(cur, prepared["contact_id"])
     message, created = repository.insert_message(cur, ctx, prepared)
     return {"message": message, "created": created}
 

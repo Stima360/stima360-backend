@@ -1054,3 +1054,26 @@ a.census-unit-main { text-decoration: none; }
   .site-source .census-list-item { flex-direction: column; align-items: stretch; }
   .site-source .btn, .site-relink .input { width: 100%; min-height: 44px; }
 }
+
+/* CESTINO-CONTATTI-1: Cestino Contatti - schede Immobili/Contatti della
+   pagina «Cestino», voci e azione dei blocchi nel foglio «Elimina…», avvisi
+   (effetti sulle comunicazioni, storico conservato, possibili doppioni) e il
+   riquadro «Nel Cestino» della scheda contatto. Solo regole NUOVE (prefisso
+   trash-), nessuna ridefinizione; azioni da 44px su smartphone. */
+.trash-tabs { margin-bottom: 12px; }
+.trash-blocker-items { margin: 4px 0 0; padding-left: 16px; font-size: 14px; display: grid; gap: 2px; }
+.trash-blocker-items li { overflow-wrap: anywhere; }
+.trash-blocker-action { margin-top: 6px; }
+.trash-effects { margin: 8px 0 0; padding-left: 18px; font-size: 14px; }
+.trash-kept { margin-top: 8px; }
+.trash-kept p { margin: 0; font-size: 13px; }
+.trash-notice { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.trash-notice p { margin: 0 0 4px; }
+.trash-notice ul { margin: 0 0 4px; padding-left: 18px; }
+.trash-banner { border-left: 4px solid var(--danger); margin-bottom: 12px; overflow-wrap: anywhere; }
+.trash-banner p { margin: 0 0 6px; }
+.trash-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.trash-card-actions a.btn, .trash-banner-actions a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+@media (max-width: 767px) {
+  .trash-blocker-action .btn, .trash-banner-actions .btn { width: 100%; min-height: 44px; }
+}

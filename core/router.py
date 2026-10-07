@@ -34,6 +34,7 @@ from .schemas import (
     ActivityCreate,
     AssignmentUpdate,
     ContactCreate,
+    ContactTrash,
     ContactRoleCreate,
     ContactUpdate,
     LeadCreate,
@@ -128,6 +129,65 @@ def set_contact_assignment(
     cannot ride along on an ordinary field update (design spec section 10).
     """
     return _translate(service.set_contact_assignment, ctx, contact_id, payload)
+
+
+# ---------------------------------------------------------------------------
+# CESTINO-CONTATTI-1: Cestino dei contatti. Stessa forma di risposta del
+# Cestino Immobili (`{detail, code, ...}`: blocchi, storico) - per QUESTE rotte
+# soltanto; `_translate` resta quello che e' per tutte le altre. Il 404 resta
+# la costante D-6.
+# ---------------------------------------------------------------------------
+
+def _translate_trash(callable_, *args, **kwargs):
+    from fastapi.encoders import jsonable_encoder
+
+    from .contact_lifecycle import ContactTrashNotInstalled
+
+    def corpo(http, exc, codice):
+        dati = dict(getattr(exc, "extra", None) or {})
+        dati.update({"detail": str(exc), "code": getattr(exc, "code", None) or codice})
+        return JSONResponse(status_code=http, content=jsonable_encoder(dati))
+
+    try:
+        esito = callable_(*args, **kwargs)
+    except NotFoundError:
+        return JSONResponse(status_code=404, content={"detail": NOT_FOUND_MESSAGE, "code": "NOT_FOUND"})
+    except ContactTrashNotInstalled as exc:
+        return corpo(503, exc, "TRASH_NOT_INSTALLED")
+    except ConflictError as exc:
+        return corpo(409, exc, "CONFLICT")
+    except ValidationError as exc:
+        return corpo(400, exc, "VALIDATION_ERROR")
+    except PermissionDenied as exc:
+        return corpo(403, exc, "FORBIDDEN")
+    except PlatformAdminAgencyRequired:
+        return JSONResponse(status_code=403, content={"detail": AGENCY_CONTEXT_REQUIRED_MESSAGE,
+                                                      "code": "AGENCY_REQUIRED"})
+    return JSONResponse(status_code=200, content=jsonable_encoder(esito))
+
+
+@router.get("/contacts/{contact_id}/deletion-check")
+def contact_deletion_check(contact_id: int, ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.contact_deletion_check, ctx, contact_id)
+
+
+@router.post("/contacts/{contact_id}/trash")
+def trash_contact(contact_id: int, payload: ContactTrash, ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.trash_contact, ctx, contact_id, payload)
+
+
+@router.post("/contacts/{contact_id}/restore")
+def restore_contact(contact_id: int, ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.restore_contact, ctx, contact_id)
+
+
+@router.get("/trash/contacts")
+def list_contact_trash(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    ctx: OperatorContext = Depends(require_operator),
+):
+    return _translate_trash(service.list_contact_trash, ctx, limit, offset)
 
 
 @router.post("/leads", status_code=201)

@@ -210,7 +210,10 @@ def test_s10_nessuna_migration_080():
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
     assert [m for m in migrazioni if m.startswith("089")] == [
         "089_pertinenze_1_unit_nature.sql", "089_pertinenze_1_unit_nature_down.sql"]
-    assert migrazioni[-1] == "089_pertinenze_1_unit_nature_down.sql"
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
+    assert [m for m in migrazioni if m.startswith("090")] == [
+        "090_cestino_contatti_1_contact_trash.sql", "090_cestino_contatti_1_contact_trash_down.sql"]
+    assert migrazioni[-1] == "090_cestino_contatti_1_contact_trash_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

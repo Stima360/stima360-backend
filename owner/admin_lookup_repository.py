@@ -25,7 +25,10 @@ _NOT_FOUND = "Risorsa non trovata"
 
 
 def lookup_contacts(agency_id: int, search: str | None = None, limit: int = 50) -> list[dict]:
-    """Return the minimum CORE contact projection required by OWNER Admin."""
+    """Return the minimum CORE contact projection required by OWNER Admin.
+
+    CESTINO-CONTATTI-1: a contact in the trash is never offered (to_jsonb:
+    valid with or without migration 090)."""
     needle = (search or "").strip()
     with core_cursor() as (_, cur):
         if needle:
@@ -39,6 +42,7 @@ def lookup_contacts(agency_id: int, search: str | None = None, limit: int = 50) 
                 """SELECT id,display_name,email
                    FROM contacts
                    WHERE agency_id=%s AND (display_name ILIKE %s OR email ILIKE %s)
+                     AND (to_jsonb(contacts)->>'deleted_at') IS NULL
                    ORDER BY display_name NULLS LAST,id
                    LIMIT %s""",
                 (agency_id, pattern, pattern, limit),
@@ -48,6 +52,7 @@ def lookup_contacts(agency_id: int, search: str | None = None, limit: int = 50) 
                 """SELECT id,display_name,email
                    FROM contacts
                    WHERE agency_id=%s
+                     AND (to_jsonb(contacts)->>'deleted_at') IS NULL
                    ORDER BY display_name NULLS LAST,id
                    LIMIT %s""",
                 (agency_id, limit),

@@ -28,7 +28,8 @@ def test_m01_la_089_e_l_ultima_valida_per_il_runner_e_additiva():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m089 = tutte[-1]
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 089 non e' piu' l'ultima (090)
+    m089 = next(m for m in tutte if m.version.startswith("089_"))
     assert m089.version == "089_pertinenze_1_unit_nature"
     assert m089.down_available and not m089.non_transactional and runner.validate_migration(m089) == []
     su = _eseguibile(SU)

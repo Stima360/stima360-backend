@@ -36,7 +36,7 @@ from .journey_enums import (
     PAUSED_BY_ENROLLMENT, STEP_MODES, STEP_REASON_CODES, STOP_REASONS, TRIGGER_TYPES,
     choose_stop_reason,
 )
-from .repository import contact_in_scope
+from .repository import contact_in_scope, refuse_if_contact_in_trash
 
 #: Una iscrizione in pausa da piu' di tanto non riprende: si ferma con
 #: `expired_on_resume` (P29-3A.1 §E). Misurato dal `next_action_at`
@@ -191,6 +191,7 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
         repo.require_schema(c)
         agency = ctx.require_agency()
         contact_in_scope(c, ctx, contact_id)
+        refuse_if_contact_in_trash(c, contact_id)          # CESTINO-CONTATTI-1
         journey = repo.select_journey(c, ctx, journey_id)
         if journey["status"] != "active":
             raise ConflictError(f"journey {journey_id} is not active")
@@ -330,6 +331,9 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
     with cursore(cur) as (_, c):
         repo.require_schema(c)
         contact_in_scope(c, ctx, contact_id)
+        # CESTINO-CONTATTI-1: le automazioni di un contatto nel Cestino restano
+        # ferme; si riattivano a mano DOPO il ripristino.
+        refuse_if_contact_in_trash(c, contact_id)
         controllo = repo.set_control_resumed(c, ctx, contact_id, actor_user_id=utente)
         for e in repo.list_open_enrollments_for_contact(c, ctx, contact_id):
             if e["status"] == ENR_PAUSED and e["paused_source"] == PAUSED_BY_CONTACT_CONTROL:

@@ -23,12 +23,14 @@ def test_b01_nessuna_migration_rotte_e_schema():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 e' degli attributi del sito, nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito), nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
-    assert runner.discover_migrations()[-6].version == "084_delete_arch_1a_mistakes"
-    assert runner.discover_migrations()[-5].version == "085_delete_arch_2b1_property_trash"
-    assert runner.discover_migrations()[-4].version == "086_delete_arch_2b2_property_trash_guards"
-    assert runner.discover_migrations()[-3].version == "087_catalogo_canonico_1_site_attributes"
-    assert runner.discover_migrations()[-2].version == "088_catalogo_canonico_1b_site_inbox"
-    assert runner.discover_migrations()[-1].version == "089_pertinenze_1_unit_nature"
+    assert runner.discover_migrations()[-7].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-6].version == "085_delete_arch_2b1_property_trash"
+    assert runner.discover_migrations()[-5].version == "086_delete_arch_2b2_property_trash_guards"
+    assert runner.discover_migrations()[-4].version == "087_catalogo_canonico_1_site_attributes"
+    assert runner.discover_migrations()[-3].version == "088_catalogo_canonico_1b_site_inbox"
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: poi la 090 (Cestino contatti), che ora e' l'ultima.
+    assert runner.discover_migrations()[-2].version == "089_pertinenze_1_unit_nature"
+    assert runner.discover_migrations()[-1].version == "090_cestino_contatti_1_contact_trash"
     from core.router import router
     rotte = {(m, r.path) for r in router.routes for m in r.methods}
     assert ("POST", "/api/core/tasks/{task_id}/mark-mistake") in rotte

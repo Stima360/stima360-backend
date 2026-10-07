@@ -303,6 +303,14 @@ def list_properties(*args, **kwargs):
         """, params)
         return [dict(x) for x in cur.fetchall()]
 
+# CESTINO-CONTATTI-1: un contatto nel Cestino non compare fra i contatti
+# dell'immobile (il collegamento resta, e torna col ripristino). to_jsonb: vale
+# anche su un database senza la migration 090.
+CONTATTI_DELL_IMMOBILE_SQL = ("SELECT pc.*,c.display_name,c.email,c.phone FROM property_contacts pc "
+                              "JOIN contacts c ON c.id=pc.contact_id WHERE pc.property_id=%s "
+                              "AND (to_jsonb(c)->>'deleted_at') IS NULL ORDER BY pc.is_primary DESC,pc.id")
+
+
 def get_property(*args, **kwargs):
     if len(args) == 1:
         ctx = None
@@ -320,7 +328,7 @@ def get_property(*args, **kwargs):
         p = row(cur.fetchone())
         if not p:
             raise NotFoundError(f'property {property_id} not found')
-        cur.execute('SELECT pc.*,c.display_name,c.email,c.phone FROM property_contacts pc JOIN contacts c ON c.id=pc.contact_id WHERE pc.property_id=%s ORDER BY pc.is_primary DESC,pc.id', (property_id,))
+        cur.execute(CONTATTI_DELL_IMMOBILE_SQL, (property_id,))
         p['contacts'] = [dict(x) for x in cur.fetchall()]
         cur.execute("SELECT pl.*,l.pipeline,l.stage,l.status,l.contact_id,to_jsonb(l)->>'lost_reason' AS lost_reason FROM property_leads pl JOIN leads l ON l.id=pl.lead_id WHERE pl.property_id=%s ORDER BY pl.id", (property_id,))
         p['leads'] = [dict(x) for x in cur.fetchall()]

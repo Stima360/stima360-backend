@@ -106,3 +106,99 @@ export function propertyLine(p) {
 export function trashListPath(offset = 0, limit = 50) {
   return `/api/property/trash?limit=${Number(limit)}&offset=${Number(offset)}`;
 }
+
+// ---------------------------------------------------------------------------
+// CESTINO-CONTATTI-1: le stesse traduzioni per i CONTATTI (core/contact_lifecycle.py).
+// Stessi motivi, stessa nota, stessa regola: blocchi, storico e possibili
+// doppioni arrivano dal backend; qui diventano solo frasi e collegamenti.
+// ---------------------------------------------------------------------------
+
+export const CONTACT_HISTORY_REQUIRES_ADMIN_TEXT =
+  'Questo contatto ha uno storico operativo. Serve un amministratore per spostarlo nel Cestino.';
+export const CONTACT_TRASHED_TOAST = 'Contatto spostato nel Cestino';
+export const CONTACT_RESTORED_TOAST = 'Contatto ripristinato';
+
+export const CONTACT_STATUS_LABELS = Object.freeze({ active: 'Attivo', inactive: 'Inattivo', archived: 'Archiviato' });
+
+/** Solo collegamenti interni della Shell («#/...»): mai un indirizzo esterno. */
+function linkInterno(voce, etichetta) {
+  return voce && typeof voce.href === 'string' && voce.href.startsWith('#/')
+    ? { href: voce.href, label: voce.label || etichetta || 'Apri' } : null;
+}
+
+/**
+ * I blocchi del Cestino Contatti come arrivano, con in piu' le VOCI (ogni
+ * record che blocca, con il suo collegamento) e l'eventuale AZIONE proposta
+ * dal backend (oggi: «Disattiva accesso» al portale proprietario).
+ */
+export function contactBlockerView(blockers) {
+  return (Array.isArray(blockers) ? blockers : []).map((b) => {
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (b.code === 'HISTORY_REQUIRES_ADMIN') {
+      return {
+        code: b.code, label: CONTACT_HISTORY_REQUIRES_ADMIN_TEXT, count: null, items: [], link: null, action: null,
+        history: items.map((h) => ({ label: h.label || h.code, count: h.count ?? null })),
+      };
+    }
+    const azione = b.action && b.action.kind === 'owner_account_disable'
+      ? { kind: b.action.kind, accountId: Number(b.action.account_id), allowed: b.action.allowed === true,
+          label: b.action.label || 'Disattiva accesso' }
+      : null;
+    return {
+      code: b.code, label: b.label || b.code, count: items.length || null, history: null,
+      link: b.link ? linkInterno(b.link, 'Apri') : null,
+      items: items.filter((i) => i && i.label).map((i) => ({ label: i.label, link: linkInterno({ href: i.href, label: 'Apri' }) })),
+      action: azione,
+    };
+  });
+}
+
+/** Il messaggio di un errore di deletion-check o di POST .../trash di un contatto. */
+export function contactTrashErrorText(error) {
+  if (!error) return 'Operazione non riuscita.';
+  if (error.code === 'HISTORY_REQUIRES_ADMIN') return CONTACT_HISTORY_REQUIRES_ADMIN_TEXT;
+  if (error.status === 404) return 'Contatto non trovato.';
+  return error.message || 'Operazione non riuscita.';
+}
+
+/** Il nome di un contatto come lo mostra il resto del CRM. */
+export function contactName(c) {
+  if (!c) return '';
+  const persona = [c.first_name, c.last_name].filter(Boolean).join(' ');
+  return c.display_name || persona || c.company_name || `Contatto #${c.id}`;
+}
+
+/** Email e telefono, quando ci sono. */
+export function contactLine(c) {
+  if (!c) return '';
+  return [c.email, c.phone].filter(Boolean).join(' · ');
+}
+
+export function contactTrashListPath(offset = 0, limit = 50) {
+  return `/api/core/trash/contacts?limit=${Number(limit)}&offset=${Number(offset)}`;
+}
+
+/**
+ * Cosa fara' lo spostamento sulle comunicazioni (deletion-check, `effects`):
+ * detto prima della conferma, con i numeri del backend.
+ */
+export function contactEffectsText(effects) {
+  const e = effects || {};
+  const frasi = [];
+  if (e.automations_to_pause) frasi.push('Le automazioni del contatto verranno sospese.');
+  else if (e.automations_already_paused) frasi.push('Le automazioni del contatto sono già sospese.');
+  const n = Number(e.queued_messages) || 0;
+  if (n === 1) frasi.push('1 messaggio in coda verrà annullato.');
+  else if (n > 1) frasi.push(`${n} messaggi in coda verranno annullati.`);
+  return frasi;
+}
+
+/** I possibili doppioni attivi segnalati dal ripristino (nessuna fusione). */
+export function duplicatesView(restored) {
+  const lista = restored && Array.isArray(restored.possible_duplicates) ? restored.possible_duplicates : [];
+  return lista.map((d) => ({
+    id: Number(d.id),
+    name: contactName(d),
+    reason: [d.same_email ? 'stessa email' : null, d.same_phone ? 'stesso telefono' : null].filter(Boolean).join(' e '),
+  }));
+}

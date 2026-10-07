@@ -419,6 +419,13 @@ def _collega_contatto(cur, property_id, contact_id) -> None:
     prova la proprieta', il ruolo di proprietario lo decide l'agente."""
     if contact_id is None:
         return
+    # CESTINO-CONTATTI-1: un contatto nel Cestino non si collega (la guardia
+    # della 090 lo rifiuterebbe e fermerebbe il trasferimento): si salta.
+    cur.execute("SELECT (to_jsonb(c)->>'deleted_at') IS NOT NULL AS nel_cestino FROM contacts c WHERE c.id = %s "
+                "FOR KEY SHARE", (contact_id,))
+    stato = cur.fetchone()
+    if stato is not None and stato["nel_cestino"]:
+        return
     cur.execute("SELECT 1 FROM property_contacts WHERE property_id = %s AND contact_id = %s LIMIT 1",
                 (property_id, contact_id))
     if cur.fetchone() is None:

@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
+from core.contact_trash import ContactInTrash  # CESTINO-CONTATTI-1: stessa forma {detail, code}
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_owner_admin_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
@@ -83,7 +84,7 @@ def x(f, *a, **kw):
         return f(*a, **kw)
     except NotFoundError:
         raise HTTPException(404, "Risorsa non trovata")
-    except PropertyInTrash as exc:                     # DELETE-ARCH 2B2: {detail, code}
+    except (PropertyInTrash, ContactInTrash) as exc:                     # DELETE-ARCH 2B2: {detail, code}
         return trash_409(exc)
     except ConflictError as exc:
         raise HTTPException(409, str(exc))

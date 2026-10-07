@@ -185,7 +185,7 @@ export async function loadCommunications(contactId) {
   };
 }
 
-export function mountCommunications(mount, contactId) {
+export function mountCommunications(mount, contactId, { readOnly = false } = {}) {
   if (!mount) return;
 
   async function ridisegna() {
@@ -195,6 +195,16 @@ export function mountCommunications(mount, contactId) {
     } catch (errore) {
       mount.innerHTML = renderCommunications({ status: 'error', message: errore.message });
     }
+    if (readOnly) soloLettura();
+  }
+
+  // CESTINO-CONTATTI-1: per un contatto nel Cestino lo storico resta
+  // leggibile, ma nessun comando (il backend li rifiuterebbe tutti): niente
+  // pulsanti d'azione, niente «Nuovo messaggio».
+  function soloLettura() {
+    for (const el of Array.from(mount.querySelectorAll('button[data-action]'))) el.remove();
+    for (const el of Array.from(mount.querySelectorAll('[data-new-message]'))) el.remove();
+    mount.insertAdjacentHTML('afterbegin', '<p class="muted" data-comm-readonly>Contatto nel Cestino: automazioni sospese, nessun messaggio nuovo. Si riattivano a mano dopo il ripristino.</p>');
   }
 
   const ROTTE = {

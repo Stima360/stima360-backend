@@ -128,7 +128,8 @@ def test_01_lo_schema_completo_viene_dal_runner_fino_alla_083(completo):
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la cartella arriva alla 087: 60 -> 61 righe di ledger.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la cartella arriva alla 088: 61 -> 62 righe di ledger.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la cartella arriva alla 089: 62 -> 63 righe di ledger.
-    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 63
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la cartella arriva alla 090: 63 -> 64 righe di ledger.
+    assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE rolled_back_at IS NULL")[0][0] == 64
     assert _q(completo, "SELECT count(*) FROM schema_migrations WHERE version = %s AND rolled_back_at IS NULL",
               (VERSIONE,))[0][0] == 1
     assert "~ '^[A-F]/[0-9]{1,2}$'" in _q(completo, "SELECT pg_get_constraintdef(oid) FROM pg_constraint "

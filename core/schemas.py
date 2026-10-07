@@ -258,6 +258,13 @@ class MistakeMark(CoreModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class ContactTrash(CoreModel):
+    """CESTINO-CONTATTI-1: «Sposta nel Cestino» un contatto. Il motivo e'
+    validato sul catalogo dal servizio (400 INVALID_TRASH_REASON)."""
+    reason_code: str = Field(..., max_length=30)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class TaskUpdate(CoreModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None

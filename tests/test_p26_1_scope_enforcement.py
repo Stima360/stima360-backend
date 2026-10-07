@@ -1019,6 +1019,13 @@ FROZEN_CORE_ROUTES = {
     # task e attivita' (scope d'agenzia nel repository, ruolo nel service).
     ("POST", "/api/core/tasks/{task_id}/mark-mistake", 200),
     ("POST", "/api/core/activities/{activity_id}/mark-mistake", 200),
+    # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: il Cestino dei contatti
+    # (stesso impianto del Cestino Immobili). Ogni rotta passa il ctx di
+    # require_operator al service: lo verifica test_cestino_contatti_1.py.
+    ("GET", "/api/core/contacts/{contact_id}/deletion-check", 200),
+    ("POST", "/api/core/contacts/{contact_id}/trash", 200),
+    ("POST", "/api/core/contacts/{contact_id}/restore", 200),
+    ("GET", "/api/core/trash/contacts", 200),
 }
 
 

@@ -5,6 +5,7 @@ from psycopg2 import errors
 from psycopg2.extras import Json
 from core.database import core_cursor
 from core import property_trash as _property_trash
+from core import contact_trash as _contact_trash
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 
 RELEVANT_FIELDS={'budget_min','budget_target','budget_max','budget_flexibility_percent','includes_agency_fees','includes_renovation','finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','surface_min','surface_target','surface_max','rooms_min','bedrooms_min','bathrooms_min','status','urgency','target_purchase_date'}
@@ -410,6 +411,10 @@ def list_requests_scoped(
         filters.append("b.urgency=%s"); params.append(urgency)
     if contact_id:
         filters.append("b.contact_id=%s"); params.append(contact_id)
+    else:
+        # CESTINO-CONTATTI-1: le richieste di un contatto nel Cestino escono
+        # dall'elenco operativo; restano nella scheda del contatto (storico).
+        filters.append(_contact_trash.live("c"))
     if lead_id:
         filters.append("b.lead_id=%s"); params.append(lead_id)
     if assigned_to:
@@ -1139,7 +1144,8 @@ def dashboard_scoped(ctx):
                    ),0) active_target_budget
             FROM buy_requests
             WHERE agency_id=%s
-            """,
+              AND {vivo}
+            """.format(vivo=_contact_trash.live_contact_id("buy_requests.contact_id")),
             (agency_id,),
         )
         kpi = dict(cur.fetchone())
@@ -1149,8 +1155,9 @@ def dashboard_scoped(ctx):
             FROM buy_request_interactions i
             JOIN buy_requests b ON b.id=i.buy_request_id
             WHERE b.agency_id=%s
+              AND {vivo}
             GROUP BY i.interaction_type
-            """,
+            """.format(vivo=_contact_trash.live_contact_id("b.contact_id")),
             (agency_id,),
         )
         kpi["interaction_counts"] = {
@@ -1163,10 +1170,11 @@ def dashboard_scoped(ctx):
             FROM buy_requests b
             JOIN contacts c ON c.id=b.contact_id AND c.agency_id=b.agency_id
             WHERE b.archived_at IS NULL AND b.agency_id=%s
+              AND {vivo}
             ORDER BY CASE WHEN b.next_action_at IS NOT NULL AND b.next_action_at<NOW()
                           THEN 0 ELSE 1 END,
                      b.next_action_at NULLS LAST,b.updated_at DESC LIMIT 12
-            """,
+            """.format(vivo=_contact_trash.live("c")),
             (agency_id,),
         )
         kpi["recent"] = [dict(x) for x in cur.fetchall()]

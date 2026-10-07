@@ -210,7 +210,10 @@ _SELECT_WITH_CONTACT_LABEL_SCOPED = """
            ON c.id = nba.contact_id
           AND c.agency_id = %s
     WHERE nba.agency_id = %s
+      AND (c.id IS NULL OR (to_jsonb(c)->>'deleted_at') IS NULL)
 """
+# CESTINO-CONTATTI-1: l'azione consigliata di un contatto nel Cestino non
+# compare in «Oggi» (to_jsonb: valido anche senza la migration 090).
 
 
 def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:

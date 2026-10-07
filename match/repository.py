@@ -5,6 +5,7 @@ from time import monotonic
 
 from psycopg2.extras import Json
 
+from core import contact_trash as _contact_trash
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ConflictError, ValidationError
 from core.scope import ProgrammingError
@@ -935,6 +936,10 @@ def list_matches_scoped(
     if buy_request_id:
         filters.append("m.buy_request_id=%s")
         params.append(buy_request_id)
+    else:
+        # CESTINO-CONTATTI-1: gli abbinamenti di un acquirente nel Cestino
+        # escono dalla graduatoria; restano nella sua scheda (storico).
+        filters.append(_contact_trash.live("c"))
     if property_id:
         filters.append("m.property_id=%s")
         params.append(property_id)

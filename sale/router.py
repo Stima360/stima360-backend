@@ -5,6 +5,7 @@ from operator_auth.dependencies import audit_actor, legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
+from core.contact_trash import ContactInTrash  # CESTINO-CONTATTI-1: stessa forma {detail, code}
 
 from . import service
 from .schemas import SaleCreate, SaleUpdate
@@ -18,7 +19,7 @@ def translate(function, *args, **kwargs):
         return function(*args, **kwargs)
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except PropertyInTrash as exc:                     # DELETE-ARCH 2B2: {detail, code}
+    except (PropertyInTrash, ContactInTrash) as exc:                     # DELETE-ARCH 2B2: {detail, code}
         return trash_409(exc)
     except ConflictError as exc:
         raise HTTPException(409, str(exc)) from exc

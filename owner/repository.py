@@ -2191,6 +2191,7 @@ SELECT oa.id AS owner_account_id, ct.id AS contact_id, ct.agency_id AS agency_id
  WHERE ct.email_normalized = %s
    AND oa.status <> 'disabled'
    AND ct.agency_id IS NOT NULL
+   AND (to_jsonb(ct)->>'deleted_at') IS NULL
    AND (
         EXISTS (SELECT 1 FROM owner_stima_access x
                   JOIN stime s ON s.id = x.stima_id
