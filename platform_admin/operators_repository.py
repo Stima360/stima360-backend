@@ -69,6 +69,15 @@ OPERATOR_UPDATABLE_COLUMNS = ("first_name", "last_name", "status")
 # I campi di membership che una PATCH puo' scrivere.
 MEMBERSHIP_UPDATABLE_COLUMNS = ("role", "status")
 
+# P27-3: le colonne dell'operatore che hanno lo stesso nome di una colonna
+# della membership (oggi `status`, `created_at`, `updated_at`; `id` resta
+# fuori dalla proiezione dell'elenco). Nell'elenco dell'organico viaggiano con
+# questi alias, perche' in una JOIN piatta il RealDictCursor terrebbe solo
+# l'ultima colonna con quel nome.
+LIST_OPERATOR_ALIASES = {
+    c: f"operator_{c}" for c in OPERATOR_COLUMNS if c != "id" and c in MEMBERSHIP_COLUMNS
+}
+
 _OPERATOR_SELECT = ", ".join(f"u.{c}" for c in OPERATOR_COLUMNS)
 _MEMBERSHIP_SELECT = ", ".join(f"m.{c}" for c in MEMBERSHIP_COLUMNS)
 
@@ -182,8 +191,18 @@ def list_agency_operators(cur, agency_id: int) -> list[dict[str, Any]]:
     Include ogni stato di membership, revocate comprese. Chi guarda l'organico
     di un'agenzia deve vedere anche chi ne e' uscito; filtrare qui renderebbe
     invisibile la differenza fra "non c'e' mai stato" e "non c'e' piu'".
+
+    P27-3, correzione: `id` non era l'unica collisione. `status`, `created_at`
+    e `updated_at` esistono in entrambe le tabelle, e senza alias la riga
+    portava quelli della membership anche come dati dell'operatore (un account
+    attivo appariva «revocato»). Le colonne dell'operatore che collidono
+    arrivano quindi come `operator_<colonna>` (`LIST_OPERATOR_ALIASES`), e
+    `platform_admin.router._agency_operator` le rimette al loro posto.
     """
-    identity = ", ".join(f"u.{c}" for c in OPERATOR_COLUMNS if c != "id")
+    identity = ", ".join(
+        f"u.{c} AS {LIST_OPERATOR_ALIASES[c]}" if c in LIST_OPERATOR_ALIASES else f"u.{c}"
+        for c in OPERATOR_COLUMNS if c != "id"
+    )
     cur.execute(
         f"""
         SELECT {identity}, {_MEMBERSHIP_SELECT}

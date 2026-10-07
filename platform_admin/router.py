@@ -58,7 +58,7 @@ from .exceptions import (
     AliasNotFound,
     TerritoryNotFound,
 )
-from .operators_repository import MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
+from .operators_repository import LIST_OPERATOR_ALIASES, MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
     ActingEnterResponse,
     TerritoryAliasCreateRequest,
@@ -476,12 +476,18 @@ def _agency_operator(row: dict) -> AgencyOperatorResponse:
     """Separa la riga piatta della JOIN nelle due proiezioni.
 
     `list_agency_operators` restituisce identita' e membership sulla stessa
-    riga, e i nomi di colonna non collidono se non su `id`: il RealDictCursor
-    tiene l'ultimo, che e' quello della membership. Le due proiezioni si
-    ricostruiscono quindi per nome, e `operator.id` si prende da
-    `operator_user_id`, che la membership porta con se'.
+    riga. `operator.id` si prende da `operator_user_id`, che la membership
+    porta con se' (`u.id` non e' nella proiezione). Le altre colonne
+    dell'operatore che hanno lo stesso nome di una della membership (`status`,
+    `created_at`, `updated_at`) arrivano con l'alias di
+    `LIST_OPERATOR_ALIASES` e qui tornano al loro nome (P27-3): la forma della
+    risposta non cambia, cambia solo che l'account non porta piu' i valori del
+    rapporto con l'agenzia.
     """
-    operator = {key: row[key] for key in OPERATOR_COLUMNS if key != "id"}
+    operator = {
+        key: row[LIST_OPERATOR_ALIASES.get(key, key)]
+        for key in OPERATOR_COLUMNS if key != "id"
+    }
     operator["id"] = row["operator_user_id"]
     membership = {key: row[key] for key in MEMBERSHIP_COLUMNS}
     return AgencyOperatorResponse(

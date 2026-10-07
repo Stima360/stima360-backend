@@ -288,6 +288,72 @@ def test_a8_the_repository_deletes_nothing():
     assert not any("delete" in name for name in functions), functions
 
 
+class ProjectingCursor:
+    """Un cursore che risponde come un RealDictCursor VERO alla SELECT che il
+    repository ha appena eseguito: legge la proiezione (`u.colonna [AS nome]`,
+    `m.colonna [AS nome]`) e compone ogni riga in quell'ordine, con
+    l'ultima colonna che vince su un nome ripetuto - esattamente cio' che fa
+    psycopg2. Nessun dato viene scelto qui: la forma della riga la decide
+    solo la SQL del repository."""
+
+    def __init__(self, pairs):
+        self._pairs = list(pairs)        # [(riga operator_users, riga agency_memberships)]
+        self.sql = ""
+
+    def execute(self, sql, params=None):
+        self.sql = " ".join(str(sql).split())
+
+    def fetchall(self):
+        import re
+        projection = re.search(r"SELECT (.*?) FROM ", self.sql, re.S).group(1)
+        items = []
+        for item in (part.strip() for part in projection.split(",")):
+            found = re.fullmatch(r"(u|m)\.(\w+)(?:\s+AS\s+(\w+))?", item, re.I)
+            assert found, f"proiezione inattesa: {item!r}"
+            table, column, alias = found.groups()
+            items.append((table, column, alias or column))
+        rows = []
+        for operator, membership in self._pairs:
+            source = {"u": operator, "m": membership}
+            rows.append(dict((name, source[table][column]) for table, column, name in items))
+        return rows
+
+
+def test_a9_the_roster_keeps_the_operator_apart_from_its_membership():
+    """P27-3: `operator_users` e `agency_memberships` hanno entrambe `status`,
+    `created_at` e `updated_at`. Senza alias il RealDictCursor teneva quelli
+    della membership, e l'elenco diceva «revocato» per un account attivo.
+
+    La riga passa per la SQL VERA del repository e per il router VERO, e la
+    risposta deve tenere distinti account e rapporto con l'agenzia."""
+    from platform_admin.router import _agency_operator
+
+    a = datetime(2026, 2, 1, 8, 0, tzinfo=timezone.utc)
+    b = datetime(2026, 10, 7, 13, 49, tzinfo=timezone.utc)
+    c = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    d = datetime(2026, 9, 22, 7, 36, tzinfo=timezone.utc)
+    operator = dict(OPERATOR_ROW, status="active", created_at=a, updated_at=b, last_login_at=b)
+    membership = dict(MEMBERSHIP_ROW, status="revoked", created_at=c, updated_at=d)
+
+    rows = operators_repository.list_agency_operators(
+        ProjectingCursor([(operator, membership)]), AGENCY_A
+    )
+    response = _agency_operator(rows[0]).model_dump()
+
+    assert response["operator"]["status"] == "active"
+    assert response["operator"]["created_at"] == a
+    assert response["operator"]["updated_at"] == b
+    assert response["membership"]["status"] == "revoked"
+    assert response["membership"]["created_at"] == c
+    assert response["membership"]["updated_at"] == d
+    # stessa forma pubblica di prima: le due proiezioni, con i loro campi
+    assert set(response) == {"operator", "membership"}
+    assert set(response["operator"]) == set(operators_repository.OPERATOR_COLUMNS)
+    assert set(response["membership"]) == set(operators_repository.MEMBERSHIP_COLUMNS)
+    assert response["operator"]["id"] == operator["id"]
+    assert response["membership"]["id"] == membership["id"]
+
+
 def _sql_literals(tree: ast.Module) -> list[str]:
     """Le stringhe eseguibili, senza i docstring - che nominano di proposito
     cio' da cui il modulo si tiene lontano."""
@@ -518,7 +584,12 @@ def service(monkeypatch):
             if m["agency_id"] != agency_id:
                 continue
             u = store.operators[m["operator_user_id"]]
-            row = {k: u[k] for k in operators_repository.OPERATOR_COLUMNS if k != "id"}
+            # P27-3: la stessa forma della SQL vera, alias compresi. Prima il
+            # finto faceva `row.update(m)` sopra i campi dell'operatore e
+            # riproduceva la collisione invece di farla vedere.
+            aliases = operators_repository.LIST_OPERATOR_ALIASES
+            row = {aliases.get(k, k): u[k] for k in operators_repository.OPERATOR_COLUMNS if k != "id"}
+            assert not set(row) & set(m), "il finto non deve sovrascrivere l'operatore"
             row.update(m)
             out.append(row)
         return out
@@ -1457,6 +1528,23 @@ def test_g2_list_returns_the_agency_roster_with_correct_identities(client):
     for row in rows:
         assert row["operator"]["id"] == row["membership"]["operator_user_id"]
         assert row["operator"]["id"] != row["membership"]["id"]
+
+
+def test_g2_the_roster_shows_the_account_status_not_the_membership_status(client):
+    """P27-3: account disabilitato, membership ancora attiva. L'elenco deve
+    dire «disabilitato» per l'account e «attiva» per la membership - e' il
+    dato da cui il dialogo «Accesso» di Rete parte."""
+    created = _http_create(client).json()
+    operator_id = created["operator"]["id"]
+    assert client.patch(
+        f"{ROUTER_PREFIX}/operators/{operator_id}", json={"status": "disabled"}
+    ).status_code == 200
+    row = client.get(OPERATORS_A).json()[0]
+    assert row["operator"]["status"] == "disabled"
+    assert row["membership"]["status"] == "active"
+    assert set(row) == {"operator", "membership"}
+    assert set(row["operator"]) == set(created["operator"])
+    assert set(row["membership"]) == set(created["membership"])
 
 
 def test_g2_get_operator_returns_every_membership(client):
