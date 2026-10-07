@@ -205,11 +205,15 @@ def test_07_pertinenze_per_relazione_reale_non_per_indirizzo(mondo):
     assert sb["census_summary"]["units_pertinenze"] == 1
     assert sb["units"][0]["parent"] == {"id": principale["id"], "code": principale["code"], "same_building": False}
     assert sciolto["building_id"] is None
-    # scollegata, resta nella sua palazzina come unita' senza principale (dato preservato)
+    # scollegata, resta nella sua palazzina senza principale (dato preservato).
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: con la 089 resta una PERTINENZA
+    # «da collegare» (prima tornava a contare come principale: la natura si
+    # perdeva con il collegamento). Censite invariate, nessun doppio conteggio.
     assert m["api"]().post(f"/api/property/properties/{principale['id']}/pertinenze/{di_fronte['id']}/unlink").status_code == 200
     sb = _scheda(m, b["id"])
-    assert (sb["census_summary"]["units_main"], sb["census_summary"]["units_pertinenze"]) == (1, 0)
-    assert sb["units"][0]["parent"] is None
+    assert (sb["census_summary"]["units_main"], sb["census_summary"]["units_pertinenze"],
+            sb["census_summary"]["units_pertinenze_unlinked"], sb["census_summary"]["units_counted"]) == (0, 1, 1, 1)
+    assert sb["units"][0]["parent"] is None and sb["units"][0]["is_pertinenza"] is True
 
 
 def test_08_immobili_autonomi_e_scheda_immobile_con_l_edificio(mondo):

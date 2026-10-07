@@ -19,10 +19,12 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as censusApi from './census-api.js';
 import {
-  bindSectionField, openAccessorySheet, openCategoryPicker, openLinkExistingSheet, openPertinenzaSheet, openResolveSheet,
-  openTakeInChargeDialog, sectionFieldHtml, showToast,
+  bindSectionField, openAccessorySheet, openCategoryPicker, openLinkExistingSheet, openLinkPrincipalSheet, openPertinenzaSheet,
+  openResolveSheet, openTakeInChargeDialog, sectionFieldHtml, showToast,
 } from './census-sheets.js';
-import { errorMessage as censusErrorMessage, labelOf, sectionLabel } from './census-model.js';
+import {
+  errorMessage as censusErrorMessage, fromAccessoryText, labelOf, pertinenzaKindLabel, sectionLabel,
+} from './census-model.js';
 import { renderSiteProvenance } from './site-provenance.js';
 
 /**
@@ -62,6 +64,12 @@ export async function renderPropertyCensusTab(el, ctx) {
   ];
   const edificio = censimento.building;
   const genitore = censimento.parent;
+  // PERTINENZE-1: la natura della scheda, indipendente dal collegamento
+  const pertinenza = censimento.is_pertinenza === true || !!genitore;
+  const daCollegare = censimento.pertinenza_unlinked === true;
+  const tipoPertinenza = pertinenzaKindLabel(censimento, kinds);
+  const provenienza = fromAccessoryText(censimento.from_accessory, kinds);
+  const confermaScollega = genitore && linkConfirm.has(`parent:${genitore.id}`);
   el.innerHTML = `
     <div class="census-tab">
       ${isCensus() ? `<div class="census-banner" data-census-state><strong>Scheda in censimento</strong> — senza proprietario, incarico o stato commerciale. Per lavorarla commercialmente usa «Prendi in carico» (stessa scheda, stesso codice).
@@ -71,21 +79,25 @@ export async function renderPropertyCensusTab(el, ctx) {
       <div class="detail-grid">
         <div class="detail-item"><label>Palazzina</label>${edificio ? `<a href="#/edifici/${escapeHtml(edificio.id)}" id="census-open-building">${escapeHtml(edificio.name || [edificio.address, edificio.civic_number].filter(Boolean).join(' ') || `#${edificio.id}`)}</a>` : '—'}</div>
         <div class="detail-item"><label>Indirizzo</label>${escapeHtml(censimento.address_inherited ? 'Ereditato dalla palazzina' : 'Proprio')}</div>
-        <div class="detail-item"><label>Unità principale</label>${genitore ? `<a href="#/immobili/${escapeHtml(genitore.id)}" id="census-open-parent">${escapeHtml(genitore.code || `#${genitore.id}`)}</a>${genitore.archived_at ? ' <small class="muted">(archiviata)</small>' : ''}` : '—'}</div>
+        <div class="detail-item"><label>Natura</label><span id="census-nature">${escapeHtml(pertinenza ? `Pertinenza autonoma${tipoPertinenza ? ` · ${tipoPertinenza}` : ''}` : 'Unità principale')}</span></div>
+        <div class="detail-item"><label>Unità principale</label>${genitore ? `<a href="#/immobili/${escapeHtml(genitore.id)}" id="census-open-parent">${escapeHtml(genitore.code || `#${genitore.id}`)}</a>${genitore.archived_at ? ' <small class="muted">(archiviata)</small>' : ''}${genitore.same_building === false ? ' <small class="muted">(in un altro edificio)</small>' : ''}` : (daCollegare ? `${renderBadge('Da collegare', 'warn')}` : '—')}</div>
         <div class="detail-item"><label>Piano · scala · interno</label>${escapeHtml([property.floor, property.staircase ? `scala ${property.staircase}` : null, property.internal_number ? `int. ${property.internal_number}` : null].filter(Boolean).join(' · ') || '—')}</div>
       </div>
+      ${provenienza ? `<p class="muted census-provenance" id="census-from-accessory">${escapeHtml(provenienza)}</p>` : ''}
+      ${daCollegare ? '<div class="action-bar"><button type="button" class="btn primary" id="census-link-principal">Collega a un’unità principale</button></div>' : ''}
+      ${genitore ? `<div class="action-bar"><button type="button" class="btn ghost btn-small${confermaScollega ? ' danger' : ''}" id="census-unlink-self">${confermaScollega ? 'Confermi lo scollegamento? Resta una pertinenza da collegare' : `Scollega da ${escapeHtml(genitore.code || `#${genitore.id}`)}`}</button></div>` : ''}
       <h3 class="section-title">Dati catastali</h3>
       <div class="detail-grid">${catasto.map(([l, v]) => `<div class="detail-item"><label>${escapeHtml(l)}</label>${escapeHtml(v === null || v === undefined || v === '' ? '—' : v)}</div>`).join('')}</div>
       <div class="action-bar"><button type="button" class="btn ghost" id="census-edit-cadastral">Modifica dati catastali</button></div>
       <div id="census-cadastral-form" hidden></div>
-      <h3 class="section-title">Pertinenze collegate</h3>
-      ${censimento.pertinenze.length ? `<ul class="census-list">${censimento.pertinenze.map((x) => `<li class="census-list-item" data-pertinenza-id="${escapeHtml(x.id)}"><a href="#/immobili/${escapeHtml(x.id)}"><strong>${escapeHtml(x.code || `#${x.id}`)}</strong></a> <span class="muted">${escapeHtml([labelOf(tipi, x.property_type, x.property_type), x.surface_sqm ? `${x.surface_sqm} m²` : null, x.cadastral_category || 'Da verificare'].filter(Boolean).join(' · '))}</span> <button type="button" class="btn ghost btn-small${linkConfirm.has(x.id) ? ' danger' : ''}" data-unlink="${escapeHtml(x.id)}">${linkConfirm.has(x.id) ? 'Confermi lo scollegamento?' : 'Scollega'}</button></li>`).join('')}</ul>` : '<p class="muted">Nessuna pertinenza collegata.</p>'}
+      ${pertinenza ? '' : `<h3 class="section-title">Pertinenze collegate</h3>
+      ${censimento.pertinenze.length ? `<ul class="census-list">${censimento.pertinenze.map((x) => `<li class="census-list-item" data-pertinenza-id="${escapeHtml(x.id)}"><a href="#/immobili/${escapeHtml(x.id)}"><strong>${escapeHtml(x.code || `#${x.id}`)}</strong></a> <span class="muted">${escapeHtml([pertinenzaKindLabel(x, kinds) || labelOf(tipi, x.property_type, x.property_type), x.surface_sqm ? `${x.surface_sqm} m²` : null, x.cadastral_subunit ? `sub ${x.cadastral_subunit}` : null, x.cadastral_category || 'Da verificare', x.same_building === false ? 'in un altro edificio' : null].filter(Boolean).join(' · '))}</span> <button type="button" class="btn ghost btn-small${linkConfirm.has(x.id) ? ' danger' : ''}" data-unlink="${escapeHtml(x.id)}">${linkConfirm.has(x.id) ? 'Confermi lo scollegamento?' : 'Scollega'}</button></li>`).join('')}</ul>` : '<p class="muted">Nessuna pertinenza collegata.</p>'}
       <div class="action-bar">
         <button type="button" class="btn primary" id="census-add-pertinenza">+ Aggiungi pertinenza</button>
         <button type="button" class="btn ghost" id="census-link-existing">Collega esistente</button>
-      </div>
+      </div>`}
       <h3 class="section-title">Accessori${censimento.accessories_unknown ? ` · ${escapeHtml(String(censimento.accessories_unknown))} da chiarire` : ''}</h3>
-      ${censimento.accessories.length ? `<ul class="census-list">${censimento.accessories.map((a) => `<li class="census-list-item" data-accessory-id="${escapeHtml(a.id)}"><strong>${escapeHtml(labelOf(kinds, a.kind, a.kind))}</strong> <span class="muted">${escapeHtml([a.quantity ? `× ${a.quantity}` : null, a.surface_sqm ? `${a.surface_sqm} m²` : null, a.notes].filter(Boolean).join(' · '))}</span> ${a.cadastral_status === 'unknown' ? renderBadge('Da chiarire', 'warn') : renderBadge('Compreso', 'gray')}${a.source === 'stima360' ? ` ${renderBadge('Dal sito', 'gray')}` : ''} ${a.cadastral_status === 'unknown' ? `<button type="button" class="btn btn-small" data-resolve="${escapeHtml(a.id)}">Chiarisci</button>` : ''}<button type="button" class="btn ghost btn-small" data-edit-accessory="${escapeHtml(a.id)}">Modifica</button></li>`).join('')}</ul>` : '<p class="muted">Nessun accessorio. Gli accessori compresi non contano mai come unità.</p>'}
+      ${censimento.accessories.length ? `<ul class="census-list">${censimento.accessories.map((a) => `<li class="census-list-item" data-accessory-id="${escapeHtml(a.id)}"><strong>${escapeHtml(labelOf(kinds, a.kind, a.kind))}</strong> <span class="muted">${escapeHtml([a.quantity ? `× ${a.quantity}` : null, a.surface_sqm ? `${a.surface_sqm} m²` : null, a.notes].filter(Boolean).join(' · '))}</span> ${a.cadastral_status === 'unknown' ? renderBadge('Da chiarire', 'warn') : renderBadge('Compreso', 'gray')}${a.source === 'stima360' ? ` ${renderBadge('Dal sito', 'gray')}` : ''} ${a.cadastral_status === 'unknown' ? `<button type="button" class="btn btn-small" data-resolve="${escapeHtml(a.id)}">Chiarisci</button>` : (pertinenza ? '' : `<button type="button" class="btn ghost btn-small" data-resolve="${escapeHtml(a.id)}" data-review>Ha un suo sub?</button>`)}<button type="button" class="btn ghost btn-small" data-edit-accessory="${escapeHtml(a.id)}">Modifica</button></li>`).join('')}</ul>` : '<p class="muted">Nessun accessorio. Gli accessori compresi non contano mai come unità.</p>'}
     </div>`;
 
   // CATALOGO-CANONICO-1: «Dal sito Stima360» (stime, valori dichiarati, da
@@ -108,14 +120,33 @@ export async function renderPropertyCensusTab(el, ctx) {
       showToast(container, { text: censusErrorMessage(error) });
     }
   });
-  el.querySelector('#census-add-pertinenza').addEventListener('click', () => openPertinenzaSheet(dialogEl, {
+  // PERTINENZE-1: collegamento e scollegamento anche dal lato della pertinenza
+  const collegaPrincipale = el.querySelector('#census-link-principal');
+  if (collegaPrincipale) collegaPrincipale.addEventListener('click', () => openLinkPrincipalSheet(dialogEl, {
+    options: opzioni, property, candidates: censimento.link_candidates || [],
+    onLinked: async (esito) => {
+      showToast(container, { text: `${property.code || 'Pertinenza'} collegata a ${esito && esito.property_id ? `#${esito.property_id}` : 'un’unità'}.` });
+      await ricarica();
+    },
+  }));
+  const scollegaSe = el.querySelector('#census-unlink-self');
+  if (scollegaSe) scollegaSe.addEventListener('click', async () => {
+    const chiave = `parent:${genitore.id}`;
+    if (!linkConfirm.has(chiave)) { linkConfirm.add(chiave); await showTab('censimento'); return; }
+    linkConfirm.delete(chiave);
+    try { await censusApi.unlinkPertinenza(genitore.id, property.id); } catch (error) { showToast(container, { text: censusErrorMessage(error) }); }
+    await ricarica();
+  });
+  const aggiungi = el.querySelector('#census-add-pertinenza');
+  if (aggiungi) aggiungi.addEventListener('click', () => openPertinenzaSheet(dialogEl, {
     options: opzioni, property, building: censimento.building,          // R2: la pertinenza resta nella palazzina
     onSaved: async (esito) => {
       showToast(container, { text: esito.kind === 'pertinenza' ? `${esito.unit.code || 'Pertinenza'} collegata a ${property.code || 'questa scheda'}.` : (esito.accessory.cadastral_status === 'unknown' ? 'Accessorio salvato: da chiarire.' : 'Accessorio compreso salvato.') });
       await ricarica();
     },
   }));
-  el.querySelector('#census-link-existing').addEventListener('click', () => openLinkExistingSheet(dialogEl, { property, onLinked: ricarica }));
+  const collegaEsistente = el.querySelector('#census-link-existing');
+  if (collegaEsistente) collegaEsistente.addEventListener('click', () => openLinkExistingSheet(dialogEl, { property, onLinked: ricarica }));
   el.querySelectorAll('[data-unlink]').forEach((b) => b.addEventListener('click', async () => {
     const id = Number(b.dataset.unlink);
     if (!linkConfirm.has(id)) { linkConfirm.add(id); await showTab('censimento'); return; }

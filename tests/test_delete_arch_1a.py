@@ -47,13 +47,15 @@ def test_m01_la_084_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: poi la 086.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 087.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito), che ora e' l'ultima.
-    assert tutte[-3].version == "086_delete_arch_2b2_property_trash_guards"
-    assert tutte[-2].version == "087_catalogo_canonico_1_site_attributes"
-    assert tutte[-4].version == "085_delete_arch_2b1_property_trash"
-    assert tutte[-5].version == VERSIONE and tutte[-6].version == "083_censimento_1_buildings_units"
-    assert tutte[-5].down_available and not tutte[-5].non_transactional
-    assert runner.validate_migration(tutte[-5]) == []
-    assert tutte[-1].version == "088_catalogo_canonico_1b_site_inbox"
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
+    assert tutte[-4].version == "086_delete_arch_2b2_property_trash_guards"
+    assert tutte[-3].version == "087_catalogo_canonico_1_site_attributes"
+    assert tutte[-5].version == "085_delete_arch_2b1_property_trash"
+    assert tutte[-6].version == VERSIONE and tutte[-7].version == "083_censimento_1_buildings_units"
+    assert tutte[-6].down_available and not tutte[-6].non_transactional
+    assert runner.validate_migration(tutte[-6]) == []
+    assert tutte[-2].version == "088_catalogo_canonico_1b_site_inbox"
+    assert tutte[-1].version == "089_pertinenze_1_unit_nature"
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)
     assert re.search(r"^\s*BEGIN\s*;", GIU, re.M) and re.search(r"^\s*COMMIT\s*;", GIU, re.M)
     assert "schema_migrations" not in GIU

@@ -21,6 +21,11 @@
 //   POST  /api/property/properties/{id}/undo-create  (toast «Annulla»)
 //   POST  /api/property/properties/{id}/archive      -> Archivia (DELETE-ARCH Fase 0)
 // Nessun totale di superficie della palazzina (REV 3.1 §0 p.3).
+//
+// PERTINENZE-1: «+ Pertinenza» censisce una pertinenza autonoma (subalterno
+// proprio) collegandola subito a un'unita' o «da collegare dopo»; il pannello
+// «Pertinenze» le mostra dalle relazioni reali, collegate (con la loro
+// principale, anche in un altro edificio) e da collegare (con «Collega a…»).
 
 import { apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
@@ -28,10 +33,10 @@ import { getSession } from '../core/auth.js';
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
-import { openBuildingSheet, openUnitSheet, showToast } from '../census/census-sheets.js';
+import { openBuildingSheet, openLinkPrincipalSheet, openUnitSheet, showToast } from '../census/census-sheets.js';
 import {
-  buildingStreet, buildingTitle, createdToastText, duplicateSeed, errorMessage, groupUnitsByFloor, labelOf,
-  summaryView, unitFacts, unitRelationText, unitRowBadges,
+  buildingPertinenze, buildingStreet, buildingTitle, createdToastText, duplicateSeed, errorMessage, groupUnitsByFloor, labelOf,
+  principalCandidates, summaryView, unitFacts, unitRelationText, unitRowBadges,
 } from '../census/census-model.js';
 import { STATUS_LABELS, canManagePropertyLifecycle } from './immobile-dettaglio.js';
 
@@ -84,6 +89,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       <div class="census-add-bar">
         <button type="button" class="btn primary" id="unit-add-apartment">+ Aggiungi unità</button>
         <button type="button" class="btn" id="unit-add-other">Altro tipo…</button>
+        <button type="button" class="btn" id="unit-add-pertinenza">+ Pertinenza</button>
       </div>
       ${modo === 'crm' ? '<p class="muted census-kind-note" id="unit-add-mode" data-record-kind="crm">Le unità che aggiungi ora nascono come schede commerciali (procedura da Immobili).</p>' : ''}
       <div id="unit-saved-bar" class="census-banner census-saved-bar" hidden></div>
@@ -91,6 +97,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       <div id="building-units"></div>
       <div id="building-archived"></div>
     </div>
+    <div class="card panel census-pertinenze-panel" id="building-pertinenze"></div>
     <dialog id="building-sheet" class="modal census-sheet"></dialog>
     <dialog id="unit-sheet" class="modal census-sheet"></dialog>
   `;
@@ -99,6 +106,8 @@ export async function renderEdificioDettaglio(container, params = []) {
   const unitsEl = container.querySelector('#building-units');
   const archivedEl = container.querySelector('#building-archived');
   const tipi = opzioni.property_types || [];
+  const kinds = opzioni.accessory_kinds || [];
+  const pertinenzeEl = container.querySelector('#building-pertinenze');
   const sessione = getSession();
 
   function renderHeader() {
@@ -146,7 +155,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     return `
           <div class="census-unit-row" data-unit-id="${escapeHtml(u.id)}">
             <a class="census-unit-main" href="#/immobili/${escapeHtml(u.id)}" data-open-unit="${escapeHtml(u.id)}">
-              <strong>${escapeHtml(u.code || `#${u.id}`)}</strong> <span>${escapeHtml(unitFacts(u, tipi))}</span>
+              <strong>${escapeHtml(u.code || `#${u.id}`)}</strong> <span>${escapeHtml(unitFacts(u, tipi, kinds))}</span>
               <span class="building-unit-meta muted">${escapeHtml([statoUnita(u), relazione].filter(Boolean).join(' · '))}</span>
               <span class="badge-row">${unitRowBadges(u).map((b) => renderBadge(b.text, b.tone)).join(' ')}${u.address_inherited === false ? renderBadge('Ingresso proprio', 'gray') : ''}${archiviata ? renderBadge('Archiviata', 'gray') : ''}</span>
             </a>${azioni}
@@ -195,6 +204,44 @@ export async function renderEdificioDettaglio(container, params = []) {
     }));
   }
 
+  // PERTINENZE-1: le pertinenze della palazzina, dalle relazioni reali
+  function renderPertinenze() {
+    const { linked, unlinked } = buildingPertinenze(edificio.units || []);
+    if (!linked.length && !unlinked.length) {
+      pertinenzeEl.innerHTML = '<h3 class="section-title">Pertinenze</h3><p class="muted">Nessuna pertinenza autonoma censita. Garage, cantine e posti auto con un loro subalterno si aggiungono con «+ Pertinenza»; quelli compresi restano accessori dell’unità.</p>';
+      return;
+    }
+    const riga = (u, azione) => `
+      <li class="census-list-item" data-pertinenza-row="${escapeHtml(u.id)}">
+        <a href="#/immobili/${escapeHtml(u.id)}" data-open-unit="${escapeHtml(u.id)}"><strong>${escapeHtml(u.code || `#${u.id}`)}</strong></a>
+        <span class="muted">${escapeHtml(unitFacts(u, tipi, kinds))}</span>
+        ${azione}
+      </li>`;
+    pertinenzeEl.innerHTML = `
+      <h3 class="section-title">Pertinenze</h3>
+      <h4 class="census-subtitle">Collegate a un’unità (${linked.length})</h4>
+      ${linked.length ? `<ul class="census-list" data-pertinenze-linked>${linked.map((u) => riga(u, u.parent
+        ? `<span class="muted">→ <a href="#/immobili/${escapeHtml(u.parent.id)}" data-open-unit="${escapeHtml(u.parent.id)}">${escapeHtml(u.parent.code || `#${u.parent.id}`)}</a>${u.parent.same_building ? '' : ' (in un altro edificio)'}</span>`
+        : '<span class="muted">→ unità principale non disponibile</span>')).join('')}</ul>` : '<p class="muted">Nessuna.</p>'}
+      <h4 class="census-subtitle">Da collegare (${unlinked.length})</h4>
+      ${unlinked.length ? `<ul class="census-list" data-pertinenze-unlinked>${unlinked.map((u) => riga(u, `<button type="button" class="btn btn-small" data-link-pertinenza="${escapeHtml(u.id)}">Collega a…</button>`)).join('')}</ul>` : '<p class="muted">Nessuna: tutte le pertinenze sono collegate.</p>'}`;
+    pertinenzeEl.querySelectorAll('[data-open-unit]').forEach((a) => a.addEventListener('click', (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      navigate('immobili', [a.dataset.openUnit]);
+    }));
+    pertinenzeEl.querySelectorAll('[data-link-pertinenza]').forEach((b) => b.addEventListener('click', () => {
+      const u = unlinked.find((x) => String(x.id) === b.dataset.linkPertinenza);
+      if (!u) return;
+      openLinkPrincipalSheet(unitSheet, {
+        options: opzioni, property: u, candidates: principalCandidates(edificio.units || [], u.id),
+        onLinked: async () => {
+          showToast(container, { text: `${u.code || 'Pertinenza'} collegata.` });
+          await ricarica();
+        },
+      });
+    }));
+  }
+
   async function ricarica() {
     try {
       edificio = await api.getBuilding(edificio.id);
@@ -204,6 +251,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     }
     renderHeader();
     renderUnits();
+    renderPertinenze();
   }
 
   // S3 -> S5: il foglio, poi il toast con «Annulla» (undo-create) e la
@@ -226,9 +274,11 @@ export async function renderEdificioDettaglio(container, params = []) {
     });
   }
 
-  function apriFoglio(seed) {
+  function apriFoglio(seed, pertinenza = null) {
     openUnitSheet(unitSheet, {
       options: opzioni, building: edificio, seed, lastFloor, recordKind: modo,
+      // PERTINENZE-1: pertinenza autonoma, collegata subito o da collegare
+      pertinenza: pertinenza ? { kind: pertinenza.kind || '', principals: principalCandidates(edificio.units || []) } : null,
       onSaved: async (unita, { another, floor }) => {
         lastFloor = floor || lastFloor;
         ultimaSalvata = unita;
@@ -250,12 +300,16 @@ export async function renderEdificioDettaglio(container, params = []) {
         });
         // R4: la prossima riparte da cio' che e' stato DAVVERO salvato
         // (tipologia, piano, scala della riga creata), non dal seme iniziale
-        if (another) apriFoglio({ property_type: unita.property_type || seed.property_type || 'apartment', floor: unita.floor || lastFloor, staircase: unita.staircase || '' });
+        if (another) {
+          apriFoglio({ property_type: unita.property_type || seed.property_type || 'apartment', floor: unita.floor || lastFloor, staircase: unita.staircase || '' },
+            pertinenza ? { kind: unita.pertinenza_kind || pertinenza.kind || '' } : null);
+        }
       },
     });
   }
 
   container.querySelector('#unit-add-apartment').addEventListener('click', () => apriFoglio({ property_type: 'apartment' }));
+  container.querySelector('#unit-add-pertinenza').addEventListener('click', () => apriFoglio({ property_type: 'garage', floor: lastFloor }, { kind: '' }));
   const chips = container.querySelector('#unit-type-chips');
   chips.innerHTML = tipi.filter((t) => t.value !== 'apartment').map((t) => `<button type="button" class="chip" data-add-type="${escapeHtml(t.value)}">${escapeHtml(t.label)}</button>`).join('');
   container.querySelector('#unit-add-other').addEventListener('click', () => { chips.hidden = !chips.hidden; });
@@ -275,6 +329,7 @@ export async function renderEdificioDettaglio(container, params = []) {
 
   renderHeader();
   renderUnits();
+  renderPertinenze();
   if (dallaProcedura) {
     // l'indirizzo torna quello della scheda: un ricaricamento non riapre il foglio
     if (window.history && typeof window.history.replaceState === 'function') {

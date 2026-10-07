@@ -497,7 +497,8 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 (guardie del Cestino Immobili), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito, provenienza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito, colonne della dettagliata), additiva, e' ora l'ultima.
-    assert numeri[-1] == 88 and numeri[-2] == 87 and numeri[-3] == 86 and numeri[-4] == 85 and numeri[-5] == 84 and numeri[-6] == 83 and numeri[-7] == 82 and numeri[-8] == 81 and numeri[-9] == 80 and numeri[-10] == 79 and numeri[-11] == 78 and numeri[-12] == 77 and numeri[-13] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
+    assert numeri[-1] == 89 and numeri[-2] == 88 and numeri[-3] == 87 and numeri[-4] == 86 and numeri[-5] == 85 and numeri[-6] == 84 and numeri[-7] == 83 and numeri[-8] == 82 and numeri[-9] == 81 and numeri[-10] == 80 and numeri[-11] == 79 and numeri[-12] == 78 and numeri[-13] == 77 and numeri[-14] == 76, numeri[-4:]
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):

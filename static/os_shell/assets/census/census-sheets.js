@@ -9,8 +9,11 @@
 //   S4  (dentro S3)            pertinenza «Si'»), con il foglio della categoria
 //   S6                         catastale e «Duplica» come precompilazione
 //   S5  showToast              «IMM-412 · 2º piano aggiunta — Annulla» (undo-create)
-//   S7  openPertinenzaSheet    «E' un'unita' catastale separata? Si' / No / Non lo so»
+//   S7  openPertinenzaSheet    «E' un'unita' catastale separata? Si' / No / Da verificare»
+//                              (PERTINENZE-1: tipo, mq e quantita' prima della risposta)
 //       openLinkExistingSheet  «Collega esistente» (ricerca immobili + link)
+//       openLinkPrincipalSheet PERTINENZE-1: «Collega a un'unita' principale» dalla
+//                              pertinenza (prima le principali della stessa palazzina)
 //       openResolveSheet       «Chiarisci › E' separata (crea / collega) · E' compresa»
 //       openAccessorySheet     modifica / elimina accessorio
 //       openTakeInChargeDialog «Porti IMM-412 nel lavoro commerciale? ☑ pertinenze»
@@ -43,8 +46,8 @@ import { provincesOf, municipalitiesOf, microzonesOf, cascadeLocation } from '..
 import * as api from './census-api.js';
 import {
   FLOOR_CHIPS, SECTION_MODES, buildBuildingPayload, buildUnitPayload, categoryGroups, errorMessage, filterCategories,
-  labelOf, propagationConfirmText, recoveredText, sameUnitBody, sectionMode, similarText, suggestionsFor,
-  uncertainText, unitPatchDiff,
+  labelOf, pertinenzaPropertyType, propagationConfirmText, recoveredText, sameUnitBody, sectionMode, similarText,
+  suggestionsFor, uncertainText, unitFacts, unitPatchDiff,
 } from './census-model.js';
 
 const str = (v) => (v === null || v === undefined ? '' : String(v));
@@ -380,14 +383,23 @@ export function openCategoryPicker(dialogEl, { options: opzioni, propertyType, c
  *   onSaved(unit, {another}) -> chi chiama mostra il toast con «Annulla»
  */
 export function openUnitSheet(dialogEl, { options: opzioni, building = null, parent = null, seed = {}, lastFloor = '', onSaved,
-  recordKind = 'census', onBack = null } = {}) {
+  recordKind = 'census', onBack = null, pertinenza = null } = {}) {
   const tree = opzioni.territory || [];
   const tipi = opzioni.property_types || [];
+  const kinds = opzioni.accessory_kinds || [];
   const inPalazzina = !!building;
   const isPertinenza = !!parent;
+  // PERTINENZE-1: pertinenza AUTONOMA (subalterno proprio). Con `parent` nasce
+  // collegata; senza, dalla palazzina, si sceglie la principale o «da
+  // collegare dopo». Il tipo viene dal catalogo degli accessori.
+  const modoPertinenza = isPertinenza || !!pertinenza;
+  const principali = (pertinenza && Array.isArray(pertinenza.principals)) ? pertinenza.principals : [];
+  const tipoPertinenza = str(pertinenza && pertinenza.kind);
   const s = seed || {};
+  const etichettaTipo = tipoPertinenza ? labelOf(kinds, tipoPertinenza, tipoPertinenza) : '';
   const titolo = s.duplicate_of ? `Copia di ${s.duplicate_of} — completa interno e categoria`
-    : (isPertinenza ? `Nuova pertinenza di ${parent.code || `#${parent.id}`}` : (inPalazzina ? 'Nuova unità' : 'Nuovo immobile singolo'));
+    : (isPertinenza ? `Nuova pertinenza di ${parent.code || `#${parent.id}`}${etichettaTipo ? ` · ${etichettaTipo}` : ''}`
+      : (modoPertinenza ? 'Nuova pertinenza autonoma' : (inPalazzina ? 'Nuova unità' : 'Nuovo immobile singolo')));
   // CREAZIONE-GUIDATA-1: scheda commerciale o di censimento, deciso da chi apre
   const commerciale = recordKind === 'crm';
   const agenti = commerciale && opzioni.can_assign === true && Array.isArray(opzioni.agents) ? opzioni.agents : [];
@@ -412,6 +424,11 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
       <h2 class="census-sheet-title">${escapeHtml(titolo)}</h2>
       ${inPalazzina ? `<p class="muted">${escapeHtml([building.name, [building.address, building.civic_number].filter(Boolean).join(' ')].filter(Boolean).join(' · '))}</p>` : ''}
       <p class="muted census-kind-note" data-record-kind="${commerciale ? 'crm' : 'census'}">${commerciale ? 'Scheda commerciale: entra subito nell’elenco Immobili.' : 'Scheda di censimento: entra nel lavoro commerciale con «Prendi in carico».'} Categoria e dati catastali si completano anche dopo.</p>
+      ${modoPertinenza ? `<div class="form-field" data-pertinenza-kind-field><label>Che tipo di pertinenza?</label>${chipsHtml('pertinenza_kind', kinds, tipoPertinenza, { multiline: true })}
+        <small class="muted">Ha un suo subalterno: è un’unità catastale autonoma, conta fra le unità censite.</small></div>` : ''}
+      ${modoPertinenza && !isPertinenza ? `<div class="form-field"><label for="us-principal">Unità principale</label>
+        <select id="us-principal" class="input"><option value="">Da collegare dopo</option>${principali.map((u) => `<option value="${escapeHtml(u.id)}">${escapeHtml(`${u.code || `#${u.id}`} · ${unitFacts(u, tipi, kinds)}`)}</option>`).join('')}</select>
+        <small class="muted">Il collegamento all’edificio resta comunque; quello all’unità si può fare anche dopo.</small></div>` : ''}
       <div class="form-field"><label>Tipologia</label>${chipsHtml('property_type', tipi, str(s.property_type) || 'apartment', { multiline: true })}</div>
       <div class="form-field"><label>Piano</label>${chipsHtml('floor', FLOOR_CHIPS, str(s.floor) || str(lastFloor))}
         <div class="census-inline"><button type="button" class="chip" data-floor-other>Altro…</button>${inputHtml('us-floor-other', (s.floor && !FLOOR_CHIPS.some((f) => f.value === String(s.floor))) ? s.floor : '', { maxlength: 50, placeholder: 'es. T+1 duplex' })}</div></div>
@@ -439,7 +456,7 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
       ${inPalazzina ? '<div class="form-field"><label class="census-check"><input type="checkbox" data-own-address> Ingresso diverso? (via o civico propri)</label></div>' : ''}
       <div data-address-block ${inPalazzina ? 'hidden' : ''}>${territoryHtml('us', inPalazzina ? { address: '', civic_number: '' } : { address: s.address, civic_number: s.civic_number })}</div>
       ${agenti.length ? fieldHtml('us-agent', 'Assegnato a', `<select id="us-agent" class="input"><option value="">Nessuno</option>${agenti.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || `Operatore #${a.id}`)}${a.is_me ? ' (tu)' : ''}</option>`).join('')}</select>`) : ''}
-      ${fieldHtml('us-notes', 'Note', `<textarea id="us-notes" class="input" rows="2"></textarea>`)}
+      ${fieldHtml('us-notes', 'Note', `<textarea id="us-notes" class="input" rows="2">${escapeHtml(str(s.internal_notes))}</textarea>`)}
       <div data-banner></div>
       <div class="field-error" data-error></div>
       <div class="modal-actions census-sheet-actions">
@@ -453,6 +470,10 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
 
   const form = dialogEl.querySelector('[data-unit-form]');
   const tipo = bindChips(dialogEl, 'property_type', str(s.property_type) || 'apartment');
+  if (s.internal_notes) dialogEl.querySelector('#us-notes').value = str(s.internal_notes);     // PERTINENZE-1: note passate dal foglio pertinenza
+  const tipoPert = modoPertinenza
+    ? bindChips(dialogEl, 'pertinenza_kind', tipoPertinenza, (k) => { if (k) tipo.set(pertinenzaPropertyType(opzioni, k)); })
+    : null;
   const altroPiano = dialogEl.querySelector('#us-floor-other');
   const piano = bindChips(dialogEl, 'floor', str(s.floor) || str(lastFloor), () => { altroPiano.value = ''; });
   dialogEl.querySelector('[data-floor-other]').addEventListener('click', () => { piano.set(''); altroPiano.focus(); });
@@ -475,7 +496,10 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
   function stato(confirmSimilar) {
     return {
       client_request_id: clientRequestId, building_id: inPalazzina ? building.id : null,
-      parent_property_id: isPertinenza ? parent.id : null,
+      parent_property_id: isPertinenza ? parent.id : (modoPertinenza && dialogEl.querySelector('#us-principal') ? v('#us-principal') : null),
+      // PERTINENZE-1: «da collegare» si dichiara; collegata, il tipo basta (la relazione la dice pertinenza)
+      is_pertinenza: modoPertinenza && !isPertinenza ? true : undefined,
+      pertinenza_kind: tipoPert ? tipoPert.get() : '',
       // R3: «Stabile intero» = tipologia `building` dentro una palazzina (CHECK
       // della 083); segue la chip scelta NEL foglio, non il bottone di apertura
       whole_building: inPalazzina && tipo.get() === 'building',
@@ -640,13 +664,17 @@ export function showToast(host, { text, actionLabel = null, onAction = null, ms 
   return { close: chiudi };
 }
 
-// --- S7: pertinenza «Si' / No / Non lo so» -------------------------------------------------
+// --- S7: pertinenza «Si' / No / Da verificare» --------------------------------------------
 
 /**
- * «E' un'unita' catastale separata?»  Si' -> foglio unita' con
- * parent_property_id (riga `properties`); No -> accessorio `included`;
- * Non lo so -> accessorio `unknown` (badge «Da chiarire»). Nessuna unita'
- * inventata, mai.
+ * PERTINENZE-1: prima COSA e' (tipo dal catalogo degli accessori, mq con i
+ * decimali, quanti se pertinente), poi «Ha un suo subalterno?»:
+ *   Si'           -> foglio unita' con parent_property_id (riga `properties`,
+ *                    pertinenza autonoma, tipo conservato, vincoli catastali
+ *                    di sempre);
+ *   No            -> accessorio `included` (compreso nell'unita');
+ *   Da verificare -> accessorio `unknown` (badge «Da chiarire»): i dati
+ *                    restano, nessun subalterno inventato, nessuna unita'.
  */
 export function openPertinenzaSheet(dialogEl, { options: opzioni, property, building = null, onSaved } = {}) {
   const kinds = opzioni.accessory_kinds || [];
@@ -655,18 +683,16 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
   dialogEl.innerHTML = `
     <form data-pertinenza-form novalidate>
       <h2 class="census-sheet-title">Aggiungi pertinenza a ${escapeHtml(property.code || `#${property.id}`)}</h2>
-      <div class="form-field"><label>È un'unità catastale separata?</label>
-        ${chipsHtml('answer', [{ value: 'yes', label: 'Sì' }, { value: 'no', label: 'No' }, { value: 'unknown', label: 'Non lo so' }], '')}
-        <small class="muted">Lo leggi in visura: se ha un suo subalterno, è separata.</small></div>
-      <div data-accessory-fields hidden>
-        <div class="form-field"><label>Che cos'è?</label>${chipsHtml('kind', kinds, '', { multiline: true })}</div>
-        <div class="form-grid-2">
-          ${fieldHtml('pa-surface', 'mq (facoltativi)', inputHtml('pa-surface', '', { type: 'number', inputmode: 'decimal', min: 0, step: 'any' }))}
-          ${fieldHtml('pa-quantity', 'Quanti (facoltativo)', inputHtml('pa-quantity', '', { type: 'number', inputmode: 'numeric', min: 1, step: 1 }))}
-          ${fieldHtml('pa-notes', 'Note', inputHtml('pa-notes', '', { maxlength: 250 }))}
-        </div>
-        <p class="muted" data-accessory-hint></p>
+      <div class="form-field"><label>Che cos'è?</label>${chipsHtml('kind', kinds, '', { multiline: true })}</div>
+      <div class="form-grid-2">
+        ${fieldHtml('pa-surface', 'mq (facoltativi)', inputHtml('pa-surface', '', { type: 'number', inputmode: 'decimal', min: 0, step: 'any' }))}
+        <div data-quantity-field>${fieldHtml('pa-quantity', 'Quanti (facoltativo)', inputHtml('pa-quantity', '', { type: 'number', inputmode: 'numeric', min: 1, step: 1 }))}</div>
+        ${fieldHtml('pa-notes', 'Note', inputHtml('pa-notes', '', { maxlength: 250 }))}
       </div>
+      <div class="form-field"><label>Ha un suo subalterno (unità catastale autonoma)?</label>
+        ${chipsHtml('answer', [{ value: 'yes', label: 'Sì' }, { value: 'no', label: 'No' }, { value: 'unknown', label: 'Da verificare' }], '')}
+        <small class="muted">Lo leggi in visura: se ha un suo subalterno, è separata.</small></div>
+      <div data-accessory-fields><p class="muted" data-accessory-hint></p></div>
       <div class="field-error" data-error></div>
       <div class="modal-actions">
         <button type="button" class="btn ghost" data-cancel>Annulla</button>
@@ -675,15 +701,17 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
     </form>`;
   if (!dialogEl._open && !dialogEl.open) dialogEl.showModal();
   const submit = dialogEl.querySelector('[data-submit]');
-  const campi = dialogEl.querySelector('[data-accessory-fields]');
   const hint = dialogEl.querySelector('[data-accessory-hint]');
+  const quantita = dialogEl.querySelector('[data-quantity-field]');
   const kind = bindChips(dialogEl, 'kind', '');
   const risposta = bindChips(dialogEl, 'answer', '', (v) => {
-    campi.hidden = v === 'yes' || v === '';
     submit.disabled = v === '';
     submit.textContent = v === 'yes' ? 'Continua: crea l\'unità collegata' : 'Salva';
+    // un'unita' autonoma e' una: «quanti» vale per l'accessorio
+    quantita.hidden = v === 'yes';
     hint.textContent = v === 'no' ? 'Resta un accessorio compreso nell\'unità: non conta come unità.'
-      : (v === 'unknown' ? 'Resta in sospeso con il badge «Da chiarire»: nessuna unità inventata.' : '');
+      : (v === 'unknown' ? 'Resta in sospeso con il badge «Da chiarire»: i dati restano, nessun subalterno inventato.'
+        : (v === 'yes' ? 'Nasce una scheda autonoma collegata a questa unità, con il suo tipo.' : ''));
   });
   dialogEl.querySelector('[data-cancel]').addEventListener('click', () => dialogEl.close());
 
@@ -692,12 +720,20 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
     event.preventDefault();
     const v = risposta.get();
     if (!v || saving) return;
+    const mqTesto = dialogEl.querySelector('#pa-surface').value.trim();
+    const mq = Number(mqTesto);
+    const note = dialogEl.querySelector('#pa-notes').value.trim();
     if (v === 'yes') {
       dialogEl.close();
       // R2: la pertinenza nasce nella STESSA palazzina della principale
       // (building_id nel corpo, indirizzo ereditato, «Ingresso diverso?»
       // disponibile); senza palazzina resta a indirizzo proprio.
-      openUnitSheet(dialogEl, { options: opzioni, building, parent: property, seed: { property_type: 'garage' }, onSaved: (unita, extra) => onSaved({ kind: 'pertinenza', unit: unita, ...extra }) });
+      // PERTINENZE-1: tipo, mq e note passano al foglio dell'unita'.
+      const seme = { property_type: kind.get() ? pertinenzaPropertyType(opzioni, kind.get()) : 'garage' };
+      if (mqTesto && !Number.isNaN(mq) && mq >= 0) seme.surface_sqm = mqTesto;
+      if (note) seme.internal_notes = note;
+      openUnitSheet(dialogEl, { options: opzioni, building, parent: property, seed: seme, pertinenza: { kind: kind.get() },
+        onSaved: (unita, extra) => onSaved({ kind: 'pertinenza', unit: unita, ...extra }) });
       return;
     }
     if (!kind.get()) { setError(dialogEl, 'Indica che cos\'è (cantina, box, posto auto…).'); return; }
@@ -705,12 +741,10 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
     saving = true;
     setBusy(submit, true);
     const payload = { kind: kind.get(), cadastral_status: v === 'no' ? 'included' : 'unknown', client_request_id: clientRequestId };
-    const mq = Number(dialogEl.querySelector('#pa-surface').value);
-    if (dialogEl.querySelector('#pa-surface').value.trim() && !Number.isNaN(mq)) payload.surface_sqm = mq;
+    if (mqTesto && !Number.isNaN(mq)) payload.surface_sqm = mq;
     // CATALOGO-CANONICO-1: quanti (es. 2 balconi); vuoto = non indicato, mai 0
     const quanti = Number(dialogEl.querySelector('#pa-quantity').value);
     if (Number.isInteger(quanti) && quanti >= 1) payload.quantity = quanti;
-    const note = dialogEl.querySelector('#pa-notes').value.trim();
     if (note) payload.notes = note;
     let accessorio;
     try {
@@ -725,6 +759,55 @@ export function openPertinenzaSheet(dialogEl, { options: opzioni, property, buil
     clientRequestId = api.newClientRequestId();
     dialogEl.close();
     if (typeof onSaved === 'function') await onSaved({ kind: 'accessory', accessory: accessorio });
+  });
+}
+
+// --- PERTINENZE-1: «Collega a un'unita' principale» (dalla pertinenza) ---------------------
+
+/**
+ * Prima le unita' principali della STESSA palazzina (relazione reale,
+ * `candidates` dal server); «Cerca un'altra unita'» per codice o indirizzo
+ * (un garage puo' servire un appartamento della palazzina di fronte). Il
+ * collegamento e' quello di sempre (`POST /properties/{principale}/pertinenze/link`):
+ * l'edificio della pertinenza non cambia.
+ */
+export function openLinkPrincipalSheet(dialogEl, { options: opzioni = {}, property, candidates = [], onLinked } = {}) {
+  const tipi = opzioni.property_types || [];
+  const kinds = opzioni.accessory_kinds || [];
+  dialogEl.className = 'modal census-sheet';
+  dialogEl.innerHTML = `
+    <div data-principal-sheet>
+      <h2 class="census-sheet-title">Collega ${escapeHtml(property.code || `#${property.id}`)} a un’unità principale</h2>
+      ${candidates.length ? `<p class="muted">Unità della stessa palazzina</p><div class="census-results">${candidates.map((u) => `<button type="button" class="census-result" data-principal-id="${escapeHtml(u.id)}"><strong>${escapeHtml(u.code || `#${u.id}`)}</strong> <span class="muted">${escapeHtml(unitFacts(u, tipi, kinds))}</span></button>`).join('')}</div>`
+        : '<p class="muted">Nessuna unità principale in questa palazzina: cercala per codice o indirizzo.</p>'}
+      <div class="field-error" data-error></div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-cancel>Chiudi</button>
+        <button type="button" class="btn" data-search-other>Cerca un’altra unità</button>
+      </div>
+    </div>`;
+  if (!dialogEl._open && !dialogEl.open) dialogEl.showModal();
+  dialogEl.querySelector('[data-cancel]').addEventListener('click', () => dialogEl.close());
+  let busy = false;
+  const collega = async (principaleId) => {
+    const esito = await api.linkPertinenza(principaleId, property.id);
+    if (onLinked) await onLinked(esito);
+  };
+  dialogEl.querySelectorAll('[data-principal-id]').forEach((b) => b.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    setError(dialogEl, '');
+    try {
+      await collega(Number(b.dataset.principalId));
+      dialogEl.close();
+    } catch (error) {
+      setError(dialogEl, errorMessage(error));
+    } finally { busy = false; }
+  }));
+  dialogEl.querySelector('[data-search-other]').addEventListener('click', () => {
+    dialogEl.close();
+    openLinkExistingSheet(dialogEl, { property, title: `Collega ${property.code || 'la pertinenza'} a un’unità principale`,
+      onPick: async (id) => { await collega(id); } });
   });
 }
 

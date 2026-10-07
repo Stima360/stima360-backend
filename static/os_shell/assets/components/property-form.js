@@ -60,9 +60,14 @@ export function siteTypeToVerify(p) {
   return voce || null;
 }
 
-export function propertyTypeLabel(p, types) {
+export function propertyTypeLabel(p, types, accessoryKinds) {
   const daVerificare = siteTypeToVerify(p);
   if (daVerificare) return daVerificare.raw ? `Da verificare (sito: «${daVerificare.raw}»)` : 'Da verificare (non dichiarata dal sito)';
+  // PERTINENZE-1: una pertinenza autonoma si legge per il suo tipo (Posto auto, non «Garage / box»)
+  if (p && p.pertinenza_kind && Array.isArray(accessoryKinds)) {
+    const tipo = accessoryKinds.find((k) => k && k.value === p.pertinenza_kind);
+    if (tipo) return `Pertinenza · ${tipo.label}`;
+  }
   const voce = (types || []).find((t) => t && t.value === (p && p.property_type));
   return voce ? voce.label : ((p && p.property_type) || '—');
 }

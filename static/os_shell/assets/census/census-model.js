@@ -92,6 +92,8 @@ export function unitRowText(u, propertyTypes) {
 export function unitRowBadges(u) {
   const badge = [];
   if (u.parent_property_id) badge.push({ text: 'Pertinenza', tone: 'gray' });
+  // PERTINENZE-1: pertinenza autonoma senza unita' principale
+  else if (isUnitPertinenza(u)) badge.push({ text: 'Pertinenza da collegare', tone: 'warn' });
   if (!u.cadastral_category) badge.push({ text: 'Da verificare', tone: 'warn' });
   else badge.push({ text: u.cadastral_category, tone: 'ok' });
   if (Number(u.accessories_unknown || 0) > 0) badge.push({ text: `${u.accessories_unknown} da chiarire`, tone: 'warn' });
@@ -184,6 +186,9 @@ export function buildUnitPayload(stato) {
     if (Number.isInteger(agente) && agente > 0) corpo.assigned_agent_id = agente;
   }
   if (s.confirm_similar === true) corpo.confirm_similar = true;
+  // PERTINENZE-1: pertinenza autonoma (collegata o da collegare) e il suo tipo
+  if (s.is_pertinenza === true) corpo.is_pertinenza = true;
+  if (str(s.pertinenza_kind)) { corpo.pertinenza_kind = str(s.pertinenza_kind); corpo.is_pertinenza = true; }
   return corpo;
 }
 
@@ -294,6 +299,7 @@ export function errorMessage(error) {
     case 'ALREADY_RESOLVED': return 'Questa voce è già stata chiarita in precedenza.';
     case 'LINK_INVALID': return error.detail || 'Collegamento non ammesso.';
     case 'CENSUS_NOT_INSTALLED': return 'Il modulo Censimento non è disponibile su questo ambiente.';
+    case 'PERTINENZE_NOT_INSTALLED': return 'Le pertinenze autonome non sono ancora disponibili su questo ambiente (aggiornamento del database in corso).';
     case 'NOT_FOUND': return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
     default:
       if (error && error.status === 404) return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
@@ -371,7 +377,7 @@ export function summaryView(summary) {
     toComplete: daCompletare === null ? '—' : String(daCompletare),
     toCompleteNote: daCompletare === null ? 'Indica quante unità risultano per calcolarle' : '',
     over: oltre > 0 ? `${plurale(oltre, 'unità censita', 'unità censite')} oltre le dichiarate: verifica il totale dichiarato` : '',
-    split: `${plurale(num(s.units_main) ?? 0, 'principale', 'principali')} + ${plurale(num(s.units_pertinenze) ?? 0, 'pertinenza', 'pertinenze')}`,
+    split: `${plurale(num(s.units_main) ?? 0, 'principale', 'principali')} + ${plurale(num(s.units_pertinenze) ?? 0, 'pertinenza', 'pertinenze')}${num(s.units_pertinenze_unlinked) ? ` (${num(s.units_pertinenze_unlinked)} da collegare)` : ''}`,
     unknownAccessories: num(s.accessories_unknown) ? plurale(s.accessories_unknown, 'accessorio da chiarire', 'accessori da chiarire') : '',
     categoryToVerify: num(s.category_to_verify) ? plurale(s.category_to_verify, 'categoria da verificare', 'categorie da verificare') : '',
   };
@@ -411,8 +417,9 @@ export function buildingListQuery(filters, offset = 0, limit = 25) {
 
 /** La riga di un'unita' nella scheda edificio: codice, tipologia, scala,
  *  piano, interno, mq (solo cio' che c'e'). */
-export function unitFacts(u, propertyTypes) {
-  const parti = [labelOf(propertyTypes, u.property_type, u.property_type || 'Unità')];
+export function unitFacts(u, propertyTypes, accessoryKinds) {
+  // PERTINENZE-1: una pertinenza si legge per il suo tipo (Posto auto, non «Garage»)
+  const parti = [pertinenzaKindLabel(u, accessoryKinds) || labelOf(propertyTypes, u.property_type, u.property_type || 'Unità')];
   if (u.staircase) parti.push(`scala ${u.staircase}`);
   if (u.floor !== null && u.floor !== undefined && String(u.floor).trim() !== '') parti.push(`piano ${floorLabel(u.floor)}`);
   if (u.internal_number) parti.push(`int. ${u.internal_number}`);
@@ -428,6 +435,7 @@ export function unitRelationText(u) {
     return u.parent.same_building ? `Pertinenza di ${di}` : `Pertinenza di ${di} (in un altro edificio)`;
   }
   if (u && u.parent_property_id) return 'Pertinenza (unità principale non disponibile)';
+  if (isUnitPertinenza(u)) return 'Pertinenza da collegare a un’unità';
   const n = Number(u && u.pertinenze_count) || 0;
   return n > 0 ? `Con ${plurale(n, 'pertinenza', 'pertinenze')}` : '';
 }
@@ -511,4 +519,61 @@ export function declaredMismatchText(stato, building) {
   const salvato = building ? building.units_declared : null;
   if (d.value === null || salvato === null || salvato === undefined || Number(salvato) === d.value) return '';
   return `Hai indicato ${d.value} unità, l’edificio ne ha già ${salvato} dichiarate: il dato dell’edificio resta invariato (si cambia da «Modifica palazzina»).`;
+}
+
+
+// --- PERTINENZE-1: la natura di pertinenza, indipendente dal collegamento ----------------
+//
+// Una scheda e' pertinenza se e' collegata a un'unita' principale
+// (`parent_property_id`) o se e' marcata tale (`is_pertinenza`, 089): censita
+// ma non ancora collegata, o scollegata. Il tipo (`pertinenza_kind`) usa il
+// catalogo degli accessori (form-options `accessory_kinds`): box e posto auto
+// restano distinti anche se la tipologia e' `garage` per entrambi.
+
+export function isUnitPertinenza(u) {
+  return !!(u && (u.parent_property_id || u.is_pertinenza === true || u.pertinenza === true));
+}
+
+export function pertinenzaKindLabel(u, accessoryKinds) {
+  if (!u || !u.pertinenza_kind) return '';
+  return labelOf(accessoryKinds, u.pertinenza_kind, u.pertinenza_kind);
+}
+
+/** La tipologia di partenza di una pertinenza dal suo tipo (form-options
+ *  `pertinenza_property_types`); `other` se il catalogo non la indica. */
+export function pertinenzaPropertyType(options, kind) {
+  const voce = ((options && options.pertinenza_property_types) || []).find((x) => x && x.value === kind);
+  return voce ? voce.property_type : 'other';
+}
+
+/** Le pertinenze di una palazzina, dalle relazioni reali: collegate (con la
+ *  loro principale, anche in un altro edificio) e da collegare. */
+export function buildingPertinenze(units) {
+  const linked = [];
+  const unlinked = [];
+  for (const u of units || []) {
+    if (!isUnitPertinenza(u)) continue;
+    if (u.parent_property_id) linked.push(u); else unlinked.push(u);
+  }
+  return { linked, unlinked };
+}
+
+/** Le unita' a cui si puo' collegare una pertinenza: principali (non
+ *  pertinenze), non «stabile intero», non archiviate, diverse da lei. */
+export function principalCandidates(units, excludeId) {
+  return (units || []).filter((u) => u && u.id !== excludeId && !isUnitPertinenza(u) && !u.whole_building
+    && u.commercial_status !== 'archived' && !u.archived_at);
+}
+
+/** «Nata dall'accessorio …»: la provenienza conservata nella conversione. */
+export function fromAccessoryText(origine, accessoryKinds) {
+  if (!origine || !origine.kind) return '';
+  const testa = `Nata dall’accessorio «${labelOf(accessoryKinds, origine.kind, origine.kind)}»`;
+  const dettagli = [];
+  if (origine.source === 'stima360') dettagli.push('dal sito Stima360');
+  if (origine.cadastral_status === 'unknown') dettagli.push('era «Da chiarire»');
+  else if (origine.cadastral_status === 'included') dettagli.push('era «Compreso»');
+  if (origine.surface_sqm !== null && origine.surface_sqm !== undefined && origine.surface_sqm !== '') dettagli.push(`${origine.surface_sqm} m²`);
+  if (origine.quantity) dettagli.push(`× ${origine.quantity}`);
+  return dettagli.length ? `${testa} (${dettagli.join(', ')})` : testa;
 }

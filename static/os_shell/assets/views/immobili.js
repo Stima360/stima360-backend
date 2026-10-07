@@ -121,8 +121,11 @@ export async function renderImmobili(container, params = []) {
   let offset = 0;
   let debounceHandle = null;
   let tipologie = [];
+  let tipiPertinenza = [];    // PERTINENZE-1: Posto auto, Cantina… per le pertinenze autonome
   try {
-    tipologie = (await loadFormOptions()).property_types || [];
+    const opzioniForm = await loadFormOptions();
+    tipologie = opzioniForm.property_types || [];
+    tipiPertinenza = opzioniForm.accessory_kinds || [];
   } catch (_error) {
     tipologie = [];           // etichette non disponibili: resta il valore tecnico
   }
@@ -149,7 +152,7 @@ export async function renderImmobili(container, params = []) {
       [
         { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
-        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie)) },
+        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie, tipiPertinenza)) },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
         { label: 'Prezzo', render: (p) => formatPrice(p.asking_price) },
         { label: 'Aggiornato il', render: (p) => escapeHtml(formatDate(p.updated_at)) },
@@ -255,7 +258,7 @@ export async function renderImmobili(container, params = []) {
     censusUnitsArea.innerHTML = renderTable(
       [
         { label: 'Unità', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
-        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie)) },
+        { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie, tipiPertinenza)) },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Collocazione', render: (p) => escapeHtml(p.building_id ? 'In palazzina' : 'Singola') },
         { label: 'Aggiornata il', render: (p) => escapeHtml(formatDate(p.updated_at)) },

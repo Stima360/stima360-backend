@@ -271,7 +271,8 @@ def _storico_crm(m):
 def test_01_palazzina_nasce_si_legge_si_elenca(mondo):
     e = _edificio(mondo)
     assert e["replica"] is False and e["agency_id"] == 1 and e["census_status"] == "partial"
-    assert e["counters"] == {"units_census": 0, "units_main": 0, "units_pertinenze": 0,
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: in piu' le pertinenze da collegare.
+    assert e["counters"] == {"units_census": 0, "units_main": 0, "units_pertinenze": 0, "units_pertinenze_unlinked": 0,
                              "units_address_inherited": 0, "units_address_custom": 0, "accessories_unknown": 0}
     letto = mondo["api"]().get(f"/api/property/buildings/{e['id']}")
     assert letto.status_code == 200 and letto.json()["units"] == [] and letto.json()["units_declared"] == 6
@@ -485,8 +486,9 @@ def test_12_pertinenza_creata_collegata_e_scollegata_con_storico(mondo):
     assert garage["parent_property_id"] == principale["id"] and garage["record_kind"] == "census"
     c = mondo["api"]().get(f"/api/property/properties/{principale['id']}/census").json()
     assert [p["id"] for p in c["pertinenze"]] == [garage["id"]] and c["building"]["id"] == e["id"]
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: in piu' le pertinenze da collegare.
     assert mondo["api"]().get(f"/api/property/buildings/{e['id']}").json()["counters"] == \
-        {"units_census": 2, "units_main": 1, "units_pertinenze": 1, "units_address_inherited": 2,
+        {"units_census": 2, "units_main": 1, "units_pertinenze": 1, "units_pertinenze_unlinked": 0, "units_address_inherited": 2,
          "units_address_custom": 0, "accessories_unknown": 0}
     # profondita' 1: una pertinenza non ha pertinenze; e nessun ciclo
     r = mondo["api"]().post("/api/property/census/units", json={"parent_property_id": garage["id"]})
@@ -595,8 +597,9 @@ def test_16_chiarisci_e_separata_crea_la_pertinenza_e_toglie_l_accessorio_in_una
     assert p["building_id"] == e["id"] and p["cadastral_category"] == "C/2" and p["cadastral_subunit"] == "11"
     assert Decimal(str(p["surface_sqm"])) == Decimal("6") and p["internal_notes"] == "cantina a nord" and p["record_kind"] == "census"
     assert _q(mondo, "SELECT count(*) FROM property_accessories WHERE property_id = %s", (u["id"],))[0][0] == 0
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: in piu' le pertinenze da collegare.
     assert api.get(f"/api/property/buildings/{e['id']}").json()["counters"] == \
-        {"units_census": 2, "units_main": 1, "units_pertinenze": 1, "units_address_inherited": 2,
+        {"units_census": 2, "units_main": 1, "units_pertinenze": 1, "units_pertinenze_unlinked": 0, "units_address_inherited": 2,
          "units_address_custom": 0, "accessories_unknown": 0}
     # ROLLBACK: la creazione fallisce (subalterno gia' censito) -> l'accessorio resta com'era
     acc2 = api.post(f"/api/property/properties/{u['id']}/accessories", json={"kind": "box", "cadastral_status": "unknown"}).json()

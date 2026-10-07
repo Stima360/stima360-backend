@@ -709,7 +709,8 @@ def test_g2_nessuna_migration_in_lmc3():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 (attributi del sito), additiva, in coda;
     # la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: poi la 088 (ricezione degli invii del sito); la finestra si allarga di uno.
-    assert migrazioni[-21:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza); la finestra si allarga di uno.
+    assert migrazioni[-22:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -729,7 +730,8 @@ def test_g2_nessuna_migration_in_lmc3():
                                "085_delete_arch_2b1_property_trash.sql",
                                "086_delete_arch_2b2_property_trash_guards.sql",
                                "087_catalogo_canonico_1_site_attributes.sql",
-                               "088_catalogo_canonico_1b_site_inbox.sql"], migrazioni[-21:]
+                               "088_catalogo_canonico_1b_site_inbox.sql",
+                               "089_pertinenze_1_unit_nature.sql"], migrazioni[-22:]
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

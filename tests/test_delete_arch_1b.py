@@ -22,12 +22,14 @@ def test_s01_nessuna_migration_nuova():
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B2: la 086 e' delle guardie del Cestino, nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 e' degli attributi del sito, nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito), nominata; nessuna oltre.
-    assert runner.discover_migrations()[-5].version == "084_delete_arch_1a_mistakes"
-    assert runner.discover_migrations()[-4].version == "085_delete_arch_2b1_property_trash"
-    assert runner.discover_migrations()[-3].version == "086_delete_arch_2b2_property_trash_guards"
-    assert runner.discover_migrations()[-2].version == "087_catalogo_canonico_1_site_attributes"
-    assert runner.discover_migrations()[-1].version == "088_catalogo_canonico_1b_site_inbox"
-    assert not list((ROOT / "migrations").glob("089*"))
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
+    assert runner.discover_migrations()[-6].version == "084_delete_arch_1a_mistakes"
+    assert runner.discover_migrations()[-5].version == "085_delete_arch_2b1_property_trash"
+    assert runner.discover_migrations()[-4].version == "086_delete_arch_2b2_property_trash_guards"
+    assert runner.discover_migrations()[-3].version == "087_catalogo_canonico_1_site_attributes"
+    assert runner.discover_migrations()[-2].version == "088_catalogo_canonico_1b_site_inbox"
+    assert runner.discover_migrations()[-1].version == "089_pertinenze_1_unit_nature"
+    assert not list((ROOT / "migrations").glob("090*"))
 
 
 def test_s02_codice_canonico_e_filtri():

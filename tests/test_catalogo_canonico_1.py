@@ -288,7 +288,8 @@ def test_m02_la_088_e_l_ultima_additiva_e_con_i_tipi_di_database_py():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m088 = tutte[-1]
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 088 non e' piu' l'ultima (089)
+    m088 = next(m for m in tutte if m.version.startswith("088_"))
     assert m088.version == "088_catalogo_canonico_1b_site_inbox"
     assert m088.down_available and not m088.non_transactional and runner.validate_migration(m088) == []
     eseguibile = "\n".join(r for r in SU88.splitlines() if not r.strip().startswith("--"))

@@ -435,8 +435,16 @@ class CensusUnitCreate(PropertyModel):
     record_kind: str = "census"
     assigned_agent_id: int | None = Field(None, gt=0)
 
+    # PERTINENZE-1 (089): una pertinenza autonoma (con subalterno proprio),
+    # collegata o no a un'unita' principale. `pertinenza_kind` con il catalogo
+    # degli accessori (box e posto auto distinti); implica `is_pertinenza`.
+    is_pertinenza: bool = False
+    pertinenza_kind: str | None = None
+
     @root_validator(skip_on_failure=True)
     def validate_unit(cls, v):
+        if v.get("pertinenza_kind") is not None and v["pertinenza_kind"] not in ACCESSORY_KINDS:
+            raise ValueError("invalid pertinenza_kind")
         if v.get("property_type") not in PROPERTY_TYPES: raise ValueError("invalid property_type")
         if v.get("record_kind") not in ("census", "crm"): raise ValueError("invalid record_kind")
         if v.get("record_kind") == "census" and v.get("assigned_agent_id") is not None:

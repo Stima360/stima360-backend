@@ -444,6 +444,17 @@ ACCESSORY_KIND_LABELS: dict[str, str] = {
 }
 
 
+#: PERTINENZE-1: la tipologia della scheda quando una pertinenza diventa (o
+#: nasce come) unita' autonoma, dal suo tipo di accessorio. E' solo il valore
+#: di partenza: la tipologia si sceglie sempre, e il TIPO di pertinenza
+#: (`properties.pertinenza_kind`, 089) resta quello del catalogo degli
+#: accessori - box e posto auto distinti anche se entrambi `garage`.
+PERTINENZA_PROPERTY_TYPE: dict[str, str] = {
+    "cantina": "storage", "deposito": "storage", "soffitta": "storage", "taverna": "storage",
+    "box": "garage", "posto_auto": "garage", "posto_moto": "garage",
+}
+
+
 def census_labels_for_form() -> dict[str, list[dict[str, str]]]:
     """Le liste (tre di Fase 4, piu' lo stato del censimento di EDIFICI-1),
     nella forma `{value, label}` gia' usata per `property_types`."""
@@ -453,3 +464,8 @@ def census_labels_for_form() -> dict[str, list[dict[str, str]]]:
         "accessory_kinds": [{"value": k, "label": v} for k, v in ACCESSORY_KIND_LABELS.items()],
         "building_census_statuses": [{"value": k, "label": v} for k, v in BUILDING_CENSUS_STATUS_LABELS.items()],
     }
+
+
+def pertinenza_types_for_form() -> list[dict[str, str]]:
+    """PERTINENZE-1: tipo di pertinenza -> tipologia di partenza della scheda."""
+    return [{"value": k, "property_type": v} for k, v in PERTINENZA_PROPERTY_TYPE.items()]

@@ -234,6 +234,18 @@ def _scrivi_campi(cur, prop: dict, valori: dict) -> dict:
     return repository.row(cur.fetchone())
 
 
+def _pertinenze_autonome(cur, property_id) -> dict:
+    """PERTINENZE-1: i tipi che su questa scheda sono gia' UNITA' AUTONOME
+    collegate (un accessorio trasformato con «Chiarisci › E' separata», o una
+    pertinenza del tipo indicato): {tipo: codice}. Il sito che ridichiara
+    quel tipo non ricrea l'accessorio (doppio conteggio). Valida anche senza
+    la 089: il tipo si legge anche dalla provenienza dell'accessorio."""
+    cur.execute(f"""SELECT p.code, coalesce(to_jsonb(p)->>'pertinenza_kind', p.metadata->'from_accessory'->>'kind') AS kind
+                      FROM properties p WHERE p.parent_property_id = %s AND {_property_trash.live('p')}
+                       AND p.archived_at IS NULL ORDER BY p.id""", (property_id,))
+    return {r["kind"]: r["code"] for r in cur.fetchall() if r["kind"]}
+
+
 def _inserisci_accessorio(cur, property_id, kind, voce) -> dict:
     cur.execute("INSERT INTO property_accessories (property_id, kind, cadastral_status, surface_sqm, quantity, source) "
                 "VALUES (%s, %s, %s, %s, %s, 'stima360') RETURNING *",
@@ -280,11 +292,16 @@ def _applica(cur, prop: dict, campi: dict, accessori: dict, *, precedente: dict,
 
     cur.execute("SELECT * FROM property_accessories WHERE property_id = %s ORDER BY id FOR UPDATE", (prop["id"],))
     esistenti = [dict(r) for r in cur.fetchall()]
+    autonome = _pertinenze_autonome(cur, prop["id"]) if accessori else {}
     for kind, voce in accessori.items():
         chiave = _ACC + kind
         nuovo = {"surface_sqm": voce.get("surface_sqm"), "quantity": voce.get("quantity")}
         prima = precedente.get(chiave, _MANCA)
         stesse = [a for a in esistenti if a["kind"] == kind]
+        if not stesse and kind in autonome:
+            # gia' unita' autonoma collegata: nessun accessorio doppio, nessun conflitto
+            scritti[chiave] = prima if prima is not _MANCA else _j(nuovo)
+            continue
         if not stesse:
             if prima is _MANCA:
                 _inserisci_accessorio(cur, prop["id"], kind, nuovo)
@@ -909,6 +926,10 @@ def resolve_conflict(ctx, property_id: int, source_id: int, body) -> dict:
                     istantanea = {}
                 else:
                     nuovo = {"surface_sqm": valore.get("surface_sqm"), "quantity": valore.get("quantity")}
+                    autonoma = _pertinenze_autonome(cur, property_id).get(kind) if not righe else None
+                    if autonoma is not None:
+                        raise SiteSyncError(f"Questa pertinenza e' gia' un'unita' autonoma collegata ({autonoma}): "
+                                            "non si crea un accessorio doppio", "PERTINENZA_IS_UNIT", code_unit=autonoma)
                     if righe:
                         aggiorna = {k: v for k, v in nuovo.items() if v is not None}
                         if aggiorna:

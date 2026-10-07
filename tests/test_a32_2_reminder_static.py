@@ -207,7 +207,10 @@ def test_s10_nessuna_migration_080():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito), additiva, e' ora l'ultima.
     assert [m for m in migrazioni if m.startswith("088")] == [
         "088_catalogo_canonico_1b_site_inbox.sql", "088_catalogo_canonico_1b_site_inbox_down.sql"]
-    assert migrazioni[-1] == "088_catalogo_canonico_1b_site_inbox_down.sql"
+    # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
+    assert [m for m in migrazioni if m.startswith("089")] == [
+        "089_pertinenze_1_unit_nature.sql", "089_pertinenze_1_unit_nature_down.sql"]
+    assert migrazioni[-1] == "089_pertinenze_1_unit_nature_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

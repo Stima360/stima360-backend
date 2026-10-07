@@ -180,6 +180,8 @@ export function siteErrorMessage(error) {
   if (code === 'SOURCE_ALREADY_RELINKED') return 'Questa stima è già collegata a un altro immobile.';
   if (code === 'CONFLICT_ALREADY_RESOLVED') return 'Questa differenza è già stata gestita.';
   if (code === 'SITE_SYNC_NOT_INSTALLED') return 'La provenienza dal sito non è disponibile su questo ambiente.';
+  // PERTINENZE-1: la pertinenza e' gia' un'unita' autonoma collegata: nessun accessorio doppio
+  if (code === 'PERTINENZA_IS_UNIT') return (error && error.detail) || 'Questa pertinenza è già un’unità autonoma collegata: non si crea un accessorio doppio.';
   if (code === 'FORBIDDEN') return 'Solo chi gestisce l’immobile (titolare, amministratore o agente assegnato) può farlo.';
   return errorMessage(error);
 }

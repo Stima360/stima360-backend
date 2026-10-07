@@ -8,7 +8,8 @@ from . import repository
 from acquisitions.enums import MANDATE_ONLY_FROM_ACQUISITION
 from .catalog import (ENERGY_CLASSES, PROPERTY_TYPE_LABELS, TERRITORY_SOURCES,
                       cadastral_categories_for_form, cadastral_suggestions_for_form,
-                      census_labels_for_form, territory_tree, validate_energy_class, validate_location)
+                      census_labels_for_form, pertinenza_types_for_form, territory_tree, validate_energy_class,
+                      validate_location)
 from . import census as _census
 from . import lifecycle as _lifecycle
 from . import site_catalog as _site_catalog
@@ -132,6 +133,8 @@ def form_options(ctx):
         # CENSIMENTO-1 Fase 4: le etichette dei chips del censimento (tipo di
         # edificio, fonte delle unita' dichiarate, tipo di accessorio).
         **census_labels_for_form(),
+        # PERTINENZE-1: tipo di pertinenza -> tipologia di partenza della scheda
+        'pertinenza_property_types': pertinenza_types_for_form(),
         # CATALOGO-CANONICO-1: stato, posizione e distanza dal mare (catalogo
         # canonico del sito, property/site_catalog.py).
         **_site_catalog.labels_for_form(),
