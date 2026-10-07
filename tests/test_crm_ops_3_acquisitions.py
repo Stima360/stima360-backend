@@ -127,7 +127,8 @@ def test_a03_la_081_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito, colonne della dettagliata), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: la 089 (natura di pertinenza), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
-    assert numeri[-1] == 90 and numeri[-2] == 89 and numeri[-3] == 88 and numeri[-4] == 87 and numeri[-5] == 86 and numeri[-6] == 85 and numeri[-7] == 84 and numeri[-8] == 83 and numeri[-9] == 82 and numeri[-10] == 81 and numeri[-11] == 80
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
+    assert numeri[-1] == 91 and numeri[-2] == 90 and numeri[-3] == 89 and numeri[-4] == 88 and numeri[-5] == 87 and numeri[-6] == 86 and numeri[-7] == 85 and numeri[-8] == 84 and numeri[-9] == 83 and numeri[-10] == 82 and numeri[-11] == 81 and numeri[-12] == 80
 
 
 def test_a04_la_up_e_additiva_e_la_down_rifiuta_con_dati():

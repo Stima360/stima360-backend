@@ -22,11 +22,13 @@
 import { escapeHtml } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import {
-  contactDeletionCheck, deletionCheck, disableOwnerAccount, trashContact, trashProperty,
+  buildingDeletionCheck, contactDeletionCheck, deletionCheck, disableOwnerAccount, trashBuilding, trashContact,
+  trashProperty,
 } from './trash-api.js';
 import {
-  CONTACT_TRASHED_TOAST, TRASHED_TOAST, TRASH_NOTE_MAX, TRASH_REASONS, blockerView, contactBlockerView,
-  contactEffectsText, contactLine, contactName, contactTrashErrorText, errorBlockers, propertyLine, trashErrorText,
+  BUILDING_TRASHED_TOAST, CONTACT_TRASHED_TOAST, TRASHED_TOAST, TRASH_NOTE_MAX, TRASH_REASONS, blockerView,
+  buildingLine, buildingName, buildingTrashErrorText, contactBlockerView, contactEffectsText, contactLine,
+  contactName, contactTrashErrorText, errorBlockers, propertyLine, trashErrorText,
 } from './trash-model.js';
 
 /**
@@ -283,5 +285,55 @@ export async function openContactTrashDialog(dialogEl, contact, { onTrashed } = 
         if (errore) errore.textContent = error.message || 'Disattivazione non riuscita.';
       }
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CESTINO-EDIFICI-1: «Elimina…» dalla scheda edificio (palazzina contenitore)
+// ---------------------------------------------------------------------------
+
+/** Il bottone «Elimina…» della scheda edificio e il suo foglio. Chi puo' e
+ *  i blocchi (unita' collegate di ogni tipo) li decide il backend. */
+export function buildingTrashButtonHtml() {
+  return '<button type="button" id="building-trash-btn" class="btn ghost trash-open">Elimina…</button>'
+    + '<dialog id="building-trash-dialog" class="modal trash-sheet"></dialog>';
+}
+
+/** Collega «Elimina…» della scheda edificio. Dopo il 200: toast e `dopo()`. */
+export function bindBuildingTrashButton(container, building, dopo) {
+  const bottone = container.querySelector('#building-trash-btn');
+  if (!bottone) return;
+  bottone.addEventListener('click', () => openBuildingTrashDialog(container.querySelector('#building-trash-dialog'), building, {
+    onTrashed: () => {
+      showToast(container.parentElement || container, { text: BUILDING_TRASHED_TOAST });
+      if (dopo) dopo();
+    },
+  }));
+}
+
+/** Il corpo del foglio edificio per ogni stato: 'loading' | 'blocked' | 'confirm' | 'error'. */
+export function buildingTrashDialogHtml(building, state = {}) {
+  const fase = state.phase || 'loading';
+  let corpo = '<p class="muted" data-trash-loading>Verifica in corso…</p>';
+  if (fase === 'blocked') {
+    corpo = `<p class="trash-lead">Non si può spostare nel Cestino:</p>${contactBlockersHtml(state.blockers)}`;
+  } else if (fase === 'confirm') {
+    corpo = `${motiviHtml()}
+      <p class="muted trash-hint">L'edificio è vuoto: esce dalla lista Edifici e dalla creazione guidata. Potrai ripristinarlo dal Cestino, con i suoi dati.</p>`;
+  } else if (fase === 'error') {
+    corpo = contactBlockersHtml(state.blockers);
+  }
+  const riga = [buildingName(building), buildingLine(building)].filter((x, i, a) => x && a.indexOf(x) === i).join(' · ');
+  return formHtml('Elimina edificio', riga, corpo, state.error);
+}
+
+/** Apre il foglio «Elimina…» per `building` (stesso comportamento degli altri). */
+export async function openBuildingTrashDialog(dialogEl, building, { onTrashed } = {}) {
+  return apriFoglio(dialogEl, {
+    html: (stato) => buildingTrashDialogHtml(building, stato),
+    check: () => buildingDeletionCheck(building.id),
+    trash: (motivo, nota) => trashBuilding(building.id, motivo, nota),
+    errorText: buildingTrashErrorText,
+    onTrashed,
   });
 }

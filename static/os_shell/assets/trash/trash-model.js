@@ -202,3 +202,61 @@ export function duplicatesView(restored) {
     reason: [d.same_email ? 'stessa email' : null, d.same_phone ? 'stesso telefono' : null].filter(Boolean).join(' e '),
   }));
 }
+
+// ---------------------------------------------------------------------------
+// CESTINO-EDIFICI-1: le traduzioni per gli EDIFICI (property/building_lifecycle.py).
+// L'edificio e' la palazzina contenitore; l'immobile «intero stabile» resta un
+// immobile (Cestino Immobili). Blocchi e possibili doppioni arrivano dal backend.
+// ---------------------------------------------------------------------------
+
+export const BUILDING_TRASHED_TOAST = 'Edificio spostato nel Cestino';
+export const BUILDING_RESTORED_TOAST = 'Edificio ripristinato';
+
+/** I blocchi dell'edificio: la stessa vista per voci dei contatti (unita' con link). */
+export function buildingBlockerView(blockers) {
+  return contactBlockerView(blockers);
+}
+
+/** Il messaggio di un errore di deletion-check o di POST .../trash di un edificio. */
+export function buildingTrashErrorText(error) {
+  if (!error) return 'Operazione non riuscita.';
+  if (error.status === 404) return 'Edificio non trovato.';
+  return error.message || 'Operazione non riuscita.';
+}
+
+/** Nome dell'edificio, o la sua via; mai vuoto. */
+export function buildingName(b) {
+  if (!b) return '';
+  const via = [b.address, b.civic_number].filter(Boolean).join(' ');
+  return b.name || via || `Edificio #${b.id}`;
+}
+
+/** Via, civico e Comune. */
+export function buildingLine(b) {
+  if (!b) return '';
+  const via = [b.address, b.civic_number].filter(Boolean).join(' ');
+  return [via, b.city].filter(Boolean).join(', ');
+}
+
+export function buildingTrashListPath(offset = 0, limit = 50) {
+  return `/api/property/trash/buildings?limit=${Number(limit)}&offset=${Number(offset)}`;
+}
+
+function uguale(a, b) {
+  return a != null && b != null && String(a).trim().toLowerCase() === String(b).trim().toLowerCase()
+    && String(a).trim() !== '';
+}
+
+/** I possibili doppioni del ripristino (la regola «palazzina simile»), nessuna fusione. */
+export function buildingDuplicatesView(restored) {
+  const lista = restored && Array.isArray(restored.possible_duplicates) ? restored.possible_duplicates : [];
+  return lista.map((d) => {
+    const catasto = ['cadastral_municipality_code', 'cadastral_sheet', 'cadastral_parcel'].every((k) => uguale(d[k], restored[k]));
+    const indirizzo = ['city', 'address'].every((k) => uguale(d[k], restored[k]));
+    return {
+      id: Number(d.id),
+      name: [buildingName(d), buildingLine(d)].filter((x, i, a) => x && a.indexOf(x) === i).join(' · '),
+      reason: [catasto ? 'stessa chiave catastale' : null, indirizzo ? 'stesso indirizzo' : null].filter(Boolean).join(' e '),
+    };
+  });
+}

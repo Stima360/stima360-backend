@@ -511,7 +511,8 @@ def test_m_schema_085(mondo):
         assert "append-only" in str(e.value)
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 ammette anche 'contact'; un'entita' fuori
     # catalogo resta rifiutata.
-    for sql in ("INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'building', 1, 'trash')",
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 ammette anche 'building'; un'entita' fuori catalogo resta rifiutata.
+    for sql in ("INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'buy_request', 1, 'trash')",
                 "INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'property', 1, 'purge')"):
         with pytest.raises(Exception):
             _q(m, sql)

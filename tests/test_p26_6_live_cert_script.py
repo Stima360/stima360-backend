@@ -5656,6 +5656,17 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # CONSEGUENZA PER IL CLEANUP, dichiarata: la matrice non chiama le rotte
     # del Cestino Contatti: non ne crea.
     ("contacts", "deleted_by_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1, migration 091. Cestino
+    # Edifici: UN riferimento non-CASCADE nuovo verso una tabella che il
+    # cleanup cancella. ESAMINATO.
+    #
+    #   buildings.deleted_by_user_id -> operator_users  SET NULL
+    #
+    # Stessa scelta di immobili e contatti: chi ha spostato un edificio nel
+    # Cestino e' un'informazione accessoria (la guardia di congelamento della
+    # 091 ammette proprio questa azione della FK). La matrice non chiama le
+    # rotte del Cestino Edifici: non ne crea.
+    ("buildings", "deleted_by_user_id", "operator_users", "SET NULL"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1, migration 087. Provenienza
     # dal sito (`property_site_sources`): QUATTRO riferimenti non-CASCADE nuovi
     # verso tabelle che il cleanup cancella. ESAMINATI.
@@ -9995,7 +10006,8 @@ def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypa
     righe = _righe_edifici(report)
     assert righe and [r for r in righe if r[0] != cert.PASS] == [], righe
     idents = {i for _k, i, _t in righe}
-    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 13
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: piu' le tre rotte del Cestino Edifici (sonda anonima).
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 16
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
                      "censimento-lettura-{a}-{b}", "presa-in-carico-{a}-{b}", "annulla-{a}-{b}",
@@ -10052,7 +10064,9 @@ def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
                 or re.match(r"^/api/property/properties/\{property_id\}/(census|pertinenze|accessories|take-in-charge|undo-create)", template)):
             for m in methods:
                 montate.add((m, re.sub(r"\{[a-z_]+\}", "{id}", template)))
-    assert len(montate) == 14
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: tre rotte nuove sotto /buildings
+    # (deletion-check, trash, restore), coperte dalla sonda anonima.
+    assert len(montate) == 17
     assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
         set(cert.BUILDINGS_OPERAZIONI) ^ montate
     assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]

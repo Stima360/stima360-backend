@@ -42,7 +42,8 @@ def test_m01_la_090_e_l_ultima_valida_e_additiva():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m090 = tutte[-1]
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 090 non e' piu' l'ultima (091)
+    m090 = next(m for m in tutte if m.version.startswith("090_"))
     assert m090.version == "090_cestino_contatti_1_contact_trash"
     assert m090.down_available and not m090.non_transactional and runner.validate_migration(m090) == []
     su = _eseguibile(SU)
@@ -159,6 +160,8 @@ def test_c01_import_e_forma_dei_rifiuti():
     for router in ("buy/router.py", "acquisition/router.py", "owner/router_admin.py", "proposal/router.py",
                    "sale/router.py", "property/router.py"):
         testo = (ROOT / router).read_text(encoding="utf-8")
-        assert "except (PropertyInTrash, ContactInTrash) as " in testo, router
+        # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: il router Immobili traduce anche BuildingInTrash
+        assert ("except (PropertyInTrash, ContactInTrash) as " in testo
+                or "except (PropertyInTrash, ContactInTrash, BuildingInTrash) as " in testo), router
     database = (ROOT / "core" / "database.py").read_text(encoding="utf-8")
     assert "raise ContactInTrash() from exc" in database

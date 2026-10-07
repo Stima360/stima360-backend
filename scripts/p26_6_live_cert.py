@@ -4869,6 +4869,11 @@ BUILDINGS_OPERAZIONI = (
     ("POST", "/api/property/properties/{id}/accessories/{id}/resolve"),
     ("POST", "/api/property/properties/{id}/take-in-charge"),
     ("POST", "/api/property/properties/{id}/undo-create"),
+    # CESTINO-EDIFICI-1: il Cestino degli edifici. Solo la sonda anonima (401
+    # prima di ogni lettura): nessuna sonda autenticata vi sposta o ripristina.
+    ("GET", "/api/property/buildings/{id}/deletion-check"),
+    ("POST", "/api/property/buildings/{id}/trash"),
+    ("POST", "/api/property/buildings/{id}/restore"),
 )
 
 
@@ -4915,7 +4920,7 @@ def _edifici_fuori_agenzia(database, ids, agency_id) -> list:
 def certify_property_buildings(report, http, cert, jars, owned, context) -> None:
     """EDIFICI e CENSIMENTO (CENSIMENTO-1 Fase 3): HOSTILE / REJECTION ONLY.
 
-        anonimo, su tredici rotte (tutte meno la DELETE)   -> 401
+        anonimo, su sedici rotte (tutte meno la DELETE)    -> 401
         elenco edifici                                      -> mai un edificio altrui
         scheda dell'edificio altrui (esistente, letto)      -> 404, nessun dato
         PATCH vuota sull'edificio altrui                    -> 404, nessun dato

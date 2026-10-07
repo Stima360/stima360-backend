@@ -150,6 +150,14 @@ def test_b01_le_rotte_del_censimento_sono_nominate_solo_dal_client_proprio():
         # i commenti possono citare i contratti; le CHIAMATE (stringhe e template) no
         codice = re.sub(r"/\*\*[\s\S]*?\*/", "", testo)
         codice = "\n".join(r for r in codice.splitlines() if not r.strip().startswith("//"))
+        # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: le rotte del CESTINO degli
+        # edifici (deletion-check, trash, restore, elenco) appartengono al client
+        # del Cestino (trash/trash-api.js, e il percorso dell'elenco a
+        # trash-model.js, come per gli immobili): solo quelle quattro forme, solo
+        # in quei due file. Ogni altra rotta `/buildings` resta di census-api.js.
+        if rel in ("static/os_shell/assets/trash/trash-api.js", "static/os_shell/assets/trash/trash-model.js"):
+            codice = re.sub(r"`/api/property/buildings/\$\{buildingId\}/(deletion-check|trash|restore)`", "", codice)
+            codice = re.sub(r"`/api/property/trash/buildings\?", "", codice)
         for fr in frammenti:
             assert not re.search(r"[`'\"][^`'\"\n]*" + re.escape(fr), codice), (rel, fr)
 

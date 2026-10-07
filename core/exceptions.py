@@ -33,6 +33,16 @@ class ContactInTrash(ConflictError):
         self.extra = {}
 
 
+class BuildingInTrash(ConflictError):
+    """CESTINO-EDIFICI-1: nuova unita' o modifica verso un edificio nel Cestino
+    (409 BUILDING_IN_TRASH). Vedi property/building_lifecycle.py."""
+    code = "BUILDING_IN_TRASH"
+
+    def __init__(self, message: str = "L'edificio è nel Cestino: ripristinalo prima di usarlo"):
+        super().__init__(message)
+        self.extra = {}
+
+
 class ValidationError(CoreError):
     pass
 

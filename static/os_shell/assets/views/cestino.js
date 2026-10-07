@@ -1,7 +1,8 @@
 // STIMA360 OS — views/cestino.js
 // DELETE-ARCH Fase 2B3: la pagina «Cestino», nata con i soli immobili.
 // CESTINO-CONTATTI-1: due schede, «Immobili» (predefinita, invariata) e
-// «Contatti» (caricata al primo tocco, o subito con `#/cestino/contatti`),
+// «Contatti» (caricata al primo tocco, o subito con `#/cestino/contatti`);
+// CESTINO-EDIFICI-1: la terza, «Edifici» (`#/cestino/edifici`),
 // con le stesse card, lo stesso «Ripristina» e lo stesso «Carica altri».
 // Per i contatti il ripristino puo' segnalare POSSIBILI DOPPIONI attivi
 // (stessa email o telefono): solo un avviso con i collegamenti, nessuna
@@ -22,10 +23,12 @@
 import { escapeHtml, formatDateTime } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import { COMMERCIAL_STATUS_LABELS } from './incarichi.js';
-import { listContactTrash, listTrash, restoreContact, restoreProperty } from '../trash/trash-api.js';
 import {
-  CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST, contactLine, contactName, duplicatesView,
-  propertyLine, reasonLabel, restoreErrorView,
+  listBuildingTrash, listContactTrash, listTrash, restoreBuilding, restoreContact, restoreProperty,
+} from '../trash/trash-api.js';
+import {
+  BUILDING_RESTORED_TOAST, CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST, buildingDuplicatesView,
+  buildingLine, buildingName, contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
 } from '../trash/trash-model.js';
 
 const PAGE_SIZE = 50;
@@ -86,14 +89,52 @@ export function contactTrashCardHtml(item) {
     </article>`;
 }
 
-/** L'avviso dopo un ripristino con possibili doppioni (esportato per le prove). */
-export function duplicatesNoticeHtml(nome, doppioni) {
+/**
+ * L'avviso dopo un ripristino con possibili doppioni (esportato per le prove).
+ * Contatti (predefinito) o, CESTINO-EDIFICI-1, edifici: cambiano solo il
+ * collegamento e le parole.
+ */
+export function duplicatesNoticeHtml(nome, doppioni, { kind = 'contact' } = {}) {
   if (!doppioni.length) return '';
-  return `<div class="trash-notice" data-contact-duplicates role="status">
-      <p><strong>${escapeHtml(nome)}</strong> è di nuovo fra i contatti. Possibili doppioni attivi, da controllare:</p>
-      <ul>${doppioni.map((d) => `<li><a href="#/contatti/${d.id}">${escapeHtml(d.name)}</a>${d.reason ? ` — ${escapeHtml(d.reason)}` : ''}</li>`).join('')}</ul>
-      <p class="muted">Nessun contatto è stato unito o modificato.</p>
+  const edificio = kind === 'building';
+  const href = (id) => (edificio ? `#/edifici/${Number(id)}` : `#/contatti/${Number(id)}`);
+  const attributo = edificio ? 'data-building-duplicates' : 'data-contact-duplicates';
+  return `<div class="trash-notice" ${attributo} role="status">
+      <p><strong>${escapeHtml(nome)}</strong> è di nuovo ${edificio ? 'fra gli edifici' : 'fra i contatti'}. Possibili doppioni attivi, da controllare:</p>
+      <ul>${doppioni.map((d) => `<li><a href="${href(d.id)}">${escapeHtml(d.name)}</a>${d.reason ? ` — ${escapeHtml(d.reason)}` : ''}</li>`).join('')}</ul>
+      <p class="muted">${edificio ? 'Nessun edificio è stato unito o modificato.' : 'Nessun contatto è stato unito o modificato.'}</p>
     </div>`;
+}
+
+const BUILDING_TYPE_LABELS = {
+  condominio: 'Condominio', villa: 'Villa', rustico: 'Rustico', capannone: 'Capannone',
+  commerciale: 'Commerciale', misto: 'Misto', altro: 'Altro',
+};
+
+/** Una card del Cestino Edifici (esportata per le prove). */
+export function buildingTrashCardHtml(item) {
+  const chi = item.deleted_by_name ? ` · da ${item.deleted_by_name}` : '';
+  const motivo = reasonLabel(item.deleted_reason) + (item.deleted_note ? ` — ${item.deleted_note}` : '');
+  const id = Number(item.id);
+  const dichiarate = item.units_declared === null || item.units_declared === undefined ? 'non note' : String(item.units_declared);
+  return `
+    <article class="trash-card" data-building-trash-item="${id}">
+      <div class="trash-card-head">
+        <strong class="trash-code">${escapeHtml(buildingName(item))}</strong>
+        <span class="muted trash-type">${escapeHtml(BUILDING_TYPE_LABELS[item.building_type] || 'Edificio')}</span>
+      </div>
+      <div class="trash-line">${escapeHtml(buildingLine(item) || '—')}</div>
+      <dl class="trash-facts">
+        <dt>Eliminato</dt><dd data-trash-when>${escapeHtml(formatDateTime(item.deleted_at))}${escapeHtml(chi)}</dd>
+        <dt>Motivo</dt><dd data-trash-reason>${escapeHtml(motivo)}</dd>
+        <dt>Unità dichiarate</dt><dd data-trash-status>${escapeHtml(dichiarate)}</dd>
+      </dl>
+      <div class="field-error trash-card-error" data-trash-card-error role="alert"></div>
+      <div class="trash-card-actions">
+        <a class="btn ghost" href="#/edifici/${id}" data-building-trash-open>Apri scheda</a>
+        <button type="button" class="btn primary" data-building-restore="${id}">Ripristina</button>
+      </div>
+    </article>`;
 }
 
 /**
@@ -163,19 +204,24 @@ function listaCestino(listEl, pagerEl, toastHost, cfg) {
 }
 
 export async function renderCestino(container) {
-  const contatti = /^#\/cestino\/contatti\b/.test(window.location.hash || '');
+  const hash = window.location.hash || '';
+  // CESTINO-EDIFICI-1: `#/cestino/contatti` e `#/cestino/edifici` aprono la loro scheda
+  const iniziale = /^#\/cestino\/contatti\b/.test(hash) ? 'contatti' : (/^#\/cestino\/edifici\b/.test(hash) ? 'edifici' : 'immobili');
+  const contatti = iniziale === 'contatti';
+  const edifici = iniziale === 'edifici';
   container.innerHTML = `
     <div class="card panel trash-page">
       <div class="tabs trash-tabs" data-trash-tabs>
-        <button type="button" class="tab-btn${contatti ? '' : ' active'}" data-trash-tab="immobili">Immobili</button>
+        <button type="button" class="tab-btn${iniziale === 'immobili' ? ' active' : ''}" data-trash-tab="immobili">Immobili</button>
         <button type="button" class="tab-btn${contatti ? ' active' : ''}" data-trash-tab="contatti">Contatti</button>
+        <button type="button" class="tab-btn${edifici ? ' active' : ''}" data-trash-tab="edifici">Edifici</button>
       </div>
-      <section class="trash-panel" data-trash-panel="immobili"${contatti ? ' hidden' : ''}>
+      <section class="trash-panel" data-trash-panel="immobili"${iniziale === 'immobili' ? '' : ' hidden'}>
         <div class="trash-page-head">
           <p class="muted trash-intro">Immobili spostati nel Cestino: non compaiono nelle liste operative finché non li ripristini.</p>
           <a href="#/immobili" class="btn ghost" data-trash-back>← Immobili</a>
         </div>
-        <div class="trash-cards" data-trash-list>${contatti ? '' : '<p class="muted">Caricamento…</p>'}</div>
+        <div class="trash-cards" data-trash-list>${iniziale === 'immobili' ? '<p class="muted">Caricamento…</p>' : ''}</div>
         <div class="list-pager" data-trash-pager></div>
       </section>
       <section class="trash-panel" data-trash-panel="contatti"${contatti ? '' : ' hidden'}>
@@ -187,13 +233,24 @@ export async function renderCestino(container) {
         <div class="trash-cards" data-contact-trash-list>${contatti ? '<p class="muted">Caricamento…</p>' : ''}</div>
         <div class="list-pager" data-contact-trash-pager></div>
       </section>
+      <section class="trash-panel" data-trash-panel="edifici"${edifici ? '' : ' hidden'}>
+        <div class="trash-page-head">
+          <p class="muted trash-intro">Edifici (palazzine) spostati nel Cestino: vuoti, non compaiono nella lista Edifici né nella creazione guidata finché non li ripristini.</p>
+          <a href="#/edifici" class="btn ghost" data-building-trash-back>← Edifici</a>
+        </div>
+        <div data-building-trash-notice></div>
+        <div class="trash-cards" data-building-trash-list>${edifici ? '<p class="muted">Caricamento…</p>' : ''}</div>
+        <div class="list-pager" data-building-trash-pager></div>
+      </section>
     </div>
   `;
   const toastHost = container.parentElement || container;
   const pannelli = {
     immobili: container.querySelector('[data-trash-panel="immobili"]'),
     contatti: container.querySelector('[data-trash-panel="contatti"]'),
+    edifici: container.querySelector('[data-trash-panel="edifici"]'),
   };
+  const buildingNoticeEl = container.querySelector('[data-building-trash-notice]');
   const noticeEl = container.querySelector('[data-contact-trash-notice]');
   const caricaImmobili = listaCestino(container.querySelector('[data-trash-list]'),
     container.querySelector('[data-trash-pager]'), toastHost, {
@@ -210,7 +267,17 @@ export async function renderCestino(container) {
       moreError: 'Impossibile caricare altri contatti.',
       afterRestore: (riga) => { noticeEl.innerHTML = duplicatesNoticeHtml(contactName(riga), duplicatesView(riga)); },
     });
-  const caricati = { immobili: false, contatti: false };
+  const caricaEdifici = listaCestino(container.querySelector('[data-building-trash-list]'),
+    container.querySelector('[data-building-trash-pager]'), toastHost, {
+      itemAttr: 'data-building-trash-item', restoreAttr: 'data-building-restore', restoreKey: 'buildingRestore',
+      card: buildingTrashCardHtml, list: listBuildingTrash, restore: restoreBuilding, toast: BUILDING_RESTORED_TOAST,
+      errorHtml: (error) => escapeHtml(restoreErrorView(error).text),
+      moreError: 'Impossibile caricare altri edifici.',
+      afterRestore: (riga) => {
+        buildingNoticeEl.innerHTML = duplicatesNoticeHtml(buildingName(riga), buildingDuplicatesView(riga), { kind: 'building' });
+      },
+    });
+  const caricati = { immobili: false, contatti: false, edifici: false };
 
   async function mostra(scheda) {
     for (const [nome, el] of Object.entries(pannelli)) el.hidden = nome !== scheda;
@@ -219,11 +286,12 @@ export async function renderCestino(container) {
     }
     if (caricati[scheda]) return;
     caricati[scheda] = true;
-    await (scheda === 'contatti' ? caricaContatti() : caricaImmobili());
+    const carica = { immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici }[scheda];
+    await carica();
   }
 
   for (const b of Array.from(container.querySelectorAll('[data-trash-tab]'))) {
     b.addEventListener('click', () => { mostra(b.dataset.trashTab); });
   }
-  await mostra(contatti ? 'contatti' : 'immobili');
+  await mostra(iniziale);
 }

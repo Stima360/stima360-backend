@@ -4,10 +4,11 @@ from fastapi.responses import JSONResponse
 from core.exceptions import NotFoundError,ConflictError,ValidationError,PermissionDenied
 from core.property_trash import PropertyInTrash, trash_409  # DELETE-ARCH 2B2
 from core.contact_trash import ContactInTrash  # CESTINO-CONTATTI-1: stessa forma {detail, code}
+from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa forma {detail, code}
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import census, interactions, mandates, service, site_sync
+from . import building_lifecycle, census, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -16,7 +17,7 @@ def tr(fn,*a,**k):
     # generici su un database senza il modulo) -> 503 leggibile, prima di ogni altro caso
     except census.CensusNotInstalled as e:raise HTTPException(503,str(e))
     except NotFoundError as e:raise HTTPException(404,str(e))
-    except (PropertyInTrash, ContactInTrash) as e:return trash_409(e)      # DELETE-ARCH 2B2: {detail, code}
+    except (PropertyInTrash, ContactInTrash, BuildingInTrash) as e:return trash_409(e)      # DELETE-ARCH 2B2: {detail, code}
     except ConflictError as e:raise HTTPException(409,str(e))
     except ValidationError as e:raise HTTPException(400,str(e))
     except PlatformAdminAgencyRequired as e:raise HTTPException(403,str(e))
@@ -139,6 +140,16 @@ def trc(fn,*a,status=200,**k):
 def list_buildings(search:str|None=None,city:str|None=None,microzone:str|None=None,sort:str=Query('recent',pattern='^(recent|address)$'),limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.list_buildings,ctx,search=search,city=city,microzone=microzone,sort=sort,limit=limit,offset=offset)
 @router.post('/buildings',status_code=201)
 def create_building(p:BuildingCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.create_building,ctx,p,status=201)
+# CESTINO-EDIFICI-1: il Cestino degli edifici (palazzine contenitore), stesso
+# impianto del Cestino Immobili; stessa traduzione `trc` ({detail, code, ...}).
+@router.get('/buildings/{building_id}/deletion-check')
+def building_deletion_check(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.deletion_check,ctx,building_id)
+@router.post('/buildings/{building_id}/trash')
+def trash_building(building_id:int,p:PropertyTrash,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.trash_building,ctx,building_id,p.reason_code,p.note)
+@router.post('/buildings/{building_id}/restore')
+def restore_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.restore_building,ctx,building_id)
+@router.get('/trash/buildings')
+def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.list_trash,ctx,limit=limit,offset=offset)
 @router.get('/buildings/{building_id}')
 def get_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.get_building,ctx,building_id)
 @router.patch('/buildings/{building_id}')

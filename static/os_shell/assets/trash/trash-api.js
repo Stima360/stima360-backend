@@ -5,8 +5,9 @@
 // CESTINO-CONTATTI-1: anche le rotte del Cestino Contatti (core/router.py) e
 // il «Disattiva» dell'accesso al portale proprietario che un blocco propone
 // (owner/router_admin.py, la rotta esistente: nessuna nuova).
+// CESTINO-EDIFICI-1: anche le rotte del Cestino Edifici (property/router.py).
 import { apiGet, apiPost } from '../core/api-client.js';
-import { contactTrashListPath, trashListPath } from './trash-model.js';
+import { buildingTrashListPath, contactTrashListPath, trashListPath } from './trash-model.js';
 
 export function deletionCheck(propertyId) {
   return apiGet(`/api/property/properties/${propertyId}/deletion-check`);
@@ -51,4 +52,25 @@ export function restoreContact(contactId) {
 /** L'azione proposta dal blocco OWNER_PORTAL_ACTIVE: la rotta esistente. */
 export function disableOwnerAccount(accountId) {
   return apiPost(`/api/owner/admin/accounts/${Number(accountId)}/disable`, {});
+}
+
+// --- CESTINO-EDIFICI-1 -------------------------------------------------------
+
+export function buildingDeletionCheck(buildingId) {
+  return apiGet(`/api/property/buildings/${buildingId}/deletion-check`);
+}
+
+export function trashBuilding(buildingId, reasonCode, note) {
+  const corpo = { reason_code: reasonCode };
+  const testo = typeof note === 'string' ? note.trim() : '';
+  if (testo) corpo.note = testo;
+  return apiPost(`/api/property/buildings/${buildingId}/trash`, corpo);
+}
+
+export function listBuildingTrash(offset = 0, limit = 50) {
+  return apiGet(buildingTrashListPath(offset, limit));
+}
+
+export function restoreBuilding(buildingId) {
+  return apiPost(`/api/property/buildings/${buildingId}/restore`);
 }

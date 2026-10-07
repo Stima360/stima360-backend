@@ -56,7 +56,9 @@ from core import repository as core_repository
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, ValidationError
 
+from core import building_trash as _building_trash
 from core import property_trash as _property_trash
+from core.building_trash import BuildingInTrash
 
 from . import repository
 from .catalog import PERTINENZA_PROPERTY_TYPE, generated_title, validate_cadastral_category, validate_location
@@ -384,18 +386,25 @@ def _etichetta(riga) -> str:
 # letture nello scope
 # ---------------------------------------------------------------------------
 
-def _edificio(cur, agency_id, building_id, *, lock=False, share=False):
+def _edificio(cur, agency_id, building_id, *, lock=False, share=False, trashed_ok=False):
     """`lock`: FOR UPDATE (chi modifica l'edificio). `share`: FOR SHARE (chi
     ne copia l'indirizzo in una unita' nuova): cosi' la PATCH dell'edificio
     aspetta la creazione e la propaga anche alla riga nuova, oppure la
     creazione aspetta la PATCH e copia l'indirizzo nuovo - mai un'unita'
     ereditata con l'indirizzo vecchio. E' lo stesso FOR SHARE che il trigger
-    della 083 prende sull'edificio al momento del collegamento."""
+    della 083 prende sull'edificio al momento del collegamento.
+
+    CESTINO-EDIFICI-1: un edificio nel Cestino si legge solo con
+    `trashed_ok` (la scheda in sola lettura); per chi modifica o collega e'
+    un 409 BUILDING_IN_TRASH, deciso DOPO il lock (FOR UPDATE / FOR SHARE):
+    uno spostamento nel Cestino concorrente si vede."""
     cur.execute(f"SELECT * FROM buildings WHERE id = %s AND agency_id = %s AND archived_at IS NULL"
                 f"{' FOR UPDATE' if lock else (' FOR SHARE' if share else '')}", (building_id, agency_id))
     riga = repository.row(cur.fetchone())
     if riga is None:
         raise NotFoundError(f"building {building_id} not found")
+    if riga.get("deleted_at") is not None and not trashed_ok:
+        raise BuildingInTrash()
     return riga
 
 
@@ -655,7 +664,8 @@ def _simili_edificio(cur, agency_id, data, escluso=None) -> list[dict]:
     if not condizioni:
         return []
     cur.execute("SELECT id, name, city, address, civic_number, cadastral_municipality_code, cadastral_sheet, "
-                "cadastral_parcel FROM buildings WHERE agency_id = %s AND archived_at IS NULL AND id IS DISTINCT FROM %s "
+                "cadastral_parcel FROM buildings b WHERE agency_id = %s AND archived_at IS NULL AND id IS DISTINCT FROM %s "
+                f"AND {_building_trash.live('b')} "
                 f"AND ({' OR '.join(condizioni)}) ORDER BY id LIMIT 10", [agency_id, escluso] + params)
     return [dict(r) for r in cur.fetchall()]
 
@@ -699,7 +709,9 @@ def list_buildings(ctx, *, search=None, city=None, microzone=None, sort="recent"
         raise ValidationError("Ordinamento non valido")
     with core_cursor() as (_, cur):
         _assicura_083(cur)
-        condizioni, params = ["b.agency_id = %s", "b.archived_at IS NULL"], [agency_id]
+        # CESTINO-EDIFICI-1: un edificio nel Cestino non e' nella lista Edifici
+        # ne' fra i candidati della creazione guidata (stessa rotta).
+        condizioni, params = ["b.agency_id = %s", "b.archived_at IS NULL", _building_trash.live("b")], [agency_id]
         for parola in (search or "").split()[:8]:
             condizioni.append("concat_ws(' ', b.name, b.address, b.civic_number, b.city, b.microzone) ILIKE %s")
             params.append(_like(parola))
@@ -727,10 +739,17 @@ def list_buildings(ctx, *, search=None, city=None, microzone=None, sort="recent"
 
 
 def get_building(ctx, building_id: int) -> dict:
+    """La scheda. CESTINO-EDIFICI-1: anche di un edificio nel Cestino (sola
+    lettura, consultabile dal Cestino), con `trash` = chi, quando, perche'."""
+    from .building_lifecycle import trash_info
     agency_id = ctx.require_agency()
     with core_cursor() as (_, cur):
         _assicura_083(cur)
-        return _dettaglio_edificio(cur, _edificio(cur, agency_id, building_id))
+        edificio = _edificio(cur, agency_id, building_id, trashed_ok=True)
+        dettaglio = _dettaglio_edificio(cur, edificio)
+        if edificio.get("deleted_at") is not None:
+            dettaglio["trash"] = trash_info(cur, ctx, edificio)
+        return dettaglio
 
 
 def create_building(ctx, body) -> dict:
@@ -747,6 +766,11 @@ def create_building(ctx, body) -> dict:
             _assicura_083(cur)
             replica = _replica_in(cur, "buildings", agency_id, chiave, impronta)
             if replica is not None:
+                if replica.get("deleted_at") is not None:
+                    # CESTINO-EDIFICI-1: la palazzina di questa richiesta e' nel
+                    # Cestino: nessun doppione, si ripristina
+                    from .building_lifecycle import REPLICA_IN_TRASH_MESSAGE
+                    raise BuildingInTrash(REPLICA_IN_TRASH_MESSAGE)
                 return {**_dettaglio_edificio(cur, replica), "replica": True}
             simili = _simili_edificio(cur, agency_id, data)
             if simili and not conferma:

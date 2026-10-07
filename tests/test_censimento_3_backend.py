@@ -211,7 +211,13 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     from operator_auth.dependencies import legacy_basic_agency_context as _gate
     nuove = [r for r in router.routes if "/site-sources" in r.path]
     assert len(nuove) == 4 and all(_gate in {d.call for d in r.dependant.dependencies} for r in nuove)
-    assert len(router.routes) == 50
+    # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: 50 -> 54 (Cestino Edifici:
+    # deletion-check, trash, restore e l'elenco), stesso gate (verificato qui sotto).
+    cestino = [r for r in router.routes if r.path.startswith("/api/property/buildings/{building_id}/")
+               and r.path.rsplit("/", 1)[-1] in ("deletion-check", "trash", "restore")
+               or r.path == "/api/property/trash/buildings"]
+    assert len(cestino) == 4 and all(_gate in {d.call for d in r.dependant.dependencies} for r in cestino)
+    assert len(router.routes) == 54
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

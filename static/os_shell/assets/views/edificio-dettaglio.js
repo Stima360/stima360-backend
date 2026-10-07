@@ -30,7 +30,7 @@
 import { apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { getSession } from '../core/auth.js';
-import { escapeHtml, renderBadge } from '../components/st-table.js';
+import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
 import { openBuildingSheet, openLinkPrincipalSheet, openUnitSheet, showToast } from '../census/census-sheets.js';
@@ -39,6 +39,15 @@ import {
   principalCandidates, summaryView, unitFacts, unitRelationText, unitRowBadges,
 } from '../census/census-model.js';
 import { STATUS_LABELS, canManagePropertyLifecycle } from './immobile-dettaglio.js';
+// CESTINO-EDIFICI-1: «Elimina…» (foglio condiviso del Cestino) e, per un
+// edificio nel Cestino, la scheda in sola lettura con «Ripristina». Le rotte
+// le nomina solo trash/trash-api.js; blocchi e permessi li decide il backend.
+import { bindBuildingTrashButton, buildingTrashButtonHtml } from '../trash/trash-dialog.js';
+import { restoreBuilding } from '../trash/trash-api.js';
+import {
+  BUILDING_RESTORED_TOAST, buildingDuplicatesView, buildingName, reasonLabel, restoreErrorView,
+} from '../trash/trash-model.js';
+import { duplicatesNoticeHtml } from './cestino.js';
 
 export async function renderEdificioDettaglio(container, params = []) {
   const buildingId = params[0];
@@ -59,22 +68,27 @@ export async function renderEdificioDettaglio(container, params = []) {
 
   let lastFloor = '';
   let archiveConfirm = null;
+  // CESTINO-EDIFICI-1: nel Cestino l'edificio e' congelato (il backend
+  // rifiuta modifica e unita' nuove): scheda consultabile, senza comandi.
+  const inTrash = Boolean(edificio.deleted_at);
   // CREAZIONE-GUIDATA-1: arrivando dalla procedura guidata (#/edifici/{id}/
   // aggiungi/crm|censimento) il foglio dell'unita' si apre subito e le unita'
   // nascono del tipo deciso dall'ingresso; altrimenti, come prima, censimento.
-  const dallaProcedura = params[1] === 'aggiungi';
+  const dallaProcedura = params[1] === 'aggiungi' && !inTrash;
   const modo = dallaProcedura && params[2] === 'crm' ? 'crm' : 'census';
   let ultimaSalvata = null;
 
   container.innerHTML = `
+    ${inTrash ? buildingTrashBannerHtml(edificio) : ''}
     <div class="contact-header card census-building-header">
       <a href="#/edifici" class="muted census-back" id="building-back">← Edifici</a>
       <h2 id="building-title"></h2>
       <div class="muted" id="building-subtitle"></div>
       <dl class="building-facts" id="building-facts"></dl>
-      <div class="action-bar">
+      ${inTrash ? '' : `<div class="action-bar">
         <button type="button" class="btn ghost" id="building-edit">Modifica palazzina</button>
-      </div>
+        ${buildingTrashButtonHtml()}
+      </div>`}
     </div>
     <div class="card panel building-summary-panel">
       <div class="building-counts building-counts-large" id="building-counters"></div>
@@ -86,11 +100,11 @@ export async function renderEdificioDettaglio(container, params = []) {
       </details>
     </div>
     <div class="card panel census-units-panel">
-      <div class="census-add-bar">
+      ${inTrash ? '' : `<div class="census-add-bar">
         <button type="button" class="btn primary" id="unit-add-apartment">+ Aggiungi unità</button>
         <button type="button" class="btn" id="unit-add-other">Altro tipo…</button>
         <button type="button" class="btn" id="unit-add-pertinenza">+ Pertinenza</button>
-      </div>
+      </div>`}
       ${modo === 'crm' ? '<p class="muted census-kind-note" id="unit-add-mode" data-record-kind="crm">Le unità che aggiungi ora nascono come schede commerciali (procedura da Immobili).</p>' : ''}
       <div id="unit-saved-bar" class="census-banner census-saved-bar" hidden></div>
       <div id="unit-type-chips" class="census-chips census-chips-wrap" hidden></div>
@@ -165,7 +179,8 @@ export async function renderEdificioDettaglio(container, params = []) {
   function renderUnits() {
     const gruppi = groupUnitsByFloor(edificio.units || []);
     if (!gruppi.length) {
-      unitsEl.innerHTML = '<p class="muted">Nessuna unità censita: comincia con «+ Appartamento».</p>';
+      unitsEl.innerHTML = inTrash ? '<p class="muted">Nessuna unità: l’edificio è nel Cestino.</p>'
+        : '<p class="muted">Nessuna unità censita: comincia con «+ Appartamento».</p>';
     } else {
       unitsEl.innerHTML = gruppi.map((g) => `
       <div class="census-floor" data-floor="${escapeHtml(g.floor)}">
@@ -308,16 +323,23 @@ export async function renderEdificioDettaglio(container, params = []) {
     });
   }
 
-  container.querySelector('#unit-add-apartment').addEventListener('click', () => apriFoglio({ property_type: 'apartment' }));
-  container.querySelector('#unit-add-pertinenza').addEventListener('click', () => apriFoglio({ property_type: 'garage', floor: lastFloor }, { kind: '' }));
+  container.querySelector('#unit-add-apartment')?.addEventListener('click', () => apriFoglio({ property_type: 'apartment' }));
+  container.querySelector('#unit-add-pertinenza')?.addEventListener('click', () => apriFoglio({ property_type: 'garage', floor: lastFloor }, { kind: '' }));
   const chips = container.querySelector('#unit-type-chips');
   chips.innerHTML = tipi.filter((t) => t.value !== 'apartment').map((t) => `<button type="button" class="chip" data-add-type="${escapeHtml(t.value)}">${escapeHtml(t.label)}</button>`).join('');
-  container.querySelector('#unit-add-other').addEventListener('click', () => { chips.hidden = !chips.hidden; });
+  container.querySelector('#unit-add-other')?.addEventListener('click', () => { chips.hidden = !chips.hidden; });
   // R3: «Stabile intero» e' la tipologia `building` in palazzina; il flag lo
   // deriva il foglio dalla chip scelta, non il bottone di apertura
   chips.querySelectorAll('[data-add-type]').forEach((b) => b.addEventListener('click', () => { chips.hidden = true; apriFoglio({ property_type: b.dataset.addType }); }));
 
-  container.querySelector('#building-edit').addEventListener('click', () => openBuildingSheet(buildingSheet, {
+  if (inTrash) {
+    bindBuildingRestore(container, edificio);
+  } else {
+    // CESTINO-EDIFICI-1: dopo lo spostamento si torna alla lista Edifici
+    bindBuildingTrashButton(container, edificio, () => navigate('edifici'));
+  }
+
+  container.querySelector('#building-edit')?.addEventListener('click', () => openBuildingSheet(buildingSheet, {
     options: opzioni, building: edificio,
     onSaved: async (aggiornato) => {
       if (aggiornato && typeof aggiornato.propagated_units === 'number') {
@@ -337,4 +359,47 @@ export async function renderEdificioDettaglio(container, params = []) {
     }
     apriFoglio({ property_type: 'apartment' });
   }
+}
+
+// --- CESTINO-EDIFICI-1: edificio nel Cestino ---------------------------------
+
+function buildingTrashBannerHtml(edificio) {
+  const info = edificio.trash || {};
+  const chi = info.deleted_by_name ? ` da ${info.deleted_by_name}` : '';
+  const data = formatDateTime(info.deleted_at || edificio.deleted_at);
+  const motivo = reasonLabel(info.deleted_reason || edificio.deleted_reason) + (info.deleted_note ? ` — ${info.deleted_note}` : '');
+  return `
+    <div class="card trash-banner" data-building-in-trash role="status">
+      <p><strong>Nel Cestino</strong> dal ${escapeHtml(data)}${escapeHtml(chi)}. Motivo: ${escapeHtml(motivo)}.</p>
+      <p class="muted">L'edificio non compare nella lista Edifici né nella creazione guidata, non si modifica e non riceve unità. I suoi dati restano.</p>
+      <div class="field-error" data-building-restore-error role="alert"></div>
+      <div class="trash-banner-actions">
+        ${info.can_restore ? '<button type="button" class="btn primary" data-building-restore-btn>Ripristina</button>' : '<span class="muted">Può ripristinarlo chi lo ha spostato o un amministratore.</span>'}
+        <a class="btn ghost" href="#/cestino/edifici">Apri il Cestino</a>
+      </div>
+    </div>`;
+}
+
+/** «Ripristina» dalla scheda: poi la scheda si ridisegna (stesso id) e i
+ *  possibili doppioni attivi si mostrano con il loro collegamento; nulla si unisce. */
+function bindBuildingRestore(container, edificio) {
+  const bottone = container.querySelector('[data-building-restore-btn]');
+  if (!bottone) return;
+  bottone.addEventListener('click', async () => {
+    const errore = container.querySelector('[data-building-restore-error]');
+    bottone.disabled = true;
+    bottone.textContent = 'Ripristino…';
+    errore.textContent = '';
+    try {
+      const riga = await restoreBuilding(edificio.id);
+      showToast(container.parentElement || container, { text: BUILDING_RESTORED_TOAST });
+      await renderEdificioDettaglio(container, [String(edificio.id)]);
+      const avviso = duplicatesNoticeHtml(buildingName(riga), buildingDuplicatesView(riga), { kind: 'building' });
+      if (avviso) container.insertAdjacentHTML('afterbegin', avviso);
+    } catch (error) {
+      errore.textContent = restoreErrorView(error).text;
+      bottone.textContent = 'Ripristina';
+      bottone.disabled = false;
+    }
+  });
 }

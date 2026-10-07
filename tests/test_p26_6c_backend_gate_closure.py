@@ -839,7 +839,12 @@ def test_28_no_certified_router_regressed_out_of_full_scoping():
         # (provenienza dal sito: GET .../site-sources, POST .../conflicts,
         # POST .../duplicates/{other_id}/dismiss, POST .../relink), dietro
         # legacy_basic_agency_context e nello scope. Il conteggio resta esatto.
-        "property": 50, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
+        # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: property 50 -> 54
+        # (Cestino Edifici: GET /buildings/{id}/deletion-check, POST
+        # /buildings/{id}/trash, POST /buildings/{id}/restore, GET
+        # /trash/buildings), dietro legacy_basic_agency_context e nello scope
+        # (set(routes) == set(scoped) qui sotto). Il conteggio resta esatto.
+        "property": 54, "buy": 23, "match": 26, "crm": 4, "proposal": 5,
         "sale": 6, "seller_intelligence": 2, "followup": 1, "seller_intent": 1,
         "property_watch": 12, "next_best_action": 3,
     }
