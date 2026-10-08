@@ -535,10 +535,14 @@ def test_e2_nessun_cron_nuovo():
     # A30-9B (dichiarato): un secondo runner, `run_calendar_sync_cron.py`, per
     # la riconciliazione verso Google Calendar - stesso principio degli altri:
     # un processo in-process, senza HTTP/Basic/sessione browser.
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: un runner nuovo, nominato,
+    # `run_site_import_cron.py` (importazione in sola lettura dal database del
+    # sito); in-process, nessun invio. Qualunque ALTRO runner fa ancora fallire.
     assert runner == ["run_calendar_sync_cron.py", "run_communication_dispatch_cron.py",
                       "run_flow_p2b_cron.py", "run_followup_p18d_cron.py",
                       "run_owner_home_alert_cron.py",
-                      "run_property_watch_valuation_cron.py"], runner
+                      "run_property_watch_valuation_cron.py",
+                      "run_site_import_cron.py"], runner
     sorgente = _codice(ROOT / "owner" / "home_metrics.py")
     for vietato in ("advisory_job_lock", "argparse", "schedule", "cron"):
         assert vietato not in sorgente, vietato

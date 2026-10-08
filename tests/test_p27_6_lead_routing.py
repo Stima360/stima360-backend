@@ -763,7 +763,8 @@ def test_i1_059_is_the_highest_version_and_follows_058():
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: la 090 (Cestino contatti), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: 093 (PDF privato, F07) e 094 (ricevute, F04/F06), additive, seguono la 092 (Cestino richieste).
-    assert numeri[-19:] == list(range(76, 95)), numeri[-19:]
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
+    assert numeri[-20:] == list(range(76, 96)), numeri[-20:]
     assert 64 in numeri, numeri[-4:]
     assert 59 in numeri and 58 in numeri, numeri[-4:]
     assert 58 in numeri, numeri[-4:]

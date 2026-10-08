@@ -5742,6 +5742,23 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # silenziosa.
     ("stima_pdf_artifacts", "agency_id", "agencies", "NO ACTION"),
     ("public_submission_receipts", "agency_id", "agencies", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1, migration 095 (registro
+    # dell'importazione dal sito): UN riferimento non-CASCADE nuovo verso una
+    # tabella che il cleanup cancella. ESAMINATO.
+    #
+    #   site_import_records.agency_id  -> agencies  NO ACTION
+    #
+    # A differenza di PDF e ricevute il registro NON e' figlio della stima (di
+    # proposito nessuna FK verso `stime`): e' la memoria di cio' che e' gia'
+    # stato importato, e se un operatore cancella una stima importata il
+    # registro deve restare, altrimenti il giro dopo la reimporterebbe.
+    # L'agenzia non si cancella sotto il registro (NO ACTION).
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: lo scrive solo
+    # `run_site_import_cron.py`, che la matrice non esegue; se un'agenzia di
+    # prova ne avesse, il preflight la incontra come RIFIUTO, non come
+    # cancellazione silenziosa.
+    ("site_import_records", "agency_id", "agencies", "NO ACTION"),
 })
 
 

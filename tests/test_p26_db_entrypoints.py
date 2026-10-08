@@ -832,6 +832,34 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "the test traffic: that is the application choke point and must stay "
         "uncoupled from a throwaway test database"
     ),
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: due siti nuovi, nominati con la
+    # loro giustificazione. Il CRM continua a scrivere SOLO da
+    # database.get_connection(); l'unica connessione nuova e' verso un ALTRO
+    # database (quello del sito) ed e' in sola lettura imposta dal server.
+    "site_import/source.py": (
+        "READ-ONLY connection to a DIFFERENT database: the public site's "
+        "database (SITE_DB_URL), never the CRM's. It cannot go through "
+        "database.get_connection(), which by design points at the CRM. The "
+        "session is opened with default_transaction_read_only=on and a "
+        "statement_timeout, and the module verifies SHOW "
+        "default_transaction_read_only = 'on' before any query; it issues "
+        "SELECT/SHOW only and rolls back after each read. The importer refuses "
+        "to run if the source is the CRM database itself or carries the CRM "
+        "import ledger. It is not an application/RLS entrypoint of the CRM"
+    ),
+    "tests/test_site_import_1_postgres.py": (
+        "TEST-only SITE-IMPORT-1 proof on TWO throwaway databases: the CRM "
+        "complete schema (reusing the CENSIMENTO-1 Fase 3 module fixture, "
+        "opt-in through P29_TEST_DSN, local DSN only, dropped at teardown) and "
+        "a throwaway site_import_sito_test built from the PROD site schema and "
+        "dropped at teardown. It proves against a real PostgreSQL that the "
+        "site connection is really read-only, that the UNIQUE ledger and the "
+        "advisory lock prevent duplicates under concurrent runs, and that an "
+        "interrupted run resumes without losing records. It must not go "
+        "through database.get_connection() for the test traffic: that is the "
+        "application choke point and must stay uncoupled from a throwaway test "
+        "database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor

@@ -1628,6 +1628,15 @@ function renderStime(loaded) {
       { label: 'Lead collegato', render: (e) => `#${escapeHtml(e.lead_id)}` },
       { label: 'Relazione', render: (e) => renderBadge(e.relation_type || '—', 'gray') },
       { label: 'Collegata il', render: (e) => escapeHtml(formatDate(e.created_at)) },
+      // SITE-IMPORT-1: il PDF originale della stima (dall'archivio del sito per
+      // le stime importate). Rotta operatore, sessione e agenzia del CRM; se il
+      // PDF manca la rotta risponde "PDF non disponibile", senza generarne uno.
+      {
+        label: 'PDF',
+        render: (e) => (Number.isSafeInteger(Number(e.stima_id)) && Number(e.stima_id) > 0
+          ? `<a href="/api/admin/stime/${Number(e.stima_id)}/pdf" target="_blank" rel="noopener">Apri PDF</a>`
+          : '—'),
+      },
     ],
     rows,
     { emptyMessage: 'Nessuna stima collegata ai lead di questo contatto.' },

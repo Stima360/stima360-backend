@@ -526,10 +526,14 @@ def test_24_nessun_secondo_cron_e_nessun_altro_percorso_automatico():
     cron = sorted(p.name for p in ROOT.glob("run_*cron*.py"))
     # A30-9B (collisione dichiarata): un secondo runner, per Google Calendar -
     # non un secondo dispatch della sequenza che questo test protegge.
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: `run_site_import_cron.py`
+    # importa dal sito in sola lettura; non chiama il dispatch, non accende
+    # sequenze (lo verifica anche la riga `chiamanti` qui sotto).
     assert cron == ["run_calendar_sync_cron.py", "run_communication_dispatch_cron.py",
                     "run_flow_p2b_cron.py", "run_followup_p18d_cron.py",
                     "run_owner_home_alert_cron.py",
-                    "run_property_watch_valuation_cron.py"], cron
+                    "run_property_watch_valuation_cron.py",
+                    "run_site_import_cron.py"], cron
 
     chiamanti = subprocess.run(
         ["git", "--no-optional-locks", "grep", "-l", "journeys/tick", "--",

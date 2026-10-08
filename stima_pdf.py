@@ -137,6 +137,12 @@ def generate(stima_id, renderer=genera_pdf_stima, token=None, agency_id=None,
             if status == "ready" and _valid_pdf(pdf, digest):
                 conn.commit()
                 return pdf
+            if isinstance(payload, dict) and payload.get("origin") == "site_archive":
+                # SITE-IMPORT-1: il PDF di una stima importata e' SOLO l'originale
+                # dell'archivio del sito. Se manca non se ne genera uno nuovo: un
+                # documento ricalcolato oggi non e' quello che il cliente ha ricevuto.
+                conn.rollback()
+                raise HTTPException(status_code=503, detail=UNAVAILABLE)
             try:
                 pdf = renderer(copy.deepcopy(payload), nome_file=f"stima_{stima_id}.pdf")
                 if not _valid_pdf(pdf):

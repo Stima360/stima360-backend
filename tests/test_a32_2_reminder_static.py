@@ -224,7 +224,10 @@ def test_s10_nessuna_migration_080():
         "093_stima_private_pdf.sql", "093_stima_private_pdf_down.sql"]
     assert [m for m in migrazioni if m.startswith("094")] == [
         "094_public_submission_receipts.sql", "094_public_submission_receipts_down.sql"]
-    assert migrazioni[-1] == "094_public_submission_receipts_down.sql"
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
+    assert [m for m in migrazioni if m.startswith("095")] == [
+        "095_site_import_ledger.sql", "095_site_import_ledger_down.sql"]
+    assert migrazioni[-1] == "095_site_import_ledger_down.sql"
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

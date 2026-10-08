@@ -714,7 +714,8 @@ def test_g2_nessuna_migration_in_lmc3():
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: poi la 091 (Cestino edifici); la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: poi la 092 (Cestino richieste); la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la finestra si allarga di due.
-    assert migrazioni[-27:] == ["068_lmc10_owner_home_overrides.sql",
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
+    assert migrazioni[-28:] == ["068_lmc10_owner_home_overrides.sql",
                                "069_lmc12_owner_home_notifications.sql",
                                "070_lmc15_acquisition_bridge.sql",
                                "071_p29_3_journey_automation.sql",
@@ -740,7 +741,8 @@ def test_g2_nessuna_migration_in_lmc3():
                                "091_cestino_edifici_1_building_trash.sql",
                                "092_cestino_richieste_1_buy_request_trash.sql",
                                "093_stima_private_pdf.sql",
-                               "094_public_submission_receipts.sql"], migrazioni[-27:]
+                               "094_public_submission_receipts.sql",
+                               "095_site_import_ledger.sql"], migrazioni[-28:]
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

@@ -847,6 +847,12 @@ def test_c7_nessun_sender_marketing_decide_leggendo_la_colonna():
         # nulla. L'unico invio che fa e' l'email di SERVIZIO con il PDF, che
         # non passa e non deve passare da questa guardia.
         "main.py",
+        # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: categoria E - l'importazione
+        # dal sito fa la stessa cosa di main.py: INOLTRA al bridge il valore
+        # registrato dal form pubblico (`consenso_marketing` della riga del
+        # sito) e non autorizza nulla. Non invia niente: nessuna email,
+        # nessun WhatsApp, nessuna sequenza.
+        "site_import/service.py",
     }
 
     trovati = set()

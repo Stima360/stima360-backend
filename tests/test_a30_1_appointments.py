@@ -104,7 +104,8 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
-    assert numeri[-1] == 94 and numeri[-2] == 93 and numeri[-3] == 92 and numeri[-4] == 91 and numeri[-5] == 90 and numeri[-6] == 89 and numeri[-7] == 88 and numeri[-8] == 87 and numeri[-9] == 86 and numeri[-10] == 85 and numeri[-11] == 84 and numeri[-12] == 83 and numeri[-13] == 82 and numeri[-14] == 81 and numeri[-15] == 80 and numeri[-16] == 79 and numeri[-17] == 78 and numeri[-18] == 77 and numeri[-19] == 76 and numeri[-20] == 75 and numeri[-21] == 74
+    # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
+    assert numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76 and numeri[-21] == 75 and numeri[-22] == 74
     assert len(numeri) == len(set(numeri))
 
 
