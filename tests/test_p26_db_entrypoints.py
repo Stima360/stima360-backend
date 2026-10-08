@@ -860,6 +860,31 @@ ALLOWED_CONNECTION_SITES: dict[str, str] = {
         "application choke point and must stay uncoupled from a throwaway test "
         "database"
     ),
+    # SENTINELLA AGGIORNATA DA CRM-PROD-BOOTSTRAP: il canale di migrazione del
+    # CRM PROD, separato dal runner TEST (che resta intatto) e dal suo test.
+    "scripts/crm_prod_migrate.py": (
+        "privileged migration channel for the CRM PRODUCTION database only, the "
+        "counterpart of scripts/p26_migrate.py, which stays TEST only and is "
+        "imported unchanged for discovery, validation, planning and the ledger "
+        "row. It connects through CRM_PROD_DATABASE_URL (never the DB_* "
+        "variables), requires the database name typed on the command line and "
+        "refuses the site's production names, any name carrying the TEST "
+        "marker, the SITE_DB_URL database, and any non-empty database that does "
+        "not carry its own crm_instance marker - so the site's database and the "
+        "CRM TEST database can never be bootstrapped over. The migrator "
+        "legitimately sits outside RLS, like the TEST runner"
+    ),
+    "tests/test_crm_prod_bootstrap_postgres.py": (
+        "TEST-only proof of scripts/crm_prod_migrate.py on TWO throwaway "
+        "databases of the local cluster (opt-in through P29_TEST_DSN, local DSN "
+        "only, both dropped at teardown): an EMPTY database named without the "
+        "TEST marker, bootstrapped to the last migration exactly as CRM PROD "
+        "will be, and a PROD-shaped site database that the channel must refuse "
+        "and that the SITE-IMPORT-1 cron then imports from, as a subprocess with "
+        "the DB_* variables of the bootstrapped database. It must not go through "
+        "database.get_connection() for the test traffic: that is the application "
+        "choke point and must stay uncoupled from a throwaway test database"
+    ),
 }
 
 # Modules that legitimately import the choke point to build their own cursor
