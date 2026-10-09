@@ -117,3 +117,28 @@ def stima_lead_attiva(ctx, *, cur=None) -> dict[str, Any] | None:
         if journey is not None and journey["status"] == JOURNEY_ACTIVE:
             journey["steps"] = repo.list_steps(c, ctx, journey["id"])
         return journey
+
+
+def ensure_stima_lead_v2(ctx, *, cur=None) -> dict[str, Any]:
+    """Dieci bozze automatiche; provisioning serializzato, mai attivazione."""
+    from .journey_enums import TRIGGER_STIMA_REQUEST_REGISTERED
+    with journey_service.cursore(cur) as (_, c):
+        # La riga agenzia serializza anche due provisioning iniziali concorrenti.
+        c.execute("SELECT id FROM agencies WHERE id = %s FOR UPDATE", (ctx.require_agency(),))
+        existing = repo.select_journey_version(c, ctx, journey_key=STIMA_LEAD_KEY, version=2)
+        if existing is not None:
+            existing["steps"] = repo.list_steps(c, ctx, existing["id"])
+            return {"journey": existing, "created": False}
+        steps = [{"step_no": i, "step_key": f"M{i}", "reason_code": f"m{i}",
+                  "delay_from": "trigger" if i == 1 else "previous_step_sent",
+                  "delay_seconds": (2 if i == 1 else 10) * _GIORNO,
+                  "default_mode": "automatic", "channel": "email",
+                  "communication_type": "marketing", "template_key": f"stima_lead_m{i}",
+                  "template_version": 2, "send_window": dict(FINESTRA_LAVORATIVA),
+                  "stop_on": []} for i in range(1, 11)]
+        journey = journey_service.provision_journey(
+            ctx, journey_key=STIMA_LEAD_KEY, version=2, trigger_type=TRIGGER_STIMA_REQUEST_REGISTERED,
+            name="Sequenza stima continuativa (bozze da approvare)", steps=steps,
+            send_timezone=STIMA_LEAD_TIMEZONE, cur=c)
+        journey["steps"] = repo.list_steps(c, ctx, journey["id"])
+        return {"journey": journey, "created": True}

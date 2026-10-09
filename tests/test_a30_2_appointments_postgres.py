@@ -124,6 +124,9 @@ def db():
             for versione in CATENA:
                 cur.execute((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
             cur.execute((MIGRAZIONI / "072_a30_1_appointments.sql").read_text(encoding="utf-8"))
+            # Il service di disponibilita' legge le tre tabelle introdotte
+            # dalla 076; applicare la migration reale sulla fixture isolata.
+            cur.execute((MIGRAZIONI / "076_a30_11_working_hours.sql").read_text(encoding="utf-8"))
         yield {"conn": conn, "dsn": dsn}
     finally:
         conn.close()

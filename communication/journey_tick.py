@@ -190,7 +190,7 @@ NOMI_DI_STOP = {
 
 
 def _fence_e_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: int | None,
-                  stima_snapshot: int | None):
+                  stima_snapshot: int | None, contact_wide: bool = False):
     """Prende il fence e risponde: c'e' uno stop ADESSO? `(ragione, evento)`.
 
     L'ordine conta ed e' il contratto della fase:
@@ -213,8 +213,11 @@ def _fence_e_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: i
     proprio con `lock_contact`, quindi nessuna revoca puo' infilarsi fra
     questa lettura e il nostro commit.
     """
-    repo.fence(cur, ctx, contact_id=contact_id, lead_id=lead_id, stima_id=stima_id)
-    ragione, evento = repo.fresh_stop(
+    if contact_wide:
+        repo.request_fence(cur, ctx, contact_id=contact_id, stima_id=stima_id)
+    else:
+        repo.fence(cur, ctx, contact_id=contact_id, lead_id=lead_id, stima_id=stima_id)
+    ragione, evento = repo.contact_wide_stop(cur, ctx, contact_id) if contact_wide else repo.fresh_stop(
         cur, ctx, contact_id=contact_id, lead_id=lead_id, stima_id=stima_id,
         stima_snapshot=stima_snapshot, priorita=STOP_PRIORITY,
         tipi_evento=EVENTI_DI_STOP, nomi=NOMI_DI_STOP)
@@ -292,6 +295,9 @@ def _fase_stop(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
     ragioni, eventi = _ragioni_di_stop(cur, ctx, righe)
     for r in righe:
         vincente = choose_stop_reason(ragioni[r["id"]])
+        if repo.is_request_enrollment(r):
+            vincente, _ = _fence_e_stop(cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
+                stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"], contact_wide=True)
         if vincente is None:
             continue
         try:
@@ -351,6 +357,9 @@ def _fase_advance(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> No
         try:
             with _Savepoint(cur, f"adv_{r['id']}"):
                 successivi = [s for s in passi[r["journey_id"]] if s["step_no"] > r["next_step_no"]]
+                rotate = not successivi and journeys[r["journey_id"]]["trigger_type"] == "stima_request_registered"
+                if rotate:
+                    successivi = [dict(passi[r["journey_id"]][0], delay_from="previous_step_sent", delay_seconds=10 * 86400)]
                 if not successivi:
                     # L'ultimo passo e' partito: la journey ha detto tutto
                     # quello che aveva da dire. `ConflictError` qui significa
@@ -367,7 +376,7 @@ def _fase_advance(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> No
                 base = _base_temporale(passo, trigger_sent_at=r["trigger_sent_at"],
                                        precedente_sent_at=sent_at)
                 avanzata = repo.advance_enrollment(
-                    cur, ctx, r["id"], da_step=r["next_step_no"], next_step_no=passo["step_no"],
+                    cur, ctx, r["id"], da_step=r["next_step_no"], next_step_no=passo["step_no"], rotate=rotate,
                     next_action_at=_quando(base, passo, journey["send_timezone"]),
                     next_action_kind=(KIND_AWAIT_OPERATOR if passo["default_mode"] == "assisted"
                                       else KIND_ENQUEUE))
@@ -424,13 +433,16 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
     `STOP_PRIORITY`. Non esistono due decisioni da mettere d'accordo: ne
     esiste una, e l'ordine ufficiale la risolve.
     """
-    for journey in repo.active_journeys(cur, ctx, trigger_type=TRIGGER_STIMA_PDF_SENT):
+    for journey in (repo.active_journeys(cur, ctx, trigger_type=TRIGGER_STIMA_PDF_SENT)
+                    + repo.active_journeys(cur, ctx, trigger_type="stima_request_registered")):
         passi = [s for s in repo.list_steps(cur, ctx, journey["id"]) if s["active"]]
         if not passi:
             continue
-        candidati = repo.candidate_triggers(
-            cur, ctx, journey_id=journey["id"], activated_at=journey["activated_at"],
-            limit=limite)
+        registered = journey["trigger_type"] == "stima_request_registered"
+        candidati = (repo.candidate_registered_request(
+            cur, ctx, journey_id=journey["id"], activated_at=journey["activated_at"], now=adesso, limit=limite)
+            if registered else repo.candidate_triggers(
+            cur, ctx, journey_id=journey["id"], activated_at=journey["activated_at"], limit=limite))
         if not candidati:
             continue
         primo = passi[0]
@@ -446,7 +458,7 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
                     ragione, evento = _fence_e_stop(
                         cur, ctx, contact_id=candidato["contact_id"],
                         lead_id=candidato["lead_id"], stima_id=candidato["stima_id"],
-                        stima_snapshot=candidato["stima_id"])
+                        stima_snapshot=candidato["stima_id"], contact_wide=registered)
                     if ragione is None:
                         stato = ENR_ACTIVE
                         quando = _quando(candidato["sent_at"], primo, journey["send_timezone"])
@@ -565,12 +577,18 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                 # spedire prima che il giro successivo lo cancelli.
                 ragione, evento = _fence_e_stop(
                     cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
-                    stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"])
+                    stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"],
+                    contact_wide=repo.is_request_enrollment(r))
                 if ragione is not None:
                     repo.stop_enrollment(cur, ctx, r["id"], reason=ragione,
                                          actor_user_id=None, stop_event_id=evento)
                     repo.cancel_queued_journey_messages(
                         cur, ctx, r["id"], reason=f"stopped:{ragione}", actor_user_id=None)
+                    conteggi["stopped"] += 1
+                    continue
+                if repo.first_send_expired(cur, ctx, r, adesso):
+                    repo.stop_enrollment(cur, ctx, r["id"], reason="request_too_old", actor_user_id=None)
+                    repo.cancel_queued_journey_messages(cur, ctx, r["id"], reason="request_too_old", actor_user_id=None)
                     conteggi["stopped"] += 1
                     continue
                 passo = next(s for s in passi[r["journey_id"]] if s["step_no"] == r["next_step_no"])

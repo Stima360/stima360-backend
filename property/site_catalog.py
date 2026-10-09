@@ -454,8 +454,11 @@ def map_site_payload(raw: dict | None, *, comune: str | None = None, detailed: b
         e.ignoto(nome_yn, yn, "Vista mare: valore non riconosciuto")
     dettaglio = _testo(_primo(raw, "vistaMareDettaglio", "vistamaredettaglio")[1]) \
         or _testo(_primo(raw, "vistaMare", "vistamare")[1])
-    if vista is None and dettaglio is not None and _chiave(dettaglio) not in _FALSO:
-        vista = True                       # una vista descritta e' una vista dichiarata
+    if dettaglio is not None and _chiave(dettaglio) in _NON_SO:
+        dettaglio = None
+    if vista is None and dettaglio is not None:
+        # Le etichette del prefill non sono sempre una vista positiva.
+        vista = _chiave(dettaglio) not in (_FALSO | {"nessuna vista mare"})
     if vista is not None:
         e.metti("sea_view", vista, yn if yn is not None else dettaglio)
     if dettaglio is not None and vista is not False:

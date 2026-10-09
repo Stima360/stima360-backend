@@ -83,15 +83,13 @@ def test_down_migration_only_drops_the_two_new_columns_from_stime():
 
 
 def test_main_py_salva_stima_contract_is_unchanged_by_this_fix():
-    # Questa fix non deve toccare main.py: il contratto di /api/salva_stima
-    # (colonne scritte, ordine, semantica) resta esattamente quello gia'
-    # presente prima di questa migration - la migration si limita a rendere
-    # lo schema DB coerente con codice che esisteva gia'.
+    # La Tappa 7 richiede il booleano JSON true; la migration 018 mantiene
+    # colonne e scritture precedenti, senza cambiare l'impronta dello schema.
     main_source = MAIN_PY.read_text(encoding="utf-8")
     assert re.search(
-        r"consenso_marketing\s*=\s*bool\(raw\.get\(\"consenso_marketing\",\s*False\)\)",
+        r"consenso_marketing\s*=\s*raw\.get\(\"consenso_marketing\"\)\s+is\s+True",
         main_source,
-    ), "la semantica esistente di consenso_marketing in main.py e' cambiata inaspettatamente"
+    ), "il consenso marketing richiede il booleano JSON true esplicito"
     assert "consenso_marketing, consenso_marketing_at" in main_source
     assert "s.consenso_marketing" in main_source
 

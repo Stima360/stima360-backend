@@ -113,7 +113,11 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[numeri.index(71) - 1] == 70 and numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76
+    # Tappa 6 certifica la 097 senza riscrivere le migration storiche.
+    assert numeri[numeri.index(71) - 1] == 70
+    assert numeri[numeri.index(76):] == list(range(76, 98))
+    nuova = trovate["097_tappa6_request_followup"]
+    assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
 
 
@@ -211,8 +215,9 @@ IMPRONTE = {
 def test_08_il_registry_e_versionato_immutabile_e_senza_fallback():
     from communication import templates
     from communication.exceptions import ValidationError
-    assert set(templates.REGISTRY) == set(IMPRONTE)
-    for (k, v), t in templates.REGISTRY.items():
+    assert {key for key in templates.REGISTRY if key[1] == 1} == set(IMPRONTE)
+    for (k, v) in IMPRONTE:
+        t = templates.REGISTRY[(k, v)]
         src = inspect.getsource(t.subject) + inspect.getsource(t.body)
         assert hashlib.sha256(src.encode()).hexdigest()[:16] == IMPRONTE[(k, v)], (k, v)
         assert (t.key, t.version) == (k, v)
@@ -369,14 +374,22 @@ def test_17_nessun_cron_nuovo_e_il_runner_toccato_e_quello_dichiarato():
     assert toccati <= {RUNNER_TOCCATO, RUNNER_A30_9B}, sorted(toccati)
 
 
-def test_18_il_dispatcher_non_conosce_le_journey():
+def test_18_tappa6_revalida_la_journey_nello_stesso_dispatcher():
     from communication import dispatcher
     codice = _codice(dispatcher)
-    for vietato in ("enrollment", "journey", "assisted", "await_operator"):
-        assert vietato not in codice, vietato
+    assert "_dispatch_request_journey" in codice
+    gate = inspect.getsource(dispatcher._dispatch_request_journey)
+    assert "contact_wide=True" in gate
+    assert gate.index("_fence_e_stop") < gate.index("provider.send")
+    assert "communication_cursor(commit=True)" in gate
 
 
 def test_19_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
+    # REV 2: validate the authorized current phase, not an old working-tree manifest.
+    if (ROOT / 'migrations/097_tappa6_request_followup.sql').exists():
+        from tests.tappa6_scope import assert_tappa6_scope
+        assert_tappa6_scope(ROOT)
+        return
     """L'inventario di P29-3B e' scritto a mano in `p29_3b_diff` e vale
     PRIMA e DOPO il commit: prima, il working tree non puo' contenere nulla
     oltre l'inventario; dopo, ogni file dell'inventario e' nell'indice.

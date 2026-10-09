@@ -45,7 +45,7 @@ RETRY_STATUSES = ("pending", "partial", "orphan", "failed")
 #: Colonne del sito che NON si copiano: l'agenzia la decide il CRM; il token e'
 #: la capability pubblica del SITO e non deve aprire una seconda porta nel CRM.
 SKIP_COLUMNS = {
-    "stime": {"id", "agency_id", "token", "token_expires"},
+    "stime": {"id", "agency_id", "token", "token_expires", "crm_registered_at"},
     "stime_dettagliate": {"id", "agency_id"},
 }
 #: Dati personali che non servono alla scheda immobile.

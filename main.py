@@ -870,7 +870,7 @@ def _save_quick_submission(raw, receipt):
     # --------------------------
     # CONSENSO MARKETING (GDPR)
     # --------------------------
-    consenso_marketing = bool(raw.get("consenso_marketing", False))
+    consenso_marketing = raw.get("consenso_marketing") is True
     consenso_marketing_at = receipt.row["created_at"] if consenso_marketing else None
         
     # --- 2. Normalizza (CON VALORI DI DEFAULT PER FORM LEGGERO) ---

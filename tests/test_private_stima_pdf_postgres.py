@@ -9,6 +9,7 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -500,24 +501,29 @@ def test_down_exclusive_lock_prevents_a_concurrent_snapshot_from_being_lost(priv
 def test_private_pdf_backup_restore_preserves_bytes_snapshot_and_capability(private_pdf, tmp_path):
     """Real pg_dump/pg_restore, confined to a second disposable local DB."""
     from psycopg2 import sql
+    from psycopg2.extensions import parse_dsn
     p = private_pdf
     result = p.quick()
     row = _q(p.s.m, "SELECT a.agency_id, a.render_payload, a.pdf_bytes, a.sha256, s.token "
                    "FROM stima_pdf_artifacts a JOIN stime s ON s.id=a.stima_id WHERE a.stima_id=%s", (result["id"],))[0]
     receipt_columns = "request_id, proof_sha256, payload_sha256, request_payload, checkpoints, frozen, response_payload, stima_id, detail_id, agency_id, status, expires_at"
     receipt_row = _q(p.s.m, "SELECT " + receipt_columns + " FROM public_submission_receipts WHERE stima_id=%s AND kind='quick'", (result["id"],))[0]
-    pg_root = Path("/private/tmp/stima360-isolated-pg.vQlFs50D")
-    pg_bin = pg_root / "runtime/Cellar/postgresql@18/18.6/bin"
+    params = parse_dsn(DSN)
+    assert params["host"].startswith("/private/tmp/stima360-isolated-pg.")
+    pg_dump = shutil.which("pg_dump")
+    pg_restore = shutil.which("pg_restore")
+    assert pg_dump and pg_restore, "PostgreSQL client tools unavailable"
     artifacts = Path(os.getenv("STIMA360_JOURNEY_ARTIFACTS", str(tmp_path))) / "backup"
     artifacts.mkdir(parents=True, exist_ok=True, mode=0o700)
     backup = artifacts / ("private-pdf-" + uuid.uuid4().hex + ".dump")
     fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(fd)
-    connection_args = ["--host", str(pg_root / "socket"), "--port", "55473", "--username", "stima_local", "--no-password"]
-    env = {"PATH": str(pg_bin), "LC_ALL": "C", "PGCONNECT_TIMEOUT": "5",
+    connection_args = ["--host", params["host"], "--port", params["port"],
+                       "--username", params["user"], "--no-password"]
+    env = {"PATH": os.path.dirname(pg_dump), "LC_ALL": "C", "PGCONNECT_TIMEOUT": "5",
            "PGPASSFILE": str(artifacts / "no-password-file"),
            "PGSERVICEFILE": str(artifacts / "no-service-file"), "PGAPPNAME": "stima360-f07-private-backup"}
-    dumped = subprocess.run([str(pg_bin / "pg_dump"), *connection_args, "--format=custom", "--file", str(backup),
+    dumped = subprocess.run([pg_dump, *connection_args, "--format=custom", "--file", str(backup),
                              "--dbname", "stima360_db_test"], env=env, capture_output=True, text=True, timeout=60)
     assert dumped.returncode == 0, dumped.stderr
     assert backup.stat().st_mode & 0o777 == 0o600
@@ -527,7 +533,7 @@ def test_private_pdf_backup_restore_preserves_bytes_snapshot_and_capability(priv
     try:
         with service.cursor() as cur:
             cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(restore_name)))
-        restored = subprocess.run([str(pg_bin / "pg_restore"), *connection_args, "--no-owner", "--no-acl", "--exit-on-error",
+        restored = subprocess.run([pg_restore, *connection_args, "--no-owner", "--no-acl", "--exit-on-error",
                                    "--dbname", restore_name, str(backup)], env=env, capture_output=True, text=True, timeout=60)
         assert restored.returncode == 0, restored.stderr
         restored_dsn = p.s.m["dsn"].replace("/stima360_db_test?", f"/{restore_name}?")

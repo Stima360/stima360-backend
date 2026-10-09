@@ -276,11 +276,15 @@ def resume_enrollment(ctx, enrollment_id: int, *, now: datetime | None = None, c
         e = repo.select_enrollment(c, ctx, enrollment_id, for_update=True)
         if e["status"] != ENR_PAUSED:
             raise ConflictError(f"enrollment {enrollment_id} is {e['status']}, not paused")
-        if adesso - e["next_action_at"] > MAX_RESUME_AGE:
+        if not repo.is_request_enrollment(e) and adesso - e["next_action_at"] > MAX_RESUME_AGE:
             return repo.stop_enrollment(c, ctx, enrollment_id, reason="expired_on_resume",
                                         actor_user_id=None)
         residuo = e["next_action_at"] - e["paused_at"]
         nuovo = adesso + residuo if residuo > timedelta(0) else adesso
+        if repo.is_request_enrollment(e):
+            j = repo.select_journey(c, ctx, e["journey_id"])
+            step = next(s for s in repo.list_steps(c, ctx, j["id"]) if s["step_no"] == e["next_step_no"])
+            nuovo = send_window.next_allowed(max(nuovo, adesso + timedelta(days=10)), step["send_window"], j["send_timezone"])
         return repo.resume_enrollment(c, ctx, enrollment_id, next_action_at=nuovo)
 
 
@@ -310,8 +314,13 @@ def pause_automations(ctx, contact_id: int, *, reason: str | None = None, cur=No
     with cursore(cur) as (_, c):
         repo.require_schema(c)
         contact_in_scope(c, ctx, contact_id)
+        c.execute("SELECT id FROM communication_enrollments WHERE agency_id=%s AND contact_id=%s AND status IN ('active','paused') ORDER BY id FOR UPDATE", (ctx.require_agency(), contact_id))
         aperte = repo.list_open_enrollments_for_contact(c, ctx, contact_id)
         stima = next((e["stima_id"] for e in aperte if e["stima_id"]), None)
+        if any(repo.is_request_enrollment(e) for e in aperte):
+            repo.request_fence(c, ctx, contact_id=contact_id, stima_id=stima)
+        else:
+            repo.fence(c, ctx, contact_id=contact_id, lead_id=None, stima_id=None)
         controllo = repo.upsert_control_paused(c, ctx, contact_id, actor_user_id=utente,
                                                reason=ragione, stima_id=stima)
         for e in aperte:
@@ -334,6 +343,8 @@ def resume_automations(ctx, contact_id: int, *, now: datetime | None = None, cur
         # CESTINO-CONTATTI-1: le automazioni di un contatto nel Cestino restano
         # ferme; si riattivano a mano DOPO il ripristino.
         refuse_if_contact_in_trash(c, contact_id)
+        c.execute("SELECT id FROM communication_enrollments WHERE agency_id=%s AND contact_id=%s AND status IN ('active','paused') ORDER BY id FOR UPDATE", (ctx.require_agency(), contact_id))
+        repo.fence(c, ctx, contact_id=contact_id, lead_id=None, stima_id=None)
         controllo = repo.set_control_resumed(c, ctx, contact_id, actor_user_id=utente)
         for e in repo.list_open_enrollments_for_contact(c, ctx, contact_id):
             if e["status"] == ENR_PAUSED and e["paused_source"] == PAUSED_BY_CONTACT_CONTROL:

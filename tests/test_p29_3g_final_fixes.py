@@ -320,7 +320,16 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
     diff = set(_git("diff", "--name-only", "--", *intatti).split())
     fuori = (diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
              - MOD_A31_4 - NUOVI_A31_4 - MOD_A32_2 - NUOVI_A32_2)
-    assert fuori == set(), sorted(fuori)
+    # Tappa 6 autorizza esattamente questi file, mantenendo chiusi cron,
+    # calendario, consenso, sito e gli altri moduli.
+    tappa6 = {
+        "communication/contact_view.py", "communication/dispatcher.py",
+        "communication/enums.py", "communication/journey_catalog.py",
+        "communication/journey_enums.py", "communication/journey_repository.py",
+        "communication/journey_service.py", "communication/journey_tick.py",
+        "communication/repository.py", "communication/templates.py",
+    }
+    assert fuori - tappa6 == set(), sorted(fuori - tappa6)
 
 
 def test_19_STOP_PRIORITY_e_le_fasi_del_tick_sono_intatte():
@@ -332,6 +341,11 @@ def test_19_STOP_PRIORITY_e_le_fasi_del_tick_sono_intatte():
 
 
 def test_20_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
+    # REV 2: validate the authorized current phase, not an old working-tree manifest.
+    if (ROOT / 'migrations/097_tappa6_request_followup.sql').exists():
+        from tests.tappa6_scope import assert_tappa6_scope
+        assert_tappa6_scope(ROOT)
+        return
     from tests.p29_3g_diff import FILE_MODIFICATI, FILE_NUOVI
     # FLOW GLOBAL SECURITY si dichiara allo stesso modo: l'unione cresce di
     # una fase, il verso del controllo no. Non e' una fase di P29 - e' il

@@ -408,12 +408,15 @@ def test_c2_the_foreign_key_restricts_and_does_not_cascade(cur):
         "acting_entered_at = NOW() WHERE id = %s",
         (agenzia, sessione),
     )
-    # `RestrictViolation` e non il generico `ForeignKeyViolation`: e' la
-    # sottoclasse che PostgreSQL solleva SOLO per un RESTRICT, quindi e'
-    # l'asserzione che distingue questa FK da una NO ACTION scritta per
-    # distrazione - che qui passerebbe ugualmente.
-    with pytest.raises(psycopg2.errors.RestrictViolation):
+    cur.execute("SELECT confdeltype FROM pg_constraint WHERE conrelid = "
+                "'operator_sessions'::regclass AND conname = "
+                "'operator_sessions_acting_agency_fk'")
+    assert cur.fetchone()["confdeltype"] == "r"
+    # PostgreSQL 16 segnala 23503 anche per RESTRICT; il catalogo distingue
+    # questa FK da NO ACTION e l'errore prova il blocco effettivo.
+    with pytest.raises(psycopg2.errors.ForeignKeyViolation) as refused:
         cur.execute("DELETE FROM agencies WHERE id = %s", (agenzia,))
+    assert refused.value.diag.constraint_name == 'operator_sessions_acting_agency_fk'
 
 
 def test_c3_an_agency_nobody_is_visiting_can_still_be_deleted(cur):

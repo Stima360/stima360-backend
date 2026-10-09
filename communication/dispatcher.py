@@ -269,6 +269,18 @@ def dispatch_batch(ctx_operatore, *, channel: str,
         message = preso["message"]
         token = message["claim_token"]
 
+        if message.get("enrollment_id"):
+            try:
+                result = _dispatch_request_journey(ctx, message, token, provider)
+            except Exception:
+                # Claim remains sending after rollback, recovered as indeterminate.
+                # Continue the batch without converting a DB failure into a retry.
+                logger.exception("request journey dispatch rolled back message_id=%s agency_id=%s",
+                                 message["id"], ctx.require_agency())
+                result = "lost"
+            if result is not None:
+                conteggi[result] += 1
+                continue
         ragione = _consenso_nega(ctx, message)
         # A32-2: la revalida FINALE del promemoria di un appuntamento, e solo
         # di quello. Dopo il claim, immediatamente prima del provider: rilegge
@@ -351,3 +363,66 @@ def dispatch_batch(ctx_operatore, *, channel: str,
         conteggi[stato if esito is not None else "lost"] += 1
 
     return conteggi
+
+
+def _dispatch_request_journey(ctx, message, token, provider, *, now=None):
+    """Fence v2 tenuto fino all'esito; il claim è già persistito.
+
+    Un crash dopo accepted lascia sending, recuperato come indeterminate.
+    I writer dei fatti commerciali e del consenso condividono il contact lock.
+    """
+    from datetime import datetime, timezone
+    from . import journey_repository as repo, journey_tick, send_window
+    with communication_cursor(commit=True) as (_, cur):
+        enrollment = repo.select_enrollment(cur, ctx, message["enrollment_id"], for_update=True)
+        if not repo.is_request_enrollment(enrollment):
+            return None
+        repo.request_fence(cur, ctx, contact_id=enrollment["contact_id"], stima_id=enrollment["stima_id"])
+        # Lock claim before provider: recovery cannot race finalization.
+        cur.execute("SELECT status,claim_token FROM communication_messages WHERE id=%s AND agency_id=%s FOR UPDATE",(message["id"],ctx.require_agency()))
+        claim=cur.fetchone()
+        if claim is None or claim['status']!='sending' or str(claim['claim_token'])!=str(token):
+            return "lost"
+        now=now or datetime.now(timezone.utc)
+        reason=None
+        if enrollment['status']!='active' or enrollment['run_no']!=message['run_no']:
+            reason="journey_not_active"
+        elif repo.automations_paused(cur,ctx,enrollment['contact_id']):
+            reason="contact_paused"
+        else:
+            reason,event=journey_tick._fence_e_stop(cur,ctx,contact_id=enrollment['contact_id'],
+                lead_id=enrollment['lead_id'],stima_id=enrollment['stima_id'],
+                stima_snapshot=enrollment['stima_id_snapshot'],contact_wide=True)
+            if reason:
+                repo.stop_enrollment(cur,ctx,enrollment['id'],reason=reason,actor_user_id=None,stop_event_id=event)
+                repo.cancel_queued_journey_messages(cur,ctx,enrollment['id'],reason=f"stopped:{reason}",actor_user_id=None)
+        if reason is None and repo.first_send_expired(cur,ctx,enrollment,now):
+            reason="request_too_old"
+            repo.stop_enrollment(cur,ctx,enrollment['id'],reason=reason,actor_user_id=None)
+        if reason is None:
+            j=repo.select_journey(cur,ctx,enrollment['journey_id'])
+            step=next(s for s in repo.list_steps(cur,ctx,j['id']) if s['step_no']==message['step_no'])
+            if send_window.next_allowed(now,step['send_window'],j['send_timezone'])>now:
+                # Claim crossed 19:00. Close its unattempted intent and issue a
+                # distinct run at the next window; never recycle an uncertain send.
+                result=service.finalize_suppressed(ctx,message['id'],token,reason="outside_send_window",cur=cur)
+                if result is not None:
+                    repo.advance_enrollment(cur,ctx,enrollment['id'],da_step=enrollment['next_step_no'],
+                        next_step_no=enrollment['next_step_no'],next_action_kind="enqueue",rotate=True,
+                        next_action_at=send_window.next_allowed(now,step['send_window'],j['send_timezone']))
+                return 'suppressed' if result is not None else 'lost'
+        if reason:
+            result=service.finalize_suppressed(ctx,message['id'],token,reason=reason,cur=cur)
+            return 'suppressed' if result is not None else 'lost'
+        try:
+            response=provider.send(message)
+        except Exception as exc:
+            state,fields=_esito_di_una_eccezione(exc)
+        else:
+            state,fields=_esito_del_provider(response,provider.CAPABILITIES)
+        finalizer={'sent':service.finalize_sent,'failed':service.finalize_failed,
+                   'indeterminate':service.finalize_indeterminate}[state]
+        result=finalizer(ctx,message['id'],token,cur=cur,**fields)
+        if state=='sent' and result is not None:
+            integrations.dopo_invio(cur,result['message'])
+        return state if result is not None else 'lost'

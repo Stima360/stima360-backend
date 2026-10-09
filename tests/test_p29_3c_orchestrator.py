@@ -312,7 +312,7 @@ def test_19_il_template_di_prova_e_immutabile_e_i_testi_reali_sono_di_P29_3D():
     import hashlib
 
     from communication import templates
-    assert set(templates.REGISTRY) == {
+    assert {key for key in templates.REGISTRY if key[1] == 1} == {
         ("registry_probe", 1), ("stima_lead_m1", 1), ("stima_lead_m2", 1),
         ("stima_lead_m3", 1), ("stima_lead_m4", 1), ("stima_lead_m5", 1)}
     impronta = hashlib.sha256(
@@ -342,11 +342,12 @@ def test_21_il_motore_non_accetta_agency_id_e_l_attore_viene_dalla_sessione():
     assert "require_agency()" in codice
 
 
-def test_22_il_dispatcher_continua_a_non_conoscere_le_journey():
+def test_22_tappa6_usando_dispatcher_esistente_rilegge_stop_prima_del_provider():
     from communication import dispatcher
-    codice = _codice(dispatcher)
-    for vietato in ("journey", "enrollment", "step_no", "run_no"):
-        assert vietato not in codice, vietato
+    gate = inspect.getsource(dispatcher._dispatch_request_journey)
+    assert "request_fence" in gate and "contact_wide=True" in gate
+    assert gate.index("first_send_expired") < gate.index("provider.send")
+    assert "finalize_indeterminate" in gate
 
 
 def test_23_la_decisione_sul_consenso_resta_UNA_SOLA():
@@ -449,6 +450,11 @@ def test_29_nessuno_dei_moduli_nuovi_apre_una_connessione():
 
 
 def test_30_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
+    # REV 2: validate the authorized current phase, not an old working-tree manifest.
+    if (ROOT / 'migrations/097_tappa6_request_followup.sql').exists():
+        from tests.tappa6_scope import assert_tappa6_scope
+        assert_tappa6_scope(ROOT)
+        return
     from tests.p29_3c_diff import FILE_MODIFICATI, FILE_NUOVI
     # SENTINELLA AGGIORNATA DA P29-3D: la fase successiva ha il suo
     # inventario, dichiarato allo stesso modo. Questo test continua a

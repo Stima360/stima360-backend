@@ -75,7 +75,7 @@ def test_01_i_cinque_testi_sono_registrati_email_marketing_versione_uno():
         assert t.version == 1, chiave
         assert t.subject is not None, chiave
     # E niente di piu': un sesto testo commerciale sarebbe una fase non fatta.
-    assert set(templates.REGISTRY) == {("registry_probe", 1)} | {(k, 1) for k in CHIAVI}
+    assert {key for key in templates.REGISTRY if key[1] == 1} == {("registry_probe", 1)} | {(k, 1) for k in CHIAVI}
 
 
 def test_02_ogni_testo_di_marketing_PRETENDE_il_link_di_disiscrizione():
@@ -658,6 +658,11 @@ def test_38_le_rotte_nuove_non_accettano_l_agenzia_dal_client():
 
 
 def test_39_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
+    # REV 2: validate the authorized current phase, not an old working-tree manifest.
+    if (ROOT / 'migrations/097_tappa6_request_followup.sql').exists():
+        from tests.tappa6_scope import assert_tappa6_scope
+        assert_tappa6_scope(ROOT)
+        return
     from tests.p29_3c_diff import FILE_MODIFICATI as MOD_3C, FILE_NUOVI as NUOVI_3C
     from tests.p29_3d_diff import FILE_MODIFICATI, FILE_NUOVI
     # P29-3E si dichiara allo stesso modo: l'unione cresce di una fase.

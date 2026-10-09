@@ -430,11 +430,11 @@ def test_c1_the_foreign_key_restricts_and_does_not_cascade(cur):
 
     territorio = _territorio(cur, "067001", "Alba Adriatica")
     _alias(cur, territorio, "Alba Adriatica")
-    # `RestrictViolation` e non il generico `ForeignKeyViolation`: e' PostgreSQL
-    # a distinguere RESTRICT da NO ACTION, e la classe dell'errore e' la prova
-    # che la clausola c'e' davvero e non e' stata omessa.
-    with pytest.raises(errors.RestrictViolation):
+    # Il catalogo prova ON DELETE RESTRICT; PostgreSQL 16 segnala 23503
+    # anche per questo caso. Verifichiamo sia il rifiuto sia la FK responsabile.
+    with pytest.raises(errors.ForeignKeyViolation) as refused:
         cur.execute("DELETE FROM network_territories WHERE id = %s", (territorio,))
+    assert refused.value.diag.constraint_name == 'network_territory_aliases_territory_id_fkey'
 
 
 def test_c2_an_alias_cannot_point_at_a_territory_that_does_not_exist(cur):

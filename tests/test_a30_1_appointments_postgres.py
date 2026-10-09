@@ -26,6 +26,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -40,10 +41,17 @@ VERSIONE = "072_a30_1_appointments"
 
 ROMA = timezone(timedelta(hours=2))
 GIORNO = datetime(2026, 10, 5, tzinfo=ROMA)
+ROMA_REALE = ZoneInfo("Europe/Rome")
+GIORNO_FUTURO = (datetime.now(ROMA_REALE) + timedelta(days=14)).date()
 
 
 def ore(h, m=0):
     return GIORNO.replace(hour=h, minute=m)
+
+
+def ore_future(h, m=0):
+    """Solo per gli spostamenti che il service deve rifiutare se passati."""
+    return datetime.combine(GIORNO_FUTURO, datetime.min.time(), ROMA_REALE).replace(hour=h, minute=m)
 
 
 def _schema_e_catena():
@@ -473,7 +481,7 @@ def test_50_il_registro_lo_scrive_il_service_con_l_attore(mondo, servizio):
     ctx = Ctx(mondo["a"], mondo["giorgio"])
     r = servizio.create_appointment(ctx, _corpo(assigned_user_id=mondo["luca"]))
     n = servizio.reschedule_appointment(
-        ctx, r["id"], AppointmentReschedule(start_at=ore(15), end_at=ore(16)))
+        ctx, r["id"], AppointmentReschedule(start_at=ore_future(15), end_at=ore_future(16)))
     eventi = mondo["sql"]("SELECT appointment_id, event_type, from_status, to_status, "
                           "actor_user_id, db_user, changes FROM appointment_events "
                           "ORDER BY id")
@@ -616,22 +624,23 @@ def test_66_orari_senza_fuso_sono_rifiutati_dallo_schema():
 def test_67_spostare_crea_una_riga_nuova_e_libera_la_vecchia(mondo, servizio):
     from appointments.schemas import AppointmentReschedule
     ctx = Ctx(mondo["a"], mondo["giorgio"])
-    vecchio = servizio.create_appointment(ctx, _corpo(assigned_user_id=mondo["luca"]))
+    vecchio = servizio.create_appointment(ctx, _corpo(
+        assigned_user_id=mondo["luca"], start_at=ore_future(10), end_at=ore_future(11)))
     # spostarlo di mezz'ora sovrappone il VECCHIO intervallo: non e' un conflitto
     nuovo = servizio.reschedule_appointment(
-        ctx, vecchio["id"], AppointmentReschedule(start_at=ore(10, 30), end_at=ore(11, 30)))
+        ctx, vecchio["id"], AppointmentReschedule(start_at=ore_future(10, 30), end_at=ore_future(11, 30)))
     assert nuovo["rescheduled_from_id"] == vecchio["id"] and nuovo["status"] == "scheduled"
     stato = mondo["uno"]("SELECT status, rescheduled_at IS NOT NULL FROM appointments "
                          "WHERE id=%s", (vecchio["id"],))
     assert stato[0] == "rescheduled" and stato[1] is True
     # la vecchia riga non blocca piu'
     assert servizio.create_appointment(ctx, _corpo(assigned_user_id=mondo["luca"],
-                                                   start_at=ore(9), end_at=ore(10, 30)))
+                                                   start_at=ore_future(9), end_at=ore_future(10, 30)))
     # e una riga gia' spostata non si sposta di nuovo
     from core.exceptions import ConflictError
     with pytest.raises(ConflictError):
         servizio.reschedule_appointment(
-            ctx, vecchio["id"], AppointmentReschedule(start_at=ore(15), end_at=ore(16)))
+            ctx, vecchio["id"], AppointmentReschedule(start_at=ore_future(15), end_at=ore_future(16)))
 
 
 def test_68_uno_spostamento_in_conflitto_non_lascia_niente_a_meta(mondo, servizio):
@@ -639,16 +648,16 @@ def test_68_uno_spostamento_in_conflitto_non_lascia_niente_a_meta(mondo, servizi
     ctx = Ctx(mondo["a"], mondo["giorgio"])
     a = servizio.create_appointment(ctx, _corpo(assigned_user_id=mondo["luca"]))
     b = servizio.create_appointment(ctx, _corpo(assigned_user_id=mondo["luca"],
-                                                start_at=ore(14), end_at=ore(15)))
+                                                start_at=ore_future(14), end_at=ore_future(15)))
     with pytest.raises(servizio.AppointmentConflict):
         servizio.reschedule_appointment(
-            ctx, a["id"], AppointmentReschedule(start_at=ore(14, 30), end_at=ore(15, 30)))
+            ctx, a["id"], AppointmentReschedule(start_at=ore_future(14, 30), end_at=ore_future(15, 30)))
     assert mondo["uno"]("SELECT status FROM appointments WHERE id=%s", (a["id"],))[0] == \
         "scheduled"
     assert mondo["uno"]("SELECT count(*) FROM appointments")[0] == 2
     # verso un altro agente libero, invece, si puo'
     n = servizio.reschedule_appointment(
-        ctx, a["id"], AppointmentReschedule(start_at=ore(14, 30), end_at=ore(15, 30),
+        ctx, a["id"], AppointmentReschedule(start_at=ore_future(14, 30), end_at=ore_future(15, 30),
                                             assigned_user_id=mondo["marta"]))
     assert n["assigned_user_id"] == mondo["marta"]
     del b
@@ -1017,7 +1026,7 @@ def test_98a_test_certificato_insert_purge_e_spostamento(certificato, monkeypatc
     ctx = Ctx(d["agency"], d["giorgio"])
     a = _riga_grezza(conn, d["agency"], d["luca"], ore(10), ore(11), run="run-1")
     b = service.reschedule_appointment(
-        ctx, a, AppointmentReschedule(start_at=ore(15), end_at=ore(16)))
+        ctx, a, AppointmentReschedule(start_at=ore_future(15), end_at=ore_future(16)))
     assert b["source"] == "a30_test" and b["test_run_id"] == "run-1"
     altra = _riga_grezza(conn, d["agency"], d["marta"], ore(10), ore(11), run="run-2")
     vera = service.create_appointment(ctx, AppointmentCreate(

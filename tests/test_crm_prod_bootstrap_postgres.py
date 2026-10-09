@@ -251,13 +251,6 @@ def test_04_secondo_bootstrap_rifiutato_e_upgrade_senza_nulla_da_fare(cluster, m
 
 def test_05_il_cron_di_importazione_gira_sul_crm_prod_bootstrappato(cluster, monkeypatch):
     psycopg2 = cluster["psycopg2"]
-    with cluster["sito"].cursor() as cur:
-        cur.execute("INSERT INTO stime (comune, microzona, via, civico, tipologia, mq, piano, locali, bagni, "
-                    "nome, cognome, email, telefono, consenso_marketing, data) VALUES "
-                    "('Alba Adriatica', 'Villa Fiore', 'Via Roma', '1', 'Appartamento', 85, '2', 3, 1, "
-                    "'Mario', 'Rossi', 'bootstrap@example.invalid', '3330000000', TRUE, "
-                    "LOCALTIMESTAMP - interval '1 day') RETURNING id")
-        stima_id = cur.fetchone()[0]
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", SMTP_HOST="", SMTP_USER="", SMTP_PASS="",
                WHATSAPP_SERVICE_URL="", SITE_DB_URL=cluster["sito_dsn"])
     for chiave in ("SITE_PDF_GITHUB_REPO", "SITE_PDF_GITHUB_TOKEN"):
@@ -269,6 +262,17 @@ def test_05_il_cron_di_importazione_gira_sul_crm_prod_bootstrappato(cluster, mon
     def cron(*argomenti):
         return subprocess.run([sys.executable, "-B", "run_site_import_cron.py", *argomenti], cwd=ROOT,
                               env=env, capture_output=True, text=True, timeout=120)
+
+    # La baseline precede ogni richiesta nuova anche sul CRM appena creato.
+    iniziale = cron("--initialize-baseline")
+    assert iniziale.returncode == 0, iniziale.stdout + iniziale.stderr
+    with cluster["sito"].cursor() as cur:
+        cur.execute("INSERT INTO stime (comune, microzona, via, civico, tipologia, mq, piano, locali, bagni, "
+                    "nome, cognome, email, telefono, consenso_marketing, data) VALUES "
+                    "('Alba Adriatica', 'Villa Fiore', 'Via Roma', '1', 'Appartamento', 85, '2', 3, 1, "
+                    "'Mario', 'Rossi', 'bootstrap@example.invalid', '3330000000', TRUE, "
+                    "LOCALTIMESTAMP - interval '1 day') RETURNING id")
+        stima_id = cur.fetchone()[0]
 
     secco = cron("--dry-run")
     assert secco.returncode == 0, secco.stdout + secco.stderr

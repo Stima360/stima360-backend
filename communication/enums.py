@@ -147,7 +147,7 @@ REASON_CODES = frozenset({
     REASON_M1, REASON_M2, REASON_M3, REASON_M4, REASON_M5,
     REASON_OWNER_LOGIN_LINK,
     REASON_APPOINTMENT_REMINDER,
-})
+} | {f"m{i}" for i in range(6, 11)})
 
 # --------------------------------------------------------------------------
 # Codici di errore NOSTRI, non del provider: `error_detail` porta il testo

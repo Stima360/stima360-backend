@@ -553,3 +553,21 @@ def test_phase4_new_detail_imports_only_missing_historical_parent(mondo):
     assert mondo['giro']()['stime_imported'] == 0
     assert conta(mondo, 'lead_stime', 'stima_id = %s', (parent,)) == 1
     assert unrelated not in mondo['ledger']()
+
+
+def test_rev2_import_uses_local_registration_and_retry_keeps_it(mondo):
+    """Only local CRM insertion supplies the scheduling origin, never source data."""
+    from datetime import timezone
+    forged = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    mondo["q_sito"]("ALTER TABLE stime ADD COLUMN crm_registered_at TIMESTAMPTZ")
+    try:
+        sid = mondo["stima"](crm_registered_at=forged)
+        before = mondo["q_crm"]("SELECT clock_timestamp()")[0][0]
+        mondo["giro"]()
+        after = mondo["q_crm"]("SELECT clock_timestamp()")[0][0]
+        registered = mondo["q_crm"]("SELECT crm_registered_at FROM stime WHERE id=%s", (sid,))[0][0]
+        assert before <= registered <= after and registered != forged
+        mondo["giro"]()
+        assert mondo["q_crm"]("SELECT crm_registered_at FROM stime WHERE id=%s", (sid,))[0][0] == registered
+    finally:
+        mondo["q_sito"]("ALTER TABLE stime DROP COLUMN crm_registered_at")

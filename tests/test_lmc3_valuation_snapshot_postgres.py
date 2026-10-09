@@ -395,8 +395,22 @@ def test_19_le_osservazioni_di_mercato_non_entrano_nello_storico(mondo, modulo):
     vista = modulo["home_service"].get_home(mondo["acc"], mondo["st_a"])
     assert len(vista["valuation_history"]) == 1
     assert vista["history"]["observation_count"] == 4
+    def valori(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                yield from valori(key)
+                yield from valori(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from valori(item)
+        else:
+            yield value
+
+    # Una cifra in un timestamp o fingerprint non e' l'osservazione 82.
+    assert not any(v == 82 for v in valori(vista))
+    assert not any(v == 210000 for v in valori(vista))
     testo = repr(vista).lower()
-    for vietato in ("82", "210000", "budget", "score", "supply", "mario", "richiamare"):
+    for vietato in ("budget", "score", "supply", "mario", "richiamare"):
         assert vietato not in testo, vietato
 
 

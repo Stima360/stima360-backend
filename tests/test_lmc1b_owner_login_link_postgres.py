@@ -432,8 +432,8 @@ def test_9e_il_limite_di_un_account_non_tocca_l_altro(mondo, modulo):
     assert esito["sent"] == 1 and esito["rate_limited"] == 1
 
     nuovi = righe(mondo, "SELECT owner_account_id FROM owner_access_tokens "
-                         "WHERE created_by = 'LMC_LOGIN' AND token_hash NOT LIKE '0%%' "
-                         "ORDER BY id")
+                         "WHERE created_by = 'LMC_LOGIN' AND token_hash NOT IN (%s, %s, %s) "
+                         "ORDER BY id", tuple(f"{n:064d}" for n in range(3)))
     assert [r[0] for r in nuovi] == [mondo["acc_b"]]
     messaggi_per_agenzia = dict(righe(mondo, "SELECT agency_id, count(*) FROM communication_messages "
                                              "GROUP BY agency_id"))

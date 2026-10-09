@@ -285,3 +285,86 @@ def render(key: str, version: int, context: Mapping[str, str]) -> Rendered:
         )
     soggetto = template.subject(context) if template.subject else None
     return Rendered((soggetto, template.body(context)))
+
+
+# Tappa 6: bozze v2; approvazione editoriale separata per agenzia.
+
+_V2_M1 = 'Ciao {{contact_first_name}}, la stima online è un buon punto di partenza, ma non racconta tutta la storia di un immobile. Piano, condizioni reali e posizione nella via possono cambiare parecchio il risultato. Se qualcosa non ti torna, rispondi pure a questa email: possiamo rivedere insieme i dati e capire quanto potrebbe valere oggi la tua casa.'
+REGISTRY[("stima_lead_m1", 2)] = Template(
+    key="stima_lead_m1", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Hai visto la valutazione della tua casa?',
+    body=lambda c, text=_V2_M1: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M2 = 'Ciao {{contact_first_name}}, quando si parla di prezzo al metro quadro si fa una media. Ma un appartamento luminoso, con ascensore e un buon affaccio non è uguale a uno da ristrutturare, anche nella stessa strada. Il punto è capire quali caratteristiche contano davvero per gli acquirenti della tua zona. Se vuoi una valutazione più precisa, contattaci: in STIMA360 possiamo analizzare la tua situazione concreta.'
+REGISTRY[("stima_lead_m2", 2)] = Template(
+    key="stima_lead_m2", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Perché due case vicine non valgono sempre uguale',
+    body=lambda c, text=_V2_M2: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M3 = 'Ciao {{contact_first_name}}, una casa pubblicata a 200.000 euro non significa necessariamente che venga venduta a quella cifra. I prezzi richiesti sono utili per orientarsi, ma una strategia seria considera domanda, concorrenza e trattative reali. Se stai valutando una vendita, possiamo aiutarti a individuare una fascia di prezzo realistica, senza partire da numeri messi lì a caso. Ti basta rispondere a questa email.'
+REGISTRY[("stima_lead_m3", 2)] = Template(
+    key="stima_lead_m3", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Il prezzo degli annunci non è il prezzo di vendita',
+    body=lambda c, text=_V2_M3: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M4 = "Ciao {{contact_first_name}}, non sempre rifare una cucina o un bagno aumenta il prezzo abbastanza da recuperare la spesa. Spesso contano di più ordine, luce, piccole riparazioni e una presentazione curata. Prima di investire, vale la pena capire cosa cercano davvero gli acquirenti. Se ci racconti com'è la tua casa, possiamo ragionare insieme sugli interventi utili e su quelli che puoi evitare."
+REGISTRY[("stima_lead_m4", 2)] = Template(
+    key="stima_lead_m4", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Prima di vendere, cosa conviene sistemare?',
+    body=lambda c, text=_V2_M4: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M5 = 'Ciao {{contact_first_name}}, una vendita può rallentare quando mancano documenti o quando emergono differenze tra stato reale e planimetrie. Verificare per tempo provenienza, dati catastali, situazione urbanistica e attestato energetico permette di affrontare le trattative con più tranquillità. Non serve fare tutto da soli: se stai pensando di mettere in vendita, STIMA360 può aiutarti a organizzare i controlli e i professionisti necessari.'
+REGISTRY[("stima_lead_m5", 2)] = Template(
+    key="stima_lead_m5", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'I documenti da preparare prima della vendita',
+    body=lambda c, text=_V2_M5: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M6 = "Ciao {{contact_first_name}}, non esiste una data perfetta valida per tutti. Conta quanto sei pronto, quali immobili simili sono disponibili e quanta domanda c'è per la tua tipologia di casa. Pubblicare senza un piano può significare dover cambiare strada dopo poche settimane. Se hai in mente di vendere nei prossimi mesi, scrivici: possiamo studiare insieme tempi, prezzo di partenza e percorso di vendita."
+REGISTRY[("stima_lead_m6", 2)] = Template(
+    key="stima_lead_m6", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Il momento giusto per pubblicare casa',
+    body=lambda c, text=_V2_M6: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M7 = 'Ciao {{contact_first_name}}, le fotografie aiutano a far fermare una persona su un annuncio, ma devono raccontare bene spazi, luce e punti di forza senza creare aspettative sbagliate. Anche la gestione delle visite conta: selezionare gli interessati e preparare le informazioni evita molto tempo perso. Con STIMA360 seguiamo sia la presentazione online sia le persone reali che vengono a vedere casa. Se vuoi sapere come, contattaci.'
+REGISTRY[("stima_lead_m7", 2)] = Template(
+    key="stima_lead_m7", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Una buona prima impressione cambia le visite',
+    body=lambda c, text=_V2_M7: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M8 = 'Ciao {{contact_first_name}}, spesso il problema non è decidere di vendere: è capire come coordinare vendita, ricerca della prossima casa, proposte, rogito e trasloco. Sono passaggi che sembrano difficili quando li affronti da solo. Noi possiamo costruire con te un piano realistico, con tempi e condizioni da valutare insieme. Raccontaci cosa vorresti cambiare e ti diciamo da dove iniziare.'
+REGISTRY[("stima_lead_m8", 2)] = Template(
+    key="stima_lead_m8", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Vuoi cambiare casa senza complicarti la vita?',
+    body=lambda c, text=_V2_M8: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M9 = "Ciao {{contact_first_name}}, una buona vendita non dipende solo dal prezzo scritto nell'annuncio. Quando arriva una proposta contano anche tempi, modalità di pagamento, eventuali condizioni e affidabilità dell'acquirente. Essere preparati aiuta a trattare senza fretta e senza rinunciare inutilmente al valore dell'immobile. Se vuoi vendere ma non sai come gestire le trattative, scrivici: è una delle parti del lavoro in cui possiamo davvero esserti utili."
+REGISTRY[("stima_lead_m9", 2)] = Template(
+    key="stima_lead_m9", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: "Ricevere un'offerta non significa doverla accettare",
+    body=lambda c, text=_V2_M9: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)
+
+_V2_M10 = "Ciao {{contact_first_name}}, una stima automatica è il primo passo. Il successivo è capire come valorizzare e vendere concretamente l'immobile: prezzo, presentazione, promozione, selezione degli acquirenti e gestione di ogni passaggio. Con STIMA360 possiamo preparare un piano di vendita su misura; per chi vende, il nostro modello prevede zero provvigioni di agenzia. Se vuoi parlarne, rispondi a questa email e raccontaci la tua situazione."
+REGISTRY[("stima_lead_m10", 2)] = Template(
+    key="stima_lead_m10", version=2, channel="email",
+    communication_type=TYPE_MARKETING, required_fields=BASE_STIMA,
+    subject=lambda c: 'Quanto potrebbe ottenere davvero la tua casa?',
+    body=lambda c, text=_V2_M10: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
+)

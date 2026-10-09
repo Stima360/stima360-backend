@@ -533,7 +533,7 @@ def lock_due_enrollments(cur, ctx, *, kind: str, now, limit: int) -> list[dict[s
 
 
 def advance_enrollment(cur, ctx, enrollment_id: int, *, da_step: int, next_step_no: int,
-                       next_action_at, next_action_kind: str) -> dict[str, Any] | None:
+                       next_action_at, next_action_kind: str, rotate: bool = False) -> dict[str, Any] | None:
     """Il passo successivo, SE l'iscrizione e' ancora a quello di prima.
 
     `None` quando la condizione non regge: un altro tick l'ha gia' avanzata,
@@ -544,11 +544,11 @@ def advance_enrollment(cur, ctx, enrollment_id: int, *, da_step: int, next_step_
     cur.execute(
         """UPDATE communication_enrollments
               SET next_step_no = %s, next_action_at = %s, next_action_kind = %s,
-                  awaiting_since = %s, updated_at = NOW()
+                  awaiting_since = %s, run_no = run_no + %s, updated_at = NOW()
             WHERE id = %s AND agency_id = %s AND status = 'active' AND next_step_no = %s
         RETURNING *""",
         (next_step_no, next_action_at, next_action_kind,
-         next_action_at if next_action_kind == KIND_AWAIT_OPERATOR else None,
+         next_action_at if next_action_kind == KIND_AWAIT_OPERATOR else None, int(rotate),
          enrollment_id, ctx.require_agency(), da_step))
     riga = cur.fetchone()
     return _proietta(riga, ENROLLMENT_COLUMNS) if riga else None
@@ -943,3 +943,79 @@ def fresh_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: int 
         parametri)
     riga = cur.fetchone()
     return (riga["reason"], riga["stop_event_id"]) if riga else (None, None)
+
+
+def candidate_registered_request(cur, ctx, *, journey_id, activated_at, now, limit):
+    """Registrazione CRM; né il PDF né il suo invio sono prerequisiti."""
+    cur.execute("""
+        SELECT NULL::bigint AS trigger_message_id,
+               l.contact_id, p.id AS stima_id, l.id AS lead_id, p.crm_registered_at AS sent_at
+        FROM stime p
+        JOIN LATERAL (SELECT x.lead_id FROM lead_stime x JOIN leads own ON own.id=x.lead_id
+              WHERE x.stima_id=p.id AND own.agency_id=p.agency_id ORDER BY x.id LIMIT 1) ls ON TRUE
+        JOIN leads l ON l.id = ls.lead_id AND l.agency_id = p.agency_id
+        WHERE p.agency_id = %(agency)s AND p.crm_registered_at >= %(now)s - interval '7 days'
+          AND p.crm_registered_at <= %(now)s AND p.crm_registered_at >= %(activation)s - interval '7 days'
+          AND NOT EXISTS (SELECT 1 FROM site_import_baselines b,
+              jsonb_array_elements_text(b.ids->'stime') h WHERE h::integer = p.id)
+          AND NOT EXISTS (SELECT 1 FROM communication_enrollments e
+              WHERE e.journey_id = %(journey)s AND e.stima_id_snapshot = p.id)
+          AND NOT EXISTS (SELECT 1 FROM communication_enrollments e
+              WHERE e.agency_id = p.agency_id AND e.contact_id = l.contact_id AND e.status IN ('active','paused'))
+          AND NOT EXISTS (SELECT 1 FROM communication_automation_controls c
+              WHERE c.agency_id = p.agency_id AND c.contact_id = l.contact_id AND c.paused)
+        ORDER BY p.crm_registered_at,p.id LIMIT %(limit)s
+    """,dict(agency=ctx.require_agency(),now=now,activation=activated_at,journey=journey_id,limit=limit))
+    return [dict(x) for x in cur.fetchall()]
+
+
+def contact_wide_stop(cur, ctx, contact_id):
+    """Fatti di tutte le case del contatto, sempre limitati all'agenzia."""
+    cur.execute("""
+      WITH homes AS (SELECT ls.stima_id FROM lead_stime ls JOIN leads l ON l.id=ls.lead_id
+                     WHERE l.agency_id=%(a)s AND l.contact_id=%(c)s
+                     UNION SELECT stima_id_snapshot FROM communication_enrollments WHERE agency_id=%(a)s AND contact_id=%(c)s),
+      facts(reason,priority) AS (
+        SELECT 'mandate_signed',1 WHERE EXISTS(SELECT 1 FROM stima_acquisitions x JOIN homes h ON h.stima_id=x.stima_id_snapshot WHERE x.link_status='active' AND x.mandate_signed_at IS NOT NULL)
+        UNION ALL SELECT 'acquisition_linked',2 WHERE EXISTS(SELECT 1 FROM acquisitions x WHERE x.agency_id=%(a)s AND x.owner_contact_id=%(c)s AND x.status<>'lost')
+          OR EXISTS(SELECT 1 FROM stima_acquisitions x JOIN homes h ON h.stima_id=x.stima_id_snapshot WHERE x.link_status='active')
+        UNION ALL SELECT 'inspection',3 WHERE EXISTS(SELECT 1 FROM stima_inspections x JOIN homes h ON h.stima_id=x.stima_id_snapshot WHERE x.status IN ('scheduled','completed'))
+          OR EXISTS(SELECT 1 FROM appointments x LEFT JOIN leads l ON l.id=x.lead_id AND l.agency_id=x.agency_id
+                    WHERE x.agency_id=%(a)s AND (x.contact_id=%(c)s OR l.contact_id=%(c)s OR x.stima_id IN (SELECT stima_id FROM homes)
+                    OR EXISTS(SELECT 1 FROM property_contacts pc JOIN properties prop ON prop.id=pc.property_id
+                      WHERE pc.property_id=x.property_id AND prop.agency_id=%(a)s AND pc.contact_id=%(c)s AND pc.role IN ('owner','seller')))
+                    AND (x.status IN ('requested','scheduled','confirmed') OR (x.appointment_type='inspection' AND x.status='completed')))
+        UNION ALL SELECT 'consultation_requested',4 WHERE EXISTS(SELECT 1 FROM seller_timeline_events x WHERE x.agency_id=%(a)s AND x.event_type='owner_consultation_requested'
+                    AND (x.contact_id=%(c)s OR x.stima_id IN(SELECT stima_id FROM homes)
+                    OR EXISTS(SELECT 1 FROM leads l WHERE l.id=x.lead_id AND l.agency_id=%(a)s AND l.contact_id=%(c)s)))
+        UNION ALL SELECT 'lead_closed',5 WHERE EXISTS(SELECT 1 FROM leads l WHERE l.agency_id=%(a)s AND l.contact_id=%(c)s AND l.status='closed')
+        UNION ALL SELECT 'contact_inactive',6 WHERE NOT EXISTS(SELECT 1 FROM contacts x WHERE x.agency_id=%(a)s AND x.id=%(c)s AND x.status='active' AND to_jsonb(x)->>'deleted_at' IS NULL)
+      ) SELECT reason FROM facts ORDER BY priority LIMIT 1
+    """,dict(a=ctx.require_agency(),c=contact_id))
+    row=cur.fetchone()
+    return (row['reason'], None) if row else (None,None)
+
+
+def first_send_expired(cur, ctx, enrollment, now):
+    from datetime import timedelta
+    if not is_request_enrollment(enrollment) or now <= enrollment['trigger_sent_at'] + timedelta(days=7):
+        return False
+    cur.execute("SELECT 1 FROM communication_messages WHERE agency_id=%s AND enrollment_id=%s AND status='sent' LIMIT 1", (ctx.require_agency(),enrollment['id']))
+    return cur.fetchone() is None
+
+
+def request_fence(cur, ctx, *, contact_id, stima_id):
+    """Origin FK first, then contact: writers of inspections lock stima first.
+
+    KEY SHARE holds the origin FK through provider finalization, without
+    blocking non-key estimation changes. Other-house facts use the contact fence.
+    """
+    if stima_id is not None:
+        cur.execute("SELECT id FROM stime WHERE id=%s AND agency_id=%s FOR KEY SHARE",
+                    (stima_id, ctx.require_agency()))
+    fence(cur, ctx, contact_id=contact_id, lead_id=None, stima_id=None)
+
+
+def is_request_enrollment(enrollment):
+    """A NULL message origin identifies v2; the DB guard certifies its source."""
+    return enrollment.get("trigger_message_id", 0) is None

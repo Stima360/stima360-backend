@@ -535,28 +535,17 @@ def test_the_existing_foreign_keys_and_on_delete_semantics_survive(db):
 
     # An agency that still owns FLOW rows cannot be deleted.
     #
-    # The refusal is SQLSTATE 23001 RestrictViolation, NOT 23503
-    # ForeignKeyViolation. PostgreSQL reports the two from different paths:
-    # ON DELETE NO ACTION defers the check to end of statement and reports
-    # 23503 ("violates foreign key constraint"), while ON DELETE RESTRICT
-    # refuses immediately and reports 23001 ("violates RESTRICT setting of
-    # foreign key constraint"). 052 declares RESTRICT and the catalogue
-    # assertion four lines above pins `confdeltype = 'r'`, so 23001 is the only
-    # class this DELETE can produce.
-    #
-    # psycopg2 maps them to SIBLING classes - RestrictViolation is not a
-    # subclass of ForeignKeyViolation, they share only IntegrityError - so the
-    # first version of this assertion could never have passed against a
-    # correctly built schema. It expected the error of the ON DELETE mode the
-    # test itself had just proved was not in use.
+    # PostgreSQL 16 reports SQLSTATE 23503 for this RESTRICT violation. The
+    # catalogue assertion above certifies the deletion rule independently;
+    # the error below must name one of the protected FLOW foreign keys.
     #
     # The DELETE aborts the transaction, so it runs inside its own savepoint:
     # everything after it needs a usable session.
     db.execute("SAVEPOINT restrict_probe")
-    with pytest.raises(pg_errors.RestrictViolation) as excinfo:
+    with pytest.raises(pg_errors.ForeignKeyViolation) as excinfo:
         db.execute("DELETE FROM agencies WHERE id = %s", (AGENCY_A,))
     error = excinfo.value
-    assert error.pgcode == "23001", (error.pgcode, str(error))
+    assert error.pgcode == "23503", (error.pgcode, str(error))
 
     # And it must be a FLOW constraint that refused, not an unrelated FK to
     # agencies. AGENCY_A owns rows in all three FLOW tables and the RI triggers

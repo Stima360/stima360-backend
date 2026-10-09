@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 TRIGGER_STIMA_PDF_SENT = "stima_pdf_sent"
-TRIGGER_TYPES = frozenset({TRIGGER_STIMA_PDF_SENT})
+TRIGGER_STIMA_REQUEST_REGISTERED = "stima_request_registered"
+TRIGGER_TYPES = frozenset({TRIGGER_STIMA_PDF_SENT, TRIGGER_STIMA_REQUEST_REGISTERED})
 
 JOURNEY_DRAFT, JOURNEY_ACTIVE, JOURNEY_RETIRED = "draft", "active", "retired"
 JOURNEY_STATUSES = frozenset({JOURNEY_DRAFT, JOURNEY_ACTIVE, JOURNEY_RETIRED})
@@ -12,7 +13,7 @@ ACTOR_TYPES = frozenset({ACTOR_SYSTEM, ACTOR_OPERATOR})
 
 STEP_MODES = frozenset({"automatic", "assisted"})
 DELAY_FROM = frozenset({"trigger", "previous_step_sent"})
-STEP_REASON_CODES = ("m1", "m2", "m3", "m4", "m5")
+STEP_REASON_CODES = tuple(f"m{i}" for i in range(1, 11))
 
 ENR_ACTIVE, ENR_PAUSED, ENR_COMPLETED, ENR_STOPPED = "active", "paused", "completed", "stopped"
 ENROLLMENT_STATUSES = frozenset({ENR_ACTIVE, ENR_PAUSED, ENR_COMPLETED, ENR_STOPPED})
@@ -49,7 +50,7 @@ STOP_PRIORITY = (
     STOP_CONSENT_REVOKED, STOP_CONSENT_NOT_GRANTED, STOP_CONSENT_INCONSISTENT,
     STOP_EXPIRED_ON_RESUME, STOP_OPERATOR,
 )
-STOP_REASONS = frozenset(STOP_PRIORITY)
+STOP_REASONS = frozenset(STOP_PRIORITY) | {"request_too_old"}
 
 #: Le tre ragioni del consenso, mappate dalla guardia (P29-1.5).
 CONSENT_STOP_BY_GUARD_REASON = {
