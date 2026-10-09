@@ -72,6 +72,11 @@ def sito_db(completo):
             cur.execute((ROOT / "migrations" / f"{nome}.sql").read_text(encoding="utf-8"))
         for colonna, tipo in COLONNE_DETTAGLIO_PROD.items():
             cur.execute(f"ALTER TABLE stime_dettagliate ADD COLUMN IF NOT EXISTS {colonna} {tipo}")
+        # Lo schema PROD vero conserva locali e anno della stima come TEXT,
+        # e anno della dettagliata come TEXT: la fixture deve rifletterlo.
+        cur.execute("ALTER TABLE stime ALTER COLUMN locali TYPE text USING locali::text")
+        cur.execute("ALTER TABLE stime ALTER COLUMN anno TYPE text USING anno::text")
+        cur.execute("ALTER TABLE stime_dettagliate ALTER COLUMN anno TYPE text USING anno::text")
         # gli id del sito partono lontano da quelli locali del CRM di prova
         cur.execute("SELECT setval('stime_id_seq', 5000)")
         cur.execute("SELECT setval('stime_dettagliate_id_seq', 7000)")
@@ -430,3 +435,21 @@ def test_14_lotto_limitato_e_ripresa_dello_storico(mondo):
     while mondo["giro"](limit=2)["stime_imported"]:
         pass
     assert {k for k, v in mondo["ledger"]().items() if v[0] == "imported"} == set(ids)
+
+
+
+def test_15_stima_locali_non_specificato_del_sito_prod(mondo):
+    """Caso reale 230: il sito salva 'Non specificato' nel campo TEXT."""
+    sid = mondo["stima"](locali="Non specificato", anno="2010")
+    esito = mondo["giro"](limit=1)
+    assert esito["failed"] == 0 and esito["conflict"] == 0, esito
+    assert mondo["q_crm"]("SELECT locali, anno FROM stime WHERE id = %s", (sid,))[0] == (None, 2010)
+    assert mondo["ledger"]()[sid][0] in ("imported", "partial")
+
+
+def test_16_stima_locali_numerici_come_testo(mondo):
+    """Il testo '3' deve restare il numero 3 nel CRM."""
+    sid = mondo["stima"](locali="3", anno="1995")
+    esito = mondo["giro"](limit=1)
+    assert esito["failed"] == 0 and esito["conflict"] == 0, esito
+    assert mondo["q_crm"]("SELECT locali, anno FROM stime WHERE id = %s", (sid,))[0] == (3, 1995)

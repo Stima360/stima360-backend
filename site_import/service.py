@@ -79,6 +79,29 @@ def _colonne(cur, table: str) -> set[str]:
     return {r["column_name"] for r in cur.fetchall()}
 
 
+def _numero_legacy(valore):
+    """Converte i numeri che il sito PROD salva come testo.
+
+    Valori non numerici (es. "Non specificato") diventano NULL nel CRM.
+    Il dato originale del sito rimane invariato.
+    """
+    if valore is None:
+        return None
+    if isinstance(valore, int) and not isinstance(valore, bool):
+        return valore
+    if isinstance(valore, str):
+        valore = valore.strip()
+        if valore.isascii() and valore.isdecimal():
+            return int(valore)
+    return None
+
+
+def _valori_per_crm(tabella: str, colonne: list[str], riga: dict) -> list:
+    interi = {"locali", "anno"} if tabella == "stime" else (
+        {"anno"} if tabella == "stime_dettagliate" else set())
+    return [_numero_legacy(riga[c]) if c in interi else riga[c] for c in colonne]
+
+
 def _raw_stima(riga: dict) -> dict:
     """Il payload che il catalogo immobile sa leggere, dalle colonne del sito."""
     from property.site_catalog import PREFILL_KEYS
@@ -300,7 +323,7 @@ class Importer:
                     return
                 ctx, decisione = system_context_for_routed_public_stima(cur, comune=sito.get("comune"))
                 colonne = sorted((_colonne(cur, "stime") & set(sito)) - SKIP_COLUMNS["stime"])
-                valori = [sito[c] for c in colonne]
+                valori = _valori_per_crm("stime", colonne, sito)
                 cur.execute(
                     f"INSERT INTO stime (id, agency_id, {', '.join(colonne)}) "
                     f"VALUES (%s, %s{', %s' * len(colonne)})",
@@ -464,7 +487,7 @@ class Importer:
                 cur.execute(
                     f"INSERT INTO stime_dettagliate (id, agency_id, {', '.join(colonne)}) "
                     f"VALUES (%s, %s{', %s' * len(colonne)})",
-                    (source_id, genitore["agency_id"], *[sito[c] for c in colonne]))
+                    (source_id, genitore["agency_id"], *_valori_per_crm("stime_dettagliate", colonne, sito)))
                 steps["detail"] = {"state": "done"}
                 ledger.save(cur, riga["id"], crm_id=source_id, agency_id=genitore["agency_id"],
                             steps=steps, attempts=attempts, source_sha256=_impronta(sito),
