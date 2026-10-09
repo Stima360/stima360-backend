@@ -16,13 +16,12 @@ del CRM chiama dopo il salvataggio - e non ne introduce di nuove:
   * contatto, lead, consenso              core.service.bridge_public_stima
   * immobile e pertinenze                 property.site_sync
   * evento di storia                      seller_intelligence.service
-  * task "Contattare proprietario"        followup.service (solo stime recenti)
   * richiesta di sopralluogo in Agenda    appointments_legacy.site_hook
 
 COSA NON FA, DI PROPOSITO: non scrive MAI nel database del sito (la sessione
 e' read-only e il modulo `source` emette solo SELECT), non manda email,
 WhatsApp o altro (nessun messaggio accodato, nessuna sequenza commerciale
-attivata: al piu' il task interno "Contattare proprietario" per l'agente),
+attivata; nessun task commerciale creato),
 non rigenera PDF (il PDF e' quello originale dell'archivio, o manca e lo dice).
 
 Chiave univoca: `site_import_records (source, source_table, source_id)` (095).

@@ -19,7 +19,7 @@ registro nascono nella stessa transazione. Poi i passi: bridge, immobile,
 evento, task, PDF (per la stima); immobile, Agenda (per la dettagliata). Ogni
 passo e' una funzione gia' esistente e idempotente del CRM; il suo esito va in
 `steps`. Un passo fallito lascia la riga `partial` e si ritenta al giro dopo,
-fino a `max_attempts`. Nessun passo viene ripetuto se e' gia' riuscito.
+fino a `max_attempts` (PDF indisponibile: retry senza limite). Nessun passo viene ripetuto se e' gia' riuscito.
 """
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ class Ledger:
 
     def all(self, table: str) -> dict[int, dict]:
         with self.cur() as cur:
-            cur.execute("SELECT source_id, status, attempts FROM site_import_records "
+            cur.execute("SELECT source_id, status, attempts, steps FROM site_import_records "
                         "WHERE source = %s AND source_table = %s", (self.source, table))
             return {r["source_id"]: dict(r) for r in cur.fetchall()}
 
@@ -178,11 +178,14 @@ class Importer:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT current_database() AS db, inet_server_addr()::text AS addr, "
                         "inet_server_port() AS port, "
-                        "to_regclass('public.site_import_records') IS NOT NULL AS ledger")
+                        "to_regclass('public.site_import_records') IS NOT NULL AS ledger, "
+                        "to_regclass('public.site_import_baselines') IS NOT NULL AS baseline")
             crm = dict(cur.fetchone())
         conn.rollback()
         if not crm["ledger"]:
             raise ImportRefused("site_import_records is missing: apply migration 095 first")
+        if not crm["baseline"]:
+            raise ImportRefused("site_import_baselines is missing: apply migration 096 first")
         if (crm["db"], crm["addr"], crm["port"]) == (sito["db"], sito["addr"], sito["port"]):
             raise ImportRefused("SITE_DB_URL and the CRM database are the same database: refusing")
         for table in ("stime", "stime_dettagliate"):
@@ -191,7 +194,8 @@ class Importer:
 
     # -- entrata -------------------------------------------------------------
 
-    def run(self, *, limit: int | None = None, dry_run: bool = False) -> dict[str, Any]:
+    def run(self, *, limit: int | None = None, dry_run: bool = False,
+            initialize_baseline: bool = False) -> dict[str, Any]:
         limite = limit or self.config.batch
         lock_conn = self.connect()
         try:
@@ -204,6 +208,25 @@ class Importer:
                 conn = self.connect()
                 try:
                     ledger = Ledger(conn, self.config.source)
+                    with ledger.cur() as cur:
+                        cur.execute("SELECT ids FROM site_import_baselines WHERE source = %s",
+                                    (self.config.source,))
+                        baseline = cur.fetchone()
+                        if initialize_baseline:
+                            if dry_run:
+                                raise ImportRefused("baseline initialization cannot be a dry run")
+                            if baseline is not None:
+                                return {"status": "baseline_already_initialized"}
+                            ids = self.source.baseline_ids()
+                            cur.execute("INSERT INTO site_import_baselines (source, ids) VALUES (%s, %s)",
+                                        (self.config.source, Json(ids)))
+                            conn.commit()
+                            return {"status": "baseline_initialized",
+                                    **{t: len(v) for t, v in ids.items()}}
+                        if baseline is None:
+                            raise ImportRefused("baseline missing: run --initialize-baseline first")
+                        self.baseline = baseline["ids"]
+                    self._baseline_dependencies(conn, ledger)
                     piano = {t: self._da_fare(ledger, t) for t in ("stime", "stime_dettagliate")}
                     conn.rollback()
                     if dry_run:
@@ -233,12 +256,33 @@ class Importer:
         finally:
             lock_conn.close()
 
+    def _baseline_dependencies(self, conn, ledger):
+        """Authorize only missing historical parents of post-baseline details."""
+        historical = set(self.baseline["stime"])
+        detail_history = set(self.baseline["stime_dettagliate"])
+        ids = [i for i in self.source.settled_ids("stime_dettagliate", self.config.settle_minutes)
+               if i not in detail_history]
+        parents = {r.get("stima_id") for r in self.source.fetch("stime_dettagliate", ids).values()}
+        parents &= historical
+        records = ledger.all("stime")
+        retained = {i for i, r in records.items()
+                    if r["steps"].get("baseline_dependency")}
+        with ledger.cur() as cur:
+            cur.execute("SELECT id FROM stime WHERE id = ANY(%s)", (list(parents),))
+            existing = {r["id"] for r in cur.fetchall()}
+        self.baseline_parents = (parents - existing) | retained
+
     def _da_fare(self, ledger: Ledger, table: str) -> list[int]:
         presenti = ledger.all(table)
         sito = self.source.settled_ids(table, self.config.settle_minutes)
-        nuovi = [i for i in sito if i not in presenti]
+        excluded = set(self.baseline[table])
+        if table == "stime":
+            excluded -= self.baseline_parents
+        nuovi = [i for i in sito if i not in presenti and i not in excluded]
         ritenta = [i for i, r in presenti.items()
-                   if r["status"] in RETRY_STATUSES and r["attempts"] < self.config.max_attempts]
+                   if i not in excluded and r["status"] in RETRY_STATUSES
+                   and (r["attempts"] < self.config.max_attempts
+                        or (r["steps"].get("pdf") or {}).get("state") == "error")]
         return sorted(set(nuovi) | set(ritenta))
 
     def _fallito(self, conn, ledger, table, source_id, exc) -> None:
@@ -305,6 +349,8 @@ class Importer:
                 return
             attempts = riga["attempts"] + 1
             steps = dict(riga["steps"] or {})
+            if source_id in self.baseline_parents:
+                steps["baseline_dependency"] = {"state": "done"}
             if sito is None:
                 ledger.save(cur, riga["id"], status="failed", attempts=attempts,
                             last_error="source_row_missing")
@@ -349,7 +395,6 @@ class Importer:
 
     def _passi_stima(self, conn, ledger, riga, steps, sito, ctx, stima_id) -> None:
         from core import service as core_service
-        from followup import service as followup_service
         from property import site_sync
         from seller_intelligence import service as seller_intelligence_service
 
@@ -391,20 +436,8 @@ class Importer:
 
         self._passo(conn, ledger, riga["id"], steps, "event", evento)
 
-        def task():
-            creata = _utc(sito.get("data"))
-            if not collegato:
-                return {"state": "not_applicable", "reason": "no_contact_lead"}
-            if creata is None or self.now() - creata > timedelta(hours=self.config.followup_max_age_hours):
-                return {"state": "skipped", "reason": "history"}
-            regola = followup_service.get_rule("FOLLOWUP_STIMA_RICHIESTA")
-            followup_service.run_followup(
-                rule_code="FOLLOWUP_STIMA_RICHIESTA", trigger_type="event", stima_id=stima_id,
-                contact_id=ponte["contact_id"], lead_id=ponte["lead_id"], created_by="FOLLOWUP",
-                recover=True, due_at_override=creata + timedelta(hours=regola.due_hours))
-            return {"state": "done"}
-
-        self._passo(conn, ledger, riga["id"], steps, "followup", task)
+        self._passo(conn, ledger, riga["id"], steps, "followup",
+                    lambda: {"state": "skipped", "reason": "site_import_no_commercial_followup"})
         self._passo(conn, ledger, riga["id"], steps, "pdf",
                     lambda: self._pdf(conn, stima_id, _utc(sito.get("data"))))
 
@@ -522,7 +555,8 @@ class Importer:
 
 
 def run_once(config: Config | None = None, *, source=None, archive=None, connect=None,
-             limit: int | None = None, dry_run: bool = False, now=None) -> dict[str, Any]:
+             limit: int | None = None, dry_run: bool = False, now=None,
+             initialize_baseline: bool = False) -> dict[str, Any]:
     """Un giro completo. `source`/`archive`/`connect` si iniettano nei test."""
     from .pdf_archive import GitHubArchive
     from .source import SiteSource
@@ -534,7 +568,7 @@ def run_once(config: Config | None = None, *, source=None, archive=None, connect
     source = source or SiteSource(config.site_db_url)
     try:
         return Importer(config, source=source, archive=archive, connect=connect, now=now).run(
-            limit=limit, dry_run=dry_run)
+            limit=limit, dry_run=dry_run, initialize_baseline=initialize_baseline)
     finally:
         if proprio:
             source.close()

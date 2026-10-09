@@ -193,6 +193,7 @@ def mondo(completo, sito_db, monkeypatch):
                       f"({', '.join(['%s'] * len(colonne))}, LOCALTIMESTAMP - make_interval(mins => %s)) RETURNING id",
                       (*base.values(), minuti_fa))[0][0]
 
+    q_crm("DELETE FROM site_import_baselines")
     archivio = FakeArchive()
 
     def giro(**kw):
@@ -204,6 +205,8 @@ def mondo(completo, sito_db, monkeypatch):
         with SiteSource(sito_db["dsn"]) as source:
             return Importer(config, source=source, archive=kw.pop("archivio", archivio),
                             connect=crm).run(**kw)
+
+    giro(initialize_baseline=True)
 
     def ledger(table="stime"):
         return {r[0]: r[1:] for r in q_crm(
@@ -364,15 +367,15 @@ def test_09_nessuna_comunicazione_e_nessuna_sequenza(mondo):
     assert conta(mondo, "communication_enrollments") == 0
 
 
-def test_10_task_solo_per_le_stime_recenti(mondo):
+def test_10_nessun_task_commerciale_anche_per_stime_recenti(mondo):
     vecchia = mondo["stima"]()
     recente = mondo["stima"](minuti_fa=30)
     mondo["giro"]()
     led = mondo["ledger"]()
-    assert led[vecchia][1]["followup"] == {"state": "skipped", "reason": "history"}
-    assert led[recente][1]["followup"]["state"] == "done"
+    assert led[vecchia][1]["followup"]["state"] == "skipped"
+    assert led[recente][1]["followup"]["state"] == "skipped"
     assert conta(mondo, "tasks", "metadata->>'rule_code' = 'FOLLOWUP_STIMA_RICHIESTA' AND stima_id = %s", (vecchia,)) == 0
-    assert conta(mondo, "tasks", "metadata->>'rule_code' = 'FOLLOWUP_STIMA_RICHIESTA' AND stima_id = %s", (recente,)) == 1
+    assert conta(mondo, "tasks", "metadata->>'rule_code' = 'FOLLOWUP_STIMA_RICHIESTA' AND stima_id = %s", (recente,)) == 0
 
 
 def test_11_il_pdf_mancante_non_viene_mai_rigenerato(mondo, monkeypatch):
@@ -453,3 +456,100 @@ def test_16_stima_locali_numerici_come_testo(mondo):
     esito = mondo["giro"](limit=1)
     assert esito["failed"] == 0 and esito["conflict"] == 0, esito
     assert mondo["q_crm"]("SELECT locali, anno FROM stime WHERE id = %s", (sid,))[0] == (3, 1995)
+
+
+def test_phase4_baseline_repeated_history_ignored_and_new_detail(mondo):
+    old = mondo['stima'](minuti_fa=1)  # baseline includes unsettled records
+    old_detail = mondo['dettaglio'](old)
+    mondo['q_crm']('DELETE FROM site_import_baselines')
+    before = conta(mondo, 'stime')
+    assert mondo['giro'](initialize_baseline=True)['stime'] == 1
+    new = mondo['stima']()
+    # Future arrival with a lower ID than the historical record.
+    mondo['q_sito']('UPDATE stime SET id = 4901 WHERE id = %s', (new,))
+    new = 4901
+    detail = mondo['dettaglio'](new)
+    mondo['archivio'].pdf[new] = PDF
+    assert mondo['giro'](initialize_baseline=True)['status'] == 'baseline_already_initialized'
+    result = mondo['giro']()
+    assert result['stime_imported'] == 1 and result['dettagliate_imported'] == 1
+    assert old not in mondo['ledger']() and old_detail not in mondo['ledger']('stime_dettagliate')
+    assert conta(mondo, 'stime') == before + 1
+    assert conta(mondo, 'lead_stime', 'stima_id = %s', (new,)) == 1
+    pid = mondo['q_crm']('SELECT property_id FROM property_site_sources WHERE stima_id = %s', (new,))[0][0]
+    assert conta(mondo, 'property_accessories', 'property_id = %s', (pid,)) >= 1
+    assert conta(mondo, 'appointments', 'source_record_id = %s', (f'stime_dettagliate:{detail}',)) == 1
+    assert mondo['giro']()['stime_imported'] == 0
+    assert conta(mondo, 'lead_stime', 'stima_id = %s', (new,)) == 1
+
+
+def test_phase4_pdf_rate_limit_recovers_after_attempt_limit(mondo):
+    from site_import.pdf_archive import Esito
+    class LimitedArchive:
+        def fetch(self, *args):
+            return Esito('unavailable', reason='archive_http_403')
+    sid = mondo['stima']()
+    for _ in range(6):
+        assert mondo['giro'](archivio=LimitedArchive())['partial'] == 1
+    mondo['archivio'].pdf[sid] = PDF
+    assert mondo['giro']()['stime_imported'] == 1
+    assert conta(mondo, 'lead_stime', 'stima_id = %s', (sid,)) == 1
+    row = mondo['q_crm']('SELECT pdf_bytes FROM stima_pdf_artifacts WHERE stima_id = %s', (sid,))[0]
+    assert bytes(row[0]) == PDF
+
+
+def test_phase4_without_baseline_refuses(mondo):
+    from site_import.service import ImportRefused
+    mondo['q_crm']('DELETE FROM site_import_baselines')
+    mondo['stima']()
+    with pytest.raises(ImportRefused, match='baseline missing'):
+        mondo['giro']()
+
+
+def test_phase4_baseline_preserves_previously_imported_stima(mondo):
+    sid = mondo['stima']()
+    mondo['giro']()
+    old_ledger = mondo['q_crm']('SELECT * FROM site_import_records WHERE source_id = %s', (sid,))
+    old_stima = mondo['q_crm']('SELECT * FROM stime WHERE id = %s', (sid,))
+    mondo['q_crm']('DELETE FROM site_import_baselines')
+    mondo['giro'](initialize_baseline=True)
+    assert mondo['giro']()['stime_imported'] == 0
+    assert mondo['q_crm']('SELECT * FROM site_import_records WHERE source_id = %s', (sid,)) == old_ledger
+    assert mondo['q_crm']('SELECT * FROM stime WHERE id = %s', (sid,)) == old_stima
+
+
+def test_phase4_baseline_failure_can_restart(mondo, monkeypatch):
+    from site_import.source import SiteSource
+    mondo['stima']()
+    mondo['q_crm']('DELETE FROM site_import_baselines')
+    original = SiteSource.baseline_ids
+    def unavailable(self):
+        raise RuntimeError('simulated source failure')
+    monkeypatch.setattr(SiteSource, 'baseline_ids', unavailable)
+    with pytest.raises(RuntimeError, match='simulated source failure'):
+        mondo['giro'](initialize_baseline=True)
+    assert conta(mondo, 'site_import_baselines') == 0
+    monkeypatch.setattr(SiteSource, 'baseline_ids', original)
+    assert mondo['giro'](initialize_baseline=True)['stime'] == 1
+    assert mondo['giro']()['stime_imported'] == 0
+
+
+def test_phase4_new_detail_imports_only_missing_historical_parent(mondo):
+    from site_import.pdf_archive import Esito
+    parent = mondo['stima']()
+    unrelated = mondo['stima']()
+    mondo['q_crm']('DELETE FROM site_import_baselines')
+    mondo['giro'](initialize_baseline=True)
+    detail = mondo['dettaglio'](parent)
+    class Limited:
+        def fetch(self, *args):
+            return Esito('unavailable', reason='archive_http_429')
+    result = mondo['giro'](archivio=Limited())
+    assert result['partial'] == 1 and result['dettagliate_imported'] == 1
+    assert unrelated not in mondo['ledger']()
+    assert conta(mondo, 'appointments', 'source_record_id = %s', (f'stime_dettagliate:{detail}',)) == 1
+    mondo['archivio'].pdf[parent] = PDF
+    assert mondo['giro']()['stime_imported'] == 1
+    assert mondo['giro']()['stime_imported'] == 0
+    assert conta(mondo, 'lead_stime', 'stima_id = %s', (parent,)) == 1
+    assert unrelated not in mondo['ledger']()

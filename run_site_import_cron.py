@@ -2,7 +2,8 @@
 
     python3 run_site_import_cron.py              # un giro (batch SITE_IMPORT_BATCH)
     python3 run_site_import_cron.py --dry-run    # conta soltanto, non scrive nulla
-    python3 run_site_import_cron.py --limit 2000 # storico: giri piu' lunghi
+    python3 run_site_import_cron.py --initialize-baseline # solo una volta
+    python3 run_site_import_cron.py --limit 2000 # lotto piu' lungo
 
 Gira sul database del CRM (variabili DB_* come il servizio web) e LEGGE il
 database del sito da SITE_DB_URL, in sola lettura. Non manda email, WhatsApp o
@@ -25,6 +26,7 @@ import time
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import site estimations into the CRM")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--initialize-baseline", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -35,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     inizio = time.monotonic()
     try:
         config = Config.from_env()
-        esito = run_once(config, limit=args.limit, dry_run=args.dry_run)
+        esito = run_once(config, limit=args.limit, dry_run=args.dry_run,
+                         initialize_baseline=args.initialize_baseline)
     except (ConfigurationError, ImportRefused) as exc:
         print(f"site_import status=refused reason={exc}")
         return 1

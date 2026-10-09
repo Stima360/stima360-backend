@@ -64,6 +64,13 @@ class SiteSource:
         assert table in TABLES
         return bool(self._rows("SELECT to_regclass(%s) IS NOT NULL AS ok", (f"public.{table}",))[0]["ok"])
 
+    def baseline_ids(self) -> dict[str, list[int]]:
+        """One statement/snapshot, including records still being completed."""
+        rows = self._rows("SELECT 'stime' AS kind, id FROM stime UNION ALL "
+                          "SELECT 'stime_dettagliate' AS kind, id FROM stime_dettagliate")
+        return {table: sorted(int(r["id"]) for r in rows if r["kind"] == table)
+                for table in TABLES}
+
     def settled_ids(self, table: str, settle_minutes: int) -> list[int]:
         """Gli id delle righe "ferme": scritte da piu' di `settle_minutes`.
 
