@@ -172,6 +172,18 @@ def _crm_ops_3_viste():
     return {ROOT / k: v for k, v in VISTE_CON_DIALOG_AGENDA.items()}
 
 
+# SENTINELLA AGGIORNATA DAL MENU PROFILO DI AURORA GLASS (autorizzata da
+# Giorgio): il profilo in alto a destra mostra nome e cognome dell'operatore,
+# che solo l'elenco degli operatori dell'agenzia espone (riga `is_me`). Lo
+# legge dall'UNICO client dell'Agenda (`getAgents`), cosi' `/api/appointments`
+# resta nominato solo in agenda-api.js (test_a30_mount_api::test_33).
+# Esenzione CHIUSA: un solo componente, questa sola riga esatta.
+AURORA_USER_MENU = ASSETS / "components" / "user-menu.js"
+AURORA_USER_MENU_IMPORT_AMMESSI = (
+    "import { getAgents } from '../agenda/agenda-api.js';",
+)
+
+
 def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_agenda():
     for f in ASSETS.rglob("*.js"):
         # A30-9B: i due file nuovi vivono anche loro sotto "agenda/" (uno e'
@@ -187,6 +199,10 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         if f == CRM_OPS_1B_VISTA_CONTATTO:
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
             assert righe == list(CRM_OPS_1B_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
+            continue
+        if f == AURORA_USER_MENU:
+            righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
+            assert righe == list(AURORA_USER_MENU_IMPORT_AMMESSI), (f.relative_to(ROOT), righe)
             continue
         if f in _crm_ops_3_viste():
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]

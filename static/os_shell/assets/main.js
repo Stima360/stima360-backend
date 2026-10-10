@@ -1,4 +1,5 @@
 import { mountGlobalSearch } from './components/global-search.js';
+import { mountUserMenu } from './components/user-menu.js';
 // STIMA360 OS — main.js
 // Bootstrap minimo dell'App Shell: collega login, sidebar, router e badge
 // ambiente. Nessuna libreria, nessuna dipendenza esterna.
@@ -223,6 +224,7 @@ initRouter(contentEl, {
 });
 
 mountEnvBadge(envBadgeEl);
+mountUserMenu();
 mountGlobalSearch(contentEl.parentElement);
 
 const NAV_ICON_PATHS = {
