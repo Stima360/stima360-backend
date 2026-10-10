@@ -18,6 +18,7 @@ import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } f
 import { mountEnvBadge } from './core/env-badge.js';
 import { renderOggi } from './views/oggi.js';
 import { renderContatti } from './views/contatti.js';
+import { renderStime } from './views/stime.js';
 import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
 import { renderImmobili } from './views/immobili.js';
 import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
@@ -50,6 +51,8 @@ const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
+  { name: 'stime', label: 'Stime' },
+  { name: 'stime-dettagliate', label: 'Stime dettagliate' },
   // EDIFICI-1: subito sopra Immobili (Edificio -> Immobili/Unita', come il
   // modello), senza separare Immobili da Venditori (flusso di VENDITORI-1).
   { name: 'edifici', label: 'Edifici' },
@@ -108,6 +111,8 @@ registerRoute('oggi', renderOggi);
 registerRoute('contatti', (container, params = []) => {
   return params[0] ? renderContattoDettaglio(container, params) : renderContatti(container);
 });
+registerRoute('stime', (container, params = []) => renderStime(container, params, 'all'));
+registerRoute('stime-dettagliate', (container, params = []) => renderStime(container, params, 'detailed'));
 // "immobili" copre sia la lista (#/immobili) sia il dettaglio (#/immobili/{id}),
 // stesso pattern dispatcher gia' usato per "contatti".
 registerRoute('immobili', (container, params = []) => {
@@ -220,12 +225,42 @@ initRouter(contentEl, {
 mountEnvBadge(envBadgeEl);
 mountGlobalSearch(contentEl.parentElement);
 
+const NAV_ICON_PATHS = {
+  oggi: ['M3 10.5 12 3l9 7.5', 'M5 9.5V21h14V9.5', 'M9 21v-7h6v7'],
+  agenda: ['M4 5h16v16H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4', 'M8 13h3', 'M14 13h2', 'M8 17h3'],
+  contatti: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
+  stime: ['M3 3v18h18', 'M7 16l4-5 3 2 5-7', 'M16 6h3v3'],
+  'stime-dettagliate': ['M8 4h9l3 3v14H6V4z', 'M17 4v4h4', 'M10 12h7', 'M10 16h7'],
+  edifici: ['M4 21V5h12v16', 'M16 9h4v12', 'M8 9h2', 'M8 13h2', 'M8 17h2', 'M3 21h18'],
+  immobili: ['M3 10l9-7 9 7', 'M5 9v12h14V9', 'M9 21v-7h6v7'],
+  venditori: ['M4 20v-2a4 4 0 0 1 4-4h3', 'M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M14 17h7', 'M18 13l4 4-4 4'],
+  acquisizioni: ['M3 10l9-7 9 7', 'M5 10v11h14V10', 'M9 16l2 2 4-4'],
+  incarichi: ['M6 3h12v18H6z', 'M9 8h6', 'M9 12h6', 'M9 16h4'],
+  acquirenti: ['M3 10l9-7 9 7', 'M5 10v11h14V10', 'M8 17l3 3 5-6'],
+  abbinamenti: ['M7 7h4a4 4 0 0 1 4 4v2', 'M17 17h-4a4 4 0 0 1-4-4v-2', 'M12 9l3 4 4-4'],
+  attivita: ['M3 12h5l3-7 4 14 3-7h3'],
+  automazioni: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M6 6l2 2', 'M16 16l2 2', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'],
+  cestino: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 14h10l1-14', 'M10 11v6', 'M14 11v6'],
+  rete: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20', 'M2 12h20', 'M12 2c5 5 5 15 0 20', 'M12 2c-5 5-5 15 0 20'],
+};
+
 function creaVoceNav(section) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'nav-item';
   btn.dataset.route = section.name;
-  btn.textContent = section.label;
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.classList.add('nav-icon');
+  for (const d of NAV_ICON_PATHS[section.name]) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    icon.appendChild(path);
+  }
+  const label = document.createElement('span');
+  label.textContent = section.label;
+  btn.append(icon, label);
   btn.addEventListener('click', () => navigate(section.name));
   return btn;
 }
@@ -274,13 +309,7 @@ function aggiornaVoceRete(session) {
     return;
   }
   if (esistente) return;
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'nav-item';
-  btn.dataset.route = SEZIONE_RETE.name;
-  btn.textContent = SEZIONE_RETE.label;
-  btn.addEventListener('click', () => navigate(SEZIONE_RETE.name));
-  navEl.appendChild(btn);
+  navEl.appendChild(creaVoceNav(SEZIONE_RETE));
 }
 
 // P28 - LA BARRA DEL SUPERADMIN.

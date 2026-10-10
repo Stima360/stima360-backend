@@ -1077,3 +1077,44 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .trash-blocker-action .btn, .trash-banner-actions .btn { width: 100%; min-height: 44px; }
 }
+
+/* STIME-UI-1 — Icone della sidebar e viste Stime, solo presentazione. */
+.nav-item { display: flex; align-items: center; gap: 10px; }
+.nav-icon { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.nav-item[data-route="stime"] { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 14px; }
+.nav-item[data-route="stime-dettagliate"] { padding-left: 34px; font-size: 13px; }
+.nav-item[data-route="stime-dettagliate"] .nav-icon { width: 16px; height: 16px; flex-basis: 16px; }
+.stime-page { max-width: 1200px; }
+.stime-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
+.stime-stat { display: grid; gap: 5px; border-radius: var(--radius); padding: 14px; background: var(--bg); }
+.stime-stat strong { font-size: 23px; font-weight: 700; }
+.stime-stat span { font-size: 12px; color: var(--muted); }
+.stime-toolbar .input[type="search"] { flex: 1; max-width: unset; min-width: 185px; }
+.stime-cards { display: grid; gap: 12px; }
+.stime-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.stime-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+.stime-name-link { border: 0; padding: 0; background: transparent; font: inherit; font-size: 16px; font-weight: 650; color: var(--primary); text-align: left; cursor: pointer; }
+.stime-location { margin: 8px 0; }
+.stime-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; color: var(--muted); font-size: 13px; }
+.stime-estimate { color: var(--text); font-size: 15px; }
+.stime-status { display: inline-block; background: #eef0f4; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: #3c4860; }
+.stime-status.is-detailed { background: #e7f6eb; color: #245f37; }
+.stime-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 14px; font-size: 13px; }
+.stime-actions a { color: var(--primary); text-decoration: none; font-weight: 600; }
+.stime-actions a:hover { text-decoration: underline; }
+.stime-detail-toolbar { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
+.stime-detail-actions { margin: 14px 0 18px; }
+.stime-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.stime-detail-card h2 { margin-top: 0; font-size: 16px; }
+.stime-fields { margin: 0; display: grid; gap: 0; }
+.stime-field { display: grid; grid-template-columns: minmax(120px, 40%) minmax(0,1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.stime-field:last-child { border-bottom: 0; }
+.stime-field dt { color: var(--muted); }
+.stime-field dd { margin: 0; overflow-wrap: anywhere; }
+.stime-value-note { margin-top: 18px; }
+@media (max-width: 767px) {
+  .stime-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stime-detail-grid { grid-template-columns: 1fr; }
+  .stime-field { grid-template-columns: minmax(105px, 36%) minmax(0,1fr); }
+  .nav-item[data-route="stime-dettagliate"] { padding-left: 24px; }
+}

@@ -21,17 +21,49 @@ requests, matches, visits) stay unscoped until those modules are migrated.
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
-from . import sellers, service
+import stima_pdf
+
+from . import sellers, service, valuations
 from .schemas import Contact360Response, SellerActivate, SellerDeactivate
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
+
+
+@router.get("/stime")
+def list_stime(
+    view: str = Query("all", pattern="^(all|base|detailed)$"),
+    search: str | None = Query(None, max_length=160),
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    return valuations.list_stime(ctx, view=view, search=search, limit=limit, offset=offset)
+
+
+@router.get("/stime/{stima_id}")
+def get_stima(stima_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    return valuations.get_stima(ctx, stima_id)
+
+
+@router.get("/stime/{stima_id}/pdf")
+def get_stima_pdf(stima_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    # La funzione esistente controlla nuovamente stima, agenzia e artifact.
+    pdf = stima_pdf.download(stima_id, agency_id=ctx.require_agency())
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="stima_{stima_id}.pdf"',
+        "Cache-Control": "private, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Vary": "Cookie, Authorization",
+    })
 
 
 @router.get("/contacts/{contact_id}/360", response_model=Contact360Response)
