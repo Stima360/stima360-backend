@@ -46,10 +46,15 @@ ASKING_ISSUES = frozenset({
 # Motivi aggiunti dalla politica (stabili).
 REF_NOT_FOUND = "reference_not_found"
 REF_AMBIGUOUS = "reference_ambiguous"
-REF_FUZZY = "reference_fuzzy"                   # trovato uno, ma non per recapito o nome completo
+REF_FUZZY = "reference_fuzzy"                   # immobile/edificio trovato, ma non per codice o via+civico
+#: Un contatto trovato SOLO per nome, cognome o ragione sociale: per qualunque
+#: operazione che scrive dati serve un identificativo affidabile (telefono o
+#: email) oppure la conferma esplicita dell'agente sul contatto giusto.
+CONTACT_CONFIRM = "contact_confirmation_required"
 DUPLICATE_VISIBLE = "possible_duplicate_contact"
 DUPLICATE_HIDDEN = "possible_duplicate_hidden"  # D1: esiste, ma non lo puoi vedere
 SIMILAR_BUILDING = "similar_building_found"
+SIMILAR_UNIT = "similar_unit_found"             # Fase 2: stesso indirizzo+civico, o stessa posizione in palazzina
 CADASTRAL_DUPLICATE = "cadastral_duplicate"
 AGENDA_CONFLICT = "agenda_conflict"
 AGENT_CANNOT_ASSIGN = "agent_cannot_assign"
@@ -81,6 +86,7 @@ class Facts:
     #: (altro agente). Solo vero/falso: nessun dato di chi non si puo' vedere.
     duplicate_hidden: frozenset[int] = frozenset()
     similar_building: frozenset[int] = frozenset()
+    similar_unit: frozenset[int] = frozenset()
     cadastral_duplicate: frozenset[int] = frozenset()
     agenda_conflict: frozenset[int] = frozenset()
     actor_may_assign: bool = False
@@ -139,7 +145,10 @@ def _ref_reasons(step: Step, facts: Facts) -> list[str]:
         elif trovato.candidates > 1:
             motivi.append(REF_AMBIGUOUS)
         elif not trovato.exact:
-            motivi.append(REF_FUZZY if step.intent != "add_note" else NOTE_TARGET_NOT_EXACT)
+            if ref.kind == "contact":
+                motivi.append(CONTACT_CONFIRM)
+            else:
+                motivi.append(REF_FUZZY if step.intent != "add_note" else NOTE_TARGET_NOT_EXACT)
     return motivi
 
 
@@ -163,6 +172,8 @@ def decide_step(step: Step, facts: Facts, settings: Settings) -> StepDecision:
         domande.append(SIMILAR_BUILDING)
     if step.intent == "create_unit" and step.ordinal in facts.cadastral_duplicate:
         domande.append(CADASTRAL_DUPLICATE)
+    if step.intent == "create_unit" and step.ordinal in facts.similar_unit:
+        domande.append(SIMILAR_UNIT)
     if step.intent == "create_appointment" and step.ordinal in facts.agenda_conflict:
         domande.append(AGENDA_CONFLICT)
     if domande:

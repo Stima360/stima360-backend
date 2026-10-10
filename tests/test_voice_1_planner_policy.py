@@ -163,7 +163,7 @@ def test_11_auto_when_everything_is_resolved():
 
 
 @pytest.mark.parametrize("facts, motivo", [
-    (RefFacts(0), policy.REF_NOT_FOUND), (RefFacts(2), policy.REF_AMBIGUOUS), (RefFacts(1, exact=False), policy.NOTE_TARGET_NOT_EXACT),
+    (RefFacts(0), policy.REF_NOT_FOUND), (RefFacts(2), policy.REF_AMBIGUOUS), (RefFacts(1, exact=False), policy.CONTACT_CONFIRM),
 ])
 def test_12_references_must_be_unique_and_exact_for_notes(facts, motivo):
     p = plan("nota", {"intent": "add_note", "quote": "x", "text": "ok", "contact": {"first_name": "Marco"}})
@@ -174,7 +174,32 @@ def test_12_references_must_be_unique_and_exact_for_notes(facts, motivo):
 def test_13_fuzzy_reference_for_other_intents():
     p = plan("vende", {"intent": "activate_seller", "quote": "x", "contact": {"first_name": "Marco"}, "property": {"address": "via Roma"}})
     d = decide(p, _facts(refs={(1, "contact"): RefFacts(1, exact=False), (1, "property"): RefFacts(1, exact=True)}))
+    assert d.of(1).reasons == (policy.CONTACT_CONFIRM,)
+    d = decide(p, _facts(refs={(1, "contact"): RefFacts(1, exact=True), (1, "property"): RefFacts(1, exact=False)}))
     assert d.of(1).reasons == (policy.REF_FUZZY,)
+    nota_su_immobile = plan("nota", {"intent": "add_note", "quote": "x", "text": "ok", "property": {"address": "via Roma"}})
+    d = decide(nota_su_immobile, _facts(refs={(1, "property"): RefFacts(1, exact=False)}))
+    assert d.of(1).reasons == (policy.NOTE_TARGET_NOT_EXACT,)
+
+
+@pytest.mark.parametrize("comando", [
+    {"intent": "add_note", "quote": "x", "text": "ok", "contact": {"first_name": "Mario", "last_name": "Rossi"}},
+    {"intent": "add_task", "quote": "x", "title": "Richiamare", "contact": {"first_name": "Mario", "last_name": "Rossi"}},
+    {"intent": "link_owner", "quote": "x", "contact": {"first_name": "Mario", "last_name": "Rossi"}, "property": {"code": "VR10"}},
+    {"intent": "activate_seller", "quote": "x", "contact": {"first_name": "Mario", "last_name": "Rossi"}, "property": {"code": "VR10"}},
+    {"intent": "create_appointment", "quote": "x", "when": {"date_text": "domani", "time_text": "alle 15"},
+     "contact": {"first_name": "Mario", "last_name": "Rossi"}},
+    {"intent": "create_unit", "quote": "vuole vendere", "address": "via Roma", "owner": {"first_name": "Mario", "last_name": "Rossi"}},
+])
+def test_13b_a_contact_found_by_name_needs_confirmation_for_every_write(comando):
+    """Correzione della review Fase 2: per qualunque operazione che scrive,
+    un contatto trovato solo per nome non basta. Con il recapito si esegue."""
+    p = plan("vuole vendere", comando)
+    nomi = {k: RefFacts(1, exact=k != "contact" and k != "owner") for k in p.step(1).refs}
+    d = decide(p, _facts(refs={(1, k): v for k, v in nomi.items()}))
+    assert d.of(1).decision == "ask" and policy.CONTACT_CONFIRM in d.of(1).reasons
+    affidabili = {(1, k): RefFacts(1, exact=True) for k in p.step(1).refs}
+    assert decide(p, _facts(refs=affidabili)).of(1).decision == "auto"
 
 
 def test_14_duplicates_visible_hidden_and_the_d1_switch():
@@ -222,3 +247,9 @@ def test_18_modes_only_move_auto_to_ask():
     assert [s.decision for s in decide(p, f, Settings(mode="auto")).steps] == ["auto", "auto"]
     bloccato = plan("x", {"intent": "unsupported", "quote": "x", "description": "d"})
     assert decide(bloccato, f, Settings(mode="review")).of(1).decision == "blocked"  # mai meno severo
+
+
+def test_19_similar_unit_is_a_question_not_a_block():
+    p = plan("vende", {"intent": "create_unit", "quote": "vuole vendere", "address": "via Roma", "civic_number": "10"})
+    d = decide(p, _facts(similar_unit=frozenset({1})))
+    assert d.of(1).decision == "ask" and d.of(1).reasons == (policy.SIMILAR_UNIT,)

@@ -1,8 +1,10 @@
-"""STIMA Voice Fase 1 - il perimetro: funzioni pure, nessun database,
-nessuna rete, nessun servizio del CRM toccato, nessuna rotta montata."""
+"""STIMA Voice - il perimetro (Fasi 1-2): funzioni pure piu' le sole
+letture del risolutore. Nessuna scrittura, nessuna rete, nessun servizio del
+CRM che scrive, nessuna rotta montata, nessun modulo CRM toccato."""
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,14 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 VOICE = ROOT / "voice"
 
 FILE_FASE_1 = {"__init__.py", "schemas.py", "planner.py", "dates.py", "policy.py", "fake_provider.py"}
-#: Cio' che la Fase 1 puo' importare dal CRM: enum, schemi e normalizzazione.
-IMPORT_AMMESSI = {
+FILE_FASE_2 = {"repository.py", "resolver.py"}
+#: Cio' che il modulo puo' importare dal CRM: enum, schemi, normalizzazione
+#: e - SOLO in repository.py - le letture: scope, cursore, predicati del
+#: Cestino, avvisi del censimento, agenti dell'Agenda.
+IMPORT_PURI = {
     "appointments.enums", "core.enums", "core.normalization", "core.schemas",
     "property.enums", "property.schemas", "property.interactions",
 }
-VIETATI = ("psycopg2", "requests", "httpx", "openai", "boto3", "fastapi", "database", "core.database",
-           "core.repository", "core.service", "property.service", "property.census", "property.repository",
-           "appointments.service", "appointments.repository", "crm.sellers", "acquisitions")
+IMPORT_LETTURE = {"core.database", "core.scope", "core", "property", "appointments"}
+VIETATI = ("psycopg2", "requests", "httpx", "openai", "boto3", "fastapi", "database",
+           "core.repository", "core.service", "property.service", "property.repository",
+           "appointments.service", "crm.sellers", "acquisitions")
 
 
 def _import_names(path: Path) -> set[str]:
@@ -31,29 +37,39 @@ def _import_names(path: Path) -> set[str]:
     return nomi
 
 
-def test_01_only_phase_1_files_exist():
-    assert {p.name for p in VOICE.glob("*.py")} == FILE_FASE_1
-    assert not (VOICE / "router.py").exists() and not list(VOICE.glob("*provider.py")) == []
+def test_01_only_declared_files_exist():
+    assert {p.name for p in VOICE.glob("*.py")} == FILE_FASE_1 | FILE_FASE_2
+    assert not (VOICE / "router.py").exists() and not (VOICE / "executor.py").exists()
 
 
-def test_02_no_database_no_network_no_crm_services():
+def test_02_only_repository_touches_the_database():
     for file in VOICE.glob("*.py"):
         for nome in _import_names(file):
             assert not nome.startswith(VIETATI), (file.name, nome)
-            if "." in nome and not nome.startswith("voice"):
-                assert nome in IMPORT_AMMESSI, (file.name, nome)
+            if nome.startswith("voice") or "." not in nome and nome not in IMPORT_LETTURE:
+                continue
+            if file.name == "repository.py":
+                assert nome in IMPORT_PURI | IMPORT_LETTURE, (file.name, nome)
+            else:
+                assert nome in IMPORT_PURI, (file.name, nome)
 
 
-def test_03_no_sql_no_http_in_voice():
+def test_03_no_write_sql_and_no_http_anywhere():
+    scrittura = re.compile(r"\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|TRUNCATE|ALTER\s+TABLE|CREATE\s+TABLE|DROP\s)", re.I)
     for file in VOICE.glob("*.py"):
-        testo = file.read_text(encoding="utf-8").lower()
-        for vietato in ("select ", "insert ", "update ", "cursor(", "fetch(", "http://", "https://"):
-            assert vietato not in testo, (file.name, vietato)
+        testo = file.read_text(encoding="utf-8")
+        assert not scrittura.search(testo), file.name
+        assert "commit=True" not in testo and ".commit()" not in testo, file.name
+        for vietato in ("http://", "https://", "fetch("):
+            assert vietato not in testo.lower(), (file.name, vietato)
+    for file in VOICE.glob("*.py"):
+        if file.name != "repository.py":
+            assert "cur.execute" not in file.read_text(encoding="utf-8"), file.name
 
 
 def test_04_main_and_crm_modules_untouched():
-    """Nessun file del CRM modificato o aggiunto fuori da voice/ e dai test
-    della Fase 1 (lo stato git del working tree, come le sentinelle P27/P29)."""
+    """Nessun file del CRM modificato o aggiunto fuori da voice/ e dai test di
+    STIMA Voice (lo stato git del working tree, come le sentinelle P27/P29)."""
     esito = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--",
                             "main.py", "core/", "property/", "appointments/", "crm/", "acquisitions/",
                             "operator_auth/", "migrations/", "static/", "public_submissions.py"],
@@ -64,3 +80,14 @@ def test_04_main_and_crm_modules_untouched():
 def test_05_no_migration_and_no_route():
     assert not list((ROOT / "migrations").glob("*voice*"))
     assert "voice" not in (ROOT / "main.py").read_text(encoding="utf-8")
+
+
+def test_06_census_helpers_reused_keep_their_signature():
+    """Il risolutore richiama tre funzioni private del censimento, senza
+    modificarle: se la firma cambia, questo test lo dice prima che la
+    risoluzione si rompa in esercizio."""
+    import inspect
+    from property import census
+    for nome in ("_simili_edificio", "_simili_unita", "_duplicato_catastale"):
+        firma = list(inspect.signature(getattr(census, nome)).parameters)
+        assert firma == ["cur", "agency_id", "data", "escluso"], (nome, firma)
