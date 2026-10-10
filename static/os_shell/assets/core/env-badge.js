@@ -19,5 +19,10 @@ export function computeEnvLabel(hostname) {
 
 export function mountEnvBadge(element) {
   if (!element) return;
-  element.textContent = computeEnvLabel(window.location.hostname);
+  const label = computeEnvLabel(window.location.hostname);
+  element.textContent = label;
+  // Aurora Glass: solo un aggancio per il colore del badge, il testo resta
+  // l'unica fonte di verita'.
+  element.dataset.env = label === 'AMBIENTE TEST' ? 'test'
+    : label === 'AMBIENTE PROD' ? 'prod' : 'local';
 }

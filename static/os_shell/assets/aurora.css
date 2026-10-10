@@ -1,0 +1,949 @@
+/* ===========================================================================
+   STIMA360 OS — AURORA GLASS
+   Strato visivo caricato DOPO app.css. Solo presentazione: nessuna regola
+   tocca [hidden], la logica delle viste o i punti di rottura funzionali
+   (agenda mobile/desktop, bottom-sheet, voci rimosse dalla sidebar).
+   Struttura: 1 token · 2 base · 3 shell · 4 componenti · 5 sezioni ·
+              6 responsive · 7 movimento ridotto / fallback.
+   =========================================================================== */
+
+/* 1 — TOKEN ---------------------------------------------------------------- */
+:root {
+  /* Colori base: ridefiniscono quelli di app.css, cosi' tutto il CRM segue. */
+  --bg: #f2f4fa;                 /* superfici di appoggio opache (chip, hover, sticky) */
+  --panel: #ffffff;              /* resta opaco: serve alle intestazioni sticky */
+  --border: #dde3ef;
+  --text: #0f1b33;
+  --muted: #4b5875;              /* >= 7:1 su bianco */
+  --primary: #2445d4;
+  --danger: #b42318;
+  --radius: 14px;
+
+  /* Aurora */
+  --au-pearl: #f7f8fc;
+  --au-violet: #7c3aed;
+  --au-blue: #2563eb;
+  --au-cyan: #06b6d4;
+  --au-green: #10b981;
+  --au-amber: #f59e0b;
+  --au-rose: #f43f5e;
+  --au-rainbow: linear-gradient(90deg, var(--au-violet), var(--au-blue) 22%, var(--au-cyan) 42%, var(--au-green) 60%, var(--au-amber) 80%, var(--au-rose));
+  --au-primary-grad: linear-gradient(135deg, #2f5bff 0%, #2445d4 45%, #5b3fd6 100%);
+
+  /* Vetro */
+  --au-glass: rgba(255, 255, 255, .66);
+  --au-glass-strong: rgba(255, 255, 255, .86);
+  --au-glass-soft: rgba(255, 255, 255, .45);
+  --au-glass-line: rgba(255, 255, 255, .85);
+  --au-hairline: rgba(15, 27, 51, .08);
+  --au-blur: blur(18px) saturate(165%);
+
+  /* Profondita' */
+  --au-shadow-sm: 0 1px 2px rgba(15, 27, 51, .05), 0 2px 8px rgba(15, 27, 51, .04);
+  --au-shadow: 0 1px 2px rgba(15, 27, 51, .05), 0 10px 30px -12px rgba(36, 69, 212, .18);
+  --au-shadow-lg: 0 24px 60px -20px rgba(15, 27, 51, .35), 0 2px 6px rgba(15, 27, 51, .06);
+  --au-glow: 0 0 0 4px rgba(36, 69, 212, .14);
+
+  --au-r-sm: 10px;
+  --au-r: 14px;
+  --au-r-lg: 20px;
+  --au-ease: cubic-bezier(.2, .7, .2, 1);
+  --au-fast: 160ms;
+  --au-mid: 260ms;
+  --au-sidebar-w: 248px;
+  --au-font: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* 2 — BASE ----------------------------------------------------------------- */
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--au-font);
+  color: var(--text);
+  background-color: var(--au-pearl);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Cielo aurora: un livello fisso dietro a tutto (fixed su ::before invece di
+   background-attachment, che su iOS non funziona). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60vmax 40vmax at 8% -6%, rgba(124, 58, 237, .16), transparent 60%),
+    radial-gradient(55vmax 38vmax at 96% 2%, rgba(6, 182, 212, .16), transparent 62%),
+    radial-gradient(50vmax 40vmax at 82% 100%, rgba(244, 63, 94, .10), transparent 60%),
+    radial-gradient(45vmax 36vmax at 10% 96%, rgba(16, 185, 129, .11), transparent 60%),
+    radial-gradient(40vmax 30vmax at 50% 50%, rgba(245, 158, 11, .06), transparent 70%),
+    linear-gradient(180deg, #fbfbfe 0%, var(--au-pearl) 100%);
+}
+
+::selection { background: rgba(36, 69, 212, .18); }
+
+a { color: var(--primary); }
+
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+h1, h2, h3 { letter-spacing: -.01em; }
+
+/* 3 — SHELL ---------------------------------------------------------------- */
+
+/* Login */
+#login-view { position: relative; padding: 24px 16px; }
+.login-box {
+  position: relative;
+  max-width: 400px;
+  padding: 40px 34px 34px;
+  border-radius: var(--au-r-lg);
+  background: var(--au-glass);
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  border: 1px solid var(--au-glass-line);
+  box-shadow: var(--au-shadow-lg), inset 0 1px 0 rgba(255, 255, 255, .9);
+  overflow: hidden;
+  animation: au-rise var(--au-mid) var(--au-ease) both;
+}
+.login-box::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: var(--au-rainbow);
+}
+.login-box h1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 24px;
+  font-weight: 800;
+  margin: 0 0 6px;
+}
+.login-box h1::before {
+  content: "";
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #fff 0 42%, transparent 43%),
+    conic-gradient(from 200deg, var(--au-violet), var(--au-blue), var(--au-cyan), var(--au-green), var(--au-amber), var(--au-rose), var(--au-violet));
+  box-shadow: 0 6px 18px -6px rgba(36, 69, 212, .55);
+}
+.login-box p { font-size: 14px; color: var(--muted); margin-bottom: 18px; }
+.login-box label { font-weight: 600; font-size: 13px; color: var(--text); margin-top: 14px; }
+.login-box input { padding: 12px 14px; font-size: 15px; }
+.login-box button[type="submit"] { margin-top: 22px; min-height: 46px; font-size: 15px; }
+
+/* Barra Superadmin: resta nel flusso (sposta la pagina), rossa e
+   inconfondibile; solo piu' rifinita. */
+.acting-bar {
+  position: relative;
+  z-index: 30;
+  padding: 10px 20px;
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, .06) 0 10px, transparent 10px 20px),
+    linear-gradient(90deg, #a51d15, #c8261b 50%, #a51d15);
+  box-shadow: 0 6px 20px -8px rgba(165, 29, 21, .6);
+  font-weight: 500;
+}
+.acting-bar .acting-label {
+  background: #fff;
+  color: #a51d15;
+  border-color: #fff;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 800;
+}
+.acting-bar .acting-exit { border-radius: 999px; font-weight: 600; }
+
+/* Shell */
+#app-view { background: transparent; }
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  width: var(--au-sidebar-w);
+  height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 12px 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .78), rgba(255, 255, 255, .56));
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  border-right: 1px solid var(--au-glass-line);
+  box-shadow: 1px 0 0 var(--au-hairline), 12px 0 40px -30px rgba(15, 27, 51, .35);
+  scrollbar-width: thin;
+}
+.sidebar::after {
+  /* filo arcobaleno verticale, firma del marchio */
+  content: "";
+  position: absolute;
+  top: 0;
+  right: -1px;
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--au-violet), var(--au-blue), var(--au-cyan), var(--au-green), var(--au-amber), var(--au-rose));
+  opacity: .55;
+  pointer-events: none;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 10px 18px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--au-hairline);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  color: var(--text);
+}
+.brand::before {
+  content: "";
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #fff 0 40%, transparent 41%),
+    conic-gradient(from 200deg, var(--au-violet), var(--au-blue), var(--au-cyan), var(--au-green), var(--au-amber), var(--au-rose), var(--au-violet));
+  box-shadow: 0 4px 14px -4px rgba(36, 69, 212, .5);
+}
+
+#nav { gap: 2px; }
+.nav-item {
+  position: relative;
+  border-radius: 11px;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #2a3654;
+  transition: background var(--au-fast) var(--au-ease), color var(--au-fast) var(--au-ease), box-shadow var(--au-fast) var(--au-ease), transform var(--au-fast) var(--au-ease);
+}
+.nav-item .nav-icon { opacity: .8; transition: opacity var(--au-fast), transform var(--au-fast) var(--au-ease); }
+.nav-item:hover {
+  background: rgba(255, 255, 255, .75);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .9), 0 4px 14px -8px rgba(36, 69, 212, .35);
+}
+.nav-item:hover .nav-icon { opacity: 1; transform: scale(1.06); }
+.nav-item.active {
+  border-right: none;
+  background: #fff;
+  color: var(--primary);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(15, 27, 51, .06), 0 8px 22px -12px rgba(36, 69, 212, .55), inset 0 0 0 1px rgba(36, 69, 212, .10);
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--au-violet), var(--au-blue), var(--au-cyan));
+}
+.nav-item.active .nav-icon { opacity: 1; }
+.nav-item:focus-visible { outline-offset: 0; }
+/* separatori gia' previsti da app.css, solo resi piu' leggeri */
+.nav-item[data-route="stime"] { border-top-color: var(--au-hairline); padding-top: 9px; margin-top: 8px; }
+.nav-item[data-route="stime"]::after,
+.nav-item[data-route="cestino"]::after { content: none; }
+.nav-item[data-route="stime-dettagliate"] { padding-left: 36px; }
+.nav-item[data-route="cestino"] { border-top-color: var(--au-hairline); border-radius: 0 0 11px 11px; }
+.nav-item[data-route="cestino"].active { border-radius: 11px; }
+
+/* Badge ambiente: deve leggersi da lontano. Il colore lo decide
+   data-env (impostato da env-badge.js), il testo resta quello di sempre. */
+.env-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 14px 4px 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  background: #e8ecf5;
+  color: #34405c;
+  border: 1px solid rgba(15, 27, 51, .08);
+}
+.env-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, .5);
+  flex: 0 0 8px;
+}
+.env-badge[data-env="test"] {
+  background: linear-gradient(135deg, #ffd166, #f59e0b);
+  color: #3d2600;
+  border-color: #e08e00;
+  box-shadow: 0 6px 18px -8px rgba(245, 158, 11, .8);
+}
+.env-badge[data-env="test"]::before { animation: au-pulse 2.2s ease-in-out infinite; }
+.env-badge[data-env="prod"] {
+  background: linear-gradient(135deg, #0f9d6b, #047857);
+  color: #fff;
+  border-color: #046c4e;
+  box-shadow: 0 6px 18px -8px rgba(4, 120, 87, .8);
+}
+.env-badge[data-env="local"] { background: #e6e9f2; color: #2a3654; }
+
+/* Contenuto principale */
+.main { min-height: 100vh; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 64px;
+  padding: 14px 28px;
+  background: rgba(255, 255, 255, .62);
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  border-bottom: 1px solid var(--au-glass-line);
+  box-shadow: 0 1px 0 var(--au-hairline);
+}
+.topbar h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  color: var(--text);
+}
+.topbar h1::after {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: var(--au-rainbow);
+}
+
+.content { padding: 26px 28px 40px; }
+.content > * { animation: au-rise var(--au-mid) var(--au-ease) both; }
+
+/* 4 — COMPONENTI ----------------------------------------------------------- */
+
+/* Superfici di vetro */
+.card,
+.panel.card,
+.seller-card,
+.trash-card,
+.stime-card,
+.building-card,
+.census-card,
+.seller-intent-card,
+.buyer-pressure-card,
+.invisible-sale-card,
+.owner-home-card,
+.int-item,
+.gcal-panel,
+.agenda-month,
+.agenda-scroll {
+  background: var(--au-glass);
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  border: 1px solid var(--au-glass-line);
+  box-shadow: var(--au-shadow), inset 0 1px 0 rgba(255, 255, 255, .8);
+  border-radius: var(--au-r);
+}
+.card { padding: 18px 20px; }
+
+/* Superfici interattive: hover luminoso */
+.seller-card, .trash-card, .stime-card, .building-card, .census-card,
+.census-result, .acq-owner-option, .property-building-link {
+  transition: transform var(--au-fast) var(--au-ease), box-shadow var(--au-fast) var(--au-ease), border-color var(--au-fast) var(--au-ease), background var(--au-fast);
+}
+.seller-card:hover, .trash-card:hover, .stime-card:hover,
+.building-card:hover, .census-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(36, 69, 212, .28);
+  box-shadow: 0 18px 40px -22px rgba(36, 69, 212, .55), 0 0 0 1px rgba(36, 69, 212, .06), inset 0 1px 0 #fff;
+}
+.census-result, .acq-owner-option { background: var(--au-glass-strong); border-color: var(--border); border-radius: var(--au-r-sm); }
+.census-result:hover { box-shadow: var(--au-glow); }
+
+/* Pannelli della dashboard */
+.panel h2,
+.card > h2:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 14px;
+  color: var(--text);
+}
+.panel > h2::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--au-primary-grad);
+  box-shadow: 0 0 0 4px rgba(36, 69, 212, .12);
+}
+.panel-grid { gap: 18px; }
+
+/* KPI */
+.kpi-grid { gap: 14px; margin-bottom: 22px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.kpi {
+  position: relative;
+  overflow: hidden;
+  gap: 8px;
+  padding: 18px 18px 16px;
+  transition: transform var(--au-fast) var(--au-ease), box-shadow var(--au-fast) var(--au-ease);
+}
+.kpi::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--au-rainbow);
+  opacity: .85;
+}
+.kpi::after {
+  content: "";
+  position: absolute;
+  right: -30px;
+  top: -30px;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(36, 69, 212, .14), transparent 70%);
+  pointer-events: none;
+}
+.kpi-grid > .kpi:nth-child(5n+2)::after { background: radial-gradient(circle, rgba(6, 182, 212, .16), transparent 70%); }
+.kpi-grid > .kpi:nth-child(5n+3)::after { background: radial-gradient(circle, rgba(124, 58, 237, .14), transparent 70%); }
+.kpi-grid > .kpi:nth-child(5n+4)::after { background: radial-gradient(circle, rgba(16, 185, 129, .15), transparent 70%); }
+.kpi-grid > .kpi:nth-child(5n+5)::after { background: radial-gradient(circle, rgba(245, 158, 11, .16), transparent 70%); }
+.kpi:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -22px rgba(36, 69, 212, .5), inset 0 1px 0 #fff; }
+.kpi-label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.kpi-value {
+  font-size: 34px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Statistiche secondarie */
+.stat-chip, .stime-stat, .building-count, .buyer-pressure-metric {
+  background: rgba(255, 255, 255, .7);
+  border: 1px solid var(--au-glass-line);
+  box-shadow: var(--au-shadow-sm);
+  border-radius: var(--au-r-sm);
+}
+.stat-chip span, .stime-stat strong { font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stime-stat { padding: 16px; }
+.stime-stat strong { font-size: 26px; }
+
+/* Liste */
+.list-item { border-bottom-color: var(--au-hairline); padding: 4px 0 12px; }
+.list-item:last-child { padding-bottom: 0; }
+.list { gap: 12px; }
+#contact-search-results .list-item, .card > a.list-item {
+  border-radius: var(--au-r-sm);
+  transition: background var(--au-fast);
+}
+
+/* Pulsanti */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 16px;
+  border-radius: 11px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  background: rgba(255, 255, 255, .82);
+  border: 1px solid rgba(15, 27, 51, .12);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(15, 27, 51, .06), inset 0 1px 0 #fff;
+  transition: transform var(--au-fast) var(--au-ease), box-shadow var(--au-fast) var(--au-ease), background var(--au-fast), border-color var(--au-fast), color var(--au-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:hover:not(:disabled) {
+  background: #fff;
+  border-color: rgba(36, 69, 212, .35);
+  box-shadow: 0 6px 18px -10px rgba(36, 69, 212, .55), inset 0 1px 0 #fff;
+  transform: translateY(-1px);
+}
+.btn:active:not(:disabled) { transform: translateY(0); box-shadow: 0 1px 2px rgba(15, 27, 51, .1); }
+.btn:focus-visible { outline: none; box-shadow: var(--au-glow), 0 0 0 1px var(--primary); }
+.btn.primary {
+  color: #fff;
+  border-color: transparent;
+  background: var(--au-primary-grad);
+  box-shadow: 0 8px 20px -10px rgba(36, 69, 212, .85), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--au-primary-grad);
+  border-color: transparent;
+  filter: brightness(1.07) saturate(1.1);
+  box-shadow: 0 12px 26px -10px rgba(36, 69, 212, .9), 0 0 0 4px rgba(36, 69, 212, .12), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+.btn.ghost { background: transparent; box-shadow: none; border-color: rgba(15, 27, 51, .14); }
+.btn.ghost:hover:not(:disabled) { background: rgba(255, 255, 255, .85); }
+.btn.danger { color: var(--danger); border-color: rgba(180, 35, 24, .45); background: rgba(255, 255, 255, .82); }
+.btn.danger:hover:not(:disabled) { background: var(--danger); border-color: var(--danger); color: #fff; box-shadow: 0 8px 20px -10px rgba(180, 35, 24, .8); }
+.btn.btn-small { min-height: 32px; padding: 4px 10px; font-size: 12.5px; border-radius: 9px; }
+.btn:disabled { opacity: .5; box-shadow: none; }
+a.btn { text-decoration: none; }
+
+/* Pulsanti attivi nelle barre (agenda, chip) */
+.agenda-view-btn.active,
+.chip.active {
+  background: var(--au-primary-grad);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(36, 69, 212, .8);
+}
+.chip {
+  background: rgba(255, 255, 255, .8);
+  border-color: rgba(15, 27, 51, .12);
+  font-weight: 500;
+  transition: background var(--au-fast), border-color var(--au-fast), box-shadow var(--au-fast);
+}
+.chip:hover:not(.active) { border-color: rgba(36, 69, 212, .35); background: #fff; }
+
+/* Campi */
+.input,
+.login-box input,
+textarea.input,
+select.input,
+.form-field select,
+.form-field input:not([type="checkbox"]):not([type="radio"]),
+.form-field textarea {
+  min-height: 40px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px solid rgba(15, 27, 51, .14);
+  background: rgba(255, 255, 255, .9);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  box-shadow: inset 0 1px 2px rgba(15, 27, 51, .04);
+  transition: border-color var(--au-fast), box-shadow var(--au-fast), background var(--au-fast);
+}
+textarea.input, .form-field textarea { min-height: 84px; line-height: 1.45; }
+.input:hover, .login-box input:hover { border-color: rgba(36, 69, 212, .3); }
+.input:focus,
+.login-box input:focus,
+.form-field select:focus,
+.form-field input:focus,
+.form-field textarea:focus {
+  outline: none;
+  background: #fff;
+  border-color: var(--primary);
+  box-shadow: var(--au-glow);
+}
+.input::placeholder { color: #7a86a1; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
+.form-field label { font-weight: 600; color: #34405c; }
+
+/* Barre strumenti e paginazione */
+.list-toolbar { gap: 10px; align-items: center; }
+.list-pager { color: var(--muted); }
+
+/* Tabelle */
+.table-wrap {
+  border-radius: var(--au-r);
+  background: var(--au-glass);
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  border: 1px solid var(--au-glass-line);
+  box-shadow: var(--au-shadow);
+}
+.card .table-wrap { background: transparent; border: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; border-radius: 0; }
+.st-table th, .st-table td { padding: 11px 14px; border-bottom-color: var(--au-hairline); }
+.st-table th {
+  font-size: 11.5px;
+  letter-spacing: .06em;
+  color: var(--muted);
+  background: rgba(242, 244, 250, .7);
+  white-space: nowrap;
+}
+.st-table thead th:first-child { border-top-left-radius: var(--au-r); }
+.st-table thead th:last-child { border-top-right-radius: var(--au-r); }
+.st-table tbody tr:last-child td { border-bottom: none; }
+.st-table tbody tr { transition: background var(--au-fast); }
+.st-table tr.row-clickable:hover,
+.st-table tbody tr:hover { background: linear-gradient(90deg, rgba(36, 69, 212, .06), rgba(6, 182, 212, .04)); }
+.st-table tr.row-clickable:hover td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
+
+/* Badge */
+.badge { padding: 3px 10px; font-weight: 650; letter-spacing: .01em; box-shadow: inset 0 0 0 1px rgba(15, 27, 51, .05); }
+.badge-gray { background: #eceff6; color: #3b4763; }
+.badge-role { background: #e5ebff; color: #1f3bb8; }
+.badge-ok { background: #ddf5e7; color: #12623a; }
+.badge-warn { background: #fdefc8; color: #7a5200; }
+.badge-danger { background: #fde4e1; color: #9b1c12; }
+.badge-buy { background: #efe5ff; color: #5a23a6; }
+
+/* Tab */
+.tabs {
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--au-glass-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .55);
+  -webkit-backdrop-filter: var(--au-blur);
+  backdrop-filter: var(--au-blur);
+  box-shadow: var(--au-shadow-sm);
+  width: fit-content;
+  max-width: 100%;
+}
+.tab-btn {
+  border-radius: 10px;
+  border-bottom: none;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  color: #3b4763;
+  transition: background var(--au-fast), color var(--au-fast), box-shadow var(--au-fast);
+}
+.tab-btn:hover { background: rgba(255, 255, 255, .8); color: var(--text); }
+.tab-btn.active {
+  background: #fff;
+  color: var(--primary);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(15, 27, 51, .08), 0 6px 14px -8px rgba(36, 69, 212, .5);
+}
+
+/* Titoli di sezione e intestazioni scheda */
+.section-title { font-size: 12px; font-weight: 700; letter-spacing: .07em; color: var(--muted); }
+.contact-header h2, .acq-header h2, .inc-head h2 { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.detail-item label, .building-facts dt, .trash-facts dt, .seller-facts dt, .stime-field dt { color: var(--muted); font-weight: 500; }
+
+/* Messaggi */
+.error-box, .success-box, .census-banner {
+  border-radius: var(--au-r-sm);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--au-shadow-sm);
+}
+.error-box { background: rgba(253, 236, 234, .92); border-color: #f2b8b1; color: #8f1d14; border-left: 4px solid var(--danger); }
+.success-box { background: rgba(225, 246, 233, .92); border-color: #b5e2c4; color: #12623a; border-left: 4px solid #16a34a; }
+.field-error { color: var(--danger); font-weight: 500; }
+
+/* Modali e fogli */
+dialog.modal {
+  color: var(--text);
+  background: rgba(255, 255, 255, .9);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  backdrop-filter: blur(24px) saturate(170%);
+  border: 1px solid var(--au-glass-line);
+  border-radius: var(--au-r-lg);
+  box-shadow: var(--au-shadow-lg), inset 0 1px 0 #fff;
+  padding: 26px;
+}
+dialog.modal[open] { animation: au-pop var(--au-mid) var(--au-ease) both; }
+dialog.modal::backdrop {
+  background: rgba(15, 27, 51, .32);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+dialog.modal h2, dialog.modal h3 { font-weight: 800; letter-spacing: -.01em; }
+.modal-actions { gap: 10px; padding-top: 14px; border-top: 1px solid var(--au-hairline); }
+dialog.modal.agenda-drawer { border-radius: var(--au-r-lg) 0 0 var(--au-r-lg); }
+dialog.modal.agenda-drawer[open] { animation: au-slide var(--au-mid) var(--au-ease) both; }
+
+/* Riquadri secondari */
+.selected-contact-card, .acq-selected, .site-source, .agenda-availability,
+.agenda-links, .agenda-follow-up, .trash-notice, .property-building-link {
+  border-radius: var(--au-r-sm);
+  background: rgba(255, 255, 255, .7);
+}
+.content code { background: rgba(36, 69, 212, .07); color: #1f3bb8; border-radius: 6px; }
+details summary { cursor: pointer; }
+
+/* Toast */
+.census-toast {
+  background: rgba(15, 27, 51, .88);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--au-shadow-lg);
+}
+
+/* 5 — SEZIONI -------------------------------------------------------------- */
+
+/* Agenda: griglia leggibile su vetro, intestazioni sticky opache */
+.agenda-scroll { overflow: auto; }
+.agenda-grid-head { background: rgba(255, 255, 255, .96); }
+.agenda-hours, .agenda-hours-head { background: rgba(255, 255, 255, .96); }
+.agenda-day-head { font-weight: 700; color: #34405c; }
+.agenda-day-head.agenda-today {
+  color: var(--primary);
+  background: linear-gradient(180deg, rgba(36, 69, 212, .10), rgba(36, 69, 212, .03));
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+.agenda-card { border-radius: 8px; box-shadow: 0 1px 2px rgba(15, 27, 51, .06); }
+button.agenda-card { transition: box-shadow var(--au-fast), transform var(--au-fast) var(--au-ease); }
+button.agenda-card:hover { box-shadow: 0 8px 18px -10px rgba(36, 69, 212, .6); transform: translateY(-1px); }
+.agenda-block:hover { z-index: 4; }
+.agenda-list .agenda-card { border-radius: 12px; background-color: rgba(255, 255, 255, .85); }
+.agenda-month-cell:hover { background: rgba(36, 69, 212, .05); }
+.agenda-month-out { background: rgba(242, 244, 250, .6); }
+.agenda-period { font-weight: 800; letter-spacing: -.01em; }
+
+/* Stime */
+.stime-name-link { font-weight: 700; }
+.stime-status { background: #eceff6; color: #34405c; }
+.stime-status.is-detailed { background: #ddf5e7; color: #12623a; }
+
+/* Edifici, censimento, cestino */
+.census-floor-head { background: rgba(242, 244, 250, .95); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border-radius: 8px; }
+.census-unit-main:hover { background: rgba(36, 69, 212, .06); }
+.trash-banner { border-radius: var(--au-r-sm); }
+
+/* Foto */
+.photo-item { border-radius: var(--au-r); box-shadow: var(--au-shadow-sm); transition: transform var(--au-fast) var(--au-ease), box-shadow var(--au-fast); }
+.photo-item:hover { transform: translateY(-2px); box-shadow: var(--au-shadow); }
+
+/* Placeholder */
+.placeholder h2 { font-weight: 800; }
+
+/* 6 — RESPONSIVE ----------------------------------------------------------- */
+
+/* Tablet/smartphone (stesso punto di app.css): la sidebar diventa una barra
+   superiore di vetro con navigazione a scorrimento orizzontale, cosi' le
+   ~16 voci non occupano mezzo schermo. */
+@media (max-width: 860px) {
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 10px 12px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--au-glass-line);
+    box-shadow: 0 8px 24px -18px rgba(15, 27, 51, .45);
+  }
+  .sidebar::after {
+    top: auto;
+    bottom: -1px;
+    right: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: var(--au-rainbow);
+  }
+  .brand { order: 1; padding: 0; margin: 0; border: none; font-size: 14px; }
+  .brand::before { width: 26px; height: 26px; flex-basis: 26px; }
+  .env-badge { order: 2; margin: 0 0 0 auto; padding: 6px 10px; font-size: 10.5px; }
+  #nav {
+    order: 3;
+    flex: 1 0 calc(100% + 24px);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 4px;
+    padding: 2px 2px 4px;
+    margin: 0 -12px;
+    padding-inline: 12px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
+  }
+  #nav::-webkit-scrollbar { display: none; }
+  .nav-item {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 8px 12px;
+    white-space: nowrap;
+    scroll-snap-align: start;
+    background: rgba(255, 255, 255, .55);
+    box-shadow: inset 0 0 0 1px rgba(15, 27, 51, .06);
+  }
+  .nav-item.active::before { left: 10px; right: 10px; top: auto; bottom: 3px; width: auto; height: 3px; background: var(--au-rainbow); }
+  .nav-item[data-route="stime"],
+  .nav-item[data-route="cestino"] { margin-top: 0; border-top: none; padding-top: 8px; border-radius: 11px; }
+  .nav-item[data-route="stime-dettagliate"] { padding-left: 12px; }
+  .topbar { position: static; padding: 14px 16px; min-height: 0; }
+  .topbar h1 { font-size: 20px; }
+  .content { padding: 16px 14px 32px; }
+  .main { min-height: 0; }
+}
+
+@media (max-width: 767px) {
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi { padding: 14px; }
+  .kpi-value { font-size: 28px; }
+  .kpi-label { font-size: 11px; }
+  .card { padding: 16px; }
+  .panel-grid { grid-template-columns: 1fr; }
+  .list-toolbar .input { max-width: none; }
+  .btn { min-height: 42px; }
+  .tabs { width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn { flex: 0 0 auto; white-space: nowrap; }
+  dialog.modal { padding: 20px 16px; }
+  dialog.modal.census-sheet,
+  dialog.modal.seller-sheet,
+  dialog.modal.trash-sheet { border-radius: 22px 22px 0 0; }
+  dialog.modal.census-sheet[open],
+  dialog.modal.seller-sheet[open],
+  dialog.modal.trash-sheet[open] { animation-name: au-sheet; }
+  dialog.modal.agenda-drawer, dialog.modal.agenda-dialog { border-radius: 0; }
+  .login-box { padding: 32px 22px 26px; }
+  .contact-header h2, .acq-header h2, .inc-head h2 { font-size: 21px; }
+  .acting-bar { padding: 10px 14px; }
+}
+
+/* Su schermi senza hover niente sollevamenti "appiccicosi" */
+@media (hover: none) {
+  .btn:hover:not(:disabled), .kpi:hover, .seller-card:hover, .trash-card:hover,
+  .stime-card:hover, .building-card:hover, .census-card:hover, .photo-item:hover { transform: none; }
+}
+
+/* 7 — MOVIMENTO, FALLBACK, STAMPA ----------------------------------------- */
+@keyframes au-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes au-pop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes au-slide { from { opacity: .4; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+/* Il bottom-sheet non trasla: la sua geometria (a filo del bordo) resta
+   esatta fin dal primo frame; si limita a dissolversi. */
+@keyframes au-sheet { from { opacity: .4; } to { opacity: 1; } }
+@keyframes au-pulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(255, 255, 255, .5); } 50% { box-shadow: 0 0 0 6px rgba(255, 255, 255, .15); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn:hover:not(:disabled), .kpi:hover, .seller-card:hover, .trash-card:hover,
+  .stime-card:hover, .building-card:hover, .census-card:hover,
+  .photo-item:hover, button.agenda-card:hover, .nav-item:hover .nav-icon { transform: none; }
+}
+
+/* Senza backdrop-filter il vetro diventa quasi opaco: il testo resta leggibile. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --au-glass: rgba(255, 255, 255, .94); }
+  .sidebar, .topbar, .tabs { background: rgba(255, 255, 255, .96); }
+}
+
+/* Contrasto elevato richiesto dal sistema */
+@media (prefers-contrast: more) {
+  :root { --au-glass: #fff; --muted: #36415a; --border: #9aa6bf; }
+  .card, .table-wrap, .sidebar, .topbar { border-color: #9aa6bf; }
+}
+
+@media print {
+  body::before, .sidebar::after, .topbar h1::after, .kpi::before, .kpi::after { display: none; }
+  .sidebar, .topbar { position: static; box-shadow: none; }
+}
+
+/* 8 — RIFINITURE SHELL ----------------------------------------------------- */
+
+/* Badge ambiente sempre visibile: sotto il marchio, non in fondo a una
+   sidebar che puo' scorrere. Solo ordine visivo, il DOM resta quello. */
+@media (min-width: 861px) {
+  .sidebar .brand { order: -2; }
+  .sidebar .env-badge { order: -1; margin: 0 6px 14px; }
+  .sidebar #nav { order: 0; }
+  .sidebar { height: 100dvh; }
+}
+
+/* Ricerca globale (montata in testa a .main come .card): barra comandi. */
+.main > .card:first-child {
+  margin: 16px 28px 0;
+  padding: 10px 12px 10px 16px;
+  border-radius: 16px;
+  position: relative;
+  z-index: 21;
+}
+.main > .card:first-child > label {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.main > .card:first-child > label::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  background: var(--au-primary-grad);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.main > .card:first-child .input { flex: 1; min-width: 0; max-width: 620px; }
+.main > .card:first-child > div:not([hidden]) {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--au-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.main > .card:first-child .list-item {
+  border: none;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
+}
+.main > .card:first-child .list-item:hover { background: rgba(36, 69, 212, .07); }
+
+.topbar { margin-top: 0; }
+
+@media (max-width: 860px) {
+  .main > .card:first-child { margin: 12px 14px 0; padding: 10px 12px; }
+  .main > .card:first-child > label { flex-wrap: wrap; gap: 6px 10px; white-space: normal; }
+  .main > .card:first-child .input { flex: 1 1 100%; max-width: none; }
+}
+@media (max-width: 767px) {
+  .kpi-grid > .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .topbar .btn.ghost { min-height: 38px; padding: 6px 14px; }
+}
+
+/* Desktop con barra Superadmin attiva: la barra resta nel flusso (sposta la
+   pagina) ma diventa sticky, cosi' resta visibile anche scorrendo; sidebar e
+   topbar si agganciano sotto di lei e la sidebar non finisce fuori schermo. */
+@media (min-width: 861px) {
+  :root { --au-acting-h: 0px; }
+  body:has(> #acting-bar:not([hidden])) { --au-acting-h: 58px; }
+  .acting-bar {
+    position: sticky;
+    top: 0;
+    height: 58px;
+    flex-wrap: nowrap;
+    box-sizing: border-box;
+  }
+  .acting-bar .acting-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acting-bar .acting-exit { flex: 0 0 auto; }
+  .sidebar { top: var(--au-acting-h); height: calc(100dvh - var(--au-acting-h)); }
+  .topbar { top: var(--au-acting-h); }
+  .nav-item { padding-top: 8px; padding-bottom: 8px; }
+}
+.main > .card:first-child .input { font-weight: 400; letter-spacing: 0; }
