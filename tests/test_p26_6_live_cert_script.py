@@ -5759,6 +5759,33 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # prova ne avesse, il preflight la incontra come RIFIUTO, non come
     # cancellazione silenziosa.
     ("site_import_records", "agency_id", "agencies", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 3, migration 098 (registro dei
+    # comandi vocali): SETTE riferimenti non-CASCADE nuovi verso tabelle che il
+    # cleanup cancella. ESAMINATI.
+    #
+    #   voice_agency_settings.agency_id           -> agencies        RESTRICT
+    #   voice_agency_settings.updated_by_user_id  -> operator_users  RESTRICT
+    #   voice_commands.agency_id                  -> agencies        RESTRICT
+    #   voice_commands.actor_user_id              -> operator_users  RESTRICT
+    #   voice_command_steps.agency_id             -> agencies        RESTRICT
+    #   voice_command_events.agency_id            -> agencies        RESTRICT
+    #   voice_command_events.actor_user_id        -> operator_users  RESTRICT
+    #
+    # Il registro e' storico non cancellabile (trigger che rifiutano DELETE):
+    # ne' l'agenzia ne' l'operatore che ha dettato un comando si cancellano
+    # sotto di esso, come per `site_submissions`.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: lo scrive solo `voice/ledger.py`,
+    # che nessuna rotta richiama e che la matrice non percorre; se un'agenzia
+    # o un operatore di prova ne avesse, il preflight lo incontra come RIFIUTO,
+    # non come cancellazione silenziosa.
+    ("voice_agency_settings", "agency_id", "agencies", "RESTRICT"),
+    ("voice_agency_settings", "updated_by_user_id", "operator_users", "RESTRICT"),
+    ("voice_commands", "agency_id", "agencies", "RESTRICT"),
+    ("voice_commands", "actor_user_id", "operator_users", "RESTRICT"),
+    ("voice_command_steps", "agency_id", "agencies", "RESTRICT"),
+    ("voice_command_events", "agency_id", "agencies", "RESTRICT"),
+    ("voice_command_events", "actor_user_id", "operator_users", "RESTRICT"),
 })
 
 

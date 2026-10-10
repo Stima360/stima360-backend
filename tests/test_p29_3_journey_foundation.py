@@ -115,7 +115,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
     # Tappa 6 certifica la 097 senza riscrivere le migration storiche.
     assert numeri[numeri.index(71) - 1] == 70
-    assert numeri[numeri.index(76):] == list(range(76, 98))
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 3: 098_voice_commands
+    assert numeri[numeri.index(76):] == list(range(76, 99))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
