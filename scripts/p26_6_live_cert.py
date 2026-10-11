@@ -4888,6 +4888,14 @@ BUILDINGS_OPERAZIONI = (
     ("GET", "/api/property/buildings/{id}/deletion-check"),
     ("POST", "/api/property/buildings/{id}/trash"),
     ("POST", "/api/property/buildings/{id}/restore"),
+    # CENSIMENTO-2: composizione, generazione delle unita' mancanti, annullamento
+    # del lotto, modifica di gruppo. Sonda anonima (401 prima di ogni lettura) e,
+    # autenticata, solo la LETTURA della composizione dell'edificio altrui (404).
+    ("GET", "/api/property/buildings/{id}/composition"),
+    ("PUT", "/api/property/buildings/{id}/composition"),
+    ("POST", "/api/property/buildings/{id}/units/generate"),
+    ("POST", "/api/property/buildings/{id}/units/generate/{id}/undo"),
+    ("POST", "/api/property/buildings/{id}/units/bulk-update"),
 )
 
 
@@ -4934,9 +4942,10 @@ def _edifici_fuori_agenzia(database, ids, agency_id) -> list:
 def certify_property_buildings(report, http, cert, jars, owned, context) -> None:
     """EDIFICI e CENSIMENTO (CENSIMENTO-1 Fase 3): HOSTILE / REJECTION ONLY.
 
-        anonimo, su sedici rotte (tutte meno la DELETE)    -> 401
+        anonimo, su ventuno rotte (tutte meno la DELETE)   -> 401
         elenco edifici                                      -> mai un edificio altrui
         scheda dell'edificio altrui (esistente, letto)      -> 404, nessun dato
+        composizione dell'edificio altrui (lettura)         -> 404, nessun dato
         PATCH vuota sull'edificio altrui                    -> 404, nessun dato
         censimento dell'immobile altrui (lettura)           -> 404, nessun dato
         presa in carico / annulla dell'immobile altrui      -> 404 (prima di ogni UPDATE)
@@ -4997,8 +5006,9 @@ def certify_property_buildings(report, http, cert, jars, owned, context) -> None
                 f"PREREQUISITO: l'agenzia {altro} non ha alcun edificio sul TEST. "
                 "La matrice non ne crea uno (il censimento si prova con dati veri)")
         else:
-            for nome, metodo, corpo in (("dettaglio-edificio", "GET", None), ("patch-edificio", "PATCH", {})):
-                risposta = http.request(metodo, f"/api/property/buildings/{suo_edificio}", jar=jar, payload=corpo)
+            for nome, metodo, corpo, coda in (("dettaglio-edificio", "GET", None, ""), ("patch-edificio", "PATCH", {}, ""),
+                                              ("composizione-edificio", "GET", None, "/composition")):
+                risposta = http.request(metodo, f"/api/property/buildings/{suo_edificio}{coda}", jar=jar, payload=corpo)
                 report.check(
                     f"BUILDINGS-{nome}-{etichetta}-{altro}",
                     risposta.status == 404 and _solo_dettaglio(risposta),

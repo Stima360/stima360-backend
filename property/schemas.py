@@ -147,6 +147,18 @@ class PropertyUpdate(PropertyModel):
     cadastral_parcel: str | None = Field(None,max_length=10)
     cadastral_subunit: str | None = Field(None,max_length=10)
     cadastral_category: str | None = Field(None,max_length=5)
+    # CENSIMENTO-2 (migration 100): la provenienza di superficie e categoria,
+    # modificabile dalla scheda della singola unita'. NULL = «non indicata».
+    # Solo se inviata (PATCH: exclude_unset). «verified» richiede l'identita'
+    # catastale (CHECK della 100, tradotto in 400 dal router).
+    surface_source: str | None = None
+    cadastral_category_source: str | None = None
+    # CENSIMENTO-2: la fonte catastale consultata e registrata che «verified»
+    # richiede (tipo e data obbligatori, riferimento facoltativo, nessun
+    # allegato). L'identita' a cui si riferisce la scrive il database.
+    cadastral_evidence_type: str | None = None
+    cadastral_evidence_date: date | None = None
+    cadastral_evidence_ref: str | None = Field(None,max_length=120)
     # CATALOGO-CANONICO-1 (migration 087): i dati del sito stima360.it che non
     # avevano una colonna. NULL = non dichiarato; i valori di catalogo
     # (posizione e distanza dal mare) li giudica il service. Entrano
@@ -171,6 +183,17 @@ class PropertyUpdate(PropertyModel):
         if v.get('classification') is not None and v['classification'] not in PROPERTY_CLASSES: raise ValueError('classification must be A, B or C')
         if v.get('mandate_start') and v.get('mandate_end') and v['mandate_end'] < v['mandate_start']: raise ValueError('mandate_end cannot precede mandate_start')
         # CRM-OPS-2: vedi PropertyCreate - le regole del catalogo sono nel service.
+        for fonte in ('surface_source', 'cadastral_category_source'):
+            if v.get(fonte) is not None and v[fonte] not in ('estimated', 'declared', 'verified'): raise ValueError(f'invalid {fonte}')
+        # CENSIMENTO-2: ogni «verified» (anche una riconferma) registra nella stessa
+        # richiesta la fonte consultata: niente verifica dalla sola compilazione dei campi
+        if v.get('cadastral_evidence_type') is not None and v['cadastral_evidence_type'] not in ('visura', 'planimetria', 'atto', 'altro'):
+            raise ValueError('invalid cadastral_evidence_type')
+        if v.get('cadastral_evidence_date') is not None and not (date(1900, 1, 1) <= v['cadastral_evidence_date'] <= date.today()):
+            raise ValueError('cadastral_evidence_date: data della consultazione non valida')
+        if 'verified' in (v.get('surface_source'), v.get('cadastral_category_source')) and (
+                v.get('cadastral_evidence_type') is None or v.get('cadastral_evidence_date') is None):
+            raise ValueError('verified richiede cadastral_evidence_type e cadastral_evidence_date nella stessa richiesta')
         return v
 
 class PropertyContactCreate(PropertyModel):
@@ -548,4 +571,139 @@ class SiteRelink(PropertyModel):
     def one_target(cls, v):
         if (v.get("target_property_id") is None) == (v.get("target_code") is None):
             raise ValueError("indica target_property_id oppure target_code")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# CENSIMENTO-2: composizione dell'edificio, generazione delle unita' mancanti,
+# modifica di gruppo (property/composition.py). Le classi in un solo posto:
+# property/census_classes.py.
+# ---------------------------------------------------------------------------
+
+from . import census_classes as _classi  # noqa: E402
+from .catalog import PERTINENZA_PROPERTY_TYPE as PERTINENZA_KIND_TYPES  # noqa: E402  (PERTINENZE-1: un solo elenco)
+
+MAX_BATCH_UNITS = 300                     # D6: limite per lotto, misurato dai test
+
+
+class BuildingComposition(PropertyModel):
+    """«Composizione»: quante abitazioni, commerciali, altre unita' e
+    pertinenze. `null` = «Non so» (bozza sempre salvabile). `set_total`: con
+    le quattro note, il totale dichiarato diventa la loro somma (scelta
+    esplicita, mai implicita)."""
+    residential: int | None = Field(None, ge=0, le=10000)
+    commercial: int | None = Field(None, ge=0, le=10000)
+    other: int | None = Field(None, ge=0, le=10000)
+    pertinenze: int | None = Field(None, ge=0, le=10000)
+    set_total: bool = False
+    units_declared_source: str | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_composition(cls, v):
+        if v.get("units_declared_source") is not None and v["units_declared_source"] not in UNITS_DECLARED_SOURCES:
+            raise ValueError("invalid units_declared_source")
+        if v.get("set_total") and any(v.get(k) is None for k in _classi.CLASSES):
+            raise ValueError("set_total richiede tutte e quattro le classi")
+        return v
+
+
+class UnitGroup(PropertyModel):
+    """Un gruppo di unita' uguali da generare. Superficie e categoria sono
+    facoltative e, se indicate, scelte esplicite con la loro provenienza
+    (mai dedotte dalla tipologia; mai «verificata» in blocco)."""
+    unit_class: str
+    count: int = Field(..., ge=1, le=MAX_BATCH_UNITS)
+    property_type: str
+    surface_sqm: Decimal | None = Field(None, ge=0, le=100000)
+    surface_source: str | None = None
+    cadastral_category: str | None = Field(None, max_length=5)
+    cadastral_category_source: str | None = None
+    floor: str | None = Field(None, max_length=50)
+    staircase: str | None = Field(None, max_length=10)
+    pertinenza_kind: str | None = None
+    #: D5: numerazione interna facoltativa e PROVVISORIA (interni N, N+1, ...)
+    numbering_start: int | None = Field(None, ge=0, le=99999)
+
+    @root_validator(skip_on_failure=True)
+    def validate_group(cls, v):
+        classe = v.get("unit_class")
+        if classe not in _classi.CLASSES:
+            raise ValueError("invalid unit_class")
+        if v.get("property_type") not in _classi.GROUP_TYPES[classe]:
+            raise ValueError(f"property_type non ammesso per la classe {classe}")
+        if v.get("pertinenza_kind") is not None:
+            if classe != "pertinenze":
+                raise ValueError("pertinenza_kind solo per le pertinenze")
+            if v["pertinenza_kind"] not in ACCESSORY_KINDS:
+                raise ValueError("invalid pertinenza_kind")
+            atteso = PERTINENZA_KIND_TYPES.get(v["pertinenza_kind"])
+            if atteso is not None and v.get("property_type") != atteso:
+                raise ValueError(f"pertinenza_kind {v['pertinenza_kind']} richiede property_type {atteso}")
+        for valore, fonte in (("surface_sqm", "surface_source"), ("cadastral_category", "cadastral_category_source")):
+            if (v.get(valore) is None) != (v.get(fonte) is None):
+                raise ValueError(f"{valore} e {fonte} vanno indicati insieme")
+            if v.get(fonte) is not None and v[fonte] not in _classi.DATA_SOURCES:
+                raise ValueError(f"invalid {fonte}")
+            if v.get(fonte) == "verified":
+                raise ValueError("'verified' non si applica in blocco: si verifica unita' per unita'")
+        return v
+
+
+class UnitsGenerate(PropertyModel):
+    """«Crea le unita' mancanti». `dry_run` (default) = anteprima in sola
+    lettura. La conferma porta `expected_existing` (i conteggi per classe
+    visti nell'anteprima): se nel frattempo sono cambiati -> 409."""
+    client_request_id: UUID
+    dry_run: bool = True
+    expected_existing: dict[str, int] | None = None
+    confirm_over_declared: bool = False
+    confirm_similar: bool = False
+    groups: list[UnitGroup] = Field(..., min_length=1, max_length=20)
+
+    @root_validator(skip_on_failure=True)
+    def validate_batch(cls, v):
+        gruppi = v.get("groups") or []
+        if sum(g.count for g in gruppi) > MAX_BATCH_UNITS:
+            raise ValueError(f"al massimo {MAX_BATCH_UNITS} unita' per lotto")
+        attese = v.get("expected_existing")
+        if attese is not None and (set(attese) != set(_classi.CLASSES) or any(int(x) < 0 for x in attese.values())):
+            raise ValueError("expected_existing: una voce per classe, mai negativa")
+        if not v.get("dry_run") and attese is None:
+            raise ValueError("la conferma richiede expected_existing (dall'anteprima)")
+        return v
+
+
+class UnitsBulkChanges(PropertyModel):
+    """I soli campi modificabili in gruppo (elenco chiuso). Campo omesso =
+    invariato; `null` esplicito = azzera."""
+    surface_sqm: Decimal | None = Field(None, ge=0, le=100000)
+    surface_source: str | None = None
+    cadastral_category: str | None = Field(None, max_length=5)
+    cadastral_category_source: str | None = None
+    floor: str | None = Field(None, max_length=50)
+    staircase: str | None = Field(None, max_length=10)
+    #: D1: solo per i rustici, «abitazione» esplicita (o null per toglierla)
+    census_class: str | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_changes(cls, v):
+        for fonte in ("surface_source", "cadastral_category_source"):
+            if v.get(fonte) is not None and v[fonte] not in _classi.DATA_SOURCES:
+                raise ValueError(f"invalid {fonte}")
+        if v.get("census_class") is not None and v["census_class"] != "residential":
+            raise ValueError("census_class: solo 'residential' (o null)")
+        return v
+
+
+class UnitsBulkUpdate(PropertyModel):
+    property_ids: list[int] = Field(..., min_length=1, max_length=MAX_BATCH_UNITS)
+    changes: UnitsBulkChanges
+
+    @root_validator(skip_on_failure=True)
+    def validate_bulk(cls, v):
+        ids = v.get("property_ids") or []
+        if any(int(i) < 1 for i in ids) or len(set(ids)) != len(ids):
+            raise ValueError("property_ids: identificativi positivi, senza ripetizioni")
+        if not v["changes"].model_fields_set:
+            raise ValueError("nessuna modifica indicata")
         return v

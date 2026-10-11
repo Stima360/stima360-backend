@@ -217,7 +217,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
                and r.path.rsplit("/", 1)[-1] in ("deletion-check", "trash", "restore")
                or r.path == "/api/property/trash/buildings"]
     assert len(cestino) == 4 and all(_gate in {d.call for d in r.dependant.dependencies} for r in cestino)
-    assert len(router.routes) == 54
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2: 54 -> 59 (composizione GET/PUT,
+    # generate, undo del lotto, bulk-update), stesso gate (verificato qui sotto).
+    composizione = [r for r in router.routes if r.path.startswith("/api/property/buildings/{building_id}/")
+                    and ("/composition" in r.path or "/units/" in r.path)]
+    assert len(composizione) == 5 and all(_gate in {d.call for d in r.dependant.dependencies} for r in composizione)
+    assert len(router.routes) == 59
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

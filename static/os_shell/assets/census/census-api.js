@@ -94,6 +94,10 @@ async function request(method, path, body) {
     errore.similar = dati && Array.isArray(dati.similar) ? dati.similar : [];
     errore.existing = dati && dati.existing && typeof dati.existing === 'object' ? dati.existing : null;
     errore.linked = dati && Array.isArray(dati.linked) ? dati.linked : [];
+    // CENSIMENTO-2: i dati che accompagnano i rifiuti della composizione
+    errore.existingCounts = dati && dati.existing && typeof dati.existing === 'object' && !('id' in dati.existing) ? dati.existing : null;
+    errore.plan = dati && dati.plan && typeof dati.plan === 'object' ? dati.plan : null;
+    errore.propertyId = dati && Number.isInteger(dati.property_id) ? dati.property_id : null;
     throw errore;
   }
   return dati;
@@ -238,4 +242,31 @@ export function dismissSiteDuplicate(propertyId, sourceId, otherId) {
 
 export function relinkSiteSource(propertyId, sourceId, target) {
   return request('POST', `/properties/${id(propertyId)}/site-sources/${id(sourceId)}/relink`, target);
+}
+
+// --- CENSIMENTO-2: composizione dell'edificio e schede delle unita' ---------------
+// (property/composition.py). La generazione e' in due tempi: anteprima
+// (`dry_run: true`, sola lettura) e conferma con i conteggi dell'anteprima
+// (`expected_existing`): stessa chiave del lotto per anteprima, conferma e
+// ritentativi (nessun doppione). L'annullamento del lotto archivia solo le
+// schede ancora intatte.
+
+export function getComposition(buildingId) {
+  return request('GET', `/buildings/${id(buildingId)}/composition`);
+}
+
+export function setComposition(buildingId, payload) {
+  return request('PUT', `/buildings/${id(buildingId)}/composition`, payload);
+}
+
+export function generateUnits(buildingId, payload) {
+  return request('POST', `/buildings/${id(buildingId)}/units/generate`, payload);
+}
+
+export function undoUnitsBatch(buildingId, batchKey) {
+  return request('POST', `/buildings/${id(buildingId)}/units/generate/${encodeURIComponent(String(batchKey))}/undo`);
+}
+
+export function bulkUpdateUnits(buildingId, payload) {
+  return request('POST', `/buildings/${id(buildingId)}/units/bulk-update`, payload);
 }

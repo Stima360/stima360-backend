@@ -117,7 +117,8 @@ def test_01_la_071_e_valida_e_in_coda():
     assert numeri[numeri.index(71) - 1] == 70
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 3: 098_voice_commands
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: 099_voice_undo
-    assert numeri[numeri.index(76):] == list(range(76, 100))
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2: 100_censimento_2_composition
+    assert numeri[numeri.index(76):] == list(range(76, 101))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

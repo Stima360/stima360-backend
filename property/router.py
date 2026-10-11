@@ -8,7 +8,7 @@ from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa for
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import building_lifecycle, census, interactions, mandates, service, site_sync
+from . import building_lifecycle, census, composition, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -129,6 +129,13 @@ CENSUS_NOT_INSTALLED=census.CENSUS_NOT_INSTALLED_MESSAGE
 def trc(fn,*a,status=200,**k):
     try:esito=fn(*a,**k)
     except census.CensusNotInstalled as e:return JSONResponse(status_code=503,content={'detail':str(e),'code':e.code})
+    # CENSIMENTO-2: i vincoli e le colonne della migration 100 arrivano anche dalla
+    # PATCH generica (provenienza dalla scheda dell'unita'): risposta leggibile, mai 500.
+    except composition.DB_ERRORS as e:
+        tradotto=composition.translate_db_error(e)
+        if tradotto is None:raise
+        http,code,detail=tradotto
+        return JSONResponse(status_code=http,content={'detail':detail,'code':code})
     except (NotFoundError,ConflictError,ValidationError,PermissionDenied,PlatformAdminAgencyRequired) as e:
         stato={NotFoundError:404,ConflictError:409,ValidationError:400,PermissionDenied:403,PlatformAdminAgencyRequired:403}
         http=next(v for c,v in stato.items() if isinstance(e,c))
@@ -174,6 +181,19 @@ def resolve_accessory(property_id:int,accessory_id:int,p:AccessoryResolve,ctx:Op
 def take_in_charge(property_id:int,p:TakeInCharge,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.take_in_charge,ctx,property_id,p)
 @router.post('/properties/{property_id}/undo-create')
 def undo_create(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.undo_create,ctx,property_id)
+# CENSIMENTO-2: composizione dell'edificio, generazione delle unita' mancanti
+# (anteprima/conferma, una transazione), annullamento del lotto, modifica di
+# gruppo (property/composition.py). Stesso contesto e stessa traduzione `trc`.
+@router.get('/buildings/{building_id}/composition')
+def get_building_composition(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.get_composition,ctx,building_id)
+@router.put('/buildings/{building_id}/composition')
+def set_building_composition(building_id:int,p:BuildingComposition,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.set_composition,ctx,building_id,p)
+@router.post('/buildings/{building_id}/units/generate')
+def generate_building_units(building_id:int,p:UnitsGenerate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.generate_units,ctx,building_id,p)
+@router.post('/buildings/{building_id}/units/generate/{batch_key}/undo')
+def undo_building_units_batch(building_id:int,batch_key:str,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.undo_batch,ctx,building_id,batch_key)
+@router.post('/buildings/{building_id}/units/bulk-update')
+def bulk_update_building_units(building_id:int,p:UnitsBulkUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.bulk_update,ctx,building_id,p)
 # CATALOGO-CANONICO-1: provenienza dal sito stima360.it (property/site_sync.py).
 # Lettura con la visibilita' della scheda; scritture con l'accesso di gestione
 # dell'immobile (lifecycle.require_manage), nella stessa agenzia.

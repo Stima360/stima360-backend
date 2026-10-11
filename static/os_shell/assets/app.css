@@ -1155,3 +1155,48 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .voice-compose-actions .voice-big, .voice-command-actions .voice-big { flex: 1 1 140px; }
 }
+
+/* CENSIMENTO-2 — composizione dell'edificio e interni (census/composition-panel.js).
+   Solo regole NUOVE (prefisso composition-/interior-), nessuna ridefinizione.
+   Mobile-first: a 390 px gli interni sono righe impilate, mai una tabella larga. */
+.composition-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.composition-head .section-title { margin: 4px 0; }
+.composition-indicators { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 8px 0; }
+.composition-indicators .building-count b { font-size: 16px; overflow-wrap: anywhere; }
+.composition-classes { display: grid; gap: 6px; margin: 8px 0 12px; }
+.composition-class { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); min-width: 0; }
+.composition-class strong { font-size: 14px; overflow-wrap: anywhere; }
+.composition-class span { display: flex; flex-direction: column; font-size: 15px; min-width: 0; }
+.composition-class small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.composition-actions { margin: 4px 0; flex-wrap: wrap; }
+.composition-hint { font-size: 13px; margin: 4px 0 12px; }
+.composition-filter { margin: 6px 0; }
+.composition-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.composition-bulk-bar[hidden] { display: none; }
+.composition-interiors { list-style: none; margin: 0; padding: 0; }
+.interior-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.interior-row.interior-complete { opacity: .92; }
+.interior-check { flex-shrink: 0; width: 28px; min-height: 28px; display: flex; align-items: center; justify-content: center; padding-top: 2px; }
+.interior-check input { width: 20px; height: 20px; }
+.interior-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.interior-title { color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.interior-title:hover strong { color: var(--primary); }
+.interior-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.interior-facts span { min-width: 0; overflow-wrap: anywhere; }
+.interior-facts .badge { margin-left: 2px; }
+.interior-state .badge { white-space: normal; }
+.composition-group { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 12px; min-width: 0; }
+.composition-group legend { font-weight: 600; padding: 0 6px; }
+.composition-start { max-width: 140px; margin: 4px 0 6px; }
+.composition-start[hidden] { display: none; }
+.composition-add-class { max-width: 220px; }
+.composition-preview { margin-top: 8px; }
+@media (max-width: 767px) {
+  .composition-indicators { grid-template-columns: 1fr; }
+  .composition-class { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .composition-class strong { grid-column: 1 / -1; }
+  .composition-actions .btn { flex: 1; min-height: 44px; }
+  .composition-bulk-bar .action-bar { width: 100%; }
+  .composition-bulk-bar .action-bar .btn { flex: 1; }
+  .composition-add-class { max-width: none; flex: 1; }
+}

@@ -301,6 +301,18 @@ export function errorMessage(error) {
     case 'CENSUS_NOT_INSTALLED': return 'Il modulo Censimento non è disponibile su questo ambiente.';
     case 'PERTINENZE_NOT_INSTALLED': return 'Le pertinenze autonome non sono ancora disponibili su questo ambiente (aggiornamento del database in corso).';
     case 'NOT_FOUND': return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
+    // CENSIMENTO-2: composizione e schede delle unità
+    case 'COMPOSITION_NOT_INSTALLED': return 'La composizione degli edifici non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
+    case 'COMPOSITION_REQUIRED': return 'Dichiara prima la composizione dell’edificio: abitazioni, commerciali, altre unità e pertinenze.';
+    case 'COMPOSITION_TOTAL_MISMATCH': return 'Il totale dichiarato non corrisponde alla somma delle classi: scegli «Usa la somma come totale» oppure correggi i numeri.';
+    case 'UNITS_CHANGED': return 'Nel frattempo le unità dell’edificio sono cambiate: rifai l’anteprima.';
+    case 'OVER_DECLARED': return 'Stai creando più unità di quelle dichiarate: conferma esplicitamente o riduci i numeri.';
+    case 'VERIFIED_NOT_IN_BULK': return '«Verificata» si registra dalla scheda della singola unità, con la fonte consultata.';
+    case 'VERIFIED_NEEDS_CADASTRAL_EVIDENCE': return '«Verificata» richiede l’identità catastale dell’unità (comune catastale, foglio, particella, subalterno; la sezione solo se prevista) e la fonte consultata: tipo di documento e data.';
+    case 'SOURCE_WITHOUT_VALUE': return 'Una provenienza senza il dato non si salva: indica prima il valore.';
+    case 'CLASS_NOT_APPLICABLE': return 'La classe «abitazione» si sceglie solo per i rustici.';
+    case 'UNIT_ARCHIVED': return 'Una delle unità selezionate è archiviata: riattivala prima di modificarla.';
+    case 'FORBIDDEN': return error.detail || 'Non hai i permessi per modificare una delle unità selezionate.';
     default:
       if (error && error.status === 404) return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
       if (error && error.status === 422) return 'Alcuni valori non sono validi: controlla i campi.';
@@ -449,7 +461,31 @@ export function unitRelationText(u) {
 /** Lo stato iniziale della procedura. */
 export function wizardInitialState() {
   return { city: '', microzone: '', address: '', civic_number: '', units_declared: '', units_unknown: false,
-    building_name: '', path: '', search: null, building: null, building_saved: false };
+    building_name: '', path: '', search: null, building: null, building_saved: false,
+    // CENSIMENTO-2: composizione facoltativa (vuoto = «Non so»)
+    comp_residential: '', comp_commercial: '', comp_other: '', comp_pertinenze: '', composition_error: '' };
+}
+
+const CLASSI_COMPOSIZIONE = ['residential', 'commercial', 'other', 'pertinenze'];
+
+/** CENSIMENTO-2: la composizione indicata nella procedura. `given` se almeno
+ *  una classe e' compilata; `body` e' il corpo di PUT .../composition
+ *  (vuoto = null, «Non so»); la somma solo con le quattro note. */
+export function wizardComposition(stato) {
+  const s = stato || {};
+  const body = {};
+  let errore = '';
+  for (const k of CLASSI_COMPOSIZIONE) {
+    const t = str(s[`comp_${k}`]);
+    if (!t) { body[k] = null; continue; }
+    if (!/^\d+$/.test(t)) { errore = 'I numeri della composizione sono interi, 0 o più.'; body[k] = null; continue; }
+    body[k] = Number.parseInt(t, 10);
+  }
+  const given = CLASSI_COMPOSIZIONE.some((k) => body[k] !== null);
+  const complete = CLASSI_COMPOSIZIONE.every((k) => body[k] !== null);
+  const sum = complete ? CLASSI_COMPOSIZIONE.reduce((a, k) => a + body[k], 0) : null;
+  body.set_total = complete;
+  return { given, complete, sum, body, error: errore };
 }
 
 /** Il totale dichiarato: intero >= 0, oppure null con «Non so» (mai 0 o 1 per difetto). */
@@ -467,8 +503,14 @@ export function wizardStep1Errors(stato, municipalities) {
   const comune = (municipalities || []).find((m) => m.name === stato.city);
   if (!comune) errori.push('Scegli il Comune.');
   else if (stato.microzone && !comune.microzones.includes(stato.microzone)) errori.push('La microzona non appartiene al Comune scelto.');
+  const c = wizardComposition(stato);
   const d = wizardDeclared(stato);
-  if (d.error) errori.push(d.error);
+  // CENSIMENTO-2: con le quattro classi note il totale e' la loro somma, anche con «Non so»
+  if (d.error && !(c.complete && !str(stato.units_declared))) errori.push(d.error);
+  if (c.error) errori.push(c.error);
+  if (c.complete && d.value !== null && d.value !== c.sum) {
+    errori.push(`La somma della composizione (${c.sum}) non corrisponde alle unità indicate (${d.value}).`);
+  }
   return errori;
 }
 
@@ -508,7 +550,9 @@ export function wizardBuildingPayload(stato, municipalities, { clientRequestId, 
   const corpo = { building_type: stato.building_type || 'condominio', client_request_id: clientRequestId, ...wizardLocation(stato, municipalities) };
   if (str(stato.building_name)) corpo.name = str(stato.building_name);
   const d = wizardDeclared(stato);
+  const c = wizardComposition(stato);
   if (d.value !== null) corpo.units_declared = d.value;
+  else if (c.complete) corpo.units_declared = c.sum;       // CENSIMENTO-2: le quattro classi note danno il totale
   if (confirmSimilar) corpo.confirm_similar = true;
   return corpo;
 }

@@ -26,6 +26,10 @@ import {
   errorMessage as censusErrorMessage, fromAccessoryText, labelOf, pertinenzaKindLabel, sectionLabel,
 } from './census-model.js';
 import { renderSiteProvenance } from './site-provenance.js';
+// CENSIMENTO-2: provenienza di superficie e categoria, modificabile da qui
+import {
+  UNIT_SOURCES_CATALOG, evidenceText, hasCadastralSource, identityKey, sourceLabel, unitSourcesPatch, verificationState,
+} from './composition-model.js';
 
 /**
  * @param {HTMLElement} el   il contenitore della tab
@@ -57,8 +61,22 @@ export async function renderPropertyCensusTab(el, ctx) {
     showToast(container, { text: `${property.code || 'Immobile'} preso in carico${esito.pertinenze_taken && esito.pertinenze_taken.length ? ` con ${esito.pertinenze_taken.length} pertinenze` : ''}.` });
     navigate('immobili', [property.id]);
   };
+  // CENSIMENTO-2: le colonne della 100 ci sono solo dopo la migrazione; senza,
+  // la tab resta com'era (nessun campo che il database non saprebbe salvare)
+  const conProvenienza = Object.prototype.hasOwnProperty.call(property, 'surface_source');
+  const fonte = (v) => sourceLabel(UNIT_SOURCES_CATALOG, v);
+  const mqTesto = property.surface_sqm === null || property.surface_sqm === undefined || property.surface_sqm === ''
+    ? '' : `${Number(property.surface_sqm).toLocaleString('it-IT', { maximumFractionDigits: 2 })} m²`;
   const catasto = [
-    ['Categoria catastale', property.cadastral_category || 'Da verificare'],
+    ['Categoria catastale', `${property.cadastral_category || 'Da verificare'}${conProvenienza && property.cadastral_category ? ` · ${fonte(property.cadastral_category_source)}` : ''}`],
+    ...(conProvenienza ? [['Superficie', mqTesto ? `${mqTesto} · ${fonte(property.surface_source)}` : '']] : []),
+    // la verifica catastale: indicatore separato dalla completezza della scheda
+    ...(conProvenienza ? [['Verifica catastale', (() => {
+      const statoVerifica = verificationState(property);
+      if (statoVerifica === 'verified') return `Verificata · ${evidenceText(property)}`;
+      if (statoVerifica === 'to_reconfirm') return `Da riconfermare: i riferimenti catastali sono cambiati dopo la verifica (${evidenceText(property)})`;
+      return 'Non verificata';
+    })()]] : []),
     ['Comune catastale', property.cadastral_municipality_code], ['Sezione', sectionLabel(property.cadastral_section)],
     ['Foglio', property.cadastral_sheet], ['Particella', property.cadastral_parcel], ['Subalterno', property.cadastral_subunit],
   ];
@@ -88,7 +106,7 @@ export async function renderPropertyCensusTab(el, ctx) {
       ${genitore ? `<div class="action-bar"><button type="button" class="btn ghost btn-small${confermaScollega ? ' danger' : ''}" id="census-unlink-self">${confermaScollega ? 'Confermi lo scollegamento? Resta una pertinenza da collegare' : `Scollega da ${escapeHtml(genitore.code || `#${genitore.id}`)}`}</button></div>` : ''}
       <h3 class="section-title">Dati catastali</h3>
       <div class="detail-grid">${catasto.map(([l, v]) => `<div class="detail-item"><label>${escapeHtml(l)}</label>${escapeHtml(v === null || v === undefined || v === '' ? '—' : v)}</div>`).join('')}</div>
-      <div class="action-bar"><button type="button" class="btn ghost" id="census-edit-cadastral">Modifica dati catastali</button></div>
+      <div class="action-bar"><button type="button" class="btn ghost" id="census-edit-cadastral">${conProvenienza ? 'Modifica dati catastali e superficie' : 'Modifica dati catastali'}</button></div>
       <div id="census-cadastral-form" hidden></div>
       ${pertinenza ? '' : `<h3 class="section-title">Pertinenze collegate</h3>
       ${censimento.pertinenze.length ? `<ul class="census-list">${censimento.pertinenze.map((x) => `<li class="census-list-item" data-pertinenza-id="${escapeHtml(x.id)}"><a href="#/immobili/${escapeHtml(x.id)}"><strong>${escapeHtml(x.code || `#${x.id}`)}</strong></a> <span class="muted">${escapeHtml([pertinenzaKindLabel(x, kinds) || labelOf(tipi, x.property_type, x.property_type), x.surface_sqm ? `${x.surface_sqm} m²` : null, x.cadastral_subunit ? `sub ${x.cadastral_subunit}` : null, x.cadastral_category || 'Da verificare', x.same_building === false ? 'in un altro edificio' : null].filter(Boolean).join(' · '))}</span> <button type="button" class="btn ghost btn-small${linkConfirm.has(x.id) ? ' danger' : ''}" data-unlink="${escapeHtml(x.id)}">${linkConfirm.has(x.id) ? 'Confermi lo scollegamento?' : 'Scollega'}</button></li>`).join('')}</ul>` : '<p class="muted">Nessuna pertinenza collegata.</p>'}
@@ -174,6 +192,11 @@ export async function renderPropertyCensusTab(el, ctx) {
   el.querySelector('#census-edit-cadastral').addEventListener('click', () => {
     if (!formEl.hidden) { formEl.hidden = true; return; }
     let categoria = property.cadastral_category || '';
+    // la fonte registrata si propone solo se vale ancora per l'identità attuale
+    const valida = conProvenienza && property.cadastral_evidence_identity && property.cadastral_evidence_identity === identityKey(property);
+    const evidenzaIniziale = valida ? { type: property.cadastral_evidence_type || '', date: String(property.cadastral_evidence_date || '').slice(0, 10), ref: property.cadastral_evidence_ref || '' }
+      : { type: '', date: '', ref: '' };
+    const oggi = new Date().toISOString().slice(0, 10);
     formEl.hidden = false;
     formEl.innerHTML = `
       <div class="form-field"><label>Categoria catastale</label><button type="button" class="btn census-category-btn" id="census-cat-btn">${escapeHtml(categoria || 'Da verificare ›')}</button></div>
@@ -184,16 +207,76 @@ export async function renderPropertyCensusTab(el, ctx) {
         <div class="form-field"><label for="cc-subunit">Subalterno</label><input id="cc-subunit" class="input" maxlength="10" value="${escapeHtml(property.cadastral_subunit || '')}"></div>
       </div>
       ${sectionFieldHtml('cc', property.cadastral_section)}
+      ${conProvenienza ? `<div class="form-grid-2 census-sources" data-unit-sources>
+        <div class="form-field"><label for="cc-category-source">Provenienza della categoria</label>${fonteSelect('cc-category-source', property.cadastral_category_source)}</div>
+        <div class="form-field"><label for="cc-surface">Superficie m²</label><input id="cc-surface" class="input" inputmode="decimal" value="${escapeHtml(property.surface_sqm === null || property.surface_sqm === undefined ? '' : property.surface_sqm)}"></div>
+        <div class="form-field"><label for="cc-surface-source">Provenienza della superficie</label>${fonteSelect('cc-surface-source', property.surface_source)}</div>
+      </div>
+      <div class="census-evidence" data-evidence-fields hidden>
+        <p class="muted"><strong>Fonte consultata</strong> — «Verificata» si registra solo con il documento effettivamente consultato (l’allegato non è obbligatorio).</p>
+        <div class="form-grid-2">
+          <div class="form-field"><label for="cc-evidence-type">Tipo di documento</label><select id="cc-evidence-type" class="input"><option value="">Scegli…</option>${UNIT_SOURCES_CATALOG.evidence_types.map((x) => `<option value="${escapeHtml(x.value)}"${x.value === evidenzaIniziale.type ? ' selected' : ''}>${escapeHtml(x.label)}</option>`).join('')}</select></div>
+          <div class="form-field"><label for="cc-evidence-date">Data della consultazione</label><input id="cc-evidence-date" class="input" type="date" max="${escapeHtml(oggi)}" value="${escapeHtml(evidenzaIniziale.date)}"></div>
+        </div>
+        <div class="form-field"><label for="cc-evidence-ref">Riferimento (facoltativo)</label><input id="cc-evidence-ref" class="input" maxlength="120" placeholder="es. protocollo della visura" value="${escapeHtml(evidenzaIniziale.ref)}"></div>
+      </div>
+      <p class="muted" id="cc-sources-hint">«Verificata» richiede l’identità catastale (comune catastale, foglio, particella, subalterno; la sezione solo se prevista) e la fonte consultata. Se cambi un valore, indica di nuovo la sua provenienza: altrimenti torna «Non indicata». Se cambi i riferimenti catastali, una verifica va riconfermata.</p>` : ''}
       <div class="field-error" id="cc-error"></div>
       <div class="action-bar"><button type="button" class="btn ghost" id="cc-cancel">Annulla</button><button type="button" class="btn primary" id="cc-save">Salva</button></div>`;
     formEl.querySelector('#census-cat-btn').addEventListener('click', () => openCategoryPicker(dialogEl, {
       options: opzioni, propertyType: property.property_type, current: categoria,
-      onPick: (code) => { categoria = code || ''; formEl.querySelector('#census-cat-btn').textContent = categoria || 'Da verificare ›'; },
+      onPick: (code) => {
+        const cambiata = (code || '') !== categoria;
+        categoria = code || '';
+        formEl.querySelector('#census-cat-btn').textContent = categoria || 'Da verificare ›';
+        // CENSIMENTO-2: categoria nuova = provenienza da confermare di nuovo
+        const sel = formEl.querySelector('#cc-category-source');
+        if (sel && cambiata) { sel.value = ''; aggiornaVerificata(); }
+      },
     }));
+    const identita = () => ({ cadastral_municipality_code: formEl.querySelector('#cc-belfiore').value,
+      cadastral_sheet: formEl.querySelector('#cc-sheet').value, cadastral_parcel: formEl.querySelector('#cc-parcel').value,
+      cadastral_subunit: formEl.querySelector('#cc-subunit').value });
+    // «Verificata» si offre solo con la fonte catastale compilata (il server la richiede comunque)
+    function aggiornaVerificata() {
+      if (!conProvenienza) return;
+      const ok = hasCadastralSource(identita(), UNIT_SOURCES_CATALOG);
+      for (const id of ['#cc-category-source', '#cc-surface-source']) {
+        const sel = formEl.querySelector(id);
+        const voce = sel && sel.querySelector('option[value="verified"]');
+        if (voce) voce.disabled = !ok;
+        if (sel && !ok && sel.value === 'verified') sel.value = '';
+      }
+      const scelta = ['#cc-category-source', '#cc-surface-source'].some((id) => formEl.querySelector(id).value === 'verified');
+      formEl.querySelector('[data-evidence-fields]').hidden = !scelta;
+    }
+    if (conProvenienza) {
+      // riferimenti catastali cambiati: una verifica precedente non vale piu' da sola.
+      // «Verificata» torna da scegliere e la fonte da indicare di nuovo (riconferma esplicita)
+      const riferimentiCambiati = () => {
+        if (identityKey({ ...property, ...identita() }) !== identityKey(property)) {
+          for (const id of ['#cc-category-source', '#cc-surface-source']) {
+            const sel = formEl.querySelector(id);
+            if (sel.value === 'verified') sel.value = '';
+          }
+          ['#cc-evidence-type', '#cc-evidence-date', '#cc-evidence-ref'].forEach((s) => { formEl.querySelector(s).value = ''; });
+        }
+        aggiornaVerificata();
+      };
+      ['#cc-belfiore', '#cc-sheet', '#cc-parcel', '#cc-subunit'].forEach((s) => formEl.querySelector(s).addEventListener('input', riferimentiCambiati));
+      ['#cc-category-source', '#cc-surface-source'].forEach((s) => formEl.querySelector(s).addEventListener('change', aggiornaVerificata));
+      const sup = formEl.querySelector('#cc-surface');
+      sup.addEventListener('input', () => {
+        const prima = property.surface_sqm === null || property.surface_sqm === undefined ? '' : String(Number(property.surface_sqm));
+        const ora = String(sup.value || '').trim() === '' ? '' : String(Number(String(sup.value).replace(',', '.')));
+        if (ora !== prima) formEl.querySelector('#cc-surface-source').value = '';
+      });
+      aggiornaVerificata();
+    }
     const sezione = bindSectionField(formEl, 'cc', property.cadastral_section);
     formEl.querySelector('#cc-cancel').addEventListener('click', () => { formEl.hidden = true; });
     formEl.querySelector('#cc-save').addEventListener('click', async () => {
-      const campi = { cadastral_category: categoria, cadastral_municipality_code: formEl.querySelector('#cc-belfiore').value,
+      const campi = { ...(conProvenienza ? {} : { cadastral_category: categoria }), cadastral_municipality_code: formEl.querySelector('#cc-belfiore').value,
         cadastral_sheet: formEl.querySelector('#cc-sheet').value,
         cadastral_parcel: formEl.querySelector('#cc-parcel').value, cadastral_subunit: formEl.querySelector('#cc-subunit').value };
       const payload = {};
@@ -205,6 +288,25 @@ export async function renderPropertyCensusTab(el, ctx) {
       if (nuovaSezione === undefined) { formEl.querySelector('#cc-error').textContent = 'Hai scelto «Con sezione»: scrivi la sezione, oppure scegli «Non conosciuta» o «Nessuna».'; return; }
       const sezioneSalvata = property.cadastral_section === undefined ? null : property.cadastral_section;
       if (nuovaSezione !== sezioneSalvata) payload.cadastral_section = nuovaSezione;
+      if (conProvenienza) {
+        // CENSIMENTO-2: superficie, categoria e provenienza; un valore cambiato
+        // porta sempre la sua provenienza (anche «Non indicata»)
+        const identitaModulo = { ...property, ...identita() };
+        if (nuovaSezione !== undefined) identitaModulo.cadastral_section = nuovaSezione;
+        const fonti = unitSourcesPatch(property, {
+          surface_sqm: formEl.querySelector('#cc-surface').value, surface_source: formEl.querySelector('#cc-surface-source').value,
+          cadastral_category: categoria, cadastral_category_source: formEl.querySelector('#cc-category-source').value,
+          cadastral_evidence_type: formEl.querySelector('#cc-evidence-type').value,
+          cadastral_evidence_date: formEl.querySelector('#cc-evidence-date').value,
+          cadastral_evidence_ref: formEl.querySelector('#cc-evidence-ref').value,
+        }, { today: oggi, identityChanged: identityKey(identitaModulo) !== identityKey(property) });
+        const verificata = fonti.patch.surface_source === 'verified' || fonti.patch.cadastral_category_source === 'verified';
+        if (verificata && !hasCadastralSource(identitaModulo, UNIT_SOURCES_CATALOG)) {
+          fonti.errors.push('«Verificata» richiede comune catastale, foglio, particella e subalterno.');
+        }
+        if (fonti.errors.length) { formEl.querySelector('#cc-error').textContent = fonti.errors.join(' '); return; }
+        Object.assign(payload, fonti.patch);
+      }
       if (!Object.keys(payload).length) { formEl.hidden = true; return; }
       formEl.querySelector('#cc-save').disabled = true;
       try {
@@ -232,4 +334,9 @@ export function buildingLinkHtml(p) {
   const dove = [b.name ? via : '', b.city].filter(Boolean).join(', ');
   return `<a class="property-building-link" id="property-building-link" href="#/edifici/${escapeHtml(b.id)}">`
     + `<span class="muted">Nell'edificio</span> <strong>${escapeHtml(nome)}</strong>${dove ? ` <span class="muted">${escapeHtml(dove)}</span>` : ''} ›</a>`;
+}
+
+// CENSIMENTO-2: il selettore della provenienza (null = «Non indicata»)
+function fonteSelect(id, selected) {
+  return `<select id="${escapeHtml(id)}" class="input"><option value="">Non indicata</option>${UNIT_SOURCES_CATALOG.data_sources.map((x) => `<option value="${escapeHtml(x.value)}"${x.value === selected ? ' selected' : ''}>${escapeHtml(x.label)}</option>`).join('')}</select>`;
 }

@@ -341,7 +341,8 @@ def test_m1_migration_099_is_valid_contiguous_and_has_a_down():
     m = [x for x in tutte if x.number == 99]
     assert [x.version for x in m] == ["099_voice_undo"] and m[0].down_available
     assert runner.validate_migration(m[0]) == []
-    assert tutte[-1].number == 99
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2: dopo la 099 viene solo la 100 (composizione degli edifici)
+    assert [x.number for x in tutte if x.number >= 99] == [99, 100]
     testo = (ROOT / "migrations" / "099_voice_undo.sql").read_text(encoding="utf-8")
     assert "ALTER TABLE" not in testo.upper() and "voice_command_events" not in testo
 
@@ -405,6 +406,16 @@ PROTETTI = ("main.py", "property/census.py", "property/service.py", "property/in
 
 from tests.test_voice_1_perimeter import FASE6_UI  # noqa: E402
 
+CENSIMENTO2_PROPERTY = ("property/census_classes.py", "property/composition.py", "property/router.py",
+                        "property/schemas.py",
+                        # la UI di CENSIMENTO-2 nel censimento esistente della Shell
+                        "static/os_shell/assets/app.css", "static/os_shell/assets/census/census-api.js",
+                        "static/os_shell/assets/census/census-model.js", "static/os_shell/assets/census/census-wizard.js",
+                        "static/os_shell/assets/census/composition-model.js",
+                        "static/os_shell/assets/census/composition-panel.js",
+                        "static/os_shell/assets/census/property-census-tab.js",
+                        "static/os_shell/assets/views/edificio-dettaglio.js")
+
 
 def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     if subprocess.run(["git", "cat-file", "-e", BASE], cwd=ROOT, capture_output=True).returncode != 0:
@@ -441,5 +452,7 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = subprocess.run(["git", "diff", "--name-only", BASE, "--", cartella], cwd=ROOT,
                               capture_output=True, text=True).stdout.split()
         # Fase 6: solo i file dichiarati dell'interfaccia Voice nella shell
-        diff = [f for f in diff if f not in FASE6_UI]
+        # SENTINELLA AGGIORNATA DA CENSIMENTO-2: i soli file dichiarati della composizione
+        # degli edifici (modulo nuovo, classi, rotte e schemi); i PROTETTI qui sopra restano identici.
+        diff = [f for f in diff if f not in FASE6_UI and f not in CENSIMENTO2_PROPERTY]
         assert diff == [], diff

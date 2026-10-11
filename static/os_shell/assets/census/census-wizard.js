@@ -35,9 +35,15 @@ import * as api from './census-api.js';
 import { openUnitSheet } from './census-sheets.js';
 import {
   buildingPlace, buildingStreet, buildingTitle, candidateSearch, catalogMunicipalities, declaredMismatchText,
-  errorMessage, rankCandidates, summaryView, wizardBuildingPayload, wizardDeclared, wizardInitialState,
+  errorMessage, rankCandidates, summaryView, wizardBuildingPayload, wizardComposition, wizardDeclared, wizardInitialState,
   wizardLocation, wizardStep1Errors,
 } from './census-model.js';
+
+// CENSIMENTO-2: la composizione facoltativa del passo 1 (vuoto = «Non so»)
+const COMPOSIZIONE = [
+  { key: 'residential', label: 'Abitazioni' }, { key: 'commercial', label: 'Commerciali' },
+  { key: 'other', label: 'Altre unità' }, { key: 'pertinenze', label: 'Pertinenze con sub proprio' },
+];
 
 const str = (v) => (v === null || v === undefined ? '' : String(v));
 
@@ -104,6 +110,11 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           <div class="census-inline"><input id="wz-declared" class="input" type="number" inputmode="numeric" min="0" step="1" value="${escapeHtml(stato.units_declared)}"${stato.units_unknown ? ' disabled' : ''}>
           <label class="census-check"><input type="checkbox" id="wz-unknown"${stato.units_unknown ? ' checked' : ''}> Non so</label></div>
           <small class="muted">${escapeHtml(DECLARED_HINT)}</small></div>
+        <details class="census-details" data-wizard-composition${COMPOSIZIONE.some((c) => stato[`comp_${c.key}`]) ? ' open' : ''}>
+          <summary>Composizione (facoltativa)</summary>
+          <p class="muted">Quante unità per classe. Lascia vuoto se non lo sai: la composizione si completa anche dopo, dalla scheda dell’edificio. Con tutte e quattro il totale è la loro somma.</p>
+          <div class="form-grid-2">${COMPOSIZIONE.map((c) => `<div class="form-field"><label for="wz-comp-${c.key}">${escapeHtml(c.label)}</label><input id="wz-comp-${c.key}" class="input" type="number" inputmode="numeric" min="0" step="1" placeholder="Non so" value="${escapeHtml(stato[`comp_${c.key}`])}"></div>`).join('')}</div>
+        </details>
         <div class="form-field"><label for="wz-name">Nome della palazzina (facoltativo)</label><input id="wz-name" class="input" maxlength="120" value="${escapeHtml(stato.building_name)}" placeholder="es. Residenza Gabbiano"></div>
         <p class="muted census-wizard-note">Nulla viene salvato finché non lo confermi.</p>
         <div class="field-error" data-error></div>
@@ -121,6 +132,7 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
       stato.units_declared = str($('#wz-declared').value).trim();
       stato.units_unknown = $('#wz-unknown').checked;
       stato.building_name = str($('#wz-name').value).trim();
+      for (const c of COMPOSIZIONE) stato[`comp_${c.key}`] = str($(`#wz-comp-${c.key}`).value).trim();
     };
     $('#wz-city').addEventListener('change', () => { leggi(); stato.microzone = ''; passo1(); });
     $('#wz-unknown').addEventListener('change', () => { leggi(); $('#wz-declared').disabled = stato.units_unknown; });
@@ -249,13 +261,18 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
     if (!richiestaEdificio) richiestaEdificio = api.newClientRequestId();
     const loc = wizardLocation(stato, comuni);
     const d = wizardDeclared(stato);
+    const comp = wizardComposition(stato);
+    const totale = d.value !== null ? d.value : comp.sum;
     const righe = [['Comune', loc.city], ['Microzona', loc.microzone], ['Via', loc.address], ['Civico', loc.civic_number],
-      ['Nome', stato.building_name], ['Unità dichiarate', d.value === null ? 'Non note' : String(d.value)]];
+      ['Nome', stato.building_name], ['Unità dichiarate', totale === null ? 'Non note' : String(totale)]];
+    if (comp.given) {
+      righe.push(['Composizione', COMPOSIZIONE.map((c) => `${c.label}: ${comp.body[c.key] === null ? 'non so' : comp.body[c.key]}`).join(' · ')]);
+    }
     wizardDialog.innerHTML = `
       <div data-wizard-step="4">
         ${testata(4, 'Salvo il nuovo edificio?')}
         <dl class="building-facts">${righe.map(([k, val]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(val || '—')}</dd></div>`).join('')}</dl>
-        <p class="muted">Viene salvato solo l’edificio. Le unità le inserisci subito dopo, una alla volta; un edificio può anche restare vuoto.</p>
+        <p class="muted">Viene salvato l’edificio${comp.given ? ' e poi la sua composizione' : ''}. Le unità le inserisci subito dopo; un edificio può anche restare vuoto.</p>
         <div data-banner></div>
         <div class="field-error" data-error></div>
         <div class="modal-actions">
@@ -301,9 +318,26 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
       occupato = false;
       stato.building = esito;
       stato.building_saved = true;
+      await salvaComposizione();
       passo5();
     }
     salvaBtn.addEventListener('click', () => salva(false));
+  }
+
+  // CENSIMENTO-2: la composizione si salva DOPO l'edificio (seconda chiamata).
+  // Se non riesce l'edificio resta salvato, in bozza e riconoscibile («Bozza:
+  // composizione da dichiarare» nella sua scheda); qui si puo' riprovare con
+  // gli stessi numeri (PUT: ripeterla non crea nulla due volte).
+  async function salvaComposizione() {
+    const comp = wizardComposition(stato);
+    stato.composition_error = '';
+    if (!comp.given || !stato.building_saved || !stato.building) return;
+    try {
+      await api.setComposition(stato.building.id, comp.body);
+      stato.composition_saved = true;
+    } catch (error) {
+      stato.composition_error = errorMessage(error);
+    }
   }
 
   // --- 5. Edificio pronto -----------------------------------------------------------------
@@ -320,6 +354,10 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           <div class="muted">Dichiarate ${escapeHtml(v.declared)} · Censite ${escapeHtml(v.counted)}</div>
           <div>${stato.building_saved ? 'Salvato ora, ancora senza unità.' : 'Edificio esistente: nessun dato modificato.'}</div></div>
         ${differenza ? `<p class="muted" data-declared-mismatch>${escapeHtml(differenza)}</p>` : ''}
+        ${stato.composition_error ? `<div class="census-banner census-banner-block" data-composition-failed><strong>Composizione non salvata</strong> — ${escapeHtml(stato.composition_error)} L’edificio è salvato e resta in bozza: puoi riprovare ora o completarla dalla sua scheda.
+          <div class="action-bar"><button type="button" class="btn btn-small" data-retry-composition>Riprova la composizione</button></div></div>` : ''}
+        ${stato.building_saved && stato.composition_saved ? '<p class="muted" data-composition-saved>Composizione salvata.</p>' : ''}
+        ${!stato.building_saved && wizardComposition(stato).given ? '<p class="muted" data-composition-not-applied>La composizione indicata non viene applicata a un edificio già esistente: si aggiorna dalla sua scheda.</p>' : ''}
         <p class="muted">Ora le unità: ${commerciale ? 'nasceranno come schede commerciali' : 'nasceranno come schede di censimento'}, con l’indirizzo dell’edificio.</p>
         <div class="modal-actions">
           ${stato.building_saved ? '' : '<button type="button" class="btn ghost" data-change-building>← Scegli un altro edificio</button>'}
@@ -327,6 +365,8 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           <button type="button" class="btn primary" data-add-units>${stato.path === 'single' ? 'Inserisci l’unità' : 'Inserisci le unità'}</button>
         </div>
       </div>`;
+    const riprova = wizardDialog.querySelector('[data-retry-composition]');
+    if (riprova) riprova.addEventListener('click', async () => { riprova.disabled = true; await salvaComposizione(); passo5(); });
     const cambia = wizardDialog.querySelector('[data-change-building]');
     if (cambia) cambia.addEventListener('click', () => { stato.building = null; passo3(); });
     wizardDialog.querySelector('[data-finish]').addEventListener('click', () => { wizardDialog.close(); navigate('edifici', [b.id]); });

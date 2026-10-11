@@ -34,6 +34,8 @@ import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
 import { openBuildingSheet, openLinkPrincipalSheet, openUnitSheet, showToast } from '../census/census-sheets.js';
+// CENSIMENTO-2: composizione, unità mancanti, interni e modifica di gruppo
+import { renderCompositionPanel } from '../census/composition-panel.js';
 import {
   buildingPertinenze, buildingStreet, buildingTitle, createdToastText, duplicateSeed, errorMessage, groupUnitsByFloor, labelOf,
   principalCandidates, summaryView, unitFacts, unitRelationText, unitRowBadges,
@@ -99,6 +101,7 @@ export async function renderEdificioDettaglio(container, params = []) {
         <p class="muted">Dichiarate: le unità catastali che risultano (principali più pertinenze con subalterno proprio); «Non note» se non sono state indicate. Censite: le schede di questo edificio, comprese le archiviate; non contano gli accessori senza subalterno, le unità nel Cestino e quelle annullate subito dopo la creazione. Da completare: dichiarate meno censite, mai sotto zero.</p>
       </details>
     </div>
+    <div class="card panel census-composition-panel" id="building-composition"></div>
     <div class="card panel census-units-panel">
       ${inTrash ? '' : `<div class="census-add-bar">
         <button type="button" class="btn primary" id="unit-add-apartment">+ Aggiungi unità</button>
@@ -114,6 +117,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     <div class="card panel census-pertinenze-panel" id="building-pertinenze"></div>
     <dialog id="building-sheet" class="modal census-sheet"></dialog>
     <dialog id="unit-sheet" class="modal census-sheet"></dialog>
+    <dialog id="composition-sheet" class="modal census-sheet"></dialog>
   `;
   const buildingSheet = container.querySelector('#building-sheet');
   const unitSheet = container.querySelector('#unit-sheet');
@@ -257,7 +261,11 @@ export async function renderEdificioDettaglio(container, params = []) {
     }));
   }
 
-  async function ricarica() {
+  // CENSIMENTO-2: il pannello della composizione si ricarica con la scheda
+  // (unità aggiunte, archiviate, collegate); quando e' il pannello a cambiare
+  // qualcosa ricarica solo la scheda e poi se stesso.
+  let pannello = null;
+  async function ricarica({ composizione = true } = {}) {
     try {
       edificio = await api.getBuilding(edificio.id);
     } catch (error) {
@@ -267,6 +275,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     renderHeader();
     renderUnits();
     renderPertinenze();
+    if (composizione && pannello) await pannello.reload();
   }
 
   // S3 -> S5: il foglio, poi il toast con «Annulla» (undo-create) e la
@@ -352,6 +361,13 @@ export async function renderEdificioDettaglio(container, params = []) {
   renderHeader();
   renderUnits();
   renderPertinenze();
+  pannello = await renderCompositionPanel(container.querySelector('#building-composition'), {
+    buildingId: edificio.id, options: opzioni, inTrash, host: container,
+    dialogEl: container.querySelector('#composition-sheet'),
+    // census: ogni operatore dell'agenzia; commerciale: la regola di gestione di sempre
+    canEdit: (u) => u.record_kind === 'census' || canManagePropertyLifecycle(u, sessione),
+    navigate, onChanged: () => ricarica({ composizione: false }),
+  });
   if (dallaProcedura) {
     // l'indirizzo torna quello della scheda: un ricaricamento non riapre il foglio
     if (window.history && typeof window.history.replaceState === 'function') {

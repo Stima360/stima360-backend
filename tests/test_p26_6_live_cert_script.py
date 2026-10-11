@@ -1898,7 +1898,8 @@ class FakeHttp(cert.HttpProbe):
                 return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
             nuovo = crea_edificio()
             return self._reply(method, path, 201, _json.dumps({"id": nuovo, "agency_id": agency}).encode())
-        trovato = re.match(r"^/api/property/buildings/(\d+)$", percorso)
+        # CENSIMENTO-2: la composizione dell'edificio si legge con lo stesso isolamento della scheda
+        trovato = re.match(r"^/api/property/buildings/(\d+)(?:/composition)?$", percorso)
         if trovato:
             bid = int(trovato.group(1))
             if method == "PATCH":
@@ -10151,9 +10152,12 @@ def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypa
     assert righe and [r for r in righe if r[0] != cert.PASS] == [], righe
     idents = {i for _k, i, _t in righe}
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: piu' le tre rotte del Cestino Edifici (sonda anonima).
-    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 16
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2: piu' le cinque rotte della composizione (sonda anonima)
+    # e la lettura della composizione dell'edificio altrui (404).
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 21
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
+                     "composizione-edificio-{a}-{b}",
                      "censimento-lettura-{a}-{b}", "presa-in-carico-{a}-{b}", "annulla-{a}-{b}",
                      "agency-nel-corpo-{a}"):
             assert "BUILDINGS-" + nome.format(a=a, b=b) in idents, (nome, a, b)
@@ -10210,7 +10214,10 @@ def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
                 montate.add((m, re.sub(r"\{[a-z_]+\}", "{id}", template)))
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: tre rotte nuove sotto /buildings
     # (deletion-check, trash, restore), coperte dalla sonda anonima.
-    assert len(montate) == 17
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2: cinque rotte nuove sotto /buildings
+    # (composizione GET/PUT, generate, undo del lotto, bulk-update), coperte
+    # dalla sonda anonima; la lettura della composizione altrui anche autenticata.
+    assert len(montate) == 22
     assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
         set(cert.BUILDINGS_OPERAZIONI) ^ montate
     assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]
