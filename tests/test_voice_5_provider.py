@@ -92,6 +92,9 @@ def test_03_request_carries_only_rules_and_the_dictated_text():
     assert corpo["model"] == "modello-di-prova" and corpo["temperature"] == 0
     assert corpo["messages"] == [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": TESTO}]
     assert kw["headers"]["Authorization"] == "Bearer chiave-segreta-123"
+    # Fase 7: User-Agent esplicito e senza dati (Cloudflare 1010 senza)
+    assert kw["headers"]["User-Agent"] == "STIMA360-Voice/1.0"
+    assert set(kw["headers"]) == {"Authorization", "Content-Type", "User-Agent"}
     assert "chiave-segreta-123" not in json.dumps(corpo)
     schema = corpo["response_format"]["json_schema"]["schema"]
 

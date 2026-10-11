@@ -40,6 +40,11 @@ from .schemas import MAX_TEXT, VoicePlanOutput, parse_plan_output, plan_json_sch
 
 log = logging.getLogger("stima360.voice.provider")
 
+#: Fase 7: un User-Agent esplicito. Senza, `requests` si presenta come
+#: `python-requests/x.y` e il fornitore (Groq, dietro Cloudflare) rifiuta con
+#: HTTP 403 / errore 1010, verificato da Render TEST. Nessun dato nell'header.
+USER_AGENT = "STIMA360-Voice/1.0"
+
 #: (connessione, lettura) in secondi: nessuna chiamata senza timeout.
 DEFAULT_TIMEOUT = (5.0, 20.0)
 MAX_RESPONSE_BYTES = 200_000
@@ -112,7 +117,8 @@ class HttpVoiceProvider:
         try:
             risposta = self._http.post(self.config.url, json=corpo, timeout=self.config.timeout,
                                        headers={"Authorization": f"Bearer {self.config.api_key}",
-                                                "Content-Type": "application/json"})
+                                                "Content-Type": "application/json",
+                                                "User-Agent": USER_AGENT})
         except requests.RequestException as exc:
             log.warning("voice provider: richiesta fallita (%s)", type(exc).__name__)
             raise ProviderUnavailable("fornitore AI non raggiungibile") from None
