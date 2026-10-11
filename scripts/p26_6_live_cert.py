@@ -548,7 +548,7 @@ DOMAINS = (
         # di un'altra agenzia non e' raggiungibile (403 spento / 404 acceso).
         certifier="voice",
         api_delete=False,
-        note="dodici rotte: anonimo e Basic -> 401 su tutte, /status con due "
+        note="tredici rotte: anonimo e Basic -> 401 su tutte, /status con due "
              "soli booleani, agency_id/actor nel corpo -> 422, comando di un'altra "
              "agenzia (o inesistente) mai restituito, registro vocale invariato",
     ),
@@ -6783,7 +6783,7 @@ def certify_calendar_sync(report, http, cert, domain, jars, owned, context) -> N
     )
 
 
-#: Le dodici rotte di STIMA Voice (Fase 7), per il giro anonimo/Basic. L'id e'
+#: Le tredici rotte di STIMA Voice (Fase 7, con la risposta della conversazione), per il giro anonimo/Basic. L'id e'
 #: un segnaposto: il rifiuto arriva al mount, prima di qualunque lettura.
 VOICE_OPERAZIONI = (
     ("GET", "/status"), ("POST", "/commands"), ("GET", "/commands/1"),
@@ -6791,7 +6791,7 @@ VOICE_OPERAZIONI = (
     ("POST", "/commands/1/cancel"), ("POST", "/commands/1/steps/1/retry"),
     ("GET", "/commands/1/undo"), ("POST", "/commands/1/undo"),
     ("POST", "/commands/1/steps/1/undo"), ("GET", "/commands/1/steps/1/reconcile"),
-    ("POST", "/commands/1/steps/1/reconcile"),
+    ("POST", "/commands/1/steps/1/reconcile"), ("POST", "/commands/1/reply"),
 )
 
 #: I codici con cui STIMA Voice rifiuta quando e' spento (globale, agenzia,
@@ -6839,7 +6839,7 @@ def certify_voice(report, http, cert, domain, jars, owned, context) -> None:
     risposta corretta un rifiuto o una lettura di due booleani. Il registro
     vocale si fotografa prima e dopo: nessuna riga nuova deve comparire.
 
-        anonimo, Basic          -> 401 su tutte le dodici rotte (mount)
+        anonimo, Basic          -> 401 su tutte le tredici rotte (mount)
         GET  /status            -> 200, esattamente {enabled, speech_input}
         POST /commands + agency_id/actor nel corpo -> 422 (corpo chiuso)
         GET  /commands/{id} di un'altra agenzia (o inesistente)

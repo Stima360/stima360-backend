@@ -87,6 +87,20 @@ POST /commands/{id}/undo               tutto il comando, in ordine inverso
 POST /commands/{id}/steps/{n}/undo
 GET  /commands/{id}/steps/{n}/reconcile   analisi di un passo incerto
 POST /commands/{id}/steps/{n}/reconcile   {outcome: present|absent, record_id}
+POST /commands/{id}/reply              {client_command_id: uuid, text} (Fase 7)
+                                       risposta o correzione a un comando che non
+                                       ha ancora eseguito nulla: testo originale +
+                                       «Precisazione: <risposta>» diventa un comando
+                                       NUOVO (stesso percorso di POST /commands,
+                                       stesse conferme), il precedente si annulla.
+                                       Le domande di STIMA vanno al modello come
+                                       contesto, non nel testo dell'agente.
+                                       409 VOICE_REPLY_NOT_ALLOWED (gia' eseguito,
+                                       oppure annullato/gia' sostituito da un'altra
+                                       risposta: un solo piano vivo),
+                                       409 VOICE_CONVERSATION_EXPIRED (trascritto
+                                       scaduto). Ogni risposta conta nel limite
+                                       giornaliero come un comando.
 
 Errori: sempre {"detail", "code"}. Fornitore non raggiungibile: 503
 VOICE_PROVIDER_UNAVAILABLE (nessuna azione, si ripete con la stessa chiave).

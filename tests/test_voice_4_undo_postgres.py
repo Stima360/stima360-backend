@@ -413,11 +413,24 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
                   if not p.name.startswith("099_")]
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: `main.py` cambia SOLO per il montaggio del router
     # (righe aggiunte, nessuna tolta), verificato riga per riga; il resto dei protetti resta identico.
-    esito_ = subprocess.run(["git", "diff", "--name-only", BASE, "--", *[p for p in PROTETTI if p != "main.py"],
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7 (conversazione): `voice/planner.py` cambia SOLO per la
+    # parola «acquisizion» -> seller_meeting (il tipo che usa il modulo Acquisizioni), verificata riga per riga.
+    esito_ = subprocess.run(["git", "diff", "--name-only", BASE, "--",
+                             *[p for p in PROTETTI if p not in ("main.py", "voice/planner.py")],
                              *migrazioni], cwd=ROOT, capture_output=True, text=True)
     assert esito_.returncode == 0 and esito_.stdout.strip() == "", esito_.stdout
     diff_main = subprocess.run(["git", "diff", "-U0", BASE, "--", "main.py"], cwd=ROOT,
                                capture_output=True, text=True).stdout.splitlines()
+    diff_planner = subprocess.run(["git", "diff", "-U0", BASE, "--", "voice/planner.py"], cwd=ROOT,
+                                  capture_output=True, text=True).stdout.splitlines()
+    assert [r for r in diff_planner if r.startswith("-") and not r.startswith("---")] == []
+    assert [r[1:].strip() for r in diff_planner if r.startswith("+") and not r.startswith("+++")
+            and not r[1:].strip().startswith("#")] in ([], [
+        '("acquisizion", "seller_meeting"), ("proprietari", "seller_meeting"),',
+        'SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari")',
+        'if tipo == "seller_meeting" and not any(p in dates.fold(c.quote) or p in folded',
+        'for p in SELLER_MEETING_EVIDENCE):',
+        'tipo = appointment_type_from(dates.fold(c.quote))'])
     tolte = [r for r in diff_main if r.startswith("-") and not r.startswith("---")]
     aggiunte = [r[1:].strip() for r in diff_main if r.startswith("+") and not r.startswith("+++")]
     assert tolte == [], tolte

@@ -26,7 +26,8 @@ class ProviderUnavailable(RuntimeError):
 class VoiceProvider(Protocol):
     def transcribe(self, audio: bytes, *, mime_type: str, language: str = "it") -> str: ...
 
-    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime) -> dict[str, Any]: ...
+    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime,
+                  context: list[str] | None = None) -> dict[str, Any]: ...
 
 
 def audio_key(audio: bytes) -> str:
@@ -41,6 +42,8 @@ class FakeVoiceProvider:
         #: trascritto -> output grezzo del "modello"
         self.outputs: dict[str, dict[str, Any]] = dict(outputs or {})
         self.calls: list[tuple[str, str]] = []
+        #: Fase 7: il contesto (domande di STIMA) ricevuto a ogni interpretazione
+        self.contexts: list[list[str]] = []
         self.fail_next = False
         self.malformed_next = False
 
@@ -65,8 +68,10 @@ class FakeVoiceProvider:
     def _labels(self) -> set[bytes]:
         return {k.encode("utf-8") for k in self.transcripts}
 
-    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime) -> dict[str, Any]:
+    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime,
+                  context: list[str] | None = None) -> dict[str, Any]:
         self._guard("interpret", transcript)
+        self.contexts.append(list(context or []))
         if self.malformed_next:
             self.malformed_next = False
             return {"commands": [{"intent": "create_everything", "quote": transcript}]}

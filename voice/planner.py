@@ -62,7 +62,16 @@ APPOINTMENT_KEYWORDS = (
     ("notaio", "notary"), ("proposta", "proposal"), ("preliminare", "preliminary_contract"),
     ("compromesso", "preliminary_contract"), ("valutazione", "valuation_presentation"),
     ("tecnic", "technical"),
+    # Fase 7: l'appuntamento di acquisizione e' un `seller_meeting`, lo stesso
+    # tipo che il modulo Acquisizioni usa per il suo appuntamento in Agenda
+    # (acquisitions/enums.py::APPOINTMENT_TYPE). Crea solo l'appuntamento: non
+    # apre un'Acquisizione.
+    ("acquisizion", "seller_meeting"), ("proprietari", "seller_meeting"),
 )
+#: Fase 7: `seller_meeting` SOLO se il comando parla davvero di acquisizione o
+#: di proprietario. Anche se il modello lo propone, senza queste parole nel
+#: testo dell'agente l'appuntamento resta del tipo dedotto (di norma `other`).
+SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari")
 DEFAULT_APPOINTMENT_TYPE = "other"
 DEFAULT_APPOINTMENT_MINUTES = 60
 #: Un task con la data ma senza l'ora scade alle 9 del mattino (decisione
@@ -306,6 +315,9 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
 
     elif c.intent == "create_appointment":
         tipo = c.appointment_type or appointment_type_from(dates.fold(c.quote))
+        if tipo == "seller_meeting" and not any(p in dates.fold(c.quote) or p in folded
+                                                for p in SELLER_MEETING_EVIDENCE):
+            tipo = appointment_type_from(dates.fold(c.quote))
         minuti = c.duration_minutes or DEFAULT_APPOINTMENT_MINUTES
         quando = dates.resolve_when(c.when.date_text, c.when.time_text, now, require_time=True)
         issues += [Issue(r, _messaggio_data(r), "when") for r in quando.reasons]

@@ -98,7 +98,7 @@ ROTTE = [("GET", "/api/voice/status"), ("POST", "/api/voice/commands"), ("GET", 
          ("POST", "/api/voice/commands/1/cancel"), ("POST", "/api/voice/commands/1/steps/1/retry"),
          ("GET", "/api/voice/commands/1/undo"), ("POST", "/api/voice/commands/1/undo"),
          ("POST", "/api/voice/commands/1/steps/1/undo"), ("GET", "/api/voice/commands/1/steps/1/reconcile"),
-         ("POST", "/api/voice/commands/1/steps/1/reconcile")]
+         ("POST", "/api/voice/commands/1/steps/1/reconcile"), ("POST", "/api/voice/commands/1/reply")]
 
 
 class GuardFailure(RuntimeError):
@@ -432,9 +432,9 @@ class Run:
             c = self.http.call(metodo, percorso, corpo=corpo,
                                headers={"Authorization": "Basic " + "Y2VydGlmaWNhemlvbmU6ZmFsc2E="})[0]
             esiti.append((percorso, a, b, c))
-        self.r.check("S.1", all(a == 401 for _, a, _, _ in esiti), "12 rotte senza sessione: tutte 401")
-        self.r.check("S.2", all(b == 401 for _, _, b, _ in esiti), "12 rotte con cookie inventato: tutte 401")
-        self.r.check("S.3", all(c == 401 for _, _, _, c in esiti), "12 rotte con credenziali Basic finte: tutte 401")
+        self.r.check("S.1", all(a == 401 for _, a, _, _ in esiti), f"{len(ROTTE)} rotte senza sessione: tutte 401")
+        self.r.check("S.2", all(b == 401 for _, _, b, _ in esiti), f"{len(ROTTE)} rotte con cookie inventato: tutte 401")
+        self.r.check("S.3", all(c == 401 for _, _, _, c in esiti), f"{len(ROTTE)} rotte con credenziali Basic finte: tutte 401")
         self.r.check("S.4", self.db.one("SELECT count(*) AS n FROM voice_commands")["n"] == prima,
                      "nessun comando registrato senza sessione")
 

@@ -56,6 +56,13 @@ class ConfirmIn(_Corpo):
     steps: list[StepChoice] = Field(default_factory=list, max_length=12)
 
 
+class ReplyIn(_Corpo):
+    """Fase 7: la risposta (o la correzione) dell'agente a un comando non ancora
+    eseguito. Nuova chiave del client: la risposta e' un comando nuovo."""
+    client_command_id: uuid.UUID
+    text: str = Field(..., min_length=1, max_length=voice_provider.MAX_TEXT)
+
+
 class ReconcileIn(_Corpo):
     outcome: Literal["present", "absent"]
     record_id: int | None = Field(None, ge=1)
@@ -69,7 +76,7 @@ def get_provider():
 
 _STATI = {
     DISABLED: 403, service.GLOBALLY_DISABLED: 403, PLATFORM_ADMIN_BLOCKED: 403, ACTOR_REQUIRED: 403,
-    service.PILOT_USER_REQUIRED: 403,
+    service.PILOT_USER_REQUIRED: 403, service.CONVERSATION_EXPIRED: 409, service.REPLY_NOT_ALLOWED: 409,
     service.DAILY_LIMIT: 429, CHOICE_REQUIRED: 422, CHOICE_INVALID: 422, service.TEXT_INVALID: 422,
 }
 
@@ -129,6 +136,22 @@ def submit_command(body: CommandIn, ctx: OperatorContext = Depends(require_opera
             return _errore(spento)
         return _errore(exc)
     return _x(service.submit, ctx, body.client_command_id, body.text, provider=fornitore)
+
+
+@router.post("/commands/{command_id}/reply")
+def reply_command(command_id: int, body: ReplyIn, ctx: OperatorContext = Depends(require_operator)):
+    """Fase 7: risposta a una domanda / correzione, senza perdere il comando.
+    Diventa un comando nuovo (stesso percorso di POST /commands) che
+    sostituisce quello, mai eseguito, a cui risponde."""
+    try:
+        fornitore = get_provider()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            service.guard(ctx)
+        except Exception as spento:  # noqa: BLE001
+            return _errore(spento)
+        return _errore(exc)
+    return _x(service.reply, ctx, command_id, body.client_command_id, body.text, provider=fornitore)
 
 
 @router.get("/commands/{command_id}")

@@ -71,6 +71,10 @@ Regole obbligatorie:
 - Una palazzina con N appartamenti e' UN comando create_building con units_declared=N, mai N unita'.
 - Se qualcosa non e' chiaro, aggiungi una domanda breve in "clarifications" invece di indovinare.
 - Non assegnare il record_kind se il testo non dice se e' una scheda commerciale o di censimento.
+- Il testo puo' contenere il comando iniziale seguito da righe "Precisazione: ...": sono le risposte o le
+  correzioni dell'agente alle domande di STIMA. Uniscile al comando iniziale e restituisci il comando COMPLETO
+  aggiornato (non solo la modifica); a parita' di dato vale la precisazione piu' recente.
+- Un appuntamento di acquisizione (con un proprietario per acquisire l'immobile) e' appointment_type "seller_meeting".
 """
 
 
@@ -105,12 +109,20 @@ class HttpVoiceProvider:
     def transcribe(self, audio: bytes, *, mime_type: str, language: str = "it") -> str:
         raise ProviderUnavailable("trascrizione audio non disponibile in questa fase")
 
-    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime) -> dict[str, Any]:
+    def interpret(self, transcript: str, *, schema: dict[str, Any], recorded_at: datetime,
+                  context: list[str] | None = None) -> dict[str, Any]:
+        messaggi = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if context:
+            # Fase 7: le domande gia' poste da STIMA in questa conversazione. Solo
+            # testo di STIMA (nessun dato del CRM): aiutano a leggere le righe
+            # «Precisazione:» del testo dell'agente.
+            messaggi.append({"role": "system", "content": "Domande gia' poste da STIMA all'agente: "
+                             + " | ".join(context)})
+        messaggi.append({"role": "user", "content": transcript})
         corpo = {
             "model": self.config.model,
             "temperature": 0,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                         {"role": "user", "content": transcript}],
+            "messages": messaggi,
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "voice_plan", "schema": schema, "strict": False}},
         }
@@ -140,14 +152,15 @@ def from_env(env=None) -> HttpVoiceProvider:
     return HttpVoiceProvider(ProviderConfig.from_env(env))
 
 
-def interpret(provider, text: str, recorded_at: datetime) -> VoicePlanOutput:
+def interpret(provider, text: str, recorded_at: datetime, *, context: list[str] | None = None) -> VoicePlanOutput:
     """Il testo -> output VALIDATO. Qualunque deviazione dallo schema chiuso
     scarta tutta la risposta: nessuna esecuzione parziale di un output
     sbagliato."""
     if not text or not text.strip() or len(text) > MAX_TEXT:
         raise ProviderMalformed("testo vuoto o troppo lungo")
     try:
-        grezzo = provider.interpret(text, schema=plan_json_schema(), recorded_at=recorded_at)
+        extra = {"context": list(context)} if context else {}
+        grezzo = provider.interpret(text, schema=plan_json_schema(), recorded_at=recorded_at, **extra)
     except (ProviderUnavailable, ProviderMalformed, ProviderNotConfigured):
         raise
     except Exception as exc:  # noqa: BLE001 - un fornitore che solleva altro e' indisponibile

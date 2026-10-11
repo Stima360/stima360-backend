@@ -1148,6 +1148,9 @@ a.census-unit-main { text-decoration: none; }
 .voice-option input { width: 22px; height: 22px; }
 .voice-notice, .voice-dupes, .voice-confirm-note { margin: 0; padding: 8px 10px; border-radius: 8px; background: #fdf3d8; color: #6b4a06; }
 .voice-page .voice-step-actions .btn, .voice-page .voice-command-actions .btn { min-height: 44px; }
+.voice-reply { display: grid; gap: 10px; border-top: 1px solid var(--border, #dfe6f1); padding-top: 12px; }
+.voice-question { margin: 0; padding: 10px 12px; border-radius: 8px; background: #eef3fd; }
+.voice-history { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 15px; }
 .voice-page .btn:focus-visible { outline: 3px solid rgba(37, 99, 235, .45); outline-offset: 2px; }
 @media (max-width: 767px) {
   .voice-compose-actions .voice-big, .voice-command-actions .voice-big { flex: 1 1 140px; }

@@ -59,7 +59,41 @@ export function intentLabel(intent) {
 }
 
 export function commandStatus(view) {
+  // Fase 7: un piano senza operazioni non e' «Pronto». Se STIMA ha fatto una
+  // domanda aspetta una risposta; altrimenti non ha riconosciuto nulla.
+  const vivo = view && ['received', 'planned', 'awaiting_answers'].includes(view.status);
+  if (vivo && !(view.steps || []).length) {
+    return (view.clarifications || []).length
+      ? { label: 'Serve una tua risposta', tone: 'warn' }
+      : { label: 'Nessuna operazione riconosciuta', tone: 'gray' };
+  }
   return COMMAND_STATUS[view && view.status] || { label: 'Stato sconosciuto', tone: 'gray' };
+}
+
+/**
+ * Fase 7: si puo' rispondere (o correggere) finche' il comando non ha eseguito
+ * nulla. Il server lo ricontrolla (VOICE_REPLY_NOT_ALLOWED).
+ */
+export function canReply(view) {
+  return Boolean(view) && ['received', 'planned', 'awaiting_answers'].includes(view.status)
+    && (view.steps || []).every((s) => s.state === 'pending' || s.state === 'skipped');
+}
+
+/** Le domande di STIMA: chiarimenti del modello e domande di dati dei passi. */
+export function openQuestions(view) {
+  const domande = [...((view && view.clarifications) || [])];
+  for (const s of (view && view.steps) || []) {
+    if (s.state === 'pending' || s.decision === 'blocked') {
+      for (const r of s.reasons || []) if (!r.confirmable && r.message) domande.push(r.message);
+    }
+  }
+  return [...new Set(domande)];
+}
+
+/** Un riferimento non trovato fra i record visibili (contatto, immobile...). */
+export function referenceNotFound(view) {
+  return ((view && view.steps) || []).some((s) => (s.state === 'pending' || s.decision === 'blocked')
+    && (s.reasons || []).some((r) => r.code === 'reference_not_found'));
 }
 
 /** Etichetta e tono di un passo, dal suo stato e da cio' che gli manca. */
@@ -139,6 +173,8 @@ export function errorMessage(error) {
   const messaggi = {
     VOICE_GLOBALLY_DISABLED: 'STIMA Voice non è attivo.',
     VOICE_DISABLED: 'STIMA Voice non è attivo per la tua agenzia.',
+    VOICE_REPLY_NOT_ALLOWED: 'Questo comando ha già eseguito delle operazioni: usa «Annulla» o inizia un nuovo comando.',
+    VOICE_CONVERSATION_EXPIRED: 'Il testo di questo comando non è più disponibile: detta di nuovo il comando.',
     VOICE_PILOT_USER_REQUIRED: 'STIMA Voice è attivo solo per gli operatori della prova pilota.',
     VOICE_PLATFORM_ADMIN_BLOCKED: 'STIMA Voice non è disponibile per l’amministrazione della piattaforma.',
     VOICE_DAILY_LIMIT: 'Hai raggiunto il limite giornaliero dei comandi vocali.',

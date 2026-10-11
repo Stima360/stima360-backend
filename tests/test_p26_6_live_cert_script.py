@@ -3210,14 +3210,14 @@ def test_13b_with_everything_populated_only_the_escalation_stays_BLOCKED(monkeyp
 def test_13c_voice_is_certified_rejection_only(monkeypatch):
     """STIMA Voice Fase 7: la sezione VOICE gira davvero nella matrice (non solo
     dichiarata) e ogni sua prova e' un PASS sull'app com'e' oggi: montata e
-    spenta. 12 rotte anonime + 12 Basic + 3 domande per ciascuna agenzia + la
+    spenta. 13 rotte anonime + 13 Basic + 3 domande per ciascuna agenzia + la
     guardia sul registro."""
     code, report, _db, _probe, _ = working_run(
         monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
         stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
     voce = [(k, i) for k, i, _ in report.rows if i.startswith("VOICE-")]
     assert [k for k, _ in voce if k != cert.PASS and k != cert.NOTE] == [], voce
-    assert sum(1 for k, _ in voce if k == cert.PASS) >= 12 + 12 + 3 * 2, voce
+    assert sum(1 for k, _ in voce if k == cert.PASS) >= 13 + 13 + 3 * 2, voce
     assert {i for _, i in voce} >= {"VOICE-status-A", "VOICE-status-B", "VOICE-corpo-chiuso-A-B",
                                     "VOICE-corpo-chiuso-B-A", "VOICE-comando-altrui-A", "VOICE-comando-altrui-B"}
 

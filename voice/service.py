@@ -53,6 +53,12 @@ ROMA = ZoneInfo("Europe/Rome")
 GLOBALLY_DISABLED = "VOICE_GLOBALLY_DISABLED"
 DAILY_LIMIT = "VOICE_DAILY_LIMIT"
 TEXT_INVALID = "VOICE_TEXT_INVALID"
+#: Fase 7 - conversazione: una risposta si da' solo a un comando che non ha
+#: ancora eseguito nulla; il trascritto (contesto) deve esistere ancora.
+REPLY_NOT_ALLOWED = "VOICE_REPLY_NOT_ALLOWED"
+CONVERSATION_EXPIRED = "VOICE_CONVERSATION_EXPIRED"
+#: Il prefisso con cui la risposta dell'agente si aggiunge al testo originale.
+REPLY_PREFIX = "Precisazione: "
 
 #: I messaggi delle domande e dei blocchi, per codice (stabili, in italiano).
 MESSAGES = {
@@ -190,7 +196,8 @@ def _limite_giornaliero(ctx, impostazioni, adesso: datetime) -> None:
         raise VoiceRefused(DAILY_LIMIT, "Limite giornaliero dei comandi vocali raggiunto")
 
 
-def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None = None) -> dict[str, Any]:
+def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None = None,
+           context: list[str] | None = None) -> dict[str, Any]:
     """Testo dettato -> comando nel registro -> piano. Idempotente sulla
     chiave del client: la stessa chiave con lo stesso testo restituisce lo
     stesso comando senza richiamare il modello; con un testo diverso e' un
@@ -209,7 +216,7 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
         with ledger.executing(ctx, riga["id"]):            # una sola interpretazione per comando
             comando = ledger.get_command(ctx, riga["id"])
             if comando["plan_sha256"] is None:
-                output = voice_provider.interpret(provider, testo, comando["recorded_at"])
+                output = voice_provider.interpret(provider, testo, comando["recorded_at"], context=context)
                 piano = planner.build_plan(output, testo, comando["recorded_at"])
                 executor.prepare(ctx, riga["id"], piano)
                 registrato = ledger.get_command(ctx, riga["id"])
@@ -222,6 +229,65 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
         if automatico:
             executor.execute(ctx, riga["id"])
     return view(ctx, riga["id"])
+
+
+# ---------------------------------------------------------------------------
+# Conversazione (Fase 7): rispondere a una domanda senza perdere il comando
+# ---------------------------------------------------------------------------
+
+_MAI_ESEGUITO = ("pending", "skipped")
+#: Un comando annullato (dall'agente o da una risposta precedente) non si
+#: riprende: una seconda risposta con un'altra chiave non apre un secondo piano.
+#: La ripetizione della STESSA risposta passa dalla chiave (sopra).
+_RISPONDIBILE = ("received", "planned", "awaiting_answers")
+
+
+def _domande(vista: dict[str, Any]) -> list[str]:
+    """Cio' che STIMA ha chiesto: i chiarimenti del modello e le domande di
+    DATI dei passi in attesa (non le semplici conferme)."""
+    domande = list(vista.get("clarifications") or [])
+    for passo in vista.get("steps") or []:
+        if passo["state"] == "pending" or passo["decision"] == "blocked":
+            domande += [r["message"] for r in passo["reasons"] if not r["confirmable"]]
+    return list(dict.fromkeys(d for d in domande if d))
+
+
+def reply(ctx, command_id: int, client_command_id, text: str, *, provider,
+          now: datetime | None = None) -> dict[str, Any]:
+    """La risposta dell'agente a una domanda (o una correzione) prima che il
+    comando abbia eseguito qualcosa. NON e' una scorciatoia: il testo
+    originale + «Precisazione: <risposta>» diventa un comando NUOVO che passa
+    per `submit` (abilitazione, limite giornaliero, idempotenza della chiave,
+    fornitore, planner, resolver con i permessi di chi parla, policy,
+    conferme). Il comando precedente, mai eseguito, viene annullato: un solo
+    piano vivo per conversazione. Le domande di STIMA vanno al modello come
+    contesto, NON nel trascritto: il planner cerca le prove (vendita,
+    censimento...) solo nelle parole dell'agente.
+
+    Stessa chiave = stesso comando nuovo (ripetibile dopo un errore di rete o
+    del fornitore). Il contesto viene dal registro, mai dal client."""
+    impostazioni = guard(ctx)
+    risposta = (text or "").strip()
+    if not risposta:
+        raise VoiceRefused(TEXT_INVALID, "risposta vuota")
+    vista = view(ctx, command_id)                       # di chi chiede, o 404
+    comando = ledger.get_command(ctx, command_id)
+    if comando.get("transcript") is None:
+        raise VoiceRefused(CONVERSATION_EXPIRED, "Il testo del comando non e' piu' disponibile: detta di nuovo il comando")
+    testo = f"{comando['transcript'].rstrip()}\n{REPLY_PREFIX}{risposta}"
+    if len(testo) > voice_provider.MAX_TEXT:
+        raise VoiceRefused(TEXT_INVALID, "La conversazione e' troppo lunga: inizia un nuovo comando")
+    contesto = _domande(vista)
+    if _gia_ricevuto(ctx, client_command_id):           # ripetizione della stessa risposta
+        return submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
+    with ledger.executing(ctx, command_id):             # nessuna esecuzione del precedente nel frattempo
+        comando = ledger.get_command(ctx, command_id)
+        if comando["status"] not in _RISPONDIBILE or any(p["state"] not in _MAI_ESEGUITO for p in comando["steps"]):
+            raise VoiceRefused(REPLY_NOT_ALLOWED, "Questo comando ha gia' eseguito delle operazioni: "
+                                                  "per cambiarle usa «Annulla» o inizia un nuovo comando")
+        _limite_giornaliero(ctx, impostazioni, now or datetime.now(ROMA))
+        ledger.cancel(ctx, command_id)
+    return submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
 
 
 # ---------------------------------------------------------------------------

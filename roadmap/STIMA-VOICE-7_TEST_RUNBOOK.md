@@ -280,7 +280,7 @@ python scripts/voice_7_live_cert.py --approved-commit "$RENDER_GIT_COMMIT" --bas
 ```
 
 Cosa fa, in circa 2–5 minuti, ben dentro la finestra di annullamento di 15 minuti:
-1. guardie, poi 12 rotte senza sessione, con un cookie inventato e con credenziali Basic finte: tutte 401;
+1. guardie, poi 13 rotte senza sessione, con un cookie inventato e con credenziali Basic finte: tutte 401;
 2. due contatti «Fabio Collaudovoce&lt;run&gt;», senza email né telefono;
 3. **A**: piano, scelta obbligata fra più «Fabio», id iniettato rifiutato, collegamento proprietario solo dopo conferma, unità commerciale assegnata al pilota, «Vende», doppia esecuzione senza doppioni;
 4. **B**: domanda dell'indirizzo senza scritture, poi un edificio con `units_declared = 12` e nessuna unità;

@@ -41,6 +41,9 @@ const percorso = (id, resto = '') => `${BASE}/commands/${Number(id)}${resto}`;
 
 export const submitCommand = (key, text, post = apiPost) => post(`${BASE}/commands`, { client_command_id: key, text });
 export const getCommand = (id, get = apiGet) => get(percorso(id));
+/** Fase 7: risposta o correzione a un comando non ancora eseguito (nuova chiave). */
+export const replyCommand = (id, key, text, post = apiPost) =>
+  post(percorso(id, '/reply'), { client_command_id: key, text });
 export const confirmSteps = (id, steps, post = apiPost) => post(percorso(id, '/confirm'), { all: false, steps });
 export const executeCommand = (id, post = apiPost) => post(percorso(id, '/execute'), {});
 export const cancelCommand = (id, post = apiPost) => post(percorso(id, '/cancel'), {});

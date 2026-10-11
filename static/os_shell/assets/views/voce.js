@@ -18,8 +18,8 @@
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
-  SPEECH_ERRORS, UNDO_TEXT, choicesNeeded, commandStatus, errorMessage, hasRunnableSteps,
-  intentLabel, resultText, stepDescription, stepStatus, stepsToConfirm,
+  SPEECH_ERRORS, UNDO_TEXT, canReply, choicesNeeded, commandStatus, errorMessage, hasRunnableSteps,
+  intentLabel, openQuestions, referenceNotFound, resultText, stepDescription, stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
 import { createDictation, speechSupport } from '../voice/voice-speech.js';
 
@@ -71,12 +71,50 @@ function passoHtml(step) {
     </li>`;
 }
 
-export function commandHtml(view) {
+/**
+ * Fase 7: rispondere o correggere senza perdere il comando. Visibile finche'
+ * il comando non ha eseguito nulla; la risposta crea un comando nuovo sul
+ * server (stesso percorso, nuove conferme) che sostituisce questo.
+ */
+function rispostaHtml(view, conMicrofono) {
+  if (!canReply(view)) return '';
+  const domande = openQuestions(view);
+  const nonTrovato = referenceNotFound(view);
+  return `
+    <form class="voice-reply" data-voice-reply-form novalidate>
+      <label for="voice-reply-text" class="voice-label">${domande.length ? 'La tua risposta' : 'Vuoi correggere qualcosa?'}</label>
+      <textarea id="voice-reply-text" class="voice-text" data-voice-reply-text rows="2" maxlength="1500"
+        placeholder="Es. «alle 18:30», «Fabio Rossi», «in via Roma 3 a Tortoreto»"></textarea>
+      ${nonTrovato ? `<p class="muted voice-hint" data-voice-notfound-hint>Non lo trovo fra i record che puoi vedere.
+        Aggiungi un dettaglio per cercarlo meglio (cognome, telefono, indirizzo) oppure chiedi di crearlo.</p>` : ''}
+      <div class="voice-compose-actions">
+        ${conMicrofono ? `<button type="button" class="btn voice-mic voice-big" data-voice-reply-mic aria-pressed="false"
+          aria-label="Parla: detta la risposta">🎤 Parla</button>` : ''}
+        <button type="submit" class="btn primary voice-big" data-voice-reply-send>Rispondi</button>
+        ${nonTrovato ? '<button type="button" class="btn" data-voice-new-contact>Crea nuovo contatto</button>' : ''}
+      </div>
+    </form>`;
+}
+
+function conversazioneHtml(storia) {
+  if (!storia || storia.length < 2) return '';
+  return `<ol class="voice-history" data-voice-history aria-label="Conversazione">${storia.map((t, i) =>
+    `<li><span class="muted">${i === 0 ? 'Comando' : 'Risposta'}:</span> ${escapeHtml(t)}</li>`).join('')}</ol>`;
+}
+
+export function commandHtml(view, opzioni = {}) {
   const stato = commandStatus(view);
   const daConfermare = stepsToConfirm(view);
-  const aperto = AGGIORNA.includes(view.status) && (view.steps || []).some((s) => s.state === 'pending');
+  // Fase 7: anche un comando con sola domanda si puo' annullare.
+  const aperto = canReply(view) || (AGGIORNA.includes(view.status) && (view.steps || []).some((s) => s.state === 'pending'));
   let azioni = '';
-  if (daConfermare.length) {
+  // Fase 7: se un passo aspetta un DATO (orario, persona, indirizzo...) si
+  // risponde prima: la risposta aggiorna il piano e solo dopo si conferma.
+  // Confermare il resto adesso eseguirebbe mezzo comando.
+  const domandeAperte = (view.steps || []).some((s) => s.state === 'pending' && s.needs === 'needs_answer');
+  if (domandeAperte && canReply(view)) {
+    azioni += '<p class="voice-confirm-note" data-voice-answer-first>Rispondi alla domanda qui sopra: il piano si aggiorna e poi potrai confermare.</p>';
+  } else if (daConfermare.length) {
     azioni += `<p class="voice-confirm-note" data-voice-confirm-note>Confermando, STIMA Voice eseguirà i passi «Da confermare» qui sopra. Il server ricontrolla dati e permessi.</p>
       <button type="button" class="btn primary voice-big" data-voice-confirm>Conferma ed esegui</button>`;
   } else if (hasRunnableSteps(view) && view.status !== 'completed') {
@@ -91,10 +129,14 @@ export function commandHtml(view) {
         <span data-voice-command-status>${badge(stato)}</span>
       </div>
       ${view.notice ? `<p class="voice-notice" data-voice-notice role="note">${escapeHtml(view.notice)}</p>` : ''}
-      ${(view.clarifications || []).length ? `<ul class="voice-reasons" data-voice-clarifications>${view.clarifications.map((c) =>
-        `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : ''}
+      ${conversazioneHtml(opzioni.storia)}
+      ${(view.clarifications || []).length ? `<div class="voice-question" data-voice-clarifications>
+        <strong>STIMA chiede:</strong>
+        <ul class="voice-reasons">${view.clarifications.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul></div>` : ''}
       ${(view.steps || []).length ? `<ol class="voice-steps">${view.steps.map(passoHtml).join('')}</ol>`
-        : '<p class="muted" data-voice-empty>Nessuna operazione riconosciuta: riformula il comando.</p>'}
+        : ((view.clarifications || []).length ? ''
+          : '<p class="muted" data-voice-empty>Non ho riconosciuto un’operazione: precisa qui sotto o riformula.</p>')}
+      ${rispostaHtml(view, opzioni.conMicrofono)}
       <div class="voice-command-actions">${azioni}</div>
     </section>`;
 }
@@ -142,19 +184,20 @@ export async function renderVoce(container, _params = [], deps = {}) {
   const area = q('[data-voice-result]');
   const mic = q('[data-voice-mic]');
   // La chiave appartiene al TESTO: stesso testo reinviato = stessa chiave.
-  const s = { busy: false, key: null, keyText: null, view: null };
+  const s = { busy: false, key: null, keyText: null, view: null, storia: [], replyKey: null, replyFor: null };
 
   const mostraErrore = (msg) => { errore.textContent = msg || ''; };
   const occupato = (si) => {
     s.busy = si;
     invia.disabled = si;
     for (const b of area.querySelectorAll('button')) b.disabled = si;
+    for (const t of area.querySelectorAll('textarea')) t.readOnly = si;
     live.textContent = si ? 'Elaborazione…' : '';
   };
 
   function disegna(view) {
     s.view = view;
-    area.innerHTML = commandHtml(view);
+    area.innerHTML = commandHtml(view, { storia: s.storia, conMicrofono });
     collega();
   }
 
@@ -203,11 +246,37 @@ export async function renderVoce(container, _params = [], deps = {}) {
     if (esegui) esegui.addEventListener('click', () => azione(() => api.executeCommand(id())));
     const annullaComando = area.querySelector('[data-voice-cancel]');
     if (annullaComando) annullaComando.addEventListener('click', () => azione(() => api.cancelCommand(id())));
+    const risposta = area.querySelector('[data-voice-reply-form]');
+    if (risposta) {
+      const campo = area.querySelector('[data-voice-reply-text]');
+      risposta.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const testoRisposta = String(campo.value || '').trim();
+        if (!testoRisposta) { mostraErrore('Scrivi o detta la risposta.'); campo.focus(); return; }
+        if (dettatura && dettatura.listening) dettatura.stop();
+        const per = `${id()}\n${testoRisposta}`;          // la chiave appartiene a (comando, risposta)
+        if (s.replyFor !== per) { s.replyKey = api.newCommandKey(); s.replyFor = per; }
+        const chiave = s.replyKey;
+        azione(async () => {
+          const view = await api.replyCommand(id(), chiave, testoRisposta);
+          s.storia.push(testoRisposta);
+          s.replyKey = null; s.replyFor = null;
+          return view;
+        });
+      });
+      const nuovoContatto = area.querySelector('[data-voice-new-contact]');
+      if (nuovoContatto) nuovoContatto.addEventListener('click', () => {
+        if (!campo.value.trim()) campo.value = 'Crea un nuovo contatto: ';
+        campo.focus();
+      });
+      const micRisposta = area.querySelector('[data-voice-reply-mic]');
+      if (micRisposta && dettatura) micRisposta.addEventListener('click', () => avviaDettatura(campo, micRisposta));
+    }
     const nuovo = area.querySelector('[data-voice-new]');
     if (nuovo) nuovo.addEventListener('click', () => {
       if (s.busy) return;
       area.innerHTML = '';
-      s.view = null; s.key = null; s.keyText = null;
+      s.view = null; s.key = null; s.keyText = null; s.storia = []; s.replyKey = null; s.replyFor = null;
       testo.value = '';
       mostraErrore('');
       testo.focus();
@@ -270,28 +339,40 @@ export async function renderVoce(container, _params = [], deps = {}) {
     if (!comando) { mostraErrore('Scrivi o detta un comando.'); return; }
     if (dettatura && dettatura.listening) dettatura.stop();
     if (s.keyText !== comando) { s.key = api.newCommandKey(); s.keyText = comando; }
-    azione(() => api.submitCommand(s.key, comando));
+    azione(async () => {
+      const view = await api.submitCommand(s.key, comando);
+      s.storia = [comando];
+      return view;
+    });
   });
 
+  // Una sola dettatura per pagina: scrive nel campo da cui e' partita (il
+  // comando o la risposta) e aggiorna il SUO pulsante.
   let dettatura = null;
+  let bersaglio = testo;
+  let pulsante = mic;
+  function avviaDettatura(campo, bottone) {
+    mostraErrore('');
+    if (dettatura.listening) { dettatura.stop(); return; }
+    bersaglio = campo; pulsante = bottone;
+    dettatura.start();
+  }
   if (mic) {
     dettatura = createDictation({
       win,
-      onText: (t) => { testo.value = t; },
+      onText: (t) => { if (bersaglio && bersaglio.isConnected !== false) bersaglio.value = t; },
       onState: (st) => {
         const ascolta = st === 'listening';
-        mic.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
-        mic.setAttribute('aria-label', ascolta ? 'Ferma la dettatura' : 'Parla: avvia la dettatura');
-        mic.textContent = ascolta ? '■ Ferma' : '🎤 Parla';
-        mic.classList.toggle('listening', ascolta);
+        if (!pulsante) return;
+        pulsante.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
+        pulsante.setAttribute('aria-label', ascolta ? 'Ferma la dettatura' : 'Parla: avvia la dettatura');
+        pulsante.textContent = ascolta ? '■ Ferma' : '🎤 Parla';
+        pulsante.classList.toggle('listening', ascolta);
         live.textContent = ascolta ? 'In ascolto… parla ora, poi tocca «Ferma».' : '';
       },
       onError: (codice) => mostraErrore(SPEECH_ERRORS[codice] || SPEECH_ERRORS.error),
     });
-    mic.addEventListener('click', () => {
-      mostraErrore('');
-      if (dettatura.listening) dettatura.stop(); else dettatura.start();
-    });
+    mic.addEventListener('click', () => avviaDettatura(testo, mic));
     // Niente in sottofondo: pagina nascosta, uscita o cambio di sezione = stop.
     const interrompi = () => dettatura.abort();
     if (win && typeof win.addEventListener === 'function') {
