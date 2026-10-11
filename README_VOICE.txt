@@ -1,4 +1,4 @@
-STIMA VOICE - comandi vocali del CRM (Fasi 1-6)
+STIMA VOICE - comandi vocali del CRM (Fasi 1-7)
 ===============================================
 
 STATO: SPENTO. Nessun utente TEST o PROD puo' usarlo. Accenderlo richiede
@@ -21,7 +21,7 @@ Il modello AI interpreta; il codice deterministico decide e scrive.
     -> voice/undo.py       annullamento protetto (migration 099)
     -> voice/reconcile.py  passi incerti: analisi in sola lettura + decisione umana
   voice/service.py         orchestrazione delle API, abilitazione, limiti
-  voice/router.py          API /api/voice (NON montato in main.py)
+  voice/router.py          API /api/voice (montato in main.py dalla Fase 7, spento)
 
 Agenzia, operatore, ruolo e permessi vengono solo dalla sessione
 (require_operator). Il modello non sceglie id, agenti o azioni: le scelte fra
@@ -34,7 +34,8 @@ ABILITAZIONE (fail-closed: servono TUTTI)
 1. Migrazioni 098_voice_commands e 099_voice_undo applicate con
    scripts/p26_migrate.py (oggi NON applicate su TEST ne' PROD). Senza la 098
    le API rispondono 403 VOICE_DISABLED.
-2. Router montato in main.py (oggi NON montato; decisione separata).
+2. Router montato in main.py (Fase 7: montato come gli altri domini; da solo
+   non accende nulla - senza i livelli qui sotto ogni rotta rifiuta).
 3. STIMA_VOICE_ENABLED=1 nell'ambiente del server (qualsiasi altro valore o
    assenza = spento, 403 VOICE_GLOBALLY_DISABLED).
 4. Riga in voice_agency_settings con enabled=TRUE per l'agenzia (default
@@ -44,6 +45,10 @@ ABILITAZIONE (fail-closed: servono TUTTI)
    STIMA_VOICE_AI_TIMEOUT (secondi di lettura, default 20). Nessun modello di
    default. Senza configurazione: 503 VOICE_PROVIDER_NOT_CONFIGURED.
 Il platform admin non usa STIMA Voice, neanche in acting (D-E).
+Fase 7 - elenco pilota: STIMA_VOICE_PILOT_USER_IDS=<id>[,<id>...] (id di
+   operator_users) limita STIMA Voice a quegli operatori. Assente o vuoto =
+   vale solo l'agenzia. Valore non valido (es. "12;") = NESSUNO (fail-closed).
+   Rifiuto: 403 VOICE_PILOT_USER_REQUIRED.
 6. (Facoltativo) STIMA_VOICE_BROWSER_SPEECH=1: mostra il pulsante «Parla»,
    che usa il riconoscimento vocale DEL BROWSER (Web Speech API). Chrome
    elabora l'audio sui server Google, Safari puo' usare i server Apple: e' un
@@ -115,7 +120,12 @@ Altri:
 
 TEST
 ----
-tests/test_voice_*.py (Fasi 1-6; la Fase 6 prova l'interfaccia nello stub di
-DOM con API simulate). Solo PostgreSQL locale usa-e-getta
+tests/test_voice_*.py (Fasi 1-7; la Fase 6 prova l'interfaccia nello stub di
+DOM con API simulate).
+
+ATTIVAZIONE SU TEST (Fase 7): roadmap/STIMA-VOICE-7_TEST_RUNBOOK.md, passo per
+passo, con scripts/voice_7_live_cert.py (--plan-only, completo, --verify-off).
+Spegnimento: voice_agency_settings.enabled=FALSE (immediato) oppure
+STIMA_VOICE_ENABLED assente/0 (globale). Solo PostgreSQL locale usa-e-getta
 (P29_TEST_DSN) e fornitore FINTO (voice/fake_provider.py): nessun modello
 reale, nessuna scrittura su TEST o PROD.

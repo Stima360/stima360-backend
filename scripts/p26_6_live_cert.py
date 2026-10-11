@@ -539,6 +539,20 @@ DOMAINS = (
              "e le tre tabelle di A30-9A invariate a fine sezione",
     ),
     Domain(
+        "VOICE", "/api/voice",
+        # STIMA Voice Fase 7. HOSTILE / REJECTION ONLY, come CALENDAR_SYNC: la
+        # matrice non accende STIMA Voice, non configura un fornitore AI e non
+        # crea comandi vocali. Agenzia, operatore e ruolo vengono SOLO dalla
+        # sessione e i corpi sono chiusi: la prova cross-tenant e' che un
+        # `agency_id` nel corpo viene rifiutato (422) e che l'id di un comando
+        # di un'altra agenzia non e' raggiungibile (403 spento / 404 acceso).
+        certifier="voice",
+        api_delete=False,
+        note="dodici rotte: anonimo e Basic -> 401 su tutte, /status con due "
+             "soli booleani, agency_id/actor nel corpo -> 422, comando di un'altra "
+             "agenzia (o inesistente) mai restituito, registro vocale invariato",
+    ),
+    Domain(
         "SELLER_INTENT", "/api/seller-intent",
         # Lo score si chiede per lead_id, e questo run non crea lead. La sonda
         # forte sarebbe l'ID diretto; qui resta il percorso che attraversa il
@@ -6766,6 +6780,155 @@ def certify_calendar_sync(report, http, cert, domain, jars, owned, context) -> N
         f"prima e dopo la sezione: {prima} -> {dopo} (attesi identici: nessuna "
         "di queste domande deve aver creato uno stato OAuth, una connessione o "
         "una riga di sincronizzazione)",
+    )
+
+
+#: Le dodici rotte di STIMA Voice (Fase 7), per il giro anonimo/Basic. L'id e'
+#: un segnaposto: il rifiuto arriva al mount, prima di qualunque lettura.
+VOICE_OPERAZIONI = (
+    ("GET", "/status"), ("POST", "/commands"), ("GET", "/commands/1"),
+    ("POST", "/commands/1/confirm"), ("POST", "/commands/1/execute"),
+    ("POST", "/commands/1/cancel"), ("POST", "/commands/1/steps/1/retry"),
+    ("GET", "/commands/1/undo"), ("POST", "/commands/1/undo"),
+    ("POST", "/commands/1/steps/1/undo"), ("GET", "/commands/1/steps/1/reconcile"),
+    ("POST", "/commands/1/steps/1/reconcile"),
+)
+
+#: I codici con cui STIMA Voice rifiuta quando e' spento (globale, agenzia,
+#: elenco pilota, platform admin): un rifiuto, mai un dato.
+VOICE_RIFIUTI = ("VOICE_GLOBALLY_DISABLED", "VOICE_DISABLED", "VOICE_PILOT_USER_REQUIRED",
+                 "VOICE_PLATFORM_ADMIN_BLOCKED", "VOICE_ACTOR_REQUIRED")
+
+
+def _voice_firma(database) -> dict | None:
+    """Righe del registro vocale (098/099), o None se non misurabili. Senza la
+    098 il registro non esiste: `{"registro": False}` e' gia' una firma."""
+    if database is None:
+        return None
+    with database.read() as cur:
+        cur.execute("SELECT to_regclass('public.voice_commands') IS NOT NULL AS c,"
+                    "       to_regclass('public.voice_step_undos') IS NOT NULL AS u")
+        presenti = dict(cur.fetchone() or {})
+        if not presenti.get("c"):
+            return {"registro": False}
+        cur.execute("SELECT (SELECT count(*) FROM voice_commands) AS comandi,"
+                    "       (SELECT count(*) FROM voice_command_steps) AS passi,"
+                    "       (SELECT count(*) FROM voice_command_events) AS eventi"
+                    + (", (SELECT count(*) FROM voice_step_undos) AS annullamenti" if presenti.get("u") else ""))
+        riga = dict(cur.fetchone() or {})
+    return {"registro": True, **{k: int(v) for k, v in riga.items()}}
+
+
+def _voice_comando_altrui(database, agency_id) -> int | None:
+    """L'id di un comando vocale di UN'ALTRA agenzia, letto in sola lettura, o None."""
+    if database is None or agency_id is None:
+        return None
+    with database.read() as cur:
+        cur.execute("SELECT to_regclass('public.voice_commands') IS NOT NULL AS c")
+        if not dict(cur.fetchone() or {}).get("c"):
+            return None
+        cur.execute("SELECT id FROM voice_commands WHERE agency_id <> %s ORDER BY id LIMIT 1", (agency_id,))
+        riga = cur.fetchone()
+    return int(dict(riga)["id"]) if riga else None
+
+
+def certify_voice(report, http, cert, domain, jars, owned, context) -> None:
+    """VOICE (STIMA Voice Fase 7): HOSTILE / REJECTION ONLY.
+
+    La matrice non accende STIMA Voice e non crea comandi: ogni domanda ha come
+    risposta corretta un rifiuto o una lettura di due booleani. Il registro
+    vocale si fotografa prima e dopo: nessuna riga nuova deve comparire.
+
+        anonimo, Basic          -> 401 su tutte le dodici rotte (mount)
+        GET  /status            -> 200, esattamente {enabled, speech_input}
+        POST /commands + agency_id/actor nel corpo -> 422 (corpo chiuso)
+        GET  /commands/{id} di un'altra agenzia (o inesistente)
+                                -> 403 se spento, 404 se acceso: mai il comando
+    """
+    base = domain.prefix
+    database = context.get("database")
+    prima = _voice_firma(database)
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    # -- senza identita' -------------------------------------------------------
+    for metodo, suffisso in VOICE_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso, payload={} if metodo == "POST" else None)
+        report.check(
+            f"VOICE-anonimo-{metodo}{suffisso}",
+            risposta.status == 401,
+            f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)",
+        )
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in VOICE_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso, payload={} if metodo == "POST" else None,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(
+            f"VOICE-basic-{metodo}{suffisso}",
+            risposta.status == 401,
+            f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} "
+            "(atteso 401: P26-5 ha tolto quel canale, e una rotta nuova non lo riapre)",
+        )
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        jar = jars[etichetta]
+
+        # -- STATUS: due booleani e nient'altro ------------------------------
+        stato = http.request("GET", f"{base}/status", jar=jar)
+        corpo = stato.json() if stato.status == 200 else None
+        report.check(
+            f"VOICE-status-{etichetta}",
+            stato.status == 200 and isinstance(corpo, dict)
+            and set(corpo) == {"enabled", "speech_input"}
+            and all(isinstance(v, bool) for v in corpo.values()),
+            f"{etichetta}: GET {base}/status -> {stato.status} {corpo} (atteso 200 con "
+            "esattamente due booleani: nessun dettaglio di configurazione)",
+        )
+
+        # -- CORPO CHIUSO: l'agenzia non arriva mai dal client ----------------
+        intruso = http.request("POST", f"{base}/commands", jar=jar, payload={
+            "client_command_id": "00000000-0000-4000-8000-000000000000", "text": "p26-6",
+            "agency_id": agenzia_id(altro), "actor_user_id": 999999})
+        report.check(
+            f"VOICE-corpo-chiuso-{etichetta}-{altro}",
+            intruso.status == 422,
+            f"{etichetta} manda `agency_id`/`actor_user_id` di {altro} nel corpo -> "
+            f"{intruso.status} (atteso 422: corpo chiuso, rifiutato prima del servizio)",
+        )
+
+        # -- L'ID DI UN COMANDO ALTRUI ---------------------------------------
+        altrui = _voice_comando_altrui(database, agenzia_id(etichetta))
+        sonda = altrui if altrui is not None else 999999999
+        risposta = http.request("GET", f"{base}/commands/{sonda}", jar=jar)
+        codice = ((risposta.json() or {}) if risposta.status in (403, 404) else {}).get("code")
+        report.check(
+            f"VOICE-comando-altrui-{etichetta}",
+            (risposta.status == 403 and codice in VOICE_RIFIUTI)
+            or (risposta.status == 404 and codice == "VOICE_COMMAND_NOT_FOUND"),
+            f"{etichetta}: GET {base}/commands/<"
+            + ("comando di un'altra agenzia" if altrui is not None else "id inesistente")
+            + f"> -> {risposta.status} {codice} (atteso 403 se spento, 404 se acceso: "
+            "mai il comando)",
+        )
+
+    # -- la guardia read-only ----------------------------------------------------
+    dopo = _voice_firma(database)
+    if prima is None or dopo is None:
+        report.note(
+            "VOICE-registro-invariato",
+            "nessuna connessione di lettura: che il giro ostile non abbia scritto "
+            "non e' stato misurato sulle righe in questo run",
+        )
+        return
+    report.check(
+        "VOICE-registro-invariato",
+        dopo == prima,
+        f"registro vocale prima e dopo la sezione: {prima} -> {dopo} (attesi identici)",
     )
 
 

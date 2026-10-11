@@ -69,6 +69,8 @@ from communication import service as communication_service
 from communication.router import router as communication_router
 from communication.public_router import router as communication_public_router
 from appointment_reminders.router import router as appointment_reminders_router
+# STIMA Voice Fase 7: il router dei comandi vocali (spento finche' non e' acceso ogni livello).
+from voice.router import router as voice_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -172,6 +174,14 @@ app.include_router(communication_router, dependencies=[Depends(require_authentic
 # A32-2: il giro dei promemoria degli appuntamenti (`/api/communication/reminders/tick`).
 # Solo il mount, come il dispatch: la soglia la prende la rotta da `require_dispatch_context`.
 app.include_router(appointment_reminders_router, dependencies=[Depends(require_authenticated_operator)])
+# STIMA Voice Fase 7: `/api/voice`. Solo il mount, come l'Agenda: ogni rotta
+# prende lo scope da `require_operator`. Montato non vuol dire acceso: ogni
+# richiesta passa da `voice.service.guard`, che rifiuta tutto finche' non sono
+# attivi TUTTI i livelli (STIMA_VOICE_ENABLED=1, eventuale elenco pilota
+# STIMA_VOICE_PILOT_USER_IDS, voice_agency_settings.enabled dell'agenzia,
+# fornitore AI configurato). Senza la migrazione 098 risponde «spento», mai un
+# errore; `GET /api/voice/status` tiene nascosta l'interfaccia.
+app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

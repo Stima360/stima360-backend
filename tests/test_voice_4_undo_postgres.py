@@ -411,9 +411,19 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         pytest.skip("commit di partenza non disponibile in questo clone")
     migrazioni = [str(p.relative_to(ROOT)) for p in sorted((ROOT / "migrations").glob("0*.sql"))
                   if not p.name.startswith("099_")]
-    esito_ = subprocess.run(["git", "diff", "--name-only", BASE, "--", *PROTETTI, *migrazioni],
-                            cwd=ROOT, capture_output=True, text=True)
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: `main.py` cambia SOLO per il montaggio del router
+    # (righe aggiunte, nessuna tolta), verificato riga per riga; il resto dei protetti resta identico.
+    esito_ = subprocess.run(["git", "diff", "--name-only", BASE, "--", *[p for p in PROTETTI if p != "main.py"],
+                             *migrazioni], cwd=ROOT, capture_output=True, text=True)
     assert esito_.returncode == 0 and esito_.stdout.strip() == "", esito_.stdout
+    diff_main = subprocess.run(["git", "diff", "-U0", BASE, "--", "main.py"], cwd=ROOT,
+                               capture_output=True, text=True).stdout.splitlines()
+    tolte = [r for r in diff_main if r.startswith("-") and not r.startswith("---")]
+    aggiunte = [r[1:].strip() for r in diff_main if r.startswith("+") and not r.startswith("+++")]
+    assert tolte == [], tolte
+    assert [r for r in aggiunte if r and not r.startswith("#")] == [
+        "from voice.router import router as voice_router",
+        "app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])"], aggiunte
     for cartella in ("core", "property", "appointments", "crm", "static"):
         diff = subprocess.run(["git", "diff", "--name-only", BASE, "--", cartella], cwd=ROOT,
                               capture_output=True, text=True).stdout.split()

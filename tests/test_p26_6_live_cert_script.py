@@ -2002,6 +2002,32 @@ class FakeHttp(cert.HttpProbe):
         scrivi(pid)
         return self._reply(method, path, 201, b'{"id": 1}')
 
+    def _voice(self, method, path, agency, payload):
+        """STIMA Voice Fase 7. Il doppio e' STIMA Voice com'e' oggi su TEST:
+        montato e SPENTO. /status dice due booleani falsi; il corpo di
+        /commands e' validato col modello VERO (`voice.router.CommandIn`,
+        extra=forbid) prima del rifiuto, come FastAPI; ogni altra rotta e'
+        rifiutata con il codice di spegnimento. Rotto `isolation`: il doppio
+        restituisce un comando a chiunque, e il certificatore deve vederlo."""
+        import json as _json
+
+        import pydantic
+        from voice.router import CommandIn
+
+        percorso = path.split("?")[0]
+        if percorso == "/api/voice/status" and method == "GET":
+            return self._reply(method, path, 200, b'{"enabled": false, "speech_input": false}')
+        if percorso == "/api/voice/commands" and method == "POST":
+            try:
+                CommandIn(**(payload or {}))
+            except pydantic.ValidationError:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if self._broken("isolation", "voice") and method == "GET" and percorso.startswith("/api/voice/commands/"):
+            return self._reply(method, path, 200, _json.dumps(
+                {"command_id": int(percorso.split("/")[4]), "status": "completed", "steps": []}).encode())
+        return self._reply(method, path, 403, b'{"detail":"STIMA Voice non e\' attivo",'
+                                              b'"code":"VOICE_GLOBALLY_DISABLED"}')
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -2318,6 +2344,9 @@ class FakeHttp(cert.HttpProbe):
 
         if path.startswith("/api/calendar/google"):
             return self._calendar_sync(method, path, agency, payload)
+
+        if path.startswith("/api/voice"):
+            return self._voice(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3176,6 +3205,31 @@ def test_13b_with_everything_populated_only_the_escalation_stays_BLOCKED(monkeyp
         f"l'insieme delle prove non eseguibili e' cambiato: {blocked}"
     )
     assert code == 2, report.verdict
+
+
+def test_13c_voice_is_certified_rejection_only(monkeypatch):
+    """STIMA Voice Fase 7: la sezione VOICE gira davvero nella matrice (non solo
+    dichiarata) e ogni sua prova e' un PASS sull'app com'e' oggi: montata e
+    spenta. 12 rotte anonime + 12 Basic + 3 domande per ciascuna agenzia + la
+    guardia sul registro."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    voce = [(k, i) for k, i, _ in report.rows if i.startswith("VOICE-")]
+    assert [k for k, _ in voce if k != cert.PASS and k != cert.NOTE] == [], voce
+    assert sum(1 for k, _ in voce if k == cert.PASS) >= 12 + 12 + 3 * 2, voce
+    assert {i for _, i in voce} >= {"VOICE-status-A", "VOICE-status-B", "VOICE-corpo-chiuso-A-B",
+                                    "VOICE-corpo-chiuso-B-A", "VOICE-comando-altrui-A", "VOICE-comando-altrui-B"}
+
+
+def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):
+    """La contropartita: un'app che restituisce il comando di un'altra agenzia
+    fa fallire la matrice, proprio sulla prova VOICE."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="voice"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("VOICE-comando-altrui") for i in falliti), falliti
 
 
 def test_13b_bis_with_dedicated_agencies_nothing_stays_BLOCKED(monkeypatch):

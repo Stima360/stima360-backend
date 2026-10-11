@@ -309,6 +309,11 @@ TENANT_PREFIXES = (
     # SOLO il cookie, come verifica il test 6 qui sopra. Distinta dal ponte
     # LMC-15 (`/api/acquisition`, singolare).
     "/api/acquisitions",
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: i comandi vocali. Superficie
+    # operatore come le altre - agenzia, operatore e ruolo vengono dalla
+    # sessione (`require_operator` su ogni rotta, corpi chiusi senza agency_id)
+    # - quindi dichiara il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/voice",
 )
 
 

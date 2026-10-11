@@ -7,8 +7,10 @@ Abilitazione fail-closed, su tre livelli (tutti necessari):
   2. `voice_agency_settings.enabled` per l'agenzia (default FALSE; tabella
      assente, cioe' migrazione 098 non applicata = spento);
   3. il fornitore AI configurato (`voice.provider`), solo per interpretare.
-In piu' il router (`voice.router`) NON e' montato in `main.py`: montarlo e'
-una decisione separata.
+Fase 7: in piu', se impostato, l'elenco pilota `STIMA_VOICE_PILOT_USER_IDS`
+limita STIMA Voice a quegli operatori (valore non valido = nessuno).
+Fase 7: il router (`voice.router`) e' montato in `main.py`; montato non vuol
+dire acceso - ogni richiesta passa da `guard`.
 
 Chi parla, l'agenzia, il ruolo e i permessi vengono SOLO dalla sessione
 (`OperatorContext` del router): mai dal testo, dal modello o dal corpo della
@@ -108,10 +110,32 @@ def globally_enabled(env=None) -> bool:
     return env.get("STIMA_VOICE_ENABLED", "").strip() == "1"
 
 
+PILOT_USER_REQUIRED = "VOICE_PILOT_USER_REQUIRED"
+
+
+def pilot_user_ids(env=None) -> frozenset[int] | None:
+    """Fase 7: l'elenco pilota `STIMA_VOICE_PILOT_USER_IDS` (id di
+    `operator_users`, separati da virgola). Assente o vuoto = nessuna
+    restrizione per operatore (vale solo l'agenzia). Presente ma non valido =
+    NESSUNO (fail-closed): un refuso non apre STIMA Voice a tutti."""
+    env = os.environ if env is None else env
+    grezzo = env.get("STIMA_VOICE_PILOT_USER_IDS", "").strip()
+    if not grezzo:
+        return None
+    try:
+        ids = frozenset(int(p) for p in grezzo.split(","))
+    except ValueError:
+        return frozenset()
+    return ids if all(i > 0 for i in ids) else frozenset()
+
+
 def guard(ctx):
     """Tutti i livelli d'abilitazione e il cancello dell'esecutore (D-E)."""
     if not globally_enabled():
         raise VoiceRefused(GLOBALLY_DISABLED, "STIMA Voice non e' attivo su questo server")
+    pilota = pilot_user_ids()
+    if pilota is not None and getattr(ctx, "user_id", None) not in pilota:
+        raise VoiceRefused(PILOT_USER_REQUIRED, "STIMA Voice e' attivo solo per gli operatori della prova pilota")
     try:
         return executor.gate(ctx)
     except psycopg2.Error as exc:

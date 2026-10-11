@@ -133,7 +133,12 @@ def test_e5_without_migration_098_voice_is_off_not_broken(api, db):
 def test_e4_router_is_not_mounted_in_main():
     from pathlib import Path
     testo = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
-    assert "voice" not in testo
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: il router e' montato UNA volta, come gli altri
+    # domini (mount `require_authenticated_operator`, scope da `require_operator` su ogni rotta), e
+    # `main.py` non contiene altro di Voice: nessuna logica, nessuna variabile, nessun interruttore.
+    righe = [r.strip() for r in testo.splitlines() if "voice" in r.lower() and not r.strip().startswith("#")]
+    assert righe == ["from voice.router import router as voice_router",
+                     "app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])"], righe
 
 
 # ---------------------------------------------------------------------------

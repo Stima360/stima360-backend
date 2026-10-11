@@ -139,6 +139,7 @@ export function errorMessage(error) {
   const messaggi = {
     VOICE_GLOBALLY_DISABLED: 'STIMA Voice non è attivo.',
     VOICE_DISABLED: 'STIMA Voice non è attivo per la tua agenzia.',
+    VOICE_PILOT_USER_REQUIRED: 'STIMA Voice è attivo solo per gli operatori della prova pilota.',
     VOICE_PLATFORM_ADMIN_BLOCKED: 'STIMA Voice non è disponibile per l’amministrazione della piattaforma.',
     VOICE_DAILY_LIMIT: 'Hai raggiunto il limite giornaliero dei comandi vocali.',
     VOICE_PROVIDER_NOT_CONFIGURED: 'L’interpretazione dei comandi non è disponibile.',

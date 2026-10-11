@@ -1,8 +1,8 @@
 """STIMA Voice Fase 5 - le API (`/api/voice`).
 
-NON montato in `main.py`: il router esiste ed e' provato su un'app FastAPI di
-test; montarlo e' una decisione separata (come A30-2 D1). Anche montato resta
-spento finche' non sono attivi tutti i livelli di `voice.service.guard`.
+Fase 7: montato in `main.py` come gli altri domini (mount
+`require_authenticated_operator`). Resta spento finche' non sono attivi tutti
+i livelli di `voice.service.guard`.
 
 Autenticazione: `require_operator` (sessione), come Agenda e CORE. Agenzia,
 operatore e ruolo vengono SOLO da li'. I corpi sono chiusi (`extra=forbid`):
@@ -69,6 +69,7 @@ def get_provider():
 
 _STATI = {
     DISABLED: 403, service.GLOBALLY_DISABLED: 403, PLATFORM_ADMIN_BLOCKED: 403, ACTOR_REQUIRED: 403,
+    service.PILOT_USER_REQUIRED: 403,
     service.DAILY_LIMIT: 429, CHOICE_REQUIRED: 422, CHOICE_INVALID: 422, service.TEXT_INVALID: 422,
 }
 

@@ -154,7 +154,13 @@ def test_04_main_and_crm_modules_untouched():
 def test_05_only_the_voice_migrations_and_no_route():
     assert sorted(p.name for p in (ROOT / "migrations").glob("*voice*")) == [
         "098_voice_commands.sql", "098_voice_commands_down.sql", "099_voice_undo.sql", "099_voice_undo_down.sql"]
-    assert "voice" not in (ROOT / "main.py").read_text(encoding="utf-8")
+    testo = (ROOT / "main.py").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: il router e' montato UNA volta, come gli altri
+    # domini (mount `require_authenticated_operator`, scope da `require_operator` su ogni rotta), e
+    # `main.py` non contiene altro di Voice: nessuna logica, nessuna variabile, nessun interruttore.
+    righe = [r.strip() for r in testo.splitlines() if "voice" in r.lower() and not r.strip().startswith("#")]
+    assert righe == ["from voice.router import router as voice_router",
+                     "app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])"], righe
 
 
 def test_05b_the_ai_provider_is_the_only_network_boundary_and_is_off_by_default():
