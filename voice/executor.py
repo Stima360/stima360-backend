@@ -59,6 +59,9 @@ OWNER_LINK_CONFIRMATION = "owner_link_confirmation_required"
 COMPOSITE = "composite_command_confirmation"
 PLAN_HAS_BLOCKED = "plan_has_blocked_steps"
 PROPERTY_NOT_MANAGEABLE = "voice_property_not_manageable"
+#: Fase 5: comune fuori dal catalogo del CRM. Serve un comune diverso (un
+#: dato), non un «si'»: non e' confermabile.
+MUNICIPALITY_NOT_SUPPORTED = "municipality_not_supported"
 
 #: I motivi che una conferma puo' sciogliere. Tutti gli altri chiedono dati
 #: (o una scelta diversa): servono parole nuove, non un «si'».
@@ -178,6 +181,10 @@ class View:
     duplicates: list[int] = field(default_factory=list)
     hidden: bool = False
     digest: str = ""
+    #: Fase 5: le etichette dei candidati e dei doppioni, per la domanda.
+    #: Solo dati che chi parla vede gia' (resolver). Fuori dall'impronta.
+    labels: dict[str, list[dict]] = field(default_factory=dict)
+    duplicate_labels: list[dict] = field(default_factory=list)
 
     @property
     def confirmable(self) -> bool:
@@ -185,10 +192,13 @@ class View:
 
 
 def strengthen(step: Step, decision: str, reasons, *, manageable: bool = True, composite: bool = False,
-               cadastral: bool = False) -> tuple[str, tuple[str, ...]]:
+               cadastral: bool = False, municipality_ok: bool = True) -> tuple[str, tuple[str, ...]]:
     """Le guardie della Fase 4 sopra la decisione della politica. Solo piu'
     severe: un `blocked` resta tale, un `ask` non diventa `auto`."""
     motivi = list(reasons)
+    if not municipality_ok and decision != "blocked" and not cadastral and manageable:
+        motivi.append(MUNICIPALITY_NOT_SUPPORTED)
+        decision = "ask"
     blocchi = []
     if cadastral:
         blocchi.append(policy.CADASTRAL_DUPLICATE)
@@ -276,7 +286,9 @@ def _evaluate(ctx, plan: Plan, impostazioni, *, stati: dict[int, dict], frozen: 
         base = policy.decide_step(s, facts, impostazioni.policy)
         decisione, motivi = strengthen(
             s, base.decision, base.reasons, manageable=_gestibile(ctx, s, plan, resolution, stati),
-            composite=_composto(s, plan), cadastral=s.ordinal in facts.cadastral_duplicate)
+            composite=_composto(s, plan), cadastral=s.ordinal in facts.cadastral_duplicate,
+            municipality_ok=(s.intent not in ("create_unit", "create_building")
+                             or operations.municipality_supported(s.payload)))
         viste[s.ordinal] = View(s.ordinal, s.intent, decisione, motivi)
     # dipendenze: un passo che dipende da uno bloccato e' bloccato; nel piano
     # registrato (come la politica) uno che dipende da una domanda aspetta
@@ -306,9 +318,11 @@ def _evaluate(ctx, plan: Plan, impostazioni, *, stati: dict[int, dict], frozen: 
             m = resolution.matches.get((s.ordinal, nome))
             if m is not None:
                 v.candidates[nome] = [c.id for c in m.candidates]
+                v.labels[nome] = [{"id": c.id, "label": c.label} for c in m.candidates]
                 if m.resolved_id is not None:
                     v.resolved[nome] = m.resolved_id
         v.duplicates = [c.id for c in resolution.duplicates.get(s.ordinal, ())] if s.intent == "create_contact" else []
+        v.duplicate_labels = [{"id": c.id, "label": c.label} for c in resolution.duplicates.get(s.ordinal, ())]
         v.hidden = s.ordinal in facts.duplicate_hidden
         v.digest = _digest(plan.fingerprint, v)
     return viste

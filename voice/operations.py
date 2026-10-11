@@ -45,6 +45,7 @@ from crm import sellers
 from crm.schemas import SellerActivate
 from property import census, interactions
 from property import service as property_service
+from property.catalog import validate_location
 from property.lifecycle import may_manage
 from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate, PropertyContactCreate
 
@@ -182,6 +183,20 @@ def record_by_key(ctx, intent: str, key: str | None) -> dict | None:
             return None
         riga = cur.fetchone()
         return None if riga is None else dict(riga)
+
+
+def municipality_supported(payload: dict) -> bool:
+    """Fase 5: il comune (e regione/provincia/microzona, se dette) e' nel
+    catalogo del CRM? E' la STESSA regola che il censimento applica alla
+    scrittura (`property.catalog.validate_location`), anticipata al piano: un
+    comune fuori catalogo si chiede prima di scrivere, invece di fallire
+    dopo (limite 2 della Fase 4)."""
+    try:
+        validate_location(payload.get("region"), payload.get("province"), payload.get("city"),
+                          payload.get("microzone"))
+    except ValueError:
+        return False
+    return True
 
 
 def agenda_busy(ctx, agent_user_id: int, start_at, end_at, *, exclude_id: int | None = None) -> bool:

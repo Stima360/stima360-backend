@@ -14,7 +14,11 @@ SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: ammessi executor.py,
 operations.py, reconcile.py, undo.py e la migrazione 099_voice_undo (con il suo
 _down); l'elenco degli import ora registra anche il sottomodulo di
 `from X import Y`, cosi' `from core import service` non si nasconde dietro
-`core`."""
+`core`.
+SENTINELLA AGGIORNATA DA STIMA VOICE FASE 5: ammessi provider.py (l'UNICO
+modulo con la rete: `requests`), service.py (orchestrazione, solo letture
+SQL) e router.py (l'UNICO con FastAPI e la sessione), NON montato in main.py;
+operations.py legge anche il catalogo dei comuni del CRM."""
 from __future__ import annotations
 
 import ast
@@ -29,6 +33,7 @@ FILE_FASE_1 = {"__init__.py", "schemas.py", "planner.py", "dates.py", "policy.py
 FILE_FASE_2 = {"repository.py", "resolver.py"}
 FILE_FASE_3 = {"ledger.py", "settings.py"}
 FILE_FASE_4 = {"executor.py", "operations.py", "reconcile.py", "undo.py"}
+FILE_FASE_5 = {"provider.py", "service.py", "router.py"}
 #: Le uniche tabelle su cui STIMA Voice scrive SQL.
 TABELLE_VOICE = {"voice_commands", "voice_command_steps", "voice_command_events", "voice_step_undos"}
 #: Chi scrive SQL, e dove.
@@ -44,7 +49,9 @@ PURI = {"appointments.enums", "core.enums", "core.normalization", "core.schemas"
         "property.schemas", "property.interactions.INTERACTION_TYPES"}
 AMMESSI = {
     "__init__.py": set(), "fake_provider.py": set(), "policy.py": set(), "resolver.py": set(),
-    "executor.py": set(),
+    "executor.py": set(), "provider.py": set(),
+    "service.py": {"psycopg2"},
+    "router.py": {"core.exceptions", "operator_auth.context", "operator_auth.dependencies"},
     "schemas.py": PURI, "planner.py": PURI, "dates.py": PURI,
     "repository.py": {"core.database", "core.scope", "core.normalization", "core.building_trash",
                       "core.contact_trash", "core.property_trash", "property.census", "appointments.repository"},
@@ -54,13 +61,16 @@ AMMESSI = {
     "operations.py": {"appointments.repository", "appointments.service", "appointments.schemas", "core.database",
                       "core.repository", "core.service", "core.exceptions", "core.normalization", "core.schemas",
                       "core.scope", "crm.sellers", "crm.schemas", "property.census", "property.interactions",
-                      "property.service", "property.lifecycle", "property.schemas"},
+                      "property.service", "property.lifecycle", "property.schemas", "property.catalog"},
     "undo.py": {"appointments.service", "appointments.schemas", "core.service", "core.database", "core.schemas",
                 "crm.sellers", "crm.schemas", "property.building_lifecycle", "property.census", "property.service",
                 "property.schemas", "psycopg2"},
 }
 VIETATI_OVUNQUE = ("requests", "httpx", "openai", "anthropic", "boto3", "fastapi", "main", "database",
                    "acquisitions", "operator_auth.dependencies")
+#: Le sole eccezioni, per file: la rete solo nel fornitore, FastAPI e la
+#: sessione solo nel router.
+ECCEZIONI = {"provider.py": {"requests"}, "router.py": {"fastapi", "operator_auth.dependencies"}}
 
 
 def _import_names(path: Path) -> set[str]:
@@ -79,14 +89,15 @@ def _ammesso(nome: str, ammessi: set[str]) -> bool:
 
 
 def test_01_only_declared_files_exist():
-    assert {p.name for p in VOICE.glob("*.py")} == FILE_FASE_1 | FILE_FASE_2 | FILE_FASE_3 | FILE_FASE_4
-    assert not (VOICE / "router.py").exists()
+    assert {p.name for p in VOICE.glob("*.py")} == FILE_FASE_1 | FILE_FASE_2 | FILE_FASE_3 | FILE_FASE_4 | FILE_FASE_5
 
 
 def test_02_each_file_imports_only_what_it_is_allowed_to():
     for file in VOICE.glob("*.py"):
         for nome in _import_names(file):
             radice = nome.split(".")[0]
+            if _ammesso(nome, ECCEZIONI.get(file.name, set())):
+                continue
             assert not any(nome == v or nome.startswith(v + ".") for v in VIETATI_OVUNQUE), (file.name, nome)
             assert ".router" not in nome, (file.name, nome)
             if radice in RADICI_CRM:
@@ -98,8 +109,9 @@ def test_03_sql_writes_only_on_voice_tables_and_no_http():
     bersaglio = re.compile(r"\b(?:INSERT\s+INTO\s+(\w+)|UPDATE\s+(\w+)\s+SET)", re.I)
     for file in VOICE.glob("*.py"):
         testo = file.read_text(encoding="utf-8")
-        for vietato in ("http://", "https://", "fetch("):
-            assert vietato not in testo.lower(), (file.name, vietato)
+        if file.name != "provider.py":                 # l'unico confine di rete
+            for vietato in ("http://", "https://", "fetch("):
+                assert vietato not in testo.lower(), (file.name, vietato)
         assert not re.search(r"\b(DELETE\s+FROM|TRUNCATE|ALTER\s+TABLE|CREATE\s+TABLE|DROP\s)", testo, re.I), file.name
         assert ".commit()" not in testo, file.name
         if file.name in SCRITTORI:
@@ -109,7 +121,8 @@ def test_03_sql_writes_only_on_voice_tables_and_no_http():
         assert not scrittura.search(testo), file.name
         assert "commit=True" not in testo, file.name
     for file in VOICE.glob("*.py"):
-        if file.name not in ("repository.py", "ledger.py", "settings.py", "operations.py", "reconcile.py", "undo.py"):
+        if file.name not in ("repository.py", "ledger.py", "settings.py", "operations.py", "reconcile.py", "undo.py",
+                             "service.py"):
             assert "cur.execute" not in file.read_text(encoding="utf-8"), file.name
     # gli adattatori leggono soltanto: ogni loro statement SQL e' una SELECT
     operazioni = (VOICE / "operations.py").read_text(encoding="utf-8")
@@ -135,6 +148,18 @@ def test_05_only_the_voice_migrations_and_no_route():
     assert sorted(p.name for p in (ROOT / "migrations").glob("*voice*")) == [
         "098_voice_commands.sql", "098_voice_commands_down.sql", "099_voice_undo.sql", "099_voice_undo_down.sql"]
     assert "voice" not in (ROOT / "main.py").read_text(encoding="utf-8")
+
+
+def test_05b_the_ai_provider_is_the_only_network_boundary_and_is_off_by_default():
+    """Fase 5: solo provider.py parla in rete; senza configurazione non c'e'
+    fornitore e senza STIMA_VOICE_ENABLED=1 il servizio e' spento."""
+    import pytest
+    from voice import provider, service
+    with pytest.raises(provider.ProviderNotConfigured):
+        provider.ProviderConfig.from_env({})
+    assert service.globally_enabled({}) is False
+    testo = (VOICE / "provider.py").read_text(encoding="utf-8")
+    assert "timeout=" in testo and "verify=False" not in testo
 
 
 def test_06_census_helpers_reused_keep_their_signature():
