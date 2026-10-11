@@ -28,6 +28,12 @@ Regole:
 Le scritture qui toccano SOLO le tabelle `voice_*`. Nessun servizio del CRM
 e' chiamato da questo modulo: l'operazione di un passo la passa il chiamante
 (Fase 4).
+
+Fase 4 (D-C, unica modifica autorizzata): `step_class` per passo e
+`run_step_atomic`, che chiude il passo nella STESSA transazione in cui il
+chiamante scrive nel CRM con il suo cursore. Le invarianti della 098 restano:
+nessuna transizione nuova, nessuno stato concluso riaperto, eventi solo
+aggiunti, lock del comando preso prima del passo come in ogni altra funzione.
 """
 from __future__ import annotations
 
@@ -53,11 +59,24 @@ STEP_CLASSES = {
     "create_appointment": "replayable",   # appointments: client_request_id
     "activate_seller": "replayable",      # crm.sellers.activate: riuso sulla coppia
     "create_contact": "at_most_once",     # core: nessuna chiave
-    "add_note": "at_most_once",
-    "add_task": "at_most_once",
+    "add_note": "at_most_once",           # su un immobile: interactions (transazione propria)
+    "add_task": "at_most_once",           # vedi step_class: su un contatto e' atomico (D-C)
     "link_owner": "at_most_once",
     "unsupported": "at_most_once",        # mai eseguito: sempre bloccato
 }
+
+
+def step_class(step) -> str:
+    """Fase 4, D-C: nota e task su un CONTATTO si scrivono con
+    `core.repository.create_*_with_cursor` nella STESSA transazione che chiude
+    il passo (`run_step_atomic`): o entrambi o nessuno. Un passo rimasto
+    `running` dopo un crash non ha quindi scritto nulla e si puo' ripetere:
+    e' `replayable` nel senso della 098 («ripeterlo non crea doppioni»). La
+    nota su un IMMOBILE passa da `property.interactions` (transazione propria):
+    resta `at_most_once`."""
+    if step.intent == "add_task" or (step.intent == "add_note" and "property" not in step.refs):
+        return "replayable"
+    return STEP_CLASSES[step.intent]
 
 TERMINAL_COMMAND = ("completed", "failed", "cancelled")
 RUNNABLE_COMMAND = ("planned", "awaiting_answers", "executing", "partial")
@@ -234,7 +253,7 @@ def record_plan(ctx, command_id: int, plan: Plan, decision: PlanDecision, *, mod
             raise InvalidTransition(f"stato {comando['status']}: il piano non si registra")
         frozen = dict(comando["frozen"])
         for s in plan.steps:
-            if STEP_CLASSES[s.intent] == "replayable":
+            if step_class(s) == "replayable":
                 frozen.setdefault(f"step:{s.ordinal}:client_request_id", str(uuid.uuid4()))
         stato = "awaiting_answers" if decision.asks else "planned"
         cur.execute("UPDATE voice_commands SET transcript = %s, transcript_expires_at = NOW() + make_interval(days => %s), "
@@ -242,7 +261,7 @@ def record_plan(ctx, command_id: int, plan: Plan, decision: PlanDecision, *, mod
                     (plan.transcript, int(retention_days), Json(serialize_plan(plan)), plan.fingerprint, mode,
                      Json(frozen), stato, command_id))
         for s, d in zip(plan.steps, decision.steps):
-            classe = STEP_CLASSES[s.intent]
+            classe = step_class(s)
             cur.execute("INSERT INTO voice_command_steps (command_id, ordinal, agency_id, intent, decision, reasons, "
                         "step_class, client_request_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                         (command_id, s.ordinal, agency_id, s.intent, d.decision, list(d.reasons), classe,
@@ -414,6 +433,74 @@ def run_step(ctx, command_id: int, ordinal: int, operation: Callable[[dict], dic
         fail_step(ctx, command_id, ordinal, error_type=type(exc).__name__)
         raise
     return finish_step(ctx, command_id, ordinal, risultato)
+
+
+def _finish_with_cursor(cur, agency_id: int, actor: int, command_id: int, ordinal: int, result: dict) -> dict:
+    """Il checkpoint `succeeded` sul cursore del chiamante, SENZA commit:
+    chiude il passo nella stessa transazione della scrittura nel CRM."""
+    cur.execute("UPDATE voice_command_steps SET state = 'succeeded', result = %s, finished_at = NOW() "
+                "WHERE command_id = %s AND ordinal = %s AND state = 'running' RETURNING *",
+                (Json(_json(result or {})), command_id, ordinal))
+    riga = cur.fetchone()
+    if riga is None:
+        raise InvalidTransition(f"passo {ordinal} non in esecuzione")
+    _event(cur, agency_id, command_id, "step_succeeded", actor, ordinal, {"atomic": True})
+    return dict(riga)
+
+
+def _step_row(ctx, command_id: int, ordinal: int) -> dict | None:
+    agency_id, actor = _scope(ctx)
+    with core_cursor() as (conn, cur):
+        _command(cur, agency_id, actor, command_id)
+        cur.execute("SELECT * FROM voice_command_steps WHERE command_id = %s AND ordinal = %s", (command_id, ordinal))
+        riga = cur.fetchone()
+        conn.rollback()
+        return None if riga is None else dict(riga)
+
+
+def run_step_atomic(ctx, command_id: int, ordinal: int, operation: Callable[[Any, dict], dict], *,
+                    confirmed: bool = False, describe: Callable[[BaseException], str] | None = None) -> dict:
+    """Fase 4, D-C: begin -> UNA transazione con [lock del comando, scrittura
+    nel CRM sul cursore (`operation(cur, passo)`), checkpoint `succeeded`] ->
+    commit. Solo per i passi `replayable` per costruzione (`step_class`).
+
+    Esiti:
+      * crash prima del commit: il rollback toglie scrittura E checkpoint; il
+        passo resta `running` e `recover` lo riporta `pending`: nulla e'
+        stato scritto, ripeterlo non crea doppioni;
+      * errore sicuro (il servizio ha sollevato prima del commit): `failed`;
+      * connessione persa (forse dopo il commit): si RILEGGE il passo; se e'
+        `succeeded` la scrittura c'e' ed e' unica; altrimenti `failed`
+        (la transazione non e' arrivata al commit, perche' il checkpoint
+        e' nella stessa transazione).
+    Nessuna scrittura parziale, nessun secondo commit."""
+    agency_id, actor = _scope(ctx)
+    descrivi = describe or (lambda exc: type(exc).__name__)
+    presente = _step_row(ctx, command_id, ordinal)
+    if presente is None:
+        raise CommandNotFound("passo non trovato")
+    if presente["step_class"] != "replayable":
+        raise StepNotAllowed(f"passo {ordinal}: non e' atomico")
+    passo = begin_step(ctx, command_id, ordinal, confirmed=confirmed)
+    try:
+        with core_cursor(commit=True) as (_, cur):
+            _command(cur, agency_id, actor, command_id, lock=True)
+            cur.execute("SELECT state FROM voice_command_steps WHERE command_id = %s AND ordinal = %s FOR UPDATE",
+                        (command_id, ordinal))
+            stato = cur.fetchone()
+            if stato is None or stato["state"] != "running":
+                raise InvalidTransition(f"passo {ordinal} non in esecuzione")
+            risultato = operation(cur, passo)
+            return _finish_with_cursor(cur, agency_id, actor, command_id, ordinal, risultato)
+    except UNCERTAIN_ERRORS as exc:
+        riletto = _step_row(ctx, command_id, ordinal)
+        if riletto is not None and riletto["state"] == "succeeded":
+            return riletto
+        fail_step(ctx, command_id, ordinal, error_type=descrivi(exc), uncertain=True)
+        raise
+    except Exception as exc:
+        fail_step(ctx, command_id, ordinal, error_type=descrivi(exc))
+        raise
 
 
 def retry_step(ctx, command_id: int, ordinal: int) -> dict:

@@ -5786,6 +5786,21 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("voice_command_steps", "agency_id", "agencies", "RESTRICT"),
     ("voice_command_events", "agency_id", "agencies", "RESTRICT"),
     ("voice_command_events", "actor_user_id", "operator_users", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4, migration 099 (registro degli
+    # annullamenti): DUE riferimenti non-CASCADE nuovi verso tabelle che il
+    # cleanup cancella. ESAMINATI.
+    #
+    #   voice_step_undos.agency_id      -> agencies        RESTRICT
+    #   voice_step_undos.actor_user_id  -> operator_users  RESTRICT
+    #
+    # Stessa natura del registro della 098: storico append-only (trigger che
+    # rifiuta UPDATE e DELETE), legato a un comando vocale del suo attore.
+    #
+    # CONSEGUENZA PER IL CLEANUP, dichiarata: lo scrive solo `voice/undo.py`,
+    # che nessuna rotta richiama e che la matrice non percorre; se un'agenzia
+    # o un operatore di prova ne avesse, il preflight lo incontra come RIFIUTO.
+    ("voice_step_undos", "agency_id", "agencies", "RESTRICT"),
+    ("voice_step_undos", "actor_user_id", "operator_users", "RESTRICT"),
 })
 
 

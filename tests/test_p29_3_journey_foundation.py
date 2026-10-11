@@ -116,7 +116,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # Tappa 6 certifica la 097 senza riscrivere le migration storiche.
     assert numeri[numeri.index(71) - 1] == 70
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 3: 098_voice_commands
-    assert numeri[numeri.index(76):] == list(range(76, 99))
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: 099_voice_undo
+    assert numeri[numeri.index(76):] == list(range(76, 100))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

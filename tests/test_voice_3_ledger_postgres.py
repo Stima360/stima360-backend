@@ -93,21 +93,28 @@ def test_01_migration_098_is_valid_contiguous_and_has_a_down():
     m = [x for x in tutte if x.number == 98]
     assert [x.version for x in m] == ["098_voice_commands"] and m[0].down_available
     assert runner.validate_migration(m[0]) == []
-    assert tutte[-1].number == 98
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: dopo la 098 viene solo la 099 (registro degli annullamenti)
+    assert [x.number for x in tutte if x.number > 98] == [99]
 
 
 def test_02_applied_by_the_runner_with_its_guards(db):
     tabelle = {r[0] for r in _q(db, "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'voice_%%'")}
-    assert tabelle == {"voice_agency_settings", "voice_commands", "voice_command_steps", "voice_command_events"}
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: la 099 aggiunge voice_step_undos
+    assert tabelle == {"voice_agency_settings", "voice_commands", "voice_command_steps", "voice_command_events",
+                       "voice_step_undos"}
     assert _q(db, "SELECT 1 FROM schema_migrations WHERE version = '098_voice_commands'")
     trigger = {r[0] for r in _q(db, "SELECT tgname FROM pg_trigger WHERE tgname LIKE 'trg_voice_%%'")}
     assert trigger == {"trg_voice_commands_guard", "trg_voice_command_steps_guard", "trg_voice_commands_no_delete",
-                       "trg_voice_command_steps_no_delete", "trg_voice_command_events_append_only"}
+                       "trg_voice_command_steps_no_delete", "trg_voice_command_events_append_only",
+                       "trg_voice_step_undos_guard"}      # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4 (099)
 
 
 def test_03_down_refuses_with_data_and_runs_on_empty(db):
     import psycopg2
     giu = (ROOT / "migrations" / "098_voice_commands_down.sql").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: con la 099 applicata il rollback va in ordine
+    # inverso, come lo fa il runner: prima la down della 099 (registro annullamenti vuoto), poi la 098.
+    giu_099 = (ROOT / "migrations" / "099_voice_undo_down.sql").read_text(encoding="utf-8")
     pianificato(db)  # almeno un comando
     conn = psycopg2.connect(db["dsn"])
     try:
@@ -118,6 +125,8 @@ def test_03_down_refuses_with_data_and_runs_on_empty(db):
             cur.execute("ALTER TABLE voice_command_events DISABLE TRIGGER USER; ALTER TABLE voice_command_steps DISABLE TRIGGER USER; "
                         "ALTER TABLE voice_commands DISABLE TRIGGER USER; DELETE FROM voice_command_events; "
                         "DELETE FROM voice_command_steps; DELETE FROM voice_commands; DELETE FROM voice_agency_settings")
+            cur.execute("ALTER TABLE voice_step_undos DISABLE TRIGGER USER; DELETE FROM voice_step_undos")
+            cur.execute(giu_099)
             cur.execute(giu)
             cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'voice_%%'")
             assert cur.fetchone()[0] == 0
