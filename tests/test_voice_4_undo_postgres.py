@@ -403,6 +403,9 @@ PROTETTI = ("main.py", "property/census.py", "property/service.py", "property/in
             "voice/resolver.py", "voice/repository.py", "voice/schemas.py", "voice/settings.py")
 
 
+from tests.test_voice_1_perimeter import FASE6_UI  # noqa: E402
+
+
 def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     if subprocess.run(["git", "cat-file", "-e", BASE], cwd=ROOT, capture_output=True).returncode != 0:
         pytest.skip("commit di partenza non disponibile in questo clone")
@@ -413,5 +416,7 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     assert esito_.returncode == 0 and esito_.stdout.strip() == "", esito_.stdout
     for cartella in ("core", "property", "appointments", "crm", "static"):
         diff = subprocess.run(["git", "diff", "--name-only", BASE, "--", cartella], cwd=ROOT,
-                              capture_output=True, text=True).stdout.strip()
-        assert diff == "", diff
+                              capture_output=True, text=True).stdout.split()
+        # Fase 6: solo i file dichiarati dell'interfaccia Voice nella shell
+        diff = [f for f in diff if f not in FASE6_UI]
+        assert diff == [], diff

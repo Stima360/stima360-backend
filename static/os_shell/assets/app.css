@@ -1118,3 +1118,37 @@ a.census-unit-main { text-decoration: none; }
   .stime-field { grid-template-columns: minmax(105px, 36%) minmax(0,1fr); }
   .nav-item[data-route="stime-dettagliate"] { padding-left: 24px; }
 }
+
+/* ---------------------------------------------------------------------------
+   STIMA Voice Fase 6 — la pagina «Voce» (#/voce). Solo classi .voice-*.
+   Mobile-first: comandi ad almeno 48px, testo a 16px (iPhone non zooma),
+   azioni che vanno a capo per l'uso con una mano.
+   --------------------------------------------------------------------------- */
+.voice-page { max-width: 720px; margin: 0 auto; display: grid; gap: 16px; }
+.voice-compose { display: grid; gap: 10px; }
+.voice-label { font-weight: 600; }
+.voice-text {
+  width: 100%; box-sizing: border-box; min-height: 96px; padding: 12px;
+  font: inherit; font-size: 16px; line-height: 1.4; border: 1px solid var(--border, #dfe6f1); border-radius: 10px;
+}
+.voice-text:focus { outline: 3px solid rgba(37, 99, 235, .35); outline-offset: 1px; }
+.voice-compose-actions, .voice-command-actions, .voice-step-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+/* .voice-page davanti: aurora.css (caricato dopo) porta .btn a 42px su mobile */
+.voice-page .voice-big { min-height: 48px; min-width: 120px; font-size: 16px; padding: 10px 18px; }
+.voice-mic.listening { background: var(--danger, #b3261e); border-color: var(--danger, #b3261e); color: #fff; }
+.voice-hint, .voice-live { font-size: 14px; }
+.voice-result { display: grid; gap: 12px; }
+.voice-result-head, .voice-step-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
+.voice-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.voice-step { border: 1px solid var(--border, #dfe6f1); border-radius: 10px; padding: 12px; display: grid; gap: 6px; }
+.voice-step-desc, .voice-step-result { margin: 0; }
+.voice-reasons { margin: 0; padding-left: 18px; }
+.voice-choice { border: 1px solid var(--border, #dfe6f1); border-radius: 8px; padding: 8px 10px; margin: 0; }
+.voice-option { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 16px; }
+.voice-option input { width: 22px; height: 22px; }
+.voice-notice, .voice-dupes, .voice-confirm-note { margin: 0; padding: 8px 10px; border-radius: 8px; background: #fdf3d8; color: #6b4a06; }
+.voice-page .voice-step-actions .btn, .voice-page .voice-command-actions .btn { min-height: 44px; }
+.voice-page .btn:focus-visible { outline: 3px solid rgba(37, 99, 235, .45); outline-offset: 2px; }
+@media (max-width: 767px) {
+  .voice-compose-actions .voice-big, .voice-command-actions .voice-big { flex: 1 1 140px; }
+}

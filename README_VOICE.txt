@@ -1,4 +1,4 @@
-STIMA VOICE - comandi vocali del CRM (Fasi 1-5)
+STIMA VOICE - comandi vocali del CRM (Fasi 1-6)
 ===============================================
 
 STATO: SPENTO. Nessun utente TEST o PROD puo' usarlo. Accenderlo richiede
@@ -44,10 +44,29 @@ ABILITAZIONE (fail-closed: servono TUTTI)
    STIMA_VOICE_AI_TIMEOUT (secondi di lettura, default 20). Nessun modello di
    default. Senza configurazione: 503 VOICE_PROVIDER_NOT_CONFIGURED.
 Il platform admin non usa STIMA Voice, neanche in acting (D-E).
+6. (Facoltativo) STIMA_VOICE_BROWSER_SPEECH=1: mostra il pulsante «Parla»,
+   che usa il riconoscimento vocale DEL BROWSER (Web Speech API). Chrome
+   elabora l'audio sui server Google, Safari puo' usare i server Apple: e' un
+   servizio esterno, quindi spento di default. Senza, si scrive il comando
+   (sul telefono anche con il microfono della tastiera).
+
+INTERFACCIA (Fase 6) - shell /os, sezione #/voce
+------------------------------------------------
+La voce di menu «Voce» compare SOLO se GET /api/voice/status risponde
+enabled=true (tutti i livelli qui sopra accesi). Router non montato = 404 =
+nessuna voce di menu; il link diretto #/voce mostra solo «STIMA Voice non e'
+attivo». Mai per il platform admin senza agenzia (nessuna richiesta).
+Il microfono si chiede solo al tocco di «Parla»; la dettatura riempie un campo
+modificabile e parte verso il server solo con «Invia». Nessun audio passa da
+STIMA360, nessuna registrazione in sottofondo (stop a pagina nascosta o cambio
+di sezione). Piano, scelte fra candidati, domande, conferme, risultato,
+annulla e riconciliazione usano le API qui sotto; il server ricontrolla tutto.
 
 
 API (prefisso /api/voice, sessione obbligatoria)
 ------------------------------------------------
+GET  /status                           {enabled, speech_input} - mai un errore,
+                                       spento per qualunque motivo (Fase 6)
 POST /commands                         {client_command_id: uuid, text}
                                        -> piano con domande/conferme; esegue da
                                        solo SOLO se ogni passo e' "auto".
@@ -86,7 +105,8 @@ LIMITI NOTI (dichiarati, non nascosti)
 Altri:
 - il limite giornaliero (max_commands_per_day, per agenzia, giorno Europe/Rome)
   e' morbido: due richieste concorrenti al confine possono superarlo di poco;
-- max_audio_seconds_month non si applica: in Fase 5 non c'e' audio (Fase 6);
+- max_audio_seconds_month non si applica: nessun audio arriva al server
+  (anche in Fase 6 il browser invia solo testo);
 - il lock d'identita' dei contatti mette in fila i dettati concorrenti, non una
   creazione contemporanea fatta dall'interfaccia del CRM;
 - collegamento proprietario e «Vende» riaperto/riutilizzato non si annullano
@@ -95,6 +115,7 @@ Altri:
 
 TEST
 ----
-tests/test_voice_*.py (Fasi 1-5). Solo PostgreSQL locale usa-e-getta
+tests/test_voice_*.py (Fasi 1-6; la Fase 6 prova l'interfaccia nello stub di
+DOM con API simulate). Solo PostgreSQL locale usa-e-getta
 (P29_TEST_DSN) e fornitore FINTO (voice/fake_provider.py): nessun modello
 reale, nessuna scrittura su TEST o PROD.

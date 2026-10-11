@@ -47,6 +47,9 @@ import { renderIncarichi } from './views/incarichi.js';
 import { renderIncaricoDettaglio } from './views/incarico-dettaglio.js';
 // DELETE-ARCH Fase 2B3: il Cestino (solo immobili).
 import { renderCestino } from './views/cestino.js';
+// STIMA Voice Fase 6: la pagina «Voce», nascosta finche' il server non la abilita.
+import { renderVoce } from './views/voce.js';
+import { voiceStatus } from './voice/voice-api.js';
 
 const SECTIONS = [
   { name: 'oggi', label: 'Oggi' },
@@ -85,6 +88,15 @@ const SECTIONS = [
 // `require_platform_admin` (P27-1), che e' l'unica autorita' in materia. Un
 // tenant normale che arrivi qui non vede dati: vede un avviso.
 const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
+
+// STIMA Voice Fase 6 - la voce «Voce», che NON sta in SECTIONS.
+//
+// Come «Rete»: il bottone esiste nel DOM solo quando il server lo consente
+// (`GET /api/voice/status` -> enabled), e viene RIMOSSO altrimenti. Finche' il
+// router Voice non e' montato quella richiesta risponde 404, e nessuno vede la
+// voce. La rotta e' registrata sempre: la vista stessa chiede lo stato e, da
+// spenta, mostra solo un avviso, senza pulsanti.
+const SEZIONE_VOCE = { name: 'voce', label: 'Voce' };
 
 // P28 - dove finisce un tenant rimandato indietro dalla Rete.
 //
@@ -183,6 +195,8 @@ registerRoute('incarichi', (container, params = []) => {
 });
 // DELETE-ARCH Fase 2B3: `#/cestino` (elenco + «Ripristina»). Nessun dettaglio.
 registerRoute('cestino', (container) => renderCestino(container));
+// STIMA Voice Fase 6: `#/voce` (vedi SEZIONE_VOCE).
+registerRoute('voce', (container) => renderVoce(container));
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
@@ -215,7 +229,7 @@ initRouter(contentEl, {
     return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
   },
   onNavigate(name) {
-    const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);
+    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE].find((s) => s.name === name);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === name);
@@ -244,6 +258,7 @@ const NAV_ICON_PATHS = {
   automazioni: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M6 6l2 2', 'M16 16l2 2', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'],
   cestino: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 14h10l1-14', 'M10 11v6', 'M14 11v6'],
   rete: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20', 'M2 12h20', 'M12 2c5 5 5 15 0 20', 'M12 2c-5 5-5 15 0 20'],
+  voce: ['M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3', 'M9 21h6'],
 };
 
 function creaVoceNav(section) {
@@ -312,6 +327,23 @@ function aggiornaVoceRete(session) {
   }
   if (esistente) return;
   navEl.appendChild(creaVoceNav(SEZIONE_RETE));
+}
+
+// STIMA Voice Fase 6. La voce «Voce» compare solo dopo un SI' del server per
+// QUESTA sessione: prima si toglie, poi si chiede. Una risposta arrivata dopo
+// un cambio di sessione (`sessionEpoch`) o di richiesta si butta. Mai per chi
+// non ha una superficie di tenant.
+let voceRichiesta = 0;
+async function aggiornaVoceVoce(session) {
+  const richiesta = ++voceRichiesta;
+  const esistente = navEl.querySelector('[data-route="voce"]');
+  if (esistente) esistente.remove();
+  if (!session || isPlatformOnly(session)) return;
+  const epoca = sessionEpoch();
+  const stato = await voiceStatus();
+  if (richiesta !== voceRichiesta || sessionEpoch() !== epoca || !stato.enabled) return;
+  if (navEl.querySelector('[data-route="voce"]')) return;
+  navEl.insertBefore(creaVoceNav(SEZIONE_VOCE), navEl.querySelector('[data-route="rete"]'));
 }
 
 // P28 - LA BARRA DEL SUPERADMIN.
@@ -405,6 +437,7 @@ onAuthChange((session) => {
   aggiornaVoceRete(session);
   aggiornaNavTenant(session);
   aggiornaBarraActing(session);
+  aggiornaVoceVoce(session);
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;
   // Il form viene svuotato appena la sessione esiste: la password non deve

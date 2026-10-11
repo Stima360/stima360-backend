@@ -109,6 +109,13 @@ def _x(funzione, *args, **kwargs):
         return _errore(exc)
 
 
+@router.get("/status")
+def voice_status(ctx: OperatorContext = Depends(require_operator)):
+    """Fase 6: {enabled, speech_input}. Mai un errore: spento per qualunque
+    motivo. L'interfaccia mostra STIMA Voice solo con `enabled: true`."""
+    return service.status(ctx)
+
+
 @router.post("/commands")
 def submit_command(body: CommandIn, ctx: OperatorContext = Depends(require_operator)):
     """Testo -> piano (con domande e conferme). Stessa chiave = stesso comando."""

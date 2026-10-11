@@ -131,6 +131,11 @@ def test_03_sql_writes_only_on_voice_tables_and_no_http():
     assert "SET TRANSACTION READ ONLY" in impostazioni and "voice_agency_settings" in impostazioni
 
 
+FASE6_UI = ("static/os_shell/assets/main.js", "static/os_shell/assets/app.css",
+            "static/os_shell/assets/views/voce.js", "static/os_shell/assets/voice/voice-api.js",
+            "static/os_shell/assets/voice/voice-model.js", "static/os_shell/assets/voice/voice-speech.js")
+
+
 def test_04_main_and_crm_modules_untouched():
     """Nessun file del CRM modificato o aggiunto fuori da voice/ e dai test di
     STIMA Voice (lo stato git del working tree, come le sentinelle P27/P29)."""
@@ -140,6 +145,8 @@ def test_04_main_and_crm_modules_untouched():
                            cwd=ROOT, capture_output=True, text=True)
     dichiarati = ("migrations/098_voice_commands.sql", "migrations/098_voice_commands_down.sql",
                   "migrations/099_voice_undo.sql", "migrations/099_voice_undo_down.sql")
+    # Fase 6: l'interfaccia di STIMA Voice nella shell (nascosta finche' /api/voice/status non dice si')
+    dichiarati += FASE6_UI
     righe = [r for r in esito.stdout.splitlines() if r[3:] not in dichiarati]
     assert righe == [], esito.stdout
 

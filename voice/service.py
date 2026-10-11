@@ -120,6 +120,29 @@ def guard(ctx):
         raise
 
 
+def browser_speech_allowed(env=None) -> bool:
+    """Fase 6: il microfono dell'interfaccia usa il riconoscimento vocale del
+    BROWSER, che su Chrome e Safari puo' elaborare l'audio sui server del
+    fornitore del browser (Google, Apple). E' un servizio esterno: spento
+    finche' `STIMA_VOICE_BROWSER_SPEECH=1` non lo autorizza. Senza, resta
+    l'inserimento testuale (e la dettatura della tastiera del telefono)."""
+    env = os.environ if env is None else env
+    return env.get("STIMA_VOICE_BROWSER_SPEECH", "").strip() == "1"
+
+
+def status(ctx) -> dict[str, bool]:
+    """Fase 6: cio' che l'interfaccia deve sapere per mostrare (o NON
+    mostrare) STIMA Voice. Mai un errore e mai un dettaglio: due booleani.
+    Attivo solo se tutti i livelli lo sono, compreso il fornitore AI
+    configurato: un'interfaccia che porta a un 503 non si mostra."""
+    try:
+        guard(ctx)
+        voice_provider.ProviderConfig.from_env()
+    except Exception:  # noqa: BLE001 - qualunque motivo = spento
+        return {"enabled": False, "speech_input": False}
+    return {"enabled": True, "speech_input": browser_speech_allowed()}
+
+
 # ---------------------------------------------------------------------------
 # Ricezione del testo -> piano (-> esecuzione automatica se tutto e' `auto`)
 # ---------------------------------------------------------------------------
