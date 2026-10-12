@@ -222,7 +222,8 @@ def test_b02_scheda_della_singola_unita_provenienza_e_verificata(server, larghez
             # la verifica precedente non si trascina: «Verificata» e la fonte tornano da indicare
             assert page.input_value("#cc-category-source") == "" and page.input_value("#cc-evidence-date") == ""
             page.click("#cc-save")
-            page.wait_for_function("() => ((document.querySelector('.census-tab') || {}).textContent || '').includes('Da riconfermare')")
+            # AGGIORNATO DA CENSIMENTO-2 FASE A (D4): «Verifica da riconfermare», mai un «Da …» ambiguo
+            page.wait_for_function("() => ((document.querySelector('.census-tab') || {}).textContent || '').includes('Verifica da riconfermare')")
             assert _q(m, "SELECT surface_source, cadastral_category_source FROM properties WHERE id = %s", (u["id"],))[0] == [
                 "declared", None]
             page.screenshot(path=str(cartella / f"c2_scheda_unita_da_riconfermare_{larghezza}.png"), full_page=True)

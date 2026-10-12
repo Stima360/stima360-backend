@@ -28,7 +28,8 @@ import {
 import { renderSiteProvenance } from './site-provenance.js';
 // CENSIMENTO-2: provenienza di superficie e categoria, modificabile da qui
 import {
-  UNIT_SOURCES_CATALOG, evidenceText, hasCadastralSource, identityKey, sourceLabel, unitSourcesPatch, verificationState,
+  UNIT_SOURCES_CATALOG, evidenceText, hasCadastralSource, identityKey, needsReconfirm, provisionalNumbering, sourceLabel,
+  unitSourcesPatch, verificationState,
 } from './composition-model.js';
 
 /**
@@ -56,6 +57,8 @@ export async function renderPropertyCensusTab(el, ctx) {
     } catch (_error) { /* la tab si ridisegna comunque dalla lettura del censimento */ }
     await showTab('censimento');
   };
+  // Fase A: lo stato letto per ultimo; il server rifiuta (STALE_DATA) se nel frattempo e' cambiato
+  const atteso = () => (property.updated_at ? { expected_updated_at: property.updated_at } : {});
   const dopoPresa = async (esito) => {
     Object.assign(property, esito);
     showToast(container, { text: `${property.code || 'Immobile'} preso in carico${esito.pertinenze_taken && esito.pertinenze_taken.length ? ` con ${esito.pertinenze_taken.length} pertinenze` : ''}.` });
@@ -68,14 +71,17 @@ export async function renderPropertyCensusTab(el, ctx) {
   const mqTesto = property.surface_sqm === null || property.surface_sqm === undefined || property.surface_sqm === ''
     ? '' : `${Number(property.surface_sqm).toLocaleString('it-IT', { maximumFractionDigits: 2 })} m²`;
   const catasto = [
-    ['Categoria catastale', `${property.cadastral_category || 'Da verificare'}${conProvenienza && property.cadastral_category ? ` · ${fonte(property.cadastral_category_source)}` : ''}`],
+    // D4: «Mancante» (il dato non c'e'), distinto dalla verifica catastale qui sotto
+    ['Categoria catastale', `${property.cadastral_category || 'Mancante'}${conProvenienza && property.cadastral_category ? ` · ${fonte(property.cadastral_category_source)}` : ''}`],
     ...(conProvenienza ? [['Superficie', mqTesto ? `${mqTesto} · ${fonte(property.surface_source)}` : '']] : []),
     // la verifica catastale: indicatore separato dalla completezza della scheda
+    // Fase A (A1): tre condizioni - verificata (superficie e categoria), parziale, da verificare/riconfermare
     ...(conProvenienza ? [['Verifica catastale', (() => {
       const statoVerifica = verificationState(property);
-      if (statoVerifica === 'verified') return `Verificata · ${evidenceText(property)}`;
-      if (statoVerifica === 'to_reconfirm') return `Da riconfermare: i riferimenti catastali sono cambiati dopo la verifica (${evidenceText(property)})`;
-      return 'Non verificata';
+      if (statoVerifica === 'verified') return `Verifica completa: superficie e categoria · ${evidenceText(property)}`;
+      if (statoVerifica === 'partial') return `Verifica parziale: ${property.surface_source === 'verified' ? 'superficie sì, categoria no' : 'categoria sì, superficie no'} · ${evidenceText(property)}`;
+      if (needsReconfirm(property)) return `Verifica da riconfermare: i riferimenti catastali sono cambiati dopo la verifica (${evidenceText(property)})`;
+      return 'Verifica da completare';
     })()]] : []),
     ['Comune catastale', property.cadastral_municipality_code], ['Sezione', sectionLabel(property.cadastral_section)],
     ['Foglio', property.cadastral_sheet], ['Particella', property.cadastral_parcel], ['Subalterno', property.cadastral_subunit],
@@ -88,6 +94,8 @@ export async function renderPropertyCensusTab(el, ctx) {
   const tipoPertinenza = pertinenzaKindLabel(censimento, kinds);
   const provenienza = fromAccessoryText(censimento.from_accessory, kinds);
   const confermaScollega = genitore && linkConfirm.has(`parent:${genitore.id}`);
+  // Fase A (A2): interno generato in blocco e non ancora confermato
+  const internoProvvisorio = conProvenienza && provisionalNumbering(property);
   el.innerHTML = `
     <div class="census-tab">
       ${isCensus() ? `<div class="census-banner" data-census-state><strong>Scheda in censimento</strong> — senza proprietario, incarico o stato commerciale. Per lavorarla commercialmente usa «Prendi in carico» (stessa scheda, stesso codice).
@@ -99,8 +107,9 @@ export async function renderPropertyCensusTab(el, ctx) {
         <div class="detail-item"><label>Indirizzo</label>${escapeHtml(censimento.address_inherited ? 'Ereditato dalla palazzina' : 'Proprio')}</div>
         <div class="detail-item"><label>Natura</label><span id="census-nature">${escapeHtml(pertinenza ? `Pertinenza autonoma${tipoPertinenza ? ` · ${tipoPertinenza}` : ''}` : 'Unità principale')}</span></div>
         <div class="detail-item"><label>Unità principale</label>${genitore ? `<a href="#/immobili/${escapeHtml(genitore.id)}" id="census-open-parent">${escapeHtml(genitore.code || `#${genitore.id}`)}</a>${genitore.archived_at ? ' <small class="muted">(archiviata)</small>' : ''}${genitore.same_building === false ? ' <small class="muted">(in un altro edificio)</small>' : ''}` : (daCollegare ? `${renderBadge('Da collegare', 'warn')}` : '—')}</div>
-        <div class="detail-item"><label>Piano · scala · interno</label>${escapeHtml([property.floor, property.staircase ? `scala ${property.staircase}` : null, property.internal_number ? `int. ${property.internal_number}` : null].filter(Boolean).join(' · ') || '—')}</div>
+        <div class="detail-item"><label>Piano · scala · interno</label>${escapeHtml([property.floor, property.staircase ? `scala ${property.staircase}` : null, property.internal_number ? `int. ${property.internal_number}` : null].filter(Boolean).join(' · ') || '—')}${internoProvvisorio ? ` ${renderBadge('Interno provvisorio', 'gray')}` : ''}</div>
       </div>
+      ${internoProvvisorio ? `<div class="action-bar" data-internal-provisional><span class="muted">L’interno è stato numerato in blocco: confermalo quando è quello reale (oppure correggilo da «Modifica dati catastali e superficie»).</span><button type="button" class="btn ghost btn-small" id="census-confirm-internal">Conferma interno</button></div>` : ''}
       ${provenienza ? `<p class="muted census-provenance" id="census-from-accessory">${escapeHtml(provenienza)}</p>` : ''}
       ${daCollegare ? '<div class="action-bar"><button type="button" class="btn primary" id="census-link-principal">Collega a un’unità principale</button></div>' : ''}
       ${genitore ? `<div class="action-bar"><button type="button" class="btn ghost btn-small${confermaScollega ? ' danger' : ''}" id="census-unlink-self">${confermaScollega ? 'Confermi lo scollegamento? Resta una pertinenza da collegare' : `Scollega da ${escapeHtml(genitore.code || `#${genitore.id}`)}`}</button></div>` : ''}
@@ -109,7 +118,7 @@ export async function renderPropertyCensusTab(el, ctx) {
       <div class="action-bar"><button type="button" class="btn ghost" id="census-edit-cadastral">${conProvenienza ? 'Modifica dati catastali e superficie' : 'Modifica dati catastali'}</button></div>
       <div id="census-cadastral-form" hidden></div>
       ${pertinenza ? '' : `<h3 class="section-title">Pertinenze collegate</h3>
-      ${censimento.pertinenze.length ? `<ul class="census-list">${censimento.pertinenze.map((x) => `<li class="census-list-item" data-pertinenza-id="${escapeHtml(x.id)}"><a href="#/immobili/${escapeHtml(x.id)}"><strong>${escapeHtml(x.code || `#${x.id}`)}</strong></a> <span class="muted">${escapeHtml([pertinenzaKindLabel(x, kinds) || labelOf(tipi, x.property_type, x.property_type), x.surface_sqm ? `${x.surface_sqm} m²` : null, x.cadastral_subunit ? `sub ${x.cadastral_subunit}` : null, x.cadastral_category || 'Da verificare', x.same_building === false ? 'in un altro edificio' : null].filter(Boolean).join(' · '))}</span> <button type="button" class="btn ghost btn-small${linkConfirm.has(x.id) ? ' danger' : ''}" data-unlink="${escapeHtml(x.id)}">${linkConfirm.has(x.id) ? 'Confermi lo scollegamento?' : 'Scollega'}</button></li>`).join('')}</ul>` : '<p class="muted">Nessuna pertinenza collegata.</p>'}
+      ${censimento.pertinenze.length ? `<ul class="census-list">${censimento.pertinenze.map((x) => `<li class="census-list-item" data-pertinenza-id="${escapeHtml(x.id)}"><a href="#/immobili/${escapeHtml(x.id)}"><strong>${escapeHtml(x.code || `#${x.id}`)}</strong></a> <span class="muted">${escapeHtml([pertinenzaKindLabel(x, kinds) || labelOf(tipi, x.property_type, x.property_type), x.surface_sqm ? `${x.surface_sqm} m²` : null, x.cadastral_subunit ? `sub ${x.cadastral_subunit}` : null, x.cadastral_category || 'Categoria mancante', x.same_building === false ? 'in un altro edificio' : null].filter(Boolean).join(' · '))}</span> <button type="button" class="btn ghost btn-small${linkConfirm.has(x.id) ? ' danger' : ''}" data-unlink="${escapeHtml(x.id)}">${linkConfirm.has(x.id) ? 'Confermi lo scollegamento?' : 'Scollega'}</button></li>`).join('')}</ul>` : '<p class="muted">Nessuna pertinenza collegata.</p>'}
       <div class="action-bar">
         <button type="button" class="btn primary" id="census-add-pertinenza">+ Aggiungi pertinenza</button>
         <button type="button" class="btn ghost" id="census-link-existing">Collega esistente</button>
@@ -184,10 +193,32 @@ export async function renderPropertyCensusTab(el, ctx) {
     openAccessorySheet(dialogEl, { options: opzioni, property, accessory: accessorio, onSaved: ricarica });
   }));
 
-  // Dati catastali: la PATCH generica (PropertyUpdate porta i campi della
-  // 083); la categoria dal foglio di scelta, mai dedotta. La sezione e' a
-  // tre stati (R1): null = non conosciuta, '' = nessuna, stringa = valore;
-  // viaggia solo se cambia davvero, con il valore esatto (null o '').
+  // Fase A (A2): «Conferma interno» - stessa scheda, cade solo «provvisorio».
+  // Esito incerto: si rilegge la scheda, mai un successo dichiarato a priori.
+  const confermaInterno = el.querySelector('#census-confirm-internal');
+  if (confermaInterno) confermaInterno.addEventListener('click', async () => {
+    confermaInterno.disabled = true;
+    try {
+      await censusApi.updateCensusData(property.id, { confirm_internal_number: true, ...atteso() });
+      showToast(container, { text: `Interno ${property.internal_number} confermato.` });
+      await ricarica();
+    } catch (error) {
+      confermaInterno.disabled = false;
+      if (error && (error.uncertain || error.code === 'STALE_DATA')) {
+        await ricarica();
+        showToast(container, { text: 'Esito non noto: la scheda è stata riletta dal server. Controlla l’interno prima di riprovare.' });
+        return;
+      }
+      showToast(container, { text: error && error.code === 'UNIT_ARCHIVED' && error.detail ? error.detail : censusErrorMessage(error) });
+    }
+  });
+
+  // Dati catastali. Con la migration 100 («Dati catastali e superficie»): UNA
+  // chiamata a PATCH .../census-data (Fase A, A3), una transazione con lo
+  // storico; senza la 100 la PATCH generica di prima (solo i campi della 083).
+  // La categoria dal foglio di scelta, mai dedotta. La sezione e' a tre stati
+  // (R1): null = non conosciuta, '' = nessuna, stringa = valore; viaggia solo
+  // se cambia davvero, con il valore esatto (null o '').
   const formEl = el.querySelector('#census-cadastral-form');
   el.querySelector('#census-edit-cadastral').addEventListener('click', () => {
     if (!formEl.hidden) { formEl.hidden = true; return; }
@@ -220,9 +251,14 @@ export async function renderPropertyCensusTab(el, ctx) {
         </div>
         <div class="form-field"><label for="cc-evidence-ref">Riferimento (facoltativo)</label><input id="cc-evidence-ref" class="input" maxlength="120" placeholder="es. protocollo della visura" value="${escapeHtml(evidenzaIniziale.ref)}"></div>
       </div>
+      <div class="form-grid-2 census-internal" data-internal-fields>
+        <div class="form-field"><label for="cc-internal">Interno</label><input id="cc-internal" class="input" maxlength="10" value="${escapeHtml(property.internal_number || '')}"></div>
+        ${internoProvvisorio ? `<label class="form-field census-confirm-internal"><span><input type="checkbox" id="cc-confirm-internal"> Conferma l’interno (non più provvisorio)</span><small class="muted">Correggerlo senza confermarlo lo lascia provvisorio.</small></label>` : ''}
+      </div>
       <p class="muted" id="cc-sources-hint">«Verificata» richiede l’identità catastale (comune catastale, foglio, particella, subalterno; la sezione solo se prevista) e la fonte consultata. Se cambi un valore, indica di nuovo la sua provenienza: altrimenti torna «Non indicata». Se cambi i riferimenti catastali, una verifica va riconfermata.</p>` : ''}
-      <div class="field-error" id="cc-error"></div>
-      <div class="action-bar"><button type="button" class="btn ghost" id="cc-cancel">Annulla</button><button type="button" class="btn primary" id="cc-save">Salva</button></div>`;
+      <div class="field-error" id="cc-error" role="alert"></div>
+      <div class="census-reconcile" id="cc-reconcile" hidden></div>
+      <div class="action-bar"><button type="button" class="btn ghost" id="cc-cancel">Annulla</button><button type="button" class="btn" id="cc-save-anyway" hidden>Salva comunque</button><button type="button" class="btn primary" id="cc-save">Salva</button></div>`;
     formEl.querySelector('#census-cat-btn').addEventListener('click', () => openCategoryPicker(dialogEl, {
       options: opzioni, propertyType: property.property_type, current: categoria,
       onPick: (code) => {
@@ -275,24 +311,29 @@ export async function renderPropertyCensusTab(el, ctx) {
     }
     const sezione = bindSectionField(formEl, 'cc', property.cadastral_section);
     formEl.querySelector('#cc-cancel').addEventListener('click', () => { formEl.hidden = true; });
-    formEl.querySelector('#cc-save').addEventListener('click', async () => {
+    const errore = (testo) => { formEl.querySelector('#cc-error').textContent = testo; };
+    const riconcilia = formEl.querySelector('#cc-reconcile');
+    const salvaComunque = formEl.querySelector('#cc-save-anyway');
+    // il corpo della richiesta dal modulo, rispetto all'ultimo stato letto dal server (`property`)
+    function corpoDelModulo() {
       const campi = { ...(conProvenienza ? {} : { cadastral_category: categoria }), cadastral_municipality_code: formEl.querySelector('#cc-belfiore').value,
         cadastral_sheet: formEl.querySelector('#cc-sheet').value,
-        cadastral_parcel: formEl.querySelector('#cc-parcel').value, cadastral_subunit: formEl.querySelector('#cc-subunit').value };
+        cadastral_parcel: formEl.querySelector('#cc-parcel').value, cadastral_subunit: formEl.querySelector('#cc-subunit').value,
+        ...(conProvenienza ? { internal_number: formEl.querySelector('#cc-internal').value } : {}) };
       const payload = {};
       for (const [k, v] of Object.entries(campi)) {
         const nuovo = String(v ?? '').trim();
         if (nuovo !== String(property[k] ?? '').trim()) payload[k] = nuovo === '' ? null : nuovo;
       }
       const nuovaSezione = sezione.value();
-      if (nuovaSezione === undefined) { formEl.querySelector('#cc-error').textContent = 'Hai scelto «Con sezione»: scrivi la sezione, oppure scegli «Non conosciuta» o «Nessuna».'; return; }
+      if (nuovaSezione === undefined) return { errors: ['Hai scelto «Con sezione»: scrivi la sezione, oppure scegli «Non conosciuta» o «Nessuna».'] };
       const sezioneSalvata = property.cadastral_section === undefined ? null : property.cadastral_section;
       if (nuovaSezione !== sezioneSalvata) payload.cadastral_section = nuovaSezione;
       if (conProvenienza) {
         // CENSIMENTO-2: superficie, categoria e provenienza; un valore cambiato
         // porta sempre la sua provenienza (anche «Non indicata»)
         const identitaModulo = { ...property, ...identita() };
-        if (nuovaSezione !== undefined) identitaModulo.cadastral_section = nuovaSezione;
+        identitaModulo.cadastral_section = nuovaSezione;
         const fonti = unitSourcesPatch(property, {
           surface_sqm: formEl.querySelector('#cc-surface').value, surface_source: formEl.querySelector('#cc-surface-source').value,
           cadastral_category: categoria, cadastral_category_source: formEl.querySelector('#cc-category-source').value,
@@ -304,22 +345,79 @@ export async function renderPropertyCensusTab(el, ctx) {
         if (verificata && !hasCadastralSource(identitaModulo, UNIT_SOURCES_CATALOG)) {
           fonti.errors.push('«Verificata» richiede comune catastale, foglio, particella e subalterno.');
         }
-        if (fonti.errors.length) { formEl.querySelector('#cc-error').textContent = fonti.errors.join(' '); return; }
+        if (fonti.errors.length) return { errors: fonti.errors };
         Object.assign(payload, fonti.patch);
+        const conferma = formEl.querySelector('#cc-confirm-internal');
+        if (conferma && conferma.checked && provisionalNumbering(property)) payload.confirm_internal_number = true;
       }
+      return { payload, errors: [] };
+    }
+    // esito incerto o scheda cambiata nel frattempo: si rilegge dal server, si
+    // mostrano le differenze con i valori inseriti (che restano nel modulo) e
+    // si riprova solo su scelta esplicita, rispetto allo stato appena letto
+    async function rileggiEConfronta(inviato, titolo) {
+      let letto = null;
+      try { letto = await apiGet(`/api/property/properties/${property.id}`); } catch (_e) { letto = null; }
+      if (!letto) {
+        errore(`${titolo} Il server ora non risponde: i valori inseriti restano qui, riprova quando la connessione torna.`);
+        return;
+      }
+      Object.assign(property, letto);
+      const etichette = { cadastral_municipality_code: 'Comune catastale', cadastral_section: 'Sezione', cadastral_sheet: 'Foglio',
+        cadastral_parcel: 'Particella', cadastral_subunit: 'Subalterno', surface_sqm: 'Superficie', surface_source: 'Provenienza della superficie',
+        cadastral_category: 'Categoria', cadastral_category_source: 'Provenienza della categoria', internal_number: 'Interno',
+        cadastral_evidence_type: 'Fonte consultata', cadastral_evidence_date: 'Data della fonte', cadastral_evidence_ref: 'Riferimento della fonte' };
+      const testo = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
+      const uguali = (k, a, b) => (k === 'surface_sqm' && a !== null && a !== undefined && b !== null && b !== undefined
+        ? Number(a) === Number(b) : String(a ?? '').trim().toUpperCase() === String(b ?? '').trim().toUpperCase());
+      const diverse = Object.keys(inviato).filter((k) => etichette[k] && !uguali(k, letto[k], inviato[k]));
+      riconcilia.hidden = false;
+      riconcilia.innerHTML = `<p><strong>${escapeHtml(titolo)}</strong></p>${diverse.length
+        ? `<p class="muted">Sul server ora risulta diverso da quanto hai inserito:</p><ul class="census-list">${diverse.map((k) => `<li data-reconcile-field="${escapeHtml(k)}">${escapeHtml(etichette[k])}: salvato <strong>${escapeHtml(testo(letto[k]))}</strong> · inserito <strong>${escapeHtml(testo(inviato[k]))}</strong></li>`).join('')}</ul><p class="muted">I valori inseriti restano nel modulo: «Salva» li applica ai dati appena riletti.</p>`
+        : '<p class="muted" data-reconcile-same>I dati salvati sul server coincidono con quelli inseriti: puoi chiudere il modulo.</p>'}`;
+      errore('');
+    }
+    async function salva({ simili = false } = {}) {
+      errore('');
+      salvaComunque.hidden = true;
+      const { payload, errors } = corpoDelModulo();
+      if (errors.length) { errore(errors.join(' ')); return; }
       if (!Object.keys(payload).length) { formEl.hidden = true; return; }
-      formEl.querySelector('#cc-save').disabled = true;
+      const bottone = formEl.querySelector('#cc-save');
+      bottone.disabled = true;
       try {
         // il client del censimento conserva `code` (CADASTRAL_DUPLICATE,
         // CENSUS_LOCKED...): il messaggio viene dal codice, non dal solo 409
-        const aggiornato = await censusApi.updateProperty(property.id, payload);
-        Object.assign(property, aggiornato);
-        await showTab('censimento');
+        if (conProvenienza) {
+          await censusApi.updateCensusData(property.id, { ...payload, ...(simili ? { confirm_similar: true } : {}), ...atteso() });
+          // la tab si ridisegna dai dati riletti dal server (il modulo si chiude con essa)
+          await ricarica();
+          showToast(container, { text: 'Dati catastali e superficie salvati.' });
+        } else {
+          const aggiornato = await censusApi.updateProperty(property.id, payload);
+          Object.assign(property, aggiornato);
+          await showTab('censimento');
+        }
       } catch (error) {
-        formEl.querySelector('#cc-save').disabled = false;
-        formEl.querySelector('#cc-error').textContent = censusErrorMessage(error);
+        // il modulo resta aperto con i valori inseriti; nessun messaggio di successo
+        bottone.disabled = false;
+        if (conProvenienza && error && (error.uncertain || error.code === 'STALE_DATA')) {
+          await rileggiEConfronta(payload, error.uncertain
+            ? 'Esito non noto: la scheda è stata riletta dal server. Il salvataggio non è dato per riuscito.'
+            : censusErrorMessage(error));
+          return;
+        }
+        if (error && error.code === 'SIMILAR_FOUND') {
+          errore(`Nessuna modifica salvata: ${error.detail || 'esiste già un interno uguale in questa posizione.'}${(error.similar || []).length ? ` (${error.similar.map((x) => x.code || `#${x.id}`).join(', ')})` : ''}`);
+          salvaComunque.hidden = false;
+          return;
+        }
+        const motivo = error && error.code === 'UNIT_ARCHIVED' && error.detail ? error.detail : censusErrorMessage(error);
+        errore(conProvenienza ? `Nessuna modifica salvata: ${motivo}` : motivo);   // senza la 100: come prima
       }
-    });
+    }
+    formEl.querySelector('#cc-save').addEventListener('click', () => salva());
+    salvaComunque.addEventListener('click', () => salva({ simili: true }));
   });
 }
 

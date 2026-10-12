@@ -147,18 +147,10 @@ class PropertyUpdate(PropertyModel):
     cadastral_parcel: str | None = Field(None,max_length=10)
     cadastral_subunit: str | None = Field(None,max_length=10)
     cadastral_category: str | None = Field(None,max_length=5)
-    # CENSIMENTO-2 (migration 100): la provenienza di superficie e categoria,
-    # modificabile dalla scheda della singola unita'. NULL = «non indicata».
-    # Solo se inviata (PATCH: exclude_unset). «verified» richiede l'identita'
-    # catastale (CHECK della 100, tradotto in 400 dal router).
-    surface_source: str | None = None
-    cadastral_category_source: str | None = None
-    # CENSIMENTO-2: la fonte catastale consultata e registrata che «verified»
-    # richiede (tipo e data obbligatori, riferimento facoltativo, nessun
-    # allegato). L'identita' a cui si riferisce la scrive il database.
-    cadastral_evidence_type: str | None = None
-    cadastral_evidence_date: date | None = None
-    cadastral_evidence_ref: str | None = Field(None,max_length=120)
+    # CENSIMENTO-2 Fase A (A3): provenienza di superficie e categoria e fonte
+    # della verifica NON si scrivono da qui (422, `extra=forbid`): solo da
+    # PATCH /properties/{id}/census-data (`UnitCensusData`), in una transazione
+    # con lo storico. I valori protetti da una verifica li difende il router.
     # CATALOGO-CANONICO-1 (migration 087): i dati del sito stima360.it che non
     # avevano una colonna. NULL = non dichiarato; i valori di catalogo
     # (posizione e distanza dal mare) li giudica il service. Entrano
@@ -183,17 +175,6 @@ class PropertyUpdate(PropertyModel):
         if v.get('classification') is not None and v['classification'] not in PROPERTY_CLASSES: raise ValueError('classification must be A, B or C')
         if v.get('mandate_start') and v.get('mandate_end') and v['mandate_end'] < v['mandate_start']: raise ValueError('mandate_end cannot precede mandate_start')
         # CRM-OPS-2: vedi PropertyCreate - le regole del catalogo sono nel service.
-        for fonte in ('surface_source', 'cadastral_category_source'):
-            if v.get(fonte) is not None and v[fonte] not in ('estimated', 'declared', 'verified'): raise ValueError(f'invalid {fonte}')
-        # CENSIMENTO-2: ogni «verified» (anche una riconferma) registra nella stessa
-        # richiesta la fonte consultata: niente verifica dalla sola compilazione dei campi
-        if v.get('cadastral_evidence_type') is not None and v['cadastral_evidence_type'] not in ('visura', 'planimetria', 'atto', 'altro'):
-            raise ValueError('invalid cadastral_evidence_type')
-        if v.get('cadastral_evidence_date') is not None and not (date(1900, 1, 1) <= v['cadastral_evidence_date'] <= date.today()):
-            raise ValueError('cadastral_evidence_date: data della consultazione non valida')
-        if 'verified' in (v.get('surface_source'), v.get('cadastral_category_source')) and (
-                v.get('cadastral_evidence_type') is None or v.get('cadastral_evidence_date') is None):
-            raise ValueError('verified richiede cadastral_evidence_type e cadastral_evidence_date nella stessa richiesta')
         return v
 
 class PropertyContactCreate(PropertyModel):
@@ -706,4 +687,43 @@ class UnitsBulkUpdate(PropertyModel):
             raise ValueError("property_ids: identificativi positivi, senza ripetizioni")
         if not v["changes"].model_fields_set:
             raise ValueError("nessuna modifica indicata")
+        return v
+
+
+class UnitCensusData(PropertyModel):
+    """CENSIMENTO-2 Fase A (A2/A3): «Dati catastali e superficie» della singola
+    scheda, PATCH /properties/{id}/census-data. Elenco CHIUSO (`extra=forbid`:
+    nessun altro campo, mai lo stato commerciale); vale solo cio' che si invia.
+    La sezione ha tre stati (null = non conosciuta, '' = nessuna, valore).
+    «verified» porta nella stessa richiesta la fonte consultata (tipo e data);
+    `confirm_internal_number` toglie l'indicazione «provvisorio» all'interno;
+    `expected_updated_at` (quello letto aprendo il modulo) evita di
+    sovrascrivere senza saperlo una modifica arrivata nel frattempo."""
+    cadastral_municipality_code: str | None = Field(None, max_length=4)
+    cadastral_section: str | None = Field(None, max_length=5)
+    cadastral_sheet: str | None = Field(None, max_length=10)
+    cadastral_parcel: str | None = Field(None, max_length=10)
+    cadastral_subunit: str | None = Field(None, max_length=10)
+    surface_sqm: Decimal | None = Field(None, ge=0, le=100000)
+    surface_source: str | None = None
+    cadastral_category: str | None = Field(None, max_length=5)
+    cadastral_category_source: str | None = None
+    cadastral_evidence_type: str | None = None
+    cadastral_evidence_date: date | None = None
+    cadastral_evidence_ref: str | None = Field(None, max_length=120)
+    internal_number: str | None = Field(None, max_length=10)
+    confirm_internal_number: bool = False
+    confirm_similar: bool = False
+    expected_updated_at: datetime | None = None
+
+    @root_validator(skip_on_failure=True)
+    def validate_census_data(cls, v):
+        for fonte in ("surface_source", "cadastral_category_source"):
+            if v.get(fonte) is not None and v[fonte] not in _classi.DATA_SOURCES:
+                raise ValueError(f"invalid {fonte}")
+        if v.get("cadastral_evidence_type") is not None and v["cadastral_evidence_type"] not in _classi.EVIDENCE_TYPES:
+            raise ValueError("invalid cadastral_evidence_type")
+        if v.get("cadastral_evidence_date") is not None and not (
+                date(1900, 1, 1) <= v["cadastral_evidence_date"] <= date.today()):
+            raise ValueError("cadastral_evidence_date: data della consultazione non valida")
         return v

@@ -94,7 +94,8 @@ export function unitRowBadges(u) {
   if (u.parent_property_id) badge.push({ text: 'Pertinenza', tone: 'gray' });
   // PERTINENZE-1: pertinenza autonoma senza unita' principale
   else if (isUnitPertinenza(u)) badge.push({ text: 'Pertinenza da collegare', tone: 'warn' });
-  if (!u.cadastral_category) badge.push({ text: 'Da verificare', tone: 'warn' });
+  // CENSIMENTO-2 Fase A (D4): dice cosa manca, distinto dalla verifica catastale
+  if (!u.cadastral_category) badge.push({ text: 'Categoria mancante', tone: 'warn' });
   else badge.push({ text: u.cadastral_category, tone: 'ok' });
   if (Number(u.accessories_unknown || 0) > 0) badge.push({ text: `${u.accessories_unknown} da chiarire`, tone: 'warn' });
   if (u.record_kind && u.record_kind !== 'census') badge.push({ text: 'In carico', tone: 'role' });
@@ -285,7 +286,40 @@ export function similarText(s) {
 }
 
 /** La frase per l'operatore, dal codice del backend. Mai un nome tecnico. */
+// CENSIMENTO-2 Fase A: le etichette dei campi di un salvataggio in due chiamate
+const ETICHETTE_CAMPI = {
+  internal_number: 'interno', floor: 'piano', staircase: 'scala', surface_sqm: 'superficie', rooms: 'locali',
+  bathrooms: 'bagni', bedrooms: 'camere', property_type: 'tipologia', cadastral_category: 'categoria catastale',
+  cadastral_municipality_code: 'comune catastale', cadastral_section: 'sezione', cadastral_sheet: 'foglio',
+  cadastral_parcel: 'particella', cadastral_subunit: 'subalterno', internal_notes: 'note', address: 'via',
+  civic_number: 'civico', address_inherited: 'indirizzo',
+};
+const etichettaCampo = (k) => ETICHETTE_CAMPI[k] || k;
+
+/** Un salvataggio in due chiamate non atomiche (interno dalla rotta tracciata,
+ *  il resto dalla PATCH generica) andato a meta': cosa e' salvato di sicuro,
+ *  cosa sicuramente no, cosa ha esito incerto. Nessun successo complessivo. */
+export function partialSaveText(partial, motivo) {
+  const p = partial || {};
+  const elenco = (ks) => ks.map(etichettaCampo).join(', ');
+  const salvati = (p.saved || []).map((k) => {
+    const v = p.savedValues && p.savedValues[k];
+    return v === null || v === undefined || v === '' ? `${etichettaCampo(k)} (tolto)` : `${etichettaCampo(k)} «${v}»`;
+  });
+  const parti = ['Salvataggio non completato.'];
+  if (salvati.length) parti.push(`Salvato: ${salvati.join(', ')}.`);
+  if ((p.notSaved || []).length) parti.push(`Non salvato: ${elenco(p.notSaved)}.`);
+  if ((p.uncertain || []).length) parti.push(`Esito non noto: ${elenco(p.uncertain)}.`);
+  if (motivo) parti.push(`Motivo: ${/[.!?]$/.test(motivo) ? motivo : `${motivo}.`}`);
+  // descrive il comportamento reale del nuovo tentativo: si rimanda TUTTO, non solo il resto
+  parti.push('Riprovando si rimandano tutte le modifiche, comprese quelle già salvate (con lo stesso valore); nessuna scheda doppia.');
+  return parti.join(' ');
+}
+
 export function errorMessage(error) {
+  if (error && error.partial) {
+    return partialSaveText(error.partial, errorMessage({ ...error, message: error.message, partial: null }));
+  }
   const code = error && error.code ? error.code : '';
   switch (code) {
     case 'NETWORK': return 'Connessione assente. Riprova.';
@@ -312,6 +346,14 @@ export function errorMessage(error) {
     case 'SOURCE_WITHOUT_VALUE': return 'Una provenienza senza il dato non si salva: indica prima il valore.';
     case 'CLASS_NOT_APPLICABLE': return 'La classe «abitazione» si sceglie solo per i rustici.';
     case 'UNIT_ARCHIVED': return 'Una delle unità selezionate è archiviata: riattivala prima di modificarla.';
+    // CENSIMENTO-2 Fase A: «Dati catastali e superficie» e verifiche documentate
+    case 'VERIFIED_DATA_LOCKED': return Array.isArray(error.propertyIds) && error.propertyIds.length
+      ? 'Alcune schede selezionate hanno il dato verificato con una fonte documentata: modificale una per una dal modulo «Dati catastali e superficie».'
+      : 'Questo dato è verificato con una fonte documentata: modificalo dal modulo «Dati catastali e superficie» della scheda.';
+    case 'STALE_DATA': return 'Nel frattempo la scheda è stata modificata: i dati salvati sono stati riletti. Controlla le differenze prima di riprovare.';
+    case 'EVIDENCE_WITHOUT_VERIFIED': return 'La fonte consultata si registra insieme a una provenienza «Verificata».';
+    case 'INTERNAL_NUMBER_REQUIRED': return 'Indica l’interno prima di confermarlo.';
+    case 'INTERNAL_NUMBER_TRACKED': return 'L’interno si modifica dal modulo «Dati catastali e superficie» della scheda, che lo registra nello storico.';
     case 'FORBIDDEN': return error.detail || 'Non hai i permessi per modificare una delle unità selezionate.';
     default:
       if (error && error.status === 404) return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
@@ -391,7 +433,7 @@ export function summaryView(summary) {
     over: oltre > 0 ? `${plurale(oltre, 'unità censita', 'unità censite')} oltre le dichiarate: verifica il totale dichiarato` : '',
     split: `${plurale(num(s.units_main) ?? 0, 'principale', 'principali')} + ${plurale(num(s.units_pertinenze) ?? 0, 'pertinenza', 'pertinenze')}${num(s.units_pertinenze_unlinked) ? ` (${num(s.units_pertinenze_unlinked)} da collegare)` : ''}`,
     unknownAccessories: num(s.accessories_unknown) ? plurale(s.accessories_unknown, 'accessorio da chiarire', 'accessori da chiarire') : '',
-    categoryToVerify: num(s.category_to_verify) ? plurale(s.category_to_verify, 'categoria da verificare', 'categorie da verificare') : '',
+    categoryToVerify: num(s.category_to_verify) ? plurale(s.category_to_verify, 'categoria mancante', 'categorie mancanti') : '',
   };
 }
 

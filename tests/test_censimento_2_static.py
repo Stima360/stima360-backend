@@ -92,9 +92,13 @@ def test_c01_classi_d1():
     ident = {"cadastral_municipality_code": "L307", "cadastral_section": None, "cadastral_sheet": "5",
              "cadastral_parcel": "61", "cadastral_subunit": "2"}
     assert c.identity_key(ident) == "L307||5|61|2" and c.identity_key({**ident, "cadastral_subunit": ""}) is None
-    assert c.verification_state({**ident, "cadastral_category_source": "verified"}) == "verified"
-    assert c.verification_state({**ident, "cadastral_evidence_identity": "L307||5|61|1"}) == "to_reconfirm"
-    assert c.verification_state({**ident, "cadastral_evidence_identity": "L307||5|61|2"}) is None
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A1): tre condizioni (verificata, parziale, da verificare/riconfermare)
+    assert c.verification_state({**ident, "cadastral_category_source": "verified"}) == "partial"
+    assert c.verification_state({**ident, "cadastral_category_source": "verified", "surface_source": "verified"}) == "verified"
+    assert c.verification_state({**ident, "cadastral_evidence_identity": "L307||5|61|1"}) == "to_verify"
+    assert c.needs_reconfirm({**ident, "cadastral_evidence_identity": "L307||5|61|1"}) is True
+    assert c.verification_state({**ident, "cadastral_evidence_identity": "L307||5|61|2"}) == "to_verify"
+    assert c.needs_reconfirm({**ident, "cadastral_evidence_identity": "L307||5|61|2"}) is False
     sql = c.class_sql("u")
     assert "'rustic'" in sql and "census_class" in sql and "is_pertinenza" in sql
 

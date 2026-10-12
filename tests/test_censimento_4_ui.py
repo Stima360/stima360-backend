@@ -468,7 +468,8 @@ def test_c03_s2_palazzina_per_piano_contatori_e_s3_s5_unita_con_toast_e_annulla(
     assert out["piani"] == ["Terra 1", "1º 1", "2º 1"]
     assert "Dichiarate6" in out["contatori"] and "Censite3" in out["contatori"] and "Da completare3" in out["contatori"]
     assert "3 principali + 0 pertinenze" in out["contatori"] and "1 accessorio da chiarire" in out["contatori"]
-    assert any("IMM-411" in r and "Da verificare" in r and "1 da chiarire" in r and "Ingresso proprio" in r for r in out["badgeDaChiarire"])
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (D4): «Categoria mancante», distinto dalla verifica catastale
+    assert any("IMM-411" in r and "Categoria mancante" in r and "1 da chiarire" in r and "Ingresso proprio" in r for r in out["badgeDaChiarire"])
     assert any("IMM-412" in r and "A/3" in r and "int. 2" in r and "scala B" in r and "85" in r for r in out["badgeDaChiarire"])
     assert out["titolo"] == "Nuova unità" and out["tipoAttivo"] == "apartment"
     assert out["toast"].startswith("IMM-413 · 2º piano aggiunta") and "Annulla" in out["toast"]
@@ -563,7 +564,7 @@ def test_c06_scheda_in_censimento_tab_guardia_e_presa_in_carico_con_pertinenze(s
     assert out["tabs"][0] == "Censimento" and out["attiva"] == "censimento"
     assert "Censimento" in out["badge"] and "Indirizzo ereditato" in out["badge"]
     for atteso in ("Scheda in censimento", "Prendi in carico", "Annulla creazione", "Palazzina via Roma 10", "Ereditato dalla palazzina",
-                   "Da verificare", "IMM-414", "Garage / box", "C/6", "Cantina", "6.00 m²", "Da chiarire", "Chiarisci", "+ Aggiungi pertinenza", "Collega esistente"):
+                   "Mancante", "IMM-414", "Garage / box", "C/6", "Cantina", "6.00 m²", "Da chiarire", "Chiarisci", "+ Aggiungi pertinenza", "Collega esistente"):
         assert atteso in out["tabCens"], atteso
     assert not out["cambiaStato"] and "Prendi in carico" in out["avvisoCensus"] and "in censimento" in out["incarico"]
     assert "Porti IMM-30 nel lavoro commerciale?" in out["dialogo"] and "IMM-414" in out["dialogo"] and out["spuntata"]

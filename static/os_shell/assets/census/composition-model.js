@@ -8,9 +8,9 @@
 // census_classes.py, migration 100): classi, presenti, da creare, stato di
 // completamento, dati minimi, provenienze ammesse. Le liste arrivano nel
 // `catalog` della risposta di GET .../composition: qui nessun elenco scritto
-// a mano. Due indicatori SEPARATI: quante unita' ci sono rispetto alle
-// dichiarate, e quanto sono complete le schede (il proprietario non e' fra i
-// dati minimi).
+// a mano. Tre indicatori SEPARATI: quante unita' ci sono rispetto alle
+// dichiarate, quanto sono complete le schede (il proprietario non e' fra i
+// dati minimi) e quante sono verificate (Fase A, A1).
 
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const plurale = (n, uno, molti) => `${n} ${n === 1 ? uno : molti}`;
@@ -37,13 +37,43 @@ export function identityKey(f) {
   return [0, 2, 3, 4].every((i) => parti[i]) ? parti.join('|') : null;
 }
 
-/** Lo stato della verifica, separato dalla completezza: 'verified',
- *  'to_reconfirm' (i riferimenti catastali sono cambiati dopo la verifica) o null. */
+/** CENSIMENTO-2 Fase A (A1): la verifica della scheda, separata dalla
+ *  completezza. Tre condizioni, come il server (census_classes.py):
+ *  'verified' (superficie E categoria verificate con la fonte), 'partial'
+ *  (una sola delle due), 'to_verify' (nessuna; vedi `needsReconfirm`). */
 export function verificationState(p) {
-  if (!p) return null;
-  if (p.surface_source === 'verified' || p.cadastral_category_source === 'verified') return 'verified';
-  if (p.cadastral_evidence_identity && p.cadastral_evidence_identity !== identityKey(p)) return 'to_reconfirm';
-  return null;
+  if (!p) return 'to_verify';
+  const n = ['surface_source', 'cadastral_category_source'].filter((k) => p[k] === 'verified').length;
+  return ['to_verify', 'partial', 'verified'][n];
+}
+
+/** La verifica non vale piu': la fonte registrata e' di un'identita'
+ *  catastale diversa da quella attuale (riferimenti cambiati dopo). */
+export function needsReconfirm(p) {
+  if (!p) return false;
+  if (typeof p.verification_reconfirm === 'boolean') return p.verification_reconfirm;
+  return Boolean(p.cadastral_evidence_identity) && p.cadastral_evidence_identity !== identityKey(p)
+    && verificationState(p) === 'to_verify';
+}
+
+// D4: sempre «Verifica …», mai «Da verificare» (che nella scheda edificio era la categoria mancante)
+export const VERIFICATION_LABELS = { verified: 'Verifica completa', partial: 'Verifica parziale', to_verify: 'Verifica da completare' };
+
+/** L'etichetta e il tono del badge della verifica di una scheda. */
+export function verificationBadge(p) {
+  const stato = (p && p.verification) || verificationState(p);
+  if (stato === 'verified') return { label: VERIFICATION_LABELS.verified, tone: 'ok' };
+  if (stato === 'partial') return { label: VERIFICATION_LABELS.partial, tone: 'role' };
+  if (needsReconfirm(p)) return { label: 'Verifica da riconfermare', tone: 'warn' };
+  return { label: VERIFICATION_LABELS.to_verify, tone: 'gray' };
+}
+
+/** A2: l'interno e' provvisorio (generato in blocco e non ancora confermato). */
+export function provisionalNumbering(p) {
+  if (!p || !str(p.internal_number)) return false;
+  if (typeof p.provisional_numbering === 'boolean') return p.provisional_numbering;
+  const lotto = p.metadata && typeof p.metadata === 'object' ? p.metadata.census_batch : null;
+  return Boolean(lotto && lotto.provisional_numbering);
 }
 
 /** «Visura catastale del 01/10/2026 · rif. prot. 123» (la fonte registrata). */
@@ -109,6 +139,12 @@ export function compositionView(c) {
       over: num(r.over_declared) ? plurale(r.over_declared, 'in più', 'in più') : '',
     };
   });
+  // indicatore 3 (A1): attendibilita' delle schede, separato da quantita' e completezza
+  const ver = c.verification || {};
+  const verificate = num(ver.verified) ?? 0;
+  const parziali = num(ver.partial) ?? 0;
+  const daVerificare = num(ver.to_verify) ?? 0;
+  const daRiconfermare = num(ver.to_reconfirm) ?? 0;
   const presenti = num(create.present) ?? 0;
   const dichiarate = num(create.declared);
   const daCreare = num(create.to_create);
@@ -125,6 +161,11 @@ export function compositionView(c) {
     unitsDone: create.complete === true,
     dataIndicator: schede ? `${complete} di ${plurale(schede, 'scheda completa', 'schede complete')}` : 'Nessuna scheda',
     dataDone: schede > 0 && complete === schede,
+    verificationIndicator: schede ? `${verificate} di ${plurale(schede, 'scheda verificata', 'schede verificate')}` : 'Nessuna scheda',
+    verificationNote: schede ? [parziali ? plurale(parziali, 'parziale', 'parziali') : '',
+      daVerificare ? `${daVerificare} da completare${daRiconfermare ? ` (${daRiconfermare} da riconfermare)` : ''}` : '']
+      .filter(Boolean).join(' · ') : '',
+    verificationDone: schede > 0 && verificate === schede,
     toCreate: daCreare || 0,
     canGenerate: comp.complete === true && (daCreare || 0) > 0,
     totalNote: comp.total_matches === false

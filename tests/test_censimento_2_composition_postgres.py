@@ -156,35 +156,46 @@ def test_01_migration_100_vincoli_e_trigger(mondo):
         [pid, "declared"], [altra, "estimated"]]                                   # entrambe confermate nella SET
     _q(m, "UPDATE properties SET surface_sqm = surface_sqm + 1 WHERE id = ANY(%s)", ([pid, altra],))
     assert _q(m, "SELECT surface_source FROM properties WHERE id = ANY(%s)", ([pid, altra],)) == [[None], [None]]
-    # dalla scheda dell'unita' (PATCH generica): «verificata» solo con la fonte nella stessa richiesta
+    # dalla scheda dell'unita': «verificata» solo con la fonte nella stessa richiesta.
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A3): provenienze e fonte non passano piu' dalla PATCH
+    # generica (422, `extra=forbid`) ma dalla rotta dedicata `census-data`, con gli stessi controlli.
     api = m["api"]()
-    r = api.patch(f"/api/property/properties/{pid}", json={"surface_sqm": "80", "surface_source": "verified"})
-    assert r.status_code == 422                                                    # nessuna fonte indicata
-    r = api.patch(f"/api/property/properties/{pid}", json={"surface_sqm": "80", "surface_source": "verified",
-                                                         "cadastral_evidence_type": "planimetria",
-                                                         "cadastral_evidence_date": "2026-10-09",
-                                                         "cadastral_evidence_ref": "prot. TE0012345"})
+    dati = f"/api/property/properties/{pid}/census-data"
+    for campo, valore in (("surface_source", "verified"), ("cadastral_category_source", "declared"),
+                          ("cadastral_evidence_type", "visura"), ("cadastral_evidence_date", "2026-10-01"),
+                          ("cadastral_evidence_ref", "x")):
+        assert api.patch(f"/api/property/properties/{pid}", json={campo: valore}).status_code == 422, campo
+    r = api.patch(dati, json={"surface_sqm": "80", "surface_source": "verified"})
+    assert (r.status_code, r.json()["code"]) == (400, "VERIFIED_NEEDS_CADASTRAL_EVIDENCE")   # nessuna fonte indicata
+    r = api.patch(dati, json={"surface_sqm": "80", "surface_source": "verified",
+                              "cadastral_evidence_type": "planimetria",
+                              "cadastral_evidence_date": "2026-10-09",
+                              "cadastral_evidence_ref": "prot. TE0012345"})
     assert r.status_code == 200 and r.json()["surface_source"] == "verified", r.text
     assert (r.json()["cadastral_evidence_type"], r.json()["cadastral_evidence_ref"]) == ("planimetria", "prot. TE0012345")
-    assert api.patch(f"/api/property/properties/{pid}", json={"surface_source": "verified", "cadastral_evidence_type": "visura",
-                                                            "cadastral_evidence_date": "2999-01-01"}).status_code == 422
+    assert api.patch(dati, json={"surface_source": "verified", "cadastral_evidence_type": "visura",
+                                 "cadastral_evidence_date": "2999-01-01"}).status_code == 422
     r = api.patch(f"/api/property/properties/{pid}", json={"rooms": 4, "internal_notes": "altro"})
     assert r.status_code == 200 and (r.json()["surface_source"], r.json()["cadastral_category_source"]) == ("verified", "verified")
-    # togliere la fonte a una «verificata»: 400 leggibile, nessuna modifica
-    r = api.patch(f"/api/property/properties/{pid}", json={"cadastral_evidence_date": None})
-    assert (r.status_code, r.json()["code"]) == (400, "VERIFIED_NEEDS_CADASTRAL_EVIDENCE"), r.text
-    # un riferimento catastale cambiato dalla scheda: «verificata» da riconfermare, le altre restano
+    # togliere la fonte a una «verificata»: non da qui (la fonte si scrive solo con una «verificata»)
+    r = api.patch(dati, json={"cadastral_evidence_date": None})
+    assert (r.status_code, r.json()["code"]) == (400, "EVIDENCE_WITHOUT_VERIFIED"), r.text
+    # un riferimento catastale cambiato dalla PATCH generica su una verifica: 409, nessuna modifica silenziosa
     r = api.patch(f"/api/property/properties/{pid}", json={"cadastral_subunit": None})
+    assert (r.status_code, r.json()["code"]) == (409, "VERIFIED_DATA_LOCKED"), r.text
+    # dal modulo dedicato e' una scelta esplicita: «verificata» da riconfermare, le altre restano
+    r = api.patch(dati, json={"cadastral_subunit": None})
     assert r.status_code == 200, r.text
     assert (r.json()["surface_source"], r.json()["cadastral_category_source"]) == (None, None)
     assert r.json()["cadastral_evidence_type"] == "planimetria"                   # storico della verifica
     # «verificata» su un'unita' senza identita' completa: 400; provenienza senza dato: 400; fuori elenco: 422
-    r = api.patch(f"/api/property/properties/{altra}", json={"cadastral_category": "A/3", "cadastral_category_source": "verified",
-                                                           "cadastral_evidence_type": "visura", "cadastral_evidence_date": "2026-10-01"})
+    r = api.patch(f"/api/property/properties/{altra}/census-data", json={
+        "cadastral_category": "A/3", "cadastral_category_source": "verified",
+        "cadastral_evidence_type": "visura", "cadastral_evidence_date": "2026-10-01"})
     assert (r.status_code, r.json()["code"]) == (400, "VERIFIED_NEEDS_CADASTRAL_EVIDENCE")
-    r = api.patch(f"/api/property/properties/{altra}", json={"cadastral_category_source": "declared"})
+    r = api.patch(f"/api/property/properties/{altra}/census-data", json={"cadastral_category_source": "declared"})
     assert (r.status_code, r.json()["code"]) == (400, "SOURCE_WITHOUT_VALUE")
-    assert api.patch(f"/api/property/properties/{altra}", json={"surface_source": "misurata"}).status_code == 422
+    assert api.patch(f"/api/property/properties/{altra}/census-data", json={"surface_source": "misurata"}).status_code == 422
     _q(m, "UPDATE properties SET cadastral_category = 'A/2' WHERE id = %s", (pid,))
     # cancellare il dato cancella la sua provenienza (mai un CHECK violato da una PATCH)
     _q(m, "UPDATE properties SET cadastral_category_source = 'declared' WHERE id = %s", (pid,))
@@ -587,11 +598,13 @@ def test_13_completezza_senza_piano_verifica_separata_e_composizione_obbligatori
     riga = next(x for x in s["units"] if x["id"] == u["id"])
     assert riga["missing"] == ["surface_source", "cadastral_category_source"]
     assert "floor" not in [x["value"] for x in s["catalog"]["minimum_data"]]
-    assert api.patch(f"/api/property/properties/{u['id']}", json={"surface_source": "estimated",
-                                                                 "cadastral_category_source": "declared"}).status_code == 200
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A3): le provenienze dalla rotta dedicata
+    assert api.patch(f"/api/property/properties/{u['id']}/census-data", json={"surface_source": "estimated",
+                                                                             "cadastral_category_source": "declared"}).status_code == 200
     s = _stato(m, e["id"])
     riga = next(x for x in s["units"] if x["id"] == u["id"])
-    assert riga["missing"] == [] and riga["verification"] is None and s["data_completeness"]["complete"] == 1
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A1): tre condizioni, mai None
+    assert riga["missing"] == [] and riga["verification"] == "to_verify" and s["data_completeness"]["complete"] == 1
     # schede complete ma composizione assente: l'edificio NON e' completo, resta in bozza
     assert s["completion"] == "draft" and s["composition"]["complete"] is False
     # bozza parziale salvabile, sempre in bozza; con la composizione completa e coerente: completo
@@ -599,27 +612,34 @@ def test_13_completezza_senza_piano_verifica_separata_e_composizione_obbligatori
     r = _composizione(m, e["id"], residential=1, commercial=0, other=0, pertinenze=0, set_total=True)
     assert r.status_code == 200 and r.json()["completion"] == "data_complete", r.text
     # la verifica: indicatore separato dalla completezza
-    assert api.patch(f"/api/property/properties/{u['id']}", json={
+    assert api.patch(f"/api/property/properties/{u['id']}/census-data", json={
         "cadastral_municipality_code": "L307", "cadastral_sheet": "5", "cadastral_parcel": "61", "cadastral_subunit": "2",
         "cadastral_category_source": "verified", "cadastral_evidence_type": "visura",
         "cadastral_evidence_date": "2026-10-10"}).status_code == 200
     riga = next(x for x in _stato(m, e["id"])["units"] if x["id"] == u["id"])
-    assert riga["verification"] == "verified" and riga["missing"] == []
-    assert api.patch(f"/api/property/properties/{u['id']}", json={"cadastral_parcel": "62"}).status_code == 200
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A1): solo la categoria verificata = parzialmente verificata
+    assert riga["verification"] == "partial" and riga["missing"] == []
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A3): dalla PATCH generica 409; dal modulo dedicato si toglie in modo esplicito
+    assert api.patch(f"/api/property/properties/{u['id']}", json={"cadastral_parcel": "62"}).status_code == 409
+    assert api.patch(f"/api/property/properties/{u['id']}/census-data", json={"cadastral_parcel": "62"}).status_code == 200
     s = _stato(m, e["id"])
     riga = next(x for x in s["units"] if x["id"] == u["id"])
-    assert riga["verification"] == "to_reconfirm" and riga["cadastral_category_source"] is None
+    assert riga["verification"] == "to_verify" and riga["verification_reconfirm"] is True
+    assert riga["cadastral_category_source"] is None
     assert riga["surface_source"] == "estimated"                             # non dipende dalla verifica
     assert riga["missing"] == ["cadastral_category_source"] and s["completion"] == "units_created"
     assert [x["value"] for x in s["catalog"]["evidence_types"]] == ["visura", "planimetria", "atto", "altro"]
     # l'identita' della verifica la scrive solo il database; la modifica di gruppo non tocca la fonte
     r = api.patch(f"/api/property/properties/{u['id']}", json={"cadastral_evidence_identity": "L307||5|62|2"})
     assert r.status_code == 422
+    r = api.patch(f"/api/property/properties/{u['id']}/census-data", json={"cadastral_evidence_identity": "L307||5|62|2"})
+    assert r.status_code == 422
     r = api.post(f"/api/property/buildings/{e['id']}/units/bulk-update",
                  json={"property_ids": [u["id"]], "changes": {"cadastral_evidence_type": "visura"}})
     assert r.status_code == 422
     # un'altra agenzia non legge ne' scrive la fonte
-    assert m["api"]("owner_b").patch(f"/api/property/properties/{u['id']}", json={
+    assert m["api"]("owner_b").patch(f"/api/property/properties/{u['id']}/census-data", json={
+        "cadastral_category_source": "verified",
         "cadastral_evidence_type": "atto", "cadastral_evidence_date": "2026-10-10"}).status_code == 404
     assert _q(m, "SELECT cadastral_evidence_type FROM properties WHERE id = %s", (u["id"],))[0][0] == "visura"
 

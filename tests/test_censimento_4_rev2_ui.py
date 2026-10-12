@@ -455,7 +455,8 @@ def test_r7b_retry_dopo_modifica_recupera_la_riga_salvata_e_applica_le_modifiche
       report({ aperto, banner, azioni, errore, chiuso: !D(), toast: testoToast(), post: scritture() });
     """
     out = _run(staged, scenario,
-               "__route('PATCH', '/api/property/properties/413', " + json.dumps({"status": 200, "body": {**CREATA, "surface_sqm": "90.00", "internal_number": "3"}}) + ");\n"
+               "__route('PATCH', '/api/property/properties/413/census-data', " + json.dumps({"status": 200, "body": {**CREATA, "internal_number": "3", "changed": ["internal_number"]}}) + ");\n"
+               + "__route('PATCH', '/api/property/properties/413', " + json.dumps({"status": 200, "body": {**CREATA, "surface_sqm": "90.00", "internal_number": "3"}}) + ");\n"
                + _rotte(post_unit=({"throw": True}, CHIAVE_RIUSATA, {"status": 200, "body": CREATA_REPLICA})),
                "#/immobili/edifici/7")
     assert out["aperto"] and out["banner"] and "IMM-413" in out["banner"] and "già" in out["banner"]
@@ -467,7 +468,11 @@ def test_r7b_retry_dopo_modifica_recupera_la_riga_salvata_e_applica_le_modifiche
     assert len(creazioni) == 3 and len({c["body"]["client_request_id"] for c in creazioni}) == 1
     assert _corpo_senza_chiave(creazioni[0]) == _corpo_senza_chiave(creazioni[2])       # il recupero rimanda il PRIMO corpo
     assert creazioni[1]["body"]["surface_sqm"] == 90 and creazioni[1]["body"]["internal_number"] == "3"
-    assert patch == [{**patch[0], "url": "/api/property/properties/413", "body": {"surface_sqm": 90, "internal_number": "3"}}]
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (D3): l'interno passa dalla rotta tracciata (storico),
+    # gli altri campi dalla PATCH generica di sempre; nessun avviso di posizione, come prima
+    assert patch == [{**patch[0], "url": "/api/property/properties/413/census-data",
+                      "body": {"internal_number": "3", "confirm_similar": True}},
+                     {**patch[1], "url": "/api/property/properties/413", "body": {"surface_sqm": 90}}]
     assert out["chiuso"] and out["toast"].startswith("IMM-413")
     assert not re.search(r"[A-Z]{3,}_[A-Z_]+", out["banner"])
 

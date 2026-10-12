@@ -32,7 +32,7 @@ import * as api from './census-api.js';
 import { openCategoryPicker, showToast } from './census-sheets.js';
 import { errorMessage, floorLabel, labelOf } from './census-model.js';
 import {
-  bulkPayload, classLabel, compositionForm, compositionPayload, compositionView, defaultGroups, generatePayload,
+  bulkPayload, classLabel, compositionForm, compositionPayload, compositionView, defaultGroups, generatePayload, verificationBadge,
   generatedText, hasOverDeclared, interiorRows, missingText, pertinenzeText, planRows, sourceLabel,
   sourceOptions, sourceTone, undoBatchText,
 } from './composition-model.js';
@@ -125,6 +125,7 @@ export async function renderCompositionPanel(el, ctx) {
       <div class="building-counts composition-indicators">
         <span class="building-count" data-indicator="units"><small>Unità create</small><b>${escapeHtml(v.unitsIndicator)}</b>${v.unitsDone ? '<em>tutte presenti</em>' : ''}</span>
         <span class="building-count" data-indicator="data"><small>Schede complete</small><b>${escapeHtml(v.dataIndicator)}</b><em>dati minimi: ${escapeHtml(((catalog.minimum_data) || []).map((x) => x.label).join(', '))}</em></span>
+        <span class="building-count" data-indicator="verification"><small>Schede verificate</small><b>${escapeHtml(v.verificationIndicator)}</b>${v.verificationNote ? `<em>${escapeHtml(v.verificationNote)}</em>` : ''}</span>
       </div>
       ${v.totalNote ? `<p class="muted" data-total-note>${escapeHtml(v.totalNote)}</p>` : ''}
       <div class="composition-classes" data-composition-classes>
@@ -169,7 +170,7 @@ export async function renderCompositionPanel(el, ctx) {
               <span data-fact="category">${escapeHtml(u.cadastral_category || 'Categoria —')} ${renderBadge(sourceLabel(catalog, u.cadastral_category_source), sourceTone(u.cadastral_category_source))}</span>
               ${pert ? `<span data-fact="pertinenze">${escapeHtml(pert)}</span>` : ''}
             </div>
-            <div class="interior-state" data-fact="state">${(u.missing || []).length ? renderBadge(missingText(u, catalog), 'warn') : renderBadge('Completa', 'ok')}${u.record_kind === 'crm' ? ` ${renderBadge('In carico', 'role')}` : ''}${u.provisional_numbering ? ` ${renderBadge('Interno provvisorio', 'gray')}` : ''}${u.verification === 'verified' ? ` ${renderBadge('Verifica catastale', 'ok')}` : ''}${u.verification === 'to_reconfirm' ? ` ${renderBadge('Verifica da riconfermare', 'warn')}` : ''}</div>
+            <div class="interior-state" data-fact="state">${(u.missing || []).length ? renderBadge(missingText(u, catalog), 'warn') : renderBadge('Completa', 'ok')}${u.record_kind === 'crm' ? ` ${renderBadge('In carico', 'role')}` : ''}${u.provisional_numbering ? ` ${renderBadge('Interno provvisorio', 'gray')}` : ''} <span data-verification="${escapeHtml(u.verification || '')}">${(() => { const b = verificationBadge(u); return renderBadge(b.label, b.tone); })()}</span></div>
           </div>
         </li>`;
       }).join('')}</ul>` : `<p class="muted" data-interiors-empty>${stato.filter === 'incomplete' ? 'Nessuna scheda da completare.' : 'Nessuna unità attiva in questo edificio.'}</p>`}`;

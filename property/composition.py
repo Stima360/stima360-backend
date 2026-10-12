@@ -62,6 +62,18 @@ VERIFIED_NEEDS_EVIDENCE = ("'Verificata' richiede una fonte catastale consultata
                            "catastale dell'unita' (comune catastale, foglio, particella, subalterno; sezione solo se "
                            "prevista) e tipo e data del documento")
 SOURCE_WITHOUT_VALUE = "Una provenienza senza il dato non si salva"
+# Fase A (A2/A3): «Dati catastali e superficie» della singola scheda
+VERIFIED_IN_BULK = ("Alcune schede selezionate hanno il dato verificato con una fonte documentata: la modifica di "
+                    "gruppo non lo cambia. Modificale una per una dal modulo «Dati catastali e superficie»")
+VERIFIED_DATA_LOCKED = ("Questo dato e' verificato con una fonte documentata: modificalo dal modulo «Dati catastali e "
+                        "superficie» della scheda, che chiede di riconfermare la verifica o la toglie in modo esplicito")
+EVIDENCE_WITHOUT_VERIFIED = "La fonte consultata si registra insieme a una provenienza «Verificata»"
+INTERNAL_NUMBER_REQUIRED = "Indica l'interno prima di confermarlo"
+UNIT_ARCHIVED = "La scheda e' archiviata: riattivala prima di modificarne i dati"
+UNIT_IN_TRASH = "La scheda e' nel Cestino: ripristinala prima di modificarne i dati"
+STALE_DATA = ("Nel frattempo la scheda e' stata modificata (da te o da un collega): rileggi i dati salvati e "
+              "decidi se riapplicare le tue modifiche")
+INTERNAL_SIMILAR = "Nella stessa scala e allo stesso piano c'e' gia' questo interno: controlla o salva comunque"
 
 _BATCH_KEY = "census_batch"
 _FONTI = (("surface_sqm", "surface_source"), ("cadastral_category", "cadastral_category_source"))
@@ -157,11 +169,14 @@ def _schede(cur, building_id) -> list[dict]:
         meta = riga.pop("metadata", None) or {}
         lotto = meta.get(_BATCH_KEY) if isinstance(meta, dict) else None
         riga["batch_key"] = lotto.get("key") if isinstance(lotto, dict) else None
-        riga["provisional_numbering"] = bool(isinstance(lotto, dict) and lotto.get("provisional_numbering"))
+        # A2: provvisorio finche' non confermato; senza interno non c'e' nulla di provvisorio da mostrare
+        riga["provisional_numbering"] = bool(isinstance(lotto, dict) and lotto.get("provisional_numbering")
+                                             and riga.get("internal_number"))
         riga["missing"] = classi.missing_data(riga)
         riga["cadastral_source"] = classi.has_cadastral_source(riga)
-        # indicatore SEPARATO dalla completezza: verificata / da riconfermare
+        # A1: indicatore SEPARATO dalla completezza: verificata / parziale / da verificare (o riconfermare)
         riga["verification"] = classi.verification_state(riga)
+        riga["verification_reconfirm"] = classi.needs_reconfirm(riga)
         riga.pop("cadastral_evidence_identity", None)
         riga["census_class_explicit"] = bool(isinstance(meta, dict) and meta.get(classi.EXPLICIT_CLASS_KEY))
         riga["pertinenze_count"] = int(riga["pertinenze_count"] or 0)
@@ -220,6 +235,10 @@ def _riepilogo(cur, edificio: dict) -> dict:
         # indicatore 2: quanto sono complete le schede (separato dal primo)
         "data_completeness": {"units": len(schede), "complete": len(schede) - len(incomplete),
                               "incomplete": len(incomplete), "minimum_data": list(classi.MINIMUM_DATA)},
+        # indicatore 3 (A1): quanto sono attendibili le schede (separato dai primi due)
+        "verification": {"units": len(schede),
+                         **{s: sum(1 for x in schede if x["verification"] == s) for s in classi.VERIFICATION_STATES},
+                         "to_reconfirm": sum(1 for x in schede if x["verification_reconfirm"])},
         "completion": stato,
         "units": schede,
         "catalog": classi.catalog(),
@@ -545,6 +564,15 @@ def bulk_update(ctx, building_id: int, body) -> dict:
                 if "census_class" in cambi and r["property_type"] != classi.RUSTIC:
                     raise census.CensusInvalid("La classe si sceglie solo per i rustici", "CLASS_NOT_APPLICABLE",
                                                property_id=r["id"])
+            # Fase A (A3): la modifica di gruppo non invalida in silenzio una verifica
+            # documentata: una scheda con il dato «verificato» si modifica da sola,
+            # dal modulo «Dati catastali e superficie» (che lo registra nello storico)
+            verificate = sorted({r["id"] for r in righe for valore, fonte in _FONTI
+                                 if r.get(fonte) == "verified" and (fonte in fonti or (
+                                     valore in valori and not _uguale(valore, r.get(valore), valori[valore])))})
+            if verificate:
+                raise census.CensusConflict(VERIFIED_IN_BULK, "VERIFIED_DATA_LOCKED", property_ids=verificate)
+            for r in righe:
                 dopo = {**r, **valori}
                 for valore, fonte in _FONTI:
                     if fonti.get(fonte) is not None and dopo.get(valore) is None:
@@ -590,3 +618,300 @@ def bulk_update(ctx, building_id: int, body) -> dict:
                     "units": aggiornate}
 
     return census._esegui(operazione)
+
+
+# ---------------------------------------------------------------------------
+# Fase A (A2/A3): «Dati catastali e superficie» della singola scheda
+# ---------------------------------------------------------------------------
+#
+# PATCH /properties/{id}/census-data: identita' catastale, superficie,
+# categoria, provenienze, fonte della verifica, interno e sua conferma in UNA
+# transazione, con UNA riga di storico (`activities` di sistema, come la
+# modifica di gruppo: agenzia, autore e data li scrive l'audit esistente;
+# campo, valore precedente e successivo in `metadata.changes`). Ogni rifiuto
+# avviene prima dell'UPDATE; un errore dopo (vincolo, indice unico) annulla
+# tutto, storico compreso. Mai lo stato commerciale.
+
+_IDENTITA = ("cadastral_municipality_code", "cadastral_section", "cadastral_sheet", "cadastral_parcel",
+             "cadastral_subunit")
+_EVIDENZA = ("cadastral_evidence_type", "cadastral_evidence_date", "cadastral_evidence_ref")
+_CAMPI_DATI = (*_IDENTITA, "surface_sqm", "surface_source", "cadastral_category", "cadastral_category_source",
+               *_EVIDENZA, "internal_number")
+_ETICHETTE_DATI = {"cadastral_municipality_code": "comune catastale", "cadastral_section": "sezione",
+                   "cadastral_sheet": "foglio", "cadastral_parcel": "particella", "cadastral_subunit": "subalterno",
+                   "surface_sqm": "superficie", "surface_source": "provenienza della superficie",
+                   "cadastral_category": "categoria catastale", "cadastral_category_source": "provenienza della categoria",
+                   "cadastral_evidence_type": "fonte consultata", "cadastral_evidence_date": "data della fonte",
+                   "cadastral_evidence_ref": "riferimento della fonte", "internal_number": "interno",
+                   "internal_number_status": "conferma dell'interno"}
+#: i campi che una verifica documentata protegge, per provenienza: il valore e
+#: l'identita' catastale a cui la fonte e' legata (vincolo e trigger della 100)
+_PROTETTI_DA = {"surface_source": ("surface_sqm", *_IDENTITA),
+                "cadastral_category_source": ("cadastral_category", *_IDENTITA)}
+
+
+def _uguale(campo, a, b) -> bool:
+    """Lo stesso valore come lo salva il database (normalizzazione della 083)."""
+    if campo in _IDENTITA:
+        return census._norm(a) == census._norm(b)
+    if campo in ("cadastral_category", "internal_number", "cadastral_evidence_ref", "cadastral_evidence_type"):
+        a = (str(a).strip() or None) if a is not None else None
+        b = (str(b).strip() or None) if b is not None else None
+        return (a.upper() if a and campo == "cadastral_category" else a) == \
+            (b.upper() if b and campo == "cadastral_category" else b)
+    return a == b                                        # Decimal('80') == Decimal('80.00'); date == date
+
+
+def _per_storico(valore):
+    if valore is None or isinstance(valore, (bool, int, str)):
+        return valore
+    return str(valore) if not hasattr(valore, "isoformat") else valore.isoformat()
+
+
+def _lotto(riga: dict) -> dict:
+    meta = riga.get("metadata")
+    lotto = meta.get(_BATCH_KEY) if isinstance(meta, dict) else None
+    return lotto if isinstance(lotto, dict) else {}
+
+
+def _verificati_toccati(riga: dict, dati: dict) -> list[str]:
+    """I dati di `riga` protetti da una provenienza «verificata» che `dati`
+    cambierebbe (il trigger della 100 toglierebbe la verifica in silenzio)."""
+    toccati = []
+    for fonte, campi in _PROTETTI_DA.items():
+        if riga.get(fonte) != "verified":
+            continue
+        toccati += [c for c in campi if c in dati and c not in toccati and not _uguale(c, riga.get(c), dati[c])]
+    return toccati
+
+
+def _interni_simili(cur, riga: dict, interno) -> list[dict]:
+    """La stessa regola di posizione della numerazione (scala, piano, interno):
+    un avviso superabile, mai un blocco silenzioso. Scale diverse = interni
+    diversi."""
+    if not riga.get("building_id") or not interno:
+        return []
+    cur.execute(f"SELECT id, code, staircase, floor, internal_number FROM properties u WHERE u.building_id = %s "
+                f"AND u.id <> %s AND {_property_trash.live('u')} AND NOT {census._ARCHIVIATA} "
+                "AND coalesce(upper(btrim(u.staircase)), '') = coalesce(upper(btrim(%s)), '') "
+                "AND coalesce(upper(btrim(u.floor)), '') = coalesce(upper(btrim(%s)), '') "
+                "AND upper(btrim(u.internal_number)) = upper(btrim(%s)) ORDER BY u.id LIMIT 10",
+                (riga["building_id"], riga["id"], riga.get("staircase"), riga.get("floor"), interno))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _normalizza_dati(dati: dict) -> dict:
+    for k in ("cadastral_municipality_code", "cadastral_sheet", "cadastral_parcel", "cadastral_subunit",
+              "cadastral_category", "cadastral_evidence_ref", "internal_number"):
+        if isinstance(dati.get(k), str):
+            dati[k] = dati[k].strip() or None
+    if isinstance(dati.get("cadastral_section"), str):
+        dati["cadastral_section"] = dati["cadastral_section"].strip()          # '' = «nessuna», resta ''
+    return dati
+
+
+def update_unit_data(ctx, property_id: int, body) -> dict:
+    agency_id = ctx.require_agency()
+    dati = _normalizza_dati(body.model_dump(exclude_unset=True))
+    conferma = bool(dati.pop("confirm_internal_number", False))
+    simili_ok = bool(dati.pop("confirm_similar", False))
+    atteso = dati.pop("expected_updated_at", None)
+    census._check_cadastral(dati)                       # catalogo della categoria, formato del Belfiore
+    verificate = [f for f in _PROTETTI_DA if dati.get(f) == "verified"]
+    if any(k in dati for k in _EVIDENZA) and not verificate:
+        raise census.CensusInvalid(EVIDENCE_WITHOUT_VERIFIED, "EVIDENCE_WITHOUT_VERIFIED")
+    if verificate and (dati.get("cadastral_evidence_type") is None or dati.get("cadastral_evidence_date") is None):
+        raise census.CensusInvalid(VERIFIED_NEEDS_EVIDENCE, "VERIFIED_NEEDS_CADASTRAL_EVIDENCE")
+    from core.exceptions import PropertyInTrash
+
+    def operazione():
+        with core_cursor(commit=True) as (_, cur):
+            _assicura_100(cur)
+            # D2: lo stesso lock della scheda della PATCH generica e di «Applica» del
+            # sito, PRIMA della riga: nessuna verifica si intreccia con quelle scritture
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (_chiave_scheda(property_id),))
+            cur.execute("SELECT * FROM properties WHERE id = %s AND agency_id = %s FOR UPDATE", (property_id, agency_id))
+            r = repository.row(cur.fetchone())
+            if r is None:
+                raise NotFoundError(f"property {property_id} not found")
+            if r.get("deleted_at") is not None:
+                raise PropertyInTrash(UNIT_IN_TRASH)
+            if r.get("archived_at") is not None or r.get("commercial_status") == "archived":
+                raise census.CensusConflict(UNIT_ARCHIVED, "UNIT_ARCHIVED", property_id=r["id"])
+            # D1: le autorizzazioni della PATCH generica, che questo modulo usava prima:
+            # ogni operatore dell'agenzia, su schede di censimento e commerciali
+            if atteso is not None and r.get("updated_at") != atteso:
+                raise census.CensusConflict(STALE_DATA, "STALE_DATA", updated_at=r.get("updated_at"))
+            dopo = {**r, **dati}
+            if verificate and not classi.has_cadastral_source(dopo):
+                raise census.CensusInvalid(VERIFIED_NEEDS_EVIDENCE, "VERIFIED_NEEDS_CADASTRAL_EVIDENCE")
+            for valore, fonte in _FONTI:
+                if dati.get(fonte) is not None and dopo.get(valore) is None:
+                    raise census.CensusInvalid(SOURCE_WITHOUT_VALUE, "SOURCE_WITHOUT_VALUE")
+            if any(c in dati and not _uguale(c, r.get(c), dati[c]) for c in _IDENTITA):
+                doppione = census._duplicato_catastale(cur, agency_id, {c: dopo.get(c) for c in _IDENTITA},
+                                                       escluso=property_id)
+                if doppione is not None:
+                    raise census.CensusConflict(f"Questo subalterno e' gia' censito come {census._etichetta(doppione)}",
+                                                "CADASTRAL_DUPLICATE",
+                                                existing={"id": doppione["id"], "code": doppione.get("code")})
+            provvisorio = bool(_lotto(r).get("provisional_numbering"))
+            interno = dopo.get("internal_number")
+            if conferma and not interno:
+                raise census.CensusInvalid(INTERNAL_NUMBER_REQUIRED, "INTERNAL_NUMBER_REQUIRED")
+            conferma_effettiva = conferma and provvisorio
+            interno_cambiato = "internal_number" in dati and not _uguale("internal_number", r.get("internal_number"),
+                                                                        interno)
+            if (interno_cambiato or conferma_effettiva) and not simili_ok:
+                simili = _interni_simili(cur, r, interno)
+                if simili:
+                    raise census.CensusConflict(INTERNAL_SIMILAR, "SIMILAR_FOUND", similar=simili)
+            cambia = conferma_effettiva or any(not _uguale(k, r.get(k), v) for k, v in dati.items())
+            if not cambia:
+                return {**r, "changed": [], **_stato_scheda(r)}
+            insieme = {k: v for k, v in dati.items() if k in _CAMPI_DATI}
+            assegna = [f"{k} = %s" for k in insieme]
+            valori = list(insieme.values())
+            if conferma_effettiva:
+                # stessa scheda, stesso id e codice: cade solo il «provvisorio»
+                assegna.append(f"metadata = jsonb_set(coalesce(metadata, '{{}}'::jsonb), "
+                               f"'{{{_BATCH_KEY},provisional_numbering}}', 'false'::jsonb)")
+            # UNA istruzione: valori, provenienze e fonte insieme (per il trigger della
+            # 100 una provenienza nella stessa SET e' una conferma esplicita)
+            cur.execute(f"UPDATE properties SET {', '.join(assegna)}, updated_at = NOW() "
+                        "WHERE id = %s AND agency_id = %s RETURNING *", valori + [property_id, agency_id])
+            nuova = repository.row(cur.fetchone())
+            modifiche = {k: [_per_storico(r.get(k)), _per_storico(nuova.get(k))] for k in _CAMPI_DATI
+                         if not _uguale(k, r.get(k), nuova.get(k))}
+            if conferma_effettiva:
+                modifiche["internal_number_status"] = ["provvisorio", "confermato"]
+            if modifiche:
+                census._attivita_sistema(ctx, cur, property_id, "Dati catastali e superficie: " +
+                                         ", ".join(_ETICHETTE_DATI[k] for k in modifiche),
+                                         census_data=True, fields=sorted(modifiche), changes=modifiche,
+                                         building_id=r.get("building_id"))
+            return {**nuova, "changed": sorted(modifiche), **_stato_scheda(nuova)}
+
+    return census._esegui(operazione)
+
+
+def _stato_scheda(riga: dict) -> dict:
+    return {"verification": classi.verification_state(riga), "verification_reconfirm": classi.needs_reconfirm(riga),
+            "provisional_numbering": bool(_lotto(riga).get("provisional_numbering") and riga.get("internal_number"))}
+
+
+# ---------------------------------------------------------------------------
+# Fase A (A3, D2, D3): gli ALTRI percorsi di modifica non invalidano in
+# silenzio una verifica documentata e non cambiano l'interno senza storico.
+#
+# Il service generico (property/service.py) e la sincronizzazione dal sito
+# (property/site_sync.py) non si toccano. La loro scrittura apre una
+# connessione propria, quindi il controllo non puo' stare nella loro stessa
+# transazione: sta davanti, nel router, sotto un LOCK DI SERIALIZZAZIONE
+# PER SCHEDA (advisory lock di sessione, `census-data:property:{id}`), preso
+# PRIMA di leggere e tenuto fino a DOPO il commit della scrittura. Chi
+# scrive una verifica (la rotta census-data, l'unico percorso che puo'
+# scriverla) prende lo stesso lock nella SUA transazione (advisory lock di
+# transazione) prima di leggere la riga: le due operazioni non possono piu'
+# intrecciarsi. La modifica di gruppo controlla le righe che ha gia' bloccato
+# FOR UPDATE, nella sua transazione. Ordine dei lock ovunque: advisory, poi
+# riga. Il lock di sessione cade comunque alla chiusura della connessione.
+# ---------------------------------------------------------------------------
+
+def _chiave_scheda(property_id) -> str:
+    return f"census-data:property:{int(property_id)}"
+
+
+def _sotto_lock(ctx, property_id, controlla, scrivi):
+    """Lock della scheda -> `controlla(cur, agency_id)` sullo stato committato
+    -> `scrivi()` (il service, con la sua transazione) -> rilascio."""
+    agency_id = ctx.require_agency()
+    esito, errore = None, None
+    with core_cursor() as (conn, cur):
+        conn.autocommit = True                          # nessuna transazione aperta durante l'attesa
+        cur.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (_chiave_scheda(property_id),))
+        try:
+            controlla(cur, agency_id)
+            try:
+                esito = scrivi()
+            except Exception as exc:                    # noqa: BLE001 - rilanciato com'e', fuori dal cursore
+                errore = exc
+        finally:
+            cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (_chiave_scheda(property_id),))
+    if errore is not None:
+        raise errore
+    return esito
+
+
+def _con_la_100(cur) -> bool:
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'properties' AND column_name = 'cadastral_category_source') AS pronta")
+    return bool(cur.fetchone()["pronta"])
+
+
+INTERNAL_NUMBER_TRACKED = ("L'interno si modifica dal modulo «Dati catastali e superficie» della scheda, che lo "
+                           "registra nello storico (e lo conferma, se era provvisorio)")
+_CAMPI_GUARDATI = ("surface_sqm", "cadastral_category", *_IDENTITA, "internal_number")
+
+
+def update_property_guarded(ctx, property_id: int, body, scrivi):
+    """PATCH generica dell'immobile (D2/D3), con la scrittura `scrivi` del
+    service di sempre:
+      * un valore protetto da una provenienza «verificata» (superficie;
+        categoria e identita' catastale) non cambia da qui: 409
+        VERIFIED_DATA_LOCKED;
+      * l'interno non cambia da qui (passa dalla rotta tracciata): 409
+        INTERNAL_NUMBER_TRACKED;
+    nessuna scrittura in entrambi i casi. Rimandare lo stesso valore (il form
+    Immobili rimanda tutto) resta possibile; senza la 100 tutto come prima.
+    Una PATCH che non tocca questi campi non prende alcun lock."""
+    dati = body.model_dump(exclude_unset=True)
+    if not any(c in dati for c in _CAMPI_GUARDATI):
+        return scrivi()
+    prova = _normalizza_dati({k: v for k, v in dati.items() if k in _CAMPI_GUARDATI})
+    try:
+        census._check_cadastral(prova)
+    except census.CensusInvalid:
+        return scrivi()                                  # lo rifiuta il service, con il suo messaggio
+
+    def controlla(cur, agency_id):
+        if not _con_la_100(cur):
+            return
+        cur.execute(f"SELECT id, surface_sqm, surface_source, cadastral_category, cadastral_category_source, "
+                    f"internal_number, {', '.join(_IDENTITA)} FROM properties p WHERE id = %s AND agency_id = %s "
+                    f"AND {_property_trash.live('p')}", (property_id, agency_id))
+        riga = cur.fetchone()
+        if riga is None:
+            return                                       # 404 / Cestino: li decide il service
+        riga = dict(riga)
+        if "internal_number" in prova and not _uguale("internal_number", riga.get("internal_number"),
+                                                      prova["internal_number"]):
+            raise census.CensusConflict(INTERNAL_NUMBER_TRACKED, "INTERNAL_NUMBER_TRACKED", fields=["internal_number"])
+        toccati = _verificati_toccati(riga, prova)
+        if toccati:
+            raise census.CensusConflict(VERIFIED_DATA_LOCKED, "VERIFIED_DATA_LOCKED", fields=toccati)
+
+    return _sotto_lock(ctx, property_id, controlla, scrivi)
+
+
+def resolve_site_conflict_guarded(ctx, property_id: int, source_id: int, body, scrivi):
+    """«Applica» un valore del sito (D2): non sulla superficie verificata,
+    con lo stesso lock della scheda. «Ignora» non scrive dati: nessun lock."""
+    if getattr(body, "action", None) != "apply":
+        return scrivi()
+
+    def controlla(cur, agency_id):
+        if not _con_la_100(cur):
+            return
+        cur.execute(f"SELECT p.surface_source, s.conflicts FROM properties p JOIN property_site_sources s "
+                    f"ON s.property_id = p.id AND s.id = %s WHERE p.id = %s AND p.agency_id = %s "
+                    f"AND {_property_trash.live('p')}", (source_id, property_id, agency_id))
+        riga = cur.fetchone()
+        if riga is None or riga["surface_source"] != "verified":
+            return
+        conflitto = next((c for c in (riga["conflicts"] or []) if isinstance(c, dict)
+                          and c.get("id") == body.conflict_id), None)
+        if conflitto is not None and conflitto.get("field") == "surface_sqm":
+            raise census.CensusConflict(VERIFIED_DATA_LOCKED, "VERIFIED_DATA_LOCKED", fields=["surface_sqm"])
+
+    return _sotto_lock(ctx, property_id, controlla, scrivi)

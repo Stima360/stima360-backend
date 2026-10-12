@@ -137,7 +137,8 @@ export async function renderEdificioDettaglio(container, params = []) {
     const voci = [
       ['Comune', edificio.city], ['Microzona', edificio.microzone], ['Via', edificio.address],
       ['Civico', edificio.civic_number], ['Nome', edificio.name],
-      ['Stato censimento', labelOf(opzioni.building_census_statuses, edificio.census_status, edificio.census_status)],
+      // CENSIMENTO-2 Fase A (A5): stessa colonna `census_status`, etichetta che dice cosa misura
+      ['Affidabilità della dichiarazione', labelOf(opzioni.building_census_statuses, edificio.census_status, edificio.census_status)],
       ['Scale', (edificio.staircases || []).join(', ')],
     ];
     container.querySelector('#building-facts').innerHTML = voci.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v && String(v).trim() ? v : '—')}</dd></div>`).join('');

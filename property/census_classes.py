@@ -134,16 +134,31 @@ def identity_key(riga: dict) -> str | None:
     return "|".join(parti)
 
 
-def verification_state(riga: dict) -> str | None:
-    """'verified' (una provenienza verificata, legata all'identita' attuale),
-    'to_reconfirm' (una fonte registrata per un'identita' che non e' piu'
-    quella dell'unita'), oppure None."""
-    if "verified" in (riga.get("surface_source"), riga.get("cadastral_category_source")):
-        return "verified"
+#: CENSIMENTO-2 Fase A (A1): tre condizioni, sempre una per scheda. Indicatore
+#: di ATTENDIBILITA', separato dalla quantita' (unita' create) e dalla
+#: completezza (dati minimi). «Verificata» = superficie E categoria con
+#: provenienza `verified`: il vincolo della 100 garantisce che ognuna abbia la
+#: fonte consultata (tipo e data) legata all'identita' catastale attuale.
+VERIFICATION_STATES = ("verified", "partial", "to_verify")
+VERIFICATION_LABELS = {"verified": "Verificata", "partial": "Parzialmente verificata", "to_verify": "Da verificare"}
+RECONFIRM_LABEL = "Da riconfermare"
+
+
+def verification_state(riga: dict) -> str:
+    """'verified' (superficie e categoria entrambe verificate), 'partial' (una
+    sola delle due), 'to_verify' (nessuna; comprende la verifica non piu'
+    valida, vedi `needs_reconfirm`)."""
+    verificati = sum(1 for k in ("surface_source", "cadastral_category_source") if riga.get(k) == "verified")
+    return ("to_verify", "partial", "verified")[verificati]
+
+
+def needs_reconfirm(riga: dict) -> bool:
+    """Una fonte registrata per un'identita' catastale che non e' piu' quella
+    dell'unita' (i riferimenti sono cambiati dopo la verifica): la verifica
+    non vale piu' e va riconfermata. Il trigger della 100 ha gia' riportato le
+    provenienze «verificate» a «non indicata»; la fonte resta come storico."""
     registrata = riga.get("cadastral_evidence_identity")
-    if registrata and registrata != identity_key(riga):
-        return "to_reconfirm"
-    return None
+    return bool(registrata) and registrata != identity_key(riga) and verification_state(riga) == "to_verify"
 
 
 def catalog() -> dict:
@@ -157,5 +172,6 @@ def catalog() -> dict:
         "completion": [{"value": k, "label": v} for k, v in COMPLETION_LABELS.items()],
         "cadastral_source_fields": list(CADASTRAL_SOURCE_FIELDS),
         "evidence_types": [{"value": v, "label": EVIDENCE_TYPE_LABELS[v]} for v in EVIDENCE_TYPES],
+        "verification": [{"value": v, "label": VERIFICATION_LABELS[v]} for v in VERIFICATION_STATES],
         "max_batch_units": 300,
     }

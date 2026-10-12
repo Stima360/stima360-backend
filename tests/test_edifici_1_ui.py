@@ -263,11 +263,11 @@ def test_05_scheda_edificio_dati_contatori_unita_e_link(staged):  # noqa: F811
     out = _run(staged, scenario, _rotte(), "#/edifici/7")
     assert out["titolo"] == "Edifici"
     for atteso in ("ComuneTortoreto", "MicrozonaLido Nord", "ViaVia Roma", "Civico10", "NomePalazzina via Roma 10",
-                   "Stato censimentoParziale", "ScaleA, B"):
+                   "Affidabilità della dichiarazioneParziale", "ScaleA, B"):   # A5 (CENSIMENTO-2 Fase A)
         assert atteso in out["fatti"], atteso
     assert "Dichiarate6" in out["contatori"] and "Sopralluogo" in out["contatori"]
     assert "Censite5" in out["contatori"] and "di cui 1 archiviata" in out["contatori"] and "Da completare1" in out["contatori"]
-    assert "1 accessorio da chiarire" in out["segnali"] and "2 categorie da verificare" in out["segnali"]
+    assert "1 accessorio da chiarire" in out["segnali"] and "2 categorie mancanti" in out["segnali"]   # D4
     assert out["link"] == ["#/immobili/410", "#/immobili/411", "#/immobili/412", "#/immobili/415"]
     riga412 = next(r for r in out["righe"] if "IMM-412" in r)
     assert "Appartamento · scala B · piano 2º · int. 2 · 85 m²" in riga412 and "Censimento · Bozza" in riga412

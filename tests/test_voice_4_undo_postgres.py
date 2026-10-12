@@ -417,6 +417,42 @@ CENSIMENTO2_PROPERTY = ("property/census_classes.py", "property/composition.py",
                         "static/os_shell/assets/views/edificio-dettaglio.js")
 
 
+# CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
+# regola di `_applica` che non aggiorna da sola una superficie verificata. L'eccezione e' vincolata
+# al CONTENUTO: il file deve essere identico alla base oppure identico alla base con ESATTAMENTE
+# questa modifica, nel punto previsto di `_applica`. Nessuna modifica parziale, nessun'altra riga.
+SITE_SYNC = "property/site_sync.py"
+SITE_SYNC_ANCORA = "        prima = precedente.get(campo, _MANCA)\n"
+SITE_SYNC_SEGUENTE = "        if _uguale(attuale, nuovo):\n"
+SITE_SYNC_AGGIUNTE = (
+    "        # CENSIMENTO-2 Fase A: una superficie verificata con una fonte documentata non si\n"
+    "        # aggiorna da sola: la differenza diventa un conflitto («Applica» / «Ignora»)\n"
+    "        protetto = campo == \"surface_sqm\" and prop.get(\"surface_source\") == \"verified\"\n")
+SITE_SYNC_VECCHIA = "        elif prima is not _MANCA and attuale is not None and _uguale(attuale, prima):\n"
+SITE_SYNC_NUOVA = "        elif not protetto and prima is not _MANCA and attuale is not None and _uguale(attuale, prima):\n"
+
+
+def _site_sync_approvato(base: str) -> str:
+    """La base con la sola modifica approvata, applicata DENTRO `_applica`:
+    tre righe subito dopo l'ancora (che nella base precede il primo confronto
+    dei valori) e la sostituzione della condizione «si aggiorna»."""
+    inizio = base.index("\ndef _applica(")
+    fine = base.index("\ndef ", inizio + 1)
+    corpo = base[inizio:fine]
+    assert corpo.count(SITE_SYNC_ANCORA + SITE_SYNC_SEGUENTE) == 1 and base.count(SITE_SYNC_ANCORA) == 1
+    assert corpo.count(SITE_SYNC_VECCHIA) == 1 and base.count(SITE_SYNC_VECCHIA) == 1
+    corpo = corpo.replace(SITE_SYNC_ANCORA, SITE_SYNC_ANCORA + SITE_SYNC_AGGIUNTE, 1)
+    corpo = corpo.replace(SITE_SYNC_VECCHIA, SITE_SYNC_NUOVA, 1)
+    return base[:inizio] + corpo + base[fine:]
+
+
+def _site_sync_ammesso(root=ROOT, base_ref=BASE) -> bool:
+    base = subprocess.run(["git", "show", f"{base_ref}:{SITE_SYNC}"], cwd=root, capture_output=True,
+                          text=True, check=True).stdout
+    attuale = (Path(root) / SITE_SYNC).read_text(encoding="utf-8")
+    return attuale in (base, _site_sync_approvato(base))
+
+
 def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     if subprocess.run(["git", "cat-file", "-e", BASE], cwd=ROOT, capture_output=True).returncode != 0:
         pytest.skip("commit di partenza non disponibile in questo clone")
@@ -455,4 +491,9 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2: i soli file dichiarati della composizione
         # degli edifici (modulo nuovo, classi, rotte e schemi); i PROTETTI qui sopra restano identici.
         diff = [f for f in diff if f not in FASE6_UI and f not in CENSIMENTO2_PROPERTY]
+        # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
+        # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
+        if SITE_SYNC in diff:
+            assert _site_sync_ammesso(), "property/site_sync.py diverso dalla base e dalla modifica approvata"
+            diff = [f for f in diff if f != SITE_SYNC]
         assert diff == [], diff

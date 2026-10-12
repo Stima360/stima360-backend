@@ -225,7 +225,7 @@ def test_m07_verificata_solo_con_fonte_registrata_e_riconferma():
       m.unitSourcesPatch({json.dumps(verificata)}, {{surface_sqm: '65', surface_source: 'declared', cadastral_category: 'A/2', cadastral_category_source: 'verified'}}),
       m.unitSourcesPatch({json.dumps(verificata)}, {{surface_sqm: '65', surface_source: 'declared', cadastral_category: 'A/2', cadastral_category_source: 'verified'}}, {{identityChanged: true}}).errors,
       m.verificationState({json.dumps(verificata)}),
-      m.verificationState({{...{json.dumps(verificata)}, cadastral_category_source: null, cadastral_subunit: '3'}}),
+      m.needsReconfirm({{...{json.dumps(verificata)}, cadastral_category_source: null, cadastral_subunit: '3'}}),
       m.verificationState({json.dumps(base)}),
       m.evidenceText({json.dumps(verificata)}),
       m.identityKey({{cadastral_municipality_code: 'l307', cadastral_sheet: '5', cadastral_parcel: '61', cadastral_subunit: '2'}}),
@@ -238,7 +238,9 @@ def test_m07_verificata_solo_con_fonte_registrata_e_riconferma():
     assert futura == ["La data della consultazione non è valida."]
     assert invariata == {"patch": {}, "errors": []}                            # nulla da riverificare
     assert riconferma == ["«Verificata» richiede la fonte consultata: tipo di documento e data."]
-    assert (stato, daRiconfermare, nessuna) == ("verified", "to_reconfirm", None)
+    # AGGIORNATO DA CENSIMENTO-2 FASE A (A1): tre condizioni; solo la categoria verificata = parziale;
+    # riferimenti cambiati dopo la verifica = da verificare, con l'indicazione «da riconfermare»
+    assert (stato, daRiconfermare, nessuna) == ("partial", True, "to_verify")
     assert testo == "Visura catastale del 01/10/2026 · rif. prot. 9" and chiave == "L307||5|61|2"
 
 
@@ -284,3 +286,111 @@ def test_s01_pannello_senza_liste_scritte_a_mano_e_con_escape():
     api = (CENSUS / "census-api.js").read_text(encoding="utf-8")
     for rotta in ("/composition`", "/units/generate`", "/units/generate/${", "/units/bulk-update`"):
         assert rotta in api, rotta
+
+
+@node
+def test_m08_fase_a_tre_condizioni_tre_indicatori_e_interno_provvisorio():
+    """CENSIMENTO-2 Fase A (A1/A2): verificata / parziale / da verificare (o
+    da riconfermare) per scheda; tre indicatori SEPARATI per l'edificio;
+    interno provvisorio solo con un numero."""
+    ident = {"cadastral_municipality_code": "L307", "cadastral_section": "", "cadastral_sheet": "5",
+             "cadastral_parcel": "61", "cadastral_subunit": "2"}
+    out = _js(MODELLO, f"""(() => {{
+      const i = {json.dumps(ident)};
+      const comp = {{ composition: {{ complete: true }}, by_class: {{}}, catalog: {{ classes: [] }},
+        units_created: {{ declared: 4, present: 4, to_create: 0, complete: true }},
+        data_completeness: {{ units: 4, complete: 3 }},
+        verification: {{ units: 4, verified: 1, partial: 1, to_verify: 2, to_reconfirm: 1 }} }};
+      const v = m.compositionView(comp);
+      return [
+        m.verificationState({{ ...i, surface_source: 'verified', cadastral_category_source: 'verified' }}),
+        m.verificationState({{ ...i, surface_source: 'verified', cadastral_category_source: 'declared' }}),
+        m.verificationState({{ ...i }}), m.verificationState(null),
+        m.verificationBadge({{ verification: 'partial' }}), m.verificationBadge({{ verification: 'to_verify', verification_reconfirm: true }}),
+        m.verificationBadge({{ verification: 'to_verify', verification_reconfirm: false }}),
+        [v.unitsIndicator, v.dataIndicator, v.verificationIndicator, v.verificationNote, v.verificationDone],
+        m.provisionalNumbering({{ internal_number: '3', metadata: {{ census_batch: {{ provisional_numbering: true }} }} }}),
+        m.provisionalNumbering({{ internal_number: '', metadata: {{ census_batch: {{ provisional_numbering: true }} }} }}),
+        m.provisionalNumbering({{ internal_number: '3', provisional_numbering: false }}),
+        m.provisionalNumbering({{ internal_number: '3', metadata: {{}} }}),
+      ];
+    }})()""")
+    tutte, parziale, nessuna, vuota, b_parz, b_ric, b_da, indicatori, prov, senza_numero, confermato, mai = out
+    assert (tutte, parziale, nessuna, vuota) == ("verified", "partial", "to_verify", "to_verify")
+    # D4: sempre «Verifica …», mai «Da verificare» (la categoria mancante ha la sua etichetta)
+    assert b_parz == {"label": "Verifica parziale", "tone": "role"}
+    assert b_ric == {"label": "Verifica da riconfermare", "tone": "warn"} and b_da == {"label": "Verifica da completare", "tone": "gray"}
+    assert indicatori == ["4 di 4 dichiarate", "3 di 4 schede complete", "1 di 4 schede verificate",
+                          "1 parziale · 2 da completare (1 da riconfermare)", False]
+    assert (prov, senza_numero, confermato, mai) == (True, False, False, False)
+
+
+@node
+def test_m09_salvataggio_in_due_chiamate_salvato_non_salvato_incerto():
+    """CENSIMENTO-2 Fase A (D3, punto 3 della revisione): l'interno passa dalla
+    rotta tracciata, il resto dalla PATCH generica. Le due chiamate non sono
+    atomiche: l'errore dice campo per campo cosa e' SICURAMENTE salvato, cosa
+    SICURAMENTE no e cosa ha esito INCERTO; mai un successo complessivo; il
+    nuovo tentativo rimanda tutto (l'interno con lo stesso valore)."""
+    api = (ROOT / "static/os_shell/assets/census/census-api.js").as_posix()
+    modello = (ROOT / "static/os_shell/assets/census/census-model.js").as_posix()
+    script = f"""
+      const risposte = [];
+      const chiamate = [];
+      globalThis.fetch = async (url, o) => {{
+        chiamate.push([o.method, url.replace('/api/property', ''), JSON.parse(o.body)]);
+        const r = risposte.shift();
+        if (r === 'rete') throw new TypeError('Failed to fetch');
+        return {{ status: r.status, ok: r.status < 300, json: async () => r.body }};
+      }};
+      const api = await import('{api}');
+      const m = await import('{modello}');
+      const prova = async (seq, corpo) => {{
+        risposte.length = 0; risposte.push(...seq); chiamate.length = 0;
+        try {{ const esito = await api.updateProperty(413, corpo); return {{ ok: true, esito, chiamate: [...chiamate] }}; }}
+        catch (e) {{ return {{ ok: false, partial: e.partial || null, testo: m.errorMessage(e), chiamate: [...chiamate] }}; }}
+      }};
+      const corpo = {{ internal_number: '3', surface_sqm: 90, floor: '2' }};
+      const out = [];
+      out.push(await prova([{{ status: 200, body: {{ id: 413 }} }}, {{ status: 500, body: {{ detail: 'guasto' }} }}], corpo));
+      out.push(await prova([{{ status: 200, body: {{ id: 413 }} }}, 'rete'], corpo));
+      out.push(await prova(['rete'], corpo));
+      out.push(await prova([{{ status: 409, body: {{ detail: 'Scheda archiviata', code: 'UNIT_ARCHIVED' }} }}], corpo));
+      out.push(await prova([{{ status: 200, body: {{ id: 413, changed: [] }} }}, {{ status: 200, body: {{ id: 413, surface_sqm: '90.00' }} }}], corpo));
+      out.push(await prova([{{ status: 200, body: {{ id: 413, internal_number: '3' }} }}], {{ internal_number: '3' }}));
+      out.push(await prova([{{ status: 503, body: {{ detail: 'x', code: 'COMPOSITION_NOT_INSTALLED' }} }}, {{ status: 200, body: {{ id: 413 }} }}], corpo));
+      out.push(await prova([{{ status: 500, body: {{ detail: 'guasto' }} }}], {{ surface_sqm: 90 }}));
+      console.log(JSON.stringify(out));
+    """
+    esito = subprocess.run([a30_5.NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=30)
+    assert esito.returncode == 0, esito.stderr
+    secondo_ko, secondo_incerto, primo_incerto, primo_ko, riprova, solo_interno, senza_100, senza_interno = \
+        json.loads(esito.stdout.strip().splitlines()[-1])
+    tracciata = ["PATCH", "/properties/413/census-data", {"internal_number": "3", "confirm_similar": True}]
+    generica = ["PATCH", "/properties/413", {"surface_sqm": 90, "floor": "2"}]
+    # 1) interno salvato, il resto rifiutato
+    assert secondo_ko["chiamate"] == [tracciata, generica] and not secondo_ko["ok"]
+    assert secondo_ko["partial"] == {"saved": ["internal_number"], "savedValues": {"internal_number": "3"},
+                                     "uncertain": [], "notSaved": ["surface_sqm", "floor"]}
+    assert secondo_ko["testo"].startswith("Salvataggio non completato. Salvato: interno «3». Non salvato: superficie, piano.")
+    assert "Motivo: guasto." in secondo_ko["testo"] and "Esito non noto" not in secondo_ko["testo"]
+    assert "comprese quelle già salvate" in secondo_ko["testo"]          # dice il comportamento reale del nuovo tentativo
+    # 2) interno salvato, il resto con esito incerto
+    assert secondo_incerto["partial"]["uncertain"] == ["surface_sqm", "floor"] and secondo_incerto["partial"]["notSaved"] == []
+    assert "Salvato: interno «3». Esito non noto: superficie, piano." in secondo_incerto["testo"]
+    # 3) interno con esito incerto: il resto NON e' stato inviato
+    assert primo_incerto["chiamate"] == [tracciata]
+    assert primo_incerto["partial"] == {"saved": [], "savedValues": {}, "uncertain": ["internal_number"],
+                                        "notSaved": ["surface_sqm", "floor"]}
+    assert "Salvato:" not in primo_incerto["testo"] and "Non salvato: superficie, piano. Esito non noto: interno." in primo_incerto["testo"]
+    # 4) interno rifiutato: nulla salvato, il resto non inviato
+    assert primo_ko["chiamate"] == [tracciata]
+    assert primo_ko["partial"]["notSaved"] == ["internal_number", "surface_sqm", "floor"] and primo_ko["partial"]["saved"] == []
+    assert "Non salvato: interno, superficie, piano." in primo_ko["testo"]
+    # 5) nuovo tentativo dopo (1): rimanda TUTTO, l'interno con lo stesso valore (nessun cambiamento lato server)
+    assert riprova["ok"] and riprova["chiamate"] == [tracciata, generica]
+    # 6) solo l'interno: una chiamata; 7) senza la 100: la PATCH generica di prima, interno compreso
+    assert solo_interno["ok"] and solo_interno["chiamate"] == [tracciata]
+    assert senza_100["ok"] and senza_100["chiamate"][1] == ["PATCH", "/properties/413", {"internal_number": "3", "surface_sqm": 90, "floor": "2"}]
+    # 8) senza interno: una sola chiamata, errore come prima (nessun salvataggio parziale)
+    assert senza_interno["partial"] is None and senza_interno["testo"] == "guasto"

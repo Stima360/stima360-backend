@@ -222,7 +222,10 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     composizione = [r for r in router.routes if r.path.startswith("/api/property/buildings/{building_id}/")
                     and ("/composition" in r.path or "/units/" in r.path)]
     assert len(composizione) == 5 and all(_gate in {d.call for d in r.dependant.dependencies} for r in composizione)
-    assert len(router.routes) == 59
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: 59 -> 60 (PATCH .../census-data), stesso gate.
+    dati = [r for r in router.routes if r.path == "/api/property/properties/{property_id}/census-data"]
+    assert len(dati) == 1 and dati[0].methods == {"PATCH"} and _gate in {d.call for d in dati[0].dependant.dependencies}
+    assert len(router.routes) == 60
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

@@ -32,6 +32,12 @@ def _alza(monkeypatch, exc):
     def finto(ctx, property_id, body):
         raise exc
     monkeypatch.setattr(service, "update_property", finto)
+    # AGGIORNATO DA CENSIMENTO-2 FASE A: davanti al service c'e' la guardia delle
+    # verifiche documentate, che legge la scheda dal database. Qui non c'e' un
+    # database (si prova solo la traduzione degli errori del service): la guardia
+    # e' provata su PostgreSQL vero (test_censimento_2_fase_a_postgres.py::test_a09).
+    from property import composition
+    monkeypatch.setattr(composition, "update_property_guarded", lambda ctx, property_id, body, scrivi: scrivi())
 
 
 def test_01_la_guardia_del_censimento_porta_il_codice_sulla_rotta_reale(api, monkeypatch):
@@ -68,7 +74,11 @@ def test_04_solo_la_patch_generica_e_passata_a_trc_nel_router():
     from pathlib import Path
     righe = (Path(__file__).resolve().parents[1] / "property" / "router.py").read_text(encoding="utf-8").splitlines()
     patch = [r for r in righe if r.startswith("def update_property(")]
-    assert len(patch) == 1 and "return trc(service.update_property" in patch[0]
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: la PATCH generica passa da `trc` con
+    # la guardia delle verifiche documentate davanti al service (stesso service, stesse risposte)
+    assert len(patch) == 1 and "return trc(_update_property_guarded" in patch[0]
+    guardia = righe[next(i for i, r in enumerate(righe) if r.startswith("def _update_property_guarded(")):][:3]
+    assert "composition.update_property_guarded(" in guardia[1] and "service.update_property(ctx,property_id,p)" in guardia[1]
     # le altre rotte generiche restano su `tr`: nessun cambio di contratto fuori dal residuo
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 0: `archive_property` (la DELETE
     # deprecata) e le azioni esplicite /archive e /unarchive rispondono con

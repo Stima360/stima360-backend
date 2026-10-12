@@ -1913,7 +1913,7 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 404, b'{"detail":"building not found"}')
         if percorso == "/api/property/census/units":
             return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
-        trovato = re.match(r"^/api/property/properties/(\d+)/(census|pertinenze|accessories|take-in-charge|undo-create)", percorso)
+        trovato = re.match(r"^/api/property/properties/(\d+)/(census-data|census|pertinenze|accessories|take-in-charge|undo-create)", percorso)
         pid = int(trovato.group(1))
         cosa = trovato.group(2)
         suo = agenzia_di(pid) == agency or (agenzia_di(pid) is not None and rotto("isolation"))
@@ -1926,6 +1926,9 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 409, b'{"detail":"gia\' commerciale","code":"NOT_CENSUS"}')
         if cosa == "undo-create":
             return self._reply(method, path, 409, b'{"detail":"non annullabile","code":"UNDO_NOT_POSSIBLE"}')
+        if cosa == "census-data":
+            # CENSIMENTO-2 Fase A: un corpo vuoto non cambia nulla (la scheda, senza scrivere)
+            return self._reply(method, path, 200, _json.dumps({"id": pid, "changed": []}).encode())
         # pertinenze e accessori sul proprio immobile: fuori dal giro ostile
         return self._reply(method, path, 400, b'{"detail":"non previsto dal giro ostile"}')
 
@@ -10154,11 +10157,14 @@ def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypa
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: piu' le tre rotte del Cestino Edifici (sonda anonima).
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: piu' le cinque rotte della composizione (sonda anonima)
     # e la lettura della composizione dell'edificio altrui (404).
-    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 21
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: piu' la PATCH .../census-data (sonda anonima)
+    # e la PATCH vuota sui dati catastali dell'immobile altrui (404).
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 22
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
                      "composizione-edificio-{a}-{b}",
                      "censimento-lettura-{a}-{b}", "presa-in-carico-{a}-{b}", "annulla-{a}-{b}",
+                     "dati-catastali-{a}-{b}",
                      "agency-nel-corpo-{a}"):
             assert "BUILDINGS-" + nome.format(a=a, b=b) in idents, (nome, a, b)
     assert "BUILDINGS-nessuna-riga-del-run" in idents
@@ -10217,7 +10223,9 @@ def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: cinque rotte nuove sotto /buildings
     # (composizione GET/PUT, generate, undo del lotto, bulk-update), coperte
     # dalla sonda anonima; la lettura della composizione altrui anche autenticata.
-    assert len(montate) == 22
+    # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: la PATCH .../census-data, coperta
+    # dalla sonda anonima e, autenticata, dalla PATCH vuota sull'immobile altrui.
+    assert len(montate) == 23
     assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
         set(cert.BUILDINGS_OPERAZIONI) ^ montate
     assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]

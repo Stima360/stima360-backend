@@ -4896,6 +4896,10 @@ BUILDINGS_OPERAZIONI = (
     ("POST", "/api/property/buildings/{id}/units/generate"),
     ("POST", "/api/property/buildings/{id}/units/generate/{id}/undo"),
     ("POST", "/api/property/buildings/{id}/units/bulk-update"),
+    # CENSIMENTO-2 Fase A: «Dati catastali e superficie» della singola scheda.
+    # Sonda anonima (401) e, autenticata, la PATCH a corpo vuoto sull'immobile
+    # altrui (404 prima di ogni lettura dei dati: un corpo vuoto non scrive mai).
+    ("PATCH", "/api/property/properties/{id}/census-data"),
 )
 
 
@@ -4942,13 +4946,14 @@ def _edifici_fuori_agenzia(database, ids, agency_id) -> list:
 def certify_property_buildings(report, http, cert, jars, owned, context) -> None:
     """EDIFICI e CENSIMENTO (CENSIMENTO-1 Fase 3): HOSTILE / REJECTION ONLY.
 
-        anonimo, su ventuno rotte (tutte meno la DELETE)   -> 401
+        anonimo, su ventidue rotte (tutte meno la DELETE)  -> 401
         elenco edifici                                      -> mai un edificio altrui
         scheda dell'edificio altrui (esistente, letto)      -> 404, nessun dato
         composizione dell'edificio altrui (lettura)         -> 404, nessun dato
         PATCH vuota sull'edificio altrui                    -> 404, nessun dato
         censimento dell'immobile altrui (lettura)           -> 404, nessun dato
         presa in carico / annulla dell'immobile altrui      -> 404 (prima di ogni UPDATE)
+        dati catastali dell'immobile altrui (PATCH vuota)   -> 404, nessun dato
         `agency_id` nel corpo di una palazzina              -> 422 (`extra=forbid`)
         e, prima e dopo: edifici, unita' census, immobili e accessori invariati.
 
@@ -5023,7 +5028,8 @@ def certify_property_buildings(report, http, cert, jars, owned, context) -> None
             for nome, metodo, percorso, corpo in (
                     ("censimento-lettura", "GET", f"/api/property/properties/{suo_immobile}/census", None),
                     ("presa-in-carico", "POST", f"/api/property/properties/{suo_immobile}/take-in-charge", {}),
-                    ("annulla", "POST", f"/api/property/properties/{suo_immobile}/undo-create", None)):
+                    ("annulla", "POST", f"/api/property/properties/{suo_immobile}/undo-create", None),
+                    ("dati-catastali", "PATCH", f"/api/property/properties/{suo_immobile}/census-data", {})):
                 risposta = http.request(metodo, percorso, jar=jar, payload=corpo)
                 report.check(
                     f"BUILDINGS-{nome}-{etichetta}-{altro}",

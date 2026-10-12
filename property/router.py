@@ -49,7 +49,12 @@ def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency
 # CENSIMENTO-1 Fase 4: la PATCH generica risponde con `{detail, code}` come le rotte del
 # censimento (`trc`), cosi' la guardia §7 porta `code: CENSUS_LOCKED` e non solo il testo.
 # Risposte di successo invariate; gli altri errori guadagnano solo un `code` additivo.
-def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(service.update_property,ctx,property_id,p)
+def update_property(property_id:int,p:PropertyUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(_update_property_guarded,ctx,property_id,p)
+# CENSIMENTO-2 Fase A (A3, D2, D3): la PATCH generica non invalida in silenzio una verifica
+# catastale documentata (409 VERIFIED_DATA_LOCKED) e non cambia l'interno senza storico
+# (409 INTERNAL_NUMBER_TRACKED): controllo e scrittura del service sotto lo stesso lock della scheda.
+def _update_property_guarded(ctx,property_id,p):
+    return composition.update_property_guarded(ctx,property_id,p,lambda:service.update_property(ctx,property_id,p))
 # DELETE-ARCH Fase 0: Archivia/Riattiva sono azioni esplicite (D11). La DELETE
 # storica resta come archivio per i client esistenti, deprecata: nessun
 # caller nuovo la usa e la UI e' passata a /archive. Errori con `code`
@@ -192,6 +197,11 @@ def set_building_composition(building_id:int,p:BuildingComposition,ctx:OperatorC
 def generate_building_units(building_id:int,p:UnitsGenerate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.generate_units,ctx,building_id,p)
 @router.post('/buildings/{building_id}/units/generate/{batch_key}/undo')
 def undo_building_units_batch(building_id:int,batch_key:str,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.undo_batch,ctx,building_id,batch_key)
+# CENSIMENTO-2 Fase A (A2/A3): «Dati catastali e superficie» della singola scheda in
+# UNA transazione con lo storico (identita' catastale, superficie, categoria,
+# provenienze, fonte della verifica, interno e sua conferma).
+@router.patch('/properties/{property_id}/census-data')
+def update_property_census_data(property_id:int,p:UnitCensusData,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.update_unit_data,ctx,property_id,p)
 @router.post('/buildings/{building_id}/units/bulk-update')
 def bulk_update_building_units(building_id:int,p:UnitsBulkUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(composition.bulk_update,ctx,building_id,p)
 # CATALOGO-CANONICO-1: provenienza dal sito stima360.it (property/site_sync.py).
@@ -200,7 +210,10 @@ def bulk_update_building_units(building_id:int,p:UnitsBulkUpdate,ctx:OperatorCon
 @router.get('/properties/{property_id}/site-sources')
 def list_site_sources(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.list_sources,ctx,property_id)
 @router.post('/properties/{property_id}/site-sources/{source_id}/conflicts')
-def resolve_site_conflict(property_id:int,source_id:int,p:SiteConflictResolve,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.resolve_conflict,ctx,property_id,source_id,p)
+def resolve_site_conflict(property_id:int,source_id:int,p:SiteConflictResolve,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(_resolve_site_conflict_guarded,ctx,property_id,source_id,p)
+# CENSIMENTO-2 Fase A (A3, D2): «Applica» del sito non scavalca una superficie verificata (stesso lock).
+def _resolve_site_conflict_guarded(ctx,property_id,source_id,p):
+    return composition.resolve_site_conflict_guarded(ctx,property_id,source_id,p,lambda:site_sync.resolve_conflict(ctx,property_id,source_id,p))
 @router.post('/properties/{property_id}/site-sources/{source_id}/duplicates/{other_id}/dismiss')
 def dismiss_site_duplicate(property_id:int,source_id:int,other_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(site_sync.dismiss_duplicate,ctx,property_id,source_id,other_id)
 @router.post('/properties/{property_id}/site-sources/{source_id}/relink')

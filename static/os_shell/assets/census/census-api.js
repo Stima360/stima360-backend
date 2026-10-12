@@ -98,6 +98,8 @@ async function request(method, path, body) {
     errore.existingCounts = dati && dati.existing && typeof dati.existing === 'object' && !('id' in dati.existing) ? dati.existing : null;
     errore.plan = dati && dati.plan && typeof dati.plan === 'object' ? dati.plan : null;
     errore.propertyId = dati && Number.isInteger(dati.property_id) ? dati.property_id : null;
+    // CENSIMENTO-2 Fase A: le schede verificate di una selezione (VERIFIED_DATA_LOCKED)
+    errore.propertyIds = dati && Array.isArray(dati.property_ids) ? dati.property_ids : [];
     throw errore;
   }
   return dati;
@@ -173,8 +175,54 @@ export function undoCreate(propertyId) {
 /** La PATCH generica dell'immobile (`PropertyUpdate`, stesse colonne della
  *  083): usata dal recupero di un invio dall'esito incerto per applicare a
  *  una riga GIA' creata le modifiche fatte dopo (R7). Nessuna rotta nuova. */
-export function updateProperty(propertyId, payload) {
-  return request('PATCH', `/properties/${id(propertyId)}`, payload);
+export async function updateProperty(propertyId, payload) {
+  // CENSIMENTO-2 Fase A (D3): l'interno passa SOLO dalla rotta tracciata (storico);
+  // la PATCH generica lo rifiuterebbe (409 INTERNAL_NUMBER_TRACKED). Come la PATCH
+  // generica di prima, nessun avviso di posizione simile (`confirm_similar`).
+  // Senza la migration 100 la rotta non c'e' (503): tutto come prima.
+  // Le due chiamate NON sono atomiche: se una fallisce, l'errore porta `partial`
+  // con i campi sicuramente salvati, sicuramente non salvati e con esito incerto
+  // (census-model.js::errorMessage li dice all'operatore, campo per campo).
+  const corpo = { ...(payload || {}) };
+  let salvati = [];
+  let valoriSalvati = {};
+  if (Object.prototype.hasOwnProperty.call(corpo, 'internal_number')) {
+    const resto = Object.keys(corpo).filter((k) => k !== 'internal_number');
+    try {
+      const esito = await request('PATCH', `/properties/${id(propertyId)}/census-data`,
+        { internal_number: corpo.internal_number, confirm_similar: true });
+      salvati = ['internal_number'];
+      valoriSalvati = { internal_number: corpo.internal_number };
+      delete corpo.internal_number;
+      if (!Object.keys(corpo).length) return esito;
+    } catch (error) {
+      if (!error || error.code !== 'COMPOSITION_NOT_INSTALLED') {
+        // la prima chiamata e' fallita: il resto NON e' stato inviato
+        if (error) error.partial = { saved: [], savedValues: {}, uncertain: error.uncertain ? ['internal_number'] : [],
+          notSaved: error.uncertain ? resto : ['internal_number', ...resto] };
+        throw error;
+      }
+    }
+  }
+  try {
+    return await request('PATCH', `/properties/${id(propertyId)}`, corpo);
+  } catch (error) {
+    if (error && salvati.length) {
+      const resto = Object.keys(corpo);
+      error.partial = { saved: salvati, savedValues: valoriSalvati,
+        uncertain: error.uncertain ? resto : [], notSaved: error.uncertain ? [] : resto };
+    }
+    throw error;
+  }
+}
+
+/** CENSIMENTO-2 Fase A (A2/A3): «Dati catastali e superficie» della singola
+ *  scheda in UNA chiamata e UNA transazione con lo storico (identita'
+ *  catastale, superficie, categoria, provenienze, fonte della verifica,
+ *  interno e sua conferma). `expected_updated_at` = lo stato letto aprendo il
+ *  modulo: se nel frattempo e' cambiato, 409 STALE_DATA e nulla e' scritto. */
+export function updateCensusData(propertyId, payload) {
+  return request('PATCH', `/properties/${id(propertyId)}/census-data`, payload);
 }
 
 // --- Pertinenze ------------------------------------------------------------------

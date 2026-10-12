@@ -276,12 +276,15 @@ def _applica(cur, prop: dict, campi: dict, accessori: dict, *, precedente: dict,
         # un valore tecnico (la tipologia NOT NULL) «Da verificare» vale vuoto
         attuale = None if campo in sospesi else prop.get(campo)
         prima = precedente.get(campo, _MANCA)
+        # CENSIMENTO-2 Fase A: una superficie verificata con una fonte documentata non si
+        # aggiorna da sola: la differenza diventa un conflitto («Applica» / «Ignora»)
+        protetto = campo == "surface_sqm" and prop.get("surface_source") == "verified"
         if _uguale(attuale, nuovo):
             scritti[campo] = nuovo
         elif attuale is None and prima is _MANCA:
             da_scrivere[campo] = nuovo
             scritti[campo] = nuovo
-        elif prima is not _MANCA and attuale is not None and _uguale(attuale, prima):
+        elif not protetto and prima is not _MANCA and attuale is not None and _uguale(attuale, prima):
             da_scrivere[campo] = nuovo
             scritti[campo] = nuovo
         elif prima is not _MANCA and attuale is None and _uguale(nuovo, prima):
