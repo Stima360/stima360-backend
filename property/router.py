@@ -8,7 +8,7 @@ from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa for
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import building_lifecycle, census, composition, interactions, mandates, service, site_sync
+from . import building_deletion, building_lifecycle, census, composition, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -156,14 +156,25 @@ def create_building(p:BuildingCreate,ctx:OperatorContext=Depends(legacy_basic_ag
 # impianto del Cestino Immobili; stessa traduzione `trc` ({detail, code, ...}).
 @router.get('/buildings/{building_id}/deletion-check')
 def building_deletion_check(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.deletion_check,ctx,building_id)
+# ELIMINAZIONE-EDIFICIO-1: nessun operatore sposta da solo un edificio nel Cestino ne' lo
+# ripristina. Si RICHIEDE l'eliminazione (sotto); approvazione, ripristino e cancellazione
+# definitiva sono del Super Admin, sulla superficie Platform (platform_admin/router.py).
 @router.post('/buildings/{building_id}/trash')
-def trash_building(building_id:int,p:PropertyTrash,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.trash_building,ctx,building_id,p.reason_code,p.note)
+def trash_building(building_id:int,p:PropertyTrash,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.direct_trash_refused,ctx,building_id)
 @router.post('/buildings/{building_id}/restore')
-def restore_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.restore_building,ctx,building_id)
+def restore_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.direct_restore_refused,ctx,building_id)
+@router.get('/buildings/{building_id}/deletion-request')
+def building_deletion_request_status(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.request_status,ctx,building_id)
+@router.post('/buildings/{building_id}/deletion-request',status_code=201)
+def create_building_deletion_request(building_id:int,p:BuildingDeletionRequestCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.create_request,ctx,building_id,p.reason_code,p.note,status=201)
+@router.post('/building-deletion-requests/{request_id}/withdraw')
+def withdraw_building_deletion_request(request_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.withdraw_request,ctx,request_id)
+@router.get('/trash/building-groups')
+def list_building_trash_groups(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.list_trash_groups,ctx,limit=limit,offset=offset)
 @router.get('/trash/buildings')
 def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.list_trash,ctx,limit=limit,offset=offset)
 @router.get('/buildings/{building_id}')
-def get_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.get_building,ctx,building_id)
+def get_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(lambda *a:building_deletion.scheda_tenant(census.get_building(*a)),ctx,building_id)
 @router.patch('/buildings/{building_id}')
 def update_building(building_id:int,p:BuildingUpdate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(census.update_building,ctx,building_id,p)
 @router.post('/census/units',status_code=201)

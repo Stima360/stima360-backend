@@ -4900,6 +4900,10 @@ BUILDINGS_OPERAZIONI = (
     # Sonda anonima (401) e, autenticata, la PATCH a corpo vuoto sull'immobile
     # altrui (404 prima di ogni lettura dei dati: un corpo vuoto non scrive mai).
     ("PATCH", "/api/property/properties/{id}/census-data"),
+    # ELIMINAZIONE-EDIFICIO-1: stato e richiesta di eliminazione dell'edificio. Solo
+    # la sonda anonima (401 prima di ogni lettura): nessuna sonda crea una richiesta.
+    ("GET", "/api/property/buildings/{id}/deletion-request"),
+    ("POST", "/api/property/buildings/{id}/deletion-request"),
 )
 
 

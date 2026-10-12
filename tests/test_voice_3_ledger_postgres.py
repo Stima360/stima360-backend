@@ -95,7 +95,8 @@ def test_01_migration_098_is_valid_contiguous_and_has_a_down():
     assert runner.validate_migration(m[0]) == []
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: dopo la 098 viene solo la 099 (registro degli annullamenti)
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: poi la 100 (composizione degli edifici)
-    assert [x.number for x in tutte if x.number > 98] == [99, 100]
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: poi la 101 (richieste di eliminazione degli edifici)
+    assert [x.number for x in tutte if x.number > 98] == [99, 100, 101]
 
 
 def test_02_applied_by_the_runner_with_its_guards(db):

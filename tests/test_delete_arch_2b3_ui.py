@@ -132,10 +132,26 @@ ROTTE_CESTINO = (re.compile(r"/deletion-check"), re.compile(r"\}/trash`"), re.co
                  re.compile(r"/api/property/trash"))
 
 
+# SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: il client dell'eliminazione controllata degli
+# edifici (building-deletion/building-deletion.js) nomina le SUE rotte - il Cestino Edifici raggruppato
+# (`/api/property/trash/building-groups`) e il ripristino del Super Admin
+# (`/api/platform/building-deletions/.../restore`) - e nessun'altra del Cestino: si tolgono
+# quelle due forme esatte, in quel solo file, prima del controllo.
+_ELIMINAZIONE = "building-deletion/building-deletion.js"
+
+
+def _codice_rotte(p):
+    codice = _codice(p)
+    if p.relative_to(ASSETS).as_posix() == _ELIMINAZIONE:
+        codice = codice.replace("`/api/property/trash/building-groups?", "")
+        codice = re.sub(r"`\$\{PLATFORM\}/building-deletions/\$\{Number\(buildingId\)\}/restore`", "", codice)
+    return codice
+
+
 def test_s01_le_rotte_del_cestino_sono_nominate_solo_dal_client_proprio():
     for rotta in ROTTE_CESTINO:
         fuori = sorted(p.relative_to(ASSETS).as_posix() for p in ASSETS.rglob("*.js")
-                       if rotta.search(_codice(p)))
+                       if rotta.search(_codice_rotte(p)))
         # trash-model.js costruisce solo il percorso dell'elenco, per trash-api.js
         attesi = ["trash/trash-model.js"] if rotta.pattern == "/api/property/trash" else ["trash/trash-api.js"]
         assert fuori == attesi, (rotta.pattern, fuori)

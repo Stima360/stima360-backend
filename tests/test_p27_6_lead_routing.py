@@ -826,6 +826,17 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         # DELETE: si esce con una POST dichiarata, non cancellando una risorsa.
         ("POST", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/enter"),
         ("POST", f"{ROUTER_PREFIX}/agency-context/exit"),
+        # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1 - il Super Admin e le eliminazioni
+        # degli edifici. Nessuna DELETE: la cancellazione definitiva e' una POST dichiarata,
+        # con seconda conferma, dal Cestino.
+        ("GET", f"{ROUTER_PREFIX}/building-deletion-requests"),
+        ("GET", f"{ROUTER_PREFIX}/building-deletion-requests/{{request_id}}"),
+        ("POST", f"{ROUTER_PREFIX}/building-deletion-requests/{{request_id}}/approve"),
+        ("POST", f"{ROUTER_PREFIX}/building-deletion-requests/{{request_id}}/reject"),
+        ("GET", f"{ROUTER_PREFIX}/building-deletions/trash"),
+        ("POST", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/restore"),
+        ("GET", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/purge-check"),
+        ("POST", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/purge"),
     }, sorted(trovate)
 
 

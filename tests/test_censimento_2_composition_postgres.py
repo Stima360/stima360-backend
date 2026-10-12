@@ -443,8 +443,11 @@ def test_08_agenzie_cestino_e_validazione(mondo):
     assert _genera(m, e["id"], corpo(cadastral_category="Z/9", cadastral_category_source="declared")).status_code == 400
     # edificio nel Cestino: 409 leggibile
     vuoto = _edificio(m, address="Via Vuota", name="Vuota")
-    r = m["api"]().post(f"/api/property/buildings/{vuoto['id']}/trash", json={"reason_code": "duplicate"})
-    assert r.status_code == 200, r.text
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la rotta tenant non sposta piu' nel Cestino
+    # (403); l'edificio ci va dal servizio di CESTINO-EDIFICI-1, invariato.
+    from property import building_lifecycle
+    m["stato"]["chi"] = "owner_a"
+    building_lifecycle.trash_building(m["ctx"](), vuoto["id"], "duplicate")
     r = _composizione(m, vuoto["id"], residential=1)
     assert (r.status_code, r.json()["code"]) == (409, "BUILDING_IN_TRASH")
 

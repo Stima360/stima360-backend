@@ -28,6 +28,8 @@
 //   POST /api/platform/agencies
 //   GET  /api/platform/territories?kind&agency_id&assignment_status&limit&offset
 //   POST /api/platform/territories
+//   + la scheda «Eliminazioni edifici» (ELIMINAZIONE-EDIFICIO-1): le sue rotte
+//     /api/platform/building-deletion* le nomina solo building-deletion/building-deletion.js.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
@@ -44,12 +46,15 @@ import {
   labelOf,
   selectOptions,
 } from '../components/network.js';
+// ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
+import { renderEliminazioni } from './rete-eliminazioni.js';
 
 const TERRITORI_PAGE = 50;
 
 const TABS = [
   { key: 'agenzie', label: 'Agenzie' },
   { key: 'territori', label: 'Territori' },
+  { key: 'eliminazioni', label: 'Eliminazioni edifici' },
 ];
 
 export async function renderRete(container) {
@@ -92,6 +97,7 @@ export async function renderRete(container) {
       btn.classList.toggle('active', btn.dataset.tab === key);
     });
     if (key === 'agenzie') return caricaAgenzie();
+    if (key === 'eliminazioni') return renderEliminazioni(contentEl);
     return caricaTerritori();
   }
 

@@ -727,3 +727,31 @@ class UnitCensusData(PropertyModel):
                 date(1900, 1, 1) <= v["cadastral_evidence_date"] <= date.today()):
             raise ValueError("cadastral_evidence_date: data della consultazione non valida")
         return v
+
+
+# ---------------------------------------------------------------------------
+# ELIMINAZIONE-EDIFICIO-1: richiesta, decisione del Super Admin, cancellazione
+# definitiva (property/building_deletion.py). Motivo e nota validati dal service.
+# ---------------------------------------------------------------------------
+
+class BuildingDeletionRequestCreate(PropertyModel):
+    reason_code: str = Field("created_by_mistake", max_length=30)
+    note: str | None = Field(None, max_length=500)
+
+
+class BuildingDeletionApprove(PropertyModel):
+    """`fingerprint`: l'impronta delle unita' che il Super Admin ha visto nel
+    dettaglio; se le unita' sono cambiate l'approvazione si ferma."""
+    fingerprint: str = Field(..., min_length=64, max_length=64)
+    note: str | None = Field(None, max_length=500)
+
+
+class BuildingDeletionReject(PropertyModel):
+    note: str = Field(..., min_length=1, max_length=500)
+
+
+class BuildingPurge(PropertyModel):
+    """Seconda conferma esplicita: il testo esatto e l'impronta delle unita'
+    mostrate nel riepilogo."""
+    confirm_text: str = Field(..., max_length=100)
+    fingerprint: str = Field(..., min_length=64, max_length=64)

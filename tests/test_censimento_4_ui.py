@@ -158,6 +158,11 @@ def test_b01_le_rotte_del_censimento_sono_nominate_solo_dal_client_proprio():
         if rel in ("static/os_shell/assets/trash/trash-api.js", "static/os_shell/assets/trash/trash-model.js"):
             codice = re.sub(r"`/api/property/buildings/\$\{buildingId\}/(deletion-check|trash|restore)`", "", codice)
             codice = re.sub(r"`/api/property/trash/buildings\?", "", codice)
+        # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la richiesta di eliminazione dell'edificio
+        # (`/api/property/buildings/${id}/deletion-request`) appartiene al client dell'eliminazione
+        # controllata: quella sola forma, in quel solo file.
+        if rel == "static/os_shell/assets/building-deletion/building-deletion.js":
+            codice = codice.replace("`/api/property/buildings/${Number(buildingId)}/deletion-request`", "")
         for fr in frammenti:
             assert not re.search(r"[`'\"][^`'\"\n]*" + re.escape(fr), codice), (rel, fr)
 

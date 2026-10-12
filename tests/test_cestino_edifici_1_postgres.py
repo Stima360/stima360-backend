@@ -57,13 +57,36 @@ def _check(m, bid, chi="owner_a"):
     return m["api"](chi).get(f"/api/property/buildings/{bid}/deletion-check")
 
 
+# SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: le rotte tenant «trash» e «restore» degli
+# edifici rispondono 403 (si RICHIEDE l'eliminazione; approvazione e ripristino sono del Super
+# Admin). Il servizio di CESTINO-EDIFICI-1 resta invariato (lo usa STIMA Voice per annullare la
+# creazione di un edificio vuoto) e queste prove lo esercitano DIRETTAMENTE, con la stessa
+# traduzione delle rotte (`trc`) e lo stesso contesto per ruolo. Il rifiuto delle rotte e' in
+# test_00 qui sotto e in tests/test_eliminazione_edificio_1_postgres.py.
+class _Risposta:
+    def __init__(self, r):
+        self.status_code = r.status_code
+        self.text = r.body.decode() if getattr(r, "body", None) else ""
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+
+def _servizio(m, chi, fn, *a):
+    from property.router import trc
+    m["stato"]["chi"] = chi
+    return _Risposta(trc(fn, m["ctx"](), *a))
+
+
 def _sposta(m, bid, chi="owner_a", reason="created_by_mistake", note=None):
-    corpo = {"reason_code": reason, **({"note": note} if note is not None else {})}
-    return m["api"](chi).post(f"/api/property/buildings/{bid}/trash", json=corpo)
+    from property import building_lifecycle
+    return _servizio(m, chi, building_lifecycle.trash_building, bid, reason, note)
 
 
 def _ripristina(m, bid, chi="owner_a"):
-    return m["api"](chi).post(f"/api/property/buildings/{bid}/restore")
+    from property import building_lifecycle
+    return _servizio(m, chi, building_lifecycle.restore_building, bid)
 
 
 def _cestino(m, chi="owner_a"):
@@ -101,6 +124,22 @@ def _codice(r, atteso):
 
 # ---------------------------------------------------------------------------
 
+def test_00_rotte_tenant_rifiutano_sposta_e_ripristina(mondo):
+    """ELIMINAZIONE-EDIFICIO-1: nessun operatore (titolare compreso) sposta o ripristina un
+    edificio dalle rotte tenant, nemmeno vuoto; nulla cambia."""
+    m = mondo
+    e = _edificio(m)
+    for chi in ("owner_a", "agent_a"):
+        r = m["api"](chi).post(f"/api/property/buildings/{e['id']}/trash", json={"reason_code": "duplicate"})
+        assert _codice(r, 403)["code"] == "BUILDING_DELETION_REQUIRES_APPROVAL"
+    assert _q(m, "SELECT deleted_at FROM buildings WHERE id = %s", (e["id"],))[0][0] is None
+    assert _codice(_sposta(m, e["id"]), 200)["id"] == e["id"]                 # il servizio (Voice) resta
+    r = m["api"]().post(f"/api/property/buildings/{e['id']}/restore")
+    assert _codice(r, 403)["code"] == "BUILDING_RESTORE_SUPER_ADMIN"
+    assert _q(m, "SELECT deleted_at IS NOT NULL FROM buildings WHERE id = %s", (e["id"],))[0][0] is True
+    assert _codice(_ripristina(m, e["id"]), 200)["id"] == e["id"]
+
+
 def test_01_edificio_vuoto_sposta_legge_ripristina(mondo):
     m = mondo
     api = m["api"]()
@@ -111,7 +150,8 @@ def test_01_edificio_vuoto_sposta_legge_ripristina(mondo):
     r = _check(m, e["id"])
     assert r.status_code == 200 and r.json() == {"can_trash": True, "blockers": []}
     assert _codice(_sposta(m, e["id"], reason="boh"), 400)["code"] == "INVALID_TRASH_REASON"
-    assert _sposta(m, e["id"], note="x" * 501).status_code == 422
+    assert m["api"]().post(f"/api/property/buildings/{e['id']}/trash",
+                           json={"reason_code": "duplicate", "note": "x" * 501}).status_code == 422
     riga = _codice(_sposta(m, e["id"], reason="duplicate", note="  Doppione della palazzina 12  "), 200)
     assert riga["id"] == e["id"] and riga["deleted_reason"] == "duplicate"
     ev = _q(m, "SELECT action, reason_code, note, actor_user_id FROM record_lifecycle_events "
@@ -123,7 +163,9 @@ def test_01_edificio_vuoto_sposta_legge_ripristina(mondo):
     # scheda in sola lettura, con chi/quando/perche'
     scheda = _codice(api.get(f"/api/property/buildings/{e['id']}"), 200)
     assert scheda["trash"]["deleted_reason"] == "duplicate" and scheda["trash"]["deleted_by_name"] == "Olga"
-    assert scheda["trash"]["deleted_note"] == "Doppione della palazzina 12" and scheda["trash"]["can_restore"] is True
+    # ELIMINAZIONE-EDIFICIO-1: il ripristino dalla scheda non e' dell'operatore (Super Admin)
+    assert scheda["trash"]["deleted_note"] == "Doppione della palazzina 12" and scheda["trash"]["can_restore"] is False
+    assert scheda["trash"]["restore_by"] == "super_admin"
     voce = _cestino(m)[e["id"]]
     assert (voce["city"], voce["deleted_by_name"], voce["deleted_note"]) == ("Grottammare", "Olga",
                                                                              "Doppione della palazzina 12")

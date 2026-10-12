@@ -874,3 +874,124 @@ def update_territory_alias(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# ELIMINAZIONE-EDIFICIO-1 - IL SUPER ADMIN E LE ELIMINAZIONI DEGLI EDIFICI
+#
+# Il Super Admin e' il platform admin: la stessa ammissione di ogni route di
+# questo router (`require_platform_admin`, con la sua riga di audit), e il
+# service lo verifica di nuovo sul contesto. Le richieste arrivano da TUTTE le
+# agenzie: e' la ragione per cui vivono qui e non sulla superficie tenant, che
+# non ha un ramo cross-agency (D1). L'agenzia su cui si agisce e' quella
+# scritta nella richiesta o nell'edificio, mai un parametro del client.
+#
+# Approva, rifiuta, ripristina e cancella definitivamente scrivono la riga di
+# `platform_audit_log` PRIMA del commit (`audit_then_commit`): senza audit,
+# nessuna modifica. La regola di dominio vive in property/building_deletion.py;
+# qui si traduce soltanto (risposte `{detail, code, ...}` come la superficie
+# tenant, perche' la UI mostri i blocchi).
+# ---------------------------------------------------------------------------
+
+from fastapi.encoders import jsonable_encoder  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError  # noqa: E402
+from property.census import CensusNotInstalled  # noqa: E402
+from property.schemas import BuildingDeletionApprove, BuildingDeletionReject, BuildingPurge  # noqa: E402
+
+
+def _eliminazione(fn, *args, **kwargs):
+    try:
+        esito = fn(*args, **kwargs)
+    except CensusNotInstalled as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc), "code": getattr(exc, "code", None)})
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE) from exc
+    except (NotFoundError, ConflictError, ValidationError, PermissionDenied) as exc:
+        stato = {NotFoundError: 404, ConflictError: 409, ValidationError: 400, PermissionDenied: 403}
+        http = next(v for c, v in stato.items() if isinstance(exc, c))
+        corpo = dict(getattr(exc, "extra", None) or {})
+        corpo.update({"detail": str(exc), "code": getattr(exc, "code", None) or
+                      {404: "NOT_FOUND", 409: "CONFLICT", 400: "VALIDATION_ERROR", 403: "FORBIDDEN"}[http]})
+        return JSONResponse(status_code=http, content=jsonable_encoder(corpo))
+    return JSONResponse(status_code=200, content=jsonable_encoder(esito))
+
+
+@router.get("/building-deletion-requests")
+def list_building_deletion_requests(
+    status: str = Query("pending", max_length=12),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.admin_list_requests, context, status=status, limit=limit, offset=offset)
+
+
+@router.get("/building-deletion-requests/{request_id}")
+def get_building_deletion_request(
+    request_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.admin_get_request, context, request_id)
+
+
+@router.post("/building-deletion-requests/{request_id}/approve")
+def approve_building_deletion_request(
+    request_id: int,
+    payload: BuildingDeletionApprove,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.approve, context, request_id, payload.fingerprint, payload.note)
+
+
+@router.post("/building-deletion-requests/{request_id}/reject")
+def reject_building_deletion_request(
+    request_id: int,
+    payload: BuildingDeletionReject,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.reject, context, request_id, payload.note)
+
+
+@router.get("/building-deletions/trash")
+def list_trashed_buildings(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.admin_list_trash, context, limit=limit, offset=offset)
+
+
+@router.post("/building-deletions/{building_id}/restore")
+def restore_trashed_building(
+    building_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.restore, context, building_id)
+
+
+@router.get("/building-deletions/{building_id}/purge-check")
+def purge_check_trashed_building(
+    building_id: int,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.purge_check, context, building_id)
+
+
+@router.post("/building-deletions/{building_id}/purge")
+def purge_trashed_building(
+    building_id: int,
+    payload: BuildingPurge,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import building_deletion
+    return _eliminazione(building_deletion.purge, context, building_id, payload.confirm_text, payload.fingerprint)
+

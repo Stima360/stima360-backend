@@ -5,13 +5,18 @@ vera + router veri sul database usa-e-getta, migration 091 compresa; solo
 l'autenticazione sostituita, titolare agenzia 1). A 390 px e 1280 px:
 
   b01  navigazione edificio -> unita' (tocco sulla riga dell'unita');
-  b02  «Elimina…» di un edificio con un'unita': il blocco elenca l'unita' con
-       il suo collegamento, la conferma resta disabilitata, il link apre la
-       scheda dell'unita'; nulla cambia nel database;
-  b03  «Elimina…» di un edificio vuoto: motivo -> Cestino, lista Edifici;
+  SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la scheda non ha piu' «Elimina…» e il
+  Cestino Edifici non ha «Ripristina» (richiesta e decisione del Super Admin: vedi
+  tests/test_eliminazione_edificio_1_browser_postgres.py). Qui:
+  b02  scheda di un edificio con un'unita': nessun «Elimina…», il pannello
+       «Eliminazione edificio» elenca l'unita' coinvolta con il suo
+       collegamento; nulla cambia nel database;
+  b03  edificio vuoto nel Cestino dal servizio di CESTINO-EDIFICI-1 (quello che
+       STIMA Voice usa per annullare una creazione);
   b04  creazione guidata: l'edificio nel Cestino NON e' fra i candidati;
-  b05  Cestino › Edifici: card, «Apri scheda» in sola lettura, «Ripristina»
-       (stesso id) -> di nuovo candidato nella creazione guidata.
+  b05  Cestino › Edifici: card raggruppata in sola lettura, «Apri scheda» in
+       sola lettura senza ripristino; ripristino dal servizio (stesso id) ->
+       di nuovo candidato nella creazione guidata.
 Nessuno scorrimento orizzontale, nessun errore di pagina. Screenshot in
 `EDIFICI1_SHOTS` (o /tmp/edifici1_shots).
 """
@@ -92,15 +97,14 @@ def test_b01_b05_cestino_edifici_in_chromium(server, larghezza):
 
             # --- b02: edificio con unita': blocco con collegamento -----------------------
             page.goto(f"{m['url']}/os/#/edifici/{pieno['id']}")
-            page.wait_for_selector("#building-trash-btn")
-            page.click("#building-trash-btn")
-            page.wait_for_selector("[data-blocker='BUILDING_HAS_UNITS']")
-            testo = page.inner_text("#building-trash-dialog")
-            assert "1 unità collegata (1 attiva)" in testo and "Non si può spostare nel Cestino" in testo, testo
-            assert page.is_disabled("#building-trash-dialog [data-trash-confirm]")
+            page.wait_for_selector("[data-deletion-open]")
+            assert page.locator("#building-trash-btn").count() == 0
+            testo = page.inner_text("[data-deletion-panel]")
+            assert "Coinvolge 1 unità: 1 attiva." in testo, testo
             misure.append(_sfora(page))
             page.screenshot(path=str(cartella / f"cestino_edifici_bloccato_{larghezza}.png"))
-            page.click(f"#building-trash-dialog a[href='#/immobili/{unita['id']}']")
+            page.click("[data-deletion-units] summary")
+            page.click(f"[data-deletion-units] a[href='#/immobili/{unita['id']}']")
             page.wait_for_function(f"() => window.location.hash === '#/immobili/{unita['id']}'")
             # la scheda dell'unita' finisce di disegnarsi prima di cambiare pagina:
             # cosi' un suo disegno tardivo non copre la scheda edificio di b03
@@ -110,18 +114,9 @@ def test_b01_b05_cestino_edifici_in_chromium(server, larghezza):
             assert _q(m, "SELECT building_id FROM properties WHERE id = %s", (unita["id"],))[0][0] == pieno["id"]
 
             # --- b03: edificio vuoto nel Cestino -----------------------------------------
-            page.goto(f"{m['url']}/os/#/edifici/{vuoto['id']}")
-            page.wait_for_function("() => (document.querySelector('#building-title') || {}).textContent === 'Palazzina sbagliata'")
-            page.wait_for_load_state("networkidle")
-            page.click("#building-trash-btn")
-            page.wait_for_selector("#building-trash-dialog input[name='trash-reason']")
-            page.check("#building-trash-dialog input[value='created_by_mistake']")
-            page.fill("#building-trash-dialog [data-trash-note]", "Creata due volte")
-            misure.append(_sfora(page))
-            page.screenshot(path=str(cartella / f"cestino_edifici_conferma_{larghezza}.png"))
-            page.click("#building-trash-dialog [data-trash-confirm]")
-            page.wait_for_function("() => window.location.hash === '#/edifici'")
-            page.wait_for_selector("text=Edificio spostato nel Cestino")
+            from property import building_lifecycle
+            m["stato"]["chi"] = "owner_a"
+            building_lifecycle.trash_building(m["ctx"](), vuoto["id"], "created_by_mistake", "Creata due volte")
             assert _q(m, "SELECT deleted_reason FROM buildings WHERE id = %s", (vuoto["id"],))[0][0] == "created_by_mistake"
 
             # --- b04: creazione guidata senza l'edificio nel Cestino ---------------------
@@ -131,19 +126,20 @@ def test_b01_b05_cestino_edifici_in_chromium(server, larghezza):
 
             # --- b05: Cestino › Edifici, scheda in sola lettura, Ripristina ---------------
             page.goto(f"{m['url']}/os/#/cestino/edifici")
-            page.wait_for_selector(f"[data-building-trash-item='{vuoto['id']}']")
-            carta = page.inner_text(f"[data-building-trash-item='{vuoto['id']}']")
-            assert "Palazzina sbagliata" in carta and "Creato per errore — Creata due volte" in carta, carta
+            page.wait_for_selector(f"[data-building-group='{vuoto['id']}']")
+            carta = page.inner_text(f"[data-building-group='{vuoto['id']}']")
+            assert "Palazzina sbagliata" in carta and "Creato per errore" in carta and "solo il Super Admin" in carta, carta
+            assert page.locator("[data-group-restore], [data-building-restore]").count() == 0
             misure.append(_sfora(page))
             page.screenshot(path=str(cartella / f"cestino_edifici_elenco_{larghezza}.png"), full_page=True)
-            page.click(f"[data-building-trash-item='{vuoto['id']}'] [data-building-trash-open]")
+            page.click(f"[data-building-group='{vuoto['id']}'] [data-building-trash-open]")
             page.wait_for_selector("[data-building-in-trash]")
             assert page.locator("#building-edit").count() == 0 and page.locator("#unit-add-apartment").count() == 0
             misure.append(_sfora(page))
             page.screenshot(path=str(cartella / f"cestino_edifici_scheda_{larghezza}.png"))
-            page.click("[data-building-restore-btn]")
-            page.wait_for_selector("#building-trash-btn")
-            assert page.locator("[data-building-in-trash]").count() == 0
+            assert page.locator("[data-building-restore-btn]").count() == 0
+            assert "riservato al Super Admin" in page.inner_text("[data-building-in-trash]")
+            building_lifecycle.restore_building(m["ctx"](), vuoto["id"])
             assert _q(m, "SELECT deleted_at, name FROM buildings WHERE id = %s", (vuoto["id"],))[0] == [None, "Palazzina sbagliata"]
             assert vuoto["id"] in _candidati(page, m["url"], via_vuoto, "1")
             assert errori == [], errori

@@ -1200,3 +1200,19 @@ a.census-unit-main { text-decoration: none; }
   .composition-bulk-bar .action-bar .btn { flex: 1; }
   .composition-add-class { max-width: none; flex: 1; }
 }
+
+/* ELIMINAZIONE-EDIFICIO-1: pannello «Eliminazione edificio», richieste del Super Admin, Cestino raggruppato */
+.deletion-panel h3 { margin: 0 0 8px; font-size: 15px; }
+.deletion-panel .deletion-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.deletion-panel .deletion-rule { margin-top: 8px; font-size: 12px; }
+.deletion-request-status { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin-top: 6px; }
+.deletion-request-status p { flex-basis: 100%; margin: 4px 0 0; }
+.deletion-blockers { margin: 6px 0; padding-left: 18px; }
+.deletion-blockers li { margin: 2px 0; }
+.deletion-units ul { margin: 6px 0; padding-left: 18px; max-height: 240px; overflow-y: auto; }
+.deletion-detail, .deletion-purge { border-top: 1px solid var(--border, #e3e8f0); margin-top: 8px; padding-top: 8px; }
+.deletion-purge input[type="text"] { width: 100%; max-width: 320px; }
+.deletion-admin h3 { margin: 16px 0 8px; font-size: 15px; }
+@media (max-width: 640px) {
+  .deletion-panel .action-bar, .deletion-purge .action-bar, .deletion-detail .action-bar { flex-direction: column; align-items: stretch; }
+}

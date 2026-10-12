@@ -28,8 +28,10 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    m100 = tutte[-1]
-    assert m100.version == VERSIONE and tutte[-2].version == "099_voice_undo"
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la 100 resta valida, seguita dalla sola 101
+    assert tutte[-1].version == "101_eliminazione_edificio_1"
+    m100 = tutte[-2]
+    assert m100.version == VERSIONE and tutte[-3].version == "099_voice_undo"
     assert m100.down_available and not m100.non_transactional
     assert runner.validate_migration(m100) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)

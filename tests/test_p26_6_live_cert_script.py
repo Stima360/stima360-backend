@@ -5859,6 +5859,25 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # o un operatore di prova ne avesse, il preflight lo incontra come RIFIUTO.
     ("voice_step_undos", "agency_id", "agencies", "RESTRICT"),
     ("voice_step_undos", "actor_user_id", "operator_users", "RESTRICT"),
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1, migration 101 (richieste di
+    # eliminazione degli edifici): CINQUE riferimenti non-CASCADE nuovi. ESAMINATI.
+    #
+    #   building_deletion_requests.agency_id            -> agencies        RESTRICT
+    #   building_deletion_requests.requested_by_user_id -> operator_users  SET NULL
+    #   building_deletion_requests.decided_by_user_id   -> operator_users  SET NULL
+    #   building_deletion_requests.restored_by_user_id  -> operator_users  SET NULL
+    #   building_deletion_requests.purged_by_user_id    -> operator_users  SET NULL
+    #
+    # Storico (trigger che rifiuta DELETE e ammette solo le transizioni della
+    # decisione). CONSEGUENZA PER IL CLEANUP, dichiarata: lo scrive solo
+    # property/building_deletion.py, dalle rotte di richiesta e da quelle del
+    # Super Admin, che la matrice non percorre (solo sonde anonime); se un'agenzia di prova ne avesse, il preflight lo
+    # incontra come RIFIUTO. Gli operatori: SET NULL, la riga resta.
+    ("building_deletion_requests", "agency_id", "agencies", "RESTRICT"),
+    ("building_deletion_requests", "requested_by_user_id", "operator_users", "SET NULL"),
+    ("building_deletion_requests", "decided_by_user_id", "operator_users", "SET NULL"),
+    ("building_deletion_requests", "restored_by_user_id", "operator_users", "SET NULL"),
+    ("building_deletion_requests", "purged_by_user_id", "operator_users", "SET NULL"),
 })
 
 
@@ -8169,6 +8188,8 @@ COLLOCAZIONE_SCRITTURE = {
     "property_accessories": (GUARDIA, "POST /property/properties/{id}/accessories non e' chiamato dalla matrice; referenzia properties con ON DELETE CASCADE"),
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B1 (085, property/lifecycle.py).
     "record_lifecycle_events": (GUARDIA, "POST /property/properties/{id}/trash e /restore non sono chiamati dalla matrice; referenzia agencies e operator_users (RESTRICT), quindi il preflight la vedrebbe"),
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1 (101, property/building_deletion.py).
+    "building_deletion_requests": (GUARDIA, "POST /property/buildings/{id}/deletion-request e le rotte del Super Admin non sono chiamati dalla matrice (solo sonde anonime); referenzia agencies (RESTRICT) e operator_users (SET NULL), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (087, property/site_sync.py).
     "property_site_sources": (GUARDIA, "provenienza dal sito, scritta solo dal funnel pubblico (/api/salva_stima, /api/salva_stima_dettagliata) e dalle rotte site-sources, che la matrice non percorre; referenzia agencies (RESTRICT), stime e properties (CASCADE), contacts, leads e properties (SET NULL), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (088, property/site_sync.py).
@@ -10159,7 +10180,8 @@ def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypa
     # e la lettura della composizione dell'edificio altrui (404).
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: piu' la PATCH .../census-data (sonda anonima)
     # e la PATCH vuota sui dati catastali dell'immobile altrui (404).
-    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 22
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: piu' GET e POST .../deletion-request (sonda anonima).
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 24
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
                      "composizione-edificio-{a}-{b}",
@@ -10225,7 +10247,9 @@ def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
     # dalla sonda anonima; la lettura della composizione altrui anche autenticata.
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: la PATCH .../census-data, coperta
     # dalla sonda anonima e, autenticata, dalla PATCH vuota sull'immobile altrui.
-    assert len(montate) == 23
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: GET e POST .../deletion-request,
+    # coperte dalla sonda anonima (nessuna sonda autenticata crea una richiesta).
+    assert len(montate) == 25
     assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
         set(cert.BUILDINGS_OPERAZIONI) ^ montate
     assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]

@@ -513,8 +513,10 @@ def test_m_schema_085(mondo):
     # catalogo resta rifiutata.
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 ammette anche 'building'; un'entita' fuori catalogo resta rifiutata.
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 ammette anche 'buy_request'; un'entita' fuori catalogo resta rifiutata.
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la 101 ammette 'purge' e gli eventi della richiesta di
+    # eliminazione; un'azione fuori catalogo resta rifiutata.
     for sql in ("INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'lead', 1, 'trash')",
-                "INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'property', 1, 'purge')"):
+                "INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action) VALUES (1, 'property', 1, 'archive')"):
         with pytest.raises(Exception):
             _q(m, sql)
 

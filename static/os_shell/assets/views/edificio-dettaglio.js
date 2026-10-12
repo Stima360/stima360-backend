@@ -41,11 +41,13 @@ import {
   principalCandidates, summaryView, unitFacts, unitRelationText, unitRowBadges,
 } from '../census/census-model.js';
 import { STATUS_LABELS, canManagePropertyLifecycle } from './immobile-dettaglio.js';
-// CESTINO-EDIFICI-1: «Elimina…» (foglio condiviso del Cestino) e, per un
-// edificio nel Cestino, la scheda in sola lettura con «Ripristina». Le rotte
-// le nomina solo trash/trash-api.js; blocchi e permessi li decide il backend.
-import { bindBuildingTrashButton, buildingTrashButtonHtml } from '../trash/trash-dialog.js';
+// CESTINO-EDIFICI-1: per un edificio nel Cestino, la scheda in sola lettura.
+// ELIMINAZIONE-EDIFICIO-1: al posto di «Elimina…» il pannello «Eliminazione
+// edificio» (richiesta, unità coinvolte, stato, ritiro): lo spostamento nel
+// Cestino e il ripristino li decide il Super Admin. Le rotte le nominano solo
+// trash/trash-api.js e building-deletion/building-deletion.js; il backend decide tutto.
 import { restoreBuilding } from '../trash/trash-api.js';
+import { mountDeletionPanel } from '../building-deletion/building-deletion.js';
 import {
   BUILDING_RESTORED_TOAST, buildingDuplicatesView, buildingName, reasonLabel, restoreErrorView,
 } from '../trash/trash-model.js';
@@ -89,9 +91,9 @@ export async function renderEdificioDettaglio(container, params = []) {
       <dl class="building-facts" id="building-facts"></dl>
       ${inTrash ? '' : `<div class="action-bar">
         <button type="button" class="btn ghost" id="building-edit">Modifica palazzina</button>
-        ${buildingTrashButtonHtml()}
       </div>`}
     </div>
+    <div id="building-deletion"></div>
     <div class="card panel building-summary-panel">
       <div class="building-counts building-counts-large" id="building-counters"></div>
       <p class="muted building-split" id="building-split"></p>
@@ -342,12 +344,9 @@ export async function renderEdificioDettaglio(container, params = []) {
   // deriva il foglio dalla chip scelta, non il bottone di apertura
   chips.querySelectorAll('[data-add-type]').forEach((b) => b.addEventListener('click', () => { chips.hidden = true; apriFoglio({ property_type: b.dataset.addType }); }));
 
-  if (inTrash) {
-    bindBuildingRestore(container, edificio);
-  } else {
-    // CESTINO-EDIFICI-1: dopo lo spostamento si torna alla lista Edifici
-    bindBuildingTrashButton(container, edificio, () => navigate('edifici'));
-  }
+  if (inTrash) bindBuildingRestore(container, edificio);
+  // ELIMINAZIONE-EDIFICIO-1: richiesta di eliminazione (anche nel Cestino: mostra l'esito)
+  mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id);
 
   container.querySelector('#building-edit')?.addEventListener('click', () => openBuildingSheet(buildingSheet, {
     options: opzioni, building: edificio,
@@ -391,7 +390,10 @@ function buildingTrashBannerHtml(edificio) {
       <p class="muted">L'edificio non compare nella lista Edifici né nella creazione guidata, non si modifica e non riceve unità. I suoi dati restano.</p>
       <div class="field-error" data-building-restore-error role="alert"></div>
       <div class="trash-banner-actions">
-        ${info.can_restore ? '<button type="button" class="btn primary" data-building-restore-btn>Ripristina</button>' : '<span class="muted">Può ripristinarlo chi lo ha spostato o un amministratore.</span>'}
+        ${info.can_restore ? '<button type="button" class="btn primary" data-building-restore-btn>Ripristina</button>'
+          : info.restore_by === 'super_admin'
+            ? '<span class="muted" data-building-restore-super-admin>Il ripristino è riservato al Super Admin della piattaforma.</span>'
+            : '<span class="muted">Può ripristinarlo chi lo ha spostato o un amministratore.</span>'}
         <a class="btn ghost" href="#/cestino/edifici">Apri il Cestino</a>
       </div>
     </div>`;

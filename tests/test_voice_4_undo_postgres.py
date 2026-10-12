@@ -342,7 +342,8 @@ def test_m1_migration_099_is_valid_contiguous_and_has_a_down():
     assert [x.version for x in m] == ["099_voice_undo"] and m[0].down_available
     assert runner.validate_migration(m[0]) == []
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: dopo la 099 viene solo la 100 (composizione degli edifici)
-    assert [x.number for x in tutte if x.number >= 99] == [99, 100]
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: poi la 101 (richieste di eliminazione degli edifici)
+    assert [x.number for x in tutte if x.number >= 99] == [99, 100, 101]
     testo = (ROOT / "migrations" / "099_voice_undo.sql").read_text(encoding="utf-8")
     assert "ALTER TABLE" not in testo.upper() and "voice_command_events" not in testo
 
@@ -415,6 +416,14 @@ CENSIMENTO2_PROPERTY = ("property/census_classes.py", "property/composition.py",
                         "static/os_shell/assets/census/composition-panel.js",
                         "static/os_shell/assets/census/property-census-tab.js",
                         "static/os_shell/assets/views/edificio-dettaglio.js")
+
+# ELIMINAZIONE-EDIFICIO-1 (autorizzazione specifica del 2026-10-12): i SOLI file nuovi o toccati
+# dall'eliminazione controllata degli edifici fuori dagli elenchi qui sopra. Nessun file PROTETTO.
+ELIMINAZIONE_EDIFICIO_1 = ("property/building_deletion.py",
+                           "static/os_shell/assets/building-deletion/building-deletion.js",
+                           "static/os_shell/assets/views/rete-eliminazioni.js",
+                           "static/os_shell/assets/views/rete.js",
+                           "static/os_shell/assets/views/cestino.js")
 
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
@@ -491,6 +500,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2: i soli file dichiarati della composizione
         # degli edifici (modulo nuovo, classi, rotte e schemi); i PROTETTI qui sopra restano identici.
         diff = [f for f in diff if f not in FASE6_UI and f not in CENSIMENTO2_PROPERTY]
+        # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: i soli file dichiarati qui sopra
+        diff = [f for f in diff if f not in ELIMINAZIONE_EDIFICIO_1]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

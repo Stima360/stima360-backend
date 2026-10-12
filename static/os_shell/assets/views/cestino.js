@@ -22,21 +22,26 @@
 // backend e gli immobili in conflitto; nessuna modifica locale inventata e
 // nessuna correzione automatica di codice, dati catastali o richieste.
 //
-// Nessuna eliminazione definitiva: non esiste, in questa fase, da nessuna parte.
+// Nessuna eliminazione definitiva da qui.
+// ELIMINAZIONE-EDIFICIO-1: la scheda «Edifici» mostra ogni edificio con le sue
+// unità raggruppate (GET /api/property/trash/building-groups), in sola
+// lettura: ripristino ed eliminazione definitiva sono del Super Admin
+// (Rete › Eliminazioni edifici). Nessun «Ripristina» per gli operatori.
 import { escapeHtml, formatDateTime } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import { COMMERCIAL_STATUS_LABELS } from './incarichi.js';
 import {
-  listBuildingTrash, listBuyRequestTrash, listContactTrash, listTrash, restoreBuilding, restoreBuyRequest,
+  listBuyRequestTrash, listContactTrash, listTrash, restoreBuyRequest,
   restoreContact, restoreProperty,
 } from '../trash/trash-api.js';
 import {
   BUY_RESTORED_TOAST, BUY_STATUS_LABELS, buyDuplicatesView, buyRequestLine, buyRequestName, buyRestoreErrorView,
 } from '../trash/trash-model.js';
 import { buyBlockersHtml } from '../trash/trash-dialog.js';
+import { listBuildingTrashGroups, trashGroupCardHtml } from '../building-deletion/building-deletion.js';
 import {
-  BUILDING_RESTORED_TOAST, CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST, buildingDuplicatesView,
-  buildingLine, buildingName, contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
+  CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST,
+  contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
 } from '../trash/trash-model.js';
 
 const PAGE_SIZE = 50;
@@ -120,37 +125,6 @@ export function duplicatesNoticeHtml(nome, doppioni, { kind = 'contact' } = {}) 
       <ul>${doppioni.map((d) => `<li><a href="${t.href(d.id)}">${escapeHtml(d.name)}</a>${d.reason ? ` — ${escapeHtml(d.reason)}` : ''}</li>`).join('')}</ul>
       <p class="muted">${t.nulla}</p>
     </div>`;
-}
-
-const BUILDING_TYPE_LABELS = {
-  condominio: 'Condominio', villa: 'Villa', rustico: 'Rustico', capannone: 'Capannone',
-  commerciale: 'Commerciale', misto: 'Misto', altro: 'Altro',
-};
-
-/** Una card del Cestino Edifici (esportata per le prove). */
-export function buildingTrashCardHtml(item) {
-  const chi = item.deleted_by_name ? ` · da ${item.deleted_by_name}` : '';
-  const motivo = reasonLabel(item.deleted_reason) + (item.deleted_note ? ` — ${item.deleted_note}` : '');
-  const id = Number(item.id);
-  const dichiarate = item.units_declared === null || item.units_declared === undefined ? 'non note' : String(item.units_declared);
-  return `
-    <article class="trash-card" data-building-trash-item="${id}">
-      <div class="trash-card-head">
-        <strong class="trash-code">${escapeHtml(buildingName(item))}</strong>
-        <span class="muted trash-type">${escapeHtml(BUILDING_TYPE_LABELS[item.building_type] || 'Edificio')}</span>
-      </div>
-      <div class="trash-line">${escapeHtml(buildingLine(item) || '—')}</div>
-      <dl class="trash-facts">
-        <dt>Eliminato</dt><dd data-trash-when>${escapeHtml(formatDateTime(item.deleted_at))}${escapeHtml(chi)}</dd>
-        <dt>Motivo</dt><dd data-trash-reason>${escapeHtml(motivo)}</dd>
-        <dt>Unità dichiarate</dt><dd data-trash-status>${escapeHtml(dichiarate)}</dd>
-      </dl>
-      <div class="field-error trash-card-error" data-trash-card-error role="alert"></div>
-      <div class="trash-card-actions">
-        <a class="btn ghost" href="#/edifici/${id}" data-building-trash-open>Apri scheda</a>
-        <button type="button" class="btn primary" data-building-restore="${id}">Ripristina</button>
-      </div>
-    </article>`;
 }
 
 /** Una card del Cestino Richieste (esportata per le prove). */
@@ -254,6 +228,38 @@ function listaCestino(listEl, pagerEl, toastHost, cfg) {
   return carica;
 }
 
+/**
+ * ELIMINAZIONE-EDIFICIO-1: il Cestino Edifici, un edificio per card con le sue
+ * unità raggruppate; sola lettura per gli operatori.
+ */
+function gruppiEdifici(listEl, pagerEl) {
+  let offset = 0;
+  return async function carica() {
+    pagerEl.innerHTML = '';
+    let pagina;
+    try {
+      pagina = await listBuildingTrashGroups(offset, PAGE_SIZE);
+    } catch (error) {
+      if (offset === 0) listEl.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Impossibile caricare il Cestino.')}</div>`;
+      else pagerEl.innerHTML = `<div class="field-error">${escapeHtml(error.message || 'Impossibile caricare altri edifici.')}</div>`;
+      return;
+    }
+    const voci = (pagina && pagina.items) || [];
+    if (offset === 0) listEl.innerHTML = '';
+    for (const item of voci) listEl.insertAdjacentHTML('beforeend', trashGroupCardHtml(item));
+    if (!listEl.querySelector('[data-building-group]')) {
+      listEl.innerHTML = '<p class="muted" data-trash-empty>Il Cestino è vuoto.</p>';
+    }
+    if (pagina && pagina.has_more) {
+      pagerEl.innerHTML = '<button type="button" class="btn ghost" data-trash-more>Carica altri</button>';
+      pagerEl.querySelector('[data-trash-more]').addEventListener('click', () => {
+        offset += PAGE_SIZE;
+        carica();
+      });
+    }
+  };
+}
+
 export async function renderCestino(container) {
   const hash = window.location.hash || '';
   // CESTINO-EDIFICI-1 / CESTINO-RICHIESTE-1: `#/cestino/contatti`,
@@ -290,7 +296,7 @@ export async function renderCestino(container) {
       </section>
       <section class="trash-panel" data-trash-panel="edifici"${edifici ? '' : ' hidden'}>
         <div class="trash-page-head">
-          <p class="muted trash-intro">Edifici (palazzine) spostati nel Cestino: vuoti, non compaiono nella lista Edifici né nella creazione guidata finché non li ripristini.</p>
+          <p class="muted trash-intro">Edifici (palazzine) spostati nel Cestino con le loro unità: non compaiono nella lista Edifici né nella creazione guidata. Il ripristino e l’eliminazione definitiva li decide il Super Admin della piattaforma.</p>
           <a href="#/edifici" class="btn ghost" data-building-trash-back>← Edifici</a>
         </div>
         <div data-building-trash-notice></div>
@@ -316,7 +322,6 @@ export async function renderCestino(container) {
     richieste: container.querySelector('[data-trash-panel="richieste"]'),
   };
   const buyNoticeEl = container.querySelector('[data-buy-trash-notice]');
-  const buildingNoticeEl = container.querySelector('[data-building-trash-notice]');
   const noticeEl = container.querySelector('[data-contact-trash-notice]');
   const caricaImmobili = listaCestino(container.querySelector('[data-trash-list]'),
     container.querySelector('[data-trash-pager]'), toastHost, {
@@ -333,16 +338,8 @@ export async function renderCestino(container) {
       moreError: 'Impossibile caricare altri contatti.',
       afterRestore: (riga) => { noticeEl.innerHTML = duplicatesNoticeHtml(contactName(riga), duplicatesView(riga)); },
     });
-  const caricaEdifici = listaCestino(container.querySelector('[data-building-trash-list]'),
-    container.querySelector('[data-building-trash-pager]'), toastHost, {
-      itemAttr: 'data-building-trash-item', restoreAttr: 'data-building-restore', restoreKey: 'buildingRestore',
-      card: buildingTrashCardHtml, list: listBuildingTrash, restore: restoreBuilding, toast: BUILDING_RESTORED_TOAST,
-      errorHtml: (error) => escapeHtml(restoreErrorView(error).text),
-      moreError: 'Impossibile caricare altri edifici.',
-      afterRestore: (riga) => {
-        buildingNoticeEl.innerHTML = duplicatesNoticeHtml(buildingName(riga), buildingDuplicatesView(riga), { kind: 'building' });
-      },
-    });
+  const caricaEdifici = gruppiEdifici(container.querySelector('[data-building-trash-list]'),
+    container.querySelector('[data-building-trash-pager]'));
   const caricaRichieste = listaCestino(container.querySelector('[data-buy-trash-list]'),
     container.querySelector('[data-buy-trash-pager]'), toastHost, {
       itemAttr: 'data-buy-trash-item', restoreAttr: 'data-buy-restore', restoreKey: 'buyRestore',

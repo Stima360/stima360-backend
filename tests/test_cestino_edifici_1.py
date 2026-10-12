@@ -84,10 +84,14 @@ def test_r01_rotte_nel_router_immobili():
             ("POST", "/api/property/buildings/{building_id}/restore"),
             ("GET", "/api/property/trash/buildings")} <= presenti
     sorgente = (ROOT / "property" / "router.py").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: «trash» e «restore» restano rotte del router
+    # Immobili ma rifiutano (403): si richiede l'eliminazione, approva e ripristina il Super Admin.
+    rifiuti = {"trash_building": "trc(building_deletion.direct_trash_refused,",
+               "restore_building": "trc(building_deletion.direct_restore_refused,"}
     for nome in ("building_deletion_check", "trash_building", "restore_building", "list_building_trash"):
         nodo = next(n for n in ast.walk(ast.parse(sorgente)) if isinstance(n, ast.FunctionDef) and n.name == nome)
         testo = ast.unparse(nodo)
-        assert "trc(building_lifecycle." in testo and "Depends(legacy_basic_agency_context)" in testo, nome
+        assert rifiuti.get(nome, "trc(building_lifecycle.") in testo and "Depends(legacy_basic_agency_context)" in testo, nome
 
 
 def test_r02_servizio_motivi_nessuna_cancellazione_nessuno_scollegamento():

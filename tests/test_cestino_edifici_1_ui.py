@@ -7,16 +7,16 @@
      dell'elenco solo da trash-model.js); la scheda edificio usa il foglio
      condiviso; nessuna regola di permesso nel client; lessico;
   D  Shell VERA (main.js, router, sessione, scheda edificio, pagina Cestino)
-     nello stub DOM di P26-4/A30-5 con fetch instradato:
-       d01  «Elimina…» di un edificio con unita': blocco con le unita' e i link,
-            conferma disabilitata, nessuna scrittura;
-       d02  edificio vuoto: motivo -> POST .../trash, toast, lista Edifici;
-       d03  edificio nel Cestino: scheda in sola lettura (niente «Modifica»,
-            «Elimina…», «+ Aggiungi unita'»), «Ripristina» -> stessa scheda
-            ridisegnata, avviso dei possibili doppioni con link, nulla unito;
-            senza permesso, nessun bottone;
+     nello stub DOM di P26-4/A30-5 con fetch instradato (ELIMINAZIONE-EDIFICIO-1):
+       d01  «Richiedi eliminazione…»: unita' coinvolte con i link, conferma con
+            motivo e nota -> POST .../deletion-request, stato «in attesa»;
+       d02  blocchi con i collegamenti, nessuna richiesta; «Ritira» solo per chi
+            l'ha fatta -> POST .../withdraw, stato «ritirata»;
+       d03  edificio nel Cestino: scheda in sola lettura, ripristino riservato al
+            Super Admin, esito della richiesta; senza permesso, nessun bottone;
        d04  pagina Cestino: Immobili resta la scheda predefinita; Edifici al
-            tocco o con #/cestino/edifici; card e «Ripristina».
+            tocco o con #/cestino/edifici; edificio e unita' raggruppati, in sola
+            lettura.
 
 Senza node le prove M/D sono SKIPPED (BLOCKED), mai passate. La prova in
 Chromium e' tests/test_cestino_edifici_1_browser_postgres.py.
@@ -118,8 +118,12 @@ def test_s01_rotte_solo_nel_client_del_cestino():
 
 def test_s02_scheda_edificio_usa_il_foglio_condiviso_e_nessuna_regola():
     scheda = _codice(SCHEDA_JS)
-    assert "buildingTrashButtonHtml()" in scheda
-    assert "bindBuildingTrashButton(container, edificio, () => navigate('edifici'));" in scheda
+    # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: al posto di «Elimina…» (spostamento diretto)
+    # la scheda monta il pannello «Eliminazione edificio» (richiesta al Super Admin); il ripristino
+    # dalla scheda non e' dell'operatore.
+    assert "buildingTrashButtonHtml()" not in scheda and "bindBuildingTrashButton(" not in scheda
+    assert "mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id);" in scheda
+    assert "info.restore_by === 'super_admin'" in scheda
     assert "const inTrash = Boolean(edificio.deleted_at);" in scheda
     assert "const dallaProcedura = params[1] === 'aggiungi' && !inTrash;" in scheda   # mai unita' nuove dal Cestino
     assert "info.can_restore" in scheda and "deletion-check" not in scheda
@@ -152,53 +156,70 @@ def test_s04_node_check():
 
 # ---------------------------------------------------------------------------
 # D - Shell eseguita (stub DOM)
+#
+# SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: la scheda edificio non sposta piu' nel Cestino
+# («Elimina…») ne' ripristina: monta il pannello «Eliminazione edificio» (richiesta al Super Admin,
+# unita' coinvolte, stato, ritiro). La pagina Cestino mostra l'edificio con le sue unita'
+# raggruppate, in sola lettura. Le prove D seguono il comportamento nuovo; il Super Admin (Rete) e'
+# provato in tests/test_eliminazione_edificio_1_ui.py.
 # ---------------------------------------------------------------------------
 
 rt = a30_5._rt()
 
-BLOCCATO = {"can_trash": False, "history": [], "blockers": [
-    {"code": "BUILDING_HAS_UNITS", "label": "3 unità collegate (2 attive, 1 nel Cestino): l'edificio deve essere vuoto",
-     "link": {"href": "#/edifici/7", "label": "Apri l'edificio"},
-     "items": [{"id": 410, "label": "IMM-410 · Appartamento · attiva", "href": "#/immobili/410"},
-               {"id": 415, "label": "IMM-415 · Garage · pertinenza · attiva", "href": "#/immobili/415"},
-               {"id": 420, "label": "IMM-420 · nel Cestino", "href": "#/cestino"}]}]}
-PUO = {"can_trash": True, "blockers": [], "history": []}
 VUOTO = {**SCHEDA, "units": [], "archived_units": []}
-NEL_CESTINO = {**VUOTO, "deleted_at": "2026-10-06T08:00:00+02:00", "deleted_reason": "duplicate", "deleted_by_user_id": 3,
-               "trash": {"deleted_at": "2026-10-06T08:00:00+02:00", "deleted_reason": "duplicate", "deleted_by_user_id": 3,
-                         "deleted_by_name": "Anna Agente", "deleted_note": "Doppione di via Roma", "can_restore": True}}
-RIPRISTINATO = {"status": 200, "body": {**{k: v for k, v in VUOTO.items() if k not in ("units", "archived_units")},
-                                        "deleted_at": None, "possible_duplicates": [
-                                            {"id": 8, "name": "Gemella", "city": "Tortoreto", "address": "Via Roma",
-                                             "civic_number": "10"}]}}
+NEL_CESTINO = {**VUOTO, "deleted_at": "2026-10-06T08:00:00+02:00", "deleted_reason": "duplicate", "deleted_by_user_id": 1,
+               "trash": {"deleted_at": "2026-10-06T08:00:00+02:00", "deleted_reason": "duplicate", "deleted_by_user_id": 1,
+                         "deleted_by_name": "Super", "deleted_note": "Eliminazione dell'edificio approvata",
+                         "can_restore": False, "restore_by": "super_admin"}}
+UNITA = {"total": 3, "active": 2, "archived": 0, "trash": 1, "items": [
+    {"id": 410, "label": "IMM-410 · Appartamento · piano 1", "state": "active"},
+    {"id": 415, "label": "IMM-415 · Garage", "state": "active"},
+    {"id": 420, "label": "IMM-420 · piano 2", "state": "trash"}]}
+RICHIESTA = {"id": 55, "status": "pending", "reason_code": "duplicate", "request_note": "Doppione di via Roma",
+             "requested_by_user_id": 3, "requested_by_name": "Anna Agente", "requested_at": "2026-10-12T09:00:00+02:00",
+             "decided_by_name": None, "decided_at": None, "decision_note": None, "units_total": 3,
+             "units_already_trashed": 1}
+PUO = {"building_id": 7, "building_label": "Palazzina 7", "in_trash": False, "units": UNITA, "fingerprint": "a" * 64,
+       "blockers": [], "can_request": True, "can_withdraw": False, "request": None}
+ATTESA = {**PUO, "can_request": False, "can_withdraw": True, "request": RICHIESTA}
+RITIRATA = {**PUO, "request": {**RICHIESTA, "status": "withdrawn", "decided_at": "2026-10-12T10:00:00+02:00"}}
+BLOCCATO = {**PUO, "can_request": False, "blockers": [
+    {"code": "PROPERTY_SOLD", "label": "Immobile venduto", "property_id": 410,
+     "property_label": "IMM-410 · Appartamento · piano 1", "href": "#/immobili/410"},
+    {"code": "PERTINENZA_FUORI_EDIFICIO", "label": "Pertinenze collegate a cavallo dell'edificio",
+     "items": [{"property_id": 430, "label": "IMM-430 · Cantina"}]}]}
+APPROVATA = {**PUO, "in_trash": True, "can_request": False, "request": {
+    **RICHIESTA, "status": "approved", "decided_by_name": "Super", "decided_at": "2026-10-12T11:00:00+02:00"}}
 
 
-def _voce(bid, **extra):
-    v = {"id": bid, "name": f"Palazzina {bid}", "address": "Via Roma", "civic_number": str(bid), "city": "Tortoreto",
-         "building_type": "condominio", "units_declared": None, "deleted_at": "2026-10-05T18:30:00+02:00",
-         "deleted_reason": "created_by_mistake", "deleted_by_user_id": 3, "deleted_by_name": "Anna Agente",
-         "deleted_note": None}
+def _gruppo(bid, **extra):
+    v = {"id": bid, "agency_id": 7, "agency_name": "Agenzia A", "name": f"Palazzina {bid}",
+         "label": f"Palazzina {bid} · Via Roma {bid}, Tortoreto", "deleted_at": "2026-10-12T11:00:00+02:00",
+         "deleted_reason": "duplicate", "deleted_by_user_id": 1, "deleted_by_name": "Super",
+         "units_total": 3, "units_moved_by_approval": 2,
+         "units": [{**u, "moved_by_approval": u["state"] != "trash"} for u in UNITA["items"]],
+         "fingerprint": "b" * 64, "request": {**APPROVATA["request"]}}
     v.update(extra)
     return v
 
 
-ELENCO_EDIFICI = {"items": [_voce(7, deleted_note="Creata due volte", units_declared=6), _voce(9)],
-                  "has_more": False, "limit": 50, "offset": 0}
+GRUPPI = {"items": [_gruppo(7), _gruppo(9, units_total=0, units_moved_by_approval=0, units=[], request=None)],
+          "has_more": False, "limit": 50, "offset": 0}
 
 
-def _rotte(sessione="agency_owner", *, scheda=(VUOTO,), check=(PUO,), trash=None, restore=(RIPRISTINATO,),
-           lista=(ELENCO_EDIFICI,)):
-    trash = trash or ({"status": 200, "body": {**NEL_CESTINO}},)
+def _rotte(sessione="agency_owner", *, scheda=(VUOTO,), stato=(PUO,), richiesta=None, ritiro=None, gruppi=(GRUPPI,)):
+    richiesta = richiesta or ({"status": 201, "body": RICHIESTA},)
+    ritiro = ritiro or ({"status": 200, "body": RITIRATA["request"]},)
     voci = [
         ("GET", "/api/operator-auth/me", [rt.ok(a30_13b._sessione(sessione))]),
         ("GET", "/api/property/form-options", [rt.ok(OPZIONI_E1)]),
-        ("GET", "/api/property/buildings/7/deletion-check", [c if "status" in c else rt.ok(c) for c in check]),
-        ("POST", "/api/property/buildings/7/trash", list(trash)),
-        ("POST", "/api/property/buildings/7/restore", list(restore)),
-        ("POST", "/api/property/buildings/9/restore", [{"status": 200, "body": {"id": 9, "possible_duplicates": []}}]),
+        ("GET", "/api/property/buildings/7/deletion-request", [s if "status" in s and "body" in s else rt.ok(s)
+                                                               for s in stato]),
+        ("POST", "/api/property/buildings/7/deletion-request", list(richiesta)),
+        ("POST", "/api/property/building-deletion-requests/55/withdraw", list(ritiro)),
         ("GET", "/api/property/buildings/7", [rt.ok(s) for s in scheda]),
         ("GET", "/api/property/buildings", [rt.ok({"items": [], "total": 0, "limit": 25, "offset": 0})]),
-        ("GET", "/api/property/trash/buildings", [rt.ok(x) for x in lista]),
+        ("GET", "/api/property/trash/building-groups", [rt.ok(x) for x in gruppi]),
         ("GET", "/api/property/trash", [rt.ok({"items": [], "has_more": False, "limit": 50, "offset": 0})]),
         ("GET", "/api/core/trash/contacts", [rt.ok({"items": [], "has_more": False, "limit": 50, "offset": 0})]),
         ("GET", "/api/", [rt.ok({"items": []})]),
@@ -207,23 +228,8 @@ def _rotte(sessione="agency_owner", *, scheda=(VUOTO,), check=(PUO,), trash=None
 
 
 HELPERS = r"""
-const BD = () => C().querySelector('#building-trash-dialog');
-const bq = (s) => BD().querySelector(s);
-const btoast = () => { const t = __dom.main.querySelector('[data-census-toast]'); return t && !t.hidden ? t.visibleText() : null; };
-function bScegli(valore) {
-  for (const r of BD().querySelectorAll('input[name="trash-reason"]')) {
-    r.checked = r.getAttribute('value') === valore;
-    if (r.checked) r.dispatch('change');
-  }
-}
-function bFoglio() {
-  if (!BD()) return null;
-  return { open: !!BD()._open, testo: BD().visibleText(),
-           blocchi: BD().querySelectorAll('[data-blocker]').map((li) => li.dataset.blocker),
-           voci: BD().querySelectorAll('[data-blocker-item-link]').map((a) => [a.getAttribute('href'), a.textContent]),
-           confermaDisabilitata: bq('[data-trash-confirm]').disabled,
-           motivi: BD().querySelectorAll('input[name="trash-reason"]').map((r) => r.getAttribute('value')) };
-}
+const P = () => C().querySelector('[data-deletion-panel]');
+const pq = (s) => P().querySelector(s);
 """
 
 
@@ -236,83 +242,86 @@ def _scritture(out):
 
 
 @node
-def test_d01_edificio_con_unita_bloccato_con_collegamenti(staged):  # noqa: F811
+def test_d01_richiesta_eliminazione_con_unita_coinvolte(staged):  # noqa: F811
     scenario = r"""
       await wait(); await wait();
-      const elimina = C().querySelector('#building-trash-btn');
-      const etichetta = elimina ? elimina.textContent : null;
-      elimina.dispatch('click'); await wait(); await wait();
-      const statoFoglio = bFoglio();
-      bq('[data-trash-form]').dispatch('submit'); await wait();
-      report({ etichetta, f: statoFoglio });
+      const prima = { elimina: !!C().querySelector('#building-trash-btn'), testo: P().visibleText(),
+                      unita: pq('[data-deletion-units]').querySelectorAll('a').map((a) => [a.getAttribute('href'), a.textContent]),
+                      apri: pq('[data-deletion-open]') ? pq('[data-deletion-open]').textContent : null };
+      pq('[data-deletion-open]').dispatch('click'); await wait();
+      const statoConferma = { motivo: !!pq('[data-deletion-reason]'), testo: P().visibleText() };
+      pq('[data-deletion-reason]').value = 'duplicate';
+      pq('[data-deletion-note]').value = '  Doppione di via Roma  ';
+      pq('[data-deletion-confirm]').dispatch('click'); await wait(); await wait();
+      report({ prima, statoConferma, dopo: P().visibleText(), stato: pq('[data-deletion-status]').dataset.deletionStatus,
+               ritira: !!pq('[data-deletion-withdraw]') });
     """
-    out = _run(staged, scenario, _rotte(scheda=(SCHEDA,), check=(BLOCCATO,)), "#/edifici/7")
-    assert out["etichetta"] == "Elimina…"
-    f = out["f"]
-    assert f["open"] is True and f["blocchi"] == ["BUILDING_HAS_UNITS"]
-    assert "Elimina edificio" in f["testo"] and "Non si può spostare nel Cestino" in f["testo"]
-    assert "3 unità collegate (2 attive, 1 nel Cestino)" in f["testo"]
-    assert f["voci"] == [["#/immobili/410", "IMM-410 · Appartamento · attiva"],
-                         ["#/immobili/415", "IMM-415 · Garage · pertinenza · attiva"],
-                         ["#/cestino", "IMM-420 · nel Cestino"]]
-    assert f["confermaDisabilitata"] is True and f["motivi"] == []
-    assert _scritture(out) == []                          # nulla si scollega, sposta o cestina
-
-
-@node
-def test_d02_edificio_vuoto_motivo_cestino_lista_edifici(staged):  # noqa: F811
-    scenario = r"""
-      await wait(); await wait();
-      C().querySelector('#building-trash-btn').dispatch('click'); await wait(); await wait();
-      const statoFoglio = bFoglio();
-      const primaDelMotivo = bq('[data-trash-confirm]').disabled;
-      bScegli('duplicate');
-      const dopoMotivo = bq('[data-trash-confirm]').disabled;
-      bq('[data-trash-note]').value = '  Doppione di via Roma  ';
-      bq('[data-trash-form]').dispatch('submit'); await wait(); await wait();
-      report({ f: statoFoglio, primaDelMotivo, dopoMotivo, hashDopo: window.location.hash, t: btoast() });
-    """
-    out = _run(staged, scenario, _rotte(), "#/edifici/7")
-    f = out["f"]
-    assert f["blocchi"] == [] and f["motivi"] == ["created_by_mistake", "duplicate", "invalid_data", "test_record", "other"]
-    assert "L'edificio è vuoto: esce dalla lista Edifici e dalla creazione guidata." in f["testo"]
-    assert out["primaDelMotivo"] is True and out["dopoMotivo"] is False
-    assert _scritture(out) == [("POST", "/api/property/buildings/7/trash")]
+    out = _run(staged, scenario, _rotte("agent", stato=(PUO, ATTESA)), "#/edifici/7")
+    p = out["prima"]
+    assert p["elimina"] is False and p["apri"] == "Richiedi eliminazione…"           # mai uno spostamento diretto
+    assert "Coinvolge 3 unità: 2 attive, 1 già nel Cestino." in p["testo"]
+    assert p["unita"] == [["#/immobili/410", "IMM-410 · Appartamento · piano 1"], ["#/immobili/415", "IMM-415 · Garage"],
+                          ["#/immobili/420", "IMM-420 · piano 2"]]
+    assert "la autorizza il Super Admin" in p["testo"]
+    assert out["statoConferma"]["motivo"] is True and "finché il Super Admin non approva" in out["statoConferma"]["testo"]
+    assert _scritture(out) == [("POST", "/api/property/buildings/7/deletion-request")]
     corpo = next(c for c in out["calls"] if c["m"] == "POST")["body"]
     assert corpo == {"reason_code": "duplicate", "note": "Doppione di via Roma"}
-    assert out["hashDopo"] == "#/edifici" and out["t"] == "Edificio spostato nel Cestino"
+    assert out["stato"] == "pending" and out["ritira"] is True
+    assert "In attesa di approvazione" in out["dopo"] and "Anna Agente" in out["dopo"]
 
 
 @node
-def test_d03_scheda_nel_cestino_sola_lettura_e_ripristino(staged):  # noqa: F811
+def test_d02_blocchi_e_ritiro(staged):  # noqa: F811
+    scenario = r"""
+      await wait(); await wait();
+      report({ testo: P().visibleText(), apri: !!pq('[data-deletion-open]'),
+               blocchi: P().querySelectorAll('[data-blocker-code]').map((li) => li.dataset.blockerCode),
+               link: pq('[data-deletion-blockers]').querySelectorAll('a').map((a) => a.getAttribute('href')) });
+    """
+    out = _run(staged, scenario, _rotte(stato=(BLOCCATO,)), "#/edifici/7")
+    assert out["apri"] is False and out["blocchi"] == ["PROPERTY_SOLD", "PERTINENZA_FUORI_EDIFICIO"]
+    assert "risolvi prima questi punti" in out["testo"] and "Immobile venduto" in out["testo"]
+    assert out["link"] == ["#/immobili/410", "#/immobili/430"]
+    assert _scritture(out) == []
+    scenario = r"""
+      await wait(); await wait();
+      const prima = P().visibleText();
+      pq('[data-deletion-withdraw]').dispatch('click'); await wait(); await wait();
+      report({ prima, dopo: P().visibleText(), stato: pq('[data-deletion-status]').dataset.deletionStatus,
+               apri: !!pq('[data-deletion-open]') });
+    """
+    out = _run(staged, scenario, _rotte("agent", stato=(ATTESA, RITIRATA)), "#/edifici/7")
+    assert "In attesa di approvazione" in out["prima"] and "Ritira la richiesta" in out["prima"]
+    assert _scritture(out) == [("POST", "/api/property/building-deletion-requests/55/withdraw")]
+    assert out["stato"] == "withdrawn" and "Ritirata" in out["dopo"] and out["apri"] is True
+    # un altro operatore vede la richiesta in attesa ma non la ritira
+    scenario = r"""
+      await wait(); await wait();
+      report({ testo: P().visibleText(), ritira: !!pq('[data-deletion-withdraw]') });
+    """
+    out = _run(staged, scenario, _rotte(stato=({**ATTESA, "can_withdraw": False},)), "#/edifici/7")
+    assert out["ritira"] is False and "Può ritirarla solo chi l’ha fatta." in out["testo"]
+
+
+@node
+def test_d03_scheda_nel_cestino_sola_lettura_ripristino_del_super_admin(staged):  # noqa: F811
     scenario = r"""
       await wait(); await wait();
       const banner = C().querySelector('[data-building-in-trash]');
-      const prima = { banner: banner ? banner.visibleText() : null,
-                      modifica: !!C().querySelector('#building-edit'), elimina: !!C().querySelector('#building-trash-btn'),
-                      aggiungi: !!C().querySelector('#unit-add-apartment'), pertinenza: !!C().querySelector('#unit-add-pertinenza'),
-                      unita: C().querySelector('#building-units').visibleText(),
-                      link: banner ? banner.querySelectorAll('a').map((a) => a.getAttribute('href')) : [] };
-      C().querySelector('[data-building-restore-btn]').dispatch('click'); await wait(); await wait(); await wait();
-      const avviso = C().querySelector('[data-building-duplicates]');
-      report({ prima, avviso: avviso ? avviso.visibleText() : null,
-               linkDoppioni: avviso ? avviso.querySelectorAll('a').map((a) => a.getAttribute('href')) : [],
-               t: btoast(), dopo: { banner: !!C().querySelector('[data-building-in-trash]'),
-                                    elimina: !!C().querySelector('#building-trash-btn'),
-                                    modifica: !!C().querySelector('#building-edit') } });
+      report({ banner: banner ? banner.visibleText() : null, ripristina: !!C().querySelector('[data-building-restore-btn]'),
+               modifica: !!C().querySelector('#building-edit'), elimina: !!C().querySelector('#building-trash-btn'),
+               aggiungi: !!C().querySelector('#unit-add-apartment'), pertinenza: !!C().querySelector('#unit-add-pertinenza'),
+               unita: C().querySelector('#building-units').visibleText(), pannello: P().visibleText(),
+               link: banner ? banner.querySelectorAll('a').map((a) => a.getAttribute('href')) : [] });
     """
-    out = _run(staged, scenario, _rotte(scheda=(NEL_CESTINO, VUOTO)), "#/edifici/7")
-    p = out["prima"]
-    assert "Nel Cestino" in p["banner"] and "Anna Agente" in p["banner"] and "Duplicato — Doppione di via Roma" in p["banner"]
-    assert "non si modifica e non riceve unità" in p["banner"]
-    assert (p["modifica"], p["elimina"], p["aggiungi"], p["pertinenza"]) == (False, False, False, False)
-    assert "Nessuna unità: l’edificio è nel Cestino." in p["unita"] and p["link"] == ["#/cestino/edifici"]
-    assert _scritture(out) == [("POST", "/api/property/buildings/7/restore")]
-    assert out["t"] == "Edificio ripristinato"
-    assert "Possibili doppioni attivi" in out["avviso"] and "Gemella" in out["avviso"]
-    assert "stesso indirizzo" in out["avviso"] and "Nessun edificio è stato unito o modificato." in out["avviso"]
-    assert out["linkDoppioni"] == ["#/edifici/8"]
-    assert out["dopo"] == {"banner": False, "elimina": True, "modifica": True}   # stesso id, di nuovo operativo
+    out = _run(staged, scenario, _rotte(scheda=(NEL_CESTINO,), stato=(APPROVATA,)), "#/edifici/7")
+    assert "Nel Cestino" in out["banner"] and "Super" in out["banner"]
+    assert "Il ripristino è riservato al Super Admin della piattaforma." in out["banner"]
+    assert (out["ripristina"], out["modifica"], out["elimina"], out["aggiungi"], out["pertinenza"]) == (False,) * 5
+    assert "Nessuna unità: l’edificio è nel Cestino." in out["unita"] and out["link"] == ["#/cestino/edifici"]
+    assert "Approvata da Super" in out["pannello"]
+    assert _scritture(out) == []
 
 
 @node
@@ -322,51 +331,51 @@ def test_d03b_scheda_nel_cestino_dalla_procedura_non_apre_il_foglio_unita(staged
       report({ banner: !!C().querySelector('[data-building-in-trash]'), aggiungi: !!C().querySelector('#unit-add-apartment'),
                foglioUnita: !!C().querySelector('dialog[open]') });
     """
-    out = _run(staged, scenario, _rotte(scheda=(NEL_CESTINO,)), "#/edifici/7/aggiungi/crm")
+    out = _run(staged, scenario, _rotte(scheda=(NEL_CESTINO,), stato=(APPROVATA,)), "#/edifici/7/aggiungi/crm")
     assert out["banner"] is True and out["aggiungi"] is False and out["foglioUnita"] is False
     assert _scritture(out) == []
 
 
 @node
 def test_d03c_senza_permesso_di_ripristino_nessun_bottone(staged):  # noqa: F811
-    nel = {**NEL_CESTINO, "trash": {**NEL_CESTINO["trash"], "can_restore": False}}
+    nel = {**NEL_CESTINO, "trash": {**NEL_CESTINO["trash"], "can_restore": False, "restore_by": None}}
     scenario = r"""
       await wait(); await wait();
       report({ bottone: !!C().querySelector('[data-building-restore-btn]'),
                testo: C().querySelector('[data-building-in-trash]').visibleText() });
     """
-    out = _run(staged, scenario, _rotte("agent", scheda=(nel,)), "#/edifici/7")
+    out = _run(staged, scenario, _rotte("agent", scheda=(nel,), stato=(APPROVATA,)), "#/edifici/7")
     assert out["bottone"] is False and "Può ripristinarlo chi lo ha spostato o un amministratore." in out["testo"]
 
 
 @node
-def test_d04_pagina_cestino_scheda_edifici_e_ripristino(staged):  # noqa: F811
+def test_d04_pagina_cestino_edifici_raggruppati_in_sola_lettura(staged):  # noqa: F811
     scenario = r"""
       await wait(); await wait();
       const tabs = C().querySelectorAll('[data-trash-tab]').map((b) => b.dataset.trashTab);
       const iniziale = { immobili: !C().querySelector('[data-trash-panel="immobili"]').hidden,
                          edifici: !C().querySelector('[data-trash-panel="edifici"]').hidden,
-                         letture: __calls.filter((c) => c.url.startsWith('/api/property/trash/buildings')).length };
+                         letture: __calls.filter((c) => c.url.startsWith('/api/property/trash/building-groups')).length };
       C().querySelector('[data-trash-tab="edifici"]').dispatch('click'); await wait(); await wait();
-      const carte = C().querySelectorAll('[data-building-trash-item]').map((c) => [c.dataset.buildingTrashItem, c.visibleText()]);
-      const apri = C().querySelectorAll('[data-building-trash-open]').map((a) => a.getAttribute('href'));
-      C().querySelector('[data-building-restore="7"]').dispatch('click'); await wait(); await wait();
-      const avviso = C().querySelector('[data-building-duplicates]');
-      report({ tabs, iniziale, carte, apri, dopo: C().querySelectorAll('[data-building-trash-item]').map((c) => c.dataset.buildingTrashItem),
-               avviso: avviso ? avviso.visibleText() : null, t: btoast() });
+      const carte = C().querySelectorAll('[data-building-group]').map((c) => [c.dataset.buildingGroup, c.visibleText()]);
+      report({ tabs, iniziale, carte, apri: C().querySelectorAll('[data-building-trash-open]').map((a) => a.getAttribute('href')),
+               ripristina: C().querySelectorAll('[data-group-restore], [data-building-restore]').length,
+               elimina: C().querySelectorAll('[data-group-purge]').length,
+               intro: C().querySelector('[data-trash-panel="edifici"]').visibleText() });
     """
     out = _run(staged, scenario, _rotte(), "#/cestino")
-    # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la quarta scheda, «Richieste», dopo «Edifici»
     assert out["tabs"] == ["immobili", "contatti", "edifici", "richieste"]
     assert out["iniziale"] == {"immobili": True, "edifici": False, "letture": 0}     # Immobili resta la predefinita
     assert [c[0] for c in out["carte"]] == ["7", "9"]
     uno = out["carte"][0][1]
-    assert "Palazzina 7" in uno and "Via Roma 7, Tortoreto" in uno and "Condominio" in uno
-    assert "Creato per errore — Creata due volte" in uno and "Anna Agente" in uno and "6" in uno
-    assert "non note" in out["carte"][1][1]
-    assert out["apri"] == ["#/edifici/7", "#/edifici/9"]
-    assert _scritture(out) == [("POST", "/api/property/buildings/7/restore")]
-    assert out["dopo"] == ["9"] and out["t"] == "Edificio ripristinato" and "Gemella" in out["avviso"]
+    assert "Palazzina 7 · Via Roma 7, Tortoreto" in uno and "Duplicato" in uno and "Super" in uno
+    assert "3 unità nel Cestino con l’edificio (2 spostate dall’approvazione, 1 già nel Cestino prima)" in uno
+    assert "IMM-410 · Appartamento · piano 1" in uno and "Richiesta da Anna Agente" in uno
+    assert "Ripristino ed eliminazione definitiva: solo il Super Admin." in uno
+    assert "Nessuna unità" in out["carte"][1][1]
+    assert out["apri"] == ["#/edifici/7", "#/edifici/9"] and out["ripristina"] == 0 and out["elimina"] == 0
+    assert "li decide il Super Admin" in out["intro"]
+    assert _scritture(out) == []
 
 
 @node
@@ -379,4 +388,4 @@ def test_d04b_hash_diretto_apre_la_scheda_edifici(staged):  # noqa: F811
     """
     out = _run(staged, scenario, _rotte(), "#/cestino/edifici")
     assert out["edifici"] is True and out["immobili"] is False
-    assert out["letture"] == ["/api/property/trash/buildings?limit=50&offset=0"]
+    assert out["letture"] == ["/api/property/trash/building-groups?limit=50&offset=0"]
