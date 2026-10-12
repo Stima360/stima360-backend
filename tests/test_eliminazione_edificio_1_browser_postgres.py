@@ -75,6 +75,9 @@ def server(mondo, monkeypatch):
                         "'pbkdf2_sha256$1$x$y', 'Super', TRUE) RETURNING id")
             riga = cur.fetchone()
     superadmin = riga[0]
+    # ELIMINAZIONE-EDIFICIO-2: il Super Admin generale e' l'account DESIGNATO nella configurazione del servizio
+    from property.building_deletion import SUPER_ADMIN_ENV
+    monkeypatch.setenv(SUPER_ADMIN_ENV, str(superadmin))
     sessioni = {
         "agente": {"user_id": m["ids"]["agent_a"], "agency_id": 1, "agency_name": "Agenzia Uno", "role": "agent",
                    "is_platform_admin": False, "expires_at": "2030-01-01T00:00:00Z"},

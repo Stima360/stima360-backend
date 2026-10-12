@@ -12,8 +12,9 @@
 //     definitivamente…», che mostra prima il riepilogo e le dipendenze e chiede
 //     la seconda conferma con il testo esatto. Nessuna cancellazione automatica.
 //
-// La difesa vera è nel backend (`require_platform_admin` su ogni rotta e il
-// controllo del ruolo nel servizio); qui non si decide nulla.
+// La difesa vera è nel backend (`require_platform_admin` su ogni rotta, l'account
+// designato dalla configurazione del servizio e il ruolo riletto nel database);
+// qui non si decide nulla.
 import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.js';
 import {
   PURGE_CONFIRM_TEXT, approveDeletion, blockersHtml, deletionErrorText, getDeletionRequest, listDeletionRequests,
@@ -98,12 +99,25 @@ export async function renderEliminazioni(contentEl) {
     caricaRichieste();
   });
 
+  // ELIMINAZIONE-EDIFICIO-2: un amministratore di piattaforma che non è il Super
+  // Admin generale designato (o un servizio senza configurazione) riceve 403:
+  // un solo avviso al posto della scheda, nessun comando.
+  function vietato(error) {
+    if (!error || error.status !== 403) return false;
+    const sezione = contentEl.querySelector('[data-deletion-admin]');
+    if (sezione) {
+      sezione.innerHTML = `<div class="error-box" data-deletion-forbidden>${escapeHtml(deletionErrorText(error))}</div>`;
+    }
+    return true;
+  }
+
   async function caricaRichieste() {
     richiesteEl.innerHTML = '<p class="muted">Caricamento…</p>';
     let pagina;
     try {
       pagina = await listDeletionRequests(stato.filtro);
     } catch (error) {
+      if (vietato(error)) return;
       richiesteEl.innerHTML = `<div class="error-box">${escapeHtml(deletionErrorText(error))}</div>`;
       return;
     }
@@ -163,6 +177,7 @@ export async function renderEliminazioni(contentEl) {
     try {
       pagina = await listPlatformTrash();
     } catch (error) {
+      if (vietato(error)) return;
       cestinoEl.innerHTML = `<div class="error-box">${escapeHtml(deletionErrorText(error))}</div>`;
       return;
     }

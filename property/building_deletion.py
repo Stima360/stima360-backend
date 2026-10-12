@@ -8,12 +8,24 @@ CHI
     ritira la PROPRIA richiesta finche' e' in attesa. Nessun operatore sposta
     da solo un edificio nel Cestino ne' lo ripristina (le rotte tenant di
     CESTINO-EDIFICI-1 rispondono 403: vedi `DIRECT_*`).
-  * Il SUPER ADMIN e' l'amministratore della piattaforma: `is_platform_admin`
-    letto dalla sessione nel backend (`platform_admin.dependencies.
-    require_platform_admin` sul mount e sulla rotta, e di nuovo qui con
-    `_super_admin`). Mai un confronto sull'email. Approva o rifiuta, ripristina,
-    e dal Cestino avvia la cancellazione definitiva con seconda conferma.
+  * Il SUPER ADMIN GENERALE e' UN SOLO account designato (ELIMINAZIONE-
+    EDIFICIO-2, opzione B). Servono TUTTE e tre, nel backend:
+      1. l'ammissione alla superficie Platform (`platform_admin.dependencies.
+         require_platform_admin` sul mount e sulla rotta: `is_platform_admin`
+         della sessione);
+      2. l'identita' stabile dell'account (`operator_users.id` della sessione)
+         uguale a quella designata nella configurazione del servizio
+         (`STIMA360_SUPER_ADMIN_USER_ID`, `_super_admin`);
+      3. il ruolo ancora vero nel database al momento dell'operazione
+         (`is_platform_admin = TRUE` e `status = 'active'`, `_super_admin_db`).
+    Mai l'email: non concede nulla. Un altro amministratore di piattaforma
+    riceve 403; senza configurazione (o con un valore non valido) le
+    operazioni riservate sono NEGATE (403 SUPER_ADMIN_NOT_CONFIGURED) e il
+    resto del CRM funziona. Ogni rifiuto di un platform admin e' registrato
+    (`platform.building_deletion.denied`). Approva o rifiuta, ripristina, e dal
+    Cestino avvia la cancellazione definitiva con seconda conferma.
     L'approvazione NON autorizza la cancellazione definitiva: sono due atti.
+    STIMA Voice non chiama mai questo modulo: nessuna cancellazione fisica.
 
 ISOLAMENTO. Le operazioni tenant leggono solo l'agenzia della sessione (fuori
 agenzia: 404). Le operazioni del Super Admin agiscono sull'agenzia scritta
@@ -37,11 +49,29 @@ CANCELLAZIONE DEFINITIVA (Super Admin, solo dal Cestino): seconda conferma
 (testo esatto + impronta delle unita' viste) e controllo di TUTTE le
 dipendenze, letto dal catalogo delle FK (una FK nuova blocca da sola) piu' i
 riferimenti senza FK. Si cancellano solo righe proprie dell'unita' che non
-sono storia: il collegamento ai proprietari (i contatti restano), gli
-accessori e la riga di creazione dello storico stati. Qualunque altra
-dipendenza - attivita', appuntamenti, acquisizioni, incarichi, vendite,
-documenti e foto (file esterni), messaggi, sito, portale proprietario,
-storico prezzi o di stato, STIMA Voice - BLOCCA con la spiegazione.
+sono storia commerciale: il collegamento ai proprietari (i contatti
+restano), gli accessori e lo storico stati di creazione e di «Annulla
+creazione» (`draft -> archived`, nota `undo-create`). Qualunque altra
+dipendenza - attivita' (anche dettate a Voice), appuntamenti, acquisizioni,
+incarichi, vendite, documenti e foto (file esterni), messaggi, sito, portale
+proprietario, storico prezzi o altre transizioni di stato - BLOCCA con la
+spiegazione.
+
+STIMA VOICE (ELIMINAZIONE-EDIFICIO-2). Il registro dei comandi vocali
+(`voice_command_steps`, `voice_step_undos`) nomina edificio e unita' SENZA FK
+ed e' append-only: non si tocca. Un comando CONCLUSO non blocca: i suoi
+riferimenti restano nel registro di Voice e sono elencati nell'evento `purge`
+(«riferimenti conservati»); Voice tratta gia' un'entita' assente come
+«scaduta». Un comando IN CORSO sugli stessi dati (`pending` con riferimenti
+gia' congelati, `running`, `indeterminate`) BLOCCA: VOICE_IN_PROGRESS.
+
+COPIA DELLO STORICO E VERIFICHE. Prima del DELETE, nella STESSA transazione:
+gli eventi `purge` contengono la copia integrale dello storico stati e dei
+collegamenti ai proprietari di ogni unita' e i riferimenti Voice; la copia si
+rilegge e si confronta con le tabelle (righe e id). Dopo il DELETE: nessuna
+riga punta piu' a edificio o unita' (catalogo delle FK), gli eventi ci sono, i
+riferimenti Voice sono gli stessi. Qualunque differenza annulla TUTTO
+(PURGE_VERIFICATION_FAILED); l'audit di piattaforma si scrive solo dopo.
 
 STORICO. Tabella `building_deletion_requests` (chi chiede, chi decide e
 quando, esito) e `record_lifecycle_events` (richiesta, ritiro, approvazione,
@@ -54,6 +84,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
+import re
 
 from psycopg2 import errors as _pg_errors
 
@@ -79,8 +112,19 @@ NOT_PURGEABLE = "NOT_PURGEABLE"
 CONFIRM_MISMATCH = "CONFIRM_MISMATCH"
 DIRECT_TRASH_DISABLED = "BUILDING_DELETION_REQUIRES_APPROVAL"
 DIRECT_RESTORE_DISABLED = "BUILDING_RESTORE_SUPER_ADMIN"
+SUPER_ADMIN_NOT_CONFIGURED = "SUPER_ADMIN_NOT_CONFIGURED"
+VOICE_IN_PROGRESS = "VOICE_IN_PROGRESS"
+PURGE_VERIFICATION_FAILED = "PURGE_VERIFICATION_FAILED"
 
 PURGE_CONFIRM_TEXT = "ELIMINA DEFINITIVAMENTE"
+
+#: la configurazione del servizio che designa il Super Admin generale: l'id
+#: (`operator_users.id`, l'identita' stabile) dell'unico account designato.
+#: Un valore per database: TEST e PROD hanno id diversi. Mai l'email.
+SUPER_ADMIN_ENV = "STIMA360_SUPER_ADMIN_USER_ID"
+_ID_VALIDO = re.compile(r"[1-9][0-9]{0,17}")
+
+logger = logging.getLogger(__name__)
 
 DELETION_REQUEST_PENDING_MESSAGE = "Per questo edificio c'è già una richiesta di eliminazione in attesa"
 DELETION_BLOCKED_MESSAGE = ("L'eliminazione è bloccata: risolvi prima i punti indicati "
@@ -89,7 +133,12 @@ REQUEST_NOT_PENDING_MESSAGE = "La richiesta non è più in attesa"
 REQUEST_STALE_MESSAGE = ("Le unità dell'edificio sono cambiate dalla richiesta: serve una nuova verifica. "
                          "Il richiedente può ritirarla e richiederla di nuovo, oppure rifiutala")
 NOT_REQUESTER_MESSAGE = "Può ritirare la richiesta solo chi l'ha fatta"
-SUPER_ADMIN_REQUIRED_MESSAGE = "Operazione riservata al Super Admin della piattaforma"
+SUPER_ADMIN_REQUIRED_MESSAGE = "Operazione riservata al Super Admin generale designato della piattaforma"
+SUPER_ADMIN_NOT_CONFIGURED_MESSAGE = ("Operazione non disponibile: il Super Admin generale non è configurato su questo "
+                                      "servizio. Nessuna modifica è stata fatta")
+VOICE_IN_PROGRESS_MESSAGE = "Comando vocale in corso su questi dati: riprova quando è concluso"
+PURGE_VERIFICATION_FAILED_MESSAGE = ("Verifica dello storico non riuscita: la cancellazione definitiva è stata annullata "
+                                     "e nulla è stato cancellato")
 BUILDING_IN_TRASH_MESSAGE = "L'edificio è già nel Cestino"
 NOT_DELETED_MESSAGE = "L'edificio non è nel Cestino"
 RESTORE_CONFLICT_MESSAGE = ("Non si può ripristinare: un'unità ha la stessa identità catastale o la stessa "
@@ -108,13 +157,21 @@ AUDIT_APPROVE = "platform.building_deletion.approve"
 AUDIT_REJECT = "platform.building_deletion.reject"
 AUDIT_RESTORE = "platform.building_deletion.restore"
 AUDIT_PURGE = "platform.building_deletion.purge"
+AUDIT_DENIED = "platform.building_deletion.denied"
+
+#: lo storico stati che NON e' storia commerciale: la riga di creazione
+#: (`old_value IS NULL`) e l'«Annulla creazione» del censimento (dalla scheda o
+#: da STIMA Voice: `census.undo_create`). Si copia nell'evento `purge`.
+_ANNULLA_CREAZIONE = ("(field_name = 'commercial_status' AND old_value = 'draft' AND new_value = 'archived' "
+                      "AND note = 'undo-create')")
 
 #: righe proprie dell'unita' che la cancellazione definitiva toglie insieme a lei
 #: (CASCADE). Il valore e' il predicato delle righe che invece BLOCCANO.
 CONTENUTI_PROPRI = {
-    "property_contacts": None,          # il collegamento: il contatto resta
+    "property_contacts": None,          # il collegamento: il contatto resta (copiato nell'evento)
     "property_accessories": None,       # cantina/posto auto senza subalterno: dati dell'unita'
-    "property_status_history": "old_value IS NOT NULL",   # solo la riga di creazione non e' storia
+    # ogni altra transizione di stato e' storia commerciale e BLOCCA
+    "property_status_history": f"old_value IS NOT NULL AND NOT {_ANNULLA_CREAZIONE}",
 }
 ETICHETTE = {
     "activities": "Attività o interazioni (storico commerciale)",
@@ -143,8 +200,21 @@ ETICHETTE = {
     "owner_publications": "Pubblicazioni al proprietario",
     "properties": "Pertinenze collegate fuori dall'edificio",
 }
-#: riferimenti senza FK (entity_type, entity_id)
-_RIFERIMENTI_LIBERI = ("voice_step_undos", "flow_events", "flow_executions", "flow_suppressions", "owner_audit_log")
+#: riferimenti senza FK (entity_type, entity_id) che BLOCCANO. Il registro di
+#: STIMA Voice (`voice_step_undos`, `voice_command_steps`) e' a parte:
+#: `riferimenti_voice` (conservato se concluso, blocca se in corso).
+_RIFERIMENTI_LIBERI = ("flow_events", "flow_executions", "flow_suppressions", "owner_audit_log")
+
+#: stati di un passo Voice: concluso (il registro si conserva) o in corso (blocca).
+#: `pending` blocca solo con riferimenti gia' congelati per l'esecuzione
+#: (ripresa dopo un crash): un passo mai partito ririsolve i riferimenti e non
+#: trovera' piu' l'entita'.
+VOICE_STATI_IN_CORSO = ("pending", "running", "indeterminate")
+_VOICE_INTENTI = {"create_unit": "Crea unità", "create_building": "Crea edificio", "add_note": "Nota",
+                  "add_task": "Promemoria", "link_owner": "Collega proprietario", "activate_seller": "Attiva Venditore",
+                  "create_appointment": "Appuntamento", "create_contact": "Crea contatto", "unsupported": "Non gestito"}
+_VOICE_STATI = {"succeeded": "completato", "failed": "non riuscito", "skipped": "saltato", "pending": "in attesa",
+                "running": "in esecuzione", "indeterminate": "esito da verificare"}
 
 
 class DeletionNotInstalled(TrashNotInstalled):
@@ -177,10 +247,58 @@ def _installato(cur) -> None:
         raise DeletionNotInstalled(NOT_INSTALLED_MESSAGE)
 
 
+def designated_super_admin_id() -> int | None:
+    """L'id dell'account designato, letto dalla configurazione del servizio
+    a OGNI chiamata. Assente, vuoto o non valido (non un intero positivo): None,
+    cioe' nessun Super Admin generale e tutte le operazioni riservate negate."""
+    grezzo = (os.getenv(SUPER_ADMIN_ENV) or "").strip()
+    return int(grezzo) if _ID_VALIDO.fullmatch(grezzo) else None
+
+
+def _nega(ctx, code: str, motivo: str):
+    """403. Il rifiuto di un amministratore di piattaforma (ammesso alla
+    superficie, ma non il Super Admin generale) e' un evento di sicurezza: si
+    registra in `platform_audit_log` come `denied`, best effort - il 403 resta
+    anche se la riga non si scrive."""
+    if bool(getattr(ctx, "is_platform_admin", False)) and getattr(ctx, "user_id", None) is not None:
+        try:
+            from platform_admin import audit
+            from platform_admin.enums import RESULT_DENIED
+            audit.record(action=AUDIT_DENIED, actor=ctx, result=RESULT_DENIED, metadata={"reason": motivo})
+        except Exception:  # noqa: BLE001 - il rifiuto non dipende dal registro
+            logger.error("platform_audit_log non scrivibile: rifiuto %s (%s) non registrato", code, motivo)
+    messaggio = SUPER_ADMIN_NOT_CONFIGURED_MESSAGE if code == SUPER_ADMIN_NOT_CONFIGURED else SUPER_ADMIN_REQUIRED_MESSAGE
+    raise _Vietato(messaggio, code)
+
+
 def _super_admin(ctx) -> None:
-    """Il controllo del ruolo, nel backend: il flag della sessione."""
-    if not bool(getattr(ctx, "is_platform_admin", False)) or getattr(ctx, "user_id", None) is None:
-        raise _Vietato(SUPER_ADMIN_REQUIRED_MESSAGE, SUPER_ADMIN_REQUIRED)
+    """Il controllo nel backend, PRIMA di qualunque lettura: il flag
+    `is_platform_admin` della sessione E l'identita' stabile dell'account
+    uguale a quella designata. Mai l'email. Il ruolo si riverifica poi nel
+    database dentro la transazione (`_super_admin_db`)."""
+    utente = getattr(ctx, "user_id", None)
+    if not bool(getattr(ctx, "is_platform_admin", False)) or utente is None:
+        _nega(ctx, SUPER_ADMIN_REQUIRED, "not_platform_admin")
+    designato = designated_super_admin_id()
+    if designato is None:
+        logger.error("%s assente o non valida: operazioni del Super Admin generale negate", SUPER_ADMIN_ENV)
+        _nega(ctx, SUPER_ADMIN_NOT_CONFIGURED, "not_configured")
+    try:
+        stesso = int(utente) == designato
+    except (TypeError, ValueError):
+        stesso = False
+    if not stesso:
+        _nega(ctx, SUPER_ADMIN_REQUIRED, "not_designated")
+
+
+def _super_admin_db(cur, ctx) -> None:
+    """Il ruolo EFFETTIVO, adesso, nel database: l'account designato e'
+    ancora amministratore di piattaforma e attivo (una sessione aperta prima
+    di una revoca non basta)."""
+    cur.execute("SELECT is_platform_admin, status FROM operator_users WHERE id = %s", (ctx.user_id,))
+    riga = cur.fetchone()
+    if riga is None or riga["is_platform_admin"] is not True or riga["status"] != "active":
+        _nega(ctx, SUPER_ADMIN_REQUIRED, "role_revoked")
 
 
 def building_label(edificio: dict) -> str:
@@ -242,14 +360,16 @@ def _edificio(cur, building_id: int, *, agency_id: int | None = None, lock: bool
 
 
 def _evento(cur, ctx, agency_id: int, entity_type: str, entity_id: int, azione: str, *, reason=None, note=None,
-            before: dict | None = None, metadata: dict | None = None) -> None:
+            before: dict | None = None, metadata: dict | None = None) -> int:
     meta = {"actor_role": "platform_admin" if getattr(ctx, "is_platform_admin", False) and azione not in (
                 "deletion_requested", "deletion_withdrawn") else getattr(ctx, "role", None),
             "platform_admin": bool(getattr(ctx, "is_platform_admin", False)), **(metadata or {})}
     cur.execute("INSERT INTO record_lifecycle_events (agency_id, entity_type, entity_id, action, reason_code, note, "
-                "actor_user_id, before_state, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)",
+                "actor_user_id, before_state, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb) "
+                "RETURNING id",
                 (agency_id, entity_type, entity_id, azione, reason, note, getattr(ctx, "user_id", None),
                  json.dumps(before or {}, default=str), json.dumps(meta, default=str)))
+    return cur.fetchone()["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +662,7 @@ def admin_list_requests(ctx, *, status: str | None = "pending", limit: int = 50,
     dove = f"WHERE {' AND '.join(filtri)}" if filtri else ""
     with core_cursor() as (_, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         cur.execute(f"SELECT {_COLONNE_RICHIESTA} FROM building_deletion_requests r "
                     f"JOIN agencies a ON a.id = r.agency_id LEFT JOIN buildings b ON b.id = r.building_id {dove} "
                     "ORDER BY r.requested_at DESC, r.id DESC LIMIT %s OFFSET %s", params + [limit + 1, offset])
@@ -556,6 +677,7 @@ def admin_get_request(ctx, request_id: int) -> dict:
     _super_admin(ctx)
     with core_cursor() as (_, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         r = _richiesta(cur, request_id)
         dettaglio = {"request": r, "building": None, "units": None, "fingerprint": None, "blockers": [],
                      "stale": False}
@@ -585,6 +707,7 @@ def approve(ctx, request_id: int, expected_fingerprint: str, note=None) -> dict:
     note = (str(note).strip() or None) if note is not None else None
     with core_cursor() as (conn, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         r = _richiesta(cur, request_id, lock=True)            # 1. la richiesta
         if r["status"] != "pending":
             raise LifecycleConflict(REQUEST_NOT_PENDING_MESSAGE, REQUEST_NOT_PENDING, status=r["status"])
@@ -639,6 +762,7 @@ def reject(ctx, request_id: int, note) -> dict:
         raise _NonValido("La nota supera 500 caratteri", "REJECT_NOTE_REQUIRED")
     with core_cursor() as (conn, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         r = _richiesta(cur, request_id, lock=True)
         if r["status"] != "pending":
             raise LifecycleConflict(REQUEST_NOT_PENDING_MESSAGE, REQUEST_NOT_PENDING, status=r["status"])
@@ -662,6 +786,7 @@ def admin_list_trash(ctx, *, limit: int = 50, offset: int = 0) -> dict:
     offset = max(0, int(offset))
     with core_cursor() as (_, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         voci = _gruppi(cur, ["(to_jsonb(b) ->> 'deleted_at') IS NOT NULL"], [], limit, offset)
     return {"items": voci[:limit], "has_more": len(voci) > limit, "limit": limit, "offset": offset}
 
@@ -670,6 +795,7 @@ def restore(ctx, building_id: int) -> dict:
     _super_admin(ctx)
     with core_cursor() as (conn, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         edificio = _edificio(cur, building_id, lock=True)            # 1. l'edificio (l'agenzia e' la sua)
         agency_id = edificio["agency_id"]
         if not building_lifecycle.in_trash(edificio):
@@ -798,7 +924,7 @@ def purge_blockers(cur, building_id: int, unita: list[dict]) -> tuple[list[dict]
         n = cur.fetchone()["n"]
         if n:
             blocca(f"FK_building_{nome}", ETICHETTE.get(nome, f"Dati collegati all'edificio ({nome})"), [(None, n)])
-    # riferimenti senza FK
+    # riferimenti senza FK (flussi, portale proprietario): bloccano
     for tabella in _RIFERIMENTI_LIBERI:
         if not {"entity_type", "entity_id"} <= _colonne(cur, tabella):
             continue
@@ -809,44 +935,228 @@ def purge_blockers(cur, building_id: int, unita: list[dict]) -> tuple[list[dict]
                     ([str(i) for i in ids], str(building_id)))
         righe = [(int(r["eid"]) if r["entity_type"] == "property" else None, r["n"]) for r in cur.fetchall()]
         if righe:
-            testo = ("Storico di STIMA Voice" if tabella == "voice_step_undos"
-                     else ETICHETTE.get(tabella, f"Riferimenti in {tabella}"))
-            blocca("VOICE_HISTORY" if tabella == "voice_step_undos" else f"REF_{tabella}", testo, righe)
-    if {"intent", "result", "state"} <= _colonne(cur, "voice_command_steps"):
-        cur.execute("SELECT (result ->> 'id')::bigint AS eid, intent, count(*) AS n FROM voice_command_steps "
-                    "WHERE state = 'succeeded' AND result ? 'id' AND result ->> 'id' ~ '^[0-9]+$' "
-                    "AND ((intent = 'create_unit' AND (result ->> 'id')::bigint = ANY(%s)) "
-                    "  OR (intent = 'create_building' AND (result ->> 'id')::bigint = %s)) GROUP BY 1, 2",
-                    (ids, building_id))
-        righe = [(r["eid"] if r["intent"] == "create_unit" else None, r["n"]) for r in cur.fetchall()]
-        if righe:
-            blocca("VOICE_HISTORY", "Storico di STIMA Voice (creato con un comando vocale)", righe)
+            blocca(f"REF_{tabella}", ETICHETTE.get(tabella, f"Riferimenti in {tabella}"), righe)
+    # STIMA Voice: un comando IN CORSO sugli stessi dati blocca; uno concluso si conserva (`riferimenti_voice`)
+    in_corso = [p for p in riferimenti_voice(cur, building_id, ids)["steps"] if p["in_progress"]]
+    if in_corso:
+        blocchi[VOICE_IN_PROGRESS] = {"code": VOICE_IN_PROGRESS, "label": VOICE_IN_PROGRESS_MESSAGE,
+                                      "count": len(in_corso),
+                                      "items": [{"property_id": None, "label": _voce_testo(p, etichetta)}
+                                                for p in in_corso]}
     return list(blocchi.values()), [{"table": t, "label": _ETICHETTE_PROPRI[t], "count": n} for t, n in propri.items()]
 
 
 _ETICHETTE_PROPRI = {
-    "property_contacts": "Collegamenti ai proprietari (i contatti restano)",
+    "property_contacts": "Collegamenti ai proprietari (i contatti restano; copiati nel registro)",
     "property_accessories": "Accessori delle unità",
-    "property_status_history": "Riga di creazione dello storico stati",
+    "property_status_history": "Storico stati di creazione e di «Annulla creazione» (copiato nel registro)",
 }
+
+
+# --- STIMA Voice: riferimenti conservati -----------------------------------------
+
+def riferimenti_voice(cur, building_id: int, ids: list[int]) -> dict:
+    """I riferimenti del registro di STIMA Voice all'edificio e alle sue
+    unita' (nessuna FK; append-only: si leggono, mai si scrivono).
+
+    `steps`: i passi che hanno creato o usato questi dati - per il risultato
+    (`id` di un'unita' o dell'edificio creati, `property_id`) o per i
+    riferimenti congelati per l'esecuzione (`frozen["exec:N:refs"]`). Ognuno
+    con `in_progress` (stato in VOICE_STATI_IN_CORSO: blocca).
+    `undos`: i tentativi di «Annulla» registrati su edificio o unita'."""
+    esito = {"steps": [], "undos": []}
+    p = [str(int(i)) for i in ids]
+    b = str(int(building_id))
+    if {"intent", "result", "state"} <= _colonne(cur, "voice_command_steps") \
+            and "frozen" in _colonne(cur, "voice_commands"):
+        cur.execute("""
+            SELECT s.command_id, s.ordinal, s.intent, s.state, s.result,
+                   c.frozen -> ('exec:' || s.ordinal || ':refs') AS refs
+              FROM voice_command_steps s
+              JOIN voice_commands c ON c.id = s.command_id
+             WHERE ((s.intent = 'create_unit' OR s.result ->> 'entity' = 'property') AND s.result ->> 'id' = ANY(%(p)s))
+                OR s.result ->> 'property_id' = ANY(%(p)s)
+                OR (c.frozen -> ('exec:' || s.ordinal || ':refs')) ->> 'property' = ANY(%(p)s)
+                OR ((s.intent = 'create_building' OR s.result ->> 'entity' = 'building') AND s.result ->> 'id' = %(b)s)
+                OR (c.frozen -> ('exec:' || s.ordinal || ':refs')) ->> 'building' = %(b)s
+             ORDER BY s.command_id, s.ordinal""", {"p": p, "b": b})
+        for r in cur.fetchall():
+            risultato = r["result"] if isinstance(r["result"], dict) else {}
+            refs = r["refs"] if isinstance(r["refs"], dict) else {}
+            unita = set()
+            if (r["intent"] == "create_unit" or risultato.get("entity") == "property") and str(risultato.get("id")) in p:
+                unita.add(int(risultato["id"]))
+            for valore in (risultato.get("property_id"), refs.get("property")):
+                if valore is not None and str(valore) in p:
+                    unita.add(int(valore))
+            edificio = (((r["intent"] == "create_building" or risultato.get("entity") == "building")
+                         and str(risultato.get("id")) == b) or str(refs.get("building")) == b)
+            esito["steps"].append({"command_id": int(r["command_id"]), "ordinal": int(r["ordinal"]),
+                                   "intent": r["intent"], "state": r["state"], "property_ids": sorted(unita),
+                                   "building": edificio, "in_progress": r["state"] in VOICE_STATI_IN_CORSO})
+    if {"entity_type", "entity_id", "outcome"} <= _colonne(cur, "voice_step_undos"):
+        cur.execute("SELECT id, command_id, ordinal, entity_type, entity_id, outcome, occurred_at FROM voice_step_undos "
+                    "WHERE (entity_type = 'property' AND entity_id = ANY(%s)) "
+                    "   OR (entity_type = 'building' AND entity_id = %s) ORDER BY id", ([int(i) for i in ids], building_id))
+        esito["undos"] = [{"id": int(r["id"]), "command_id": int(r["command_id"]), "ordinal": int(r["ordinal"]),
+                           "entity_type": r["entity_type"], "entity_id": int(r["entity_id"]), "outcome": r["outcome"],
+                           "occurred_at": r["occurred_at"]} for r in cur.fetchall()]
+    return esito
+
+
+_ESITI_ANNULLA = {"undone": "annullato", "blocked": "bloccato", "expired": "scaduto", "failed": "non riuscito"}
+
+
+def _voce_testo(passo: dict, etichetta: dict) -> str:
+    dove = ", ".join(etichetta.get(pid, f"#{pid}") for pid in passo["property_ids"])
+    if passo["building"]:
+        dove = ", ".join(x for x in ("edificio", dove) if x)
+    return (f"Comando vocale n. {passo['command_id']}, passo {passo['ordinal']} · "
+            f"{_VOICE_INTENTI.get(passo['intent'], passo['intent'])} · {_VOICE_STATI.get(passo['state'], passo['state'])}"
+            + (f" — {dove}" if dove else ""))
+
+
+def _voce_meta(passo: dict) -> dict:
+    return {k: passo[k] for k in ("command_id", "ordinal", "intent", "state", "property_ids", "building")}
+
+
+def _storico_stati(cur, ids: list[int]) -> list[dict]:
+    if not ids:
+        return []
+    cur.execute("SELECT id, property_id, field_name, old_value, new_value, note, changed_by, created_at "
+                "FROM property_status_history WHERE property_id = ANY(%s) ORDER BY property_id, id", (ids,))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _legami(cur, ids: list[int]) -> list[dict]:
+    """I collegamenti ai proprietari (senza le note libere): cosa collegava
+    l'unita' a quale contatto, con quale ruolo e da quando."""
+    if not ids:
+        return []
+    cur.execute("SELECT id, property_id, contact_id, role, is_primary, ownership_share, created_at "
+                "FROM property_contacts WHERE property_id = ANY(%s) ORDER BY property_id, id", (ids,))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _json(valore):
+    """La forma in cui un valore e' scritto nel registro (stesso `default=str`)."""
+    return json.loads(json.dumps(valore, default=str))
+
+
+def _conservati(voce: dict, storico: list[dict], legami: list[dict], etichetta: dict) -> list[dict]:
+    """I riferimenti storici che RESTANO dopo la cancellazione definitiva (per
+    il riepilogo del Super Admin e per l'evento `purge`)."""
+    voci = []
+    conclusi = [p for p in voce["steps"] if not p["in_progress"]]
+    if conclusi:
+        voci.append({"code": "VOICE_COMMANDS", "label": ("Comandi di STIMA Voice che hanno creato o usato questi dati: "
+                                                         "restano nello storico dei comandi vocali"),
+                     "count": len(conclusi),
+                     "items": [{"property_id": None, "label": _voce_testo(p, etichetta)} for p in conclusi]})
+    if voce["undos"]:
+        voci.append({"code": "VOICE_UNDOS", "label": ("Tentativi di «Annulla» di STIMA Voice: restano nello storico dei "
+                                                      "comandi vocali"),
+                     "count": len(voce["undos"]),
+                     "items": [{"property_id": None, "label": (
+                         f"Comando vocale n. {u['command_id']}, passo {u['ordinal']}: "
+                         f"{_ESITI_ANNULLA.get(u['outcome'], u['outcome'])} — "
+                         + (etichetta.get(u["entity_id"], f"#{u['entity_id']}") if u["entity_type"] == "property"
+                            else "edificio"))} for u in voce["undos"]]})
+    for codice, righe, testo in (
+            ("STATUS_HISTORY", storico, "Storico degli stati delle unità: copiato nel registro prima della cancellazione"),
+            ("OWNER_LINKS", legami, "Collegamenti ai proprietari: copiati nel registro (i contatti restano)")):
+        if righe:
+            per_unita: dict[int, int] = {}
+            for r in righe:
+                per_unita[int(r["property_id"])] = per_unita.get(int(r["property_id"]), 0) + 1
+            voci.append({"code": codice, "label": testo, "count": len(righe),
+                         "items": [{"property_id": None, "label": f"{etichetta.get(pid, f'#{pid}')} ({n})"}
+                                   for pid, n in per_unita.items()]})
+    return voci
 
 
 def purge_check(ctx, building_id: int) -> dict:
     _super_admin(ctx)
     with core_cursor() as (_, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         edificio = _edificio(cur, building_id)
         unita = _unita(cur, building_id, lock=False)
         unita_intere = [{**dict(_riga_intera(cur, u["id"])), "in_trash": u["in_trash"]} for u in unita]
+        conservati = []
         if not building_lifecycle.in_trash(edificio):
             blocchi = [{"code": NOT_DELETED, "label": NOT_DELETED_MESSAGE, "count": 1, "items": []}]
             propri = []
         else:
             blocchi, propri = purge_blockers(cur, building_id, unita_intere)
+            ids = [int(u["id"]) for u in unita_intere]
+            conservati = _conservati(riferimenti_voice(cur, building_id, ids), _storico_stati(cur, ids),
+                                     _legami(cur, ids), {int(u["id"]): _unit_label(u) for u in unita_intere})
         gruppo = _gruppo_nel_cestino(cur, building_id)
     return {"building": {**edificio, "label": building_label(edificio)}, "units": _riepilogo(unita),
             "fingerprint": fingerprint(unita), "eligible": not blocchi, "blockers": blocchi, "will_delete": propri,
-            "request": gruppo, "confirm_text": PURGE_CONFIRM_TEXT}
+            "preserved": conservati, "request": gruppo, "confirm_text": PURGE_CONFIRM_TEXT}
+
+
+# --- verifiche della cancellazione definitiva (stessa transazione) ---------------
+
+def _fallisci(controllo: str):
+    logger.error("cancellazione definitiva annullata: verifica %s non riuscita", controllo)
+    raise LifecycleConflict(PURGE_VERIFICATION_FAILED_MESSAGE, PURGE_VERIFICATION_FAILED, check=controllo)
+
+
+def _chiavi_voce(voce: dict) -> tuple:
+    return (sorted((int(p["command_id"]), int(p["ordinal"])) for p in voce.get("steps") or ()),
+            sorted(int(u["id"]) for u in voce.get("undos") or ()))
+
+
+def _verifica_copia(cur, eventi: dict, building_id: int, ids: list[int]) -> None:
+    """PRIMA del DELETE: gli eventi `purge` sono scritti (stessa transazione)
+    e la copia dello storico che contengono e' identica alle tabelle, riga per
+    riga; i riferimenti Voice registrati sono quelli che ci sono."""
+    cur.execute("SELECT id, entity_type, entity_id, action, before_state, metadata FROM record_lifecycle_events "
+                "WHERE id = ANY(%s)", (list(eventi.values()),))
+    righe = {(r["entity_type"], int(r["entity_id"])): r for r in cur.fetchall()}
+    if set(righe) != set(eventi) or any(r["action"] != "purge" for r in righe.values()):
+        _fallisci("eventi_purge")
+    storico, legami = _storico_stati(cur, ids), _legami(cur, ids)
+    for pid in ids:
+        copia = righe[("property", pid)]["before_state"] or {}
+        if copia.get("status_history") != _json([r for r in storico if int(r["property_id"]) == pid]):
+            _fallisci("storico_stati")
+        if copia.get("owner_links") != _json([r for r in legami if int(r["property_id"]) == pid]):
+            _fallisci("collegamenti_proprietari")
+    registrati = (righe[("building", building_id)]["metadata"] or {}).get("preserved_references") or {}
+    if _chiavi_voce({"steps": registrati.get("voice_steps"), "undos": registrati.get("voice_undos")}) \
+            != _chiavi_voce(riferimenti_voice(cur, building_id, ids)):
+        _fallisci("riferimenti_voice_registrati")
+
+
+def _verifica_dopo(cur, building_id: int, ids: list[int], eventi: dict, voce_prima: dict) -> None:
+    """DOPO il DELETE, prima del commit: edificio e unita' non ci sono piu',
+    nessuna riga punta piu' a loro (catalogo delle FK), gli eventi `purge` ci
+    sono, il registro di Voice e' intatto."""
+    cur.execute("SELECT count(*) AS n FROM buildings WHERE id = %s", (building_id,))
+    if cur.fetchone()["n"]:
+        _fallisci("edificio_presente")
+    if ids:
+        cur.execute("SELECT count(*) AS n FROM properties WHERE id = ANY(%s)", (ids,))
+        if cur.fetchone()["n"]:
+            _fallisci("unita_presenti")
+        for tabella, colonna in _fk_verso(cur, "properties"):
+            cur.execute(f"SELECT count(*) AS n FROM {tabella} WHERE {colonna} = ANY(%s)", (ids,))
+            if cur.fetchone()["n"]:
+                _fallisci(f"riferimenti_{tabella.split('.')[-1]}")
+    for tabella, colonna in _fk_verso(cur, "buildings"):
+        cur.execute(f"SELECT count(*) AS n FROM {tabella} WHERE {colonna} = %s", (building_id,))
+        if cur.fetchone()["n"]:
+            _fallisci(f"riferimenti_{tabella.split('.')[-1]}")
+    cur.execute("SELECT count(*) AS n FROM record_lifecycle_events WHERE id = ANY(%s) AND action = 'purge'",
+                (list(eventi.values()),))
+    if cur.fetchone()["n"] != len(eventi):
+        _fallisci("eventi_purge")
+    if _chiavi_voce(riferimenti_voice(cur, building_id, ids)) != _chiavi_voce(voce_prima):
+        _fallisci("riferimenti_voice_dopo")
 
 
 def purge(ctx, building_id: int, confirm_text: str, expected_fingerprint: str) -> dict:
@@ -855,6 +1165,7 @@ def purge(ctx, building_id: int, confirm_text: str, expected_fingerprint: str) -
         raise _NonValido(CONFIRM_MISMATCH_MESSAGE, CONFIRM_MISMATCH)
     with core_cursor() as (conn, cur):
         _installato(cur)
+        _super_admin_db(cur, ctx)
         edificio = _edificio(cur, building_id, lock=True)            # 1. l'edificio
         agency_id = edificio["agency_id"]
         if not building_lifecycle.in_trash(edificio):
@@ -868,16 +1179,36 @@ def purge(ctx, building_id: int, confirm_text: str, expected_fingerprint: str) -
         blocchi, propri = purge_blockers(cur, building_id, unita)
         if blocchi:
             raise LifecycleConflict(NOT_PURGEABLE_MESSAGE, NOT_PURGEABLE, blockers=blocchi)
+        ids = [int(u["id"]) for u in unita]
+        etichetta = {int(u["id"]): _unit_label(u) for u in unita}
+        # lo storico che resta: riferimenti Voice (non si toccano) e copia di storico stati e proprietari
+        voce = riferimenti_voice(cur, building_id, ids)
+        storico, legami = _storico_stati(cur, ids), _legami(cur, ids)
+        conservati = _conservati(voce, storico, legami, etichetta)
         meta = {"building_deletion_request_id": gruppo["id"] if gruppo else None, "building_id": building_id,
                 "confirmed": True}
+        eventi = {}
         for u in unita:
-            _evento(cur, ctx, agency_id, "property", u["id"], "purge",
-                    before={k: u.get(k) for k in ("code", "title", "property_type", "floor", "internal_number",
-                                                  "record_kind", "deleted_at", "deleted_reason")}, metadata=meta)
-        _evento(cur, ctx, agency_id, "building", building_id, "purge",
-                before={k: edificio.get(k) for k in ("name", "city", "address", "civic_number", "deleted_at",
-                                                     "deleted_reason")},
-                metadata={**meta, "unit_ids": [u["id"] for u in unita], "own_content": propri})
+            pid = int(u["id"])
+            prima = {k: u.get(k) for k in ("code", "title", "property_type", "floor", "internal_number",
+                                           "record_kind", "deleted_at", "deleted_reason")}
+            prima["status_history"] = [r for r in storico if int(r["property_id"]) == pid]
+            prima["owner_links"] = [r for r in legami if int(r["property_id"]) == pid]
+            eventi[("property", pid)] = _evento(
+                cur, ctx, agency_id, "property", pid, "purge", before=prima,
+                metadata={**meta, "preserved_voice_steps": [_voce_meta(p) for p in voce["steps"]
+                                                            if pid in p["property_ids"]],
+                          "preserved_voice_undos": [u2 for u2 in voce["undos"]
+                                                    if u2["entity_type"] == "property" and u2["entity_id"] == pid]})
+        eventi[("building", building_id)] = _evento(
+            cur, ctx, agency_id, "building", building_id, "purge",
+            before={k: edificio.get(k) for k in ("name", "city", "address", "civic_number", "deleted_at",
+                                                 "deleted_reason")},
+            metadata={**meta, "unit_ids": ids, "own_content": propri,
+                      "preserved_references": {"voice_steps": [_voce_meta(p) for p in voce["steps"]],
+                                               "voice_undos": voce["undos"]},
+                      "copied_history": {"status_history_rows": len(storico), "owner_links": len(legami)}})
+        _verifica_copia(cur, eventi, building_id, ids)               # la copia c'e' ed e' identica: poi il DELETE
         if gruppo:
             cur.execute("UPDATE building_deletion_requests SET purged_by_user_id = %s, purged_at = NOW(), "
                         "updated_at = NOW() WHERE id = %s", (ctx.user_id, gruppo["id"]))
@@ -897,7 +1228,10 @@ def purge(ctx, building_id: int, confirm_text: str, expected_fingerprint: str) -
                     (building_id, agency_id))
         if cur.rowcount != 1:
             raise LifecycleConflict(NOT_PURGEABLE_MESSAGE, NOT_PURGEABLE, blockers=[])
+        _verifica_dopo(cur, building_id, ids, eventi, voce)          # nessun riferimento inconsistente
         _audit_poi_commit(conn, ctx, AUDIT_PURGE, agency_id, building_id,
                           {"request_id": gruppo["id"] if gruppo else None, "units": len(unita),
-                           "own_content": {p["table"]: p["count"] for p in propri}})
-    return {"building_id": building_id, "purged_unit_ids": [u["id"] for u in unita], "deleted_own_content": propri}
+                           "own_content": {p["table"]: p["count"] for p in propri},
+                           "preserved": {c["code"]: c["count"] for c in conservati}})
+    return {"building_id": building_id, "purged_unit_ids": [u["id"] for u in unita], "deleted_own_content": propri,
+            "preserved": conservati}

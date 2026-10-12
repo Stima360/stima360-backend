@@ -222,6 +222,7 @@ export function deletionPanelHtml(stato, { stage = 'idle', error = '' } = {}) {
 export function deletionErrorText(error) {
   if (!error) return 'Operazione non riuscita.';
   if (error.status === 404) return 'Edificio o richiesta non trovati.';
+  if (error.status === 403) return error.message || 'Operazione riservata al Super Admin generale designato.';
   if (error.status === 503) return error.message || 'Funzione non ancora disponibile su questo database.';
   return error.message || 'Operazione non riuscita.';
 }
@@ -266,6 +267,26 @@ export function trashGroupCardHtml(item, { superAdmin = false } = {}) {
     </article>`;
 }
 
+/**
+ * ELIMINAZIONE-EDIFICIO-2: i riferimenti storici che RESTANO dopo la
+ * cancellazione definitiva (comandi e «Annulla» di STIMA Voice, storico degli
+ * stati e collegamenti ai proprietari copiati nel registro).
+ */
+export function preservedHtml(preserved) {
+  const lista = Array.isArray(preserved) ? preserved : [];
+  if (!lista.length) return '';
+  return `<div class="deletion-preserved" data-purge-preserved>
+      <p><strong>Riferimenti storici conservati</strong> (non vengono cancellati):</p>
+      <ul>${lista.map((p) => {
+        const voci = Array.isArray(p.items) && p.items.length
+          ? `<ul>${p.items.slice(0, 20).map((i) => `<li>${escapeHtml(i.label || '')}</li>`).join('')}${p.items.length > 20 ? `<li class="muted">… e altri ${p.items.length - 20}</li>` : ''}</ul>`
+          : '';
+        const conta = Number.isFinite(p.count) && p.count > 0 ? ` <span class="muted">(${p.count})</span>` : '';
+        return `<li data-preserved-code="${escapeHtml(p.code || '')}">${escapeHtml(p.label || p.code || '')}${conta}${voci}</li>`;
+      }).join('')}</ul>
+    </div>`;
+}
+
 /** Il riepilogo della cancellazione definitiva e la seconda conferma. */
 export function purgeSummaryHtml(check) {
   if (!check) return '';
@@ -274,6 +295,7 @@ export function purgeSummaryHtml(check) {
     return `<div class="deletion-purge" data-purge-blocked>
         <p><strong>Non si può eliminare definitivamente.</strong> Ci sono dati da conservare; nulla viene cancellato:</p>
         ${blockersHtml(check.blockers)}
+        ${preservedHtml(check.preserved)}
       </div>`;
   }
   return `<div class="deletion-purge" data-purge-ready>
@@ -281,6 +303,7 @@ export function purgeSummaryHtml(check) {
       <p>${escapeHtml(unitsSummaryText(check.units))} Verranno cancellati l’edificio e tutte queste unità${propri.length ? ', con:' : '.'}</p>
       ${propri.length ? `<ul>${propri.map((p) => `<li>${escapeHtml(p.label)} <span class="muted">(${Number(p.count)})</span></li>`).join('')}</ul>` : ''}
       <p class="muted">Contatti, proprietari, stime e storico del registro restano.</p>
+      ${preservedHtml(check.preserved)}
       <label class="field">Per confermare scrivi <strong>${escapeHtml(PURGE_CONFIRM_TEXT)}</strong>
         <input type="text" data-purge-text autocomplete="off"></label>
       <div class="action-bar">

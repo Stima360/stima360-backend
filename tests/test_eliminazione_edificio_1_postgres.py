@@ -24,7 +24,8 @@ ammissione sostituita da un contesto `is_platform_admin`; il registro
   11  cancellazione definitiva: solo Super Admin, solo dal Cestino, seconda
       conferma; i contatti restano; storico e registro restano;
   12  cancellazione definitiva bloccata dalle dipendenze da conservare
-      (attivita', foto, storico stati, incarico, STIMA Voice); blocchi del
+      (attivita', foto, storico stati, incarico, comando STIMA Voice IN CORSO;
+      uno concluso si conserva: ELIMINAZIONE-EDIFICIO-2); blocchi del
       Cestino (pertinenze a cavallo, processi).
 """
 from __future__ import annotations
@@ -91,6 +92,9 @@ def banco(mondo, monkeypatch):
         m["ids"]["agent_a2"] = riga[0]
         m["ruoli"]["agent_a2"] = (riga[0], 1, "agent")
     m["ids"]["super"] = superadmin
+    # ELIMINAZIONE-EDIFICIO-2: il Super Admin generale e' l'account DESIGNATO nella configurazione del servizio
+    from property.building_deletion import SUPER_ADMIN_ENV
+    monkeypatch.setenv(SUPER_ADMIN_ENV, str(superadmin))
     stato = {"ctx": OperatorContext(user_id=superadmin, agency_id=None, role=None, is_platform_admin=True,
                                     session_id=None, auth_channel="operator_session")}
     app = FastAPI()
@@ -346,6 +350,7 @@ def test_06_spostamento_atomico(banco, monkeypatch):
     monkeypatch.undo()
     import platform_admin.database as pdb
     monkeypatch.setattr(pdb, "get_connection", lambda: m["psycopg2"].connect(m["dsn"]))
+    monkeypatch.setenv(bd.SUPER_ADMIN_ENV, str(m["ids"]["super"]))     # `undo` toglie anche la designazione
     # 3. poi riesce, tutto insieme
     _codice(_approva(m, r["id"]), 200)
     assert set(_nel_cestino(m, ids).values()) == {True}
@@ -633,7 +638,9 @@ def test_12_cancellazione_bloccata_dalle_dipendenze(banco):
     assert _q(m, "SELECT count(*) FROM properties WHERE building_id = %s", (e["id"],))[0][0] == righe
     assert _q(m, "SELECT count(*) FROM buildings WHERE id = %s", (e["id"],))[0][0] == 1
     assert "purge" not in _eventi(m, "building", e["id"])
-    # STIMA Voice: un'unita' creata con un comando vocale e' storia dei comandi
+    # STIMA Voice. COMPORTAMENTO CAMBIATO DA ELIMINAZIONE-EDIFICIO-2 (autorizzazione del 2026-10-12): un
+    # comando vocale CONCLUSO non blocca piu' (i suoi riferimenti restano nel registro di Voice e nell'evento
+    # `purge`); blocca solo un comando IN CORSO sugli stessi dati (VOICE_IN_PROGRESS). Qui: in corso, poi concluso.
     e2 = _edificio(m)
     v = _unita(m, building_id=e2["id"], floor="1")
     w = _unita(m, building_id=e2["id"], floor="2")
@@ -642,15 +649,17 @@ def test_12_cancellazione_bloccata_dalle_dipendenze(banco):
                  (m["ids"]["owner_a"], str(uuid.uuid4()), "a" * 64))[0][0]
     _q(m, "INSERT INTO voice_command_steps (command_id, ordinal, agency_id, intent, decision, step_class, "
           "client_request_id) VALUES (%s, 1, 1, 'create_unit', 'auto', 'replayable', %s)", (comando, str(uuid.uuid4())))
-    _q(m, "UPDATE voice_command_steps SET state = 'running' WHERE command_id = %s", (comando,))
-    _q(m, "UPDATE voice_command_steps SET state = 'succeeded', result = %s::jsonb WHERE command_id = %s",
-       (json.dumps({"id": v["id"], "created": True}), comando))
+    _q(m, "UPDATE voice_command_steps SET state = 'running', result = %s::jsonb WHERE command_id = %s",
+       (json.dumps({"id": v["id"], "entity": "property", "created": True}), comando))
     _approvato(m, e2["id"])
     chk = _codice(m["sa"].get(f"/api/platform/building-deletions/{e2['id']}/purge-check"), 200)
     voce = {x["code"]: x for x in chk["blockers"]}
-    assert set(voce) == {"VOICE_HISTORY"} and [i["property_id"] for i in voce["VOICE_HISTORY"]["items"]] == [v["id"]]
+    assert set(voce) == {"VOICE_IN_PROGRESS"} and voce["VOICE_IN_PROGRESS"]["count"] == 1
     assert _codice(_purge(m, e2["id"], impronta=chk["fingerprint"]), 409)["code"] == "NOT_PURGEABLE"
     assert _q(m, "SELECT count(*) FROM properties WHERE id = ANY(%s)", ([v["id"], w["id"]],))[0][0] == 2
+    _q(m, "UPDATE voice_command_steps SET state = 'succeeded' WHERE command_id = %s", (comando,))
+    chk = _codice(m["sa"].get(f"/api/platform/building-deletions/{e2['id']}/purge-check"), 200)
+    assert chk["eligible"] is True and "VOICE_COMMANDS" in {x["code"] for x in chk["preserved"]}
     # blocchi del Cestino: pertinenza collegata fuori dall'edificio
     e3 = _edificio(m)
     p = _unita(m, building_id=e3["id"], floor="1")
