@@ -1,0 +1,128 @@
+// STIMA360 OS — territorio/territorio-model.js (STIMA360 TERRITORIO T3)
+//
+// Funzioni PURE della mappa: nessun DOM, nessuna rete. Decidono quali edifici
+// possono comparire come marker e come vanno contati gli altri.
+//
+// LA REGOLA DI VERIFICA DELLA POSIZIONE (la sola, in un posto solo)
+//
+// Ad oggi `buildings` ha `latitude`/`longitude` ma NESSUN campo che dica da
+// dove vengono o chi le ha controllate: le accetta qualunque client della PATCH,
+// senza provenienza. `census_status` ('verified' | 'partial' | 'estimated') parla
+// del CENSIMENTO delle unita', non della posizione, e non si usa qui.
+// Quindi una coordinata presente NON e' una posizione verificata.
+//
+// Un edificio e' «posizione verificata» solo se il server restituisce una prova
+// esplicita: `position_verified_at` valorizzato con una data valida. Oggi il
+// server non lo restituisce mai (nessuna colonna, nessuna scrittura): in dati
+// reali nessun edificio risulta verificato e nessun marker compare, finche' T4
+// non introduce il meccanismo di verifica. Il nome del campo e' il contratto
+// proposto a T4; se T4 ne sceglie un altro cambia solo `isPositionVerified`.
+
+export const POSITION_STATUSES = ['verified', 'unverified', 'invalid', 'missing'];
+
+export const STATUS_LABELS = {
+  verified: 'Posizione verificata',
+  unverified: 'Coordinate non verificate',
+  invalid: 'Coordinate non valide',
+  missing: 'Senza coordinate',
+};
+
+function vuoto(v) {
+  return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+}
+
+/** Un numero decimale (numero o stringa decimale semplice, come arriva dal JSON di
+ *  un NUMERIC). Tutto il resto - booleani, esadecimali, `1e3`, spazi interni - e' NaN. */
+function decimale(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
+  if (typeof v !== 'string') return NaN;
+  const t = v.trim();
+  return /^[-+]?\d{1,3}(\.\d+)?$/.test(t) ? Number(t) : NaN;
+}
+
+/**
+ * Le coordinate di un edificio, validate. `null` = mancanti (entrambe vuote);
+ * `{ valid: false }` = presenti ma inutilizzabili (una sola, non numeriche,
+ * fuori intervallo, 0,0); `{ valid: true, lng, lat }` altrimenti.
+ */
+export function parseCoordinates(b) {
+  const la = b ? b.latitude : null;
+  const lo = b ? b.longitude : null;
+  if (vuoto(la) && vuoto(lo)) return null;
+  const lat = decimale(la);
+  const lng = decimale(lo);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { valid: false };
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return { valid: false };
+  if (lat === 0 && lng === 0) return { valid: false };
+  return { valid: true, lng, lat };
+}
+
+/** La prova di verifica. Vedi la regola in testa al file. */
+export function isPositionVerified(b) {
+  const quando = b ? b.position_verified_at : null;
+  if (typeof quando !== 'string' || quando.trim() === '') return false;
+  return Number.isFinite(Date.parse(quando));
+}
+
+export function positionStatus(b) {
+  const c = parseCoordinates(b);
+  if (c === null) return 'missing';
+  if (!c.valid) return 'invalid';
+  return isPositionVerified(b) ? 'verified' : 'unverified';
+}
+
+function idValido(b) {
+  return b && (Number.isInteger(b.id) || (typeof b.id === 'string' && /^\d+$/.test(b.id)));
+}
+
+/**
+ * Gli edifici divisi per stato della posizione, senza doppioni (stesso id = una
+ * voce: la paginazione puo' ripetere una riga se nel frattempo l'ordine cambia).
+ * `verified` porta anche `lng`/`lat` gia' validati.
+ */
+export function classifyBuildings(items) {
+  const gruppi = { verified: [], unverified: [], invalid: [], missing: [] };
+  const visti = new Set();
+  for (const b of Array.isArray(items) ? items : []) {
+    if (!idValido(b) || visti.has(String(b.id))) continue;
+    visti.add(String(b.id));
+    const stato = positionStatus(b);
+    if (stato === 'verified') {
+      const { lng, lat } = parseCoordinates(b);
+      gruppi.verified.push({ building: b, lng, lat });
+    } else {
+      gruppi[stato].push({ building: b });
+    }
+  }
+  const totale = visti.size;
+  return { ...gruppi, total: totale, toPlace: totale - gruppi.verified.length };
+}
+
+/** GeoJSON dei SOLI edifici verificati (id numerico: serve allo stato «attivo»). */
+export function verifiedFeatureCollection(verified) {
+  return {
+    type: 'FeatureCollection',
+    features: verified.map(({ building, lng, lat }) => ({
+      type: 'Feature',
+      id: Number(building.id),
+      properties: { building_id: Number(building.id) },
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+    })),
+  };
+}
+
+/** Il riquadro da inquadrare: `null` senza punti, un punto solo = centro + zoom. */
+export function viewFor(verified) {
+  if (!verified.length) return null;
+  if (verified.length === 1) return { center: [verified[0].lng, verified[0].lat], zoom: 16 };
+  let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const { lng, lat } of verified) {
+    w = Math.min(w, lng); e = Math.max(e, lng); s = Math.min(s, lat); n = Math.max(n, lat);
+  }
+  return { bounds: [[w, s], [e, n]] };
+}
+
+/** Il testo del contatore. */
+export function toPlaceText(n) {
+  return `Edifici da posizionare: ${n}`;
+}

@@ -164,10 +164,14 @@ globalThis.maplibregl = {
     constructor(o) { this.o = o; this.h = {}; this.controls = []; this.removed = false; __maps.push(this); }
     on(e, f) { (this.h[e] ||= []).push(f); }
     addControl(c, p) { this.controls.push([c.kind, p, c.o]); }
+    // SENTINELLA AGGIORNATA DA TERRITORIO T3: i metodi che il livello degli edifici usa
+    addSource() {} addLayer() {} setFeatureState() {} fitBounds() {} jumpTo() {}
+    getCanvas() { return { style: {} }; }
     remove() { this.removed = true; }
     emit(e) { for (const f of this.h[e] || []) f({}); }
   },
   NavigationControl: class { constructor(o) { this.kind = 'navigation'; this.o = o; } },
+  Popup: class { setLngLat() { return this; } setDOMContent() { return this; } addTo() { return this; } on() { return this; } remove() {} },
 };
 """
 
@@ -209,7 +213,7 @@ def test_c01_la_rotta_crea_una_mappa_e_non_chiama_il_crm(staged):  # noqa: F811
                         controlli: m.controls.map(([k, p, o]) => [k, p, o]) };
       m.emit('load'); await wait();
       report({ prima, opzioni, dopo: stato(), titolo: __dom.byId['page-title'].textContent,
-               indietro: C().querySelector('.census-back').getAttribute('href') });
+               indietro: C().querySelector('[data-back-to-buildings]').getAttribute('href') });  // T3: «Torna agli edifici»
     """
     out = _run(staged, scenario)
     assert out["prima"] == {"hidden": False, "testo": "Caricamento della mappa…", "riprova": False}
@@ -220,7 +224,10 @@ def test_c01_la_rotta_crea_una_mappa_e_non_chiama_il_crm(staged):  # noqa: F811
     assert o["controlli"] == [["navigation", "top-right", {"showCompass": False}]]
     assert out["dopo"]["hidden"] is True
     assert out["titolo"] == "Edifici" and out["indietro"] == "#/edifici"
-    assert _crm(out) == [], _crm(out)                                       # T2: nessun dato del CRM
+    # SENTINELLA AGGIORNATA DA TERRITORIO T3: la mappa legge ora gli edifici dell'agenzia (solo GET
+    # della lista, una pagina qui); nessun'altra chiamata al CRM e nessuna scrittura.
+    assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings"], _crm(out)
+    assert all(c["m"] == "GET" for c in out["calls"]), out["calls"]
 
 
 @node
@@ -276,9 +283,13 @@ window.maplibregl = {
       this.h = {}; setTimeout(() => (this.h.load || []).forEach((f) => f({})), 0); }
     on(e, f) { (this.h[e] ||= []).push(f); }
     addControl() {}
+    // SENTINELLA AGGIORNATA DA TERRITORIO T3: i metodi che il livello degli edifici usa
+    addSource() {} addLayer() {} setFeatureState() {} fitBounds() {} jumpTo() {}
+    getCanvas() { return { style: {} }; }
     remove() { window.__ml.remove++; }
   },
   NavigationControl: class {},
+  Popup: class { setLngLat() { return this; } setDOMContent() { return this; } addTo() { return this; } on() { return this; } remove() {} },
 };
 """
 

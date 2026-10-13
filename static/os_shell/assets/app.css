@@ -1261,3 +1261,24 @@ a.census-unit-main { text-decoration: none; }
   .territorio-map { height: clamp(300px, 68svh, 640px); border-radius: 8px; }
   .territorio-map .maplibregl-ctrl-group button { width: 40px; height: 40px; }
 }
+
+/* STIMA360 TERRITORIO T3: pulsante «Mappa» nell'elenco Edifici, edifici sulla mappa,
+   riquadro del marker, elenco «Edifici da posizionare». Solo regole nuove. */
+.buildings-toolbar a.buildings-map-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; white-space: nowrap; }
+.territorio-head { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.territorio-back { display: inline-flex; align-items: center; min-height: 40px; text-decoration: none; }
+.territorio-pending { padding: 12px 14px; }
+.territorio-pending summary { cursor: pointer; font-weight: 600; min-height: 32px; display: list-item; }
+.territorio-note { font-size: 13px; margin: 8px 0; }
+.territorio-group h3 { font-size: 14px; margin: 12px 0 6px; }
+.territorio-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.territorio-list a { overflow-wrap: anywhere; }
+.territorio-popup { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text); min-width: 0; }
+.territorio-popup-title { font-size: 15px; overflow-wrap: anywhere; padding-right: 18px; }
+.territorio-popup-facts { font-size: 12px; color: var(--muted); }
+.territorio-popup .btn { margin-top: 6px; min-height: 40px; }
+@media (max-width: 767px) {
+  .territorio-back { min-height: 44px; }
+  .territorio-list a { display: inline-block; min-height: 32px; padding: 4px 0; }
+  .territorio-popup .btn { min-height: 44px; width: 100%; }
+}

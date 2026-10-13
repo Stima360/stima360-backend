@@ -84,6 +84,7 @@ export async function renderEdifici(container) {
         <select id="buildings-city" class="input" aria-label="Comune"></select>
         <select id="buildings-microzone" class="input" aria-label="Microzona"></select>
         <button type="button" id="buildings-reset" class="btn ghost" hidden>Azzera filtri</button>
+        <a href="#/edifici/mappa" id="buildings-map" class="btn ghost buildings-map-btn">🗺️ Mappa</a>
         <button type="button" id="buildings-new" class="btn primary">+ Nuovo</button>
       </div>
       <div id="buildings-area" aria-live="polite"><p class="muted">Caricamento…</p></div>
