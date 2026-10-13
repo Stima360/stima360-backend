@@ -159,7 +159,9 @@ def test_t4_percorso_completo_e_sicurezza(server, larghezza):
 
         # 6. conferma vera -> mappa generale, edificio evidenziato
         page.click("[data-place-confirm]")
-        page.wait_for_function("location.hash === '#/edifici/mappa'")
+        # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T5: la mappa generale apre l'edificio appena
+        # confermato e lo scrive nell'indirizzo (#/edifici/mappa/edificio/{id}).
+        page.wait_for_function(f"location.hash === '#/edifici/mappa/edificio/{a['id']}'")
         page.wait_for_selector(".riquadro-finto [data-open-building]")
         punti = page.evaluate(f"{MAPPA}.sources['stima-buildings'].data.features.map((f) => f.id)")
         attivo = page.evaluate(f"{MAPPA}.states[{a['id']}]")

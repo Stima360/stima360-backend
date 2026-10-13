@@ -1324,3 +1324,21 @@ a.census-unit-main { text-decoration: none; }
   .territorio-place-actions .btn { flex: 1 1 0; }
   .building-position-btn { min-height: 44px; }
 }
+
+/* STIMA360 TERRITORIO T5: il pannello «Edificio» sotto la mappa (unità per piano, verso
+   le schede esistenti) e la nota sugli immobili senza edificio. Solo regole nuove. */
+.territorio-building { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.territorio-building[hidden] { display: none; }
+.territorio-building-title { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.territorio-building-where { margin: 0; font-size: 13px; }
+.territorio-building-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.territorio-building-actions .btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
+.territorio-building-count { margin: 4px 0 0; font-weight: 600; }
+.territorio-floor { margin: 8px 0 2px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.territorio-units { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.territorio-units a { display: block; padding: 10px 8px; border-radius: 8px; text-decoration: none; overflow-wrap: anywhere; }
+.territorio-units a:hover, .territorio-units a:focus-visible { background: var(--bg); }
+.territorio-independent { font-size: 13px; margin: 0; }
+@media (max-width: 767px) {
+  .territorio-building-actions .btn { flex: 1 1 100%; justify-content: center; }
+}

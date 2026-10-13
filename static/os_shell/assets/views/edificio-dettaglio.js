@@ -95,6 +95,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       ${inTrash ? '' : `<div class="action-bar">
         <button type="button" class="btn ghost" id="building-edit">Modifica palazzina</button>
         <a class="btn ghost building-position-btn" id="building-position" href="#/edifici/mappa/posiziona/${escapeHtml(edificio.id)}"></a>
+        <a class="btn ghost building-position-btn" id="building-on-map" href="#/edifici/mappa/edificio/${escapeHtml(edificio.id)}" hidden>Vedi sulla mappa</a>
       </div>`}
     </div>
     <div id="building-deletion"></div>
@@ -162,6 +163,9 @@ export async function renderEdificioDettaglio(container, params = []) {
     fatti.appendChild(riga);
     const comando = container.querySelector('#building-position');
     if (comando) comando.textContent = positionActionLabel(positionStatus(edificio));
+    // T5: con la posizione verificata, la mappa con l'edificio gia' selezionato e le sue unita'
+    const sullaMappa = container.querySelector('#building-on-map');
+    if (sullaMappa) sullaMappa.hidden = positionStatus(edificio) !== 'verified';
     const v = summaryView(edificio.census_summary);
     const fonte = labelOf(opzioni.units_declared_sources, edificio.census_summary && edificio.census_summary.units_declared_source, '');
     container.querySelector('#building-counters').innerHTML = `

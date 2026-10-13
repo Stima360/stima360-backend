@@ -24,6 +24,14 @@
 // mappa e stesso ciclo di vita (`openMap`); dopo una conferma riuscita questa
 // vista apre l'edificio appena verificato (`highlightAfterConfirm`).
 //
+// T5 - il pannello «Edificio» sotto la mappa: al clic su un marker mostra le
+// unita' dell'edificio (dalla stessa GET della scheda, gia' letta per il
+// riquadro), raggruppate per piano, ognuna verso la scheda immobile esistente
+// (#/immobili/{id}); «+ Aggiungi unita'» apre il foglio esistente del
+// censimento (#/edifici/{id}/aggiungi/censimento). Nessun salvataggio qui.
+// L'edificio selezionato e' nell'indirizzo (#/edifici/mappa/edificio/{id},
+// senza ricaricare): tornando indietro dalla scheda la mappa lo riapre.
+//
 // Ciclo di vita: al massimo UNA mappa viva. Si distrugge (`map.remove()`, che
 // libera WebGL, worker, livelli, gestori e riquadri) quando si apre un'altra
 // rotta, quando la sessione cambia (logout / altra agenzia) o quando la vista
@@ -37,7 +45,10 @@
 import { onAuthChange, sessionEpoch } from '../core/auth.js';
 import { currentRouteParams, navigate } from '../core/router.js';
 import * as api from '../census/census-api.js';
-import { buildingPlace, buildingStreet, buildingTitle, errorMessage, summaryView } from '../census/census-model.js';
+import {
+  buildingPlace, buildingStreet, buildingTitle, errorMessage, groupUnitsByFloor, summaryView, unitFacts,
+} from '../census/census-model.js';
+import { loadFormOptions } from '../components/property-form.js';
 import { loadMapLibre } from '../territorio/maplibre-loader.js';
 import { renderPosiziona } from './territorio-posiziona.js';
 import {
@@ -117,8 +128,18 @@ export function highlightAfterConfirm(buildingId) {
   daEvidenziare = buildingId === null || buildingId === undefined ? null : Number(buildingId);
 }
 
+// T5: la mappa generale e' anche `#/edifici/mappa/edificio/{id}` (edificio selezionato)
+const ROTTA_GENERALE = /^#\/edifici\/mappa(\/edificio\/\d+)?$/;
+
 function sullaRotta() {
-  return window.location.hash.replace(/\/+$/, '') === MAP_ROUTE_HASH;
+  return ROTTA_GENERALE.test(window.location.hash.replace(/\/+$/, ''));
+}
+
+/** T5: l'edificio selezionato entra nell'indirizzo senza ricaricare la vista. */
+function scriviSelezione(id) {
+  if (!window.history || typeof window.history.replaceState !== 'function' || !sullaRotta()) return;
+  const voluto = id === null ? MAP_ROUTE_HASH : `${MAP_ROUTE_HASH}/edificio/${id}`;
+  if (window.location.hash !== voluto) window.history.replaceState(null, '', voluto);
 }
 
 /**
@@ -196,7 +217,7 @@ function disegnaDaPosizionare(host, gruppi) {
 }
 
 /** Il riquadro di un marker: solo DOM e `textContent`. */
-function contenutoRiquadro(b, { dettaglio = null, stato = 'loading' } = {}) {
+function contenutoRiquadro(b, { dettaglio = null, stato = 'loading', vediUnita = null } = {}) {
   const fonte = dettaglio || b;
   const box = el('div', { cls: 'territorio-popup', attrs: { 'data-popup-building': String(b.id) } });
   box.appendChild(el('strong', { cls: 'territorio-popup-title', text: buildingTitle(fonte) }));
@@ -212,13 +233,70 @@ function contenutoRiquadro(b, { dettaglio = null, stato = 'loading' } = {}) {
   const apri = el('button', { cls: 'btn primary', text: 'Apri scheda edificio', attrs: { type: 'button', 'data-open-building': String(b.id) } });
   apri.addEventListener('click', () => navigate('edifici', [String(b.id)]));
   box.appendChild(apri);
+  if (vediUnita) {
+    const unita = el('button', { cls: 'btn ghost', text: 'Vedi unità ↓', attrs: { type: 'button', 'data-show-units': String(b.id) } });
+    unita.addEventListener('click', vediUnita);
+    box.appendChild(unita);
+  }
   return box;
+}
+
+/**
+ * T5: il pannello «Edificio» sotto la mappa. Solo DOM e `textContent`; ogni
+ * unita' e' un collegamento alla scheda immobile esistente, «+ Aggiungi unita'»
+ * al foglio esistente del censimento. `scheda` = risposta della GET dell'edificio.
+ */
+function disegnaPannello(host, b, { scheda = null, stato = 'loading', opzioni = null } = {}) {
+  host.replaceChildren();
+  host.hidden = false;
+  host.dataset.buildingPanel = String(b.id);
+  const fonte = scheda || b;
+  host.appendChild(el('h3', { cls: 'territorio-building-title', text: buildingTitle(fonte) }));
+  const dove = [buildingStreet(fonte), buildingPlace(fonte)].filter(Boolean).join(' · ');
+  if (dove) host.appendChild(el('p', { cls: 'muted territorio-building-where', text: dove }));
+  const azioni = el('div', { cls: 'territorio-building-actions' });
+  azioni.appendChild(el('a', { cls: 'btn primary', text: '+ Aggiungi unità',
+    attrs: { href: `#/edifici/${encodeURIComponent(String(b.id))}/aggiungi/censimento`, 'data-add-unit': String(b.id) } }));
+  azioni.appendChild(el('a', { cls: 'btn ghost', text: 'Apri scheda edificio',
+    attrs: { href: `#/edifici/${encodeURIComponent(String(b.id))}`, 'data-panel-open-building': String(b.id) } }));
+  host.appendChild(azioni);
+  if (stato === 'loading') {
+    host.appendChild(el('p', { cls: 'muted', text: 'Caricamento delle unità…' }));
+    return;
+  }
+  if (stato === 'error' || !scheda) {
+    host.appendChild(el('p', { cls: 'muted', text: 'Unità non disponibili ora: apri la scheda edificio.' }));
+    return;
+  }
+  const unita = Array.isArray(scheda.units) ? scheda.units : [];
+  host.appendChild(el('p', { cls: 'territorio-building-count', text: `Unità immobiliari: ${unita.length}`,
+    attrs: { 'data-units-count': String(unita.length) } }));
+  if (!unita.length) {
+    host.appendChild(el('p', { cls: 'muted', text: 'Nessuna unità censita in questo edificio.' }));
+    return;
+  }
+  const tipi = opzioni ? opzioni.property_types || [] : [];
+  const accessori = opzioni ? opzioni.accessory_kinds || [] : [];
+  for (const gruppo of groupUnitsByFloor(unita)) {
+    host.appendChild(el('h4', { cls: 'territorio-floor', text: gruppo.label }));
+    const lista = el('ul', { cls: 'territorio-units' });
+    for (const u of gruppo.units) {
+      const voce = el('li');
+      const testo = [u.code, unitFacts(u, tipi, accessori)].filter(Boolean).join(' · ');
+      voce.appendChild(el('a', { text: testo,
+        attrs: { href: `#/immobili/${encodeURIComponent(String(u.id))}`, 'data-unit-link': String(u.id) } }));
+      lista.appendChild(voce);
+    }
+    host.appendChild(lista);
+  }
 }
 
 export async function renderTerritorio(container) {
   // T4: `#/edifici/mappa/posiziona/{id}` e' la pagina di posizionamento
   const parametri = currentRouteParams();
   if (parametri[1] === 'posiziona') return renderPosiziona(container, parametri[2]);
+  // T5: `#/edifici/mappa/edificio/{id}` riapre la mappa con quell'edificio selezionato
+  const daRotta = parametri[1] === 'edificio' && /^\d+$/.test(String(parametri[2] || '')) ? Number(parametri[2]) : null;
   distruggi();
   container.innerHTML = `
     <div class="territorio-page">
@@ -235,7 +313,9 @@ export async function renderTerritorio(container) {
         <button type="button" class="btn ghost" data-buildings-retry hidden>Riprova</button>
       </div>
       <div class="territorio-map card" data-map aria-label="Mappa stradale"></div>
+      <section class="card territorio-building" data-building-panel hidden aria-live="polite"></section>
       <details class="card territorio-pending" data-to-place hidden></details>
+      <p class="muted territorio-independent" data-independent-note>Ville, case indipendenti e locali autonomi non appartengono a un edificio: si consultano in <a href="#/immobili">Immobili</a>.</p>
     </div>`;
   const stato = container.querySelector('[data-map-status]');
   const testo = container.querySelector('[data-map-status-text]');
@@ -244,6 +324,7 @@ export async function renderTerritorio(container) {
   const statoEdifici = container.querySelector('[data-buildings-status]');
   const testoEdifici = container.querySelector('[data-buildings-status-text]');
   const daPosizionare = container.querySelector('[data-to-place]');
+  const pannello = container.querySelector('[data-building-panel]');
   riprova.addEventListener('click', () => renderTerritorio(container));
   container.querySelector('[data-buildings-retry]').addEventListener('click', () => renderTerritorio(container));
 
@@ -308,30 +389,52 @@ export async function renderTerritorio(container) {
     if (id !== null) map.setFeatureState({ source: SORGENTE, id }, { selected: true });
     area.dataset.activeBuilding = id === null ? '' : String(id);
   };
+  // T5: le etichette delle tipologie per il pannello, lette una volta (cache di property-form)
+  let opzioni = null;
+  const leggiOpzioni = () => loadFormOptions().then((o) => { opzioni = o; return o; }, () => null);
+  const vediUnita = () => {
+    if (typeof pannello.scrollIntoView === 'function') pannello.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   const apriRiquadro = (id) => {
     const voce = perId.get(id);
     if (!voce) return;
     if (riquadro) riquadro.remove();
     seleziona(id);
+    scriviSelezione(id);
     const b = voce.building;
     const nota = dettagli.has(id) ? 'ready' : 'loading';
     const popup = new ml.Popup({ closeButton: true, closeOnClick: true, offset: 12, maxWidth: '300px' })
       .setLngLat([voce.lng, voce.lat])
-      .setDOMContent(contenutoRiquadro(b, { dettaglio: dettagli.get(id) || null, stato: nota }))
+      .setDOMContent(contenutoRiquadro(b, { dettaglio: dettagli.get(id) || null, stato: nota, vediUnita }))
       .addTo(map);
     riquadro = popup;
+    disegnaPannello(pannello, b, { scheda: dettagli.get(id) || null, stato: nota, opzioni });
     popup.on('close', () => {
-      if (riquadro === popup) { riquadro = null; seleziona(null); }
+      if (riquadro !== popup) return;
+      riquadro = null;
+      seleziona(null);
+      // chiusura dell'operatore (non la navigazione verso un'altra pagina): pannello chiuso
+      if (isActiveMap(map) && sullaRotta()) {
+        pannello.hidden = true;
+        pannello.replaceChildren();
+        scriviSelezione(null);
+      }
     });
     if (nota === 'ready') return;
-    api.getBuilding(b.id).then((scheda) => {
+    Promise.all([api.getBuilding(b.id), opzioni ? opzioni : leggiOpzioni()]).then(([scheda]) => {
       if (!vivo() || !attiva || attiva.map !== map) return;
       // la scheda deve essere proprio quella chiesta (stesso id): altrimenti si ignora
       if (!scheda || String(scheda.id) !== String(b.id)) throw new Error('scheda inattesa');
       dettagli.set(id, scheda);
-      if (riquadro === popup) popup.setDOMContent(contenutoRiquadro(b, { dettaglio: scheda, stato: 'ready' }));
+      if (riquadro === popup) {
+        popup.setDOMContent(contenutoRiquadro(b, { dettaglio: scheda, stato: 'ready', vediUnita }));
+        disegnaPannello(pannello, b, { scheda, stato: 'ready', opzioni });
+      }
     }).catch(() => {
-      if (riquadro === popup && vivo()) popup.setDOMContent(contenutoRiquadro(b, { stato: 'error' }));
+      if (riquadro === popup && vivo()) {
+        popup.setDOMContent(contenutoRiquadro(b, { stato: 'error', vediUnita }));
+        disegnaPannello(pannello, b, { stato: 'error', opzioni });
+      }
     });
   };
 
@@ -359,7 +462,7 @@ export async function renderTerritorio(container) {
     });
     map.on('mouseenter', LIVELLO, () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', LIVELLO, () => { map.getCanvas().style.cursor = ''; });
-    const evidenzia = daEvidenziare;
+    const evidenzia = daEvidenziare !== null ? daEvidenziare : daRotta;
     daEvidenziare = null;
     const appena = evidenzia !== null ? perId.get(evidenzia) : null;
     if (appena) {
