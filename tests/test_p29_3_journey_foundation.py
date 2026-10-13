@@ -119,7 +119,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 4: 099_voice_undo
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: 100_censimento_2_composition
     # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: 101_eliminazione_edificio_1
-    assert numeri[numeri.index(76):] == list(range(76, 102))
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: 102_territorio_4_position_verification
+    assert numeri[numeri.index(76):] == list(range(76, 103))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
