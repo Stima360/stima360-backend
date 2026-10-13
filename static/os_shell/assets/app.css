@@ -1247,3 +1247,17 @@ a.census-unit-main { text-decoration: none; }
 .trash-building-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .trash-building-actions { display: flex; justify-content: flex-end; }
 .trash-building-request .deletion-panel { box-shadow: none; padding: 0; border: 0; }
+
+/* STIMA360 TERRITORIO T2: la mappa stradale (#/edifici/mappa). Altezza propria
+   (MapLibre riempie il contenitore), niente sforamento su smartphone. Solo regole nuove. */
+.territorio-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.territorio-head h2 { margin: 0; }
+.territorio-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.territorio-status[hidden] { display: none; }
+.territorio-status.is-error { color: var(--danger); }
+.territorio-status .btn { min-height: 44px; }
+.territorio-map { position: relative; width: 100%; height: clamp(360px, 72vh, 820px); padding: 0; overflow: hidden; }
+@media (max-width: 767px) {
+  .territorio-map { height: clamp(300px, 68svh, 640px); border-radius: 8px; }
+  .territorio-map .maplibregl-ctrl-group button { width: 40px; height: 40px; }
+}

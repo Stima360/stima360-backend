@@ -28,6 +28,8 @@ import { renderImmobileDettaglio } from './views/immobile-dettaglio.js';
 // (#/edifici, #/edifici/{id}); il vecchio indirizzo resta valido.
 import { renderEdificioDettaglio } from './views/edificio-dettaglio.js';
 import { renderEdifici } from './views/edifici.js';
+// STIMA360 TERRITORIO T2: la mappa stradale, dentro Edifici (#/edifici/mappa).
+import { renderTerritorio } from './views/territorio.js';
 import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
@@ -144,6 +146,8 @@ registerRoute('immobili', (container, params = []) => {
 });
 // EDIFICI-1: "edifici" copre la lista (#/edifici) e la scheda (#/edifici/{id}).
 registerRoute('edifici', (container, params = []) => {
+  // STIMA360 TERRITORIO T2: "#/edifici/mappa" e' la mappa; ogni altro segmento resta la scheda.
+  if (params[0] === 'mappa') return renderTerritorio(container);
   return params[0] ? renderEdificioDettaglio(container, params) : renderEdifici(container);
 });
 // "acquirenti" copre sia la lista richieste BUY (#/acquirenti) sia la scheda
