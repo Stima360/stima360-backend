@@ -314,6 +314,11 @@ TENANT_PREFIXES = (
     # sessione (`require_operator` su ogni rotta, corpi chiusi senza agency_id)
     # - quindi dichiara il cookie e SOLO il cookie, come verifica il test 6.
     "/api/voice",
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino unico, in sola
+    # lettura. Superficie operatore come le altre - l'agenzia viene dalla
+    # sessione (`require_operator` su ogni rotta, mai dal client) - quindi
+    # dichiara il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/trash",
 )
 
 

@@ -113,9 +113,14 @@ def test_s02_nessuna_regola_di_permesso_nel_client():
 
 
 def test_s03_rete_monta_la_scheda_eliminazioni():
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
+    # (stesso codice, `renderEliminazioni`); in Rete la vecchia scheda e' solo un collegamento, senza duplicati.
     rete = _codice(ASSETS / "views" / "rete.js")
     assert "{ key: 'eliminazioni', label: 'Eliminazioni edifici' }" in rete
-    assert "if (key === 'eliminazioni') return renderEliminazioni(contentEl);" in rete
+    assert "if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);" in rete
+    assert "renderEliminazioni" not in rete and 'href="#/cestino/richieste-edifici"' in rete
+    cestino = _codice(ASSETS / "views" / "cestino.js")
+    assert "? () => renderEliminazioni(hostRichiesteEdifici)" in cestino
     assert "approveDeletion(id, d.fingerprint, nota())" in _codice(RETE)
     assert "purgeBuilding(id, testo.value, check.fingerprint)" in _codice(RETE)
     assert "conferma.disabled = testo.value.trim() !== PURGE_CONFIRM_TEXT;" in _codice(RETE)
@@ -180,14 +185,16 @@ def _rotte(*, check=(CHECK_OK,), dettaglio=(DETTAGLIO,)):
 
 
 HELPERS = r"""
-const tabE = () => C().querySelector('[data-tab="eliminazioni"]');
+// SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la scheda del Super Admin e' ora Cestino › Richieste edifici
+const tabE = () => C().querySelector('[data-trash-tab="richieste-edifici"]');
 const cartaR = (id) => C().querySelector(`[data-deletion-request="${id}"]`);
 const grp = (id) => C().querySelector(`[data-building-group="${id}"]`);
 """
 
 
 def _run(staged, scenario, rotte):  # noqa: F811
-    return t2b3._run(staged, HELPERS + scenario, rotte, "#/rete")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: stessa gestione, nuova posizione (prima «#/rete»)
+    return t2b3._run(staged, HELPERS + scenario, rotte, "#/cestino/richieste-edifici")
 
 
 def _scritture(out):

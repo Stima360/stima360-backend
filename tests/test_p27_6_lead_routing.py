@@ -837,6 +837,11 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         ("POST", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/restore"),
         ("GET", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/purge-check"),
         ("POST", f"{ROUTER_PREFIX}/building-deletions/{{building_id}}/purge"),
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1 - la vista globale del Cestino del
+        # Super Admin designato: SOLO letture (GET), nessuna scrittura.
+        ("GET", f"{ROUTER_PREFIX}/trash"),
+        ("GET", f"{ROUTER_PREFIX}/trash/counts"),
+        ("GET", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/relations"),
     }, sorted(trovate)
 
 

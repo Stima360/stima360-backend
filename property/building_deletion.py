@@ -85,14 +85,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import re
 
 from psycopg2 import errors as _pg_errors
 
 from core.database import core_cursor
 from core.exceptions import NotFoundError, PermissionDenied, ValidationError
 from operator_auth import permissions
+from platform_admin import super_admin as _sa
 
 from . import building_lifecycle, census, repository
 from .lifecycle import (TRASH_REASONS, LifecycleConflict, TrashNotInstalled, _audit, _conflitti_ripristino,
@@ -121,8 +120,7 @@ PURGE_CONFIRM_TEXT = "ELIMINA DEFINITIVAMENTE"
 #: la configurazione del servizio che designa il Super Admin generale: l'id
 #: (`operator_users.id`, l'identita' stabile) dell'unico account designato.
 #: Un valore per database: TEST e PROD hanno id diversi. Mai l'email.
-SUPER_ADMIN_ENV = "STIMA360_SUPER_ADMIN_USER_ID"
-_ID_VALIDO = re.compile(r"[1-9][0-9]{0,17}")
+SUPER_ADMIN_ENV = "STIMA360_SUPER_ADMIN_USER_ID"     # = platform_admin.super_admin.SUPER_ADMIN_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -248,57 +246,26 @@ def _installato(cur) -> None:
 
 
 def designated_super_admin_id() -> int | None:
-    """L'id dell'account designato, letto dalla configurazione del servizio
-    a OGNI chiamata. Assente, vuoto o non valido (non un intero positivo): None,
-    cioe' nessun Super Admin generale e tutte le operazioni riservate negate."""
-    grezzo = (os.getenv(SUPER_ADMIN_ENV) or "").strip()
-    return int(grezzo) if _ID_VALIDO.fullmatch(grezzo) else None
-
-
-def _nega(ctx, code: str, motivo: str):
-    """403. Il rifiuto di un amministratore di piattaforma (ammesso alla
-    superficie, ma non il Super Admin generale) e' un evento di sicurezza: si
-    registra in `platform_audit_log` come `denied`, best effort - il 403 resta
-    anche se la riga non si scrive."""
-    if bool(getattr(ctx, "is_platform_admin", False)) and getattr(ctx, "user_id", None) is not None:
-        try:
-            from platform_admin import audit
-            from platform_admin.enums import RESULT_DENIED
-            audit.record(action=AUDIT_DENIED, actor=ctx, result=RESULT_DENIED, metadata={"reason": motivo})
-        except Exception:  # noqa: BLE001 - il rifiuto non dipende dal registro
-            logger.error("platform_audit_log non scrivibile: rifiuto %s (%s) non registrato", code, motivo)
-    messaggio = SUPER_ADMIN_NOT_CONFIGURED_MESSAGE if code == SUPER_ADMIN_NOT_CONFIGURED else SUPER_ADMIN_REQUIRED_MESSAGE
-    raise _Vietato(messaggio, code)
+    """L'id dell'account designato (configurazione del servizio, letta a ogni
+    chiamata). CESTINO-GENERALE-1: una sola implementazione, in
+    `platform_admin/super_admin.py`."""
+    return _sa.designated_super_admin_id()
 
 
 def _super_admin(ctx) -> None:
     """Il controllo nel backend, PRIMA di qualunque lettura: il flag
     `is_platform_admin` della sessione E l'identita' stabile dell'account
     uguale a quella designata. Mai l'email. Il ruolo si riverifica poi nel
-    database dentro la transazione (`_super_admin_db`)."""
-    utente = getattr(ctx, "user_id", None)
-    if not bool(getattr(ctx, "is_platform_admin", False)) or utente is None:
-        _nega(ctx, SUPER_ADMIN_REQUIRED, "not_platform_admin")
-    designato = designated_super_admin_id()
-    if designato is None:
-        logger.error("%s assente o non valida: operazioni del Super Admin generale negate", SUPER_ADMIN_ENV)
-        _nega(ctx, SUPER_ADMIN_NOT_CONFIGURED, "not_configured")
-    try:
-        stesso = int(utente) == designato
-    except (TypeError, ValueError):
-        stesso = False
-    if not stesso:
-        _nega(ctx, SUPER_ADMIN_REQUIRED, "not_designated")
+    database dentro la transazione (`_super_admin_db`). Implementazione unica
+    in `platform_admin/super_admin.py`; qui l'azione di audit dei rifiuti."""
+    _sa.require_super_admin(ctx, audit_action=AUDIT_DENIED, error_class=_Vietato)
 
 
 def _super_admin_db(cur, ctx) -> None:
     """Il ruolo EFFETTIVO, adesso, nel database: l'account designato e'
     ancora amministratore di piattaforma e attivo (una sessione aperta prima
     di una revoca non basta)."""
-    cur.execute("SELECT is_platform_admin, status FROM operator_users WHERE id = %s", (ctx.user_id,))
-    riga = cur.fetchone()
-    if riga is None or riga["is_platform_admin"] is not True or riga["status"] != "active":
-        _nega(ctx, SUPER_ADMIN_REQUIRED, "role_revoked")
+    _sa.require_super_admin_db(cur, ctx, audit_action=AUDIT_DENIED, error_class=_Vietato)
 
 
 def building_label(edificio: dict) -> str:

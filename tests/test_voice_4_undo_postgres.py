@@ -425,6 +425,15 @@ ELIMINAZIONE_EDIFICIO_1 = ("property/building_deletion.py",
                            "static/os_shell/assets/views/rete.js",
                            "static/os_shell/assets/views/cestino.js")
 
+# CESTINO-GENERALE-1 (autorizzazione specifica del 2026-10-13): i SOLI file nuovi o toccati dal
+# Cestino unico in sola lettura fuori dagli elenchi qui sopra (main.js, app.css, rete.js e cestino.js
+# vi sono gia'). Nessun file PROTETTO; `trash/` e `platform_admin/` sono fuori dalle cartelle
+# sorvegliate. In `main.py` le SOLE due righe di montaggio qui sotto, verificate riga per riga.
+CESTINO_GENERALE_1 = ("static/os_shell/assets/trash/trash-api.js",
+                      "static/os_shell/assets/trash/trash-unified.js")
+CESTINO_GENERALE_1_MAIN = ["from trash.router import router as trash_router",
+                           "app.include_router(trash_router, dependencies=[Depends(require_authenticated_operator)])"]
+
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
 # regola di `_applica` che non aggiorna da sola una superficie verificata. L'eccezione e' vincolata
@@ -490,9 +499,13 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     tolte = [r for r in diff_main if r.startswith("-") and not r.startswith("---")]
     aggiunte = [r[1:].strip() for r in diff_main if r.startswith("+") and not r.startswith("+++")]
     assert tolte == [], tolte
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: oltre alle due righe Voice, ESATTAMENTE le due
+    # righe autorizzate del Cestino unico, nello stesso ordine del file (import, poi montaggio).
     assert [r for r in aggiunte if r and not r.startswith("#")] == [
         "from voice.router import router as voice_router",
-        "app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])"], aggiunte
+        CESTINO_GENERALE_1_MAIN[0],
+        "app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])",
+        CESTINO_GENERALE_1_MAIN[1]], aggiunte
     for cartella in ("core", "property", "appointments", "crm", "static"):
         diff = subprocess.run(["git", "diff", "--name-only", BASE, "--", cartella], cwd=ROOT,
                               capture_output=True, text=True).stdout.split()
@@ -502,6 +515,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in FASE6_UI and f not in CENSIMENTO2_PROPERTY]
         # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: i soli file dichiarati qui sopra
         diff = [f for f in diff if f not in ELIMINAZIONE_EDIFICIO_1]
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: i soli file dichiarati qui sopra
+        diff = [f for f in diff if f not in CESTINO_GENERALE_1]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

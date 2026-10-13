@@ -415,8 +415,11 @@ def test_d04_pagina_cestino_scheda_richieste(staged):  # noqa: F811
       report({ tabs, iniziale, carte, apri, dopo: C().querySelectorAll('[data-buy-trash-item]').map((c) => c.dataset.buyTrashItem),
                avviso: avviso ? avviso.visibleText() : null, t: rtoast() });
     """
-    out = _run(staged, scenario, _rotte(), "#/cestino")
-    assert out["tabs"] == ["immobili", "contatti", "edifici", "richieste"]
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(), "#/cestino/immobili")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: in testa «Tutti» (elenco unificato), in coda «Richieste edifici»;
+    # le quattro schede di categoria restano, nello stesso ordine
+    assert out["tabs"] == ["tutti", "immobili", "contatti", "edifici", "richieste", "richieste-edifici"]
     assert out["iniziale"] == {"immobili": True, "richieste": False, "letture": 0}     # Immobili resta la predefinita
     assert [c[0] for c in out["carte"]] == ["16", "18"]
     uno = out["carte"][0][1]

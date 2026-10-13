@@ -553,6 +553,21 @@ DOMAINS = (
              "agenzia (o inesistente) mai restituito, registro vocale invariato",
     ),
     Domain(
+        "TRASH", "/api/trash",
+        # CESTINO-GENERALE-1 (CG-1). SOLA LETTURA: il Cestino unico non ha
+        # rotte di scrittura (ripristini e cancellazioni restano le rotte gia'
+        # certificate di ogni categoria e quelle del Super Admin). L'agenzia
+        # viene SOLO dalla sessione: la prova cross-tenant e' che l'elenco
+        # mostra solo le voci della propria agenzia anche con l'agenzia
+        # dell'altra nella query, e che i collegamenti di una voce dell'altra
+        # agenzia rispondono 404.
+        certifier="trash",
+        api_delete=False,
+        note="quattro rotte GET: anonimo e Basic -> 401 su tutte, elenco solo "
+             "della propria agenzia (agency/agency_id nella query ignorati), "
+             "collegamenti di una voce altrui -> 404, contatori invariati",
+    ),
+    Domain(
         "SELLER_INTENT", "/api/seller-intent",
         # Lo score si chiede per lead_id, e questo run non crea lead. La sonda
         # forte sarebbe l'ID diretto; qui resta il percorso che attraversa il
@@ -6949,6 +6964,86 @@ def certify_voice(report, http, cert, domain, jars, owned, context) -> None:
         "VOICE-registro-invariato",
         dopo == prima,
         f"registro vocale prima e dopo la sezione: {prima} -> {dopo} (attesi identici)",
+    )
+
+
+#: Le quattro rotte del Cestino unico (CESTINO-GENERALE-1), tutte GET, per il
+#: giro anonimo/Basic. L'id e' un segnaposto: il rifiuto arriva al mount.
+TRASH_OPERAZIONI = (("GET", ""), ("GET", "/counts"), ("GET", "/building-requests"),
+                    ("GET", "/property/1/relations"))
+
+
+def _trash_totale(http, base, jar):
+    """Il totale dei contatori di una sessione, o None se non leggibile."""
+    risposta = http.request("GET", f"{base}/counts", jar=jar)
+    corpo = risposta.json() if risposta.status == 200 else None
+    return corpo.get("total") if isinstance(corpo, dict) else None
+
+
+def certify_trash(report, http, cert, domain, jars, owned, context) -> None:
+    """TRASH (CESTINO-GENERALE-1): SOLA LETTURA, nessuna scrittura tentata.
+
+        anonimo, Basic          -> 401 su tutte e quattro le rotte (mount)
+        GET  ?agency=&agency_id= dell'altra agenzia
+                                -> 200, SOLO voci della propria agenzia
+        GET  /{kind}/{id}/relations di una voce dell'altra agenzia
+                                -> 404 (mai i collegamenti altrui)
+        contatori di A e B prima e dopo la sezione -> identici
+    """
+    base = domain.prefix
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    # -- senza identita' -------------------------------------------------------
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in TRASH_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso)
+        report.check(f"TRASH-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"TRASH-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    prima = {e: _trash_totale(http, base, jars[e]) for e in ("A", "B")}
+
+    # -- l'elenco: solo la propria agenzia, anche se la query nomina l'altra ----
+    voci = {}
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mia, sua = agenzia_id(etichetta), agenzia_id(altro)
+        risposta = http.request("GET", f"{base}?limit=200&agency={sua}&agency_id={sua}", jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        elenco = corpo.get("items") if isinstance(corpo, dict) else None
+        voci[etichetta] = elenco if isinstance(elenco, list) else []
+        estranee = [v for v in voci[etichetta] if not isinstance(v, dict) or v.get("agency_id") != mia]
+        report.check(
+            f"TRASH-lista-{etichetta}-non-vede-{altro}",
+            risposta.status == 200 and isinstance(elenco, list) and estranee == [],
+            f"{etichetta}: GET {base} con l'agenzia di {altro} nella query -> {risposta.status}, "
+            f"{len(estranee)} voci non della propria agenzia (attese 0: l'agenzia viene dalla sessione)",
+        )
+
+    # -- i collegamenti di una voce dell'altra agenzia ---------------------------
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        altrui = next((v for v in voci[altro] if isinstance(v, dict) and v.get("kind") and v.get("id")), None)
+        tipo, ident = (altrui["kind"], int(altrui["id"])) if altrui else ("property", 999999999)
+        risposta = http.request("GET", f"{base}/{tipo}/{ident}/relations", jar=jars[etichetta])
+        report.check(
+            f"TRASH-collegamenti-{etichetta}-{altro}",
+            risposta.status == 404,
+            f"{etichetta}: GET {base}/{tipo}/<"
+            + ("voce dell'altra agenzia" if altrui else "id inesistente")
+            + f">/relations -> {risposta.status} (atteso 404: mai i collegamenti altrui)",
+        )
+
+    # -- la guardia read-only ----------------------------------------------------
+    dopo = {e: _trash_totale(http, base, jars[e]) for e in ("A", "B")}
+    report.check(
+        "TRASH-contatori-invariati",
+        None not in prima.values() and dopo == prima,
+        f"contatori del Cestino prima e dopo la sezione: {prima} -> {dopo} (attesi identici)",
     )
 
 

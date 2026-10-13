@@ -7,8 +7,10 @@
 // (owner/router_admin.py, la rotta esistente: nessuna nuova).
 // CESTINO-EDIFICI-1: anche le rotte del Cestino Edifici (property/router.py).
 // CESTINO-RICHIESTE-1: anche le rotte del Cestino Richieste acquirente (buy/router.py).
+// CESTINO-GENERALE-1: anche le letture del Cestino unico (trash/router.py, /api/platform/trash).
 import { apiGet, apiPost } from '../core/api-client.js';
 import { buildingTrashListPath, buyTrashListPath, contactTrashListPath, trashListPath } from './trash-model.js';
+import { unifiedTrashPath } from './trash-unified.js';
 
 export function deletionCheck(propertyId) {
   return apiGet(`/api/property/properties/${propertyId}/deletion-check`);
@@ -95,4 +97,32 @@ export function listBuyRequestTrash(offset = 0, limit = 50) {
 
 export function restoreBuyRequest(requestId) {
   return apiPost(`/api/buy/requests/${requestId}/restore`);
+}
+
+// --- CESTINO-GENERALE-1 (CG-1): il Cestino unico, in sola lettura ------------
+// Agenzia: `/api/trash` (trash/router.py). Vista globale del Super Admin
+// designato: `/api/platform/trash` (platform_admin/router.py). Il percorso lo
+// costruisce `unifiedTrashPath` (trash-unified.js), senza alcun parametro
+// d'agenzia sulla superficie tenant.
+export function listUnifiedTrash(filters = {}, { scope = 'agency', offset = 0, limit = 50 } = {}) {
+  return apiGet(unifiedTrashPath('', filters, { scope, offset, limit }));
+}
+
+export function unifiedTrashCounts(filters = {}, { scope = 'agency' } = {}) {
+  const { type: _tipo, ...senzaTipo } = filters;
+  return apiGet(unifiedTrashPath('/counts', senzaTipo, { scope }));
+}
+
+export function unifiedTrashRelations(kind, id, { scope = 'agency' } = {}) {
+  const base = scope === 'platform' ? '/api/platform/trash' : '/api/trash';
+  return apiGet(`${base}/${encodeURIComponent(kind)}/${Number(id)}/relations`);
+}
+
+export function listAgencyBuildingRequests(status = 'pending', offset = 0, limit = 50) {
+  return apiGet(`/api/trash/building-requests?status=${encodeURIComponent(status)}&limit=${Number(limit)}&offset=${Number(offset)}`);
+}
+
+/** Le agenzie per il selettore della vista globale (rotta esistente della Rete). */
+export function listTrashAgencies() {
+  return apiGet('/api/platform/agencies');
 }

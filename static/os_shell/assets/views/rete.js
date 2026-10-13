@@ -47,7 +47,8 @@ import {
   selectOptions,
 } from '../components/network.js';
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
-import { renderEliminazioni } from './rete-eliminazioni.js';
+// CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
+// (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
 
 const TERRITORI_PAGE = 50;
 
@@ -97,7 +98,7 @@ export async function renderRete(container) {
       btn.classList.toggle('active', btn.dataset.tab === key);
     });
     if (key === 'agenzie') return caricaAgenzie();
-    if (key === 'eliminazioni') return renderEliminazioni(contentEl);
+    if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
     return caricaTerritori();
   }
 
@@ -358,4 +359,16 @@ export async function renderRete(container) {
   }
 
   await mostraTab('agenzie');
+}
+
+/**
+ * CESTINO-GENERALE-1: la vecchia scheda «Eliminazioni edifici» porta alla sua
+ * nuova posizione, senza duplicarla (esportata per le prove).
+ */
+export function renderCollegamentoEliminazioni(contentEl) {
+  contentEl.innerHTML = `
+    <section class="deletion-admin" data-deletion-moved>
+      <p>La gestione delle eliminazioni degli edifici è nel <strong>Cestino</strong>, insieme a tutto ciò che è stato eliminato.</p>
+      <p><a class="btn primary" href="#/cestino/richieste-edifici" data-deletion-moved-link>Apri Cestino › Richieste edifici</a></p>
+    </section>`;
 }

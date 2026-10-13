@@ -71,6 +71,7 @@ from communication.public_router import router as communication_public_router
 from appointment_reminders.router import router as appointment_reminders_router
 # STIMA Voice Fase 7: il router dei comandi vocali (spento finche' non e' acceso ogni livello).
 from voice.router import router as voice_router
+from trash.router import router as trash_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -182,6 +183,7 @@ app.include_router(appointment_reminders_router, dependencies=[Depends(require_a
 # fornitore AI configurato). Senza la migrazione 098 risponde «spento», mai un
 # errore; `GET /api/voice/status` tiene nascosta l'interfaccia.
 app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])
+app.include_router(trash_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

@@ -69,9 +69,16 @@ const SECTIONS = [
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
   { name: 'automazioni', label: 'Automazioni' },
-  // DELETE-ARCH Fase 2B3: in fondo, voce discreta (app.css); dentro solo immobili.
+  // DELETE-ARCH Fase 2B3: in fondo. CESTINO-GENERALE-1: il Cestino UNICO di
+  // tutto il CRM, voce normale e ben visibile (app.css), anche per il Super Admin.
   { name: 'cestino', label: 'Cestino' },
 ];
+
+// CESTINO-GENERALE-1: la sola voce di agenzia che resta anche a un
+// amministratore di piattaforma SENZA agenzia: il Cestino ha la vista globale
+// del Super Admin generale designato (GET /api/platform/trash; a chi non e'
+// il designato il backend risponde 403 e la pagina mostra solo l'avviso).
+const SEZIONI_ANCHE_PLATFORM = new Set(['cestino']);
 
 // P27-7 - la sezione RETE, che NON sta in SECTIONS.
 //
@@ -194,7 +201,12 @@ registerRoute('incarichi', (container, params = []) => {
   return params[0] ? renderIncaricoDettaglio(container, params) : renderIncarichi(container, params);
 });
 // DELETE-ARCH Fase 2B3: `#/cestino` (elenco + «Ripristina»). Nessun dettaglio.
-registerRoute('cestino', (container) => renderCestino(container));
+// CESTINO-GENERALE-1: `#/cestino[/tutti|immobili|contatti|edifici|richieste|richieste-edifici]`.
+registerRoute('cestino', (container) => {
+  const sessione = getSession();
+  return renderCestino(container, { platformAdmin: canUsePlatformSurface(sessione), platformOnly: isPlatformOnly(sessione),
+                                    meId: sessione ? sessione.user_id : null });
+});
 // STIMA Voice Fase 6: `#/voce` (vedi SEZIONE_VOCE).
 registerRoute('voce', (container) => renderVoce(container));
 
@@ -226,6 +238,7 @@ initRouter(contentEl, {
     if (name === SEZIONE_RETE.name) {
       return canUsePlatformSurface(session) ? null : ROTTA_TENANT_INIZIALE;
     }
+    if (SEZIONI_ANCHE_PLATFORM.has(name)) return null;
     return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
   },
   onNavigate(name) {
@@ -303,7 +316,7 @@ function aggiornaNavTenant(session) {
   const soloPlatform = isPlatformOnly(session);
   for (const section of SECTIONS) {
     const esistente = navEl.querySelector(`[data-route="${section.name}"]`);
-    if (soloPlatform) {
+    if (soloPlatform && !SEZIONI_ANCHE_PLATFORM.has(section.name)) {
       if (esistente) esistente.remove();
       continue;
     }

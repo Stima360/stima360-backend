@@ -877,6 +877,17 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
             assert ATTEMPTS not in testo
             assert not re.search(r"(INSERT INTO|UPDATE|DELETE FROM)\s+" + MESSAGES, testo)
             continue
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1 (collisione dichiarata):
+        # `trash/service.py` nomina `communication_messages` SOLO come etichetta
+        # dell'anteprima dei collegamenti («Messaggi (registro)»), i cui conteggi
+        # vengono dal catalogo delle FK in una transazione READ ONLY. Nessuna
+        # scrittura, nessun tentativo: lo si verifica qui riga per riga.
+        if percorso.name == "service.py" and parti[-2:] == ("trash", "service.py") \
+                and len(parti) == len(ROOT.parts) + 2:
+            assert ATTEMPTS not in testo
+            assert not re.search(r"(INSERT INTO|UPDATE|DELETE FROM)\s+" + MESSAGES, testo)
+            assert 'cur.execute("SET TRANSACTION READ ONLY")' in testo
+            continue
         for tabella in (MESSAGES, ATTEMPTS):
             assert tabella not in testo, (
                 f"{percorso.relative_to(ROOT)} nomina {tabella} fuori dal "

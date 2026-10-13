@@ -363,8 +363,11 @@ def test_d04_pagina_cestino_edifici_raggruppati_in_sola_lettura(staged):  # noqa
                elimina: C().querySelectorAll('[data-group-purge]').length,
                intro: C().querySelector('[data-trash-panel="edifici"]').visibleText() });
     """
-    out = _run(staged, scenario, _rotte(), "#/cestino")
-    assert out["tabs"] == ["immobili", "contatti", "edifici", "richieste"]
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(), "#/cestino/immobili")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: in testa «Tutti» (elenco unificato), in coda «Richieste edifici»;
+    # le quattro schede di categoria restano, nello stesso ordine
+    assert out["tabs"] == ["tutti", "immobili", "contatti", "edifici", "richieste", "richieste-edifici"]
     assert out["iniziale"] == {"immobili": True, "edifici": False, "letture": 0}     # Immobili resta la predefinita
     assert [c[0] for c in out["carte"]] == ["7", "9"]
     uno = out["carte"][0][1]

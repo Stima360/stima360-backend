@@ -390,7 +390,8 @@ def test_d03_pagina_cestino_schede_e_ripristino(staged):  # noqa: F811
                avviso: C().querySelector('[data-contact-duplicates]') ? C().querySelector('[data-contact-duplicates]').visibleText() : null,
                t: ctoast() });
     """
-    out = _run(staged, scenario, _rotte(), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(), "#/cestino/immobili")
     assert out["iniziale"] == {"immobili": True, "contatti": False, "letture": 0}     # Immobili resta la predefinita
     assert [c[0] for c in out["carte"]] == ["159", "160"]
     uno = out["carte"][0][1]

@@ -952,7 +952,8 @@ def test_s4_platform_admin_senza_agenzia_resta_sulla_rete_senza_agenda(shell_sta
     out = rt.run(shell_staged, rt.REPORT,
                  rt.script(rt.ok(rt.PLATFORM_ADMIN), rt.ok(rt.PLATFORM_ME), rt.ok(rt.AGENZIE)),
                  hash="#/agenda")
-    assert out["navRoutes"] == ["rete"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino e' la sola voce di agenzia che resta in modalita' piattaforma (vista globale del Super Admin designato; agli altri il backend risponde 403)
+    assert out["navRoutes"] == ["cestino", "rete"], out["navRoutes"]
     assert out["title"] == "Rete", out["title"]
     assert not any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
 

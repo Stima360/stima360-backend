@@ -2032,6 +2032,36 @@ class FakeHttp(cert.HttpProbe):
         return self._reply(method, path, 403, b'{"detail":"STIMA Voice non e\' attivo",'
                                               b'"code":"VOICE_GLOBALLY_DISABLED"}')
 
+    def _trash(self, method, path, agency, payload):
+        """CESTINO-GENERALE-1. Il doppio e' il Cestino unico: SOLO letture,
+        l'agenzia dalla sessione (la query `agency`/`agency_id` e' ignorata come
+        fa FastAPI con i parametri non dichiarati). Una voce nel Cestino per
+        agenzia. Rotto `isolation`: l'elenco mostra tutte le agenzie e i
+        collegamenti altrui rispondono 200, e il certificatore deve vederlo."""
+        import json as _json
+
+        voci = [{"kind": "property", "id": 9101, "agency_id": 1},
+                {"kind": "contact", "id": 9202, "agency_id": 2}]
+        rotto = self._broken("isolation", "trash")
+        rotte_relazioni = rotto or self._broken("relazioni", "trash")   # solo i collegamenti
+        percorso = path.split("?")[0]
+        visibili = [v for v in voci if v["agency_id"] == agency or rotto]
+        if percorso == "/api/trash":
+            return self._reply(method, path, 200, _json.dumps(
+                {"items": visibili, "has_more": False, "limit": 200, "offset": 0}).encode())
+        if percorso == "/api/trash/counts":
+            return self._reply(method, path, 200, _json.dumps(
+                {"total": len(visibili), "categories": [], "building_requests_pending": 0}).encode())
+        if percorso == "/api/trash/building-requests":
+            return self._reply(method, path, 200, b'{"items": [], "has_more": false}')
+        parti = percorso.split("/")                       # ['', 'api', 'trash', kind, id, 'relations']
+        if len(parti) == 6 and parti[5] == "relations":
+            if any(v["kind"] == parti[3] and str(v["id"]) == parti[4]
+                   for v in voci if v["agency_id"] == agency or rotte_relazioni):
+                return self._reply(method, path, 200, b'{"relations": []}')
+            return self._reply(method, path, 404, b'{"detail":"Elemento non trovato nel Cestino","code":"NOT_FOUND"}')
+        return self._reply(method, path, 404, b'{"detail":"Not Found"}')
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -2351,6 +2381,10 @@ class FakeHttp(cert.HttpProbe):
 
         if path.startswith("/api/voice"):
             return self._voice(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1
+        if path.startswith("/api/trash"):
+            return self._trash(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3234,6 +3268,41 @@ def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("VOICE-comando-altrui") for i in falliti), falliti
+
+
+def test_13e_trash_is_certified_read_only(monkeypatch):
+    """SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la sezione TRASH gira davvero
+    nella matrice e ogni sua prova e' un PASS: 4 rotte anonime + 4 Basic, l'elenco
+    e i collegamenti nelle due direzioni, i contatori invariati."""
+    _code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    cestino = [(k, i) for k, i, _ in report.rows if i.startswith("TRASH-")]
+    assert [k for k, _ in cestino if k != cert.PASS] == [], cestino
+    assert {i for _, i in cestino} >= {"TRASH-lista-A-non-vede-B", "TRASH-lista-B-non-vede-A",
+                                       "TRASH-collegamenti-A-B", "TRASH-collegamenti-B-A",
+                                       "TRASH-contatori-invariati", "TRASH-anonimo-GET", "TRASH-basic-GET/counts"}
+    assert sum(1 for k, _ in cestino if k == cert.PASS) == 4 + 4 + 2 + 2 + 1, cestino
+
+
+def test_13f_trash_leaking_another_agency_fails_the_matrix(monkeypatch):
+    """La contropartita: un Cestino che mostra le voci (o i collegamenti) di
+    un'altra agenzia fa fallire la matrice, proprio sulla prova TRASH."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="trash"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("TRASH-lista") for i in falliti), falliti
+
+
+def test_13g_trash_leaking_relations_of_another_agency_fails_the_matrix(monkeypatch):
+    """Elenco isolato, ma i collegamenti di una voce altrui rispondono 200:
+    la matrice deve fallire sulla prova dei collegamenti."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"relazioni"}, only="trash"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("TRASH-collegamenti") for i in falliti), falliti
 
 
 def test_13b_bis_with_dedicated_agencies_nothing_stays_BLOCKED(monkeypatch):

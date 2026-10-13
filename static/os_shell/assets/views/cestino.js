@@ -26,7 +26,24 @@
 // ELIMINAZIONE-EDIFICIO-1: la scheda «Edifici» mostra ogni edificio con le sue
 // unità raggruppate (GET /api/property/trash/building-groups), in sola
 // lettura: ripristino ed eliminazione definitiva sono del Super Admin
-// (Rete › Eliminazioni edifici). Nessun «Ripristina» per gli operatori.
+// (Cestino › Richieste edifici). Nessun «Ripristina» per gli operatori.
+//
+// CESTINO-GENERALE-1 (CG-1): il Cestino diventa UNICO.
+//   * «Tutti» (predefinita, `#/cestino` o `#/cestino/tutti`): l'elenco
+//     unificato di tutte le categorie con ricerca, filtri e contatori
+//     (GET /api/trash, /api/trash/counts), in SOLA LETTURA; «Gestisci» porta
+//     alla scheda di categoria, che resta quella di prima (con «Ripristina»).
+//   * Vista globale per il Super Admin generale designato (GET
+//     /api/platform/trash), con selettore dell'agenzia: un amministratore di
+//     piattaforma la sceglie; a chi non e' il designato il backend risponde 403
+//     e qui compare solo l'avviso.
+//   * «Richieste edifici» (`#/cestino/richieste-edifici`): per un
+//     amministratore di piattaforma la gestione centralizzata gia' esistente
+//     (renderEliminazioni, stesso codice e stesse rotte, prima in Rete); per
+//     l'agenzia l'elenco delle sue richieste, in sola lettura. Una richiesta in
+//     attesa NON e' un elemento eliminato.
+//   * Se il server non ha ancora il Cestino unico (404), «Tutti» lo dice e si
+//     apre la scheda Immobili come prima.
 import { escapeHtml, formatDateTime } from '../components/st-table.js';
 import { showToast } from '../census/census-sheets.js';
 import { COMMERCIAL_STATUS_LABELS } from './incarichi.js';
@@ -39,6 +56,16 @@ import {
 } from '../trash/trash-model.js';
 import { buyBlockersHtml } from '../trash/trash-dialog.js';
 import { listBuildingTrashGroups, trashGroupCardHtml } from '../building-deletion/building-deletion.js';
+// CESTINO-GENERALE-1 (CG-1): il Cestino unico (scheda «Tutti», sola lettura) e
+// le richieste di eliminazione degli edifici dentro il Cestino.
+import {
+  listAgencyBuildingRequests, listTrashAgencies, listUnifiedTrash, unifiedTrashCounts, unifiedTrashRelations,
+} from '../trash/trash-api.js';
+import {
+  TRASH_KINDS, UPCOMING_KINDS, buildingRequestRowHtml, countsHtml, reasonOptionsHtml, relationsHtml,
+  unifiedCardHtml, unifiedErrorText,
+} from '../trash/trash-unified.js';
+import { renderEliminazioni } from './rete-eliminazioni.js';
 import {
   CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST,
   contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
@@ -260,24 +287,231 @@ function gruppiEdifici(listEl, pagerEl) {
   };
 }
 
-export async function renderCestino(container) {
+const SCHEDE = ['tutti', 'immobili', 'contatti', 'edifici', 'richieste', 'richieste-edifici'];
+
+/** La scheda iniziale dall'indirizzo (esportata per le prove). */
+export function initialTrashTab(hash, { platformOnly = false } = {}) {
+  const scheda = (String(hash || '').match(/^#\/cestino\/(tutti|immobili|contatti|edifici|richieste-edifici|richieste)\b/) || [])[1];
+  if (platformOnly) return scheda === 'richieste-edifici' ? scheda : 'tutti';
+  return scheda || 'tutti';
+}
+
+/** Il Cestino unico: filtri, contatori, elenco, collegamenti (sola lettura). */
+function cestinoUnico(panel, { platformOnly, meId, onMissing }) {
+  const stato = { scope: platformOnly ? 'platform' : 'agency', filtri: { type: 'all' }, offset: 0 };
+  const listEl = panel.querySelector('[data-unified-list]');
+  const pagerEl = panel.querySelector('[data-unified-pager]');
+  const countsEl = panel.querySelector('[data-unified-counts]');
+  const scopeEl = panel.querySelector('[data-unified-scope]');
+  const agencyEl = panel.querySelector('[data-unified-agency]');
+  const form = panel.querySelector('[data-unified-filters]');
+  const campo = (nome) => form.querySelector(`[name="${nome}"]`);
+  let richiesta = 0;
+  let agenzieCaricate = false;
+
+  function leggiFiltri() {
+    const mie = campo('mine') && campo('mine').checked && meId;
+    stato.filtri = {
+      type: campo('type').value || 'all',
+      q: campo('q').value,
+      reason: campo('reason').value,
+      date_from: campo('date_from').value,
+      date_to: campo('date_to').value,
+      deleted_by: mie ? meId : '',
+      agency: stato.scope === 'platform' && agencyEl ? agencyEl.value : '',
+    };
+  }
+
+  function collega(card) {
+    const bottone = card.querySelector('[data-trash-relations]');
+    const host = card.querySelector('[data-trash-relations-host]');
+    if (!bottone) return;
+    bottone.addEventListener('click', async () => {
+      if (host.innerHTML) { host.innerHTML = ''; return; }
+      const [kind, id] = bottone.dataset.trashRelations.split(':');
+      host.innerHTML = '<p class="muted">Caricamento…</p>';
+      try {
+        host.innerHTML = relationsHtml(await unifiedTrashRelations(kind, Number(id), { scope: stato.scope }));
+      } catch (error) {
+        host.innerHTML = `<p class="field-error">${escapeHtml(unifiedErrorText(error))}</p>`;
+      }
+    });
+  }
+
+  async function caricaAgenzie() {
+    if (agenzieCaricate || !agencyEl) return;
+    agenzieCaricate = true;
+    try {
+      const agenzie = await listTrashAgencies();
+      const voci = Array.isArray(agenzie) ? agenzie : ((agenzie && agenzie.items) || []);
+      agencyEl.innerHTML = `<option value="">Tutte le agenzie</option>${voci.map((a) =>
+        `<option value="${Number(a.id)}">${escapeHtml(a.name || `Agenzia #${a.id}`)}</option>`).join('')}`;
+    } catch (_error) {
+      agencyEl.innerHTML = '<option value="">Tutte le agenzie</option>';
+    }
+  }
+
+  async function carica({ reset = true } = {}) {
+    const mia = ++richiesta;
+    if (reset) { stato.offset = 0; listEl.innerHTML = '<p class="muted">Caricamento…</p>'; }
+    pagerEl.innerHTML = '';
+    if (agencyEl) agencyEl.hidden = stato.scope !== 'platform';
+    let pagina;
+    let conti = null;
+    try {
+      [pagina, conti] = await Promise.all([
+        listUnifiedTrash(stato.filtri, { scope: stato.scope, offset: stato.offset, limit: PAGE_SIZE }),
+        reset ? unifiedTrashCounts(stato.filtri, { scope: stato.scope }) : Promise.resolve(null),
+      ]);
+    } catch (error) {
+      if (mia !== richiesta) return;
+      if (error && error.status === 404 && stato.scope === 'agency' && onMissing) { onMissing(); return; }
+      listEl.innerHTML = `<div class="error-box" data-unified-error>${escapeHtml(unifiedErrorText(error))}</div>`;
+      if (reset) countsEl.innerHTML = '';
+      return;
+    }
+    if (mia !== richiesta) return;
+    if (conti) countsEl.innerHTML = countsHtml(conti, stato.filtri.type || 'all');
+    for (const chip of Array.from(countsEl.querySelectorAll('[data-trash-count]'))) {
+      chip.addEventListener('click', () => {
+        campo('type').value = chip.dataset.trashCount;
+        leggiFiltri();
+        carica();
+      });
+    }
+    const voci = (pagina && pagina.items) || [];
+    if (reset) listEl.innerHTML = '';
+    for (const item of voci) {
+      listEl.insertAdjacentHTML('beforeend', unifiedCardHtml(item, { scope: stato.scope }));
+      const card = listEl.querySelector(`[data-unified-item="${String(item.kind)}:${Number(item.id)}"]`);
+      if (card) collega(card);
+    }
+    if (!listEl.querySelector('[data-unified-item]')) {
+      const filtrato = Object.entries(stato.filtri).some(([k, v]) => v && !(k === 'type' && v === 'all'));
+      listEl.innerHTML = `<p class="muted" data-trash-empty>${filtrato ? 'Nessun elemento corrisponde ai filtri.' : 'Il Cestino è vuoto.'}</p>`;
+    }
+    if (pagina && pagina.has_more) {
+      pagerEl.innerHTML = '<button type="button" class="btn ghost" data-trash-more>Carica altri</button>';
+      pagerEl.querySelector('[data-trash-more]').addEventListener('click', () => {
+        stato.offset += PAGE_SIZE;
+        carica({ reset: false });
+      });
+    }
+  }
+
+  form.addEventListener('submit', (event) => { if (event && event.preventDefault) event.preventDefault(); leggiFiltri(); carica(); });
+  for (const nome of ['type', 'reason', 'date_from', 'date_to', 'mine']) {
+    const el = campo(nome);
+    if (el) el.addEventListener('change', () => { leggiFiltri(); carica(); });
+  }
+  if (agencyEl) agencyEl.addEventListener('change', () => { leggiFiltri(); carica(); });
+  if (scopeEl) {
+    for (const b of Array.from(scopeEl.querySelectorAll('[data-unified-scope-choice]'))) {
+      b.addEventListener('click', async () => {
+        stato.scope = b.dataset.unifiedScopeChoice;
+        for (const x of Array.from(scopeEl.querySelectorAll('[data-unified-scope-choice]'))) {
+          x.classList.toggle('active', x.dataset.unifiedScopeChoice === stato.scope);
+        }
+        if (stato.scope === 'platform') await caricaAgenzie();
+        leggiFiltri();
+        carica();
+      });
+    }
+  }
+  return async () => {
+    if (stato.scope === 'platform') await caricaAgenzie();
+    leggiFiltri();
+    await carica();
+  };
+}
+
+/** Le richieste di eliminazione degli edifici dell'agenzia (sola lettura). */
+function richiesteEdificiAgenzia(host) {
+  host.innerHTML = `
+    <div class="trash-page-head">
+      <p class="muted trash-intro">Le richieste di eliminazione degli edifici della tua agenzia. Una richiesta in attesa non è ancora un elemento eliminato: decide il Super Admin. Si chiede dalla scheda dell’edificio.</p>
+      <select data-building-requests-status aria-label="Stato delle richieste">
+        <option value="pending">In attesa</option><option value="all">Tutte</option>
+      </select>
+    </div>
+    <div class="trash-cards" data-building-requests-list><p class="muted">Caricamento…</p></div>
+    <div class="list-pager" data-building-requests-pager></div>`;
+  const listEl = host.querySelector('[data-building-requests-list]');
+  const pagerEl = host.querySelector('[data-building-requests-pager]');
+  const statoEl = host.querySelector('[data-building-requests-status]');
+  let offset = 0;
+  async function carica({ reset = true } = {}) {
+    if (reset) { offset = 0; listEl.innerHTML = '<p class="muted">Caricamento…</p>'; }
+    pagerEl.innerHTML = '';
+    let pagina;
+    try {
+      pagina = await listAgencyBuildingRequests(statoEl.value || 'pending', offset, PAGE_SIZE);
+    } catch (error) {
+      listEl.innerHTML = `<div class="error-box">${escapeHtml(unifiedErrorText(error))}</div>`;
+      return;
+    }
+    const voci = (pagina && pagina.items) || [];
+    if (reset) listEl.innerHTML = '';
+    for (const r of voci) listEl.insertAdjacentHTML('beforeend', buildingRequestRowHtml(r));
+    if (!listEl.querySelector('[data-building-request]')) {
+      listEl.innerHTML = '<p class="muted" data-trash-empty>Nessuna richiesta.</p>';
+    }
+    if (pagina && pagina.has_more) {
+      pagerEl.innerHTML = '<button type="button" class="btn ghost" data-trash-more>Carica altri</button>';
+      pagerEl.querySelector('[data-trash-more]').addEventListener('click', () => { offset += PAGE_SIZE; carica({ reset: false }); });
+    }
+  }
+  statoEl.addEventListener('change', () => carica());
+  return carica;
+}
+
+/**
+ * `platformAdmin`, `platformOnly` e `meId` arrivano da main.js (la sessione la
+ * legge solo lui): servono a MOSTRARE la vista globale e il filtro «Eliminati
+ * da me»; chi vede cosa lo decide sempre il backend.
+ */
+export async function renderCestino(container, { platformAdmin = false, platformOnly = false, meId = null } = {}) {
   const hash = window.location.hash || '';
-  // CESTINO-EDIFICI-1 / CESTINO-RICHIESTE-1: `#/cestino/contatti`,
-  // `#/cestino/edifici` e `#/cestino/richieste` aprono la loro scheda
-  const scheda = (hash.match(/^#\/cestino\/(contatti|edifici|richieste)\b/) || [])[1];
-  const iniziale = scheda || 'immobili';
+  const iniziale = initialTrashTab(hash, { platformOnly });
   const contatti = iniziale === 'contatti';
   const edifici = iniziale === 'edifici';
   const richieste = iniziale === 'richieste';
+  const nascosta = (nome) => (iniziale === nome ? '' : ' hidden');
+  const tabTenant = (nome, label) => (platformOnly ? '' : `<button type="button" class="tab-btn${iniziale === nome ? ' active' : ''}" data-trash-tab="${nome}">${label}</button>`);
   container.innerHTML = `
     <div class="card panel trash-page">
       <div class="tabs trash-tabs" data-trash-tabs>
-        <button type="button" class="tab-btn${iniziale === 'immobili' ? ' active' : ''}" data-trash-tab="immobili">Immobili</button>
-        <button type="button" class="tab-btn${contatti ? ' active' : ''}" data-trash-tab="contatti">Contatti</button>
-        <button type="button" class="tab-btn${edifici ? ' active' : ''}" data-trash-tab="edifici">Edifici</button>
-        <button type="button" class="tab-btn${richieste ? ' active' : ''}" data-trash-tab="richieste">Richieste</button>
+        <button type="button" class="tab-btn${iniziale === 'tutti' ? ' active' : ''}" data-trash-tab="tutti">Tutti</button>
+        ${tabTenant('immobili', 'Immobili')}
+        ${tabTenant('contatti', 'Contatti')}
+        ${tabTenant('edifici', 'Edifici')}
+        ${tabTenant('richieste', 'Richieste')}
+        <button type="button" class="tab-btn${iniziale === 'richieste-edifici' ? ' active' : ''}" data-trash-tab="richieste-edifici">Richieste edifici</button>
       </div>
-      <section class="trash-panel" data-trash-panel="immobili"${iniziale === 'immobili' ? '' : ' hidden'}>
+      <section class="trash-panel" data-trash-panel="tutti"${nascosta('tutti')}>
+        <div class="trash-page-head">
+          <p class="muted trash-intro">Tutto ciò che è stato eliminato nel CRM, in un posto solo: gli elementi nel Cestino non compaiono negli elenchi, nelle ricerche e nelle automazioni finché non vengono ripristinati. «Gestisci» apre la scheda della categoria con «Ripristina».</p>
+          ${platformAdmin ? `<div class="chips trash-scope" data-unified-scope role="group" aria-label="Vista del Cestino">
+              ${platformOnly ? '' : '<button type="button" class="chip active" data-unified-scope-choice="agency">Questa agenzia</button>'}
+              <button type="button" class="chip${platformOnly ? ' active' : ''}" data-unified-scope-choice="platform">Tutte le agenzie (Super Admin)</button>
+            </div>` : ''}
+        </div>
+        <form class="trash-filters" data-unified-filters role="search">
+          <input type="search" name="q" maxlength="120" placeholder="Cerca per nome, indirizzo, codice, email, telefono…" aria-label="Cerca nel Cestino">
+          <select name="type" aria-label="Categoria"><option value="all">Tutte le categorie</option>${TRASH_KINDS.map((k) => `<option value="${k.value}">${escapeHtml(k.label)}</option>`).join('')}</select>
+          <select name="reason" aria-label="Motivo">${reasonOptionsHtml()}</select>
+          <label class="trash-date">Dal <input type="date" name="date_from"></label>
+          <label class="trash-date">Al <input type="date" name="date_to"></label>
+          <label class="trash-mine"><input type="checkbox" name="mine"> Eliminati da me</label>
+          ${platformAdmin ? `<select data-unified-agency aria-label="Agenzia"${platformOnly ? '' : ' hidden'}><option value="">Tutte le agenzie</option></select>` : ''}
+          <button type="submit" class="btn primary">Cerca</button>
+        </form>
+        <div data-unified-counts></div>
+        <div class="trash-cards" data-unified-list>${iniziale === 'tutti' ? '<p class="muted">Caricamento…</p>' : ''}</div>
+        <div class="list-pager" data-unified-pager></div>
+        <p class="muted trash-upcoming" data-trash-upcoming>In arrivo nel Cestino generale: ${escapeHtml(UPCOMING_KINDS.join(', '))}.</p>
+      </section>
+      <section class="trash-panel" data-trash-panel="immobili"${nascosta('immobili')}>
         <div class="trash-page-head">
           <p class="muted trash-intro">Immobili spostati nel Cestino: non compaiono nelle liste operative finché non li ripristini.</p>
           <a href="#/immobili" class="btn ghost" data-trash-back>← Immobili</a>
@@ -312,15 +546,14 @@ export async function renderCestino(container) {
         <div class="trash-cards" data-buy-trash-list>${richieste ? '<p class="muted">Caricamento…</p>' : ''}</div>
         <div class="list-pager" data-buy-trash-pager></div>
       </section>
+      <section class="trash-panel" data-trash-panel="richieste-edifici"${nascosta('richieste-edifici')}>
+        <div data-building-requests-host></div>
+      </section>
     </div>
   `;
   const toastHost = container.parentElement || container;
-  const pannelli = {
-    immobili: container.querySelector('[data-trash-panel="immobili"]'),
-    contatti: container.querySelector('[data-trash-panel="contatti"]'),
-    edifici: container.querySelector('[data-trash-panel="edifici"]'),
-    richieste: container.querySelector('[data-trash-panel="richieste"]'),
-  };
+  const pannelli = {};
+  for (const nome of SCHEDE) pannelli[nome] = container.querySelector(`[data-trash-panel="${nome}"]`);
   const buyNoticeEl = container.querySelector('[data-buy-trash-notice]');
   const noticeEl = container.querySelector('[data-contact-trash-notice]');
   const caricaImmobili = listaCestino(container.querySelector('[data-trash-list]'),
@@ -350,7 +583,11 @@ export async function renderCestino(container) {
         buyNoticeEl.innerHTML = duplicatesNoticeHtml(buyRequestName(riga), buyDuplicatesView(riga), { kind: 'buy' });
       },
     });
-  const caricati = { immobili: false, contatti: false, edifici: false, richieste: false };
+  const hostRichiesteEdifici = container.querySelector('[data-building-requests-host]');
+  const caricaRichiesteEdifici = platformAdmin
+    ? () => renderEliminazioni(hostRichiesteEdifici)          // la gestione centralizzata, invariata
+    : richiesteEdificiAgenzia(hostRichiesteEdifici);
+  const caricati = Object.fromEntries(SCHEDE.map((n) => [n, false]));
 
   async function mostra(scheda) {
     for (const [nome, el] of Object.entries(pannelli)) el.hidden = nome !== scheda;
@@ -359,10 +596,20 @@ export async function renderCestino(container) {
     }
     if (caricati[scheda]) return;
     caricati[scheda] = true;
-    const carica = { immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici,
-                     richieste: caricaRichieste }[scheda];
+    const carica = { tutti: caricaTutti, immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici,
+                     richieste: caricaRichieste, 'richieste-edifici': caricaRichiesteEdifici }[scheda];
     await carica();
   }
+
+  // il server senza il Cestino unico (404): lo si dice e si apre la scheda Immobili come prima
+  const caricaTutti = cestinoUnico(pannelli.tutti, {
+    platformOnly, meId,
+    onMissing: () => {
+      pannelli.tutti.querySelector('[data-unified-list]').innerHTML =
+        '<p class="muted" data-unified-missing>La vista unificata non è ancora attiva su questo server: usa le schede di categoria.</p>';
+      mostra('immobili');
+    },
+  });
 
   for (const b of Array.from(container.querySelectorAll('[data-trash-tab]'))) {
     b.addEventListener('click', () => { mostra(b.dataset.trashTab); });

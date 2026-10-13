@@ -202,9 +202,12 @@ def test_s05_main_js_una_voce_discreta_e_una_rotta():
     sezioni = main[inizio:main.index("];", inizio)]
     assert re.findall(r"name:\s*'([a-z]+)'", sezioni)[-1] == "cestino"       # in fondo
     assert main.count("registerRoute('cestino'") == 1
-    assert "registerRoute('cestino', (container) => renderCestino(container));" in main
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la rotta passa alla pagina cio' che serve a MOSTRARE la vista
+    # globale (piattaforma) e il filtro «Eliminati da me»; la voce resta in fondo ma non piu' discreta
+    assert "registerRoute('cestino', (container) => {" in main and "return renderCestino(container, {" in main
     css = (ASSETS / "app.css").read_text(encoding="utf-8")
     assert '.nav-item[data-route="cestino"] { margin-top: auto; font-size: 13px; color: var(--muted);' in css
+    assert '#nav .nav-item[data-route="cestino"] { font-size: inherit; color: inherit; }' in css
 
 
 # ---------------------------------------------------------------------------
@@ -472,8 +475,10 @@ def test_e_pagina_cestino_admin_agenzia_agent_propri(staged):  # noqa: F811
                nav: __dom.byId['nav'].children.map((b) => b.dataset.route || ''),
                titolo: __dom.byId['page-title'].textContent });
     """
-    admin = _run(staged, scenario, _rotte("agency_admin", lista=(CESTINO_AGENZIA,)), "#/cestino")
-    agente = _run(staged, scenario, _rotte("agent", lista=(CESTINO_AGENTE,)), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    admin = _run(staged, scenario, _rotte("agency_admin", lista=(CESTINO_AGENZIA,)), "#/cestino/immobili")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    agente = _run(staged, scenario, _rotte("agent", lista=(CESTINO_AGENTE,)), "#/cestino/immobili")
     assert admin["cards"] == ["31", "32"] and agente["cards"] == ["31"]
     assert admin["bottoni"] == ["Ripristina", "Ripristina"]
     uno, due = admin["testi"]
@@ -495,7 +500,8 @@ def test_e2_cestino_vuoto(staged):  # noqa: F811
       await wait(); await wait();
       report({});
     """
-    out = _run(staged, scenario, _rotte(lista=({"items": [], "has_more": False, "limit": 50, "offset": 0},)), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(lista=({"items": [], "has_more": False, "limit": 50, "offset": 0},)), "#/cestino/immobili")
     assert "Il Cestino è vuoto." in out["content"]
     assert "Elimina definitivamente" not in out["content"] and "Svuota" not in out["content"]
 
@@ -507,7 +513,8 @@ def test_f_ripristina_card_sparisce_e_toast(staged):  # noqa: F811
       card(31).querySelector('[data-trash-restore]').dispatch('click'); await wait(); await wait();
       report({ cards: C().querySelectorAll('[data-trash-item]').map((c) => c.dataset.trashItem), t: toast() });
     """
-    out = _run(staged, scenario, _rotte(), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(), "#/cestino/immobili")
     assert out["cards"] == ["32"]
     assert out["t"] == "Immobile ripristinato"
     assert _scritture(out) == [("POST", "/api/property/properties/31/restore")]
@@ -530,7 +537,8 @@ def test_g_restore_conflict_leggibile_nessuna_modifica_locale(staged):  # noqa: 
                bottone: [c.querySelector('[data-trash-restore]').textContent, c.querySelector('[data-trash-restore]').disabled],
                prima, dopo: c.querySelector('.trash-facts').visibleText(), t: toast() });
     """
-    out = _run(staged, scenario, _rotte(restore=(CONFLITTO,)), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte(restore=(CONFLITTO,)), "#/cestino/immobili")
     assert out["cards"] == ["31", "32"]                                   # la card resta
     assert "Non si può ripristinare" in out["errore"] and "IMM-12" in out["errore"]
     assert "stessa identità catastale" in out["errore"]
@@ -551,7 +559,8 @@ def test_g2_ripristino_di_un_altro_agente_rifiutato_dal_backend(staged):  # noqa
       report({ cards: C().querySelectorAll('[data-trash-item]').map((x) => x.dataset.trashItem),
                errore: card(31).querySelector('[data-trash-card-error]').visibleText() });
     """
-    out = _run(staged, scenario, _rotte("agent", restore=(rifiuto,)), "#/cestino")
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+    out = _run(staged, scenario, _rotte("agent", restore=(rifiuto,)), "#/cestino/immobili")
     assert out["cards"] == ["31", "32"]
     assert out["errore"].startswith("Puoi ripristinare solo gli immobili che hai spostato tu")
 
@@ -635,7 +644,8 @@ def test_h02_chromium_cestino_e_foglio_senza_sforamento(larghezza):
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": larghezza, "height": 780})
             _servi(page, api)
-            page.goto("http://stima360.test/os/#/cestino")
+            # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «#/cestino» apre ora «Tutti» (Cestino unico); la scheda Immobili di prima e' «#/cestino/immobili», identica
+            page.goto("http://stima360.test/os/#/cestino/immobili")
             page.wait_for_selector("[data-trash-item='31']")
             pagina = _sfora(page)
             page.goto("http://stima360.test/os/#/immobili/30")

@@ -1216,3 +1216,22 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 640px) {
   .deletion-panel .action-bar, .deletion-purge .action-bar, .deletion-detail .action-bar { flex-direction: column; align-items: stretch; }
 }
+
+/* CESTINO-GENERALE-1: il Cestino UNICO. La voce del menu non e' piu' discreta
+   (stessa forma delle altre; `#nav` vince sulle regole di 2B3 e di aurora),
+   la scheda «Tutti» ha filtri, contatori e collegamenti. Solo regole nuove. */
+#nav .nav-item[data-route="cestino"] { font-size: inherit; color: inherit; }
+.trash-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.trash-filters input[type="search"] { flex: 1 1 240px; min-height: 40px; }
+.trash-filters select, .trash-filters .btn { min-height: 40px; }
+.trash-date, .trash-mine { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.trash-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.trash-chip-n { font-weight: 700; margin-left: 4px; }
+.trash-scope { display: flex; flex-wrap: wrap; gap: 6px; }
+.trash-kind { font-size: 12px; }
+.trash-relations-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.trash-upcoming { font-size: 13px; margin-top: 12px; }
+@media (max-width: 767px) {
+  .trash-filters > * { flex: 1 1 100%; }
+  .trash-date, .trash-mine { justify-content: space-between; }
+}

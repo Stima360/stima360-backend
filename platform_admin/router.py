@@ -995,3 +995,54 @@ def purge_trashed_building(
     from property import building_deletion
     return _eliminazione(building_deletion.purge, context, building_id, payload.confirm_text, payload.fingerprint)
 
+
+
+# ---------------------------------------------------------------------------
+# CESTINO-GENERALE-1 (CG-1) - IL CESTINO GLOBALE DEL SUPER ADMIN, SOLA LETTURA
+#
+# Tutte le agenzie, solo per il Super Admin generale designato: ammissione
+# Platform (`require_platform_admin`), identita' designata e ruolo riletto nel
+# database (`platform_admin/super_admin.py`, nel servizio `trash/service.py`).
+# Nessuna scrittura: le operazioni (ripristino, cancellazione definitiva degli
+# edifici) restano le rotte qui sopra.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/trash")
+def list_platform_trash(
+    type: str | None = Query(None, max_length=80),
+    q: str | None = Query(None, max_length=200),
+    reason: str | None = Query(None, max_length=30),
+    deleted_by: int | None = Query(None, ge=1),
+    date_from: str | None = Query(None, max_length=10),
+    date_to: str | None = Query(None, max_length=10),
+    agency: int | None = Query(None, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from trash import service as cestino
+    return _eliminazione(cestino.list_items, context, scope="platform", kind=type, q=q, reason=reason,
+                         deleted_by=deleted_by, date_from=date_from, date_to=date_to, agency_id=agency,
+                         limit=limit, offset=offset)
+
+
+@router.get("/trash/counts")
+def platform_trash_counts(
+    q: str | None = Query(None, max_length=200),
+    reason: str | None = Query(None, max_length=30),
+    deleted_by: int | None = Query(None, ge=1),
+    date_from: str | None = Query(None, max_length=10),
+    date_to: str | None = Query(None, max_length=10),
+    agency: int | None = Query(None, ge=1),
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from trash import service as cestino
+    return _eliminazione(cestino.counts, context, scope="platform", q=q, reason=reason, deleted_by=deleted_by,
+                         date_from=date_from, date_to=date_to, agency_id=agency)
+
+
+@router.get("/trash/{kind}/{entity_id}/relations")
+def platform_trash_relations(kind: str, entity_id: int, context: OperatorContext = Depends(require_platform_admin)):
+    from trash import service as cestino
+    return _eliminazione(cestino.relations, context, kind, entity_id, scope="platform")
