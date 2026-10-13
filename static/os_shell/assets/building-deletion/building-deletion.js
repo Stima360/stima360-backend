@@ -16,6 +16,10 @@
 //     POST /api/platform/building-deletions/{id}/restore      «Ripristina»
 //     GET  /api/platform/building-deletions/{id}/purge-check  riepilogo e dipendenze
 //     POST /api/platform/building-deletions/{id}/purge        «Elimina definitivamente»
+//   CESTINO-GENERALE-3, Super Admin generale designato (trash/purge.py, motore condiviso):
+//     GET  …/platform/trash/{kind}/{id}/purge-check   immobile, contatto, richiesta acquirente
+//     POST …/platform/trash/{kind}/{id}/purge         «Elimina definitivamente» (testo + impronta)
+//     (il percorso lo costruisce `unifiedTrashPath`, come per il resto del Cestino unico)
 //
 // Cartella propria, fuori da trash/: il client del Cestino (trash/*.js e
 // views/cestino.js) resta senza comandi del Super Admin, come prima.
@@ -28,6 +32,7 @@
 import { apiGet, apiPost } from '../core/api-client.js';
 import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.js';
 import { TRASH_REASONS, reasonLabel } from '../trash/trash-model.js';
+import { unifiedTrashPath } from '../trash/trash-unified.js';
 
 const PLATFORM = '/api/platform';
 
@@ -370,4 +375,171 @@ export async function mountDeletionPanel(host, buildingId, { onChange = null, in
     });
   }
   if (await carica()) disegna();
+}
+
+
+// --- CESTINO-GENERALE-3: cancellazione definitiva di un elemento del Cestino ----------
+//
+// Stesso flusso degli edifici (riepilogo -> testo esatto -> impronta), dalle card
+// del Cestino unico nella vista globale, che legge SOLO il Super Admin generale
+// designato (agli altri il backend risponde 403 e non arriva nessuna card). Il
+// backend ricontrolla tutto a ogni passo: qui nessuna regola di permesso.
+
+/** Le categorie del motore condiviso (gli edifici restano sul loro flusso). */
+export const ITEM_PURGE_KINDS = Object.freeze(['property', 'contact', 'buy_request']);
+
+const ITEM_PURGE_NAMES = Object.freeze({ property: 'l’immobile', contact: 'il contatto', buy_request: 'la richiesta acquirente' });
+const ITEM_PURGE_OF = Object.freeze({ property: 'dell’immobile', contact: 'del contatto', buy_request: 'della richiesta acquirente' });
+
+function itemPurgePath(kind, id, coda) {
+  if (!ITEM_PURGE_KINDS.includes(kind)) throw new Error('Categoria non gestita');
+  return unifiedTrashPath(`/${encodeURIComponent(kind)}/${Number(id)}/${coda}`, {}, { scope: 'platform' });
+}
+
+export function itemPurgeCheck(kind, id) {
+  return apiGet(itemPurgePath(kind, id, 'purge-check'));
+}
+
+export function purgeItem(kind, id, confirmText, fingerprint) {
+  return apiPost(itemPurgePath(kind, id, 'purge'), { confirm_text: String(confirmText || ''), fingerprint });
+}
+
+/** I blocchi di un elemento: motivo, quanti, «come risolvere» e collegamento (dal backend). */
+export function itemBlockersHtml(blockers) {
+  const lista = Array.isArray(blockers) ? blockers : [];
+  if (!lista.length) return '';
+  return `<ul class="deletion-blockers" data-item-blockers>${lista.map((b) => {
+    const conta = Number(b.count) > 0 ? ` <span class="muted">(${Number(b.count)})</span>` : '';
+    const link = b.href && String(b.href).startsWith('#/') ? ` <a href="${escapeHtml(b.href)}" data-item-blocker-link>Apri</a>` : '';
+    const aiuto = b.help ? `<span class="deletion-help" data-item-blocker-help>Come risolvere: ${escapeHtml(b.help)}</span>` : '';
+    return `<li data-blocker-code="${escapeHtml(b.code || '')}">${escapeHtml(b.label || b.code || '')}${conta}${link}${aiuto}</li>`;
+  }).join('')}</ul>`;
+}
+
+/** Il riepilogo della cancellazione definitiva di un elemento e la conferma forte. */
+export function itemPurgeSummaryHtml(check) {
+  if (!check) return '';
+  const nome = ITEM_PURGE_NAMES[check.kind] || 'l’elemento';
+  const etichetta = check.label ? ` «${escapeHtml(check.label)}»` : '';
+  if (!check.eligible) {
+    return `<div class="deletion-purge" data-item-purge-blocked>
+        <p><strong>Non si può eliminare definitivamente${etichetta}.</strong> Nulla viene cancellato. Motivi:</p>
+        ${itemBlockersHtml(check.blockers)}
+        ${preservedHtml(check.preserved)}
+        <div class="action-bar"><button type="button" class="btn ghost" data-item-purge-close>Chiudi</button></div>
+      </div>`;
+  }
+  const propri = Array.isArray(check.will_delete) ? check.will_delete : [];
+  const resta = check.kind === 'contact'
+    ? 'Restano gli altri dati del CRM e il registro del Cestino, senza dati personali.'
+    : 'Restano gli altri dati del CRM (contatti, immobili, richieste) e il registro del Cestino.';
+  return `<div class="deletion-purge" data-item-purge-ready>
+      <p><strong>Eliminazione definitiva ${escapeHtml(ITEM_PURGE_OF[check.kind] || 'dell’elemento')}${etichetta}</strong>: non si può annullare.</p>
+      <p>Si cancella ${escapeHtml(nome)}${propri.length ? ', con i suoi dati:' : ', senza altri dati collegati.'}</p>
+      ${propri.length ? `<ul data-item-will-delete>${propri.map((p) => `<li data-will-delete="${escapeHtml(p.table || '')}">${escapeHtml(p.label || p.table || '')} <span class="muted">(${Number(p.count)})</span></li>`).join('')}</ul>` : ''}
+      <p class="muted">${escapeHtml(resta)}</p>
+      ${preservedHtml(check.preserved)}
+      <label class="field">Per confermare scrivi <strong>${escapeHtml(PURGE_CONFIRM_TEXT)}</strong>
+        <input type="text" data-item-purge-text autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
+      <div class="action-bar">
+        <button type="button" class="btn danger" data-item-purge-confirm disabled>Elimina definitivamente</button>
+        <button type="button" class="btn ghost" data-item-purge-close>Annulla</button>
+      </div>
+    </div>`;
+}
+
+/** Il testo di un errore della cancellazione definitiva di un elemento. */
+export function itemPurgeErrorText(error) {
+  if (!error) return 'Operazione non riuscita. Nessun dato è stato cancellato.';
+  if (error.status === 404) return 'Elemento non trovato: forse è già stato eliminato definitivamente.';
+  if (error.status === 403) return error.message || 'Operazione riservata al Super Admin generale designato.';
+  return error.message || 'Operazione non riuscita. Nessun dato è stato cancellato.';
+}
+
+/** Il comando nella card del Cestino unico: separato dagli altri, in una zona propria. */
+export function itemPurgeZoneHtml(kind, id) {
+  if (kind === 'building') {
+    return `<div class="trash-final" data-item-purge-zone="building:${Number(id)}">
+        <a class="btn ghost" href="#/cestino/richieste-edifici" data-item-purge-building>Eliminazione definitiva: Richieste edifici</a>
+      </div>`;
+  }
+  if (!ITEM_PURGE_KINDS.includes(kind)) return '';
+  return `<div class="trash-final" data-item-purge-zone="${escapeHtml(kind)}:${Number(id)}">
+      <p class="muted trash-final-note">Solo Super Admin · irreversibile, diverso da «Ripristina»</p>
+      <button type="button" class="btn danger" data-item-purge>Elimina definitivamente…</button>
+      <div data-item-purge-host></div>
+      <div class="field-error" data-item-purge-error role="alert"></div>
+    </div>`;
+}
+
+/**
+ * Aggiunge alla card la zona della cancellazione definitiva e ne gestisce il
+ * flusso: controllo -> riepilogo -> testo esatto -> POST con l'impronta.
+ * Riepilogo superato (PURGE_STALE): si ricarica e si chiede di nuovo. Dopo
+ * l'esito `onDone({ kind, id, label })`.
+ */
+export function bindFinalDeletion(card, item, { onDone = null } = {}) {
+  if (!card || !item) return;
+  const kind = String(item.kind || '');
+  const id = Number(item.id);
+  const zona = itemPurgeZoneHtml(kind, id);
+  if (!zona) return;
+  card.insertAdjacentHTML('beforeend', zona);                 // in fondo, dopo le azioni della card
+  if (!ITEM_PURGE_KINDS.includes(kind)) return;
+  const bottone = card.querySelector('[data-item-purge]');
+  const host = card.querySelector('[data-item-purge-host]');
+  const erroreEl = card.querySelector('[data-item-purge-error]');
+
+  function chiudi() { host.innerHTML = ''; bottone.hidden = false; }
+
+  function disegna(check, avviso = '') {
+    host.innerHTML = itemPurgeSummaryHtml(check);
+    bottone.hidden = true;
+    erroreEl.textContent = avviso;
+    host.querySelector('[data-item-purge-close]')?.addEventListener('click', () => { erroreEl.textContent = ''; chiudi(); });
+    const testo = host.querySelector('[data-item-purge-text]');
+    const conferma = host.querySelector('[data-item-purge-confirm]');
+    if (!testo || !conferma) return;
+    testo.addEventListener('input', () => { conferma.disabled = testo.value.trim() !== PURGE_CONFIRM_TEXT; });
+    conferma.addEventListener('click', async () => {
+      if (testo.value.trim() !== PURGE_CONFIRM_TEXT) return;
+      conferma.disabled = true;
+      erroreEl.textContent = '';
+      try {
+        await purgeItem(kind, id, testo.value, check.fingerprint);
+      } catch (error) {
+        if (error && error.code === 'PURGE_STALE') { await apri(itemPurgeErrorText(error)); return; }
+        if (error && error.data && Array.isArray(error.data.blockers) && error.data.blockers.length) {
+          disegna({ ...check, eligible: false, blockers: error.data.blockers }, itemPurgeErrorText(error));
+          return;
+        }
+        erroreEl.textContent = itemPurgeErrorText(error);
+        conferma.disabled = testo.value.trim() !== PURGE_CONFIRM_TEXT;
+        return;
+      }
+      host.innerHTML = '';
+      card.setAttribute('data-item-purged', '');
+      if (onDone) onDone({ kind, id, label: check.label || item.label || '' });
+    });
+  }
+
+  async function apri(avviso = '') {
+    bottone.disabled = true;
+    erroreEl.textContent = '';
+    try {
+      disegna(await itemPurgeCheck(kind, id), avviso);
+    } catch (error) {
+      erroreEl.textContent = itemPurgeErrorText(error);
+    } finally {
+      bottone.disabled = false;
+    }
+  }
+
+  bottone.addEventListener('click', () => { apri(); });
+}
+
+/** Il messaggio dopo l'esito. */
+export function finalDeletionDoneText(esito) {
+  const label = esito && esito.label ? ` «${esito.label}»` : '';
+  return `Eliminazione definitiva completata${label}. Il registro del Cestino conserva l’operazione.`;
 }

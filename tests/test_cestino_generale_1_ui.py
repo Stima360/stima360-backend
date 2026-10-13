@@ -169,16 +169,21 @@ def test_s04_app_reale_solo_letture_e_mai_anonimo():
     import main
     rotte = sorted((m.upper(), p) for p, ops in main.app.openapi()["paths"].items()
                    if p == "/api/trash" or p.startswith(("/api/trash/", "/api/platform/trash")) for m in ops)
+    # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-3: in piu' SOLO il riepilogo (GET) e la conferma (POST)
+    # della cancellazione definitiva della vista globale; la superficie tenant resta in sola lettura
     assert rotte == [("GET", "/api/platform/trash"), ("GET", "/api/platform/trash/counts"),
+                     ("GET", "/api/platform/trash/{kind}/{entity_id}/purge-check"),
                      ("GET", "/api/platform/trash/{kind}/{entity_id}/relations"),
                      ("GET", "/api/trash"), ("GET", "/api/trash/building-requests"),
-                     ("GET", "/api/trash/counts"), ("GET", "/api/trash/{kind}/{entity_id}/relations")], rotte
+                     ("GET", "/api/trash/counts"), ("GET", "/api/trash/{kind}/{entity_id}/relations"),
+                     ("POST", "/api/platform/trash/{kind}/{entity_id}/purge")], rotte
     client = TestClient(main.app)
     basic = {"Authorization": "Basic " + base64.b64encode(b"x:y").decode()}
-    for _m, percorso in rotte:
+    for metodo, percorso in rotte:
         url = percorso.replace("{kind}", "property").replace("{entity_id}", "1")
-        assert client.get(url).status_code == 401, url
-        assert client.get(url, headers=basic).status_code == 401, url
+        chiama = client.post if metodo == "POST" else client.get
+        assert chiama(url).status_code == 401, url
+        assert chiama(url, headers=basic).status_code == 401, url
 
 
 @node

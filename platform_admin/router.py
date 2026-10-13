@@ -1046,3 +1046,29 @@ def platform_trash_counts(
 def platform_trash_relations(kind: str, entity_id: int, context: OperatorContext = Depends(require_platform_admin)):
     from trash import service as cestino
     return _eliminazione(cestino.relations, context, kind, entity_id, scope="platform")
+
+
+# ---------------------------------------------------------------------------
+# CESTINO-GENERALE-3 (CG-3) - CANCELLAZIONE DEFINITIVA CONTROLLATA di immobili,
+# contatti e richieste acquirente gia' nel Cestino. Solo il Super Admin generale
+# designato (verificato nel motore, `trash/purge.py`). Riepilogo in sola lettura,
+# poi conferma con il testo esatto e l'impronta del riepilogo. Nessuna DELETE HTTP:
+# una POST dichiarata. Gli edifici restano sulle rotte `building-deletions` qui sopra.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/trash/{kind}/{entity_id}/purge-check")
+def platform_trash_purge_check(kind: str, entity_id: int, context: OperatorContext = Depends(require_platform_admin)):
+    from trash import purge as definitiva
+    return _eliminazione(definitiva.purge_check, context, kind, entity_id)
+
+
+@router.post("/trash/{kind}/{entity_id}/purge")
+def platform_trash_purge(
+    kind: str,
+    entity_id: int,
+    payload: BuildingPurge,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from trash import purge as definitiva
+    return _eliminazione(definitiva.purge, context, kind, entity_id, payload.confirm_text, payload.fingerprint)

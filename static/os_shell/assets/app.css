@@ -1282,3 +1282,18 @@ a.census-unit-main { text-decoration: none; }
   .territorio-list a { display: inline-block; min-height: 32px; padding: 4px 0; }
   .territorio-popup .btn { min-height: 44px; width: 100%; }
 }
+
+/* CESTINO-GENERALE-3: la cancellazione definitiva nella card del Cestino unico (vista globale,
+   Super Admin generale designato). Zona propria sotto le azioni, separata da «Ripristina»;
+   comandi alti almeno 44px, a tutta larghezza su smartphone. */
+.trash-final { border-top: 1px dashed var(--border); margin-top: 4px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.trash-final-note { margin: 0; font-size: 12px; }
+.trash-final > .btn, .trash-final .action-bar .btn { min-height: 44px; align-self: flex-start; }
+.trash-final .deletion-purge { overflow-wrap: anywhere; }
+.trash-final .field-error { margin-top: 0; min-height: 0; }
+.trash-final .deletion-help { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.trash-final .deletion-purge input[type="text"] { width: 100%; max-width: 320px; min-height: 44px; }
+@media (max-width: 640px) {
+  .trash-final > .btn, .trash-final .action-bar .btn { width: 100%; align-self: stretch; }
+  .trash-final .deletion-purge input[type="text"] { max-width: none; }
+}

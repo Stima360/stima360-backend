@@ -842,6 +842,11 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         ("GET", f"{ROUTER_PREFIX}/trash"),
         ("GET", f"{ROUTER_PREFIX}/trash/counts"),
         ("GET", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/relations"),
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-3 - la cancellazione definitiva di immobili,
+        # contatti e richieste acquirente dal Cestino, SOLO il Super Admin generale designato.
+        # Nessuna DELETE: riepilogo in lettura e POST dichiarata con testo esatto e impronta.
+        ("GET", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/purge-check"),
+        ("POST", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/purge"),
     }, sorted(trovate)
 
 

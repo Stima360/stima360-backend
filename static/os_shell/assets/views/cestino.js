@@ -55,7 +55,9 @@ import {
   BUY_RESTORED_TOAST, BUY_STATUS_LABELS, buyDuplicatesView, buyRequestLine, buyRequestName, buyRestoreErrorView,
 } from '../trash/trash-model.js';
 import { buyBlockersHtml } from '../trash/trash-dialog.js';
-import { listBuildingTrashGroups, trashGroupCardHtml } from '../building-deletion/building-deletion.js';
+import {
+  bindFinalDeletion, finalDeletionDoneText, listBuildingTrashGroups, trashGroupCardHtml,
+} from '../building-deletion/building-deletion.js';
 // CESTINO-GENERALE-1 (CG-1): il Cestino unico (scheda «Tutti», sola lettura) e
 // le richieste di eliminazione degli edifici dentro il Cestino.
 import {
@@ -385,6 +387,13 @@ function cestinoUnico(panel, { platformOnly, meId, onMissing }) {
       listEl.insertAdjacentHTML('beforeend', unifiedCardHtml(item, { scope: stato.scope }));
       const card = listEl.querySelector(`[data-unified-item="${String(item.kind)}:${Number(item.id)}"]`);
       if (card) collega(card);
+      // CESTINO-GENERALE-3: la vista globale la legge solo il Super Admin generale designato
+      // (agli altri 403, nessuna card); il comando e il suo flusso stanno fuori da questo file
+      if (card && stato.scope === 'platform') {
+        bindFinalDeletion(card, item, {
+          onDone: (esito) => { showToast(panel, { text: finalDeletionDoneText(esito) }); carica(); },
+        });
+      }
     }
     if (!listEl.querySelector('[data-unified-item]')) {
       const filtrato = Object.entries(stato.filtri).some(([k, v]) => v && !(k === 'type' && v === 'all'));
