@@ -42,6 +42,11 @@
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
+// CESTINO-GENERALE-2: «Elimina…» su ogni riga, con lo STESSO foglio della
+// scheda contatto (trash-dialog.js). Come nella scheda, il comando c'e' per ogni
+// contatto che l'elenco mostra (gia' nello scope di chi guarda): blocchi e
+// storico li decide il backend.
+import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
 
 const PAGE_SIZE = 50;
 
@@ -64,8 +69,9 @@ export async function renderContatti(container) {
         <button type="button" id="contatti-new-btn" class="btn primary">+ Nuovo contatto</button>
       </div>
       <div id="contatti-feedback"></div>
-      <div id="contatti-list-area"><p class="muted">Caricamento…</p></div>
+      <div id="contatti-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
       <div id="contatti-pager" class="list-pager"></div>
+      ${rowDeleteDialogHtml()}
     </div>
     <dialog id="contact-create-dialog" class="modal"></dialog>
   `;
@@ -102,11 +108,20 @@ export async function renderContatti(container) {
         { label: 'Telefono', render: (c) => escapeHtml(c.phone || '—') },
         { label: 'Stato', render: (c) => escapeHtml(c.status || '—') },
         { label: 'Creato il', render: (c) => escapeHtml(formatDate(c.created_at)) },
+        rowDeleteColumn('contact'),
       ],
       items,
       { emptyMessage: term ? 'Nessun contatto trovato per questa ricerca.' : 'Nessun contatto presente.', onRowClick: true },
     );
     bindTableRowClicks(listArea, (id) => navigate('contatti', [id]));
+    bindRowDeletes(listArea, {
+      rows: items,
+      dialog: container.querySelector('[data-row-delete-dialog]'),
+      onDone: async () => {
+        if (items.length === 1 && offset > 0) offset = Math.max(0, offset - PAGE_SIZE);
+        await load();
+      },
+    });
 
     pagerArea.innerHTML = `
       <button class="btn" id="contatti-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>

@@ -1235,3 +1235,15 @@ a.census-unit-main { text-decoration: none; }
   .trash-filters > * { flex: 1 1 100%; }
   .trash-date, .trash-mine { justify-content: space-between; }
 }
+
+/* CESTINO-GENERALE-2: «Elimina…» negli elenchi (Immobili, Contatti, Acquirenti, Edifici).
+   La colonna del comando resta visibile anche quando la tabella scorre su smartphone;
+   il comando e' alto almeno 44px (tocco). */
+.trash-row-host .st-table:has(.trash-row-cell) th:last-child,
+.trash-row-host .st-table:has(.trash-row-cell) td:last-child { position: sticky; right: 0; background: var(--panel); }
+.trash-row-host .trash-row-cell { display: inline-flex; }
+.trash-row-host .trash-row-delete,
+.trash-building-actions .trash-row-delete { min-height: 44px; white-space: nowrap; }
+.trash-building-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.trash-building-actions { display: flex; justify-content: flex-end; }
+.trash-building-request .deletion-panel { box-shadow: none; padding: 0; border: 0; }

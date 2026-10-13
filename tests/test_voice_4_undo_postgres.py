@@ -444,6 +444,16 @@ VENDITORI_SOSPESI_1 = ("static/os_shell/assets/sellers/seller-model.js",
                        "static/os_shell/assets/trash/trash-model.js",
                        "static/os_shell/assets/trash/trash-dialog.js")
 
+# CESTINO-GENERALE-2 (autorizzazione specifica del 2026-10-13): «Elimina…» dagli elenchi di Immobili,
+# Contatti, Richieste acquirente ed Edifici con i fogli e il pannello gia' esistenti. SOLO questi file
+# d'interfaccia fuori dagli elenchi qui sopra (app.css e building-deletion.js vi sono gia'); nessun
+# backend, nessun file PROTETTO.
+CESTINO_GENERALE_2 = ("static/os_shell/assets/trash/trash-row-actions.js",
+                      "static/os_shell/assets/views/immobili.js",
+                      "static/os_shell/assets/views/contatti.js",
+                      "static/os_shell/assets/views/acquirenti.js",
+                      "static/os_shell/assets/views/edifici.js")
+
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
 # regola di `_applica` che non aggiorna da sola una superficie verificata. L'eccezione e' vincolata
@@ -529,6 +539,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in CESTINO_GENERALE_1]
         # SENTINELLA AGGIORNATA DA VENDITORI-SOSPESI-1: i soli file dichiarati qui sopra
         diff = [f for f in diff if f not in VENDITORI_SOSPESI_1]
+        # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-2: i soli file dichiarati qui sopra
+        diff = [f for f in diff if f not in CESTINO_GENERALE_2]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

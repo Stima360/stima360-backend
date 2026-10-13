@@ -319,10 +319,12 @@ export function purgeSummaryHtml(check) {
  * Il pannello dell'operatore nella scheda edificio: carica lo stato, gestisce
  * richiesta (con conferma) e ritiro. `onChange` dopo ogni esito.
  */
-export async function mountDeletionPanel(host, buildingId, { onChange = null } = {}) {
+export async function mountDeletionPanel(host, buildingId, { onChange = null, initialStage = 'idle' } = {}) {
   if (!host) return;
   let stato;
-  let stage = 'idle';
+  // CESTINO-GENERALE-2: da un elenco il pannello si apre gia' sul motivo
+  // (`confirm`), solo se il backend dice che la richiesta si puo' fare
+  let stage = initialStage === 'confirm' ? 'confirm' : 'idle';
   let errore = '';
   async function carica() {
     try {

@@ -32,6 +32,9 @@
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+// CESTINO-GENERALE-2: «Elimina…» su ogni riga, con lo STESSO foglio della
+// scheda richiesta (trash-dialog.js): blocchi, storico ed effetti dal backend.
+import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
 
 const PAGE_SIZE = 50;
 
@@ -55,8 +58,9 @@ export async function renderAcquirenti(container) {
         </select>
         <button type="button" id="acquirenti-new" class="btn primary">+ Nuova richiesta</button>
       </div>
-      <div id="acquirenti-list-area"><p class="muted">Caricamento…</p></div>
+      <div id="acquirenti-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
       <div id="acquirenti-pager" class="list-pager"></div>
+      ${rowDeleteDialogHtml()}
     </div>
     <dialog id="new-request-dialog" class="modal"></dialog>
   `;
@@ -96,11 +100,20 @@ export async function renderAcquirenti(container) {
         { label: 'Criteri', render: (r) => `<span class="muted">${escapeHtml(r.locations_count ?? 0)} zone · ${escapeHtml(r.typologies_count ?? 0)} tipologie · ${escapeHtml(r.features_count ?? 0)} caratteristiche</span>` },
         { label: 'Prossima azione', render: (r) => renderNextAction(r) },
         { label: 'Aggiornata il', render: (r) => escapeHtml(formatDate(r.updated_at)) },
+        rowDeleteColumn('buy_request'),
       ],
       items,
       { emptyMessage: (term || status) ? 'Nessuna richiesta trovata per questi filtri.' : 'Nessuna richiesta BUY presente.', onRowClick: true },
     );
     bindTableRowClicks(listArea, (id) => navigate('acquirenti', [id]));
+    bindRowDeletes(listArea, {
+      rows: items,
+      dialog: container.querySelector('[data-row-delete-dialog]'),
+      onDone: async () => {
+        if (items.length === 1 && offset > 0) offset = Math.max(0, offset - PAGE_SIZE);
+        await load();
+      },
+    });
 
     pagerArea.innerHTML = `
       <button class="btn" id="acquirenti-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>

@@ -64,7 +64,14 @@
 // (`record_kind=census`). Una scheda passa da una lista all'altra solo con
 // «Prendi in carico» (stessa riga, stesso codice).
 // DELETE-ARCH Fase 2B3: link discreto «Cestino» nella barra dell'elenco Commerciale.
+// CESTINO-GENERALE-2: «Elimina…» su ogni riga dell'elenco Commerciale, con la
+// regola della scheda (canManagePropertyLifecycle) e lo STESSO foglio
+// (trash-dialog.js): blocchi, motivo, conferma. Dopo lo spostamento l'elenco si
+// ricarica con gli stessi filtri e la stessa pagina.
 import { apiGet } from '../core/api-client.js';
+import { getSession } from '../core/auth.js';
+import { canManagePropertyLifecycle } from './immobile-dettaglio.js';
+import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
 import { propertyDisplayName, propertyTypeLabel, loadFormOptions } from '../components/property-form.js';
@@ -94,8 +101,9 @@ export async function renderImmobili(container, params = []) {
         <button type="button" id="immobili-new" class="btn primary">+ Nuovo immobile</button>
         <a href="#/cestino" class="btn ghost trash-link" id="immobili-trash-link">Cestino</a>
       </div>
-      <div id="immobili-list-area"><p class="muted">Caricamento…</p></div>
+      <div id="immobili-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
       <div id="immobili-pager" class="list-pager"></div>
+      ${rowDeleteDialogHtml()}
     </div>
     <div class="card panel" id="immobili-census-panel" ${modoIniziale === 'crm' ? 'hidden' : ''}>
       <div class="list-toolbar">
@@ -120,6 +128,8 @@ export async function renderImmobili(container, params = []) {
 
   let offset = 0;
   let debounceHandle = null;
+  const sessione = getSession();
+  const puoEliminare = (p) => canManagePropertyLifecycle(p, sessione);
   let tipologie = [];
   let tipiPertinenza = [];    // PERTINENZE-1: Posto auto, Cantina… per le pertinenze autonome
   try {
@@ -156,11 +166,21 @@ export async function renderImmobili(container, params = []) {
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
         { label: 'Prezzo', render: (p) => formatPrice(p.asking_price) },
         { label: 'Aggiornato il', render: (p) => escapeHtml(formatDate(p.updated_at)) },
+        // CESTINO-GENERALE-2: solo dove la scheda offrirebbe «Elimina…»
+        ...(items.some(puoEliminare) ? [rowDeleteColumn('property', puoEliminare)] : []),
       ],
       items,
       { emptyMessage: (term || status) ? 'Nessun immobile trovato per questi filtri.' : 'Nessun immobile presente.', onRowClick: true },
     );
     bindTableRowClicks(listArea, (id) => navigate('immobili', [id]));
+    bindRowDeletes(listArea, {
+      rows: items,
+      dialog: container.querySelector('[data-row-delete-dialog]'),
+      onDone: async () => {
+        if (items.length === 1 && offset > 0) offset = Math.max(0, offset - PAGE_SIZE);   // pagina rimasta vuota
+        await load();
+      },
+    });
 
     pagerArea.innerHTML = `
       <button class="btn" id="immobili-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>

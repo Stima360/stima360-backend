@@ -23,6 +23,10 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
 import { startCreation } from '../census/census-wizard.js';
+// CESTINO-GENERALE-2: «Elimina…» sotto ogni card. Per un edificio NON sposta
+// nulla nel Cestino: apre lo STESSO pannello della scheda (richiesta di
+// eliminazione con motivo), che il Super Admin designato approva o rifiuta.
+import { bindRowDeletes, rowDeleteButtonHtml, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
 import {
   buildingListQuery, buildingPlace, buildingStreet, buildingTitle, catalogMunicipalities, coherentFilters,
   errorMessage, labelOf, summaryView,
@@ -84,6 +88,7 @@ export async function renderEdifici(container) {
       </div>
       <div id="buildings-area" aria-live="polite"><p class="muted">Caricamento…</p></div>
       <div id="buildings-pager" class="list-pager"></div>
+      ${rowDeleteDialogHtml()}
     </div>
     <dialog id="buildings-sheet" class="modal census-sheet"></dialog>
   `;
@@ -148,7 +153,11 @@ export async function renderEdifici(container) {
         : '<p class="muted">Nessun edificio censito. Comincia da «+ Nuovo».</p>';
       return;
     }
-    area.innerHTML = `<div class="building-cards">${items.map((b) => buildingCardHtml(b, tipi)).join('')}</div>`;
+    area.innerHTML = `<div class="building-cards">${items.map((b) => `<div class="trash-building-item" data-building-item="${escapeHtml(b.id)}">
+        ${buildingCardHtml(b, tipi)}
+        <div class="trash-building-actions">${rowDeleteButtonHtml('building', b.id)}</div>
+      </div>`).join('')}</div>`;
+    bindRowDeletes(area, { rows: items, dialog: $('[data-row-delete-dialog]') });
     const ultimo = offset + items.length;
     pager.innerHTML = `
       <button class="btn" id="buildings-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>
