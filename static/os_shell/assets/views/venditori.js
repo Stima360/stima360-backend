@@ -15,12 +15,21 @@
 //   Smetti               -> POST /api/crm/sellers/deactivate (non cancella)
 //   Avvia acquisizione   -> il modulo Acquisizioni, precompilato con immobile,
 //                           proprietario e lead (#/acquisizioni/nuova/...)
+//
+// VENDITORI-SOSPESI-1: un'opportunita' sospesa blocca il Cestino dell'immobile
+// (regola del backend, invariata) e quindi deve restare raggiungibile e
+// chiudibile: `#/venditori/sospesi` apre la lista gia' filtrata, la lista
+// «Attivi» vuota dice quante sospese ci sono, e una sospesa offre «Riprendi»
+// e «Smetti…» (solo «Non vende più» / «Inserito per errore»), anche se il
+// contatto e' ancora proprietario. Nulla si chiude da solo.
 
 import { escapeHtml, renderBadge, formatDateTime } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
+import { currentRouteParams } from '../core/router.js';
 import * as api from '../sellers/sellers-api.js';
 import {
-  acquisitionHref, dueText, interactionLabel, propertyLine, sellerErrorMessage, stageLabel, telHref, worklistParams,
+  acquisitionHref, dueText, interactionLabel, pausedCountText, propertyLine, sellerErrorMessage, sellersStatusFromRoute,
+  sellerStopErrorMessage, stageLabel, stopOutcomes, telHref, worklistParams,
 } from '../sellers/seller-model.js';
 
 const PAGE_SIZE = 30;
@@ -50,7 +59,8 @@ export async function renderVenditori(container) {
     <dialog id="sellers-dialog" class="modal seller-sheet"></dialog>`;
   const $ = (sel) => container.querySelector(sel);
   const dialogEl = $('#sellers-dialog');
-  const filtri = { view: 'all', status: 'active', agentId: '', city: '', search: '' };
+  // `#/venditori/sospesi`: la stessa pagina, con il filtro «Sospesi» gia' scelto
+  const filtri = { view: 'all', status: sellersStatusFromRoute(currentRouteParams()), agentId: '', city: '', search: '' };
   let offset = 0;
   let cataloghi = null;
   let items = [];
@@ -86,11 +96,13 @@ export async function renderVenditori(container) {
     cataloghi = dati;
     items = dati.items || [];
     disegnaFiltri();
+    const vuotaAttivi = !items.length && filtri.view === 'all' && filtri.status === 'active' && !filtri.search && !filtri.city;
     $('#sellers-list').innerHTML = items.length
       ? `<div class="seller-cards">${items.map(card).join('')}</div>`
-      : `<p class="muted">${filtri.view === 'all' && filtri.status === 'active' && !filtri.search && !filtri.city
+      : `<p class="muted">${vuotaAttivi
         ? 'Nessun venditore attivo. Dalla scheda di un immobile, tab Proprietari, usa «Vende?» sul proprietario che vuole vendere.'
         : 'Nessun venditore con questi filtri.'}</p>`;
+    if (vuotaAttivi) await avvisoSospesi();
     $('#sellers-pager').innerHTML = (offset > 0 || dati.has_more) ? `
       <button class="btn" id="sellers-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>
       <span class="muted">${items.length ? offset + 1 : 0}–${offset + items.length}</span>
@@ -98,6 +110,29 @@ export async function renderVenditori(container) {
     if ($('#sellers-prev')) $('#sellers-prev').addEventListener('click', () => { offset = Math.max(0, offset - PAGE_SIZE); carica(); });
     if ($('#sellers-next')) $('#sellers-next').addEventListener('click', () => { offset += PAGE_SIZE; carica(); });
     collega();
+  }
+
+  // Lista «Attivi» vuota: le sospese non si vedono, ma bloccano il Cestino dei
+  // loro immobili. Si dice quante sono (stesso scope di chi guarda) e si offre
+  // il filtro. Una lettura in piu', solo in questo caso.
+  async function avvisoSospesi() {
+    const filtro = { ...filtri };
+    let sospese;
+    try {
+      sospese = await api.listSellers(worklistParams({ status: 'paused', agentId: filtri.agentId }, 0, 200));
+    } catch (_e) {
+      return;                                            // l'avviso e' un aiuto: senza, resta la lista vuota
+    }
+    const n = (sospese.items || []).length;
+    if (!n || filtro.status !== filtri.status || filtro.agentId !== filtri.agentId) return;
+    $('#sellers-list').insertAdjacentHTML('beforeend', `<div class="seller-line" data-sellers-paused-notice>
+        <span>${escapeHtml(pausedCountText(n, sospese.has_more))}</span>
+        <button type="button" class="btn ghost" data-show-paused>Mostra sospesi</button></div>`);
+    $('#sellers-list').querySelector('[data-show-paused]').addEventListener('click', () => {
+      filtri.status = 'paused';
+      $('#sellers-status').value = 'paused';
+      ricarica();
+    });
   }
 
   function card(it) {
@@ -139,8 +174,8 @@ export async function renderVenditori(container) {
         ${proprietario ? `<button type="button" class="btn ghost" data-stage="${id}">Fase</button>` : ''}
         ${it.acquisition || !proprietario ? '' : `<a class="btn ghost" href="${escapeHtml(acquisitionHref(it))}" data-acquire="${id}">Avvia acquisizione</a>`}
         <button type="button" class="btn ghost" data-stop="${id}">Smetti…</button>`
-    : (proprietario ? `<button type="button" class="btn" data-resume="${id}">${it.status === 'paused' ? 'Riprendi' : 'Riattiva'}</button>`
-      : (it.status === 'paused' ? `<button type="button" class="btn ghost" data-stop="${id}">Smetti…</button>` : ''))}
+    : `${proprietario ? `<button type="button" class="btn" data-resume="${id}">${it.status === 'paused' ? 'Riprendi' : 'Riattiva'}</button>` : ''}
+      ${it.status === 'paused' ? `<button type="button" class="btn ghost" data-stop="${id}">Smetti…</button>` : ''}`}
       </div>
     </article>`;
   }
@@ -245,14 +280,21 @@ export async function renderVenditori(container) {
   }
 
   function apriSmetti(it) {
+    // gia' sospesa: solo le chiusure vere, mai di nuovo «Vendita sospesa»
+    const scelte = stopOutcomes(cataloghi.outcomes, it.status);
     apri(`<form novalidate data-stop-form>
         <h3 class="section-title">${escapeHtml(it.contact.name)} non vende più?</h3>
         <p class="muted">Lo storico resta: cambia solo lo stato dell’opportunità.</p>
-        ${(cataloghi.outcomes || []).map((o, i) => `<label class="seller-choice"><input type="radio" name="seller-outcome" value="${escapeHtml(o.value)}" ${i === 0 ? 'checked' : ''}><span>${escapeHtml(o.label)}</span></label>`).join('')}
+        ${scelte.map((o, i) => `<label class="seller-choice"><input type="radio" name="seller-outcome" value="${escapeHtml(o.value)}" ${i === 0 ? 'checked' : ''}><span>${escapeHtml(o.label)}</span></label>`).join('')}
         <div class="form-field"><label for="seller-stop-note">Nota (facoltativa)</label><input id="seller-stop-note" class="input" maxlength="500"></div>
         ${azioni('Conferma')}</form>`, async () => {
       const radio = [...dialogEl.querySelectorAll('input[name="seller-outcome"]')].find((r) => r.checked);
-      await api.deactivateSeller(it.property.id, it.contact.id, radio ? radio.value : 'paused', dialogEl.querySelector('#seller-stop-note').value);
+      try {
+        await api.deactivateSeller(it.property.id, it.contact.id, radio ? radio.value : scelte[0].value, dialogEl.querySelector('#seller-stop-note').value);
+      } catch (error) {
+        error.userMessage = sellerStopErrorMessage(error);
+        throw error;
+      }
       return 'Stato aggiornato: lo storico resta.';
     });
   }

@@ -434,6 +434,16 @@ CESTINO_GENERALE_1 = ("static/os_shell/assets/trash/trash-api.js",
 CESTINO_GENERALE_1_MAIN = ["from trash.router import router as trash_router",
                            "app.include_router(trash_router, dependencies=[Depends(require_authenticated_operator)])"]
 
+# VENDITORI-SOSPESI-1 (autorizzazione specifica del 2026-10-13): le opportunita' Venditore sospese
+# restano raggiungibili e chiudibili («Smetti…» anche da sospesa, `#/venditori/sospesi`, avviso
+# nella lista Attivi vuota, aiuto nel blocco del Cestino). SOLO questi file d'interfaccia; nessun
+# backend, nessun file PROTETTO (la regola open/paused di property/lifecycle.py resta identica).
+VENDITORI_SOSPESI_1 = ("static/os_shell/assets/sellers/seller-model.js",
+                       "static/os_shell/assets/sellers/seller-toggle.js",
+                       "static/os_shell/assets/views/venditori.js",
+                       "static/os_shell/assets/trash/trash-model.js",
+                       "static/os_shell/assets/trash/trash-dialog.js")
+
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
 # regola di `_applica` che non aggiorna da sola una superficie verificata. L'eccezione e' vincolata
@@ -517,6 +527,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in ELIMINAZIONE_EDIFICIO_1]
         # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: i soli file dichiarati qui sopra
         diff = [f for f in diff if f not in CESTINO_GENERALE_1]
+        # SENTINELLA AGGIORNATA DA VENDITORI-SOSPESI-1: i soli file dichiarati qui sopra
+        diff = [f for f in diff if f not in VENDITORI_SOSPESI_1]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

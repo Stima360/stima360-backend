@@ -111,6 +111,52 @@ export function sellerErrorMessage(error) {
   }
 }
 
+// --- VENDITORI-SOSPESI-1: le opportunita' sospese restano gestibili ----------
+// La regola del backend NON cambia (open e paused bloccano il Cestino
+// dell'immobile, property/lifecycle.py): qui solo le funzioni che rendono
+// raggiungibile e chiudibile un'opportunita' sospesa, senza riattivarla.
+
+/** Le scelte di «Smetti…», nell'ordine del backend (crm/sellers.py::OUTCOMES). */
+export const STOP_OUTCOMES = Object.freeze([
+  { value: 'paused', label: 'Vendita sospesa', hint: 'ne riparliamo più avanti' },
+  { value: 'not_selling', label: 'Non vende più' },
+  { value: 'mistake', label: 'Inserito per errore' },
+]);
+
+/** Le scelte da proporre per un'opportunita' nello stato `status`: se e' gia'
+ *  sospesa, solo le chiusure vere (mai di nuovo «Vendita sospesa»). */
+export function stopOutcomes(outcomes, status) {
+  const tutte = Array.isArray(outcomes) && outcomes.length ? outcomes : STOP_OUTCOMES;
+  return status === 'paused' ? tutte.filter((o) => o.value !== 'paused') : tutte;
+}
+
+/** Il collegamento diretto alla worklist filtrata sulle sospese. */
+export const SELLERS_PAUSED_HREF = '#/venditori/sospesi';
+
+/** Il filtro di stato iniziale della worklist dai segmenti dell'indirizzo:
+ *  `#/venditori/sospesi` -> 'paused'; ogni altro indirizzo -> 'active'. */
+export function sellersStatusFromRoute(params) {
+  return Array.isArray(params) && params[0] === 'sospesi' ? 'paused' : 'active';
+}
+
+/** «C'e' 1 venditore sospeso» / «Ci sono 3 venditori sospesi» / «piu' di 200». */
+export function pausedCountText(n, hasMore = false) {
+  const numero = Number(n) || 0;
+  if (hasMore) return `Ci sono più di ${numero} venditori sospesi.`;
+  return numero === 1 ? 'C’è 1 venditore sospeso.' : `Ci sono ${numero} venditori sospesi.`;
+}
+
+/** Chiusura rifiutata perche' l'opportunita' non e' visibile a chi chiede
+ *  (assegnata a un altro agente): nessun dettaglio, solo a chi rivolgersi. */
+export const SELLER_NOT_YOURS_TEXT =
+  'Questa opportunità è assegnata a un altro agente o non è più disponibile: rivolgiti a un amministratore dell’agenzia.';
+
+/** Il messaggio di un errore di «Smetti…». */
+export function sellerStopErrorMessage(error) {
+  if (error && error.status === 404) return SELLER_NOT_YOURS_TEXT;
+  return sellerErrorMessage(error);
+}
+
 /** «Scaduta da 2 giorni» / «Oggi» / «Tra 3 giorni», sul giorno di Roma. */
 export function dueText(isoDate, now = new Date()) {
   if (!isoDate) return '';

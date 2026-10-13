@@ -8,7 +8,10 @@
 // stato letto da `property.leads` e l'azione giusta:
 //   nessuna opportunita' -> «Vende?»       -> POST /api/crm/sellers
 //   aperta               -> «Vende ✓»       -> «Apri in Venditori» · «Smetti…»
-//   sospesa              -> «Sospesa»       -> «Riprendi»
+//   sospesa              -> «Sospesa»       -> «Riprendi» · «Smetti…» (VENDITORI-
+//                           SOSPESI-1: una sospesa blocca il Cestino dell'immobile,
+//                           quindi si deve poter chiudere senza riaprirla; nel
+//                           foglio solo «Non vende più» / «Inserito per errore»)
 //   chiusa               -> «Non vende»     -> «Riattiva»
 //   inserita per errore  -> «Inserito per errore» -> «Vende?» (DELETE-ARCH 1B:
 //                           mai mostrata come una chiusura «Non vende»)
@@ -28,7 +31,9 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import { navigate } from '../core/router.js';
 import { takeInCharge } from '../census/census-api.js';
 import * as api from './sellers-api.js';
-import { sellableOwners, sellerErrorMessage, sellerState, stageLabel } from './seller-model.js';
+import {
+  sellableOwners, sellerErrorMessage, sellerState, sellerStopErrorMessage, stageLabel, stopOutcomes,
+} from './seller-model.js';
 
 /** La cella «Vendita» di una riga property_contacts (vuota per i ruoli che
  *  non vendono e per le righe ripetute dello stesso contatto). */
@@ -45,7 +50,8 @@ export function renderSellerCell(row, property) {
   }
   if (s.state === 'paused') {
     return `<span class="seller-cell" data-seller-state="paused">${renderBadge('Vendita sospesa', 'warn')}
-      <button type="button" class="btn btn-small" data-seller-on="${cid}">Riprendi</button></span>`;
+      <button type="button" class="btn btn-small" data-seller-on="${cid}">Riprendi</button>
+      <button type="button" class="btn ghost btn-small" data-seller-stop="${cid}" data-seller-stop-state="paused">Smetti…</button></span>`;
   }
   if (s.state === 'mistake') {
     return `<span class="seller-cell" data-seller-state="mistake">${renderBadge('Inserito per errore', 'gray')}
@@ -157,13 +163,13 @@ export function bindSellerToggles(panelEl, { property, host, onChanged, onRerend
     });
   }
 
-  function apriSmetti(contactId) {
+  function apriSmetti(contactId, stato) {
+    // gia' sospesa: solo le chiusure vere, mai di nuovo «Vendita sospesa»
+    const scelte = stopOutcomes(null, stato);
     el.innerHTML = `<form data-seller-stop-form novalidate>
         <h3 class="section-title">${escapeHtml(nomeDi(property, contactId))} non vende più?</h3>
         <p class="muted">Lo storico (telefonate, note, richiami) resta: cambia solo lo stato dell’opportunità.</p>
-        <label class="seller-choice"><input type="radio" name="seller-outcome" value="paused" checked><span><strong>Vendita sospesa</strong> <small class="muted">ne riparliamo più avanti</small></span></label>
-        <label class="seller-choice"><input type="radio" name="seller-outcome" value="not_selling"><span><strong>Non vende più</strong></span></label>
-        <label class="seller-choice"><input type="radio" name="seller-outcome" value="mistake"><span><strong>Inserito per errore</strong></span></label>
+        ${scelte.map((o, i) => `<label class="seller-choice"><input type="radio" name="seller-outcome" value="${escapeHtml(o.value)}"${i === 0 ? ' checked' : ''}><span><strong>${escapeHtml(o.label)}</strong>${o.hint ? ` <small class="muted">${escapeHtml(o.hint)}</small>` : ''}</span></label>`).join('')}
         <div class="form-field"><label for="seller-stop-note">Nota (facoltativa)</label><input id="seller-stop-note" class="input" maxlength="500"></div>
         <div class="field-error" data-error role="alert"></div>
         <div class="modal-actions"><button type="button" class="btn ghost" data-cancel>Annulla</button>
@@ -174,11 +180,11 @@ export function bindSellerToggles(panelEl, { property, host, onChanged, onRerend
       evento.preventDefault();
       const radio = [...el.querySelectorAll('input[name="seller-outcome"]')].find((r) => r.checked);
       try {
-        await api.deactivateSeller(property.id, contactId, radio ? radio.value : 'paused', el.querySelector('#seller-stop-note').value);
+        await api.deactivateSeller(property.id, contactId, radio ? radio.value : scelte[0].value, el.querySelector('#seller-stop-note').value);
         el.close();
         await onChanged('Stato aggiornato: lo storico resta.');
       } catch (error) {
-        el.querySelector('[data-error]').textContent = sellerErrorMessage(error);
+        el.querySelector('[data-error]').textContent = sellerStopErrorMessage(error);
       }
     });
   }
@@ -188,6 +194,6 @@ export function bindSellerToggles(panelEl, { property, host, onChanged, onRerend
     await attiva(b.dataset.sellerOn);
     b.disabled = false;
   }));
-  panelEl.querySelectorAll('[data-seller-stop]').forEach((b) => b.addEventListener('click', () => apriSmetti(b.dataset.sellerStop)));
+  panelEl.querySelectorAll('[data-seller-stop]').forEach((b) => b.addEventListener('click', () => apriSmetti(b.dataset.sellerStop, b.dataset.sellerStopState || 'open')));
   panelEl.querySelectorAll('[data-seller-open]').forEach((b) => b.addEventListener('click', () => navigate('venditori', [])));
 }

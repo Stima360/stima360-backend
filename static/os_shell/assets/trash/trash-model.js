@@ -54,8 +54,34 @@ export function blockerView(blockers) {
     // blocco (es. «Apri incarico»): solo collegamenti interni della Shell.
     const link = b.link && typeof b.link.href === 'string' && b.link.href.startsWith('#/')
       ? { href: b.link.href, label: b.link.label || 'Apri' } : null;
-    return { code: b.code, label: b.label || b.code, count: items.length || null, history: null, link };
+    const voce = { code: b.code, label: b.label || b.code, count: items.length || null, history: null, link };
+    // VENDITORI-SOSPESI-1: solo per il blocco Venditore, come risolverlo (gli altri invariati)
+    if (b.code === 'SELLER_OPPORTUNITY_OPEN') voce.help = sellerBlockerHelp(items);
+    return voce;
   });
+}
+
+// VENDITORI-SOSPESI-1: il blocco «Opportunità Venditore» (open o paused: regola
+// del backend, invariata) arriva con l'etichetta del backend e il numero delle
+// voci. Qui si aggiunge SOLO come risolverlo: dove trovarla (una sospesa non e'
+// fra i Venditori attivi) e a chi chiedere se e' di un altro agente. Nessun
+// dato del lead viene mostrato: si leggono soltanto gli stati.
+export const SELLER_BLOCKER_OTHER_AGENT =
+  'Se l’opportunità è assegnata a un altro agente, rivolgiti a un amministratore dell’agenzia.';
+
+export function sellerBlockerHelp(items) {
+  const stati = (Array.isArray(items) ? items : []).map((i) => (i && i.status) || 'open');
+  const sospese = stati.filter((x) => x === 'paused').length;
+  const aperte = stati.length - sospese;
+  const dove = sospese && !aperte
+    ? 'La vendita è sospesa e non compare fra i Venditori attivi: aprila in Venditori › Sospesi e chiudila con «Smetti…» (Non vende più o Inserito per errore), oppure dalla tab Proprietari di questo immobile.'
+    : (sospese
+      ? 'Ci sono vendite aperte e sospese: chiudile da Venditori con «Smetti…» (le sospese sono nel filtro «Sospesi»), oppure dalla tab Proprietari di questo immobile.'
+      : 'Chiudila da Venditori con «Smetti…», oppure dalla tab Proprietari di questo immobile.');
+  const links = sospese
+    ? [{ href: '#/venditori/sospesi', label: 'Apri Venditori sospesi' }, ...(aperte ? [{ href: '#/venditori', label: 'Apri Venditori' }] : [])]
+    : [{ href: '#/venditori', label: 'Apri Venditori' }];
+  return { text: `${dove} ${SELLER_BLOCKER_OTHER_AGENT}`, links };
 }
 
 /** Il messaggio di un errore di deletion-check o di POST .../trash. */
