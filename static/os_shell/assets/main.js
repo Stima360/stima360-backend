@@ -61,6 +61,10 @@ const SECTIONS = [
   { name: 'stime-dettagliate', label: 'Stime dettagliate' },
   // EDIFICI-1: subito sopra Immobili (Edificio -> Immobili/Unita', come il
   // modello), senza separare Immobili da Venditori (flusso di VENDITORI-1).
+  // STIMA360 TERRITORIO - ZONA: la mappa del territorio come voce principale. Apre la
+  // STESSA mappa di Edifici (#/edifici/mappa, T2-T5bis): nessuna seconda mappa.
+  // `target` = dove porta il bottone; la rotta `zona` esiste solo per chi scrive #/zona a mano.
+  { name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] },
   { name: 'edifici', label: 'Edifici' },
   { name: 'immobili', label: 'Immobili' },
   // VENDITORI-1: il flusso reale Immobili -> Venditori -> Acquisizioni -> Incarichi.
@@ -145,6 +149,12 @@ registerRoute('immobili', (container, params = []) => {
   return params[0] ? renderImmobileDettaglio(container, params) : renderImmobili(container);
 });
 // EDIFICI-1: "edifici" copre la lista (#/edifici) e la scheda (#/edifici/{id}).
+// ZONA: #/zona scritto a mano -> la mappa, senza lasciare una voce nella cronologia
+// (altrimenti «indietro» tornerebbe su #/zona e rimbalzerebbe avanti di nuovo).
+registerRoute('zona', () => {
+  if (window.location && typeof window.location.replace === 'function') window.location.replace('#/edifici/mappa');
+  else navigate('edifici', ['mappa']);
+});
 registerRoute('edifici', (container, params = []) => {
   // STIMA360 TERRITORIO T2: "#/edifici/mappa" e' la mappa; ogni altro segmento resta la scheda.
   if (params[0] === 'mappa') return renderTerritorio(container);
@@ -245,11 +255,13 @@ initRouter(contentEl, {
     if (SEZIONI_ANCHE_PLATFORM.has(name)) return null;
     return isPlatformOnly(session) ? SEZIONE_RETE.name : null;
   },
-  onNavigate(name) {
-    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE].find((s) => s.name === name);
+  onNavigate(name, params = []) {
+    // ZONA: la mappa (#/edifici/mappa e le sue pagine) evidenzia «Zona», non «Edifici»
+    const nome = name === 'edifici' && params[0] === 'mappa' ? 'zona' : name;
+    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE].find((s) => s.name === nome);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
-      btn.classList.toggle('active', btn.dataset.route === name);
+      btn.classList.toggle('active', btn.dataset.route === nome);
     }
   },
 });
@@ -264,6 +276,7 @@ const NAV_ICON_PATHS = {
   contatti: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
   stime: ['M3 3v18h18', 'M7 16l4-5 3 2 5-7', 'M16 6h3v3'],
   'stime-dettagliate': ['M8 4h9l3 3v14H6V4z', 'M17 4v4h4', 'M10 12h7', 'M10 16h7'],
+  zona: ['M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z', 'M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5'],
   edifici: ['M4 21V5h12v16', 'M16 9h4v12', 'M8 9h2', 'M8 13h2', 'M8 17h2', 'M3 21h18'],
   immobili: ['M3 10l9-7 9 7', 'M5 9v12h14V9', 'M9 21v-7h6v7'],
   venditori: ['M4 20v-2a4 4 0 0 1 4-4h3', 'M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M14 17h7', 'M18 13l4 4-4 4'],
@@ -295,7 +308,7 @@ function creaVoceNav(section) {
   const label = document.createElement('span');
   label.textContent = section.label;
   btn.append(icon, label);
-  btn.addEventListener('click', () => navigate(section.name));
+  btn.addEventListener('click', () => (section.target ? navigate(section.target[0], section.target.slice(1)) : navigate(section.name)));
   return btn;
 }
 

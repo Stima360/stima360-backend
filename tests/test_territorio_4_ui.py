@@ -80,7 +80,12 @@ def test_b01_il_client_manda_solo_le_coordinate():
 def test_b02_rotta_dentro_edifici_nessuna_voce_nuova():
     main = (ASSETS / "main.js").read_text(encoding="utf-8")
     sezioni = main[main.index("const SECTIONS = ["):main.index("];", main.index("const SECTIONS = ["))]
-    assert "mappa" not in sezioni and "territorio" not in sezioni and "posiziona" not in sezioni
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: la sidebar ha ORA la voce «Zona» (name 'zona'), che
+    # apre la STESSA mappa (target ['edifici', 'mappa']): nessuna voce 'mappa'/'territorio'/'posiziona' e nessun altro
+    # `target`; la mappa resta dentro Edifici (#/edifici/mappa), nessuna seconda mappa.
+    nomi = re.findall(r"name:\s*'([a-z]+)'", sezioni)
+    assert "mappa" not in nomi and "territorio" not in nomi and "posiziona" not in nomi
+    assert sezioni.count("target:") == 1 and "{ name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] }" in sezioni
     vista = (ASSETS / "views" / "territorio.js").read_text(encoding="utf-8")
     assert "if (parametri[1] === 'posiziona') return renderPosiziona(container, parametri[2]);" in vista
     scheda = (ASSETS / "views" / "edificio-dettaglio.js").read_text(encoding="utf-8")

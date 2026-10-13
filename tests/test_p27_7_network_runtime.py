@@ -316,7 +316,8 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # SENTINELLA AGGIORNATA DA DELETE-ARCH FASE 2B3: "cestino" e' l'ultima voce
     # di SECTIONS (discreta, in fondo); "rete" resta assente. L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "edifici", "immobili", "venditori", "acquisizioni",
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa) subito prima di "edifici".
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "zona", "edifici", "immobili", "venditori", "acquisizioni",
                                 "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "cestino"]
 
 

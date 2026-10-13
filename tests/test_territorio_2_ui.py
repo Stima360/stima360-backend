@@ -71,7 +71,12 @@ def test_a03_main_js_rotta_dentro_edifici_nessuna_voce_nuova():
     assert "if (params[0] === 'mappa') return renderTerritorio(container);" in main
     assert main.count("registerRoute('edifici'") == 1
     sezioni = main[main.index("const SECTIONS = ["):main.index("];", main.index("const SECTIONS = ["))]
-    assert "mappa" not in sezioni and "territorio" not in sezioni
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: la sidebar ha ORA la voce «Zona» (name 'zona'), che
+    # apre la STESSA mappa (target ['edifici', 'mappa']): nessuna voce 'mappa'/'territorio' e nessun altro
+    # `target`; la mappa resta dentro Edifici (#/edifici/mappa), nessuna seconda mappa.
+    nomi = re.findall(r"name:\s*'([a-z]+)'", sezioni)
+    assert "mappa" not in nomi and "territorio" not in nomi
+    assert sezioni.count("target:") == 1 and "{ name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] }" in sezioni
 
 
 @node
@@ -223,7 +228,9 @@ def test_c01_la_rotta_crea_una_mappa_e_non_chiama_il_crm(staged):  # noqa: F811
     assert o["attribuzione"] == {"compact": False}
     assert o["controlli"] == [["navigation", "top-right", {"showCompass": False}]]
     assert out["dopo"]["hidden"] is True
-    assert out["titolo"] == "Edifici" and out["indietro"] == "#/edifici"
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: sulla mappa il titolo della pagina e' «Zona»
+    # (la voce principale che la apre); «indietro» porta sempre all'elenco edifici.
+    assert out["titolo"] == "Zona" and out["indietro"] == "#/edifici"
     # SENTINELLA AGGIORNATA DA TERRITORIO T3: la mappa legge ora gli edifici dell'agenzia (solo GET
     # della lista, una pagina qui); nessun'altra chiamata al CRM e nessuna scrittura.
     assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings"], _crm(out)

@@ -134,7 +134,12 @@ def test_b01_pulsante_mappa_accanto_a_nuovo_invariato():
     assert testo.index('id="buildings-map"') < testo.index('id="buildings-new"')
     main = (ASSETS / "main.js").read_text(encoding="utf-8")
     sezioni = main[main.index("const SECTIONS = ["):main.index("];", main.index("const SECTIONS = ["))]
-    assert "mappa" not in sezioni and "territorio" not in sezioni          # nessuna voce nuova nella sidebar
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: la sidebar ha ORA la voce «Zona» (name 'zona'), che
+    # apre la STESSA mappa (target ['edifici', 'mappa']): nessuna voce 'mappa'/'territorio' e nessun altro
+    # `target`; la mappa resta dentro Edifici (#/edifici/mappa), nessuna seconda mappa.
+    nomi = re.findall(r"name:\s*'([a-z]+)'", sezioni)
+    assert "mappa" not in nomi and "territorio" not in nomi
+    assert sezioni.count("target:") == 1 and "{ name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] }" in sezioni
 
 
 def test_b02_la_mappa_legge_e_basta():
@@ -375,7 +380,9 @@ def test_c06_pulsante_mappa_dall_elenco_edifici(staged):  # noqa: F811
     """
     out = _run(staged, scenario, [rt.ok(QUATTRO)], hash="#/edifici")
     assert out["visto"] == {"href": "#/edifici/mappa", "testo": "🗺️ Mappa", "nuovo": "+ Nuovo"}
-    assert out["mappe"] == 1 and out["titolo"] == "Edifici"
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: dal pulsante «Mappa» si apre la stessa mappa, il cui
+    # titolo di pagina e' ora «Zona» (voce attiva «Zona»).
+    assert out["mappe"] == 1 and out["titolo"] == "Zona"
     assert out["indietro"] == "← Torna agli edifici"
 
 
