@@ -755,3 +755,10 @@ class BuildingPurge(PropertyModel):
     mostrate nel riepilogo."""
     confirm_text: str = Field(..., max_length=100)
     fingerprint: str = Field(..., min_length=64, max_length=64)
+
+
+# STIMA360 TERRITORIO T4: la conferma della posizione di un edificio. Solo le
+# coordinate: l'operatore e la data li mette il server (property/building_position.py).
+class PositionConfirm(PropertyModel):
+    latitude: Decimal
+    longitude: Decimal

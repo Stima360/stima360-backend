@@ -154,6 +154,16 @@ export function updateBuilding(buildingId, payload) {
   return request('PATCH', `/buildings/${id(buildingId)}`, payload);
 }
 
+// STIMA360 TERRITORIO T4: la posizione VERIFICATA dell'edificio. Il corpo porta
+// SOLO le coordinate: operatore e data li registra il server.
+export function getBuildingPosition(buildingId) {
+  return request('GET', `/buildings/${id(buildingId)}/position`);
+}
+
+export function confirmBuildingPosition(buildingId, { latitude, longitude }) {
+  return request('POST', `/buildings/${id(buildingId)}/position`, { latitude, longitude });
+}
+
 // --- Unita' di censimento -------------------------------------------------------
 
 export function createUnit(payload) {

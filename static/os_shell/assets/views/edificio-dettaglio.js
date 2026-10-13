@@ -52,6 +52,9 @@ import {
   BUILDING_RESTORED_TOAST, buildingDuplicatesView, buildingName, reasonLabel, restoreErrorView,
 } from '../trash/trash-model.js';
 import { duplicatesNoticeHtml } from './cestino.js';
+// STIMA360 TERRITORIO T4: la posizione verificata dell'edificio (riga «Posizione» e comando
+// «Posiziona sulla mappa» / «Verifica posizione» / «Correggi posizione»).
+import { positionActionLabel, positionFactText, positionStatus } from '../territorio/territorio-model.js';
 
 export async function renderEdificioDettaglio(container, params = []) {
   const buildingId = params[0];
@@ -91,6 +94,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       <dl class="building-facts" id="building-facts"></dl>
       ${inTrash ? '' : `<div class="action-bar">
         <button type="button" class="btn ghost" id="building-edit">Modifica palazzina</button>
+        <a class="btn ghost building-position-btn" id="building-position" href="#/edifici/mappa/posiziona/${escapeHtml(edificio.id)}"></a>
       </div>`}
     </div>
     <div id="building-deletion"></div>
@@ -129,6 +133,8 @@ export async function renderEdificioDettaglio(container, params = []) {
   const kinds = opzioni.accessory_kinds || [];
   const pertinenzeEl = container.querySelector('#building-pertinenze');
   const sessione = getSession();
+  // T4: chi ha verificato la posizione (nome dal server, letto una volta)
+  let chiHaVerificato = null;
 
   function renderHeader() {
     container.querySelector('#building-title').textContent = buildingTitle(edificio);
@@ -144,6 +150,18 @@ export async function renderEdificioDettaglio(container, params = []) {
       ['Scale', (edificio.staircases || []).join(', ')],
     ];
     container.querySelector('#building-facts').innerHTML = voci.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v && String(v).trim() ? v : '—')}</dd></div>`).join('');
+    // T4: la riga «Posizione» (testo, mai HTML) e l'etichetta del comando secondo lo stato
+    const fatti = container.querySelector('#building-facts');
+    const riga = document.createElement('div');
+    riga.dataset.positionFact = positionStatus(edificio);
+    const dt = document.createElement('dt');
+    dt.textContent = 'Posizione';
+    const dd = document.createElement('dd');
+    dd.textContent = positionFactText(edificio, chiHaVerificato);
+    riga.append(dt, dd);
+    fatti.appendChild(riga);
+    const comando = container.querySelector('#building-position');
+    if (comando) comando.textContent = positionActionLabel(positionStatus(edificio));
     const v = summaryView(edificio.census_summary);
     const fonte = labelOf(opzioni.units_declared_sources, edificio.census_summary && edificio.census_summary.units_declared_source, '');
     container.querySelector('#building-counters').innerHTML = `
@@ -361,6 +379,16 @@ export async function renderEdificioDettaglio(container, params = []) {
   renderHeader();
   renderUnits();
   renderPertinenze();
+  // T4: con una posizione verificata si legge una volta chi l'ha confermata (solo il nome);
+  // se la lettura non riesce la riga resta con la sola data.
+  if (positionStatus(edificio) === 'verified') {
+    api.getBuildingPosition(edificio.id).then((p) => {
+      const nome = p && p.position_verified_by && p.position_verified_by.name;
+      if (!nome || !container.isConnected) return;
+      chiHaVerificato = nome;
+      renderHeader();
+    }).catch(() => {});
+  }
   pannello = await renderCompositionPanel(container.querySelector('#building-composition'), {
     buildingId: edificio.id, options: opzioni, inTrash, host: container,
     dialogEl: container.querySelector('#composition-sheet'),

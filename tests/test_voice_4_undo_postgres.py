@@ -463,6 +463,13 @@ TERRITORIO_2 = ("static/os_shell/assets/territorio/maplibre-loader.js",
 # SOLO il modulo puro nuovo fuori dagli elenchi qui sopra (edifici.js e' in CESTINO_GENERALE_2,
 # territorio.js in TERRITORIO_2, app.css in FASE6_UI); nessun backend, nessun file PROTETTO.
 TERRITORIO_3 = ("static/os_shell/assets/territorio/territorio-model.js",)
+# STIMA360 TERRITORIO T4 (autorizzazione specifica del 2026-10-13): posizionamento manuale e verifica
+# della posizione degli edifici. SOLO questi file nuovi fuori dagli elenchi qui sopra (router.py, schemas.py,
+# census-api.js, census-model.js ed edificio-dettaglio.js sono in CENSIMENTO2_PROPERTY, territorio.js in
+# TERRITORIO_2, territorio-model.js in TERRITORIO_3, app.css in FASE6_UI). Nessun file PROTETTO:
+# property/census.py resta identico (building_position.py ne usa le letture, non lo modifica).
+TERRITORIO_4 = ("property/building_position.py",
+                "static/os_shell/assets/views/territorio-posiziona.js")
 
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
@@ -555,6 +562,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in TERRITORIO_2]
         # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T3: il solo file dichiarato qui sopra
         diff = [f for f in diff if f not in TERRITORIO_3]
+        # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: i soli file dichiarati qui sopra
+        diff = [f for f in diff if f not in TERRITORIO_4]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

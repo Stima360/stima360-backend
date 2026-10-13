@@ -4919,6 +4919,10 @@ BUILDINGS_OPERAZIONI = (
     # la sonda anonima (401 prima di ogni lettura): nessuna sonda crea una richiesta.
     ("GET", "/api/property/buildings/{id}/deletion-request"),
     ("POST", "/api/property/buildings/{id}/deletion-request"),
+    # STIMA360 TERRITORIO T4: stato e conferma della posizione verificata. Solo la sonda
+    # anonima (401 prima di ogni lettura): nessuna sonda conferma una posizione.
+    ("GET", "/api/property/buildings/{id}/position"),
+    ("POST", "/api/property/buildings/{id}/position"),
 )
 
 

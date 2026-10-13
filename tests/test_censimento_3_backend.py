@@ -231,7 +231,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
         "/api/property/buildings/{building_id}/deletion-request",
         "/api/property/building-deletion-requests/{request_id}/withdraw", "/api/property/trash/building-groups")]
     assert len(eliminazione) == 4 and all(_gate in {d.call for d in r.dependant.dependencies} for r in eliminazione)
-    assert len(router.routes) == 64
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: 64 -> 66 (GET e POST .../position, la posizione
+    # verificata dell'edificio), stesso gate (verificato qui sotto).
+    posizione = [r for r in router.routes if r.path == "/api/property/buildings/{building_id}/position"]
+    assert sorted(m for r in posizione for m in r.methods) == ["GET", "POST"]
+    assert all(_gate in {d.call for d in r.dependant.dependencies} for r in posizione)
+    assert len(router.routes) == 66
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

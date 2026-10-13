@@ -1297,3 +1297,30 @@ a.census-unit-main { text-decoration: none; }
   .trash-final > .btn, .trash-final .action-bar .btn { width: 100%; align-self: stretch; }
   .trash-final .deletion-purge input[type="text"] { max-width: none; }
 }
+
+/* STIMA360 TERRITORIO T4: posizionamento manuale. Tre segnaposti distinti
+   (provvisorio arancione ad anello, verificata blu pieno, da verificare grigio
+   tratteggiato), barra d'azione fissa in basso e comoda al tocco. Solo regole nuove. */
+.territorio-pin { display: inline-block; width: 22px; height: 22px; border-radius: 50%; box-sizing: border-box; vertical-align: middle; }
+.territorio-pin.is-provisional { border: 5px solid #ea580c; background: rgba(255, 255, 255, .85); box-shadow: 0 0 0 3px rgba(234, 88, 12, .25); cursor: grab; }
+.territorio-pin.is-verified { background: #1a56db; border: 3px solid #fff; box-shadow: 0 0 0 1px #1a56db; }
+.territorio-pin.is-unverified { background: rgba(100, 116, 139, .25); border: 3px dashed #64748b; }
+.territorio-pin.is-current { pointer-events: none; }   /* si tocca la mappa, non il punto attuale */
+.territorio-map .territorio-pin { width: 28px; height: 28px; }
+.territorio-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--muted); }
+.territorio-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.territorio-legend .territorio-pin { width: 16px; height: 16px; }
+.territorio-legend .territorio-pin.is-provisional { border-width: 4px; }
+.territorio-place-bar { position: sticky; bottom: 0; z-index: 3; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(23, 35, 58, .08); }
+.territorio-place-bar[hidden] { display: none; }
+.territorio-place-hint { margin: 0; font-size: 14px; }
+.territorio-place-error { margin: 0; font-size: 14px; color: var(--danger); }
+.territorio-place-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.territorio-place-actions .btn { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.territorio-place-actions .btn[disabled] { opacity: .55; cursor: not-allowed; }
+.building-position-btn { display: inline-flex; align-items: center; text-decoration: none; }
+@media (max-width: 767px) {
+  .territorio-map-place { height: clamp(320px, 62svh, 620px); }
+  .territorio-place-actions .btn { flex: 1 1 0; }
+  .building-position-btn { min-height: 44px; }
+}

@@ -20,6 +20,10 @@
 // geocoding: i marker sono un livello `circle` della mappa, non elementi DOM.
 // I dati del CRM entrano nel DOM solo come `textContent`.
 //
+// T4 - `#/edifici/mappa/posiziona/{id}` (views/territorio-posiziona.js): stessa
+// mappa e stesso ciclo di vita (`openMap`); dopo una conferma riuscita questa
+// vista apre l'edificio appena verificato (`highlightAfterConfirm`).
+//
 // Ciclo di vita: al massimo UNA mappa viva. Si distrugge (`map.remove()`, che
 // libera WebGL, worker, livelli, gestori e riquadri) quando si apre un'altra
 // rotta, quando la sessione cambia (logout / altra agenzia) o quando la vista
@@ -31,10 +35,11 @@
 // Data from OpenStreetMap).
 
 import { onAuthChange, sessionEpoch } from '../core/auth.js';
-import { navigate } from '../core/router.js';
+import { currentRouteParams, navigate } from '../core/router.js';
 import * as api from '../census/census-api.js';
 import { buildingPlace, buildingStreet, buildingTitle, errorMessage, summaryView } from '../census/census-model.js';
 import { loadMapLibre } from '../territorio/maplibre-loader.js';
+import { renderPosiziona } from './territorio-posiziona.js';
 import {
   STATUS_LABELS, classifyBuildings, toPlaceText, verifiedFeatureCollection, viewFor,
 } from '../territorio/territorio-model.js';
@@ -65,6 +70,51 @@ function distruggi() {
 /** Solo per le prove: c'e' una mappa viva? */
 export function hasActiveMap() {
   return attiva !== null;
+}
+
+/** La mappa viva e' ancora questa? (risposte tardive, gestori) */
+export function isActiveMap(map) {
+  return attiva !== null && attiva.map === map;
+}
+
+/** Chiude la mappa viva, se c'e' (T4: la pagina di posizionamento usa lo stesso ciclo). */
+export function destroyActiveMap() {
+  distruggi();
+}
+
+/**
+ * STIMA360 TERRITORIO T4: lo stesso ciclo di vita di T2, condiviso. Crea la
+ * mappa (stile, attribuzione estesa, zoom), la registra come UNICA mappa viva e
+ * la distrugge quando l'indirizzo non e' piu' `restaSu()` o la sessione cambia.
+ * Lancia se il browser non sa disegnare (WebGL): chi chiama lo dice.
+ */
+export function openMap(ml, area, { center = MAP_START.center, zoom = MAP_START.zoom, restaSu = sullaRotta } = {}) {
+  distruggi();
+  const map = new ml.Map({
+    container: area,
+    style: MAP_STYLE_URL,
+    center,
+    zoom,
+    attributionControl: { compact: false },
+  });
+  map.addControl(new ml.NavigationControl({ showCompass: false }), 'top-right');
+  const suHash = () => { if (!restaSu()) distruggi(); };
+  window.addEventListener('hashchange', suHash);
+  const staccaAuth = onAuthChange(() => distruggi());
+  attiva = {
+    map,
+    stacca: () => {
+      window.removeEventListener('hashchange', suHash);
+      staccaAuth();
+    },
+  };
+  return map;
+}
+
+// T4: dopo una conferma riuscita la mappa generale apre l'edificio appena posizionato.
+let daEvidenziare = null;
+export function highlightAfterConfirm(buildingId) {
+  daEvidenziare = buildingId === null || buildingId === undefined ? null : Number(buildingId);
 }
 
 function sullaRotta() {
@@ -166,6 +216,9 @@ function contenutoRiquadro(b, { dettaglio = null, stato = 'loading' } = {}) {
 }
 
 export async function renderTerritorio(container) {
+  // T4: `#/edifici/mappa/posiziona/{id}` e' la pagina di posizionamento
+  const parametri = currentRouteParams();
+  if (parametri[1] === 'posiziona') return renderPosiziona(container, parametri[2]);
   distruggi();
   container.innerHTML = `
     <div class="territorio-page">
@@ -237,29 +290,11 @@ export async function renderTerritorio(container) {
 
   let map;
   try {
-    map = new ml.Map({
-      container: area,
-      style: MAP_STYLE_URL,
-      center: MAP_START.center,
-      zoom: MAP_START.zoom,
-      attributionControl: { compact: false },
-    });
+    map = openMap(ml, area);
   } catch (_errore) {
     mostra('Questo browser non riesce a disegnare la mappa (WebGL non disponibile).', { errore: true });
     return;
   }
-  map.addControl(new ml.NavigationControl({ showCompass: false }), 'top-right');
-
-  const suHash = () => { if (!sullaRotta()) distruggi(); };
-  window.addEventListener('hashchange', suHash);
-  const staccaAuth = onAuthChange(() => distruggi());
-  attiva = {
-    map,
-    stacca: () => {
-      window.removeEventListener('hashchange', suHash);
-      staccaAuth();
-    },
-  };
 
   // I marker: un livello della mappa sui SOLI edifici verificati. Lo stato
   // «attivo» e' uno stato della feature (colore e raggio), uno alla volta.
@@ -324,6 +359,15 @@ export async function renderTerritorio(container) {
     });
     map.on('mouseenter', LIVELLO, () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', LIVELLO, () => { map.getCanvas().style.cursor = ''; });
+    const evidenzia = daEvidenziare;
+    daEvidenziare = null;
+    const appena = evidenzia !== null ? perId.get(evidenzia) : null;
+    if (appena) {
+      // T4: l'edificio appena confermato, al centro e gia' aperto (marker attivo)
+      map.jumpTo({ center: [appena.lng, appena.lat], zoom: 17 });
+      apriRiquadro(evidenzia);
+      return;
+    }
     const vista = viewFor(g.verified);
     if (vista && vista.bounds) map.fitBounds(vista.bounds, { padding: 48, maxZoom: 17, duration: 0 });
     else if (vista) map.jumpTo({ center: vista.center, zoom: vista.zoom });

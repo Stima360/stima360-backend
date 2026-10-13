@@ -335,6 +335,10 @@ export function errorMessage(error) {
     case 'CENSUS_NOT_INSTALLED': return 'Il modulo Censimento non è disponibile su questo ambiente.';
     case 'PERTINENZE_NOT_INSTALLED': return 'Le pertinenze autonome non sono ancora disponibili su questo ambiente (aggiornamento del database in corso).';
     case 'NOT_FOUND': return 'Non trovato: potrebbe essere stato archiviato o appartenere a un’altra agenzia.';
+    // STIMA360 TERRITORIO T4: la verifica della posizione
+    case 'POSITION_INVALID': return 'Posizione non valida: tocca un punto sulla mappa e riprova.';
+    case 'POSITION_NOT_INSTALLED': return 'La verifica della posizione non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
+    case 'POSITION_NOT_SAVED': return 'La posizione non è stata salvata: riprova.';
     // CENSIMENTO-2: composizione e schede delle unità
     case 'COMPOSITION_NOT_INSTALLED': return 'La composizione degli edifici non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
     case 'COMPOSITION_REQUIRED': return 'Dichiara prima la composizione dell’edificio: abitazioni, commerciali, altre unità e pertinenze.';

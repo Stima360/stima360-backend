@@ -8,7 +8,7 @@ from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa for
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import building_deletion, building_lifecycle, census, composition, interactions, mandates, service, site_sync
+from . import building_deletion, building_lifecycle, building_position, census, composition, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -173,6 +173,12 @@ def withdraw_building_deletion_request(request_id:int,ctx:OperatorContext=Depend
 def list_building_trash_groups(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_deletion.list_trash_groups,ctx,limit=limit,offset=offset)
 @router.get('/trash/buildings')
 def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.list_trash,ctx,limit=limit,offset=offset)
+# STIMA360 TERRITORIO T4: la posizione VERIFICATA dell'edificio. Lettura dello stato e conferma
+# esplicita (coordinate + verifica, operatore e data dal server); stesso gate e stessa traduzione.
+@router.get('/buildings/{building_id}/position')
+def get_building_position(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_position.position_info,ctx,building_id)
+@router.post('/buildings/{building_id}/position')
+def confirm_building_position(building_id:int,p:PositionConfirm,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_position.confirm_position,ctx,building_id,p)
 @router.get('/buildings/{building_id}')
 def get_building(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(lambda *a:building_deletion.scheda_tenant(census.get_building(*a)),ctx,building_id)
 @router.patch('/buildings/{building_id}')

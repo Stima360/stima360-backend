@@ -10259,7 +10259,8 @@ def test_cens3_01_edifici_e_censimento_solo_rifiuti_e_nessuna_scrittura(monkeypa
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: piu' la PATCH .../census-data (sonda anonima)
     # e la PATCH vuota sui dati catastali dell'immobile altrui (404).
     # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: piu' GET e POST .../deletion-request (sonda anonima).
-    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 24
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: piu' GET e POST .../position (sonda anonima).
+    assert sum(1 for i in idents if i.startswith("BUILDINGS-anonimo-")) == len(cert.BUILDINGS_OPERAZIONI) == 26
     for a, b in (("A", "B"), ("B", "A")):
         for nome in ("list-{a}-non-vede-{b}", "dettaglio-edificio-{a}-{b}", "patch-edificio-{a}-{b}",
                      "composizione-edificio-{a}-{b}",
@@ -10327,7 +10328,9 @@ def test_cens3_05_le_sonde_coprono_le_rotte_del_censimento_tranne_la_delete():
     # dalla sonda anonima e, autenticata, dalla PATCH vuota sull'immobile altrui.
     # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: GET e POST .../deletion-request,
     # coperte dalla sonda anonima (nessuna sonda autenticata crea una richiesta).
-    assert len(montate) == 25
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: GET e POST .../position, coperte dalla
+    # sonda anonima (nessuna sonda conferma una posizione).
+    assert len(montate) == 27
     assert set(cert.BUILDINGS_OPERAZIONI) == {x for x in montate if x[0] != "DELETE"}, \
         set(cert.BUILDINGS_OPERAZIONI) ^ montate
     assert not [m for m, _p in cert.BUILDINGS_OPERAZIONI if m == "DELETE"]

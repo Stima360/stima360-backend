@@ -126,3 +126,52 @@ export function viewFor(verified) {
 export function toPlaceText(n) {
   return `Edifici da posizionare: ${n}`;
 }
+
+// ---------------------------------------------------------------------------
+// STIMA360 TERRITORIO T4 - posizionamento manuale e verifica
+//
+// `position_verified_at` e `position_verified_by_user_id` li scrive SOLO il
+// server, alla conferma (migration 102 + property/building_position.py). Qui si
+// decide soltanto cosa mostrare e quando la conferma e' ammessa.
+// ---------------------------------------------------------------------------
+
+/** Sotto questo zoom il punto e' troppo impreciso per essere confermato. */
+export const MIN_CONFIRM_ZOOM = 17;
+
+/** L'etichetta del comando nella scheda edificio. */
+export function positionActionLabel(stato) {
+  if (stato === 'verified') return 'Correggi posizione';
+  if (stato === 'unverified') return 'Verifica posizione';
+  return 'Posiziona sulla mappa';
+}
+
+function dataItaliana(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', year: 'numeric' })
+    .format(new Date(t));
+}
+
+/** La riga «Posizione» della scheda. `chi` = nome di chi ha verificato, se noto. */
+export function positionFactText(b, chi = null) {
+  const stato = positionStatus(b);
+  if (stato === 'verified') {
+    const quando = dataItaliana(b.position_verified_at);
+    return `Verificata${quando ? ` il ${quando}` : ''}${chi ? ` da ${chi}` : ''}`;
+  }
+  if (stato === 'unverified') return 'Da verificare';
+  if (stato === 'invalid') return 'Coordinate non valide: da posizionare';
+  return 'Non indicata';
+}
+
+/** Il punto scelto, nel formato della colonna (NUMERIC(10,7)), o `null` se non valido. */
+export function pointForSave(lng, lat) {
+  const c = parseCoordinates({ latitude: Number(lat).toFixed(7), longitude: Number(lng).toFixed(7) });
+  if (!c || !c.valid) return null;
+  return { latitude: Number(lat).toFixed(7), longitude: Number(lng).toFixed(7) };
+}
+
+/** La conferma e' ammessa con un punto valido, a uno zoom sufficiente, senza invii in corso. */
+export function canConfirm({ point, zoom, saving = false }) {
+  return Boolean(point) && !saving && Number.isFinite(zoom) && zoom >= MIN_CONFIRM_ZOOM;
+}
