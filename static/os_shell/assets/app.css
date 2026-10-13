@@ -1342,3 +1342,27 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .territorio-building-actions .btn { flex: 1 1 100%; justify-content: center; }
 }
+
+/* STIMA360 TERRITORIO T5-bis: «Cerca indirizzo» nella pagina di posizionamento. Campo e
+   pulsante sulla stessa riga (a tutta larghezza su smartphone), risultati come voci toccabili
+   da 44 px, nota sulla trasmissione al servizio esterno e attribuzione. Solo regole nuove. */
+.territorio-search { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.territorio-search-label { font-weight: 600; }
+.territorio-search-row { display: flex; gap: 8px; }
+.territorio-search-row .input { flex: 1 1 auto; min-width: 0; min-height: 44px; }
+.territorio-search-row .btn { min-height: 44px; white-space: nowrap; }
+.territorio-search-note { margin: 0; font-size: 12px; }
+.territorio-search-status { margin: 0; font-size: 13px; }
+.territorio-search-status.is-error { color: var(--danger); }
+.territorio-search-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.territorio-search-results[hidden], .territorio-search-status[hidden], .territorio-search-attrib[hidden] { display: none; }
+.territorio-search-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 44px; padding: 8px 10px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); cursor: pointer; font: inherit; }
+.territorio-search-pick:hover, .territorio-search-pick:focus-visible { border-color: var(--primary); }
+.territorio-search-pick.is-picked { border-color: #ea580c; box-shadow: 0 0 0 2px rgba(234, 88, 12, .25); }
+.territorio-search-pick-title { overflow-wrap: anywhere; }
+.territorio-search-pick-sub { font-size: 12px; }
+.territorio-search-attrib { margin: 0; font-size: 11px; }
+@media (max-width: 767px) {
+  .territorio-search-row { flex-direction: column; }
+  .territorio-search-row .btn { width: 100%; }
+}

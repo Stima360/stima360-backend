@@ -236,7 +236,11 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     posizione = [r for r in router.routes if r.path == "/api/property/buildings/{building_id}/position"]
     assert sorted(m for r in posizione for m in r.methods) == ["GET", "POST"]
     assert all(_gate in {d.call for d in r.dependant.dependencies} for r in posizione)
-    assert len(router.routes) == 66
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T5-bis: 66 -> 67 (GET /api/property/geocode, la
+    # ricerca indirizzo per la mappa), stesso gate (verificato qui sotto).
+    ricerca = [r for r in router.routes if r.path == "/api/property/geocode"]
+    assert len(ricerca) == 1 and ricerca[0].methods == {"GET"} and _gate in {d.call for d in ricerca[0].dependant.dependencies}
+    assert len(router.routes) == 67
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

@@ -164,6 +164,12 @@ export function confirmBuildingPosition(buildingId, { latitude, longitude }) {
   return request('POST', `/buildings/${id(buildingId)}/position`, { latitude, longitude });
 }
 
+// STIMA360 TERRITORIO T5-bis: ricerca indirizzo per la mappa. SOLO il testo scritto
+// dall'operatore; il backend parla con il servizio esterno (limite globale, cache).
+export function geocode(q) {
+  return request('GET', `/geocode${query({ q })}`);
+}
+
 // --- Unita' di censimento -------------------------------------------------------
 
 export function createUnit(payload) {

@@ -64,9 +64,14 @@ def test_b01_il_client_manda_solo_le_coordinate():
     corpo = corpo[:corpo.index("\n}\n")]
     assert "{ latitude, longitude }" in corpo and "position_verified" not in corpo and "user" not in corpo
     vista = _codice(POSIZIONA)
-    for vietata in ("geolocation", "Geolocate", "geocod", "nominatim", "fetch(", "apiPatch", "updateBuilding",
-                    "position_verified_by", "user_id", "localStorage", "innerHTML = `${"):
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T5-bis: la ricerca indirizzo esiste, ma SOLO tramite il
+    # backend (`api.geocode`) e SOLO dal pulsante: nessuna chiamata diretta del browser a un provider,
+    # nessun autocompletamento.
+    for vietata in ("geolocation", "Geolocate", "nominatim", "openstreetmap.org", "fetch(", "apiPatch", "updateBuilding",
+                    "position_verified_by", "user_id", "localStorage", "innerHTML = `${", "addEventListener('input'",
+                    "addEventListener('keyup'", "oninput"):
         assert vietata not in vista, vietata
+    assert vista.count("api.geocode(") == 1 and "addEventListener('submit'" in vista
     assert vista.count("draggable: true") == 1 and vista.count("draggable: false") == 1
     assert "esito.status !== 'verified'" in vista and "highlightAfterConfirm(Number(id))" in vista
     assert "openMap(ml, area" in vista and "loadMapLibre()" in vista             # stessa mappa, stesso caricatore

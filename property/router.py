@@ -8,7 +8,7 @@ from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa for
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import building_deletion, building_lifecycle, building_position, census, composition, interactions, mandates, service, site_sync
+from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -175,6 +175,11 @@ def list_building_trash_groups(limit:int=Query(50,ge=1,le=200),offset:int=Query(
 def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_lifecycle.list_trash,ctx,limit=limit,offset=offset)
 # STIMA360 TERRITORIO T4: la posizione VERIFICATA dell'edificio. Lettura dello stato e conferma
 # esplicita (coordinate + verifica, operatore e data dal server); stesso gate e stessa traduzione.
+# STIMA360 TERRITORIO T5-bis: ricerca indirizzo per la mappa (Nominatim/OpenStreetMap tramite il
+# backend: limite globale 1 req/s con advisory lock, cache, solo su richiesta esplicita). Suggerisce
+# e basta: nessuna scrittura, la verifica resta la conferma T4.
+@router.get('/geocode')
+def geocode_search(q:str=Query(...,min_length=1,max_length=300),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(geocode.search,ctx,q)
 @router.get('/buildings/{building_id}/position')
 def get_building_position(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_position.position_info,ctx,building_id)
 @router.post('/buildings/{building_id}/position')

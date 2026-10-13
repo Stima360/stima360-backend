@@ -339,6 +339,10 @@ export function errorMessage(error) {
     case 'POSITION_INVALID': return 'Posizione non valida: tocca un punto sulla mappa e riprova.';
     case 'POSITION_NOT_INSTALLED': return 'La verifica della posizione non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
     case 'POSITION_NOT_SAVED': return 'La posizione non è stata salvata: riprova.';
+    // STIMA360 TERRITORIO T5-bis: la ricerca indirizzo
+    case 'GEOCODE_DISABLED': return 'La ricerca indirizzo non è attiva su questo ambiente.';
+    case 'GEOCODE_BUSY': return 'Troppe ricerche in corso: riprova fra qualche secondo.';
+    case 'GEOCODE_UNAVAILABLE': return 'Il servizio di ricerca indirizzi non risponde: riprova più tardi.';
     // CENSIMENTO-2: composizione e schede delle unità
     case 'COMPOSITION_NOT_INSTALLED': return 'La composizione degli edifici non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
     case 'COMPOSITION_REQUIRED': return 'Dichiara prima la composizione dell’edificio: abitazioni, commerciali, altre unità e pertinenze.';
