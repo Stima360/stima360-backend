@@ -175,3 +175,48 @@ export function pointForSave(lng, lat) {
 export function canConfirm({ point, zoom, saving = false }) {
   return Boolean(point) && !saving && Number.isFinite(zoom) && zoom >= MIN_CONFIRM_ZOOM;
 }
+
+// ---------------------------------------------------------------------------
+// STIMA360 TERRITORIO ZONA-2 - inserimento geografico integrato
+//
+// Da Zona si sceglie un punto (ricerca indirizzo T5-bis o tocco) e da li' si
+// apre la procedura guidata ESISTENTE (census/census-wizard.js). Qui solo le
+// regole pure: cosa precompilare dal risultato della ricerca e come descrivere
+// il punto. La posizione si registra SOLO con la conferma T4 dell'edificio.
+// ---------------------------------------------------------------------------
+
+const testo = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
+/**
+ * I campi del passo 1 della procedura guidata ricavabili da un risultato della
+ * ricerca indirizzo (`risultato` = una voce di GET /api/property/geocode) o da
+ * nulla (tocco sulla mappa). Il Comune solo se e' nel catalogo territoriale
+ * dell'agenzia (`municipalities` = catalogMunicipalities), confrontato senza
+ * maiuscole/accenti: altrimenti resta da scegliere. Il civico solo se e'
+ * quello cercato (mai un civico diverso spacciato per buono).
+ */
+export function wizardFieldsFromPlace(risultato, municipalities) {
+  const campi = { city: '', address: '', civic_number: '' };
+  if (!risultato || typeof risultato !== 'object') return campi;
+  const piega = (s) => testo(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const comune = (municipalities || []).find((m) => piega(m.name) === piega(risultato.town) && piega(m.name));
+  if (comune) campi.city = comune.name;
+  campi.address = testo(risultato.road).slice(0, 250);
+  if (risultato.precision === 'house' && risultato.house_number_matches === true) {
+    campi.civic_number = testo(risultato.house_number).toUpperCase().slice(0, 30);
+  }
+  return campi;
+}
+
+/** Il punto scelto, leggibile (5 decimali: ~1 m), per il pannello e i riepiloghi. */
+export function chosenPointText(punto) {
+  if (!punto || !Number.isFinite(Number(punto.lat)) || !Number.isFinite(Number(punto.lng))) return '';
+  return `${Number(punto.lat).toFixed(5)}, ${Number(punto.lng).toFixed(5)}`;
+}
+
+/** Le azioni di Zona dopo la conferma del punto: solo cio' che il CRM sa gia' fare. */
+export const INSERT_ACTIONS = [
+  { key: 'building', label: 'Nuovo edificio', text: 'Palazzina o edificio con più unità: la posizione viene verificata al salvataggio.' },
+  { key: 'unit', label: 'Nuovo immobile', text: 'Un’unità: in una palazzina (la posizione va all’edificio) oppure autonoma (villa, locale: vedi nota).' },
+  { key: 'link', label: 'Collega un edificio esistente', text: 'Verifica la posizione di un edificio già in archivio su questo punto.' },
+];

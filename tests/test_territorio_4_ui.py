@@ -71,7 +71,15 @@ def test_b01_il_client_manda_solo_le_coordinate():
                     "position_verified_by", "user_id", "localStorage", "innerHTML = `${", "addEventListener('input'",
                     "addEventListener('keyup'", "oninput"):
         assert vietata not in vista, vietata
-    assert vista.count("api.geocode(") == 1 and "addEventListener('submit'" in vista
+    # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA-2: il modulo «Cerca indirizzo» e' condiviso con
+    # Zona (views/territorio-inserisci.js): e' LI' che sta l'unica chiamata `api.geocode(`, sempre solo dal
+    # pulsante (submit); questa pagina lo monta e basta, con le stesse regole.
+    ricerca = _codice(ASSETS / "views" / "territorio-inserisci.js")
+    for vietata in ("geolocation", "Geolocate", "nominatim", "openstreetmap.org", "fetch(", "apiPatch", "updateBuilding",
+                    "position_verified_by", "user_id", "localStorage", "addEventListener('input'", "addEventListener('keyup'", "oninput"):
+        assert vietata not in ricerca, vietata
+    assert vista.count("api.geocode(") == 0 and vista.count("mountGeocodeSearch(") == 1
+    assert ricerca.count("api.geocode(") == 1 and "addEventListener('submit'" in ricerca
     assert vista.count("draggable: true") == 1 and vista.count("draggable: false") == 1
     assert "esito.status !== 'verified'" in vista and "highlightAfterConfirm(Number(id))" in vista
     assert "openMap(ml, area" in vista and "loadMapLibre()" in vista             # stessa mappa, stesso caricatore

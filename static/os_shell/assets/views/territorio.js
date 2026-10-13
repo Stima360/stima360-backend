@@ -32,6 +32,12 @@
 // L'edificio selezionato e' nell'indirizzo (#/edifici/mappa/edificio/{id},
 // senza ricaricare): tornando indietro dalla scheda la mappa lo riapre.
 //
+// ZONA-2 - «Inserisci dalla mappa» (views/territorio-inserisci.js): dalla mappa
+// generale si sceglie un punto (ricerca indirizzo o tocco) e si aprono i moduli
+// ESISTENTI del CRM (procedura guidata, conferma T4 su un edificio esistente). La
+// posizione scelta si collega all'edificio al suo salvataggio; questa vista non
+// scrive nulla: il pannello e' montato qui e vive con la mappa.
+//
 // Ciclo di vita: al massimo UNA mappa viva. Si distrugge (`map.remove()`, che
 // libera WebGL, worker, livelli, gestori e riquadri) quando si apre un'altra
 // rotta, quando la sessione cambia (logout / altra agenzia) o quando la vista
@@ -51,6 +57,7 @@ import {
 import { loadFormOptions } from '../components/property-form.js';
 import { loadMapLibre } from '../territorio/maplibre-loader.js';
 import { renderPosiziona } from './territorio-posiziona.js';
+import { mountInserimento } from './territorio-inserisci.js';
 import {
   STATUS_LABELS, classifyBuildings, toPlaceText, verifiedFeatureCollection, viewFor,
 } from '../territorio/territorio-model.js';
@@ -109,7 +116,9 @@ export function openMap(ml, area, { center = MAP_START.center, zoom = MAP_START.
     attributionControl: { compact: false },
   });
   map.addControl(new ml.NavigationControl({ showCompass: false }), 'top-right');
-  const suHash = () => { if (!restaSu()) distruggi(); };
+  // ZONA-2: il gestore di QUESTA mappa chiude solo lei, mai una mappa aperta dopo
+  // (nello stesso cambio di indirizzo) da un'altra pagina.
+  const suHash = () => { if (!restaSu() && attiva && attiva.map === map) distruggi(); };
   window.addEventListener('hashchange', suHash);
   const staccaAuth = onAuthChange(() => distruggi());
   attiva = {
@@ -312,6 +321,7 @@ export async function renderTerritorio(container) {
         <span data-buildings-status-text>Caricamento degli edifici…</span>
         <button type="button" class="btn ghost" data-buildings-retry hidden>Riprova</button>
       </div>
+      <details class="card territorio-insert" data-insert-panel></details>
       <div class="territorio-map card" data-map aria-label="Mappa stradale"></div>
       <section class="card territorio-building" data-building-panel hidden aria-live="polite"></section>
       <details class="card territorio-pending" data-to-place hidden></details>
@@ -376,6 +386,18 @@ export async function renderTerritorio(container) {
     mostra('Questo browser non riesce a disegnare la mappa (WebGL non disponibile).', { errore: true });
     return;
   }
+
+  // ZONA-2: il pannello «Inserisci dalla mappa», sulla stessa mappa viva. Dopo una
+  // posizione verificata la mappa si riapre con quell'edificio evidenziato (rilettura).
+  mountInserimento(container.querySelector('[data-insert-panel]'), {
+    map, ml, vivo,
+    onLinked: (id) => {
+      highlightAfterConfirm(id);
+      const voluto = `${MAP_ROUTE_HASH}/edificio/${id}`;
+      if (window.location.hash === voluto) renderTerritorio(container);
+      else navigate('edifici', ['mappa', 'edificio', String(id)]);
+    },
+  });
 
   // I marker: un livello della mappa sui SOLI edifici verificati. Lo stato
   // «attivo» e' uno stato della feature (colore e raggio), uno alla volta.

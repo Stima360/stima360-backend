@@ -57,11 +57,17 @@ const PERCORSI = [
 
 /**
  * @param {{wizardDialog: HTMLDialogElement, formDialog?: HTMLDialogElement, options: object,
- *          recordKind?: 'crm'|'census', state?: object}} opts
+ *          recordKind?: 'crm'|'census', state?: object, onBuildingReady?: Function}} opts
  *   options = GET /api/property/form-options (catalogo, etichette, agenti)
  *   formDialog = il dialog del form commerciale (scheda singola `crm`)
+ *   onBuildingReady = STIMA360 TERRITORIO ZONA-2: chiamata UNA volta quando l'edificio
+ *     del passo 4 e' pronto (`created` = salvato ora, altrimenti scelto fra gli
+ *     esistenti); puo' restituire un nodo DOM che il passo «Edificio pronto» mostra
+ *     sotto il riepilogo (es. la posizione scelta su Zona). Mai chiamata senza
+ *     edificio; un suo errore non tocca l'edificio gia' salvato.
  */
-export function startCreation({ wizardDialog, formDialog = null, options: opzioni, recordKind = 'census', state = null } = {}) {
+export function startCreation({ wizardDialog, formDialog = null, options: opzioni, recordKind = 'census', state = null,
+                                onBuildingReady = null } = {}) {
   const comuni = catalogMunicipalities(opzioni.territory || []);
   const stato = state || wizardInitialState();
   const commerciale = recordKind === 'crm';
@@ -240,10 +246,11 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
             ${b.same_civic ? renderBadge('Stesso civico', 'warn') : ''}</div>
           <button type="button" class="btn primary btn-small" data-use-building="${escapeHtml(b.id)}">Usa questo edificio</button></li>`;
       }).join('')}</ul>`;
-      area.querySelectorAll('[data-use-building]').forEach((btn) => btn.addEventListener('click', () => {
+      area.querySelectorAll('[data-use-building]').forEach((btn) => btn.addEventListener('click', async () => {
         const scelto = candidati.find((b) => String(b.id) === btn.dataset.useBuilding);
         stato.building = scelto;
         stato.building_saved = false;
+        await edificioPronto(false);
         passo5();
       }));
     }
@@ -302,9 +309,10 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           banner.innerHTML = `<div class="census-banner" data-similar-banner><strong>Esiste già un edificio con questi dati</strong>
             <ul>${error.similar.slice(0, 5).map((s) => `<li>${escapeHtml(buildingTitle(s))} <small class="muted">${escapeHtml(buildingStreet(s))}</small> <button type="button" class="btn ghost btn-small" data-use-similar="${escapeHtml(s.id)}">Usa questo</button></li>`).join('')}</ul>
             <div class="action-bar"><button type="button" class="btn" data-save-anyway>Crea comunque un edificio distinto</button></div></div>`;
-          banner.querySelectorAll('[data-use-similar]').forEach((b) => b.addEventListener('click', () => {
+          banner.querySelectorAll('[data-use-similar]').forEach((b) => b.addEventListener('click', async () => {
             stato.building = error.similar.find((s) => String(s.id) === b.dataset.useSimilar);
             stato.building_saved = false;
+            await edificioPronto(false);
             passo5();
           }));
           banner.querySelector('[data-save-anyway]').addEventListener('click', () => salva(true));
@@ -319,6 +327,7 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
       stato.building = esito;
       stato.building_saved = true;
       await salvaComposizione();
+      await edificioPronto(true);
       passo5();
     }
     salvaBtn.addEventListener('click', () => salva(false));
@@ -340,6 +349,20 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
     }
   }
 
+  // STIMA360 TERRITORIO ZONA-2: chi ha aperto la procedura (Zona) puo' agganciare un
+  // passo DOPO che l'edificio e' pronto (es. collegare la posizione scelta sulla mappa).
+  // Il nodo restituito si mostra nel passo 5; un errore del gancio non tocca l'edificio.
+  async function edificioPronto(creato) {
+    stato.ready_panel = null;
+    if (typeof onBuildingReady !== 'function' || !stato.building) return;
+    try {
+      const nodo = await onBuildingReady(stato.building, { created: creato });
+      stato.ready_panel = nodo && typeof nodo === 'object' && typeof nodo.appendChild === 'function' ? nodo : null;
+    } catch (_errore) {
+      stato.ready_panel = null;
+    }
+  }
+
   // --- 5. Edificio pronto -----------------------------------------------------------------
   function passo5() {
     apri();
@@ -358,6 +381,7 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           <div class="action-bar"><button type="button" class="btn btn-small" data-retry-composition>Riprova la composizione</button></div></div>` : ''}
         ${stato.building_saved && stato.composition_saved ? '<p class="muted" data-composition-saved>Composizione salvata.</p>' : ''}
         ${!stato.building_saved && wizardComposition(stato).given ? '<p class="muted" data-composition-not-applied>La composizione indicata non viene applicata a un edificio già esistente: si aggiorna dalla sua scheda.</p>' : ''}
+        <div data-building-ready-extra></div>
         <p class="muted">Ora le unità: ${commerciale ? 'nasceranno come schede commerciali' : 'nasceranno come schede di censimento'}, con l’indirizzo dell’edificio.</p>
         <div class="modal-actions">
           ${stato.building_saved ? '' : '<button type="button" class="btn ghost" data-change-building>← Scegli un altro edificio</button>'}
@@ -365,6 +389,8 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
           <button type="button" class="btn primary" data-add-units>${stato.path === 'single' ? 'Inserisci l’unità' : 'Inserisci le unità'}</button>
         </div>
       </div>`;
+    // ZONA-2: il nodo del gancio (stesso nodo a ogni ridisegno del passo: conserva il suo stato)
+    if (stato.ready_panel) wizardDialog.querySelector('[data-building-ready-extra]').appendChild(stato.ready_panel);
     const riprova = wizardDialog.querySelector('[data-retry-composition]');
     if (riprova) riprova.addEventListener('click', async () => { riprova.disabled = true; await salvaComposizione(); passo5(); });
     const cambia = wizardDialog.querySelector('[data-change-building]');

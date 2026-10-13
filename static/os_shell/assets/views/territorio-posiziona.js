@@ -24,6 +24,11 @@
 // civico non e' stato trovato lo si dice: il punto e' sulla via, non sull'edificio.
 // Niente viene salvato dalla ricerca: solo «Conferma posizione» (T4).
 //
+// ZONA-2 - il modulo di ricerca e' condiviso con Zona (views/territorio-inserisci.js:
+// stesso scheletro, stessa regola «solo dal pulsante»). Se su Zona e' stato scelto
+// un punto (`chosenPoint`), questa pagina RIPARTE da quel punto come provvisorio:
+// e' la via di recupero quando il collegamento automatico non e' riuscito.
+//
 // I dati del CRM entrano nel DOM solo come `textContent`.
 
 import { sessionEpoch } from '../core/auth.js';
@@ -35,6 +40,7 @@ import {
   MIN_CONFIRM_ZOOM, canConfirm, parseCoordinates, pointForSave, positionStatus,
 } from '../territorio/territorio-model.js';
 import { MAP_START, highlightAfterConfirm, isActiveMap, openMap } from './territorio.js';
+import { chosenPoint, clearChosenPoint, geocodeSearchHtml, mountGeocodeSearch } from './territorio-inserisci.js';
 
 const TESTI = {
   tocca: 'Tocca il punto esatto dell’edificio sulla mappa.',
@@ -44,6 +50,7 @@ const TESTI = {
   salva: 'Salvataggio della posizione…',
   civicoNo: 'Civico non trovato: il punto è sulla via, non sull’edificio. Spostalo sul punto esatto.',
   risultato: 'Punto suggerito dalla ricerca: controllalo e correggilo se serve.',
+  daZona: 'Punto scelto su Zona: controllalo e confermalo, oppure correggilo.',
 };
 
 function pin(classe, etichetta) {
@@ -72,17 +79,7 @@ export async function renderPosiziona(container, rawId) {
         <h2 data-place-title>Posiziona edificio</h2>
         <div class="muted" data-place-subtitle></div>
       </div>
-      <form class="territorio-search card" data-geocode-form novalidate>
-        <label class="territorio-search-label" for="geocode-q">Cerca indirizzo</label>
-        <div class="territorio-search-row">
-          <input id="geocode-q" class="input" type="search" autocomplete="off" autocapitalize="sentences" enterkeyhint="search" placeholder="Es. Via Roma 25, Giulianova" maxlength="200" data-geocode-input>
-          <button type="submit" class="btn primary" data-geocode-submit>Cerca</button>
-        </div>
-        <p class="muted territorio-search-note">L’indirizzo che cerchi viene inviato al servizio esterno OpenStreetMap (Nominatim) per trovare il punto sulla mappa. Il risultato è solo un suggerimento: la posizione si salva con «Conferma posizione».</p>
-        <p class="territorio-search-status" data-geocode-status role="status" aria-live="polite" hidden></p>
-        <ul class="territorio-search-results" data-geocode-results hidden></ul>
-        <p class="muted territorio-search-attrib" data-geocode-attrib hidden>Risultati © OpenStreetMap contributors</p>
-      </form>
+      ${geocodeSearchHtml('la posizione si salva con «Conferma posizione».')}
       <div class="territorio-status" data-map-status role="status" aria-live="polite">
         <span data-map-status-text>Caricamento…</span>
       </div>
@@ -170,87 +167,14 @@ export async function renderPosiziona(container, rawId) {
     else suggerimento.textContent = `${notaRicerca ? `${notaRicerca} ` : ''}${TESTI.pronto} ${TESTI.correggi}`;
   };
 
-  // --- T5-bis: la ricerca indirizzo (solo dal pulsante) ---------------------------
-  const formRicerca = q('[data-geocode-form]');
-  const campoRicerca = q('[data-geocode-input]');
-  const invioRicerca = q('[data-geocode-submit]');
-  const statoRicerca = q('[data-geocode-status]');
-  const elencoRicerca = q('[data-geocode-results]');
-  const attribRicerca = q('[data-geocode-attrib]');
-  let ricercaInCorso = false;
-  const diciRicerca = (testo, { errore = false } = {}) => {
-    statoRicerca.hidden = !testo;
-    statoRicerca.classList.toggle('is-error', errore);
-    statoRicerca.textContent = testo || '';
-  };
-  const usaRisultato = (r) => {
-    const lat = Number(r.latitude);
-    const lng = Number(r.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    const civicoOk = r.precision === 'house' && r.house_number_matches !== false;
-    map.jumpTo({ center: [lng, lat], zoom: civicoOk ? 18 : 16 });
-    scegli({ lng, lat }, { nota: civicoOk ? TESTI.risultato : TESTI.civicoNo });
-    for (const b of elencoRicerca.querySelectorAll('[data-geocode-pick]')) b.classList.toggle('is-picked', b === r.__el);
-  };
-  const mostraRisultati = (risultati) => {
-    elencoRicerca.replaceChildren();
-    if (!risultati.length) {
-      elencoRicerca.hidden = true;
-      attribRicerca.hidden = true;
-      diciRicerca('Nessun risultato: prova con via e comune, oppure tocca il punto sulla mappa.');
-      return;
-    }
-    for (const r of risultati) {
-      const voce = document.createElement('li');
-      const bottone = document.createElement('button');
-      bottone.type = 'button';
-      bottone.className = 'territorio-search-pick';
-      bottone.dataset.geocodePick = r.precision;
-      const titolo = document.createElement('span');
-      titolo.className = 'territorio-search-pick-title';
-      titolo.textContent = r.label;
-      const sotto = document.createElement('span');
-      sotto.className = 'muted territorio-search-pick-sub';
-      sotto.textContent = r.precision === 'house' && r.house_number_matches !== false
-        ? 'Civico trovato'
-        : (r.precision === 'house' ? `Civico ${r.house_number}: diverso da quello cercato` : (r.precision === 'street' ? 'Civico non trovato: punto sulla via' : 'Solo la zona'));
-      bottone.append(titolo, sotto);
-      r.__el = bottone;
-      bottone.addEventListener('click', () => usaRisultato(r));
-      voce.appendChild(bottone);
-      elencoRicerca.appendChild(voce);
-    }
-    elencoRicerca.hidden = false;
-    attribRicerca.hidden = false;
-    diciRicerca(risultati.length === 1 ? '1 risultato: toccalo per centrare la mappa.' : `${risultati.length} risultati: tocca quello giusto per centrare la mappa.`);
-  };
-  formRicerca.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (ricercaInCorso || salvataggio) return;
-    const testo = campoRicerca.value.trim();
-    if (testo.length < 3) {
-      diciRicerca('Scrivi almeno via e comune.', { errore: true });
-      return;
-    }
-    ricercaInCorso = true;
-    invioRicerca.disabled = true;
-    elencoRicerca.hidden = true;
-    attribRicerca.hidden = true;
-    diciRicerca('Ricerca in corso…');
-    let esito;
-    try {
-      esito = await api.geocode(testo);
-    } catch (errore) {
-      if (!vivo()) return;
-      ricercaInCorso = false;
-      invioRicerca.disabled = false;
-      diciRicerca(`Ricerca non riuscita: ${errorMessage(errore)} Puoi comunque toccare il punto sulla mappa.`, { errore: true });
-      return;
-    }
-    if (!vivo()) return;
-    ricercaInCorso = false;
-    invioRicerca.disabled = false;
-    mostraRisultati(Array.isArray(esito && esito.results) ? esito.results : []);
+  // --- T5-bis: la ricerca indirizzo (solo dal pulsante; modulo condiviso, ZONA-2) ---
+  mountGeocodeSearch(q('[data-geocode-form]'), {
+    vivo,
+    puoCercare: () => !salvataggio,
+    onPick: (r) => {
+      map.jumpTo({ center: [r.lng, r.lat], zoom: r.civicoOk ? 18 : 16 });
+      scegli({ lng: r.lng, lat: r.lat }, { nota: r.civicoOk ? TESTI.risultato : TESTI.civicoNo });
+    },
   });
 
   let notaRicerca = null;    // T5-bis: avviso sul punto suggerito (civico trovato o no), finche' non lo si sposta
@@ -275,6 +199,13 @@ export async function renderPosiziona(container, rawId) {
     }
     aggiorna();
   };
+
+  // ZONA-2: il punto scelto su Zona diventa il provvisorio di partenza (recupero)
+  const daZona = chosenPoint();
+  if (daZona) {
+    map.jumpTo({ center: [daZona.lng, daZona.lat], zoom: 18 });
+    scegli({ lng: daZona.lng, lat: daZona.lat }, { nota: TESTI.daZona });
+  }
 
   map.on('load', () => {
     if (!isActiveMap(map)) return;
@@ -331,6 +262,7 @@ export async function renderPosiziona(container, rawId) {
       aggiorna();
       return;
     }
+    if (daZona) clearChosenPoint();          // ZONA-2: il punto di Zona e' stato usato
     highlightAfterConfirm(Number(id));
     navigate('edifici', ['mappa']);
   });

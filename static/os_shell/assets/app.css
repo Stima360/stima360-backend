@@ -1366,3 +1366,34 @@ a.census-unit-main { text-decoration: none; }
   .territorio-search-row { flex-direction: column; }
   .territorio-search-row .btn { width: 100%; }
 }
+
+/* STIMA360 TERRITORIO ZONA-2: «Inserisci dalla mappa» su Zona. Un riquadro richiudibile sopra
+   la mappa (ricerca T5-bis, scelta del punto, conferma, le tre azioni come carte toccabili
+   da 44 px, ricerca dell'edificio da collegare) e il riquadro del gancio nella procedura
+   guidata. Solo regole nuove. */
+.territorio-insert { padding: 0; }
+.territorio-insert-summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; min-height: 44px; display: flex; align-items: center; }
+.territorio-insert-summary::-webkit-details-marker { display: none; }
+.territorio-insert-summary::after { content: '▸'; margin-left: auto; transition: transform .15s; }
+.territorio-insert[open] .territorio-insert-summary::after { transform: rotate(90deg); }
+.territorio-insert-body { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 14px; border-top: 1px solid var(--border); }
+.territorio-insert-body .territorio-search { padding: 10px 0 0; border: 0; background: transparent; box-shadow: none; }
+.territorio-insert-intro { margin: 10px 0 0; font-size: 13px; }
+.territorio-insert-pick .btn { min-height: 44px; }
+.territorio-insert-pick .btn[aria-pressed="true"], .territorio-insert-pick .btn.active { border-color: #ea580c; color: #9a3412; box-shadow: 0 0 0 2px rgba(234, 88, 12, .2); }
+.territorio-insert-point { position: static; box-shadow: none; }
+.territorio-insert-coords { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.territorio-insert-actions { display: flex; flex-direction: column; gap: 8px; }
+.territorio-insert-actions[hidden], .territorio-insert-point[hidden], .territorio-insert-link[hidden] { display: none; }
+.territorio-insert-cards { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.territorio-insert-cards .census-card { min-height: 44px; text-align: left; }
+.territorio-insert-independent { margin: 0; font-size: 12px; }
+.territorio-insert-link { display: flex; flex-direction: column; gap: 8px; }
+.territorio-insert-candidates { margin: 0; }
+.territorio-insert-candidates .census-list-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.territorio-insert-candidates .btn { min-height: 44px; white-space: nowrap; }
+.territorio-ready .action-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.territorio-ready .btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
+@media (min-width: 768px) {
+  .territorio-insert-cards { grid-template-columns: repeat(3, 1fr); }
+}

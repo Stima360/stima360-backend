@@ -190,6 +190,8 @@ globalThis.maplibregl = {
     fitBounds(b, o) { this.fit = [b, o]; }
     jumpTo(o) { this.jump = o; }
     getCanvas() { return { style: {} }; }
+    // SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA-2: lo zoom (la regola di conferma del punto)
+    getZoom() { return this.o && Number.isFinite(this.o.zoom) ? this.o.zoom : 14; }
     remove() { this.removed = true; }
     emit(e) { for (const f of this.h[e] || []) f({}); }
     clickLayer(layer, id) { for (const f of this.lh['click:' + layer] || []) f({ features: [{ id }] }); }
@@ -408,6 +410,8 @@ window.maplibregl = {
         this.c.appendChild(b); } }
     addLayer() {} setFeatureState() {} fitBounds() {} jumpTo() {}
     getCanvas() { return { style: {} }; }
+    // SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA-2: lo zoom (la regola di conferma del punto)
+    getZoom() { return this.o && Number.isFinite(this.o.zoom) ? this.o.zoom : 14; }
     remove() { window.__ml.remove++; }
   },
   NavigationControl: class {},
