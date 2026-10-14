@@ -94,10 +94,15 @@ def test_a02_il_modulo_di_zona_legge_cerca_dal_backend_e_scrive_solo_con_la_conf
     codice = _codice(INSERISCI)
     for vietata in ("geolocation", "Geolocate", "nominatim", "openstreetmap.org", "fetch(", "apiPost", "apiPatch", "apiPut",
                     "updateBuilding", "createBuilding", "createUnit", "updateProperty", "position_verified_by", "user_id",
-                    "localStorage", "sessionStorage", "innerHTML = `${", "addEventListener('input'", "addEventListener('keyup'",
+                    "localStorage", "sessionStorage", "innerHTML = `${", "addEventListener('keyup'",
                     "oninput", "latitude:", "longitude:"):
         assert vietata not in codice, vietata
-    assert codice.count("api.geocode(") == 1 and "addEventListener('submit'" in codice
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: un solo gestore `input` (i campi dell'indirizzo: fa solo decadere
+    # la conferma, nessuna ricerca); la ricerca inversa e' una sola chiamata, mai mentre si scrive.
+    assert codice.count("addEventListener('input'") == 1
+    gestore = codice[codice.index("addEventListener('input'"):]
+    assert "api." not in gestore[:gestore.index("});")]
+    assert codice.count("api.geocode(") == 1 and codice.count("api.reverseGeocode(") == 1 and "addEventListener('submit'" in codice
     assert codice.count("api.confirmBuildingPosition(") == 1 and "esito.status !== 'verified'" in codice
     assert codice.count("startCreation(") == 1 and "recordKind: 'census'" in codice and "onBuildingReady" in codice
     assert "canConfirm(" in codice and "pointForSave(" in codice                        # stessa regola di conferma di T4
@@ -296,7 +301,9 @@ def test_b01_zona_cerca_punto_conferma_nuovo_edificio_posizione_collegata_e_rito
     assert c["punto"] is False and c["azioni"] is True and c["trascinabile"] is False and c["scritture"] == []
     # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: quattro carte (anche «Collega un immobile esistente»).
     assert c["scelto"] == "Punto scelto: 42.80300, 13.91500" and c["carte"] == ["building", "unit", "link", "link-property"]
-    assert c["nota"].startswith("Dalla ricerca: 25, Via Roma")
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: il risultato scelto diventa l'indirizzo DICHIARATO (pannello
+    # «Indirizzo individuato», gia' confermato perche' scelto dall'operatore) e la nota lo riporta.
+    assert c["nota"] == "Indirizzo dichiarato: Via Roma 25, 64018 Tortoreto"
     assert out["passo1"] == {"passo": "1", "city": "Tortoreto", "via": "Via Roma", "civico": "25"}
     assert out["passo2"] == {"passo": "2", "attivo": "building"}
     assert out["passo3"] == {"passo": "3"}

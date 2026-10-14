@@ -38,6 +38,22 @@
 // nel suggerimento; si corregge e si conferma come ogni altro punto. Nulla di
 // automatico: senza «Conferma punto» non succede niente.
 //
+// ZONA-5 - scelta del punto con un GESTO sulla mappa: doppio clic (computer,
+// con lo zoom del doppio clic spento su questa mappa) o pressione prolungata
+// (smartphone: mai durante un trascinamento, mai sui comandi, mai doppia fra
+// touch e mouse), con lo stesso meccanismo del GPS (`scegli` + ricerca
+// dell'indirizzo). Dopo il gesto - e SOLO allora, mai durante trascinamento,
+// zoom o spostamento - UNA ricerca inversa (GET /api/property/reverse-geocode,
+// stesso limite globale della ricerca diretta) riempie il pannello «Indirizzo
+// individuato» (via, civico, Comune, CAP: modificabili; civico assente =
+// vuoto, mai inventato). L'operatore CONFERMA l'indirizzo («Confermi che
+// questo e' l'indirizzo corretto?»: una dichiarazione sua, non una certezza
+// catastale); modificare un campo o spostare il punto la invalida. Solo con
+// l'indirizzo confermato si conferma il punto; poi le azioni di sempre, con
+// la procedura guidata precompilata dall'indirizzo dichiarato. Un punto dalla
+// ricerca diretta arriva gia' con il suo indirizzo (scelto dall'operatore).
+// Se il servizio non risponde, i campi si compilano a mano.
+//
 // I dati del CRM entrano nel DOM solo come `textContent`.
 
 import { sessionEpoch } from '../core/auth.js';
@@ -48,8 +64,8 @@ import {
 import { loadFormOptions } from '../components/property-form.js';
 import { startCreation } from '../census/census-wizard.js';
 import {
-  INSERT_ACTIONS, MIN_CONFIRM_ZOOM, STATUS_LABELS, accuracyText, canConfirm, chosenPointText, pointForSave, positionStatus,
-  propertyTitle, propertyWhere, wizardFieldsFromPlace,
+  INSERT_ACTIONS, MIN_CONFIRM_ZOOM, STATUS_LABELS, accuracyText, addressFieldsFrom, addressSummary, canConfirm, chosenPointText,
+  placeFromAddressFields, pointForSave, positionStatus, propertyTitle, propertyWhere, wizardFieldsFromPlace,
 } from '../territorio/territorio-model.js';
 
 // ---------------------------------------------------------------------------
@@ -195,7 +211,20 @@ const TESTI = {
   attesa: 'Punto scelto in attesa: scegli cosa inserire, oppure cambialo o annullalo.',
   indipendenti: 'Ville, case indipendenti e locali autonomi (senza edificio): al salvataggio il punto scelto diventa la loro posizione verificata. Le unità di una palazzina prendono la posizione dell’edificio, senza un marker proprio.',
   salvatoNonCollegato: 'Immobile salvato, ma posizione non collegata',
+  gesto: 'Punto scelto sulla mappa: controllalo e correggilo se serve.',
+  indirizzoAttesa: 'Conferma prima l’indirizzo qui sopra (o compilalo a mano).',
+  indirizzoCerca: 'Ricerca dell’indirizzo…',
+  indirizzoTrovato: 'Indirizzo suggerito dalla mappa: controllalo, correggilo se serve e confermalo.',
+  indirizzoSenzaCivico: 'Civico non trovato: completalo se lo conosci, altrimenti lascialo vuoto (non va inventato).',
+  indirizzoNonTrovato: 'Nessun indirizzo trovato per questo punto: compilalo a mano e confermalo.',
+  indirizzoErrore: 'Ricerca dell’indirizzo non riuscita: compilalo a mano e confermalo.',
+  indirizzoSpostato: 'Punto spostato: ricontrolla l’indirizzo e confermalo di nuovo (oppure cercalo di nuovo).',
+  indirizzoDaRicerca: 'Indirizzo del risultato scelto: puoi correggerlo.',
+  indirizzoConfermato: 'Indirizzo confermato.',
+  indirizzoModificato: 'Indirizzo modificato: confermalo di nuovo.',
 };
+const PRESSIONE_MS = 600;        // pressione prolungata (smartphone)
+const PRESSIONE_PX = 10;         // oltre, e' un trascinamento
 
 function pin(classe, etichetta) {
   const el = document.createElement('div');
@@ -239,6 +268,22 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
         </div>
         <div class="territorio-place-bar territorio-insert-point" data-insert-point hidden>
           <p class="territorio-insert-coords" data-insert-point-text></p>
+          <section class="territorio-address" data-insert-address hidden>
+            <h3 class="territorio-address-title">Indirizzo individuato</h3>
+            <p class="territorio-address-status" data-address-status role="status" aria-live="polite"></p>
+            <div class="form-grid-2 territorio-address-grid">
+              <div class="form-field"><label for="insert-address-road">Via</label><input id="insert-address-road" class="input" maxlength="250" autocomplete="off" data-address-road></div>
+              <div class="form-field"><label for="insert-address-civic">Numero civico</label><input id="insert-address-civic" class="input" maxlength="30" autocomplete="off" data-address-civic></div>
+              <div class="form-field"><label for="insert-address-town">Comune</label><input id="insert-address-town" class="input" maxlength="120" autocomplete="off" data-address-town></div>
+              <div class="form-field"><label for="insert-address-postcode">CAP</label><input id="insert-address-postcode" class="input" maxlength="20" inputmode="numeric" autocomplete="off" data-address-postcode></div>
+            </div>
+            <p class="territorio-address-question">Confermi che questo è l’indirizzo corretto?</p>
+            <p class="muted territorio-address-note">È l’indirizzo che dichiari tu: non è una certificazione catastale. Il punto sulla mappa si conferma a parte.</p>
+            <div class="territorio-place-actions territorio-address-actions">
+              <button type="button" class="btn ghost" data-address-refresh>Cerca di nuovo l’indirizzo</button>
+              <button type="button" class="btn primary" data-address-confirm>Conferma indirizzo</button>
+            </div>
+          </section>
           <p class="territorio-place-hint" data-insert-hint role="status" aria-live="polite"></p>
           <div class="territorio-place-actions">
             <button type="button" class="btn ghost" data-insert-cancel>Annulla</button>
@@ -270,6 +315,11 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   const q = (s) => host.querySelector(s);
   const puntoEl = q('[data-insert-point]');
   const puntoTesto = q('[data-insert-point-text]');
+  const indirizzoEl = q('[data-insert-address]');
+  const indirizzoStato = q('[data-address-status]');
+  const campiIndirizzo = { road: q('[data-address-road]'), house_number: q('[data-address-civic]'), town: q('[data-address-town]'), postcode: q('[data-address-postcode]') };
+  const confermaIndirizzo = q('[data-address-confirm]');
+  const ricercaIndirizzo = q('[data-address-refresh]');
   const suggerimento = q('[data-insert-hint]');
   const conferma = q('[data-insert-confirm]');
   const sceltaBtn = q('[data-insert-pick]');
@@ -298,15 +348,100 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     sceltaBtn.classList.toggle('active', si);
     try { map.getCanvas().style.cursor = si ? 'crosshair' : ''; } catch (_e) { /* mappa finta */ }
   };
+  // ZONA-5: lo stato dell'indirizzo del punto provvisorio. `attivo` = il pannello e' in gioco
+  // (gesto, GPS o risultato della ricerca); `confermato` = dichiarato dall'operatore.
+  const indirizzo = { attivo: false, stato: 'idle', confermato: false, giro: 0 };
+  const leggiIndirizzo = () => addressFieldsFrom({ road: campiIndirizzo.road.value, house_number: campiIndirizzo.house_number.value,
+    town: campiIndirizzo.town.value, postcode: campiIndirizzo.postcode.value });
+  const scriviIndirizzo = (campi) => {
+    const f = addressFieldsFrom(campi);
+    campiIndirizzo.road.value = f.road;
+    campiIndirizzo.house_number.value = f.house_number;
+    campiIndirizzo.town.value = f.town;
+    campiIndirizzo.postcode.value = f.postcode;
+  };
+  const mostraIndirizzo = (stato, testo) => {
+    indirizzo.stato = stato;
+    indirizzoEl.hidden = !indirizzo.attivo;
+    indirizzoEl.dataset.addressState = stato;
+    indirizzoEl.dataset.addressConfirmed = indirizzo.confermato ? 'true' : 'false';
+    indirizzoStato.textContent = testo;
+    indirizzoStato.classList.toggle('is-error', stato === 'error');
+    indirizzoStato.classList.toggle('is-ok', indirizzo.confermato);
+    confermaIndirizzo.disabled = stato === 'loading' || indirizzo.confermato;
+    confermaIndirizzo.textContent = indirizzo.confermato ? 'Indirizzo confermato' : 'Conferma indirizzo';
+    ricercaIndirizzo.disabled = stato === 'loading';
+  };
+  const indirizzoOk = () => !indirizzo.attivo || indirizzo.confermato;
   const aggiorna = () => {
     if (confermato) return;
     const zoom = map.getZoom();
-    conferma.disabled = !canConfirm({ point: punto, zoom });
+    conferma.disabled = !canConfirm({ point: punto, zoom }) || !indirizzoOk();
     puntoTesto.textContent = punto ? `Punto provvisorio: ${chosenPointText(punto)}` : '';
     if (!punto) suggerimento.textContent = TESTI.tocca;
+    else if (!indirizzoOk()) suggerimento.textContent = `${notaRicerca ? `${notaRicerca} ` : ''}${TESTI.indirizzoAttesa}`;
     else if (zoom < MIN_CONFIRM_ZOOM) suggerimento.textContent = `${notaRicerca ? `${notaRicerca} ` : ''}${TESTI.zoom}`;
     else suggerimento.textContent = `${notaRicerca ? `${notaRicerca} ` : ''}${TESTI.pronto} ${TESTI.correggi}`;
   };
+  // la ricerca inversa: UNA chiamata per gesto, mai durante trascinamento/zoom/spostamento
+  async function cercaIndirizzo() {
+    if (!punto) return;
+    const mio = ++indirizzo.giro;
+    indirizzo.attivo = true;
+    indirizzo.confermato = false;
+    scriviIndirizzo({});
+    mostraIndirizzo('loading', TESTI.indirizzoCerca);
+    aggiorna();
+    let esito;
+    try {
+      esito = await api.reverseGeocode(punto.lat.toFixed(7), punto.lng.toFixed(7));
+    } catch (errore) {
+      if (!vivo() || mio !== indirizzo.giro) return;
+      mostraIndirizzo('error', `${TESTI.indirizzoErrore} (${errorMessage(errore)})`);
+      aggiorna();
+      return;
+    }
+    if (!vivo() || mio !== indirizzo.giro) return;
+    if (!esito || esito.found !== true) {
+      mostraIndirizzo('missing', TESTI.indirizzoNonTrovato);
+    } else {
+      scriviIndirizzo(esito);
+      mostraIndirizzo('found', esito.house_number ? TESTI.indirizzoTrovato : `${TESTI.indirizzoTrovato} ${TESTI.indirizzoSenzaCivico}`);
+    }
+    aggiorna();
+  }
+  const indirizzoDaRisultato = (r) => {
+    indirizzo.giro += 1;                      // una ricerca inversa in corso non deve sovrascrivere
+    indirizzo.attivo = true;
+    indirizzo.confermato = true;              // scelto dall'operatore fra i risultati: gia' dichiarato
+    scriviIndirizzo(r);
+    luogo = placeFromAddressFields(leggiIndirizzo());
+    mostraIndirizzo('found', `${TESTI.indirizzoDaRicerca} ${addressSummary(leggiIndirizzo())}`);
+  };
+  const chiudiIndirizzo = () => {
+    indirizzo.giro += 1;
+    indirizzo.attivo = false;
+    indirizzo.confermato = false;
+    scriviIndirizzo({});
+    mostraIndirizzo('idle', '');
+  };
+  confermaIndirizzo.addEventListener('click', () => {
+    if (!indirizzo.attivo || indirizzo.stato === 'loading') return;
+    indirizzo.confermato = true;
+    luogo = placeFromAddressFields(leggiIndirizzo());
+    mostraIndirizzo('confirmed', `${TESTI.indirizzoConfermato} ${addressSummary(leggiIndirizzo())}`);
+    aggiorna();
+  });
+  ricercaIndirizzo.addEventListener('click', () => { if (punto && !confermato) cercaIndirizzo(); });   // gesto esplicito
+  for (const campo of Object.values(campiIndirizzo)) {
+    campo.addEventListener('input', () => {
+      if (!indirizzo.attivo || !indirizzo.confermato) return;
+      indirizzo.confermato = false;
+      luogo = null;
+      mostraIndirizzo('edited', TESTI.indirizzoModificato);
+      aggiorna();
+    });
+  }
   const mostraPunto = () => {
     confermato = false;
     puntoEl.hidden = !punto;
@@ -315,7 +450,9 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     trascinabile(true);
     aggiorna();
   };
-  const scegli = (lngLat, { nota = null, da = null } = {}) => {
+  // `lookup`: ZONA-5, dopo un gesto o dal GPS si cerca l'indirizzo del punto (UNA volta);
+  // `da`: il risultato della ricerca diretta (l'indirizzo e' gia' quello scelto dall'operatore).
+  const scegli = (lngLat, { nota = null, da = null, lookup = false } = {}) => {
     if (!lngLat || confermato) return;
     punto = { lng: Number(lngLat.lng), lat: Number(lngLat.lat) };
     luogo = da;
@@ -330,13 +467,22 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
         punto = { lng: p.lng, lat: p.lat };
         notaRicerca = null;
         luogo = null;
+        // ZONA-5: punto spostato -> l'indirizzo confermato decade; NESSUNA nuova ricerca da sola
+        if (indirizzo.attivo) {
+          indirizzo.giro += 1;
+          indirizzo.confermato = false;
+          mostraIndirizzo('moved', TESTI.indirizzoSpostato);
+        }
         aggiorna();
       });
     } else {
       provvisorio.setLngLat([punto.lng, punto.lat]);
     }
     host.open = true;
+    if (da) indirizzoDaRisultato(da);
+    else if (!lookup) chiudiIndirizzo();
     mostraPunto();
+    if (lookup) cercaIndirizzo();
   };
   const azzera = () => {
     if (provvisorio) provvisorio.remove();
@@ -345,6 +491,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     luogo = null;
     notaRicerca = null;
     confermato = false;
+    chiudiIndirizzo();
     clearChosenPoint();
     impostaTocco(false);
     puntoEl.hidden = true;
@@ -374,9 +521,10 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     }
   };
   conferma.addEventListener('click', () => {
-    if (!canConfirm({ point: punto, zoom: map.getZoom() })) { aggiorna(); return; }
+    if (!canConfirm({ point: punto, zoom: map.getZoom() }) || !indirizzoOk()) { aggiorna(); return; }
     setChosenPoint(punto, luogo);
-    mostraAzioni(luogo && luogo.label ? `Dalla ricerca: ${luogo.label}` : 'Scelto sulla mappa.');
+    mostraAzioni(luogo && luogo.declared ? `Indirizzo dichiarato: ${addressSummary(luogo)}`
+      : (luogo && luogo.label ? `Dalla ricerca: ${luogo.label}` : 'Scelto sulla mappa.'));
   });
   q('[data-insert-change]').addEventListener('click', () => {
     clearChosenPoint();
@@ -387,11 +535,64 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   map.on('click', (e) => { if (modoTocco) scegli(e && e.lngLat); });
   map.on('zoomend', aggiorna);
 
+  // --- ZONA-5: il gesto sulla mappa (doppio clic / pressione prolungata) ------------------
+  const gesto = (lngLat) => {
+    if (!lngLat || !Number.isFinite(Number(lngLat.lng)) || !Number.isFinite(Number(lngLat.lat))) return;
+    if (confermato) {                         // un punto gia' confermato si scarta: nulla era stato salvato
+      clearChosenPoint();
+      confermato = false;
+    }
+    scegli({ lng: Number(lngLat.lng), lat: Number(lngLat.lat) }, { nota: TESTI.gesto, lookup: true });
+    if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const suMarker = (e) => {
+    if (!e || !e.point || typeof map.queryRenderedFeatures !== 'function') return false;
+    try {
+      return map.queryRenderedFeatures(e.point, { layers: ['stima-buildings-points', 'stima-properties-points'] }).length > 0;
+    } catch (_errore) {
+      return false;                           // livelli non ancora disegnati
+    }
+  };
+  const daTocco = (ev) => !!ev && (ev.pointerType === 'touch' || (typeof TouchEvent !== 'undefined' && ev instanceof TouchEvent));
+  // computer: doppio clic, senza lo zoom del doppio clic su questa mappa; non sui marker
+  if (map.doubleClickZoom && typeof map.doubleClickZoom.disable === 'function') map.doubleClickZoom.disable();
+  map.on('dblclick', (e) => {
+    if (!e || daTocco(e.originalEvent) || suMarker(e)) return;
+    if (e.originalEvent && typeof e.originalEvent.preventDefault === 'function') e.originalEvent.preventDefault();
+    gesto(e.lngLat);
+  });
+  // smartphone: pressione prolungata ferma (mai durante un trascinamento, mai sui comandi)
+  const contenitore = typeof map.getCanvasContainer === 'function' ? map.getCanvasContainer() : null;
+  if (contenitore && typeof contenitore.addEventListener === 'function') {
+    let pressione = null;                     // { id, x, y, timer }
+    const annullaPressione = () => { if (pressione) { clearTimeout(pressione.timer); pressione = null; } };
+    contenitore.addEventListener('pointerdown', (ev) => {
+      if (!ev || ev.pointerType !== 'touch' || !ev.isPrimary) return;
+      if (ev.target && typeof ev.target.closest === 'function' && ev.target.closest('button, a, input, .maplibregl-ctrl, .maplibregl-marker, [data-gps]')) return;
+      annullaPressione();
+      const x = ev.clientX;
+      const y = ev.clientY;
+      pressione = { id: ev.pointerId, x, y, timer: setTimeout(() => {
+        pressione = null;
+        if (typeof map.unproject !== 'function' || typeof contenitore.getBoundingClientRect !== 'function') return;
+        const r = contenitore.getBoundingClientRect();
+        const ll = map.unproject([x - r.left, y - r.top]);
+        if (ll) gesto({ lng: ll.lng, lat: ll.lat });
+      }, PRESSIONE_MS) };
+    });
+    contenitore.addEventListener('pointermove', (ev) => {
+      if (!pressione || !ev || ev.pointerId !== pressione.id) return;
+      if (Math.abs(ev.clientX - pressione.x) > PRESSIONE_PX || Math.abs(ev.clientY - pressione.y) > PRESSIONE_PX) annullaPressione();
+    });
+    for (const nome of ['pointerup', 'pointercancel', 'pointerleave']) contenitore.addEventListener(nome, annullaPressione);
+  }
+
   mountGeocodeSearch(q('[data-geocode-form]'), {
     vivo,
     puoCercare: () => !confermato,
     onPick: (r) => {
       map.jumpTo({ center: [r.lng, r.lat], zoom: r.civicoOk ? 18 : 16 });
+      if (confermato) { clearChosenPoint(); confermato = false; }
       scegli({ lng: r.lng, lat: r.lat }, { nota: r.civicoOk ? TESTI.risultato : TESTI.civicoNo, da: r });
     },
   });
@@ -747,7 +948,8 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
       confermato = false;
     }
     host.open = true;
-    scegli({ lng: Number(p.lng), lat: Number(p.lat) }, { nota: `Punto dal GPS (${accuracyText(p.accuracy).toLowerCase()}): controllalo e correggilo se serve.` });
+    // ZONA-5: stesso meccanismo del gesto: punto provvisorio + ricerca dell'indirizzo da confermare
+    scegli({ lng: Number(p.lng), lat: Number(p.lat) }, { nota: `Punto dal GPS (${accuracyText(p.accuracy).toLowerCase()}): controllalo e correggilo se serve.`, lookup: true });
     if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   return { placeProvisional };

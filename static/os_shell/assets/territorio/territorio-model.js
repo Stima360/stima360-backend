@@ -351,3 +351,39 @@ export function gpsFeatureCollection(lng, lat, metri) {
       { type: 'Feature', properties: { kind: 'gps' }, geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] } }],
   };
 }
+
+// ---------------------------------------------------------------------------
+// STIMA360 ZONA-5 - il pannello «Indirizzo individuato»
+//
+// Dal risultato della ricerca inversa (o da quello della ricerca diretta) ai
+// quattro campi modificabili; dai campi confermati dall'operatore al «luogo»
+// che precompila la procedura guidata (wizardFieldsFromPlace). La conferma e'
+// una dichiarazione dell'operatore sui dati dell'indirizzo, non una certezza
+// catastale; un civico assente resta vuoto.
+// ---------------------------------------------------------------------------
+
+/** I campi del pannello da un risultato (inverso o diretto): mai un civico inventato. */
+export function addressFieldsFrom(risultato) {
+  const r = risultato && typeof risultato === 'object' ? risultato : {};
+  const civico = r.precision === 'house' && r.house_number_matches === false ? '' : testo(r.house_number);
+  return { road: testo(r.road).slice(0, 250), house_number: civico.slice(0, 30), town: testo(r.town).slice(0, 120), postcode: testo(r.postcode).slice(0, 20) };
+}
+
+/** Il «luogo» dichiarato dall'operatore, nella forma che la procedura guidata gia' capisce. */
+export function placeFromAddressFields(campi) {
+  const f = addressFieldsFrom(campi);
+  const pezzi = [[f.house_number, f.road].filter(Boolean).join(', ') || f.road, [f.postcode, f.town].filter(Boolean).join(' ')].filter(Boolean);
+  return {
+    road: f.road || null, house_number: f.house_number || null, town: f.town || null, postcode: f.postcode || null,
+    precision: f.house_number ? 'house' : (f.road ? 'street' : 'area'), house_number_matches: Boolean(f.house_number),
+    label: pezzi.join(', '), declared: true,
+  };
+}
+
+/** «Via Roma 25, 64011 Alba Adriatica» (o «Indirizzo non indicato»). */
+export function addressSummary(campi) {
+  const f = addressFieldsFrom(campi);
+  const via = [f.road, f.house_number].filter(Boolean).join(' ');
+  const luogo = [f.postcode, f.town].filter(Boolean).join(' ');
+  return [via, luogo].filter(Boolean).join(', ') || 'Indirizzo non indicato';
+}

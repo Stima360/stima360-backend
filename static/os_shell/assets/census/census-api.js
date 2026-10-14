@@ -185,6 +185,12 @@ export function geocode(q) {
   return request('GET', `/geocode${query({ q })}`);
 }
 
+// STIMA360 ZONA-5: la ricerca INVERSA, dal punto scelto sulla mappa (doppio clic, pressione
+// prolungata, «Inserisci qui» del GPS) all'indirizzo. SOLO le due coordinate, SOLO dopo il gesto.
+export function reverseGeocode(lat, lng) {
+  return request('GET', `/reverse-geocode${query({ lat, lon: lng })}`);
+}
+
 // --- Unita' di censimento -------------------------------------------------------
 
 export function createUnit(payload) {

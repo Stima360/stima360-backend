@@ -185,6 +185,10 @@ def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0)
 # e basta: nessuna scrittura, la verifica resta la conferma T4.
 @router.get('/geocode')
 def geocode_search(q:str=Query(...,min_length=1,max_length=300),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(geocode.search,ctx,q)
+# STIMA360 ZONA-5: la ricerca INVERSA (dal punto scelto sulla mappa a via/civico/Comune), stesso backend, stesso
+# limite globale della ricerca diretta, solo dopo un gesto esplicito. Suggerisce e basta: nessuna scrittura.
+@router.get('/reverse-geocode')
+def geocode_reverse(lat:str=Query(...,min_length=1,max_length=32),lon:str=Query(...,min_length=1,max_length=32),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(geocode.reverse,ctx,lat,lon)
 # STIMA360 ZONA-3: la posizione VERIFICATA di un IMMOBILE INDIPENDENTE (migration 103), stesso
 # contratto di T4: stato, conferma esplicita (coordinate + verifica, operatore e data dal server) e la
 # lista LEGGERA per la mappa (solo verificati, solo colonne essenziali). Stesso gate e stessa traduzione.

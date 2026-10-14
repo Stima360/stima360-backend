@@ -143,8 +143,15 @@ def _run(staged, scenario, rotte, hash="#/edifici/mappa"):  # noqa: F811
     return t2b3._run(staged, HELPERS + scenario, rotte, hash)
 
 
+# SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: «Inserisci qui» cerca anche l'indirizzo del punto (ricerca inversa,
+# una sola chiamata) e il punto si conferma solo dopo aver confermato l'indirizzo.
+REVERSE = {"found": True, "road": "Via Roma", "house_number": "25", "town": "Tortoreto", "postcode": "64018", "province": "Teramo",
+           "label": "25, Via Roma, Tortoreto, TE, 64018, Italia", "precision": "house", "latitude": "42.8341000", "longitude": "13.9262000",
+           "cached": False, "attribution": "© OpenStreetMap contributors"}
+
+
 def _rotte():
-    return z3._rotte(posizioni=[rt.ok({"items": [], "total": 0})]) + GEO_FINTA
+    return z3._rotte(posizioni=[rt.ok({"items": [], "total": 0})], extra=[("GET", "/api/property/reverse-geocode", [rt.ok(REVERSE)])]) + GEO_FINTA
 
 
 @node
@@ -161,11 +168,17 @@ def test_b01_nessuna_richiesta_all_apertura_tocco_indicatore_inserisci_qui_e_con
       __geo.attesa.shift()(); await wait(); await wait();
       const ricevuta = { ...gps(), centro: M().jump && M().jump.center, zoom: M().getZoom(), opzioni: __geo.chiamate[0].opts,
                          poligono: M().sources['stima-gps'].data.features[0].geometry.type, punto: M().sources['stima-gps'].data.features[1].geometry.coordinates };
-      gq('[data-gps-insert]').dispatch('click'); await wait();
-      const provvisorio = { ...stato(), hint: stato().hint, segnaposto: K().length ? K()[0].p : null, aperto: !!P().open, gpsNascosto: gq('[data-gps-status]').hidden };
+      gq('[data-gps-insert]').dispatch('click'); await wait(); await wait();
+      const provvisorio = { ...stato(), hint: stato().hint, segnaposto: K().length ? K()[0].p : null, aperto: !!P().open, gpsNascosto: gq('[data-gps-status]').hidden,
+                            indirizzo: pq('[data-insert-address]').dataset.addressState, via: pq('[data-address-road]').value, civico: pq('[data-address-civic]').value,
+                            inverse: chiamate().filter((c) => c.url.startsWith('/api/property/reverse-geocode')).map((c) => c.url) };
+      pq('[data-address-confirm]').dispatch('click'); await wait();                 // ZONA-5: l'indirizzo si conferma
       M().setZoom(16); await wait();
       const zoomBasso = stato().conferma;
       K()[0].setLngLat([13.9265, 42.8345]); K()[0].fire('dragend'); await wait();
+      const spostato = { indirizzo: pq('[data-insert-address]').dataset.addressState, conferma: stato().conferma,
+                         inverse: chiamate().filter((c) => c.url.startsWith('/api/property/reverse-geocode')).length };
+      pq('[data-address-confirm]').dispatch('click'); await wait();                 // punto spostato: si riconferma l'indirizzo
       M().setZoom(18); await wait();
       await confermaPunto();
       const confermato = { ...stato(), carte: pq('[data-insert-cards]').querySelectorAll('[data-insert-action]').map((b) => b.dataset.insertAction), scritture: scritte() };
@@ -174,7 +187,7 @@ def test_b01_nessuna_richiesta_all_apertura_tocco_indicatore_inserisci_qui_e_con
       const seconda = { chiamate: __geo.chiamate.length, pronto: gps().inserisci };
       gq('[data-gps-insert]').dispatch('click'); await wait();
       const sostituito = { ...stato(), segnaposto: K()[0].p };
-      report({ apertura, attesa, doppio, ricevuta, provvisorio, zoomBasso, confermato, seconda, sostituito });
+      report({ apertura, attesa, doppio, ricevuta, provvisorio, zoomBasso, spostato, confermato, seconda, sostituito });
     """
     out = _run(staged, scenario, _rotte())
     a = out["apertura"]
@@ -192,7 +205,11 @@ def test_b01_nessuna_richiesta_all_apertura_tocco_indicatore_inserisci_qui_e_con
     assert p["punto"] is True and p["azioni"] is False and p["segnaposto"] == [13.9262, 42.8341] and p["trascinabile"] is True
     assert p["testo"] == "Punto provvisorio: 42.83410, 13.92620" and "Punto dal GPS" in p["hint"] and "circa 12 m" in p["hint"]
     assert p["aperto"] is True and p["gpsNascosto"] is True
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: dal GPS parte UNA ricerca inversa con le coordinate del punto
+    assert p["indirizzo"] == "found" and p["via"] == "Via Roma" and p["civico"] == "25"
+    assert p["inverse"] == ["/api/property/reverse-geocode?lat=42.8341000&lon=13.9262000"]
     assert out["zoomBasso"] is False                                                                   # la regola di T4 resta
+    assert out["spostato"] == {"indirizzo": "moved", "conferma": False, "inverse": 1}                   # spostato: decade, nessuna nuova ricerca
     c = out["confermato"]
     assert c["azioni"] is True and c["scelto"] == "Punto scelto: 42.83450, 13.92650" and c["scritture"] == []
     assert c["carte"] == ["building", "unit", "link", "link-property"]

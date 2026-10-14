@@ -76,10 +76,17 @@ def test_b01_il_client_manda_solo_le_coordinate():
     # pulsante (submit); questa pagina lo monta e basta, con le stesse regole.
     ricerca = _codice(ASSETS / "views" / "territorio-inserisci.js")
     for vietata in ("geolocation", "Geolocate", "nominatim", "openstreetmap.org", "fetch(", "apiPatch", "updateBuilding",
-                    "position_verified_by", "user_id", "localStorage", "addEventListener('input'", "addEventListener('keyup'", "oninput"):
+                    "position_verified_by", "user_id", "localStorage", "addEventListener('keyup'", "oninput"):
         assert vietata not in ricerca, vietata
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: l'UNICO gestore `input` del modulo e' quello dei campi del
+    # pannello «Indirizzo individuato» e si limita a far decadere la conferma: nessuna ricerca (diretta o
+    # inversa) parte scrivendo. La ricerca inversa parte SOLO dal gesto / «Inserisci qui» / «Cerca di nuovo».
+    assert ricerca.count("addEventListener('input'") == 1
+    gestore = ricerca[ricerca.index("addEventListener('input'"):]
+    gestore = gestore[:gestore.index("});")]
+    assert "api." not in gestore and "cercaIndirizzo" not in gestore
     assert vista.count("api.geocode(") == 0 and vista.count("mountGeocodeSearch(") == 1
-    assert ricerca.count("api.geocode(") == 1 and "addEventListener('submit'" in ricerca
+    assert ricerca.count("api.geocode(") == 1 and ricerca.count("api.reverseGeocode(") == 1 and "addEventListener('submit'" in ricerca
     assert vista.count("draggable: true") == 1 and vista.count("draggable: false") == 1
     assert "esito.status !== 'verified'" in vista and "highlightAfterConfirm(Number(id))" in vista
     assert "openMap(ml, area" in vista and "loadMapLibre()" in vista             # stessa mappa, stesso caricatore

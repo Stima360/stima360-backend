@@ -1434,3 +1434,21 @@ a.census-unit-main { text-decoration: none; }
   .territorio-gps-label { font-size: 13px; }
   .territorio-gps-status { max-width: calc(100vw - 60px); }
 }
+
+/* STIMA360 ZONA-5: il pannello «Indirizzo individuato» dentro il riquadro del punto provvisorio
+   (via, civico, Comune, CAP modificabili; stato della ricerca; conferma dell'indirizzo). Solo regole nuove. */
+.territorio-address { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: rgba(255, 255, 255, .6); }
+.territorio-address[hidden] { display: none; }
+.territorio-address-title { margin: 0; font-size: 15px; }
+.territorio-address-status { margin: 0; font-size: 13px; color: var(--muted); }
+.territorio-address-status.is-error { color: var(--danger); }
+.territorio-address-status.is-ok { color: #15803d; font-weight: 600; }
+.territorio-address-grid { margin: 0; }
+.territorio-address-question { margin: 0; font-weight: 600; }
+.territorio-address-note { margin: 0; font-size: 12px; }
+.territorio-address-actions { justify-content: flex-start; }
+.territorio-address-actions .btn[disabled] { opacity: .55; cursor: not-allowed; }
+@media (max-width: 767px) {
+  .territorio-address-grid { grid-template-columns: 1fr 1fr; }
+  .territorio-address-actions .btn { flex: 1 1 auto; }
+}

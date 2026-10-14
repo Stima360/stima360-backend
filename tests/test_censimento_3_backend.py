@@ -250,7 +250,11 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     assert len(lista_posizioni) == 1 and lista_posizioni[0].methods == {"GET"} and _gate in {d.call for d in lista_posizioni[0].dependant.dependencies}
     percorsi = [r.path for r in router.routes]
     assert percorsi.index("/api/property/properties/positions") < percorsi.index("/api/property/properties/{property_id}")
-    assert len(router.routes) == 70
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: 70 -> 71 (GET /api/property/reverse-geocode, la ricerca inversa
+    # per il punto scelto sulla mappa), stesso gate (verificato qui sotto).
+    inversa = [r for r in router.routes if r.path == "/api/property/reverse-geocode"]
+    assert len(inversa) == 1 and inversa[0].methods == {"GET"} and _gate in {d.call for d in inversa[0].dependant.dependencies}
+    assert len(router.routes) == 71
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

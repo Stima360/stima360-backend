@@ -28,6 +28,19 @@ Configurazione (variabili d'ambiente, nessun codice da cambiare):
   STIMA360_GEOCODE_URL          endpoint di ricerca (default Nominatim pubblico)
   STIMA360_GEOCODE_CONTACT      recapito nello User-Agent (default info@stima360.it)
   STIMA360_GEOCODE_TIMEOUT      secondi per la risposta del provider (default 6)
+  STIMA360_GEOCODE_REVERSE_URL  endpoint della ricerca INVERSA (default: lo stesso host di
+                                STIMA360_GEOCODE_URL con `/reverse` al posto di `/search`)
+
+STIMA360 ZONA-5 - la ricerca INVERSA (`reverse(ctx, lat, lon)`): dal punto
+scelto sulla mappa (doppio clic, pressione prolungata, «Inserisci qui» del GPS)
+a via, civico, Comune, CAP e provincia, SOLO dopo quel gesto esplicito (mai
+durante trascinamento, zoom o spostamento). STESSO lock globale, stessa cache,
+stesso User-Agent e stessa attribuzione della ricerca diretta: ricerca e
+ricerca inversa si contendono UN solo turno al secondo per tutta l'applicazione.
+Al provider vanno SOLO le due coordinate del punto scelto (nessun dato del
+CRM); nulla viene registrato nei log applicativi e nulla nel database: il
+punto resta nell'interfaccia finche' l'operatore non salva l'entita'. Un
+civico assente resta vuoto: nulla viene inventato.
 """
 from __future__ import annotations
 
@@ -77,6 +90,15 @@ def enabled(env=None) -> bool:
 
 def provider_url(env=None) -> str:
     return (env if env is not None else os.environ).get("STIMA360_GEOCODE_URL", "").strip() or DEFAULT_URL
+
+
+def reverse_url(env=None) -> str:
+    """ZONA-5: l'endpoint inverso; se non e' configurato, `/reverse` accanto a `/search`."""
+    esplicito = (env if env is not None else os.environ).get("STIMA360_GEOCODE_REVERSE_URL", "").strip()
+    if esplicito:
+        return esplicito
+    base = provider_url(env)
+    return re.sub(r"/search/?$", "/reverse", base) if re.search(r"/search/?$", base) else base.rstrip("/") + "/reverse"
 
 
 def user_agent(env=None) -> str:
@@ -146,6 +168,36 @@ def shape_results(raw, q: str) -> list[dict]:
     return esito
 
 
+# --- ZONA-5: la forma del risultato inverso ----------------------------------------
+
+def shape_reverse(raw, lat, lng) -> dict:
+    """Dal risultato di Nominatim i SOLI campi che servono al pannello «Indirizzo
+    individuato»: via, civico (vuoto se assente: mai inventato), Comune, CAP,
+    provincia, indirizzo leggibile. `found` False se il provider non ha un
+    indirizzo per quel punto (risposta vuota o con `error`)."""
+    vuoto = {"found": False, "road": None, "house_number": None, "town": None, "postcode": None, "province": None,
+             "label": None, "precision": None, "latitude": f"{lat:.7f}", "longitude": f"{lng:.7f}"}
+    if not isinstance(raw, dict) or raw.get("error") or not raw.get("address"):
+        return vuoto
+    indirizzo = raw.get("address") if isinstance(raw.get("address"), dict) else {}
+    numero = str(indirizzo.get("house_number") or "").strip() or None
+    via = indirizzo.get("road") or indirizzo.get("pedestrian") or indirizzo.get("square") or indirizzo.get("footway")
+    comune = indirizzo.get("city") or indirizzo.get("town") or indirizzo.get("village") or indirizzo.get("municipality") or indirizzo.get("hamlet")
+    provincia = indirizzo.get("county") or indirizzo.get("province") or indirizzo.get("state_district")
+    return {
+        "found": True,
+        "road": via,
+        "house_number": numero,
+        "town": comune,
+        "postcode": indirizzo.get("postcode"),
+        "province": provincia,
+        "label": str(raw.get("display_name") or "")[:300] or None,
+        "precision": "house" if numero else ("street" if via else "area"),
+        "latitude": f"{lat:.7f}",
+        "longitude": f"{lng:.7f}",
+    }
+
+
 # --- cache per processo ---------------------------------------------------------
 
 _cache_lock = threading.Lock()
@@ -195,17 +247,12 @@ def call_provider(q: str, *, http=None, env=None) -> list:
         raise GeocodeUnavailable() from exc
 
 
-def search(ctx, q, *, http=None, env=None, sleep=time.sleep) -> dict:
-    ctx.require_agency()                       # solo dentro un'agenzia, come la mappa
-    if not enabled(env):
-        raise GeocodeDisabled()
-    testo = normalize_query(q)
-    chiave = testo.casefold()
-    in_cache = _cache_get(chiave)
-    if in_cache is not None:
-        return {"query": testo, "results": in_cache, "cached": True, "attribution": "© OpenStreetMap contributors"}
-
-    # IL LIMITE GLOBALE: una transazione, un lock condiviso da tutta l'applicazione.
+def _con_il_turno(chiamata, *, sleep=time.sleep):
+    """IL LIMITE GLOBALE (ricerca diretta E inversa): una transazione, UN lock
+    condiviso da tutta l'applicazione. Chi tiene il lock chiama il provider e
+    poi aspetta il resto del secondo PRIMA di rilasciarlo: cosi' due chiamate
+    consecutive, di qualunque tipo e da qualunque processo, distano almeno
+    MIN_INTERVAL. Restituisce (grezzi, errore)."""
     with core_cursor() as (_, cur):
         cur.execute("SET LOCAL lock_timeout = %s", (f"{LOCK_TIMEOUT_MS}ms",))
         try:
@@ -215,18 +262,64 @@ def search(ctx, q, *, http=None, env=None, sleep=time.sleep) -> dict:
         inizio = time.monotonic()
         grezzi, errore = None, None
         try:
-            grezzi = call_provider(testo, http=http, env=env)
+            grezzi = chiamata()
         except GeocodeUnavailable as exc:
             errore = exc
         except Exception as exc:               # timeout, rete, DNS
             errore = exc
-        # chi tiene il lock aspetta il resto del secondo PRIMA di rilasciarlo: cosi'
-        # due chiamate consecutive, da qualunque processo, distano almeno MIN_INTERVAL
         resto = MIN_INTERVAL - (time.monotonic() - inizio)
         if resto > 0:
             sleep(resto)
+    return grezzi, errore
+
+
+def search(ctx, q, *, http=None, env=None, sleep=time.sleep) -> dict:
+    ctx.require_agency()                       # solo dentro un'agenzia, come la mappa
+    if not enabled(env):
+        raise GeocodeDisabled()
+    testo = normalize_query(q)
+    chiave = testo.casefold()
+    in_cache = _cache_get(chiave)
+    if in_cache is not None:
+        return {"query": testo, "results": in_cache, "cached": True, "attribution": "© OpenStreetMap contributors"}
+    grezzi, errore = _con_il_turno(lambda: call_provider(testo, http=http, env=env), sleep=sleep)
     if grezzi is None:
         raise GeocodeUnavailable() from errore
     risultati = shape_results(grezzi, testo)
     _cache_put(chiave, risultati)
     return {"query": testo, "results": risultati, "cached": False, "attribution": "© OpenStreetMap contributors"}
+
+
+# --- ZONA-5: la ricerca inversa -------------------------------------------------------
+
+def call_reverse(lat, lng, *, http=None, env=None) -> dict:
+    """UNA richiesta inversa a Nominatim: formato json, dettaglio al civico (zoom 18),
+    indirizzo scomposto. SOLO le due coordinate: mai cookie, mai dati del CRM."""
+    risposta = (http or requests).get(reverse_url(env), params={
+        "lat": f"{lat:.7f}", "lon": f"{lng:.7f}", "format": "jsonv2", "zoom": 18, "addressdetails": 1, "accept-language": "it",
+    }, headers={"User-Agent": user_agent(env), "Accept": "application/json"}, timeout=timeout_s(env))
+    if risposta.status_code != 200:
+        raise GeocodeUnavailable()
+    try:
+        return risposta.json()
+    except ValueError as exc:
+        raise GeocodeUnavailable() from exc
+
+
+def reverse(ctx, lat, lon, *, http=None, env=None, sleep=time.sleep) -> dict:
+    ctx.require_agency()
+    if not enabled(env):
+        raise GeocodeDisabled()
+    from .building_position import validate_coordinates   # le stesse regole di T4 (intervallo, mai 0,0)
+    la, lo = validate_coordinates(lat, lon)
+    la_f, lo_f = float(la), float(lo)
+    chiave = f"reverse:{la_f:.7f},{lo_f:.7f}"
+    in_cache = _cache_get(chiave)
+    if in_cache is not None:
+        return {**in_cache[0], "cached": True, "attribution": "© OpenStreetMap contributors"}
+    grezzi, errore = _con_il_turno(lambda: call_reverse(la_f, lo_f, http=http, env=env), sleep=sleep)
+    if grezzi is None:
+        raise GeocodeUnavailable() from errore
+    esito = shape_reverse(grezzi, la_f, lo_f)
+    _cache_put(chiave, [esito])
+    return {**esito, "cached": False, "attribution": "© OpenStreetMap contributors"}

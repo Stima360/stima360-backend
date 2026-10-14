@@ -33,6 +33,9 @@ from tests.test_censimento_3_backend_postgres import completo, mondo  # noqa: F4
 from tests.test_edifici_1_browser_postgres import server  # noqa: F401  (fixture)
 from tests.test_territorio_4_browser_postgres import FINTA, MAPPA
 from tests.test_zona_3_browser_postgres import _immobile, _riga
+# SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: «Inserisci qui» cerca anche l'indirizzo del punto (ricerca inversa,
+# provider FINTO: nessuna chiamata a Nominatim dalle prove) e il punto si conferma solo dopo l'indirizzo.
+from tests.test_zona_5_postgres import _HttpMisto
 
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
@@ -74,16 +77,35 @@ def _apri(page, url):
 
 
 def _gps(page):
-    """Tocco -> posizione ricevuta -> «Inserisci qui» -> punto provvisorio."""
+    """Tocco -> posizione ricevuta -> «Inserisci qui» -> punto provvisorio -> indirizzo confermato (ZONA-5)."""
     page.click("[data-gps-button]")
     page.wait_for_selector("[data-gps-status][data-gps-state='ready']")
     page.click("[data-gps-insert]")
     page.wait_for_selector("[data-insert-point]:not([hidden])")
+    _conferma_indirizzo(page)
+
+
+def _conferma_indirizzo(page):
+    page.wait_for_selector("[data-insert-address][data-address-state='found']")
+    page.click("[data-address-confirm]")
+    page.wait_for_selector("[data-insert-address][data-address-confirmed='true']")
+
+
+def _provider_finto(monkeypatch):
+    from property import geocode
+    geocode.clear_cache()
+    monkeypatch.setattr(geocode, "requests", _HttpMisto())
+    monkeypatch.setattr(geocode, "MIN_INTERVAL", 0.05)
 
 
 def _conferma_punto(page, lng, lat):
     page.evaluate(f"(() => {{ const k = window.__ml.markers.filter((k) => k.el.isConnected)[0]; k.setLngLat([{lng}, {lat}]); k.fire('dragend'); }})()")
     page.evaluate(f"{MAPPA}.setZoom(18)")
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-5: il punto spostato fa decadere l'indirizzo confermato (nessuna
+    # nuova ricerca da sola): lo si riconferma, poi si conferma il punto
+    if page.evaluate("(() => { const a = document.querySelector('[data-insert-address]'); return !!a && !a.hidden && a.dataset.addressConfirmed !== 'true'; })()"):
+        page.click("[data-address-confirm]")
+        page.wait_for_selector("[data-insert-address][data-address-confirmed='true']")
     page.click("[data-insert-confirm]")
     page.wait_for_selector("[data-insert-actions]:not([hidden])")
 
@@ -107,9 +129,10 @@ def _wizard_edificio(page):
 
 
 @pytest.mark.parametrize("larghezza", [320, 390, 1280])
-def test_zona4_gps_inserisci_qui_edificio_immobile_e_collegamenti(server, larghezza):
+def test_zona4_gps_inserisci_qui_edificio_immobile_e_collegamenti(server, larghezza, monkeypatch):
     from playwright.sync_api import sync_playwright
     m = server
+    _provider_finto(monkeypatch)
     url = m["url"]
     esistente_b = _edificio(m, city="Alba Adriatica", address="Via Esistente GPS", civic_number="2", name="Palazzina GPS")
     esistente_p = _immobile(m, title="Villa GPS Esistente", address="Via Villa GPS")
@@ -149,6 +172,7 @@ def test_zona4_gps_inserisci_qui_edificio_immobile_e_collegamenti(server, larghe
         page.wait_for_selector("[data-insert-point]:not([hidden])")
         provvisorio = page.evaluate("""() => ({ p: window.__ml.markers.filter((k) => k.el.isConnected)[0].p, testo: document.querySelector('[data-insert-point-text]').textContent,
                                                  hint: document.querySelector('[data-insert-hint]').textContent, gpsNascosto: document.querySelector('[data-gps-status]').hidden })""")
+        _conferma_indirizzo(page)
         _conferma_punto(page, 13.9252345, 42.8332345)
         bid = _wizard_edificio(page)
         page.click("[data-ready-map]")
