@@ -14,7 +14,9 @@ Lo stesso catalogo e' stato confrontato con le altre due copie pubblicate dal
 portale e coincide voce per voce: il mini-form di /PianoVenditaStima360.html
 (`zoneMini`) e la sitemap generata dal backend da `seo_microzone`
 (/sitemap.xml, 80 pagine /valutazione/<comune>/<microzona>; le differenze sono
-solo nella forma degli slug). Totale: 2 regioni, 25 comuni, 80 microzone. I
+solo nella forma degli slug). Totale dal portale: 2 regioni, 25 comuni, 80
+microzone; in piu' i comuni aggiunti dal CRM (`CRM_ADDED_MUNICIPALITIES`, oggi
+Giulianova, senza microzone): 26 comuni in tutto. I
 nomi sono copiati come li pubblica il portale, apostrofo tipografico compreso
 ("Sant’Omero", "Porto d’Ascoli"): sono gli stessi valori che il sito salva in
 `stime_dettagliate.comune/microzona`.
@@ -65,6 +67,8 @@ TERRITORY: dict[str, dict[str, Any]] = {
             "Colonnella": ("067019", ["Bivio", "Centro storico", "Contrade"]),
             "Controguerra": ("067020", ["Centro storico", "Contrade"]),
             "Corropoli": ("067021", ["Centro storico", "Bivio", "Contrade"]),
+            # C0-quater: comune aggiunto dal CRM (vedi CRM_ADDED_MUNICIPALITIES), non dal portale
+            "Giulianova": ("067025", []),
             "Martinsicuro": ("067047", ["Centro", "Villarosa", "Alto"]),
             "Nereto": ("067031", ["Centro storico", "Bivio", "Contrade"]),
             "Sant’Egidio alla Vibrata": ("067038", ["Centro", "Bivio", "Contrade"]),
@@ -103,6 +107,15 @@ TERRITORY: dict[str, dict[str, Any]] = {
 TERRITORY_SOURCES = {
     "municipalities_and_microzones": "https://www.stima360.it (form di stima, letto il 2026-10-01)",
     "provinces": "ISTAT, Elenco comuni italiani (last-modified 2024-01-26)",
+}
+
+#: AGENZIE-TERRITORI C0-quater (2026-10-14, decisione del titolare): comuni che
+#: il CRM conosce anche se il portale non li offre. Giulianova e' il comune
+#: dell'agenzia «STIMA360 Giulianova» (territorio TEST `municipality/giulianova`).
+#: Codice ISTAT 067025, provincia TE (ISTAT). Nessuna microzona: il portale non
+#: ne pubblica e qui non se ne inventano; la microzona resta facoltativa.
+CRM_ADDED_MUNICIPALITIES: dict[str, str] = {
+    "Giulianova": "Comune dell'agenzia STIMA360 Giulianova (C0-quater); assente dal portale, senza microzone",
 }
 
 

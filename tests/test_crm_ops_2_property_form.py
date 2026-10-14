@@ -83,6 +83,8 @@ ISTAT = {
     "Fermo": ("FM", "109006"), "Porto San Giorgio": ("FM", "109033"),
     "Porto Sant’Elpidio": ("FM", "109034"), "Potenza Picena": ("MC", "043043"),
     "Porto Recanati": ("MC", "043042"), "Civitanova Marche": ("MC", "043013"),
+    # SENTINELLA AGGIORNATA DA C0-quater: comune aggiunto dal CRM (ISTAT 067025, provincia TE)
+    "Giulianova": ("TE", "067025"),
 }
 
 
@@ -96,13 +98,20 @@ def _catalogo_piatto():
 
 
 def test_a01_comuni_e_microzone_coincidono_con_il_portale():
+    # SENTINELLA AGGIORNATA DA C0-quater: il catalogo e' il portale PIU' i comuni aggiunti dal
+    # CRM, dichiarati uno per uno in `CRM_ADDED_MUNICIPALITIES` (oggi solo Giulianova, senza microzone)
     piatto = _catalogo_piatto()
+    aggiunti = set(catalog.CRM_ADDED_MUNICIPALITIES)
+    assert aggiunti == {"Giulianova"}
+    portale = {c: v for c, v in piatto.items() if c not in aggiunti}
     assert set(catalog.TERRITORY) == set(PORTALE["regioni"])
     for region, comuni in PORTALE["comuni"].items():
-        assert {c for c, v in piatto.items() if v[0] == region} == set(comuni), region
-    assert {c: v[3] for c, v in piatto.items()} == PORTALE["zone"]   # stesso ordine delle microzone
-    assert len(piatto) == 25
+        assert {c for c, v in portale.items() if v[0] == region} == set(comuni), region
+    assert {c: v[3] for c, v in portale.items()} == PORTALE["zone"]   # stesso ordine delle microzone
+    assert len(portale) == 25 and len(piatto) == 26
     assert sum(len(v[3]) for v in piatto.values()) == 80
+    assert not aggiunti & set(PORTALE["zone"])                         # nessun duplicato del portale
+    assert all(piatto[c][3] == [] for c in aggiunti)                   # nessuna microzona inventata
 
 
 def test_a02_province_e_codici_istat():
@@ -141,7 +150,8 @@ def test_a04_combinazioni_valide(args):
     (("Lazio", None, None, None), "Regione"),
     (("Abruzzo", "AP", None, None), "non appartiene alla regione"),
     (("Abruzzo", "teramo", None, None), "Provincia"),
-    (("Abruzzo", "TE", "Giulianova", None), "Comune non presente"),
+    # SENTINELLA AGGIORNATA DA C0-quater: Giulianova ora e' nel catalogo; esempio fuori catalogo sostituito
+    (("Abruzzo", "TE", "Roseto degli Abruzzi", None), "Comune non presente"),
     (("Marche", "AP", "Fermo", None), "non appartiene alla provincia"),
     (("Abruzzo", None, "Fermo", None), "non appartiene alla regione"),
     (("Abruzzo", "TE", "Tortoreto", "Nord"), "non appartiene al comune"),
@@ -246,7 +256,8 @@ def test_b02_creazione_dal_form_os_valida_il_territorio(fake):
         property_service.create_property(_ctx(), PropertyCreate(region="Abruzzo", province="TE",
                                                                 city="Tortoreto", microzone="Nord"))
     with pytest.raises(ValidationError, match="Comune"):
-        property_service.create_property(_ctx(), PropertyCreate(region="Abruzzo", city="Giulianova"))
+        # SENTINELLA AGGIORNATA DA C0-quater: Giulianova ora e' nel catalogo; esempio fuori catalogo sostituito
+        property_service.create_property(_ctx(), PropertyCreate(region="Abruzzo", city="Roseto degli Abruzzi"))
 
 
 def test_b03_property_admin_crea_e_modifica_a_testo_libero_come_prima(fake):

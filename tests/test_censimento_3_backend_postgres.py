@@ -291,7 +291,8 @@ def test_02_campi_protetti_e_valori_invalidi(mondo):
                   {"building_type": "grattacielo"}, {"units_declared": -1}, {"census_status": "x"}):
         assert api.post("/api/property/buildings", json=corpo).status_code == 422, corpo
     # territorio e Belfiore giudicati dal service (400), non dal database
-    r = api.post("/api/property/buildings", json={"region": "Abruzzo", "city": "Giulianova"})
+    # SENTINELLA AGGIORNATA DA C0-quater: Giulianova ora e' nel catalogo; esempio fuori catalogo sostituito
+    r = api.post("/api/property/buildings", json={"region": "Abruzzo", "city": "Roseto degli Abruzzi"})
     assert r.status_code == 400 and "Comune" in r.json()["detail"]
     r = api.post("/api/property/buildings", json={"cadastral_municipality_code": "12AB"})
     assert r.status_code == 400 and r.json()["code"] == "VALIDATION_ERROR"

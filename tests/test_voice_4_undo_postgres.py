@@ -492,6 +492,11 @@ TERRITORIO_ZONA3 = ("property/property_position.py",)
 # territorio-model.js in TERRITORIO_3, territorio-inserisci.js in TERRITORIO_ZONA2, app.css in FASE6_UI).
 # Nessun backend, nessun file PROTETTO, nessuna migration.
 TERRITORIO_ZONA4 = ("static/os_shell/assets/territorio/gps.js",)
+# AGENZIE-TERRITORI C0-quater (autorizzazione specifica del 2026-10-14): Giulianova nel catalogo dei
+# Comuni del CRM. SOLO il catalogo esistente; il suo contenuto e' vincolato da
+# tests/test_crm_ops_2_property_form.py::test_a01/test_a02 (portale invariato voce per voce, un solo
+# comune aggiunto e dichiarato in CRM_ADDED_MUNICIPALITIES). Nessun file PROTETTO, nessuna migration.
+AGENZIE_C0QUATER = ("property/catalog.py",)
 
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
@@ -594,6 +599,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in TERRITORIO_ZONA3]
         # SENTINELLA AGGIORNATA DA STIMA360 ZONA-4: il solo file dichiarato qui sopra
         diff = [f for f in diff if f not in TERRITORIO_ZONA4]
+        # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C0-quater: il solo file dichiarato qui sopra
+        diff = [f for f in diff if f not in AGENZIE_C0QUATER]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:
