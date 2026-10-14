@@ -120,7 +120,10 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA CENSIMENTO-2: 100_censimento_2_composition
     # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1: 101_eliminazione_edificio_1
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: 102_territorio_4_position_verification
-    assert numeri[numeri.index(76):] == list(range(76, 103))
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3 (C1): 103_zona_3_property_position_verification
+    # (verifica della posizione degli immobili indipendenti; additiva, nessun backfill). Si nomina
+    # invece di smettere di guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
+    assert numeri[numeri.index(76):] == list(range(76, 104))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

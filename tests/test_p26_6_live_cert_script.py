@@ -5813,6 +5813,15 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # Chi ha verificato e' un'informazione accessoria: la data della verifica resta (il trigger
     # della 102 ammette proprio questa azione della FK). La matrice non conferma posizioni.
     ("buildings", "position_verified_by_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3 (C1), migration 103. Verifica della posizione degli
+    # immobili indipendenti: UN riferimento non-CASCADE nuovo verso una tabella che il cleanup
+    # cancella. ESAMINATO.
+    #
+    #   properties.position_verified_by_user_id -> operator_users  SET NULL
+    #
+    # Chi ha verificato e' un'informazione accessoria: la data della verifica resta (il trigger
+    # della 103 ammette proprio questa azione della FK). La matrice non conferma posizioni.
+    ("properties", "position_verified_by_user_id", "operator_users", "SET NULL"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1, migration 087. Provenienza
     # dal sito (`property_site_sources`): QUATTRO riferimenti non-CASCADE nuovi
     # verso tabelle che il cleanup cancella. ESAMINATI.
