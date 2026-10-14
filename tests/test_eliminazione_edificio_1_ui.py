@@ -214,8 +214,11 @@ def test_d01_richieste_dettaglio_rifiuto_e_approvazione(staged):  # noqa: F811
       const erroreRifiuto = cartaR(55).querySelector('[data-trash-card-error]').visibleText();
       const scrittePrima = __calls.filter((c) => (c.options.method || 'GET') !== 'GET').length;
       cartaR(55).querySelector('[data-deletion-decision-note]').value = 'ok, verificato';
-      cartaR(55).querySelector('[data-deletion-approve]').dispatch('click'); await wait(); await wait();
-      report({ elenco, dettaglio, unita, erroreRifiuto, scrittePrima });
+      // SENTINELLA AGGIORNATA DA APPROVAZIONE-EDIFICI-1: «Approva» apre la conferma, la scrittura parte da «Sì, approva»
+      cartaR(55).querySelector('[data-deletion-approve]').dispatch('click'); await wait();
+      const scrittePrimaDellaConferma = __calls.filter((c) => (c.options.method || 'GET') !== 'GET').length;
+      cartaR(55).querySelector('[data-deletion-approve-yes]').dispatch('click'); await wait(); await wait();
+      report({ elenco, dettaglio, unita, erroreRifiuto, scrittePrima, scrittePrimaDellaConferma });
     """
     out = _run(staged, scenario, _rotte())
     assert "Palazzina 7 · Via Roma 7, Tortoreto" in out["elenco"] and "Agenzia A" in out["elenco"]
@@ -223,6 +226,7 @@ def test_d01_richieste_dettaglio_rifiuto_e_approvazione(staged):  # noqa: F811
     assert "Coinvolge 3 unità: 2 attive, 1 già nel Cestino." in out["dettaglio"]
     assert out["unita"] == ["#/immobili/410", "#/immobili/415", "#/immobili/420"]
     assert out["erroreRifiuto"] == "Scrivi il motivo del rifiuto." and out["scrittePrima"] == 0
+    assert out["scrittePrimaDellaConferma"] == 0                               # «Approva» da solo non scrive
     assert _scritture(out) == [("POST", "/api/platform/building-deletion-requests/55/approve")]
     corpo = next(c for c in out["calls"] if c["m"] == "POST")["body"]
     assert corpo == {"fingerprint": "c" * 64, "note": "ok, verificato"}         # l'impronta VISTA nel dettaglio

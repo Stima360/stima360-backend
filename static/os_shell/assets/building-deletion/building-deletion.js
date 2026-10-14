@@ -173,13 +173,30 @@ function opzioniMotivo(scelto = 'created_by_mistake') {
   return TRASH_REASONS.map((r) => `<option value="${escapeHtml(r.value)}"${r.value === scelto ? ' selected' : ''}>${escapeHtml(r.label)}</option>`).join('');
 }
 
+/** Dove si decide una richiesta: la scheda «Richieste edifici» del Cestino. */
+export const DECISION_HASH = '#/cestino/richieste-edifici';
+
+/**
+ * APPROVAZIONE-EDIFICI-1: nella scheda dell'edificio una richiesta in attesa
+ * si vede soltanto; «Approva» / «Rifiuta» stanno nel Cestino › Richieste
+ * edifici (pannello del Super Admin). Il collegamento lo dice: a chi usa la
+ * superficie di piattaforma come comando, agli altri come informazione.
+ * `platformAdmin` arriva dalla scheda (che legge la sessione): qui nessuna
+ * regola di permesso, decide sempre il backend.
+ */
+export function decisionLinkHtml({ platformAdmin = false } = {}) {
+  return platformAdmin
+    ? `<p class="deletion-decide" data-deletion-decide="super-admin">Qui si vede solo lo stato. Per approvare o rifiutare: <a class="btn ghost" href="${DECISION_HASH}" data-deletion-decide-link>Apri Cestino › Richieste edifici</a></p>`
+    : `<p class="muted deletion-decide" data-deletion-decide="operator">La decide il Super Admin della piattaforma da Cestino › Richieste edifici. <a href="${DECISION_HASH}" data-deletion-decide-link>Vedi le richieste della tua agenzia</a>.</p>`;
+}
+
 /**
  * Il pannello «Eliminazione edificio» della scheda (operatore). `stage`:
  * 'idle' (riepilogo e «Richiedi eliminazione…»), 'confirm' (motivo, nota,
  * «Conferma richiesta»). Lo stato della richiesta (in attesa / approvata /
  * rifiutata / ritirata) si vede sempre quando c'è.
  */
-export function deletionPanelHtml(stato, { stage = 'idle', error = '' } = {}) {
+export function deletionPanelHtml(stato, { stage = 'idle', error = '', platformAdmin = false } = {}) {
   if (!stato) return '';
   const req = requestStatusView(stato.request);
   const inAttesa = req && req.status === 'pending';
@@ -189,6 +206,7 @@ export function deletionPanelHtml(stato, { stage = 'idle', error = '' } = {}) {
         <span class="muted">${escapeHtml(req.requested)}${req.reason ? ` · ${escapeHtml(req.reason)}` : ''}</span>
         ${req.outcome ? `<p>${escapeHtml(req.outcome)}</p>` : ''}
         ${inAttesa && req.stale ? '<p class="field-error" data-deletion-stale>Le unità sono cambiate dalla richiesta: il Super Admin non può approvarla così. Ritirala e richiedila di nuovo.</p>' : ''}
+        ${inAttesa ? decisionLinkHtml({ platformAdmin }) : ''}
       </div>` : '';
   let azioni = '';
   if (inAttesa) {
@@ -324,7 +342,7 @@ export function purgeSummaryHtml(check) {
  * Il pannello dell'operatore nella scheda edificio: carica lo stato, gestisce
  * richiesta (con conferma) e ritiro. `onChange` dopo ogni esito.
  */
-export async function mountDeletionPanel(host, buildingId, { onChange = null, initialStage = 'idle' } = {}) {
+export async function mountDeletionPanel(host, buildingId, { onChange = null, initialStage = 'idle', platformAdmin = false } = {}) {
   if (!host) return;
   let stato;
   // CESTINO-GENERALE-2: da un elenco il pannello si apre gia' sul motivo
@@ -341,7 +359,7 @@ export async function mountDeletionPanel(host, buildingId, { onChange = null, in
     return true;
   }
   function disegna() {
-    host.innerHTML = deletionPanelHtml(stato, { stage, error: errore });
+    host.innerHTML = deletionPanelHtml(stato, { stage, error: errore, platformAdmin });
     host.querySelector('[data-deletion-open]')?.addEventListener('click', () => { stage = 'confirm'; errore = ''; disegna(); });
     host.querySelector('[data-deletion-cancel]')?.addEventListener('click', () => { stage = 'idle'; errore = ''; disegna(); });
     const conferma = host.querySelector('[data-deletion-confirm]');

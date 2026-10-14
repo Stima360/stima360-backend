@@ -213,7 +213,10 @@ def test_b01_b05_eliminazione_edificio_in_chromium(server, larghezza):
             assert "Coinvolge 3 unità" in dettaglio and "Creata due volte" in dettaglio, dettaglio
             misure.append(_sfora(page))
             page.screenshot(path=str(cartella / f"eliminazione_approva_{larghezza}.png"), full_page=True)
+            # SENTINELLA AGGIORNATA DA APPROVAZIONE-EDIFICI-1: «Approva» apre la conferma, poi «Sì, approva»
             page.click(f"[data-deletion-request='{rid}'] [data-deletion-approve]")
+            page.wait_for_selector(f"[data-deletion-request='{rid}'] [data-deletion-approve-confirm]:not([hidden])")
+            page.click(f"[data-deletion-request='{rid}'] [data-deletion-approve-yes]")
             page.wait_for_selector(f"[data-building-group='{e['id']}']")
             assert _q(m, "SELECT status FROM building_deletion_requests WHERE id = %s", (rid,))[0][0] == "approved"
             assert nel_cestino() == {u1["id"]: True, u2["id"]: True, gia["id"]: True}
@@ -257,7 +260,8 @@ def test_b01_b05_eliminazione_edificio_in_chromium(server, larghezza):
             _apri_rete(page, m["url"])
             page.click(f"[data-deletion-request='{rid2}'] [data-deletion-detail-open]")
             page.wait_for_selector(f"[data-deletion-request='{rid2}'] [data-deletion-approve]")
-            page.click(f"[data-deletion-request='{rid2}'] [data-deletion-approve]")
+            page.click(f"[data-deletion-request='{rid2}'] [data-deletion-approve]")  # SENTINELLA AGGIORNATA DA APPROVAZIONE-EDIFICI-1
+            page.click(f"[data-deletion-request='{rid2}'] [data-deletion-approve-yes]")
             page.wait_for_selector(f"[data-building-group='{e['id']}'] [data-group-purge]")
             page.click(f"[data-building-group='{e['id']}'] [data-group-purge]")
             page.wait_for_selector("[data-purge-ready]")

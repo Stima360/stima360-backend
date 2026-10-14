@@ -1216,6 +1216,13 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 640px) {
   .deletion-panel .action-bar, .deletion-purge .action-bar, .deletion-detail .action-bar { flex-direction: column; align-items: stretch; }
 }
+/* APPROVAZIONE-EDIFICI-1: dove si decide (scheda edificio) e la conferma di «Approva» */
+.deletion-request-status .deletion-decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.deletion-request-status .deletion-decide .btn { min-height: 44px; }
+.deletion-approve-confirm { border: 1px solid var(--border, #e3e8f0); border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+.deletion-approve-confirm[hidden] { display: none; }
+.deletion-approve-confirm p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.deletion-request .trash-card-actions [data-deletion-hint] { font-size: 12px; align-self: center; }
 
 /* CESTINO-GENERALE-1: il Cestino UNICO. La voce del menu non e' piu' discreta
    (stessa forma delle altre; `#nav` vince sulle regole di 2B3 e di aurora),

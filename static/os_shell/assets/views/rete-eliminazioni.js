@@ -51,6 +51,7 @@ export function requestRowHtml(r) {
       <div class="field-error trash-card-error" data-trash-card-error role="alert"></div>
       <div class="trash-card-actions">
         <button type="button" class="btn ghost" data-deletion-detail-open="${Number(r.id)}">Dettaglio</button>
+        ${r.status === 'pending' ? '<span class="muted" data-deletion-hint>Apri il dettaglio per approvare o rifiutare.</span>' : ''}
       </div>
     </article>`;
 }
@@ -67,6 +68,8 @@ export function requestDetailHtml(d) {
     ? '<p class="field-error" data-deletion-stale>Le unità sono cambiate dalla richiesta: non si può approvare. Rifiutala, oppure il richiedente la ritira e la richiede di nuovo.</p>' : '';
   const blocchi = d.blockers && d.blockers.length
     ? `<p><strong>Blocchi:</strong> finché ci sono non si può approvare.</p>${blockersHtml(d.blockers)}` : '';
+  // APPROVAZIONE-EDIFICI-1: «Approva» apre la conferma (riepilogo di ciò che va
+  // nel Cestino); la chiamata parte solo da «Sì, approva».
   const azioni = r.status === 'pending' ? `
       <label class="field">Nota (obbligatoria per il rifiuto)
         <textarea data-deletion-decision-note maxlength="500" rows="2"></textarea></label>
@@ -74,6 +77,13 @@ export function requestDetailHtml(d) {
       <div class="action-bar">
         <button type="button" class="btn primary" data-deletion-approve${d.can_approve ? '' : ' disabled'}>Approva</button>
         <button type="button" class="btn danger" data-deletion-reject>Rifiuta</button>
+      </div>
+      <div class="deletion-approve-confirm" data-deletion-approve-confirm hidden>
+        <p><strong>Confermi l’approvazione?</strong> ${escapeHtml(b ? b.label : r.building_label || '')}${r.agency_name ? ` (${escapeHtml(r.agency_name)})` : ''} va nel Cestino${d.units && Number(d.units.active) ? ` con ${Number(d.units.active)} unità ${Number(d.units.active) === 1 ? 'attiva' : 'attive'}` : ''}. Nessuna cancellazione definitiva: si può ripristinare.</p>
+        <div class="action-bar">
+          <button type="button" class="btn primary" data-deletion-approve-yes>Sì, approva</button>
+          <button type="button" class="btn ghost" data-deletion-approve-no>Annulla</button>
+        </div>
       </div>` : '';
   return `<div class="deletion-detail" data-deletion-detail-body>${edificio}${unita}${cambiate}${blocchi}${azioni}</div>`;
 }
@@ -144,15 +154,28 @@ export async function renderEliminazioni(contentEl) {
       const nota = () => (dettaglioEl.querySelector('[data-deletion-decision-note]') || {}).value || '';
       const approva = dettaglioEl.querySelector('[data-deletion-approve]');
       const rifiuta = dettaglioEl.querySelector('[data-deletion-reject]');
-      approva?.addEventListener('click', async () => {
+      const conferma = dettaglioEl.querySelector('[data-deletion-approve-confirm]');
+      const si = dettaglioEl.querySelector('[data-deletion-approve-yes]');
+      const no = dettaglioEl.querySelector('[data-deletion-approve-no]');
+      // APPROVAZIONE-EDIFICI-1: azione esplicita («Approva») + conferma («Sì, approva»)
+      approva?.addEventListener('click', () => {
+        erroreEl.textContent = '';
         approva.disabled = true;
+        if (conferma) conferma.hidden = false;
+      });
+      no?.addEventListener('click', () => {
+        if (conferma) conferma.hidden = true;
+        if (approva) approva.disabled = !d.can_approve;
+      });
+      si?.addEventListener('click', async () => {
+        si.disabled = true;
         try {
           await approveDeletion(id, d.fingerprint, nota());
           await Promise.all([caricaRichieste(), caricaCestino()]);
         } catch (error) {
           erroreEl.innerHTML = escapeHtml(deletionErrorText(error))
             + (error && error.data && Array.isArray(error.data.blockers) ? blockersHtml(error.data.blockers) : '');
-          approva.disabled = false;
+          si.disabled = false;
         }
       });
       rifiuta?.addEventListener('click', async () => {

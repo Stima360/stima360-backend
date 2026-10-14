@@ -29,7 +29,7 @@
 
 import { apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
-import { getSession } from '../core/auth.js';
+import { canUsePlatformSurface, getSession } from '../core/auth.js';
 import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as api from '../census/census-api.js';
@@ -368,7 +368,10 @@ export async function renderEdificioDettaglio(container, params = []) {
 
   if (inTrash) bindBuildingRestore(container, edificio);
   // ELIMINAZIONE-EDIFICIO-1: richiesta di eliminazione (anche nel Cestino: mostra l'esito)
-  mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id);
+  // APPROVAZIONE-EDIFICI-1: a chi usa la superficie di piattaforma il pannello
+  // indica dove si approva (Cestino › Richieste edifici); il permesso lo decide il backend
+  mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id,
+    { platformAdmin: canUsePlatformSurface(sessione) });
 
   container.querySelector('#building-edit')?.addEventListener('click', () => openBuildingSheet(buildingSheet, {
     options: opzioni, building: edificio,

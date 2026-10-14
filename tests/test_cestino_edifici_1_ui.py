@@ -122,7 +122,10 @@ def test_s02_scheda_edificio_usa_il_foglio_condiviso_e_nessuna_regola():
     # la scheda monta il pannello «Eliminazione edificio» (richiesta al Super Admin); il ripristino
     # dalla scheda non e' dell'operatore.
     assert "buildingTrashButtonHtml()" not in scheda and "bindBuildingTrashButton(" not in scheda
-    assert "mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id);" in scheda
+    # SENTINELLA AGGIORNATA DA APPROVAZIONE-EDIFICI-1: la scheda passa al pannello solo se la sessione
+    # usa la superficie di piattaforma (per il collegamento «dove si approva»); nessuna regola di permesso
+    assert "mountDeletionPanel(container.querySelector('#building-deletion'), edificio.id," in scheda
+    assert "{ platformAdmin: canUsePlatformSurface(sessione) });" in scheda
     assert "info.restore_by === 'super_admin'" in scheda
     assert "const inTrash = Boolean(edificio.deleted_at);" in scheda
     assert "const dallaProcedura = params[1] === 'aggiungi' && !inTrash;" in scheda   # mai unita' nuove dal Cestino

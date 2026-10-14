@@ -285,6 +285,7 @@ def test_e01_e06_elimina_dagli_elenchi_in_chromium(server, larghezza):
         page.click(f"[data-deletion-request='{rid}'] [data-deletion-detail-open]")
         page.wait_for_selector(f"[data-deletion-request='{rid}'] [data-deletion-approve]")
         page.click(f"[data-deletion-request='{rid}'] [data-deletion-approve]")
+        page.click(f"[data-deletion-request='{rid}'] [data-deletion-approve-yes]")  # SENTINELLA AGGIORNATA DA APPROVAZIONE-EDIFICI-1
         page.wait_for_selector(f"[data-building-group='{e['id']}']")
         assert _nel_cestino(s, "buildings", e["id"]) is True and _nel_cestino(s, "properties", u1["id"]) is True
         s["come"]["chi"] = "titolare"
