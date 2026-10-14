@@ -85,7 +85,9 @@ def test_a01_precompilazione_dal_risultato_e_testo_del_punto():
     assert out["via"] == {"city": "Tortoreto", "address": "Via Roma", "civic_number": ""}
     assert out["nulla"] == {"city": "", "address": "", "civic_number": ""}
     assert out["testo"] == ["42.83415, 13.92621", "", ""]
-    assert out["azioni"] == [["building", "Nuovo edificio"], ["unit", "Nuovo immobile"], ["link", "Collega un edificio esistente"]]
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: la quarta azione collega un immobile indipendente esistente.
+    assert out["azioni"] == [["building", "Nuovo edificio"], ["unit", "Nuovo immobile"], ["link", "Collega un edificio esistente"],
+                             ["link-property", "Collega un immobile esistente"]]
 
 
 def test_a02_il_modulo_di_zona_legge_cerca_dal_backend_e_scrive_solo_con_la_conferma_t4():
@@ -292,7 +294,8 @@ def test_b01_zona_cerca_punto_conferma_nuovo_edificio_posizione_collegata_e_rito
     assert out["zoomAlto"]["conferma"] is True
     c = out["confermato"]
     assert c["punto"] is False and c["azioni"] is True and c["trascinabile"] is False and c["scritture"] == []
-    assert c["scelto"] == "Punto scelto: 42.80300, 13.91500" and c["carte"] == ["building", "unit", "link"]
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: quattro carte (anche «Collega un immobile esistente»).
+    assert c["scelto"] == "Punto scelto: 42.80300, 13.91500" and c["carte"] == ["building", "unit", "link", "link-property"]
     assert c["nota"].startswith("Dalla ricerca: 25, Via Roma")
     assert out["passo1"] == {"passo": "1", "city": "Tortoreto", "via": "Via Roma", "civico": "25"}
     assert out["passo2"] == {"passo": "2", "attivo": "building"}
@@ -451,7 +454,9 @@ def test_b04_collega_un_edificio_esistente_e_nuovo_immobile_con_la_nota(staged):
     """
     liste = [VUOTA, rt.ok({"items": [{**SALVATO, "name": "Palazzina Zona"}, c4.EDIFICIO], "total": 2}), CON_51]
     out = _run(staged, scenario, _rotte(liste=liste, posizione=[POSIZIONE_KO, POSIZIONE_OK]))
-    assert out["nota"].startswith("Ville, case indipendenti") and "NON" in out["nota"]
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: la nota dice ora che il punto diventa la posizione
+    # verificata dell'immobile indipendente al salvataggio (103) e che le unita' di palazzina stanno sull'edificio.
+    assert out["nota"].startswith("Ville, case indipendenti") and "posizione verificata" in out["nota"] and "edificio" in out["nota"]
     assert out["apertura"] == {"link": True, "scritture": []}
     assert [t[0] for t in out["trovati"]] == ["51", "7"] and "Senza coordinate" in out["trovati"][0][1]
     assert out["lettura"][-1].startswith("/api/property/buildings?") and "search=Roma" in out["lettura"][-1]

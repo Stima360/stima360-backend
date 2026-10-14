@@ -235,7 +235,9 @@ def test_c01_la_rotta_crea_una_mappa_e_non_chiama_il_crm(staged):  # noqa: F811
     assert out["titolo"] == "Zona" and out["indietro"] == "#/edifici"
     # SENTINELLA AGGIORNATA DA TERRITORIO T3: la mappa legge ora gli edifici dell'agenzia (solo GET
     # della lista, una pagina qui); nessun'altra chiamata al CRM e nessuna scrittura.
-    assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings"], _crm(out)
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: la mappa legge anche gli immobili indipendenti
+    # verificati (GET della lista leggera, una pagina qui); sempre e solo letture, nessuna scrittura.
+    assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings", "/api/property/properties/positions"], _crm(out)
     assert all(c["m"] == "GET" for c in out["calls"]), out["calls"]
 
 

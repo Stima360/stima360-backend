@@ -8,7 +8,7 @@ from core.building_trash import BuildingInTrash  # CESTINO-EDIFICI-1: stessa for
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
-from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, mandates, service, site_sync
+from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, property_position, mandates, service, site_sync
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -43,6 +43,11 @@ def create_property(p:PropertyCreate,ctx:OperatorContext=Depends(legacy_basic_ag
 # esistente», viste per relazione). Valore diverso: 422.
 @router.get('/properties')
 def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,contact_id:int|None=None,lead_id:int|None=None,assigned_to:str|None=None,mandate_expiring:bool=False,missing_documents:bool=False,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return {'items':tr(service.list_properties,ctx,limit,offset,search,status,classification,city,contact_id,lead_id,assigned_to,mandate_expiring,missing_documents,record_kind=record_kind,include_archived=include_archived)}
+# STIMA360 ZONA-3: la lista LEGGERA per la mappa (immobili indipendenti con posizione verificata, solo
+# colonne essenziali). DEVE stare prima di `/properties/{property_id}`: il template senza convertitore
+# accetterebbe «positions» come id e risponderebbe 422. Le altre rotte della posizione sono piu' sotto.
+@router.get('/properties/positions')
+def list_property_positions(limit:int=Query(200,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(property_position.list_verified,ctx,limit=limit,offset=offset)
 @router.get('/properties/{property_id}')
 def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_property,ctx,property_id)
 @router.patch('/properties/{property_id}')
@@ -180,6 +185,13 @@ def list_building_trash(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0)
 # e basta: nessuna scrittura, la verifica resta la conferma T4.
 @router.get('/geocode')
 def geocode_search(q:str=Query(...,min_length=1,max_length=300),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(geocode.search,ctx,q)
+# STIMA360 ZONA-3: la posizione VERIFICATA di un IMMOBILE INDIPENDENTE (migration 103), stesso
+# contratto di T4: stato, conferma esplicita (coordinate + verifica, operatore e data dal server) e la
+# lista LEGGERA per la mappa (solo verificati, solo colonne essenziali). Stesso gate e stessa traduzione.
+@router.get('/properties/{property_id}/position')
+def get_property_position(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(property_position.position_info,ctx,property_id)
+@router.post('/properties/{property_id}/position')
+def confirm_property_position(property_id:int,p:PositionConfirm,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(property_position.confirm_position,ctx,property_id,p)
 @router.get('/buildings/{building_id}/position')
 def get_building_position(building_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(building_position.position_info,ctx,building_id)
 @router.post('/buildings/{building_id}/position')

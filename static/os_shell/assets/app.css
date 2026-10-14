@@ -1397,3 +1397,18 @@ a.census-unit-main { text-decoration: none; }
 @media (min-width: 768px) {
   .territorio-insert-cards { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* STIMA360 ZONA-3: gli immobili indipendenti sulla mappa (marker verde, distinto dal blu degli
+   edifici), la legenda sotto la mappa, il pannello «Immobile», il riquadro di recupero «Immobile
+   salvato, ma posizione non collegata» e lo stato della verifica nella ricerca. Solo regole nuove. */
+.territorio-map-legend { margin: 8px 0 0; }
+.territorio-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(23, 35, 58, .25); vertical-align: middle; }
+.territorio-dot.is-building { background: #1a56db; }
+.territorio-dot.is-property { background: #15803d; width: 12px; height: 12px; }
+.territorio-legend-note { color: var(--danger); font-size: 12px; }
+.territorio-property-facts { margin: 4px 0 0; }
+.territorio-popup-property .territorio-popup-title::before { content: '●'; color: #15803d; margin-right: 6px; font-size: 12px; }
+.territorio-verified-note { color: #15803d; font-weight: 600; }
+.territorio-recovery-error { margin: 4px 0; }
+[data-unit-recovery] .modal-actions { flex-wrap: wrap; }
+[data-unit-recovery] .modal-actions .btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }

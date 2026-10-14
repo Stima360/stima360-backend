@@ -339,6 +339,9 @@ export function errorMessage(error) {
     case 'POSITION_INVALID': return 'Posizione non valida: tocca un punto sulla mappa e riprova.';
     case 'POSITION_NOT_INSTALLED': return 'La verifica della posizione non è ancora disponibile su questo ambiente (aggiornamento del database in corso).';
     case 'POSITION_NOT_SAVED': return 'La posizione non è stata salvata: riprova.';
+    // STIMA360 ZONA-3: la posizione di un immobile indipendente
+    case 'POSITION_NOT_INDEPENDENT': return 'L’immobile appartiene a un edificio: la posizione è quella dell’edificio (posizionalo dalla scheda dell’edificio).';
+    case 'PROPERTY_IN_TRASH': return 'L’immobile è nel Cestino: ripristinalo prima.';
     // STIMA360 TERRITORIO T5-bis: la ricerca indirizzo
     case 'GEOCODE_DISABLED': return 'La ricerca indirizzo non è attiva su questo ambiente.';
     case 'GEOCODE_BUSY': return 'Troppe ricerche in corso: riprova fra qualche secondo.';

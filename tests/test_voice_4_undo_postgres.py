@@ -481,6 +481,12 @@ TERRITORIO_5BIS = ("property/geocode.py",)
 # TERRITORIO_3, territorio-posiziona.js in TERRITORIO_4, census-wizard.js e app.css in
 # CENSIMENTO2_PROPERTY / FASE6_UI). Nessun backend, nessun file PROTETTO, nessuna migration.
 TERRITORIO_ZONA2 = ("static/os_shell/assets/views/territorio-inserisci.js",)
+# STIMA360 ZONA-3 (autorizzazione specifica del 2026-10-14): posizione verificata degli immobili
+# indipendenti (migration 103). SOLO il modulo backend nuovo fuori dagli elenchi qui sopra (router.py,
+# schemas.py, census-api.js, census-model.js e census-wizard.js in CENSIMENTO2_PROPERTY; territorio.js in
+# TERRITORIO_2, territorio-model.js in TERRITORIO_3, territorio-inserisci.js in TERRITORIO_ZONA2, app.css in
+# FASE6_UI). Nessun file PROTETTO: property/repository.py e service.py restano identici.
+TERRITORIO_ZONA3 = ("property/property_position.py",)
 
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
@@ -579,6 +585,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in TERRITORIO_5BIS]
         # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA-2: il solo file dichiarato qui sopra
         diff = [f for f in diff if f not in TERRITORIO_ZONA2]
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: il solo file dichiarato qui sopra
+        diff = [f for f in diff if f not in TERRITORIO_ZONA3]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

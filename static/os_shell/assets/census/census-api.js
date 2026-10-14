@@ -164,6 +164,21 @@ export function confirmBuildingPosition(buildingId, { latitude, longitude }) {
   return request('POST', `/buildings/${id(buildingId)}/position`, { latitude, longitude });
 }
 
+// STIMA360 ZONA-3: la posizione VERIFICATA di un IMMOBILE INDIPENDENTE (migration 103), stesso
+// contratto di T4 (solo le coordinate nel corpo), piu' la lista LEGGERA per la mappa: SOLO gli
+// immobili indipendenti dell'agenzia con posizione verificata, colonne essenziali, pagina per pagina.
+export function getPropertyPosition(propertyId) {
+  return request('GET', `/properties/${id(propertyId)}/position`);
+}
+
+export function confirmPropertyPosition(propertyId, { latitude, longitude }) {
+  return request('POST', `/properties/${id(propertyId)}/position`, { latitude, longitude });
+}
+
+export function listPropertyPositions({ limit = 200, offset = 0 } = {}) {
+  return request('GET', `/properties/positions${query({ limit, offset })}`);
+}
+
 // STIMA360 TERRITORIO T5-bis: ricerca indirizzo per la mappa. SOLO il testo scritto
 // dall'operatore; il backend parla con il servizio esterno (limite globale, cache).
 export function geocode(q) {

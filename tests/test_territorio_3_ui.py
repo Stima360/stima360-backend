@@ -268,7 +268,11 @@ def test_c01_solo_il_verificato_diventa_un_punto_gli_altri_da_posizionare(staged
     fc = out["sorgenti"]["stima-buildings"]["data"]
     assert [f["id"] for f in fc["features"]] == [9]                          # SOLO il verificato
     assert fc["features"][0]["geometry"]["coordinates"] == [13.9262, 42.8341]
-    assert out["livelli"] == [["stima-buildings-points", "circle", "stima-buildings"]]
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: accanto al livello degli edifici c'e' quello degli
+    # immobili indipendenti verificati (sorgente propria, vuota qui: la lista finta non ne ha).
+    assert out["livelli"] == [["stima-buildings-points", "circle", "stima-buildings"],
+                              ["stima-properties-points", "circle", "stima-properties"]]
+    assert out["sorgenti"]["stima-properties"]["data"]["features"] == []
     assert out["vista"] == {"center": [13.9262, 42.8341], "zoom": 16} and out["fit"] is None
     assert out["statoEdifici"] is True
     d = out["daPos"]
@@ -352,7 +356,9 @@ def test_c04_nessun_edificio_mappa_comunque_e_errore_api(staged):  # noqa: F811
     """
     out = _run(staged, scenario, [{"status": 500, "body": {"detail": "boom"}}])
     assert out["testo"].startswith("Impossibile leggere gli edifici") and out["riprova"] is True
-    assert out["daPos"] is None and out["sorgenti"] == [] and out["mappaViva"] is True
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: gli immobili indipendenti si leggono a parte: con gli
+    # edifici in errore resta solo la loro sorgente (vuota), la mappa e' viva e si puo' riprovare.
+    assert out["daPos"] is None and out["sorgenti"] == ["stima-properties"] and out["mappaViva"] is True
 
 
 @node
@@ -402,7 +408,10 @@ window.maplibregl = {
       setTimeout(() => (this.h.load || []).forEach((f) => f({})), 0); }
     on(e, a, b) { if (b) (this.lh[e + ':' + a] ||= []).push(b); else (this.h[e] ||= []).push(a); }
     addControl() {}
-    addSource(id, s) { window.__ml.features = s.data.features.map((f) => f.id);
+    // SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: una seconda sorgente (immobili indipendenti) non
+    // deve coprire quella degli edifici: `features` resta degli edifici, le altre per nome
+    addSource(id, s) { if (id === 'stima-buildings') window.__ml.features = s.data.features.map((f) => f.id);
+      (window.__ml.sources ||= {})[id] = s.data.features.map((f) => f.id);
       for (const f of s.data.features) { const b = document.createElement('button'); b.type = 'button';
         b.className = 'punto-finto'; b.dataset.id = f.id; b.textContent = 'punto ' + f.id;
         b.style.position = 'absolute'; b.style.left = '40%'; b.style.top = '40%';

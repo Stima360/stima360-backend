@@ -240,7 +240,17 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     # ricerca indirizzo per la mappa), stesso gate (verificato qui sotto).
     ricerca = [r for r in router.routes if r.path == "/api/property/geocode"]
     assert len(ricerca) == 1 and ricerca[0].methods == {"GET"} and _gate in {d.call for d in ricerca[0].dependant.dependencies}
-    assert len(router.routes) == 67
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: 67 -> 70 (GET/POST /properties/{id}/position, la posizione
+    # verificata dell'immobile indipendente, e GET /properties/positions, la lista leggera per la mappa),
+    # stesso gate (verificato qui sotto); la lista sta PRIMA di /properties/{property_id}.
+    posizione_immobili = [r for r in router.routes if r.path == "/api/property/properties/{property_id}/position"]
+    assert sorted(m for r in posizione_immobili for m in r.methods) == ["GET", "POST"]
+    assert all(_gate in {d.call for d in r.dependant.dependencies} for r in posizione_immobili)
+    lista_posizioni = [r for r in router.routes if r.path == "/api/property/properties/positions"]
+    assert len(lista_posizioni) == 1 and lista_posizioni[0].methods == {"GET"} and _gate in {d.call for d in lista_posizioni[0].dependant.dependencies}
+    percorsi = [r.path for r in router.routes]
+    assert percorsi.index("/api/property/properties/positions") < percorsi.index("/api/property/properties/{property_id}")
+    assert len(router.routes) == 70
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

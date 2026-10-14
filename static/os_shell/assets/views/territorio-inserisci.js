@@ -19,11 +19,19 @@
 //
 // Il punto scelto resta in memoria per la sessione (`chosenPoint`), cosi' il
 // passaggio Zona -> modulo -> Zona non lo perde; cambia sessione -> sparisce.
-// Nessun localStorage. «Annulla» non scrive nulla. Immobili senza edificio
-// (ville, locali autonomi): il CRM non ha ancora una verifica della posizione
-// per le `properties` (l'equivalente della 102 per gli edifici), quindi qui
-// NON si registra alcuna coordinata per loro e lo si dice prima di aprire la
-// scheda: niente «posizionato» finto.
+// Nessun localStorage. «Annulla» non scrive nulla.
+//
+// ZONA-3 - gli IMMOBILI INDIPENDENTI (ville, locali autonomi: senza edificio)
+// hanno la loro verifica (migration 103, POST /api/property/properties/{id}/
+// position): quando la scheda singola del percorso «Unita' autonoma» salva
+// un immobile senza edificio, il gancio `onUnitSaved` collega subito il punto
+// scelto; se il collegamento fallisce l'immobile NON viene duplicato e lo si
+// dice («Immobile salvato, ma posizione non collegata»: «Riprova
+// collegamento» con lo stesso id e lo stesso punto, oppure la scheda). Le
+// unita' di una palazzina prendono la posizione dell'edificio (nessun marker
+// doppio). «Collega un immobile esistente»: ricerca fra gli immobili
+// dell'agenzia (solo quelli senza edificio) e conferma su questo punto, con
+// lo stato della verifica in chiaro.
 //
 // I dati del CRM entrano nel DOM solo come `textContent`.
 
@@ -36,7 +44,7 @@ import { loadFormOptions } from '../components/property-form.js';
 import { startCreation } from '../census/census-wizard.js';
 import {
   INSERT_ACTIONS, MIN_CONFIRM_ZOOM, STATUS_LABELS, canConfirm, chosenPointText, pointForSave, positionStatus,
-  wizardFieldsFromPlace,
+  propertyTitle, propertyWhere, wizardFieldsFromPlace,
 } from '../territorio/territorio-model.js';
 
 // ---------------------------------------------------------------------------
@@ -180,7 +188,8 @@ const TESTI = {
   civicoNo: 'Civico non trovato: il punto è sulla via, non sull’edificio. Spostalo sul punto esatto.',
   risultato: 'Punto suggerito dalla ricerca: controllalo e correggilo se serve.',
   attesa: 'Punto scelto in attesa: scegli cosa inserire, oppure cambialo o annullalo.',
-  indipendenti: 'Ville, case indipendenti e locali autonomi: il CRM non registra ancora in modo verificato la posizione di un immobile senza edificio. Creandolo da qui nasce con l’indirizzo, ma questo punto NON gli viene associato (resta qui finché non lo annulli).',
+  indipendenti: 'Ville, case indipendenti e locali autonomi (senza edificio): al salvataggio il punto scelto diventa la loro posizione verificata. Le unità di una palazzina prendono la posizione dell’edificio, senza un marker proprio.',
+  salvatoNonCollegato: 'Immobile salvato, ma posizione non collegata',
 };
 
 function pin(classe, etichetta) {
@@ -214,7 +223,7 @@ const STATO_POSIZIONE = {
  * viva `map`. `onLinked(id)` = la posizione di un edificio e' stata verificata:
  * la pagina riapre la mappa con quell'edificio evidenziato.
  */
-export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = () => {} } = {}) {
+export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = () => {}, onPropertyLinked = () => {} } = {}) {
   host.innerHTML = `
       <summary class="territorio-insert-summary">+ Inserisci dalla mappa</summary>
       <div class="territorio-insert-body">
@@ -242,7 +251,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
           </div>
         </div>
         <form class="territorio-insert-link" data-insert-link hidden novalidate>
-          <label class="territorio-search-label" for="insert-link-q">Quale edificio?</label>
+          <label class="territorio-search-label" for="insert-link-q" data-insert-link-label>Quale edificio?</label>
           <div class="territorio-search-row">
             <input id="insert-link-q" class="input" type="search" autocomplete="off" placeholder="Cerca per via, civico o nome" maxlength="120" data-insert-link-input>
             <button type="submit" class="btn primary" data-insert-link-submit>Cerca</button>
@@ -398,11 +407,85 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   const testoErrore = (errore) => (errore && errore.code === 'NO_POINT'
     ? 'Nessun punto scelto su Zona: scegline uno e riprova.'
     : (errore && errore.code === 'BUILDING_IN_TRASH' ? 'L’edificio è nel Cestino: non si può posizionare.'
-      : `${errorMessage(errore)}`));
+      : (errore && errore.code === 'PROPERTY_IN_TRASH' ? 'L’immobile è nel Cestino: non si può posizionare.'
+        : `${errorMessage(errore)}`)));
   const vaiAllaMappa = (id) => {
     azzera();
     onLinked(Number(id));
   };
+
+  // ZONA-3: la conferma della posizione di un IMMOBILE INDIPENDENTE (stessa regola: riuscita
+  // SOLO se il server dice «verified» per QUELL'immobile)
+  async function collegaImmobile(propertyId) {
+    const p = chosenPoint();
+    const corpo = p ? pointForSave(p.lng, p.lat) : null;
+    if (!corpo) throw Object.assign(new Error('Nessun punto scelto su Zona.'), { code: 'NO_POINT' });
+    const esito = await api.confirmPropertyPosition(String(propertyId), corpo);
+    if (!esito || String(esito.property_id) !== String(propertyId) || esito.status !== 'verified') {
+      throw Object.assign(new Error('risposta inattesa del server'), { code: 'UNEXPECTED' });
+    }
+    return esito;
+  }
+  const vaiAllaMappaImmobile = (id) => {
+    azzera();
+    onPropertyLinked(Number(id));
+  };
+
+  /** ZONA-3: dopo il salvataggio di un'unita' dal percorso «Unita' autonoma» (gancio del wizard).
+   *  Immobile senza edificio -> collega il punto; con edificio -> la scheda come prima. */
+  async function unitaSalvata(unita) {
+    if (!unita || unita.building_id !== null && unita.building_id !== undefined) return false;
+    try {
+      await collegaImmobile(unita.id);
+    } catch (errore) {
+      if (!vivo()) return true;
+      mostraRecuperoImmobile(unita, errore);
+      return true;
+    }
+    if (!vivo()) return true;
+    vaiAllaMappaImmobile(unita.id);
+    return true;
+  }
+
+  /** «Immobile salvato, ma posizione non collegata»: stesso id, stesso punto, nessun doppione. */
+  function mostraRecuperoImmobile(unita, errore) {
+    sheet.className = 'modal census-sheet';
+    sheet.replaceChildren();
+    const box = el('div', { attrs: { 'data-unit-recovery': String(unita.id) } });
+    box.appendChild(el('h2', { cls: 'census-sheet-title', text: TESTI.salvatoNonCollegato }));
+    const banner = el('div', { cls: 'census-banner census-banner-block' });
+    banner.appendChild(el('strong', { text: `${propertyTitle(unita)}${unita.code ? ` (${unita.code})` : ''} è salvato` }));
+    banner.appendChild(el('div', { cls: 'territorio-recovery-error', text: testoErrore(errore), attrs: { 'data-unit-recovery-error': '1' } }));
+    banner.appendChild(el('div', { text: 'L’immobile non viene duplicato: riprova il collegamento con lo stesso punto, oppure apri la scheda (il punto resta qui su Zona).' }));
+    box.appendChild(banner);
+    const azioni = el('div', { cls: 'modal-actions' });
+    const chiudi = el('button', { cls: 'btn ghost', text: 'Chiudi', attrs: { type: 'button', 'data-unit-recovery-close': '1' } });
+    chiudi.addEventListener('click', () => sheet.close());
+    const scheda = el('a', { cls: 'btn ghost', text: 'Apri la scheda immobile',
+      attrs: { href: `#/immobili/${encodeURIComponent(String(unita.id))}`, 'data-unit-recovery-open': String(unita.id) } });
+    scheda.addEventListener('click', () => sheet.close());
+    const riprova = el('button', { cls: 'btn primary', text: 'Riprova collegamento', attrs: { type: 'button', 'data-unit-recovery-retry': String(unita.id) } });
+    riprova.addEventListener('click', async () => {
+      riprova.disabled = true;
+      riprova.textContent = 'Collegamento…';
+      try {
+        await collegaImmobile(unita.id);
+      } catch (e) {
+        if (!vivo()) return;
+        riprova.disabled = false;
+        riprova.textContent = 'Riprova collegamento';
+        banner.querySelector('[data-unit-recovery-error]').textContent = testoErrore(e);
+        return;
+      }
+      if (!vivo()) return;
+      sheet.close();
+      vaiAllaMappaImmobile(unita.id);
+    });
+    azioni.append(chiudi, scheda, riprova);
+    box.appendChild(azioni);
+    sheet.appendChild(box);
+    if (!(sheet.open || sheet._open)) sheet.showModal();
+  }
 
   // --- «Nuovo edificio» / «Nuovo immobile»: la procedura guidata esistente -----------------
   let opzioniPromessa = null;
@@ -473,9 +556,18 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     return box;
   }
 
+  let linkTipo = 'building';       // ZONA-3: 'building' | 'property' (che cosa cerca «Collega…»)
   async function azione(chiave) {
     if (!chosenPoint()) { mostraPunto(); return; }
-    if (chiave === 'link') {
+    if (chiave === 'link' || chiave === 'link-property') {
+      linkTipo = chiave === 'link' ? 'building' : 'property';
+      linkForm.dataset.insertLinkKind = linkTipo;
+      q('[data-insert-link-label]').textContent = linkTipo === 'building' ? 'Quale edificio?' : 'Quale immobile indipendente?';
+      q('[data-insert-link-input]').setAttribute('placeholder', linkTipo === 'building' ? 'Cerca per via, civico o nome' : 'Cerca per titolo, codice, via o comune');
+      linkElenco.replaceChildren();
+      linkElenco.hidden = true;
+      linkStato.hidden = true;
+      linkErrore.hidden = true;
       linkForm.hidden = false;
       q('[data-insert-link-input]').focus && q('[data-insert-link-input]').focus();
       return;
@@ -494,6 +586,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     startCreation({
       wizardDialog: sheet, options: opzioni, recordKind: 'census', state,
       onBuildingReady: (edificio, info) => pannelloPronto(edificio, info),
+      onUnitSaved: (unita) => unitaSalvata(unita),
     });
   }
 
@@ -513,10 +606,13 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     linkElenco.hidden = true;
     linkStato.hidden = false;
     linkStato.classList.remove('is-error');
-    linkStato.textContent = 'Ricerca fra gli edifici…';
+    const immobili = linkTipo === 'property';
+    linkStato.textContent = immobili ? 'Ricerca fra gli immobili…' : 'Ricerca fra gli edifici…';
     let corpo;
     try {
-      corpo = await api.listBuildings({ search: testo || undefined, sort: 'address', limit: 10 });
+      corpo = immobili
+        ? await api.searchProperties(testo, 20)
+        : await api.listBuildings({ search: testo || undefined, sort: 'address', limit: 10 });
     } catch (errore) {
       if (!vivo() || mio !== giro) return;
       linkInvio.disabled = false;
@@ -526,8 +622,13 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     }
     if (!vivo() || mio !== giro) return;
     linkInvio.disabled = false;
-    const voci = Array.isArray(corpo && corpo.items) ? corpo.items : [];
+    const trovati = Array.isArray(corpo && corpo.items) ? corpo.items : [];
     linkElenco.replaceChildren();
+    if (immobili) {
+      mostraImmobili(trovati);
+      return;
+    }
+    const voci = trovati;
     if (!voci.length) {
       linkStato.textContent = 'Nessun edificio trovato: prova con via, civico o nome, oppure crealo con «Nuovo edificio».';
       return;
@@ -568,6 +669,58 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     }
     linkElenco.hidden = false;
   });
+
+  // ZONA-3: gli immobili trovati: SOLO quelli senza edificio si collegano qui (le unita' di
+  // palazzina si posizionano con l'edificio); lo stato della verifica in chiaro.
+  function mostraImmobili(trovati) {
+    const indipendenti = trovati.filter((p) => p && (p.building_id === null || p.building_id === undefined));
+    const inPalazzina = trovati.length - indipendenti.length;
+    if (!indipendenti.length) {
+      linkStato.textContent = inPalazzina
+        ? `Trovate solo unità di palazzina (${inPalazzina}): la loro posizione è quella dell’edificio («Collega un edificio esistente»).`
+        : 'Nessun immobile trovato: prova con titolo, codice, via o comune, oppure crealo con «Nuovo immobile».';
+      return;
+    }
+    linkStato.textContent = `${indipendenti.length === 1 ? '1 immobile indipendente trovato' : `${indipendenti.length} immobili indipendenti trovati`}`
+      + (inPalazzina ? ` (${inPalazzina} unità di palazzina escluse: la posizione è dell’edificio)` : '')
+      + ': «Collega qui» ne verifica la posizione su questo punto.';
+    for (const p of indipendenti) {
+      const voce = el('li', { cls: 'census-list-item', attrs: { 'data-insert-candidate-property': String(p.id) } });
+      const testoVoce = el('div', { cls: 'census-candidate-text' });
+      testoVoce.appendChild(el('strong', { text: propertyTitle(p) }));
+      testoVoce.appendChild(el('small', { cls: 'muted', text: [p.code, propertyWhere(p)].filter(Boolean).join(' · ') }));
+      const s = positionStatus(p);
+      const statoEl = el('small', { cls: s === 'verified' ? 'territorio-verified-note' : 'muted',
+        text: s === 'missing' ? STATUS_LABELS.missing : STATO_POSIZIONE[s], attrs: { 'data-property-position-status': s } });
+      testoVoce.appendChild(statoEl);
+      voce.appendChild(testoVoce);
+      const lega = el('button', { cls: 'btn primary btn-small', text: 'Collega qui', attrs: { type: 'button', 'data-insert-link-property': String(p.id) } });
+      lega.addEventListener('click', async () => {
+        if (collegamento) return;
+        collegamento = true;
+        lega.disabled = true;
+        lega.textContent = 'Collegamento…';
+        linkErrore.hidden = true;
+        try {
+          await collegaImmobile(p.id);
+        } catch (errore) {
+          if (!vivo()) return;
+          collegamento = false;
+          lega.disabled = false;
+          lega.textContent = 'Collega qui';
+          linkErrore.hidden = false;
+          linkErrore.textContent = `Posizione non collegata. ${testoErrore(errore)} Riprova.`;
+          return;
+        }
+        if (!vivo()) return;
+        collegamento = false;
+        vaiAllaMappaImmobile(p.id);
+      });
+      voce.appendChild(lega);
+      linkElenco.appendChild(voce);
+    }
+    linkElenco.hidden = false;
+  }
 
   // --- un punto scelto prima (si torna da un modulo): si riparte da li' --------------------
   const prima = chosenPoint();

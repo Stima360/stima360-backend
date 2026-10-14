@@ -57,7 +57,8 @@ const PERCORSI = [
 
 /**
  * @param {{wizardDialog: HTMLDialogElement, formDialog?: HTMLDialogElement, options: object,
- *          recordKind?: 'crm'|'census', state?: object, onBuildingReady?: Function}} opts
+ *          recordKind?: 'crm'|'census', state?: object, onBuildingReady?: Function,
+ *          onUnitSaved?: Function}} opts
  *   options = GET /api/property/form-options (catalogo, etichette, agenti)
  *   formDialog = il dialog del form commerciale (scheda singola `crm`)
  *   onBuildingReady = STIMA360 TERRITORIO ZONA-2: chiamata UNA volta quando l'edificio
@@ -65,9 +66,15 @@ const PERCORSI = [
  *     esistenti); puo' restituire un nodo DOM che il passo «Edificio pronto» mostra
  *     sotto il riepilogo (es. la posizione scelta su Zona). Mai chiamata senza
  *     edificio; un suo errore non tocca l'edificio gia' salvato.
+ *   onUnitSaved = STIMA360 ZONA-3: chiamata UNA volta quando la scheda singola del
+ *     percorso «Unita' autonoma» ha SALVATO l'unita' (`unita` = risposta del server,
+ *     `unita.building_id` null = immobile indipendente). Se restituisce `true` ha
+ *     preso in carico il seguito (es. ha collegato la posizione e aperto Zona);
+ *     altrimenti, o se fallisce, si apre la scheda immobile come prima. Mai chiamata
+ *     senza unita' salvata; non puo' salvare due volte.
  */
 export function startCreation({ wizardDialog, formDialog = null, options: opzioni, recordKind = 'census', state = null,
-                                onBuildingReady = null } = {}) {
+                                onBuildingReady = null, onUnitSaved = null } = {}) {
   const comuni = catalogMunicipalities(opzioni.territory || []);
   const stato = state || wizardInitialState();
   const commerciale = recordKind === 'crm';
@@ -180,17 +187,30 @@ export function startCreation({ wizardDialog, formDialog = null, options: opzion
   function schedaAutonoma() {
     const seme = wizardLocation(stato, comuni);
     const torna = () => passo2();
+    // ZONA-3: dopo il salvataggio, chi ha aperto la procedura puo' prendere in carico il seguito
+    const salvata = async (unita) => {
+      if (typeof onUnitSaved === 'function' && unita && unita.id !== undefined && unita.id !== null) {
+        let presoInCarico = false;
+        try {
+          presoInCarico = (await onUnitSaved(unita)) === true;
+        } catch (_errore) {
+          presoInCarico = false;
+        }
+        if (presoInCarico) return;
+      }
+      navigate('immobili', [unita.id]);
+    };
     if (commerciale && formDialog) {
       wizardDialog.close();
       openPropertyDialog(formDialog, {
         mode: 'create', seed: seme, onBack: torna,
-        onSaved: (creato) => navigate('immobili', [creato.id]),
+        onSaved: (creato) => salvata(creato),
       });
       return;
     }
     openUnitSheet(wizardDialog, {
       options: opzioni, seed: seme, recordKind: commerciale ? 'crm' : 'census', onBack: torna,
-      onSaved: (unita) => navigate('immobili', [unita.id]),
+      onSaved: (unita) => salvata(unita),
     });
   }
 

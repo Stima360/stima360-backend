@@ -143,7 +143,8 @@ def test_zona2_ricerca_punto_nuovo_edificio_posizione_collegata_e_marker(server,
         browser.close()
 
     assert errori == [], errori
-    assert azioni == ["building", "unit", "link"]
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: la quarta azione collega un immobile indipendente esistente.
+    assert azioni == ["building", "unit", "link", "link-property"]
     assert compilato == {"city": "Alba Adriatica", "via": "Via Roma", "civico": "25"}
     assert "Posizione verificata sulla mappa" in pronto
     assert _edifici(m) == prima + 1                                                  # UN edificio

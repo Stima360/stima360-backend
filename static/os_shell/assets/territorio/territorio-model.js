@@ -215,8 +215,74 @@ export function chosenPointText(punto) {
 }
 
 /** Le azioni di Zona dopo la conferma del punto: solo cio' che il CRM sa gia' fare. */
+// ZONA-3: anche l'immobile indipendente (villa, locale autonomo) si verifica al salvataggio
+// o si collega se gia' in archivio.
 export const INSERT_ACTIONS = [
   { key: 'building', label: 'Nuovo edificio', text: 'Palazzina o edificio con più unità: la posizione viene verificata al salvataggio.' },
-  { key: 'unit', label: 'Nuovo immobile', text: 'Un’unità: in una palazzina (la posizione va all’edificio) oppure autonoma (villa, locale: vedi nota).' },
+  { key: 'unit', label: 'Nuovo immobile', text: 'Villa, casa indipendente o locale autonomo: la posizione viene verificata al salvataggio. In una palazzina la posizione va all’edificio.' },
   { key: 'link', label: 'Collega un edificio esistente', text: 'Verifica la posizione di un edificio già in archivio su questo punto.' },
+  { key: 'link-property', label: 'Collega un immobile esistente', text: 'Verifica la posizione di una villa o di un locale autonomo già in archivio su questo punto.' },
 ];
+
+// ---------------------------------------------------------------------------
+// STIMA360 ZONA-3 - gli immobili INDIPENDENTI sulla mappa
+//
+// Stessa regola di verifica degli edifici (`position_verified_at` scritto dal
+// server, migration 103): coordinate presenti ma non confermate NON sono un
+// marker. Un immobile con edificio (`building_id`) non e' mai un marker
+// proprio: la sua posizione e' quella dell'edificio (niente doppioni).
+// ---------------------------------------------------------------------------
+
+/** Gli immobili indipendenti verificati, senza doppioni, con `lng`/`lat` validati. */
+export function verifiedProperties(items) {
+  const esito = [];
+  const visti = new Set();
+  for (const p of Array.isArray(items) ? items : []) {
+    if (!idValido(p) || visti.has(String(p.id))) continue;
+    visti.add(String(p.id));
+    if (p.building_id !== null && p.building_id !== undefined) continue;   // mai un marker proprio
+    if (positionStatus(p) !== 'verified') continue;
+    const { lng, lat } = parseCoordinates(p);
+    esito.push({ property: p, lng, lat });
+  }
+  return esito;
+}
+
+/** GeoJSON dei SOLI immobili indipendenti verificati (id numerico = immobile). */
+export function propertyFeatureCollection(verified) {
+  return {
+    type: 'FeatureCollection',
+    features: verified.map(({ property, lng, lat }) => ({
+      type: 'Feature',
+      id: Number(property.id),
+      properties: { property_id: Number(property.id) },
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+    })),
+  };
+}
+
+const testoBreve = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
+/** Il titolo dell'immobile per riquadro e pannello: titolo, altrimenti codice, altrimenti via. */
+export function propertyTitle(p) {
+  const t = testoBreve(p && p.title);
+  if (t) return t;
+  const codice = testoBreve(p && p.code);
+  if (codice) return codice;
+  const via = [testoBreve(p && p.address), testoBreve(p && p.civic_number)].filter(Boolean).join(' ');
+  return via || `Immobile ${p && p.id !== undefined ? p.id : ''}`.trim();
+}
+
+/** «Via Roma 25 · Alba Adriatica (Lido)» */
+export function propertyWhere(p) {
+  const via = [testoBreve(p && p.address), testoBreve(p && p.civic_number)].filter(Boolean).join(' ');
+  const comune = testoBreve(p && p.city);
+  const zona = testoBreve(p && p.microzone);
+  const luogo = comune ? (zona ? `${comune} (${zona})` : comune) : zona;
+  return [via, luogo].filter(Boolean).join(' · ');
+}
+
+/** Il riquadro da inquadrare per edifici E immobili insieme (stessa regola di `viewFor`). */
+export function viewForAll(buildings, properties) {
+  return viewFor([...(buildings || []), ...(properties || [])]);
+}
