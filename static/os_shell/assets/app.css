@@ -1412,3 +1412,25 @@ a.census-unit-main { text-decoration: none; }
 .territorio-recovery-error { margin: 4px 0; }
 [data-unit-recovery] .modal-actions { flex-wrap: wrap; }
 [data-unit-recovery] .modal-actions .btn { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
+
+/* STIMA360 ZONA-4: «La mia posizione» sulla mappa di Zona. Pulsante in alto a sinistra (lo zoom
+   di MapLibre sta in alto a destra, i marker sotto), vetro Aurora, tocco >= 44 px; sotto il
+   pulsante il riquadro di stato (attesa, precisione, errore) con «Inserisci qui». Solo regole nuove. */
+.territorio-gps { position: absolute; top: 10px; left: 10px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: calc(100% - 80px); pointer-events: none; }
+.territorio-gps > * { pointer-events: auto; }
+/* specificita' > .btn di aurora.css (caricato dopo, 38/42 px): qui il tocco e' sempre >= 44 px */
+.territorio-gps .territorio-gps-btn.btn { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: 999px; background: rgba(255, 255, 255, .86); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, .7); box-shadow: 0 6px 18px rgba(23, 35, 58, .14); color: var(--text); font-weight: 600; }
+.territorio-gps-btn:disabled { opacity: .7; cursor: progress; }
+.territorio-gps.is-busy .territorio-gps-btn svg { animation: territorio-gps-pulse 1s ease-in-out infinite; }
+@keyframes territorio-gps-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.territorio-gps-status { background: rgba(255, 255, 255, .92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, .7); border-radius: var(--radius); box-shadow: 0 6px 18px rgba(23, 35, 58, .14); padding: 10px 12px; max-width: 320px; font-size: 13px; }
+.territorio-gps-status[hidden] { display: none; }
+.territorio-gps-status.is-error { color: var(--danger); border-color: rgba(220, 38, 38, .35); }
+.territorio-gps-text { margin: 0 0 8px; }
+.territorio-gps-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.territorio-gps-actions .btn, .territorio-gps-actions .btn.btn-small { min-height: 44px; padding: 8px 14px; font-size: 13px; }
+.territorio-gps-actions .btn[hidden] { display: none; }
+@media (max-width: 420px) {
+  .territorio-gps-label { font-size: 13px; }
+  .territorio-gps-status { max-width: calc(100vw - 60px); }
+}

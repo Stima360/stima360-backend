@@ -43,7 +43,8 @@ window.maplibregl = {
     addControl() {} addLayer() {} fitBounds() {}
     addSource(id, s) { this.sources[id] = s; }
     setFeatureState(f, s) { this.states[f.id] = { ...(this.states[f.id] || {}), ...s }; }
-    jumpTo(o) { if (o.zoom !== undefined) this.z = o.zoom; }
+    // SENTINELLA AGGIORNATA DA STIMA360 ZONA-4: jumpTo ricorda anche dove ha centrato (per «La mia posizione»)
+    jumpTo(o) { this.jump = o; if (o.zoom !== undefined) this.z = o.zoom; }
     getZoom() { return this.z; }
     setZoom(z) { this.z = z; this.fire('zoomend'); }
     getCanvas() { return { style: {} }; }

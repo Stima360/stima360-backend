@@ -33,6 +33,11 @@
 // dell'agenzia (solo quelli senza edificio) e conferma su questo punto, con
 // lo stato della verifica in chiaro.
 //
+// ZONA-4 - «Inserisci qui» dal GPS (territorio/gps.js): il punto dello
+// smartphone entra qui come PROVVISORIO (`placeProvisional`), con la precisione
+// nel suggerimento; si corregge e si conferma come ogni altro punto. Nulla di
+// automatico: senza «Conferma punto» non succede niente.
+//
 // I dati del CRM entrano nel DOM solo come `textContent`.
 
 import { sessionEpoch } from '../core/auth.js';
@@ -43,7 +48,7 @@ import {
 import { loadFormOptions } from '../components/property-form.js';
 import { startCreation } from '../census/census-wizard.js';
 import {
-  INSERT_ACTIONS, MIN_CONFIRM_ZOOM, STATUS_LABELS, canConfirm, chosenPointText, pointForSave, positionStatus,
+  INSERT_ACTIONS, MIN_CONFIRM_ZOOM, STATUS_LABELS, accuracyText, canConfirm, chosenPointText, pointForSave, positionStatus,
   propertyTitle, propertyWhere, wizardFieldsFromPlace,
 } from '../territorio/territorio-model.js';
 
@@ -732,4 +737,18 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   } else {
     aggiorna();
   }
+
+  // ZONA-4: il punto dal GPS diventa il provvisorio (anche al posto di uno gia' confermato:
+  // il confermato si scarta, nulla era stato salvato). Poi correzione e conferma come sempre.
+  function placeProvisional(p) {
+    if (!p || !Number.isFinite(Number(p.lng)) || !Number.isFinite(Number(p.lat))) return;
+    if (confermato) {
+      clearChosenPoint();
+      confermato = false;
+    }
+    host.open = true;
+    scegli({ lng: Number(p.lng), lat: Number(p.lat) }, { nota: `Punto dal GPS (${accuracyText(p.accuracy).toLowerCase()}): controllalo e correggilo se serve.` });
+    if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  return { placeProvisional };
 }

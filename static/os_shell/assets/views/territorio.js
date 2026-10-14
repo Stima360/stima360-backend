@@ -38,6 +38,11 @@
 // posizione scelta si collega all'edificio al suo salvataggio; questa vista non
 // scrive nulla: il pannello e' montato qui e vive con la mappa.
 //
+// ZONA-4 - «La mia posizione» (territorio/gps.js): un pulsante sulla mappa che,
+// SOLO su tocco, chiede al browser la posizione dello smartphone e la mostra
+// con il cerchio della precisione; «Inserisci qui» la passa al pannello come
+// punto provvisorio. Nulla di salvato o inviato: la verifica resta la conferma.
+//
 // ZONA-3 - gli IMMOBILI INDIPENDENTI (ville, locali autonomi: `properties`
 // senza edificio) con posizione VERIFICATA (migration 103) sono un secondo
 // livello della stessa mappa, con un marker distinguibile. UNA lettura per
@@ -68,6 +73,7 @@ import { loadFormOptions } from '../components/property-form.js';
 import { loadMapLibre } from '../territorio/maplibre-loader.js';
 import { renderPosiziona } from './territorio-posiziona.js';
 import { mountInserimento } from './territorio-inserisci.js';
+import { mountGps } from '../territorio/gps.js';
 import {
   STATUS_LABELS, classifyBuildings, propertyFeatureCollection, propertyTitle, propertyWhere, toPlaceText,
   verifiedFeatureCollection, verifiedProperties, viewForAll,
@@ -509,7 +515,7 @@ export async function renderTerritorio(container) {
 
   // ZONA-2: il pannello «Inserisci dalla mappa», sulla stessa mappa viva. Dopo una
   // posizione verificata la mappa si riapre con quell'edificio evidenziato (rilettura).
-  mountInserimento(container.querySelector('[data-insert-panel]'), {
+  const inserimento = mountInserimento(container.querySelector('[data-insert-panel]'), {
     map, ml, vivo,
     onLinked: (id) => {
       highlightAfterConfirm(id);
@@ -525,6 +531,9 @@ export async function renderTerritorio(container) {
       else navigate('edifici', ['mappa', 'immobile', String(id)]);
     },
   });
+  // ZONA-4: «La mia posizione» sulla mappa (solo su tocco; «Inserisci qui» passa il punto al
+  // pannello come provvisorio: correzione e conferma restano dell'operatore)
+  mountGps(area, { map, vivo, onInsertHere: (p) => inserimento.placeProvisional(p) });
 
   // I marker: un livello della mappa sui SOLI edifici verificati. Lo stato
   // «attivo» e' uno stato della feature (colore e raggio), uno alla volta

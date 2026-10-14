@@ -286,3 +286,68 @@ export function propertyWhere(p) {
 export function viewForAll(buildings, properties) {
   return viewFor([...(buildings || []), ...(properties || [])]);
 }
+
+// ---------------------------------------------------------------------------
+// STIMA360 ZONA-4 - «La mia posizione» (GPS dello smartphone)
+//
+// Solo regole pure: le opzioni della richiesta (fresca, precisa, con un tempo
+// massimo), il testo della precisione, i messaggi d'errore, lo zoom adatto
+// alla precisione e il cerchio indicativo (poligono in metri). La posizione
+// personale non viene mai salvata ne' inviata: resta nello stato della pagina
+// finche' l'operatore non la trasferisce al flusso di inserimento e la
+// conferma lui stesso.
+// ---------------------------------------------------------------------------
+
+/** Una posizione FRESCA (maximumAge 0), precisa, al massimo 15 s di attesa. */
+export const GPS_OPTIONS = Object.freeze({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+
+/** «Precisione stimata: circa 12 m» (sotto i 5 m si dice «pochi metri», oltre il km in km). */
+export function accuracyText(metri) {
+  const m = Number(metri);
+  if (!Number.isFinite(m) || m < 0) return 'Precisione non nota';
+  if (m < 5) return 'Precisione stimata: pochi metri';
+  if (m >= 1000) return `Precisione stimata: circa ${(m / 1000).toFixed(1).replace('.', ',')} km`;
+  return `Precisione stimata: circa ${Math.round(m)} m`;
+}
+
+/** Lo zoom a cui mostrare il punto: piu' stretto quanto piu' la posizione e' precisa. */
+export function zoomForAccuracy(metri) {
+  const m = Number(metri);
+  if (!Number.isFinite(m) || m < 0) return 16;
+  if (m <= 25) return 18;
+  if (m <= 60) return 17;
+  if (m <= 150) return 16;
+  return 15;
+}
+
+/** I messaggi, uno per esito della Geolocation API (1 negato, 2 non disponibile, 3 tempo scaduto). */
+export function gpsErrorText(codice) {
+  const c = codice && typeof codice === 'object' ? codice.code : codice;
+  if (c === 'unsupported') return 'Questo browser non offre la posizione: cerca l’indirizzo o tocca il punto sulla mappa.';
+  if (c === 1) return 'Permesso negato: consenti al browser di usare la posizione per «La mia posizione», oppure cerca l’indirizzo.';
+  if (c === 2) return 'Posizione non disponibile ora: riprova all’aperto, oppure cerca l’indirizzo.';
+  if (c === 3) return 'Tempo scaduto: nessuna posizione ricevuta. Riprova, oppure cerca l’indirizzo.';
+  return 'Posizione non ricevuta: riprova, oppure cerca l’indirizzo.';
+}
+
+/** Il cerchio indicativo della precisione: un poligono GeoJSON di raggio `metri` attorno al punto. */
+export function accuracyCircle(lng, lat, metri, punti = 48) {
+  const r = Math.max(0, Number(metri) || 0);
+  const dLat = r / 111320;
+  const dLng = r / (111320 * Math.max(Math.cos((Number(lat) * Math.PI) / 180), 0.01));
+  const anello = [];
+  for (let i = 0; i <= punti; i += 1) {
+    const a = (i / punti) * 2 * Math.PI;
+    anello.push([Number(lng) + dLng * Math.cos(a), Number(lat) + dLat * Math.sin(a)]);
+  }
+  return { type: 'Feature', properties: { accuracy: r }, geometry: { type: 'Polygon', coordinates: [anello] } };
+}
+
+/** Le due feature dell'indicatore: il cerchio e il punto. */
+export function gpsFeatureCollection(lng, lat, metri) {
+  return {
+    type: 'FeatureCollection',
+    features: [accuracyCircle(lng, lat, metri),
+      { type: 'Feature', properties: { kind: 'gps' }, geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] } }],
+  };
+}
