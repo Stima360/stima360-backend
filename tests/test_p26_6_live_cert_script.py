@@ -5965,6 +5965,26 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("building_deletion_requests", "decided_by_user_id", "operator_users", "SET NULL"),
     ("building_deletion_requests", "restored_by_user_id", "operator_users", "SET NULL"),
     ("building_deletion_requests", "purged_by_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2, migration 104 (proposte di modifica territoriali
+    # e loro registro): SEI riferimenti non-CASCADE nuovi. ESAMINATI.
+    #
+    #   property_territorial_change_requests.origin_agency_id     -> agencies        RESTRICT
+    #   property_territorial_change_requests.competent_agency_id  -> agencies        RESTRICT
+    #   property_territorial_change_requests.requested_by_user_id -> operator_users  SET NULL
+    #   property_territorial_change_requests.decided_by_user_id   -> operator_users  SET NULL
+    #   property_territorial_change_events.actor_agency_id        -> agencies        RESTRICT
+    #   property_territorial_change_events.actor_user_id          -> operator_users  SET NULL
+    #
+    # Storico (guard che rifiuta DELETE, registro append-only). Le scrive solo
+    # property/territorial_changes.py, dalle rotte di proposta e da quelle del Super Admin, che la
+    # matrice non percorre; se un'agenzia di prova ne avesse, il preflight lo incontra come RIFIUTO.
+    # Gli operatori: SET NULL, la riga resta.
+    ("property_territorial_change_requests", "origin_agency_id", "agencies", "RESTRICT"),
+    ("property_territorial_change_requests", "competent_agency_id", "agencies", "RESTRICT"),
+    ("property_territorial_change_requests", "requested_by_user_id", "operator_users", "SET NULL"),
+    ("property_territorial_change_requests", "decided_by_user_id", "operator_users", "SET NULL"),
+    ("property_territorial_change_events", "actor_agency_id", "agencies", "RESTRICT"),
+    ("property_territorial_change_events", "actor_user_id", "operator_users", "SET NULL"),
 })
 
 
@@ -8277,6 +8297,9 @@ COLLOCAZIONE_SCRITTURE = {
     "record_lifecycle_events": (GUARDIA, "POST /property/properties/{id}/trash e /restore non sono chiamati dalla matrice; referenzia agencies e operator_users (RESTRICT), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA ELIMINAZIONE-EDIFICIO-1 (101, property/building_deletion.py).
     "building_deletion_requests": (GUARDIA, "POST /property/buildings/{id}/deletion-request e le rotte del Super Admin non sono chiamati dalla matrice (solo sonde anonime); referenzia agencies (RESTRICT) e operator_users (SET NULL), quindi il preflight la vedrebbe"),
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2 (104, property/territorial_changes.py).
+    "property_territorial_change_requests": (GUARDIA, "POST /property/properties/{id}/territorial-change-requests e le rotte del Super Admin non sono chiamati dalla matrice; referenzia agencies (RESTRICT) e operator_users (SET NULL), quindi il preflight la vedrebbe"),
+    "property_territorial_change_events": (GUARDIA, "registro append-only scritto solo insieme alle proposte territoriali, che la matrice non percorre; referenzia agencies (RESTRICT) e operator_users (SET NULL), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (087, property/site_sync.py).
     "property_site_sources": (GUARDIA, "provenienza dal sito, scritta solo dal funnel pubblico (/api/salva_stima, /api/salva_stima_dettagliata) e dalle rotte site-sources, che la matrice non percorre; referenzia agencies (RESTRICT), stime e properties (CASCADE), contacts, leads e properties (SET NULL), quindi il preflight la vedrebbe"),
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1 (088, property/site_sync.py).

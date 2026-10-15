@@ -10,6 +10,7 @@ from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, property_position, mandates, service, site_sync
 from . import territorial_access  # AGENZIE-TERRITORI C1: lettura territoriale condivisa (sola lettura)
+from . import territorial_changes  # AGENZIE-TERRITORI C2: proposte di modifica, approvate dal Super Admin
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -59,6 +60,13 @@ def list_shared_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge
 # altrimenti la lettura territoriale; negato -> 404 come prima.
 @router.get('/properties/{property_id}')
 def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(territorial_access.property_view,ctx,property_id)
+# AGENZIE-TERRITORI C2: proposte di modifica di un immobile condiviso. Le vede chi legge l'immobile;
+# le presenta solo il Supervisore (agency_owner) dell'agenzia competente; nulla cambia sull'immobile
+# finche' il Super Admin non approva (/api/platform/territorial-change-requests).
+@router.get('/properties/{property_id}/territorial-change-requests')
+def list_territorial_change_requests(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(territorial_changes.property_requests,ctx,property_id)
+@router.post('/properties/{property_id}/territorial-change-requests',status_code=201)
+def create_territorial_change_request(property_id:int,p:territorial_changes.TerritorialChangeCreate,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(territorial_changes.propose,ctx,property_id,p.changes,p.note,status=201)
 @router.patch('/properties/{property_id}')
 # CENSIMENTO-1 Fase 4: la PATCH generica risponde con `{detail, code}` come le rotte del
 # censimento (`trc`), cosi' la guardia §7 porta `code: CENSUS_LOCKED` e non solo il testo.

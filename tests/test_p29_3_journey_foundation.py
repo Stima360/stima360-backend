@@ -123,7 +123,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3 (C1): 103_zona_3_property_position_verification
     # (verifica della posizione degli immobili indipendenti; additiva, nessun backfill). Si nomina
     # invece di smettere di guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
-    assert numeri[numeri.index(76):] == list(range(76, 104))
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: 104_agenzie_c2_territorial_change_requests
+    # (proposte di modifica territoriali e loro registro; additiva, nessun backfill).
+    assert numeri[numeri.index(76):] == list(range(76, 105))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

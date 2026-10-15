@@ -1459,3 +1459,17 @@ a.census-unit-main { text-decoration: none; }
   .territorio-address-grid { grid-template-columns: 1fr 1fr; }
   .territorio-address-actions .btn { flex: 1 1 auto; }
 }
+
+/* AGENZIE-TERRITORI C2: scheda condivisa e proposte di modifica territoriali */
+.shared-property .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px 16px; margin: 12px 0; }
+.shared-property .detail-grid dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.shared-property .detail-grid dt { font-size: 12px; color: var(--muted); }
+.shared-contacts { padding-left: 18px; overflow-wrap: anywhere; }
+.tc-form .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 16px; }
+.tc-form .field { display: flex; flex-direction: column; gap: 4px; }
+.tc-form .field .input { width: 100%; min-height: 44px; box-sizing: border-box; }
+.tc-form textarea.input { min-height: 72px; }
+.tc-form .action-bar .btn, .tc-section [data-tc-open], .tc-admin .action-bar .btn { min-height: 44px; }
+.tc-fields { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.tc-fields th, .tc-fields td { text-align: left; padding: 4px 8px 4px 0; overflow-wrap: anywhere; }
+.tc-admin [data-tc-admin-note] { width: 100%; box-sizing: border-box; }

@@ -96,6 +96,7 @@ import { buildingLinkHtml, renderPropertyCensusTab } from '../census/property-ce
 // VENDITORI-1: l'interruttore «Vende» per proprietario (sellers/seller-toggle.js).
 import { bindSellerToggles, renderSellerCell } from '../sellers/seller-toggle.js';
 import { bindTrashButton, trashButtonHtml } from '../trash/trash-dialog.js'; // DELETE-ARCH 2B3
+import { renderImmobileCondiviso } from './immobile-condiviso.js'; // AGENZIE-TERRITORI C2: scheda condivisa
 
 export const STATUS_LABELS = {
   draft: 'Bozza', evaluation: 'In valutazione', mandate: 'Mandato', active: 'Attivo',
@@ -257,8 +258,15 @@ export async function renderImmobileDettaglio(container, params = []) {
   let proposals = [];
   let sales = [];
   try {
-    const [propertyData, proposalsData, salesData] = await Promise.all([
-      apiGet(`/api/property/properties/${propertyId}`),
+    // AGENZIE-TERRITORI C2: prima la scheda. Un immobile di un'altra agenzia letto per competenza
+    // territoriale (`access.mode`) ha la sua vista in sola lettura, senza le sezioni operative
+    // (proposte, vendite, ...) che appartengono all'agenzia d'origine.
+    const propertyData = await apiGet(`/api/property/properties/${propertyId}`);
+    if (propertyData && propertyData.access && propertyData.access.mode === 'territorial') {
+      await renderImmobileCondiviso(container, propertyData);
+      return;
+    }
+    const [proposalsData, salesData] = await Promise.all([
       apiGet(`/api/proposals?property_id=${propertyId}`),
       apiGet(`/api/sales?property_id=${propertyId}`),
     ]);

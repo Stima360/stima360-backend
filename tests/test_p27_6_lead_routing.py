@@ -847,6 +847,11 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         # Nessuna DELETE: riepilogo in lettura e POST dichiarata con testo esatto e impronta.
         ("GET", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/purge-check"),
         ("POST", f"{ROUTER_PREFIX}/trash/{{kind}}/{{entity_id}}/purge"),
+        # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: le modifiche territoriali del Super Admin
+        ("GET", f"{ROUTER_PREFIX}/territorial-change-requests"),
+        ("GET", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}"),
+        ("POST", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}/approve"),
+        ("POST", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}/reject"),
     }, sorted(trovate)
 
 

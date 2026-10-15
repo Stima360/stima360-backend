@@ -46,6 +46,7 @@ import {
   labelOf,
   selectOptions,
 } from '../components/network.js';
+import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TERRITORI C2
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
 // CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
 // (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
@@ -56,6 +57,8 @@ const TABS = [
   { key: 'agenzie', label: 'Agenzie' },
   { key: 'territori', label: 'Territori' },
   { key: 'eliminazioni', label: 'Eliminazioni edifici' },
+  // AGENZIE-TERRITORI C2: proposte di modifica dei Supervisori territoriali (approvazione del Super Admin)
+  { key: 'modifiche', label: 'Modifiche territoriali' },
 ];
 
 export async function renderRete(container) {
@@ -99,6 +102,7 @@ export async function renderRete(container) {
     });
     if (key === 'agenzie') return caricaAgenzie();
     if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
+    if (key === 'modifiche') return renderModificheTerritoriali(contentEl);
     return caricaTerritori();
   }
 

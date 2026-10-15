@@ -259,7 +259,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     condivisi = [r for r in router.routes if r.path == "/api/property/properties/shared"]
     assert len(condivisi) == 1 and condivisi[0].methods == {"GET"} and _gate in {d.call for d in condivisi[0].dependant.dependencies}
     assert percorsi.index("/api/property/properties/shared") < percorsi.index("/api/property/properties/{property_id}")
-    assert len(router.routes) == 72
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: 72 -> 74 (GET e POST
+    # /api/property/properties/{property_id}/territorial-change-requests), stesso gate.
+    proposte = [r for r in router.routes if r.path == "/api/property/properties/{property_id}/territorial-change-requests"]
+    assert sorted(m for r in proposte for m in r.methods) == ["GET", "POST"]
+    assert all(_gate in {d.call for d in r.dependant.dependencies} for r in proposte)
+    assert len(router.routes) == 74
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

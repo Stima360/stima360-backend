@@ -1072,3 +1072,52 @@ def platform_trash_purge(
 ):
     from trash import purge as definitiva
     return _eliminazione(definitiva.purge, context, kind, entity_id, payload.confirm_text, payload.fingerprint)
+
+
+# ---------------------------------------------------------------------------
+# AGENZIE-TERRITORI C2 - MODIFICHE TERRITORIALI. Il Supervisore dell'agenzia
+# competente propone (superficie tenant); qui il Super Admin le vede da tutte le
+# agenzie, le approva (applicazione dei soli campi della whitelist, in una
+# transazione con tutte le verifiche) o le rifiuta (motivo obbligatorio).
+# Il ruolo e' riletto nel database dal modulo (`require_super_admin_db`), oltre
+# all'ammissione di questo router. Separate dalle eliminazioni degli edifici.
+# ---------------------------------------------------------------------------
+
+from property.territorial_changes import TerritorialChangeApprove, TerritorialChangeReject  # noqa: E402
+
+
+@router.get("/territorial-change-requests")
+def list_territorial_change_requests(
+    status: str = Query("pending", max_length=12),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import territorial_changes
+    return _eliminazione(territorial_changes.admin_list, context, status=status, limit=limit, offset=offset)
+
+
+@router.get("/territorial-change-requests/{request_id}")
+def get_territorial_change_request(request_id: int, context: OperatorContext = Depends(require_platform_admin)):
+    from property import territorial_changes
+    return _eliminazione(territorial_changes.admin_get, context, request_id)
+
+
+@router.post("/territorial-change-requests/{request_id}/approve")
+def approve_territorial_change_request(
+    request_id: int,
+    payload: TerritorialChangeApprove,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import territorial_changes
+    return _eliminazione(territorial_changes.approve, context, request_id, payload.note)
+
+
+@router.post("/territorial-change-requests/{request_id}/reject")
+def reject_territorial_change_request(
+    request_id: int,
+    payload: TerritorialChangeReject,
+    context: OperatorContext = Depends(require_platform_admin),
+):
+    from property import territorial_changes
+    return _eliminazione(territorial_changes.reject, context, request_id, payload.note)

@@ -123,7 +123,11 @@ def property_access(ctx, property_id: int) -> dict[str, Any] | None:
             return None
         return {"mode": MODE_TERRITORIAL, "reason": REASON_TERRITORIAL, "origin_agency_id": riga["agency_id"],
                 "origin_agency_name": _nome_agenzia(cur, riga["agency_id"]), "territory": territorio,
-                "read_only": True}
+                "read_only": True,
+                # C2: il Supervisore (agency_owner) dell'agenzia competente puo' PROPORRE modifiche
+                # (property/territorial_changes.py); applicarle resta del Super Admin
+                "can_propose": getattr(ctx, "role", None) == "agency_owner"
+                and not getattr(ctx, "is_platform_admin", False)}
 
 
 def shared_property(ctx, property_id: int) -> dict[str, Any]:

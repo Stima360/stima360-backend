@@ -32,11 +32,14 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO T4: poi la sola 102 (verifica della posizione degli edifici)
     # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3 (C1): poi la sola 103 (verifica della posizione degli
     # immobili indipendenti, stesso modello della 102), additiva, ora l'ultima
-    assert tutte[-1].version == "103_zona_3_property_position_verification"
-    assert tutte[-2].version == "102_territorio_4_position_verification"
-    assert tutte[-3].version == "101_eliminazione_edificio_1"
-    m100 = tutte[-4]
-    assert m100.version == VERSIONE and tutte[-5].version == "099_voice_undo"
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: poi la sola 104 (proposte di modifica territoriali
+    # e loro registro), additiva, ora l'ultima
+    assert tutte[-1].version == "104_agenzie_c2_territorial_change_requests"
+    assert tutte[-2].version == "103_zona_3_property_position_verification"
+    assert tutte[-3].version == "102_territorio_4_position_verification"
+    assert tutte[-4].version == "101_eliminazione_edificio_1"
+    m100 = tutte[-5]
+    assert m100.version == VERSIONE and tutte[-6].version == "099_voice_undo"
     assert m100.down_available and not m100.non_transactional
     assert runner.validate_migration(m100) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)
