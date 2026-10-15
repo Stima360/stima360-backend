@@ -508,6 +508,10 @@ AGENZIE_C1 = ("property/territorial_access.py",)
 AGENZIE_C2 = ("property/territorial_changes.py", "static/os_shell/assets/views/immobile-dettaglio.js",
               "static/os_shell/assets/views/immobile-condiviso.js", "static/os_shell/assets/views/rete-modifiche.js",
               "static/os_shell/assets/territorial-changes/territorial-changes.js")
+# AGENZIE-TERRITORI C3 (autorizzazione specifica del 2026-10-15): l'elenco «Immobili» unificato
+# (propri + condivisi C1). SOLO il modulo nuovo, in sola lettura (property/router.py, immobili.js e
+# app.css sono gia' dichiarati). Nessun file PROTETTO, nessuna migration.
+AGENZIE_C3 = ("property/accessible_list.py",)
 
 
 # CENSIMENTO-2 FASE A (autorizzazione specifica del 2026-10-12): in property/site_sync.py la SOLA
@@ -616,6 +620,8 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         diff = [f for f in diff if f not in AGENZIE_C1]
         # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: i soli file dichiarati qui sopra
         diff = [f for f in diff if f not in AGENZIE_C2]
+        # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C3: il solo file dichiarato qui sopra
+        diff = [f for f in diff if f not in AGENZIE_C3]
         # SENTINELLA AGGIORNATA DA CENSIMENTO-2 FASE A: site_sync.py solo se identico alla base
         # o alla base con esattamente la modifica approvata (vincolo sul contenuto, non sul nome)
         if SITE_SYNC in diff:

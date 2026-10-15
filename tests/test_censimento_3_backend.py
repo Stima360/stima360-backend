@@ -264,7 +264,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     proposte = [r for r in router.routes if r.path == "/api/property/properties/{property_id}/territorial-change-requests"]
     assert sorted(m for r in proposte for m in r.methods) == ["GET", "POST"]
     assert all(_gate in {d.call for d in r.dependant.dependencies} for r in proposte)
-    assert len(router.routes) == 74
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C3: 74 -> 75 (GET /api/property/properties/accessible,
+    # l'elenco unificato propri + condivisi), stesso gate, PRIMA di `/properties/{property_id}`.
+    unificata = [r for r in router.routes if r.path == "/api/property/properties/accessible"]
+    assert len(unificata) == 1 and unificata[0].methods == {"GET"} and _gate in {d.call for d in unificata[0].dependant.dependencies}
+    assert percorsi.index("/api/property/properties/accessible") < percorsi.index("/api/property/properties/{property_id}")
+    assert len(router.routes) == 75
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

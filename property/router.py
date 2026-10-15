@@ -11,6 +11,7 @@ from operator_auth.exceptions import PlatformAdminAgencyRequired
 from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, property_position, mandates, service, site_sync
 from . import territorial_access  # AGENZIE-TERRITORI C1: lettura territoriale condivisa (sola lettura)
 from . import territorial_changes  # AGENZIE-TERRITORI C2: proposte di modifica, approvate dal Super Admin
+from . import accessible_list  # AGENZIE-TERRITORI C3: elenco unificato propri + condivisi (sola lettura)
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -56,6 +57,11 @@ def list_property_positions(limit:int=Query(200,ge=1,le=200),offset:int=Query(0,
 @router.get('/properties/shared')
 def list_shared_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,city:str|None=None,status:str|None=None,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
     return {'items':tr(territorial_access.list_shared,ctx,limit=limit,offset=offset,search=search,city=city,status=status,record_kind=record_kind,include_archived=include_archived)}
+# AGENZIE-TERRITORI C3: l'elenco «Immobili» unificato (propri + condivisi C1) con UNA paginazione e
+# i conteggi delle tre viste. Solo lettura; `/properties` resta quella dei selettori. Prima di `/{property_id}`.
+@router.get('/properties/accessible')
+def list_accessible_properties(scope:str=Query('all',pattern='^(all|mine|shared)$'),limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    return tr(accessible_list.list_accessible,ctx,scope=scope,limit=limit,offset=offset,search=search,status=status,classification=classification,city=city,include_archived=include_archived)
 # AGENZIE-TERRITORI C1: la scheda di sempre per l'agenzia d'origine (con il blocco `access`);
 # altrimenti la lettura territoriale; negato -> 404 come prima.
 @router.get('/properties/{property_id}')

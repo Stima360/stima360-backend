@@ -78,11 +78,44 @@ import { propertyDisplayName, propertyTypeLabel, loadFormOptions } from '../comp
 import * as census from '../census/census-api.js';
 import { startCreation } from '../census/census-wizard.js';
 import { errorMessage } from '../census/census-model.js';
+// AGENZIE-TERRITORI C3: l'elenco «Commerciale» legge GET /api/property/properties/accessible
+// (property/accessible_list.py): propri + condivisi per competenza territoriale (C1) in UNA
+// lista paginata dal server, con i conteggi delle tre viste. La lista di sempre
+// (/properties) resta quella dei selettori che portano a una scrittura. La provenienza
+// di ogni riga arriva dal blocco `access` del backend; «Elimina…» solo sulle righe proprie.
+// La scheda condivisa e la proposta di modifica restano quelle di C2 (immobile-condiviso.js).
 
 const PAGE_SIZE = 50;
 
 // Valori reali del CHECK constraint properties_status_check (migrations/002_property_01.sql:43).
 const STATUS_OPTIONS = ['draft', 'evaluation', 'mandate', 'active', 'reserved', 'under_offer', 'sold', 'withdrawn', 'archived'];
+const CLASS_OPTIONS = ['A', 'B', 'C'];
+
+export const SCOPES = Object.freeze([
+  { value: 'all', label: 'Tutti gli accessibili' },
+  { value: 'mine', label: 'La mia agenzia' },
+  { value: 'shared', label: 'Condivisi nel territorio' },
+]);
+
+/** Riga condivisa per competenza territoriale (decide il backend). */
+export function isSharedRow(p) {
+  return Boolean(p && p.access && p.access.mode === 'territorial');
+}
+
+/** La provenienza sotto il nome dell'immobile (esportata per le prove). */
+export function originLineHtml(p) {
+  if (isSharedRow(p)) {
+    const dove = [p.access.origin_agency_name || p.origin_agency_name, p.city].filter(Boolean).map(escapeHtml).join(' · ');
+    return `<div class="origin-line" data-origin="shared"><span class="badge badge-role">Condiviso</span><small class="muted">${dove}</small></div>`;
+  }
+  return '<div class="origin-line" data-origin="mine"><span class="badge badge-gray">La mia agenzia</span></div>';
+}
+
+const EMPTY_SCOPE = {
+  all: 'Nessun immobile presente.',
+  mine: 'Nessun immobile della tua agenzia.',
+  shared: 'Nessun immobile di altre agenzie nel tuo territorio.',
+};
 
 export async function renderImmobili(container, params = []) {
   const modoIniziale = params[0] === 'censimento' ? 'census' : 'crm';
@@ -92,11 +125,19 @@ export async function renderImmobili(container, params = []) {
       <button type="button" class="tab-btn${modoIniziale === 'census' ? ' active' : ''}" data-mode="census">Censimento</button>
     </div>
     <div class="card panel" id="immobili-crm-panel" ${modoIniziale === 'census' ? 'hidden' : ''}>
+      <div class="scope-switch" id="immobili-scope" role="group" aria-label="Quali immobili">
+        ${SCOPES.map((s) => `<button type="button" class="scope-btn${s.value === 'all' ? ' active' : ''}" data-scope="${s.value}" aria-pressed="${s.value === 'all'}">${escapeHtml(s.label)} <span class="scope-count" data-scope-count="${s.value}"></span></button>`).join('')}
+      </div>
       <div class="list-toolbar">
         <input id="immobili-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…">
-        <select id="immobili-status" class="input">
+        <input id="immobili-city" class="input" type="search" placeholder="Comune" aria-label="Comune">
+        <select id="immobili-status" class="input" aria-label="Stato commerciale">
           <option value="">Tutti gli stati</option>
           ${STATUS_OPTIONS.map((s) => `<option value="${s}">${escapeHtml(s)}</option>`).join('')}
+        </select>
+        <select id="immobili-class" class="input" aria-label="Classificazione">
+          <option value="">Tutte le classi</option>
+          ${CLASS_OPTIONS.map((c) => `<option value="${c}">Classe ${c}</option>`).join('')}
         </select>
         <button type="button" id="immobili-new" class="btn primary">+ Nuovo immobile</button>
         <a href="#/cestino" class="btn ghost trash-link" id="immobili-trash-link">Cestino</a>
@@ -121,15 +162,20 @@ export async function renderImmobili(container, params = []) {
   `;
 
   const searchInput = container.querySelector('#immobili-search');
+  const cityInput = container.querySelector('#immobili-city');
   const statusSelect = container.querySelector('#immobili-status');
+  const classSelect = container.querySelector('#immobili-class');
+  const scopeBar = container.querySelector('#immobili-scope');
   const listArea = container.querySelector('#immobili-list-area');
   const pagerArea = container.querySelector('#immobili-pager');
   const dialogEl = container.querySelector('#new-property-dialog');
 
   let offset = 0;
+  let scope = 'all';
   let debounceHandle = null;
   const sessione = getSession();
-  const puoEliminare = (p) => canManagePropertyLifecycle(p, sessione);
+  // C3: «Elimina…» mai su una riga condivisa (resta dell'agenzia d'origine)
+  const puoEliminare = (p) => !isSharedRow(p) && canManagePropertyLifecycle(p, sessione);
   let tipologie = [];
   let tipiPertinenza = [];    // PERTINENZE-1: Posto auto, Cantina… per le pertinenze autonome
   try {
@@ -144,23 +190,35 @@ export async function renderImmobili(container, params = []) {
     listArea.innerHTML = '<p class="muted">Caricamento…</p>';
     pagerArea.innerHTML = '';
     const term = searchInput.value.trim();
+    const city = cityInput.value.trim();
     const status = statusSelect.value;
-    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    const classification = classSelect.value;
+    const params = new URLSearchParams({ scope, limit: String(PAGE_SIZE), offset: String(offset) });
     if (term) params.set('search', term);
+    if (city) params.set('city', city);
     if (status) params.set('status', status);
+    if (classification) params.set('classification', classification);
 
     let items = [];
+    let total = 0;
     try {
-      const data = await apiGet(`/api/property/properties?${params.toString()}`);
+      const data = await apiGet(`/api/property/properties/accessible?${params.toString()}`);
       items = Array.isArray(data?.items) ? data.items : [];
+      total = Number.isInteger(data?.total) ? data.total : items.length;
+      const counts = data?.counts || {};
+      scopeBar.querySelectorAll('[data-scope-count]').forEach((el) => {
+        const n = counts[el.dataset.scopeCount];
+        el.textContent = Number.isInteger(n) ? `(${n})` : '';
+      });
     } catch (error) {
       listArea.innerHTML = `<div class="error-box">Impossibile caricare gli immobili: ${escapeHtml(error.message)}</div>`;
       return;
     }
+    const filtrato = Boolean(term || city || status || classification);
 
     listArea.innerHTML = renderTable(
       [
-        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
+        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>${originLineHtml(p)}` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie, tipiPertinenza)) },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
@@ -170,7 +228,7 @@ export async function renderImmobili(container, params = []) {
         ...(items.some(puoEliminare) ? [rowDeleteColumn('property', puoEliminare)] : []),
       ],
       items,
-      { emptyMessage: (term || status) ? 'Nessun immobile trovato per questi filtri.' : 'Nessun immobile presente.', onRowClick: true },
+      { emptyMessage: filtrato ? 'Nessun immobile trovato per questi filtri.' : EMPTY_SCOPE[scope], onRowClick: true },
     );
     bindTableRowClicks(listArea, (id) => navigate('immobili', [id]));
     bindRowDeletes(listArea, {
@@ -184,8 +242,8 @@ export async function renderImmobili(container, params = []) {
 
     pagerArea.innerHTML = `
       <button class="btn" id="immobili-prev" ${offset === 0 ? 'disabled' : ''}>← Precedenti</button>
-      <span class="muted">Risultati da ${items.length ? offset + 1 : 0} a ${offset + items.length}</span>
-      <button class="btn" id="immobili-next" ${items.length < PAGE_SIZE ? 'disabled' : ''}>Successivi →</button>
+      <span class="muted" data-pager-text>${items.length ? offset + 1 : 0}–${offset + items.length} di ${total}</span>
+      <button class="btn" id="immobili-next" ${offset + items.length >= total ? 'disabled' : ''}>Successivi →</button>
     `;
     const prevBtn = pagerArea.querySelector('#immobili-prev');
     const nextBtn = pagerArea.querySelector('#immobili-next');
@@ -198,7 +256,23 @@ export async function renderImmobili(container, params = []) {
     clearTimeout(debounceHandle);
     debounceHandle = setTimeout(load, 300);
   });
+  cityInput.addEventListener('input', () => {
+    offset = 0;
+    clearTimeout(debounceHandle);
+    debounceHandle = setTimeout(load, 300);
+  });
   statusSelect.addEventListener('change', () => { offset = 0; load(); });
+  classSelect.addEventListener('change', () => { offset = 0; load(); });
+  scopeBar.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => {
+    if (scope === b.dataset.scope) return;
+    scope = b.dataset.scope;
+    scopeBar.querySelectorAll('[data-scope]').forEach((x) => {
+      x.classList.toggle('active', x === b);
+      x.setAttribute('aria-pressed', String(x === b));
+    });
+    offset = 0;
+    load();
+  }));
   // CREAZIONE-GUIDATA-1: «+ Nuovo immobile» parte dalla procedura guidata
   // (territorio -> percorso -> edificio). Da qui le schede nascono COMMERCIALI:
   // l'unita' autonoma apre il form di sempre (POST /properties) con il
