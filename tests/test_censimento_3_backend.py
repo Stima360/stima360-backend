@@ -254,7 +254,12 @@ def test_c01_quattordici_rotte_tutte_dietro_il_gate_di_sessione():
     # per il punto scelto sulla mappa), stesso gate (verificato qui sotto).
     inversa = [r for r in router.routes if r.path == "/api/property/reverse-geocode"]
     assert len(inversa) == 1 and inversa[0].methods == {"GET"} and _gate in {d.call for d in inversa[0].dependant.dependencies}
-    assert len(router.routes) == 71
+    # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C1: 71 -> 72 (GET /api/property/properties/shared, gli
+    # immobili letti per competenza territoriale), stesso gate, PRIMA di `/properties/{property_id}`.
+    condivisi = [r for r in router.routes if r.path == "/api/property/properties/shared"]
+    assert len(condivisi) == 1 and condivisi[0].methods == {"GET"} and _gate in {d.call for d in condivisi[0].dependant.dependencies}
+    assert percorsi.index("/api/property/properties/shared") < percorsi.index("/api/property/properties/{property_id}")
+    assert len(router.routes) == 72
 
 
 def test_c02_gli_errori_portano_code_accanto_a_detail():

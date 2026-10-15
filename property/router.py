@@ -9,6 +9,7 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 from . import building_deletion, building_lifecycle, building_position, census, composition, geocode, interactions, property_position, mandates, service, site_sync
+from . import territorial_access  # AGENZIE-TERRITORI C1: lettura territoriale condivisa (sola lettura)
 from .schemas import *
 router=APIRouter(prefix='/api/property',tags=['property'])
 def tr(fn,*a,**k):
@@ -48,8 +49,16 @@ def list_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),sea
 # accetterebbe «positions» come id e risponderebbe 422. Le altre rotte della posizione sono piu' sotto.
 @router.get('/properties/positions')
 def list_property_positions(limit:int=Query(200,ge=1,le=200),offset:int=Query(0,ge=0),ctx:OperatorContext=Depends(legacy_basic_agency_context)):return trc(property_position.list_verified,ctx,limit=limit,offset=offset)
+# AGENZIE-TERRITORI C1: gli immobili di ALTRE agenzie letti per competenza territoriale (sola
+# lettura). Lista separata: quella di sempre (`/properties`) resta identica, anche per i selettori
+# che portano a una scrittura. DEVE stare prima di `/properties/{property_id}` (vedi sopra).
+@router.get('/properties/shared')
+def list_shared_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,city:str|None=None,status:str|None=None,record_kind:str=Query('crm',pattern='^(crm|census|all)$'),include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    return {'items':tr(territorial_access.list_shared,ctx,limit=limit,offset=offset,search=search,city=city,status=status,record_kind=record_kind,include_archived=include_archived)}
+# AGENZIE-TERRITORI C1: la scheda di sempre per l'agenzia d'origine (con il blocco `access`);
+# altrimenti la lettura territoriale; negato -> 404 come prima.
 @router.get('/properties/{property_id}')
-def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(service.get_property,ctx,property_id)
+def get_property(property_id:int,ctx:OperatorContext=Depends(legacy_basic_agency_context)):return tr(territorial_access.property_view,ctx,property_id)
 @router.patch('/properties/{property_id}')
 # CENSIMENTO-1 Fase 4: la PATCH generica risponde con `{detail, code}` come le rotte del
 # censimento (`trc`), cosi' la guardia §7 porta `code: CENSUS_LOCKED` e non solo il testo.
