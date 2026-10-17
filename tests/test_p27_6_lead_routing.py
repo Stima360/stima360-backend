@@ -852,6 +852,12 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         ("GET", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}"),
         ("POST", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}/approve"),
         ("POST", f"{ROUTER_PREFIX}/territorial-change-requests/{{request_id}}/reject"),
+        # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM-2: «Verifica conseguenze», SOLO
+        # letture (GET) del Super Admin generale designato, nessuna scrittura.
+        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/impact"),
+        ("GET", f"{ROUTER_PREFIX}/operators/{{operator_user_id}}/impact"),
+        ("GET", f"{ROUTER_PREFIX}/agencies/{{agency_id}}/territories/{{assignment_id}}/impact"),
+        ("GET", f"{ROUTER_PREFIX}/aliases/{{alias_id}}/impact"),
     }, sorted(trovate)
 
 

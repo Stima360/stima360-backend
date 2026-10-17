@@ -63,6 +63,7 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
+  mostraConseguenze,
   mostraSoloSuperAdmin,
   selectOptions,
 } from '../components/network.js';
@@ -206,10 +207,17 @@ export async function renderReteAgenzia(container, agencyId) {
         </div>
         <div class="field-error" id="pa-errore" role="alert"></div>
         <div class="modal-actions">
+          <button type="button" class="btn" id="pa-conseguenze">Verifica conseguenze</button>
           <button type="submit" class="btn primary">Salva modifiche</button>
         </div>
       </form>
     `;
+    // ADM-2: anteprima in sola lettura, prima di sospendere o archiviare.
+    contentEl.querySelector('#pa-conseguenze').addEventListener('click', () => mostraConseguenze(
+      hostEl,
+      () => apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}/impact`),
+      `Conseguenze per “${agenzia.name}”`,
+    ));
     contentEl.querySelector('#form-panoramica').addEventListener('submit', async (event) => {
       event.preventDefault();
       const erroreEl = contentEl.querySelector('#pa-errore');
@@ -354,6 +362,19 @@ export async function renderReteAgenzia(container, agencyId) {
       });
     });
 
+    // ADM-2: anteprima in sola lettura, prima di disabilitare o sospendere.
+    listaEl.querySelectorAll('[data-impatto-operatore]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.impattoOperatore));
+        if (!riga) return;
+        mostraConseguenze(
+          hostEl,
+          () => apiGet(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/impact`),
+          `Conseguenze per “${nomeOperatore(riga.operator)}”`,
+        );
+      });
+    });
+
     contentEl.querySelector('#op-nuovo').addEventListener('click', () => dialogoNuovoOperatore());
     contentEl.querySelector('#op-titolare').addEventListener('click', () => dialogoTitolare(righe));
   }
@@ -373,6 +394,7 @@ export async function renderReteAgenzia(container, agencyId) {
     if (riga.membership.status !== 'revoked') {
       bottoni.push(`<button type="button" class="btn" data-azione="membership" data-operatore="${escapeHtml(riga.operator.id)}">Membership</button>`);
     }
+    bottoni.push(`<button type="button" class="btn" data-impatto-operatore="${escapeHtml(riga.operator.id)}">Verifica conseguenze</button>`);
     return bottoni.join(' ');
   }
 
@@ -595,6 +617,18 @@ export async function renderReteAgenzia(container, agencyId) {
         navigate('rete', ['territori', a.dataset.territorio]);
       });
     });
+    // ADM-2: anteprima in sola lettura, prima di sospendere o revocare.
+    listaEl.querySelectorAll('[data-impatto-assegnazione]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const riga = righe.find((a) => String(a.id) === String(btn.dataset.impattoAssegnazione));
+        if (!riga) return;
+        mostraConseguenze(
+          hostEl,
+          () => apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}/territories/${encodeURIComponent(riga.id)}/impact`),
+          `Conseguenze per ${riga.territory_label}`,
+        );
+      });
+    });
     contentEl.querySelector('#te-assegna').addEventListener('click', () => dialogoAssegna());
   }
 
@@ -612,6 +646,7 @@ export async function renderReteAgenzia(container, agencyId) {
       bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="active">Riattiva</button>`);
     }
     bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="revoked">Revoca</button>`);
+    bottoni.push(`<button type="button" class="btn" data-impatto-assegnazione="${escapeHtml(a.id)}">Verifica conseguenze</button>`);
     return `${bottoni.join(' ')} ${apri}`;
   }
 

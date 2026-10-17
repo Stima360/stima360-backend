@@ -35,6 +35,7 @@ from . import (
     aliases_service,
     agencies_service,
     configuration_service,
+    impact_service,
     operators_service,
     territories_service,
 )
@@ -902,6 +903,49 @@ def update_territory_alias(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# ADM-2 - ANTEPRIMA DELLE CONSEGUENZE ("Verifica conseguenze")
+#
+# Quattro GET in sola lettura, riservate al Super Admin generale designato
+# (`require_super_admin_context`, ADM-1). Nessuna scrittura, nessun audit
+# operativo oltre all'ammissione. L'anteprima e' informativa: le verifiche vere
+# si ripetono, in transazione, quando l'operazione viene eseguita.
+# ---------------------------------------------------------------------------
+
+@router.get("/agencies/{agency_id}/impact")
+def agency_impact(agency_id: int, context: OperatorContext = Depends(require_super_admin_context)) -> dict:
+    try:
+        return impact_service.agency_impact(agency_id)
+    except AgencyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/operators/{operator_user_id}/impact")
+def operator_impact(operator_user_id: int, context: OperatorContext = Depends(require_super_admin_context)) -> dict:
+    try:
+        return impact_service.operator_impact(operator_user_id)
+    except OperatorNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/agencies/{agency_id}/territories/{assignment_id}/impact")
+def assignment_impact(
+    agency_id: int, assignment_id: int, context: OperatorContext = Depends(require_super_admin_context),
+) -> dict:
+    try:
+        return impact_service.assignment_impact(agency_id, assignment_id)
+    except TerritoryAssignmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/aliases/{alias_id}/impact")
+def alias_impact(alias_id: int, context: OperatorContext = Depends(require_super_admin_context)) -> dict:
+    try:
+        return impact_service.alias_impact(alias_id)
+    except AliasNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

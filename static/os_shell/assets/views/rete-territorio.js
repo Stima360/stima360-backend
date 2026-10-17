@@ -55,6 +55,7 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
+  mostraConseguenze,
   mostraSoloSuperAdmin,
 } from '../components/network.js';
 
@@ -220,6 +221,18 @@ export async function renderReteTerritorio(container, territoryId) {
         if (riga) revocaAlias(riga);
       });
     });
+    // ADM-2: anteprima in sola lettura, prima di revocare un valore.
+    aliasEl.querySelectorAll('[data-impatto-alias]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const riga = alias.find((a) => String(a.id) === String(btn.dataset.impattoAlias));
+        if (!riga) return;
+        mostraConseguenze(
+          hostEl,
+          () => apiGet(`${PLATFORM}/aliases/${encodeURIComponent(riga.id)}/impact`),
+          `Conseguenze per “${riga.match_value}”`,
+        );
+      });
+    });
     disegnaCatena();
   }
 
@@ -228,7 +241,8 @@ export async function renderReteTerritorio(container, territoryId) {
     // cancella: la riga dice che quel valore ha voluto dire qualcosa, e fino a
     // quando. Per riusare il valore si dichiara un alias nuovo.
     if (a.status !== 'active') return '<span class="muted">Definitivo</span>';
-    return `<button type="button" class="btn" data-alias="${escapeHtml(a.id)}">Revoca</button>`;
+    return `<button type="button" class="btn" data-alias="${escapeHtml(a.id)}">Revoca</button> `
+      + `<button type="button" class="btn" data-impatto-alias="${escapeHtml(a.id)}">Verifica conseguenze</button>`;
   }
 
   async function revocaAlias(riga) {

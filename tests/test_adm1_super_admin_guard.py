@@ -49,7 +49,7 @@ def test_a_ogni_rotta_della_rete_richiede_il_super_admin_designato():
             else:
                 assert require_super_admin_context in chiamate, (metodo, rotta.path)
                 controllate += 1
-    assert controllate == 23, controllate
+    assert controllate == 27, controllate  # 23 di ADM-1 + 4 anteprime ADM-2
 
 
 @pytest.fixture
