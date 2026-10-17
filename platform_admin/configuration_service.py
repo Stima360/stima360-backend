@@ -48,7 +48,7 @@ from typing import Any
 
 from operator_auth.context import OperatorContext
 
-from . import agencies_repository
+from . import agencies_repository, super_admin
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_AGENCY_CONFIGURATION_UPDATE,
@@ -161,6 +161,7 @@ def update_configuration(
     dipenderebbe dal rollback per una cosa che si puo' semplicemente non fare.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_AGENCY_CONFIGURATION_UPDATE)
         agency = agencies_repository.get_agency(cur, agency_id)
         if agency is None:
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)

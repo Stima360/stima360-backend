@@ -11,8 +11,9 @@ Chi fa cosa (tutto deciso qui, nel backend):
     competenza territoriale (C1, `territorial_access.property_access`);
     l'agenzia d'origine modifica come sempre, senza proposte;
   * vedere le proposte di un immobile: chi legge l'immobile (origine o competente);
-  * approvare/rifiutare: platform admin (superficie `/api/platform`,
-    `require_platform_admin`) con il ruolo RILETTO nel database
+  * approvare/rifiutare: il Super Admin generale DESIGNATO (ADM-1:
+    `STIMA360_SUPER_ADMIN_USER_ID`, `super_admin.require_super_admin`) con il
+    ruolo RILETTO nel database
     (`operator_users.is_platform_admin = TRUE` e `status = 'active'`,
     `super_admin.require_super_admin_db`); mai l'email.
 
@@ -43,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
-from platform_admin.super_admin import require_super_admin_db
+from platform_admin.super_admin import require_super_admin, require_super_admin_db
 
 from . import territorial_access
 from .catalog import validate_energy_class
@@ -257,6 +258,8 @@ def propose(ctx, property_id: int, changes: dict, note: str | None = None) -> di
 def _super_admin(cur, ctx) -> None:
     if not getattr(ctx, "is_platform_admin", False) or getattr(ctx, "user_id", None) is None:
         raise _errore(PermissionDenied, "Operazione riservata al Super Admin della piattaforma", "SUPER_ADMIN_REQUIRED")
+    # ADM-1: il SOLO Super Admin generale designato, poi il ruolo riletto nel database.
+    require_super_admin(ctx, audit_action=_AUDIT_ACTION)
     require_super_admin_db(cur, ctx, audit_action=_AUDIT_ACTION)
 
 

@@ -221,6 +221,61 @@ def revoke_session(cur, token_hash: str) -> int:
     return cur.rowcount
 
 
+def revoke_operator_sessions(cur, operator_user_id: int) -> int:
+    """ADM-1. Revoke every live session of one operator; return the count.
+
+    Called inside the transaction that changes the operator's access (status,
+    or a membership status). A revoked session never comes back: reactivating
+    the account later does not resurrect it, the person logs in again.
+    """
+    cur.execute(
+        "UPDATE operator_sessions SET revoked_at = NOW() "
+        "WHERE operator_user_id = %s AND revoked_at IS NULL",
+        (operator_user_id,),
+    )
+    return cur.rowcount
+
+
+def revoke_agency_member_sessions(cur, agency_id: int) -> int:
+    """ADM-1. Revoke the live sessions of the agency's active members.
+
+    Platform admins are excluded: their session is never bound to a
+    membership (`_effective_agency`), so an agency status change must not log
+    out the people who administer the platform. Their acting context on that
+    agency is cleared by `clear_acting_for_agency` instead.
+    """
+    cur.execute(
+        """
+        UPDATE operator_sessions s
+           SET revoked_at = NOW()
+          FROM operator_users u
+         WHERE s.operator_user_id = u.id
+           AND s.revoked_at IS NULL
+           AND u.is_platform_admin = FALSE
+           AND EXISTS (SELECT 1 FROM agency_memberships m
+                        WHERE m.operator_user_id = u.id
+                          AND m.agency_id = %s
+                          AND m.status = 'active')
+        """,
+        (agency_id,),
+    )
+    return cur.rowcount
+
+
+def clear_acting_for_agency(cur, agency_id: int) -> int:
+    """ADM-1. Take every platform admin out of that agency's acting context."""
+    cur.execute(
+        """
+        UPDATE operator_sessions
+           SET acting_agency_id = NULL,
+               acting_entered_at = NULL
+         WHERE acting_agency_id = %s
+        """,
+        (agency_id,),
+    )
+    return cur.rowcount
+
+
 def membership_exists(cur, agency_id: int, operator_user_id: int) -> bool:
     """True when the operator holds an active membership in that agency.
 

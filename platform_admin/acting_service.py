@@ -44,7 +44,7 @@ from typing import Any
 
 from operator_auth.context import OperatorContext
 
-from . import acting_repository, agencies_repository, transaction
+from . import acting_repository, agencies_repository, super_admin, transaction
 from .database import platform_operation_cursor
 from .enums import (
     ACTING_AGENCY_NOT_ACTIVE_MESSAGE,
@@ -95,6 +95,7 @@ def enter_agency(actor: OperatorContext, agency_id: int) -> dict[str, Any]:
     session_id = _require_session(actor)
 
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_ACTING_ENTER)
         sessione = acting_repository.get_session_acting(cur, session_id)
         if sessione is None:
             raise PlatformConflict(ACTING_SESSION_GONE_MESSAGE)

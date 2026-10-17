@@ -95,6 +95,13 @@ def get_agency(cur, agency_id: int) -> dict[str, Any] | None:
     return _row(cur.fetchone())
 
 
+def lock_agency(cur, agency_id: int) -> dict[str, Any] | None:
+    """Come `get_agency`, con la riga BLOCCATA fino al commit (ADM-1): due
+    cambi di stato della stessa agenzia non si incrociano."""
+    cur.execute(f"SELECT {_SELECT} FROM agencies WHERE id = %s FOR UPDATE", (agency_id,))
+    return _row(cur.fetchone())
+
+
 def slug_exists(cur, slug: str) -> bool:
     """True se lo slug e' gia' di un'agenzia. Un solo chiamante: la creazione.
 

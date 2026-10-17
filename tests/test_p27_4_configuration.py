@@ -62,6 +62,13 @@ DEFAULTS = {"timezone": CONFIGURATION_DEFAULT_TIMEZONE,
             "locale": CONFIGURATION_DEFAULT_LOCALE}
 
 
+
+@pytest.fixture(autouse=True)
+def _adm1_super_admin_designato(monkeypatch):
+    """ADM-1: il platform admin di questi test e' il Super Admin designato."""
+    from tests.adm1_support import super_admin_designato
+    return super_admin_designato(monkeypatch, PLATFORM_USER)
+
 def _ctx(**overrides) -> OperatorContext:
     base = dict(
         user_id=PLATFORM_USER, agency_id=None, role=None,

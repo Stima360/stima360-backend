@@ -46,10 +46,11 @@ from typing import Any
 from psycopg2 import errors
 
 from core.normalization import normalize_email
+from operator_auth import repository as session_repository
 from operator_auth.context import OperatorContext
 from operator_auth.security import hash_password
 
-from . import agencies_repository, operators_repository
+from . import agencies_repository, operators_repository, super_admin
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_MEMBERSHIP_CREATE,
@@ -60,9 +61,11 @@ from .enums import (
     ACTIVE_MEMBERSHIP_ELSEWHERE_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
     EMAIL_TAKEN_MESSAGE,
+    LAST_SUPER_ADMIN_MESSAGE,
     MEMBERSHIP_ACTIVE,
     MEMBERSHIP_EXISTS_MESSAGE,
     MEMBERSHIP_NOT_FOUND_MESSAGE,
+    OPERATOR_ACTIVE,
     OPERATOR_NOT_FOUND_MESSAGE,
     OWNER_ALREADY_EXISTS_MESSAGE,
     OWNER_MUST_BE_ACTIVE_MEMBER_MESSAGE,
@@ -224,6 +227,7 @@ def create_agency_operator(
         raise PlatformConflict(EMAIL_TAKEN_MESSAGE)
 
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OPERATOR_CREATE)
         _require_agency(cur, agency_id)
 
         existing = operators_repository.find_operator_by_normalized_email(
@@ -338,14 +342,31 @@ def update_operator(
     volta e `_scope_is_usable` rifiuta tutto cio' che non e' `active`. Non c'e'
     una seconda invalidazione da scrivere, e scriverla significherebbe averne
     due che possono divergere.
+
+    ADM-1 ha aggiunto la seconda, perche' la prima da sola non bastava: il
+    ricontrollo ferma la sessione finche' l'account e' disabilitato, ma alla
+    riattivazione la stessa sessione tornava valida. Ogni cambio di stato
+    revoca ora le sessioni dell'operatore, nella stessa transazione: dopo una
+    riattivazione si rifa' l'accesso. E l'account del Super Admin generale
+    designato non lascia `active` da questa superficie, nemmeno per mano sua.
     """
     with platform_operation_cursor() as (conn, cur):
-        if operators_repository.get_operator(cur, operator_user_id) is None:
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OPERATOR_UPDATE)
+        current = operators_repository.lock_operator(cur, operator_user_id)
+        if current is None:
             raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+
+        status_changes = "status" in fields and fields["status"] != current["status"]
+        if (status_changes and fields["status"] != OPERATOR_ACTIVE
+                and super_admin.is_designated(operator_user_id)):
+            raise PlatformConflict(LAST_SUPER_ADMIN_MESSAGE)
 
         operator = operators_repository.update_operator(cur, operator_user_id, fields)
         if operator is None:
             raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+
+        if status_changes:
+            session_repository.revoke_operator_sessions(cur, operator_user_id)
 
         audit_then_commit(
             conn,
@@ -384,9 +405,15 @@ def update_membership(
     ammette una sola membership attiva per persona: se nel frattempo e' entrata
     in un'altra agenzia, la riattivazione e' 409 e non una revoca silenziosa
     dell'altra.
+
+    ADM-1: un cambio di stato della membership revoca le sessioni
+    dell'operatore nella stessa transazione, salvo per un platform admin, la
+    cui sessione non dipende mai da una membership.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_MEMBERSHIP_UPDATE)
         _require_agency(cur, agency_id)
+        person = operators_repository.lock_operator(cur, operator_user_id)
 
         membership = operators_repository.get_membership(
             cur, agency_id, operator_user_id
@@ -408,6 +435,10 @@ def update_membership(
 
         if updated is None:
             raise MembershipNotFound(MEMBERSHIP_NOT_FOUND_MESSAGE)
+
+        if (updated["status"] != membership["status"] and person is not None
+                and not person["is_platform_admin"]):
+            session_repository.revoke_operator_sessions(cur, operator_user_id)
 
         audit_then_commit(
             conn,
@@ -482,6 +513,7 @@ def transfer_owner(
     in un registro che non si puo' correggere.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OWNER_TRANSFER)
         _require_agency(cur, agency_id)
 
         if operators_repository.get_operator(cur, new_owner_user_id) is None:

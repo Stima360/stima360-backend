@@ -160,9 +160,11 @@ def test_02_configurazione_assente_o_non_valida(banco, monkeypatch):
             monkeypatch.setenv(bd.SUPER_ADMIN_ENV, valore)
         assert bd.designated_super_admin_id() is None, valore
         _negati(m, r["id"], e["id"], "SUPER_ADMIN_NOT_CONFIGURED")
-        # il resto del CRM funziona: stato e richieste dell'agenzia, altre rotte della piattaforma
+        # il resto del CRM funziona: stato e richieste dell'agenzia
         assert _stato(m, e["id"])["request"]["status"] == "pending"
-        assert m["sa"].get("/api/platform/agencies").status_code == 200
+        # ADM-1: anche la gestione della Rete e' del solo Super Admin designato:
+        # senza configurazione nessuno la gestisce (fail-closed)
+        assert m["sa"].get("/api/platform/agencies").status_code == 403
     altro = _edificio(m)
     assert _codice(_richiedi(m, altro["id"]), 201)["status"] == "pending"
     assert _foto(m, e["id"], r["id"])[:3] == prima[:3]

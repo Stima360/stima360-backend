@@ -50,6 +50,8 @@ def server(rete, monkeypatch):
     sa = sa[0][0] if sa else _q(m, "INSERT INTO operator_users (email, email_normalized, password_hash, first_name, "
                                    "is_platform_admin) VALUES ('c2.super.b@x.test', 'c2.super.b@x.test', 'pbkdf2_sha256$1$x$y', "
                                    "'Super', TRUE) RETURNING id")[0][0]
+    # ADM-1: la Rete e le proposte C2 sono del SOLO Super Admin generale designato.
+    monkeypatch.setenv("STIMA360_SUPER_ADMIN_USER_ID", str(sa))
     scad = "2030-01-01T00:00:00Z"
     sessioni = {
         "owner_b": {"user_id": m["ruoli"]["owner_b"][0], "agency_id": 2, "agency_name": "Due", "role": "agency_owner",
@@ -82,7 +84,8 @@ def server(rete, monkeypatch):
     @app.get("/api/platform/me")
     def platform_me():
         piattaforma_ctx()
-        return {"user_id": sa, "is_platform_admin": True, "agency_id": None, "session_expires_at": scad,
+        return {"user_id": sa, "is_platform_admin": True, "is_super_admin": True,  # ADM-1
+                "agency_id": None, "session_expires_at": scad,
                 "acting_agency_id": None, "acting_entered_at": None}
 
     for r in (immobili, piattaforma):

@@ -64,18 +64,25 @@ from typing import Any
 
 from psycopg2 import errors
 
+from operator_auth import repository as session_repository
 from operator_auth.context import OperatorContext
+from operator_auth.enums import DEFAULT_AGENCY_SLUG
 
-from . import agencies_repository
+from . import agencies_repository, super_admin
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_AGENCY_CREATE,
     ACTION_AGENCY_UPDATE,
+    AGENCY_ARCHIVE_NEEDS_SUSPENSION_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
     AGENCY_SLUG_CONFLICT_MESSAGE,
+    AGENCY_STATUS_ACTIVE,
+    AGENCY_STATUS_ARCHIVED,
+    AGENCY_STATUS_SUSPENDED,
+    SYSTEM_AGENCY_PROTECTED_MESSAGE,
     TARGET_TYPE_AGENCY,
 )
-from .exceptions import AgencyNotFound, AgencySlugConflict
+from .exceptions import AgencyNotFound, AgencySlugConflict, PlatformConflict
 from .transaction import audit_then_commit
 
 
@@ -126,6 +133,7 @@ def create_agency(
     sospesa" da "aperta con il valore predefinito". Sono nomi, mai valori.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_AGENCY_CREATE)
         # Il controllo esplicito produce il messaggio buono nel caso normale.
         if agencies_repository.slug_exists(cur, slug):
             raise AgencySlugConflict(AGENCY_SLUG_CONFLICT_MESSAGE)
@@ -182,10 +190,22 @@ def update_agency(
     - un `except` che non puo' scattare afferma che quel conflitto e' ancora
     possibile, e manda chi legge a cercare un percorso che non esiste. Sulla
     CREAZIONE resta, dove la corsa e' reale.
+
+    ADM-1, IL CAMBIO DI STATO. Riga dell'agenzia bloccata; l'agenzia di
+    sistema non lascia `active`; `archived` solo da `suspended`. Nella stessa
+    transazione si revocano le sessioni dei membri attivi e si chiude l'acting
+    dei platform admin su questa agenzia: una sessione revocata non torna
+    valida alla riattivazione. Nessun dato e nessuna assegnazione cambiano.
     """
     with platform_operation_cursor() as (conn, cur):
-        if agencies_repository.get_agency(cur, agency_id) is None:
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_AGENCY_UPDATE)
+        current = agencies_repository.lock_agency(cur, agency_id)
+        if current is None:
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
+
+        status_changes = "status" in fields and fields["status"] != current["status"]
+        if status_changes:
+            _guard_status_change(current, fields["status"])
 
         row = agencies_repository.update_agency(cur, agency_id, fields)
 
@@ -195,6 +215,10 @@ def update_agency(
             # dovrebbe accadere; se accade, e' un 404 onesto e non una riga
             # inventata.
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
+
+        if status_changes:
+            session_repository.revoke_agency_member_sessions(cur, agency_id)
+            session_repository.clear_acting_for_agency(cur, agency_id)
 
         audit_then_commit(
             conn,
@@ -206,3 +230,11 @@ def update_agency(
             metadata={"changed_fields": sorted(fields)},
         )
         return row
+
+
+def _guard_status_change(current: dict[str, Any], new_status: str) -> None:
+    """ADM-1. I cambi di stato che nessuna PATCH puo' fare."""
+    if current["slug"] == DEFAULT_AGENCY_SLUG and new_status != AGENCY_STATUS_ACTIVE:
+        raise PlatformConflict(SYSTEM_AGENCY_PROTECTED_MESSAGE)
+    if new_status == AGENCY_STATUS_ARCHIVED and current["status"] != AGENCY_STATUS_SUSPENDED:
+        raise PlatformConflict(AGENCY_ARCHIVE_NEEDS_SUSPENSION_MESSAGE)

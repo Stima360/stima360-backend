@@ -65,6 +65,10 @@ class PlatformMeResponse(BaseModel):
 
     user_id: int | None
     is_platform_admin: bool
+    # ADM-1: True solo per l'account designato da `STIMA360_SUPER_ADMIN_USER_ID`.
+    # La UI lo usa per mostrare o no la gestione della Rete; l'autorita' resta
+    # `require_super_admin_context` sul backend.
+    is_super_admin: bool = False
     agency_id: int | None
     session_expires_at: datetime
     # P28. DUE campi, e il nome dell'agenzia NON e' fra questi.

@@ -79,6 +79,13 @@ ALTRA = 77        # l'agenzia in cui NON e' entrato
 SESSIONE = 500
 
 
+
+@pytest.fixture(autouse=True)
+def _adm1_super_admin_designato(monkeypatch):
+    """ADM-1: il platform admin di questi test e' il Super Admin designato."""
+    from tests.adm1_support import super_admin_designato
+    return super_admin_designato(monkeypatch, GIORGIO)
+
 def _ctx(**sovrascritture) -> OperatorContext:
     base = dict(
         user_id=GIORGIO, agency_id=None, role=None, is_platform_admin=True,

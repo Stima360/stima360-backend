@@ -44,6 +44,7 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
+  mostraSoloSuperAdmin,
   selectOptions,
 } from '../components/network.js';
 import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TERRITORI C2
@@ -65,12 +66,15 @@ export async function renderRete(container) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
 
   // Il cancello. Nessuna altra chiamata parte prima che questa risponda.
+  let platformMe;
   try {
-    await apiGet(`${PLATFORM}/me`);
+    platformMe = await apiGet(`${PLATFORM}/me`);
   } catch (error) {
     container.innerHTML = errorBox(error);
     return;
   }
+  // ADM-1: il secondo cancello, il Super Admin generale designato.
+  if (mostraSoloSuperAdmin(container, platformMe)) return;
 
   const state = {
     tab: 'agenzie',

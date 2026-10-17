@@ -1582,7 +1582,7 @@ def app_http(db_http, monkeypatch):
 
 
 @pytest.fixture
-def piattaforma(db_http):
+def piattaforma(db_http, monkeypatch):
     """Due agenzie, un platform admin VERO senza nessuna membership, una
     stima e un immobile per agenzia. Tutto pulito prima di ogni test."""
     from core.normalization import normalize_email
@@ -1613,6 +1613,8 @@ def piattaforma(db_http):
             (ADMIN_EMAIL, normalize_email(ADMIN_EMAIL),
              security.hash_password(ADMIN_PASSWORD)))
         admin = cur.fetchone()[0]
+        # ADM-1: entrare in un'agenzia spetta al SOLO Super Admin generale designato.
+        monkeypatch.setenv("STIMA360_SUPER_ADMIN_USER_ID", str(admin))
         cur.execute("SELECT count(*) FROM agency_memberships WHERE operator_user_id = %s",
                     (admin,))
         assert cur.fetchone()[0] == 0, "il platform admin NON ha membership: e' il punto"

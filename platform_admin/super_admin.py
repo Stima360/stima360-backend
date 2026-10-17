@@ -88,10 +88,38 @@ def require_super_admin(ctx, *, audit_action: str, error_class=SuperAdminDenied)
         deny(ctx, SUPER_ADMIN_REQUIRED, "not_designated", audit_action=audit_action, error_class=error_class)
 
 
-def require_super_admin_db(cur, ctx, *, audit_action: str, error_class=SuperAdminDenied) -> None:
+def require_super_admin_db(cur, ctx, *, audit_action: str, error_class=SuperAdminDenied,
+                           for_update: bool = False) -> None:
     """Il ruolo EFFETTIVO, adesso, nel database: l'account designato e'
-    ancora amministratore di piattaforma e attivo."""
-    cur.execute("SELECT is_platform_admin, status FROM operator_users WHERE id = %s", (ctx.user_id,))
+    ancora amministratore di piattaforma e attivo. `for_update` tiene la riga
+    bloccata fino alla fine della transazione del chiamante (ADM-1)."""
+    blocco = " FOR UPDATE" if for_update else ""
+    cur.execute("SELECT is_platform_admin, status FROM operator_users WHERE id = %s" + blocco, (ctx.user_id,))
     riga = cur.fetchone()
     if riga is None or riga["is_platform_admin"] is not True or riga["status"] != "active":
         deny(ctx, SUPER_ADMIN_REQUIRED, "role_revoked", audit_action=audit_action, error_class=error_class)
+
+
+# ---------------------------------------------------------------------------
+# ADM-1 - la Rete e' del SOLO Super Admin generale designato.
+# ---------------------------------------------------------------------------
+
+def is_designated(user_id) -> bool:
+    """L'account e' quello designato dalla configurazione? Solo l'identita':
+    il ruolo nel database lo verifica `require_super_admin_db`."""
+    designato = designated_super_admin_id()
+    try:
+        return designato is not None and int(user_id) == designato
+    except (TypeError, ValueError):
+        return False
+
+
+def lock_super_admin(cur, ctx, *, audit_action: str, error_class=SuperAdminDenied) -> None:
+    """Dentro la transazione di una modifica della Rete, PRIMA di ogni altra
+    lettura: identita' designata e ruolo riletto, con la riga dell'account
+    BLOCCATA fino al commit. Tutte le modifiche della Rete passano di qui per
+    prime: si serializzano sulla stessa riga, sempre nello stesso ordine
+    (attore -> agenzia -> operatore -> sessioni), e nessuna puo' committare se
+    nel frattempo il ruolo e' stato tolto."""
+    require_super_admin(ctx, audit_action=audit_action, error_class=error_class)
+    require_super_admin_db(cur, ctx, audit_action=audit_action, error_class=error_class, for_update=True)

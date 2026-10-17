@@ -71,6 +71,7 @@ from operator_auth.dependencies import (
 from . import audit
 from .enums import (
     ACTION_ADMISSION,
+    ACTION_SUPER_ADMIN_REQUIRED,
     AUDIT_UNAVAILABLE_MESSAGE,
     FORBIDDEN_MESSAGE,
     RESULT_DENIED,
@@ -144,4 +145,26 @@ def require_platform_admin(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
         ) from exc
 
+    return context
+
+
+def require_super_admin_context(
+    context: OperatorContext = Depends(require_platform_admin),
+) -> OperatorContext:
+    """ADM-1: la Rete e' del SOLO Super Admin generale designato.
+
+    Prima l'ammissione di sempre (`require_platform_admin`, cached: una sola
+    riga `success`), poi l'identita' designata da `STIMA360_SUPER_ADMIN_USER_ID`.
+    Flag e stato dell'account sono gia' riletti nel database a OGNI richiesta
+    dalla risoluzione della sessione; le modifiche li rileggono una seconda
+    volta, bloccando la riga, dentro la propria transazione
+    (`super_admin.lock_super_admin`). Un platform admin non designato riceve
+    403 e una riga `denied`; senza configurazione nessuno passa.
+    """
+    from . import super_admin
+
+    try:
+        super_admin.require_super_admin(context, audit_action=ACTION_SUPER_ADMIN_REQUIRED)
+    except super_admin.SuperAdminDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return context

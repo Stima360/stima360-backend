@@ -63,6 +63,7 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
+  mostraSoloSuperAdmin,
   selectOptions,
 } from '../components/network.js';
 
@@ -87,6 +88,8 @@ export async function renderReteAgenzia(container, agencyId) {
     container.innerHTML = errorBox(error);
     return;
   }
+  // ADM-1: solo il Super Admin generale designato.
+  if (mostraSoloSuperAdmin(container, platformMe)) return;
 
   let agenzia;
   try {
@@ -243,7 +246,7 @@ export async function renderReteAgenzia(container, agencyId) {
         await ricaricaAgenzia();
         await panoramica();
       } catch (error) {
-        erroreEl.textContent = describeError(error, 'agenzia-crea');
+        erroreEl.textContent = describeError(error, 'agenzia-aggiorna');
       }
     });
   }
@@ -389,7 +392,7 @@ export async function renderReteAgenzia(container, agencyId) {
         await operatori();
         return null;
       } catch (error) {
-        return describeError(error, 'membership-aggiorna');
+        return describeError(error, 'operatore-accesso');
       }
     });
   }

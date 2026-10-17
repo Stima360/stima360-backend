@@ -585,3 +585,33 @@ ACTING_NEEDS_SESSION_MESSAGE = (
 ACTING_SESSION_GONE_MESSAGE = (
     "La sessione non e' piu' valida: rifare l'accesso."
 )
+
+
+# ---------------------------------------------------------------------------
+# ADM-1 - Super Admin generale, ultimo amministratore, agenzia di sistema.
+# ---------------------------------------------------------------------------
+
+# Riga `denied` quando un platform admin NON designato chiede la Rete (403).
+ACTION_SUPER_ADMIN_REQUIRED = "platform.super_admin.required"
+
+# 409. L'account designato da `STIMA360_SUPER_ADMIN_USER_ID` non si disabilita
+# da questa superficie, nemmeno da se stesso: STIMA360 resterebbe senza chi la
+# amministra. La sostituzione del Super Admin e' una procedura a parte (ADM-6).
+LAST_SUPER_ADMIN_MESSAGE = (
+    "L'account del Super Admin generale designato non si disabilita: la "
+    "piattaforma resterebbe senza amministratore. Nessuna modifica e' stata fatta."
+)
+
+# 409. L'agenzia di sistema (slug `stima360`) riceve i lead senza agenzia
+# competente e regge i servizi centrali: non si sospende e non si archivia.
+SYSTEM_AGENCY_PROTECTED_MESSAGE = (
+    "L'agenzia di sistema STIMA360 non si sospende e non si archivia: regge i "
+    "servizi centrali della piattaforma. Nessuna modifica e' stata fatta."
+)
+
+# 409. Decisione del proprietario: un'agenzia si archivia solo dopo essere
+# stata sospesa.
+AGENCY_ARCHIVE_NEEDS_SUSPENSION_MESSAGE = (
+    "Un'agenzia si archivia solo dopo essere stata sospesa. Nessuna modifica "
+    "e' stata fatta."
+)

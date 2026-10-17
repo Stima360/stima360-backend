@@ -106,7 +106,8 @@ def server(mondo, monkeypatch):
     @app.get("/api/platform/me")
     def platform_me():
         piattaforma_ctx()
-        return {"user_id": superadmin, "is_platform_admin": True, "agency_id": None,
+        return {"user_id": superadmin, "is_platform_admin": True, "is_super_admin": True,  # ADM-1
+                "agency_id": None,
                 "session_expires_at": "2030-01-01T00:00:00Z", "acting_agency_id": None, "acting_entered_at": None}
 
     for r in (immobili, core_router, piattaforma):

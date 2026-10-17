@@ -52,6 +52,8 @@ def piattaforma(rete, monkeypatch):
                                    "is_platform_admin) VALUES ('c2.super@x.test', 'c2.super@x.test', 'pbkdf2_sha256$1$x$y', "
                                    "'Super', TRUE) RETURNING id")[0][0]
     _q(m, "UPDATE operator_users SET is_platform_admin = TRUE, status = 'active' WHERE id = %s", (sa,))
+    # ADM-1: approvare e rifiutare spetta al SOLO Super Admin generale designato.
+    monkeypatch.setenv("STIMA360_SUPER_ADMIN_USER_ID", str(sa))
     m["ruoli"]["admin_b"] = (_operatore(m, "c2.admin.b@x.test", "Dario", 2, "agency_admin"), 2, "agency_admin")
     stato = m["stato"]
 

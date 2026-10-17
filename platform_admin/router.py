@@ -24,6 +24,8 @@ per cui la dichiarazione sul mount non e' ridondante.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse as _JSONResponse
+from fastapi.routing import APIRoute
 
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import AuthenticatedSession, current_session
@@ -36,7 +38,8 @@ from . import (
     operators_service,
     territories_service,
 )
-from .dependencies import require_platform_admin
+from .dependencies import require_platform_admin, require_super_admin_context
+from .super_admin import SuperAdminDenied, is_designated
 from .enums import (
     AUDIT_UNAVAILABLE_MESSAGE,
     CONFIGURATION_CORRUPTED_MESSAGE,
@@ -90,7 +93,25 @@ from .schemas import (
     TransferResponse,
 )
 
-router = APIRouter(prefix=ROUTER_PREFIX, tags=["platform"])
+class _PlatformRoute(APIRoute):
+    """ADM-1. Un `SuperAdminDenied` sollevato DENTRO la transazione di una
+    modifica (ruolo tolto fra l'ammissione e il lock della riga) diventa 403 con
+    il suo codice, mai 500. Nulla e' stato committato. Sta qui, sul router, e
+    non in main.py: vale ovunque il router sia montato."""
+
+    def get_route_handler(self):
+        gestore = super().get_route_handler()
+
+        async def con_rifiuto(request):
+            try:
+                return await gestore(request)
+            except SuperAdminDenied as exc:
+                return _JSONResponse(status_code=403, content={"detail": str(exc), "code": exc.code})
+
+        return con_rifiuto
+
+
+router = APIRouter(prefix=ROUTER_PREFIX, tags=["platform"], route_class=_PlatformRoute)
 
 
 @router.get("/me", response_model=PlatformMeResponse)
@@ -110,6 +131,7 @@ def me(
     return PlatformMeResponse(
         user_id=context.user_id,
         is_platform_admin=context.is_platform_admin,
+        is_super_admin=is_designated(context.user_id),
         agency_id=context.agency_id,
         session_expires_at=session.expires_at,
         acting_agency_id=session.acting_agency_id,
@@ -135,7 +157,7 @@ def me(
 )
 def enter_agency(
     agency_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> ActingEnterResponse:
     """Entra nel CRM dell'agenzia indicata, come Superadmin.
 
@@ -206,7 +228,7 @@ def exit_agency_context(
 
 @router.get("/agencies", response_model=list[AgencyResponse])
 def list_agencies(
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> list[AgencyResponse]:
     """L'elenco delle agenzie della rete.
 
@@ -220,7 +242,7 @@ def list_agencies(
 @router.get("/agencies/{agency_id}", response_model=AgencyResponse)
 def get_agency(
     agency_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyResponse:
     try:
         return AgencyResponse(**agencies_service.get_agency(agency_id))
@@ -231,7 +253,7 @@ def get_agency(
 @router.post("/agencies", response_model=AgencyResponse, status_code=201)
 def create_agency(
     payload: AgencyCreateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyResponse:
     """Apre una nuova agenzia. 201, con la riga completa.
 
@@ -263,7 +285,7 @@ def create_agency(
 def update_agency(
     agency_id: int,
     payload: AgencyUpdateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyResponse:
     """Aggiorna i soli campi presenti nel corpo: name e status.
 
@@ -286,6 +308,9 @@ def update_agency(
         )
     except AgencyNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        # ADM-1: agenzia di sistema, archiviazione senza sospensione.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
@@ -319,7 +344,7 @@ def update_agency(
 )
 def list_agency_operators(
     agency_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> list[AgencyOperatorResponse]:
     """L'organico di un'agenzia: identita' e membership, in ogni stato."""
     try:
@@ -332,7 +357,7 @@ def list_agency_operators(
 @router.get("/operators/{operator_user_id}", response_model=OperatorDetailResponse)
 def get_operator(
     operator_user_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> OperatorDetailResponse:
     try:
         found = operators_service.get_operator(operator_user_id)
@@ -352,7 +377,7 @@ def get_operator(
 def create_agency_operator(
     agency_id: int,
     payload: OperatorCreateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyOperatorResponse:
     """Crea o riusa l'operatore, e lo lega all'agenzia.
 
@@ -396,7 +421,7 @@ def create_agency_operator(
 def update_operator(
     operator_user_id: int,
     payload: OperatorUpdateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> OperatorResponse:
     """Aggiorna nome, cognome e stato. Non email, non password, non il flag
     di piattaforma: non sono campi di questo schema."""
@@ -406,6 +431,9 @@ def update_operator(
         )
     except OperatorNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        # ADM-1: l'account del Super Admin generale designato.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
@@ -421,7 +449,7 @@ def update_membership(
     agency_id: int,
     operator_user_id: int,
     payload: MembershipUpdateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> MembershipResponse:
     """Ruolo e stato della membership. Sospendere, revocare, riattivare.
 
@@ -446,7 +474,7 @@ def update_membership(
 def transfer_owner(
     agency_id: int,
     payload: OwnerTransferRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> OwnerTransferResponse:
     """Rende l'operatore indicato il titolare, degradando il precedente.
 
@@ -510,7 +538,7 @@ def _agency_operator(row: dict) -> AgencyOperatorResponse:
 )
 def get_agency_configuration(
     agency_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyConfigurationResponse:
     """La configurazione, con i default gia' applicati.
 
@@ -539,7 +567,7 @@ def get_agency_configuration(
 def update_agency_configuration(
     agency_id: int,
     payload: AgencyConfigurationUpdateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AgencyConfigurationResponse:
     """Scrive i soli campi indicati. Merge, mai sostituzione."""
     try:
@@ -597,7 +625,7 @@ def list_territories(
     assignment_status: str | None = Query(None),
     limit: int = Query(TERRITORY_PAGE_DEFAULT, ge=1, le=TERRITORY_PAGE_MAX),
     offset: int = Query(0, ge=0),
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> list[TerritoryListItem]:
     """I territori della rete, con chi presidia ciascuno.
 
@@ -625,7 +653,7 @@ def list_territories(
 @router.get("/territories/{territory_id}", response_model=TerritoryDetailResponse)
 def get_territory(
     territory_id: int,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> TerritoryDetailResponse:
     try:
         found = territories_service.get_territory(territory_id)
@@ -641,7 +669,7 @@ def get_territory(
 @router.post("/territories", response_model=TerritoryDetailResponse, status_code=201)
 def create_territory(
     payload: TerritoryCreateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> TerritoryDetailResponse:
     """Dichiara un territorio. NON lo assegna.
 
@@ -677,7 +705,7 @@ def list_agency_territories(
     status: str | None = Query(None),
     limit: int = Query(TERRITORY_PAGE_DEFAULT, ge=1, le=TERRITORY_PAGE_MAX),
     offset: int = Query(0, ge=0),
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> list[AgencyAssignmentResponse]:
     """La copertura territoriale di un'agenzia, in ogni stato salvo filtro.
 
@@ -701,7 +729,7 @@ def list_agency_territories(
 def assign_territory(
     agency_id: int,
     payload: TerritoryAssignRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AssignmentResponse:
     """Assegna un territorio LIBERO a questa agenzia.
 
@@ -738,7 +766,7 @@ def update_assignment(
     agency_id: int,
     assignment_id: int,
     payload: AssignmentUpdateRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> AssignmentResponse:
     """Lo stato dell'assegnazione: sospendere, revocare, riattivare.
 
@@ -764,7 +792,7 @@ def update_assignment(
 def transfer_territory(
     territory_id: int,
     payload: TerritoryTransferRequest,
-    context: OperatorContext = Depends(require_platform_admin),
+    context: OperatorContext = Depends(require_super_admin_context),
 ) -> TransferResponse:
     """Sposta il territorio all'agenzia indicata, revocando la precedente.
 
@@ -814,7 +842,7 @@ def transfer_territory(
 )
 def list_territory_aliases(
     territory_id: int,
-    actor: OperatorContext = Depends(require_platform_admin),
+    actor: OperatorContext = Depends(require_super_admin_context),
 ):
     try:
         return aliases_service.list_territory_aliases(actor, territory_id)
@@ -832,7 +860,7 @@ def list_territory_aliases(
 def create_territory_alias(
     territory_id: int,
     payload: TerritoryAliasCreateRequest,
-    actor: OperatorContext = Depends(require_platform_admin),
+    actor: OperatorContext = Depends(require_super_admin_context),
 ):
     try:
         return aliases_service.create_alias(
@@ -856,7 +884,7 @@ def create_territory_alias(
 def update_territory_alias(
     alias_id: int,
     payload: TerritoryAliasUpdateRequest,
-    actor: OperatorContext = Depends(require_platform_admin),
+    actor: OperatorContext = Depends(require_super_admin_context),
 ):
     try:
         return aliases_service.update_alias(
@@ -901,6 +929,11 @@ from property.census import CensusNotInstalled  # noqa: E402
 from property.schemas import BuildingDeletionApprove, BuildingDeletionReject, BuildingPurge  # noqa: E402
 
 
+# ADM-1. Queste rotte (eliminazione edifici, Cestino di piattaforma, proposte C2)
+# restano ammesse da `require_platform_admin`: il Super Admin generale DESIGNATO
+# lo impone il loro service, prima di qualunque lettura, con il proprio codice
+# (`SUPER_ADMIN_REQUIRED` / `SUPER_ADMIN_NOT_CONFIGURED`) e la propria riga
+# `denied` - il contratto `{detail, code}` che la UI gia' mostra.
 def _eliminazione(fn, *args, **kwargs):
     try:
         esito = fn(*args, **kwargs)

@@ -98,6 +98,15 @@ def get_operator(cur, operator_user_id: int) -> dict[str, Any] | None:
     return _row(cur.fetchone())
 
 
+def lock_operator(cur, operator_user_id: int) -> dict[str, Any] | None:
+    """Come `get_operator`, con la riga BLOCCATA fino al commit (ADM-1)."""
+    cur.execute(
+        f"SELECT {_OPERATOR_SELECT} FROM operator_users u WHERE u.id = %s FOR UPDATE OF u",
+        (operator_user_id,),
+    )
+    return _row(cur.fetchone())
+
+
 def find_operator_by_normalized_email(cur, email_normalized: str) -> dict[str, Any] | None:
     """L'operatore con quell'email, o None. La chiave e' GLOBALE.
 

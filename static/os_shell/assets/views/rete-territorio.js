@@ -55,17 +55,21 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
+  mostraSoloSuperAdmin,
 } from '../components/network.js';
 
 export async function renderReteTerritorio(container, territoryId) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
 
+  let platformMe;
   try {
-    await apiGet(`${PLATFORM}/me`);
+    platformMe = await apiGet(`${PLATFORM}/me`);
   } catch (error) {
     container.innerHTML = errorBox(error);
     return;
   }
+  // ADM-1: solo il Super Admin generale designato.
+  if (mostraSoloSuperAdmin(container, platformMe)) return;
 
   let territorio;
   try {

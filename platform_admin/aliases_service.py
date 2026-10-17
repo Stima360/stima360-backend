@@ -32,7 +32,7 @@ from psycopg2 import errors
 
 from operator_auth.context import OperatorContext
 
-from . import aliases_repository, territories_repository
+from . import aliases_repository, super_admin, territories_repository
 from .transaction import audit_then_commit
 from .database import platform_operation_cursor
 from .enums import (
@@ -99,6 +99,7 @@ def create_alias(
     dell'indice. E' la forma che P27-5 usa per le assegnazioni.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ALIAS_CREATE)
         _require_territory_municipality(cur, territory_id)
 
         esistente = aliases_repository.active_alias_for_value(
@@ -162,6 +163,7 @@ def update_alias(
     # campo. Ripeterlo qui darebbe due messaggi diversi per lo stesso errore.
 
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ALIAS_UPDATE)
         corrente = aliases_repository.get_alias(cur, alias_id)
         if corrente is None:
             raise AliasNotFound(ALIAS_NOT_FOUND_MESSAGE)

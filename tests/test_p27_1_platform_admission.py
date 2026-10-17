@@ -182,6 +182,8 @@ def test_a4_an_unbound_platform_admin_is_admitted_and_recorded(platform_app):
     assert response.json() == {
         "user_id": PLATFORM_USER,
         "is_platform_admin": True,
+        # ADM-1: nessun Super Admin designato configurato in questo test.
+        "is_super_admin": False,
         "agency_id": None,
         "session_expires_at": EXPIRES.isoformat().replace("+00:00", "Z"),
         # P28. Questo amministratore non sta operando dentro nessuna agenzia,
@@ -336,6 +338,8 @@ def test_a11_the_response_projects_six_fields_and_no_personal_datum():
     assert fields == {
         "user_id",
         "is_platform_admin",
+        # ADM-1: un booleano, nessun dato personale.
+        "is_super_admin",
         "agency_id",
         "session_expires_at",
         "acting_agency_id",

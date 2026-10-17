@@ -105,6 +105,9 @@ const CONFLITTI = {
   'territorio-trasferisci': 'Trasferimento non possibile: il territorio non ha un’assegnazione attiva da trasferire, oppure appartiene gia’ a quell’agenzia.',
   'alias-crea': 'Questo valore e’ gia’ dichiarato come alias attivo, per questo territorio o per un altro. Ogni valore in ingresso appartiene a un solo territorio.',
   'alias-aggiorna': 'Operazione in conflitto: un alias revocato e’ definitivo. Per usare di nuovo quel valore, dichiarane uno nuovo.',
+  // ADM-1
+  'agenzia-aggiorna': 'Cambio di stato non consentito: l’agenzia di sistema STIMA360 non si sospende e non si archivia, e un’agenzia si archivia solo dopo essere stata sospesa. Nessuna modifica e’ stata fatta.',
+  'operatore-accesso': 'L’account del Super Admin generale designato non si disabilita: la piattaforma resterebbe senza amministratore. Nessuna modifica e’ stata fatta.',
 };
 
 const NON_TROVATO = {
@@ -162,6 +165,21 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+// ADM-1. La gestione della Rete e' del SOLO Super Admin generale designato
+// (`is_super_admin` di `/api/platform/me`). Un altro amministratore di
+// piattaforma vede questo avviso e nessun comando; il backend risponderebbe
+// comunque 403 a ogni chiamata. Testo statico, scritto con `textContent`.
+export const SUPER_ADMIN_ONLY_MESSAGE = 'La gestione della Rete e’ riservata al Super Admin generale designato della piattaforma.';
+
+export function mostraSoloSuperAdmin(container, platformMe) {
+  if (platformMe && platformMe.is_super_admin === true) return false;
+  const box = document.createElement('div');
+  box.className = 'error-box';
+  box.textContent = SUPER_ADMIN_ONLY_MESSAGE;
+  container.replaceChildren(box);
+  return true;
 }
 
 export function errorBox(error, azione = '') {

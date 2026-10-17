@@ -46,7 +46,7 @@ from psycopg2 import errors
 
 from operator_auth.context import OperatorContext
 
-from . import agencies_repository, territories_repository
+from . import agencies_repository, super_admin, territories_repository
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_TERRITORY_ASSIGNMENT_CREATE,
@@ -212,6 +212,7 @@ def create_territory(
     entrano nel registro.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_CREATE)
         # Il controllo esplicito produce il messaggio buono nel caso normale.
         if territories_repository.territory_identity_exists(
             cur, kind=kind, canonical_key=canonical_key
@@ -267,6 +268,7 @@ def assign_territory(
     cancellare la relazione.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ASSIGNMENT_CREATE)
         _require_agency(cur, agency_id)
         _require_territory(cur, territory_id)
 
@@ -342,6 +344,7 @@ def update_assignment(
     dell'altra.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ASSIGNMENT_UPDATE)
         _require_agency(cur, agency_id)
 
         assignment = territories_repository.get_assignment(
@@ -459,6 +462,7 @@ def transfer_territory(
     torna per conto suo.
     """
     with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_TRANSFER)
         _require_agency(cur, agency_id)
         _require_territory(cur, territory_id)
 

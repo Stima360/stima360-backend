@@ -57,6 +57,13 @@ DOPO = datetime(2026, 2, 1, tzinfo=timezone.utc)
 COMUNE, PROVINCIA, CAP = 100, 200, 300
 
 
+
+@pytest.fixture(autouse=True)
+def _adm1_super_admin_designato(monkeypatch):
+    """ADM-1: il platform admin di questi test e' il Super Admin designato."""
+    from tests.adm1_support import super_admin_designato
+    return super_admin_designato(monkeypatch, 9)
+
 def _ctx(**sovrascritture) -> OperatorContext:
     base = dict(
         user_id=9, agency_id=None, role=None, is_platform_admin=True,
