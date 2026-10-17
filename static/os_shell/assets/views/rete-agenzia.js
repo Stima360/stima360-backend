@@ -63,7 +63,6 @@ import {
   errorBox,
   escapeHtml,
   labelOf,
-  mostraConseguenze,
   mostraSoloSuperAdmin,
   selectOptions,
 } from '../components/network.js';
@@ -74,6 +73,31 @@ const TABS = [
   { key: 'operatori', label: 'Operatori' },
   { key: 'territori', label: 'Territori' },
 ];
+
+// ADM-3 - i testi dello stato dell'agenzia: cosa vuol dire, e cosa succede.
+const AGENZIA_DI_SISTEMA = 'stima360';
+const SPIEGAZIONE_STATO = {
+  active: 'Attiva: gli operatori lavorano e i lead dei suoi Comuni arrivano qui.',
+  suspended: 'Sospesa: nessun operatore accede. I dati restano tutti qui. I nuovi lead dei suoi Comuni continuano ad arrivare e la attendono; i follow-up automatici sono in pausa fino alla riattivazione.',
+  archived: 'Archiviata: l’agenzia e’ fuori dalla rete. I dati restano tutti qui, senza accessi.',
+};
+const CONFERME_STATO_AGENZIA = {
+  suspended: {
+    titolo: 'Sospendere l’agenzia?',
+    bottone: 'Sospendi agenzia',
+    testo: (nome) => `Gli operatori di “${nome}” non potranno piu’ accedere e le loro sessioni verranno chiuse. Nessun dato viene cancellato o spostato. I nuovi lead dei suoi Comuni restano a questa agenzia; i follow-up automatici, le prenotazioni online e i calendari collegati si fermano fino alla riattivazione.`,
+  },
+  archived: {
+    titolo: 'Archiviare l’agenzia?',
+    bottone: 'Archivia agenzia',
+    testo: (nome) => `“${nome}” esce dalla rete. Nessun dato viene cancellato o spostato. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema.`,
+  },
+  active: {
+    titolo: 'Riattivare l’agenzia?',
+    bottone: 'Riattiva agenzia',
+    testo: (nome) => `Gli operatori di “${nome}” potranno di nuovo accedere, con un nuovo accesso. Follow-up, prenotazioni e calendari riprendono.`,
+  },
+};
 
 export async function renderReteAgenzia(container, agencyId) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -200,63 +224,80 @@ export async function renderReteAgenzia(container, agencyId) {
           <label for="pa-name">Nome</label>
           <input class="input" id="pa-name" value="${escapeHtml(agenzia.name)}" maxlength="200">
         </div>
-        <div class="form-field">
-          <label for="pa-status">Stato</label>
-          <select class="input" id="pa-status">${selectOptions(AGENCY_STATUS_LABELS, agenzia.status)}</select>
-          <small class="muted">Sospesa: gli operatori dell’agenzia non possono piu’ accedere. Archiviata: l’agenzia esce dall’operativita’ della rete.</small>
-        </div>
         <div class="field-error" id="pa-errore" role="alert"></div>
         <div class="modal-actions">
-          <button type="button" class="btn" id="pa-conseguenze">Verifica conseguenze</button>
-          <button type="submit" class="btn primary">Salva modifiche</button>
+          <button type="submit" class="btn primary">Salva nome</button>
         </div>
       </form>
+      <div class="card" id="pa-stato">
+        <div class="form-field">
+          <label>Stato</label>
+          <div>${renderBadge(labelOf(AGENCY_STATUS_LABELS, agenzia.status), AGENCY_STATUS_TONE[agenzia.status] || 'gray')}</div>
+        </div>
+        <p class="muted">${escapeHtml(SPIEGAZIONE_STATO[agenzia.status] || '')}</p>
+        <div class="field-error" id="pa-stato-errore" role="alert"></div>
+        <div class="modal-actions">${azioniStatoAgenzia()}</div>
+      </div>
     `;
-    // ADM-2: anteprima in sola lettura, prima di sospendere o archiviare.
-    contentEl.querySelector('#pa-conseguenze').addEventListener('click', () => mostraConseguenze(
-      hostEl,
-      () => apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}/impact`),
-      `Conseguenze per “${agenzia.name}”`,
-    ));
     contentEl.querySelector('#form-panoramica').addEventListener('submit', async (event) => {
       event.preventDefault();
       const erroreEl = contentEl.querySelector('#pa-errore');
       erroreEl.textContent = '';
       const nuovoNome = contentEl.querySelector('#pa-name').value;
-      const nuovoStato = contentEl.querySelector('#pa-status').value;
-
-      // Una PATCH manda SOLO cio' che cambia: `model_fields_set` decide cosa
-      // viene scritto, quindi rimandare un campo invariato lo registrerebbe
-      // nell'audit come una modifica che nessuno ha fatto.
-      const corpo = {};
-      if (nuovoNome !== agenzia.name) corpo.name = nuovoNome;
-      if (nuovoStato !== agenzia.status) corpo.status = nuovoStato;
-      if (!Object.keys(corpo).length) {
+      // Una PATCH manda SOLO cio' che cambia: rimandare un campo invariato lo
+      // registrerebbe nell'audit come una modifica che nessuno ha fatto.
+      if (nuovoNome === agenzia.name) {
         erroreEl.textContent = 'Nessuna modifica da salvare.';
         return;
       }
-
-      if (corpo.status === 'suspended' || corpo.status === 'archived') {
-        const testo = corpo.status === 'suspended'
-          ? `Gli operatori di “${agenzia.name}” non potranno piu’ accedere finche’ l’agenzia resta sospesa. I dati restano, le assegnazioni territoriali restano, ma l’agenzia non e’ piu’ instradabile dal modulo Stima360.`
-          : `“${agenzia.name}” esce dall’operativita’ della rete: nessun accesso per i suoi operatori e nessun lead instradato. I dati e la storia restano, ma l’agenzia non viene piu’ usata.`;
-        const ok = await confirmAction(hostEl, {
-          titolo: corpo.status === 'suspended' ? 'Sospendere l’agenzia?' : 'Archiviare l’agenzia?',
-          testo,
-          conferma: corpo.status === 'suspended' ? 'Sospendi' : 'Archivia',
-          tono: 'danger',
-        });
-        if (!ok) return;
-      }
-
       try {
-        await apiPatch(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`, corpo);
+        await apiPatch(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`, { name: nuovoNome });
         await ricaricaAgenzia();
         await panoramica();
       } catch (error) {
         erroreEl.textContent = describeError(error, 'agenzia-aggiorna');
       }
     });
+    contentEl.querySelectorAll('[data-stato-agenzia]').forEach((btn) => {
+      btn.addEventListener('click', () => cambiaStatoAgenzia(btn.dataset.statoAgenzia));
+    });
+  }
+
+  // ADM-3: un comando per ogni passaggio di stato consentito, e una conferma.
+  // Nessun comando cancella: sospendere, archiviare e riattivare cambiano solo
+  // lo stato dell'agenzia. L'agenzia di sistema non si sospende.
+  function azioniStatoAgenzia() {
+    const bottone = (verso, etichetta, tono = '') =>
+      `<button type="button" class="btn ${tono}" data-stato-agenzia="${verso}">${etichetta}</button>`;
+    if (agenzia.status === 'active') {
+      return agenzia.slug === AGENZIA_DI_SISTEMA
+        ? '<span class="muted">Agenzia di sistema: non si sospende e non si archivia.</span>'
+        : bottone('suspended', 'Sospendi agenzia', 'danger');
+    }
+    if (agenzia.status === 'suspended') {
+      return `${bottone('active', 'Riattiva agenzia', 'primary')} ${bottone('archived', 'Archivia agenzia', 'danger')}`;
+    }
+    return bottone('active', 'Riattiva agenzia', 'primary');
+  }
+
+  async function cambiaStatoAgenzia(verso) {
+    const conferma = CONFERME_STATO_AGENZIA[verso];
+    const ok = await confirmAction(hostEl, {
+      titolo: conferma.titolo,
+      testo: conferma.testo(agenzia.name),
+      conferma: conferma.bottone,
+      tono: verso === 'active' ? '' : 'danger',
+    });
+    if (!ok) return;
+    const erroreEl = contentEl.querySelector('#pa-stato-errore');
+    if (erroreEl) erroreEl.textContent = '';
+    try {
+      await apiPatch(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`, { status: verso });
+      await ricaricaAgenzia();
+      await panoramica();
+    } catch (error) {
+      if (erroreEl) erroreEl.textContent = describeError(error, 'agenzia-aggiorna');
+    }
   }
 
   // --- configurazione -------------------------------------------------------
@@ -357,21 +398,9 @@ export async function renderReteAgenzia(container, agencyId) {
       btn.addEventListener('click', () => {
         const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.operatore));
         if (!riga) return;
-        if (btn.dataset.azione === 'accesso') return dialogoAccesso(riga);
+        if (btn.dataset.azione === 'disabilita') return cambiaAccesso(riga, 'disabled');
+        if (btn.dataset.azione === 'riattiva') return cambiaAccesso(riga, 'active');
         if (btn.dataset.azione === 'membership') return dialogoMembership(riga);
-      });
-    });
-
-    // ADM-2: anteprima in sola lettura, prima di disabilitare o sospendere.
-    listaEl.querySelectorAll('[data-impatto-operatore]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.impattoOperatore));
-        if (!riga) return;
-        mostraConseguenze(
-          hostEl,
-          () => apiGet(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/impact`),
-          `Conseguenze per “${nomeOperatore(riga.operator)}”`,
-        );
       });
     });
 
@@ -385,38 +414,39 @@ export async function renderReteAgenzia(container, agencyId) {
   }
 
   function azioniOperatore(riga) {
-    const bottoni = [
-      `<button type="button" class="btn" data-azione="accesso" data-operatore="${escapeHtml(riga.operator.id)}">Accesso</button>`,
-    ];
+    // ADM-3: un comando diretto per l'accesso della persona, con una conferma.
+    const id = escapeHtml(riga.operator.id);
+    const bottoni = [riga.operator.status === 'active'
+      ? `<button type="button" class="btn danger" data-azione="disabilita" data-operatore="${id}">Disabilita operatore</button>`
+      : `<button type="button" class="btn" data-azione="riattiva" data-operatore="${id}">Riattiva operatore</button>`];
     // Su una membership REVOCATA non si disegna il pulsante che la
     // modificherebbe: revoked e' terminale, e l'unica strada e' una nuova
     // membership. Un pulsante che porta a un 409 certo e' una trappola.
     if (riga.membership.status !== 'revoked') {
       bottoni.push(`<button type="button" class="btn" data-azione="membership" data-operatore="${escapeHtml(riga.operator.id)}">Membership</button>`);
     }
-    bottoni.push(`<button type="button" class="btn" data-impatto-operatore="${escapeHtml(riga.operator.id)}">Verifica conseguenze</button>`);
     return bottoni.join(' ');
   }
 
-  function dialogoAccesso(riga) {
-    apriDialogo(`
-      <h3>Accesso di ${escapeHtml(nomeOperatore(riga.operator))}</h3>
-      <p class="muted">Riguarda la persona, non questa agenzia: un operatore disabilitato non accede da nessuna parte.</p>
-      <div class="form-field">
-        <label for="op-stato">Stato dell’accesso</label>
-        <select class="input" id="op-stato">${selectOptions(OPERATOR_STATUS_LABELS, riga.operator.status)}</select>
-      </div>
-    `, 'Salva', async (dialog) => {
-      const stato = dialog.querySelector('#op-stato').value;
-      if (stato === riga.operator.status) return 'Nessuna modifica da salvare.';
-      try {
-        await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}`, { status: stato });
-        await operatori();
-        return null;
-      } catch (error) {
-        return describeError(error, 'operatore-accesso');
-      }
+  async function cambiaAccesso(riga, verso) {
+    const nome = nomeOperatore(riga.operator);
+    const disabilita = verso === 'disabled';
+    const ok = await confirmAction(hostEl, {
+      titolo: disabilita ? 'Disabilitare l’operatore?' : 'Riattivare l’operatore?',
+      testo: disabilita
+        ? `${nome} non potra’ piu’ accedere al CRM e le sue sessioni verranno chiuse. Il suo lavoro resta: contatti, immobili e appuntamenti restano a suo nome, nessun dato viene cancellato o spostato. Le sue prenotazioni online e il suo calendario collegato si fermano.`
+        : `${nome} potra’ di nuovo accedere, con un nuovo accesso.`,
+      conferma: disabilita ? 'Disabilita operatore' : 'Riattiva operatore',
+      tono: disabilita ? 'danger' : '',
     });
+    if (!ok) return;
+    try {
+      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}`, { status: verso });
+      await operatori();
+    } catch (error) {
+      const listaEl = contentEl.querySelector('#operatori-lista');
+      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', errorBox(error, 'operatore-accesso'));
+    }
   }
 
   function dialogoMembership(riga) {
@@ -617,18 +647,6 @@ export async function renderReteAgenzia(container, agencyId) {
         navigate('rete', ['territori', a.dataset.territorio]);
       });
     });
-    // ADM-2: anteprima in sola lettura, prima di sospendere o revocare.
-    listaEl.querySelectorAll('[data-impatto-assegnazione]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const riga = righe.find((a) => String(a.id) === String(btn.dataset.impattoAssegnazione));
-        if (!riga) return;
-        mostraConseguenze(
-          hostEl,
-          () => apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}/territories/${encodeURIComponent(riga.id)}/impact`),
-          `Conseguenze per ${riga.territory_label}`,
-        );
-      });
-    });
     contentEl.querySelector('#te-assegna').addEventListener('click', () => dialogoAssegna());
   }
 
@@ -640,26 +658,40 @@ export async function renderReteAgenzia(container, agencyId) {
     if (a.status === 'revoked') return apri;
     const bottoni = [];
     if (a.status === 'active') {
-      bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="suspended">Sospendi</button>`);
+      bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="suspended">Sospendi assegnazione</button>`);
     }
     if (a.status === 'suspended') {
-      bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="active">Riattiva</button>`);
+      bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="active">Riattiva assegnazione</button>`);
     }
-    bottoni.push(`<button type="button" class="btn" data-assegnazione="${escapeHtml(a.id)}" data-verso="revoked">Revoca</button>`);
-    bottoni.push(`<button type="button" class="btn" data-impatto-assegnazione="${escapeHtml(a.id)}">Verifica conseguenze</button>`);
+    bottoni.push(`<button type="button" class="btn danger" data-assegnazione="${escapeHtml(a.id)}" data-verso="revoked">Revoca assegnazione</button>`);
     return `${bottoni.join(' ')} ${apri}`;
   }
 
+  // ADM-3: una conferma per ogni passaggio, e il testo dice cosa succede ai lead.
+  const CONFERME_ASSEGNAZIONE = {
+    suspended: (r) => ({
+      titolo: 'Sospendere l’assegnazione?',
+      testo: `“${agenzia.name}” smette temporaneamente di presidiare ${r.territory_label}: finche’ e’ sospesa, i nuovi lead di quel Comune vanno all’agenzia di sistema. Nessun dato viene cancellato o spostato.`,
+      conferma: 'Sospendi assegnazione',
+      tono: 'danger',
+    }),
+    active: (r) => ({
+      titolo: 'Riattivare l’assegnazione?',
+      testo: `“${agenzia.name}” torna a presidiare ${r.territory_label} e a ricevere i nuovi lead di quel Comune.`,
+      conferma: 'Riattiva assegnazione',
+      tono: '',
+    }),
+    revoked: (r) => ({
+      titolo: 'Revocare l’assegnazione?',
+      testo: `“${agenzia.name}” smette di presidiare ${r.territory_label}. I nuovi lead di quel Comune andranno all’agenzia di sistema finche’ il territorio non viene assegnato a qualcun altro. I lead gia’ ricevuti restano a “${agenzia.name}”. La revoca e’ definitiva: per ridare il territorio servira’ una nuova assegnazione.`,
+      conferma: 'Revoca assegnazione',
+      tono: 'danger',
+    }),
+  };
+
   async function cambiaAssegnazione(riga, verso) {
-    if (verso === 'revoked') {
-      const ok = await confirmAction(hostEl, {
-        titolo: 'Revocare l’assegnazione?',
-        testo: `“${agenzia.name}” smette di presidiare ${riga.territory_label}. I lead con quel comune in ingresso andranno all’agenzia predefinita finche’ il territorio non viene assegnato a qualcun altro. La revoca e’ definitiva: per ridare il territorio servira’ una nuova assegnazione.`,
-        conferma: 'Revoca',
-        tono: 'danger',
-      });
-      if (!ok) return;
-    }
+    const ok = await confirmAction(hostEl, CONFERME_ASSEGNAZIONE[verso](riga));
+    if (!ok) return;
     try {
       await apiPatch(
         `${PLATFORM}/agencies/${encodeURIComponent(agencyId)}/territories/${encodeURIComponent(riga.id)}`,

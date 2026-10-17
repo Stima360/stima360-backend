@@ -183,3 +183,19 @@ def public_names(cur, *, agency_id, user_id) -> dict:
         "agency_name": None if agenzia is None else agenzia["name"],
         "agent_name": nome_agente,
     }
+
+
+def link_operable(cur, agency_id: int, user_id: int) -> bool:
+    """ADM-3. Il link e' prenotabile solo se l'operatore assegnato puo'
+    davvero operare: membership attiva, account attivo, agenzia attiva. Un
+    operatore disabilitato o un'agenzia sospesa non ricevono prenotazioni
+    pubbliche: chi le riceverebbe non potrebbe vederle ne' presentarsi."""
+    cur.execute(
+        "SELECT 1 FROM agency_memberships m "
+        "JOIN operator_users u ON u.id = m.operator_user_id "
+        "JOIN agencies g ON g.id = m.agency_id "
+        "WHERE m.agency_id = %s AND m.operator_user_id = %s AND m.status = 'active' "
+        "AND u.status = 'active' AND g.status = 'active'",
+        (agency_id, user_id),
+    )
+    return cur.fetchone() is not None

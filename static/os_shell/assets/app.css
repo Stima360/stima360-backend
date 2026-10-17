@@ -490,14 +490,6 @@ dialog.modal.modal-wide { max-width: 680px; }
   padding: 1px 5px;
 }
 
-/* ADM-2 - «Verifica conseguenze». Additive come le precedenti: il dialogo e'
-   il `dialog.modal` di sempre; qui solo la lettura su schermi piccoli. */
-dialog.modal.conseguenze .conseguenze-corpo { max-height: 60vh; overflow-y: auto; }
-.conseguenze-sezione h4 { margin: 12px 0 4px; font-size: 14px; }
-.conseguenze-lista { margin: 0; padding-left: 18px; }
-.conseguenze-lista li { margin: 4px 0; overflow-wrap: anywhere; }
-.conseguenze-needs_decision h4 { color: #b3261e; }
-
 /* NOTA: qui c'era una seconda `.list-toolbar { flex-wrap: wrap; gap: 8px }`.
    E' stata tolta perche' sbagliata due volte: la regola a riga 210 gia'
    dichiara `flex-wrap: wrap`, quindi non aggiungeva niente, e riduceva il

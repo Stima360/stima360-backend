@@ -491,11 +491,16 @@ def test_d6_a_non_active_assignment_does_not_route(cur, stato):
     assert find_routable_agency_id(cur, comune="Alba Adriatica") is None
 
 
-@pytest.mark.parametrize("stato", ["suspended", "archived"])
-def test_d7_a_non_active_agency_does_not_route(cur, stato):
-    """I tre stati che `agencies_status_chk` ammette, e i due che non instradano."""
-    _rete(cur, agency_status=stato)
+def test_d7_an_archived_agency_does_not_route(cur):
+    """I tre stati che `agencies_status_chk` ammette: l'archiviata non instrada."""
+    _rete(cur, agency_status="archived")
     assert find_routable_agency_id(cur, comune="Alba Adriatica") is None
+
+
+def test_d7_bis_a_suspended_agency_keeps_routing(cur):
+    """ADM-3 (decisione del proprietario): la sospesa resta la destinazione."""
+    rete = _rete(cur, agency_status="suspended")
+    assert find_routable_agency_id(cur, comune="Alba Adriatica") == rete["agenzia"]
 
 
 @pytest.mark.parametrize("kind", ["province", "postal_code"])

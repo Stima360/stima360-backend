@@ -202,6 +202,10 @@ def _resolve_bookable_link(token: str) -> dict:
     token_hash = security.hash_token(token)
     with core_cursor() as (_, cur):
         link = repository.find_link_by_token_hash(cur, token_hash)
+        # ADM-3: operatore disabilitato o agenzia sospesa -> stesso esito
+        # pubblico di un link revocato, senza dire quale dei casi.
+        operabile = link is not None and repository.link_operable(
+            cur, link["agency_id"], link["assigned_user_id"])
     if link is None:
         raise LinkNotBookable("token")
     if link["status"] != "active":
@@ -210,6 +214,8 @@ def _resolve_bookable_link(token: str) -> dict:
         raise LinkNotBookable("expired")
     if link["revoked_at"] is not None:
         raise LinkNotBookable("revoked")
+    if not operabile:
+        raise LinkNotBookable("operator")
     return link
 
 

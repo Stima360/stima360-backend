@@ -37,7 +37,7 @@ from .repository import (
     ALIAS_SOURCE_PUBLIC_STIMA,
     find_fallback_agency_id,
     find_persisted_stima_agency_id,
-    find_routable_agency_id,
+    find_routable_agency,
 )
 
 #: L'origine che `core.repository.bridge_public_stima` accetta, e nessun'altra.
@@ -88,6 +88,8 @@ class RoutingDecision:
     #: chi legge un log deve poter cercare un valore, non ricordarne la forma.
     TERRITORY = "territory"
     FALLBACK = "fallback"
+    #: ADM-3: l'agenzia competente e' SOSPESA e il lead resta a lei.
+    TERRITORY_SUSPENDED = "territory_suspended_agency"
 
 
 def resolve_agency_for_public_stima(
@@ -119,8 +121,19 @@ def resolve_agency_for_public_stima(
     """
     testo = None if comune is None else " ".join(str(comune).split())
     if testo:
-        agency_id = find_routable_agency_id(cur, comune=testo)
-        if agency_id is not None:
+        trovata = find_routable_agency(cur, comune=testo)
+        if trovata is not None:
+            agency_id, stato = trovata
+            if stato == AGENCY_SUSPENDED:
+                # Esito esplicito, non un ripiego: il chiamante lo scrive nel
+                # log (`source=territory_suspended_agency`) e la stima nasce
+                # con l'agenzia competente. Nessuna riga nel registro di piattaforma
+                # (P27-6, g7: il registro non e' un log di traffico).
+                return RoutingDecision(
+                    agency_id=agency_id,
+                    source=RoutingDecision.TERRITORY_SUSPENDED,
+                    matched_value=testo,
+                )
             return RoutingDecision(
                 agency_id=agency_id,
                 source=RoutingDecision.TERRITORY,
@@ -218,3 +231,7 @@ def system_context_for_routed_public_stima(cur, *, comune):
     return SystemAgencyContext(
         agency_id=decision.agency_id, origin=PUBLIC_STIMA_ORIGIN
     ), decision
+
+
+#: ADM-3: lo stato che resta instradabile oltre ad `active` (vedi repository).
+AGENCY_SUSPENDED = "suspended"

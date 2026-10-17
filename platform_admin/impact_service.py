@@ -133,12 +133,18 @@ def agency_impact(agency_id: int) -> dict[str, Any]:
     # funzionalita' che possono interrompersi
     effective = [x for x in assignments if x["status"] == "active" and x["kind"] == "municipality"
                  and int(x["active_aliases"]) > 0]
+    # ADM-3: un'agenzia SOSPESA continua a ricevere le stime dei suoi Comuni;
+    # solo un'agenzia ARCHIVIATA non e' instradabile.
     if status == "active" and effective:
-        fallback = (f"all'agenzia di sistema «{system['name']}» ({system['status']})" if system and not is_system
+        a.note("preserved", "routing", "Comuni che ricevono le stime pubbliche", count=len(effective),
+               note="Anche da sospesa i nuovi lead di questi Comuni restano a questa agenzia e la attendono; "
+                    "i follow-up automatici sono in pausa fino alla riattivazione.")
+    if status == "suspended" and effective:
+        fallback = (f"all'agenzia di sistema «{system['name']}»" if system and not is_system
                     else "a nessuna agenzia di riserva attiva")
-        a.note("may_stop", "routing", "Comuni che ricevono le stime pubbliche", count=len(effective),
-               note=f"Le nuove stime di questi Comuni andrebbero {fallback}. Nessuna destinazione viene cambiata "
-                    f"automaticamente; i lead gia' ricevuti restano qui.")
+        a.note("needs_decision", "routing", "Comuni che ricevono ancora le stime pubbliche", count=len(effective),
+               note=f"Archiviando, le nuove stime di questi Comuni andrebbero {fallback}: revoca o trasferisci "
+                    "prima le assegnazioni.")
     a.add("may_stop", "recent_stime", f"Stime pubbliche ricevute {RECENT}", _get(counts, "stime", "recent"),
           "Indicatore del flusso di lead che l'agenzia riceve oggi.")
     if sharing is not None and status == "active":
@@ -260,7 +266,7 @@ def _routing_section(a: _Anteprima, *, effective: bool, values: list[str], count
                note="Nessun valore di Comune dichiarato: oggi questo territorio non riceve stime pubbliche.")
     elif not effective:
         a.note("may_stop", "routing", "Instradamento delle stime",
-               note="Oggi non e' attivo (assegnazione o agenzia non attiva): l'operazione non lo cambia.")
+               note="Oggi non e' attivo (assegnazione non attiva o agenzia archiviata): l'operazione non lo cambia.")
     else:
         fallback = (f"l'agenzia di sistema «{system['name']}» ({system['status']})" if system and not is_system
                     else "nessuna agenzia di riserva attiva")
@@ -293,7 +299,9 @@ def assignment_impact(agency_id: int, assignment_id: int) -> dict[str, Any]:
         "territory_kind": territory["kind"], "aliases": values},
         {"active": "suspend_or_revoke", "suspended": "revoke"}.get(status, "already_revoked"))
     municipality = territory["kind"] == "municipality"
-    effective = (status == "active" and agency["status"] == "active" and municipality and bool(values))
+    # ADM-3: l'instradamento vale anche per un'agenzia sospesa; la lettura C1 no.
+    effective = (status == "active" and agency["status"] in ("active", "suspended") and municipality and bool(values))
+    c1_effective = status == "active" and agency["status"] == "active" and municipality
     is_system = system is not None and system["id"] == agency["id"]
 
     a.note("preserved", "assignment", "Riga dell'assegnazione",
@@ -305,7 +313,7 @@ def assignment_impact(agency_id: int, assignment_id: int) -> dict[str, Any]:
                          agency_name=agency["name"], is_system=is_system)
         if municipality:
             a.add("may_stop", "c1_visible", "Immobili di altre agenzie in questo Comune (C1)",
-                  counts["other_properties"] if effective else (0 if counts["other_properties"] is not None else None),
+                  counts["other_properties"] if c1_effective else (0 if counts["other_properties"] is not None else None),
                   "Oggi letti dall'agenzia per competenza: con l'assegnazione non attiva non lo sono piu'.")
         a.add("needs_decision", "c2_pending", "Proposte C2 pendenti per questo territorio", c2,
               "L'approvazione verrebbe bloccata: la competenza non sarebbe piu' valida.")
@@ -341,11 +349,12 @@ def alias_impact(alias_id: int) -> dict[str, Any]:
         "revoke" if alias["status"] == "active" else "already_revoked")
     a.note("preserved", "alias", "Riga dell'alias", note="Resta nello storico come valore revocato.")
     if alias["status"] == "active":
-        effective = bool(agency) and agency["status"] == "active" and territory["kind"] == "municipality"
+        effective = (bool(agency) and agency["status"] in ("active", "suspended")
+                     and territory["kind"] == "municipality")
         is_system = system is not None and agency is not None and system["id"] == agency["id"]
         _routing_section(a, effective=effective, values=[alias["match_value"]], counts=counts, system=system,
                          agency_name=agency["name"] if agency else None, is_system=is_system)
-        if effective:
+        if effective and agency["status"] == "active":
             a.add("may_stop", "c1_visible", "Immobili di altre agenzie con questo Comune (C1)",
                   counts["other_properties"],
                   f"Oggi letti da «{agency['name']}» per competenza tramite questo valore.")

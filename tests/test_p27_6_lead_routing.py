@@ -94,8 +94,12 @@ class FakeCursor:
             f_kind = "t.kind = %s" in compatta
             f_assegnazione = "a.status = 'active'" in compatta
             f_agenzia = "ag.status = 'active'" in compatta
+            # ADM-3: un'agenzia sospesa resta instradabile; un'archiviata no.
+            f_agenzia_o_sospesa = "ag.status IN ('active', 'suspended')" in compatta
+            ammessi = (("active", "suspended") if f_agenzia_o_sospesa
+                       else ("active",) if f_agenzia else None)
             trovate = [
-                {"agency_id": ag["id"]}
+                {"agency_id": ag["id"], "agency_status": ag["status"]}
                 for al in self.alias
                 if al["source"] == source
                 and _norm(al["match_value"]) == _norm(comune)
@@ -108,7 +112,7 @@ class FakeCursor:
                 and (a["status"] == "active" or not f_assegnazione)
                 for ag in self.agenzie
                 if ag["id"] == a["agency_id"]
-                and (ag["status"] == "active" or not f_agenzia)
+                and (ammessi is None or ag["status"] in ammessi)
             ]
             trovate.sort(key=lambda r: r["agency_id"])
             # `COUNT(*) OVER ()`: il totale della risposta dentro ogni riga. Se
@@ -270,14 +274,22 @@ def test_b2_a_non_active_assignment_does_not_route(stato):
     assert _decidi(_rete(assignment_status=stato)).source == RoutingDecision.FALLBACK
 
 
-@pytest.mark.parametrize("stato", ["suspended", "archived"])
-def test_b3_a_non_active_agency_does_not_route(stato):
-    """L'assegnazione e' attiva ma l'agenzia no: il lead non ci va.
+def test_b3_an_archived_agency_does_not_route():
+    """L'assegnazione e' attiva ma l'agenzia e' archiviata: il lead non ci va.
 
     E' il caso che una JOIN senza filtro su `agencies.status` lascerebbe
-    passare, consegnando lead a un affiliato sospeso.
+    passare, consegnando lead a un affiliato uscito dalla rete.
     """
-    assert _decidi(_rete(agency_status=stato)).source == RoutingDecision.FALLBACK
+    assert _decidi(_rete(agency_status="archived")).source == RoutingDecision.FALLBACK
+
+
+def test_b3_bis_a_suspended_agency_keeps_its_leads():
+    """ADM-3 (decisione del proprietario): l'agenzia competente SOSPESA resta la
+    destinazione. Nessun ripiego silenzioso all'agenzia di sistema: il lead
+    nasce li', con proprieta' e provenienza intatte, e l'esito lo dichiara."""
+    decisione = _decidi(_rete(agency_status="suspended"))
+    assert decisione.source == RoutingDecision.TERRITORY_SUSPENDED
+    assert decisione.agency_id == 7
 
 
 def test_b4_all_four_conditions_are_in_the_sql():
@@ -291,7 +303,7 @@ def test_b4_all_four_conditions_are_in_the_sql():
         (ROOT / "network_routing" / "repository.py").read_text(encoding="utf-8")
     )
     for condizione in ("al.status = 'active'", "a.status = 'active'",
-                       "ag.status = 'active'", "t.kind = %s"):
+                       "ag.status IN ('active', 'suspended')", "t.kind = %s"):
         assert condizione in codice, condizione
 
 

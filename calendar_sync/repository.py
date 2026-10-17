@@ -52,9 +52,17 @@ _CONN = ", ".join(CONNECTION_COLUMNS)
 #: `agency_memberships`. Una membership sospesa o revocata dopo il collegamento
 #: rende la connessione inutilizzabile senza toccarne la riga; riattivata, la
 #: stessa riga torna utilizzabile. `c` e' l'alias di `calendar_connections`.
+#: ADM-3: anche l'ACCOUNT dell'operatore e l'AGENZIA devono essere attivi. Un
+#: operatore disabilitato o un'agenzia sospesa non operano attraverso il
+#: calendario personale; la connessione resta, in attesa, e riprende senza
+#: duplicati alla riattivazione (`waiting_connection`, come una membership
+#: sospesa).
 _MEMBERSHIP_ATTIVA = (
-    "EXISTS (SELECT 1 FROM agency_memberships m WHERE m.agency_id = c.agency_id "
-    "AND m.operator_user_id = c.user_id AND m.status = 'active')")
+    "EXISTS (SELECT 1 FROM agency_memberships m "
+    "JOIN operator_users ou ON ou.id = m.operator_user_id "
+    "JOIN agencies ag ON ag.id = m.agency_id "
+    "WHERE m.agency_id = c.agency_id AND m.operator_user_id = c.user_id AND m.status = 'active' "
+    "AND ou.status = 'active' AND ag.status = 'active')")
 _USABLE = ("(c.status = 'connected' AND c.refresh_token_ciphertext IS NOT NULL "
            f"AND {_MEMBERSHIP_ATTIVA})")
 #: Le colonne di una connessione con i due flag calcolati a ogni lettura.

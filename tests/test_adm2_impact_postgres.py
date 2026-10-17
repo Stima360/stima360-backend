@@ -10,13 +10,12 @@ PostgreSQL usa-e-getta e sessioni VERE, come ADM-1 (stessa fixture `adm1`).
   04  agenzie attive, sospese, archiviate e di sistema
   05  dipendenze territoriali: Comune, instradamento, C1, conflitti; alias;
       operatore (Supervisore unico, Super Admin designato)
-  06  la UI «Verifica conseguenze» in Chromium, smartphone e desktop
+
+ADM-3 ha tolto «Verifica conseguenze» dall'interfaccia ordinaria: gli endpoint
+restano come controlli tecnici in sola lettura (provati qui). L'assenza dei
+pulsanti e' provata in `test_adm3_continuity_postgres.py`.
 """
 from __future__ import annotations
-
-import threading
-import time
-import uuid
 
 import pytest
 
@@ -213,79 +212,3 @@ def test_05_dipendenze_territoriali_alias_e_operatore(adm2):
     assert unico["count"] == 1                                           # un Comune attivo presidiato
     s = sa.get(f"/api/platform/operators/{m['persone']['super']}/impact").json()
     assert s["target"]["is_super_admin"] is True and "super_admin" in _voci(s, "needs_decision")
-
-
-# ---------------------------------------------------------------------------
-# UI
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def browser_server(adm2):
-    uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("playwright.sync_api")
-    from fastapi.staticfiles import StaticFiles
-    from operator_auth.enums import COOKIE_NAME
-    from tests.test_edifici_1_browser_postgres import SHELL, _porta_libera
-
-    m = adm2
-    app = m["app"]
-    app.mount("/os", StaticFiles(directory=str(SHELL), html=True), name="os-shell")
-    token = m["accedi"]("super").cookies.get(COOKIE_NAME)
-    porta = _porta_libera()
-    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=porta, log_level="warning"))
-    filo = threading.Thread(target=srv.run, daemon=True)
-    filo.start()
-    limite = time.monotonic() + 20
-    while not srv.started and time.monotonic() < limite:
-        time.sleep(0.05)
-    assert srv.started
-    try:
-        yield {**m, "url": f"http://127.0.0.1:{porta}", "token": token, "cookie": COOKIE_NAME}
-    finally:
-        srv.should_exit = True
-        filo.join(timeout=10)
-
-
-@pytest.mark.parametrize("larghezza", [390, 1280])
-def test_06_verifica_conseguenze_in_chromium(browser_server, larghezza):
-    from playwright.sync_api import sync_playwright
-    from tests.test_eliminazione_edificio_1_browser_postgres import _sfora
-    m = browser_server
-    prima = _impronta(m)
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": larghezza, "height": 860})
-        ctx.add_cookies([{"name": m["cookie"], "value": m["token"], "url": m["url"]}])
-        page = ctx.new_page()
-        errori = []
-        page.on("pageerror", lambda e: errori.append(str(e)))
-        page.goto(f"{m['url']}/os/?n={uuid.uuid4().hex[:8]}#/rete/agenzie/{m['quattro']}")
-        page.wait_for_selector("#pa-conseguenze")
-
-        def verifica(clic, attese):
-            page.click(clic)
-            page.wait_for_selector("dialog.conseguenze .conseguenze-sezione")
-            testo = page.inner_text("dialog.conseguenze")
-            for parola in attese:
-                assert parola in testo, (parola, testo)
-            riquadro = page.locator("dialog.conseguenze").bounding_box()
-            assert riquadro["x"] >= 0 and riquadro["x"] + riquadro["width"] <= larghezza + 0.5, riquadro
-            page.click("dialog.conseguenze .modal-actions .btn")
-            page.wait_for_selector("dialog.conseguenze", state="detached")
-
-        verifica("#pa-conseguenze", ["Dati che restano conservati", "Immobili", "Accessi che verrebbero disabilitati",
-                                     "Richiede una decisione amministrativa", "Anteprima informativa"])
-        assert _sfora(page)["scroll"] <= larghezza + 1
-        page.click("[data-tab='operatori']")
-        page.wait_for_selector(f"[data-impatto-operatore='{m['persone']['quattro']}']")
-        verifica(f"[data-impatto-operatore='{m['persone']['quattro']}']",
-                 ["Contatti assegnati", "Unico Supervisore"])
-        page.click("[data-tab='territori']")
-        page.wait_for_selector(f"[data-impatto-assegnazione='{m['assegnazione']}']")
-        verifica(f"[data-impatto-assegnazione='{m['assegnazione']}']", ["Instradamento delle stime", "Comune"])
-        page.goto(f"{m['url']}/os/?n={uuid.uuid4().hex[:8]}#/rete/territori/{m['territorio_quattro']}")
-        page.wait_for_selector(f"[data-impatto-alias='{m['alias']}']")
-        verifica(f"[data-impatto-alias='{m['alias']}']", ["Instradamento delle stime"])
-        assert errori == [], errori
-        browser.close()
-    assert _impronta(m) == prima

@@ -44,6 +44,8 @@ NORMALISED = "lower(btrim(regexp_replace({}, '\\s+', ' ', 'g')))"
 def find_routable_agency_id(cur, *, comune: str) -> int | None:
     """L'agenzia che presidia il comune, se ce n'e' una ROUTABILE.
 
+    Restituisce solo l'id: vedi `find_routable_agency` per l'id con lo stato.
+
     LA CATENA, PER INTERO E IN UNA SOLA QUERY:
 
         alias (source, match_value normalizzato, status active)
@@ -74,13 +76,28 @@ def find_routable_agency_id(cur, *, comune: str) -> int | None:
     accorgersi che di righe ce n'e' piu' d'una.
 
     Ritorna `None` quando non c'e' alias, o il territorio non e' un comune, o
-    nessuna assegnazione/agenzia e' attiva. Casi diversi, stessa risposta: chi
-    chiama non deve distinguerli, deve ripiegare.
+    nessuna assegnazione e' attiva, o l'agenzia non e' attiva NE' sospesa. Casi
+    diversi, stessa risposta: chi chiama non deve distinguerli, deve ripiegare.
+
+    ADM-3 (decisione del proprietario): un'agenzia SOSPESA resta la
+    destinazione delle stime del suo Comune. Il lead nasce li', con proprieta'
+    e provenienza territoriale intatte; nessuno lo lavora finche' l'agenzia non
+    torna attiva o il Comune non viene assegnato ad altri. Prima il lead finiva
+    in silenzio all'agenzia di sistema: un trasferimento nascosto della
+    competenza. Un'agenzia ARCHIVIATA invece non e' instradabile.
     """
+    riga = find_routable_agency(cur, comune=comune)
+    return None if riga is None else riga[0]
+
+
+def find_routable_agency(cur, *, comune: str) -> tuple[int, str] | None:
+    """`(agency_id, agency_status)` dell'agenzia instradabile, o None.
+    Stessa catena e stesse regole di `find_routable_agency_id`."""
     cur.execute(
         f"""
         SELECT ag.id AS agency_id,
-               COUNT(*) OVER () AS instradabili
+               COUNT(*) OVER () AS instradabili,
+               ag.status AS agency_status
           FROM network_territory_aliases al
           JOIN network_territories t ON t.id = al.territory_id
           JOIN agency_territory_assignments a ON a.territory_id = t.id
@@ -91,7 +108,7 @@ def find_routable_agency_id(cur, *, comune: str) -> int | None:
              = {NORMALISED.format('%s')}
            AND t.kind = %s
            AND a.status = 'active'
-           AND ag.status = 'active'
+           AND ag.status IN ('active', 'suspended')
          ORDER BY ag.id
         """,
         (ALIAS_SOURCE_PUBLIC_STIMA, comune, ROUTING_KIND),
@@ -106,7 +123,7 @@ def find_routable_agency_id(cur, *, comune: str) -> int | None:
             "uq_territory_alias_active_value o "
             "uq_agency_territory_single_active non stanno facendo il loro lavoro"
         )
-    return int(_value(riga, "agency_id", indice=0))
+    return int(_value(riga, "agency_id", indice=0)), str(_value(riga, "agency_status", indice=2))
 
 
 def find_fallback_agency_id(cur, *, slug: str) -> int | None:
