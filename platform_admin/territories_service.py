@@ -75,7 +75,7 @@ from .exceptions import (
     TerritoryAssignmentNotFound,
     TerritoryNotFound,
 )
-from .transaction import audit_then_commit
+from .transaction import audit_then_commit, status_change
 
 # I VINCOLI DI CUI QUESTO MODULO SA IL SIGNIFICATO, E SOLO QUELLI.
 #
@@ -373,7 +373,8 @@ def update_assignment(
             target_type=TARGET_TYPE_TERRITORY_ASSIGNMENT,
             target_id=assignment_id,
             target_agency_id=agency_id,
-            metadata={"changed_fields": sorted(fields)},
+            metadata={"changed_fields": sorted(fields),
+                      **status_change(assignment["status"], updated["status"])},
         )
         return updated
 

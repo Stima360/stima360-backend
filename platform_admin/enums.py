@@ -38,6 +38,17 @@ ACTION_NAMESPACE = "platform."
 # input, non una NULL silenziosa.
 ANONYMOUS_ACTOR = "anonymous"
 
+# ADM-5A. La chiave dei metadati che registra un cambio di stato amministrativo,
+# `{"from": ..., "to": ...}`. Solo gli stati: valori di un elenco chiuso, mai
+# nomi, indirizzi o configurazioni. Scritta da ADM-5A in poi; le righe di prima
+# restano come sono.
+AUDIT_STATUS_CHANGE_KEY = "status_change"
+
+# ADM-5A. La lettura del registro: stessa paginazione delle altre liste della
+# piattaforma, massimo imposto dalla route e non dal chiamante.
+AUDIT_PAGE_DEFAULT = 50
+AUDIT_PAGE_MAX = 200
+
 # 403, non 404: l'endpoint esiste e il chiamante lo sa. Non stiamo nascondendo
 # una risorsa, stiamo rifiutando un'operazione. La stessa scelta che CORE fa in
 # `AGENCY_CONTEXT_REQUIRED_MESSAGE` e OWNER Admin in `require_owner_admin_context`.

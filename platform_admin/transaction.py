@@ -53,10 +53,18 @@ from typing import Any
 from operator_auth.context import OperatorContext
 
 from . import audit
-from .enums import RESULT_ERROR, RESULT_SUCCESS
+from .enums import AUDIT_STATUS_CHANGE_KEY, RESULT_ERROR, RESULT_SUCCESS
 from .exceptions import PlatformAuditUnavailable
 
 logger = logging.getLogger(__name__)
+
+
+def status_change(previous: Any, new: Any) -> dict[str, Any]:
+    """ADM-5A. I metadati di un cambio di stato, oppure niente se lo stato non
+    e' cambiato: `{"status_change": {"from": ..., "to": ...}}`."""
+    if previous == new:
+        return {}
+    return {AUDIT_STATUS_CHANGE_KEY: {"from": previous, "to": new}}
 
 
 def audit_then_commit(

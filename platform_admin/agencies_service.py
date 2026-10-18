@@ -83,7 +83,7 @@ from .enums import (
     TARGET_TYPE_AGENCY,
 )
 from .exceptions import AgencyNotFound, AgencySlugConflict, PlatformConflict
-from .transaction import audit_then_commit
+from .transaction import audit_then_commit, status_change
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,8 @@ def update_agency(
             target_type=TARGET_TYPE_AGENCY,
             target_id=agency_id,
             target_agency_id=agency_id,
-            metadata={"changed_fields": sorted(fields)},
+            metadata={"changed_fields": sorted(fields),
+                      **status_change(current["status"], row["status"])},
         )
         return row
 

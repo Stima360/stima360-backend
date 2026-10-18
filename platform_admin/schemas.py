@@ -1089,3 +1089,27 @@ class TerritoryAliasResponse(BaseModel):
     source: str
     match_value: str
     status: str
+
+
+# ---------------------------------------------------------------------------
+# ADM-5A - lettura del registro delle operazioni
+# ---------------------------------------------------------------------------
+
+class AuditEntryResponse(BaseModel):
+    """Una riga di `platform_audit_log`, com'e' stata scritta.
+
+    `actor_user_id` e `actor_label` sono quelli originali: non si ricalcolano
+    dall'anagrafica, che puo' essere cambiata dopo. `target_id` e' testo, come
+    nella colonna, perche' gli oggetti del registro non hanno tutti un id intero.
+    """
+
+    id: int
+    created_at: datetime
+    actor_user_id: int | None
+    actor_label: str
+    action: str
+    result: str
+    target_type: str | None
+    target_id: str | None
+    target_agency_id: int | None
+    metadata: dict[str, Any]

@@ -23,6 +23,8 @@ per cui la dichiarazione sul mount non e' ridondante.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse as _JSONResponse
 from fastapi.routing import APIRoute
@@ -33,6 +35,7 @@ from operator_auth.dependencies import AuthenticatedSession, current_session
 from . import (
     acting_service,
     aliases_service,
+    audit_read_service,
     agencies_service,
     configuration_service,
     impact_service,
@@ -42,6 +45,8 @@ from . import (
 from .dependencies import require_platform_admin, require_super_admin_context
 from .super_admin import SuperAdminDenied, is_designated
 from .enums import (
+    AUDIT_PAGE_DEFAULT,
+    AUDIT_PAGE_MAX,
     AUDIT_UNAVAILABLE_MESSAGE,
     CONFIGURATION_CORRUPTED_MESSAGE,
     ROUTER_PREFIX,
@@ -65,6 +70,7 @@ from .exceptions import (
 from .operators_repository import LIST_OPERATOR_ALIASES, MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
     ActingEnterResponse,
+    AuditEntryResponse,
     TerritoryAliasCreateRequest,
     TerritoryAliasResponse,
     TerritoryAliasUpdateRequest,
@@ -903,6 +909,46 @@ def update_territory_alias(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# ADM-5A - REGISTRO DELLE OPERAZIONI
+#
+# Una GET in sola lettura, riservata al Super Admin generale designato. Dal piu'
+# recente; i filtri sono facoltativi e si combinano. Come per i territori, un
+# valore fuori elenco non trova nulla invece di essere un 422. Le ammissioni
+# (`platform.admission`, una per richiesta) restano fuori se non si chiedono
+# per nome con `action`.
+# ---------------------------------------------------------------------------
+
+@router.get("/audit", response_model=list[AuditEntryResponse])
+def list_audit(
+    action: str | None = Query(None, max_length=80),
+    result: str | None = Query(None, max_length=20),
+    agency_id: int | None = Query(None),
+    target_type: str | None = Query(None, max_length=80),
+    target_id: str | None = Query(None, max_length=100),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    limit: int = Query(AUDIT_PAGE_DEFAULT, ge=1, le=AUDIT_PAGE_MAX),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> list[AuditEntryResponse]:
+    if since is not None and until is not None:
+        try:
+            ordinati = since < until
+        except TypeError:  # uno con fuso orario e l'altro senza
+            ordinati = False
+        if not ordinati:
+            raise HTTPException(status_code=422, detail="`since` deve precedere `until`, con lo stesso formato.")
+    return [
+        AuditEntryResponse(**row)
+        for row in audit_read_service.list_audit(
+            action=action, result=result, target_agency_id=agency_id,
+            target_type=target_type, target_id=target_id, since=since, until=until,
+            limit=limit, offset=offset,
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

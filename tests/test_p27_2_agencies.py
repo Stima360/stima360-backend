@@ -721,7 +721,10 @@ def test_b6_the_update_audit_names_the_changed_fields_only(service):
     assert entry["action"] == ACTION_AGENCY_UPDATE
     assert entry["target_id"] == 1
     assert entry["target_agency_id"] == 1
-    assert entry["metadata"] == {"changed_fields": ["name", "status"]}
+    # SENTINELLA AGGIORNATA DA ADM-5A: un cambio di stato registra anche il
+    # valore prima e dopo (solo stati, elenco chiuso; i nomi restano fuori, B7).
+    assert entry["metadata"] == {"changed_fields": ["name", "status"],
+                                 "status_change": {"from": "active", "to": "suspended"}}
 
 
 def test_b7_no_audit_metadata_ever_carries_a_value_or_a_body(service):

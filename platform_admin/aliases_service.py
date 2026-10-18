@@ -33,7 +33,7 @@ from psycopg2 import errors
 from operator_auth.context import OperatorContext
 
 from . import aliases_repository, super_admin, territories_repository
-from .transaction import audit_then_commit
+from .transaction import audit_then_commit, status_change
 from .database import platform_operation_cursor
 from .enums import (
     ACTION_TERRITORY_ALIAS_CREATE,
@@ -194,6 +194,7 @@ def update_alias(
                 "from_territory_id": corrente["territory_id"],
                 "from_status": corrente["status"],
                 "updated_fields": sorted(updated_fields),
+                **status_change(corrente["status"], alias["status"]),
             },
         )
         return alias

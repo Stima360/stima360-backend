@@ -84,7 +84,7 @@ from .exceptions import (
     PasswordRequired,
     PlatformConflict,
 )
-from .transaction import audit_then_commit
+from .transaction import audit_then_commit, status_change
 
 # I vincoli di `operator_users` e `agency_memberships` che rappresentano un
 # conflitto di DOMINIO, e il messaggio che ciascuno merita.
@@ -375,7 +375,8 @@ def update_operator(
             target_type=TARGET_TYPE_OPERATOR,
             target_id=operator_user_id,
             target_agency_id=None,
-            metadata={"changed_fields": sorted(fields)},
+            metadata={"changed_fields": sorted(fields),
+                      **status_change(current["status"], operator["status"])},
         )
         return operator
 
@@ -447,7 +448,8 @@ def update_membership(
             target_type=TARGET_TYPE_OPERATOR,
             target_id=operator_user_id,
             target_agency_id=agency_id,
-            metadata={"changed_fields": sorted(fields)},
+            metadata={"changed_fields": sorted(fields),
+                      **status_change(membership["status"], updated["status"])},
         )
         return updated
 
