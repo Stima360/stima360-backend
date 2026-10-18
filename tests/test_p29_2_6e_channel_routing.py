@@ -43,10 +43,16 @@ def codice(percorso: Path) -> str:
 # Il parametro esiste, e' obbligatorio, e non ha un default
 # ---------------------------------------------------------------------------
 
+# SENTINELLA AGGIORNATA DA ADM-3: `central_continuity` (bool, default False,
+# passato solo dal processo centrale delle agenzie sospese) restringe il claim
+# a stima e passi firmati STIMA360. Non tocca `channel`, che resta obbligatorio.
 @pytest.mark.parametrize("funzione, atteso", [
-    (repository.claim_due, {"cur", "ctx", "limit", "provider", "channel", "token_factory"}),
-    (service.claim_due, {"ctx", "provider", "channel", "limit", "cur", "token_factory"}),
-    (dispatcher.dispatch_batch, {"ctx_operatore", "channel", "limit", "provider"}),
+    (repository.claim_due, {"cur", "ctx", "limit", "provider", "channel", "token_factory",
+                            "central_continuity"}),
+    (service.claim_due, {"ctx", "provider", "channel", "limit", "cur", "token_factory",
+                         "central_continuity"}),
+    (dispatcher.dispatch_batch, {"ctx_operatore", "channel", "limit", "provider",
+                                 "central_continuity"}),
 ])
 def test_1_channel_e_nella_firma_delle_tre_funzioni(funzione, atteso):
     assert set(inspect.signature(funzione).parameters) == atteso

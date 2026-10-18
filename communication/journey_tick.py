@@ -497,6 +497,20 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
 # D - AZIONI DOVUTE
 # ---------------------------------------------------------------------------
 
+#: ADM-3 (decisione del proprietario D3): mentre l'agenzia e' SOSPESA la
+#: sequenza continua a nome di STIMA360 centrale. La firma del template
+#: (`agency_name`) diventa quella ufficiale, e il messaggio porta nei metadata
+#: il segno che lo rende spedibile dal percorso centrale
+#: (`communication.central_continuity`). Un messaggio accodato PRIMA della
+#: sospensione non ha il segno: resta `queued`, conservato e non spedito.
+CENTRAL_SIGNATURE_NAME = "STIMA360"
+CENTRAL_SIGNATURE_MARKER = {"signature": "stima360_central"}
+
+
+def _firma_centrale(anagrafica: dict[str, Any]) -> bool:
+    return anagrafica.get("agency_status") == "suspended"
+
+
 def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
                            stima_url: str | None = None) -> dict[str, str]:
     """I campi che un template puo' chiedere. Nessun altro.
@@ -523,7 +537,8 @@ def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
     portale = f"{_base_pubblica()}/owner/"
     return {
         "contact_first_name": nome,
-        "agency_name": (anagrafica.get("agency_name") or "").strip(),
+        "agency_name": (CENTRAL_SIGNATURE_NAME if _firma_centrale(anagrafica)
+                        else (anagrafica.get("agency_name") or "").strip()),
         "owner_portal_url": portale,
         "stima_url": (stima_url or "").strip() or portale,
         "unsubscribe_url": unsubscribe.unsubscribe_url(
@@ -550,7 +565,8 @@ def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode
         template_version=passo["template_version"], stima_id=riga["stima_id"],
         lead_id=riga["lead_id"], scheduled_at=scheduled_at,
         idempotency_key=(f"journey:{riga['id']}:step:{passo['step_no']}:run:{riga['run_no']}"),
-        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"], cur=cur)
+        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"],
+        metadata=dict(CENTRAL_SIGNATURE_MARKER) if _firma_centrale(anagrafica) else None, cur=cur)
 
 
 def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:

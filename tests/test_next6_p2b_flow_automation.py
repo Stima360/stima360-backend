@@ -871,8 +871,12 @@ import pytest
 
 
 @pytest.fixture()
-def cron():
-    return importlib.import_module("run_flow_p2b_cron")
+def cron(monkeypatch):
+    modulo = importlib.import_module("run_flow_p2b_cron")
+    # ADM-3: il passo centrale delle agenzie sospese ha i suoi test
+    # (`test_adm3_bis_central_followup_postgres`); qui si prova il solo flow.
+    monkeypatch.setattr(modulo, "run_central_continuity", lambda **_kw: 0)
+    return modulo
 
 
 @pytest.fixture()

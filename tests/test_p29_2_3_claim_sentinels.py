@@ -73,7 +73,10 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # P29-3D: il catalogo delle journey pubblicate e il
                     # read-model del Contact 360. Fuori dal nucleo come gli
                     # altri: il nucleo non li importa.
-                    "journey_catalog.py", "contact_view.py")
+                    "journey_catalog.py", "contact_view.py",
+                    # ADM-3: il giro centrale per le agenzie sospese, chiamato
+                    # solo dal cron. Il nucleo non lo importa.
+                    "central_continuity.py")
 
 
 def sorgenti() -> dict[str, str]:

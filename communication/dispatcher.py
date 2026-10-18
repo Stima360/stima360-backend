@@ -201,7 +201,7 @@ def _esito_di_una_eccezione(exc: BaseException) -> tuple[str, dict[str, Any]]:
 
 def dispatch_batch(ctx_operatore, *, channel: str,
                    limit: int = service.DEFAULT_CLAIM_BATCH,
-                   provider=provider_finto) -> dict[str, Any]:
+                   provider=provider_finto, central_continuity: bool = False) -> dict[str, Any]:
     """Un giro di dispatch. Restituisce il conteggio di cio' che e' successo.
 
     L'ordine e' quello del design, e ogni passo ha il suo confine:
@@ -254,8 +254,11 @@ def dispatch_batch(ctx_operatore, *, channel: str,
     # uno che non tornera'. Un worker al lavoro non viene disturbato.
     recuperati = service.recover_stale(ctx, limit=limit)
 
+    # ADM-3: il filtro centrale si passa SOLO quando serve, cosi' la chiamata
+    # delle agenzie attive resta identica a prima.
+    centrale = {"central_continuity": True} if central_continuity else {}
     reclamati = service.claim_due(ctx, provider=provider.NAME, channel=channel,
-                                  limit=limit)
+                                  limit=limit, **centrale)
 
     # Gli stale recuperati entrano in `indeterminate`, che e' lo stato in cui
     # sono finiti, e NON in `claimed`: non sono stati reclamati adesso - il loro

@@ -383,8 +383,19 @@ from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per 
 ERROR_OUTCOME_UNKNOWN = "outcome_unknown"
 
 
+#: ADM-3: cio' che il percorso centrale puo' spedire per un'agenzia SOSPESA.
+#: L'email della stima (firma centrale gia' nel testo) e i soli passi di
+#: sequenza composti durante la sospensione con la firma STIMA360 (segno nei
+#: metadata, `journey_tick.CENTRAL_SIGNATURE_MARKER`). Esclusi per costruzione:
+#: promemoria, messaggi degli operatori, link del portale e ogni messaggio
+#: accodato prima della sospensione, che resta `queued` senza essere toccato.
+CENTRAL_CONTINUITY_FILTER = (
+    " AND (m.reason_code = 'stima_pdf'"
+    " OR (m.metadata ->> 'signature') = 'stima360_central')")
+
+
 def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
-              token_factory) -> list[dict[str, Any]]:
+              token_factory, central_continuity: bool = False) -> list[dict[str, Any]]:
     """Reclama fino a `limit` messaggi dovuti. Messaggio e tentativo nello stesso commit.
 
     Non apre e non chiude una transazione: quella e' del chiamante, e deve
@@ -440,6 +451,7 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
                 OR (EXTRACT(ISODOW FROM %s::timestamptz AT TIME ZONE 'Europe/Rome') BETWEEN 1 AND 6
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time >= TIME '09:00'
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time < TIME '19:00'))
+{CENTRAL_CONTINUITY_FILTER if central_continuity else ""}
          ORDER BY m.scheduled_at ASC, m.id ASC
          LIMIT %s
            FOR UPDATE SKIP LOCKED

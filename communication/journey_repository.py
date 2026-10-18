@@ -653,7 +653,8 @@ def rendering_context(cur, ctx, contact_ids: list[int]) -> dict[int, dict[str, A
     if not contact_ids:
         return {}
     cur.execute(
-        """SELECT c.id, c.first_name, c.display_name, c.email, a.name AS agency_name
+        """SELECT c.id, c.first_name, c.display_name, c.email, a.name AS agency_name,
+                  a.status AS agency_status
              FROM contacts c JOIN agencies a ON a.id = c.agency_id
             WHERE c.agency_id = %s AND c.id = ANY(%s)""",
         (ctx.require_agency(), contact_ids))

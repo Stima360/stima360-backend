@@ -364,7 +364,10 @@ def test_C20_2_non_esiste_un_percorso_per_reclamare_A_e_chiamare_B():
     scriverli.
     """
     parametri = inspect.signature(dispatcher.dispatch_batch).parameters
-    assert set(parametri) == {"ctx_operatore", "channel", "limit", "provider"}
+    # SENTINELLA AGGIORNATA DA ADM-3: `central_continuity` e' un bool e non
+    # nomina un provider; l'identita' resta derivata dall'adapter.
+    assert set(parametri) == {"ctx_operatore", "channel", "limit", "provider",
+                              "central_continuity"}
     assert "provider_name" not in parametri and "provider_key" not in parametri
 
     corpo = inspect.getsource(dispatcher.dispatch_batch)

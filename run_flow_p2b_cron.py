@@ -229,9 +229,34 @@ def main(argv=None):
         # 1 (tecnico) prevale su 2 (applicativo), che prevale su 0.
         peggiore = 1 if 1 in (peggiore, esito) else max(peggiore, esito)
 
+    # ADM-3: la continuita' centrale dei follow-up email delle agenzie SOSPESE.
+    # Sempre, qualunque sia `--agency-id`: lavora solo le agenzie sospese, e
+    # le agenzie attive e il FLOW qui sopra non cambiano.
+    # Come fra agenzie: un guasto del flow non salta il giro centrale.
+    centrale = run_central_continuity()
+    peggiore = 1 if 1 in (peggiore, centrale) else max(peggiore, centrale)
+
     _log('runner', 'completed' if peggiore == 0 else 'failed', 0,
          counts={'agencies': len(bersagli)})
     return peggiore
+
+
+def run_central_continuity(*, provider=None):
+    """Un giro di `communication.central_continuity`. 0 bene, 1 tecnico, 2 applicativo."""
+    inizio = time.monotonic()
+    try:
+        from communication import central_continuity
+        esito = central_continuity.run_for_suspended_agencies(provider=provider)
+    except Exception as exc:
+        _log('central_continuity', 'failed', int((time.monotonic() - inizio) * 1000), type(exc).__name__)
+        return 1
+    durata = int((time.monotonic() - inizio) * 1000)
+    if esito['failed']:
+        _log('central_continuity', 'failed', durata, 'agency_failure',
+             counts={'processed': esito['agencies'], 'failed': len(esito['failed'])})
+        return 2
+    _log('central_continuity', 'completed', durata, counts={'processed': esito['agencies']})
+    return 0
 
 
 if __name__=='__main__':
