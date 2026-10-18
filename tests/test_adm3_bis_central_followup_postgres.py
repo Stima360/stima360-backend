@@ -1,21 +1,26 @@
-"""ADM-3 BIS - continuita' centrale dei follow-up email delle agenzie SOSPESE.
+"""ADM-3 BIS - continuita' delle email della valutazione per le agenzie SOSPESE o CHIUSE.
+
+Regola del proprietario: le email automatiche della valutazione e i relativi
+follow-up continuano anche con l'agenzia sospesa o chiusa, comprese quelle gia'
+in coda; consenso e disiscrizione restano quelli di sempre.
 
 PostgreSQL usa-e-getta (harness P29-3C, importato) con la 079 in coda, cosi'
 il ledger ammette anche i promemoria degli appuntamenti. Nessuna email parte:
 l'adapter e' quello vero (`email_smtp`) e `invia_mail` e' una spia.
 
   01  agenzia ATTIVA: il giro centrale non la tocca, i suoi passi nascono
-      senza segno e con la sua firma, il dispatch normale resta quello
-  02  agenzia SOSPESA: un solo giro centrale iscrive, compone e spedisce M1
-      e spedisce l'email della stima ancora in coda
-  03  mittente e firma STIMA360 (segno nei metadata, firma nel testo)
-  04  nessun promemoria, nessun messaggio dell'operatore per l'agenzia sospesa
-  05  consenso revocato dopo la composizione: soppresso, nessun invio
+      con la sua firma, il dispatch normale resta quello
+  02  agenzia SOSPESA o CHIUSA: un solo giro centrale iscrive, compone e
+      spedisce M1 e spedisce l'email della stima ancora in coda
+  03  mittente e firma STIMA360 sui passi composti adesso
+  04  promemoria, messaggi dell'operatore e link del portale non passano di qui
+  05  consenso revocato o assente: nessun invio
   06  giri ripetuti: nessun duplicato
   07  nessuna fuga fra agenzie: l'agenzia attiva accanto resta intatta
-  08  i messaggi accodati PRIMA della sospensione restano `queued`, intatti
-  09  alla riattivazione nessun invio massivo: il giro centrale smette, il
-      dispatch normale riprende a lotti
+  08  le email gia' in coda prima della sospensione o chiusura partono, cosi'
+      come erano state composte
+  09  alla riattivazione nessun doppio invio: il giro centrale smette e il
+      dispatch normale riprende da dove era rimasto, a lotti
   10  nessun accesso: sessioni e login dell'agenzia sospesa non cambiano
   11  il cron: `run_central_continuity` lavora le sospese anche con
       `--agency-id 1`, e un guasto non diventa un successo
@@ -151,10 +156,11 @@ def test_01_agenzia_attiva_invariata(mondo, modulo, spia):
     assert {_riga(mondo, m1["id"])["status"], _riga(mondo, stima)["status"]} == {"sent"}
 
 
-def test_02_03_sospesa_continua_dal_centro_con_firma_stima360(mondo, modulo, spia):
+@pytest.mark.parametrize("stato", ["suspended", "archived"])
+def test_02_03_sospesa_o_chiusa_continua_dal_centro_con_firma_stima360(mondo, modulo, spia, stato):
     a = mondo["a"]
     journey_attiva(modulo, mondo["ctx"](), passi=PASSI)
-    _stato(mondo, a, "suspended")
+    _stato(mondo, a, stato)
     c = mondo["contatto"]()
     stima = _stima_in_coda(mondo, c)
 
@@ -167,8 +173,7 @@ def test_02_03_sospesa_continua_dal_centro_con_firma_stima360(mondo, modulo, spi
     assert len(m1) == 1 and m1[0]["status"] == "sent", "M1 non e' partita nello stesso giro"
     assert _riga(mondo, stima)["status"] == "sent"
     assert len(spia) == 2
-    # 03 - firma e segno
-    assert m1[0]["metadata"] == {"signature": "stima360_central"}
+    # 03 - firma
     assert m1[0]["subject_snapshot"] == "[prova] STIMA360"
     oggetti = {o for (_dest, o, _corpo) in spia}
     assert "[prova] STIMA360" in oggetti and "[prova] A" not in oggetti
@@ -186,17 +191,17 @@ def test_03b_firma_centrale_nella_chiusura_dei_template_reali(mondo, modulo):
     chiusura = templates._chiusura({"agency_name": journey_tick.CENTRAL_SIGNATURE_NAME,
                                     templates.UNSUBSCRIBE_FIELD: "https://x/u"})
     assert chiusura.startswith("\nSTIMA360\nsu Stima360\n") and "Rossi" not in chiusura
+    assert journey_tick._firma_centrale({**anagrafica, "agency_status": "archived"})
     assert not journey_tick._firma_centrale({**anagrafica, "agency_status": "active"})
 
 
-def test_04_nessun_promemoria_ne_messaggio_dell_operatore(mondo, modulo, spia):
+def test_04_promemoria_operatore_e_portale_non_passano_dal_centro(mondo, modulo, spia):
     a = mondo["a"]
     c = mondo["contatto"]()
     promemoria = _accoda(mondo, c, motivo="appointment_reminder")
     manuale = _accoda(mondo, c, motivo="operator_manual")
     portale = _accoda(mondo, c, motivo="owner_login_link")
-    # Il segno centrale lo scrive solo il motore delle sequenze: qui nessuno
-    # di questi messaggi lo porta, e nessuno parte.
+    # Non sono email della valutazione ne' follow-up di una sequenza.
     _stato(mondo, a, "suspended")
 
     _centrale()
@@ -206,30 +211,24 @@ def test_04_nessun_promemoria_ne_messaggio_dell_operatore(mondo, modulo, spia):
         assert _riga(mondo, mid)["status"] == "queued"
 
 
-def test_05_consenso_revocato_soppresso(mondo, modulo, spia):
+def test_05_consenso_revocato_nessun_invio(mondo, modulo, spia):
     a = mondo["a"]
     journey_attiva(modulo, mondo["ctx"](), passi=PASSI)
     _stato(mondo, a, "suspended")
     c = mondo["contatto"]()
-    modulo["tick"].tick(mondo["ctx"]())  # compone M1 con il segno, non spedisce
+    modulo["tick"].tick(mondo["ctx"]())  # compone M1, non spedisce
     m1 = _passi(mondo, a)[0]
-    assert m1["status"] == "queued" and m1["metadata"] == {"signature": "stima360_central"}
+    assert m1["status"] == "queued"
     mondo["sql"]("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, "
                  "source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),'crm','subject')",
                  (a, c["contact"]))
     mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE WHERE id = %s", (c["contact"],))
 
-    # e un messaggio col segno, fuori sequenza, che arriva fino al dispatcher
-    fuori = _accoda(mondo, c, motivo="m2", tipo="marketing",
-                    metadata={"signature": "stima360_central"})
-
     _centrale()
 
     assert spia == []
-    # il motore ferma l'iscrizione per primo e annulla M1; cio' che arriva al
-    # dispatcher passa dal cancello del consenso di sempre
+    # il motore ferma l'iscrizione e annulla M1, come per un'agenzia attiva
     assert _riga(mondo, m1["id"])["status"] == "cancelled"
-    assert _riga(mondo, fuori)["status"] == "suppressed"
 
 
 def test_05b_senza_consenso_nessuna_sequenza(mondo, modulo, spia):
@@ -264,10 +263,6 @@ def test_07_nessuna_fuga_fra_agenzie(mondo, modulo, spia):
     cb = mondo["contatto"](b)
     modulo["tick"].tick(mondo["ctx"]("admin_b", agenzia=b))  # M1 di B, in coda
     stima_b = _stima_in_coda(mondo, cb)
-    # perfino un messaggio di B col segno centrale non e' affare del giro
-    # centrale finche' B e' attiva: si lavorano solo le agenzie sospese.
-    segnato_b = _accoda(mondo, cb, motivo="m2", tipo="marketing",
-                        metadata={"signature": "stima360_central"})
     _stato(mondo, a, "suspended")
     ca = mondo["contatto"](a)
 
@@ -275,46 +270,52 @@ def test_07_nessuna_fuga_fra_agenzie(mondo, modulo, spia):
 
     assert [r["agency_id"] for r in esito["runs"]] == [a]
     assert len(spia) == 1 and spia[0][0] == _email(mondo, ca)
-    for mid in (stima_b, segnato_b, _passi(mondo, b)[0]["id"]):
+    for mid in (stima_b, _passi(mondo, b)[0]["id"]):
         assert _riga(mondo, mid)["status"] == "queued"
     assert [r["agency_id"] for r in iscrizioni(mondo) if r["contact_id"] == ca["contact"]] == [a]
 
 
-def test_08_i_messaggi_accodati_prima_della_sospensione_restano_in_coda(mondo, modulo, spia):
+@pytest.mark.parametrize("stato", ["suspended", "archived"])
+def test_08_le_email_gia_in_coda_partono_come_composte(mondo, modulo, spia, stato):
     a = mondo["a"]
     journey_attiva(modulo, mondo["ctx"](), passi=PASSI)
-    mondo["contatto"]()
+    c = mondo["contatto"]()
+    stima = _stima_in_coda(mondo, c)
     modulo["tick"].tick(mondo["ctx"]())  # composto con la firma dell'agenzia
     prima = _passi(mondo, a)[0]
     assert prima["status"] == "queued" and prima["subject_snapshot"] == "[prova] A"
-    _stato(mondo, a, "suspended")
+    _stato(mondo, a, stato)
 
     for _ in range(3):
         _centrale()
 
-    assert spia == []
+    assert len(spia) == 2, "le email gia' previste non sono partite (o sono partite due volte)"
     dopo = _riga(mondo, prima["id"])
-    assert dopo == prima, "un messaggio accodato prima della sospensione e' stato toccato"
-    assert mondo["sql"]("SELECT count(*) FROM communication_attempts WHERE message_id = %s",
-                        (prima["id"],))[0][0] == 0
+    assert dopo["status"] == "sent"
+    # nessuna regola nuova: il testo e' quello composto allora
+    assert (dopo["subject_snapshot"], dopo["rendered_body"]) == (prima["subject_snapshot"],
+                                                                 prima["rendered_body"])
+    assert _riga(mondo, stima)["status"] == "sent"
 
 
-def test_09_alla_riattivazione_nessun_invio_massivo(mondo, modulo, spia):
+def test_09_alla_riattivazione_nessun_doppio_invio(mondo, modulo, spia):
     from communication import service as comm_service
     a = mondo["a"]
     journey_attiva(modulo, mondo["ctx"](), passi=PASSI)
+    _stato(mondo, a, "suspended")
     for _ in range(comm_service.DEFAULT_CLAIM_BATCH + 2):
         mondo["contatto"]()
-    modulo["tick"].tick(mondo["ctx"]())
-    _stato(mondo, a, "suspended")
-    _centrale()
-    assert spia == []
+    _centrale()  # un giro: il lotto di sempre
+    assert len(spia) == comm_service.DEFAULT_CLAIM_BATCH
 
     _stato(mondo, a, "active")
-    assert _centrale()["agencies"] == 0 and spia == []
-    primo = _normale(mondo, a)
-    assert primo["sent"] == comm_service.DEFAULT_CLAIM_BATCH
-    assert len([m for m in _passi(mondo, a) if m["status"] == "queued"]) == 2
+    assert _centrale()["agencies"] == 0
+    assert len(spia) == comm_service.DEFAULT_CLAIM_BATCH
+    secondo = _normale(mondo, a)
+    assert secondo["sent"] == 2
+    assert len(spia) == comm_service.DEFAULT_CLAIM_BATCH + 2
+    assert all(m["status"] == "sent" for m in _passi(mondo, a))
+    assert _normale(mondo, a)["sent"] == 0
 
 
 def test_10_nessun_accesso_per_l_agenzia_sospesa(mondo, modulo, spia):

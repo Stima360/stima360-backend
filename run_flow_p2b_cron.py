@@ -229,8 +229,8 @@ def main(argv=None):
         # 1 (tecnico) prevale su 2 (applicativo), che prevale su 0.
         peggiore = 1 if 1 in (peggiore, esito) else max(peggiore, esito)
 
-    # ADM-3: la continuita' centrale dei follow-up email delle agenzie SOSPESE.
-    # Sempre, qualunque sia `--agency-id`: lavora solo le agenzie sospese, e
+    # ADM-3: la continuita' centrale delle email delle agenzie SOSPESE o CHIUSE.
+    # Sempre, qualunque sia `--agency-id`: lavora solo le sospese e chiuse, e
     # le agenzie attive e il FLOW qui sopra non cambiano.
     # Come fra agenzie: un guasto del flow non salta il giro centrale.
     centrale = run_central_continuity()

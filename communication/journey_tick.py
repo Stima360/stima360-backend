@@ -497,18 +497,16 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
 # D - AZIONI DOVUTE
 # ---------------------------------------------------------------------------
 
-#: ADM-3 (decisione del proprietario D3): mentre l'agenzia e' SOSPESA la
-#: sequenza continua a nome di STIMA360 centrale. La firma del template
-#: (`agency_name`) diventa quella ufficiale, e il messaggio porta nei metadata
-#: il segno che lo rende spedibile dal percorso centrale
-#: (`communication.central_continuity`). Un messaggio accodato PRIMA della
-#: sospensione non ha il segno: resta `queued`, conservato e non spedito.
+#: ADM-3 (decisione del proprietario D3): mentre l'agenzia e' sospesa o
+#: chiusa la sequenza continua a nome di STIMA360 centrale: la firma del
+#: template (`agency_name`) diventa quella ufficiale. Lo spedisce
+#: `communication.central_continuity`.
 CENTRAL_SIGNATURE_NAME = "STIMA360"
-CENTRAL_SIGNATURE_MARKER = {"signature": "stima360_central"}
+CENTRAL_SIGNATURE_STATUSES = frozenset({"suspended", "archived"})
 
 
 def _firma_centrale(anagrafica: dict[str, Any]) -> bool:
-    return anagrafica.get("agency_status") == "suspended"
+    return anagrafica.get("agency_status") in CENTRAL_SIGNATURE_STATUSES
 
 
 def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
@@ -565,8 +563,7 @@ def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode
         template_version=passo["template_version"], stima_id=riga["stima_id"],
         lead_id=riga["lead_id"], scheduled_at=scheduled_at,
         idempotency_key=(f"journey:{riga['id']}:step:{passo['step_no']}:run:{riga['run_no']}"),
-        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"],
-        metadata=dict(CENTRAL_SIGNATURE_MARKER) if _firma_centrale(anagrafica) else None, cur=cur)
+        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"], cur=cur)
 
 
 def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:

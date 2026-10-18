@@ -130,136 +130,137 @@ PostgreSQL 16 **locale e usa-e-getta**, mai il database TEST operativo.
 
 **STOP.** ADM-3 è chiusa con un commit locale. Nessun push, deploy o migration. Per qualunque pubblicazione o fase successiva aspetto la tua autorizzazione.
 
-## 7. ADM-3 BIS — continuità centrale dei follow-up email
+## 7. ADM-3 BIS — continuità delle email della valutazione
 
-Decisioni del proprietario applicate:
+**Regola definitiva del proprietario** (sostituisce le indicazioni precedenti in contrasto):
 
-- **D1:** il lead resta all'agenzia territoriale; i follow-up email commerciali continuano tramite STIMA360 centrale. Nessun trasferimento.
-- **D2:** nessun promemoria di appuntamento per le agenzie sospese.
-- **D3:** mittente e firma STIMA360.
-- Nessun accesso con account sospesi; consenso, opt-out, finestre di invio e protezione dai duplicati obbligatori; nessun nuovo costo o provider.
+- le email automatiche relative alle valutazioni immobiliari e ai relativi follow-up continuano anche quando l'agenzia di riferimento è **sospesa o chiusa** (archiviata);
+- la sospensione o chiusura non interrompe le comunicazioni già previste per i clienti, comprese quelle già in coda;
+- si usano il sistema email e i cron esistenti;
+- consenso e disiscrizione restano quelli di sempre;
+- nessuna regola nuova sulle vecchie email, nessun blocco nuovo, nessuna funzionalità in più.
+
+Valgono ancora le decisioni precedenti non in contrasto:
+
+- il lead resta all'agenzia territoriale, nessun trasferimento;
+- nessun accesso con account sospesi;
+- firma STIMA360 sui follow-up composti mentre l'agenzia è sospesa o chiusa.
 
 ### 7.1 Come funziona
 
-Un solo processo centrale: il cron esistente `run_flow_p2b_cron.py` (servizio Render `stima360-flow-automation`, comando invariato `python run_flow_p2b_cron.py --agency-id 1`).
+**Agenzie attive: invariato.** Le loro email partono dal cron di dispatch esistente (`run_communication_dispatch_cron.py`). Questo entra con l'account di un'agenzia, fa il giro delle sequenze e poi il dispatch. Il codice di questo percorso non è cambiato.
 
-1. Il cron fa prima il giro FLOW di sempre, solo sulle agenzie attive: **invariato**.
-2. Poi, **qualunque sia `--agency-id`**, esegue `run_central_continuity()`. Questo legge dal database le agenzie con stato `suspended` e, per ciascuna, isolata dalle altre:
+**Agenzie sospese o chiuse: giro centrale.** È agganciato al cron esistente `run_flow_p2b_cron.py` (servizio `stima360-flow-automation`), con il comando invariato `python run_flow_p2b_cron.py --agency-id 1`.
+
+1. Dopo il giro FLOW sulle agenzie attive, che non cambia, il cron esegue `run_central_continuity()`, **qualunque sia `--agency-id`**.
+2. Il giro centrale legge dal database le agenzie con stato `suspended` o `archived`. Per ciascuna, isolata dalle altre:
    - un giro del motore delle sequenze (`journey_tick.tick`);
    - un giro di dispatch email (`dispatcher.dispatch_batch`).
-   Entrambi girano con `SystemAgencyContext(agency_id, origin="communication_dispatch")`, l'origine che il dispatcher usa già.
-3. **Nessun login**, nessuna sessione, nessuna rotta HTTP. `communication/central_continuity.py` non è montato su nessun router.
-4. Un errore su un'agenzia non ferma le altre. Il giro centrale gira anche se il FLOW di un'agenzia attiva ha avuto un guasto tecnico. L'esito del cron segue la convenzione esistente: 0 bene, 2 applicativo, 1 tecnico.
+3. Entrambi girano con `SystemAgencyContext(agency_id, origin="communication_dispatch")`. Non c'è nessun login, nessuna sessione, nessuna rotta HTTP.
+4. Un errore su un'agenzia non ferma le altre, e un guasto del FLOW non salta il giro centrale.
 
-**Cosa spedisce il giro centrale.** Il claim riceve un filtro in più (`repository.CENTRAL_CONTINUITY_FILTER`), attivo solo in questo percorso. Passano soltanto:
+**Cosa spedisce il giro centrale** (`repository.CENTRAL_CONTINUITY_FILTER`):
 
-- l'email della stima (`stima_pdf`), il cui testo è già centrale;
-- i passi di sequenza composti **durante la sospensione**, che portano nei metadata il segno `{"signature": "stima360_central"}`.
+- l'email della valutazione (`stima_pdf`);
+- **ogni follow-up delle sequenze**, cioè ogni messaggio legato a un'iscrizione (`enrollment_id`): M1…M10, Tappa 6 compresa;
+- anche i messaggi accodati prima della sospensione o chiusura, spediti così come erano stati composti.
 
-Tutto il resto resta escluso per costruzione: promemoria (D2), messaggi degli operatori, link del portale proprietario e ogni messaggio accodato prima della sospensione.
+**Cosa non spedisce.** Promemoria degli appuntamenti, messaggi scritti dagli operatori e link del portale proprietario: non sono email della valutazione né follow-up.
 
-**Mittente e firma.**
-
-- Il mittente è già unico per tutto il sistema (`From` = `SMTP_USER`).
-- Per un'agenzia sospesa, il motore compone i passi con `agency_name = "STIMA360"`. La chiusura dei template diventa «STIMA360 / su Stima360», con il link di disiscrizione di sempre.
-
-**Agenzie attive.** Il loro dispatch non passa il nuovo argomento: la chiamata a `claim_due` è identica a prima. I loro passi nascono senza segno e con la firma dell'agenzia (provato da `test_01`).
+**Firma.** I follow-up composti mentre l'agenzia è sospesa o chiusa firmano «STIMA360 / su Stima360». Quelli già composti prima restano con il loro testo. Il mittente è unico per tutto il sistema (`SMTP_USER`).
 
 **Controlli invariati.** Valgono gli stessi del dispatch normale:
 
-- claim con token (`FOR UPDATE SKIP LOCKED`) e recupero degli stale;
-- cancello del consenso marketing per messaggio;
+- cancello del consenso marketing;
+- disiscrizione;
+- arresto della sequenza quando il consenso manca;
 - finestra oraria;
-- chiave di idempotenza;
+- chiave anti-duplicato e claim con token;
+- recupero degli stale;
 - lotto di 10 messaggi per giro.
 
-Nessuna migration, nessuna tabella, nessuno stato nuovo, nessun provider, nessuna credenziale.
+Alla riattivazione il giro centrale smette e il dispatch normale riprende da dove era rimasto, senza doppi invii.
 
-### 7.2 Messaggi già in coda prima della sospensione
+Nessuna migration, tabella, stato, provider o credenziale nuova.
 
-Non hanno il segno centrale, quindi il giro centrale **non li reclama**:
-
-- restano `queued`, intatti (stessa riga, nessun tentativo);
-- non vengono cancellati né marcati `suppressed`;
-- non serve uno stato nuovo.
-
-Alla riattivazione tornano visibili al dispatch normale dell'agenzia, a lotti di 10 per giro. Oggi quel dispatch è il cron di dispatch, che su TEST è sospeso.
-
-**Decisione che resta al proprietario.** Se, alla riattivazione, questi messaggi accodati prima della sospensione (con la firma dell'agenzia e forse ormai vecchi) debbano partire o no. Oggi partirebbero col dispatch normale dell'agenzia, appena riattivato il suo cron. Non ho aggiunto nessun meccanismo per impedirlo o per scartarli.
-
-### 7.3 File modificati
+### 7.2 File modificati (rispetto a ADM-3)
 
 | File | Modifica |
 |---|---|
-| `communication/central_continuity.py` (nuovo) | giro centrale per agenzia sospesa: tick più dispatch filtrato |
+| `communication/central_continuity.py` (nuovo) | giro centrale per agenzia sospesa o chiusa: tick più dispatch filtrato |
 | `communication/journey_repository.py` | il contesto di rendering legge anche `agencies.status` |
-| `communication/journey_tick.py` | firma STIMA360 e segno nei metadata per le agenzie sospese |
+| `communication/journey_tick.py` | firma STIMA360 per agenzie sospese o chiuse |
 | `communication/repository.py` | `CENTRAL_CONTINUITY_FILTER` e parametro `central_continuity` (default False) di `claim_due` |
-| `communication/service.py`, `communication/dispatcher.py` | il parametro passa fino al claim **solo** quando è True |
+| `communication/service.py`, `communication/dispatcher.py` | il parametro arriva al claim **solo** quando è True |
 | `run_flow_p2b_cron.py` | passo `central_continuity` dopo il FLOW, con log sanitizzato |
 | `tests/test_adm3_bis_central_followup_postgres.py` (nuovo) | collaudo su PostgreSQL |
 | `tests/test_next6_p2b_flow_automation.py` | la fixture `cron` neutralizza il passo centrale: quei test provano il solo FLOW |
 | `tests/test_p29_2_6e_channel_routing.py`, `tests/test_p29_2_4_router_contract.py`, `tests/test_p29_2_3_claim_sentinels.py` | sentinelle aggiornate in modo dichiarato (firma con `central_continuity`; nuovo file fuori dal nucleo) |
 
-### 7.4 Configurazione Render necessaria (nessun valore qui)
+### 7.3 Cron da riattivare perché la regola funzioni davvero
 
-Servizio `stima360-flow-automation`, **da non riattivare senza tua autorizzazione**. Comando invariato. Il servizio deve avere:
+Oggi su TEST **tutti e tre i cron sono sospesi**: finché restano così, non parte nessuna email automatica, per nessuna agenzia.
 
-- **database:** `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`;
-- **email:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` (è anche il mittente), `SMTP_PASS`;
-- **link di disiscrizione:** `COMMUNICATION_UNSUBSCRIBE_SECRET`, lo stesso del backend che risolve i link;
-- **link nei testi:** `PUBLIC_BASE_URL`.
+| Servizio Render | Serve per | Comando (invariato) |
+|---|---|---|
+| `stima360-flow-automation` | agenzie **sospese o chiuse** (giro centrale) | `python run_flow_p2b_cron.py --agency-id 1` |
+| `stima360-communication-dispatch-test` | agenzia **attiva** del suo account | `run_communication_dispatch_cron.py` |
+| `stima360-communication-dispatch-giulianova-test` | agenzia **attiva** Giulianova | `run_communication_dispatch_cron.py` |
 
-Facoltative, già usate dal FLOW: `FLOW_RECOVERY_LIMIT`, `FLOW_SCAN_LIMIT`.
+**Agenzie attive senza un proprio cron di dispatch.** Il cron di dispatch lavora una sola agenzia, quella dell'account in `COMMUNICATION_DISPATCH_EMAIL`. Un'agenzia attiva senza un servizio dedicato non spedisce email automatiche, oggi come prima di questa fase. Va verificato su Render quali agenzie attive hanno il loro servizio.
 
-**Da verificare su Render prima di riattivare:**
+**Variabili necessarie** (nessun valore qui):
 
-- che queste variabili ci siano su quel servizio;
-- che l'agenzia 1 sia attiva, perché con `--agency-id` di un'agenzia non attiva il cron esce prima di tutto, giro centrale compreso.
+- **`stima360-flow-automation`:**
+  - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`;
+  - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`;
+  - `COMMUNICATION_UNSUBSCRIBE_SECRET` (lo stesso del backend);
+  - `PUBLIC_BASE_URL`.
 
-### 7.5 Collaudo
+  Inoltre l'agenzia 1 deve essere attiva: con `--agency-id` di un'agenzia non attiva il cron si ferma subito, giro centrale compreso.
+- **Cron di dispatch:** quelle già previste (`COMMUNICATION_DISPATCH_EMAIL`, `COMMUNICATION_DISPATCH_PASSWORD`, URL del backend). L'account deve essere `agency_admin` di un'agenzia attiva.
 
-PostgreSQL 16 locale e usa-e-getta, mai il database TEST. Email simulate: l'adapter è quello vero, `invia_mail` è una spia, nessuna email è partita.
+### 7.4 Collaudo
 
-**Collaudo mirato:** `tests/test_adm3_bis_central_followup_postgres.py`, **12 superati**.
+PostgreSQL 16 locale e usa-e-getta, mai il database TEST. Email simulate: l'adapter è quello vero, `invia_mail` è una spia.
 
-| Verifica richiesta | Test |
+**Collaudo mirato:** `tests/test_adm3_bis_central_followup_postgres.py`, **14 superati**.
+
+| Verifica | Test |
 |---|---|
 | Agenzia attiva invariata | `test_01` |
-| Agenzia sospesa: follow-up centrale | `test_02_03`: iscrizione, M1 composta e spedita nello stesso giro, stima in coda spedita; contatto e lead restano dell'agenzia |
-| Mittente e firma | `test_02_03`, `test_03b` |
-| Nessun promemoria | `test_04`: anche messaggi dell'operatore e link del portale restano in coda |
-| Nessun invio senza consenso | `test_05`: consenso revocato, il motore annulla M1 e il dispatcher sopprime; `test_05b`: senza consenso nessuna sequenza |
-| Nessun duplicato | `test_06`: quattro giri, due invii |
-| Nessuna fuga fra agenzie | `test_07`: un'agenzia attiva accanto, perfino con un messaggio col segno, resta intatta |
-| Messaggi accodati prima della sospensione | `test_08`: riga identica, zero tentativi |
-| Riattivazione senza invio massivo | `test_09`: il giro centrale smette; il dispatch normale ne spedisce 10, ne restano 2 |
-| Nessun accesso | `test_10`: sessioni e utenti invariati |
+| Agenzia sospesa **e** chiusa: stima e follow-up continuano dal centro | `test_02_03[suspended]`, `test_02_03[archived]`; contatto e lead restano dell'agenzia |
+| Firma STIMA360 | `test_02_03`, `test_03b` |
+| Email già in coda prima della sospensione o chiusura | `test_08[suspended]`, `test_08[archived]`: partono una volta, con il testo originale |
+| Consenso e disiscrizione | `test_05`: consenso revocato, nessun invio; `test_05b`: senza consenso, nessuna sequenza |
+| Nessun duplicato | `test_06` |
+| Nessuna fuga fra agenzie | `test_07` |
+| Riattivazione | `test_09`: il centro smette, il dispatch normale finisce il resto, niente doppioni |
+| Promemoria, operatore, portale fuori dal giro centrale | `test_04` |
+| Nessun accesso | `test_10` |
 | Cron | `test_11`: con `--agency-id 1` lavora l'agenzia sospesa; un guasto dà esito 1 |
 
 **Regressione**
 
-- **Unitari** comunicazione, consenso, FLOW, ADM: nessun nuovo fallimento rispetto ad ADM-3, verificato su un clone locale con le modifiche committate (le sentinelle che leggono `git status` guardano il working tree).
-- **PostgreSQL** comunicazione (P29-*, A32-*, cutover email), ADM-1/2/3, FLOW: `499 passed, 9 skipped, 78 errors`.
-  - I 78 errori si riproducono **identici sul commit `5a8c9b2`**, prima di ADM-3 BIS:
-    - `test_a32_1_reminders_postgres` e `test_a32_2_reminder_postgres`: `DuplicateTable agent_working_hours`, difetto di fixture già noto;
-    - `test_public_submission_receipts_postgres`: si aspetta un socket macOS (ENVIRONMENT).
+- **PostgreSQL** (comunicazione P29/A32, Tappa 6 e 7, cutover email, ADM-1/2/3, FLOW): `546 passed, 9 skipped, 86 errors`.
+  - Tappa 6 (follow-up delle richieste) passa intera: 44 su 44.
+  - Gli 86 errori si riproducono identici sul commit base:
+    - `a32_1`/`a32_2` reminders: `DuplicateTable agent_working_hours`, difetto di fixture;
+    - `public_submission_receipts` e `tappa7_public`: si aspettano un socket macOS (ENVIRONMENT).
   - I 9 saltati sono i percorsi browser opt-in del sito pubblico.
-  - Per questo i promemoria su PostgreSQL non sono stati provati qui; i loro test unitari passano.
-- **Suite completa senza DB**, su un clone locale con le modifiche committate: `617 failed, 9102 passed, 2712 skipped, 63 errors`. Confronto con ADM-3 (`617 failed, 9102 passed, 2700 skipped, 63 errors`):
-  - stessi 617 fallimenti, uno per uno;
-  - stesso numero di errori (la baseline ne registrava solo il conteggio): sono le suite che chiedono un proprio cluster o un browser (`tappa6_postgres`, `tappa7_*_postgres`, `p27_7_network_e2e`);
-  - i 12 saltati in più sono il nuovo collaudo PostgreSQL, che senza DSN si salta.
+- **Unitari:** nessun nuovo fallimento rispetto ad ADM-3, verificato su un clone con le modifiche committate (le sentinelle leggono `git status`).
+- **Suite completa senza DB**, su un clone con le modifiche committate: `617 failed, 9102 passed, 2714 skipped, 63 errors`.
+  - Stessi 617 fallimenti della baseline ADM-3, uno per uno.
+  - Stessi 63 errori: suite che senza DSN o senza browser non partono (`tappa6_postgres`, `tappa7_*_postgres`, `p27_7_network_e2e`). Tappa 6, con il DSN, passa intera.
+  - I 14 saltati in più sono il nuovo collaudo PostgreSQL.
 - `git diff --check`: pulito.
 
-### 7.6 Limiti e punti aperti
+### 7.5 Punti aperti
 
-1. **Tutti i cron sono sospesi su TEST.** Finché `stima360-flow-automation` resta sospeso, il giro centrale non gira. Riattivarlo è una tua decisione.
-2. **Link del portale proprietario** (`owner_login_link`): non parte per le agenzie sospese.
+1. **Riattivazione dei cron e copertura delle agenzie attive:** vedi 7.3. È una tua azione su Render.
+2. **Promemoria degli appuntamenti delle agenzie sospese o chiuse:** non partono, come da D2. La regola definitiva parla di valutazioni e follow-up; se vuoi che partano anche i promemoria, dimmelo.
 3. **Passi assistiti** (M3): richiedono un operatore e restano in attesa.
-4. **Testo della firma:** la chiusura dice «STIMA360 / su Stima360». Se vuoi un'altra formula serve una nuova versione dei template, che sono immutabili.
-5. **Messaggi accodati prima della sospensione:** la decisione è al punto 7.2.
-6. **Esclusi da questa fase:**
-   - il cron `run_followup_p18d_cron.py`, rotto (autenticazione Basic), solo documentato;
-   - l'instradamento verso un'agenzia archiviata, decisione aperta;
+4. **Esclusi da questa fase:**
+   - `run_followup_p18d_cron.py`, rotto, solo documentato;
+   - l'instradamento dei nuovi lead di un Comune la cui agenzia è chiusa (oggi vanno all'agenzia di sistema, attiva, che li segue normalmente);
    - la riga di audit per singolo lead.

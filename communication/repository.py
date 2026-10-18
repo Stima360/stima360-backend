@@ -383,15 +383,13 @@ from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per 
 ERROR_OUTCOME_UNKNOWN = "outcome_unknown"
 
 
-#: ADM-3: cio' che il percorso centrale puo' spedire per un'agenzia SOSPESA.
-#: L'email della stima (firma centrale gia' nel testo) e i soli passi di
-#: sequenza composti durante la sospensione con la firma STIMA360 (segno nei
-#: metadata, `journey_tick.CENTRAL_SIGNATURE_MARKER`). Esclusi per costruzione:
-#: promemoria, messaggi degli operatori, link del portale e ogni messaggio
-#: accodato prima della sospensione, che resta `queued` senza essere toccato.
+#: ADM-3: cio' che il percorso centrale spedisce per un'agenzia sospesa o
+#: chiusa: le email della valutazione (`stima_pdf`) e i follow-up delle
+#: sequenze (ogni messaggio con `enrollment_id`), compresi quelli gia' in coda
+#: prima della sospensione. Promemoria, messaggi degli operatori e link del
+#: portale non sono comunicazioni della valutazione e non passano di qui.
 CENTRAL_CONTINUITY_FILTER = (
-    " AND (m.reason_code = 'stima_pdf'"
-    " OR (m.metadata ->> 'signature') = 'stima360_central')")
+    " AND (m.reason_code = 'stima_pdf' OR m.enrollment_id IS NOT NULL)")
 
 
 def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
