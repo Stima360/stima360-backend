@@ -416,8 +416,40 @@ def test_c6_losing_platform_admin_erases_the_acting_context(sessione):
     assert f"clear-acting:{SESSIONE}" in sessione["scritture"]
 
 
+# SENTINELLE AGGIORNATE DA ADM-5B. Un'agenzia sospesa o archiviata resta aperta
+# in SOLA LETTURA al solo Super Admin designato (c7_adm5b). Per ogni altro
+# platform admin vale la regola di P28, provata qui sotto con un designato
+# diverso dall'attore: l'acting si cancella.
+_NON_DESIGNATO = "999999"
+
+
 @pytest.mark.parametrize("stato_agenzia", ["suspended", "archived"])
-def test_c7_a_non_active_agency_erases_the_acting_context(sessione, stato_agenzia):
+def test_c7_adm5b_the_designated_super_admin_keeps_it_read_only(sessione, stato_agenzia):
+    sessione["riga"] = _riga(
+        acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
+        acting_agency_name="Ospite", acting_agency_status=stato_agenzia,
+    )
+    risolta = auth_service.session_from_token("token")
+    assert risolta["acting_agency_id"] == OSPITE
+    assert risolta["acting_read_only"] is True
+    assert risolta["context"].agency_id == OSPITE
+    assert risolta["context"].read_only is True
+    assert not [x for x in sessione["scritture"] if x.startswith("clear-acting")]
+
+
+def test_c7_adm5b_an_active_agency_is_never_read_only(sessione):
+    sessione["riga"] = _riga(
+        acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
+        acting_agency_name="Ospite", acting_agency_status="active",
+    )
+    risolta = auth_service.session_from_token("token")
+    assert risolta["context"].read_only is False and risolta["acting_read_only"] is False
+
+
+@pytest.mark.parametrize("stato_agenzia", ["suspended", "archived"])
+def test_c7_a_non_active_agency_erases_the_acting_context(sessione, stato_agenzia, monkeypatch):
+    from operator_auth.designation import SUPER_ADMIN_ENV
+    monkeypatch.setenv(SUPER_ADMIN_ENV, _NON_DESIGNATO)
     sessione["riga"] = _riga(
         acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
         acting_agency_name="Ospite", acting_agency_status=stato_agenzia,
@@ -472,8 +504,10 @@ def test_c6b_the_session_row_is_null_after_the_flag_was_revoked(sessione):
 
 @pytest.mark.parametrize("stato_agenzia", ["suspended", "archived"])
 def test_c7b_the_session_row_is_null_after_the_agency_stopped_being_active(
-    sessione, stato_agenzia
+    sessione, stato_agenzia, monkeypatch
 ):
+    from operator_auth.designation import SUPER_ADMIN_ENV
+    monkeypatch.setenv(SUPER_ADMIN_ENV, _NON_DESIGNATO)
     sessione["riga"] = _riga(
         acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
         acting_agency_name="Ospite", acting_agency_status=stato_agenzia,
@@ -483,7 +517,7 @@ def test_c7b_the_session_row_is_null_after_the_agency_stopped_being_active(
     assert sessione["riga"]["acting_entered_at"] is None
 
 
-def test_c7c_the_row_stays_null_even_when_that_request_ends_in_403(sessione):
+def test_c7c_the_row_stays_null_even_when_that_request_ends_in_403(sessione, monkeypatch):
     """La cancellazione NON dipende dall'esito della richiesta che la scopre.
 
     Un platform admin senza membership che perde l'agenzia visitata resta
@@ -492,6 +526,8 @@ def test_c7c_the_row_stays_null_even_when_that_request_ends_in_403(sessione):
     essere gia' pulita PRIMA che quel 403 venga formulato - altrimenti
     basterebbe una richiesta rifiutata per tenere in vita un acting decaduto.
     """
+    from operator_auth.designation import SUPER_ADMIN_ENV
+    monkeypatch.setenv(SUPER_ADMIN_ENV, _NON_DESIGNATO)
     sessione["riga"] = _riga(
         acting_agency_id=OSPITE, acting_entered_at=ENTRATO,
         acting_agency_name="Ospite", acting_agency_status="suspended",
@@ -769,9 +805,36 @@ def test_e5_a_missing_agency_is_a_404(service):
     assert not service["audit"]
 
 
+# SENTINELLA AGGIORNATA DA ADM-5B: il Super Admin designato entra in
+# un'agenzia sospesa o archiviata in SOLA LETTURA, e l'ingresso lo registra.
 @pytest.mark.parametrize("stato_agenzia", ["suspended", "archived"])
-def test_e6_a_non_active_agency_cannot_be_entered(service, stato_agenzia):
+def test_e6_a_non_active_agency_is_entered_read_only(service, stato_agenzia):
     service["store"].agenzie[OSPITE]["status"] = stato_agenzia
+    risultato = acting_service.enter_agency(_ctx(), OSPITE)
+    assert risultato["read_only"] is True
+    assert service["store"].sessioni[SESSIONE]["acting_agency_id"] == OSPITE
+    assert service["audit"][-1]["metadata"]["read_only"] is True
+    assert service["store"].agenzie[OSPITE]["status"] == stato_agenzia  # nessuna riattivazione
+
+
+@pytest.mark.parametrize("stato_agenzia", ["suspended", "archived"])
+def test_e6b_a_non_designated_admin_cannot_enter_a_non_active_agency(service, stato_agenzia, monkeypatch):
+    from operator_auth.designation import SUPER_ADMIN_ENV
+    from platform_admin.super_admin import SuperAdminDenied
+    monkeypatch.setenv(SUPER_ADMIN_ENV, "999999")
+    service["store"].agenzie[OSPITE]["status"] = stato_agenzia
+    with pytest.raises(SuperAdminDenied):
+        acting_service.enter_agency(_ctx(), OSPITE)
+    assert service["store"].sessioni[SESSIONE]["acting_agency_id"] is None
+
+
+def test_e6c_an_active_agency_is_entered_with_full_rights(service):
+    assert acting_service.enter_agency(_ctx(), OSPITE)["read_only"] is False
+    assert service["audit"][-1]["metadata"]["read_only"] is False
+
+
+def test_e6d_an_unknown_non_active_state_is_still_refused(service):
+    service["store"].agenzie[OSPITE]["status"] = "closed"
     with pytest.raises(PlatformConflict) as exc:
         acting_service.enter_agency(_ctx(), OSPITE)
     assert str(exc.value) == ACTING_AGENCY_NOT_ACTIVE_MESSAGE
@@ -1108,8 +1171,10 @@ def test_f6_a_missing_agency_answers_404(http):
     assert http.post("/api/platform/agencies/9999/enter").status_code == 404
 
 
-def test_f7_a_suspended_agency_answers_409(http, service):
-    assert http.post(f"/api/platform/agencies/{ALTRA}/enter").status_code == 409
+def test_f7_a_suspended_agency_is_entered_read_only(http, service):
+    # SENTINELLA AGGIORNATA DA ADM-5B: era 409; ora consultazione.
+    r = http.post(f"/api/platform/agencies/{ALTRA}/enter")
+    assert r.status_code == 200 and r.json()["read_only"] is True
 
 
 def test_f8_entering_twice_answers_409(http):
@@ -1316,11 +1381,12 @@ def test_h2_a_revoked_session_resolves_to_nothing(monkeypatch, sessione):
 import dataclasses  # noqa: E402
 
 
-def test_i1_operator_context_still_has_exactly_six_fields():
+def test_i1_operator_context_still_has_exactly_seven_fields():
+    # SENTINELLA AGGIORNATA DA ADM-5B: `read_only`, con default False.
     nomi = [f.name for f in dataclasses.fields(OperatorContext)]
     assert nomi == [
         "user_id", "agency_id", "role", "is_platform_admin",
-        "session_id", "auth_channel",
+        "session_id", "auth_channel", "read_only",
     ], nomi
 
 

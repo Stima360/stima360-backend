@@ -395,7 +395,11 @@ function aggiornaBarraActing(session) {
     return;
   }
   const nome = acting.agency_name || `agenzia ${acting.agency_id}`;
-  actingText.textContent = `Stai operando dentro: ${nome}`;
+  // ADM-5B: un'agenzia sospesa o archiviata si consulta soltanto. Il backend
+  // rifiuta ogni modifica; la barra lo dice prima che qualcuno ci provi.
+  actingText.textContent = acting.read_only
+    ? `SOLA LETTURA - Stai consultando: ${nome}`
+    : `Stai operando dentro: ${nome}`;
   actingBar.hidden = false;
 }
 

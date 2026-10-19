@@ -12,13 +12,13 @@ con lo `state` e' quello che impedisce a chiunque altro di usarlo.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from core.database import core_cursor
 from operator_auth.context import OperatorContext
-from operator_auth.dependencies import require_operator
+from operator_auth.dependencies import READ_ONLY_MESSAGE, require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
 from . import config as gcal_config
@@ -161,6 +161,11 @@ def _redirect_errore(code: str) -> RedirectResponse:
 
 
 def _callback(request: Request, ctx: OperatorContext, *, id_token_verifier=None):
+    # ADM-5B: in consultazione (sola lettura) nessun collegamento di calendario:
+    # il callback scrive (stato OAuth, connessione, sincronizzazione). Prima di
+    # leggere qualunque parametro, quindi prima di ogni scambio con Google.
+    if getattr(ctx, "read_only", False):
+        raise HTTPException(status_code=403, detail=READ_ONLY_MESSAGE)
     try:
         agency_id = ctx.require_agency()
     except PlatformAdminAgencyRequired:

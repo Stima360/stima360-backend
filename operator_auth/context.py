@@ -125,6 +125,10 @@ class OperatorContext:
     is_platform_admin: bool
     session_id: int | None
     auth_channel: str
+    # ADM-5B. True solo mentre il Super Admin designato consulta un'agenzia
+    # sospesa o archiviata: ogni scrittura sulle API delle agenzie e' rifiutata
+    # da `operator_auth.dependencies.optional_session`.
+    read_only: bool = False
 
     @property
     def is_agency_bound(self) -> bool:

@@ -1367,7 +1367,10 @@ def delete_feedback_scoped(ctx, feedback_id):
 
 def dashboard_scoped(ctx):
     agency_id = _agency(ctx)
-    detect_stale_scoped(ctx)
+    # ADM-5B: in consultazione (sola lettura) il cruscotto non ricalcola: il
+    # ricalcolo scrive su `matches`. Si mostra lo stato gia' registrato.
+    if not getattr(ctx, "read_only", False):
+        detect_stale_scoped(ctx)
     with core_cursor() as (_, cur):
         cur.execute(
             f"""SELECT
@@ -1402,7 +1405,8 @@ def dashboard_scoped(ctx):
 
 
 def dashboard_stale_scoped(ctx, limit=100):
-    detect_stale_scoped(ctx)
+    if not getattr(ctx, "read_only", False):  # ADM-5B, vedi dashboard_scoped
+        detect_stale_scoped(ctx)
     return list_matches_scoped(ctx, limit=limit, freshness_status="stale")
 
 

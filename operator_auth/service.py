@@ -19,7 +19,9 @@ from core.normalization import normalize_email
 from . import repository, security
 from .context import OperatorContext
 from .database import operator_cursor
-from .enums import AGENCY_STATUS_ACTIVE, SESSION_IDLE_MINUTES, SESSION_MAX_HOURS
+from .designation import is_designated
+from .enums import (AGENCY_STATUS_ACTIVE, AGENCY_STATUSES_READ_ONLY, SESSION_IDLE_MINUTES,
+                    SESSION_MAX_HOURS)
 from .exceptions import AuthenticationFailed
 
 
@@ -177,6 +179,7 @@ def session_from_token(raw_token: str | None) -> dict | None:
                 is_platform_admin=bool(row["is_platform_admin"]),
                 session_id=row["session_id"],
                 auth_channel="operator_session",
+                read_only=bool(acting and acting["read_only"]),
             ),
             # Il nome dell'agenzia EFFETTIVA: quello che la Shell scrive
             # nella barra. `None` quando non ce n'e' una - un amministratore
@@ -192,6 +195,7 @@ def session_from_token(raw_token: str | None) -> dict | None:
             "acting_agency_id": acting["agency_id"] if acting else None,
             "acting_agency_name": acting["agency_name"] if acting else None,
             "acting_entered_at": acting["entered_at"] if acting else None,
+            "acting_read_only": bool(acting and acting["read_only"]),
             # L'appartenenza vera, sempre, anche mentre si e' altrove: e' come
             # la UI puo' dire "sei Giorgio di Casa, dentro Ospite" invece di
             # far sparire meta' della frase.
@@ -298,7 +302,12 @@ def _acting_or_cleared(cur, row: dict, *, usabile: bool) -> dict | None:
         repository.clear_acting_context(cur, row["session_id"])
         return None
 
-    if row.get("acting_agency_status") != AGENCY_STATUS_ACTIVE:
+    # ADM-5B. Un'agenzia sospesa o archiviata resta aperta SOLO al Super Admin
+    # designato, ricontrollato qui a ogni richiesta, e SOLO in lettura. Per
+    # chiunque altro, e per ogni altro stato, l'acting si cancella come prima.
+    stato = row.get("acting_agency_status")
+    sola_lettura = stato in AGENCY_STATUSES_READ_ONLY and is_designated(row.get("user_id"))
+    if stato != AGENCY_STATUS_ACTIVE and not sola_lettura:
         repository.clear_acting_context(cur, row["session_id"])
         return None
 
@@ -306,6 +315,7 @@ def _acting_or_cleared(cur, row: dict, *, usabile: bool) -> dict | None:
         "agency_id": int(row["acting_agency_id"]),
         "agency_name": row.get("acting_agency_name"),
         "entered_at": row.get("acting_entered_at"),
+        "read_only": sola_lettura,
     }
 
 

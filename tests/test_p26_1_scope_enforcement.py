@@ -158,6 +158,9 @@ def test_c2_operator_context_fields():
         "is_platform_admin",
         "session_id",
         "auth_channel",
+        # SENTINELLA AGGIORNATA DA ADM-5B: consultazione in sola lettura,
+        # default False.
+        "read_only",
     ], names
 
 

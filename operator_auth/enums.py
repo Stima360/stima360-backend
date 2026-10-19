@@ -39,6 +39,10 @@ AGENCY_ROLES = (
 # compare against it, and both must mean the same thing.
 AGENCY_STATUS_ACTIVE = "active"
 
+# ADM-5B. Gli stati di un'agenzia che il Super Admin designato puo' CONSULTARE
+# in sola lettura. Ogni altro stato non attivo resta chiuso a tutti.
+AGENCY_STATUSES_READ_ONLY = ("suspended", "archived")
+
 # The Default Agency, resolved by slug rather than by id. Every legacy record
 # is backfilled to it and every public estimation routes to it.
 DEFAULT_AGENCY_SLUG = "stima360"

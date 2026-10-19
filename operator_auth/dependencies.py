@@ -139,6 +139,8 @@ class AuthenticatedSession:
     acting_entered_at: datetime | None = None
     home_agency_id: int | None = None
     home_agency_name: str | None = None
+    # ADM-5B. La consultazione di un'agenzia sospesa o archiviata.
+    acting_read_only: bool = False
 
     @property
     def is_acting(self) -> bool:
@@ -151,7 +153,29 @@ class AuthenticatedSession:
         return self.acting_agency_id is not None
 
 
+#: ADM-5B. I metodi ammessi durante la consultazione in sola lettura.
+READ_ONLY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+#: ADM-5B. Fuori dal blocco: la superficie di piattaforma (uscita dall'agenzia,
+#: registro, operazioni del Super Admin, ciascuna con le sue guardie) e
+#: l'accesso dell'operatore (logout). Non sono API di un'agenzia.
+READ_ONLY_EXEMPT_PREFIXES = ("/api/platform/", "/api/operator-auth/")
+READ_ONLY_MESSAGE = ("Consultazione in sola lettura: l'agenzia e' sospesa o archiviata e "
+                     "nessun dato puo' essere modificato.")
+
+
+def refuse_writes_in_read_only(request: Request, context: OperatorContext) -> None:
+    """ADM-5B. 403 per ogni scrittura sulle API delle agenzie mentre il
+    contesto e' in sola lettura. Un punto solo, nel percorso di ogni richiesta
+    di operatore: nessun endpoint deve saperne nulla."""
+    if not context.read_only or request.method.upper() in READ_ONLY_SAFE_METHODS:
+        return
+    if request.url.path.startswith(READ_ONLY_EXEMPT_PREFIXES):
+        return
+    raise HTTPException(status_code=403, detail=READ_ONLY_MESSAGE)
+
+
 def optional_session(
+    request: Request,
     raw_token: str | None = Depends(_cookie_scheme),
 ) -> AuthenticatedSession | None:
     """Resolve the session cookie if there is a live one, else None.
@@ -180,6 +204,8 @@ def optional_session(
     if resolved is None:
         return None
 
+    refuse_writes_in_read_only(request, resolved["context"])
+
     return AuthenticatedSession(
         context=resolved["context"],
         agency_name=resolved["agency_name"],
@@ -192,6 +218,7 @@ def optional_session(
         acting_entered_at=resolved.get("acting_entered_at"),
         home_agency_id=resolved.get("home_agency_id"),
         home_agency_name=resolved.get("home_agency_name"),
+        acting_read_only=bool(resolved.get("acting_read_only")),
     )
 
 

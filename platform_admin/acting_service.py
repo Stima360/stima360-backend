@@ -57,6 +57,8 @@ from .enums import (
     AGENCY_STATUS_ACTIVE,
     TARGET_TYPE_AGENCY,
 )
+from operator_auth.enums import AGENCY_STATUSES_READ_ONLY
+
 from .exceptions import AgencyNotFound, PlatformConflict
 from .transaction import audit_then_commit, commit_then_audit
 
@@ -80,7 +82,8 @@ def enter_agency(actor: OperatorContext, agency_id: int) -> dict[str, Any]:
        provare a entrare due volte, e dirgli 404 lo manderebbe a cercare un
        problema che non ha.
     3. **L'agenzia esiste?** 404.
-    4. **E' attiva?** 409.
+    4. **E' attiva?** Se e' sospesa o archiviata si entra in SOLA LETTURA
+       (ADM-5B); ogni altro stato non attivo e' 409.
 
     Nessuno dei quattro legge qualcosa dal client oltre `agency_id`, che e' un
     identificatore nel path - la forma che tutte le ventitre route di questa
@@ -111,7 +114,12 @@ def enter_agency(actor: OperatorContext, agency_id: int) -> dict[str, Any]:
         agenzia = agencies_repository.get_agency(cur, agency_id)
         if agenzia is None:
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
-        if agenzia["status"] != AGENCY_STATUS_ACTIVE:
+        # ADM-5B. Un'agenzia sospesa o archiviata si apre in SOLA LETTURA: il
+        # Super Admin designato e' gia' garantito da `lock_super_admin`, e la
+        # risoluzione della sessione lo ricontrolla a ogni richiesta. Nessun
+        # cambio di stato dell'agenzia. Ogni altro stato non attivo resta 409.
+        sola_lettura = agenzia["status"] in AGENCY_STATUSES_READ_ONLY
+        if agenzia["status"] != AGENCY_STATUS_ACTIVE and not sola_lettura:
             raise PlatformConflict(ACTING_AGENCY_NOT_ACTIVE_MESSAGE)
 
         toccate = acting_repository.set_acting(
@@ -133,6 +141,7 @@ def enter_agency(actor: OperatorContext, agency_id: int) -> dict[str, Any]:
             metadata={
                 "session_id": session_id,
                 "agency_slug": agenzia["slug"],
+                "read_only": sola_lettura,
             },
         )
 
@@ -140,6 +149,7 @@ def enter_agency(actor: OperatorContext, agency_id: int) -> dict[str, Any]:
             "acting_agency_id": agency_id,
             "acting_agency_name": agenzia["name"],
             "acting_agency_slug": agenzia["slug"],
+            "read_only": sola_lettura,
         }
 
 

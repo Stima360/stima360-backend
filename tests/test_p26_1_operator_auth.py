@@ -428,7 +428,11 @@ def test_no_later_operator_auth_module_exists():
     SENTINELLA AGGIORNATA DA A30-10B: `calendar_inbound.py` e' il TERZO
     `auth_channel` (decisione D2), la sola factory server-side che puo'
     costruire un `OperatorContext` col canale `calendar_inbound` - nessuna
-    route, nessuna dependency: si nomina invece di smettere di guardare."""
+    route, nessuna dependency: si nomina invece di smettere di guardare.
+
+    SENTINELLA AGGIORNATA DA ADM-5B: `designation.py` legge il Super Admin
+    designato in un posto solo, riusato da `platform_admin.super_admin` e dalla
+    risoluzione della sessione - nessuna route, nessuna dependency."""
     package = ROOT / "operator_auth"
     present = sorted(item.name for item in package.glob("*.py"))
     assert present == [
@@ -437,6 +441,7 @@ def test_no_later_operator_auth_module_exists():
         "context.py",
         "database.py",
         "dependencies.py",
+        "designation.py",
         "enums.py",
         "exceptions.py",
         "permissions.py",

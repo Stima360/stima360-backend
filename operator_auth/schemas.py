@@ -46,6 +46,9 @@ class ActingContextResponse(OperatorAuthModel):
     agency_id: int
     agency_name: str | None
     entered_at: datetime | None
+    # ADM-5B. True mentre il Super Admin designato consulta un'agenzia sospesa
+    # o archiviata: la barra della Shell scrive «SOLA LETTURA».
+    read_only: bool = False
 
 
 class MeResponse(OperatorAuthModel):

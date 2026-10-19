@@ -284,8 +284,15 @@ def test_06_richieste_simultanee_non_aggirano_le_guardie(adm1):
     assert codici["enter"][0] in (200, 409), esiti
     assert tuple(_q(m, "SELECT status, is_platform_admin FROM operator_users WHERE id = %s", (uid,))[0]) == ("active", True)
     assert _q(m, "SELECT status FROM agencies WHERE id = %s", (q,))[0][0] == "suspended"
-    # comunque sia andato l'ordine, nessuno resta dentro un'agenzia sospesa
-    assert _q(m, "SELECT count(*) FROM operator_sessions WHERE acting_agency_id = %s", (q,))[0][0] == 0
+    # comunque sia andato l'ordine, nessuno resta dentro un'agenzia sospesa CON
+    # PIENI POTERI. SENTINELLA AGGIORNATA DA ADM-5B: un ingresso arrivato DOPO la
+    # sospensione e' la consultazione in sola lettura del Super Admin
+    # designato; un acting aperto PRIMA viene chiuso dalla sospensione (ADM-1).
+    dentro = _q(m, "SELECT operator_user_id FROM operator_sessions WHERE acting_agency_id = %s", (q,))
+    assert all(r[0] == uid for r in dentro), dentro
+    if dentro:
+        assert sa.get("/api/operator-auth/me").json()["acting"]["read_only"] is True
+        assert sa.post("/api/platform/agency-context/exit").status_code == 204
     assert _viva(_token(sa))
     assert sa.patch(f"/api/platform/agencies/{q}", json={"status": "active"}).status_code == 200
 

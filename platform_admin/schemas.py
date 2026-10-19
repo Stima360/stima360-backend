@@ -103,6 +103,8 @@ class ActingEnterResponse(BaseModel):
     acting_agency_id: int
     acting_agency_name: str
     acting_agency_slug: str
+    # ADM-5B. True quando l'agenzia e' sospesa o archiviata: consultazione.
+    read_only: bool = False
 
 
 # ---------------------------------------------------------------------------

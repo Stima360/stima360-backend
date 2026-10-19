@@ -85,6 +85,7 @@ def me(
                 agency_id=session.acting_agency_id,
                 agency_name=session.acting_agency_name,
                 entered_at=session.acting_entered_at,
+                read_only=session.acting_read_only,
             )
             if session.is_acting
             else None

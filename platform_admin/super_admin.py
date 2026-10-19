@@ -27,13 +27,19 @@ import re
 
 from core.exceptions import PermissionDenied
 
-SUPER_ADMIN_ENV = "STIMA360_SUPER_ADMIN_USER_ID"
+# ADM-5B: la lettura della configurazione sta in `operator_auth.designation`,
+# riusata qui, perche' anche la risoluzione della sessione deve conoscerla.
+from operator_auth.designation import (  # noqa: E402
+    SUPER_ADMIN_ENV,
+    designated_super_admin_id,
+    is_designated,
+)
+
 SUPER_ADMIN_REQUIRED = "SUPER_ADMIN_REQUIRED"
 SUPER_ADMIN_NOT_CONFIGURED = "SUPER_ADMIN_NOT_CONFIGURED"
 SUPER_ADMIN_REQUIRED_MESSAGE = "Operazione riservata al Super Admin generale designato della piattaforma"
 SUPER_ADMIN_NOT_CONFIGURED_MESSAGE = ("Operazione non disponibile: il Super Admin generale non è configurato su questo "
                                       "servizio. Nessuna modifica è stata fatta")
-_ID_VALIDO = re.compile(r"[1-9][0-9]{0,17}")
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +51,6 @@ class SuperAdminDenied(PermissionDenied):
         super().__init__(message)
         self.code = code
         self.extra = extra
-
-
-def designated_super_admin_id() -> int | None:
-    """L'id dell'account designato, letto dalla configurazione del servizio
-    a OGNI chiamata. Assente, vuoto o non valido (non un intero positivo): None,
-    cioe' nessun Super Admin generale e tutte le operazioni riservate negate."""
-    grezzo = (os.getenv(SUPER_ADMIN_ENV) or "").strip()
-    return int(grezzo) if _ID_VALIDO.fullmatch(grezzo) else None
 
 
 def deny(ctx, code: str, reason: str, *, audit_action: str, error_class=SuperAdminDenied):
@@ -103,16 +101,6 @@ def require_super_admin_db(cur, ctx, *, audit_action: str, error_class=SuperAdmi
 # ---------------------------------------------------------------------------
 # ADM-1 - la Rete e' del SOLO Super Admin generale designato.
 # ---------------------------------------------------------------------------
-
-def is_designated(user_id) -> bool:
-    """L'account e' quello designato dalla configurazione? Solo l'identita':
-    il ruolo nel database lo verifica `require_super_admin_db`."""
-    designato = designated_super_admin_id()
-    try:
-        return designato is not None and int(user_id) == designato
-    except (TypeError, ValueError):
-        return False
-
 
 def lock_super_admin(cur, ctx, *, audit_action: str, error_class=SuperAdminDenied) -> None:
     """Dentro la transazione di una modifica della Rete, PRIMA di ogni altra
