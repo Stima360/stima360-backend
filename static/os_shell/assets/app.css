@@ -1485,3 +1485,19 @@ a.census-unit-main { text-decoration: none; }
   .scope-btn { flex: 1 1 auto; }
   .list-toolbar .input { max-width: none; min-width: 0; flex-basis: 140px; }
 }
+
+/* ADM-7 - Rete su smartphone. Solo dentro la Rete: operatori a card, form a
+   una colonna, filtri del Registro che vanno a capo. Nessun'altra vista cambia. */
+.registro-filtri { flex-wrap: wrap; }
+@media (max-width: 767px) {
+  #agenzia-tab-content .form-grid-2, #agenzia-dialog-host .form-grid-2,
+  #rete-tab-content .form-grid-2, #rete-dialog-host .form-grid-2 { grid-template-columns: 1fr; }
+  .rete-operatori .table-wrap { overflow-x: visible; }
+  .rete-operatori .st-table thead { display: none; }
+  .rete-operatori .st-table, .rete-operatori .st-table tbody,
+  .rete-operatori .st-table tr, .rete-operatori .st-table td { display: block; width: 100%; }
+  .rete-operatori .st-table tr { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
+  .rete-operatori .st-table td { border-bottom: 0; padding: 3px 0; overflow-wrap: anywhere; }
+  .rete-operatori .st-table td .btn { min-height: 44px; margin: 4px 4px 0 0; }
+  .registro-filtri > * { flex: 1 1 100%; }
+}

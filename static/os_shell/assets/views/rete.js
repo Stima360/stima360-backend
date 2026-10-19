@@ -48,6 +48,7 @@ import {
   selectOptions,
 } from '../components/network.js';
 import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TERRITORI C2
+import { renderRegistro } from './rete-registro.js'; // ADM-7: il registro delle operazioni (ADM-5A)
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
 // CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
 // (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
@@ -60,7 +61,14 @@ const TABS = [
   { key: 'eliminazioni', label: 'Eliminazioni edifici' },
   // AGENZIE-TERRITORI C2: proposte di modifica dei Supervisori territoriali (approvazione del Super Admin)
   { key: 'modifiche', label: 'Modifiche territoriali' },
+  // ADM-7: il registro delle operazioni amministrative, in sola lettura (ADM-5A).
+  { key: 'registro', label: 'Registro' },
 ];
+
+// ADM-7: il filtro dell'elenco agenzie. Locale, sull'elenco gia' caricato.
+const FILTRO_STATO_AGENZIA = { active: 'Attive', suspended: 'Sospese', archived: 'Archiviate' };
+// ADM-7: il segnale sui territori presidiati da un'agenzia non attiva.
+const AGENZIA_NON_ATTIVA = { suspended: 'Agenzia sospesa', archived: 'Agenzia archiviata' };
 
 export async function renderRete(container) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -79,6 +87,7 @@ export async function renderRete(container) {
   const state = {
     tab: 'agenzie',
     agenzie: [],
+    agenzieStato: '',
     territori: { kind: '', assignment_status: '', offset: 0, items: [] },
   };
 
@@ -107,6 +116,7 @@ export async function renderRete(container) {
     if (key === 'agenzie') return caricaAgenzie();
     if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
     if (key === 'modifiche') return renderModificheTerritoriali(contentEl);
+    if (key === 'registro') return renderRegistro(contentEl);
     return caricaTerritori();
   }
 
@@ -124,13 +134,27 @@ export async function renderRete(container) {
     state.agenzie = Array.isArray(righe) ? righe : [];
     contentEl.innerHTML = `
       <div class="list-toolbar">
+        <select class="input" id="filtro-stato-agenzia" aria-label="Stato dell’agenzia">
+          <option value="">Tutte le agenzie</option>
+          ${selectOptions(FILTRO_STATO_AGENZIA, state.agenzieStato)}
+        </select>
         <button type="button" class="btn primary" id="agenzia-nuova">Nuova agenzia</button>
       </div>
       <div id="agenzie-lista"></div>
     `;
     const listaEl = contentEl.querySelector('#agenzie-lista');
-    listaEl.innerHTML = tabellaAgenzie(state.agenzie);
-    bindTableRowClicks(listaEl, (id) => navigate('rete', ['agenzie', id]));
+    const disegna = () => {
+      const visibili = state.agenzieStato
+        ? state.agenzie.filter((a) => a.status === state.agenzieStato)
+        : state.agenzie;
+      listaEl.innerHTML = tabellaAgenzie(visibili);
+      bindTableRowClicks(listaEl, (id) => navigate('rete', ['agenzie', id]));
+    };
+    disegna();
+    contentEl.querySelector('#filtro-stato-agenzia').addEventListener('change', (e) => {
+      state.agenzieStato = e.target.value;
+      disegna();
+    });
     contentEl.querySelector('#agenzia-nuova').addEventListener('click', () => dialogoNuovaAgenzia());
   }
 
@@ -280,6 +304,11 @@ export async function renderRete(container) {
       }
     }
     const nomi = new Map(state.agenzie.map((a) => [a.id, a.name]));
+    // ADM-7: un Comune presidiato da un'agenzia sospesa o archiviata si vede
+    // subito. Lo stato viene dall'elenco agenzie gia' in memoria.
+    const stati = new Map(state.agenzie.map((a) => [a.id, a.status]));
+    const nonAttiva = (t) => t.active_agency_id && stati.get(t.active_agency_id)
+      && stati.get(t.active_agency_id) !== 'active';
 
     listaEl.innerHTML = renderTable(
       [
@@ -290,6 +319,9 @@ export async function renderRete(container) {
           label: 'Presidiato da',
           render: (t) => (t.active_agency_id
             ? escapeHtml(nomi.get(t.active_agency_id) || `Agenzia #${t.active_agency_id}`)
+              + (nonAttiva(t)
+                ? ' ' + renderBadge(labelOf(AGENZIA_NON_ATTIVA, stati.get(t.active_agency_id)), 'warn')
+                : '')
             : '<span class="muted">Nessuna assegnazione attiva</span>'),
         },
         { label: '', render: () => '<span class="muted">Apri →</span>' },

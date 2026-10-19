@@ -85,17 +85,17 @@ const CONFERME_STATO_AGENZIA = {
   suspended: {
     titolo: 'Sospendere l’agenzia?',
     bottone: 'Sospendi agenzia',
-    testo: (nome) => `Gli operatori di “${nome}” non potranno piu’ accedere e le loro sessioni verranno chiuse. Nessun dato viene cancellato o spostato. I nuovi lead dei suoi Comuni restano a questa agenzia; i follow-up automatici, le prenotazioni online e i calendari collegati si fermano fino alla riattivazione.`,
+    testo: (nome) => `Gli operatori di “${nome}” non potranno piu’ accedere e le loro sessioni verranno chiuse. Nessun dato viene cancellato o spostato e i nuovi lead dei suoi Comuni restano a questa agenzia. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; i promemoria degli appuntamenti, le prenotazioni online e i calendari collegati si fermano fino alla riattivazione. Potrai consultarla in sola lettura.`,
   },
   archived: {
     titolo: 'Archiviare l’agenzia?',
     bottone: 'Archivia agenzia',
-    testo: (nome) => `“${nome}” esce dalla rete. Nessun dato viene cancellato o spostato. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema.`,
+    testo: (nome) => `“${nome}” esce dalla rete. Nessun dato viene cancellato o spostato. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; promemoria degli appuntamenti, prenotazioni online e calendari collegati restano fermi. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema. Potrai consultarla in sola lettura.`,
   },
   active: {
     titolo: 'Riattivare l’agenzia?',
     bottone: 'Riattiva agenzia',
-    testo: (nome) => `Gli operatori di “${nome}” potranno di nuovo accedere, con un nuovo accesso. Follow-up, prenotazioni e calendari riprendono.`,
+    testo: (nome) => `Gli operatori di “${nome}” potranno di nuovo accedere, con un nuovo accesso. Promemoria degli appuntamenti, prenotazioni online e calendari collegati riprendono; le email delle valutazioni e i follow-up tornano a nome dell’agenzia.`,
   },
 };
 
@@ -127,10 +127,10 @@ export async function renderReteAgenzia(container, agencyId) {
   container.innerHTML = `
     <div class="action-bar">
       <a href="#/rete" id="torna-rete">← Rete</a>
-      ${bottoneEntra()}
+      <span id="entra-slot">${bottoneEntra()}</span>
     </div>
     <h2 id="agenzia-nome">${escapeHtml(agenzia.name)}</h2>
-    <p class="muted">Identificativo <code>${escapeHtml(agenzia.slug)}</code> · ${escapeHtml(labelOf(AGENCY_STATUS_LABELS, agenzia.status))}</p>
+    <p class="muted" id="agenzia-sottotitolo">${sottotitolo()}</p>
     <div class="tabs" id="agenzia-tabs">
       ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}
     </div>
@@ -159,18 +159,44 @@ export async function renderReteAgenzia(container, agencyId) {
   //
   // Non nascosto ma ASSENTE, come la voce "Rete" in P27-7: un pulsante
   // disabilitato invita a insistere, uno che non c'e' racconta lo stato.
+  //
+  // ADM-7 (ADM-5B): un'agenzia sospesa o archiviata si apre con «Consulta», in
+  // SOLA LETTURA. Il backend rifiuta ogni modifica; la barra della Shell scrive
+  // «SOLA LETTURA» finche' non si esce.
   function bottoneEntra() {
-    if (agenzia.status !== 'active') return '';
     if (platformMe && platformMe.acting_agency_id) return '';
-    return '<button type="button" class="btn primary" id="entra-agenzia">'
-      + 'Entra nell’agenzia</button>';
+    if (agenzia.status === 'active') {
+      return '<button type="button" class="btn primary" id="entra-agenzia" data-modo="entra">'
+        + 'Entra nell’agenzia</button>';
+    }
+    if (agenzia.status === 'suspended' || agenzia.status === 'archived') {
+      return '<button type="button" class="btn" id="entra-agenzia" data-modo="consulta">'
+        + 'Consulta (sola lettura)</button>';
+    }
+    return '';
+  }
+
+  function aggiornaEntra() {
+    const slot = container.querySelector('#entra-slot');
+    if (!slot) return;
+    slot.innerHTML = bottoneEntra();
+    collegaEntra();
   }
 
   function collegaEntra() {
     const btn = container.querySelector('#entra-agenzia');
     if (!btn) return;
+    const consulta = btn.dataset.modo === 'consulta';
     btn.addEventListener('click', async () => {
-      const confermato = await confirmAction(hostEl, {
+      const confermato = await confirmAction(hostEl, consulta ? {
+        titolo: 'Consultare l’agenzia in sola lettura?',
+        testo: `Entrerai in “${agenzia.name}” in SOLA LETTURA: potrai vedere `
+          + 'immobili, contatti e documenti, ma nessun dato potra’ essere '
+          + 'modificato. L’agenzia resta '
+          + `${agenzia.status === 'archived' ? 'archiviata' : 'sospesa'}. `
+          + 'Ingresso e uscita restano registrati a tuo nome.',
+        conferma: 'Consulta',
+      } : {
         titolo: 'Entrare nell’agenzia?',
         testo: `Opererai dentro “${agenzia.name}” come Superadmin, con privilegi `
           + 'amministrativi sui suoi dati. Ingresso, uscita e operazioni '
@@ -193,9 +219,15 @@ export async function renderReteAgenzia(container, agencyId) {
     });
   }
 
+  function sottotitolo() {
+    return `Identificativo <code>${escapeHtml(agenzia.slug)}</code> · ${escapeHtml(labelOf(AGENCY_STATUS_LABELS, agenzia.status))}`;
+  }
+
   async function ricaricaAgenzia() {
     agenzia = await apiGet(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`);
     container.querySelector('#agenzia-nome').textContent = agenzia.name;
+    const sotto = container.querySelector('#agenzia-sottotitolo');
+    if (sotto) sotto.innerHTML = sottotitolo();
   }
 
   async function mostraTab(key) {
@@ -294,6 +326,7 @@ export async function renderReteAgenzia(container, agencyId) {
     try {
       await apiPatch(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`, { status: verso });
       await ricaricaAgenzia();
+      aggiornaEntra();
       await panoramica();
     } catch (error) {
       if (erroreEl) erroreEl.textContent = describeError(error, 'agenzia-aggiorna');
@@ -375,14 +408,14 @@ export async function renderReteAgenzia(container, agencyId) {
         <button type="button" class="btn primary" id="op-nuovo">Aggiungi operatore</button>
         <button type="button" class="btn" id="op-titolare">Trasferisci titolare</button>
       </div>
-      <div id="operatori-lista"></div>
+      <div id="operatori-lista" class="rete-operatori"></div>
     `;
     const listaEl = contentEl.querySelector('#operatori-lista');
     listaEl.innerHTML = renderTable(
       [
         {
           label: 'Operatore',
-          render: (r) => `<strong>${escapeHtml(nomeOperatore(r.operator))}</strong>${r.membership.role === 'agency_owner' && r.membership.status === 'active' ? ' ' + renderBadge('Titolare', 'ok') : ''}`,
+          render: (r) => `<strong>${escapeHtml(nomeOperatore(r.operator))}</strong>${r.membership.role === 'agency_owner' && r.membership.status === 'active' ? ' ' + renderBadge('Titolare', 'ok') : ''}${badgePiattaforma(r.operator)}`,
         },
         { label: 'Email', render: (r) => escapeHtml(r.operator.email) },
         { label: 'Ruolo', render: (r) => escapeHtml(labelOf(ROLE_LABELS, r.membership.role)) },
@@ -401,6 +434,8 @@ export async function renderReteAgenzia(container, agencyId) {
         if (btn.dataset.azione === 'disabilita') return cambiaAccesso(riga, 'disabled');
         if (btn.dataset.azione === 'riattiva') return cambiaAccesso(riga, 'active');
         if (btn.dataset.azione === 'membership') return dialogoMembership(riga);
+        if (btn.dataset.azione === 'piattaforma-concedi') return cambiaRuoloPiattaforma(riga, true);
+        if (btn.dataset.azione === 'piattaforma-togli') return cambiaRuoloPiattaforma(riga, false);
       });
     });
 
@@ -425,7 +460,64 @@ export async function renderReteAgenzia(container, agencyId) {
     if (riga.membership.status !== 'revoked') {
       bottoni.push(`<button type="button" class="btn" data-azione="membership" data-operatore="${escapeHtml(riga.operator.id)}">Membership</button>`);
     }
+    const piattaforma = bottonePiattaforma(riga.operator);
+    if (piattaforma) bottoni.push(piattaforma);
     return bottoni.join(' ');
+  }
+
+  // --- ADM-7 (ADM-6): ruolo di amministratore di piattaforma -----------------
+  //
+  // Il comando c'e' solo quando il backend lo accetterebbe:
+  //   * mai sul Super Admin designato, cioe' chi sta usando questa pagina
+  //     (solo lui la vede): il backend risponderebbe 409;
+  //   * concessione solo ad account attivi che hanno gia' fatto un accesso.
+  // Il backend resta l'autorita': ricontrolla tutto e risponde 409 o 403.
+  function eDesignato(op) {
+    return platformMe && String(platformMe.user_id) === String(op.id);
+  }
+
+  function badgePiattaforma(op) {
+    if (eDesignato(op)) return ' ' + renderBadge('Super Admin designato', 'ok');
+    return op.is_platform_admin ? ' ' + renderBadge('Amministratore di piattaforma', 'role') : '';
+  }
+
+  function bottonePiattaforma(op) {
+    if (eDesignato(op)) return '';
+    const id = escapeHtml(op.id);
+    if (op.is_platform_admin) {
+      return `<button type="button" class="btn danger" data-azione="piattaforma-togli" data-operatore="${id}">Togli ruolo di piattaforma</button>`;
+    }
+    if (op.status === 'active' && op.last_login_at) {
+      return `<button type="button" class="btn" data-azione="piattaforma-concedi" data-operatore="${id}">Rendi amministratore di piattaforma</button>`;
+    }
+    return '';
+  }
+
+  async function cambiaRuoloPiattaforma(riga, concedi) {
+    const nome = nomeOperatore(riga.operator);
+    const ok = await confirmAction(hostEl, concedi ? {
+      titolo: 'Rendere amministratore di piattaforma?',
+      testo: `${nome} potra’ entrare nella superficie di piattaforma. Non diventa il Super Admin designato: `
+        + 'quello resta indicato nella configurazione del servizio. La sua appartenenza a questa agenzia non cambia. '
+        + 'L’operazione resta registrata a tuo nome.',
+      conferma: 'Rendi amministratore',
+    } : {
+      titolo: 'Togliere il ruolo di piattaforma?',
+      testo: `${nome} non potra’ piu’ entrare nella superficie di piattaforma e le sue sessioni verranno chiuse. `
+        + 'La sua appartenenza a questa agenzia non cambia e nessun dato viene cancellato. '
+        + 'L’operazione resta registrata a tuo nome.',
+      conferma: 'Togli ruolo',
+      tono: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/platform-admin`,
+        { is_platform_admin: concedi });
+      await operatori();
+    } catch (error) {
+      const listaEl = contentEl.querySelector('#operatori-lista');
+      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', errorBox(error, 'operatore-accesso'));
+    }
   }
 
   async function cambiaAccesso(riga, verso) {

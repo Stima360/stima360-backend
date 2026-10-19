@@ -250,8 +250,16 @@ def test_c1_every_status_and_role_the_backend_declares_has_an_italian_label():
 def test_c2_platform_admin_is_not_offered_as_a_membership_role():
     """`is_platform_admin` non e' un ruolo di membership, e non compare come tale."""
     codice = _tutto_il_codice()
-    assert "platform_admin: " not in codice
+    # SENTINELLA AGGIORNATA DA ADM-7: l'unica occorrenza ammessa e' il corpo
+    # della rotta DEDICATA di ADM-6 (`/operators/{id}/platform-admin`), che non
+    # e' una membership. Fuori di li' il divieto resta intero.
+    dedicata = "{ is_platform_admin: concedi }"
+    assert codice.count(dedicata) <= 1
+    assert "platform_admin: " not in codice.replace(dedicata, "")
     agenzia = _codice("views/rete-agenzia.js")
+    membership = agenzia[agenzia.index("function dialogoMembership"):]
+    membership = membership[: membership.index("\n  }\n")]
+    assert "platform" not in membership, "il dialogo Membership non tocca il ruolo di piattaforma"
     # Il selettore dei ruoli assegnabili non contiene nemmeno agency_owner: il
     # titolare si cambia solo con il trasferimento.
     blocco = agenzia[agenzia.index("ruoliAssegnabili"):]
@@ -308,6 +316,8 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/views/rete.js",
         "static/os_shell/assets/views/rete-agenzia.js",
         "static/os_shell/assets/views/rete-territorio.js",
+        # SENTINELLA AGGIORNATA DA ADM-7: la scheda «Registro» della Rete.
+        "static/os_shell/assets/views/rete-registro.js",
         # P28 - LA BARRA DEL SUPERADMIN, che per sua natura non e' una pagina
         # della Rete: deve comparire sopra QUALUNQUE pagina mentre si sta
         # operando dentro un'agenzia, quindi vive nello scheletro della Shell.
