@@ -56,10 +56,12 @@ from .enums import (
     ACTION_MEMBERSHIP_CREATE,
     ACTION_MEMBERSHIP_UPDATE,
     ACTION_OPERATOR_CREATE,
+    ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE,
     ACTION_OPERATOR_UPDATE,
     ACTION_OWNER_TRANSFER,
     ACTIVE_MEMBERSHIP_ELSEWHERE_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
+    AUDIT_PLATFORM_ADMIN_CHANGE_KEY,
     EMAIL_TAKEN_MESSAGE,
     LAST_SUPER_ADMIN_MESSAGE,
     MEMBERSHIP_ACTIVE,
@@ -71,6 +73,11 @@ from .enums import (
     OWNER_MUST_BE_ACTIVE_MEMBER_MESSAGE,
     OWNER_ROLE_NEEDS_TRANSFER_MESSAGE,
     PASSWORD_ON_EXISTING_IDENTITY_MESSAGE,
+    PLATFORM_ADMIN_DESIGNATED_MESSAGE,
+    PLATFORM_ADMIN_LAST_MESSAGE,
+    PLATFORM_ADMIN_NEEDS_ACTIVE_MESSAGE,
+    PLATFORM_ADMIN_NEEDS_LOGIN_MESSAGE,
+    PLATFORM_ADMIN_UNCHANGED_MESSAGE,
     PASSWORD_REQUIRED_MESSAGE,
     ROLE_AGENCY_ADMIN,
     ROLE_AGENCY_OWNER,
@@ -384,6 +391,69 @@ def update_operator(
 # ---------------------------------------------------------------------------
 # Aggiornamento membership
 # ---------------------------------------------------------------------------
+
+def set_platform_admin(
+    actor: OperatorContext, operator_user_id: int, value: bool
+) -> dict[str, Any]:
+    """ADM-6. Concede o toglie `is_platform_admin`. Solo il Super Admin designato.
+
+    E' il passo 2 (promozione) e il passo 5 (revoca) della sostituzione del
+    Super Admin: la designazione resta in `STIMA360_SUPER_ADMIN_USER_ID`, e
+    cambiarla e' un atto di configurazione, non di questa superficie.
+
+    Guardie, tutte nella stessa transazione e dopo `lock_super_admin`, su cui
+    ogni modifica della Rete si serializza:
+
+    * concedere: l'account e' `active` e ha gia' fatto almeno un login riuscito;
+    * togliere: mai al designato, e mai all'ultimo amministratore attivo;
+    * nessun no-op: un flag gia' com'e' richiesto e' 409, non un 200 vuoto.
+
+    Togliere il flag revoca tutte le sessioni dell'operatore: un amministratore
+    retrocesso non resta dentro con la sessione di prima. La membership non si
+    tocca: chi era membro di un'agenzia lo resta.
+    """
+    with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(
+            cur, actor, audit_action=ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE)
+        current = operators_repository.lock_operator(cur, operator_user_id)
+        if current is None:
+            raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+
+        prima = bool(current["is_platform_admin"])
+        if prima == bool(value):
+            raise PlatformConflict(PLATFORM_ADMIN_UNCHANGED_MESSAGE)
+
+        if value:
+            if current["status"] != OPERATOR_ACTIVE:
+                raise PlatformConflict(PLATFORM_ADMIN_NEEDS_ACTIVE_MESSAGE)
+            if current.get("last_login_at") is None:
+                raise PlatformConflict(PLATFORM_ADMIN_NEEDS_LOGIN_MESSAGE)
+        else:
+            if super_admin.is_designated(operator_user_id):
+                raise PlatformConflict(PLATFORM_ADMIN_DESIGNATED_MESSAGE)
+            if operators_repository.count_active_platform_admins(
+                    cur, excluding=operator_user_id) == 0:
+                raise PlatformConflict(PLATFORM_ADMIN_LAST_MESSAGE)
+
+        operator = operators_repository.set_platform_admin(cur, operator_user_id, value)
+        if operator is None:
+            raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+
+        if not value:
+            session_repository.revoke_operator_sessions(cur, operator_user_id)
+
+        audit_then_commit(
+            conn,
+            actor,
+            action=ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE,
+            target_type=TARGET_TYPE_OPERATOR,
+            target_id=operator_user_id,
+            target_agency_id=None,
+            metadata={"changed_fields": ["is_platform_admin"],
+                      AUDIT_PLATFORM_ADMIN_CHANGE_KEY: {"from": prima, "to": bool(value)}},
+        )
+        return operator
+
 
 def update_membership(
     actor: OperatorContext,

@@ -71,6 +71,7 @@ from .operators_repository import LIST_OPERATOR_ALIASES, MEMBERSHIP_COLUMNS, OPE
 from .schemas import (
     ActingEnterResponse,
     AuditEntryResponse,
+    PlatformAdminUpdateRequest,
     TerritoryAliasCreateRequest,
     TerritoryAliasResponse,
     TerritoryAliasUpdateRequest,
@@ -440,6 +441,29 @@ def update_operator(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PlatformConflict as exc:
         # ADM-1: l'account del Super Admin generale designato.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
+        ) from exc
+    return OperatorResponse(**operator)
+
+
+@router.patch("/operators/{operator_user_id}/platform-admin", response_model=OperatorResponse)
+def update_platform_admin(
+    operator_user_id: int,
+    payload: PlatformAdminUpdateRequest,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> OperatorResponse:
+    """ADM-6. Concede o toglie il ruolo di amministratore di piattaforma. Solo
+    il Super Admin designato; le guardie stanno nel service."""
+    try:
+        operator = operators_service.set_platform_admin(
+            context, operator_user_id, payload.is_platform_admin
+        )
+    except OperatorNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlatformAuditUnavailable as exc:
         raise HTTPException(

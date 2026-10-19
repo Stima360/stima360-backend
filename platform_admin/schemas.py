@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from .enums import (
     ALIAS_MATCH_VALUE_MAX,
@@ -625,6 +625,17 @@ class OperatorCreateRequest(PlatformModel):
         quel conto.
         """
         return sorted(self.model_fields_set - {"password"})
+
+
+class PlatformAdminUpdateRequest(PlatformModel):
+    """ADM-6. Concede (`true`) o toglie (`false`) il ruolo di amministratore di
+    piattaforma. Una rotta sua e un campo solo: non e' una modifica di routine
+    dell'operatore, e `OperatorUpdateRequest` non lo conosce di proposito.
+
+    `StrictBool`: "si'", 1 o "true" come stringa sono un 422, non un'escalation
+    di privilegi interpretata."""
+
+    is_platform_admin: StrictBool
 
 
 class OperatorUpdateRequest(PlatformModel):

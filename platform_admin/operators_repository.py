@@ -306,6 +306,32 @@ def update_operator(cur, operator_user_id: int, fields: dict[str, Any]):
     return _row(cur.fetchone())
 
 
+def set_platform_admin(cur, operator_user_id: int, value: bool):
+    """ADM-6. Il SOLO punto che scrive `is_platform_admin`. Non passa da
+    `update_operator`, che quel campo non lo conosce di proposito."""
+    cur.execute(
+        f"""
+        UPDATE operator_users
+           SET is_platform_admin = %s, updated_at = NOW()
+         WHERE id = %s
+        RETURNING {", ".join(OPERATOR_COLUMNS)}
+        """,
+        (bool(value), operator_user_id),
+    )
+    return _row(cur.fetchone())
+
+
+def count_active_platform_admins(cur, *, excluding: int | None = None) -> int:
+    """ADM-6. Gli amministratori di piattaforma attivi, escluso eventualmente uno."""
+    cur.execute(
+        """SELECT count(*) AS n FROM operator_users
+            WHERE is_platform_admin AND status = 'active' AND id IS DISTINCT FROM %s""",
+        (excluding,),
+    )
+    riga = cur.fetchone()
+    return int(riga["n"] if isinstance(riga, dict) else riga[0])
+
+
 def update_membership(cur, membership_id: int, fields: dict[str, Any]):
     """Aggiorna SOLO i campi presenti. None se l'id non esiste."""
     _reject_unknown(fields, MEMBERSHIP_UPDATABLE_COLUMNS, "agency_memberships")

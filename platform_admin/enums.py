@@ -152,6 +152,9 @@ TARGET_TYPE_MEMBERSHIP = "agency_membership"
 ACTION_OPERATOR_CREATE = "platform.operator.create"
 ACTION_MEMBERSHIP_CREATE = "platform.membership.create"
 ACTION_OPERATOR_UPDATE = "platform.operator.update"
+# ADM-6. Concessione o revoca del flag `is_platform_admin`, da una rotta sua:
+# non e' una modifica di routine dell'operatore.
+ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE = "platform.operator.platform_admin.update"
 ACTION_MEMBERSHIP_UPDATE = "platform.membership.update"
 ACTION_OWNER_TRANSFER = "platform.owner.transfer"
 
@@ -611,6 +614,30 @@ ACTION_SUPER_ADMIN_REQUIRED = "platform.super_admin.required"
 LAST_SUPER_ADMIN_MESSAGE = (
     "L'account del Super Admin generale designato non si disabilita: la "
     "piattaforma resterebbe senza amministratore. Nessuna modifica e' stata fatta."
+)
+
+# ADM-6. Chiave dei metadati del registro per il flag: `{"from": .., "to": ..}`.
+AUDIT_PLATFORM_ADMIN_CHANGE_KEY = "platform_admin"
+
+# ADM-6. I rifiuti (409) della concessione e della revoca del flag.
+PLATFORM_ADMIN_UNCHANGED_MESSAGE = (
+    "L'operatore ha gia' questo ruolo di piattaforma. Nessuna modifica e' stata fatta."
+)
+PLATFORM_ADMIN_NEEDS_ACTIVE_MESSAGE = (
+    "Solo un account attivo puo' diventare amministratore di piattaforma. "
+    "Nessuna modifica e' stata fatta."
+)
+PLATFORM_ADMIN_NEEDS_LOGIN_MESSAGE = (
+    "L'account non ha mai effettuato un accesso: prima di promuoverlo serve un "
+    "login riuscito. Nessuna modifica e' stata fatta."
+)
+PLATFORM_ADMIN_DESIGNATED_MESSAGE = (
+    "Al Super Admin generale designato non si toglie il ruolo di piattaforma: "
+    "prima va cambiata la designazione nella configurazione del servizio. "
+    "Nessuna modifica e' stata fatta."
+)
+PLATFORM_ADMIN_LAST_MESSAGE = (
+    "La piattaforma resterebbe senza amministratori attivi. Nessuna modifica e' stata fatta."
 )
 
 # 409. L'agenzia di sistema (slug `stima360`) riceve i lead senza agenzia

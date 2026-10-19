@@ -873,6 +873,9 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM-5A: il registro delle operazioni,
         # SOLA lettura (GET) del Super Admin generale designato.
         ("GET", f"{ROUTER_PREFIX}/audit"),
+        # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM-6: concessione e revoca del
+        # flag di piattaforma, solo il Super Admin generale designato.
+        ("PATCH", f"{ROUTER_PREFIX}/operators/{{operator_user_id}}/platform-admin"),
     }, sorted(trovate)
 
 
@@ -935,6 +938,9 @@ def test_i4_every_mutation_in_the_package_goes_through_the_shared_order():
         # accesso. Vive nello stesso file della regola - `transaction.py` -
         # quindi resta sorvegliata esattamente come le altre.
         "enter_agency",                                         # P28
+        # SENTINELLA AGGIORNATA DA ADM-6: concessione e revoca del flag di
+        # piattaforma, con lo stesso ordine scrittura -> audit -> commit.
+        "set_platform_admin",                                   # ADM-6
     }, sorted(chiamanti)
 
 
