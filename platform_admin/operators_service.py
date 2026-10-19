@@ -158,6 +158,13 @@ def list_agency_operators(agency_id: int) -> list[dict[str, Any]]:
         return operators_repository.list_agency_operators(cur, agency_id)
 
 
+def list_operators(*, without_active_membership: bool, limit: int, offset: int) -> list[dict[str, Any]]:
+    with platform_operation_cursor() as (_, cur):
+        return operators_repository.list_operators(
+            cur, without_active_membership=without_active_membership, limit=limit, offset=offset
+        )
+
+
 def get_operator(operator_user_id: int) -> dict[str, Any]:
     """Identita' piu' TUTTE le sue membership, in ogni agenzia e in ogni stato.
 

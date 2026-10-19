@@ -876,6 +876,9 @@ def test_i2_the_real_application_exposes_exactly_the_platform_surface():
         # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM-6: concessione e revoca del
         # flag di piattaforma, solo il Super Admin generale designato.
         ("PATCH", f"{ROUTER_PREFIX}/operators/{{operator_user_id}}/platform-admin"),
+        # SENTINELLA AGGIORNATA DA ELIMINAZIONE BLINDATA: l'elenco degli account della rete,
+        # anche senza agenzia. SOLA lettura (GET) del Super Admin generale designato.
+        ("GET", f"{ROUTER_PREFIX}/operators"),
     }, sorted(trovate)
 
 

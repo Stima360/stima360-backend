@@ -225,6 +225,34 @@ def list_agency_operators(cur, agency_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in cur.fetchall()]
 
 
+def list_operators(
+    cur, *, without_active_membership: bool, limit: int, offset: int
+) -> list[dict[str, Any]]:
+    """Gli account della rete, con l'agenzia in cui sono attivi (se ce n'e' una).
+
+    ELIMINAZIONE BLINDATA: chi non ha una membership attiva (un amministratore di
+    sola piattaforma, un account rimasto senza agenzia) non compare in nessun
+    organico, ed e' il motivo per cui questo elenco esiste. Sola lettura: le
+    azioni restano le rotte dell'operatore che esistono gia'.
+
+    La membership attiva e' al piu' una per persona
+    (`uq_agency_memberships_single_active`), quindi la LEFT JOIN non duplica.
+    """
+    cur.execute(
+        f"""
+        SELECT {_OPERATOR_SELECT}, m.agency_id AS active_agency_id
+          FROM operator_users u
+          LEFT JOIN agency_memberships m
+            ON m.operator_user_id = u.id AND m.status = 'active'
+         WHERE (NOT %s OR m.id IS NULL)
+         ORDER BY u.id
+         LIMIT %s OFFSET %s
+        """,
+        (without_active_membership, limit, offset),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
 def active_owner_of(cur, agency_id: int) -> dict[str, Any] | None:
     """Il titolare attivo dell'agenzia, se c'e'.
 

@@ -483,6 +483,14 @@ class OperatorResponse(BaseModel):
     updated_at: datetime
 
 
+class NetworkOperatorResponse(BaseModel):
+    """Una riga dell'elenco degli account della rete (ELIMINAZIONE BLINDATA):
+    l'identita' e l'agenzia in cui e' attivo, `None` se non ne ha nessuna."""
+
+    operator: OperatorResponse
+    active_agency_id: int | None
+
+
 class MembershipResponse(BaseModel):
     """L'APPARTENENZA a un'agenzia. Separata dall'identita', di proposito.
 

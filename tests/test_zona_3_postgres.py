@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_censimento_3_backend_postgres import (  # noqa: F401
-    DSN, _edificio, _q, _unita, completo, mondo,
+    DSN, d15_attiva, _edificio, _q, _unita, completo, mondo,
 )
 
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
@@ -255,6 +255,14 @@ def test_06_operatore_cancellato_set_null_ammesso(mondo):
     riga = _riga(m, p["id"])
     assert riga["by"] == m["ids"]["agent_a"]
     conn = m["conn"]
+    if d15_attiva(m):
+        # ADM D15 nel database di prova: l'operatore non si cancella piu'
+        # fisicamente, quindi il SET NULL non puo' scattare: riferimento e data restano.
+        from psycopg2 import errors
+        with pytest.raises(errors.RestrictViolation):
+            _q(m, "DELETE FROM operator_users WHERE id = %s", (m["ids"]["agent_a"],))
+        assert _riga(m, p["id"]) == riga
+        return
     conn.autocommit = False
     try:
         with conn.cursor() as cur:

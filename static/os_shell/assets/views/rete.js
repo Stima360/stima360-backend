@@ -28,6 +28,9 @@
 //   POST /api/platform/agencies
 //   GET  /api/platform/territories?kind&agency_id&assignment_status&limit&offset
 //   POST /api/platform/territories
+//   GET  /api/platform/operators?without_active_membership&limit&offset
+//        (ELIMINAZIONE BLINDATA: la scheda «Account», anche senza agenzia; i
+//        comandi sono le PATCH dell'operatore gia' usate dalla scheda Operatori)
 //   + la scheda «Eliminazioni edifici» (ELIMINAZIONE-EDIFICIO-1): le sue rotte
 //     /api/platform/building-deletion* le nomina solo building-deletion/building-deletion.js.
 
@@ -38,6 +41,8 @@ import {
   AGENCY_STATUS_LABELS,
   AGENCY_STATUS_TONE,
   ASSIGNMENT_STATUS_LABELS,
+  OPERATOR_STATUS_LABELS,
+  OPERATOR_STATUS_TONE,
   PLATFORM,
   TERRITORY_KIND_LABELS,
   describeError,
@@ -49,6 +54,8 @@ import {
 } from '../components/network.js';
 import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TERRITORI C2
 import { renderRegistro } from './rete-registro.js'; // ADM-7: il registro delle operazioni (ADM-5A)
+// ELIMINAZIONE BLINDATA: i comandi sull'account sono quelli della scheda Operatori.
+import { comandiAccount, nomeAccount } from './rete-agenzia.js';
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
 // CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
 // (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
@@ -57,6 +64,8 @@ const TERRITORI_PAGE = 50;
 
 const TABS = [
   { key: 'agenzie', label: 'Agenzie' },
+  // ELIMINAZIONE BLINDATA: tutti gli account, compresi quelli senza agenzia.
+  { key: 'account', label: 'Account' },
   { key: 'territori', label: 'Territori' },
   { key: 'eliminazioni', label: 'Eliminazioni edifici' },
   // AGENZIE-TERRITORI C2: proposte di modifica dei Supervisori territoriali (approvazione del Super Admin)
@@ -69,6 +78,9 @@ const TABS = [
 const FILTRO_STATO_AGENZIA = { active: 'Attive', suspended: 'Sospese', archived: 'Archiviate' };
 // ADM-7: il segnale sui territori presidiati da un'agenzia non attiva.
 const AGENZIA_NON_ATTIVA = { suspended: 'Agenzia sospesa', archived: 'Agenzia archiviata' };
+// ELIMINAZIONE BLINDATA: la scheda «Account».
+const ACCOUNT_PAGE = 50;
+const FILTRO_ACCOUNT = { senza: 'Senza agenzia attiva', tutti: 'Tutti gli account' };
 
 export async function renderRete(container) {
   container.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -89,6 +101,7 @@ export async function renderRete(container) {
     agenzie: [],
     agenzieStato: '',
     territori: { kind: '', assignment_status: '', offset: 0, items: [] },
+    account: { filtro: 'senza', offset: 0 },
   };
 
   container.innerHTML = `
@@ -117,6 +130,7 @@ export async function renderRete(container) {
     if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
     if (key === 'modifiche') return renderModificheTerritoriali(contentEl);
     if (key === 'registro') return renderRegistro(contentEl);
+    if (key === 'account') return caricaAccount();
     return caricaTerritori();
   }
 
@@ -156,6 +170,95 @@ export async function renderRete(container) {
       disegna();
     });
     contentEl.querySelector('#agenzia-nuova').addEventListener('click', () => dialogoNuovaAgenzia());
+  }
+
+  // --- account (ELIMINAZIONE BLINDATA) -----------------------------------------
+  //
+  // Chi non ha una membership attiva (un amministratore di sola piattaforma, un
+  // account rimasto senza agenzia) non compare in nessun organico: qui si trova
+  // e si elimina dalla Rete con gli STESSI comandi della scheda Operatori
+  // (`comandiAccount`), mai sul Super Admin designato.
+  async function caricaAccount() {
+    contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
+    const filtro = state.account;
+    const params = new URLSearchParams({
+      limit: String(ACCOUNT_PAGE),
+      offset: String(filtro.offset),
+      without_active_membership: filtro.filtro === 'senza' ? 'true' : 'false',
+    });
+    let righe;
+    let agenzie;
+    try {
+      [righe, agenzie] = await Promise.all([
+        apiGet(`${PLATFORM}/operators?${params.toString()}`),
+        apiGet(`${PLATFORM}/agencies`),
+      ]);
+    } catch (error) {
+      contentEl.innerHTML = errorBox(error);
+      return;
+    }
+    righe = Array.isArray(righe) ? righe : [];
+    const nomi = new Map((Array.isArray(agenzie) ? agenzie : []).map((a) => [String(a.id), a]));
+    contentEl.innerHTML = `
+      <p class="muted">Gli account della rete. Senza agenzia attiva compaiono anche gli amministratori di sola piattaforma e chi non appartiene piu’ a nessuna agenzia. Eliminare un account dalla Rete chiude accessi e sessioni; nessun dato viene cancellato.</p>
+      <div class="list-toolbar">
+        <select class="input" id="filtro-account" aria-label="Quali account">
+          ${selectOptions(FILTRO_ACCOUNT, filtro.filtro)}
+        </select>
+      </div>
+      <div id="account-lista" class="rete-operatori"></div>
+      <div class="list-pager">
+        <button type="button" class="btn ghost" id="account-prec">← Precedenti</button>
+        <span class="muted" id="account-pagina"></span>
+        <button type="button" class="btn ghost" id="account-succ">Successivi →</button>
+      </div>
+    `;
+    const listaEl = contentEl.querySelector('#account-lista');
+    const comandi = comandiAccount({
+      platformMe,
+      hostEl,
+      dopo: () => caricaAccount(),
+      errore: (html) => listaEl.insertAdjacentHTML('afterbegin', html),
+    });
+    const agenziaDi = (r) => {
+      if (r.active_agency_id == null) return '<span class="muted">Nessuna</span>';
+      const a = nomi.get(String(r.active_agency_id));
+      return escapeHtml(a ? a.name : `#${r.active_agency_id}`);
+    };
+    listaEl.innerHTML = renderTable(
+      [
+        { label: 'Account', render: (r) => `<strong>${escapeHtml(nomeAccount(r.operator))}</strong>${comandi.badgePiattaforma(r.operator)}` },
+        { label: 'Email', render: (r) => escapeHtml(r.operator.email) },
+        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') },
+        { label: 'Agenzia attiva', render: (r) => agenziaDi(r) },
+        { label: '', render: (r) => [comandi.bottoneAccesso(r.operator), comandi.bottonePiattaforma(r.operator)].filter(Boolean).join(' ') },
+      ],
+      righe,
+      { emptyMessage: filtro.filtro === 'senza' ? 'Nessun account senza agenzia attiva.' : 'Nessun account.' },
+    );
+    listaEl.querySelectorAll('[data-azione]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.operatore));
+        if (!riga) return;
+        if (btn.dataset.azione === 'disabilita') return comandi.cambiaAccesso(riga, 'disabled');
+        if (btn.dataset.azione === 'riattiva') return comandi.cambiaAccesso(riga, 'active');
+        if (btn.dataset.azione === 'piattaforma-concedi') return comandi.cambiaRuoloPiattaforma(riga, true);
+        if (btn.dataset.azione === 'piattaforma-togli') return comandi.cambiaRuoloPiattaforma(riga, false);
+      });
+    });
+    contentEl.querySelector('#filtro-account').addEventListener('change', (e) => {
+      filtro.filtro = e.target.value;
+      filtro.offset = 0;
+      caricaAccount();
+    });
+    const prec = contentEl.querySelector('#account-prec');
+    const succ = contentEl.querySelector('#account-succ');
+    prec.disabled = filtro.offset === 0;
+    succ.disabled = righe.length < ACCOUNT_PAGE;
+    contentEl.querySelector('#account-pagina').textContent = righe.length
+      ? `${filtro.offset + 1}–${filtro.offset + righe.length}` : '';
+    prec.addEventListener('click', () => { filtro.offset = Math.max(0, filtro.offset - ACCOUNT_PAGE); caricaAccount(); });
+    succ.addEventListener('click', () => { filtro.offset += ACCOUNT_PAGE; caricaAccount(); });
   }
 
   function tabellaAgenzie(righe) {

@@ -26,7 +26,9 @@ import uuid
 
 import pytest
 
-from tests.test_censimento_3_backend_postgres import DSN, _edificio, _q, _unita, completo, mondo  # noqa: F401
+from tests.test_censimento_3_backend_postgres import (  # noqa: F401
+    DSN, d15_attiva, _edificio, _q, _unita, completo, mondo,
+)
 
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
@@ -43,6 +45,24 @@ def _operatore(m, email, nome, agenzia, ruolo):
     return uid
 
 
+def _rete_d15(m, chiave, etichetta, agenzia):
+    """Con ADM D15 attiva: territorio, assegnazione e alias della fixture
+    riusati e riportati allo stato iniziale con soli UPDATE (nessun DELETE)."""
+    riga = _q(m, "SELECT id FROM network_territories WHERE canonical_key = %s", (chiave,))
+    t = riga[0][0] if riga else _q(
+        m, "INSERT INTO network_territories (kind, canonical_key, label) VALUES ('municipality', %s, %s) RETURNING id",
+        (chiave, etichetta))[0][0]
+    _q(m, "UPDATE network_territories SET label = %s WHERE id = %s", (etichetta, t))
+    _q(m, "UPDATE agency_territory_assignments SET status = 'revoked' "
+          "WHERE territory_id = %s AND status <> 'revoked'", (t,))
+    a = _q(m, "INSERT INTO agency_territory_assignments (territory_id, agency_id, status) VALUES (%s, %s, 'active') "
+              "RETURNING id", (t, agenzia))[0][0]
+    _q(m, "UPDATE network_territory_aliases SET status = 'revoked' WHERE territory_id = %s AND status <> 'revoked'", (t,))
+    al = _q(m, "INSERT INTO network_territory_aliases (territory_id, source, match_value) "
+               "VALUES (%s, 'public_stima_comune', %s) RETURNING id", (t, etichetta))[0][0]
+    return {"territory": t, "assignment": a, "alias": al}
+
+
 @pytest.fixture
 def rete(mondo):
     """Agenzia 3, collaboratore di 2 e i due Comuni assegnati, con alias: righe di prova rimosse alla fine."""
@@ -53,7 +73,11 @@ def rete(mondo):
     m["ruoli"]["agent_b"] = (_operatore(m, "c1.agent.b@x.test", "Bruno", 2, "agent"), 2, "agent")
     m["ruoli"]["owner_c"] = (_operatore(m, "c1.owner.c@x.test", "Carla", tre, "agency_owner"), tre, "agency_owner")
     creati = {}
+    d15 = d15_attiva(m)
     for chiave, etichetta, agenzia in (("c1-alba-adriatica", "Alba Adriatica", 1), ("c1-giulianova", "Giulianova", 2)):
+        if d15:
+            creati[etichetta] = _rete_d15(m, chiave, etichetta, agenzia)
+            continue
         t = _q(m, "INSERT INTO network_territories (kind, canonical_key, label) VALUES ('municipality', %s, %s) RETURNING id",
                (chiave, etichetta))[0][0]
         a = _q(m, "INSERT INTO agency_territory_assignments (territory_id, agency_id, status) VALUES (%s, %s, 'active') "
@@ -64,7 +88,10 @@ def rete(mondo):
     try:
         yield {**m, "tre": tre, "rete": creati}
     finally:
-        for v in creati.values():
+        # Con ADM D15 nel database di prova: le righe di rete non si
+        # cancellano piu'; restano e la prossima fixture le riporta allo stato
+        # iniziale con UPDATE (`_rete_d15`).
+        for v in ([] if d15 else creati.values()):
             _q(m, "DELETE FROM network_territory_aliases WHERE territory_id = %s", (v["territory"],))
             _q(m, "DELETE FROM agency_territory_assignments WHERE territory_id = %s", (v["territory"],))
             _q(m, "DELETE FROM network_territories WHERE id = %s", (v["territory"],))

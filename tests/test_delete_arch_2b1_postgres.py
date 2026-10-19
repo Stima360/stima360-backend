@@ -26,6 +26,7 @@ from datetime import timedelta
 
 import pytest
 
+from tests.test_censimento_3_backend_postgres import d15_attiva
 from tests.test_delete_arch_0_postgres import (  # noqa: F401  (fixture riusate)
     DSN, _acquisizione, _appuntamento, _assegna, _catena_vendita, _codice, _collega, _contatto, _futuro,
     _immobile, _lead, _property_lead, _q, completo, mondo, operatori,
@@ -549,7 +550,10 @@ def test_m_registro_append_only_insert_si_update_delete_no(mondo):
     # la cancellazione fisica di un operatore con eventi e' rifiutata (RESTRICT)
     with pytest.raises(Exception) as e:
         _q(m, "DELETE FROM operator_users WHERE id = %s", (uid,))
-    assert "record_lifecycle_events" in str(e.value), str(e.value)
+    # ADM D15 nel database di prova: il divieto generale scatta prima del RESTRICT
+    # (che resta, verificato qui sopra su `pg_constraint`).
+    atteso = "ADM D15" if d15_attiva(m) else "record_lifecycle_events"
+    assert atteso in str(e.value), str(e.value)
     print(f"R3 DELETE operator_users con eventi -> rifiutato: {str(e.value).splitlines()[0]}")
 
 

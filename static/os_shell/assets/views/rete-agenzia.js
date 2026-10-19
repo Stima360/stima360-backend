@@ -79,7 +79,7 @@ const AGENZIA_DI_SISTEMA = 'stima360';
 const SPIEGAZIONE_STATO = {
   active: 'Attiva: gli operatori lavorano e i lead dei suoi Comuni arrivano qui.',
   suspended: 'Sospesa: nessun operatore accede. I dati restano tutti qui. I nuovi lead dei suoi Comuni continuano ad arrivare e la attendono; i follow-up automatici sono in pausa fino alla riattivazione.',
-  archived: 'Archiviata: l’agenzia e’ fuori dalla rete. I dati restano tutti qui, senza accessi.',
+  archived: 'Archiviata (eliminata dalla Rete): fuori dall’operativita’, senza accessi. I dati restano tutti qui, consultabili in sola lettura, e l’agenzia si puo’ ripristinare.',
 };
 const CONFERME_STATO_AGENZIA = {
   suspended: {
@@ -88,13 +88,13 @@ const CONFERME_STATO_AGENZIA = {
     testo: (nome) => `Gli operatori di “${nome}” non potranno piu’ accedere e le loro sessioni verranno chiuse. Nessun dato viene cancellato o spostato e i nuovi lead dei suoi Comuni restano a questa agenzia. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; i promemoria degli appuntamenti, le prenotazioni online e i calendari collegati si fermano fino alla riattivazione. Potrai consultarla in sola lettura.`,
   },
   archived: {
-    titolo: 'Archiviare l’agenzia?',
-    bottone: 'Archivia agenzia',
-    testo: (nome) => `“${nome}” esce dalla rete. Nessun dato viene cancellato o spostato. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; promemoria degli appuntamenti, prenotazioni online e calendari collegati restano fermi. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema. Potrai consultarla in sola lettura.`,
+    titolo: 'Eliminare l’agenzia dalla Rete?',
+    bottone: 'Elimina dalla Rete',
+    testo: (nome) => `“${nome}” esce dalla Rete e i suoi operatori non potranno piu’ accedere. Nessun dato viene cancellato o spostato: immobili, contatti, lead, appuntamenti, incarichi, documenti, territori e storico restano conservati e consultabili. Potrai ripristinarla in qualunque momento. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; promemoria degli appuntamenti, prenotazioni online e calendari collegati restano fermi. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema. Potrai consultarla in sola lettura.`,
   },
   active: {
-    titolo: 'Riattivare l’agenzia?',
-    bottone: 'Riattiva agenzia',
+    titolo: 'Ripristinare l’agenzia?',
+    bottone: 'Ripristina agenzia',
     testo: (nome) => `Gli operatori di “${nome}” potranno di nuovo accedere, con un nuovo accesso. Promemoria degli appuntamenti, prenotazioni online e calendari collegati riprendono; le email delle valutazioni e i follow-up tornano a nome dell’agenzia.`,
   },
 };
@@ -293,6 +293,8 @@ export async function renderReteAgenzia(container, agencyId) {
     contentEl.querySelectorAll('[data-stato-agenzia]').forEach((btn) => {
       btn.addEventListener('click', () => cambiaStatoAgenzia(btn.dataset.statoAgenzia));
     });
+    const elimina = contentEl.querySelector('[data-elimina-agenzia]');
+    if (elimina) elimina.addEventListener('click', () => eliminaAgenziaAttiva());
   }
 
   // ADM-3: un comando per ogni passaggio di stato consentito, e una conferma.
@@ -302,14 +304,52 @@ export async function renderReteAgenzia(container, agencyId) {
     const bottone = (verso, etichetta, tono = '') =>
       `<button type="button" class="btn ${tono}" data-stato-agenzia="${verso}">${etichetta}</button>`;
     if (agenzia.status === 'active') {
+      // ADM-7-E: «Elimina dalla Rete» anche da un'agenzia attiva. Il backend
+      // archivia solo da sospesa (ADM-1): il comando fa i due passaggi, in
+      // quest'ordine, ciascuno con il suo controllo e la sua riga di registro.
       return agenzia.slug === AGENZIA_DI_SISTEMA
-        ? '<span class="muted">Agenzia di sistema: non si sospende e non si archivia.</span>'
-        : bottone('suspended', 'Sospendi agenzia', 'danger');
+        ? '<span class="muted">Agenzia di sistema: non si sospende e non si elimina dalla Rete.</span>'
+        : `${bottone('suspended', 'Sospendi agenzia', 'danger')} `
+          + '<button type="button" class="btn danger" data-elimina-agenzia="1">Elimina dalla Rete</button>';
     }
     if (agenzia.status === 'suspended') {
-      return `${bottone('active', 'Riattiva agenzia', 'primary')} ${bottone('archived', 'Archivia agenzia', 'danger')}`;
+      return `${bottone('active', 'Riattiva agenzia', 'primary')} ${bottone('archived', 'Elimina dalla Rete', 'danger')}`;
     }
-    return bottone('active', 'Riattiva agenzia', 'primary');
+    return bottone('active', 'Ripristina agenzia', 'primary');
+  }
+
+  // ADM-7-E: da attiva, prima la sospensione e poi l'esclusione. Se il secondo
+  // passaggio non riesce l'agenzia resta SOSPESA (stato piu' restrittivo, non
+  // uno stato a meta'), e il comando si puo' ripetere.
+  async function eliminaAgenziaAttiva() {
+    const conferma = CONFERME_STATO_AGENZIA.archived;
+    const ok = await confirmAction(hostEl, {
+      titolo: conferma.titolo,
+      testo: conferma.testo(agenzia.name),
+      conferma: conferma.bottone,
+      tono: 'danger',
+    });
+    if (!ok) return;
+    const erroreEl = contentEl.querySelector('#pa-stato-errore');
+    if (erroreEl) erroreEl.textContent = '';
+    const url = `${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`;
+    try {
+      await apiPatch(url, { status: 'suspended' });
+    } catch (error) {
+      if (erroreEl) erroreEl.textContent = describeError(error, 'agenzia-aggiorna');
+      return;
+    }
+    try {
+      await apiPatch(url, { status: 'archived' });
+    } catch (error) {
+      if (erroreEl) {
+        erroreEl.textContent = 'L’agenzia e’ stata sospesa ma non eliminata dalla Rete: '
+          + `${describeError(error, 'agenzia-aggiorna')} Puoi ripetere il comando.`;
+      }
+    }
+    await ricaricaAgenzia();
+    aggiornaEntra();
+    await panoramica();
   }
 
   async function cambiaStatoAgenzia(verso) {
@@ -444,101 +484,36 @@ export async function renderReteAgenzia(container, agencyId) {
   }
 
   function nomeOperatore(op) {
-    const nome = [op.first_name, op.last_name].filter(Boolean).join(' ').trim();
-    return nome || op.email;
+    return nomeAccount(op);
   }
 
+  // ELIMINAZIONE BLINDATA: i comandi sull'account (accesso e ruolo di
+  // piattaforma) sono `comandiAccount`, condivisi con la scheda «Account» della
+  // Rete. Qui si aggiungono solo la membership e il ricaricamento dell'organico.
+  const account = comandiAccount({
+    platformMe,
+    hostEl,
+    dopo: () => operatori(),
+    errore: (html) => {
+      const listaEl = contentEl.querySelector('#operatori-lista');
+      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', html);
+    },
+  });
+  const { badgePiattaforma, cambiaAccesso, cambiaRuoloPiattaforma } = account;
+
   function azioniOperatore(riga) {
-    // ADM-3: un comando diretto per l'accesso della persona, con una conferma.
-    const id = escapeHtml(riga.operator.id);
-    const bottoni = [riga.operator.status === 'active'
-      ? `<button type="button" class="btn danger" data-azione="disabilita" data-operatore="${id}">Disabilita operatore</button>`
-      : `<button type="button" class="btn" data-azione="riattiva" data-operatore="${id}">Riattiva operatore</button>`];
+    const bottoni = [];
+    const accesso = account.bottoneAccesso(riga.operator);
+    if (accesso) bottoni.push(accesso);
     // Su una membership REVOCATA non si disegna il pulsante che la
     // modificherebbe: revoked e' terminale, e l'unica strada e' una nuova
     // membership. Un pulsante che porta a un 409 certo e' una trappola.
     if (riga.membership.status !== 'revoked') {
       bottoni.push(`<button type="button" class="btn" data-azione="membership" data-operatore="${escapeHtml(riga.operator.id)}">Membership</button>`);
     }
-    const piattaforma = bottonePiattaforma(riga.operator);
+    const piattaforma = account.bottonePiattaforma(riga.operator);
     if (piattaforma) bottoni.push(piattaforma);
     return bottoni.join(' ');
-  }
-
-  // --- ADM-7 (ADM-6): ruolo di amministratore di piattaforma -----------------
-  //
-  // Il comando c'e' solo quando il backend lo accetterebbe:
-  //   * mai sul Super Admin designato, cioe' chi sta usando questa pagina
-  //     (solo lui la vede): il backend risponderebbe 409;
-  //   * concessione solo ad account attivi che hanno gia' fatto un accesso.
-  // Il backend resta l'autorita': ricontrolla tutto e risponde 409 o 403.
-  function eDesignato(op) {
-    return platformMe && String(platformMe.user_id) === String(op.id);
-  }
-
-  function badgePiattaforma(op) {
-    if (eDesignato(op)) return ' ' + renderBadge('Super Admin designato', 'ok');
-    return op.is_platform_admin ? ' ' + renderBadge('Amministratore di piattaforma', 'role') : '';
-  }
-
-  function bottonePiattaforma(op) {
-    if (eDesignato(op)) return '';
-    const id = escapeHtml(op.id);
-    if (op.is_platform_admin) {
-      return `<button type="button" class="btn danger" data-azione="piattaforma-togli" data-operatore="${id}">Togli ruolo di piattaforma</button>`;
-    }
-    if (op.status === 'active' && op.last_login_at) {
-      return `<button type="button" class="btn" data-azione="piattaforma-concedi" data-operatore="${id}">Rendi amministratore di piattaforma</button>`;
-    }
-    return '';
-  }
-
-  async function cambiaRuoloPiattaforma(riga, concedi) {
-    const nome = nomeOperatore(riga.operator);
-    const ok = await confirmAction(hostEl, concedi ? {
-      titolo: 'Rendere amministratore di piattaforma?',
-      testo: `${nome} potra’ entrare nella superficie di piattaforma. Non diventa il Super Admin designato: `
-        + 'quello resta indicato nella configurazione del servizio. La sua appartenenza a questa agenzia non cambia. '
-        + 'L’operazione resta registrata a tuo nome.',
-      conferma: 'Rendi amministratore',
-    } : {
-      titolo: 'Togliere il ruolo di piattaforma?',
-      testo: `${nome} non potra’ piu’ entrare nella superficie di piattaforma e le sue sessioni verranno chiuse. `
-        + 'La sua appartenenza a questa agenzia non cambia e nessun dato viene cancellato. '
-        + 'L’operazione resta registrata a tuo nome.',
-      conferma: 'Togli ruolo',
-      tono: 'danger',
-    });
-    if (!ok) return;
-    try {
-      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/platform-admin`,
-        { is_platform_admin: concedi });
-      await operatori();
-    } catch (error) {
-      const listaEl = contentEl.querySelector('#operatori-lista');
-      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', errorBox(error, 'operatore-accesso'));
-    }
-  }
-
-  async function cambiaAccesso(riga, verso) {
-    const nome = nomeOperatore(riga.operator);
-    const disabilita = verso === 'disabled';
-    const ok = await confirmAction(hostEl, {
-      titolo: disabilita ? 'Disabilitare l’operatore?' : 'Riattivare l’operatore?',
-      testo: disabilita
-        ? `${nome} non potra’ piu’ accedere al CRM e le sue sessioni verranno chiuse. Il suo lavoro resta: contatti, immobili e appuntamenti restano a suo nome, nessun dato viene cancellato o spostato. Le sue prenotazioni online e il suo calendario collegato si fermano.`
-        : `${nome} potra’ di nuovo accedere, con un nuovo accesso.`,
-      conferma: disabilita ? 'Disabilita operatore' : 'Riattiva operatore',
-      tono: disabilita ? 'danger' : '',
-    });
-    if (!ok) return;
-    try {
-      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}`, { status: verso });
-      await operatori();
-    } catch (error) {
-      const listaEl = contentEl.querySelector('#operatori-lista');
-      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', errorBox(error, 'operatore-accesso'));
-    }
   }
 
   function dialogoMembership(riga) {
@@ -877,4 +852,107 @@ export async function renderReteAgenzia(container, agencyId) {
   }
 
   await mostraTab('panoramica');
+}
+
+// --- comandi sull'account, condivisi con la scheda «Account» della Rete -----
+//
+// ADM-3: un comando diretto per l'accesso della persona, con una conferma.
+// ADM-7-E: «Elimina dalla Rete» esclude l'account (stato `disabled`): accessi e
+// sessioni chiusi, nessun dato cancellato. Mai sul Super Admin designato, che si
+// sostituisce solo con la procedura ADM-6.
+//
+// ADM-7 (ADM-6): ruolo di amministratore di piattaforma. Il comando c'e' solo
+// quando il backend lo accetterebbe:
+//   * mai sul Super Admin designato, cioe' chi sta usando la Rete (solo lui la
+//     vede): il backend risponderebbe 409;
+//   * concessione solo ad account attivi che hanno gia' fatto un accesso.
+// Il backend resta l'autorita': ricontrolla tutto e risponde 409 o 403.
+//
+// ELIMINAZIONE BLINDATA: le stesse funzioni servono l'organico di un'agenzia e
+// l'elenco degli account della Rete (anche quelli senza agenzia); chi le usa
+// dice cosa ricaricare (`dopo`) e dove mostrare un errore (`errore`).
+export function nomeAccount(op) {
+  const nome = [op.first_name, op.last_name].filter(Boolean).join(' ').trim();
+  return nome || op.email;
+}
+
+export function comandiAccount({ platformMe, hostEl, dopo, errore }) {
+  function eDesignato(op) {
+    return platformMe && String(platformMe.user_id) === String(op.id);
+  }
+
+  function badgePiattaforma(op) {
+    if (eDesignato(op)) return ' ' + renderBadge('Super Admin designato', 'ok');
+    return op.is_platform_admin ? ' ' + renderBadge('Amministratore di piattaforma', 'role') : '';
+  }
+
+  function bottoneAccesso(op) {
+    if (eDesignato(op)) return '';
+    const id = escapeHtml(op.id);
+    return op.status === 'active'
+      ? `<button type="button" class="btn danger" data-azione="disabilita" data-operatore="${id}">Elimina dalla Rete</button>`
+      : `<button type="button" class="btn" data-azione="riattiva" data-operatore="${id}">Ripristina operatore</button>`;
+  }
+
+  function bottonePiattaforma(op) {
+    if (eDesignato(op)) return '';
+    const id = escapeHtml(op.id);
+    if (op.is_platform_admin) {
+      return `<button type="button" class="btn danger" data-azione="piattaforma-togli" data-operatore="${id}">Togli ruolo di piattaforma</button>`;
+    }
+    if (op.status === 'active' && op.last_login_at) {
+      return `<button type="button" class="btn" data-azione="piattaforma-concedi" data-operatore="${id}">Rendi amministratore di piattaforma</button>`;
+    }
+    return '';
+  }
+
+  async function cambiaRuoloPiattaforma(riga, concedi) {
+    const nome = nomeAccount(riga.operator);
+    const ok = await confirmAction(hostEl, concedi ? {
+      titolo: 'Rendere amministratore di piattaforma?',
+      testo: `${nome} potra’ entrare nella superficie di piattaforma. Non diventa il Super Admin designato: `
+        + 'quello resta indicato nella configurazione del servizio. Le sue appartenenze alle agenzie non cambiano. '
+        + 'L’operazione resta registrata a tuo nome.',
+      conferma: 'Rendi amministratore',
+    } : {
+      titolo: 'Togliere il ruolo di piattaforma?',
+      testo: `${nome} non potra’ piu’ entrare nella superficie di piattaforma e le sue sessioni verranno chiuse. `
+        + 'Le sue appartenenze alle agenzie non cambiano e nessun dato viene cancellato. '
+        + 'L’operazione resta registrata a tuo nome.',
+      conferma: 'Togli ruolo',
+      tono: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/platform-admin`,
+        { is_platform_admin: concedi });
+      await dopo();
+    } catch (error) {
+      errore(errorBox(error, 'operatore-accesso'));
+    }
+  }
+
+  async function cambiaAccesso(riga, verso) {
+    const nome = nomeAccount(riga.operator);
+    const disabilita = verso === 'disabled';
+    const ok = await confirmAction(hostEl, {
+      titolo: disabilita ? 'Eliminare l’operatore dalla Rete?' : 'Ripristinare l’operatore?',
+      testo: disabilita
+        ? `${nome} esce dalla Rete: non potra’ piu’ accedere al CRM ne’ alla piattaforma, da nessuna agenzia, e le sue sessioni verranno chiuse subito. Il suo lavoro resta: contatti, immobili, appuntamenti e incarichi restano a suo nome, nessun dato viene cancellato o spostato e lo storico conserva il suo nome. Le sue prenotazioni online e il suo calendario collegato si fermano. Potrai ripristinarlo.`
+        : `${nome} potra’ di nuovo accedere, con un nuovo accesso. Membership e ruoli restano quelli di prima.`,
+      conferma: disabilita ? 'Elimina dalla Rete' : 'Ripristina operatore',
+      tono: disabilita ? 'danger' : '',
+    });
+    if (!ok) return;
+    try {
+      await apiPatch(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}`, { status: verso });
+      await dopo();
+    } catch (error) {
+      errore(errorBox(error, 'operatore-accesso'));
+    }
+  }
+
+  return {
+    eDesignato, badgePiattaforma, bottoneAccesso, bottonePiattaforma, cambiaRuoloPiattaforma, cambiaAccesso,
+  };
 }

@@ -83,6 +83,7 @@ from .schemas import (
     AgencyUpdateRequest,
     MembershipResponse,
     MembershipUpdateRequest,
+    NetworkOperatorResponse,
     OperatorCreateRequest,
     OperatorDetailResponse,
     OperatorResponse,
@@ -360,6 +361,27 @@ def list_agency_operators(
     except AgencyNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [_agency_operator(row) for row in rows]
+
+
+@router.get("/operators", response_model=list[NetworkOperatorResponse])
+def list_operators(
+    without_active_membership: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> list[NetworkOperatorResponse]:
+    """Gli account della rete, anche quelli senza agenzia. Sola lettura: si
+    agisce con `PATCH /operators/{id}` e `PATCH /operators/{id}/platform-admin`."""
+    rows = operators_service.list_operators(
+        without_active_membership=without_active_membership, limit=limit, offset=offset
+    )
+    return [
+        NetworkOperatorResponse(
+            operator=OperatorResponse(**{c: row[c] for c in OPERATOR_COLUMNS}),
+            active_agency_id=row["active_agency_id"],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/operators/{operator_user_id}", response_model=OperatorDetailResponse)
