@@ -53,6 +53,12 @@ class FakeCursor:
 
     `residue` e `delete_rowcount` restano come scavalcamenti espliciti, per le
     prove che devono simulare una DELETE che non ha fatto il suo lavoro.
+
+    ADM D15: utenti e membership non si cancellano, si DISMETTONO. Il doppio
+    tiene quindi anche `state["disabled"]` (gli id resi `disabled`) e
+    `state["revoked"]` (gli utenti le cui membership sono `revoked`), e le
+    UPDATE li modificano davvero; `state["writes"]` registra in ordine DELETE
+    e UPDATE.
     """
 
     def __init__(self, state: dict) -> None:
@@ -81,14 +87,20 @@ class FakeCursor:
                 self._row = {"n": self.state["leftovers"]}
             else:
                 pattern = cert.CERT_PREFIX
-                self._row = {"n": sum(1 for e in self._users().values()
-                                      if e.startswith(pattern))}
+                dismessi = self.state.setdefault("disabled", set())
+                self._row = {"n": sum(1 for i, e in self._users().items()
+                                      if e.startswith(pattern) and i not in dismessi)}
+        elif "AS RETIRED FROM OPERATOR_USERS" in upper:
+            dismessi = self.state.setdefault("disabled", set())
+            self._row = {"retired": sum(1 for i, e in self._users().items()
+                                        if e.startswith(cert.CERT_PREFIX) and i in dismessi)}
         elif "AS USERS" in upper:
             if "residue" in self.state:
                 self._row = dict(self.state["residue"])
             else:
                 ids = set(params[0]) if params else set()
-                remaining = len([i for i in ids if i in self._users()])
+                dismessi = self.state.setdefault("disabled", set())
+                remaining = len([i for i in ids if i in self._users() and i not in dismessi])
                 self._row = {"users": remaining, "memberships": 0, "sessions": 0}
         elif upper.startswith("SELECT 1 FROM OPERATOR_USERS"):
             self._row = {"1": 1} if self.state.get("collide") else None
@@ -101,7 +113,16 @@ class FakeCursor:
         elif upper.startswith("INSERT INTO AGENCY_MEMBERSHIPS"):
             self.state.setdefault("memberships", []).append(params)
             self.rowcount = 1
+        elif upper.startswith("UPDATE"):
+            self.state.setdefault("writes", []).append(statement)
+            ids = [i for i in (params[0] if params else ()) if i in self._users()]
+            if upper.startswith("UPDATE OPERATOR_USERS"):
+                self.state.setdefault("disabled", set()).update(ids)
+            elif upper.startswith("UPDATE AGENCY_MEMBERSHIPS"):
+                self.state.setdefault("revoked", set()).update(ids)
+            self.rowcount = len(ids)
         elif upper.startswith("DELETE"):
+            self.state.setdefault("writes", []).append(statement)
             self.state.setdefault("deletes", []).append(statement)
             if "delete_rowcount" in self.state:
                 self.rowcount = self.state["delete_rowcount"]
@@ -282,28 +303,33 @@ def _run_with_failure(monkeypatch, where, **db_state):
     return code, report, database, stream
 
 
-def test_8_a_failed_check_still_deletes_the_temporary_rows(monkeypatch):
+def _ritirati(database) -> bool:
+    """D15: sessioni cancellate, membership revocate, utenti disabilitati."""
+    scritture = " ".join(database.state.get("writes", []))
+    return ("DELETE FROM operator_sessions" in scritture
+            and "UPDATE agency_memberships SET status = 'revoked'" in scritture
+            and "UPDATE operator_users SET status = 'disabled'" in scritture)
+
+
+def test_8_a_failed_check_still_retires_the_temporary_rows(monkeypatch):
     code, report, database, _ = _run_with_failure(
         monkeypatch, cert.CheckFailed("prova fallita"))
 
-    deletes = " ".join(database.state.get("deletes", []))
-    for table in ("operator_sessions", "agency_memberships", "operator_users"):
-        assert table in deletes, f"il cleanup non ha toccato {table}"
+    assert _ritirati(database), database.state.get("writes")
     assert code != 0
 
 
-def test_9_an_unexpected_exception_still_deletes_the_temporary_rows(monkeypatch):
+def test_9_an_unexpected_exception_still_retires_the_temporary_rows(monkeypatch):
     """Non solo i fallimenti previsti: anche un errore che nessuno aspettava."""
     code, report, database, _ = _run_with_failure(
         monkeypatch, RuntimeError("qualcosa di imprevisto"))
 
-    deletes = " ".join(database.state.get("deletes", []))
-    assert "operator_users" in deletes
+    assert _ritirati(database), database.state.get("writes")
     assert code == 1
     assert any(ident == "RUN" for kind, ident, _ in report.rows if kind == cert.FAIL)
 
 
-def test_9b_a_keyboard_interrupt_still_deletes_the_temporary_rows(monkeypatch):
+def test_9b_a_keyboard_interrupt_still_retires_the_temporary_rows(monkeypatch):
     """Il motivo per cui il cleanup sta in un `finally` e non semplicemente
     dopo il try.
 
@@ -331,8 +357,7 @@ def test_9b_a_keyboard_interrupt_still_deletes_the_temporary_rows(monkeypatch):
     except KeyboardInterrupt:
         pass
 
-    deletes = " ".join(database.state.get("deletes", []))
-    assert "operator_users" in deletes
+    assert _ritirati(database), database.state.get("writes")
 
 
 def test_9c_the_cleanup_is_lexically_inside_a_finally():
@@ -349,7 +374,7 @@ def test_9c_the_cleanup_is_lexically_inside_a_finally():
     assert any("operators.cleanup()" in stmt for stmt in in_finally), in_finally
 
 
-def test_10_the_deletes_run_in_dependency_order(monkeypatch):
+def test_10_the_cleanup_runs_in_dependency_order(monkeypatch):
     """Sessioni, poi membership, poi utenti: un fallimento parziale resta
     attribuibile alla tabella giusta."""
     _code, _report, database, _ = _run_with_failure(
@@ -357,11 +382,21 @@ def test_10_the_deletes_run_in_dependency_order(monkeypatch):
 
     order = [
         table
-        for statement in database.state.get("deletes", [])
+        for statement in database.state.get("writes", [])
         for table in ("operator_sessions", "agency_memberships", "operator_users")
-        if f"FROM {table}" in statement
+        if f"FROM {table} " in f"{statement} " or statement.startswith(f"UPDATE {table} ")
     ]
     assert order[:3] == ["operator_sessions", "agency_memberships", "operator_users"]
+
+
+def test_10b_d15_accounts_and_memberships_are_never_deleted():
+    """ADM D15 (migration 105): `operator_users` e `agency_memberships` non si
+    cancellano fisicamente. Il cleanup li DISMETTE, e lo si fissa sul
+    sorgente: una DELETE reintrodotta fallirebbe sul TEST, a cleanup avviato."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    for tabella in ("operator_users", "agency_memberships", "agencies"):
+        assert not re.search(rf"DELETE\s+FROM\s+{tabella}\b", source), tabella
+    assert "SET status = 'disabled'" in source and "SET status = 'revoked'" in source
 
 
 def test_11_the_cleanup_never_raises_on_a_dead_database():
@@ -515,12 +550,15 @@ def test_16b_a_concurrent_run_survives_this_run_cleanup(monkeypatch):
     operators.cleanup()
 
     survivors = database.state["users"]
-    assert concurrent_id in survivors, (
-        "il cleanup ha cancellato l'operatore di un run concorrente"
+    dismessi = database.state["disabled"]
+    assert concurrent_id in survivors and concurrent_id not in dismessi, (
+        "il cleanup ha toccato l'operatore di un run concorrente"
     )
     assert survivors[concurrent_id] == concurrent_email
     for identifier in mine:
-        assert identifier not in survivors, "un proprio operatore e' sopravvissuto"
+        # D15: la riga resta, dismessa.
+        assert identifier in survivors and identifier in dismessi, \
+            "un proprio operatore e' rimasto operativo"
 
     # E il verdetto resta PASS: il conteggio finale guarda i propri id, non il
     # prefisso, quindi la riga altrui non lo fa fallire.
@@ -557,6 +595,28 @@ def test_16d_the_residue_check_is_scoped_to_this_run_ids():
     assert residue_queries, "il controllo finale non e' stato eseguito"
     for query in residue_queries:
         assert "LIKE" not in query and "email" not in query, query
+
+
+def test_16e_retired_residue_does_not_stop_the_run_but_is_reported(monkeypatch):
+    """D15: un operatore di certificazione DISMESSO (disabled) e' la traccia
+    storica di un run concluso. Non ferma il run - fermarlo renderebbe la
+    certificazione ineseguibile per sempre - ma il report lo conta."""
+    vecchio = {900: f"{cert.CERT_PREFIX}deadbeef-1111{cert.CERT_DOMAIN}"}
+    database = fake_database(agencies=AGENCIES, users=dict(vecchio), disabled={900})
+
+    def creating_certify(report_, http_, operators, agency_a, *rest):
+        operators.create(agency_a)
+
+    code, report, _ = _run_to_completion(monkeypatch, database,
+                                         certify=creating_certify)
+
+    # 2 e non 0: senza ADMIN_USER/ADMIN_PASS il canale Basic e' BLOCKED (0.14).
+    assert code == 2 and not [r for r in report.rows if r[0] == cert.FAIL], report.rows
+    assert database.state.get("inserted"), "il run si e' fermato sul residuo dismesso"
+    riga = next(t for k, i, t in report.rows if i == "0.15")
+    assert "1 operatore/i di certificazione gia' DISMESSI" in riga, riga
+    assert 900 in database.state["disabled"]
+    assert database.state["users"][900] == vecchio[900], "la riga storica e' stata toccata"
 
 
 def test_16f_with_nothing_created_the_cleanup_claims_nothing_verified():

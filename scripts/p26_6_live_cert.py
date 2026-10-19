@@ -62,10 +62,20 @@ REGOLE DI CONDOTTA
 * Ogni run ha un `run_id`; le fixture nascono con quel marchio e il cleanup
   cancella per ID, mai per prefisso: due certificazioni avviate insieme non si
   distruggono a vicenda.
-* Un residuo trovato all'avvio ferma il run senza creare e senza cancellare
-  nulla: da qui non si distingue un resto di ieri da un run in corso adesso.
+* Un residuo OPERATIVO trovato all'avvio (identita' non dismessa, agenzia
+  dedicata non archiviata) ferma il run senza creare e senza cancellare nulla:
+  da qui non si distingue un resto di ieri da un run in corso adesso. I
+  residui gia' dismessi non lo fermano, ma il report li conta.
 * Cleanup in `finally`, nell'ordine imposto dalle chiavi esterne. Qualunque
   cleanup incompleto e' FAIL.
+* ADM D15 (migration 105): agenzie, account e membership non si cancellano
+  fisicamente. Le identita' del run si DISMETTONO (account `disabled`,
+  membership `revoked`, sessioni cancellate) e le agenzie dedicate si
+  ARCHIVIANO dopo averne rimosso le fixture: restano come righe storiche,
+  riconoscibili dall'email `p26-6-cert-...@certification.invalid` e dallo slug
+  `p26-6-cert-...`, senza accessi e senza dati operativi. Le fixture di dominio
+  del run continuano a essere rimosse per id: lasciate li', i follow-up e le
+  email centrali (ADM-3 BIS) le raggiungerebbero anche in un'agenzia archiviata.
 * Qualunque prova non eseguita e' BLOCKED, mai PASS. Una lista vuota non e' una
   prova di isolamento, e un dominio senza dati risulta non provato.
 * Uscita 0 solo con tutte le prove PASS.
@@ -1251,14 +1261,66 @@ class Certification:
         """
         return f"P26-6-{self.run_id}-{agency}"
 
+    #: ADM D15: le tabelle che il cleanup NON cancella mai. Le loro righe si
+    #: dismettono (`agencies` -> archived, `operator_users` -> disabled,
+    #: `agency_memberships` -> revoked) e restano come storia: le
+    #: cancellazioni per predicato le saltano e la verifica non le conta come
+    #: residuo.
+    RETIRED_TABLES = ("agencies", "operator_users", "agency_memberships")
+
+    #: Le tabelle dismesse che la guardia delle dipendenze NON interroga piu':
+    #: nessuna loro riga viene cancellata, quindi nessun CASCADE o SET NULL
+    #: puo' partire da li'. `agencies` invece RESTA sorvegliata: nelle agenzie
+    #: dedicate le fixture si cancellano per `agency_id` (DEDICATED_TABLES), ed
+    #: e' la guardia su `agencies` a dire se in quelle tabelle c'e' una riga
+    #: che non e' del run.
+    UNGUARDED_RETIRED_TABLES = ("operator_users", "agency_memberships")
+
+    #: Lo slug delle agenzie dedicate, da `create_dedicated_agency`.
+    DEDICATED_SLUG_LIKE = "p26-6-cert-%"
+
     def leftovers(self) -> int:
+        """I residui di certificazione ancora OPERATIVI.
+
+        D15: un'identita' dismessa o un'agenzia dedicata archiviata restano
+        come righe storiche, quindi la sola esistenza non dice piu' nulla.
+        Conta cio' che potrebbe ancora lavorare - account non `disabled`,
+        membership non `revoked`, sessione presente, agenzia dedicata non
+        `archived` - cioe' un run in corso o un cleanup non completato.
+        """
         with self.db.read() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS n FROM operator_users "
-                "WHERE email_normalized LIKE %s",
+                "SELECT COUNT(*) AS n FROM operator_users u "
+                "WHERE u.email_normalized LIKE %s AND ("
+                "u.status <> 'disabled' "
+                "OR EXISTS (SELECT 1 FROM agency_memberships m "
+                "WHERE m.operator_user_id = u.id AND m.status <> 'revoked') "
+                "OR EXISTS (SELECT 1 FROM operator_sessions s "
+                "WHERE s.operator_user_id = u.id))",
                 (CERT_EMAIL_LIKE,),
             )
-            return int(cur.fetchone()["n"])
+            identita = int(cur.fetchone()["n"])
+            cur.execute(
+                "SELECT COUNT(*) AS agenzie_operative FROM agencies "
+                "WHERE slug LIKE %s AND status <> 'archived'",
+                (self.DEDICATED_SLUG_LIKE,),
+            )
+            return identita + int(cur.fetchone()["agenzie_operative"])
+
+    def retired(self) -> tuple[int, int]:
+        """(identita', agenzie dedicate) gia' dismesse dai run precedenti."""
+        with self.db.read() as cur:
+            cur.execute(
+                "SELECT (SELECT COUNT(*) FROM operator_users "
+                "         WHERE email_normalized LIKE %s "
+                "           AND status = 'disabled') AS identita_dismesse, "
+                "       (SELECT COUNT(*) FROM agencies "
+                "         WHERE slug LIKE %s "
+                "           AND status = 'archived') AS agenzie_archiviate",
+                (CERT_EMAIL_LIKE, self.DEDICATED_SLUG_LIKE),
+            )
+            riga = cur.fetchone()
+            return int(riga["identita_dismesse"]), int(riga["agenzie_archiviate"])
 
     def create_operator(self, agency: dict) -> dict:
         """Un operatore attivo nell'agenzia data, con password casuale."""
@@ -1309,13 +1371,18 @@ class Certification:
         Contato per id e non per prefisso: un conteggio per prefisso
         includerebbe le righe di un run concorrente e trasformerebbe il lavoro
         di qualcun altro in un fallimento di questo.
+
+        D15: utenti e membership restano come righe storiche, quindi si
+        contano quelli ancora OPERATIVI; le sessioni, che si cancellano, tutte.
         """
         cur.execute(
             """
             SELECT (SELECT COUNT(*) FROM operator_users u
-                     WHERE u.id IN %s)                          AS users,
+                     WHERE u.id IN %s
+                       AND u.status <> 'disabled')              AS users,
                    (SELECT COUNT(*) FROM agency_memberships m
-                     WHERE m.operator_user_id IN %s)            AS memberships,
+                     WHERE m.operator_user_id IN %s
+                       AND m.status <> 'revoked')               AS memberships,
                    (SELECT COUNT(*) FROM operator_sessions s
                      WHERE s.operator_user_id IN %s)            AS sessions
             """,
@@ -1628,7 +1695,9 @@ class Certification:
         # segnale da cui far nascere un'azione.
         ("leads", "agency_id"),
         ("contacts", "agency_id"),
-        ("agency_memberships", "agency_id"),
+        # `agency_memberships` NON c'e' piu': ADM D15 ne vieta la DELETE. Le
+        # membership delle agenzie dedicate si revocano in
+        # `cleanup_dedicated_agencies`, e l'agenzia si archivia.
     )
 
     def create_dedicated_agency(self, label: str) -> dict | None:
@@ -2275,12 +2344,18 @@ class Certification:
         return bloccanti
 
     def cleanup_dedicated_agencies(self) -> None:
-        """Le agenzie temporanee, e tutto cio' che il run vi ha messo dentro.
+        """Le agenzie temporanee: via tutto cio' che il run vi ha messo dentro,
+        poi l'agenzia si ARCHIVIA (ADM D15: non si cancella).
 
         Ordine esplicito, per id. Poi il catalogo, e solo per GUARDARE: se una
         tabella che non avevamo previsto referenzia ancora l'agenzia, la si
         nomina e si fallisce - non la si cancella. Cancellare cio' che non era
         stato considerato e' il modo in cui un cleanup diventa il danno.
+
+        Resta, per ciascuna agenzia, la riga `agencies` (archived) con le sue
+        membership `revoked` e il suo operatore `disabled`: nessun accesso,
+        nessun dato operativo, riconoscibile come agenzia di certificazione
+        (vedi `create_dedicated_agency`). Il criterio resta l'id.
         """
         # Invocata: da qui in avanti `verify_no_residue` ha il diritto di
         # pretendere che gli effetti delle agenzie dedicate siano spariti. Se
@@ -2366,10 +2441,17 @@ class Certification:
                 for table, column in self.DEDICATED_TABLES:
                     cur.execute(
                         f"DELETE FROM {table} WHERE {column} IN %s", (ids,))
+                # ADM D15: membership, identita' e agenzia si DISMETTONO.
                 cur.execute(
-                    "DELETE FROM operator_users WHERE id IN %s",
+                    "UPDATE agency_memberships SET status = 'revoked' "
+                    "WHERE agency_id IN %s AND status <> 'revoked'", (ids,))
+                cur.execute(
+                    "UPDATE operator_users SET status = 'disabled' "
+                    "WHERE id IN %s AND status <> 'disabled'",
                     (tuple(self.created_user_ids) or (0,),))
-                cur.execute("DELETE FROM agencies WHERE id IN %s", (ids,))
+                cur.execute(
+                    "UPDATE agencies SET status = 'archived' "
+                    "WHERE id IN %s AND status <> 'archived'", (ids,))
         except Exception as exc:
             self.report.fail(
                 "CLEAN-DEDICATA",
@@ -2380,65 +2462,81 @@ class Certification:
             return
 
         # Verifica, e ricerca di dipendenze impreviste.
+        #
+        # D15: l'agenzia RESTA, archiviata. La domanda non e' piu' "e'
+        # sparita?" ma "e' archiviata, senza membership attive, e nient'altro
+        # la referenzia?". Il catalogo si interroga quindi SEMPRE: ogni riga
+        # rimasta dentro un'agenzia dedicata - tolte le membership revocate,
+        # che sono la sua storia - e' un dato di prova residuo.
         try:
             with self.db.read() as cur:
-                cur.execute("SELECT COUNT(*) AS n FROM agencies WHERE id IN %s", (ids,))
+                cur.execute("SELECT COUNT(*) AS n FROM agencies "
+                            "WHERE id IN %s AND status <> 'archived'", (ids,))
                 rimaste = int(cur.fetchone()["n"])
+                cur.execute("SELECT COUNT(*) AS n FROM agency_memberships "
+                            "WHERE agency_id IN %s AND status <> 'revoked'", (ids,))
+                membership_attive = int(cur.fetchone()["n"])
                 inattese = []
-                if rimaste:
+                cur.execute(
+                    """
+                    SELECT ns.nspname AS schema, cl.relname AS tabella,
+                           att.attname AS colonna
+                      FROM pg_constraint con
+                      JOIN pg_class cl ON cl.oid = con.conrelid
+                      JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+                      CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
+                           AS k(child_attnum, parent_attnum)
+                      JOIN pg_attribute att ON att.attrelid = con.conrelid
+                           AND att.attnum = k.child_attnum
+                      JOIN pg_attribute patt ON patt.attrelid = con.confrelid
+                           AND patt.attnum = k.parent_attnum
+                     WHERE con.contype = 'f'
+                       AND con.confrelid = 'public.agencies'::regclass
+                       AND patt.attname = 'id'
+                    """
+                )
+                for riga in cur.fetchall():
+                    if (riga["schema"], riga["tabella"]) == ("public", "agency_memberships"):
+                        # La storia dell'agenzia: contata sopra, solo se attiva.
+                        continue
                     cur.execute(
-                        """
-                        SELECT ns.nspname AS schema, cl.relname AS tabella,
-                               att.attname AS colonna
-                          FROM pg_constraint con
-                          JOIN pg_class cl ON cl.oid = con.conrelid
-                          JOIN pg_namespace ns ON ns.oid = cl.relnamespace
-                          CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
-                               AS k(child_attnum, parent_attnum)
-                          JOIN pg_attribute att ON att.attrelid = con.conrelid
-                               AND att.attnum = k.child_attnum
-                          JOIN pg_attribute patt ON patt.attrelid = con.confrelid
-                               AND patt.attnum = k.parent_attnum
-                         WHERE con.contype = 'f'
-                           AND con.confrelid = 'public.agencies'::regclass
-                           AND patt.attname = 'id'
-                        """
-                    )
-                    for riga in cur.fetchall():
-                        cur.execute(
-                            f"SELECT COUNT(*) AS n FROM {riga['schema']}.{riga['tabella']} "
-                            f"WHERE {riga['colonna']} IN %s", (ids,))
-                        n = int(cur.fetchone()["n"])
-                        if n:
-                            inattese.append(
-                                f"{riga['schema']}.{riga['tabella']}.{riga['colonna']}={n}")
+                        f"SELECT COUNT(*) AS n FROM {riga['schema']}.{riga['tabella']} "
+                        f"WHERE {riga['colonna']} IN %s", (ids,))
+                    n = int(cur.fetchone()["n"])
+                    if n:
+                        inattese.append(
+                            f"{riga['schema']}.{riga['tabella']}.{riga['colonna']}={n}")
         except Exception as exc:
             self.report.fail("CLEAN-DEDICATA",
                              f"verifica non eseguibile ({type(exc).__name__}): non si "
-                             f"puo' affermare che le agenzie {list(ids)} siano sparite")
+                             f"puo' affermare che le agenzie {list(ids)} siano dismesse "
+                             "e vuote")
             return
 
-        if rimaste:
+        if rimaste or membership_attive or inattese:
             self.report.fail(
                 "CLEAN-DEDICATA",
-                f"{rimaste} agenzie temporanee ANCORA PRESENTI: {list(ids)}. "
-                + (f"Dipendenze non previste dal cleanup: {inattese}. "
-                   if inattese else "Nessuna dipendenza residua individuata. ")
+                f"agenzie temporanee {list(ids)} NON dismesse del tutto: "
+                f"{rimaste} non archiviate, {membership_attive} membership attive. "
+                + (f"Dati residui non previsti dal cleanup: {inattese}. "
+                   if inattese else "Nessun dato residuo individuato. ")
                 + self.RECOVERY_HINT,
             )
         else:
             self.report.note(
                 "CLEAN-DEDICATA",
-                f"agenzie temporanee {list(ids)} rimosse, 0 residue")
+                f"agenzie temporanee {list(ids)} svuotate e archiviate (D15: "
+                "nessuna cancellazione fisica), 0 membership attive, 0 dati residui")
 
     #: Cosa fare a mano se il cleanup non riesce. Nessun dato personale: solo
     #: id numerici e nomi di tabella.
     RECOVERY_HINT = (
         "RECUPERO: le righe sono identificate dagli id agenzia sopra. "
-        "Rimuovere nell'ordine followup_actions, tasks, contacts, "
-        "agency_memberships, operator_users, poi agencies, filtrando SEMPRE per "
-        "quegli id e mai per prefisso dello slug. Se una tabella non prevista "
-        "compare fra le dipendenze, va esaminata prima di cancellare."
+        "Rimuovere nell'ordine followup_actions, tasks, contacts, filtrando "
+        "SEMPRE per quegli id e mai per prefisso dello slug; poi revocare le "
+        "agency_memberships, disabilitare gli operator_users e archiviare le "
+        "agencies (ADM D15: queste tre non si cancellano). Se una tabella non "
+        "prevista compare fra le dipendenze, va esaminata prima di cancellare."
     )
 
     #: Cosa dire quando il bucket non e' stato ripulito. Nomina la colonna in
@@ -3032,6 +3130,11 @@ class Certification:
         try:
             with self.db.read() as cur:
                 for table, ids in perimetro.items():
+                    if table in self.UNGUARDED_RETIRED_TABLES:
+                        # D15: non si cancellano, quindi nessuna riga che le
+                        # referenzia puo' essere toccata da un CASCADE o da un
+                        # SET NULL del cleanup.
+                        continue
                     cur.execute(
                         """
                         SELECT con.conrelid::regclass::text AS figlio,
@@ -3376,6 +3479,10 @@ class Certification:
                         cur.execute(f"DELETE FROM {table} WHERE id IN %s", (tuple(ids),))
                         rimosse[table] = cur.rowcount
                 for table, columns in reversed(self.EFFECT_TABLES):
+                    if table in self.RETIRED_TABLES:
+                        # D15: le membership del run si REVOCANO in
+                        # `cleanup_database`, non si cancellano qui.
+                        continue
                     ids = self.effect_rows_before.get(table)
                     if not ids:
                         # NIENTE DI NOSTRO QUI DENTRO: nessuna DELETE.
@@ -3600,6 +3707,10 @@ class Certification:
                             "effetti non verificabili per id (nessuna istantanea: "
                             "vedi CLEAN-EFFETTI)")
                     for tabella, ids in self.effect_rows_before.items():
+                        if tabella in self.RETIRED_TABLES:
+                            # D15: restano per definizione; la loro dismissione
+                            # la verifica CLEAN-CHK, per id.
+                            continue
                         cur.execute(
                             f"SELECT COUNT(*) AS n FROM {tabella} WHERE id IN %s",
                             (ids,))
@@ -3717,7 +3828,13 @@ class Certification:
                              f"creati {dettaglio}; 0 presenti: verificato sul database")
 
     def cleanup_database(self) -> None:
-        """Cancella identita' e sessioni di questo run, e lo dimostra.
+        """Dismette le identita' di questo run e ne cancella le sessioni, e lo
+        dimostra.
+
+        ADM D15: `operator_users` e `agency_memberships` non si cancellano. Le
+        membership diventano `revoked`, gli account `disabled` - lo stesso
+        esito di «Elimina dalla Rete» (ADM-7-E) - e le righe restano come
+        storia. Le sessioni, che sono credenziali, si cancellano.
 
         Il criterio e' `created_user_ids` e nient'altro. Cancellare per
         prefisso sarebbe piu' comodo - ripulirebbe anche i resti di ieri - e
@@ -3736,14 +3853,18 @@ class Certification:
                     "DELETE FROM operator_sessions WHERE operator_user_id IN %s", (ids,))
                 sessions = cur.rowcount
                 cur.execute(
-                    "DELETE FROM agency_memberships WHERE operator_user_id IN %s", (ids,))
+                    "UPDATE agency_memberships SET status = 'revoked' "
+                    "WHERE operator_user_id IN %s AND status <> 'revoked'", (ids,))
                 memberships = cur.rowcount
-                cur.execute("DELETE FROM operator_users WHERE id IN %s", (ids,))
+                cur.execute(
+                    "UPDATE operator_users SET status = 'disabled' "
+                    "WHERE id IN %s AND status <> 'disabled'", (ids,))
                 users = cur.rowcount
                 self.report.note(
                     "CLEAN-DB",
-                    f"run {self.run_id}: rimossi {sessions} sessioni, "
-                    f"{memberships} membership, {users} identita'",
+                    f"run {self.run_id}: rimosse {sessions} sessioni, revocate "
+                    f"{memberships} membership, disabilitate {users} identita' "
+                    "(conservate come righe storiche, D15)",
                 )
             with self.db.read() as cur:
                 final = self._residue(cur, ids)
@@ -3758,14 +3879,14 @@ class Certification:
         if sum(final.values()) == 0:
             self.report.note(
                 "CLEAN-CHK",
-                f"verifica sugli id del run {self.run_id}: 0 identita', "
-                "0 membership, 0 sessioni",
+                f"verifica sugli id del run {self.run_id}: 0 identita' attive, "
+                "0 membership attive, 0 sessioni",
             )
         else:
             self.report.fail(
                 "CLEAN-CHK",
-                f"cleanup INCOMPLETO: restano {final['users']} identita', "
-                f"{final['memberships']} membership, {final['sessions']} sessioni",
+                f"cleanup INCOMPLETO: restano {final['users']} identita' attive, "
+                f"{final['memberships']} membership attive, {final['sessions']} sessioni",
             )
 
 
@@ -8330,14 +8451,24 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
     if leftovers:
         report.fail(
             "0.11",
-            f"{leftovers} identita' di certificazione gia' presenti. Potrebbero "
-            "essere il residuo di un run non completato oppure una "
+            f"{leftovers} identita' o agenzie di certificazione ancora OPERATIVE. "
+            "Potrebbero essere il residuo di un run non completato oppure una "
             "certificazione in corso: nessuna identita' creata e nessuna riga "
-            "cancellata. Verificare a mano prima di rieseguire.",
+            "toccata. Verificare a mano prima di rieseguire.",
         )
         report.summary()
         return report.exit_code
-    report.note("0.11", "nessun residuo di certificazioni precedenti")
+    # D15: i residui DISMESSI non fermano il run, ma si dichiarano sempre.
+    identita_dismesse, agenzie_archiviate = cert.retired()
+    if identita_dismesse or agenzie_archiviate:
+        report.note(
+            "0.11",
+            f"nessun residuo operativo; restano come righe storiche (D15) "
+            f"{identita_dismesse} identita' di certificazione dismesse "
+            f"({CERT_PREFIX}...{CERT_DOMAIN}) e {agenzie_archiviate} agenzie "
+            "dedicate archiviate (p26-6-cert-...), senza accessi")
+    else:
+        report.note("0.11", "nessun residuo di certificazioni precedenti")
 
     incoherence_census(report, database)
 

@@ -91,7 +91,9 @@ def rete(mondo):
         # Con ADM D15 nel database di prova: le righe di rete non si
         # cancellano piu'; restano e la prossima fixture le riporta allo stato
         # iniziale con UPDATE (`_rete_d15`).
-        for v in ([] if d15 else creati.values()):
+        # Il catalogo si rilegge qui: D15 puo' essere stata applicata dopo
+        # l'apertura della fixture (`test_adm_d15_activation_postgres`).
+        for v in ([] if d15 or d15_attiva(m) else creati.values()):
             _q(m, "DELETE FROM network_territory_aliases WHERE territory_id = %s", (v["territory"],))
             _q(m, "DELETE FROM agency_territory_assignments WHERE territory_id = %s", (v["territory"],))
             _q(m, "DELETE FROM network_territories WHERE id = %s", (v["territory"],))

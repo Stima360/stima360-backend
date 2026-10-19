@@ -446,6 +446,19 @@ class FakeCursor:
             # soltanto il ramo Python, e il caso "entita' ancora presente"
             # sarebbe una dichiarazione invece di una deduzione.
             self._rows = self._classifica_rootless()
+        elif "AS AGENZIE_OPERATIVE FROM AGENCIES" in upper:
+            # ADM D15: agenzie dedicate di un run precedente non archiviate.
+            self._row = {"agenzie_operative": self.state.get("agenzie_cert_operative", 0)}
+        elif "AS IDENTITA_DISMESSE" in upper:
+            # ADM D15: i residui DISMESSI dei run precedenti, che il report conta.
+            dismessi = self.state.setdefault("disabled", set())
+            self._row = {
+                "identita_dismesse": sum(1 for i, e in self._users().items()
+                                         if e.startswith(cert.CERT_PREFIX) and i in dismessi),
+                "agenzie_archiviate": self.state.get("agenzie_cert_archiviate", 0)}
+        elif "COUNT(*) AS N FROM AGENCY_MEMBERSHIPS WHERE AGENCY_ID IN" in upper:
+            # ADM D15: membership ancora attive nelle agenzie dedicate.
+            self._row = {"n": self.state.get("membership_attive", 0)}
         elif "COUNT(*) AS N FROM AGENCIES" in upper:
             # Prima del ramo generico: quello imposta `_rows` e lascerebbe
             # `fetchone()` su un risultato vecchio.
@@ -472,14 +485,18 @@ class FakeCursor:
             if "leftovers" in self.state:
                 self._row = {"n": self.state["leftovers"]}
             else:
-                self._row = {"n": sum(1 for e in self._users().values()
-                                      if e.startswith(cert.CERT_PREFIX))}
+                dismessi = self.state.setdefault("disabled", set())
+                self._row = {"n": sum(1 for i, e in self._users().items()
+                                      if e.startswith(cert.CERT_PREFIX)
+                                      and i not in dismessi)}
         elif "AS USERS" in upper:
             if "residue" in self.state:
                 self._row = dict(self.state["residue"])
             else:
                 ids = set(params[0]) if params else set()
-                self._row = {"users": len([i for i in ids if i in self._users()]),
+                dismessi = self.state.setdefault("disabled", set())
+                self._row = {"users": len([i for i in ids if i in self._users()
+                                           and i not in dismessi]),
                              "memberships": 0, "sessions": 0}
         elif "FROM FOLLOWUP_ACTIONS" in upper and "TASK_ID = %S" in upper:
             # L'azione persistita dalla scansione: 1 per difetto, cosi' un run
@@ -835,6 +852,23 @@ class FakeCursor:
         elif upper.startswith("INSERT INTO AGENCY_MEMBERSHIPS"):
             self.state.setdefault("memberships", []).append(params)
             self.rowcount = 1
+        elif upper.startswith("UPDATE"):
+            # ADM D15: la dismissione. Gli utenti diventano `disabled`, le
+            # agenzie `archived` (escono da `agenzie_vive`, che il conteggio
+            # finale interroga con `status <> 'archived'`).
+            self.state.setdefault("updates", []).append(statement)
+            ids = set(params[0]) if params and isinstance(params[0], (tuple, list, set)) else set()
+            if upper.startswith("UPDATE OPERATOR_USERS"):
+                bersagli = [i for i in ids if i in self._users()]
+                self.state.setdefault("disabled", set()).update(bersagli)
+                self.rowcount = len(bersagli)
+            elif upper.startswith("UPDATE AGENCIES"):
+                vive = self.state.get("agenzie_vive", [])
+                self.rowcount = len([a for a in vive if a in ids])
+                if not self.state.get("archiviazione_inefficace"):
+                    self.state["agenzie_vive"] = [a for a in vive if a not in ids]
+            else:
+                self.rowcount = 1
         elif upper.startswith("DELETE"):
             self.state.setdefault("deletes", []).append(statement)
             # Solo le DELETE per agenzia portano una tupla di id: quella delle
@@ -3572,6 +3606,37 @@ def test_22_leftovers_stop_the_run_without_creating_or_deleting(monkeypatch):
     assert database.state["users"] == other_run
 
 
+def test_22b_d15_retired_residue_does_not_stop_the_run_but_is_reported(monkeypatch):
+    """ADM D15: identita' dismesse e agenzie dedicate archiviate sono la traccia
+    storica di run conclusi. Non fermano il run - lo renderebbero ineseguibile
+    per sempre - ma il report le conta, con il loro riconoscimento."""
+    vecchio = {900: f"{cert.CERT_PREFIX}deadbeef-11{cert.CERT_DOMAIN}"}
+    database = fake_database(agencies=AGENCIES, users=dict(vecchio), disabled={900},
+                             agenzie_cert_archiviate=2)
+
+    _code, report, database, _probe, _ = working_run(monkeypatch, database=database)
+
+    assert not any(k == cert.FAIL and i == "0.11" for k, i, _t in report.rows), report.rows
+    riga = next(t for _k, i, t in report.rows if i == "0.11")
+    assert "1 identita' di certificazione dismesse" in riga, riga
+    assert "2 agenzie dedicate archiviate" in riga, riga
+    assert database.state.get("inserted"), "il run si e' fermato su un residuo dismesso"
+    assert database.state["users"][900] == vecchio[900]
+
+
+def test_22c_d15_an_unarchived_dedicated_agency_stops_the_run(monkeypatch):
+    """Un'agenzia dedicata NON archiviata e' un run in corso o un cleanup
+    rimasto a meta': come un'identita' attiva, ferma tutto e non tocca nulla."""
+    database = fake_database(agencies=AGENCIES, agenzie_cert_operative=1)
+
+    code, report, database, _probe, _ = working_run(monkeypatch, database=database)
+
+    assert code == 1
+    assert any(k == cert.FAIL and i == "0.11" for k, i, _t in report.rows), report.rows
+    executed = " ".join(database.state.get("sql", [])).upper()
+    assert "INSERT" not in executed and "UPDATE" not in executed and "DELETE" not in executed
+
+
 # ---------------------------------------------------------------------------
 # 23-27 - fixture, cleanup e concorrenza
 # ---------------------------------------------------------------------------
@@ -3580,10 +3645,25 @@ def test_23_cleanup_runs_even_after_a_failure(monkeypatch):
     code, report, database, _probe, _ = working_run(
         monkeypatch, http=FakeHttp(broken={"isolation"}))
 
+    # ADM D15: le sessioni si cancellano, membership e identita' si dismettono.
     deletes = " ".join(database.state.get("deletes", []))
-    for table in ("operator_sessions", "agency_memberships", "operator_users"):
-        assert table in deletes, f"il cleanup non ha toccato {table}"
+    updates = " ".join(database.state.get("updates", []))
+    assert "operator_sessions" in deletes, "il cleanup non ha toccato operator_sessions"
+    assert "UPDATE agency_memberships SET status = 'revoked'" in updates, updates
+    assert "UPDATE operator_users SET status = 'disabled'" in updates, updates
     assert code == 1
+
+
+def test_23b_d15_agencies_accounts_and_memberships_are_never_deleted():
+    """ADM D15 (migration 105): nessuna DELETE su agencies, operator_users e
+    agency_memberships, in nessun punto del sorgente. Una DELETE reintrodotta
+    fallirebbe sul TEST a cleanup avviato, lasciando il run a meta'."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    codice = "\n".join(r for r in source.split("\n") if not r.strip().startswith("#"))
+    for tabella in cert.Certification.RETIRED_TABLES:
+        assert not re.search(rf'"DELETE\s+FROM\s+{tabella}\b', codice), tabella
+        assert (tabella, "agency_id") not in cert.Certification.DEDICATED_TABLES
+    assert "UPDATE agencies SET status = 'archived'" in source
 
 
 def test_24_the_cleanup_is_lexically_inside_a_finally():
@@ -3635,8 +3715,13 @@ def test_26_a_concurrent_run_survives_this_run_cleanup():
     assert concurrent in database.state["users"], (
         "il cleanup ha cancellato l'identita' di un run concorrente"
     )
+    assert concurrent not in database.state["disabled"], (
+        "il cleanup ha dismesso l'identita' di un run concorrente"
+    )
     for identifier in mine:
-        assert identifier not in database.state["users"]
+        # ADM D15: la riga resta, dismessa.
+        assert identifier in database.state["users"]
+        assert identifier in database.state["disabled"]
     assert report.exit_code == 0
 
 
@@ -4550,7 +4635,10 @@ def test_59_a_surviving_dedicated_agency_is_a_failure_with_a_recovery_hint(monke
     fallimenti = [(i, t) for k, i, t in report.rows if k == cert.FAIL]
     testo = next((t for i, t in fallimenti if i == "CLEAN-DEDICATA"), None)
     assert testo is not None, fallimenti
-    assert "ANCORA PRESENTI" in testo and "RECUPERO:" in testo
+    # ADM D15: l'agenzia non sparisce, si archivia; il residuo e' un'agenzia
+    # rimasta NON archiviata.
+    assert "NON dismesse del tutto" in testo and "2 non archiviate" in testo
+    assert "RECUPERO:" in testo
     assert "mai per prefisso" in testo
 
 
@@ -6090,8 +6178,13 @@ def _tabelle_cancellate():
     tabelle |= set(C.DEDICATED_EFFECT_TABLES)
     tabelle |= {t for _attributo, t in C.TRACKED_ID_TABLES}
     tabelle |= {t for t, _colonna in C.DEDICATED_TABLES}
-    tabelle |= {"agencies", "operator_users"}
-    return tabelle
+    # ADM D15: identita' e membership non si cancellano piu', si dismettono, e
+    # nessuna loro riga puo' far partire un CASCADE o un SET NULL. `agencies`
+    # resta: non si cancella neppure lei, ma le fixture delle agenzie
+    # dedicate si cancellano per `agency_id`, e la sua guardia e' quella che
+    # protegge le righe altrui in quelle tabelle.
+    tabelle.add("agencies")
+    return tabelle - set(C.UNGUARDED_RETIRED_TABLES)
 
 
 def _parent_da_sorvegliare():
@@ -6253,13 +6346,12 @@ def test_86m_the_guard_runs_before_the_first_delete(monkeypatch):
     assert not [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")], \
         [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")]
 
-    # Le IDENTITA' invece se ne vanno, ed e' voluto: i soli figli di
-    # `operator_users` sono `agency_memberships` e `operator_sessions`, in
-    # CASCADE e create da questo run - nessuna riga altrui puo' risentirne, e
-    # lasciare vive delle credenziali sul TEST sarebbe il danno peggiore fra i
-    # due. Se un giorno comparisse un terzo figlio, la prova di completezza
-    # sulle FK lo segnalerebbe prima di qui.
-    assert any("FROM operator_users" in q for q in eseguite), eseguite
+    # Le IDENTITA' invece si DISMETTONO comunque, ed e' voluto: lasciare vive
+    # delle credenziali sul TEST sarebbe il danno peggiore fra i due. ADM D15:
+    # non si cancellano, diventano `disabled` - una UPDATE, che non tocca
+    # nessuna riga altrui.
+    assert any(q.startswith("UPDATE operator_users SET status = 'disabled'")
+               for q in database.state.get("updates", [])), database.state.get("updates")
 
 
 def test_86o_a_block_also_stops_the_deletions_made_through_the_api():
@@ -6351,8 +6443,9 @@ def test_86s_a_healthy_snapshot_does_not_block_anything(monkeypatch):
     supererebbe la prova qui sopra."""
     _code, report, database, _probe, _ = _dedicato(monkeypatch)
     assert not any(i == "CLEAN-ISTANTANEA" for _k, i, _t in report.rows), report.rows
-    assert any("FROM agencies" in q for q in database.state.get("deletes", [])), \
-        database.state.get("deletes")
+    # ADM D15: l'agenzia dedicata si ARCHIVIA, non si cancella.
+    assert any(q.startswith("UPDATE agencies SET status = 'archived'")
+               for q in database.state.get("updates", [])), database.state.get("updates")
 
 
 @pytest.mark.parametrize("guasto,chiavi_attese", [
@@ -6514,13 +6607,16 @@ def test_87b_the_block_also_holds_the_dedicated_agencies(monkeypatch):
     resti una seconda strada per arrivare alle stesse righe."""
     _code, report, database, _probe, _ = _dedicato(monkeypatch, storage_rotto=True)
     eseguite = database.state.get("deletes", [])
+    aggiornate = database.state.get("updates", [])
     assert not any("FROM agencies" in q for q in eseguite), eseguite
+    assert not any(q.startswith("UPDATE agencies") for q in aggiornate), aggiornate
     fallimenti = {i: t for k, i, t in report.rows if k == cert.FAIL}
     assert "CLEAN-DEDICATA" in fallimenti
     assert "NON rimosse" in fallimenti["CLEAN-DEDICATA"]
-    # Le identita' invece se ne vanno: nessuna credenziale resta viva per
-    # colpa di un file rimasto in un bucket.
-    assert any("FROM operator_users" in q for q in eseguite), eseguite
+    # Le identita' invece si dismettono (D15): nessuna credenziale resta viva
+    # per colpa di un file rimasto in un bucket.
+    assert any(q.startswith("UPDATE operator_users SET status = 'disabled'")
+               for q in aggiornate), aggiornate
 
 
 def test_87c_with_a_clean_bucket_the_rows_are_removed_as_usual(monkeypatch):
@@ -6840,6 +6936,12 @@ def test_96_the_children_of_the_fixtures_are_recognised_and_removed(monkeypatch)
 
     cancellazioni = " ".join(database.state.get("deletes", [])).upper()
     for figlia in FIGLI_DELLE_FIXTURE:
+        if figlia in cert.Certification.RETIRED_TABLES:
+            # ADM D15: la membership del run non si cancella, si REVOCA.
+            assert f"FROM {figlia.upper()} T WHERE" not in cancellazioni
+            assert any(q.startswith(f"UPDATE {figlia} SET status = 'revoked'")
+                       for q in database.state.get("updates", [])), figlia
+            continue
         assert f"FROM {figlia.upper()} T WHERE" in cancellazioni, (
             f"{figlia} non viene rimossa: {database.state.get('deletes')}")
 
@@ -6871,9 +6973,12 @@ def test_96b_each_child_is_watched_by_the_guard_and_declared(monkeypatch):
                    if "pg_constraint" in q and p}
     for figlia in FIGLI_DELLE_FIXTURE:
         assert figlia in set(cert.Certification.CLEANUP_PARENTS), figlia
-    # I genitori da cui pendono sono tutti passati alla guardia.
+    # I genitori da cui pendono sono tutti passati alla guardia - tranne quelli
+    # che ADM D15 non cancella piu' (le identita' del run si dismettono).
     genitori = {g.split(".")[-1] for g, _c in FIGLI_DELLE_FIXTURE.values()}
-    assert genitori <= interrogate, sorted(genitori - interrogate)
+    sorvegliati = genitori - set(cert.Certification.UNGUARDED_RETIRED_TABLES)
+    assert sorvegliati <= interrogate, sorted(sorvegliati - interrogate)
+    assert not (set(cert.Certification.UNGUARDED_RETIRED_TABLES) & interrogate)
 
 
 def test_96d_the_membership_belongs_to_the_run_through_its_operator():
@@ -6912,7 +7017,12 @@ def test_96d_the_membership_belongs_to_the_run_through_its_operator():
     assert " OR " in generale and "IS NULL" in generale, generale
 
 
-@pytest.mark.parametrize("figlia", sorted(FIGLI_DELLE_FIXTURE))
+@pytest.mark.parametrize("figlia", sorted(
+    f for f, (g, _c) in FIGLI_DELLE_FIXTURE.items()
+    # ADM D15: i figli di `operator_users` non bloccano piu' nulla, perche'
+    # l'identita' non si cancella: una riga altrui che la referenzia non puo'
+    # essere toccata. Il caso e' provato a parte, in test_96e.
+    if g.split(".")[-1] not in cert.Certification.UNGUARDED_RETIRED_TABLES))
 def test_96c_a_foreign_row_in_the_same_table_still_blocks(monkeypatch, figlia):
     """Una riga ESTRANEA nella stessa tabella continua a fermare tutto.
 
@@ -6943,11 +7053,29 @@ def test_96c_a_foreign_row_in_the_same_table_still_blocks(monkeypatch, figlia):
     assert not [q for q in eseguite if any(f"FROM {t} " in q + " " for t in dati)], \
         eseguite
     assert not [s for s, _st, _b in probe.exchanges if s.startswith("DELETE")]
-    # `agency_memberships` e `operator_sessions` restano cancellabili da
-    # `cleanup_database`: sono figlie di `operator_users`, tutte e due in
-    # CASCADE e create da questo run, e lasciare credenziali vive sul TEST
-    # sarebbe il danno peggiore. Non e' un'eccezione al blocco sui DATI.
-    assert any("FROM operator_users" in q for q in eseguite), eseguite
+    # Le identita' del run si dismettono comunque in `cleanup_database`:
+    # lasciare credenziali vive sul TEST sarebbe il danno peggiore. Non e'
+    # un'eccezione al blocco sui DATI, ed e' una UPDATE (ADM D15).
+    assert any(q.startswith("UPDATE operator_users SET status = 'disabled'")
+               for q in database.state.get("updates", [])), database.state.get("updates")
+
+
+def test_96e_d15_a_foreign_row_on_the_runs_identities_no_longer_blocks(monkeypatch):
+    """ADM D15: le identita' del run non si cancellano piu', quindi una riga
+    altrui che le referenzia (una membership, una sessione) non puo' essere
+    portata via da un CASCADE ne' azzerata da un SET NULL. La guardia non le
+    interroga, e il cleanup procede: si dismette, non si cancella."""
+    _code, report, database, _probe, _ = working_run(
+        monkeypatch, dedicated_agencies=True,
+        http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        fk_perimetro={"operator_users": [("public.agency_memberships", "operator_user_id")]},
+        dipendenti_estranee=1)
+    esiti = {i: k for k, i, _t in report.rows}
+    assert esiti.get("CLEAN-PREFLIGHT") == cert.PASS, report.rows
+    interrogate = {p[0] for q, p in database.state["interrogazioni"]
+                   if "pg_constraint" in q and p}
+    assert "operator_users" not in interrogate
+    assert not any("FROM operator_users" in q for q in database.state.get("deletes", []))
 
 
 #: Le TREDICI relazioni che il preflight del run 38e341f68f8a ha dichiarato
@@ -7005,10 +7133,12 @@ def test_97_the_live_preflight_no_longer_calls_the_runs_own_rows_foreign(monkeyp
     assert esiti.get("CLEAN-VERIFICA") == cert.PASS, \
         [r for r in report.rows if r[1] == "CLEAN-VERIFICA"]
 
-    # E ogni genitore delle tredici e' stato davvero interrogato.
+    # E ogni genitore delle tredici e' stato davvero interrogato - tranne le
+    # identita', che ADM D15 dismette invece di cancellare.
     interrogate = {p[0] for q, p in database.state["interrogazioni"]
                    if "pg_constraint" in q and p}
-    genitori = {g for g, _f, _c in RELAZIONI_DEL_RUN_38E341}
+    genitori = ({g for g, _f, _c in RELAZIONI_DEL_RUN_38E341}
+                - set(cert.Certification.UNGUARDED_RETIRED_TABLES))
     assert genitori <= interrogate, sorted(genitori - interrogate)
 
 
@@ -9573,11 +9703,13 @@ def test_107_nba_materializzate_entrano_nel_cleanup_completo(monkeypatch):
     assert db.state["nba_rows"] == {}
     deletes = db.state["deletes"]
     n = next(i for i, q in enumerate(deletes) if q.startswith("DELETE FROM next_best_actions"))
-    for parent in ("leads", "contacts", "agencies"):
+    for parent in ("leads", "contacts"):
         p = next(i for i, q in enumerate(deletes)
-                 if q.startswith(f"DELETE FROM {parent} WHERE agency_id")
-                 or (parent == "agencies" and q.startswith("DELETE FROM agencies WHERE id")))
+                 if q.startswith(f"DELETE FROM {parent} WHERE agency_id"))
         assert n < p
+    # ADM D15: l'agenzia non si cancella, si archivia - dopo le sue fixture.
+    assert any(q.startswith("UPDATE agencies SET status = 'archived'")
+               for q in db.state.get("updates", []))
 
 
 @pytest.mark.parametrize("fault", ["nba_mixed_contact", "nba_mixed_subject", "nba_mixed_stima",

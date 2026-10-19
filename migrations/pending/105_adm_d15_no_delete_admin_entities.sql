@@ -10,9 +10,11 @@
 --     (`d15_attiva`) e non cancellano piu' queste righe. Per provarla su un
 --     PostgreSQL usa-e-getta senza spostarla: `ADM_D15_TEST=1`.
 --   * Gli script di certificazione P26 (`scripts/p26_3_live_cert.py`,
---     `scripts/p26_6_live_cert.py`) cancellano ancora operatori, membership e
---     agenzie temporanei: con D15 attiva la loro pulizia fallisce. Serve una
---     decisione del proprietario.
+--     `scripts/p26_6_live_cert.py`) sono compatibili: le identita' di prova
+--     si dismettono (disabled, membership revoked, sessioni cancellate) e le
+--     agenzie dedicate si archiviano dopo averne rimosso le fixture. Restano
+--     come righe storiche riconoscibili (`p26-*-cert-...@certification.invalid`,
+--     slug `p26-6-cert-...`) e ogni run ne conta i residui.
 --   * Spostarla in `migrations/` richiede l'aggiornamento dichiarato delle
 --     sentinelle sulla numerazione delle migration.
 --

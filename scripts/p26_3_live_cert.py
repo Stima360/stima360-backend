@@ -21,32 +21,40 @@ COSA TOCCA
 ----------
 Dati di dominio: nulla. Le sole scritture stanno sulle tabelle di
 autenticazione - `operator_users`, `agency_memberships`, `operator_sessions` -
-e riguardano due operatori temporanei creati qui e cancellati nel `finally`.
+e riguardano due operatori temporanei creati qui e DISMESSI nel `finally`.
 Le agenzie vengono lette e mai modificate, create o disattivate.
+
+ADM D15: account e membership non si cancellano piu' fisicamente (migration
+105). A fine run l'operatore temporaneo resta come riga storica `disabled`,
+con la membership `revoked` e nessuna sessione: non accede piu' a nulla, non
+compare in nessun organico attivo e si riconosce dall'email
+(`p26-3-cert-...@certification.invalid`). Le sessioni, che sono credenziali e
+non storia, si cancellano come prima.
 
 I due operatori esistono perche' le password del seed P26-1 non sono nel
 runtime: sono variabili d'ambiente che servivano al seeding e non vi sono
 rimaste. Senza un'identita' vera la sessione operatore non e' provabile, e una
 prova dichiarata BLOCKED e' comunque una prova non fatta. Vengono quindi creati
 sul momento, con password casuali generate in memoria, mai stampate e mai
-scritte su disco, e le loro righe spariscono a fine run.
+scritte su disco, e a fine run vengono dismessi.
 
 CLEANUP
 -------
 Il cleanup e' esso stesso una prova. Ogni fallimento - una revoca non
-confermata da un 204, una DELETE che non completa - e' un FAIL che porta
+confermata da un 204, una dismissione che non completa - e' un FAIL che porta
 l'uscita a 1. Un cleanup incompleto non puo' in nessun caso produrre PASS: e'
-l'unico modo perche' "certificato" significhi anche "il database e' come l'ho
-trovato".
+l'unico modo perche' "certificato" significhi anche "nessuna identita' di
+prova resta operativa" (D15: le righe restano, dismesse, e il report le conta).
 
-Cancella per id, e solo gli id che ha creato lui. Ogni run porta un `run_id`
+Dismette per id, e solo gli id che ha creato lui. Ogni run porta un `run_id`
 casuale che finisce nell'email per rendere leggibile la provenienza di una
 riga, ma non e' quello il criterio di cancellazione: due certificazioni
 avviate insieme condividono il prefisso, e una DELETE per prefisso farebbe
 sparire gli operatori dell'altra mentre li sta usando. Se all'avvio trova
-righe di certificazione gia' presenti si ferma senza creare e senza
-cancellare nulla, perche' da qui non c'e' modo di distinguere il residuo di
-ieri da un run in corso adesso.
+identita' di certificazione ancora OPERATIVE (non dismesse) si ferma senza
+creare e senza toccare nulla, perche' da qui non c'e' modo di distinguere il
+residuo di ieri da un run in corso adesso. Quelle gia' dismesse dai run
+precedenti non fermano il run: il report le conta e le segnala.
 """
 from __future__ import annotations
 
@@ -424,13 +432,35 @@ class TemporaryOperators:
     # -- creazione ---------------------------------------------------------
 
     def leftovers(self) -> int:
+        """Le identita' di certificazione ancora OPERATIVE.
+
+        D15: un operatore dismesso resta come riga storica, quindi la sola
+        esistenza non dice piu' nulla. Conta chi potrebbe ancora lavorare -
+        account non `disabled`, membership non `revoked` o sessione ancora
+        presente - cioe' un run in corso o un cleanup non completato.
+        """
         with self.db.read() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS n FROM operator_users "
-                "WHERE email_normalized LIKE %s",
+                "SELECT COUNT(*) AS n FROM operator_users u "
+                "WHERE u.email_normalized LIKE %s AND ("
+                "u.status <> 'disabled' "
+                "OR EXISTS (SELECT 1 FROM agency_memberships m "
+                "WHERE m.operator_user_id = u.id AND m.status <> 'revoked') "
+                "OR EXISTS (SELECT 1 FROM operator_sessions s "
+                "WHERE s.operator_user_id = u.id))",
                 (CERT_EMAIL_LIKE,),
             )
             return int(cur.fetchone()["n"])
+
+    def retired(self) -> int:
+        """Le identita' di certificazione gia' dismesse dai run precedenti."""
+        with self.db.read() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS retired FROM operator_users "
+                "WHERE email_normalized LIKE %s AND status = 'disabled'",
+                (CERT_EMAIL_LIKE,),
+            )
+            return int(cur.fetchone()["retired"])
 
     def create(self, agency: dict) -> dict:
         """Un operatore attivo nell'agenzia data, con password casuale."""
@@ -481,19 +511,25 @@ class TemporaryOperators:
     # -- distruzione -------------------------------------------------------
 
     def _residue(self, cur, ids: tuple[int, ...]) -> dict:
-        """Quante righe restano PER GLI ID DI QUESTO RUN.
+        """Quante righe restano OPERATIVE PER GLI ID DI QUESTO RUN.
 
         Contato per id e non per prefisso dell'email. Un conteggio per prefisso
         includerebbe le righe di un run concorrente e trasformerebbe il lavoro
         di qualcun altro in un fallimento di questo - o, peggio, spingerebbe a
-        cancellarle per far tornare il conto.
+        toccarle per far tornare il conto.
+
+        D15: utenti e membership restano come righe storiche, quindi si contano
+        quelli non dismessi (utente non `disabled`, membership non `revoked`);
+        le sessioni, che si cancellano, si contano tutte.
         """
         cur.execute(
             """
             SELECT (SELECT COUNT(*) FROM operator_users u
-                     WHERE u.id IN %s)                              AS users,
+                     WHERE u.id IN %s
+                       AND u.status <> 'disabled')                  AS users,
                    (SELECT COUNT(*) FROM agency_memberships m
-                     WHERE m.operator_user_id IN %s)                AS memberships,
+                     WHERE m.operator_user_id IN %s
+                       AND m.status <> 'revoked')                   AS memberships,
                    (SELECT COUNT(*) FROM operator_sessions s
                      WHERE s.operator_user_id IN %s)                AS sessions
             """,
@@ -503,7 +539,7 @@ class TemporaryOperators:
         return {k: int(row[k]) for k in ("users", "memberships", "sessions")}
 
     def cleanup(self) -> None:
-        """Cancella cio' che QUESTO run ha creato, e lo dimostra.
+        """Dismette cio' che QUESTO run ha creato, e lo dimostra.
 
         Il criterio e' `created_ids` e nient'altro. Cancellare per prefisso
         dell'email sarebbe piu' comodo - ripulirebbe anche i resti di ieri - e
@@ -512,9 +548,10 @@ class TemporaryOperators:
         prima mentre li sta ancora usando, facendola fallire con 401
         inspiegabili. Un processo cancella quello che ha creato lui.
 
-        Le tre DELETE sono esplicite anche dove ON DELETE CASCADE basterebbe.
-        L'ordine rende leggibile l'intenzione e attribuisce un fallimento
-        parziale alla tabella giusta; il conteggio finale e' l'unica prova che
+        D15: nessuna DELETE su `operator_users` e `agency_memberships`. Le
+        sessioni si cancellano, la membership diventa `revoked`, l'utente
+        `disabled`: e' lo stesso esito di «Elimina dalla Rete» (ADM-7-E). Il
+        conteggio finale delle righe ancora operative e' l'unica prova che
         conta davvero.
         """
         if not self.created_ids:
@@ -530,16 +567,22 @@ class TemporaryOperators:
                 )
                 sessions = cur.rowcount
                 cur.execute(
-                    "DELETE FROM agency_memberships WHERE operator_user_id IN %s",
+                    "UPDATE agency_memberships SET status = 'revoked' "
+                    "WHERE operator_user_id IN %s AND status <> 'revoked'",
                     (ids,),
                 )
                 memberships = cur.rowcount
-                cur.execute("DELETE FROM operator_users WHERE id IN %s", (ids,))
+                cur.execute(
+                    "UPDATE operator_users SET status = 'disabled' "
+                    "WHERE id IN %s AND status <> 'disabled'",
+                    (ids,),
+                )
                 users = cur.rowcount
                 self.report.note(
                     "CLEAN-DB",
-                    f"run {self.run_id}: rimossi {sessions} sessioni, "
-                    f"{memberships} membership, {users} utenti temporanei",
+                    f"run {self.run_id}: rimosse {sessions} sessioni, revocate "
+                    f"{memberships} membership, disabilitati {users} utenti "
+                    "temporanei (conservati come righe storiche, D15)",
                 )
 
             with self.db.read() as cur:
@@ -556,15 +599,15 @@ class TemporaryOperators:
         if sum(final.values()) == 0:
             self.report.note(
                 "CLEAN-CHK",
-                f"verifica sugli id del run {self.run_id}: 0 utenti, "
-                "0 membership, 0 sessioni",
+                f"verifica sugli id del run {self.run_id}: 0 utenti attivi, "
+                "0 membership attive, 0 sessioni",
             )
         else:
             self.report.fail(
                 "CLEAN-CHK",
-                f"cleanup INCOMPLETO: restano {final['users']} utenti, "
-                f"{final['memberships']} membership, {final['sessions']} sessioni "
-                f"del run {self.run_id}",
+                f"cleanup INCOMPLETO: restano {final['users']} utenti attivi, "
+                f"{final['memberships']} membership attive, {final['sessions']} "
+                f"sessioni del run {self.run_id}",
             )
 
 
@@ -963,15 +1006,25 @@ def run(report: Report, database: Database, env: dict, approved_commit: str,
     if leftovers:
         report.fail(
             "0.15",
-            f"{leftovers} operatore/i di certificazione gia' presenti "
+            f"{leftovers} operatore/i di certificazione ancora OPERATIVI "
             f"({CERT_PREFIX}...{CERT_DOMAIN}). Potrebbero essere il residuo di un "
             "run non completato oppure una certificazione in corso da un'altra "
-            "shell: nessun operatore creato e nessuna riga cancellata. Verificare "
+            "shell: nessun operatore creato e nessuna riga toccata. Verificare "
             "a mano prima di rieseguire.",
         )
         report.summary()
         return report.exit_code
-    report.note("0.15", "nessun residuo di certificazioni precedenti")
+    # D15: i residui DISMESSI non fermano il run, ma si dichiarano sempre.
+    dismessi = operators.retired()
+    if dismessi:
+        report.note(
+            "0.15",
+            f"nessun residuo operativo; {dismessi} operatore/i di certificazione "
+            f"gia' DISMESSI ({CERT_PREFIX}...{CERT_DOMAIN}, disabled, membership "
+            "revocate, nessuna sessione) restano come righe storiche (D15)",
+        )
+    else:
+        report.note("0.15", "nessun residuo di certificazioni precedenti")
 
     try:
         certify(report, http, operators, agency_a, agency_b, basic_ok, basic_wrong)
