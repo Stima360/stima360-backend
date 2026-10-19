@@ -1,11 +1,11 @@
-"""ADM D15 - la migration PREPARATA che vieta i DELETE fisici della Rete.
+"""ADM D15 - la migration che vieta i DELETE fisici della Rete.
 
-`migrations/pending/105_adm_d15_no_delete_admin_entities.sql` NON e' applicata
-da nessuna parte: il runner legge solo `migrations/*.sql`. Qui la si prova su
-PostgreSQL usa-e-getta (schema completo, fixture `rete`) DENTRO una
-transazione che alla fine si annulla: il database di prova resta com'era.
+`migrations/105_adm_d15_no_delete_admin_entities.sql` e' ATTIVATA: il runner la
+vede e la applica come ogni altra (la catena `completo` la contiene gia'). Qui
+la si riprova su PostgreSQL usa-e-getta (schema completo, fixture `rete`)
+DENTRO una transazione che alla fine si annulla.
 
-  01  il runner non la vede (resta fuori da `migrations/*.sql`)
+  01  il runner la vede, con la sua down, e la valida senza errori
   02  dopo la migration: DELETE e TRUNCATE rifiutati su agenzie, account,
       membership, territori, assegnazioni, alias (23001), anche in replica;
       gli UPDATE di stato della Rete funzionano; i trigger del registro sono
@@ -24,18 +24,20 @@ from tests.test_censimento_3_backend_postgres import DSN, _q, completo, mondo  #
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
 ROOT = Path(__file__).resolve().parents[1]
-PENDING = ROOT / "migrations" / "pending"
-UP = PENDING / "105_adm_d15_no_delete_admin_entities.sql"
-DOWN = PENDING / "105_adm_d15_no_delete_admin_entities_down.sql"
+MIGRAZIONI = ROOT / "migrations"
+UP = MIGRAZIONI / "105_adm_d15_no_delete_admin_entities.sql"
+DOWN = MIGRAZIONI / "105_adm_d15_no_delete_admin_entities_down.sql"
 TABELLE = ("agencies", "operator_users", "agency_memberships", "network_territories",
            "agency_territory_assignments", "network_territory_aliases")
 
 
-def test_01_il_runner_non_la_applica():
+def test_01_il_runner_la_vede_con_la_sua_down():
     from scripts import p26_migrate
-    visti = {p.name for p in p26_migrate.MIGRATIONS_DIR.glob("*.sql")}
-    assert UP.exists() and DOWN.exists()
-    assert UP.name not in visti and DOWN.name not in visti
+    trovate = [m for m in p26_migrate.discover_migrations() if m.number == 105]
+    assert [m.path for m in trovate] == [UP]
+    assert trovate[0].down_path == DOWN and not trovate[0].non_transactional
+    assert p26_migrate.validate_migration(trovate[0]) == []
+    assert not (MIGRAZIONI / "pending").exists()
 
 
 @pytest.fixture

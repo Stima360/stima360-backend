@@ -28,7 +28,6 @@ Opt-in `P29_TEST_DSN`, SOLO database locale; DB `stima360_db_test`.
 from __future__ import annotations
 
 import argparse
-import os
 import threading
 import uuid
 from decimal import Decimal
@@ -44,24 +43,14 @@ from tests.test_censimento_1_fullschema_postgres import (
 pytestmark = pytest.mark.skipif(
     not DSN, reason="P29_TEST_DSN non impostata: nessun PostgreSQL su cui provare CENSIMENTO-1 Fase 3")
 
-# ADM D15 (eliminazione blindata), SOLO PER I TEST: con `ADM_D15_TEST=1` la
-# migration PREPARATA `migrations/pending/105_...` si applica anche al database
-# usa-e-getta di questa catena, dopo tutte le migration, per provare che CRM,
-# Rete e Territorio funzionano con i DELETE/TRUNCATE fisici vietati. Non e' un
-# interruttore dell'applicazione: il runner non la vede e nessun database
-# condiviso la riceve da qui.
-ADM_D15_ATTIVA = os.environ.get("ADM_D15_TEST") == "1"
-ADM_D15_SU = Path(__file__).resolve().parents[1] / "migrations" / "pending" / "105_adm_d15_no_delete_admin_entities.sql"
-
-
-def applica_d15_se_richiesta(cur):
-    if ADM_D15_ATTIVA:
-        cur.execute(ADM_D15_SU.read_text(encoding="utf-8"))
+# ADM D15 (eliminazione blindata): la migration 105 sta in `migrations/` e la
+# catena qui sotto la applica con il runner, come ogni altra. Il percorso serve
+# ai test che la riapplicano (e' idempotente) o ne provano la down.
+ADM_D15_SU = Path(__file__).resolve().parents[1] / "migrations" / "105_adm_d15_no_delete_admin_entities.sql"
 
 
 def d15_attiva(c):
-    """Se il database di prova ha il divieto D15 (dall'opt-in qui sopra o, dopo
-    l'attivazione autorizzata, dal runner): lo dice il catalogo, non l'ambiente."""
+    """Se il database di prova ha il divieto D15: lo dice il catalogo."""
     return bool(_q(c, "SELECT 1 FROM pg_trigger WHERE tgname = 'trg_adm_no_delete' LIMIT 1"))
 
 OPERATORE = "censimento.fase3"
@@ -113,8 +102,6 @@ def completo():
         assert runner.command_apply(args) == 0
         mp.setattr(runner, "MIGRATIONS_DIR", MIGRAZIONI)
         assert runner.command_apply(args) == 0
-        with conn.cursor() as cur:
-            applica_d15_se_richiesta(cur)
         from core import database as core_database
         mp.setattr(core_database, "get_connection", lambda: psycopg2.connect(dsn))
         c["impronte_storiche"] = _impronte(c)

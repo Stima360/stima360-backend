@@ -125,7 +125,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # invece di smettere di guardare: qualunque ALTRA migration comparisse farebbe ancora fallire.
     # SENTINELLA AGGIORNATA DA AGENZIE-TERRITORI C2: 104_agenzie_c2_territorial_change_requests
     # (proposte di modifica territoriali e loro registro; additiva, nessun backfill).
-    assert numeri[numeri.index(76):] == list(range(76, 105))
+    # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM D15: 105_adm_d15_no_delete_admin_entities
+    # (nessuna cancellazione fisica delle entita' della Rete), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 106))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

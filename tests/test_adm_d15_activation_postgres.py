@@ -1,8 +1,8 @@
 """ADM D15 - collaudo di attivazione su PostgreSQL usa-e-getta, con D15 ATTIVA.
 
-Lo schema e' quello completo del runner (catena `completo`), piu' la migration
-PREPARATA `migrations/pending/105_...` applicata a questo solo database di
-prova. Nessun database condiviso la riceve da qui.
+Lo schema e' quello completo del runner (catena `completo`), che contiene gia'
+la migration 105 (`migrations/105_...`). La fixture qui sotto lo verifica.
+Nessun database condiviso viene toccato da qui.
 
   01  P26-3: le identita' di certificazione si DISMETTONO (sessioni cancellate,
       membership revocate, account disabilitati), senza un solo DELETE su
@@ -26,7 +26,7 @@ import pytest
 from tests.test_adm1_super_admin_postgres import PASSWORD, adm1  # noqa: F401
 from tests.test_c1_lettura_territoriale_postgres import rete  # noqa: F401
 from tests.test_censimento_3_backend_postgres import (  # noqa: F401
-    ADM_D15_SU, DSN, _q, completo, d15_attiva, mondo,
+    DSN, _q, completo, d15_attiva, mondo,
 )
 
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
@@ -34,11 +34,8 @@ pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
 @pytest.fixture(scope="module", autouse=True)
 def _d15_nel_database_di_prova(completo):
-    """D15 su QUESTO database usa-e-getta, prima di ogni altra fixture."""
-    if not d15_attiva(completo):
-        with completo["conn"].cursor() as cur:
-            cur.execute(ADM_D15_SU.read_text(encoding="utf-8"))
-    assert d15_attiva(completo)
+    """D15 c'e' gia': l'ha applicata il runner con il resto della catena."""
+    assert d15_attiva(completo), "la catena del runner non ha applicato la 105"
     yield
 
 

@@ -1,22 +1,20 @@
 -- 105 - ADM D15: nessuna cancellazione fisica delle entita' della Rete.
 --
--- PREPARATA, NON APPLICATA. Sta in `migrations/pending/`, che il runner
--- (`scripts/p26_migrate.py`, glob di `migrations/*.sql`) non legge. Si applica
--- solo con autorizzazione esplicita del proprietario, spostandola in
--- `migrations/` insieme alla sua down.
+-- ATTIVAZIONE. Spostata da `migrations/pending/` a `migrations/` su
+-- autorizzazione del proprietario: da qui il runner (`scripts/p26_migrate.py`,
+-- glob di `migrations/*.sql`) la vede e la applica come ogni altra. Su un
+-- database va applicata solo dopo aver verificato che sia `stima360_db_test`
+-- e che ne esista un backup ripristinabile.
 --
--- PRIMA DELL'ATTIVAZIONE
---   * Le fixture di prova sono gia' adattate: riconoscono D15 dal catalogo
---     (`d15_attiva`) e non cancellano piu' queste righe. Per provarla su un
---     PostgreSQL usa-e-getta senza spostarla: `ADM_D15_TEST=1`.
+-- GIA' PRONTO PRIMA DELL'ATTIVAZIONE
+--   * Le fixture di prova riconoscono D15 dal catalogo (`d15_attiva`) e non
+--     cancellano piu' queste righe.
 --   * Gli script di certificazione P26 (`scripts/p26_3_live_cert.py`,
 --     `scripts/p26_6_live_cert.py`) sono compatibili: le identita' di prova
 --     si dismettono (disabled, membership revoked, sessioni cancellate) e le
 --     agenzie dedicate si archiviano dopo averne rimosso le fixture. Restano
 --     come righe storiche riconoscibili (`p26-*-cert-...@certification.invalid`,
 --     slug `p26-6-cert-...`) e ogni run ne conta i residui.
---   * Spostarla in `migrations/` richiede l'aggiornamento dichiarato delle
---     sentinelle sulla numerazione delle migration.
 --
 -- ROLLBACK: `105_adm_d15_no_delete_admin_entities_down.sql` toglie i trigger e
 -- la funzione e riporta i trigger del registro a ENABLE (stato di 057).

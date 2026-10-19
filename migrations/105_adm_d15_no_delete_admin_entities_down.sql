@@ -1,6 +1,6 @@
 -- 105 down - ADM D15. Toglie i trigger che rifiutano la cancellazione fisica e
 -- riporta i trigger di `platform_audit_log` allo stato di 057 (ENABLE).
--- PREPARATA, NON APPLICATA: vedi 105_adm_d15_no_delete_admin_entities.sql.
+-- Rollback di 105_adm_d15_no_delete_admin_entities.sql. Nessun dato viene toccato.
 
 DO $do$
 DECLARE
