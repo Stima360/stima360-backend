@@ -74,6 +74,6 @@ def test_02_incarichi_segnala_i_dati_da_completare(staged):  # noqa: F811
       report({ righe: C().querySelectorAll('tr').map((r) => r.visibleText()) });
     """
     out = _run(staged, scenario, rotte, "#/incarichi")
-    righe = [r for r in out["righe"] if "IMM-3" in r]
+    righe = [r for r in out["righe"] if "Via Roma" in r]   # SEMPLIFICAZIONE-CRM-1: senza codice
     assert len(righe) == 2
     assert "Dati da completare" in righe[0] and "Dati da completare" not in righe[1]

@@ -126,12 +126,19 @@ def test_b5_create_link_body_accetta_ogni_tipo_della_072():
     # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: la 106 aggiunge
     # `sale_appointment`, che NON si prenota da un link pubblico (servono un
     # incarico e un cliente scelti dall'agenzia; il CHECK della 077 non cambia).
+    # SEMPLIFICAZIONE-CRM-1: anche la visita immobile (`buyer_visit`) richiede
+    # un incarico e un cliente: non si prenota piu' da un link pubblico.
     dodici = ("call", "video_call", "seller_meeting", "inspection", "buyer_visit",
               "valuation_presentation", "mandate_signing", "proposal",
               "preliminary_contract", "notary", "technical", "other")
     assert APPOINTMENT_TYPES == dodici + ("sale_appointment",)
-    assert NOT_BOOKABLE_TYPES == ("sale_appointment",)
+    assert NOT_BOOKABLE_TYPES == ("buyer_visit", "sale_appointment")
     for tipo in dodici:
+        if tipo in NOT_BOOKABLE_TYPES:
+            with pytest.raises(ValidationError):
+                BookingLinkCreateBody(assigned_user_id=1, appointment_type=tipo,
+                                      duration_minutes=30)
+            continue
         corpo = BookingLinkCreateBody(assigned_user_id=1, appointment_type=tipo,
                                       duration_minutes=30)
         assert corpo.appointment_type == tipo
@@ -372,16 +379,19 @@ def test_j1_migration_077_esiste_con_la_sua_down():
 
 
 def test_j2_check_appointment_type_della_077_elenca_i_dodici_tipi_reali():
-    from appointments.enums import APPOINTMENT_TYPES
+    from appointments.enums import APPOINTMENT_TYPES, SALE_APPOINTMENT_TYPE
     from public_booking.enums import NOT_BOOKABLE_TYPES
     testo = (ROOT / "migrations" / "077_a30_12_public_booking.sql").read_text(encoding="utf-8")
-    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: i tipi prenotabili sono
-    # tutti nel CHECK della 077; quelli non prenotabili (106) non ci sono.
+    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: i dodici tipi della 072
+    # sono nel CHECK della 077; `sale_appointment` (106) non c'e'.
+    # SEMPLIFICAZIONE-CRM-1: `buyer_visit` resta nel CHECK (righe e link
+    # storici) ma e' escluso dall'applicazione (`NOT_BOOKABLE_TYPES`).
     for tipo in APPOINTMENT_TYPES:
-        if tipo in NOT_BOOKABLE_TYPES:
+        if tipo == SALE_APPOINTMENT_TYPE:
             assert f"'{tipo}'" not in testo, tipo
         else:
             assert f"'{tipo}'" in testo, tipo
+    assert "buyer_visit" in NOT_BOOKABLE_TYPES
 
 
 def test_j3_public_booking_source_e_gia_ammessa_dal_check_di_072_o_073():

@@ -481,7 +481,7 @@ def test_d01_voce_di_menu_ed_elenco_con_colonne_e_filtri(staged):  # noqa: F811
     assert out["nav"].index("venditori") == out["nav"].index("immobili") + 1
     assert out["nav"].index("acquisizioni") == out["nav"].index("venditori") + 1
     testo = out["content"]
-    for atteso in ("IMM-30", "Mario Rossi", "Anna Agente", "Appuntamento fissato", "Ultima attività",
+    for atteso in ("Trilocale", "Mario Rossi", "Anna Agente", "Appuntamento fissato", "Ultima attività",   # SEMPLIFICAZIONE-CRM-1: senza codice
                    "Stato appuntamento", "Prezzo richiesto", "+ Nuova acquisizione"):
         assert atteso in testo, atteso
     assert out["agenteVisibile"] is True
@@ -572,7 +572,7 @@ def test_d04_scheda_sezioni_azioni_e_persa_con_motivo(staged):  # noqa: F811
     """
     out = _run(staged, scenario, _rotte(), "#/acquisizioni/501")
     testo = out["content"]
-    for atteso in ("Acquisizione #501", "Appuntamento fissato", "Immobile", "IMM-30", "Apri immobile",
+    for atteso in ("Acquisizione #501", "Appuntamento fissato", "Immobile", "Trilocale", "Apri immobile",   # SEMPLIFICAZIONE-CRM-1: senza codice
                    "Proprietari", "Mario Rossi", "Bruno Bianchi", "Principale", "Appuntamento",
                    "Apri in Agenda", "Informazioni commerciali", "Storico", "Acquisizione creata"):
         assert atteso in testo, atteso
@@ -689,7 +689,7 @@ def test_d11_ricerca_immobile_dal_pulsante_nuova(staged):  # noqa: F811
                proprietari: opz(q('#acq-owner')) });
     """
     out = _run(staged, scenario, _rotte(), "#/acquisizioni")
-    assert "Immobile selezionato" in out["scelto"] and "IMM-30" in out["scelto"]
+    assert "Immobile selezionato" in out["scelto"] and "Trilocale · Via Roma 1" in out["scelto"]   # SEMPLIFICAZIONE-CRM-1
     assert out["id"] == "30" and out["nascosto"] is False and out["proprietari"] == ["41", "42"]
     ricerche = [c["url"] for c in out["calls"] if c["url"].startswith("/api/property/properties?")]
     assert ricerche and "search=trilo" in ricerche[0]

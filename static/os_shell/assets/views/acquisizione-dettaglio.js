@@ -130,7 +130,6 @@ export async function renderAcquisizioneDettaglio(container, params = []) {
 
         <section class="acq-section"><h3 class="section-title">Immobile</h3>
           <div class="detail-grid">
-            ${riga('Codice', escapeHtml(p.code || '—'))}
             ${riga('Titolo', escapeHtml(p.title || '—'))}
             ${riga('Indirizzo', escapeHtml(via || '—'))}
             ${riga('Comune', escapeHtml(p.city || '—'))}

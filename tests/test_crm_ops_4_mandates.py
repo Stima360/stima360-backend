@@ -72,7 +72,10 @@ def test_k03_nessuna_entita_incarico_e_nessuna_scrittura_dagli_incarichi():
         testo = "\n".join(r for r in testo.splitlines() if not r.lstrip().startswith("//"))
         assert "/mandate`" not in testo and "/mandate'" not in testo, nome
         assert "Nuovo incarico" not in testo and "Crea incarico" not in testo, nome
-        assert "apiPost" not in testo, nome
+        # SEMPLIFICAZIONE-CRM-1: la sola scrittura dalla scheda Incarico e' «Programma
+        # visita» (POST .../properties/{id}/visits, la stessa della scheda Immobile).
+        scritture = [r for r in testo.splitlines() if "apiPost(" in r]
+        assert all("/visits`" in r for r in scritture), (nome, scritture)
 
 
 def test_k04_rotte_sotto_api_property_nessun_mount_nuovo():
@@ -177,7 +180,9 @@ def test_l01_voce_di_menu_elenco_colonne_e_filtri(staged):  # noqa: F811
     out = base._run(staged, scenario, _rotte(), "#/incarichi")
     assert out["nav"].index("incarichi") == out["nav"].index("acquisizioni") + 1
     testo = out["content"]
-    for atteso in ("IMM-30", "Mario Rossi", "Bruno Bianchi", "Anna Agente", "Esclusiva", "7 giorni",
+    # SEMPLIFICAZIONE-CRM-1: l'immobile si legge da indirizzo e comune, mai dal codice
+    assert "IMM-30" not in testo
+    for atteso in ("Via Roma 1", "Giulianova", "Mario Rossi", "Bruno Bianchi", "Anna Agente", "Esclusiva", "7 giorni",
                    "Mandato", "#501", "Nessuna", "nascono solo da un", "Scadenza entro 7 giorni"):
         assert atteso in testo, atteso
     assert out["agenteVisibile"] is True and out["tipi"] == ["", "Esclusiva", "Non esclusiva"]
@@ -199,7 +204,8 @@ def test_l02_scheda_incarico_sezioni_azioni_e_storico(staged):  # noqa: F811
     """
     out = base._run(staged, scenario, _rotte(), "#/incarichi/30")
     testo = out["content"]
-    for atteso in ("Incarico · IMM-30", "Immobile", "Proprietari", "Mario Rossi", "Principale", "Bruno Bianchi",
+    assert "IMM-30" not in testo
+    for atteso in ("Incarico · Via Roma 1", "Visite", "Programma visita", "Immobile", "Proprietari", "Mario Rossi", "Principale", "Bruno Bianchi",
                    "Tipo incarico", "Esclusiva", "Data inizio", "02/10/2026", "Data scadenza", "09/10/2026",
                    "Giorni residui", "7 giorni", "Prezzo richiesto", "Prezzo minimo", "Stato commerciale",
                    "Acquisizione di origine", "#501", "Ultima interazione", "Storico interazioni",

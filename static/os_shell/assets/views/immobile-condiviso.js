@@ -6,6 +6,7 @@
 // puo' «Proporre una modifica» dei soli campi consentiti; l'immobile cambia
 // solo quando il Super Admin approva.
 import { escapeHtml, formatDateTime, renderBadge } from '../components/st-table.js';
+import { propertyShortLabel } from '../components/property-label.js';
 import {
   FIELD_TYPES, changesFrom, errorText, fieldsListHtml, getPropertyRequests, proposeChange, requestSummaryHtml,
   valueText,
@@ -27,7 +28,7 @@ export function sharedCardHtml(p) {
   return `
     <div class="card panel shared-property" data-shared-property="${Number(p.id)}">
       <a href="#/immobili" class="btn ghost">← Immobili</a>
-      <h2>${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</h2>
+      <h2>${escapeHtml(p.title || propertyShortLabel(p) || 'Immobile')}</h2>
       <p class="muted">${escapeHtml([luogo, p.city].filter(Boolean).join(', '))}</p>
       <p data-shared-badge>${renderBadge('Condiviso per competenza territoriale', 'info')}
         <span class="muted">Agenzia d’origine: <strong>${escapeHtml(a.origin_agency_name || '')}</strong>

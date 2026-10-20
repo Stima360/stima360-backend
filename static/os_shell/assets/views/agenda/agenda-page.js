@@ -22,6 +22,7 @@ import {
   MOBILE_MAX_WIDTH,
   STATUS_LABELS,
   TYPE_LABELS,
+  CREATE_HIDDEN_TYPES,
   VIEW_LABELS,
   VIEW_SLUGS,
   TIMEZONE_LABEL,
@@ -311,7 +312,9 @@ export async function renderAgenda(container, params = []) {
     spuntaColleghi.dataset.filter = 'colleagues';
     spuntaColleghi.checked = filtri.colleagues;
   }
-  const selTipo = selezione('type', [['', 'Tutti i tipi'], ...Object.entries(TYPE_LABELS)], filtri.type);
+  // SEMPLIFICAZIONE-CRM-1: un solo tipo di visita nei filtri (la visita immobile).
+  const selTipo = selezione('type', [['', 'Tutti i tipi'],
+    ...Object.entries(TYPE_LABELS).filter(([t]) => !CREATE_HIDDEN_TYPES.includes(t))], filtri.type);
   const selStato = selezione('status', [
     ['', 'Stati predefiniti'], [ALL_STATUSES_FILTER, 'Tutti gli stati'],
     ...Object.entries(STATUS_LABELS), [MISTAKES_FILTER, 'Creati per errore']], filtri.status);

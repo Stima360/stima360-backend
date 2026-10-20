@@ -65,21 +65,29 @@ export const TYPE_LABELS = Object.freeze({
   video_call: 'Videochiamata',
   seller_meeting: 'Appuntamento proprietario',
   inspection: 'Sopralluogo',
-  buyer_visit: 'Visita acquirente',
+  buyer_visit: 'Visita immobile',
   valuation_presentation: 'Presentazione valutazione',
   mandate_signing: 'Firma incarico',
-  proposal: 'Proposta',
-  preliminary_contract: 'Preliminare',
-  notary: 'Rogito',
-  technical: 'Tecnico',
+  proposal: 'Proposta d’acquisto',
+  preliminary_contract: 'Preliminare di compravendita',
+  notary: 'Rogito notarile',
+  technical: 'Appuntamento tecnico',
   other: 'Altro',
   sale_appointment: 'Appuntamento di vendita',
 });
 
+// SEMPLIFICAZIONE-CRM-1: specchio di appointments/enums.py::VISIT_TYPE,
+// MANDATE_REQUIRED_TYPES e CREATE_HIDDEN_TYPES. La visita immobile
+// (`buyer_visit`) si fissa solo su un incarico; `sale_appointment` non si
+// offre piu' alla creazione (resta leggibile sulle righe esistenti).
+export const VISIT_TYPE = 'buyer_visit';
+export const MANDATE_REQUIRED_TYPES = Object.freeze(['buyer_visit', 'sale_appointment']);
+export const CREATE_HIDDEN_TYPES = Object.freeze(['sale_appointment']);
+
 // Specchio di appointments/enums.py::SALE_APPOINTMENT_TYPE e di
 // public_booking/enums.py::NOT_BOOKABLE_TYPES.
 export const SALE_APPOINTMENT_TYPE = 'sale_appointment';
-export const NOT_BOOKABLE_TYPES = Object.freeze([SALE_APPOINTMENT_TYPE]);
+export const NOT_BOOKABLE_TYPES = Object.freeze(['buyer_visit', SALE_APPOINTMENT_TYPE]);
 
 // Specchio di appointments/enums.py::DEFAULT_DURATION_MINUTES: e' solo il
 // valore PROPOSTO nel form, non un vincolo.

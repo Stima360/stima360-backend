@@ -402,7 +402,7 @@ def test_c05_pagina_venditori_una_get_card_interazione_e_richiamo(staged):  # no
     assert out["nav"].index("venditori") == out["nav"].index("immobili") + 1
     assert out["listaPrima"] == 1                                # UNA GET per tutta la lista
     mario, bruno = out["card"]
-    for atteso in ("Mario Rossi", "Contattato", "Caldo 72", "IMM-30 · Via Roma 1, Giulianova", "333 111",
+    for atteso in ("Mario Rossi", "Contattato", "Caldo 72", "Via Roma 1, Giulianova", "333 111",   # SEMPLIFICAZIONE-CRM-1: senza codice
                    "Anna Agente", "Telefonata", "Vuole 220.000", "Richiamare Mario Rossi", "Scaduta da"):
         assert atteso in mario, atteso
     assert "Sospesa" in bruno and "Non più collegato come proprietario" in bruno

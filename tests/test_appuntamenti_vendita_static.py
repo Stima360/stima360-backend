@@ -1,6 +1,7 @@
 """APPUNTAMENTI DI VENDITA - prove statiche (senza database).
 
-  01  la 106 e' valida per il runner, ha la sua down ed e' l'ultima
+  01  la 106 e' valida per il runner e ha la sua down (SEMPLIFICAZIONE-CRM-1:
+      l'ultima della serie e' ora la 107, verificata nel suo test)
   02  la 106 aggiunge al CHECK della 072 SOLO `sale_appointment`, e il vincolo
       incarico/cliente/agente; la down si ferma se ci sono appuntamenti di vendita
   03  il catalogo del codice e gli specchi dell'interfaccia coincidono
@@ -38,8 +39,7 @@ def test_01_la_106_e_valida_e_l_ultima():
     from scripts import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    ultima = tutte[-1]
-    assert ultima.version == "106_sale_appointments"
+    ultima = next(m for m in tutte if m.version == "106_sale_appointments")
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)
@@ -66,7 +66,7 @@ def test_03_catalogo_ed_etichette():
     from appointments import enums
     assert enums.APPOINTMENT_TYPES[-1] == enums.SALE_APPOINTMENT_TYPE == "sale_appointment"
     assert enums.APPOINTMENT_TYPE_LABELS_IT["sale_appointment"] == "Appuntamento di vendita"
-    assert enums.APPOINTMENT_TYPE_LABELS_IT["buyer_visit"] == "Visita acquirente"
+    assert enums.APPOINTMENT_TYPE_LABELS_IT["buyer_visit"] == "Visita immobile"
     assert enums.SALE_MANDATE_STATES == ("active", "expired")
     modello = (ASSETS / "agenda" / "agenda-model.js").read_text(encoding="utf-8")
     assert "sale_appointment: 'Appuntamento di vendita'," in modello
@@ -77,7 +77,7 @@ def test_04_non_si_prenota_da_un_link_pubblico():
     from pydantic import ValidationError
     from public_booking.enums import NOT_BOOKABLE_TYPES
     from public_booking.schemas import BookingLinkCreateBody, BookingLinkPatchBody
-    assert NOT_BOOKABLE_TYPES == ("sale_appointment",)
+    assert NOT_BOOKABLE_TYPES == ("buyer_visit", "sale_appointment")
     with pytest.raises(ValidationError):
         BookingLinkCreateBody(assigned_user_id=1, appointment_type="sale_appointment",
                               duration_minutes=60)

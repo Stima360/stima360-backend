@@ -229,9 +229,10 @@ def _acquisizione(m, pid, cid, chi="owner_a"):
 
 def _appuntamento(m, pid, giorni=20):
     inizio = _futuro(giorni, 15)
-    return _q(m, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, property_id) "
-                 "VALUES (1, %s, 'buyer_visit', 'scheduled', %s, %s, %s) RETURNING id",
-              (m["ids"]["owner_a"], inizio, inizio + timedelta(hours=1), pid))[0][0]
+    # SEMPLIFICAZIONE-CRM-1 (107): una visita immobile porta anche il cliente.
+    return _q(m, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, property_id, contact_id) "
+                 "VALUES (1, %s, 'buyer_visit', 'scheduled', %s, %s, %s, %s) RETURNING id",
+              (m["ids"]["owner_a"], inizio, inizio + timedelta(hours=1), pid, m["mario"]))[0][0]
 
 
 def _richiesta(m, cid, agenzia=1):

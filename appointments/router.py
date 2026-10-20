@@ -271,9 +271,11 @@ def lookup_stime(
 def lookup_mandates(
     search: str | None = None,
     limit: int = 10,
+    property_id: int | None = None,
     ctx: OperatorContext = Depends(require_operator),
 ):
-    return _x(lambda: {"items": service.lookup_sale_mandates(ctx, search=search, limit=limit)})
+    return _x(lambda: {"items": service.lookup_sale_mandates(
+        ctx, search=search, limit=limit, property_id=property_id)})
 
 
 # ---------------------------------------------------------------------------

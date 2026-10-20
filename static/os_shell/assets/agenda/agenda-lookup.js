@@ -21,6 +21,8 @@
 // perche' e' una rotta dell'Agenda); qui c'e' solo la sua etichetta.
 
 import { apiGet } from '../core/api-client.js';
+import { propertyLookupLabel } from '../components/property-label.js';
+import { LEAD_PIPELINE_LABELS, LEAD_STAGE_LABELS, LEAD_STATUS_LABELS } from '../components/lead-labels.js';
 
 const LIMITE_LEAD = 20;
 const LIMITE_IMMOBILI = 10;
@@ -51,28 +53,27 @@ const DATA_BREVE = new Intl.DateTimeFormat('it-IT', {
   timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', year: 'numeric',
 });
 
-const STATI_LEAD = Object.freeze({ open: 'aperto', paused: 'in pausa', closed: 'chiuso' });
-
 /**
  * L'etichetta di un lead: cio' che serve a distinguerne due dello stesso
- * cliente (pipeline, fase, stato, da quando). Nessun ID.
+ * cliente (pipeline, fase, stato, da quando), in italiano
+ * (SEMPLIFICAZIONE-CRM-1: `components/lead-labels.js`; i valori salvati non
+ * cambiano). Nessun ID.
  */
 export function leadLabel(lead) {
   if (!lead) return '';
   const quando = lead.created_at && !Number.isNaN(Date.parse(lead.created_at))
     ? `dal ${DATA_BREVE.format(new Date(lead.created_at))}` : '';
-  const stato = STATI_LEAD[lead.status] || lead.status || '';
-  const parti = [lead.pipeline, lead.stage, stato, quando].filter(Boolean);
+  const pipeline = LEAD_PIPELINE_LABELS[lead.pipeline] || lead.pipeline || '';
+  const fase = LEAD_STAGE_LABELS[lead.stage] || lead.stage || '';
+  const stato = LEAD_STATUS_LABELS[lead.status] || lead.status || '';
+  const parti = [pipeline, fase, stato, quando].filter(Boolean);
   return parti.length ? parti.join(' · ') : 'Lead senza descrizione';
 }
 
-/** Titolo e riga secondaria di un immobile (codice, indirizzo, citta'). */
-export function propertyLabel(property) {
-  if (!property) return { title: '', detail: '' };
-  return {
-    title: property.title || property.code || 'Immobile senza titolo',
-    detail: [property.code, property.address, property.city].filter(Boolean).join(' · '),
-  };
+/** Titolo e riga secondaria di un immobile: tipologia, indirizzo, piano;
+ *  comune e proprietario sotto. Mai il codice (SEMPLIFICAZIONE-CRM-1). */
+export function propertyLabel(property, types) {
+  return propertyLookupLabel(property, types);
 }
 
 /**

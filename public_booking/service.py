@@ -33,6 +33,7 @@ from appointments.enums import APPOINTMENT_TYPE_LABELS_IT
 from appointments.service import create_public_booking_appointment
 
 from . import repository, security
+from .enums import NOT_BOOKABLE_TYPES
 
 PUBLIC_BOOKING_ORIGIN = "public_booking"
 
@@ -216,6 +217,11 @@ def _resolve_bookable_link(token: str) -> dict:
         raise LinkNotBookable("revoked")
     if not operabile:
         raise LinkNotBookable("operator")
+    # SEMPLIFICAZIONE-CRM-1: un link di un tipo che richiede un incarico e un
+    # cliente scelti dall'agenzia (visita immobile, vendita) non e' piu'
+    # prenotabile, anche se creato prima della regola: stesso esito neutro.
+    if link["appointment_type"] in NOT_BOOKABLE_TYPES:
+        raise LinkNotBookable("type")
     return link
 
 

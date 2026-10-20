@@ -1501,3 +1501,8 @@ a.census-unit-main { text-decoration: none; }
   .rete-operatori .st-table td .btn { min-height: 44px; margin: 4px 4px 0 0; }
   .registro-filtri > * { flex: 1 1 100%; }
 }
+
+/* SEMPLIFICAZIONE-CRM-1: le opzioni avanzate del dialog Agenda (il lead) */
+.agenda-advanced { margin-top: 8px; }
+.agenda-advanced > summary { cursor: pointer; color: var(--muted, #6b7280); font-size: 0.9em; }
+.agenda-advanced[open] > summary { margin-bottom: 6px; }

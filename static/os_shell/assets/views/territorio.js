@@ -310,7 +310,7 @@ function contenutoRiquadroImmobile(p, { tipi = [], vediDettagli = null } = {}) {
   box.appendChild(el('strong', { cls: 'territorio-popup-title', text: propertyTitle(p) }));
   const dove = propertyWhere(p);
   if (dove) box.appendChild(el('div', { text: dove }));
-  box.appendChild(el('div', { cls: 'muted', text: [labelOf(tipi, p.property_type, p.property_type || 'Immobile'), p.code].filter(Boolean).join(' · ') }));
+  box.appendChild(el('div', { cls: 'muted', text: labelOf(tipi, p.property_type, p.property_type || 'Immobile') }));
   const apri = el('button', { cls: 'btn primary', text: 'Apri scheda immobile', attrs: { type: 'button', 'data-open-property': String(p.id) } });
   apri.addEventListener('click', () => navigate('immobili', [String(p.id)]));
   box.appendChild(apri);
@@ -344,7 +344,6 @@ function disegnaPannelloImmobile(host, p, { tipi = [] } = {}) {
     fatti.appendChild(d);
   };
   riga('Tipologia', labelOf(tipi, p.property_type, p.property_type || ''));
-  riga('Codice', p.code);
   riga('Scheda', p.record_kind === 'census' ? 'Censimento' : 'Commerciale');
   riga('Posizione', 'Verificata su Zona (immobile senza edificio)');
   host.appendChild(fatti);
@@ -393,7 +392,7 @@ function disegnaPannello(host, b, { scheda = null, stato = 'loading', opzioni = 
     const lista = el('ul', { cls: 'territorio-units' });
     for (const u of gruppo.units) {
       const voce = el('li');
-      const testo = [u.code, unitFacts(u, tipi, accessori)].filter(Boolean).join(' · ');
+      const testo = unitFacts(u, tipi, accessori) || propertyTitle(u);
       voce.appendChild(el('a', { text: testo,
         attrs: { href: `#/immobili/${encodeURIComponent(String(u.id))}`, 'data-unit-link': String(u.id) } }));
       lista.appendChild(voce);

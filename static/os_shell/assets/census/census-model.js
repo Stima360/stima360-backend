@@ -23,6 +23,8 @@ export const FLOOR_CHIPS = [
   { value: '6', label: '6' },
 ];
 
+import { unitLabel } from '../components/property-label.js';
+
 const FLOOR_NAMES = {
   '-1': 'Interrato', '-2': 'Interrato', S: 'Seminterrato', T: 'Terra', '0': 'Terra', R: 'Rialzato',
 };
@@ -274,7 +276,7 @@ export function suggestionsFor(suggestions, categories, propertyType) {
   };
 }
 
-/** Il testo «Simile a IMM-402 (2º piano, int. 2)» per un candidato. */
+/** Il testo «Simile a un’unità già censita (2º piano, int. 2)» per un candidato. */
 export function similarText(s) {
   const parti = [];
   if (s.floor) parti.push(`${floorLabel(s.floor)}${/^-?\d+$/.test(String(s.floor)) ? ' piano' : ''}`);
@@ -282,7 +284,8 @@ export function similarText(s) {
   if (s.staircase) parti.push(`scala ${s.staircase}`);
   if (!parti.length && (s.address || s.city)) parti.push([s.address, s.civic_number].filter(Boolean).join(' ') || s.city);
   const dove = parti.length ? ` (${parti.join(', ')})` : '';
-  return `Simile a ${s.code || s.name || `#${s.id}`}${dove}`;
+  // SEMPLIFICAZIONE-CRM-1: mai il codice; il banner offre «Apri» sulla scheda.
+  return `Simile a un’unità già censita${dove}`;
 }
 
 /** La frase per l'operatore, dal codice del backend. Mai un nome tecnico. */
@@ -380,14 +383,14 @@ export function uncertainText() {
 
 /** Il banner del recupero (R7): la riga era gia' salvata con i dati del primo invio. */
 export function recoveredText(unit, modifiche) {
-  const codice = (unit && unit.code) || 'La scheda';
+  const codice = 'La scheda';
   return `${codice} era già stata salvata con i dati del primo invio. ${modifiche ? 'Le modifiche fatte dopo non sono ancora applicate: puoi applicarle ora, oppure aprire la scheda e lasciarla com’è.' : 'Nessuna differenza rispetto a quanto inviato.'}`;
 }
 
-/** Il testo del toast S5: «IMM-412 · 2º piano aggiunta — Annulla». */
-export function createdToastText(unit) {
-  const dove = unit && unit.floor ? ` · ${floorLabel(unit.floor)}${/^-?\d+$/.test(String(unit.floor)) ? ' piano' : ''}` : '';
-  return `${(unit && unit.code) || 'Unità'}${dove} aggiunta`;
+/** Il testo del toast S5: «Appartamento — Piano 2 aggiunta — Annulla». */
+export function createdToastText(unit, propertyTypes, accessoryKinds) {
+  // SEMPLIFICAZIONE-CRM-1: «Appartamento — Piano 2 aggiunta», mai il codice.
+  return `${unitLabel(unit, propertyTypes, accessoryKinds) || 'Unità'} aggiunta`;
 }
 
 /** Il testo della conferma prima di cambiare l'indirizzo della palazzina
@@ -496,8 +499,8 @@ export function unitFacts(u, propertyTypes, accessoryKinds) {
 /** La relazione principale/pertinenza dell'unita', dai dati reali. */
 export function unitRelationText(u) {
   if (u && u.parent) {
-    const di = u.parent.code || `#${u.parent.id}`;
-    return u.parent.same_building ? `Pertinenza di ${di}` : `Pertinenza di ${di} (in un altro edificio)`;
+    // SEMPLIFICAZIONE-CRM-1: senza codice; la riga porta il collegamento all'unita'.
+    return u.parent.same_building ? 'Pertinenza di un’unità principale' : 'Pertinenza di un’unità principale (in un altro edificio)';
   }
   if (u && u.parent_property_id) return 'Pertinenza (unità principale non disponibile)';
   if (isUnitPertinenza(u)) return 'Pertinenza da collegare a un’unità';

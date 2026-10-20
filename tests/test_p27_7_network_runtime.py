@@ -56,6 +56,12 @@ from tests.test_p26_4_shell_runtime import DOM, FETCH  # noqa: E402
 # cui si creano agenzie, territori e alias, e una conferma che non si puo'
 # aprire e' una conferma che non si puo' provare.
 EXTRA_DOM = r"""
+// SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1: main.js (Aurora Glass) disegna
+// le icone della barra laterale con `document.createElementNS`, che lo stub di
+// P26-4 non aveva; senza questa riga nessuna prova runtime della Shell parte.
+if (typeof document.createElementNS !== 'function') {
+  document.createElementNS = (_ns, tag) => document.createElement(tag);
+}
 El.prototype.showModal = function () { this._open = true; };
 El.prototype.close = function () { this._open = false; };
 El.prototype.insertAdjacentHTML = function (position, html) {

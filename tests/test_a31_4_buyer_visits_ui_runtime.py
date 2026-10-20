@@ -91,6 +91,10 @@ def _rotte(sessione="agent", *, check=(LIBERO,), buy=None, visita=None):
         ("GET", "/api/sales?", [rt.ok({"items": []})]),
         ("POST", URL_PROPERTY, list(visita)),
         ("GET", "/api/property/properties/30", [rt.ok(IMMOBILE)]),
+        # SEMPLIFICAZIONE-CRM-1: l'incarico dell'immobile 30, chiesto prima di aprire il dialog
+        ("GET", "/api/appointments/lookups/mandates?", [rt.ok({"items": [
+            {"id": 30, "title": "Trilocale", "address": "Via Roma", "civic_number": "1", "city": "Giulianova",
+             "mandate_state": "active", "mandate_origin": "acquisition", "mandate_page": True}]})]),
         ("GET", "/api/core/contacts?search=", [rt.ok(a30_5.CONTATTI)]),
         ("GET", "/api/core/leads?contact_id=41", [rt.ok(a30_5.LEADS_41)]),
         ("GET", "/api/core/leads?contact_id=42", [rt.ok({"items": []})]),
@@ -122,6 +126,13 @@ function statoProgramma() {
   };
 }
 function scegliAgente(id) { const a = f('[data-field="agent"]'); a.value = String(id); a.dispatch('change'); }
+// SEMPLIFICAZIONE-CRM-1: chi assegna si trova preselezionato; nel browser
+// `select.value = ''` sceglie la prima opzione, nello stub si tolgono le scelte.
+function togliAgente() {
+  const a = f('[data-field="agent"]');
+  for (const o of a.querySelectorAll('option')) o.selected = false;
+  a.value = ''; a.dispatch('change');
+}
 function orarioFuturo(inizio = '10:00') { orario('2031-01-10', inizio); }
 """
 
@@ -166,6 +177,9 @@ APRI = {
 }
 BUY = (ABBINAMENTO, ACQUIRENTE)
 TUTTI = (ABBINAMENTO, ACQUIRENTE, IMMOBILE_VISITE)
+# SEMPLIFICAZIONE-CRM-1: dalla scheda Immobile la visita richiede il cliente
+# acquirente (`requireContact`): le prove che arrivano alla conferma lo scelgono.
+PREPARA = {ABBINAMENTO: "", ACQUIRENTE: "", IMMOBILE_VISITE: "await scegliCliente(0); await wait(50);"}
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +190,7 @@ def test_A_agenda_normale_senza_opzioni_invariata(staged):
     out = run(staged, """
       await apriNuovo();
       const s = statoProgramma();
+      togliAgente();
       orario('2031-01-10', '10:00');
       await conferma();
       report({ s });
@@ -185,8 +200,10 @@ def test_A_agenda_normale_senza_opzioni_invariata(staged):
     assert s["tipo"] == "seller_meeting" and not s["tipoBloccato"]
     assert not s["durataBloccata"] and not s["fineBloccata"]
     assert s["agenteOpzioni"][0] == "Nessuno: salva come richiesta"
+    # SEMPLIFICAZIONE-CRM-1: chi assegna ed e' un agente attivo si trova preselezionato
+    assert s["agenteValore"] == "3"
     assert all(s[k] for k in ("crm", "cliente", "lead", "stima", "immobile", "luogo", "note"))
-    # senza agente: una richiesta, direttamente all'Agenda, nessun controllo
+    # senza agente (tolto a mano): una richiesta, direttamente all'Agenda, nessun controllo
     scritture = _scritture(out)
     assert [c["url"] for c in scritture] == ["/api/appointments"]
     assert scritture[0]["body"]["status"] == "requested"
@@ -230,8 +247,9 @@ def test_L_M_N_property_cliente_e_lead_niente_stima_immobile_note_luogo(staged):
 @pytest.mark.parametrize("pagina", TUTTI)
 def test_D_owner_admin_supreme_devono_scegliere_senza_agente_nessuna_richiesta(
         staged, pagina, ruolo):
-    out = run(staged, APRI[pagina] + """
+    out = run(staged, APRI[pagina] + PREPARA[pagina] + """
       const s = statoProgramma();
+      togliAgente();
       orarioFuturo();
       await conferma();
       report({ s });
@@ -240,7 +258,8 @@ def test_D_owner_admin_supreme_devono_scegliere_senza_agente_nessuna_richiesta(
     assert not s["agenteDisabilitato"]
     assert s["agenteOpzioni"] == ["Scegli un agente", "Anna Agente", "Bruno Collega"]
     assert "Nessuno" not in " ".join(s["agenteOpzioni"])
-    assert s["agenteValore"] == ""
+    # SEMPLIFICAZIONE-CRM-1: preselezionato chi assegna (se agente attivo), poi tolto a mano
+    assert s["agenteValore"] == "3"
     assert out["open"] is True and "agente" in out["error"]
     # errore locale: nessun controllo di disponibilita', nessuna scrittura
     assert _post(out, "/api/appointments/availability/check") == []
@@ -330,11 +349,22 @@ def test_O_P_property_payload_esatto_con_cliente_e_lead(staged):
     assert a30_5.UUID4.match(corpo["client_request_id"])
 
 
-def test_O_property_senza_cliente_solo_i_quattro_campi(staged):
+def test_O_property_senza_cliente_nessuna_post(staged):
+    """SEMPLIFICAZIONE-CRM-1: una visita immobile ha sempre il cliente acquirente:
+    senza, nessun controllo e nessuna scrittura, con il messaggio in chiaro."""
     out = run(staged, APRI[IMMOBILE_VISITE] + "orarioFuturo(); await conferma(); report();",
               _rotte("agent"), IMMOBILE_VISITE)
+    assert _post(out, "/api/appointments/availability/check") == []
+    assert _scritture(out) == []
+    assert out["open"] is True and "cliente" in out["error"].lower()
+
+
+def test_O_property_con_cliente_senza_lead_i_cinque_campi(staged):
+    out = run(staged, APRI[IMMOBILE_VISITE] + PREPARA[IMMOBILE_VISITE]
+              + "orarioFuturo(); await conferma(); report();", _rotte("agent"), IMMOBILE_VISITE)
     corpo = _post(out, URL_PROPERTY)[0]["body"]
-    assert set(corpo) == {"scheduled_at", "status", "assigned_user_id", "client_request_id"}
+    assert set(corpo) == {"scheduled_at", "status", "assigned_user_id", "client_request_id", "contact_id"}
+    assert corpo["contact_id"] == 41
     assert "Visita programmata" in out["content"]
 
 
@@ -344,7 +374,7 @@ def test_O_property_senza_cliente_solo_i_quattro_campi(staged):
 
 @pytest.mark.parametrize("pagina", TUTTI)
 def test_R_conflitto_ferma_la_post_e_mostra_le_alternative(staged, pagina):
-    out = run(staged, APRI[pagina] + "orarioFuturo(); await conferma(); report();",
+    out = run(staged, APRI[pagina] + PREPARA[pagina] + "orarioFuturo(); await conferma(); report();",
               _rotte("agent", check=(OCCUPATO,)), pagina)
     assert _scritture(out) == []
     assert out["open"] is True
@@ -354,7 +384,7 @@ def test_R_conflitto_ferma_la_post_e_mostra_le_alternative(staged, pagina):
 
 @pytest.mark.parametrize("pagina", TUTTI)
 def test_S_doppio_click_una_sola_post(staged, pagina):
-    out = run(staged, APRI[pagina] + """
+    out = run(staged, APRI[pagina] + PREPARA[pagina] + """
       orarioFuturo();
       f('form').dispatch('submit');
       f('form').dispatch('submit');
@@ -366,7 +396,7 @@ def test_S_doppio_click_una_sola_post(staged, pagina):
 
 @pytest.mark.parametrize("pagina", TUTTI)
 def test_orario_passato_nessuna_post(staged, pagina):
-    out = run(staged, APRI[pagina] + """
+    out = run(staged, APRI[pagina] + PREPARA[pagina] + """
       orario('2020-01-10', '10:00');
       await conferma();
       report();

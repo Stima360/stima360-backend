@@ -82,7 +82,7 @@ import { openNewActivityDialog, openNewTaskDialog } from '../components/activity
 // disponibilita', conflitti, alternative). La sola scrittura resta la POST
 // BUY .../decision: la facade A31-3 crea appuntamento + proiezione.
 import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
-import { getAgents } from '../agenda/agenda-api.js';
+import { getAgents, lookupMandates } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
 // CESTINO-RICHIESTE-1: «Elimina…» (foglio condiviso del Cestino) e, per una
@@ -96,6 +96,9 @@ import {
 } from '../trash/trash-model.js';
 import { showToast } from '../census/census-sheets.js';
 import { duplicatesNoticeHtml } from './cestino.js';
+// SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
+import { propertyRowLabel } from '../components/property-label.js';
+import { NO_MANDATE_FOR_VISIT } from './immobile-dettaglio.js';
 
 const STATUS_LABELS = { draft: 'Bozza', active: 'Attiva', paused: 'In pausa', satisfied: 'Soddisfatta', closed: 'Chiusa', archived: 'Archiviata' };
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
@@ -596,6 +599,21 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     const dialogEl = container.querySelector('#visit-schedule-dialog');
     if (!dialogEl) return;
     const feedbackEl = contentEl.querySelector('#abbinamenti-feedback');
+    // SEMPLIFICAZIONE-CRM-1: una visita immobile si fissa solo su un incarico in
+    // corso o scaduto. Si chiede all'Agenda PRIMA di aprire il dialog (la
+    // stessa ricerca degli incarichi, ristretta a questo immobile): senza, il
+    // messaggio e' in chiaro e nessun dialog si apre. Il server ricontrolla.
+    let incarichi;
+    try {
+      incarichi = await lookupMandates({ propertyId: match.property_id });
+    } catch (error) {
+      if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile verificare l’incarico: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    if (!(incarichi && Array.isArray(incarichi.items) && incarichi.items.length)) {
+      if (feedbackEl) feedbackEl.innerHTML = `<div class="error-box" data-no-mandate>${escapeHtml(NO_MANDATE_FOR_VISIT)}</div>`;
+      return;
+    }
     let agents;
     try {
       const esito = await getAgents();
@@ -639,7 +657,7 @@ export async function renderAcquirenteDettaglio(container, params = []) {
     ).map((i) => i.property_visit_id))];
     const outcomeActions = ['visited', 'interested', 'discarded', 'offer_candidate'];
     const dialog = container.querySelector('#match-decision-dialog');
-    const propertyLabel = match.property_title || match.property_code || `Immobile #${match.property_id}`;
+    const propertyLabel = propertyRowLabel(match);
     dialog.innerHTML = `
       <div class="modal-content">
         <h3>Registra esito — ${escapeHtml(propertyLabel)}</h3>
@@ -1376,7 +1394,7 @@ function renderImmobiliCompatibili(matches) {
   const list = Array.isArray(matches) ? matches : [];
   if (!list.length) return '<p class="muted">Nessun abbinamento calcolato.</p>';
   return renderMatchTable(list, [
-    { label: 'Immobile', render: (m) => escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`) },
+    { label: 'Immobile', render: (m) => escapeHtml(propertyRowLabel(m)) },
     { label: 'Comune', render: (m) => escapeHtml(m.city || '—') },
     { label: 'Prezzo', render: (m) => formatPrice(m.asking_price) },
     { label: 'Stato immobile', render: (m) => renderBadge(PROPERTY_STATUS_LABELS[m.property_status] || m.property_status || '—', 'gray') },
@@ -1400,7 +1418,7 @@ function renderAbbinamenti(matches) {
   const list = Array.isArray(matches) ? matches : [];
   if (!list.length) return `${actionBar}<p class="muted">Nessun abbinamento calcolato.</p>`;
   const table = renderMatchTable(list, [
-    { label: 'Immobile', render: (m) => escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`) },
+    { label: 'Immobile', render: (m) => escapeHtml(propertyRowLabel(m)) },
     { label: 'Punteggio', render: (m) => escapeHtml(m.effective_score ?? m.score_total ?? '—') },
     { label: 'Classe', render: (m) => renderBadge(m.match_class || '—', matchClassTone(m.match_class)) },
     { label: 'Stato commerciale', render: (m) => escapeHtml(m.commercial_status || '—') },
@@ -1448,7 +1466,7 @@ function renderVisite(interactions) {
   const note = '<p class="muted">Elenco dagli eventi di visita registrati sulla richiesta (buy_request_interactions). Stato, esito e valutazione della singola visita non sono disponibili qui: nessuna API espone il dettaglio property_visits per id o filtrato su questa richiesta.</p>';
   const table = renderTable(
     [
-      { label: 'Immobile', render: (i) => escapeHtml(i.property_title || i.property_code || (i.property_id ? `Immobile #${i.property_id}` : '—')) },
+      { label: 'Immobile', render: (i) => escapeHtml(i.property_id ? propertyRowLabel(i) : '—') },
       { label: 'Tipo evento', render: (i) => renderBadge(INTERACTION_TYPE_LABELS[i.interaction_type] || i.interaction_type || '—', 'gray') },
       { label: 'Quando', render: (i) => escapeHtml(formatDateTime(i.occurred_at)) },
       { label: 'Note', render: (i) => escapeHtml(i.notes || '—') },
@@ -1565,7 +1583,7 @@ function renderProposte(items, proposalsError, sales, saleCancelConfirm) {
   }
   const table = renderTable(
     [
-      { label: 'Immobile', render: (p) => escapeHtml(p.property_title || p.property_code || `Immobile #${p.property_id}`) },
+      { label: 'Immobile', render: (p) => escapeHtml(propertyRowLabel(p)) },
       { label: 'Importo', render: (p) => formatPrice(p.amount) },
       { label: 'Stato', render: (p) => renderBadge(PROPOSAL_STATUS_LABELS[p.status] || p.status || '—', statusTone(p.status)) },
       { label: 'Scadenza', render: (p) => escapeHtml(formatDateTime(p.expires_at)) },
@@ -1589,7 +1607,7 @@ function renderProposte(items, proposalsError, sales, saleCancelConfirm) {
 // un match_id digitato manualmente, solo scelta da un elenco di abbinamenti
 // reali gia' presenti (stesso principio gia' applicato in P3 per il Contatto).
 function matchOptionLabel(m) {
-  const propertyLabel = m.property_title || m.property_code || `Immobile #${m.property_id}`;
+  const propertyLabel = propertyRowLabel(m);
   const scoreText = m.effective_score ?? m.score_total;
   return `${propertyLabel}${scoreText != null ? ` \u2014 punteggio ${scoreText}` : ''}${m.match_class ? ` (${m.match_class})` : ''}`;
 }

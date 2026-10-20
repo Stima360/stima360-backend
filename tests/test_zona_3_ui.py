@@ -77,7 +77,7 @@ def test_a01_solo_gli_indipendenti_verificati_sono_marker():
     })()""")
     assert out["ids"] == [5] and out["lnglat"] == [13.93, 42.83]
     assert out["fc"] == [[5, 5, [13.93, 42.83]]]
-    assert out["titoli"] == ["Villa Mare", "IMM-2", "Via A 1", "Immobile 4"]
+    assert out["titoli"] == ["Villa Mare", "Immobile", "Via A 1", "Immobile"]   # SEMPLIFICAZIONE-CRM-1: senza codice
     assert out["dove"] == ["Via Mare 3 · Alba Adriatica (Lido)", "Teramo", ""]
     assert out["vista"] == {"bounds": [[13.9, 42.8], [13.95, 42.85]]}
     assert out["solo"] == {"center": [13.93, 42.83], "zoom": 16} and out["nulla"] is None
@@ -187,7 +187,7 @@ def test_b01_marker_degli_indipendenti_verificati_riquadro_pannello_e_scheda(sta
     assert out["livelli"] == [["stima-buildings-points", "stima-buildings"], ["stima-properties-points", "stima-properties"]]
     assert out["letture"].count("/api/property/properties/positions") == 1 and "/api/property/properties/61" not in out["letture"]
     r = out["riquadro"]
-    assert "Villa Gabbiano" in r["testo"] and "Via Gabbiano 4 · Tortoreto (Lido)" in r["testo"] and "Appartamento" in r["testo"] and "IMM-61" in r["testo"]
+    assert "Villa Gabbiano" in r["testo"] and "Via Gabbiano 4 · Tortoreto (Lido)" in r["testo"] and "Appartamento" in r["testo"] and "IMM-61" not in r["testo"]   # SEMPLIFICAZIONE-CRM-1: senza codice
     # (l'indirizzo con la selezione passa da history.replaceState, che lo stub non ha: lo prova Chromium)
     assert r["apri"] is True and r["attivo"] == {"selected": True} and r["area"] == "61"
     p = out["pannello"]

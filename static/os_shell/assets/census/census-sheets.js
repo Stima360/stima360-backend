@@ -42,6 +42,7 @@
 
 import { navigate } from '../core/router.js';
 import { escapeHtml } from '../components/st-table.js';
+import { unitLabel } from '../components/property-label.js';
 import { provincesOf, municipalitiesOf, microzonesOf, cascadeLocation } from '../components/property-form.js';
 import * as api from './census-api.js';
 import {
@@ -212,10 +213,11 @@ function bindSimilarBanner(root, onSaveAnyway, apri) {
 }
 
 function duplicateHtml(existing) {
-  const code = existing && existing.code ? existing.code : (existing && existing.id ? `#${existing.id}` : '');
+  // SEMPLIFICAZIONE-CRM-1: senza codice; l'unità gia' censita si descrive per tipologia e posizione
+  const nome = existing && (existing.property_type || existing.title || existing.floor || existing.internal_number) ? unitLabel(existing) : '';
   return `<div class="census-banner census-banner-block" data-duplicate-banner>
-      <strong>Questo subalterno è già censito${code ? ` come ${escapeHtml(code)}` : ''}</strong>
-      ${existing && existing.id ? `<div class="action-bar"><button type="button" class="btn" data-open-duplicate="${escapeHtml(existing.id)}">Apri ${escapeHtml(code)}</button></div>` : ''}
+      <strong>Questo subalterno è già censito${nome ? ` come ${escapeHtml(nome)}` : ''}</strong>
+      ${existing && existing.id ? `<div class="action-bar"><button type="button" class="btn" data-open-duplicate="${escapeHtml(existing.id)}">Apri la scheda</button></div>` : ''}
     </div>`;
 }
 
@@ -398,7 +400,7 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
   const s = seed || {};
   const etichettaTipo = tipoPertinenza ? labelOf(kinds, tipoPertinenza, tipoPertinenza) : '';
   const titolo = s.duplicate_of ? `Copia di ${s.duplicate_of} — completa interno e categoria`
-    : (isPertinenza ? `Nuova pertinenza di ${parent.code || `#${parent.id}`}${etichettaTipo ? ` · ${etichettaTipo}` : ''}`
+    : (isPertinenza ? `Nuova pertinenza di ${unitLabel(parent, tipi, kinds) || 'un’unità principale'}${etichettaTipo ? ` · ${etichettaTipo}` : ''}`
       : (modoPertinenza ? 'Nuova pertinenza autonoma' : (inPalazzina ? 'Nuova unità' : 'Nuovo immobile singolo')));
   // CREAZIONE-GUIDATA-1: scheda commerciale o di censimento, deciso da chi apre
   const commerciale = recordKind === 'crm';
@@ -427,7 +429,7 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
       ${modoPertinenza ? `<div class="form-field" data-pertinenza-kind-field><label>Che tipo di pertinenza?</label>${chipsHtml('pertinenza_kind', kinds, tipoPertinenza, { multiline: true })}
         <small class="muted">Ha un suo subalterno: è un’unità catastale autonoma, conta fra le unità censite.</small></div>` : ''}
       ${modoPertinenza && !isPertinenza ? `<div class="form-field"><label for="us-principal">Unità principale</label>
-        <select id="us-principal" class="input"><option value="">Da collegare dopo</option>${principali.map((u) => `<option value="${escapeHtml(u.id)}">${escapeHtml(`${u.code || `#${u.id}`} · ${unitFacts(u, tipi, kinds)}`)}</option>`).join('')}</select>
+        <select id="us-principal" class="input"><option value="">Da collegare dopo</option>${principali.map((u) => `<option value="${escapeHtml(u.id)}">${escapeHtml(unitFacts(u, tipi, kinds))}</option>`).join('')}</select>
         <small class="muted">Il collegamento all’edificio resta comunque; quello all’unità si può fare anche dopo.</small></div>` : ''}
       <div class="form-field"><label>Tipologia</label>${chipsHtml('property_type', tipi, str(s.property_type) || 'apartment', { multiline: true })}</div>
       <div class="form-field"><label>Piano</label>${chipsHtml('floor', FLOOR_CHIPS, str(s.floor) || str(lastFloor))}
@@ -547,11 +549,11 @@ export function openUnitSheet(dialogEl, { options: opzioni, building = null, par
     }
     if (!salvata) { setError(dialogEl, errorMessage({ code: 'IDEMPOTENCY_KEY_REUSED' })); return; }
     const modifiche = unitPatchDiff(corpoSalvato, payloadAttuale);
-    const codice = salvata.code || `#${salvata.id}`;
+    const codice = 'questa unità';
     const conModifiche = Object.keys(modifiche).length > 0;
     dialogEl.querySelector('[data-banner]').innerHTML = `<div class="census-banner" data-recovered-banner>${escapeHtml(recoveredText(salvata, conModifiche))}
         <div class="action-bar">${conModifiche ? `<button type="button" class="btn primary" data-apply-changes>Applica le modifiche a ${escapeHtml(codice)}</button>` : ''}
-        <button type="button" class="btn" data-open-recovered>Apri ${escapeHtml(codice)}</button></div></div>`;
+        <button type="button" class="btn" data-open-recovered>Apri la scheda</button></div></div>`;
     dialogEl.querySelector('[data-open-recovered]').addEventListener('click', () => { invioIncerto = null; dialogEl.close(); navigate('immobili', [salvata.id]); });
     const applica = dialogEl.querySelector('[data-apply-changes]');
     if (applica) applica.addEventListener('click', async () => {
@@ -677,12 +679,13 @@ export function showToast(host, { text, actionLabel = null, onAction = null, ms 
  *                    restano, nessun subalterno inventato, nessuna unita'.
  */
 export function openPertinenzaSheet(dialogEl, { options: opzioni, property, building = null, onSaved } = {}) {
+  const tipi = opzioni.property_types || [];
   const kinds = opzioni.accessory_kinds || [];
   let clientRequestId = api.newClientRequestId();
   dialogEl.className = 'modal census-sheet';
   dialogEl.innerHTML = `
     <form data-pertinenza-form novalidate>
-      <h2 class="census-sheet-title">Aggiungi pertinenza a ${escapeHtml(property.code || `#${property.id}`)}</h2>
+      <h2 class="census-sheet-title">Aggiungi pertinenza a ${escapeHtml(unitLabel(property, tipi, kinds) || 'questa unità')}</h2>
       <div class="form-field"><label>Che cos'è?</label>${chipsHtml('kind', kinds, '', { multiline: true })}</div>
       <div class="form-grid-2">
         ${fieldHtml('pa-surface', 'mq (facoltativi)', inputHtml('pa-surface', '', { type: 'number', inputmode: 'decimal', min: 0, step: 'any' }))}
@@ -777,9 +780,9 @@ export function openLinkPrincipalSheet(dialogEl, { options: opzioni = {}, proper
   dialogEl.className = 'modal census-sheet';
   dialogEl.innerHTML = `
     <div data-principal-sheet>
-      <h2 class="census-sheet-title">Collega ${escapeHtml(property.code || `#${property.id}`)} a un’unità principale</h2>
-      ${candidates.length ? `<p class="muted">Unità della stessa palazzina</p><div class="census-results">${candidates.map((u) => `<button type="button" class="census-result" data-principal-id="${escapeHtml(u.id)}"><strong>${escapeHtml(u.code || `#${u.id}`)}</strong> <span class="muted">${escapeHtml(unitFacts(u, tipi, kinds))}</span></button>`).join('')}</div>`
-        : '<p class="muted">Nessuna unità principale in questa palazzina: cercala per codice o indirizzo.</p>'}
+      <h2 class="census-sheet-title">Collega ${escapeHtml(unitLabel(property, tipi, kinds) || 'questa pertinenza')} a un’unità principale</h2>
+      ${candidates.length ? `<p class="muted">Unità della stessa palazzina</p><div class="census-results">${candidates.map((u) => `<button type="button" class="census-result" data-principal-id="${escapeHtml(u.id)}"><strong>${escapeHtml(unitFacts(u, tipi, kinds))}</strong></button>`).join('')}</div>`
+        : '<p class="muted">Nessuna unità principale in questa palazzina: cercala per indirizzo.</p>'}
       <div class="field-error" data-error></div>
       <div class="modal-actions">
         <button type="button" class="btn ghost" data-cancel>Chiudi</button>

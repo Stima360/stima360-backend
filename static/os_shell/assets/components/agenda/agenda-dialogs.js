@@ -51,7 +51,8 @@ import {
   typeLabel,
   weeklySlotsFromDays,
   NOT_BOOKABLE_TYPES,
-  SALE_APPOINTMENT_TYPE,
+  CREATE_HIDDEN_TYPES,
+  MANDATE_REQUIRED_TYPES,
 } from '../../agenda/agenda-model.js';
 import {
   checkAvailability,
@@ -156,25 +157,37 @@ const BLOCCO_DURATA = `
 // A31-4: il blocco e' composto da due parti, cosi' un chiamante puo' chiedere
 // solo cliente + lead (`crmMode: 'contact_lead'`) o nessun collegamento
 // (`crmMode: 'none'`). Il default (`'full'`) e' il blocco di sempre.
+// SEMPLIFICAZIONE-CRM-1: ogni collegamento sta in un contenitore
+// `data-campo`, mostrato o nascosto secondo il TIPO scelto (`CAMPI_TIPO`); il
+// lead del cliente vive nelle «Opzioni avanzate» (serve al follow-up e alle
+// stime, non alla programmazione). Gli elementi restano nel DOM: un campo
+// nascosto non viene inviato.
 const CRM_CLIENTE_LEAD = `
-    <div class="form-field"><label data-contact-label>Cliente</label><div data-contact-picker></div></div>
-    <div class="form-field">
-      <label>Lead del cliente</label>
-      <select class="input" data-field="lead" disabled></select>
-      <small class="muted" data-lead-hint></small>
-    </div>`;
+    <div class="form-field" data-campo="contact"><label data-contact-label>Cliente</label><div data-contact-picker></div></div>`;
 
-const CRM_STIMA_IMMOBILE = `
-    <div class="form-field">
+const CRM_LEAD_AVANZATO = `
+    <details class="agenda-advanced" data-campo="lead" data-advanced>
+      <summary>Opzioni avanzate</summary>
+      <div class="form-field">
+        <label>Lead del cliente</label>
+        <select class="input" data-field="lead" disabled></select>
+        <small class="muted" data-lead-hint></small>
+      </div>
+    </details>`;
+
+const CRM_STIMA = `
+    <div class="form-field" data-campo="stima">
       <label>Stima</label>
       <input type="search" class="input" data-stima-search placeholder="Cerca per nominativo, comune o via…" autocomplete="off">
       <small class="muted" data-stima-hint></small>
       <div class="agenda-lookup-results" data-stima-results></div>
       <div class="agenda-lookup-selected" data-stima-selected hidden></div>
-    </div>
-    <div class="form-field">
+    </div>`;
+
+const CRM_IMMOBILE = `
+    <div class="form-field" data-campo="property">
       <label data-property-label>Immobile</label>
-      <input type="search" class="input" data-property-search placeholder="Cerca per titolo, codice o indirizzo…" autocomplete="off">
+      <input type="search" class="input" data-property-search placeholder="Cerca per indirizzo, comune o descrizione…" autocomplete="off">
       <small class="muted" data-property-hint></small>
       <div class="agenda-lookup-results" data-property-results></div>
       <div class="agenda-lookup-selected" data-property-selected hidden></div>
@@ -182,11 +195,18 @@ const CRM_STIMA_IMMOBILE = `
 
 function bloccoCrm(modo) {
   if (modo === 'none') return '';
-  const parti = modo === 'contact_lead' ? CRM_CLIENTE_LEAD : CRM_CLIENTE_LEAD + CRM_STIMA_IMMOBILE;
+  // Ordine del flusso (SEMPLIFICAZIONE-CRM-1): cliente, poi incarico/immobile,
+  // poi la stima; il lead sta in fondo al dialog, nelle opzioni avanzate
+  // (`bloccoAvanzato`).
+  const parti = modo === 'contact_lead' ? CRM_CLIENTE_LEAD : CRM_CLIENTE_LEAD + CRM_IMMOBILE + CRM_STIMA;
   return `
   <fieldset class="agenda-links">
     <legend data-crm-legend>Collegamento CRM (facoltativo)</legend>${parti}
   </fieldset>`;
+}
+
+function bloccoAvanzato(modo) {
+  return modo === 'none' ? '' : CRM_LEAD_AVANZATO;
 }
 
 const BLOCCO_DISPONIBILITA = `
@@ -668,7 +688,7 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
     risultati.replaceChildren();
     if (elementi === null) return;
     if (!elementi.length) {
-      risultati.appendChild(rigaTesto('muted', vuoto));
+      risultati.appendChild(rigaTesto('muted', typeof vuoto === 'function' ? vuoto() : vuoto));
       return;
     }
     for (const x of elementi) {
@@ -713,12 +733,48 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
 // chiamante. Nessuna conoscenza di BUY o di immobili: solo opzioni generiche.
 const MODI_CRM = Object.freeze(['full', 'contact_lead', 'none']);
 const MSG_AGENTE_OBBLIGATORIO = 'Scegli l’agente: è obbligatorio.';
-// APPUNTAMENTI DI VENDITA: incarico, cliente e agente obbligatori (il server
-// li ricontrolla: `_controlla_vendita`, CHECK della 106).
-const MSG_VENDITA_INCARICO = 'Scegli l’incarico: un appuntamento di vendita va collegato a un incarico.';
-const MSG_VENDITA_CLIENTE = 'Scegli il cliente interessato all’acquisto: è obbligatorio.';
-const MSG_VENDITA_AGENTE = 'Scegli l’agente incaricato: è obbligatorio per un appuntamento di vendita.';
+// VISITA IMMOBILE / APPUNTAMENTI DI VENDITA: incarico, cliente e agente
+// obbligatori (il server li ricontrolla: `_controlla_vendita`, CHECK della
+// 106, trigger della 107).
+const MSG_VENDITA_INCARICO = 'Scegli l’incarico di vendita: una visita immobile si fissa solo su un incarico.';
+const MSG_VENDITA_CLIENTE = 'Scegli il cliente acquirente: è obbligatorio.';
+const MSG_VENDITA_AGENTE = 'Scegli l’agente responsabile: è obbligatorio per una visita immobile.';
+const MSG_CLIENTE_OBBLIGATORIO = 'Scegli il cliente: è obbligatorio.';
+const MSG_NESSUN_INCARICO = 'Nessun incarico in corso o scaduto corrisponde: un immobile senza incarico di vendita non si può scegliere.';
 const STATI_INCARICO = Object.freeze({ active: 'incarico in corso', expired: 'incarico scaduto' });
+
+// SEMPLIFICAZIONE-CRM-1: i collegamenti pertinenti a ogni tipo. `mandate` e
+// `property` usano la stessa ricerca: la prima fra gli incarichi (in corso o
+// scaduti), la seconda fra tutti gli immobili. L'obbligo dell'incarico vale
+// SOLO per MANDATE_REQUIRED_TYPES (visita immobile); per proposta,
+// preliminare e rogito l'incarico si propone ma non e' un vincolo (D4).
+const CAMPI_TIPO = Object.freeze({
+  call: ['contact', 'notes'],
+  video_call: ['contact', 'notes'],
+  seller_meeting: ['contact', 'property', 'stima', 'location', 'notes'],
+  inspection: ['contact', 'property', 'stima', 'location', 'notes'],
+  buyer_visit: ['contact', 'mandate', 'notes'],
+  valuation_presentation: ['contact', 'stima', 'location', 'notes'],
+  mandate_signing: ['contact', 'property', 'location', 'notes'],
+  proposal: ['contact', 'mandate', 'notes'],
+  preliminary_contract: ['contact', 'mandate', 'location', 'notes'],
+  notary: ['contact', 'mandate', 'location', 'notes'],
+  technical: ['contact', 'property', 'location', 'notes'],
+  other: ['contact', 'property', 'stima', 'location', 'notes'],
+  sale_appointment: ['contact', 'mandate', 'notes'],
+});
+const CAMPI_DEFAULT = Object.freeze(['contact', 'property', 'stima', 'location', 'notes']);
+const ETICHETTA_CLIENTE = Object.freeze({
+  seller_meeting: 'Proprietario', mandate_signing: 'Proprietario', inspection: 'Proprietario',
+  valuation_presentation: 'Proprietario',
+  buyer_visit: 'Cliente acquirente', sale_appointment: 'Cliente acquirente', proposal: 'Acquirente',
+});
+
+/** I collegamenti pertinenti al tipo (il lead segue il cliente). */
+export function fieldsForType(tipo) {
+  const campi = CAMPI_TIPO[tipo] || CAMPI_DEFAULT;
+  return campi.includes('contact') ? [...campi, 'lead'] : [...campi];
+}
 
 /** Un incarico selezionabile: l'etichetta dell'immobile piu' lo stato. */
 function etichettaIncarico(x) {
@@ -728,9 +784,9 @@ function etichettaIncarico(x) {
 }
 
 const BLOCCO_LUOGO = `
-    <div class="form-field"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>`;
+    <div class="form-field" data-campo="location"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>`;
 const BLOCCO_NOTE = `
-    <div class="form-field"><label>Note</label><textarea class="input" data-field="notes" maxlength="5000"></textarea></div>`;
+    <div class="form-field" data-campo="notes"><label>Note</label><textarea class="input" data-field="notes" maxlength="5000"></textarea></div>`;
 
 /**
  * "Nuovo appuntamento". Senza le opzioni A31-4 il dialog e' identico a prima.
@@ -743,6 +799,10 @@ const BLOCCO_NOTE = `
  *   lockDuration         la durata non si cambia (richiede durationMinutes)
  *   requireAgent         l'agente e' obbligatorio: nessun "Nessuno", nessuna
  *                        richiesta; senza agente nessuna scrittura
+ *   requireContact       il cliente e' obbligatorio (SEMPLIFICAZIONE-CRM-1:
+ *                        per una visita lo e' comunque)
+ *   presetContact        un contatto gia' scelto dal chiamante (es. l'acquirente
+ *                        di un abbinamento): parte selezionato, si puo' cambiare
  *   crmMode              'full' (default) | 'contact_lead' | 'none'
  *   showLocation         mostra "Luogo" (default true)
  *   showNotes            mostra "Note" (default true)
@@ -758,6 +818,8 @@ export function openCreateDialog(dialogEl, {
   durationMinutes: durataFissa = null,
   lockDuration = false,
   requireAgent = false,
+  requireContact = false,
+  presetContact = null,
   crmMode = 'full',
   showLocation = true,
   showNotes = true,
@@ -774,26 +836,29 @@ export function openCreateDialog(dialogEl, {
   if (submitAppointment !== null && typeof submitAppointment !== 'function') {
     throw new Error('submitAppointment deve essere una funzione.');
   }
-  // Un appuntamento di vendita richiede l'incarico: si offre solo dove il
-  // blocco CRM ha la ricerca dell'immobile (`full`).
+  // SEMPLIFICAZIONE-CRM-1: un solo tipo di visita a schermo («Visita
+  // immobile»); `sale_appointment` resta leggibile sulle righe esistenti ma
+  // non si crea piu' (salvo che il chiamante lo chieda esplicitamente).
   const tipi = Object.keys(TYPE_LABELS).filter((t) => (
-    t !== SALE_APPOINTMENT_TYPE || crmMode === 'full' || t === appointmentType));
+    !CREATE_HIDDEN_TYPES.includes(t) || t === appointmentType));
+  // Ordine del flusso: tipo, cliente, incarico/immobile, stima, data e ora,
+  // agente, luogo, note, opzioni avanzate (il lead).
   const form = preparaDialog(dialogEl, title, `
     <div class="form-field"><label>Tipo *</label><select class="input" data-field="type"></select></div>
     ${bloccoCrm(crmMode)}
+    ${BLOCCO_ORARIO}
+    ${BLOCCO_DURATA}
     <div class="form-field">
-      <label>${requireAgent ? 'Agente *' : 'Agente'}</label>
+      <label data-agent-label>${requireAgent ? 'Agente *' : 'Agente'}</label>
       <select class="input" data-field="agent"></select>
       <small class="muted" data-status-hint></small>
     </div>
-    ${BLOCCO_ORARIO}
-    ${BLOCCO_DURATA}
     <div class="action-bar">
       <button type="button" class="btn" data-check>Verifica disponibilità</button>
       <button type="button" class="btn" data-show-slots>Mostra slot liberi</button>
     </div>
     <div class="agenda-slots" data-slots hidden></div>
-    ${BLOCCO_DISPONIBILITA}${showLocation ? BLOCCO_LUOGO : ''}${showNotes ? BLOCCO_NOTE : ''}`);
+    ${BLOCCO_DISPONIBILITA}${showLocation ? BLOCCO_LUOGO : ''}${showNotes ? BLOCCO_NOTE : ''}${bloccoAvanzato(crmMode)}`);
 
   const erroreBox = form.querySelector('[data-error]');
   const tipo = form.querySelector('[data-field="type"]');
@@ -811,8 +876,12 @@ export function openCreateDialog(dialogEl, {
   if (puoAssegnare) {
     // A31-4 `requireAgent`: nessuna opzione "Nessuno" e nessun agente scelto
     // al posto dell'operatore: la prima voce chiede la scelta e non vale.
+    // SEMPLIFICAZIONE-CRM-1: se chi assegna e' anche un agente attivo
+    // (`is_me`), e' preselezionato; lo si puo' sempre cambiare.
+    const me = (agents || []).find((a) => a.is_me === true) || null;
     riempiAgenti(agente, agents, {
       vuoto: requireAgent ? 'Scegli un agente' : 'Nessuno: salva come richiesta',
+      selezionato: me ? me.id : undefined,
     });
     if (requireAgent && agente.firstChild) agente.firstChild.disabled = true;
   } else {
@@ -825,13 +894,19 @@ export function openCreateDialog(dialogEl, {
     agente.disabled = true;
   }
   const suggerimento = form.querySelector('[data-status-hint]');
-  const eVendita = () => tipo.value === SALE_APPOINTMENT_TYPE;
+  // SEMPLIFICAZIONE-CRM-1: il tipo decide i collegamenti mostrati e cosa e' obbligatorio.
+  const campiAttivi = () => fieldsForType(tipo.value);
+  const attivo = (campo) => campiAttivi().includes(campo);
+  const modoIncarico = () => attivo('mandate');
+  const incaricoObbligatorio = () => MANDATE_REQUIRED_TYPES.includes(tipo.value);
+  const clienteObbligatorio = () => requireContact || incaricoObbligatorio();
+  const agenteObbligatorio = () => requireAgent || incaricoObbligatorio();
   const aggiornaSuggerimento = () => {
-    if (eVendita() && !agente.value) {
+    if (incaricoObbligatorio() && !agente.value) {
       suggerimento.textContent = MSG_VENDITA_AGENTE;
       return;
     }
-    if (requireAgent || eVendita()) {
+    if (agenteObbligatorio()) {
       suggerimento.textContent = agente.value
         ? 'L’appuntamento nasce “Fissato” nell’agenda dell’agente, dopo la verifica della disponibilità.'
         : MSG_AGENTE_OBBLIGATORIO;
@@ -843,7 +918,7 @@ export function openCreateDialog(dialogEl, {
   };
   aggiornaSuggerimento();
 
-  // -- collegamenti CRM (facoltativi) ---------------------------------------
+  // -- collegamenti CRM -----------------------------------------------------
   let cliente = null;
   let selLead = null;
   let immobile = null;
@@ -862,6 +937,7 @@ export function openCreateDialog(dialogEl, {
     };
     azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
     createContactPicker(form.querySelector('[data-contact-picker]'), {
+      initial: presetContact,
       onChange: async (scelto) => {
         cliente = scelto;
         const giro = ++giroLead;
@@ -890,16 +966,17 @@ export function openCreateDialog(dialogEl, {
 
   if (crmMode === 'full') {
     immobile = montaRicerca(form, 'property', {
-      // Senza testo non si elenca l'archivio immobili. Per un appuntamento di
-      // vendita si cerca fra gli incarichi in corso o scaduti.
+      // Senza testo non si elenca l'archivio immobili. Per una visita (o un
+      // appuntamento legato a un incarico) si cerca fra gli incarichi in corso
+      // o scaduti: un immobile senza incarico non compare, e lo si dice.
       cerca: async (testo) => {
         if (!testo) return null;
-        if (!eVendita()) return searchProperties(testo);
+        if (!modoIncarico()) return searchProperties(testo);
         const esito = await lookupMandates({ search: testo });
         return (esito && esito.items) || [];
       },
-      etichetta: (x) => (eVendita() ? etichettaIncarico(x) : propertyLabel(x)),
-      vuoto: 'Nessun risultato.',
+      etichetta: (x) => (modoIncarico() ? etichettaIncarico(x) : propertyLabel(x)),
+      vuoto: () => (modoIncarico() ? MSG_NESSUN_INCARICO : 'Nessun risultato.'),
     });
 
     // La stima: per testo, e - se c'e' - dentro la relazione CORE del lead
@@ -927,7 +1004,7 @@ export function openCreateDialog(dialogEl, {
       if (filtro.leadId) hintStima.textContent = 'Solo le stime collegate al lead scelto (la ricerca resta al loro interno).';
       else if (filtro.contactId) hintStima.textContent = 'Solo le stime collegate ai lead del cliente (la ricerca resta al loro interno).';
       else hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
-      if (filtro.leadId || filtro.contactId) stima.cerca('');
+      if ((filtro.leadId || filtro.contactId) && attivo('stima')) stima.cerca('');
     };
     hintStima.textContent = 'Cerca fra le stime dell’agenzia.';
     selLead.addEventListener('change', aggiornaStime);
@@ -1009,37 +1086,51 @@ export function openCreateDialog(dialogEl, {
     nascondiDisponibilita(form);
   });
   campoData.addEventListener('input', () => nascondiDisponibilita(form));
-  // APPUNTAMENTI DI VENDITA: etichette, obbligatorieta' e ricerca seguono il
-  // tipo. Un immobile scelto prima non e' necessariamente un incarico: si
-  // azzera al cambio fra vendita e altri tipi.
-  let eraVendita = null;
-  const aggiornaVendita = () => {
-    const vendita = eVendita();
+
+  // SEMPLIFICAZIONE-CRM-1: il form segue il tipo. Si mostrano solo i
+  // collegamenti pertinenti; etichette e obbligatorieta' seguono. Un immobile
+  // scelto prima non e' necessariamente un incarico: si azzera al cambio fra
+  // la ricerca degli incarichi e quella degli immobili.
+  let eraIncarico = null;
+  const aggiornaCampi = () => {
+    const incarico = modoIncarico();
+    for (const nodo of form.querySelectorAll('[data-campo]')) {
+      const campo = nodo.dataset.campo;
+      const visibile = campo === 'property' ? (attivo('property') || incarico) : attivo(campo);
+      nodo.hidden = !visibile;
+    }
     const legenda = form.querySelector('[data-crm-legend]');
     if (legenda) {
-      legenda.textContent = vendita
-        ? 'Incarico e cliente (obbligatori)' : 'Collegamento CRM (facoltativo)';
+      legenda.textContent = incaricoObbligatorio()
+        ? 'Cliente acquirente e incarico (obbligatori)'
+        : (clienteObbligatorio() ? 'Collegamento CRM (cliente obbligatorio)' : 'Collegamento CRM (facoltativo)');
     }
     const etichettaCliente = form.querySelector('[data-contact-label]');
-    if (etichettaCliente) etichettaCliente.textContent = vendita ? 'Cliente interessato all’acquisto *' : 'Cliente';
+    if (etichettaCliente) {
+      etichettaCliente.textContent = `${ETICHETTA_CLIENTE[tipo.value] || 'Cliente'}${clienteObbligatorio() ? ' *' : ''}`;
+    }
     const etichettaImmobile = form.querySelector('[data-property-label]');
-    if (etichettaImmobile) etichettaImmobile.textContent = vendita ? 'Incarico *' : 'Immobile';
+    if (etichettaImmobile) {
+      etichettaImmobile.textContent = incarico ? `Incarico${incaricoObbligatorio() ? ' *' : ''}` : 'Immobile';
+    }
     const aiutoImmobile = form.querySelector('[data-property-hint]');
     if (aiutoImmobile) {
-      aiutoImmobile.textContent = vendita
-        ? 'Cerca fra gli incarichi in corso o scaduti (titolo, codice, indirizzo o proprietario).' : '';
+      aiutoImmobile.textContent = incarico
+        ? 'Cerca fra gli incarichi in corso o scaduti: indirizzo, comune o proprietario.' : '';
     }
-    if (immobile && eraVendita !== null && eraVendita !== vendita) immobile.azzera();
-    eraVendita = vendita;
+    const etichettaAgente = form.querySelector('[data-agent-label]');
+    if (etichettaAgente) etichettaAgente.textContent = agenteObbligatorio() ? 'Agente *' : 'Agente';
+    if (immobile && eraIncarico !== null && eraIncarico !== incarico) immobile.azzera();
+    eraIncarico = incarico;
     aggiornaSuggerimento();
   };
-  aggiornaVendita();
+  aggiornaCampi();
   tipo.addEventListener('change', () => {
     if (!durataScelta && !lockDuration) {
       fineDopo(durataBase());
       mostraDurata();
     }
-    aggiornaVendita();
+    aggiornaCampi();
   });
   agente.addEventListener('change', () => { aggiornaSuggerimento(); nascondiDisponibilita(form); });
 
@@ -1053,7 +1144,7 @@ export function openCreateDialog(dialogEl, {
   form.querySelector('[data-check]').addEventListener('click', async () => {
     erroreBox.textContent = '';
     if (!agente.value) {
-      erroreBox.textContent = requireAgent
+      erroreBox.textContent = agenteObbligatorio()
         ? MSG_AGENTE_OBBLIGATORIO
         : 'Senza agente non c’è un’agenda da verificare: '
           + 'l’appuntamento si salverà come “Richiesta”.';
@@ -1081,10 +1172,16 @@ export function openCreateDialog(dialogEl, {
     const idAgente = agente.value ? Number(agente.value) : null;
     // A31-4: vincoli del chiamante, PRIMA di qualunque richiesta.
     if (requireAgent && !idAgente) throw new Error(MSG_AGENTE_OBBLIGATORIO);
-    if (eVendita()) {
-      if (!(immobile && immobile.scelto && immobile.scelto.id)) throw new Error(MSG_VENDITA_INCARICO);
-      if (!(cliente && cliente.id)) throw new Error(MSG_VENDITA_CLIENTE);
+    // SEMPLIFICAZIONE-CRM-1: una visita immobile ha SEMPRE incarico, cliente
+    // e agente; il cliente e' obbligatorio anche quando lo chiede il
+    // chiamante. Un collegamento nascosto dal tipo non si invia.
+    const conCliente = attivo('contact') && cliente && cliente.id;
+    if (incaricoObbligatorio()) {
+      if (immobile && !(immobile.scelto && immobile.scelto.id)) throw new Error(MSG_VENDITA_INCARICO);
+      if (crmMode !== 'none' && !conCliente) throw new Error(MSG_VENDITA_CLIENTE);
       if (!idAgente) throw new Error(MSG_VENDITA_AGENTE);
+    } else if (requireContact && crmMode !== 'none' && !conCliente) {
+      throw new Error(MSG_CLIENTE_OBBLIGATORIO);
     }
     if (lockDuration && durationMinutes(startAt, endAt) !== durataFissa) {
       throw new Error(`La durata è fissa (${formatDuration(durataFissa)}): scegli un orario di inizio che la consenta.`);
@@ -1098,14 +1195,16 @@ export function openCreateDialog(dialogEl, {
       assigned_user_id: idAgente,
       client_request_id: chiave,
     };
-    if (cliente && cliente.id) corpo.contact_id = Number(cliente.id);
-    if (cliente && selLead && selLead.value) corpo.lead_id = Number(selLead.value);
-    if (stima && stima.scelto && stima.scelto.id) corpo.stima_id = Number(stima.scelto.id);
-    if (immobile && immobile.scelto && immobile.scelto.id) corpo.property_id = Number(immobile.scelto.id);
+    if (conCliente) corpo.contact_id = Number(cliente.id);
+    if (conCliente && selLead && selLead.value) corpo.lead_id = Number(selLead.value);
+    if (attivo('stima') && stima && stima.scelto && stima.scelto.id) corpo.stima_id = Number(stima.scelto.id);
+    if ((attivo('property') || modoIncarico()) && immobile && immobile.scelto && immobile.scelto.id) {
+      corpo.property_id = Number(immobile.scelto.id);
+    }
     const campoLuogo = form.querySelector('[data-field="location"]');
     const campoNote = form.querySelector('[data-field="notes"]');
-    const luogo = campoLuogo ? campoLuogo.value.trim() : '';
-    const note = campoNote ? campoNote.value.trim() : '';
+    const luogo = attivo('location') && campoLuogo ? campoLuogo.value.trim() : '';
+    const note = attivo('notes') && campoNote ? campoNote.value.trim() : '';
     if (luogo) corpo.location_text = luogo;
     if (note) corpo.notes = note;
     // A31-4: una sola scrittura - quella dell'Agenda, oppure quella del

@@ -14,23 +14,35 @@ APPOINTMENT_TYPES = (
     "sale_appointment",
 )
 
-#: Etichette dell'interfaccia italiana. Sopralluogo proprietario (inspection)
-#: e visita acquirente (buyer_visit) sono due cose diverse.
+#: Etichette dell'interfaccia italiana (SEMPLIFICAZIONE-CRM-1: le parole di un
+#: agente immobiliare). Sopralluogo proprietario (inspection) e visita
+#: immobile (buyer_visit) sono due cose diverse. `sale_appointment` resta nel
+#: catalogo per le righe esistenti ma non si offre piu' alla creazione
+#: (`CREATE_HIDDEN_TYPES`): la visita immobile ne ha preso il ruolo.
 APPOINTMENT_TYPE_LABELS_IT = {
     "call": "Telefonata",
     "video_call": "Videochiamata",
     "seller_meeting": "Appuntamento proprietario",
     "inspection": "Sopralluogo",
-    "buyer_visit": "Visita acquirente",
+    "buyer_visit": "Visita immobile",
     "valuation_presentation": "Presentazione valutazione",
     "mandate_signing": "Firma incarico",
-    "proposal": "Proposta",
-    "preliminary_contract": "Preliminare",
-    "notary": "Rogito",
-    "technical": "Tecnico",
+    "proposal": "Proposta d’acquisto",
+    "preliminary_contract": "Preliminare di compravendita",
+    "notary": "Rogito notarile",
+    "technical": "Appuntamento tecnico",
     "other": "Altro",
     "sale_appointment": "Appuntamento di vendita",
 }
+
+#: SEMPLIFICAZIONE-CRM-1: la VISITA IMMOBILE e' `buyer_visit` (proiezione in
+#: `property_visits`, promemoria, Google, voce: tutto invariato) e da ora si
+#: fissa SOLO su un incarico reale, con il cliente acquirente e l'agente.
+#: Stessa regola di `sale_appointment` (106), che resta valido per le righe
+#: gia' scritte ma non si crea piu' dall'interfaccia.
+VISIT_TYPE = "buyer_visit"
+MANDATE_REQUIRED_TYPES = ("buyer_visit", "sale_appointment")
+CREATE_HIDDEN_TYPES = ("sale_appointment",)
 
 #: APPUNTAMENTI DI VENDITA (106). Distinto dalla visita acquirente: nessuna
 #: proiezione in `property_visits`, nessuna prenotazione pubblica.

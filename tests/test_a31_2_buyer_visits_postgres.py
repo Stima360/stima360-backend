@@ -67,6 +67,11 @@ def v(w, schema_a31, monkeypatch):  # noqa: F811
     PRIMA della pulizia di A30-2 del test successivo (FK RESTRICT)."""
     sql = w["sql"]
     _pulisci(sql)
+    # SEMPLIFICAZIONE-CRM-1: una visita immobile si fissa solo su un incarico
+    # reale (core/property_mandate.py): `casa` ne porta uno storico (tipo +
+    # inizio), in corso. Nessun'altra riga cambia.
+    sql("UPDATE properties SET mandate_type='Esclusiva', mandate_start=CURRENT_DATE WHERE id=%s",
+        (w["casa"],))
     monkeypatch.setenv("PUBLIC_BOOKING_IP_PEPPER", "pepe-a31")
     yield w
     w["conn"].rollback()
@@ -78,6 +83,24 @@ def _visita(http, v, chi="giorgio", **kw):  # noqa: F811
              "contact_id": v["mario"], "assigned_user_id": v["luca"]}
     corpo.update(kw)
     return a30_2._crea(http, chi, **corpo)
+
+
+def _richiesta(v, **kw):
+    """SEMPLIFICAZIONE-CRM-1: una visita immobile nuova non nasce piu' come
+    richiesta senza agente dall'API (422). Le prove del passaggio
+    richiesta -> fissata seminano la richiesta direttamente (stesse colonne di
+    una riga `crm_manual` storica); lo schema di queste prove non applica la
+    107, che comunque esclude... solo le righe con agente, cliente e immobile."""
+    valori = {"property_id": v["casa"], "contact_id": v["mario"], "assigned_user_id": None}
+    valori.update(kw)
+    riga = v["sql"](
+        "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, "
+        "start_at, end_at, source, contact_id, property_id, created_by_user_id) "
+        "VALUES (%s,%s,'buyer_visit','requested',%s,%s,'crm_manual',%s,%s,%s) "
+        "RETURNING id, version, status",
+        (v["a"], valori["assigned_user_id"], ore(10), ore(11), valori["contact_id"],
+         valori["property_id"], v["giorgio"]))[0]
+    return {"id": riga[0], "version": riga[1], "status": riga[2]}
 
 
 def _pv(v, appointment_id=None):
@@ -253,14 +276,32 @@ def test_a6_legacy_invariato(http, v):  # noqa: F811
 # B-D - NASCITA DELLA PROIEZIONE (D1, D2)
 # ---------------------------------------------------------------------------
 
-def test_b_requested_nessuna_proiezione(http, v):  # noqa: F811
-    r = _visita(http, v, status="requested", assigned_user_id=None)
-    assert r["status"] == "requested"
-    assert _conta(v, "property_visits") == 0
+def test_b_requested_senza_agente_rifiutata(http, v):  # noqa: F811
+    """SEMPLIFICAZIONE-CRM-1: una visita immobile richiede sempre l'agente
+    (oltre a incarico e cliente): nemmeno come richiesta. Nessuna riga,
+    nessuna proiezione."""
+    r = http("giorgio").post("/api/appointments", json=a30_2._nuovo(
+        appointment_type="buyer_visit", property_id=v["casa"], contact_id=v["mario"],
+        status="requested", assigned_user_id=None))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "AGENT_REQUIRED"
+    assert _conta(v, "appointments") == 0 and _conta(v, "property_visits") == 0
+
+
+def test_b2_senza_incarico_rifiutata(http, v):  # noqa: F811
+    """SEMPLIFICAZIONE-CRM-1: un immobile senza incarico reale non accetta visite."""
+    senza = v["sql"]("INSERT INTO properties (agency_id, title) VALUES (%s,'Senza incarico') "
+                     "RETURNING id", (v["a"],))[0][0]
+    r = http("giorgio").post("/api/appointments", json=a30_2._nuovo(
+        appointment_type="buyer_visit", property_id=senza, contact_id=v["mario"],
+        status="scheduled", assigned_user_id=v["luca"]))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "SALE_MANDATE_REQUIRED"
+    assert _conta(v, "appointments") == 0 and _conta(v, "property_visits") == 0
 
 
 def test_c_schedule_crea_una_proiezione(http, v):  # noqa: F811
-    req = _visita(http, v, status="requested", assigned_user_id=None)
+    req = _richiesta(v)
     r = http("giorgio").post(f"/api/appointments/{req['id']}/schedule",
                              json={"version": req["version"], "assigned_user_id": v["luca"],
                                    "start_at": ore(14).isoformat(), "end_at": ore(15).isoformat()})
@@ -297,7 +338,11 @@ def test_d2_agente_obbligatorio_gia_garantito(http, v):  # noqa: F811
 
 
 def test_d3_senza_immobile_o_altro_tipo_nessuna_proiezione(http, v):  # noqa: F811
-    _visita(http, v, property_id=None)
+    # SEMPLIFICAZIONE-CRM-1: una visita senza immobile non si crea (422).
+    r = http("giorgio").post("/api/appointments", json=a30_2._nuovo(
+        appointment_type="buyer_visit", property_id=None, contact_id=v["mario"],
+        status="scheduled", assigned_user_id=v["luca"]))
+    assert r.status_code == 422 and r.json()["code"] == "SALE_MANDATE_REQUIRED", r.text
     a30_2._crea(http, assigned_user_id=v["marta"], property_id=v["casa"])   # seller_meeting
     assert _conta(v, "property_visits") == 0
 
@@ -398,7 +443,11 @@ def test_k_patch_immobile_proiettata_409(http, v):  # noqa: F811
 
 
 def test_k2_immobile_aggiunto_a_visita_fissata_la_proietta(http, v):  # noqa: F811
-    a = _visita(http, v, property_id=None)
+    """SEMPLIFICAZIONE-CRM-1: una visita fissata senza immobile non nasce
+    dall'API; una riga storica (seminata) che riceve l'immobile si proietta."""
+    a = _richiesta(v, property_id=None, assigned_user_id=v["luca"])
+    v["sql"]("UPDATE appointments SET status='scheduled' WHERE id=%s", (a["id"],))
+    a["version"] += 1
     assert _conta(v, "property_visits") == 0
     r = http("giorgio").patch(f"/api/appointments/{a['id']}",
                               json={"version": a["version"], "property_id": v["casa"]})
@@ -455,7 +504,7 @@ def test_m1_proiezione_fallita_annulla_la_creazione(http, v, monkeypatch):  # no
 def test_m2_proiezione_fallita_annulla_lo_schedule(http, v, monkeypatch):  # noqa: F811
     from buyer_visits import errors, projection
 
-    req = _visita(http, v, status="requested", assigned_user_id=None)
+    req = _richiesta(v)
     eventi = _conta(v, "appointment_events")
 
     def rotta(*a, **k):

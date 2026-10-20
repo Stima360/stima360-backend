@@ -140,7 +140,7 @@ def test_m03_righe_unita_e_relazioni_reali():
     }))()""")
     assert out["fatti"] == "Appartamento · scala B · piano 2º · int. 5 · 85 m²"
     assert out["senza"] == "garage"
-    assert out["pert"] == "Pertinenza di IMM-1" and out["altrove"] == "Pertinenza di IMM-1 (in un altro edificio)"
+    assert out["pert"] == "Pertinenza di un’unità principale" and out["altrove"] == "Pertinenza di un’unità principale (in un altro edificio)"   # SEMPLIFICAZIONE-CRM-1
     assert out["perso"].startswith("Pertinenza") and out["principale"] == "Con 2 pertinenze" and out["sola"] == ""
     assert out["titolo"] == ["Palazzina #3", "Via Po 1", "Palazzina #3"]
 
@@ -269,11 +269,11 @@ def test_05_scheda_edificio_dati_contatori_unita_e_link(staged):  # noqa: F811
     assert "Censite5" in out["contatori"] and "di cui 1 archiviata" in out["contatori"] and "Da completare1" in out["contatori"]
     assert "1 accessorio da chiarire" in out["segnali"] and "2 categorie mancanti" in out["segnali"]   # D4
     assert out["link"] == ["#/immobili/410", "#/immobili/411", "#/immobili/412", "#/immobili/415"]
-    riga412 = next(r for r in out["righe"] if "IMM-412" in r)
+    riga412 = next(r for r in out["righe"] if "int. 2" in r and "scala B" in r)   # SEMPLIFICAZIONE-CRM-1: senza codice
     assert "Appartamento · scala B · piano 2º · int. 2 · 85 m²" in riga412 and "Censimento · Bozza" in riga412
     assert "Con 1 pertinenza" in riga412
-    assert any("IMM-415" in r and "Pertinenza di IMM-412" in r for r in out["righe"])
-    assert "Archiviate (1)" in out["archiviate"] and "IMM-420" in out["archiviate"] and "Archiviato" in out["archiviate"]
+    assert any("Pertinenza di un’unità principale" in r for r in out["righe"])
+    assert "Archiviate (1)" in out["archiviate"] and "Archiviato" in out["archiviate"]
     assert out["hash"] == "#/immobili/412"
 
 

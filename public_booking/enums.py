@@ -6,12 +6,13 @@ vocabolario parallelo che puo' divergere.
 """
 from __future__ import annotations
 
-from appointments.enums import APPOINTMENT_TYPES, SALE_APPOINTMENT_TYPE
+from appointments.enums import APPOINTMENT_TYPES, MANDATE_REQUIRED_TYPES
 
-#: APPUNTAMENTI DI VENDITA (106): un appuntamento di vendita richiede un
-#: incarico e un cliente scelti dall'agenzia, che una prenotazione pubblica
-#: non puo' fornire. Il CHECK di `public_booking_links` (077) non lo ammette.
-NOT_BOOKABLE_TYPES = (SALE_APPOINTMENT_TYPE,)
+#: SEMPLIFICAZIONE-CRM-1: la visita immobile (`buyer_visit`) e l'appuntamento
+#: di vendita (106) richiedono un incarico e un cliente scelti dall'agenzia,
+#: che una prenotazione pubblica non puo' fornire. Un link gia' esistente di
+#: questi tipi non crea piu' appuntamenti (`appointments/service.py`).
+NOT_BOOKABLE_TYPES = tuple(MANDATE_REQUIRED_TYPES)
 
 LINK_STATUSES = ("active", "disabled")
 

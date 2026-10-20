@@ -121,7 +121,7 @@ def test_u01_aggiungi_pertinenza_tipo_mq_quantita_e_sub(staged):  # noqa: F811
     assert {k: acc["body"][k] for k in ("kind", "cadastral_status", "surface_sqm", "quantity")} == \
         {"kind": "box", "cadastral_status": "unknown", "surface_sqm": 18.5, "quantity": 1}
     assert out["quantitaNascosta"] is True
-    assert "pertinenza di IMM-30" in out["titolo"] and "Posto auto" in out["titolo"]
+    assert "pertinenza di Appartamento" in out["titolo"] and "Posto auto" in out["titolo"]   # SEMPLIFICAZIONE-CRM-1
     assert (out["tipologia"], out["tipoPertinenza"], out["mq"], out["note"]) == ("garage", "posto_auto", "12.5", "sotto la rampa")
     unita = out["post"][1]
     assert unita["url"] == "/api/property/census/units"
@@ -168,7 +168,7 @@ def test_u02_scheda_edificio_pertinenze_collegate_e_da_collegare(staged):  # noq
                    ("POST", "/api/property/census/units", [{"status": 201, "body": {**SCIOLTA, "id": 417, "code": "IMM-417", "pertinenza_kind": "cantina", "replica": False, "similar": []}}])) + e1._rotte()
     out = _run(staged, scenario, rotte, "#/edifici/7")
     assert "Collegate a un’unità (1)" in out["pannello"] and "Da collegare (1)" in out["pannello"]
-    assert "Posto auto" in out["pannello"] and "IMM-412" in out["pannello"] and "Garage / box" in out["pannello"]
+    assert "Posto auto" in out["pannello"] and "Garage / box" in out["pannello"]
     assert "(1 da collegare)" in out["split"]
     assert out["collegate"] == ["415"] and out["sciolte"] == ["416"]
     assert out["candidate"] == ["410", "412"]                    # principali della palazzina, non le pertinenze
@@ -228,7 +228,7 @@ def test_u04_pertinenza_collegata_scollega_dal_suo_lato(staged):  # noqa: F811
     out = _run(staged, scenario, _scheda_rotte(collegata, extra=(
         ("POST", "/api/property/properties/412/pertinenze/30/unlink", [rt.ok({"property_id": 412, "pertinenza": {"id": 30}})]),)),
         "#/immobili/30")
-    assert "IMM-412" in out["testo"] and "(in un altro edificio)" in out["testo"] and "Scollega da IMM-412" in out["testo"]
+    assert "(in un altro edificio)" in out["testo"] and "Scollega da Appartamento" in out["testo"]   # SEMPLIFICAZIONE-CRM-1
     assert "Resta una pertinenza da collegare" in out["testoConferma"] and out["primaDellaConferma"] == 0
     assert [c["url"] for c in out["post"]] == ["/api/property/properties/412/pertinenze/30/unlink"]
 

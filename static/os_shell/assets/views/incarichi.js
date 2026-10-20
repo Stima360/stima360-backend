@@ -13,6 +13,8 @@ import { apiGet } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, renderBadge, escapeHtml, formatDate } from '../components/st-table.js';
 import { formatInteractionTime } from '../components/property-interactions.js';
+// SEMPLIFICAZIONE-CRM-1: l'incarico si legge come l'immobile (tipologia, via, piano), mai il codice.
+import { propertyPlaceText, propertyShortLabel } from '../components/property-label.js';
 
 const PAGE_SIZE = 50;
 export const EXPIRY_LABELS = {
@@ -69,7 +71,7 @@ export async function renderIncarichi(container) {
     <div class="card panel">
       <p class="muted">Gli incarichi nascono solo da un’acquisizione («Genera incarico»): qui compaiono da soli.</p>
       <div class="list-toolbar inc-toolbar">
-        <input id="inc-search" class="input" type="search" placeholder="Cerca immobile, codice, indirizzo o proprietario…">
+        <input id="inc-search" class="input" type="search" placeholder="Cerca per indirizzo, comune o proprietario…">
         <select id="inc-expiry" class="input">${opzioni(Object.entries(EXPIRY_LABELS), 'Tutte le scadenze')}</select>
         <select id="inc-status" class="input">${opzioni(Object.entries(COMMERCIAL_STATUS_LABELS), 'Stato commerciale')}</select>
         <select id="inc-type" class="input"><option value="">Tipo incarico</option></select>
@@ -123,7 +125,7 @@ export async function renderIncarichi(container) {
     const filtrato = Object.entries(f).some(([k, v]) => k !== 'sort' && v);
     listArea.innerHTML = renderTable(
       [
-        { label: 'Immobile', render: (r) => `<strong>${escapeHtml(r.code || `#${r.property_id}`)}</strong><br><small class="muted">${escapeHtml([r.title, [r.address, r.civic_number].filter(Boolean).join(' '), r.city].filter(Boolean).join(' · '))}</small>` },
+        { label: 'Immobile', render: (r) => `<strong>${escapeHtml(propertyShortLabel(r))}</strong><br><small class="muted">${escapeHtml(propertyPlaceText(r) || '—')}</small>` },
         { label: 'Proprietario', render: (r) => `${escapeHtml(r.main_owner_name || '—')}${r.other_owners && r.other_owners.length ? `<br><small class="muted">+ ${escapeHtml(r.other_owners.map((o) => o.display_name).join(', '))}</small>` : ''}` },
         { label: 'Agente', render: (r) => escapeHtml(r.agent_name || '—') },
         { label: 'Tipo', render: (r) => `${escapeHtml(r.mandate_type || '—')}${r.missing_fields && r.missing_fields.length ? ` ${renderBadge('Dati da completare', 'warn')}` : ''}` },

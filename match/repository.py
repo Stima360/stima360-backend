@@ -298,7 +298,7 @@ def list_matches(
     params += [limit, offset]
     with core_cursor() as (_, cur):
         cur.execute(
-            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,b.contact_id AS buyer_contact_id,
                 p.title AS property_title,p.code AS property_code,p.city,p.microzone,
                 p.asking_price,p.classification,
                 COALESCE(m.manual_score,m.score_total) AS effective_score
@@ -316,7 +316,7 @@ def list_matches(
 def get_match(match_id):
     with core_cursor() as (_, cur):
         cur.execute(
-            """SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+            """SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,b.contact_id AS buyer_contact_id,
                 p.title AS property_title,p.code AS property_code,p.city,p.microzone,
                 p.asking_price,p.classification,
                 COALESCE(m.manual_score,m.score_total) AS effective_score
@@ -971,7 +971,7 @@ def list_matches_scoped(
     params += [limit, offset]
     with core_cursor() as (_, cur):
         cur.execute(
-            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,b.contact_id AS buyer_contact_id,
                 p.title AS property_title,p.code AS property_code,p.city,p.microzone,
                 p.asking_price,p.classification,
                 COALESCE(m.manual_score,m.score_total) AS effective_score
@@ -988,7 +988,7 @@ def get_match_scoped(ctx, match_id):
     agency_id = _agency(ctx)
     with core_cursor() as (_, cur):
         cur.execute(
-            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,
+            f"""SELECT m.*,b.title AS buy_title,c.display_name AS buyer_name,b.contact_id AS buyer_contact_id,
                 p.title AS property_title,p.code AS property_code,p.city,p.microzone,
                 p.asking_price,p.classification,
                 COALESCE(m.manual_score,m.score_total) AS effective_score

@@ -161,7 +161,7 @@ export async function renderVenditori(container) {
         ${renderBadge(it.stage_label || stageLabel(it.stage), STAGE_TONES[it.stage] || 'gray')} ${intent}
         ${it.status === 'paused' ? renderBadge('Sospesa', 'warn') : ''}${it.status === 'closed' ? renderBadge(it.lost_reason_label || it.lost_reason || 'Chiusa', 'gray') : ''}
       </header>
-      <div class="seller-line"><a href="#/immobili/${escapeHtml(String(it.property.id))}">${escapeHtml([it.property.code, propertyLine(it.property)].filter(Boolean).join(' · '))}</a>
+      <div class="seller-line"><a href="#/immobili/${escapeHtml(String(it.property.id))}">${escapeHtml(propertyLine(it.property))}</a>
         ${proprietario ? '' : ` ${renderBadge('Non più collegato come proprietario', 'warn')}`}</div>
       ${proprietario ? '' : `<div class="seller-line muted" data-not-owner="${id}">Per lavorare questa vendita ricollega ${escapeHtml(it.contact.name || 'il contatto')} come proprietario dalla <a href="#/immobili/${escapeHtml(String(it.property.id))}/proprietari">scheda immobile</a>, oppure chiudi l’opportunità.</div>`}
       <div class="seller-line muted">${it.contact.phone ? escapeHtml(it.contact.phone) : 'Nessun telefono'}${it.contact.email ? ` · ${escapeHtml(it.contact.email)}` : ''} · Agente: ${escapeHtml(it.agent_name || 'non assegnato')}</div>

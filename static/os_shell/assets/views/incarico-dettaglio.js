@@ -12,10 +12,24 @@
 //
 // Nessun "Crea incarico": nasce solo dall'acquisizione. Nessuna nota copiata:
 // una riga di storico registrata qui la vede anche la scheda Immobile.
-import { apiGet, apiPatch } from '../core/api-client.js';
-import { renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+//
+// SEMPLIFICAZIONE-CRM-1 - VISITE: la sezione «Visite» legge l'Agenda
+// (GET /api/appointments?property_id=&types=buyer_visit, la fonte autorevole),
+// con cliente, data, ora, agente e stato; nessuna copia. La visibilita' e'
+// quella dell'Agenda: titolare e amministratore vedono tutta l'agenzia, un
+// agente solo le visite assegnate a lui. «Programma visita» usa il dialog
+// condiviso dell'Agenda come la scheda Immobile (stessa POST .../visits, stessa
+// facade A31-3): cliente, agente e incarico sono obbligatori.
+import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
+import { getAgents, getList, lookupMandates } from '../agenda/agenda-api.js';
+import { MANDATE_REQUIRED_TYPES, formatTime, romeDateKey, statusLabel, todayKey } from '../agenda/agenda-model.js';
+import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
+import { getSession } from '../core/auth.js';
+import { NO_MANDATE_FOR_VISIT, propertyVisitPayload } from './immobile-dettaglio.js';
+import { renderBadge, renderTable, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
 import { mountPropertyInteractions, formatInteractionTime } from '../components/property-interactions.js';
 import { COMMERCIAL_STATUS_LABELS, expiryText, expiryTone, formatPrice } from './incarichi.js';
+import { propertyShortLabel } from '../components/property-label.js';
 
 const ROLE_LABELS = { owner: 'Proprietario', seller: 'Venditore' };
 
@@ -33,6 +47,26 @@ export function mandatePatchPayload(inc, valori) {
     if ((valori[campo] || '') !== prima) corpo[campo] = valori[campo] || null;
   }
   return corpo;
+}
+
+/** La tabella delle visite dell'incarico, dalle righe dell'Agenda. */
+export function renderVisiteIncarico(righe, session) {
+  const ordinate = [...(righe || [])].sort((a, b) => Date.parse(b.start_at) - Date.parse(a.start_at));
+  const nota = session && session.role === 'agent'
+    ? '<p class="muted" id="inc-visits-scope">Vedi le visite assegnate a te; le altre restano nell’agenda dei colleghi.</p>' : '';
+  const table = renderTable(
+    [
+      { label: 'Data', render: (v) => escapeHtml(formatDate(v.start_at)) },
+      { label: 'Ora', render: (v) => escapeHtml(`${formatTime(v.start_at)}–${formatTime(v.end_at)}`) },
+      { label: 'Cliente', render: (v) => escapeHtml(v.contact_name || '—') },
+      { label: 'Agente', render: (v) => escapeHtml(v.agent_name || '—') },
+      { label: 'Stato', render: (v) => renderBadge(statusLabel(v.status) || v.status || '—', ['scheduled', 'confirmed', 'completed'].includes(v.status) ? 'ok' : 'gray') },
+      { label: '', render: (v) => `<a class="btn ghost" href="#/agenda/giorno/${escapeHtml(romeDateKey(v.start_at))}" data-open-agenda="${escapeHtml(v.id)}">Apri in Agenda</a>` },
+    ],
+    ordinate,
+    { emptyMessage: 'Nessuna visita programmata per questo incarico.' },
+  );
+  return nota + table;
 }
 
 export async function renderIncaricoDettaglio(container, params = []) {
@@ -67,7 +101,7 @@ export async function renderIncaricoDettaglio(container, params = []) {
       <div class="card panel inc-detail">
         <p><a href="#/incarichi">← Incarichi</a></p>
         <div class="inc-head">
-          <h2 class="section-title">Incarico · ${escapeHtml(inc.code || `#${inc.property_id}`)}</h2>
+          <h2 class="section-title">Incarico · ${escapeHtml(propertyShortLabel(inc))}</h2>
           ${renderBadge(COMMERCIAL_STATUS_LABELS[inc.commercial_status] || inc.commercial_status || '—', 'gray')}
           ${renderBadge(expiryText(inc.days_to_expiry), expiryTone(inc.days_to_expiry))}
         </div>
@@ -109,11 +143,19 @@ export async function renderIncaricoDettaglio(container, params = []) {
             <small class="muted">${escapeHtml((o.roles || []).map((r) => ROLE_LABELS[r] || r).join(', '))}${o.phone ? ` · ${escapeHtml(o.phone)}` : ''}${o.email ? ` · ${escapeHtml(o.email)}` : ''}</small></li>`).join('')}</ul>`
     : '<p class="muted">Nessun proprietario collegato all’immobile.</p>'}
 
+        <h3 class="section-title">Visite</h3>
+        <div class="action-bar"><button type="button" class="btn primary" id="inc-visit-schedule">Programma visita</button></div>
+        <div id="inc-visits-feedback"></div>
+        <div id="inc-visits"><p class="muted">Caricamento visite…</p></div>
+
         <h3 class="section-title">Storico interazioni</h3>
         <div id="inc-interactions"></div>
       </div>
-      <dialog class="modal" id="inc-edit-dialog"></dialog>`;
+      <dialog class="modal" id="inc-edit-dialog"></dialog>
+      <dialog class="modal modal-wide agenda-dialog" id="inc-visit-dialog"></dialog>`;
     container.querySelector('#inc-edit').addEventListener('click', apriModifica);
+    container.querySelector('#inc-visit-schedule').addEventListener('click', programmaVisita);
+    caricaVisite();
     mountPropertyInteractions(container.querySelector('#inc-interactions'), {
       propertyId: inc.property_id,
       context: 'mandate',
@@ -127,6 +169,71 @@ export async function renderIncaricoDettaglio(container, params = []) {
         } catch (error) {
           // lo storico e' gia' aggiornato; il riepilogo si rilegge al prossimo caricamento
         }
+      },
+    });
+  }
+
+  // --- Visite (SEMPLIFICAZIONE-CRM-1) -------------------------------------
+  async function caricaVisite() {
+    const area = container.querySelector('#inc-visits');
+    if (!area) return;
+    let righe;
+    try {
+      const esito = await getList({ propertyId: inc.property_id, types: [...MANDATE_REQUIRED_TYPES], limit: 200 });
+      righe = (esito && esito.items) || [];
+    } catch (error) {
+      area.innerHTML = `<div class="error-box">Impossibile caricare le visite: ${escapeHtml(error.message || 'errore')}</div>`;
+      return;
+    }
+    area.innerHTML = renderVisiteIncarico(righe, getSession());
+  }
+
+  async function programmaVisita() {
+    const dialogEl = container.querySelector('#inc-visit-dialog');
+    const fb = container.querySelector('#inc-visits-feedback');
+    if (!dialogEl) return;
+    let incarichi;
+    try {
+      incarichi = await lookupMandates({ propertyId: inc.property_id });
+    } catch (error) {
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile verificare l’incarico: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    if (!(incarichi && Array.isArray(incarichi.items) && incarichi.items.length)) {
+      if (fb) fb.innerHTML = `<div class="error-box" data-no-mandate>${escapeHtml(NO_MANDATE_FOR_VISIT)}</div>`;
+      return;
+    }
+    let agents;
+    try {
+      const esito = await getAgents();
+      agents = (esito && esito.items) || [];
+    } catch (error) {
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile caricare gli agenti: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    openCreateDialog(dialogEl, {
+      agents,
+      dateKey: todayKey(),
+      session: getSession(),
+      title: 'Programma visita',
+      appointmentType: 'buyer_visit',
+      lockAppointmentType: true,
+      durationMinutes: 60,
+      lockDuration: true,
+      requireAgent: true,
+      requireContact: true,
+      crmMode: 'contact_lead',
+      showLocation: false,
+      showNotes: false,
+      submitAppointment: (corpo) => {
+        if (!(Date.parse(corpo.start_at) > Date.now())) {
+          throw new Error('L’orario scelto è già passato: scegli un orario futuro.');
+        }
+        return apiPost(`/api/property/properties/${inc.property_id}/visits`, propertyVisitPayload(corpo));
+      },
+      onDone: async () => {
+        if (fb) fb.innerHTML = '<div class="success-box">Visita programmata nell’Agenda.</div>';
+        await caricaVisite();
       },
     });
   }

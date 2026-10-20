@@ -22,7 +22,10 @@ export function contactLabel(contact) {
 // rootEl: contenitore vuoto in cui montare input+risultati+selezione.
 // onChange(contact|null): richiamato ad ogni selezione/deselezione.
 // Ritorna { get selected() }.
-export function createContactPicker(rootEl, { onChange, placeholder = 'Cerca per nome, email o telefono…' } = {}) {
+// initial: un contatto gia' scelto dal chiamante (SEMPLIFICAZIONE-CRM-1:
+// «Programma visita» da un acquirente compatibile): mostrato come selezionato,
+// sempre cambiabile.
+export function createContactPicker(rootEl, { onChange, placeholder = 'Cerca per nome, email o telefono…', initial = null } = {}) {
   let selected = null;
   let debounceHandle = null;
 
@@ -79,6 +82,8 @@ export function createContactPicker(rootEl, { onChange, placeholder = 'Cerca per
       }
     }, 300);
   });
+
+  if (initial && initial.id) select(initial);
 
   return { get selected() { return selected; } };
 }

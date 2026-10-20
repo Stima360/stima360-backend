@@ -114,7 +114,7 @@ def deterministic_event_id(deployment_namespace: str, agency_id: int,
 _ETICHETTE = {
     "inspection": "Sopralluogo",
     "seller_meeting": "Appuntamento",
-    "buyer_visit": "Visita",
+    "buyer_visit": "Visita immobile",
     "valuation_presentation": "Appuntamento",
     "mandate_signing": "Appuntamento",
     "call": "Telefonata",

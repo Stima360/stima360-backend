@@ -37,15 +37,18 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM D15: poi la sola 105 (nessuna cancellazione
     # fisica delle entita' della Rete: trigger, nessuna colonna e nessun dato)
     # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: poi la sola 106 (la tipologia
-    # `sale_appointment` e il suo vincolo, additiva), ora l'ultima
-    assert tutte[-1].version == "106_sale_appointments"
-    assert tutte[-2].version == "105_adm_d15_no_delete_admin_entities"
-    assert tutte[-3].version == "104_agenzie_c2_territorial_change_requests"
-    assert tutte[-4].version == "103_zona_3_property_position_verification"
-    assert tutte[-5].version == "102_territorio_4_position_verification"
-    assert tutte[-6].version == "101_eliminazione_edificio_1"
-    m100 = tutte[-7]
-    assert m100.version == VERSIONE and tutte[-8].version == "099_voice_undo"
+    # `sale_appointment` e il suo vincolo, additiva)
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1: poi la sola 107 (la guardia della
+    # visita immobile su un incarico: un trigger, nessuna colonna e nessun dato), ora l'ultima
+    assert tutte[-1].version == "107_visita_immobile_incarico"
+    assert tutte[-2].version == "106_sale_appointments"
+    assert tutte[-3].version == "105_adm_d15_no_delete_admin_entities"
+    assert tutte[-4].version == "104_agenzie_c2_territorial_change_requests"
+    assert tutte[-5].version == "103_zona_3_property_position_verification"
+    assert tutte[-6].version == "102_territorio_4_position_verification"
+    assert tutte[-7].version == "101_eliminazione_edificio_1"
+    m100 = tutte[-8]
+    assert m100.version == VERSIONE and tutte[-9].version == "099_voice_undo"
     assert m100.down_available and not m100.non_transactional
     assert runner.validate_migration(m100) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)

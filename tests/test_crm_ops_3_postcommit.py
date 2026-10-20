@@ -148,7 +148,7 @@ def test_f02_il_click_seleziona_esattamente_quell_immobile(staged):  # noqa: F81
     assert v["id"] == "31" and not v["nascosto"] and v["noOwner"] and v["opzioni"] == []
     assert p["id"] == "30" and not p["nascosto"] and not p["noOwner"]
     assert p["opzioni"] == ["41", "42"] and p["owner"] == "41"   # il principale e' preselezionato
-    assert "Immobile selezionato" in p["testo"] and "IMM-30" in p["testo"]
+    assert "Immobile selezionato" in p["testo"] and "Trilocale · Via Roma 1" in p["testo"]   # SEMPLIFICAZIONE-CRM-1: senza codice
     assert p["prezzo"] == "180000.00" and p["risultati"] == 0    # scelto: i risultati si chiudono
 
 

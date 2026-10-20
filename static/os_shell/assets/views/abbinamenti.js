@@ -49,6 +49,8 @@
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
+// SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
+import { propertyRowLabel, propertyShortLabel } from '../components/property-label.js';
 
 const PAGE_SIZE = 50;
 
@@ -138,7 +140,7 @@ export async function renderAbbinamenti(container) {
     listArea.innerHTML = renderTable(
       [
         { label: 'Acquirente / Richiesta', render: (m) => `<strong>${escapeHtml(m.buyer_name || `Richiesta #${m.buy_request_id}`)}</strong><br><small class="muted">${escapeHtml(m.buy_title || '—')}</small>` },
-        { label: 'Immobile', render: (m) => `<strong>${escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`)}</strong><br><small class="muted">${escapeHtml(m.city || '—')}</small>` },
+        { label: 'Immobile', render: (m) => `<strong>${escapeHtml(propertyRowLabel(m))}</strong><br><small class="muted">${escapeHtml(m.city || '—')}</small>` },
         { label: 'Punteggio', render: (m) => renderScoreCell(m) },
         { label: 'Classe', render: (m) => renderBadge(MATCH_CLASS_LABELS[m.match_class] || m.match_class || '—', matchClassTone(m.match_class)) },
         { label: 'Freschezza', render: (m) => renderBadge(FRESHNESS_LABELS[m.freshness_status] || m.freshness_status || '—', freshnessTone(m.freshness_status)) },
@@ -266,9 +268,9 @@ function openCalcDialog(dialogEl, onDone) {
 
   createEntityPicker(propertyPickerEl, {
     label: 'Immobile',
-    placeholder: 'Cerca per titolo, codice, indirizzo o comune…',
+    placeholder: 'Cerca per indirizzo, comune o descrizione…',
     search: (term) => apiGet(`/api/property/properties?search=${encodeURIComponent(term)}&limit=10`),
-    itemLabel: (p) => p.title || p.code || `Immobile #${p.id}`,
+    itemLabel: (p) => propertyShortLabel(p),
     itemSub: (p) => `${p.city || '—'} · ${p.commercial_status || '—'}`,
     onChange: (value) => { selectedProperty = value; resetResult(); refreshReadiness(); },
   });

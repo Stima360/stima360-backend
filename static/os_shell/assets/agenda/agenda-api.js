@@ -100,9 +100,11 @@ export function getCalendar({ from, to, agents, types, statuses, showColleagues,
 }
 
 /** GET lista (la vista Lista). */
-export function getList({ from, to, statuses, types, mistakes, limit = 200, offset = 0 } = {}) {
+export function getList({ from, to, statuses, types, mistakes, propertyId, limit = 200, offset = 0 } = {}) {
   return request('GET', query({
     from, to, statuses, types, limit, offset, mistakes: mistakes ? 'true' : undefined,
+    // SEMPLIFICAZIONE-CRM-1: le visite di un incarico (la scheda Incarico).
+    property_id: propertyId ? id(propertyId) : undefined,
   }));
 }
 
@@ -134,10 +136,12 @@ export function lookupStime({ search, leadId, contactId, limit = 10 } = {}) {
 
 // APPUNTAMENTI DI VENDITA: gli incarichi selezionabili (ogni origine, in corso o
 // scaduti), nella forma di un immobile per `propertyLabel`.
-export function lookupMandates({ search, limit = 10 } = {}) {
+export function lookupMandates({ search, limit = 10, propertyId } = {}) {
   return request('GET', `/lookups/mandates${query({
     search: search ? String(search).trim() : undefined,
     limit,
+    // SEMPLIFICAZIONE-CRM-1: per UN immobile (vuoto se non ha un incarico utilizzabile).
+    property_id: propertyId ? id(propertyId) : undefined,
   })}`);
 }
 

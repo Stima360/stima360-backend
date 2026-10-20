@@ -24,6 +24,7 @@
 
 import { apiGet, apiPatch, apiPost, apiDelete } from '../core/api-client.js';
 import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from '../components/st-table.js';
+import { propertyShortLabel } from '../components/property-label.js';
 import {
   createBuyerPressureCache,
   hydrateBuyerPressure,
@@ -833,7 +834,7 @@ export async function renderContattoDettaglio(container, params = []) {
     }
 
     function propertyLabel(p) {
-      return p.title || p.code || `Immobile #${p.id}`;
+      return p.title || propertyShortLabel(p) || 'Immobile';
     }
 
     function render() {
@@ -1558,7 +1559,7 @@ function renderImmobili(loaded) {
     [
       // DELETE-ARCH Fase 0: la relazione resta visibile (e' storico) ma un
       // immobile archiviato e' marcato come tale.
-      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || p.code || `Immobile #${p.id}`)}</a>${p.record_kind === 'census' ? ` ${renderBadge('Censimento', 'warn')}` : ''}${(p.archived_at || p.commercial_status === 'archived') ? ` ${renderBadge('Archiviato', 'gray')}` : ''}` },
+      { label: 'Immobile', render: (p) => `<a href="#/immobili/${escapeHtml(p.id)}">${escapeHtml(p.title || propertyShortLabel(p) || 'Immobile')}</a>${p.record_kind === 'census' ? ` ${renderBadge('Censimento', 'warn')}` : ''}${(p.archived_at || p.commercial_status === 'archived') ? ` ${renderBadge('Archiviato', 'gray')}` : ''}` },
       { label: 'Città', render: (p) => escapeHtml(p.city || '—') },
       { label: 'Ruolo del contatto', render: (p) => {
         const link = (p.contacts || []).find((c) => String(c.contact_id) === String(contactId));
@@ -1579,7 +1580,7 @@ function renderDocumenti(loaded) {
   const rows = [];
   for (const p of properties) {
     for (const doc of (p.documents || [])) {
-      rows.push({ ...doc, property_title: p.title || p.code || `Immobile #${p.id}` });
+      rows.push({ ...doc, property_title: p.title || propertyShortLabel(p) || 'Immobile' });
     }
   }
   const note = '<p class="muted">Documenti collegati tramite Contatto → Immobile → documenti immobile (property_documents). Non esiste una relazione diretta Contatto → documento.</p>';

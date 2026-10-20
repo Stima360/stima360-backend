@@ -263,14 +263,13 @@ export function propertyFeatureCollection(verified) {
 
 const testoBreve = (v) => (v === null || v === undefined ? '' : String(v).trim());
 
-/** Il titolo dell'immobile per riquadro e pannello: titolo, altrimenti codice, altrimenti via. */
+/** Il titolo dell'immobile per riquadro e pannello: titolo, altrimenti via
+ *  (SEMPLIFICAZIONE-CRM-1: mai il codice tecnico). */
 export function propertyTitle(p) {
   const t = testoBreve(p && p.title);
   if (t) return t;
-  const codice = testoBreve(p && p.code);
-  if (codice) return codice;
   const via = [testoBreve(p && p.address), testoBreve(p && p.civic_number)].filter(Boolean).join(' ');
-  return via || `Immobile ${p && p.id !== undefined ? p.id : ''}`.trim();
+  return via || testoBreve(p && p.city) || 'Immobile';
 }
 
 /** «Via Roma 25 · Alba Adriatica (Lido)» */

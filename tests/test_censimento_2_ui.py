@@ -113,7 +113,7 @@ def test_m02_interni_ordine_filtro_pertinenze_e_mancanti():
     assert out[1] == [1, 2, 4]
     assert out[2] == "Mancano: superficie, provenienza della categoria"
     assert out[3] == "Completa"
-    assert out[4] == "Pertinenza di IMM-3 (altro edificio)" and out[5] == "Pertinenza da collegare"
+    assert out[4] == "Pertinenza di un’unità principale (altro edificio)"   # SEMPLIFICAZIONE-CRM-1: senza codice and out[5] == "Pertinenza da collegare"
     assert out[6] == "Con 2 pertinenze" and out[7] == ""
     assert out[8:10] == ["Non indicata", "Verificata"] and out[10] == ["estimated", "declared"]
 

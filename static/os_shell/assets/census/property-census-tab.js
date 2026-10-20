@@ -16,6 +16,7 @@
 
 import { apiGet } from '../core/api-client.js';
 import { escapeHtml, renderBadge } from '../components/st-table.js';
+import { unitLabel } from '../components/property-label.js';
 import { loadFormOptions } from '../components/property-form.js';
 import * as censusApi from './census-api.js';
 import {
@@ -61,7 +62,7 @@ export async function renderPropertyCensusTab(el, ctx) {
   const atteso = () => (property.updated_at ? { expected_updated_at: property.updated_at } : {});
   const dopoPresa = async (esito) => {
     Object.assign(property, esito);
-    showToast(container, { text: `${property.code || 'Immobile'} preso in carico${esito.pertinenze_taken && esito.pertinenze_taken.length ? ` con ${esito.pertinenze_taken.length} pertinenze` : ''}.` });
+    showToast(container, { text: `${unitLabel(property, tipi, kinds) || 'Immobile'} preso in carico${esito.pertinenze_taken && esito.pertinenze_taken.length ? ` con ${esito.pertinenze_taken.length} pertinenze` : ''}.` });
     navigate('immobili', [property.id]);
   };
   // CENSIMENTO-2: le colonne della 100 ci sono solo dopo la migrazione; senza,
@@ -112,7 +113,7 @@ export async function renderPropertyCensusTab(el, ctx) {
       ${internoProvvisorio ? `<div class="action-bar" data-internal-provisional><span class="muted">L’interno è stato numerato in blocco: confermalo quando è quello reale (oppure correggilo da «Modifica dati catastali e superficie»).</span><button type="button" class="btn ghost btn-small" id="census-confirm-internal">Conferma interno</button></div>` : ''}
       ${provenienza ? `<p class="muted census-provenance" id="census-from-accessory">${escapeHtml(provenienza)}</p>` : ''}
       ${daCollegare ? '<div class="action-bar"><button type="button" class="btn primary" id="census-link-principal">Collega a un’unità principale</button></div>' : ''}
-      ${genitore ? `<div class="action-bar"><button type="button" class="btn ghost btn-small${confermaScollega ? ' danger' : ''}" id="census-unlink-self">${confermaScollega ? 'Confermi lo scollegamento? Resta una pertinenza da collegare' : `Scollega da ${escapeHtml(genitore.code || `#${genitore.id}`)}`}</button></div>` : ''}
+      ${genitore ? `<div class="action-bar"><button type="button" class="btn ghost btn-small${confermaScollega ? ' danger' : ''}" id="census-unlink-self">${confermaScollega ? 'Confermi lo scollegamento? Resta una pertinenza da collegare' : `Scollega da ${escapeHtml(unitLabel(genitore, tipi, kinds) || 'unità principale')}`}</button></div>` : ''}
       <h3 class="section-title">Dati catastali</h3>
       <div class="detail-grid">${catasto.map(([l, v]) => `<div class="detail-item"><label>${escapeHtml(l)}</label>${escapeHtml(v === null || v === undefined || v === '' ? '—' : v)}</div>`).join('')}</div>
       <div class="action-bar"><button type="button" class="btn ghost" id="census-edit-cadastral">${conProvenienza ? 'Modifica dati catastali e superficie' : 'Modifica dati catastali'}</button></div>
@@ -139,7 +140,7 @@ export async function renderPropertyCensusTab(el, ctx) {
     if (undo.dataset.confirm !== '1') { undo.dataset.confirm = '1'; undo.textContent = 'Confermi? La scheda viene archiviata'; return; }
     try {
       await censusApi.undoCreate(property.id);
-      showToast(container, { text: `${property.code || 'Scheda'} annullata (archiviata).` });
+      showToast(container, { text: `${unitLabel(property, tipi, kinds) || 'Scheda'} annullata (archiviata).` });
       await ricarica();
     } catch (error) {
       undo.dataset.confirm = '0';
@@ -152,7 +153,7 @@ export async function renderPropertyCensusTab(el, ctx) {
   if (collegaPrincipale) collegaPrincipale.addEventListener('click', () => openLinkPrincipalSheet(dialogEl, {
     options: opzioni, property, candidates: censimento.link_candidates || [],
     onLinked: async (esito) => {
-      showToast(container, { text: `${property.code || 'Pertinenza'} collegata a ${esito && esito.property_id ? `#${esito.property_id}` : 'un’unità'}.` });
+      showToast(container, { text: `${unitLabel(property, tipi, kinds) || 'Pertinenza'} collegata a un’unità principale.` });
       await ricarica();
     },
   }));

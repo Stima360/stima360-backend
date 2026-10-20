@@ -41,6 +41,9 @@ import {
   principalCandidates, summaryView, unitFacts, unitRelationText, unitRowBadges,
 } from '../census/census-model.js';
 import { STATUS_LABELS, canManagePropertyLifecycle } from './immobile-dettaglio.js';
+// SEMPLIFICAZIONE-CRM-1: le unita' si leggono per tipologia, piano, scala e
+// interno (components/property-label.js); il codice resta al database.
+import { unitLabel } from '../components/property-label.js';
 // CESTINO-EDIFICI-1: per un edificio nel Cestino, la scheda in sola lettura.
 // ELIMINAZIONE-EDIFICIO-1: al posto di «Elimina…» il pannello «Eliminazione
 // edificio» (richiesta, unità coinvolte, stato, ritiro): lo spostamento nel
@@ -198,7 +201,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     return `
           <div class="census-unit-row" data-unit-id="${escapeHtml(u.id)}">
             <a class="census-unit-main" href="#/immobili/${escapeHtml(u.id)}" data-open-unit="${escapeHtml(u.id)}">
-              <strong>${escapeHtml(u.code || `#${u.id}`)}</strong> <span>${escapeHtml(unitFacts(u, tipi, kinds))}</span>
+              <strong>${escapeHtml(unitLabel(u, tipi, kinds))}</strong> <span>${escapeHtml(unitFacts(u, tipi, kinds))}</span>
               <span class="building-unit-meta muted">${escapeHtml([statoUnita(u), relazione].filter(Boolean).join(' · '))}</span>
               <span class="badge-row">${unitRowBadges(u).map((b) => renderBadge(b.text, b.tone)).join(' ')}${u.address_inherited === false ? renderBadge('Ingresso proprio', 'gray') : ''}${archiviata ? renderBadge('Archiviata', 'gray') : ''}</span>
             </a>${azioni}
@@ -231,7 +234,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     }));
     unitsEl.querySelectorAll('[data-duplicate-unit]').forEach((b) => b.addEventListener('click', () => {
       const u = (edificio.units || []).find((x) => String(x.id) === b.dataset.duplicateUnit);
-      if (u) apriFoglio({ ...duplicateSeed(u), duplicate_of: u.code || `#${u.id}` });
+      if (u) apriFoglio({ ...duplicateSeed(u), duplicate_of: unitLabel(u, tipi, kinds) });
     }));
     unitsEl.querySelectorAll('[data-archive-unit]').forEach((b) => b.addEventListener('click', async () => {
       const id = Number(b.dataset.archiveUnit);
@@ -257,7 +260,7 @@ export async function renderEdificioDettaglio(container, params = []) {
     }
     const riga = (u, azione) => `
       <li class="census-list-item" data-pertinenza-row="${escapeHtml(u.id)}">
-        <a href="#/immobili/${escapeHtml(u.id)}" data-open-unit="${escapeHtml(u.id)}"><strong>${escapeHtml(u.code || `#${u.id}`)}</strong></a>
+        <a href="#/immobili/${escapeHtml(u.id)}" data-open-unit="${escapeHtml(u.id)}"><strong>${escapeHtml(unitLabel(u, tipi, kinds))}</strong></a>
         <span class="muted">${escapeHtml(unitFacts(u, tipi, kinds))}</span>
         ${azione}
       </li>`;
@@ -265,7 +268,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       <h3 class="section-title">Pertinenze</h3>
       <h4 class="census-subtitle">Collegate a un’unità (${linked.length})</h4>
       ${linked.length ? `<ul class="census-list" data-pertinenze-linked>${linked.map((u) => riga(u, u.parent
-        ? `<span class="muted">→ <a href="#/immobili/${escapeHtml(u.parent.id)}" data-open-unit="${escapeHtml(u.parent.id)}">${escapeHtml(u.parent.code || `#${u.parent.id}`)}</a>${u.parent.same_building ? '' : ' (in un altro edificio)'}</span>`
+        ? `<span class="muted">→ <a href="#/immobili/${escapeHtml(u.parent.id)}" data-open-unit="${escapeHtml(u.parent.id)}">Apri l’unità principale</a>${u.parent.same_building ? '' : ' (in un altro edificio)'}</span>`
         : '<span class="muted">→ unità principale non disponibile</span>')).join('')}</ul>` : '<p class="muted">Nessuna.</p>'}
       <h4 class="census-subtitle">Da collegare (${unlinked.length})</h4>
       ${unlinked.length ? `<ul class="census-list" data-pertinenze-unlinked>${unlinked.map((u) => riga(u, `<button type="button" class="btn btn-small" data-link-pertinenza="${escapeHtml(u.id)}">Collega a…</button>`)).join('')}</ul>` : '<p class="muted">Nessuna: tutte le pertinenze sono collegate.</p>'}`;
@@ -279,7 +282,7 @@ export async function renderEdificioDettaglio(container, params = []) {
       openLinkPrincipalSheet(unitSheet, {
         options: opzioni, property: u, candidates: principalCandidates(edificio.units || [], u.id),
         onLinked: async () => {
-          showToast(container, { text: `${u.code || 'Pertinenza'} collegata.` });
+          showToast(container, { text: `${unitLabel(u, tipi, kinds) || 'Pertinenza'} collegata.` });
           await ricarica();
         },
       });
@@ -312,7 +315,7 @@ export async function renderEdificioDettaglio(container, params = []) {
   function mostraSalvata() {
     if (!ultimaSalvata) { barra.hidden = true; barra.innerHTML = ''; return; }
     const u = ultimaSalvata;
-    barra.innerHTML = `<span data-saved-text>${escapeHtml(`${u.code || `Unità #${u.id}`} salvata${u.record_kind === 'crm' ? ' (scheda commerciale)' : ''}.`)}</span>
+    barra.innerHTML = `<span data-saved-text>${escapeHtml(`${unitLabel(u, tipi, kinds) || 'Unità'} salvata${u.record_kind === 'crm' ? ' (scheda commerciale)' : ''}.`)}</span>
       <span class="action-bar"><button type="button" class="btn primary btn-small" data-add-another>Aggiungi un’altra unità</button>
       <a class="btn btn-small" href="#/immobili/${escapeHtml(u.id)}" data-open-saved>Apri scheda</a></span>`;
     barra.hidden = false;
@@ -334,11 +337,11 @@ export async function renderEdificioDettaglio(container, params = []) {
         await ricarica();
         mostraSalvata();
         showToast(container, {
-          text: createdToastText(unita), actionLabel: 'Annulla',
+          text: createdToastText(unita, tipi, kinds), actionLabel: 'Annulla',
           onAction: async () => {
             try {
               await api.undoCreate(unita.id);
-              showToast(container, { text: `${unita.code || 'Unità'} annullata.` });
+              showToast(container, { text: `${unitLabel(unita, tipi, kinds) || 'Unità'} annullata.` });
               if (ultimaSalvata && ultimaSalvata.id === unita.id) { ultimaSalvata = null; mostraSalvata(); }
             } catch (error) {
               showToast(container, { text: errorMessage(error), actionLabel: 'Apri la scheda', onAction: () => navigate('immobili', [unita.id]) });

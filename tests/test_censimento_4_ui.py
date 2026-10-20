@@ -109,14 +109,14 @@ def test_a04_categorie_a_gruppi_ricerca_suggerimenti_e_messaggi_senza_nomi_tecni
                sugg: m.suggestionsFor({garage:{suggested:['C/6'],secondary:['C/7']}}, cat, 'garage').suggested.map((c) => c.code),
                msg: ['IDEMPOTENCY_KEY_REUSED','CENSUS_LOCKED','UNDO_NOT_POSSIBLE','ALREADY_RESOLVED','NETWORK'].map((code) => m.errorMessage({ code })),
                dup: m.errorMessage({ code: 'CADASTRAL_DUPLICATE', existing: { id: 405, code: 'IMM-405' } }),
-               toast: m.createdToastText({ code: 'IMM-412', floor: '2' }), simile: m.similarText({ code: 'IMM-402', floor: '2', internal_number: '2' }) };
+               toast: m.createdToastText({ code: 'IMM-412', property_type: 'apartment', floor: '2' }, [{ value: 'apartment', label: 'Appartamento' }], []), simile: m.similarText({ code: 'IMM-402', floor: '2', internal_number: '2' }) };
     })()""")
     assert out["gruppi"] == [["Gruppo A", ["A/2"]], ["Gruppo C", ["C/6"]], ["Storiche", ["A/5"]], ["Stati particolari (senza rendita)", ["F/1"]]]
     assert out["cerca"] == ["C/6"] and out["parola"] == ["C/6"] and out["sugg"] == ["C/6"]
     for testo in out["msg"] + [out["dup"]]:
         assert not re.search(r"[A-Z]{3,}_[A-Z_]+", testo), testo
     assert out["msg"][2] == "Non più annullabile: apri la scheda." and "IMM-405" in out["dup"]
-    assert out["toast"] == "IMM-412 · 2º piano aggiunta" and out["simile"] == "Simile a IMM-402 (2º piano, int. 2)"
+    assert out["toast"] == "Appartamento — Piano 2 aggiunta" and out["simile"] == "Simile a un’unità già censita (2º piano, int. 2)"   # SEMPLIFICAZIONE-CRM-1
 
 
 # ---------------------------------------------------------------------------
@@ -474,10 +474,10 @@ def test_c03_s2_palazzina_per_piano_contatori_e_s3_s5_unita_con_toast_e_annulla(
     assert "Dichiarate6" in out["contatori"] and "Censite3" in out["contatori"] and "Da completare3" in out["contatori"]
     assert "3 principali + 0 pertinenze" in out["contatori"] and "1 accessorio da chiarire" in out["contatori"]
     # AGGIORNATO DA CENSIMENTO-2 FASE A (D4): «Categoria mancante», distinto dalla verifica catastale
-    assert any("IMM-411" in r and "Categoria mancante" in r and "1 da chiarire" in r and "Ingresso proprio" in r for r in out["badgeDaChiarire"])
-    assert any("IMM-412" in r and "A/3" in r and "int. 2" in r and "scala B" in r and "85" in r for r in out["badgeDaChiarire"])
+    assert any("int. 1" in r and "Categoria mancante" in r and "1 da chiarire" in r and "Ingresso proprio" in r for r in out["badgeDaChiarire"])
+    assert any("A/3" in r and "int. 2" in r and "scala B" in r and "85" in r for r in out["badgeDaChiarire"])
     assert out["titolo"] == "Nuova unità" and out["tipoAttivo"] == "apartment"
-    assert out["toast"].startswith("IMM-413 · 2º piano aggiunta") and "Annulla" in out["toast"]
+    assert out["toast"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta") and "Annulla" in out["toast"]
     assert out["riaperto"] and out["pianoPreselezionato"] == "2"          # «Salva e aggiungine un'altra»: piano conservato
     post = out["post"]
     assert post[0]["url"] == "/api/property/census/units"
@@ -509,7 +509,7 @@ def test_c04_retry_di_rete_stessa_chiave_poi_duplicato_catastale_bloccante(stage
     out = _run(staged, scenario, _rotte(post_unit=({"throw": True}, duplicato)), "#/immobili/edifici/7")
     assert out["dopoRete"]["aperto"] and out["dopoRete"]["bottone"] == "Riprova"
     assert "Connessione assente" in out["dopoRete"]["errore"]
-    assert "già censito" in out["blocco"] and "IMM-405" in out["blocco"] and not out["salvaComunque"]
+    assert "già censito" in out["blocco"] and "Apri la scheda" in out["blocco"] and not out["salvaComunque"]   # SEMPLIFICAZIONE-CRM-1
     post = out["post"]
     assert len(post) == 2 and post[0]["body"]["client_request_id"] == post[1]["body"]["client_request_id"]
     assert out["hash"] == "#/immobili/405"
@@ -535,7 +535,7 @@ def test_c05_s6_duplica_precompila_senza_interno_categoria_e_catasto_e_s4_catego
       report({ titolo, stato, suggerite, cercate, categoriaScelta, post: scritture() });
     """
     out = _run(staged, scenario, _rotte(), "#/immobili/edifici/7")
-    assert out["titolo"] == "Copia di IMM-412 — completa interno e categoria"
+    assert out["titolo"] == "Copia di Appartamento — Piano 2 · Scala B · Int. 2 — completa interno e categoria"   # SEMPLIFICAZIONE-CRM-1
     assert out["stato"]["tipo"] == "apartment" and out["stato"]["piano"] == "2" and out["stato"]["scala"] == "B"
     assert out["stato"]["mq"] == "85.00" and out["stato"]["locali"] == "4"
     assert out["stato"]["interno"] == "" and out["stato"]["categoria"] == "Da verificare ›" and out["stato"]["sub"] == ""

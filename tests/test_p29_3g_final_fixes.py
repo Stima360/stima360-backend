@@ -316,10 +316,16 @@ def test_18_il_motore_il_dispatcher_il_cron_e_il_consenso_non_sono_cambiati():
     # promemoria nel dispatcher e il giro dei promemoria nel cron. Si sottrae
     # ESATTAMENTE cio' che A32-2 dichiara.
     from tests.a32_2_diff import FILE_MODIFICATI as MOD_A32_2, FILE_NUOVI as NUOVI_A32_2
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1 (stessa forma): la UI
+    # senza codici, il form Agenda per tipo, le visite nella scheda Incarico e
+    # la migration additiva 107. Si sottrae ESATTAMENTE cio' che dichiara.
+    from tests.semplificazione_crm_1_diff import (
+        FILE_MODIFICATI as MOD_SCRM1, FILE_NUOVI as NUOVI_SCRM1)
 
     diff = set(_git("diff", "--name-only", "--", *intatti).split())
     fuori = (diff - MOD_FGS - NUOVI_FGS - MOD_A30_4 - NUOVI_A30_4
-             - MOD_A31_4 - NUOVI_A31_4 - MOD_A32_2 - NUOVI_A32_2)
+             - MOD_A31_4 - NUOVI_A31_4 - MOD_A32_2 - NUOVI_A32_2
+             - MOD_SCRM1 - NUOVI_SCRM1)
     # Tappa 6 autorizza esattamente questi file, mantenendo chiusi cron,
     # calendario, consenso, sito e gli altri moduli.
     tappa6 = {

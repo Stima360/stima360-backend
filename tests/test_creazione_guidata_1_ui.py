@@ -235,7 +235,7 @@ def test_04_una_unita_in_palazzina_totale_ignoto_scheda_commerciale(staged):  # 
     assert "confirm_similar" not in post[0]["body"]                                      # nessun candidato mostrato
     unita = post[2]["body"]
     assert unita["building_id"] == 7 and unita["record_kind"] == "crm" and "address" not in unita   # indirizzo ereditato
-    assert "IMM-413 salvata (scheda commerciale)" in out["barra"] and "Aggiungi un’altra unità" in out["barra"]
+    assert "Appartamento — Piano 2 · Scala B · Int. 3 salvata (scheda commerciale)" in out["barra"] and "Aggiungi un’altra unità" in out["barra"]
     assert out["apri"] == "#/immobili/413"
 
 
@@ -281,7 +281,7 @@ def test_06_dalla_scheda_edificio_due_unita_di_fila_e_contatori_riletti(staged):
     assert post[0]["body"]["client_request_id"] != post[1]["body"]["client_request_id"]   # due unita' = due richieste
     assert all("record_kind" not in c["body"] for c in post)                             # dalla scheda: censimento, come prima
     assert out["letture"] >= 3                                                           # contatori riletti dopo ogni salvataggio
-    assert "IMM-414 salvata" in out["barra"]
+    assert "Appartamento — Piano 2 · Scala B · Int. 3 salvata" in out["barra"]   # SEMPLIFICAZIONE-CRM-1: senza codice
 
 
 @node

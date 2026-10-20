@@ -267,9 +267,10 @@ def test_c2_venditore_chiuso_e_appuntamento_passato_non_bloccano(mondo):
     pid = p["id"]
     _property_lead(m, pid, _lead(m, cid, pipeline="sell", status="closed"))
     inizio = _futuro(-10, 10)
-    _q(m, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, property_id) "
-          "VALUES (1, %s, 'buyer_visit', 'scheduled', %s, %s, %s)",
-       (m["ids"]["owner_a"], inizio, inizio + timedelta(hours=1), pid))
+    # SEMPLIFICAZIONE-CRM-1 (107): una visita immobile porta anche il cliente.
+    _q(m, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, property_id, contact_id) "
+          "VALUES (1, %s, 'buyer_visit', 'scheduled', %s, %s, %s, %s)",
+       (m["ids"]["owner_a"], inizio, inizio + timedelta(hours=1), pid, m["mario"]))
     assert _codice(_check(m, pid), 200) == {"can_trash": True, "blockers": []}
     _codice(_trash(m, pid), 200)
     # la riga lead/opportunita' non e' stata toccata (nessuna chiusura automatica in 2B1)
@@ -620,10 +621,11 @@ def _appuntamento_storico(m, pid, stato="scheduled", kind=None, giorni=-10):
     extra_col, extra_val = "", ()
     if stato == "cancelled":
         extra_col, extra_val = ", cancelled_at, cancelled_kind", (inizio - timedelta(days=1), kind)
+    # SEMPLIFICAZIONE-CRM-1 (107): una visita immobile porta anche il cliente.
     return _q(m, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, "
-                 f"property_id{extra_col}) VALUES (1, %s, 'buyer_visit', %s, %s, %s, %s"
+                 f"property_id, contact_id{extra_col}) VALUES (1, %s, 'buyer_visit', %s, %s, %s, %s, %s"
                  f"{', %s, %s' if extra_val else ''}) RETURNING id",
-              (m["ids"]["agent_a"], stato, inizio, inizio + timedelta(hours=1), pid, *extra_val))[0][0]
+              (m["ids"]["agent_a"], stato, inizio, inizio + timedelta(hours=1), pid, m["mario"], *extra_val))[0][0]
 
 
 def _acquisizione_chiusa(m, pid, per_errore):

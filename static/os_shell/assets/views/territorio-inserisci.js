@@ -660,7 +660,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     const box = el('div', { attrs: { 'data-unit-recovery': String(unita.id) } });
     box.appendChild(el('h2', { cls: 'census-sheet-title', text: TESTI.salvatoNonCollegato }));
     const banner = el('div', { cls: 'census-banner census-banner-block' });
-    banner.appendChild(el('strong', { text: `${propertyTitle(unita)}${unita.code ? ` (${unita.code})` : ''} è salvato` }));
+    banner.appendChild(el('strong', { text: `${propertyTitle(unita)} è salvato` }));
     banner.appendChild(el('div', { cls: 'territorio-recovery-error', text: testoErrore(errore), attrs: { 'data-unit-recovery-error': '1' } }));
     banner.appendChild(el('div', { text: 'L’immobile non viene duplicato: riprova il collegamento con lo stesso punto, oppure apri la scheda (il punto resta qui su Zona).' }));
     box.appendChild(banner);
@@ -894,7 +894,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
       const voce = el('li', { cls: 'census-list-item', attrs: { 'data-insert-candidate-property': String(p.id) } });
       const testoVoce = el('div', { cls: 'census-candidate-text' });
       testoVoce.appendChild(el('strong', { text: propertyTitle(p) }));
-      testoVoce.appendChild(el('small', { cls: 'muted', text: [p.code, propertyWhere(p)].filter(Boolean).join(' · ') }));
+      testoVoce.appendChild(el('small', { cls: 'muted', text: propertyWhere(p) }));
       const s = positionStatus(p);
       const statoEl = el('small', { cls: s === 'verified' ? 'territorio-verified-note' : 'muted',
         text: s === 'missing' ? STATUS_LABELS.missing : STATO_POSIZIONE[s], attrs: { 'data-property-position-status': s } });

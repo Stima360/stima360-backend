@@ -200,7 +200,7 @@ def test_r2_pertinenza_si_porta_building_id_e_ingresso_diverso_disponibile(stage
       report({ titolo, spunta, bloccoNascosto, post: scritture() });
     """
     out = _run(staged, scenario, _rotte(post_unit=({"status": 201, "body": {**CREATA, "id": 417, "code": "IMM-417", "parent_property_id": 30}},)), "#/immobili/30")
-    assert "pertinenza di IMM-30" in out["titolo"]
+    assert "pertinenza di Appartamento — Piano 2 · Scala B · Int. 2" in out["titolo"]   # SEMPLIFICAZIONE-CRM-1: senza codice
     assert out["spunta"] and out["bloccoNascosto"]                # in palazzina: «Ingresso diverso?» c'e', indirizzo ereditato di default
     post = out["post"]
     assert post[0]["url"] == "/api/property/census/units"
@@ -345,12 +345,12 @@ def test_r5_il_toast_nuovo_ha_dieci_secondi_propri_anche_durante_l_azione(staged
                + _rotte(post_unit=({"status": 201, "body": CREATA}, {"status": 201, "body": {**CREATA, "id": 414, "code": "IMM-414"}},
                                    {"status": 201, "body": {**CREATA, "id": 415, "code": "IMM-415"}}, {"status": 201, "body": {**CREATA, "id": 416, "code": "IMM-416"}})),
                "#/immobili/edifici/7")
-    assert out["toast1"].startswith("IMM-413") and out["toast2"].startswith("IMM-414")
-    assert out["toast2Vivo"] is not None and out["toast2Vivo"].startswith("IMM-414") and out["annullaVivo"]
+    assert out["toast1"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta") and out["toast2"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta")   # SEMPLIFICAZIONE-CRM-1: senza codice
+    assert out["toast2Vivo"] is not None and out["toast2Vivo"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta") and out["annullaVivo"]
     assert out["toast2Scaduto"] is None
-    assert out["toastDuranteAzione"].startswith("IMM-416")
-    assert "IMM-415 annullata" in (out["toastDopoAzione"] or "")
-    assert "IMM-415 annullata" in (out["ancoraVivo"] or "")         # il timer scaduto di IMM-415 non chiude il toast nuovo
+    assert out["toastDuranteAzione"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta")
+    assert "Appartamento — Piano 2 · Scala B · Int. 3 annullata" in (out["toastDopoAzione"] or "")
+    assert "Appartamento — Piano 2 · Scala B · Int. 3 annullata" in (out["ancoraVivo"] or "")         # il timer scaduto di IMM-415 non chiude il toast nuovo
     assert out["fine"] is None
     assert [c["url"] for c in out["post"] if "undo-create" in c["url"]] == ["/api/property/properties/415/undo-create"]
 
@@ -435,7 +435,7 @@ def test_r7a_risposta_persa_retry_invariato_stessa_chiave_una_sola_creazione(sta
     post = out["post"]
     assert len(post) == 2 and post[0]["body"]["client_request_id"] == post[1]["body"]["client_request_id"]
     assert _corpo_senza_chiave(post[0]) == _corpo_senza_chiave(post[1])
-    assert out["chiuso"] and out["toast"].startswith("IMM-413")
+    assert out["chiuso"] and out["toast"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta")
 
 
 @node
@@ -459,7 +459,7 @@ def test_r7b_retry_dopo_modifica_recupera_la_riga_salvata_e_applica_le_modifiche
                + "__route('PATCH', '/api/property/properties/413', " + json.dumps({"status": 200, "body": {**CREATA, "surface_sqm": "90.00", "internal_number": "3"}}) + ");\n"
                + _rotte(post_unit=({"throw": True}, CHIAVE_RIUSATA, {"status": 200, "body": CREATA_REPLICA})),
                "#/immobili/edifici/7")
-    assert out["aperto"] and out["banner"] and "IMM-413" in out["banner"] and "già" in out["banner"]
+    assert out["aperto"] and out["banner"] and "La scheda" in out["banner"] and "già" in out["banner"]
     assert any("Applica" in a for a in out["azioni"]) and any("Apri" in a for a in out["azioni"])
     assert "dati diversi" not in out["errore"]                      # niente vicolo cieco «conferma di nuovo»
     post = out["post"]
@@ -473,7 +473,7 @@ def test_r7b_retry_dopo_modifica_recupera_la_riga_salvata_e_applica_le_modifiche
     assert patch == [{**patch[0], "url": "/api/property/properties/413/census-data",
                       "body": {"internal_number": "3", "confirm_similar": True}},
                      {**patch[1], "url": "/api/property/properties/413", "body": {"surface_sqm": 90}}]
-    assert out["chiuso"] and out["toast"].startswith("IMM-413")
+    assert out["chiuso"] and out["toast"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta")
     assert not re.search(r"[A-Z]{3,}_[A-Z_]+", out["banner"])
 
 
@@ -531,4 +531,4 @@ def test_r8b_201_con_corpo_interrotto_non_chiude_il_foglio_e_il_retry_riusa_la_c
     assert "incompleta" in out["errore"] and out["avviso"]
     post = out["post"]
     assert len(post) == 2 and post[0]["body"]["client_request_id"] == post[1]["body"]["client_request_id"]
-    assert out["chiuso"] and out["toast"].startswith("IMM-413")
+    assert out["chiuso"] and out["toast"].startswith("Appartamento — Piano 2 · Scala B · Int. 3 aggiunta")

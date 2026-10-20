@@ -143,10 +143,13 @@ A31_4_VISTE_CON_DIALOG_AGENDA = frozenset({
     ASSETS / "views" / "acquirente-dettaglio.js",
     ASSETS / "views" / "immobile-dettaglio.js",
 })
-A31_4_IMPORT_AMMESSI = (
-    "import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';",
-    "import { getAgents } from '../agenda/agenda-api.js';",
-    "import { todayKey } from '../agenda/agenda-model.js';",
+# SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1 (autorizzata, dichiarata in
+# tests/semplificazione_crm_1_diff.py): le tre viste chiedono anche
+# `lookupMandates` per verificare l'incarico prima del dialog. Le righe esatte
+# restano tre; la scheda Incarico ha la sua esenzione chiusa (D3).
+from tests.semplificazione_crm_1_diff import (
+    IMPORT_AMMESSI_VISTE_A31_4 as A31_4_IMPORT_AMMESSI,
+    VISTE_CON_DIALOG_AGENDA as _SCRM1_VISTE,
 )
 
 # SENTINELLA AGGIORNATA DA CRM-OPS-1B (autorizzata, dichiarata nel report CRM-OPS-1B): la scheda contatto
@@ -209,6 +212,10 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         if f in _crm_ops_3_viste():
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
             assert righe == list(_crm_ops_3_viste()[f]), (f.relative_to(ROOT), righe)
+            continue
+        if str(f.relative_to(ROOT)) in _SCRM1_VISTE:
+            righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
+            assert righe == list(_SCRM1_VISTE[str(f.relative_to(ROOT))]), (f.relative_to(ROOT), righe)
             continue
         assert "agenda/" not in testo, f.relative_to(ROOT)
 

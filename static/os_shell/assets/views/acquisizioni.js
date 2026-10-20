@@ -23,6 +23,8 @@ import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
 import { getAgents } from '../agenda/agenda-api.js';
 import { addDays, romeIso, statusLabel, todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
+// SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
+import { propertyRowLabel } from '../components/property-label.js';
 
 const PAGE_SIZE = 50;
 const OWNER_ROLES = ['owner', 'seller'];
@@ -120,7 +122,7 @@ export function acquisitionCreatePayload(dati) {
 
 function propertyLine(p) {
   const via = [p.address, p.civic_number].filter(Boolean).join(' ');
-  return [p.code, p.title, via, p.city].filter(Boolean).join(' · ');
+  return [p.title, via, p.city].filter(Boolean).join(' · ');   // SEMPLIFICAZIONE-CRM-1: senza codice
 }
 
 function optionsHtml(items, selected, placeholder) {
@@ -191,7 +193,7 @@ export async function renderAcquisizioni(container, params = []) {
     const filtrato = Object.values(f).some(Boolean);
     listArea.innerHTML = renderTable(
       [
-        { label: 'Immobile', render: (r) => `<strong>${escapeHtml(r.property_code || `#${r.property_id}`)}</strong><br><small class="muted">${escapeHtml([r.property_title, [r.property_address, r.property_civic_number].filter(Boolean).join(' '), r.property_city].filter(Boolean).join(' · '))}</small>` },
+        { label: 'Immobile', render: (r) => `<strong>${escapeHtml(propertyRowLabel(r))}</strong><br><small class="muted">${escapeHtml([[r.property_address, r.property_civic_number].filter(Boolean).join(' '), r.property_city].filter(Boolean).join(' · ') || '—')}</small>` },
         { label: 'Proprietario', render: (r) => escapeHtml(r.owner_name || '—') },
         { label: 'Agente', render: (r) => escapeHtml(r.agent_name || '—') },
         { label: 'Appuntamento', render: (r) => escapeHtml(formatDateTime(r.appointment_start_at)) },
@@ -247,7 +249,7 @@ export async function openNewAcquisition(container, opzioni, { propertyId = null
     <form class="acq-form" novalidate>
       <h3 class="section-title">Nuova acquisizione</h3>
       <div class="form-field"><label for="acq-property-search">Immobile *</label>
-        <input id="acq-property-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…" autocomplete="off">
+        <input id="acq-property-search" class="input" type="search" placeholder="Cerca per indirizzo, comune o descrizione…" autocomplete="off">
         <small class="muted" id="acq-property-hint">Cerca e poi scegli un risultato: il testo da solo non seleziona nessun immobile.</small>
         <div id="acq-property-results" class="acq-results" role="listbox"></div>
         <div id="acq-property-selected" class="acq-selected" hidden></div></div>

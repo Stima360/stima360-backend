@@ -12,6 +12,8 @@
 // dichiarate, quanto sono complete le schede (il proprietario non e' fra i
 // dati minimi) e quante sono verificate (Fase A, A1).
 
+import { unitLabel } from '../components/property-label.js';
+
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const plurale = (n, uno, molti) => `${n} ${n === 1 ? uno : molti}`;
 
@@ -216,9 +218,10 @@ export function interiorRows(units, { onlyIncomplete = false } = {}) {
   });
 }
 
-/** «Pertinenza di IMM-412» / «Da collegare» / «Con 2 pertinenze» / ''. */
+/** «Pertinenza di Appartamento — Piano 2 · Int. 5» / «Da collegare» / «Con 2 pertinenze» / ''.
+ *  SEMPLIFICAZIONE-CRM-1: senza codice; se dell'unità principale si sa solo l'id, «un’unità principale». */
 export function pertinenzeText(u) {
-  if (u && u.parent) return `Pertinenza di ${u.parent.code || `#${u.parent.id}`}${u.parent.same_building === false ? ' (altro edificio)' : ''}`;
+  if (u && u.parent) return `Pertinenza di ${(u.parent.property_type || u.parent.title || u.parent.floor || u.parent.internal_number) ? unitLabel(u.parent) : 'un’unità principale'}${u.parent.same_building === false ? ' (altro edificio)' : ''}`;
   if (u && u.parent_property_id) return 'Pertinenza';
   if (u && u.unit_class === 'pertinenze') return 'Pertinenza da collegare';
   const n = Number(u && u.pertinenze_count) || 0;

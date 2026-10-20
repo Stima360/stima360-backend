@@ -31,6 +31,7 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from './census-api.js';
 import { openCategoryPicker, showToast } from './census-sheets.js';
 import { errorMessage, floorLabel, labelOf } from './census-model.js';
+import { unitLabel } from '../components/property-label.js';
 import {
   bulkPayload, classLabel, compositionForm, compositionPayload, compositionView, defaultGroups, generatePayload, verificationBadge,
   generatedText, hasOverDeclared, interiorRows, missingText, pertinenzeText, planRows, sourceLabel,
@@ -161,9 +162,9 @@ export async function renderCompositionPanel(el, ctx) {
         const pert = pertinenzeText(u);
         const editabile = modificabile(u);
         return `<li class="interior-row${(u.missing || []).length ? '' : ' interior-complete'}" data-interior="${escapeHtml(u.id)}">
-          ${editabile ? `<label class="interior-check"><input type="checkbox" data-select-unit="${escapeHtml(u.id)}" aria-label="Seleziona ${escapeHtml(u.code || `#${u.id}`)}"${stato.selected.has(String(u.id)) ? ' checked' : ''}></label>` : '<span class="interior-check"></span>'}
+          ${editabile ? `<label class="interior-check"><input type="checkbox" data-select-unit="${escapeHtml(u.id)}" aria-label="Seleziona ${escapeHtml(dove)}"${stato.selected.has(String(u.id)) ? ' checked' : ''}></label>` : '<span class="interior-check"></span>'}
           <div class="interior-body">
-            <a href="#/immobili/${escapeHtml(u.id)}" data-open-interior="${escapeHtml(u.id)}" class="interior-title"><strong>${escapeHtml(dove)}</strong> <span class="muted">${escapeHtml(u.code || `#${u.id}`)}</span></a>
+            <a href="#/immobili/${escapeHtml(u.id)}" data-open-interior="${escapeHtml(u.id)}" class="interior-title"><strong>${escapeHtml(dove)}</strong></a>
             <div class="interior-facts">
               <span data-fact="type">${escapeHtml(tipo)} <small class="muted">${escapeHtml(classLabel(catalog, u.unit_class))}</small></span>
               <span data-fact="surface">${escapeHtml(mq(u.surface_sqm) || 'm² —')} ${renderBadge(sourceLabel(catalog, u.surface_source), sourceTone(u.surface_source))}</span>
@@ -390,7 +391,7 @@ export function openGenerateSheet(dialogEl, { data, options: opzioni, buildingId
             <span><small>Dichiarate</small>${escapeHtml(r.declared)}</span><span><small>Presenti</small>${escapeHtml(r.present)}</span>
             <span><small>Da creare</small>${escapeHtml(r.requested)}${r.over ? ` ${renderBadge(`${r.over} oltre le dichiarate`, 'warn')}` : ''}</span></div>`).join('')}</div>
           ${eccedenza ? `<label class="census-check" data-over-confirm><input type="checkbox" id="gen-over"${confermaEccedenza ? ' checked' : ''}> Confermo: creo più unità di quelle dichiarate</label>` : ''}
-          ${conflitti.length ? `<div class="census-banner" data-numbering-conflicts><strong>Interni già usati nella stessa posizione</strong><ul>${conflitti.slice(0, 8).map((c) => `<li>${escapeHtml([c.code, c.staircase ? `scala ${c.staircase}` : '', c.floor ? `piano ${c.floor}` : '', `int. ${c.internal_number}`].filter(Boolean).join(' · '))}</li>`).join('')}</ul>
+          ${conflitti.length ? `<div class="census-banner" data-numbering-conflicts><strong>Interni già usati nella stessa posizione</strong><ul>${conflitti.slice(0, 8).map((c) => `<li>${escapeHtml([c.staircase ? `scala ${c.staircase}` : '', c.floor ? `piano ${c.floor}` : '', `int. ${c.internal_number}`].filter(Boolean).join(' · '))}</li>`).join('')}</ul>
             <label class="census-check"><input type="checkbox" id="gen-similar"${confermaSimili ? ' checked' : ''}> Crea comunque (numerazione provvisoria)</label></div>` : ''}
         </div>` : ''}
         <div class="field-error" data-error role="alert">${escapeHtml(errore)}</div>
@@ -474,7 +475,7 @@ export function openBulkSheet(dialogEl, { units, data, options: opzioni, buildin
   let categoria = '';
   dialogEl.innerHTML = `
     <form data-bulk-form novalidate>
-      <h2 class="census-sheet-title">Modifica ${escapeHtml(singola ? (units[0].code || 'l’unità') : `${units.length} unità`)}</h2>
+      <h2 class="census-sheet-title">Modifica ${escapeHtml(singola ? (unitLabel(units[0], opzioni.property_types || [], opzioni.accessory_kinds || []) || 'l’unità') : `${units.length} unità`)}</h2>
       <p class="muted">Solo i campi che compili cambiano; gli altri restano come sono. Proprietari, collegamenti e stato non si toccano da qui.</p>
       <div class="form-grid-2">
         <div class="form-field"><label for="bk-surface">Superficie m²</label><input id="bk-surface" class="input" inputmode="decimal" placeholder="invariata"></div>

@@ -71,15 +71,17 @@ import { apiGet, apiPatch, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { renderTable, renderBadge, escapeHtml, formatDateTime } from '../components/st-table.js';
 import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
-import { getAgents } from '../agenda/agenda-api.js';
+import { getAgents, lookupMandates } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
+// SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
+import { propertyRowLabel } from '../components/property-label.js';
+import { COMPATIBILITY_STATUS_LABELS, FRESHNESS_LABELS, MATCH_CLASS_LABELS, MATCH_COMMERCIAL_STATUS_LABELS } from '../components/match-labels.js';
+import { NO_MANDATE_FOR_VISIT } from './immobile-dettaglio.js';
 
-const MATCH_CLASS_LABELS = { excellent: 'Eccellente', strong: 'Forte', good: 'Buono', possible: 'Possibile', weak: 'Debole', poor: 'Scarso', incompatible: 'Incompatibile' };
-const FRESHNESS_LABELS = { fresh: 'Aggiornato', stale: 'Da ricalcolare', recalculating: 'Ricalcolo in corso', failed: 'Errore', excluded: 'Escluso' };
-const COMPATIBILITY_STATUS_LABELS = { compatible: 'Compatibile', exception: 'Compatibile con eccezioni', incompatible: 'Incompatibile' };
 const COMMERCIAL_STATUSES = ['new', 'to_review', 'approved', 'rejected', 'suggested', 'interested', 'visit_requested', 'visit_scheduled', 'visited', 'offer_candidate', 'archived'];
-const COMMERCIAL_STATUS_LABELS = { new: 'Nuovo', to_review: 'Da valutare', approved: 'Approvato', rejected: 'Rifiutato', suggested: 'Suggerito', interested: 'Interessato', visit_requested: 'Visita richiesta', visit_scheduled: 'Visita programmata', visited: 'Visitato', offer_candidate: 'Candidato offerta', archived: 'Archiviato' };
+// SEMPLIFICAZIONE-CRM-1: etichette MATCH condivise (components/match-labels.js).
+const COMMERCIAL_STATUS_LABELS = MATCH_COMMERCIAL_STATUS_LABELS;
 const PRIORITY_LABELS = { low: 'Bassa', normal: 'Normale', high: 'Alta', urgent: 'Urgente' };
 const CRITERION_TYPE_LABELS = { hard: 'Obbligatorio', soft: 'Opzionale', preference: 'Preferenza', informational: 'Informativo' };
 const RESULT_LABELS = { matched: 'Soddisfatto', partially_matched: 'Parzialmente soddisfatto', not_matched: 'Non soddisfatto', not_available: 'Non disponibile', not_applicable: 'Non applicabile' };
@@ -123,7 +125,7 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
     container.innerHTML = `
       <div class="contact-header card">
         <h2>${renderPairHeading(match)}</h2>
-        <div class="muted">Match #${escapeHtml(match.id)} · Richiesta: ${escapeHtml(match.buy_title || '—')} · Immobile: ${escapeHtml(match.property_code || match.property_title || '—')}${match.city ? ` · ${escapeHtml(match.city)}` : ''}</div>
+        <div class="muted">Match #${escapeHtml(match.id)} · Richiesta: ${escapeHtml(match.buy_title || '—')} · Immobile: ${escapeHtml(propertyRowLabel(match) || '—')}${match.city ? ` · ${escapeHtml(match.city)}` : ''}</div>
         <div class="badge-row" id="match-badges"></div>
         <a class="btn ghost" href="#/immobili/${escapeHtml(match.property_id)}/proposte/${escapeHtml(match.id)}">Apri proposte abbinamento</a>
       </div>
@@ -256,6 +258,21 @@ export async function renderAbbinamentoDettaglio(container, params = []) {
   async function openVisitScheduleDialog() {
     const dialogEl = container.querySelector('#visit-schedule-dialog');
     if (!dialogEl) return;
+    // SEMPLIFICAZIONE-CRM-1: una visita immobile si fissa solo su un incarico in
+    // corso o scaduto. Si chiede all'Agenda PRIMA di aprire il dialog (la
+    // stessa ricerca degli incarichi, ristretta a questo immobile): senza, il
+    // messaggio e' in chiaro e nessun dialog si apre. Il server ricontrolla.
+    let incarichi;
+    try {
+      incarichi = await lookupMandates({ propertyId: match.property_id });
+    } catch (error) {
+      showFeedbackMessage(`Impossibile verificare l’incarico: ${error.message || 'errore sconosciuto'}`, true);
+      return;
+    }
+    if (!(incarichi && Array.isArray(incarichi.items) && incarichi.items.length)) {
+      showFeedbackMessage(NO_MANDATE_FOR_VISIT, true);
+      return;
+    }
     let agents;
     try {
       const esito = await getAgents();
@@ -308,7 +325,7 @@ export function visitDecisionPayload(corpo) {
 
 function renderPairHeading(m) {
   const buyerLabel = escapeHtml(m.buyer_name || `Richiesta #${m.buy_request_id}`);
-  const propertyLabel = escapeHtml(m.property_title || m.property_code || `Immobile #${m.property_id}`);
+  const propertyLabel = escapeHtml(propertyRowLabel(m));
   return `<a href="#/acquirenti/${escapeHtml(m.buy_request_id)}" id="match-buy-link">${buyerLabel}</a> <span class="muted">↔</span> <a href="#/immobili/${escapeHtml(m.property_id)}" id="match-property-link">${propertyLabel}</a>`;
 }
 

@@ -268,11 +268,15 @@ def test_02_03_cliente_lead_e_immobile_si_cercano_e_si_scelgono_senza_id(staged)
     assert "/api/core/contacts?search=Mario&limit=10" in urls
     assert "/api/core/leads?contact_id=41&limit=20" in urls          # solo i lead DEL cliente
     assert "/api/property/properties?search=trilo&limit=10" in urls
-    assert out["opzioniLead"] == ["Nessun lead", "seller · nuovo · aperto · dal 01/09/2026",
-                                  "buyer · qualificato · chiuso · dal 02/05/2026"]
+    # SEMPLIFICAZIONE-CRM-1: pipeline, fase e stato in italiano (components/lead-labels.js);
+    # un valore fuori catalogo resta com'e'.
+    assert out["opzioniLead"] == ["Nessun lead", "seller · nuovo · Aperto · dal 01/09/2026",
+                                  "buyer · qualificato · Chiuso · dal 02/05/2026"]
     assert out["leadDisabled"] is False
     assert "Mario Rossi" in out["cliente"] and "333 111" in out["cliente"]
-    assert "Trilocale vista mare" in out["immobile"] and "GIU-12" in out["immobile"]
+    # SEMPLIFICAZIONE-CRM-1: l'immobile si legge da indirizzo e comune, mai dal codice.
+    assert "Via Roma 1" in out["immobile"] and "Giulianova" in out["immobile"]
+    assert "GIU-12" not in out["immobile"]
     # nessun campo per un ID, nessun ID mostrato
     for campo in out["inputs"]:
         assert not re.search(r"(?i)(^|_|-)id$", str(campo)), campo

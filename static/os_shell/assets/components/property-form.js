@@ -47,7 +47,7 @@ export function propertyDisplayName(p) {
   const street = [p.address, p.civic_number].filter((x) => x && String(x).trim()).join(' ');
   const place = p.city ? (p.microzone ? `${p.city} (${p.microzone})` : p.city) : '';
   const label = [street, place].filter(Boolean).join(', ');
-  return label || p.title || p.code || `Immobile #${p.id}`;
+  return label || p.title || 'Immobile';   // SEMPLIFICAZIONE-CRM-1: senza codice
 }
 
 /** CATALOGO-CANONICO-1: la tipologia arrivata dal sito e non riconosciuta (o
@@ -206,7 +206,7 @@ export async function openPropertyDialog(dialogEl, { mode = 'create', property =
   dialogEl.innerHTML = `
     <form id="property-form" novalidate>
       <h2 style="margin-top:0">${isEdit ? 'Modifica immobile' : 'Nuovo immobile'}</h2>
-      ${isEdit ? `<p class="muted">Codice ${escapeHtml(p.code || 'assegnato al salvataggio')} · Immobile #${escapeHtml(p.id)}</p>` : '<p class="muted">Il codice viene assegnato automaticamente al salvataggio.</p>'}
+      ${isEdit ? `<p class="muted">${escapeHtml(propertyDisplayName(p))}</p>` : ''}
 
       <div class="form-grid-2">
         <div class="form-field"><label for="pf-type">Tipologia</label>

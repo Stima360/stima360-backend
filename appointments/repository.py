@@ -576,28 +576,44 @@ def list_events(cur, appointment_id: int) -> list[dict]:
 def list_appointments(cur, *, agency_id, statuses, types, stima_id, lead_id, contact_id,
                       property_id, date_from, date_to, only_agent_id, limit, offset,
                       mistakes=False):
+    """La lista. SEMPLIFICAZIONE-CRM-1: porta anche `contact_name` e
+    `agent_name` (le stesse espressioni del calendario), cosi' la sezione
+    Visite della scheda Incarico legge l'Agenda senza una seconda fonte."""
     cur.execute(
         f"""
-        SELECT * FROM appointments
-         WHERE agency_id = %(agency)s
-           AND {_FILTRO_ERRORI_SQL.format(k=_KIND_SQL.format(a='appointments'))}
-           AND status = ANY(%(statuses)s)
-           AND (%(types)s::text[] IS NULL OR appointment_type = ANY(%(types)s::text[]))
-           AND (%(stima)s::int IS NULL OR stima_id = %(stima)s::int)
-           AND (%(lead)s::bigint IS NULL OR lead_id = %(lead)s::bigint)
-           AND (%(contact)s::bigint IS NULL OR contact_id = %(contact)s::bigint)
-           AND (%(property)s::bigint IS NULL OR property_id = %(property)s::bigint)
-           AND (%(from)s::timestamptz IS NULL OR end_at > %(from)s::timestamptz)
-           AND (%(to)s::timestamptz IS NULL OR start_at < %(to)s::timestamptz)
-           AND (%(viewer)s::bigint IS NULL OR assigned_user_id = %(viewer)s::bigint)
-         ORDER BY start_at, id
+        SELECT a.*,
+               COALESCE({_NOME_OPERATORE.format(a='u')}, split_part(u.email, '@', 1)) AS agent_name,
+               COALESCE(c.display_name,
+                        NULLIF(BTRIM(CONCAT_WS(' ', c.first_name, c.last_name)), ''),
+                        c.company_name) AS contact_name
+          FROM appointments a
+          LEFT JOIN operator_users u ON u.id = a.assigned_user_id
+          LEFT JOIN contacts c       ON c.id = a.contact_id
+         WHERE a.agency_id = %(agency)s
+           AND {_FILTRO_ERRORI_SQL.format(k=_KIND_SQL.format(a='a'))}
+           AND a.status = ANY(%(statuses)s)
+           AND (%(types)s::text[] IS NULL OR a.appointment_type = ANY(%(types)s::text[]))
+           AND (%(stima)s::int IS NULL OR a.stima_id = %(stima)s::int)
+           AND (%(lead)s::bigint IS NULL OR a.lead_id = %(lead)s::bigint)
+           AND (%(contact)s::bigint IS NULL OR a.contact_id = %(contact)s::bigint)
+           AND (%(property)s::bigint IS NULL OR a.property_id = %(property)s::bigint)
+           AND (%(from)s::timestamptz IS NULL OR a.end_at > %(from)s::timestamptz)
+           AND (%(to)s::timestamptz IS NULL OR a.start_at < %(to)s::timestamptz)
+           AND (%(viewer)s::bigint IS NULL OR a.assigned_user_id = %(viewer)s::bigint)
+         ORDER BY a.start_at, a.id
          LIMIT %(limit)s OFFSET %(offset)s
         """,
         {"agency": agency_id, "statuses": list(statuses),
          "types": list(types) if types else None, "stima": stima_id, "lead": lead_id,
          "contact": contact_id, "property": property_id, "from": date_from, "to": date_to,
          "viewer": only_agent_id, "limit": limit, "offset": offset, "mistakes": bool(mistakes)})
-    return [_riga(r) for r in cur.fetchall()]
+    esito = []
+    for r in cur.fetchall():
+        riga = _riga(r)
+        riga["agent_name"] = r["agent_name"]
+        riga["contact_name"] = r["contact_name"]
+        esito.append(riga)
+    return esito
 
 
 def cancelled_kind_installed(cur) -> bool:
@@ -616,10 +632,20 @@ def cancelled_kind_changes(cur, kind) -> dict:
     return {"cancelled_kind": kind or DEFAULT_CANCELLED_KIND}
 
 
+#: SEMPLIFICAZIONE-CRM-1: anche tipologia, piano, scala, interno e proprietario
+#: principale, cosi' l'incarico si legge come «Appartamento — Via Roma 15 —
+#: Piano 2 — Mario Rossi», mai con il codice.
+_OWNER_NAME_SQL = (
+    "(SELECT COALESCE(c.display_name, NULLIF(BTRIM(CONCAT_WS(' ', c.first_name, c.last_name)), ''), "
+    "c.company_name) FROM property_contacts pc JOIN contacts c ON c.id = pc.contact_id "
+    "WHERE pc.property_id = p.id AND pc.role IN ('owner', 'seller') "
+    "ORDER BY pc.is_primary DESC, pc.role, c.id LIMIT 1)")
 _SALE_MANDATE_COLUMNS = (
-    "p.id, p.title, p.code, p.address, p.civic_number, p.city, p.acquisition_id, "
+    "p.id, p.title, p.code, p.address, p.civic_number, p.city, p.microzone, p.acquisition_id, "
+    "p.property_type, p.floor, p.staircase, p.internal_number, "
     "p.mandate_type, p.mandate_start, p.mandate_end, p.commercial_status, p.archived_at, "
-    "to_jsonb(p)->>'deleted_at' AS deleted_at")
+    "to_jsonb(p)->>'deleted_at' AS deleted_at, "
+    f"{_OWNER_NAME_SQL} AS owner_name")
 
 
 def sale_mandate_property(cur, agency_id: int, property_id: int):
@@ -634,18 +660,30 @@ def sale_mandate_property(cur, agency_id: int, property_id: int):
 
 
 def lookup_sale_mandates(cur, agency_id: int, *, search: str, limit: int,
-                         real_mandate_sql: str) -> list[dict]:
-    """APPUNTAMENTI DI VENDITA: gli immobili dell'agenzia con un incarico REALE
-    (le tre origini, `core.property_mandate.real_mandate_sql`), fuori dal
-    Cestino, per testo. Lo stato (in corso, scaduto...) lo decide il service."""
+                         real_mandate_sql: str, property_id=None) -> list[dict]:
+    """VISITA IMMOBILE / APPUNTAMENTI DI VENDITA: gli immobili dell'agenzia con
+    un incarico REALE (le tre origini, `core.property_mandate.real_mandate_sql`),
+    fuori dal Cestino, per testo (titolo, indirizzo, comune, proprietario; il
+    codice resta cercabile ma non si mostra) oppure per un solo `property_id`.
+    Lo stato (in corso, scaduto...) lo decide il service."""
+    if property_id is not None:
+        cur.execute(
+            f"SELECT {_SALE_MANDATE_COLUMNS} FROM properties p "
+            f"WHERE p.agency_id = %s AND p.id = %s AND {real_mandate_sql} "
+            "AND (to_jsonb(p)->>'deleted_at') IS NULL",
+            (agency_id, property_id))
+        return [dict(r) for r in cur.fetchall()]
     testo = f"%{search}%"
     cur.execute(
         f"SELECT {_SALE_MANDATE_COLUMNS} FROM properties p "
         f"WHERE p.agency_id = %s AND {real_mandate_sql} "
         "AND (to_jsonb(p)->>'deleted_at') IS NULL "
-        "AND (p.title ILIKE %s OR p.code ILIKE %s OR p.address ILIKE %s OR p.city ILIKE %s) "
+        "AND (p.title ILIKE %s OR p.code ILIKE %s OR p.address ILIKE %s OR p.city ILIKE %s "
+        "OR EXISTS (SELECT 1 FROM property_contacts pc JOIN contacts c ON c.id = pc.contact_id "
+        "WHERE pc.property_id = p.id AND pc.role IN ('owner', 'seller') "
+        "AND COALESCE(c.display_name, CONCAT_WS(' ', c.first_name, c.last_name), c.company_name) ILIKE %s)) "
         "ORDER BY p.id DESC LIMIT %s",
-        (agency_id, testo, testo, testo, testo, limit))
+        (agency_id, testo, testo, testo, testo, testo, limit))
     return [dict(r) for r in cur.fetchall()]
 
 

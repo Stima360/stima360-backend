@@ -81,12 +81,14 @@ import { renderTable, renderBadge, escapeHtml, formatDate, formatDateTime } from
 // La sola scrittura resta la POST .../properties/{id}/visits: la facade A31-3
 // crea appuntamento + proiezione. Il modal legacy resta per lo storico.
 import { openCreateDialog } from '../components/agenda/agenda-dialogs.js';
-import { getAgents } from '../agenda/agenda-api.js';
+import { getAgents, lookupMandates } from '../agenda/agenda-api.js';
 import { todayKey } from '../agenda/agenda-model.js';
 import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
 import { loadFormOptions, openPropertyDialog, propertyDisplayName, propertyTypeLabel } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
+import { propertyTypeText } from '../components/property-label.js';
+import { COMPATIBILITY_STATUS_LABELS, MATCH_CLASS_LABELS, MATCH_COMMERCIAL_STATUS_LABELS } from '../components/match-labels.js';
 // CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
 // «Si' / No / Non lo so», accessori e «Chiarisci», dati catastali, presa in
 // carico, annullamento) con il client proprio del censimento. Su una scheda
@@ -131,6 +133,8 @@ const CONFIRM_REQUIRED_STATUSES = new Set(['withdrawn', 'archived']);
 // (acquisitions/enums.py::MANDATE_ONLY_FROM_ACQUISITION), che resta la
 // garanzia: service Immobili (400) e trigger della 081.
 export const MANDATE_ONLY_FROM_ACQUISITION = 'L’incarico può essere generato solo da un’acquisizione.';
+// SEMPLIFICAZIONE-CRM-1: una visita immobile si fissa solo su un incarico in corso o scaduto.
+export const NO_MANDATE_FOR_VISIT = 'Questo immobile non ha un incarico di vendita in corso o scaduto: una visita immobile si programma solo su un incarico. Genera l’incarico dall’acquisizione, poi programma la visita.';
 
 // CRM-OPS-3: gli stati offerti dal selettore. "Mandato" solo se l'immobile
 // ha gia' un incarico (generato da un'acquisizione, o storico gia' in quello
@@ -239,8 +243,9 @@ const TABS = [
   { key: 'foto', label: 'Foto' },
   { key: 'documenti', label: 'Documenti' },
   { key: 'visite', label: 'Visite' },
+  // SEMPLIFICAZIONE-CRM-1: una sola esperienza per gli abbinamenti del motore
+  // MATCH e gli acquirenti compatibili (la rotta `.../abbinamenti` resta valida).
   { key: 'acquirenti', label: 'Acquirenti compatibili' },
-  { key: 'abbinamenti', label: 'Abbinamenti' },
   { key: 'proposte', label: 'Proposte' },
   { key: 'attivita', label: 'Storico interazioni' },
 ];
@@ -279,8 +284,12 @@ export async function renderImmobileDettaglio(container, params = []) {
     return;
   }
 
-  // Cache locale per la tab Abbinamenti (caricamento posticipato al primo click).
-  const lazyCache = { matches: null };
+  // Cache locale per la tab Acquirenti compatibili (caricamento posticipato al primo click).
+  const lazyCache = { matches: null, readiness: null };
+  // SEMPLIFICAZIONE-CRM-1: filtro della tab («Solo compatibili» / «Tutti») e
+  // ultimo messaggio della ricerca esplicita.
+  let buyersFilter = 'compatible';
+  let buyersFeedback = '';
 
   // P9: ricarica proposte dopo creazione/modifica/transizione. Stessa fonte
   // gia' usata al caricamento iniziale (/api/proposals?property_id=...),
@@ -421,8 +430,9 @@ export async function renderImmobileDettaglio(container, params = []) {
 
   // CRM-OPS-2: l'immobile si riconosce dai suoi dati (indirizzo, comune,
   // microzona), non dal titolo manuale; codice e id restano nella riga sotto.
+  // SEMPLIFICAZIONE-CRM-1: tipologia e territorio, mai il codice tecnico.
   function headerSubtitle() {
-    return `Immobile #${property.id} · ${property.code || '—'} · ${[property.region, property.province].filter(Boolean).join(' · ') || '—'}`;
+    return [propertyTypeText(property), property.region, property.province].filter(Boolean).join(' · ') || '—';
   }
 
   container.innerHTML = `
@@ -487,7 +497,8 @@ export async function renderImmobileDettaglio(container, params = []) {
   }
 
   async function showTab(key) {
-    tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
+    const attiva = key === 'abbinamenti' ? 'acquirenti' : key;
+    tabsEl.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === attiva));
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     try {
       switch (key) {
@@ -506,7 +517,15 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
         case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
-        case 'acquirenti': contentEl.innerHTML = renderAcquirentiCompatibili(); break;
+        case 'acquirenti':
+        case 'abbinamenti': {
+          const [matches, readiness] = await Promise.all([
+            loadMatchesLazy(property.id, lazyCache), loadReadinessLazy(property.id, lazyCache)]);
+          contentEl.innerHTML = renderAcquirentiCompatibili(matches, readiness, buyersFilter, buyersFeedback);
+          buyersFeedback = '';
+          bindAcquirentiSection(contentEl);
+          break;
+        }
         case 'censimento': await renderCensimentoTab(contentEl); break;
         case 'attivita':
           contentEl.innerHTML = '<div id="property-interactions"></div>';
@@ -518,12 +537,6 @@ export async function renderImmobileDettaglio(container, params = []) {
             referents: [...new Map((property.contacts || []).map((c) => [c.contact_id, { contact_id: c.contact_id, display_name: c.display_name }])).values()],
           });
           break;
-        case 'abbinamenti': {
-          const matches = await loadMatchesLazy(property.id, lazyCache);
-          contentEl.innerHTML = renderAbbinamenti(matches);
-          bindOpenMatchLinks(contentEl);
-          break;
-        }
         default: contentEl.innerHTML = '<p class="muted">Sezione non disponibile.</p>';
       }
     } catch (error) {
@@ -1320,6 +1333,50 @@ export async function renderImmobileDettaglio(container, params = []) {
     });
   }
 
+  // SEMPLIFICAZIONE-CRM-1: azioni della tab Acquirenti compatibili.
+  function bindAcquirentiSection(panelEl) {
+    panelEl.querySelectorAll('[data-buyers-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        buyersFilter = btn.dataset.buyersFilter === 'all' ? 'all' : 'compatible';
+        showTab('acquirenti');
+      });
+    });
+    const cerca = panelEl.querySelector('#match-calculate-btn');
+    if (cerca) cerca.addEventListener('click', () => runMatchCalculate(cerca));
+    bindOpenMatchLinks(panelEl);
+    panelEl.querySelectorAll('.open-buyer-btn').forEach((btn) => {
+      btn.addEventListener('click', () => navigate('acquirenti', [btn.dataset.buyRequestId]));
+    });
+    panelEl.querySelectorAll('.buyer-visit-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const contatto = btn.dataset.contactId
+          ? { id: Number(btn.dataset.contactId), display_name: btn.dataset.contactName || `Contatto #${btn.dataset.contactId}` }
+          : null;
+        openVisitScheduleDialog(contatto);
+      });
+    });
+  }
+
+  // La ricerca ESPLICITA degli acquirenti: POST /api/match/properties/{id}/calculate
+  // (il motore MATCH di sempre) calcola e AGGIORNA gli abbinamenti persistiti con
+  // tutte le richieste attive dell'agenzia. Mai all'apertura della scheda: solo da
+  // questo pulsante, e lo si dice.
+  async function runMatchCalculate(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Ricerca in corso…';
+    try {
+      const esito = await apiPost(`/api/match/properties/${property.id}/calculate`, {});
+      const n = Number.isInteger(esito && esito.count) ? esito.count : (Array.isArray(esito && esito.items) ? esito.items.length : 0);
+      const errori = Array.isArray(esito && esito.errors) ? esito.errors.length : 0;
+      buyersFeedback = `<div class="success-box">Ricerca completata: ${n} ${n === 1 ? 'abbinamento calcolato' : 'abbinamenti calcolati'} e salvati${errori ? ` (${errori} non calcolabili)` : ''}.</div>`;
+    } catch (error) {
+      buyersFeedback = `<div class="error-box">${escapeHtml(matchCalculateErrorText(error))}</div>`;
+    }
+    lazyCache.matches = null;
+    lazyCache.readiness = null;
+    showTab('acquirenti');
+  }
+
   function allVisiteButtons() {
     return Array.from(contentEl.querySelectorAll(
       '#visit-schedule-btn, #visit-new-btn, .visit-edit-btn, .visit-remove-btn, .visit-remove-confirm-btn, .visit-remove-back-btn',
@@ -1502,15 +1559,33 @@ export async function renderImmobileDettaglio(container, params = []) {
   // non le ha). Il dialog valida e controlla la disponibilita'; qui c'e' SOLO
   // la POST .../visits, con `assigned_user_id` e la stessa
   // `client_request_id` generata dal dialog.
-  async function openVisitScheduleDialog() {
+  async function openVisitScheduleDialog(presetContact = null) {
     const dialogEl = container.querySelector('#visit-schedule-dialog');
     if (!dialogEl) return;
+    const fbVisite = () => contentEl.querySelector('#visite-feedback') || contentEl.querySelector('#acquirenti-feedback');
+    // SEMPLIFICAZIONE-CRM-1: una visita immobile si fissa solo su un incarico in
+    // corso o scaduto. Si chiede all'Agenda PRIMA di aprire il dialog (la
+    // stessa ricerca degli incarichi, ristretta a questo immobile): senza, il
+    // messaggio e' in chiaro e nessun dialog si apre. Il server ricontrolla.
+    let incarichi;
+    try {
+      incarichi = await lookupMandates({ propertyId: property.id });
+    } catch (error) {
+      const fb = fbVisite();
+      if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile verificare l’incarico: ${error.message || 'errore sconosciuto'}`)}</div>`;
+      return;
+    }
+    if (!(incarichi && Array.isArray(incarichi.items) && incarichi.items.length)) {
+      const fb = fbVisite();
+      if (fb) fb.innerHTML = `<div class="error-box" data-no-mandate>${escapeHtml(NO_MANDATE_FOR_VISIT)}</div>`;
+      return;
+    }
     let agents;
     try {
       const esito = await getAgents();
       agents = (esito && esito.items) || [];
     } catch (error) {
-      const fb = contentEl.querySelector('#visite-feedback');
+      const fb = fbVisite();
       if (fb) fb.innerHTML = `<div class="error-box">${escapeHtml(`Impossibile caricare gli agenti: ${error.message || 'errore sconosciuto'}`)}</div>`;
       return;
     }
@@ -1524,6 +1599,8 @@ export async function renderImmobileDettaglio(container, params = []) {
       durationMinutes: 60,
       lockDuration: true,
       requireAgent: true,
+      requireContact: true,
+      presetContact,
       crmMode: 'contact_lead',
       showLocation: false,
       showNotes: false,
@@ -1759,7 +1836,7 @@ export async function renderImmobileDettaglio(container, params = []) {
   });
 
   // CENSIMENTO-1 Fase 4: una scheda in censimento si apre sulla sua tab.
-  await showTab(TABS.some((tab) => tab.key === params[1]) ? params[1] : tabsFor()[0].key);
+  await showTab(TABS.some((tab) => tab.key === params[1]) || params[1] === 'abbinamenti' ? params[1] : tabsFor()[0].key);
   if (params[1] === 'visite' && /^\d+$/.test(params[2] || '')) {
     const row = contentEl.querySelector(`tr[data-row-id="${params[2]}"]`);
     if (row) { row.tabIndex = -1; row.focus(); row.scrollIntoView({ block: 'center' }); }
@@ -1778,7 +1855,7 @@ function catalogLabel(catalogo, lista, valore) {
 
 function renderPanoramica(p, editMode, commercialStatusEditMode, commercialStatusPendingConfirm, commercialStatusPendingTarget, lifecycle = {}) {
   const fields = [
-    ['Codice', p.code], ['Tipologia', propertyTypeLabel(p, (lifecycle.catalogo || {}).property_types)], ['Classificazione', p.classification],
+    ['Tipologia', propertyTypeLabel(p, (lifecycle.catalogo || {}).property_types)], ['Classificazione', p.classification],
     ['Indirizzo', [p.address, p.civic_number].filter(Boolean).join(' ')],
     ['Regione', p.region], ['Provincia', p.province], ['Comune', p.city], ['Microzona', p.microzone], ['CAP', p.postal_code],
     ['Superficie (mq)', p.surface_sqm], ['Superficie commerciale (mq)', p.commercial_surface_sqm],
@@ -2249,13 +2326,16 @@ function renderVisite(items, visitRemoveConfirm) {
   `;
 }
 
-// --- Acquirenti compatibili: gap esplicito, nessun riuso dati Abbinamenti ---
-
-function renderAcquirentiCompatibili() {
-  return '<p class="muted">Funzione disponibile nella fase Abbinamenti.</p>';
-}
-
-// --- Abbinamenti (lazy: GET /api/match/matches?property_id={id}) -----------
+// --- Acquirenti compatibili (SEMPLIFICAZIONE-CRM-1) ------------------------
+// UNA sola vista sugli abbinamenti del motore MATCH (nessun motore parallelo):
+//   * lettura: GET /api/match/matches?property_id={id} (lazy, al primo click),
+//     filtrata qui su `compatibility_status` («Solo compatibili» / «Tutti»);
+//   * idoneita': GET /api/match/readiness?property_id={id}, per dire PERCHE'
+//     un immobile non e' ancora abbinabile;
+//   * ricerca esplicita: POST /api/match/properties/{id}/calculate (persiste),
+//     mai all'apertura della scheda.
+// Abbinamenti storici, stati, azioni («Apri abbinamento», «Apri acquirente»,
+// «Programma visita» con incarico obbligatorio) restano tutti raggiungibili.
 
 async function loadMatchesLazy(propertyId, cache) {
   if (cache.matches) return cache.matches;
@@ -2268,23 +2348,82 @@ async function loadMatchesLazy(propertyId, cache) {
   return cache.matches;
 }
 
-function renderAbbinamenti(matches) {
-  if (matches && matches.error) {
-    return `<div class="error-box">Impossibile caricare gli abbinamenti: ${escapeHtml(matches.error)}</div>`;
+async function loadReadinessLazy(propertyId, cache) {
+  if (cache.readiness) return cache.readiness;
+  try {
+    cache.readiness = await apiGet(`/api/match/readiness?property_id=${propertyId}`);
+  } catch (error) {
+    cache.readiness = { error: error.message };
   }
-  return renderTable(
+  return cache.readiness;
+}
+
+const READINESS_REASON_LABELS = {
+  'Immobile archiviato': 'l’immobile è archiviato',
+  'Stato PROPERTY non compatibile con MATCH': 'lo stato commerciale non è fra quelli abbinabili (Mandato, Attivo, Riservato, Sotto offerta)',
+  'Immobile in censimento': 'l’immobile è ancora in censimento',
+};
+
+// Perche' un immobile non e' abbinabile, in parole; '' se lo e' (o non si sa).
+export function readinessText(readiness) {
+  if (!readiness || readiness.error) return '';
+  const lato = readiness.property || {};
+  if (readiness.can_match !== false && lato.can_match !== false) return '';
+  const motivi = [...(lato.eligibility_reasons || []), ...(lato.reasons || [])]
+    .map((r) => READINESS_REASON_LABELS[r] || r);
+  return `Questo immobile non è ancora abbinabile: ${motivi.join('; ') || 'dati insufficienti'}.`;
+}
+
+function matchCalculateErrorText(error) {
+  const testo = (error && error.message) || 'Ricerca non riuscita.';
+  if (/not commercially matchable/i.test(testo)) return 'L’immobile non è in uno stato commerciale abbinabile: la ricerca non è partita.';
+  return `Ricerca non riuscita: ${testo}`;
+}
+
+export function filterBuyers(matches, filtro) {
+  const lista = Array.isArray(matches) ? matches : [];
+  if (filtro === 'all') return lista;
+  return lista.filter((m) => m.compatibility_status !== 'incompatible');
+}
+
+function renderAcquirentiCompatibili(matches, readiness, filtro, feedback) {
+  if (matches && matches.error) {
+    return `<div class="error-box">Impossibile caricare gli acquirenti compatibili: ${escapeHtml(matches.error)}</div>`;
+  }
+  const tutti = Array.isArray(matches) ? matches : [];
+  const visibili = filterBuyers(tutti, filtro);
+  const motivo = readinessText(readiness);
+  const nascosti = tutti.length - visibili.length;
+  const table = renderTable(
     [
-      { label: 'Match', render: (m) => `#${escapeHtml(m.id)}` },
-      { label: 'Acquirente', render: (m) => escapeHtml(m.buyer_name || `Richiesta #${m.buy_request_id}`) },
+      { label: 'Acquirente', render: (m) => `<strong>${escapeHtml(m.buyer_name || 'Acquirente')}</strong><br><small class="muted">${escapeHtml(m.buy_title || '—')}</small>` },
       { label: 'Punteggio', render: (m) => escapeHtml(m.effective_score ?? m.score_total ?? '—') },
-      { label: 'Classe', render: (m) => renderBadge(m.match_class || '—', 'gray') },
-      { label: 'Stato commerciale', render: (m) => escapeHtml(m.commercial_status || '—') },
-      { label: 'Compatibilità', render: (m) => renderBadge(m.compatibility_status || '—', m.compatibility_status === 'incompatible' ? 'danger' : 'ok') },
-      { label: '', render: (m) => `<button type="button" class="btn ghost open-match-btn" data-match-id="${escapeHtml(m.id)}">Apri match</button>` },
+      { label: 'Classe', render: (m) => renderBadge(MATCH_CLASS_LABELS[m.match_class] || m.match_class || '—', m.match_class === 'incompatible' ? 'danger' : 'gray') },
+      { label: 'Compatibilità', render: (m) => renderBadge(COMPATIBILITY_STATUS_LABELS[m.compatibility_status] || m.compatibility_status || '—', m.compatibility_status === 'incompatible' ? 'danger' : 'ok') },
+      { label: 'Stato', render: (m) => escapeHtml(MATCH_COMMERCIAL_STATUS_LABELS[m.commercial_status] || m.commercial_status || '—') },
+      { label: '', render: (m) => `<div class="action-bar">`
+        + `<button type="button" class="btn ghost open-buyer-btn" data-buy-request-id="${escapeHtml(m.buy_request_id)}">Apri acquirente</button> `
+        + `<button type="button" class="btn ghost open-match-btn" data-match-id="${escapeHtml(m.id)}">Apri abbinamento</button>`
+        + (m.compatibility_status !== 'incompatible' && m.buyer_contact_id
+          ? ` <button type="button" class="btn ghost buyer-visit-btn" data-contact-id="${escapeHtml(m.buyer_contact_id)}" data-contact-name="${escapeHtml(m.buyer_name || '')}">Programma visita</button>` : '')
+        + '</div>' },
     ],
-    matches,
-    { emptyMessage: 'Nessun abbinamento presente per questo immobile.' },
+    visibili,
+    { emptyMessage: tutti.length
+      ? 'Nessun acquirente compatibile fra gli abbinamenti calcolati: vedi «Tutti gli abbinamenti».'
+      : 'Nessun abbinamento ancora calcolato per questo immobile: usa «Cerca acquirenti compatibili».' },
   );
+  return `
+    <div class="action-bar" style="margin-bottom:12px">
+      <button type="button" id="match-calculate-btn" class="btn primary" ${motivo ? 'disabled' : ''}>Cerca acquirenti compatibili</button>
+      <button type="button" class="btn ${filtro !== 'all' ? '' : 'ghost'}" data-buyers-filter="compatible">Solo compatibili</button>
+      <button type="button" class="btn ${filtro === 'all' ? '' : 'ghost'}" data-buyers-filter="all">Tutti gli abbinamenti</button>
+    </div>
+    <p class="muted" id="acquirenti-nota">La ricerca confronta l’immobile con tutte le richieste attive dell’agenzia e aggiorna gli abbinamenti salvati; non parte da sola aprendo la scheda.${nascosti > 0 && filtro !== 'all' ? ` ${nascosti} ${nascosti === 1 ? 'abbinamento incompatibile nascosto' : 'abbinamenti incompatibili nascosti'}.` : ''}</p>
+    ${motivo ? `<div class="error-box" id="acquirenti-readiness">${escapeHtml(motivo)}</div>` : ''}
+    <div id="acquirenti-feedback">${feedback || ''}</div>
+    ${table}
+  `;
 }
 
 // P4: colonna "Apri match" -> #/abbinamenti/{match_id} (scheda MATCH nella

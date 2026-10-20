@@ -75,6 +75,8 @@ import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/t
 import { navigate } from '../core/router.js';
 import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../components/st-table.js';
 import { propertyDisplayName, propertyTypeLabel, loadFormOptions } from '../components/property-form.js';
+// SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
+import { propertyShortLabel } from '../components/property-label.js';
 import * as census from '../census/census-api.js';
 import { startCreation } from '../census/census-wizard.js';
 import { errorMessage } from '../census/census-model.js';
@@ -129,7 +131,7 @@ export async function renderImmobili(container, params = []) {
         ${SCOPES.map((s) => `<button type="button" class="scope-btn${s.value === 'all' ? ' active' : ''}" data-scope="${s.value}" aria-pressed="${s.value === 'all'}">${escapeHtml(s.label)} <span class="scope-count" data-scope-count="${s.value}"></span></button>`).join('')}
       </div>
       <div class="list-toolbar">
-        <input id="immobili-search" class="input" type="search" placeholder="Cerca per codice, indirizzo o comune…">
+        <input id="immobili-search" class="input" type="search" placeholder="Cerca per indirizzo, comune o descrizione…">
         <input id="immobili-city" class="input" type="search" placeholder="Comune" aria-label="Comune">
         <select id="immobili-status" class="input" aria-label="Stato commerciale">
           <option value="">Tutti gli stati</option>
@@ -218,7 +220,7 @@ export async function renderImmobili(container, params = []) {
 
     listArea.innerHTML = renderTable(
       [
-        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>${originLineHtml(p)}` },
+        { label: 'Immobile', render: (p) => `<strong>${escapeHtml(propertyShortLabel(p, tipologie, tipiPertinenza))}</strong><br><small class="muted">${escapeHtml(propertyDisplayName(p))}</small>${originLineHtml(p)}` },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie, tipiPertinenza)) },
         { label: 'Stato', render: (p) => escapeHtml(p.commercial_status || '—') },
@@ -351,7 +353,7 @@ export async function renderImmobili(container, params = []) {
     }
     censusUnitsArea.innerHTML = renderTable(
       [
-        { label: 'Unità', render: (p) => `<strong>${escapeHtml(propertyDisplayName(p))}</strong><br><small class="muted">${escapeHtml(p.code || '—')}</small>` },
+        { label: 'Unità', render: (p) => `<strong>${escapeHtml(propertyShortLabel(p, tipologie, tipiPertinenza))}</strong><br><small class="muted">${escapeHtml(propertyDisplayName(p))}</small>` },
         { label: 'Tipologia', render: (p) => escapeHtml(propertyTypeLabel(p, tipologie, tipiPertinenza)) },
         { label: 'Comune', render: (p) => escapeHtml(p.city || '—') },
         { label: 'Collocazione', render: (p) => escapeHtml(p.building_id ? 'In palazzina' : 'Singola') },

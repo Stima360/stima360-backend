@@ -8,7 +8,10 @@ ASSETS = ROOT / 'static/os_shell/assets'
 
 
 def run_js(view, expression):
-    source = (ASSETS / 'components/st-table.js').read_text() + '\n' + (ASSETS / view).read_text()
+    # SEMPLIFICAZIONE-CRM-1: le viste leggono il nome dell'immobile dall'helper
+    # condiviso (components/property-label.js, funzioni pure): si concatena come st-table.
+    source = ((ASSETS / 'components/st-table.js').read_text() + '\n'
+              + (ASSETS / 'components/property-label.js').read_text() + '\n' + (ASSETS / view).read_text())
     script = "const vm=require('node:vm');const assert=require('node:assert/strict');\n"
     script += 'let source=' + json.dumps(source) + ';\n'
     script += "source=source.replace(/^import [\\s\\S]*?;$/mg,'').replace(/export /g,'');\n"

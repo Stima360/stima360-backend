@@ -226,7 +226,7 @@ def test_27b_etichette_neutre_per_ogni_tipo():
     for tipo in APPOINTMENT_TYPES:
         p = build_payload(_appuntamento(appointment_type=tipo), agency_id=35,
                           chain_root_appointment_id=10, event_id=EVENTO)
-        assert p.summary in {"Sopralluogo", "Appuntamento", "Visita", "Telefonata",
+        assert p.summary in {"Sopralluogo", "Appuntamento", "Visita immobile", "Telefonata",
                              "Videochiamata"}, tipo
 
 
