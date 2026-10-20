@@ -9,6 +9,9 @@ APPOINTMENT_TYPES = (
     "call", "video_call", "seller_meeting", "inspection", "buyer_visit",
     "valuation_presentation", "mandate_signing", "proposal",
     "preliminary_contract", "notary", "technical", "other",
+    # APPUNTAMENTI DI VENDITA (migration 106): sempre su un incarico, con il
+    # cliente interessato all'acquisto e l'agente incaricato.
+    "sale_appointment",
 )
 
 #: Etichette dell'interfaccia italiana. Sopralluogo proprietario (inspection)
@@ -26,7 +29,16 @@ APPOINTMENT_TYPE_LABELS_IT = {
     "notary": "Rogito",
     "technical": "Tecnico",
     "other": "Altro",
+    "sale_appointment": "Appuntamento di vendita",
 }
+
+#: APPUNTAMENTI DI VENDITA (106). Distinto dalla visita acquirente: nessuna
+#: proiezione in `property_visits`, nessuna prenotazione pubblica.
+SALE_APPOINTMENT_TYPE = "sale_appointment"
+#: Gli stati dell'incarico (`core.property_mandate.mandate_state`) su cui si
+#: fissa un appuntamento di vendita: in corso o scaduto. Conclusi con la
+#: vendita, ritirati e su immobile archiviato restano esclusi.
+SALE_MANDATE_STATES = ("active", "expired")
 
 APPOINTMENT_STATUSES = (
     "requested", "scheduled", "confirmed", "completed",

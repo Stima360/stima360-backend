@@ -616,6 +616,39 @@ def cancelled_kind_changes(cur, kind) -> dict:
     return {"cancelled_kind": kind or DEFAULT_CANCELLED_KIND}
 
 
+_SALE_MANDATE_COLUMNS = (
+    "p.id, p.title, p.code, p.address, p.civic_number, p.city, p.acquisition_id, "
+    "p.mandate_type, p.mandate_start, p.mandate_end, p.commercial_status, p.archived_at, "
+    "to_jsonb(p)->>'deleted_at' AS deleted_at")
+
+
+def sale_mandate_property(cur, agency_id: int, property_id: int):
+    """APPUNTAMENTI DI VENDITA (106): i campi dell'immobile da cui
+    `core.property_mandate` decide se c'e' un incarico e in che stato e'.
+    Solo lettura, nello scope dell'agenzia: un immobile altrui e' None."""
+    cur.execute(
+        f"SELECT {_SALE_MANDATE_COLUMNS} FROM properties p WHERE p.id = %s AND p.agency_id = %s",
+        (property_id, agency_id))
+    riga = cur.fetchone()
+    return dict(riga) if riga is not None else None
+
+
+def lookup_sale_mandates(cur, agency_id: int, *, search: str, limit: int,
+                         real_mandate_sql: str) -> list[dict]:
+    """APPUNTAMENTI DI VENDITA: gli immobili dell'agenzia con un incarico REALE
+    (le tre origini, `core.property_mandate.real_mandate_sql`), fuori dal
+    Cestino, per testo. Lo stato (in corso, scaduto...) lo decide il service."""
+    testo = f"%{search}%"
+    cur.execute(
+        f"SELECT {_SALE_MANDATE_COLUMNS} FROM properties p "
+        f"WHERE p.agency_id = %s AND {real_mandate_sql} "
+        "AND (to_jsonb(p)->>'deleted_at') IS NULL "
+        "AND (p.title ILIKE %s OR p.code ILIKE %s OR p.address ILIKE %s OR p.city ILIKE %s) "
+        "ORDER BY p.id DESC LIMIT %s",
+        (agency_id, testo, testo, testo, testo, limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
 def link_agency(cur, table: str, record_id: int):
     """L'agenzia di un contatto, lead o immobile (per errori puliti prima del
     trigger della 072, che resta la garanzia)."""

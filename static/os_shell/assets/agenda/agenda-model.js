@@ -73,7 +73,13 @@ export const TYPE_LABELS = Object.freeze({
   notary: 'Rogito',
   technical: 'Tecnico',
   other: 'Altro',
+  sale_appointment: 'Appuntamento di vendita',
 });
+
+// Specchio di appointments/enums.py::SALE_APPOINTMENT_TYPE e di
+// public_booking/enums.py::NOT_BOOKABLE_TYPES.
+export const SALE_APPOINTMENT_TYPE = 'sale_appointment';
+export const NOT_BOOKABLE_TYPES = Object.freeze([SALE_APPOINTMENT_TYPE]);
 
 // Specchio di appointments/enums.py::DEFAULT_DURATION_MINUTES: e' solo il
 // valore PROPOSTO nel form, non un vincolo.

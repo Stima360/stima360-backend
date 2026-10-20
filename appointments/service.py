@@ -83,6 +83,18 @@ from .enums import (
     BLOCKING_STATUSES,
     CANCELLED_KINDS,
     MISTAKE_KIND,
+    SALE_APPOINTMENT_TYPE,
+    SALE_MANDATE_STATES,
+)
+# APPUNTAMENTI DI VENDITA (106): che cos'e' un incarico e in che stato e'. Modulo
+# foglia condiviso (nessun import applicativo), come lo usano `property/` e `flow/`.
+from core.property_mandate import (
+    ORIGIN_ACQUISITION,
+    ORIGIN_SIGNED_LINK,
+    mandate_origin,
+    mandate_state,
+    real_mandate_sql,
+    signed_link_mandate,
 )
 
 # A30-9B: l'hook verso la sincronizzazione del calendario esterno (Google).
@@ -208,6 +220,41 @@ def _controlla_collegamenti(cur, agency_id, *, contact_id, lead_id, property_id)
             raise NotFoundError("Lead non trovato")
         if contact_id is not None and r["contact_id"] != contact_id:
             raise errors.LinkMismatch("Il lead indicato appartiene a un altro contatto")
+
+
+def _controlla_vendita(cur, agency_id, *, appointment_type, property_id, contact_id,
+                       assigned_user_id, verifica_incarico=True):
+    """APPUNTAMENTI DI VENDITA (106): incarico, cliente e agente obbligatori.
+
+    L'incarico e' un incarico REALE secondo la definizione canonica
+    (`core/property_mandate.py`: nato da un'acquisizione, storico o firmato
+    nel ponte LMC-15), fuori dal Cestino, IN CORSO o SCADUTO. Concluso con la
+    vendita, ritirato o su immobile archiviato: rifiutato. Il cliente
+    e' un contatto dell'agenzia (gia' verificato da `_controlla_collegamenti`):
+    non serve una richiesta d'acquisto registrata. Il CHECK della 106 resta la
+    garanzia su presenza di immobile, cliente e agente.
+    """
+    if appointment_type != SALE_APPOINTMENT_TYPE:
+        return
+    if property_id is None:
+        raise errors.SaleMandateRequired(
+            "Un appuntamento di vendita va collegato a un incarico")
+    if contact_id is None:
+        raise errors.SaleClientRequired(
+            "Un appuntamento di vendita richiede il cliente interessato all'acquisto")
+    if assigned_user_id is None:
+        raise errors.AgentRequired("Un appuntamento di vendita richiede l'agente incaricato")
+    if not verifica_incarico:
+        return
+    immobile = repository.sale_mandate_property(cur, agency_id, property_id)
+    if immobile is not None:
+        immobile["signed_mandate"] = signed_link_mandate(cur, property_id)
+    if (immobile is None or immobile["deleted_at"] is not None
+            or mandate_origin(immobile) is None
+            or mandate_state(immobile) not in SALE_MANDATE_STATES):
+        raise errors.SaleMandateRequired(
+            "L'immobile scelto non ha un incarico in corso o scaduto: un appuntamento "
+            "di vendita si fissa solo su un incarico (non concluso, non ritirato)")
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +486,9 @@ def _creazione(ctx, payload):
         _controlla_stima(cur, agency_id, payload.stima_id)
         _controlla_collegamenti(cur, agency_id, contact_id=payload.contact_id,
                                 lead_id=payload.lead_id, property_id=payload.property_id)
+        _controlla_vendita(cur, agency_id, appointment_type=payload.appointment_type,
+                           property_id=payload.property_id, contact_id=payload.contact_id,
+                           assigned_user_id=payload.assigned_user_id)
         if blocca:
             repository.lock_agents(cur, [payload.assigned_user_id])
             # Riletta DOPO il lock: due richieste identiche e simultanee per lo
@@ -1110,6 +1160,13 @@ def patch_appointment(ctx, appointment_id, body):
             return repository.get_appointment(cur, agency_id, row["id"])
         finale = {c: cambi.get(c, row[c]) for c in ("contact_id", "lead_id", "property_id")}
         _controlla_collegamenti(cur, agency_id, **finale)
+        # APPUNTAMENTI DI VENDITA: incarico e cliente non si tolgono; un
+        # incarico NUOVO si verifica come alla creazione, quello gia' collegato
+        # resta valido anche se nel frattempo e' cambiato di stato.
+        _controlla_vendita(cur, agency_id, appointment_type=row["appointment_type"],
+                           property_id=finale["property_id"], contact_id=finale["contact_id"],
+                           assigned_user_id=row["assigned_user_id"],
+                           verifica_incarico=finale["property_id"] != row["property_id"])
         # A31-2 D5: l'immobile di una visita gia' proiettata non cambia (409,
         # prima di qualunque scrittura).
         _visite.before_patch(cur, agency_id, row, cambi)
@@ -1171,6 +1228,45 @@ def lookup_stime(ctx, *, search=None, lead_id=None, contact_id=None, limit=10):
     with core_cursor() as (_, cur):
         return repository.lookup_stime(cur, agency_id, search=testo or None, lead_id=lead_id,
                                        contact_id=contact_id, limit=int(limit))
+
+
+def lookup_sale_mandates(ctx, *, search=None, limit=10):
+    """APPUNTAMENTI DI VENDITA: gli incarichi selezionabili, SOLO dell'agenzia
+    della sessione e SOLO in corso o scaduti, di ogni origine (acquisizione,
+    storico, firma LMC-15). Sola lettura. Senza testo non si elenca
+    l'archivio. `mandate_page` dice se l'incarico ha una scheda in
+    #/incarichi (solo l'origine «acquisizione»): la verifica vera resta
+    `_controlla_vendita` alla creazione."""
+    agency_id = ctx.require_agency()
+    _attore(ctx)
+    testo = (search or "").strip()
+    if len(testo) > STIMA_LOOKUP_MAX_CHARS:
+        raise ValidationError(f"search: al massimo {STIMA_LOOKUP_MAX_CHARS} caratteri")
+    if not (1 <= int(limit) <= STIMA_LOOKUP_MAX):
+        raise ValidationError(f"limit: tra 1 e {STIMA_LOOKUP_MAX}")
+    if len(testo) < STIMA_LOOKUP_MIN_CHARS:
+        return []
+    with core_cursor() as (_, cur):
+        # Lo stato si decide in Python con `mandate_state` (una sola
+        # definizione): si leggono piu' righe del limite per non restare corti
+        # quando alcune sono concluse o ritirate.
+        righe = repository.lookup_sale_mandates(
+            cur, agency_id, search=testo, limit=int(limit) * 5, real_mandate_sql=real_mandate_sql("p"))
+    esito = []
+    for r in righe:
+        stato = mandate_state(r)
+        if stato not in SALE_MANDATE_STATES:
+            continue
+        # `real_mandate_sql` garantisce l'incarico: senza acquisizione ne'
+        # tipo + inizio, l'origine e' la firma LMC-15.
+        origine = mandate_origin(r) or ORIGIN_SIGNED_LINK
+        esito.append({"id": r["id"], "title": r["title"], "code": r["code"],
+                      "address": r["address"], "civic_number": r["civic_number"],
+                      "city": r["city"], "mandate_origin": origine, "mandate_state": stato,
+                      "mandate_page": origine == ORIGIN_ACQUISITION})
+        if len(esito) == int(limit):
+            break
+    return esito
 
 
 def list_agents(ctx):
@@ -1264,6 +1360,15 @@ def get_appointment_detail(ctx, appointment_id):
         if row is None or not _visibile(ctx, row):
             raise errors.AppointmentNotFound("Appuntamento non trovato")
         collegati = repository.detail_links(cur, row)
+        # APPUNTAMENTI DI VENDITA: «Apri incarico» solo se l'incarico ha una
+        # scheda in #/incarichi, cioe' e' nato da un'acquisizione (la sezione
+        # Incarichi gestisce solo quell'origine). Per gli incarichi storici e
+        # le firme LMC-15 resta «Apri immobile».
+        scheda_incarico = False
+        if row["appointment_type"] == SALE_APPOINTMENT_TYPE and row["property_id"] is not None:
+            immobile = repository.sale_mandate_property(cur, agency_id, row["property_id"])
+            scheda_incarico = bool(immobile and immobile["deleted_at"] is None
+                                   and mandate_origin(immobile) == ORIGIN_ACQUISITION)
     azioni = state_machine.allowed_actions(
         row, is_manager=_puo_assegnare(ctx), is_own=row["assigned_user_id"] == io,
         now=_adesso())
@@ -1278,6 +1383,10 @@ def get_appointment_detail(ctx, appointment_id):
         link.append("contact")
     if collegati["property"] is not None:
         link.append("property")
+        # APPUNTAMENTI DI VENDITA: la scheda dell'incarico (#/incarichi/<immobile>),
+        # solo se esiste (vedi sopra).
+        if scheda_incarico:
+            link.append("mandate")
     return {"appointment": row, **collegati, "allowed_actions": azioni, "allowed_links": link}
 
 

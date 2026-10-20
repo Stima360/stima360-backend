@@ -46,6 +46,9 @@ NO_SHOW_TOO_EARLY = "NO_SHOW_TOO_EARLY"
 RESCHEDULE_IN_PAST = "RESCHEDULE_IN_PAST"
 FOLLOW_UP_IN_PAST = "FOLLOW_UP_IN_PAST"
 FOLLOW_UP_REQUIRES_LINK = "FOLLOW_UP_REQUIRES_LINK"
+# APPUNTAMENTI DI VENDITA (106): l'incarico e il cliente obbligatori.
+SALE_MANDATE_REQUIRED = "SALE_MANDATE_REQUIRED"
+SALE_CLIENT_REQUIRED = "SALE_CLIENT_REQUIRED"
 
 
 class _ConCodice:
@@ -117,6 +120,15 @@ class AgentNotActive(_ConCodice, ValidationError):
 
 class ReasonRequired(_ConCodice, ValidationError):
     code = REASON_REQUIRED
+
+
+class SaleMandateRequired(_ConCodice, ValidationError):
+    """Un appuntamento di vendita senza un incarico in corso o scaduto."""
+    code = SALE_MANDATE_REQUIRED
+
+
+class SaleClientRequired(_ConCodice, ValidationError):
+    code = SALE_CLIENT_REQUIRED
 
 
 class CompletedAtInvalid(_ConCodice, ValidationError):

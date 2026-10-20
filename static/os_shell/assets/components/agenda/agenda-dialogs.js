@@ -50,6 +50,8 @@ import {
   todayKey,
   typeLabel,
   weeklySlotsFromDays,
+  NOT_BOOKABLE_TYPES,
+  SALE_APPOINTMENT_TYPE,
 } from '../../agenda/agenda-model.js';
 import {
   checkAvailability,
@@ -65,6 +67,7 @@ import {
   getBookingLinks,
   getClosures,
   getWorkingHours,
+  lookupMandates,
   lookupStime,
   patchAppointment,
   patchBookingLink,
@@ -154,7 +157,7 @@ const BLOCCO_DURATA = `
 // solo cliente + lead (`crmMode: 'contact_lead'`) o nessun collegamento
 // (`crmMode: 'none'`). Il default (`'full'`) e' il blocco di sempre.
 const CRM_CLIENTE_LEAD = `
-    <div class="form-field"><label>Cliente</label><div data-contact-picker></div></div>
+    <div class="form-field"><label data-contact-label>Cliente</label><div data-contact-picker></div></div>
     <div class="form-field">
       <label>Lead del cliente</label>
       <select class="input" data-field="lead" disabled></select>
@@ -170,8 +173,9 @@ const CRM_STIMA_IMMOBILE = `
       <div class="agenda-lookup-selected" data-stima-selected hidden></div>
     </div>
     <div class="form-field">
-      <label>Immobile</label>
+      <label data-property-label>Immobile</label>
       <input type="search" class="input" data-property-search placeholder="Cerca per titolo, codice o indirizzo…" autocomplete="off">
+      <small class="muted" data-property-hint></small>
       <div class="agenda-lookup-results" data-property-results></div>
       <div class="agenda-lookup-selected" data-property-selected hidden></div>
     </div>`;
@@ -181,7 +185,7 @@ function bloccoCrm(modo) {
   const parti = modo === 'contact_lead' ? CRM_CLIENTE_LEAD : CRM_CLIENTE_LEAD + CRM_STIMA_IMMOBILE;
   return `
   <fieldset class="agenda-links">
-    <legend>Collegamento CRM (facoltativo)</legend>${parti}
+    <legend data-crm-legend>Collegamento CRM (facoltativo)</legend>${parti}
   </fieldset>`;
 }
 
@@ -709,6 +713,19 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
 // chiamante. Nessuna conoscenza di BUY o di immobili: solo opzioni generiche.
 const MODI_CRM = Object.freeze(['full', 'contact_lead', 'none']);
 const MSG_AGENTE_OBBLIGATORIO = 'Scegli l’agente: è obbligatorio.';
+// APPUNTAMENTI DI VENDITA: incarico, cliente e agente obbligatori (il server
+// li ricontrolla: `_controlla_vendita`, CHECK della 106).
+const MSG_VENDITA_INCARICO = 'Scegli l’incarico: un appuntamento di vendita va collegato a un incarico.';
+const MSG_VENDITA_CLIENTE = 'Scegli il cliente interessato all’acquisto: è obbligatorio.';
+const MSG_VENDITA_AGENTE = 'Scegli l’agente incaricato: è obbligatorio per un appuntamento di vendita.';
+const STATI_INCARICO = Object.freeze({ active: 'incarico in corso', expired: 'incarico scaduto' });
+
+/** Un incarico selezionabile: l'etichetta dell'immobile piu' lo stato. */
+function etichettaIncarico(x) {
+  const base = propertyLabel(x);
+  const stato = STATI_INCARICO[x.mandate_state] || '';
+  return { title: base.title, detail: [base.detail, stato].filter(Boolean).join(' · ') };
+}
 
 const BLOCCO_LUOGO = `
     <div class="form-field"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>`;
@@ -757,7 +774,10 @@ export function openCreateDialog(dialogEl, {
   if (submitAppointment !== null && typeof submitAppointment !== 'function') {
     throw new Error('submitAppointment deve essere una funzione.');
   }
-  const tipi = Object.keys(TYPE_LABELS);
+  // Un appuntamento di vendita richiede l'incarico: si offre solo dove il
+  // blocco CRM ha la ricerca dell'immobile (`full`).
+  const tipi = Object.keys(TYPE_LABELS).filter((t) => (
+    t !== SALE_APPOINTMENT_TYPE || crmMode === 'full' || t === appointmentType));
   const form = preparaDialog(dialogEl, title, `
     <div class="form-field"><label>Tipo *</label><select class="input" data-field="type"></select></div>
     ${bloccoCrm(crmMode)}
@@ -805,8 +825,13 @@ export function openCreateDialog(dialogEl, {
     agente.disabled = true;
   }
   const suggerimento = form.querySelector('[data-status-hint]');
+  const eVendita = () => tipo.value === SALE_APPOINTMENT_TYPE;
   const aggiornaSuggerimento = () => {
-    if (requireAgent) {
+    if (eVendita() && !agente.value) {
+      suggerimento.textContent = MSG_VENDITA_AGENTE;
+      return;
+    }
+    if (requireAgent || eVendita()) {
       suggerimento.textContent = agente.value
         ? 'L’appuntamento nasce “Fissato” nell’agenda dell’agente, dopo la verifica della disponibilità.'
         : MSG_AGENTE_OBBLIGATORIO;
@@ -865,10 +890,16 @@ export function openCreateDialog(dialogEl, {
 
   if (crmMode === 'full') {
     immobile = montaRicerca(form, 'property', {
-      // Senza testo non si elenca l'archivio immobili.
-      cerca: (testo) => (testo ? searchProperties(testo) : Promise.resolve(null)),
-      etichetta: propertyLabel,
-      vuoto: 'Nessun immobile trovato.',
+      // Senza testo non si elenca l'archivio immobili. Per un appuntamento di
+      // vendita si cerca fra gli incarichi in corso o scaduti.
+      cerca: async (testo) => {
+        if (!testo) return null;
+        if (!eVendita()) return searchProperties(testo);
+        const esito = await lookupMandates({ search: testo });
+        return (esito && esito.items) || [];
+      },
+      etichetta: (x) => (eVendita() ? etichettaIncarico(x) : propertyLabel(x)),
+      vuoto: 'Nessun risultato.',
     });
 
     // La stima: per testo, e - se c'e' - dentro la relazione CORE del lead
@@ -978,11 +1009,37 @@ export function openCreateDialog(dialogEl, {
     nascondiDisponibilita(form);
   });
   campoData.addEventListener('input', () => nascondiDisponibilita(form));
+  // APPUNTAMENTI DI VENDITA: etichette, obbligatorieta' e ricerca seguono il
+  // tipo. Un immobile scelto prima non e' necessariamente un incarico: si
+  // azzera al cambio fra vendita e altri tipi.
+  let eraVendita = null;
+  const aggiornaVendita = () => {
+    const vendita = eVendita();
+    const legenda = form.querySelector('[data-crm-legend]');
+    if (legenda) {
+      legenda.textContent = vendita
+        ? 'Incarico e cliente (obbligatori)' : 'Collegamento CRM (facoltativo)';
+    }
+    const etichettaCliente = form.querySelector('[data-contact-label]');
+    if (etichettaCliente) etichettaCliente.textContent = vendita ? 'Cliente interessato all’acquisto *' : 'Cliente';
+    const etichettaImmobile = form.querySelector('[data-property-label]');
+    if (etichettaImmobile) etichettaImmobile.textContent = vendita ? 'Incarico *' : 'Immobile';
+    const aiutoImmobile = form.querySelector('[data-property-hint]');
+    if (aiutoImmobile) {
+      aiutoImmobile.textContent = vendita
+        ? 'Cerca fra gli incarichi in corso o scaduti (titolo, codice, indirizzo o proprietario).' : '';
+    }
+    if (immobile && eraVendita !== null && eraVendita !== vendita) immobile.azzera();
+    eraVendita = vendita;
+    aggiornaSuggerimento();
+  };
+  aggiornaVendita();
   tipo.addEventListener('change', () => {
     if (!durataScelta && !lockDuration) {
       fineDopo(durataBase());
       mostraDurata();
     }
+    aggiornaVendita();
   });
   agente.addEventListener('change', () => { aggiornaSuggerimento(); nascondiDisponibilita(form); });
 
@@ -1024,6 +1081,11 @@ export function openCreateDialog(dialogEl, {
     const idAgente = agente.value ? Number(agente.value) : null;
     // A31-4: vincoli del chiamante, PRIMA di qualunque richiesta.
     if (requireAgent && !idAgente) throw new Error(MSG_AGENTE_OBBLIGATORIO);
+    if (eVendita()) {
+      if (!(immobile && immobile.scelto && immobile.scelto.id)) throw new Error(MSG_VENDITA_INCARICO);
+      if (!(cliente && cliente.id)) throw new Error(MSG_VENDITA_CLIENTE);
+      if (!idAgente) throw new Error(MSG_VENDITA_AGENTE);
+    }
     if (lockDuration && durationMinutes(startAt, endAt) !== durataFissa) {
       throw new Error(`La durata è fissa (${formatDuration(durataFissa)}): scegli un orario di inizio che la consenta.`);
     }
@@ -2041,6 +2103,8 @@ export function openBookingLinksDialog(dialogEl, { agents, session }) {
     tipo.dataset.field = 'type';
     if (nuovo) tipo.appendChild(opzione('', 'Scegli un tipo', true));
     for (const [t, testo] of Object.entries(TYPE_LABELS)) {
+      // Un appuntamento di vendita non si prenota da un link pubblico.
+      if (NOT_BOOKABLE_TYPES.includes(t)) continue;
       tipo.appendChild(opzione(t, testo, !nuovo && t === link.appointment_type));
     }
     tipo.value = nuovo ? '' : link.appointment_type;

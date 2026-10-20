@@ -127,7 +127,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # (proposte di modifica territoriali e loro registro; additiva, nessun backfill).
     # SENTINELLA AGGIORNATA DA AGENZIE-AMMINISTRAZIONE ADM D15: 105_adm_d15_no_delete_admin_entities
     # (nessuna cancellazione fisica delle entita' della Rete), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 106))
+    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: 106_sale_appointments
+    # (la tipologia `sale_appointment` e il suo vincolo; additiva, nessun backfill).
+    assert numeri[numeri.index(76):] == list(range(76, 107))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

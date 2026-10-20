@@ -132,6 +132,15 @@ export function lookupStime({ search, leadId, contactId, limit = 10 } = {}) {
   })}`);
 }
 
+// APPUNTAMENTI DI VENDITA: gli incarichi selezionabili (ogni origine, in corso o
+// scaduti), nella forma di un immobile per `propertyLabel`.
+export function lookupMandates({ search, limit = 10 } = {}) {
+  return request('GET', `/lookups/mandates${query({
+    search: search ? String(search).trim() : undefined,
+    limit,
+  })}`);
+}
+
 export function getAppointment(appointmentId) {
   return request('GET', `/${id(appointmentId)}`);
 }

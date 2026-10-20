@@ -265,6 +265,17 @@ def lookup_stime(
         ctx, search=search, lead_id=lead_id, contact_id=contact_id, limit=limit)})
 
 
+# APPUNTAMENTI DI VENDITA: gli incarichi selezionabili (ogni origine, in corso o
+# scaduti). Dichiarata PRIMA di "/{appointment_id}", come "/lookups/stime".
+@router.get("/lookups/mandates")
+def lookup_mandates(
+    search: str | None = None,
+    limit: int = 10,
+    ctx: OperatorContext = Depends(require_operator),
+):
+    return _x(lambda: {"items": service.lookup_sale_mandates(ctx, search=search, limit=limit)})
+
+
 # ---------------------------------------------------------------------------
 # A30-11 - ORARI DI LAVORO, ECCEZIONI, CHIUSURE AGENZIA. Dichiarate PRIMA di
 # "/{appointment_id}" per lo stesso motivo di "/lookups/stime": i segmenti

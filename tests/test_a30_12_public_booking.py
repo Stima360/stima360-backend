@@ -118,17 +118,28 @@ def test_b4_create_link_body_rifiuta_appointment_type_non_valido():
 
 
 def test_b5_create_link_body_accetta_ogni_tipo_della_072():
-    from public_booking.schemas import BookingLinkCreateBody
+    from pydantic import ValidationError
+    from public_booking.enums import NOT_BOOKABLE_TYPES
+    from public_booking.schemas import BookingLinkCreateBody, BookingLinkPatchBody
     from appointments.enums import APPOINTMENT_TYPES
     # La lista nota da migration 072.
-    assert APPOINTMENT_TYPES == (
-        "call", "video_call", "seller_meeting", "inspection", "buyer_visit",
-        "valuation_presentation", "mandate_signing", "proposal",
-        "preliminary_contract", "notary", "technical", "other")
-    for tipo in APPOINTMENT_TYPES:
+    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: la 106 aggiunge
+    # `sale_appointment`, che NON si prenota da un link pubblico (servono un
+    # incarico e un cliente scelti dall'agenzia; il CHECK della 077 non cambia).
+    dodici = ("call", "video_call", "seller_meeting", "inspection", "buyer_visit",
+              "valuation_presentation", "mandate_signing", "proposal",
+              "preliminary_contract", "notary", "technical", "other")
+    assert APPOINTMENT_TYPES == dodici + ("sale_appointment",)
+    assert NOT_BOOKABLE_TYPES == ("sale_appointment",)
+    for tipo in dodici:
         corpo = BookingLinkCreateBody(assigned_user_id=1, appointment_type=tipo,
                                       duration_minutes=30)
         assert corpo.appointment_type == tipo
+    with pytest.raises(ValidationError):
+        BookingLinkCreateBody(assigned_user_id=1, appointment_type="sale_appointment",
+                              duration_minutes=30)
+    with pytest.raises(ValidationError):
+        BookingLinkPatchBody(appointment_type="sale_appointment")
 
 
 def test_b6_create_link_body_rifiuta_campi_extra():
@@ -362,9 +373,15 @@ def test_j1_migration_077_esiste_con_la_sua_down():
 
 def test_j2_check_appointment_type_della_077_elenca_i_dodici_tipi_reali():
     from appointments.enums import APPOINTMENT_TYPES
+    from public_booking.enums import NOT_BOOKABLE_TYPES
     testo = (ROOT / "migrations" / "077_a30_12_public_booking.sql").read_text(encoding="utf-8")
+    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: i tipi prenotabili sono
+    # tutti nel CHECK della 077; quelli non prenotabili (106) non ci sono.
     for tipo in APPOINTMENT_TYPES:
-        assert f"'{tipo}'" in testo, tipo
+        if tipo in NOT_BOOKABLE_TYPES:
+            assert f"'{tipo}'" not in testo, tipo
+        else:
+            assert f"'{tipo}'" in testo, tipo
 
 
 def test_j3_public_booking_source_e_gia_ammessa_dal_check_di_072_o_073():

@@ -111,7 +111,11 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
 
 def test_02_i_cataloghi_del_codice_coincidono_con_i_check_del_database():
     from appointments import enums
-    assert _valori_check("appointments_type_chk") == enums.APPOINTMENT_TYPES
+    # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: la 072 definisce le
+    # dodici tipologie; la 106 ridefinisce il CHECK aggiungendo SOLO
+    # `sale_appointment` (test_appuntamenti_vendita_static).
+    assert _valori_check("appointments_type_chk") + ("sale_appointment",) == \
+        enums.APPOINTMENT_TYPES
     assert _valori_check("appointments_status_chk") == enums.APPOINTMENT_STATUSES
     # SENTINELLA AGGIORNATA DA A30-2P: la 072 definisce le fonti fino ad
     # `a30_test`; la 073 aggiunge SOLO `lmc15_facade`, e il suo CHECK coincide
@@ -279,9 +283,13 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # (`acquisitions.integration`), stessa forma di quello A31-2: chiamato
         # nella STESSA transazione, il package vive FUORI da `appointments/` e
         # l'Agenda non conosce `acquisitions` oltre a quel modulo.
+        # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA (106): la definizione
+        # canonica di incarico (`core.property_mandate`, modulo foglia in sola
+        # lettura, lo stesso di `property/` e `flow/`) per verificare che
+        # l'appuntamento di vendita sia su un incarico in corso o scaduto.
         "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants",
                        "operator_auth.context", "core.scope", "buyer_visits",
-                       "acquisitions"},
+                       "acquisitions", "core.property_mandate"},
         # SENTINELLA AGGIORNATA DA A30-12: le 5 rotte OPERATORE di gestione
         # dei link di booking pubblico (create/list/patch/rotate/disable)
         # sono montate qui per URL (`/api/appointments/booking-links...`),

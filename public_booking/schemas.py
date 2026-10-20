@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .enums import APPOINTMENT_TYPES
+from .enums import APPOINTMENT_TYPES, NOT_BOOKABLE_TYPES
 
 # D4: limiti di lunghezza - conservativi, non arbitrari: abbastanza per un
 # nome/indirizzo reale, troppo poco per un payload di attacco.
@@ -38,7 +38,7 @@ class BookingLinkCreateBody(BaseModel):
     @field_validator("appointment_type")
     @classmethod
     def _tipo_ammesso(cls, v):
-        if v not in APPOINTMENT_TYPES:
+        if v not in APPOINTMENT_TYPES or v in NOT_BOOKABLE_TYPES:
             raise ValueError(f"appointment_type non valido: {v!r}")
         return v
 
@@ -56,7 +56,7 @@ class BookingLinkPatchBody(BaseModel):
     @field_validator("appointment_type")
     @classmethod
     def _tipo_ammesso(cls, v):
-        if v is not None and v not in APPOINTMENT_TYPES:
+        if v is not None and (v not in APPOINTMENT_TYPES or v in NOT_BOOKABLE_TYPES):
             raise ValueError(f"appointment_type non valido: {v!r}")
         return v
 

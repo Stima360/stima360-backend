@@ -11,7 +11,8 @@
 //   * i pulsanti delle sole azioni in `allowed_actions`: la macchina a stati
 //     e i permessi li decide il backend;
 //   * i collegamenti in `allowed_links` verso pagine che la OS Shell ha davvero
-//     (#/contatti/<id>, #/immobili/<id>). Stima e lead restano testo in sola
+//     (#/contatti/<id>, #/immobili/<id>, e #/incarichi/<id> per un
+//     appuntamento di vendita). Stima e lead restano testo in sola
 //     lettura: nessun "Apri stima", nessun "Apri lead" (D9 rev. 2) - non
 //     esistono pagine a cui portare.
 
@@ -52,9 +53,12 @@ function aggiungi(padre, ...figli) {
 }
 
 /** I collegamenti ammessi dal server verso pagine che esistono davvero. */
+// `fonte`: il riepilogo del dettaglio da cui viene l'id. L'incarico non ha un
+// riepilogo proprio: e' l'immobile dell'appuntamento di vendita.
 const COLLEGAMENTI = Object.freeze({
-  contact: { etichetta: 'Apri cliente', rotta: (d) => `#/contatti/${Number(d.contact.id)}` },
-  property: { etichetta: 'Apri immobile', rotta: (d) => `#/immobili/${Number(d.property.id)}` },
+  contact: { etichetta: 'Apri cliente', fonte: 'contact', rotta: (d) => `#/contatti/${Number(d.contact.id)}` },
+  property: { etichetta: 'Apri immobile', fonte: 'property', rotta: (d) => `#/immobili/${Number(d.property.id)}` },
+  mandate: { etichetta: 'Apri incarico', fonte: 'property', rotta: (d) => `#/incarichi/${Number(d.property.id)}` },
 });
 
 function riepilogoImmobile(p) {
@@ -191,12 +195,14 @@ export async function openAppointmentDrawer(drawerEl, {
   pannello.appendChild(dati);
 
   const collegamenti = (detail.allowed_links || [])
-    .filter((chiave) => COLLEGAMENTI[chiave] && detail[chiave] && detail[chiave].id);
+    .filter((chiave) => COLLEGAMENTI[chiave] && detail[COLLEGAMENTI[chiave].fonte]
+      && detail[COLLEGAMENTI[chiave].fonte].id);
   if (collegamenti.length) {
     const barra = el('div', 'action-bar agenda-drawer-links');
     for (const chiave of collegamenti) {
       const link = el('a', 'btn', COLLEGAMENTI[chiave].etichetta);
       link.href = COLLEGAMENTI[chiave].rotta(detail);
+      link.dataset.link = chiave;
       link.addEventListener('click', () => drawerEl.close());
       barra.appendChild(link);
     }
