@@ -22,6 +22,7 @@ FILE_NUOVI = frozenset({
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
     "voice/router.py",
+    "scripts/voice_7_live_cert.py",
     "voice/planner.py",
     "voice/policy.py",
     "voice/provider.py",
@@ -41,6 +42,7 @@ FILE_MODIFICATI = frozenset({
     "tests/test_voice_1_corpus.py",
     "tests/test_voice_1_perimeter.py",
     "tests/test_voice_4_undo_postgres.py",
+    "tests/test_voice_7_activation_postgres.py",
     "tests/voice_corpus/corpus.py",
 })
 

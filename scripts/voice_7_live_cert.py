@@ -98,7 +98,9 @@ ROTTE = [("GET", "/api/voice/status"), ("POST", "/api/voice/commands"), ("GET", 
          ("POST", "/api/voice/commands/1/cancel"), ("POST", "/api/voice/commands/1/steps/1/retry"),
          ("GET", "/api/voice/commands/1/undo"), ("POST", "/api/voice/commands/1/undo"),
          ("POST", "/api/voice/commands/1/steps/1/undo"), ("GET", "/api/voice/commands/1/steps/1/reconcile"),
-         ("POST", "/api/voice/commands/1/steps/1/reconcile"), ("POST", "/api/voice/commands/1/reply")]
+         ("POST", "/api/voice/commands/1/steps/1/reconcile"), ("POST", "/api/voice/commands/1/reply"),
+         # V8-5: la sola interpretazione per il dialog dell'Agenda (nessun comando, nessuna scrittura)
+         ("POST", "/api/voice/interpret")]
 
 
 class GuardFailure(RuntimeError):
