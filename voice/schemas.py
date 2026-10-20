@@ -23,7 +23,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from appointments.enums import APPOINTMENT_TYPES
-from core.enums import PRIORITIES
+from core.enums import CONTACT_ROLES, PRIORITIES
 from core.normalization import normalize_email, normalize_phone
 from property.enums import PROPERTY_TYPES
 from property.interactions import INTERACTION_TYPES
@@ -51,6 +51,9 @@ PropertyType = Literal[tuple(_sorted(PROPERTY_TYPES))]  # type: ignore[valid-typ
 BuildingType = Literal[tuple(BUILDING_TYPES)]  # type: ignore[valid-type]
 AppointmentType = Literal[tuple(APPOINTMENT_TYPES)]  # type: ignore[valid-type]
 Priority = Literal[tuple(_sorted(PRIORITIES))]  # type: ignore[valid-type]
+#: V8-1: il ruolo con cui l'agente nomina la persona ("venditore",
+#: "acquirente"...). Gli stessi ruoli dei contatti del CRM, non copiati.
+ContactRole = Literal[tuple(_sorted(CONTACT_ROLES))]  # type: ignore[valid-type]
 InteractionType = Literal[tuple(INTERACTION_TYPES)]  # type: ignore[valid-type]
 RecordKind = Literal[tuple(RECORD_KINDS)]  # type: ignore[valid-type]
 
@@ -72,6 +75,11 @@ class ContactRef(VoiceModel):
     company_name: str | None = Field(None, max_length=200)
     phone: str | None = Field(None, max_length=50)
     email: str | None = Field(None, max_length=320)
+    #: V8-1: SOLO se il vocale lo dice ("Francesco Rossi, venditore"). Un
+    #: ruolo da solo non identifica nessuno: non basta a creare un contatto
+    #: ne' a sceglierlo fra omonimi; serve al tipo di appuntamento e, nella
+    #: ricerca, a proporre prima le persone con quella qualifica.
+    role: ContactRole | None = None
 
     @model_validator(mode="after")
     def _qualcosa(self):

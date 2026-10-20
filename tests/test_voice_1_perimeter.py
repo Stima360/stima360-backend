@@ -54,7 +54,10 @@ AMMESSI = {
     "router.py": {"core.exceptions", "operator_auth.context", "operator_auth.dependencies"},
     "schemas.py": PURI, "planner.py": PURI, "dates.py": PURI,
     "repository.py": {"core.database", "core.scope", "core.normalization", "core.building_trash",
-                      "core.contact_trash", "core.property_trash", "property.census", "appointments.repository"},
+                      "core.contact_trash", "core.property_trash", "property.census", "appointments.repository",
+                      # SENTINELLA AGGIORNATA DA STIMA VOICE V8-2: l'incarico di vendita si legge con le
+                      # stesse funzioni dell'Agenda (definizione canonica e stati), mai con una regola propria
+                      "appointments.enums", "core.property_mandate"},
     "settings.py": {"core.database"},
     "ledger.py": {"core.database", "psycopg2"},
     "reconcile.py": {"core.database", "core.normalization", "psycopg2.extras"},

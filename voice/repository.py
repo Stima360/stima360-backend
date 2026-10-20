@@ -26,6 +26,8 @@ from contextlib import contextmanager
 from typing import Any
 
 from appointments import repository as agenda_repository
+from appointments.enums import MANDATE_REQUIRED_TYPES, SALE_MANDATE_STATES
+from core.property_mandate import mandate_origin, mandate_state, signed_link_mandate
 from core import building_trash, contact_trash, property_trash
 from core.database import core_cursor
 from core.normalization import normalize_email, normalize_phone
@@ -227,3 +229,24 @@ def cadastral_duplicate(ctx, cur, data: dict) -> dict | None:
 
 def assignable_agents(ctx, cur) -> list[dict]:
     return agenda_repository.agents(cur, ctx.require_agency())
+
+
+# ---------------------------------------------------------------------------
+# V8-2: l'incarico di vendita, letto come lo legge l'Agenda
+# ---------------------------------------------------------------------------
+
+def requires_mandate(appointment_type: str | None) -> bool:
+    """Il tipo di appuntamento esige un incarico (visita immobile, appuntamento
+    di vendita): la lista e' quella dell'Agenda, non una copia."""
+    return appointment_type in MANDATE_REQUIRED_TYPES
+
+
+def usable_mandate(ctx, cur, property_id: int) -> bool:
+    """L'immobile ha un incarico REALE, in corso o scaduto, fuori dal Cestino?
+    Le STESSE funzioni di `appointments.service._controlla_vendita`: nessuna
+    regola nuova, la voce legge quel che l'Agenda imporra' comunque."""
+    immobile = agenda_repository.sale_mandate_property(cur, ctx.require_agency(), property_id)
+    if immobile is None or immobile["deleted_at"] is not None:
+        return False
+    immobile["signed_mandate"] = signed_link_mandate(cur, property_id)
+    return mandate_origin(immobile) is not None and mandate_state(immobile) in SALE_MANDATE_STATES

@@ -568,22 +568,27 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
     # (righe aggiunte, nessuna tolta), verificato riga per riga; il resto dei protetti resta identico.
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7 (conversazione): `voice/planner.py` cambia SOLO per la
     # parola «acquisizion» -> seller_meeting (il tipo che usa il modulo Acquisizioni), verificata riga per riga.
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1 (dichiarata in tests/semplificazione_crm_1_diff.py):
+    # `appointments/service.py` porta la regola «visita immobile solo su un incarico» (service + 107).
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8 (autorizzazione V8-1..V8-5): i moduli del planner,
+    # della politica, del risolutore, del repository e dello schema evolvono per ruoli, sinonimi,
+    # incarico obbligatorio e ricerca tollerante; le prove sono in tests/test_voice_8_*. Gli altri
+    # protetti (property, core, crm, settings) restano identici alla base.
+    VOICE_V8 = ("voice/planner.py", "voice/policy.py", "voice/resolver.py", "voice/repository.py",
+                "voice/schemas.py")
+    APPUNTAMENTI_VENDITA_106 = ("appointments/enums.py", "appointments/errors.py", "appointments/repository.py",
+                                "appointments/router.py", "appointments/service.py")
+    from tests.semplificazione_crm_1_diff import FILE_MODIFICATI as SCRM1, FILE_NUOVI as SCRM1_NUOVI
+    PRECEDENTI_DICHIARATI_TARDI = ("static/os_shell/assets/components/agenda/agenda-drawer.js",
+                                   "static/os_shell/assets/views/rete-registro.js")
     esito_ = subprocess.run(["git", "diff", "--name-only", BASE, "--",
-                             *[p for p in PROTETTI if p not in ("main.py", "voice/planner.py")],
+                             *[p for p in PROTETTI if p not in ("main.py", *VOICE_V8) and p not in SCRM1],
                              *migrazioni], cwd=ROOT, capture_output=True, text=True)
     assert esito_.returncode == 0 and esito_.stdout.strip() == "", esito_.stdout
     diff_main = subprocess.run(["git", "diff", "-U0", BASE, "--", "main.py"], cwd=ROOT,
                                capture_output=True, text=True).stdout.splitlines()
-    diff_planner = subprocess.run(["git", "diff", "-U0", BASE, "--", "voice/planner.py"], cwd=ROOT,
-                                  capture_output=True, text=True).stdout.splitlines()
-    assert [r for r in diff_planner if r.startswith("-") and not r.startswith("---")] == []
-    assert [r[1:].strip() for r in diff_planner if r.startswith("+") and not r.startswith("+++")
-            and not r[1:].strip().startswith("#")] in ([], [
-        '("acquisizion", "seller_meeting"), ("proprietari", "seller_meeting"),',
-        'SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari")',
-        'if tipo == "seller_meeting" and not any(p in dates.fold(c.quote) or p in folded',
-        'for p in SELLER_MEETING_EVIDENCE):',
-        'tipo = appointment_type_from(dates.fold(c.quote))'])
+    # (la verifica riga per riga di `voice/planner.py` della Fase 7 e' superata dalla V8: il planner
+    # e' fra i moduli dichiarati sopra e le sue regole sono fissate da tests/test_voice_8_1_language.py)
     tolte = [r for r in diff_main if r.startswith("-") and not r.startswith("---")]
     aggiunte = [r[1:].strip() for r in diff_main if r.startswith("+") and not r.startswith("+++")]
     assert tolte == [], tolte
@@ -640,4 +645,11 @@ def test_n1_protected_files_and_migrations_are_identical_to_the_base():
         if SITE_SYNC in diff:
             assert _site_sync_ammesso(), "property/site_sync.py diverso dalla base e dalla modifica approvata"
             diff = [f for f in diff if f != SITE_SYNC]
+        # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA (106) e SEMPLIFICAZIONE-CRM-1: i soli file
+        # dell'Agenda dichiarati (la 106 in tests/test_appuntamenti_vendita_static.py, la CRM-1 nel suo diff)
+        diff = [f for f in diff if f not in APPUNTAMENTI_VENDITA_106 and f not in SCRM1 and f not in SCRM1_NUOVI]
+        # SENTINELLA AGGIORNATA (dichiarazione tardiva, verificata con `git log`): il drawer dell'Agenda
+        # («Apri incarico», appuntamenti di vendita 106) e il registro della rete (ADM-7) erano gia'
+        # diversi dalla base prima della V8; nessun altro file.
+        diff = [f for f in diff if f not in PRECEDENTI_DICHIARATI_TARDI]
         assert diff == [], diff

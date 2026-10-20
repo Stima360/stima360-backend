@@ -28,6 +28,7 @@ def _facts(raw: dict) -> Facts:
         similar_building=frozenset(raw.get("similar_building", [])),
         cadastral_duplicate=frozenset(raw.get("cadastral_duplicate", [])),
         agenda_conflict=frozenset(raw.get("agenda_conflict", [])),
+        visit_no_mandate=frozenset(raw.get("visit_no_mandate", [])),
         actor_may_assign=bool(raw.get("actor_may_assign", False)),
     )
 

@@ -101,12 +101,47 @@ def _clear(r: random.Random) -> list[dict]:
         day, at = r.choice(DAYS), r.choice(TIMES)
         when, start = _when(day, at)
         parola, tipo = r.choice([("appuntamento", "other"), ("sopralluogo", "inspection"), ("telefonata", "call"),
-                                 ("firma incarico", "mandate_signing"), ("visita", "buyer_visit")])
+                                 ("firma incarico", "mandate_signing"), ("videochiamata", "video_call")])
+        # (V8-2: la visita immobile ha i suoi casi, con l'incarico: sotto)
         t = f"{day[0].capitalize()} {at[0]} {parola} con {f} {l}"
         out.append(_case(f"clear-appt-{i:02d}", "clear", t,
                          [{"intent": "create_appointment", "quote": t, "when": when, "contact": {"first_name": f, "last_name": l}}],
                          {"decisions": ["auto"], "start_at": {1: start}, "fields": {1: {"appointment_type": tipo, "end_at": _end(start)}}},
                          facts={"refs": {"1:contact": [1, True]}}))
+    for i in range(10):  # V8-1: il ruolo detto decide il tipo quando manca il motivo
+        f, l = r.choice(FIRST), r.choice(LAST)
+        day, at = r.choice(DAYS), r.choice(TIMES)
+        when, start = _when(day, at)
+        ruolo, parola = r.choice([("seller", "venditore"), ("owner", "proprietario")])
+        t = f"Appuntamento con {f} {l} {parola} {day[0]} {at[0]}"
+        out.append(_case(f"clear-role-{i:02d}", "clear", t,
+                         [{"intent": "create_appointment", "quote": t, "when": when,
+                           "contact": {"first_name": f, "last_name": l, "role": ruolo}}],
+                         {"decisions": ["auto"], "start_at": {1: start}, "fields": {1: {"appointment_type": "seller_meeting"}}},
+                         facts={"refs": {"1:contact": [1, True]}}))
+    for i in range(10):  # V8-1: sinonimi di un agente immobiliare
+        f, l = r.choice(FIRST), r.choice(LAST)
+        day, at = r.choice(DAYS), r.choice(TIMES)
+        when, start = _when(day, at)
+        frase, tipo = r.choice([("ho il compromesso con", "preliminary_contract"), ("rogito dal notaio con", "notary"),
+                                ("atto notarile con", "notary"), ("presentazione della stima a", "valuation_presentation"),
+                                ("telefonata a", "call"), ("videochiamata con", "video_call")])
+        t = f"{day[0].capitalize()} {at[0]} {frase} {f} {l}"
+        out.append(_case(f"clear-syn-{i:02d}", "clear", t,
+                         [{"intent": "create_appointment", "quote": t, "when": when, "contact": {"first_name": f, "last_name": l}}],
+                         {"decisions": ["auto"], "start_at": {1: start}, "fields": {1: {"appointment_type": tipo}}},
+                         facts={"refs": {"1:contact": [1, True]}}))
+    for i in range(10):  # V8-2: visita immobile con cliente e incarico (immobile con incarico utilizzabile)
+        f, l, s, civ = r.choice(FIRST), r.choice(LAST), r.choice(STREETS), str(r.randint(1, 60))
+        day, at = r.choice(DAYS), r.choice(TIMES)
+        when, start = _when(day, at)
+        frase = r.choice(["vuole vedere casa in", "visita all'appartamento di", "devo mostrare l'immobile di"])
+        t = f"{f} {l} {frase} {s} {civ} {day[0]} {at[0]}"
+        out.append(_case(f"clear-visit-{i:02d}", "clear", t,
+                         [{"intent": "create_appointment", "quote": t, "when": when, "contact": {"first_name": f, "last_name": l},
+                           "property": {"address": s, "civic_number": civ}}],
+                         {"decisions": ["auto"], "start_at": {1: start}, "fields": {1: {"appointment_type": "buyer_visit"}}},
+                         facts={"refs": {"1:contact": [1, True], "1:property": [1, True]}}))
     for i in range(15):  # nota su un contatto esistente, risolto in modo esatto
         f, l = r.choice(FIRST), r.choice(LAST)
         t = f"Nota per {f} {l}: ha chiesto una valutazione aggiornata"
@@ -192,6 +227,27 @@ def _ambiguous(r: random.Random) -> list[dict]:
                          [{"intent": "create_appointment", "quote": t, "when": {"date_text": "questo venerdì", "time_text": "alle 10"},
                            "contact": {"first_name": f, "last_name": l}}],
                          {"decisions": ["ask"], "reasons": {1: ["date_ambiguous_this_week"]}}, facts={"refs": {"1:contact": [1, True]}}))
+    for i in range(5):  # V8-1: acquirente senza motivo: si chiede, non si inventa una visita
+        f, l = r.choice(FIRST), r.choice(LAST)
+        day, at = r.choice(DAYS), r.choice(TIMES)
+        when, _ = _when(day, at)
+        parola = r.choice(["acquirente", "compratore"])
+        t = f"Appuntamento con {f} {l} {parola} {day[0]} {at[0]}"
+        out.append(_case(f"amb-purpose-{i}", "ambiguous", t,
+                         [{"intent": "create_appointment", "quote": t, "when": when,
+                           "contact": {"first_name": f, "last_name": l, "role": "buyer"}}],
+                         {"decisions": ["ask"], "reasons": {1: ["appointment_purpose_missing"]},
+                          "fields": {1: {"appointment_type": "other"}}},
+                         facts={"refs": {"1:contact": [1, True]}}))
+    for i in range(5):  # V8-2: visita senza dire quale immobile: si chiede l'incarico
+        f, l = r.choice(FIRST), r.choice(LAST)
+        day, at = r.choice(DAYS), r.choice(TIMES)
+        when, _ = _when(day, at)
+        t = f"Visita con {f} {l} {day[0]} {at[0]}"
+        out.append(_case(f"amb-visit-{i}", "ambiguous", t,
+                         [{"intent": "create_appointment", "quote": t, "when": when, "contact": {"first_name": f, "last_name": l}}],
+                         {"decisions": ["ask"], "reasons": {1: ["visit_mandate_required"]}, "fields": {1: {"appointment_type": "buyer_visit"}}},
+                         facts={"refs": {"1:contact": [1, True]}}))
     for i in range(6):  # riferimento ambiguo o non trovato
         f = r.choice(FIRST)
         t = f"Nota per {f}: richiamare la prossima settimana"
@@ -212,7 +268,7 @@ def _ambiguous(r: random.Random) -> list[dict]:
         f, l = r.choice(FIRST), r.choice(LAST)
         day, at = r.choice(DAYS), r.choice(TIMES)
         when, _ = _when(day, at)
-        t = f"{day[0].capitalize()} {at[0]} visita con {f} {l}"
+        t = f"{day[0].capitalize()} {at[0]} sopralluogo con {f} {l}"
         out.append(_case(f"amb-agenda-{i}", "ambiguous", t,
                          [{"intent": "create_appointment", "quote": t, "when": when, "contact": {"first_name": f, "last_name": l}}],
                          {"decisions": ["ask"], "reasons": {1: ["agenda_conflict"]}},
@@ -285,6 +341,15 @@ def _blocked(r: random.Random) -> list[dict]:
                        "contact": {"first_name": "Marco", "last_name": "Rossi"}, "agent_name": "Giulia"}],
                      {"decisions": ["ask"], "reasons": {1: ["reference_not_found"]}},
                      facts={"refs": {"1:contact": [1, True]}, "actor_may_assign": True}))
+    # V8-2: l'immobile esiste ma non ha un incarico utilizzabile: la visita non si fissa
+    for i in range(3):
+        f, l, s = r.choice(FIRST), r.choice(LAST), r.choice(STREETS)
+        t = f"Domani alle 15 {f} {l} vuole vedere casa in {s} 7"
+        out.append(_case(f"blocked-visit-{i}", "blocked", t,
+                         [{"intent": "create_appointment", "quote": t, "when": {"date_text": "domani", "time_text": "alle 15"},
+                           "contact": {"first_name": f, "last_name": l}, "property": {"address": s, "civic_number": "7"}}],
+                         {"decisions": ["blocked"], "reasons": {1: ["visit_no_usable_mandate"]}},
+                         facts={"refs": {"1:contact": [1, True], "1:property": [0, True]}, "visit_no_mandate": [1]}))
     return out
 
 

@@ -28,6 +28,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from appointments.enums import MANDATE_REQUIRED_TYPES
 from core.schemas import ActivityCreate, ContactCreate, TaskCreate
 from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate
 
@@ -48,6 +49,15 @@ INVALID_PAYLOAD = "invalid_payload"                      # rifiutato dai validat
 AGENT_NAMED = "agent_named"                              # appuntamento affidato a un altro agente
 TOO_MANY_COMMANDS = "too_many_commands"
 TASK_WITHOUT_CONTACT = "task_without_contact"              # TaskCreate esige un contatto, lead o stima
+#: V8-1: «appuntamento con Mario, acquirente» senza dire per cosa: si
+#: chiede il motivo, non si inventa una visita.
+APPOINTMENT_PURPOSE_MISSING = "appointment_purpose_missing"
+#: V8-2: la visita immobile (`buyer_visit`) nasce solo su un incarico, con
+#: il cliente acquirente (le stesse regole dell'Agenda manuale: service e
+#: trigger 107). Qui si CHIEDE a monte quel che manca; il service resta la
+#: guardia autorevole all'esecuzione.
+VISIT_MANDATE_REQUIRED = "visit_mandate_required"
+VISIT_CLIENT_REQUIRED = "visit_client_required"
 
 #: Parole che nel trascritto (ripiegato) provano l'intento commerciale o di
 #: censimento. Deterministiche: un test le fissa.
@@ -62,6 +72,11 @@ APPOINTMENT_KEYWORDS = (
     ("notaio", "notary"), ("proposta", "proposal"), ("preliminare", "preliminary_contract"),
     ("compromesso", "preliminary_contract"), ("valutazione", "valuation_presentation"),
     ("tecnic", "technical"),
+    # V8-1: i sinonimi di un agente immobiliare. «vedere casa», «mostrare
+    # l'immobile», «far vedere» = visita immobile; «atto notarile», «stipula»
+    # = rogito; «presentazione della stima» = presentazione valutazione.
+    ("veder", "buyer_visit"), ("mostr", "buyer_visit"), ("visionar", "buyer_visit"),
+    ("atto notarile", "notary"), ("stipul", "notary"), ("stima", "valuation_presentation"),
     # Fase 7: l'appuntamento di acquisizione e' un `seller_meeting`, lo stesso
     # tipo che il modulo Acquisizioni usa per il suo appuntamento in Agenda
     # (acquisitions/enums.py::APPOINTMENT_TYPE). Crea solo l'appuntamento: non
@@ -71,7 +86,19 @@ APPOINTMENT_KEYWORDS = (
 #: Fase 7: `seller_meeting` SOLO se il comando parla davvero di acquisizione o
 #: di proprietario. Anche se il modello lo propone, senza queste parole nel
 #: testo dell'agente l'appuntamento resta del tipo dedotto (di norma `other`).
-SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari")
+SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari", "venditor", "venditric", "padron")
+#: V8-1: `buyer_visit` SOLO se l'agente parla di visitare, vedere o mostrare
+#: un immobile. «Appuntamento con Mario, acquirente» non e' una visita.
+BUYER_VISIT_EVIDENCE = ("visit", "veder", "mostr", "visionar")
+#: V8-1: le parole con cui l'agente dice il RUOLO della persona -> ruolo
+#: del CRM (core.enums.CONTACT_ROLES). Deterministiche: un test le fissa.
+ROLE_KEYWORDS = (
+    ("venditor", "seller"), ("venditric", "seller"), ("proprietari", "owner"), ("padron", "owner"),
+    ("acquirent", "buyer"), ("comprator", "buyer"), ("compratric", "buyer"),
+    ("cerca casa", "buyer"), ("cercano casa", "buyer"),
+)
+SELLER_ROLES = ("owner", "seller")
+BUYER_ROLES = ("buyer",)
 DEFAULT_APPOINTMENT_TYPE = "other"
 DEFAULT_APPOINTMENT_MINUTES = 60
 #: Un task con la data ma senza l'ora scade alle 9 del mattino (decisione
@@ -207,6 +234,39 @@ def appointment_type_from(quote_folded: str) -> str:
     return DEFAULT_APPOINTMENT_TYPE
 
 
+def role_from(text_folded: str) -> str | None:
+    """V8-1: il ruolo detto dall'agente, o None."""
+    for parola, ruolo in ROLE_KEYWORDS:
+        if parola in text_folded:
+            return ruolo
+    return None
+
+
+def appointment_type_for(claimed: str | None, quote_folded: str, transcript_folded: str,
+                         role: str | None) -> tuple[str, bool]:
+    """V8-1: il tipo di appuntamento e se il MOTIVO e' esplicito.
+
+    Il motivo detto (sopralluogo, visita, compromesso, rogito...) prevale
+    sempre sul ruolo. Il tipo proposto dal modello vale, tranne due casi che
+    hanno conseguenze (acquisizione; visita, che esige un incarico): li
+    devono dire le parole dell'agente. Senza motivo: un venditore o
+    proprietario = appuntamento proprietario (`seller_meeting`); un
+    acquirente = motivo da chiedere; altrimenti il tipo generico."""
+    dalle_parole = appointment_type_from(quote_folded)
+    tipo = claimed or dalle_parole
+    if tipo == "seller_meeting" and not any(p in quote_folded or p in transcript_folded
+                                            for p in SELLER_MEETING_EVIDENCE):
+        tipo = dalle_parole
+    if tipo == "buyer_visit" and not any(p in quote_folded or p in transcript_folded
+                                         for p in BUYER_VISIT_EVIDENCE):
+        tipo = dalle_parole if dalle_parole != "buyer_visit" else DEFAULT_APPOINTMENT_TYPE
+    if tipo != DEFAULT_APPOINTMENT_TYPE:
+        return tipo, True
+    if role in SELLER_ROLES and any(p in quote_folded or p in transcript_folded for p in SELLER_MEETING_EVIDENCE):
+        return "seller_meeting", True
+    return DEFAULT_APPOINTMENT_TYPE, role not in BUYER_ROLES
+
+
 # ---------------------------------------------------------------------------
 
 def build_plan(output: VoicePlanOutput, transcript: str, recorded_at: datetime) -> Plan:
@@ -314,10 +374,15 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
         refs["property"] = _ref("property", c.property)
 
     elif c.intent == "create_appointment":
-        tipo = c.appointment_type or appointment_type_from(dates.fold(c.quote))
-        if tipo == "seller_meeting" and not any(p in dates.fold(c.quote) or p in folded
-                                                for p in SELLER_MEETING_EVIDENCE):
-            tipo = appointment_type_from(dates.fold(c.quote))
+        quote_f = dates.fold(c.quote)
+        # V8-1: il ruolo lo dicono le parole dell'agente; il modello puo'
+        # solo confermarlo o proporlo (non basta a fissare un tipo).
+        ruolo = role_from(quote_f) or role_from(folded) or (c.contact.role if c.contact is not None else None)
+        tipo, motivo_esplicito = appointment_type_for(c.appointment_type, quote_f, folded, ruolo)
+        if not motivo_esplicito:
+            issues.append(Issue(APPOINTMENT_PURPOSE_MISSING,
+                                "Per che cosa e' l'appuntamento con l'acquirente? (visita di un immobile, proposta, telefonata...)",
+                                "appointment_type"))
         minuti = c.duration_minutes or DEFAULT_APPOINTMENT_MINUTES
         quando = dates.resolve_when(c.when.date_text, c.when.time_text, now, require_time=True)
         issues += [Issue(r, _messaggio_data(r), "when") for r in quando.reasons]
@@ -330,8 +395,18 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
         for nome in ("location_text", "notes"):
             if getattr(c, nome):
                 s.payload[nome] = getattr(c, nome)
+        if tipo in MANDATE_REQUIRED_TYPES:
+            if c.contact is None:
+                issues.append(Issue(VISIT_CLIENT_REQUIRED, "Con quale cliente e' la visita?", "contact"))
+            if c.property is None:
+                chi = " ".join(x for x in ((c.contact.first_name if c.contact else None),
+                                           (c.contact.last_name if c.contact else None)) if x) or "il cliente"
+                issues.append(Issue(VISIT_MANDATE_REQUIRED, f"Quale immobile deve visitare {chi}?", "property"))
         if c.contact is not None:
-            refs["contact"] = _ref("contact", c.contact)
+            rif = _ref("contact", c.contact)
+            if ruolo and rif is not None and rif.step is None:
+                rif = Ref(rif.kind, rif.step, {**rif.description, "role": ruolo})
+            refs["contact"] = rif
         if c.property is not None:
             refs["property"] = _ref("property", c.property)
         if c.agent_name:

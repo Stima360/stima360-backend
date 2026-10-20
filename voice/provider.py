@@ -75,6 +75,15 @@ Regole obbligatorie:
   correzioni dell'agente alle domande di STIMA. Uniscile al comando iniziale e restituisci il comando COMPLETO
   aggiornato (non solo la modifica); a parita' di dato vale la precisazione piu' recente.
 - Un appuntamento di acquisizione (con un proprietario per acquisire l'immobile) e' appointment_type "seller_meeting".
+- Se il testo dice il ruolo della persona (venditore o proprietario = "seller"/"owner"; acquirente, compratore,
+  chi cerca casa = "buyer"; inquilino o altro = "other"), riportalo in contact.role; altrimenti lascialo assente.
+- Sinonimi del tipo di appuntamento: sopralluogo = "inspection"; visita, vedere casa, mostrare un immobile =
+  "buyer_visit"; valutazione, presentazione della stima = "valuation_presentation"; firma dell'incarico =
+  "mandate_signing"; proposta = "proposal"; compromesso, preliminare = "preliminary_contract"; rogito, notaio,
+  atto notarile = "notary"; telefonata = "call"; videochiamata = "video_call"; tecnico = "technical".
+- Il motivo detto prevale sul ruolo. Un appuntamento con un venditore o proprietario senza motivo e' "seller_meeting".
+  Con un acquirente senza motivo NON e' una visita: lascia appointment_type assente.
+- Un immobile o un incarico nominato per l'appuntamento ("l'appartamento in via Roma 15") va in property.
 """
 
 

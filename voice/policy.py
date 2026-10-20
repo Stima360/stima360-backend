@@ -26,7 +26,8 @@ from typing import Literal
 from . import dates
 from .planner import (
     AGENT_NAMED, BUILDING_LOCATION_MISSING, CONTACT_IDENTITY_WEAK, INVALID_PAYLOAD,
-    RECORD_KIND_CONFLICT, RECORD_KIND_UNKNOWN, RECORD_KIND_UNVERIFIED, TASK_WITHOUT_CONTACT,
+    RECORD_KIND_CONFLICT, RECORD_KIND_UNKNOWN, RECORD_KIND_UNVERIFIED, TASK_WITHOUT_CONTACT, APPOINTMENT_PURPOSE_MISSING,
+    VISIT_CLIENT_REQUIRED, VISIT_MANDATE_REQUIRED,
     TOO_MANY_COMMANDS, UNITS_INVENTED, UNSUPPORTED, Plan, Step,
 )
 
@@ -38,7 +39,8 @@ BLOCKING_ISSUES = frozenset({UNSUPPORTED, UNITS_INVENTED, INVALID_PAYLOAD, TOO_M
 #: Issue del pianificatore che chiedono.
 ASKING_ISSUES = frozenset({
     CONTACT_IDENTITY_WEAK, RECORD_KIND_UNKNOWN, RECORD_KIND_UNVERIFIED, RECORD_KIND_CONFLICT,
-    BUILDING_LOCATION_MISSING, TASK_WITHOUT_CONTACT, AGENT_NAMED,
+    BUILDING_LOCATION_MISSING, TASK_WITHOUT_CONTACT, AGENT_NAMED, APPOINTMENT_PURPOSE_MISSING,
+    VISIT_CLIENT_REQUIRED, VISIT_MANDATE_REQUIRED,
     dates.UNRECOGNIZED_DATE, dates.UNRECOGNIZED_TIME, dates.AMBIGUOUS_HOUR, dates.AMBIGUOUS_WEEK,
     dates.NONEXISTENT_LOCAL, dates.DOUBLE_LOCAL, dates.PAST,
 })
@@ -58,6 +60,9 @@ SIMILAR_UNIT = "similar_unit_found"             # Fase 2: stesso indirizzo+civic
 CADASTRAL_DUPLICATE = "cadastral_duplicate"
 AGENDA_CONFLICT = "agenda_conflict"
 AGENT_CANNOT_ASSIGN = "agent_cannot_assign"
+#: V8-2: l'immobile detto esiste ma non ha un incarico in corso o scaduto:
+#: la visita non si fissa (stessa regola di `_controlla_vendita`).
+VISIT_NO_MANDATE = "visit_no_usable_mandate"
 DEPENDS_ON_QUESTION = "depends_on_question"
 DEPENDS_ON_BLOCKED = "depends_on_blocked"
 MODE_REVIEW = "mode_review"
@@ -89,6 +94,8 @@ class Facts:
     similar_unit: frozenset[int] = frozenset()
     cadastral_duplicate: frozenset[int] = frozenset()
     agenda_conflict: frozenset[int] = frozenset()
+    #: V8-2: visite il cui immobile e' stato trovato ma senza un incarico utilizzabile.
+    visit_no_mandate: frozenset[int] = frozenset()
     actor_may_assign: bool = False
 
 
@@ -156,6 +163,8 @@ def decide_step(step: Step, facts: Facts, settings: Settings) -> StepDecision:
     blocchi = sorted({i.code for i in step.issues if i.code in BLOCKING_ISSUES})
     if step.intent == "create_appointment" and "agent" in step.refs and not facts.actor_may_assign:
         blocchi.append(AGENT_CANNOT_ASSIGN)
+    if step.intent == "create_appointment" and step.ordinal in facts.visit_no_mandate:
+        blocchi.append(VISIT_NO_MANDATE)
     if blocchi:
         return StepDecision(step.ordinal, step.intent, "blocked", tuple(blocchi))
 

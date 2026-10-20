@@ -92,9 +92,10 @@ def _contact_label(r: dict) -> str:
 
 
 def _property_label(r: dict) -> str:
+    # SEMPLIFICAZIONE-CRM-1 / V8-2: senza codice; indirizzo, comune e natura della scheda.
     luogo = ", ".join(x for x in (" ".join(y for y in (r.get("address"), r.get("civic_number")) if y), r.get("city")) if x)
     tipo = "censimento" if r.get("record_kind") == "census" else "commerciale"
-    return f"{r.get('code') or r['id']} · {luogo or r.get('title') or 'senza indirizzo'} ({tipo})"
+    return f"{luogo or r.get('title') or 'senza indirizzo'} ({tipo})"
 
 
 def _building_label(r: dict) -> str:
@@ -231,17 +232,28 @@ def resolve(plan: Plan, ctx) -> Resolution:
     duplicate_hidden: set[int] = set()
     similar_building: set[int] = set()
     similar_unit: set[int] = set()
+    visit_no_mandate: set[int] = set()
     cache: dict = {}
     puo_assegnare = bool(ctx.may_assign_records)
 
     with repository.read_only() as cur:
         for step in plan.steps:
+            visita = (step.intent == "create_appointment"
+                      and repository.requires_mandate(step.payload.get("appointment_type")))
             for nome, ref in sorted(step.refs.items()):
                 if ref.step is not None:
                     continue  # creato in questo vocale
                 if ref.kind == "agent" and not puo_assegnare:
                     continue  # la politica blocca: nessuna lettura dei colleghi
                 m = _match(ctx, cur, ref, cache)
+                if visita and nome == "property" and m.candidates:
+                    # V8-2: «l'appartamento in via Roma» per una VISITA e' un
+                    # incarico: restano solo gli immobili con un incarico
+                    # utilizzabile. Trovati ma nessuno con incarico = blocco.
+                    con_incarico = tuple(c for c in m.candidates if repository.usable_mandate(ctx, cur, c.id))
+                    if not con_incarico:
+                        visit_no_mandate.add(step.ordinal)
+                    m = RefMatch(con_incarico, exact=m.exact)
                 matches[(step.ordinal, nome)] = m
                 refs[(step.ordinal, nome)] = RefFacts(len(m.candidates), exact=m.exact)
 
@@ -273,5 +285,5 @@ def resolve(plan: Plan, ctx) -> Resolution:
 
     facts = Facts(refs=refs, duplicate_visible=duplicate_visible, duplicate_hidden=frozenset(duplicate_hidden),
                   similar_building=frozenset(similar_building), similar_unit=frozenset(similar_unit),
-                  actor_may_assign=puo_assegnare)
+                  visit_no_mandate=frozenset(visit_no_mandate), actor_may_assign=puo_assegnare)
     return Resolution(facts=facts, matches=matches, duplicates=duplicates)
