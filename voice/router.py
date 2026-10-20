@@ -46,6 +46,11 @@ class CommandIn(_Corpo):
     text: str = Field(..., min_length=1, max_length=voice_provider.MAX_TEXT)
 
 
+class InterpretIn(_Corpo):
+    """V8-5: solo interpretazione, per precompilare il dialog dell'Agenda."""
+    text: str = Field(..., min_length=1, max_length=voice_provider.MAX_TEXT)
+
+
 class StepChoice(_Corpo):
     ordinal: int = Field(..., ge=1, le=12)
     choices: dict[str, int] | None = None
@@ -136,6 +141,22 @@ def submit_command(body: CommandIn, ctx: OperatorContext = Depends(require_opera
             return _errore(spento)
         return _errore(exc)
     return _x(service.submit, ctx, body.client_command_id, body.text, provider=fornitore)
+
+
+@router.post("/interpret")
+def interpret_text(body: InterpretIn, ctx: OperatorContext = Depends(require_operator)):
+    """V8-5: testo -> cio' che STIMA ha capito (tipo, quando, cliente, incarico,
+    agente), senza comando nel registro e senza esecuzione: il salvataggio e'
+    quello del dialog manuale dell'Agenda."""
+    try:
+        fornitore = get_provider()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            service.guard(ctx)
+        except Exception as spento:  # noqa: BLE001
+            return _errore(spento)
+        return _errore(exc)
+    return _x(service.interpret, ctx, body.text, provider=fornitore)
 
 
 @router.post("/commands/{command_id}/reply")

@@ -16,15 +16,27 @@ const BASE = '/api/voice';
  * Lo stato di STIMA Voice per l'operatore. Fail-closed: qualunque errore
  * (router non montato = 404, sessione, rete) vale «spento».
  */
+let ultimoStato = { enabled: false, speechInput: false };
+
 export async function voiceStatus(get = apiGet) {
   try {
     const s = await get(`${BASE}/status`);
     const enabled = Boolean(s && s.enabled === true);
-    return { enabled, speechInput: enabled && s.speech_input === true };
+    ultimoStato = { enabled, speechInput: enabled && s.speech_input === true };
   } catch (_error) {
-    return { enabled: false, speechInput: false };
+    ultimoStato = { enabled: false, speechInput: false };
   }
+  return ultimoStato;
 }
+
+/** V8-5: l'ultimo stato letto dal server in questa sessione (la shell lo
+ *  chiede all'avvio); senza una lettura, spento. Nessuna richiesta. */
+export function lastVoiceStatus() {
+  return ultimoStato;
+}
+
+/** V8-5: solo interpretazione, per precompilare il dialog «Nuovo appuntamento». */
+export const interpretText = (text, post = apiPost) => post(`${BASE}/interpret`, { text });
 
 /** Un UUID v4 dalla crittografia del browser (mai Math.random). */
 export function newCommandKey(cryptoImpl = globalThis.crypto) {

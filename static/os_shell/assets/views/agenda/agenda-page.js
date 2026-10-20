@@ -61,6 +61,9 @@ import {
   openActionDialog, openAvailabilityDialog, openBookingLinksDialog, openCreateDialog,
 } from '../../components/agenda/agenda-dialogs.js';
 import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-sync-panel.js';
+// STIMA Voice V8-5: lo stato letto dalla shell all'avvio (nessuna richiesta
+// in piu'): con `speech_input` il dialog «Nuovo appuntamento» offre il microfono.
+import { lastVoiceStatus } from '../../voice/voice-api.js';
 
 const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`;
 
@@ -586,6 +589,7 @@ export async function renderAgenda(container, params = []) {
       dateKey: giornoIniziale || key,
       startTime,
       session: getSession(),
+      voice: lastVoiceStatus(),
       onDone: async (creato) => {
         if (stale()) return;
         const messaggio = confermaCreazione(creato);

@@ -150,6 +150,10 @@ def test_04_main_and_crm_modules_untouched():
                   "migrations/099_voice_undo.sql", "migrations/099_voice_undo_down.sql")
     # Fase 6: l'interfaccia di STIMA Voice nella shell (nascosta finche' /api/voice/status non dice si')
     dichiarati += FASE6_UI
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8 (dichiarata in tests/voice_v8_diff.py): il microfono nel
+    # dialog «Nuovo appuntamento» e l'interfaccia della Voce. Nessun altro file del CRM.
+    from tests.voice_v8_diff import FILE_MODIFICATI as MOD_V8, FILE_NUOVI as NUOVI_V8
+    dichiarati += tuple(MOD_V8) + tuple(NUOVI_V8)
     righe = [r for r in esito.stdout.splitlines() if r[3:] not in dichiarati]
     assert righe == [], esito.stdout
 

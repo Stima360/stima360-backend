@@ -236,6 +236,60 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
 
 
 # ---------------------------------------------------------------------------
+# V8-5: interpretare per compilare il dialog dell'Agenda (nessuna scrittura)
+# ---------------------------------------------------------------------------
+
+def interpret(ctx, text: str, *, provider, now: datetime | None = None) -> dict[str, Any]:
+    """Testo dettato -> cosa STIMA ha capito, per PRECOMPILARE il dialog
+    «Nuovo appuntamento». Stesso fornitore, stesso planner, stesso risolutore
+    con i permessi di chi parla, stessa politica: ma NESSUN comando nel
+    registro e NESSUNA esecuzione. Il salvataggio resta quello del dialog
+    manuale (l'Agenda ricontrolla tutto). Vale il limite giornaliero come
+    lettura: non consuma un comando."""
+    from . import policy, resolver
+    impostazioni = guard(ctx)
+    testo = (text or "").strip()
+    if not testo or len(testo) > voice_provider.MAX_TEXT:
+        raise VoiceRefused(TEXT_INVALID, "testo vuoto o troppo lungo")
+    adesso = now or datetime.now(ROMA)
+    _limite_giornaliero(ctx, impostazioni, adesso)
+    output = voice_provider.interpret(provider, testo, adesso)
+    piano = planner.build_plan(output, testo, adesso)
+    risolto = resolver.resolve(piano, ctx)
+    decisione = policy.decide(piano, risolto.facts, impostazioni.policy)
+    with voice_repository.read_only() as cur:
+        attore = voice_repository.operator_name(ctx, cur, ctx.user_id)
+    passi = []
+    for s in piano.steps:
+        if s.intent != "create_appointment":
+            continue
+        d = decisione.of(s.ordinal)
+        def candidati(nome):
+            m = risolto.matches.get((s.ordinal, nome))
+            return [{"id": c.id, "label": c.label} for c in (m.candidates if m else ())]
+        def unico(nome):
+            lista = candidati(nome)
+            return lista[0] if len(lista) == 1 else None
+        motivi = _motivi(d.reasons)
+        tipo = s.payload.get("appointment_type")
+        passi.append({
+            "appointment_type": tipo, "type_label": planner.APPOINTMENT_TYPE_LABELS.get(tipo, tipo),
+            "needs_mandate": voice_repository.requires_mandate(tipo),
+            "start_at": s.start_at.isoformat() if s.start_at else None,
+            "end_at": s.end_at.isoformat() if s.end_at else None,
+            "duration_minutes": s.payload.get("duration_minutes"),
+            "notes": s.payload.get("notes"), "location_text": s.payload.get("location_text"),
+            "contact": unico("contact"), "contact_candidates": candidati("contact"),
+            "property": unico("property"), "property_candidates": candidati("property"),
+            "agent": unico("agent") if "agent" in s.refs else None, "actor": attore,
+            "decision": d.decision,
+            "questions": [m["message"] for m in motivi if not m["confirmable"] and d.decision != "blocked"],
+            "blocked": [m["message"] for m in motivi] if d.decision == "blocked" else [],
+        })
+    return {"steps": passi, "clarifications": list(output.clarifications)}
+
+
+# ---------------------------------------------------------------------------
 # Conversazione (Fase 7): rispondere a una domanda senza perdere il comando
 # ---------------------------------------------------------------------------
 

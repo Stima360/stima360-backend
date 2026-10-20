@@ -85,5 +85,7 @@ export function createContactPicker(rootEl, { onChange, placeholder = 'Cerca per
 
   if (initial && initial.id) select(initial);
 
-  return { get selected() { return selected; } };
+  // V8-5: il chiamante puo' proporre un contatto gia' identificato (dalla voce);
+  // resta sempre cambiabile dall'operatore.
+  return { get selected() { return selected; }, set: (contact) => { if (contact && contact.id) select(contact); } };
 }

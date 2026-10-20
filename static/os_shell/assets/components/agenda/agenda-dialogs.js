@@ -80,6 +80,13 @@ import {
   leadLabel, leadsOfContact, propertyLabel, searchProperties, stimaLabel,
 } from '../../agenda/agenda-lookup.js';
 import { createContactPicker } from '../contact-picker.js';
+// STIMA Voice V8-5: il microfono nel dialog «Nuovo appuntamento». Lo stesso
+// riconoscimento del browser della pagina Voce (nessuna logica duplicata) e
+// la sola interpretazione del server (`/api/voice/interpret`): i campi si
+// precompilano, l'operatore li controlla o li corregge, e salva dal dialog.
+import { interpretText } from '../../voice/voice-api.js';
+import { SPEECH_ERRORS, formatHour, romeDayKey } from '../../voice/voice-model.js';
+import { createDictation, speechSupport } from '../../voice/voice-speech.js';
 
 function due(n) {
   return String(n).padStart(2, '0');
@@ -722,6 +729,7 @@ function montaRicerca(form, nome, { cerca, etichetta, vuoto, onChange }) {
     get scelto() { return scelto; },
     azzera,
     cerca: esegui,
+    scegli,
   };
 }
 
@@ -783,6 +791,21 @@ function etichettaIncarico(x) {
   return { title: base.title, detail: [base.detail, stato].filter(Boolean).join(' · ') };
 }
 
+// V8-5: il microfono del dialog. Compare solo se il server consente il
+// riconoscimento del browser (`speech_input`); se il browser non lo
+// supporta, lo si dice. Nessun salvataggio automatico: i campi si compilano,
+// l'operatore conferma con «Salva».
+const BLOCCO_VOCE = `
+    <div class="form-field agenda-voice" data-voice-block>
+      <div class="action-bar">
+        <button type="button" class="btn voice-mic" data-voice-dictate aria-pressed="false" aria-label="Parla: detta l’appuntamento">🎤 Parla</button>
+        <small class="muted" data-voice-transcript></small>
+      </div>
+      <p class="muted" data-voice-dictation-status role="status" aria-live="polite">Detta l’appuntamento («Giovedì alle 16 Mario Rossi deve visitare l’appartamento in via Roma 15»): i campi si compilano e li controlli prima di salvare.</p>
+    </div>`;
+const MSG_VOCE_NON_SUPPORTATA = 'Il riconoscimento vocale non è disponibile in questo browser: compila i campi a mano (sul telefono puoi usare il microfono della tastiera).';
+const MSG_VOCE_NESSUN_APPUNTAMENTO = 'Non ho riconosciuto un appuntamento: compila i campi a mano o riprova.';
+
 const BLOCCO_LUOGO = `
     <div class="form-field" data-campo="location"><label>Luogo</label><input type="text" class="input" data-field="location" maxlength="500"></div>`;
 const BLOCCO_NOTE = `
@@ -824,6 +847,10 @@ export function openCreateDialog(dialogEl, {
   showLocation = true,
   showNotes = true,
   submitAppointment = null,
+  // V8-5: `{ speechInput }` dalla shell (stato del server, letto all'avvio);
+  // `win` solo per le prove. Senza, nessun microfono.
+  voice = null,
+  win = globalThis.window,
 }) {
   if (!MODI_CRM.includes(crmMode)) throw new Error(`crmMode non valido: ${crmMode}`);
   if (appointmentType !== null && !Object.prototype.hasOwnProperty.call(TYPE_LABELS, appointmentType)) {
@@ -844,6 +871,7 @@ export function openCreateDialog(dialogEl, {
   // Ordine del flusso: tipo, cliente, incarico/immobile, stima, data e ora,
   // agente, luogo, note, opzioni avanzate (il lead).
   const form = preparaDialog(dialogEl, title, `
+    ${voice && voice.speechInput ? BLOCCO_VOCE : ''}
     <div class="form-field"><label>Tipo *</label><select class="input" data-field="type"></select></div>
     ${bloccoCrm(crmMode)}
     ${BLOCCO_ORARIO}
@@ -920,6 +948,7 @@ export function openCreateDialog(dialogEl, {
 
   // -- collegamenti CRM -----------------------------------------------------
   let cliente = null;
+  let selettoreCliente = null;                       // V8-5: per proporre il cliente riconosciuto
   let selLead = null;
   let immobile = null;
   let stima = null;
@@ -936,7 +965,7 @@ export function openCreateDialog(dialogEl, {
       hintLead.textContent = testo;
     };
     azzeraLead('Scegli prima un cliente: si possono collegare solo i suoi lead.');
-    createContactPicker(form.querySelector('[data-contact-picker]'), {
+    selettoreCliente = createContactPicker(form.querySelector('[data-contact-picker]'), {
       initial: presetContact,
       onChange: async (scelto) => {
         cliente = scelto;
@@ -1125,14 +1154,109 @@ export function openCreateDialog(dialogEl, {
     aggiornaSuggerimento();
   };
   aggiornaCampi();
-  tipo.addEventListener('change', () => {
+  const dopoTipo = () => {
     if (!durataScelta && !lockDuration) {
       fineDopo(durataBase());
       mostraDurata();
     }
     aggiornaCampi();
-  });
+  };
+  tipo.addEventListener('change', dopoTipo);
   agente.addEventListener('change', () => { aggiornaSuggerimento(); nascondiDisponibilita(form); });
+
+  // -- V8-5: dettare e precompilare -------------------------------------------
+  const bloccoVoce = form.querySelector('[data-voice-block]');
+  if (bloccoVoce) {
+    const bottoneVoce = form.querySelector('[data-voice-dictate]');
+    const statoVoce = form.querySelector('[data-voice-dictation-status]');
+    const trascritto = form.querySelector('[data-voice-transcript]');
+    const dettaturaDisponibile = speechSupport(win).supported;
+    const applica = (esito) => {
+      const passo = ((esito && esito.steps) || [])[0];
+      if (!passo) { statoVoce.textContent = MSG_VOCE_NESSUN_APPUNTAMENTO; return; }
+      const note = [];
+      if (passo.appointment_type && tipi.includes(passo.appointment_type) && !lockAppointmentType) {
+        tipo.value = passo.appointment_type;
+        dopoTipo();
+      }
+      if (passo.start_at) {
+        const giorno = romeDayKey(passo.start_at);
+        if (giorno) campoData.value = giorno;
+        const inizio = formatHour(passo.start_at);
+        if (inizio) {
+          campoInizio.value = inizio;
+          if (lockDuration) fineDopo(durataFissa);
+          else if (passo.end_at && formatHour(passo.end_at)) { campoFine.value = formatHour(passo.end_at); durataScelta = true; }
+          else fineDopo(durataBase());
+          mostraDurata();
+        }
+        nascondiDisponibilita(form);
+      } else {
+        note.push('Data e ora da indicare.');
+      }
+      if (passo.contact && selettoreCliente) {
+        selettoreCliente.set({ id: passo.contact.id, display_name: passo.contact.label });
+      } else if ((passo.contact_candidates || []).length > 1) {
+        note.push(`Più contatti possibili (${passo.contact_candidates.map((c) => c.label).join(', ')}): scegli il cliente.`);
+      } else if (attivo('contact') && !passo.contact) {
+        note.push('Cliente da scegliere.');
+      }
+      if (passo.property && immobile) {
+        immobile.scegli({ id: passo.property.id, title: passo.property.label });
+      } else if ((passo.property_candidates || []).length > 1) {
+        note.push(`Più immobili possibili (${passo.property_candidates.map((c) => c.label).join(', ')}): scegli l’incarico.`);
+      }
+      if (passo.agent && puoAssegnare && !agente.disabled) {
+        agente.value = String(passo.agent.id);
+        aggiornaSuggerimento();
+      }
+      const campoNote = form.querySelector('[data-field="notes"]');
+      if (passo.notes && campoNote) campoNote.value = passo.notes;
+      const campoLuogo = form.querySelector('[data-field="location"]');
+      if (passo.location_text && campoLuogo) campoLuogo.value = passo.location_text;
+      const domande = [...(esito.clarifications || []), ...(passo.questions || []), ...(passo.blocked || [])];
+      statoVoce.textContent = [`Ho capito: ${passo.type_label || ''}. Controlla i campi e salva.`, ...domande, ...note].join(' ');
+    };
+    const interpreta = async (testo) => {
+      trascritto.textContent = testo;
+      statoVoce.textContent = 'Interpretazione…';
+      bottoneVoce.disabled = true;
+      try {
+        applica(await interpretText(testo));
+      } catch (e) {
+        statoVoce.textContent = `Interpretazione non riuscita: ${e.message || errorMessage(e)}. Compila i campi a mano.`;
+      } finally {
+        bottoneVoce.disabled = false;
+      }
+    };
+    if (!dettaturaDisponibile) {
+      bottoneVoce.disabled = true;
+      statoVoce.textContent = MSG_VOCE_NON_SUPPORTATA;
+    } else {
+      let ultimoTesto = '';
+      let erroreMicrofono = false;
+      const dettatura = createDictation({
+        win,
+        onText: (t, finale) => { ultimoTesto = t; trascritto.textContent = t; if (finale && t) interpreta(t); },
+        onState: (st) => {
+          const ascolta = st === 'listening';
+          bottoneVoce.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
+          bottoneVoce.textContent = ascolta ? '■ Ferma' : '🎤 Parla';
+          bottoneVoce.classList.toggle('listening', ascolta);
+          if (ascolta) statoVoce.textContent = 'In ascolto… parla ora, poi tocca «Ferma».';
+          else if (!ultimoTesto && !erroreMicrofono) statoVoce.textContent = 'Non ho sentito nulla. Riprova o compila i campi a mano.';
+        },
+        onError: (codice) => { erroreMicrofono = true; statoVoce.textContent = SPEECH_ERRORS[codice] || SPEECH_ERRORS.error; },
+      });
+      bottoneVoce.addEventListener('click', () => {
+        if (dettatura.listening) { dettatura.stop(); return; }
+        ultimoTesto = '';
+        erroreMicrofono = false;
+        dettatura.start();
+      });
+      dialogEl.addEventListener('close', () => dettatura.abort());
+    }
+  }
 
   form.querySelector('[data-show-slots]').addEventListener('click', () => {
     const durata = durataAttuale() || durataBase();

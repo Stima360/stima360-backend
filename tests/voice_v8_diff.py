@@ -16,10 +16,12 @@ FILE_NUOVI = frozenset({
     "tests/test_voice_8_4_summary.py",
     "tests/test_voice_8_4_summary_postgres.py",
     "tests/test_voice_8_5_agenda_mic.py",
+    "tests/test_voice_8_5_interpret_postgres.py",
 })
 
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
+    "voice/router.py",
     "voice/planner.py",
     "voice/policy.py",
     "voice/provider.py",
@@ -29,6 +31,9 @@ FILE_MODIFICATI = frozenset({
     "voice/service.py",
     "static/os_shell/assets/app.css",
     "static/os_shell/assets/components/agenda/agenda-dialogs.js",
+    "static/os_shell/assets/components/contact-picker.js",
+    "static/os_shell/assets/views/agenda/agenda-page.js",
+    "static/os_shell/assets/voice/voice-api.js",
     "static/os_shell/assets/views/voce.js",
     "static/os_shell/assets/voice/voice-model.js",
     "tests/test_a30_4_agenda_ui.py",
