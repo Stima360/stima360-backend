@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import journey_repository as journey_repo
+from . import email_metadata
 from . import journey_service
 from . import service as comm_service
 from . import unsubscribe
@@ -288,11 +289,13 @@ def send_manual(ctx, contact_id: int, *, subject: str, body: str,
                     "the message was not queued")
 
         corpo = testo
+        disiscrizione = None
         if communication_type == TYPE_MARKETING:
             # Anche un marketing scritto a mano porta il link di disiscrizione:
             # e' un obbligo del messaggio, non del template.
+            disiscrizione = unsubscribe.unsubscribe_url(_base(), ctx.require_agency(), contact_id)
             corpo = (f"{testo}\n\n---\nSe non vuoi piu' ricevere questi messaggi: "
-                     f"{unsubscribe.unsubscribe_url(_base(), ctx.require_agency(), contact_id)}\n")
+                     f"{disiscrizione}\n")
 
         return comm_service.enqueue(
             ctx, contact_id=contact_id, channel="email",
@@ -300,6 +303,9 @@ def send_manual(ctx, contact_id: int, *, subject: str, body: str,
             reason_code="operator_manual", rendered_body=corpo,
             subject_snapshot=oggetto, destination_snapshot=destinazione,
             idempotency_key=f"manual:{utente}:{contact_id}:{_impronta(oggetto, testo)}",
+            # FASE A: un operatore scrive testo semplice, con i suoi a capo.
+            metadata=email_metadata.metadata_testo(
+                communication_type=communication_type, unsubscribe_url=disiscrizione),
             cur=c)
 
 

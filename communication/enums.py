@@ -205,3 +205,14 @@ DEFAULT_STALE_AFTER_SECONDS = 15 * 60
 #: `communication_messages_subject_chk` lo impone: qui si dichiara una volta
 #: sola, cosi' il service non ripete il letterale.
 CHANNELS_WITH_SUBJECT = frozenset({CHANNEL_EMAIL})
+
+# --------------------------------------------------------------------------
+# FASE A (follow-up 180 giorni): le chiavi di `metadata` che descrivono COME
+# spedire un messaggio email. Le scrive chi accoda (journey, invio manuale),
+# le legge l'adapter. Un messaggio senza `body_format` e' un corpo html come
+# sempre, e viene spedito esattamente come prima.
+# --------------------------------------------------------------------------
+BODY_FORMAT_KEY = "body_format"
+BODY_FORMAT_TEXT = "text"
+REPLY_TO_KEY = "reply_to"
+UNSUBSCRIBE_URL_KEY = "unsubscribe_url"

@@ -70,6 +70,10 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # successiva annunciata sopra. Anche loro fuori dal
                     # nucleo, che continua a non importarli.
                     "journey_tick.py", "send_window.py",
+                    # FASE A (follow-up 180 giorni): i metadata di spedizione
+                    # di una email di testo. Li scrive chi accoda, li legge
+                    # l'adapter: il nucleo non li importa.
+                    "email_metadata.py",
                     # P29-3D: il catalogo delle journey pubblicate e il
                     # read-model del Contact 360. Fuori dal nucleo come gli
                     # altri: il nucleo non li importa.

@@ -254,7 +254,37 @@ def migrazione_stime_dettagliate_completa():
     conn.commit()
     cur.close(); conn.close()
 # ------------------- EMAIL -------------------
-def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
+#: FASE A (follow-up 180 giorni): le sole intestazioni aggiuntive che
+#: `invia_mail` accetta da fuori. Una lista chiusa: From, To, Bcc e simili non
+#: si impostano da un parametro, mai.
+INTESTAZIONI_EMAIL_AMMESSE = ("List-Unsubscribe", "List-Unsubscribe-Post")
+
+
+def _valore_intestazione(valore):
+    """Una riga sola, senza CR/LF: un valore con un a capo e' un'iniezione."""
+    if not isinstance(valore, str):
+        return None
+    valore = valore.strip()
+    if not valore or "\r" in valore or "\n" in valore:
+        return None
+    return valore
+
+
+def invia_mail(destinatario, oggetto, corpo_html, allegato=None, *,
+               corpo_testo=None, reply_to=None, intestazioni=None):
+    """L'unica primitiva email. I tre parametri a parola chiave sono FASE A:
+
+      corpo_testo   la versione testo del corpo: il messaggio diventa
+                    multipart/alternative (testo + html). Senza, UNA parte html
+                    come sempre.
+      reply_to      l'intestazione Reply-To (un indirizzo, una riga).
+      intestazioni  dict di intestazioni fra `INTESTAZIONI_EMAIL_AMMESSE`;
+                    ogni altro nome viene ignorato.
+
+    Senza i tre parametri il messaggio prodotto e' byte per byte quello di
+    prima. Ritorna True/False, non solleva, NON ritenta: un esito incerto resta
+    incerto per chi chiama.
+    """
     smtp_host = os.getenv("SMTP_HOST", "mail.stima360.it")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
@@ -271,7 +301,20 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
     msg["From"] = email_from
     msg["To"] = destinatario
     msg["Subject"] = oggetto
-    msg.attach(MIMEText(corpo_html, "html"))
+    risposta = _valore_intestazione(reply_to)
+    if risposta is not None:
+        msg["Reply-To"] = risposta
+    for nome in INTESTAZIONI_EMAIL_AMMESSE:
+        valore = _valore_intestazione((intestazioni or {}).get(nome))
+        if valore is not None:
+            msg[nome] = valore
+    if corpo_testo is None:
+        msg.attach(MIMEText(corpo_html, "html"))
+    else:
+        alternativa = MIMEMultipart("alternative")
+        alternativa.attach(MIMEText(corpo_testo, "plain", "utf-8"))
+        alternativa.attach(MIMEText(corpo_html, "html", "utf-8"))
+        msg.attach(alternativa)
 
     if allegato:
         try:
@@ -292,7 +335,9 @@ def invia_mail(destinatario, oggetto, corpo_html, allegato=None):
         print("✅ Email inviata correttamente!")
         return True
     except Exception as e:
-        print("❌ Errore invio email:", e)
+        # La classe dice "rifiuto" o "timeout" senza esporre nulla; chi chiama
+        # vede solo False e NON ritenta: potrebbe essere partita.
+        print(f"❌ Errore invio email ({type(e).__name__}):", e)
         return False
 
 

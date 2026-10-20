@@ -53,6 +53,7 @@ from typing import Any
 
 from consent.guard import can_send_marketing_bulk
 
+from . import email_metadata
 from . import journey_repository as repo
 from . import send_window
 from . import service as communication_service
@@ -563,7 +564,12 @@ def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode
         template_version=passo["template_version"], stima_id=riga["stima_id"],
         lead_id=riga["lead_id"], scheduled_at=scheduled_at,
         idempotency_key=(f"journey:{riga['id']}:step:{passo['step_no']}:run:{riga['run_no']}"),
-        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"], cur=cur)
+        enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"],
+        # FASE A: i template sono testo semplice; la riga dice come spedirlo.
+        metadata=email_metadata.metadata_testo(
+            communication_type=passo["communication_type"],
+            unsubscribe_url=contesto.get("unsubscribe_url")),
+        cur=cur)
 
 
 def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:

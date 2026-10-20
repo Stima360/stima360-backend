@@ -327,7 +327,7 @@ def test_N1_invia_mail_e_invariata():
     esattamente quelli, e si verifica anche che la funzione ritorni ancora
     `True`/`False` e non sollevi - cioe' che le capability dicano il vero."""
     database_py = (ROOT / "database.py").read_text(encoding="utf-8")
-    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None):" in database_py
+    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None, *," in database_py
     assert 'print("❌ SMTP non configurato!")' in database_py
     assert "return False" in database_py and "return True" in database_py
 

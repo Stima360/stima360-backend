@@ -898,7 +898,7 @@ def test_n4_il_confine_fra_le_fasi_del_dominio():
 def test_n5_nessun_invio_e_stato_toccato():
     """Le funzioni di invio esistenti restano esattamente dove sono."""
     database_py = (ROOT / "database.py").read_text(encoding="utf-8")
-    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None):" in database_py
+    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None, *," in database_py
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):" in main_py
     assert "def invia_whatsapp_text(numero: str, testo: str):" in main_py

@@ -45,6 +45,7 @@ from typing import Any
 
 from database import invia_mail
 
+from . import email_format
 from .base import (OUTCOME_ACCEPTED, OUTCOME_UNKNOWN, ProviderCapabilities,
                    ProviderResult)
 
@@ -94,9 +95,18 @@ def send(message: dict[str, Any]) -> ProviderResult:
     destinatario = message["destination_snapshot"]
     oggetto = message["subject_snapshot"]
     corpo = message["rendered_body"]
+    metadata = message.get("metadata")
 
     try:
-        accettata = invia_mail(destinatario, oggetto, corpo)
+        if email_format.e_testo(metadata):
+            # FASE A: un corpo di testo semplice viaggia come testo + html,
+            # con Reply-To e List-Unsubscribe se la riga li porta. Tutto il
+            # resto - le email di servizio, i corpi html - passa dal ramo di
+            # sempre, con i tre argomenti di sempre.
+            accettata = invia_mail(destinatario, oggetto, email_format.testo_in_html(corpo),
+                                   **email_format.argomenti_di_invio(corpo, metadata))
+        else:
+            accettata = invia_mail(destinatario, oggetto, corpo)
     except Exception as exc:  # noqa: BLE001 - ramo A di C22: si normalizza
         return ProviderResult(
             outcome=OUTCOME_UNKNOWN,

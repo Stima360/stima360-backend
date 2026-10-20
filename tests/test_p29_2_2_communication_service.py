@@ -472,7 +472,7 @@ def test_n4_il_consenso_non_e_interrogato_qui():
 
 
 def test_n5_nessun_sender_esistente_e_stato_toccato():
-    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None):" in \
+    assert "def invia_mail(destinatario, oggetto, corpo_html, allegato=None, *," in \
         (ROOT / "database.py").read_text(encoding="utf-8")
     main_py = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):" in main_py

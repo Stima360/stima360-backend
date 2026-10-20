@@ -148,7 +148,10 @@ def test_01_agenzia_attiva_invariata(mondo, modulo, spia):
 
     modulo["tick"].tick(mondo["ctx"]())
     m1 = _passi(mondo, a)[0]
-    assert m1["metadata"] in (None, {}), "un passo di un'agenzia attiva porta il segno centrale"
+    # FASE A: i metadata di spedizione (body_format, reply_to, unsubscribe_url)
+    # sono del passo; il segno CENTRALE no.
+    assert "central_continuity" not in (m1["metadata"] or {}), \
+        "un passo di un'agenzia attiva porta il segno centrale"
     assert m1["subject_snapshot"] == "[prova] A"
 
     conteggi = _normale(mondo, a)

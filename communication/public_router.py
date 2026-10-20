@@ -44,7 +44,14 @@ def unsubscribe_page(t: str = Query(default="", max_length=400)) -> HTMLResponse
 
 
 @router.post("/unsubscribe", response_class=HTMLResponse)
-def unsubscribe_submit(t: str = Form(default="", max_length=400)) -> HTMLResponse:
-    """Esegue. La risposta e' identica per token valido, ripetuto o alterato."""
-    unsubscribe.process(t)
+def unsubscribe_submit(t: str = Form(default="", max_length=400),
+                       t_query: str = Query(default="", max_length=400, alias="t")) -> HTMLResponse:
+    """Esegue. La risposta e' identica per token valido, ripetuto o alterato.
+
+    FASE A: il token arriva dal form (il pulsante della pagina) oppure dalla
+    query (RFC 8058, one-click: il client di posta fa POST all'URL di
+    `List-Unsubscribe`, con il token firmato gia' dentro, e un corpo che non
+    contiene `t`). Il form vince se c'e'. La GET resta senza effetti.
+    """
+    unsubscribe.process(t or t_query)
     return _pagina(unsubscribe.NEUTRAL_MESSAGE)
