@@ -36,6 +36,7 @@ EVENT_STOPPED = "journey_stopped"
 JOURNEY_COLUMNS = (
     "id", "journey_key", "version", "trigger_type", "status", "name", "send_timezone",
     "created_by_type", "activated_at", "activated_by_type", "retired_at", "created_at",
+    "sequence_policy",
 )
 STEP_COLUMNS = (
     "id", "step_no", "step_key", "reason_code", "channel", "communication_type",
@@ -51,6 +52,7 @@ ENROLLMENT_COLUMNS = (
     "trigger_sent_at", "status", "next_step_no", "next_action_at", "next_action_kind",
     "awaiting_since", "run_no", "stop_reason", "enrolled_by_type", "paused_at",
     "paused_source", "stopped_at", "completed_at", "created_at", "updated_at",
+    "email_normalized_snapshot", "resume_after", "pause_ref",
 )
 CONTROL_COLUMNS = ("id", "contact_id", "paused", "paused_at", "pause_reason",
                    "resumed_at", "created_at", "updated_at")
@@ -61,7 +63,10 @@ def utcnow() -> datetime:
 
 
 def _proietta(riga, colonne) -> dict[str, Any]:
-    return {c: riga[c] for c in colonne}
+    # 108: una colonna assente (schema senza 108) si proietta a None, cosi' il
+    # codice puo' leggerla con `.get` senza sapere quale migration c'e'.
+    presenti = set(riga.keys())
+    return {c: (riga[c] if c in presenti else None) for c in colonne}
 
 
 def _timeline(cur, *, agency_id, event_type, contact_id, stima_id, payload,
@@ -80,8 +85,12 @@ def _timeline(cur, *, agency_id, event_type, contact_id, stima_id, payload,
 # ---------------------------------------------------------------------------
 
 def insert_journey(cur, ctx, *, journey_key, version, trigger_type, name, send_timezone,
-                   actor_type, actor_user_id, steps) -> dict[str, Any]:
+                   actor_type, actor_user_id, steps, sequence_policy="linear") -> dict[str, Any]:
     agency = ctx.require_agency()
+    # 108: `sequence_policy` esiste solo da quella migration. Prima, la v2
+    # ricomincia per la regola di Tappa 6 (trigger) e la 108 la marchera'
+    # `repeat_last` nel backfill: qui non c'e' niente da scrivere.
+    scrivi_policy = sequence_policy != "linear" and contact_journey_schema(cur)
     cur.execute(
         """
         INSERT INTO communication_journeys
@@ -94,6 +103,10 @@ def insert_journey(cur, ctx, *, journey_key, version, trigger_type, name, send_t
          actor_type, actor_user_id),
     )
     journey = _proietta(cur.fetchone(), JOURNEY_COLUMNS)
+    if scrivi_policy:
+        cur.execute("UPDATE communication_journeys SET sequence_policy = %s WHERE id = %s AND agency_id = %s "
+                    "RETURNING sequence_policy", (sequence_policy, journey["id"], agency))
+        journey["sequence_policy"] = cur.fetchone()["sequence_policy"]
     for passo in steps:
         cur.execute(
             """
@@ -504,7 +517,7 @@ def schema_ready(cur) -> bool:
 def lock_open_enrollments(cur, ctx, *, limit: int) -> list[dict[str, Any]]:
     """Le iscrizioni aperte (active/paused) dell'agenzia, bloccate per il giro."""
     cur.execute(
-        f"""SELECT {', '.join(MOTORE_COLUMNS)} FROM communication_enrollments
+        """SELECT * FROM communication_enrollments
              WHERE agency_id = %s AND status IN ('active', 'paused')
              ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED""",
         (ctx.require_agency(), limit))
@@ -514,7 +527,7 @@ def lock_open_enrollments(cur, ctx, *, limit: int) -> list[dict[str, Any]]:
 def lock_advanceable_enrollments(cur, ctx, *, limit: int) -> list[dict[str, Any]]:
     """Le iscrizioni attive che stanno aspettando un passo."""
     cur.execute(
-        f"""SELECT {', '.join(MOTORE_COLUMNS)} FROM communication_enrollments
+        """SELECT * FROM communication_enrollments
              WHERE agency_id = %s AND status = 'active' AND next_step_no IS NOT NULL
              ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED""",
         (ctx.require_agency(), limit))
@@ -524,7 +537,7 @@ def lock_advanceable_enrollments(cur, ctx, *, limit: int) -> list[dict[str, Any]
 def lock_due_enrollments(cur, ctx, *, kind: str, now, limit: int) -> list[dict[str, Any]]:
     """Le iscrizioni attive la cui azione e' DOVUTA, per tipo di azione."""
     cur.execute(
-        f"""SELECT {', '.join(MOTORE_COLUMNS)} FROM communication_enrollments
+        """SELECT * FROM communication_enrollments
              WHERE agency_id = %s AND status = 'active'
                AND next_action_kind = %s AND next_action_at <= %s
              ORDER BY next_action_at, id LIMIT %s FOR UPDATE SKIP LOCKED""",
@@ -1018,5 +1031,177 @@ def request_fence(cur, ctx, *, contact_id, stima_id):
 
 
 def is_request_enrollment(enrollment):
-    """A NULL message origin identifies v2; the DB guard certifies its source."""
-    return enrollment.get("trigger_message_id", 0) is None
+    """A NULL message origin identifies v2; the DB guard certifies its source.
+
+    108: la journey SUL CONTATTO non ha un messaggio di trigger nemmeno lei,
+    ma porta l'email con cui si e' iscritta: e' quella a distinguerla."""
+    return enrollment.get("trigger_message_id", 0) is None and not is_contact_enrollment(enrollment)
+
+
+def is_contact_enrollment(enrollment) -> bool:
+    """108: una iscrizione della journey sul contatto (Fase B)."""
+    return bool(enrollment.get("email_normalized_snapshot"))
+
+
+# ---------------------------------------------------------------------------
+# 108 (Fase B) - LA JOURNEY SUL CONTATTO
+#
+# Tutto cio' che segue esiste solo con la 108 applicata, e lo dichiara:
+# `contact_journey_schema` e' la domanda, una per giro, come `schema_ready`.
+# ---------------------------------------------------------------------------
+
+def contact_journey_schema(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.communication_email_optouts') IS NOT NULL AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def insert_contact_enrollment(cur, ctx, *, journey_id, contact_id, email_normalized, admitted_at,
+                              status, next_step_no, next_action_at, stop_reason,
+                              idempotency_key) -> tuple[dict[str, Any], bool]:
+    """Una iscrizione della journey sul contatto. Idempotente sulla chiave.
+
+    `admitted_at` e' il momento iniziale del calendario (`trigger_sent_at`):
+    per un contatto futuro la data del consenso, per uno storico la data di
+    ammissione. Lo scrive il chiamante, la guardia 108 lo pretende e lo
+    rende immutabile. L'email e' quella del contatto ADESSO, e l'indice unico
+    di piattaforma la rifiuta se un'altra iscrizione aperta la porta gia'.
+    """
+    agency = ctx.require_agency()
+    adesso = utcnow()
+    stopped = status == ENR_STOPPED
+    cur.execute(
+        """
+        INSERT INTO communication_enrollments
+               (agency_id, journey_id, contact_id, lead_id, stima_id, stima_id_snapshot,
+                trigger_message_id, trigger_sent_at, email_normalized_snapshot, status,
+                next_step_no, next_action_at, next_action_kind, awaiting_since, run_no,
+                stop_reason, stopped_at, enrolled_by_type, enrolled_by_operator_user_id,
+                idempotency_key)
+        VALUES (%s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s, %s, %s, %s, NULL, 1,
+                %s, %s, 'system', NULL, %s)
+        ON CONFLICT (agency_id, idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        (agency, journey_id, contact_id, admitted_at, email_normalized, status,
+         None if stopped else next_step_no, None if stopped else next_action_at,
+         None if stopped else KIND_ENQUEUE,
+         stop_reason if stopped else None, adesso if stopped else None, idempotency_key))
+    riga = cur.fetchone()
+    if riga is not None:
+        enrollment = _proietta(riga, ENROLLMENT_COLUMNS)
+        _timeline(cur, agency_id=agency, event_type=EVENT_STOPPED if stopped else EVENT_ENROLLED,
+                  contact_id=contact_id, stima_id=None,
+                  payload={"enrollment_id": enrollment["id"], "journey_id": journey_id,
+                           **({"stop_reason": stop_reason} if stopped else {})},
+                  idempotency_key=f"p29_3:v1:{'stopped' if stopped else 'enrolled'}:enr:{enrollment['id']}",
+                  created_by="system", occurred_at=adesso)
+        return enrollment, True
+    cur.execute("SELECT * FROM communication_enrollments WHERE agency_id = %s AND idempotency_key = %s",
+                (agency, idempotency_key))
+    return _proietta(cur.fetchone(), ENROLLMENT_COLUMNS), False
+
+
+def pause_system(cur, ctx, enrollment_id: int, *, source: str, resume_after, pause_ref: str | None):
+    """`active -> paused` per un FATTO (appuntamento, relazione commerciale,
+    consulenza), senza operatore. `resume_after` puo' essere NULL: "finche'
+    il fatto dura"."""
+    return _transizione(
+        cur, ctx, enrollment_id, da=(ENR_ACTIVE,),
+        assegnazioni="status = 'paused', paused_at = NOW(), paused_source = %s, "
+                     "paused_by_operator_user_id = NULL, resume_after = %s, pause_ref = %s",
+        valori=(source, resume_after, pause_ref))
+
+
+def update_system_pause(cur, ctx, enrollment_id: int, *, source: str, resume_after, pause_ref: str | None):
+    """La pausa di sistema cambia ragione o data di ripresa: resta `paused`."""
+    return _transizione(
+        cur, ctx, enrollment_id, da=(ENR_PAUSED,),
+        assegnazioni="paused_source = %s, resume_after = %s, pause_ref = %s",
+        valori=(source, resume_after, pause_ref))
+
+
+def resume_to_step(cur, ctx, enrollment_id: int, *, next_step_no: int, next_action_at) -> dict[str, Any]:
+    """`paused -> active` SUL passo indicato (il prossimo in calendario), run
+    successivo, pausa azzerata. Vale per le pause di sistema e per quelle
+    dell'operatore su una iscrizione sul contatto."""
+    return _transizione(
+        cur, ctx, enrollment_id, da=(ENR_PAUSED,),
+        assegnazioni="status = 'active', paused_at = NULL, paused_source = NULL, "
+                     "paused_by_operator_user_id = NULL, resume_after = NULL, pause_ref = NULL, "
+                     "run_no = run_no + 1, next_step_no = %s, next_action_at = %s, "
+                     "next_action_kind = 'enqueue', awaiting_since = NULL",
+        valori=(next_step_no, next_action_at))
+
+
+def complete_from_pause(cur, ctx, enrollment_id: int) -> dict[str, Any]:
+    """`paused -> completed`: il calendario e' finito mentre era in pausa."""
+    return _transizione(
+        cur, ctx, enrollment_id, da=(ENR_PAUSED,),
+        assegnazioni="status = 'completed', completed_at = NOW(), next_step_no = NULL, "
+                     "next_action_at = NULL, next_action_kind = NULL, awaiting_since = NULL, "
+                     "paused_at = NULL, paused_source = NULL, paused_by_operator_user_id = NULL, "
+                     "resume_after = NULL, pause_ref = NULL",
+        valori=())
+
+
+def last_marketing_sent_at(cur, ctx, contact_id: int):
+    """Quando e' partita l'ultima email di marketing a questo contatto."""
+    cur.execute(
+        """SELECT MAX(sent_at) AS ultimo FROM communication_messages
+            WHERE agency_id = %s AND contact_id = %s AND communication_type = 'marketing'
+              AND status = 'sent'""", (ctx.require_agency(), contact_id))
+    return cur.fetchone()["ultimo"]
+
+
+def admitted_today(cur, ctx, journey_id: int, now) -> int:
+    """Quante iscrizioni questa journey ha creato nelle ultime 24 ore (il tetto
+    giornaliero di ammissione degli storici)."""
+    # Si conta sull'istante di AMMISSIONE (`trigger_sent_at`), non su
+    # `created_at`: e' quello che il motore governa con il suo orologio, ed e'
+    # quello che dice "oggi" anche quando il tick gira con un `now` dato.
+    cur.execute(
+        """SELECT count(*) AS n FROM communication_enrollments
+            WHERE agency_id = %s AND journey_id = %s AND email_normalized_snapshot IS NOT NULL
+              AND trigger_sent_at > %s - interval '24 hours'""",
+        (ctx.require_agency(), journey_id, now))
+    return int(cur.fetchone()["n"])
+
+
+def emails_with_open_enrollment_anywhere(cur, emails: list[str]) -> set[str]:
+    """UNA EMAIL, UNA SEQUENZA: le email con una iscrizione aperta in QUALUNQUE
+    agenzia. E' la sola lettura trasversale del motore, e lo dichiara nel
+    nome: serve alla dedup di piattaforma e a nient'altro."""
+    if not emails:
+        return set()
+    cur.execute(
+        """SELECT DISTINCT email_normalized_snapshot AS e FROM communication_enrollments
+            WHERE email_normalized_snapshot = ANY(%s) AND status IN ('active', 'paused')""",
+        (emails,))
+    return {r["e"] for r in cur.fetchall()}
+
+
+def emails_with_completed_cycle_anywhere(cur, emails: list[str]) -> set[str]:
+    """Le email che hanno gia' COMPLETATO un ciclo, in qualunque agenzia: una
+    sola sequenza per destinatario, nessuna ripartenza automatica."""
+    if not emails:
+        return set()
+    cur.execute(
+        """SELECT DISTINCT email_normalized_snapshot AS e FROM communication_enrollments
+            WHERE email_normalized_snapshot = ANY(%s) AND status = 'completed'""",
+        (emails,))
+    return {r["e"] for r in cur.fetchall()}
+
+
+def contact_row(cur, ctx, contact_id: int) -> dict[str, Any] | None:
+    cur.execute(
+        """SELECT id, email, email_normalized, status, deleted_at, archived_at
+             FROM contacts WHERE agency_id = %s AND id = %s""", (ctx.require_agency(), contact_id))
+    riga = cur.fetchone()
+    return dict(riga) if riga is not None else None
+
+
+def defer_enrollment(cur, ctx, enrollment_id: int, *, next_action_at) -> dict[str, Any]:
+    """Il passo corrente slitta a `next_action_at` (48 ore dall'ultimo invio)."""
+    return _transizione(
+        cur, ctx, enrollment_id, da=(ENR_ACTIVE,),
+        assegnazioni="next_action_at = %s", valori=(next_action_at,))

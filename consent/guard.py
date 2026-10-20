@@ -56,6 +56,7 @@ from .enums import (
     REASON_ALLOW_LEGACY_GRANT,
     REASON_DENY_INCONSISTENT_STATE,
     REASON_DENY_NEVER_GIVEN,
+    REASON_DENY_PLATFORM_OPTOUT,
     REASON_DENY_REVOKED,
     STATUS_GRANTED,
     STATUS_NEVER_GIVEN,
@@ -111,6 +112,24 @@ class MarketingSendDecision:
             "(es. `decision = can_send_marketing(ctx, contact_id); "
             "if decision.allowed: ...`)"
         )
+
+
+def _optout_di_piattaforma_dopo(contact: dict[str, Any], granted_at) -> bool:
+    """108: l'indirizzo ha detto "basta STIMA360" DOPO questa concessione?
+
+    `platform_optout_at` arriva nella stessa riga del contatto (una statement,
+    uno snapshot). Un opt-out piu' vecchio della concessione non la blocca: una
+    nuova manifestazione documentata vince su un vecchio rifiuto, mentre un
+    rifiuto successivo vince su qualunque concessione, di qualunque agenzia.
+    Un contatto letto senza quella colonna (test, o schema senza 108) non ha
+    opt-out: la decisione resta quella di sempre.
+    """
+    optout_at = contact.get("platform_optout_at")
+    if optout_at is None:
+        return False
+    if granted_at is None:
+        return True
+    return optout_at >= granted_at
 
 
 def _coerente_con_evento(contact: dict[str, Any], event: dict[str, Any], columns) -> bool:
@@ -233,6 +252,11 @@ def _decidi(contact, event) -> MarketingSendDecision:
                 state=proiezione["status"], legacy=False,
             )
         if event["decision"] == DECISION_GRANTED:
+            if _optout_di_piattaforma_dopo(contact, event["decided_at"]):
+                return decisione(
+                    False, REASON_DENY_PLATFORM_OPTOUT,
+                    state=STATUS_GRANTED, legacy=False,
+                )
             return decisione(
                 True, REASON_ALLOW_EXPLICIT_GRANT,
                 state=STATUS_GRANTED, legacy=False,
@@ -259,6 +283,10 @@ def _decidi(contact, event) -> MarketingSendDecision:
             return decisione(
                 False, REASON_DENY_INCONSISTENT_STATE,
                 state=proiezione["status"], legacy=True,
+            )
+        if _optout_di_piattaforma_dopo(contact, contact.get(columns["granted_at"])):
+            return decisione(
+                False, REASON_DENY_PLATFORM_OPTOUT, state=STATUS_GRANTED, legacy=True,
             )
         return decisione(
             True, REASON_ALLOW_LEGACY_GRANT, state=STATUS_GRANTED, legacy=True,

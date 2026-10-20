@@ -53,7 +53,9 @@ from typing import Any
 
 from consent.guard import can_send_marketing_bulk
 
+from . import audience
 from . import email_metadata
+from . import followup_rules
 from . import journey_repository as repo
 from . import send_window
 from . import service as communication_service
@@ -61,7 +63,10 @@ from . import templates
 from . import unsubscribe
 from .exceptions import ConflictError, NotFoundError, ValidationError
 from .journey_enums import (
-    CONSENT_STOP_BY_GUARD_REASON, ENR_ACTIVE, KIND_AWAIT_OPERATOR, KIND_ENQUEUE,
+    CONSENT_STOP_BY_GUARD_REASON, CONTACT_STOP_PRIORITY, ENR_ACTIVE, ENR_PAUSED,
+    KIND_AWAIT_OPERATOR, KIND_ENQUEUE, POLICY_REPEAT_LAST, STOP_CONTACT_INACTIVE as _STOP_INATTIVO,
+    STOP_DUPLICATE_EMAIL, STOP_EMAIL_INVALID, STOP_OPERATOR, SYSTEM_PAUSE_SOURCES,
+    TRIGGER_CONTACT_ELIGIBLE,
     STOP_ACQUISITION_LINKED, STOP_CONSENT_NOT_GRANTED, STOP_CONSULTATION_REQUESTED,
     STOP_CONTACT_INACTIVE, STOP_INSPECTION, STOP_LEAD_CLOSED, STOP_MANDATE_SIGNED,
     STOP_PRIORITY, TRIGGER_STIMA_PDF_SENT, assisted_action_is_due, choose_stop_reason,
@@ -121,6 +126,8 @@ def _conteggi() -> dict[str, int]:
         "stopped": 0, "advanced": 0, "completed": 0,
         "enrolled_active": 0, "enrolled_stopped": 0, "enrolled_skipped": 0,
         "queued": 0, "queued_idempotent": 0, "awaiting_operator": 0, "errors": 0,
+        # 108 (Fase B): la journey sul contatto
+        "paused": 0, "resumed": 0, "deferred": 0,
     }
 
 
@@ -295,6 +302,9 @@ def _fase_stop(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
         return
     ragioni, eventi = _ragioni_di_stop(cur, ctx, righe)
     for r in righe:
+        if repo.is_contact_enrollment(r):
+            _stop_o_pausa_contatto(ctx, cur, r, adesso, conteggi)
+            continue
         vincente = choose_stop_reason(ragioni[r["id"]])
         if repo.is_request_enrollment(r):
             vincente, _ = _fence_e_stop(cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
@@ -358,7 +368,7 @@ def _fase_advance(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> No
         try:
             with _Savepoint(cur, f"adv_{r['id']}"):
                 successivi = [s for s in passi[r["journey_id"]] if s["step_no"] > r["next_step_no"]]
-                rotate = not successivi and journeys[r["journey_id"]]["trigger_type"] == "stima_request_registered"
+                rotate = not successivi and _ricomincia(journeys[r["journey_id"]])
                 if rotate:
                     successivi = [dict(passi[r["journey_id"]][0], delay_from="previous_step_sent", delay_seconds=10 * 86400)]
                 if not successivi:
@@ -409,6 +419,146 @@ def _righe_finte_per_candidati(candidati: list[dict[str, Any]]) -> list[dict[str
              "lead_id": c["lead_id"], "stima_id": c["stima_id"],
              "stima_id_snapshot": c["stima_id"]}
             for c in candidati]
+
+
+def _ricomincia(journey: dict[str, Any]) -> bool:
+    """La journey ricomincia dall'ultimo passo? 108: lo dice `sequence_policy`
+    (`repeat_last`, la v2). Senza la 108 vale la regola di Tappa 6, com'era."""
+    policy = journey.get("sequence_policy")
+    if policy is not None:
+        return policy == POLICY_REPEAT_LAST
+    return journey["trigger_type"] == "stima_request_registered"
+
+
+def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
+    """108 (Fase B): le iscrizioni della journey SUL CONTATTO.
+
+    La platea la legge `audience.candidates` (prefiltrata e deduplicata per
+    indirizzo); qui, contatto per contatto e con il contatto bloccato, la
+    guardia del consenso dice l'ultima parola e l'iscrizione nasce `active`
+    sul primo passo del calendario, oppure `stopped` con la ragione. Il
+    tetto giornaliero vale per l'agenzia: storici e futuri insieme.
+    """
+    for journey in repo.active_journeys(cur, ctx, trigger_type=TRIGGER_CONTACT_ELIGIBLE):
+        passi = [p for p in repo.list_steps(cur, ctx, journey["id"]) if p["active"]]
+        if not passi:
+            continue
+        residuo = audience.tetto_residuo(cur, ctx, journey["id"], adesso)
+        candidati = audience.candidates(cur, ctx, now=adesso, limit=residuo)
+        if not candidati:
+            continue
+        consensi = can_send_marketing_bulk(ctx, [c["contact_id"] for c in candidati])
+        for candidato in candidati:
+            try:
+                with _Savepoint(cur, f"enrc_{candidato['contact_id']}"):
+                    repo.fence(cur, ctx, contact_id=candidato["contact_id"], lead_id=None, stima_id=None)
+                    decisione = consensi.get(candidato["contact_id"])
+                    ragione = None
+                    if decisione is None or not decisione.allowed:
+                        ragione = CONSENT_STOP_BY_GUARD_REASON.get(
+                            decisione.reason if decisione is not None else "", STOP_CONSENT_NOT_GRANTED)
+                    inizio = audience.momento_iniziale(candidato["granted_at"], adesso)
+                    passo, quando = followup_rules.prossimo_passo(
+                        passi, trigger_sent_at=inizio, now=adesso, ultimo_invio=None,
+                        timezone_name=journey["send_timezone"])
+                    if ragione is None and passo is None:
+                        # Un consenso cosi' recente che il calendario e' gia'
+                        # scaduto non esiste; ma se mai, non si iscrive a vuoto.
+                        conteggi["enrolled_skipped"] += 1
+                        continue
+                    _, creata = repo.insert_contact_enrollment(
+                        cur, ctx, journey_id=journey["id"], contact_id=candidato["contact_id"],
+                        email_normalized=candidato["email_normalized"], admitted_at=inizio,
+                        status=(ENR_ACTIVE if ragione is None else "stopped"),
+                        next_step_no=(passo["step_no"] if ragione is None else None),
+                        next_action_at=(quando if ragione is None else None),
+                        stop_reason=ragione,
+                        idempotency_key=(f"journey:{journey['journey_key']}:v{journey['version']}"
+                                         f":contact:{candidato['contact_id']}:admitted:{int(inizio.timestamp())}"))
+                    if not creata:
+                        conteggi["enrolled_skipped"] += 1
+                    elif ragione is None:
+                        conteggi["enrolled_active"] += 1
+                    else:
+                        conteggi["enrolled_stopped"] += 1
+            except Exception:
+                # L'indice unico di piattaforma (stessa email aperta altrove,
+                # da un tick concorrente) arriva qui: e' esattamente la dedup
+                # che si voleva. Saltato, non errore.
+                conteggi["enrolled_skipped"] += 1
+                logger.info("journey_tick_contact_enroll_skipped contact_id=%s journey_id=%s",
+                            candidato["contact_id"], journey["id"], exc_info=True)
+
+
+def _ragione_di_stop_contatto(cur, ctx, r: dict[str, Any]) -> str | None:
+    """Le ragioni che FERMANO una iscrizione sul contatto, con la priorita'
+    della journey sul contatto. Consenso (opt-out di piattaforma compreso),
+    indirizzo, persona: nient'altro ferma."""
+    ragioni = set()
+    contatto = repo.contact_row(cur, ctx, r["contact_id"])
+    if (contatto is None or contatto["status"] != "active" or contatto["deleted_at"] is not None
+            or contatto["archived_at"] is not None):
+        ragioni.add(_STOP_INATTIVO)
+    elif not followup_rules.email_valida(contatto["email_normalized"]):
+        ragioni.add(STOP_EMAIL_INVALID)
+    elif contatto["email_normalized"] != r["email_normalized_snapshot"]:
+        # L'indirizzo e' cambiato: la sequenza era per QUELLO. Si ferma, e
+        # il nuovo indirizzo entrera' dalla platea con le sue regole.
+        ragioni.add(STOP_DUPLICATE_EMAIL)
+    decisione = can_send_marketing_bulk(ctx, [r["contact_id"]]).get(r["contact_id"])
+    if decisione is None or not decisione.allowed:
+        ragioni.add(CONSENT_STOP_BY_GUARD_REASON.get(decisione.reason if decisione is not None else "",
+                                                    STOP_CONSENT_NOT_GRANTED))
+    return choose_stop_reason(ragioni, CONTACT_STOP_PRIORITY)
+
+
+def _stop_o_pausa_contatto(ctx, cur, r: dict[str, Any], adesso, conteggi: dict[str, int]) -> None:
+    """Fase B: stop, pausa, ripresa o completamento di una iscrizione sul
+    contatto, dai FATTI di adesso (vedi `followup_rules`)."""
+    try:
+        with _Savepoint(cur, f"stopc_{r['id']}"):
+            repo.fence(cur, ctx, contact_id=r["contact_id"], lead_id=None, stima_id=None)
+            ragione = _ragione_di_stop_contatto(cur, ctx, r)
+            if ragione is not None:
+                repo.stop_enrollment(cur, ctx, r["id"], reason=ragione, actor_user_id=None)
+                repo.cancel_queued_journey_messages(cur, ctx, r["id"], reason=f"stopped:{ragione}",
+                                                    actor_user_id=None)
+                conteggi["stopped"] += 1
+                return
+            if r["status"] == ENR_PAUSED and r["paused_source"] not in SYSTEM_PAUSE_SOURCES:
+                return  # pausa di una persona: la toglie una persona
+            fonte, fino_a, riferimento = followup_rules.pause_state(
+                cur, ctx.require_agency(), r["contact_id"], adesso)
+            if r["status"] == ENR_ACTIVE:
+                if fonte is not None:
+                    repo.pause_system(cur, ctx, r["id"], source=fonte, resume_after=fino_a,
+                                      pause_ref=riferimento)
+                    repo.cancel_queued_journey_messages(cur, ctx, r["id"], reason=f"paused:{fonte}",
+                                                        actor_user_id=None)
+                    conteggi["paused"] += 1
+                return
+            # in pausa di sistema
+            if fonte is not None:
+                if fonte != r["paused_source"] or fino_a != r.get("resume_after"):
+                    repo.update_system_pause(cur, ctx, r["id"], source=fonte, resume_after=fino_a,
+                                             pause_ref=riferimento)
+                return
+            # nessun fatto: si riprende dal prossimo passo in calendario
+            journey = repo.select_journey(cur, ctx, r["journey_id"])
+            passi = [p for p in repo.list_steps(cur, ctx, r["journey_id"]) if p["active"]]
+            passo, quando = followup_rules.prossimo_passo(
+                passi, trigger_sent_at=r["trigger_sent_at"], now=adesso,
+                ultimo_invio=repo.last_marketing_sent_at(cur, ctx, r["contact_id"]),
+                timezone_name=journey["send_timezone"])
+            if passo is None:
+                repo.complete_from_pause(cur, ctx, r["id"])
+                conteggi["completed"] += 1
+            else:
+                repo.resume_to_step(cur, ctx, r["id"], next_step_no=passo["step_no"], next_action_at=quando)
+                conteggi["resumed"] += 1
+    except Exception:
+        conteggi["errors"] += 1
+        logger.exception("journey_tick_contact_stop_failed enrollment_id=%s", r["id"])
 
 
 def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
@@ -494,6 +644,10 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
                             candidato["trigger_message_id"], journey["id"], exc_info=True)
 
 
+    if repo.contact_journey_schema(cur):
+        _enroll_contatti(ctx, cur, adesso, conteggi)
+
+
 # ---------------------------------------------------------------------------
 # D - AZIONI DOVUTE
 # ---------------------------------------------------------------------------
@@ -511,7 +665,8 @@ def _firma_centrale(anagrafica: dict[str, Any]) -> bool:
 
 
 def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
-                           stima_url: str | None = None) -> dict[str, str]:
+                           stima_url: str | None = None,
+                           unsubscribe_scope: str = unsubscribe.SCOPE_AGENCY) -> dict[str, str]:
     """I campi che un template puo' chiedere. Nessun altro.
 
     `unsubscribe_url` e' obbligatorio per il marketing (P29-3B.0) e viene
@@ -540,8 +695,11 @@ def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
                         else (anagrafica.get("agency_name") or "").strip()),
         "owner_portal_url": portale,
         "stima_url": (stima_url or "").strip() or portale,
+        # 108: la journey sul contatto manda il link "basta STIMA360"
+        # (ambito di piattaforma, dichiarato nella pagina); le altre quello
+        # di sempre, per questa agenzia.
         "unsubscribe_url": unsubscribe.unsubscribe_url(
-            _base_pubblica(), ctx.require_agency(), contact_id),
+            _base_pubblica(), ctx.require_agency(), contact_id, scope=unsubscribe_scope),
     }
 
 
@@ -550,7 +708,10 @@ def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode
                   stima_url: str | None = None) -> dict[str, Any]:
     """Il messaggio del passo, nel ledger. Nessun provider, nessuna rete."""
     contesto = _contesto_di_rendering(ctx, anagrafica, contact_id=riga["contact_id"],
-                                      stima_url=stima_url)
+                                      stima_url=stima_url,
+                                      unsubscribe_scope=(unsubscribe.SCOPE_PLATFORM
+                                                         if repo.is_contact_enrollment(riga)
+                                                         else unsubscribe.SCOPE_AGENCY))
     soggetto, corpo = templates.render(passo["template_key"], passo["template_version"], contesto)
     destinazione = (anagrafica.get("email") or "").strip()
     if not destinazione:
@@ -594,10 +755,30 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                 # rilettura, un incarico firmato fra la fase STOP e questa
                 # riga produrrebbe un messaggio che il dispatcher puo'
                 # spedire prima che il giro successivo lo cancelli.
-                ragione, evento = _fence_e_stop(
-                    cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
-                    stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"],
-                    contact_wide=repo.is_request_enrollment(r))
+                if repo.is_contact_enrollment(r):
+                    repo.fence(cur, ctx, contact_id=r["contact_id"], lead_id=None, stima_id=None)
+                    ragione, evento = _ragione_di_stop_contatto(cur, ctx, r), None
+                    passo_corrente = next(s for s in passi[r["journey_id"]] if s["step_no"] == r["next_step_no"])
+                    if ragione is None and followup_rules.oltre_orizzonte_passo(passo_corrente):
+                        # il giorno di calendario del passo e' oltre i 180: finita
+                        repo.complete_enrollment(cur, ctx, r["id"])
+                        conteggi["completed"] += 1
+                        continue
+                    ultimo = repo.last_marketing_sent_at(cur, ctx, r["contact_id"])
+                    if (ragione is None and ultimo is not None
+                            and ultimo + followup_rules.DISTANZA_MINIMA > adesso):
+                        # 48 ore fra due marketing: il passo slitta, non salta
+                        passo = next(s for s in passi[r["journey_id"]] if s["step_no"] == r["next_step_no"])
+                        journey = repo.select_journey(cur, ctx, r["journey_id"])
+                        repo.defer_enrollment(cur, ctx, r["id"], next_action_at=send_window.next_allowed(
+                            ultimo + followup_rules.DISTANZA_MINIMA, passo["send_window"], journey["send_timezone"]))
+                        conteggi["deferred"] += 1
+                        continue
+                else:
+                    ragione, evento = _fence_e_stop(
+                        cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
+                        stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"],
+                        contact_wide=repo.is_request_enrollment(r))
                 if ragione is not None:
                     repo.stop_enrollment(cur, ctx, r["id"], reason=ragione,
                                          actor_user_id=None, stop_event_id=evento)

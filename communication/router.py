@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from consent import exceptions as consent_exceptions
+from consent import operator_service as consent_operator
 from core.exceptions import PermissionDenied
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
@@ -33,7 +35,8 @@ from . import journey_service
 from . import journey_tick
 from .dependencies import require_dispatch_context
 from .exceptions import ConflictError, NotFoundError, ValidationError
-from .schemas import DispatchRequest, JourneyTickRequest, ManualMessageRequest
+from .schemas import (ConsentGrantRequest, ConsentRefusalRequest, DispatchRequest,
+                      JourneyTickRequest, ManualMessageRequest)
 
 router = APIRouter(prefix="/api/communication", tags=["communication"])
 
@@ -120,6 +123,77 @@ def _tradotto(azione):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PlatformAdminAgencyRequired as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _tradotto_consenso(azione):
+    """Le eccezioni del registro del consenso, tradotte come quelle di qui."""
+    try:
+        return azione()
+    except consent_exceptions.NotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Risorsa non trovata") from exc
+    except consent_exceptions.ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except consent_exceptions.ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PermissionDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PlatformAdminAgencyRequired as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Fase B - il consenso marketing raccolto dall'operatore
+#
+# Vive accanto alle comunicazioni perche' e' la tab in cui l'operatore lo
+# vede e lo registra. L'agenzia e' quella della sessione, il contatto nello
+# scope, l'attore la persona autenticata: il canale Basic condiviso non ha
+# una persona e viene rifiutato dal service (403).
+# ---------------------------------------------------------------------------
+
+@router.get("/consent/notices")
+def consent_notices(
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Le informative marketing valide adesso, da citare in un consenso."""
+    return {"notices": _tradotto_consenso(lambda: consent_operator.list_notices())}
+
+
+@router.get("/contacts/{contact_id}/consent")
+def contact_consent(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Lo stato del consenso marketing come lo vede la guardia."""
+    return _tradotto_consenso(lambda: consent_operator.marketing_state(ctx, contact_id))
+
+
+@router.post("/contacts/{contact_id}/consent/grant", status_code=201)
+def contact_consent_grant(
+    contact_id: int,
+    payload: ConsentGrantRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Registra un consenso raccolto con una prova e un'informativa valida."""
+    esito = _tradotto_consenso(lambda: consent_operator.register_grant(
+        ctx, contact_id, decided_at=payload.decided_at, evidence_type=payload.evidence_type,
+        evidence_ref=payload.evidence_ref, notice_id=payload.notice_id, note=payload.note))
+    return {"recorded": True, "created": esito["created"], "event_id": esito["event"]["id"],
+            "notice": esito["notice"]}
+
+
+@router.post("/contacts/{contact_id}/consent/refusal", status_code=201)
+def contact_consent_refusal(
+    contact_id: int,
+    payload: ConsentRefusalRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Registra un rifiuto o una revoca espressi al personale. Blocca subito."""
+    esito = _tradotto_consenso(lambda: consent_operator.register_refusal(
+        ctx, contact_id, decided_at=payload.decided_at, scope=payload.scope, note=payload.note,
+        evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref))
+    return {"recorded": True, "created": esito["created"], "event_id": esito["event"]["id"],
+            "scope": esito["scope"],
+            "platform_optout_id": (esito.get("platform_optout") or {}).get("id")}
 
 
 @router.post("/journeys/tick")

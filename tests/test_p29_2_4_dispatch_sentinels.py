@@ -379,9 +379,17 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
     # STESSO router e dietro la stessa ammissione di livello mount. Cio' che
     # questo test continua a garantire e' che nessuna di queste sia aperta:
     # l'unica senza sessione resta l'unsubscribe pubblico.
+    # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: il consenso marketing
+    # raccolto dall'operatore (stato, registrazione, rifiuto) e l'elenco delle
+    # informative valide, sullo STESSO router e dietro la stessa ammissione di
+    # livello mount. L'unica superficie senza sessione resta l'unsubscribe.
     assert percorsi == [
+        "/api/communication/consent/notices",
         "/api/communication/contacts/{contact_id}/automation/pause",
         "/api/communication/contacts/{contact_id}/automation/resume",
+        "/api/communication/contacts/{contact_id}/consent",
+        "/api/communication/contacts/{contact_id}/consent/grant",
+        "/api/communication/contacts/{contact_id}/consent/refusal",
         "/api/communication/contacts/{contact_id}/journey",
         "/api/communication/contacts/{contact_id}/messages",
         "/api/communication/dispatch",

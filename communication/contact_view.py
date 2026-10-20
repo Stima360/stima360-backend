@@ -56,6 +56,8 @@ ETICHETTE_MOTIVO = {
     "owner_login_link": "Accesso proprietario",
     "m6": "M6", "m7": "M7", "m8": "M8", "m9": "M9", "m10": "M10",
     "appointment_reminder": "Promemoria appuntamento",
+    # 108 (Fase B): il calendario a 180 giorni usa fino a m17, il CHECK arriva a m20.
+    **{f"m{i}": f"M{i}" for i in range(11, 21)},
 }
 
 ETICHETTE_STATO = {
@@ -227,6 +229,10 @@ def journey(ctx, contact_id: int, *, cur=None) -> dict[str, Any]:
                 "awaiting_operator": in_attesa,
                 "awaiting_since": aperta["awaiting_since"],
                 "total_steps": len(passi),
+                # 108: una pausa di SISTEMA (appuntamento, relazione
+                # commerciale, consulenza) e la data in cui riprende da sola.
+                "paused_source": aperta.get("paused_source"),
+                "resume_after": aperta.get("resume_after"),
                 "can_pause": aperta["status"] == ENR_ACTIVE,
                 "can_resume": aperta["status"] == ENR_PAUSED,
                 "can_send_current": azionabile,

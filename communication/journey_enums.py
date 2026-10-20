@@ -3,7 +3,15 @@ from __future__ import annotations
 
 TRIGGER_STIMA_PDF_SENT = "stima_pdf_sent"
 TRIGGER_STIMA_REQUEST_REGISTERED = "stima_request_registered"
-TRIGGER_TYPES = frozenset({TRIGGER_STIMA_PDF_SENT, TRIGGER_STIMA_REQUEST_REGISTERED})
+#: 108 (Fase B): la journey SUL CONTATTO eleggibile, senza stima.
+TRIGGER_CONTACT_ELIGIBLE = "contact_eligible"
+TRIGGER_TYPES = frozenset({TRIGGER_STIMA_PDF_SENT, TRIGGER_STIMA_REQUEST_REGISTERED,
+                           TRIGGER_CONTACT_ELIGIBLE})
+
+#: 108: come finisce una sequenza. `linear` si completa dopo l'ultimo passo;
+#: `repeat_last` ricomincia (la v2 di Tappa 6, che resta identica).
+POLICY_LINEAR, POLICY_REPEAT_LAST = "linear", "repeat_last"
+SEQUENCE_POLICIES = frozenset({POLICY_LINEAR, POLICY_REPEAT_LAST})
 
 JOURNEY_DRAFT, JOURNEY_ACTIVE, JOURNEY_RETIRED = "draft", "active", "retired"
 JOURNEY_STATUSES = frozenset({JOURNEY_DRAFT, JOURNEY_ACTIVE, JOURNEY_RETIRED})
@@ -13,7 +21,7 @@ ACTOR_TYPES = frozenset({ACTOR_SYSTEM, ACTOR_OPERATOR})
 
 STEP_MODES = frozenset({"automatic", "assisted"})
 DELAY_FROM = frozenset({"trigger", "previous_step_sent"})
-STEP_REASON_CODES = tuple(f"m{i}" for i in range(1, 11))
+STEP_REASON_CODES = tuple(f"m{i}" for i in range(1, 21))
 
 ENR_ACTIVE, ENR_PAUSED, ENR_COMPLETED, ENR_STOPPED = "active", "paused", "completed", "stopped"
 ENROLLMENT_STATUSES = frozenset({ENR_ACTIVE, ENR_PAUSED, ENR_COMPLETED, ENR_STOPPED})
@@ -23,6 +31,10 @@ KIND_ENQUEUE, KIND_AWAIT_OPERATOR = "enqueue", "await_operator"
 ACTION_KINDS = frozenset({KIND_ENQUEUE, KIND_AWAIT_OPERATOR})
 
 PAUSED_BY_ENROLLMENT, PAUSED_BY_CONTACT_CONTROL = "enrollment", "contact_control"
+#: 108: le pause di SISTEMA della journey sul contatto, senza operatore.
+PAUSED_BY_APPOINTMENT, PAUSED_BY_COMMERCIAL, PAUSED_BY_CONSULTATION = (
+    "appointment", "commercial", "consultation")
+SYSTEM_PAUSE_SOURCES = frozenset({PAUSED_BY_APPOINTMENT, PAUSED_BY_COMMERCIAL, PAUSED_BY_CONSULTATION})
 
 #: I nomi delle ragioni, uno per costante. P29-3C li passa come PARAMETRI
 #: alla query fresca degli stop: cosi' il SQL non contiene nessun letterale
@@ -38,6 +50,10 @@ STOP_CONSENT_NOT_GRANTED = "consent_not_granted"
 STOP_CONSENT_INCONSISTENT = "consent_inconsistent"
 STOP_EXPIRED_ON_RESUME = "expired_on_resume"
 STOP_OPERATOR = "operator"
+#: 108: le ragioni della journey sul contatto.
+STOP_PLATFORM_OPTOUT = "platform_optout"
+STOP_EMAIL_INVALID = "email_invalid"
+STOP_DUPLICATE_EMAIL = "duplicate_email"
 
 #: L'ORDINE E' LA PRIORITA' (P29-3A.1 §H): quando piu' ragioni sono vere
 #: insieme vince la prima. Una tupla, non un insieme, e un test ne fissa
@@ -50,20 +66,32 @@ STOP_PRIORITY = (
     STOP_CONSENT_REVOKED, STOP_CONSENT_NOT_GRANTED, STOP_CONSENT_INCONSISTENT,
     STOP_EXPIRED_ON_RESUME, STOP_OPERATOR,
 )
-STOP_REASONS = frozenset(STOP_PRIORITY) | {"request_too_old"}
+STOP_REASONS = frozenset(STOP_PRIORITY) | {"request_too_old", STOP_PLATFORM_OPTOUT,
+                                           STOP_EMAIL_INVALID, STOP_DUPLICATE_EMAIL}
+
+#: 108: la priorita' della journey SUL CONTATTO. Incarichi, sopralluoghi e
+#: lead chiusi qui non fermano (sono pause o niente: la relazione commerciale
+#: non toglie il consenso); fermano solo la base giuridica, l'indirizzo e la
+#: persona. `STOP_PRIORITY` sopra resta quella delle v1/v2, intatta.
+CONTACT_STOP_PRIORITY = (
+    STOP_CONSENT_REVOKED, STOP_PLATFORM_OPTOUT, STOP_CONSENT_NOT_GRANTED,
+    STOP_CONSENT_INCONSISTENT, STOP_EMAIL_INVALID, STOP_CONTACT_INACTIVE,
+    STOP_DUPLICATE_EMAIL, STOP_OPERATOR,
+)
 
 #: Le tre ragioni del consenso, mappate dalla guardia (P29-1.5).
 CONSENT_STOP_BY_GUARD_REASON = {
     "deny_revoked": "consent_revoked",
     "deny_never_given": "consent_not_granted",
     "deny_inconsistent_state": "consent_inconsistent",
+    "deny_platform_optout": STOP_PLATFORM_OPTOUT,
 }
 
 
-def choose_stop_reason(reasons) -> str | None:
-    """La ragione che vince fra quelle presenti, secondo `STOP_PRIORITY`."""
+def choose_stop_reason(reasons, priority=STOP_PRIORITY) -> str | None:
+    """La ragione che vince fra quelle presenti, secondo `priority`."""
     presenti = set(reasons)
-    for ragione in STOP_PRIORITY:
+    for ragione in priority:
         if ragione in presenti:
             return ragione
     return None

@@ -106,6 +106,93 @@ function renderCardJourney(journey) {
   </div>`;
 }
 
+// Fase B — il CONSENSO MARKETING, come lo vede la guardia, e l'azione
+// «Registra consenso marketing» per chi lo ha raccolto di persona (modulo
+// cartaceo o digitale, con un riferimento alla prova e l'informativa
+// presentata). Nessun consenso si registra senza prova e senza informativa:
+// lo rifiuta il server, qui si chiede tutto quello che serve.
+const ETICHETTE_CONSENSO = {
+  allow_explicit_grant: 'concesso',
+  allow_legacy_grant: 'concesso (storico)',
+  deny_revoked: 'revocato',
+  deny_never_given: 'mai dato',
+  deny_inconsistent_state: 'stato incoerente: verificare',
+  deny_platform_optout: 'disiscritto da tutto STIMA360',
+};
+
+function renderConsenso(consenso, informative) {
+  if (!consenso || consenso.available === false) {
+    return `<div class="panel" data-consent-panel>
+      <p class="muted">Consenso marketing non disponibile su questo ambiente.</p>
+    </div>`;
+  }
+  const etichetta = ETICHETTE_CONSENSO[consenso.reason] || consenso.reason || '—';
+  const stato = renderBadge(etichetta, consenso.allowed ? 'green' : 'red');
+  const quando = consenso.decided_at
+    ? ` <span class="muted">dal ${escapeHtml(formatDateTime(consenso.decided_at))}</span>` : '';
+  const fonte = consenso.source ? ` <span class="muted">— fonte: ${escapeHtml(consenso.source)}</span>` : '';
+  const optout = consenso.platform_optout_at
+    ? `<p class="muted" data-platform-optout>Disiscrizione da tutto STIMA360 il ${escapeHtml(formatDateTime(consenso.platform_optout_at))}: nessuna agenzia invia marketing a questo indirizzo.</p>` : '';
+  const opzioniInformative = (informative || []).map((n) =>
+    `<option value="${Number(n.id)}">${escapeHtml(n.version)} — ${escapeHtml(n.context)}</option>`).join('');
+  const senzaInformative = !(informative || []).length
+    ? '<p class="error-box" data-no-notice>Nessuna informativa marketing valida: il consenso non si puo\u0027 registrare finche\u0027 il Super Admin non ne pubblica una.</p>' : '';
+  const form = consenso.can_record ? `<details class="panel" data-consent-grant>
+    <summary>Registra consenso marketing</summary>
+    <form data-consent-grant-form>
+      <p class="muted">Solo un consenso raccolto davvero, con una prova che si puo\u0027 ritrovare.
+        Un indirizzo in rubrica o una telefonata non sono una prova.</p>
+      ${senzaInformative}
+      <label>Data e ora della raccolta <input type="datetime-local" name="decided_at" required></label>
+      <label>Modalita\u0027
+        <select name="evidence_type">
+          <option value="paper_form">Modulo cartaceo</option>
+          <option value="digital_form">Modulo digitale</option>
+          <option value="other_documented">Altra modalita\u0027 documentata</option>
+        </select>
+      </label>
+      <label>Riferimento alla prova (protocollo, archivio, documento)
+        <input type="text" name="evidence_ref" minlength="6" maxlength="100" required></label>
+      <label>Informativa presentata
+        <select name="notice_id" required>${opzioniInformative}</select>
+      </label>
+      <label>Note <textarea name="note" rows="2" maxlength="2000"></textarea></label>
+      <div class="actions"><button type="submit" class="btn btn-primary" ${(informative || []).length ? '' : 'disabled'}>Registra consenso</button></div>
+      <p class="error-box" data-consent-error hidden></p>
+    </form>
+  </details>
+  <details class="panel" data-consent-refusal>
+    <summary>Registra rifiuto o revoca espressi al personale</summary>
+    <form data-consent-refusal-form>
+      <p class="muted">Blocca subito gli invii di marketing. L\u0027ambito lo dichiari tu: questa agenzia, oppure tutto STIMA360.</p>
+      <label>Data e ora <input type="datetime-local" name="decided_at" required></label>
+      <label>Ambito
+        <select name="scope">
+          <option value="agency">Questa agenzia</option>
+          <option value="platform">Tutto STIMA360 (ogni agenzia)</option>
+        </select>
+      </label>
+      <label>Come e\u0027 stato espresso <textarea name="note" rows="2" minlength="10" maxlength="2000" required></textarea></label>
+      <div class="actions"><button type="submit" class="btn btn-danger">Registra revoca</button></div>
+      <p class="error-box" data-refusal-error hidden></p>
+    </form>
+  </details>` : '';
+  return `<div class="panel" data-consent-panel>
+    <div><strong>Consenso marketing:</strong> ${stato}${quando}${fonte}</div>
+    ${optout}
+    ${form}
+  </div>`;
+}
+
+function isoConFuso(valore) {
+  // `datetime-local` non porta il fuso: si interpreta nell\u0027ora locale del
+  // browser e si manda in ISO con offset, come il server pretende.
+  if (!valore) return '';
+  const data = new Date(valore);
+  if (Number.isNaN(data.getTime())) return '';
+  return data.toISOString();
+}
+
 function renderStorico(messaggi) {
   if (!messaggi.length) {
     return '<p class="muted">Nessun messaggio inviato o programmato per questo contatto.</p>';
@@ -162,6 +249,7 @@ export function renderCommunications(stato) {
   }
   return [
     renderAutomazione(stato.journey),
+    renderConsenso(stato.consent, stato.notices),
     renderCardJourney(stato.journey),
     '<h3>Storico comunicazioni</h3>',
     renderStorico(stato.messages || []),
@@ -171,17 +259,21 @@ export function renderCommunications(stato) {
 }
 
 export async function loadCommunications(contactId) {
-  const [messaggi, journey] = await Promise.all([
+  const [messaggi, journey, consent, informative] = await Promise.all([
     apiGet(`/api/communication/contacts/${contactId}/messages`),
     // La journey puo' non esserci (migration non applicata): non deve far
     // fallire lo storico, che e' la parte che esiste sempre.
     apiGet(`/api/communication/contacts/${contactId}/journey`).catch(() => ({ available: false })),
+    apiGet(`/api/communication/contacts/${contactId}/consent`).catch(() => ({ available: false })),
+    apiGet('/api/communication/consent/notices').catch(() => ({ notices: [] })),
   ]);
   return {
     status: 'ready',
     messages: messaggi.messages || [],
     inboundNote: messaggi.inbound_note,
     journey,
+    consent,
+    notices: informative.notices || [],
   };
 }
 
@@ -204,6 +296,7 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
   function soloLettura() {
     for (const el of Array.from(mount.querySelectorAll('button[data-action]'))) el.remove();
     for (const el of Array.from(mount.querySelectorAll('[data-new-message]'))) el.remove();
+    for (const el of Array.from(mount.querySelectorAll('[data-consent-grant], [data-consent-refusal]'))) el.remove();
     mount.insertAdjacentHTML('afterbegin', '<p class="muted" data-comm-readonly>Contatto nel Cestino: automazioni sospese, nessun messaggio nuovo. Si riattivano a mano dopo il ripristino.</p>');
   }
 
@@ -246,6 +339,34 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
   });
 
   mount.addEventListener('submit', async (evento) => {
+    const grant = evento.target.closest('form[data-consent-grant-form]');
+    const refusal = evento.target.closest('form[data-consent-refusal-form]');
+    if (grant || refusal) {
+      evento.preventDefault();
+      const modulo = grant || refusal;
+      const errore = modulo.querySelector(grant ? '[data-consent-error]' : '[data-refusal-error]');
+      errore.hidden = true;
+      const dati = new FormData(modulo);
+      const corpo = grant ? {
+        decided_at: isoConFuso((dati.get('decided_at') || '').toString()),
+        evidence_type: (dati.get('evidence_type') || '').toString(),
+        evidence_ref: (dati.get('evidence_ref') || '').toString(),
+        notice_id: Number(dati.get('notice_id') || 0),
+        note: (dati.get('note') || '').toString() || null,
+      } : {
+        decided_at: isoConFuso((dati.get('decided_at') || '').toString()),
+        scope: (dati.get('scope') || 'agency').toString(),
+        note: (dati.get('note') || '').toString(),
+      };
+      try {
+        await apiPost(`/api/communication/contacts/${contactId}/consent/${grant ? 'grant' : 'refusal'}`, corpo);
+        await ridisegna();
+      } catch (guasto) {
+        errore.hidden = false;
+        errore.textContent = guasto.message || 'Registrazione non riuscita.';
+      }
+      return;
+    }
     const form = evento.target.closest('form[data-manual-form]');
     if (!form) return;
     evento.preventDefault();

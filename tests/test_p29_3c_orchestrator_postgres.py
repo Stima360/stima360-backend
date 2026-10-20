@@ -1841,10 +1841,16 @@ def test_66_le_query_degli_stop_non_crescono_con_l_universo_ne_a_sei_per_riga(
 
     def conta(sql):
         fresche = [q for q in sql if "with prio(reason, rank)" in q]
-        consenso = [q for q in sql if "consent_events" in q and "insert" not in q]
+        # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: su uno schema SENZA la 108
+        # (questo database si ferma alla 071) la lettura decisionale prova
+        # prima la statement con l'opt-out di piattaforma, che PostgreSQL
+        # rifiuta, e ripiega su quella di sempre: si conta la statement che
+        # decide. Con la 108 applicata la statement e' una sola.
+        rifiutate = [q for q in sql if "communication_email_optouts" in q]
+        consenso = [q for q in sql if "consent_events" in q and "insert" not in q and q not in rifiutate]
         # La lettura del consenso nomina anch'essa `contacts ... = ANY(...)`:
         # va tolta dal conto del blocco, o si conterebbe due volte.
-        blocco = [q for q in sql if "= any(" in q and q not in consenso and any(
+        blocco = [q for q in sql if "= any(" in q and q not in consenso and q not in rifiutate and any(
             tabella in q for tabella in ("stima_acquisitions", "stima_inspections",
                                          "from leads", "from contacts", "seller_timeline_events"))]
         return {"fresche": len(fresche), "consenso": len(consenso), "blocco": len(blocco)}

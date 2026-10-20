@@ -45,6 +45,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from psycopg2.errors import UndefinedTable
+
 from core.scope import scoped_predicate as core_scoped_predicate
 
 from .database import consent_cursor
@@ -336,6 +338,112 @@ def read_projection(ctx, contact_id: int) -> dict[str, Any]:
         return select_contact(cur, ctx, contact_id)
 
 
+# ---------------------------------------------------------------------------
+# 108 (Fase B) - la DISISCRIZIONE DI PIATTAFORMA
+#
+# `communication_email_optouts` e' la lista di chi ha detto "basta marketing
+# STIMA360" per tutte le agenzie. Non e' scopata per agenzia di proposito:
+# l'indirizzo e' la chiave, e un'agenzia non puo' "non vederla". Qui si legge
+# nella STESSA statement del contatto e dell'evento (uno snapshot), e si
+# scrive solo in append: la guardia decide, non ripara.
+#
+# Se la tabella non esiste ancora (codice davanti alla migration), la
+# decisione resta quella di sempre: non si inventa una colonna vuota per
+# sbaglio, la si dichiara assente.
+# ---------------------------------------------------------------------------
+_OPTOUT_SELECT = """,
+                   po.id           AS platform_optout_id,
+                   po.opted_out_at AS platform_optout_at"""
+_OPTOUT_SELECT_ASSENTE = """,
+                   NULL::bigint      AS platform_optout_id,
+                   NULL::timestamptz AS platform_optout_at"""
+_OPTOUT_LATERAL = """
+              LEFT JOIN LATERAL (
+                  SELECT po.id, po.opted_out_at
+                    FROM communication_email_optouts po
+                   WHERE c.email_normalized IS NOT NULL
+                     AND po.email_normalized = c.email_normalized
+                   ORDER BY po.opted_out_at DESC, po.id DESC
+                   LIMIT 1
+              ) po ON TRUE"""
+
+
+def platform_optout_available(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.communication_email_optouts') IS NOT NULL AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def _sql_decisionale(event_source: str, contact_predicate: str, filtro: str, *, con_optout: bool) -> str:
+    return f"""
+        SELECT c.*,
+               ev.id         AS consent_event_id,
+               ev.decision   AS consent_event_decision,
+               ev.decided_at AS consent_event_decided_at,
+               ev.source     AS consent_event_source,
+               ev.notice_id  AS consent_event_notice_id
+               {_OPTOUT_SELECT if con_optout else _OPTOUT_SELECT_ASSENTE}
+          FROM contacts c
+          LEFT JOIN LATERAL (
+              SELECT ce.id, ce.decision, ce.decided_at, ce.source, ce.notice_id
+                FROM {event_source}
+                 AND ce.contact_id = c.id
+                 AND ce.purpose = %s
+               ORDER BY ce.decided_at DESC, ce.id DESC
+               LIMIT 1
+          ) ev ON TRUE
+          {_OPTOUT_LATERAL if con_optout else ""}
+         WHERE {filtro} AND {contact_predicate}
+    """
+
+
+def _esegui_decisionale(cur, event_source: str, contact_predicate: str, filtro: str, params) -> None:
+    """UNA statement, uno snapshot: contatto, ultimo evento e opt-out insieme.
+
+    Se la tabella degli opt-out non esiste (codice arrivato prima della 108)
+    PostgreSQL rifiuta la statement: si annulla e si rilegge senza di essa,
+    con la decisione di sempre. Non e' una seconda query decisionale: e' la
+    stessa, senza una colonna che il database non ha ancora. Con la 108
+    applicata la statement e' una sola, sempre.
+    """
+    try:
+        cur.execute(_sql_decisionale(event_source, contact_predicate, filtro, con_optout=True), params)
+    except UndefinedTable:
+        cur.connection.rollback()
+        cur.execute(_sql_decisionale(event_source, contact_predicate, filtro, con_optout=False), params)
+
+
+def insert_platform_optout(cur, data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Una riga di opt-out di piattaforma. Idempotente sulla chiave."""
+    cur.execute(
+        """
+        INSERT INTO communication_email_optouts
+               (email_normalized, opted_out_at, source, source_agency_id, source_contact_id,
+                consent_event_id, actor_type, actor_ref, note, idempotency_key)
+        VALUES (%(email_normalized)s, %(opted_out_at)s, %(source)s, %(source_agency_id)s,
+                %(source_contact_id)s, %(consent_event_id)s, %(actor_type)s, %(actor_ref)s,
+                %(note)s, %(idempotency_key)s)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        data,
+    )
+    row = _row(cur.fetchone())
+    if row is not None:
+        return row, True
+    cur.execute("SELECT * FROM communication_email_optouts WHERE idempotency_key = %s",
+                [data["idempotency_key"]])
+    return _row(cur.fetchone()), False
+
+
+def latest_platform_optout(cur, email_normalized: str | None) -> dict[str, Any] | None:
+    if not email_normalized or not platform_optout_available(cur):
+        return None
+    cur.execute(
+        """SELECT * FROM communication_email_optouts WHERE email_normalized = %s
+            ORDER BY opted_out_at DESC, id DESC LIMIT 1""", [email_normalized])
+    return _row(cur.fetchone())
+
+
 def read_send_decision_inputs(ctx, contact_id: int, purpose: str):
     """I due ingressi della guardia, in UN SOLO statement. Sola lettura.
 
@@ -375,31 +483,12 @@ def read_send_decision_inputs(ctx, contact_id: int, purpose: str):
     contact_predicate, contact_params = core_scoped_predicate(ctx, "contacts", "c")
     event_source, event_params = consent_scoped_source(ctx, "consent_events", "ce")
 
-    sql = f"""
-        SELECT c.*,
-               ev.id         AS consent_event_id,
-               ev.decision   AS consent_event_decision,
-               ev.decided_at AS consent_event_decided_at,
-               ev.source     AS consent_event_source,
-               ev.notice_id  AS consent_event_notice_id
-          FROM contacts c
-          LEFT JOIN LATERAL (
-              SELECT ce.id, ce.decision, ce.decided_at, ce.source, ce.notice_id
-                FROM {event_source}
-                 AND ce.contact_id = c.id
-                 AND ce.purpose = %s
-               ORDER BY ce.decided_at DESC, ce.id DESC
-               LIMIT 1
-          ) ev ON TRUE
-         WHERE c.id = %s AND {contact_predicate}
-    """
     # L'ordine dei parametri segue l'ordine dei segnaposto NEL TESTO: prima la
     # LATERAL (agenzia dell'evento, purpose), poi la WHERE esterna (id del
-    # contatto, scope del contatto).
+    # contatto, scope del contatto). La LATERAL dell'opt-out non ha parametri.
     params = list(event_params) + [purpose, contact_id] + list(contact_params)
-
     with consent_cursor() as (_, cur):
-        cur.execute(sql, params)
+        _esegui_decisionale(cur, event_source, contact_predicate, "c.id = %s", params)
         row = _row(cur.fetchone())
 
     if row is None:
@@ -453,28 +542,9 @@ def read_send_decision_inputs_bulk(ctx, contact_ids, purpose: str):
     contact_predicate, contact_params = core_scoped_predicate(ctx, "contacts", "c")
     event_source, event_params = consent_scoped_source(ctx, "consent_events", "ce")
 
-    sql = f"""
-        SELECT c.*,
-               ev.id         AS consent_event_id,
-               ev.decision   AS consent_event_decision,
-               ev.decided_at AS consent_event_decided_at,
-               ev.source     AS consent_event_source,
-               ev.notice_id  AS consent_event_notice_id
-          FROM contacts c
-          LEFT JOIN LATERAL (
-              SELECT ce.id, ce.decision, ce.decided_at, ce.source, ce.notice_id
-                FROM {event_source}
-                 AND ce.contact_id = c.id
-                 AND ce.purpose = %s
-               ORDER BY ce.decided_at DESC, ce.id DESC
-               LIMIT 1
-          ) ev ON TRUE
-         WHERE c.id = ANY(%s) AND {contact_predicate}
-    """
     params = list(event_params) + [purpose, identificativi] + list(contact_params)
-
     with consent_cursor() as (_, cur):
-        cur.execute(sql, params)
+        _esegui_decisionale(cur, event_source, contact_predicate, "c.id = ANY(%s)", params)
         righe = [_row(r) for r in cur.fetchall()]
 
     risultato = {}

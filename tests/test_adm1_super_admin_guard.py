@@ -49,7 +49,10 @@ def test_a_ogni_rotta_della_rete_richiede_il_super_admin_designato():
             else:
                 assert require_super_admin_context in chiamate, (metodo, rotta.path)
                 controllate += 1
-    assert controllate == 30, controllate  # 23 di ADM-1 + 4 anteprime ADM-2 + 1 registro ADM-5A + 1 flag ADM-6 + 1 elenco account (eliminazione blindata)
+    # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: + 4 rotte delle informative
+    # marketing (`/consent-notices`: elenco, dettaglio, creazione, chiusura),
+    # tutte dietro `require_super_admin_context`.
+    assert controllate == 34, controllate  # 23 di ADM-1 + 4 anteprime ADM-2 + 1 registro ADM-5A + 1 flag ADM-6 + 1 elenco account (eliminazione blindata) + 4 informative (Fase B)
 
 
 @pytest.fixture

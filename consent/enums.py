@@ -140,8 +140,12 @@ REASON_ALLOW_LEGACY_GRANT = "allow_legacy_grant"
 REASON_DENY_REVOKED = "deny_revoked"
 REASON_DENY_NEVER_GIVEN = "deny_never_given"
 REASON_DENY_INCONSISTENT_STATE = "deny_inconsistent_state"
+#: 108 (Fase B): l'indirizzo ha chiesto di non ricevere piu' marketing
+#: STIMA360 da NESSUNA agenzia, dopo l'ultima concessione di questa.
+REASON_DENY_PLATFORM_OPTOUT = "deny_platform_optout"
 
 SEND_DECISION_REASONS = frozenset({
+    REASON_DENY_PLATFORM_OPTOUT,
     REASON_ALLOW_EXPLICIT_GRANT,
     REASON_ALLOW_LEGACY_GRANT,
     REASON_DENY_REVOKED,

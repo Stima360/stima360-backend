@@ -129,7 +129,12 @@ def test_01_la_071_e_valida_e_in_coda():
     # (nessuna cancellazione fisica delle entita' della Rete), con la sua down.
     # SENTINELLA AGGIORNATA DA APPUNTAMENTI DI VENDITA: 106_sale_appointments
     # (la tipologia `sale_appointment` e il suo vincolo; additiva, nessun backfill).
-    assert numeri[numeri.index(76):] == list(range(76, 107))
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-CRM-1: 107_visita_immobile_incarico
+    # (la visita immobile su un incarico; un trigger, nessuna colonna).
+    # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: 108_followup_contact_journey
+    # (journey sul contatto, pausa di sistema, opt-out di piattaforma; additiva
+    # con backfill della sola `sequence_policy`), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 109))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
@@ -196,10 +201,13 @@ def test_06_la_priorita_degli_stop_e_deterministica_e_fissata():
 def test_07_le_tre_ragioni_del_consenso_mappano_la_guardia():
     from communication.journey_enums import CONSENT_STOP_BY_GUARD_REASON
     from consent import enums as c
+    # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: la quarta ragione e' l'opt-out
+    # di piattaforma (108), che la journey registra come `platform_optout`.
     assert CONSENT_STOP_BY_GUARD_REASON == {
         c.REASON_DENY_REVOKED: "consent_revoked",
         c.REASON_DENY_NEVER_GIVEN: "consent_not_granted",
-        c.REASON_DENY_INCONSISTENT_STATE: "consent_inconsistent"}
+        c.REASON_DENY_INCONSISTENT_STATE: "consent_inconsistent",
+        c.REASON_DENY_PLATFORM_OPTOUT: "platform_optout"}
 
 
 # ---------------------------------------------------------------------------

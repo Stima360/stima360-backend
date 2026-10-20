@@ -15,6 +15,8 @@ mandato.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 
 from .enums import CHANNELS, COMMUNICATION_TYPES
@@ -81,3 +83,35 @@ class ManualMessageRequest(BaseModel):
         if valore not in COMMUNICATION_TYPES:
             raise ValueError(f"communication_type must be one of {sorted(COMMUNICATION_TYPES)}")
         return valore
+
+
+class ConsentGrantRequest(BaseModel):
+    """Fase B: un consenso marketing raccolto dall'operatore, con la prova.
+
+    `decided_at` e' la data della RACCOLTA (con fuso), non quella del click.
+    `evidence_type`/`evidence_ref` dicono dove sta la prova; `notice_id` cita
+    l'informativa presentata. Nessun campo del contatto, nessun attore: il
+    contatto e' nel path e l'attore e' la sessione.
+    """
+    decided_at: datetime
+    evidence_type: str = Field(min_length=1, max_length=40)
+    evidence_ref: str = Field(min_length=1, max_length=100)
+    notice_id: int = Field(gt=0)
+    note: str | None = Field(default=None, max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class ConsentRefusalRequest(BaseModel):
+    """Fase B: un rifiuto o una revoca espressi al personale.
+
+    `scope` e' l'ambito dichiarato dall'operatore: `agency` (questa agenzia)
+    o `platform` (tutto STIMA360). `note` racconta come e' stato espresso.
+    """
+    decided_at: datetime
+    scope: str = "agency"
+    note: str = Field(min_length=1, max_length=2000)
+    evidence_type: str | None = Field(default=None, max_length=40)
+    evidence_ref: str | None = Field(default=None, max_length=100)
+
+    model_config = {"extra": "forbid"}

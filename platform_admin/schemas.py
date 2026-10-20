@@ -1134,3 +1134,63 @@ class AuditEntryResponse(BaseModel):
     target_id: str | None
     target_agency_id: int | None
     metadata: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Fase B - le informative marketing
+# ---------------------------------------------------------------------------
+
+class ConsentNoticeCreateRequest(PlatformModel):
+    purpose: str = "marketing"
+    version: str = Field(min_length=1, max_length=60)
+    context: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=20, max_length=200000)
+    valid_from: datetime
+    valid_to: datetime | None = None
+
+    @field_validator("version", "context")
+    @classmethod
+    def _ripulito(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("campo vuoto")
+        return value
+
+    @field_validator("content")
+    @classmethod
+    def _testo(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("il testo dell'informativa e' vuoto")
+        return value
+
+    @field_validator("valid_from", "valid_to")
+    @classmethod
+    def _con_fuso(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("le date di validita' devono avere il fuso orario")
+        return value
+
+
+class ConsentNoticeCloseRequest(PlatformModel):
+    valid_to: datetime | None = None
+
+    @field_validator("valid_to")
+    @classmethod
+    def _con_fuso(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("valid_to deve avere il fuso orario")
+        return value
+
+
+class ConsentNoticeResponse(BaseModel):
+    id: int
+    purpose: str
+    version: str
+    context: str
+    content: str
+    content_hash: str
+    content_available: bool
+    valid_from: datetime
+    valid_to: datetime | None
+    created_at: datetime
+    created_by: str

@@ -157,3 +157,12 @@ class AliasKindRefused(Exception):
     non puo' produrre - `stime.comune` e' un comune. E' un dato sbagliato nella
     richiesta, e il 422 dice quale.
     """
+
+
+class ConsentNoticeNotFound(Exception):
+    """Fase B: l'informativa indicata non esiste."""
+
+
+class ConsentNoticeConflict(Exception):
+    """Fase B: stessa versione gia' pubblicata per quella finalita', oppure
+    una chiusura su una informativa gia' chiusa."""

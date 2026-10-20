@@ -780,12 +780,16 @@ def test_c3_allowed_e_reason_non_possono_contraddirsi():
 
 
 def test_c4_i_motivi_sono_un_insieme_chiuso():
+    # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: `deny_platform_optout` (108),
+    # l'indirizzo ha detto "basta STIMA360" dopo l'ultima concessione.
+    from consent.enums import REASON_DENY_PLATFORM_OPTOUT
     assert SEND_DECISION_REASONS == {
         REASON_ALLOW_EXPLICIT_GRANT,
         REASON_ALLOW_LEGACY_GRANT,
         REASON_DENY_REVOKED,
         REASON_DENY_NEVER_GIVEN,
         REASON_DENY_INCONSISTENT_STATE,
+        REASON_DENY_PLATFORM_OPTOUT,
     }
     assert ALLOWING_REASONS < SEND_DECISION_REASONS
     assert ALLOWING_REASONS == {REASON_ALLOW_EXPLICIT_GRANT, REASON_ALLOW_LEGACY_GRANT}

@@ -653,3 +653,18 @@ AGENCY_ARCHIVE_NEEDS_SUSPENSION_MESSAGE = (
     "Un'agenzia si archivia solo dopo essere stata sospesa. Nessuna modifica "
     "e' stata fatta."
 )
+
+
+# ---------------------------------------------------------------------------
+# Fase B - le INFORMATIVE marketing (061 `consent_notices`), gestite dal Super
+# Admin. Una informativa e' un testo versionato con una validita': nessun
+# consenso raccolto dall'operatore si registra senza citarne una valida.
+# Non si modifica mai il testo di una versione pubblicata: si chiude la sua
+# validita' e se ne apre un'altra.
+# ---------------------------------------------------------------------------
+TARGET_TYPE_CONSENT_NOTICE = "consent_notice"
+ACTION_CONSENT_NOTICE_CREATE = "platform.consent_notice.create"
+ACTION_CONSENT_NOTICE_CLOSE = "platform.consent_notice.close"
+CONSENT_NOTICE_VERSION_MAX = 60
+CONSENT_NOTICE_CONTEXT_MAX = 200
+CONSENT_NOTICE_PURPOSES = ("marketing", "privacy_terms")

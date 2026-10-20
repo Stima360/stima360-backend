@@ -33,7 +33,8 @@ from .database import communication_cursor
 from .journey_enums import (
     ACTOR_OPERATOR, ACTOR_SYSTEM, CONSENT_STOP_BY_GUARD_REASON, DELAY_FROM, ENR_ACTIVE,
     ENR_PAUSED, ENR_STOPPED, KIND_AWAIT_OPERATOR, KIND_ENQUEUE, PAUSED_BY_CONTACT_CONTROL,
-    PAUSED_BY_ENROLLMENT, STEP_MODES, STEP_REASON_CODES, STOP_REASONS, TRIGGER_TYPES,
+    PAUSED_BY_ENROLLMENT, POLICY_LINEAR, SEQUENCE_POLICIES, STEP_MODES, STEP_REASON_CODES,
+    STOP_REASONS, TRIGGER_TYPES,
     choose_stop_reason,
 )
 from .repository import contact_in_scope, refuse_if_contact_in_trash
@@ -121,10 +122,12 @@ def _valida_passi(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str, name: str,
                       steps: list[dict[str, Any]], send_timezone: str = "Europe/Rome",
-                      cur=None) -> dict[str, Any]:
+                      sequence_policy: str = POLICY_LINEAR, cur=None) -> dict[str, Any]:
     """Crea una journey in `draft`. Dal sistema o da un operatore: lo dice `ctx`."""
     if trigger_type not in TRIGGER_TYPES:
         raise ValidationError(f"trigger_type must be one of {sorted(TRIGGER_TYPES)}")
+    if sequence_policy not in SEQUENCE_POLICIES:
+        raise ValidationError(f"sequence_policy must be one of {sorted(SEQUENCE_POLICIES)}")
     try:
         ZoneInfo(send_timezone)
     except (ZoneInfoNotFoundError, ValueError):
@@ -136,7 +139,7 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
         return repo.insert_journey(
             c, ctx, journey_key=journey_key, version=version, trigger_type=trigger_type,
             name=name, send_timezone=send_timezone, actor_type=actor_type,
-            actor_user_id=actor_user_id, steps=passi)
+            actor_user_id=actor_user_id, steps=passi, sequence_policy=sequence_policy)
 
 
 def activate_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
@@ -276,6 +279,20 @@ def resume_enrollment(ctx, enrollment_id: int, *, now: datetime | None = None, c
         e = repo.select_enrollment(c, ctx, enrollment_id, for_update=True)
         if e["status"] != ENR_PAUSED:
             raise ConflictError(f"enrollment {enrollment_id} is {e['status']}, not paused")
+        if repo.is_contact_enrollment(e):
+            # 108: la journey sul contatto riprende dal PROSSIMO passo del
+            # calendario, mai dagli arretrati; oltre i 180 giorni si completa.
+            from . import followup_rules
+            journey = repo.select_journey(c, ctx, e["journey_id"])
+            passi = [p for p in repo.list_steps(c, ctx, journey["id"]) if p["active"]]
+            passo, quando = followup_rules.prossimo_passo(
+                passi, trigger_sent_at=e["trigger_sent_at"], now=adesso,
+                ultimo_invio=repo.last_marketing_sent_at(c, ctx, e["contact_id"]),
+                timezone_name=journey["send_timezone"])
+            if passo is None:
+                return repo.complete_from_pause(c, ctx, enrollment_id)
+            return repo.resume_to_step(c, ctx, enrollment_id, next_step_no=passo["step_no"],
+                                       next_action_at=quando)
         if not repo.is_request_enrollment(e) and adesso - e["next_action_at"] > MAX_RESUME_AGE:
             return repo.stop_enrollment(c, ctx, enrollment_id, reason="expired_on_resume",
                                         actor_user_id=None)

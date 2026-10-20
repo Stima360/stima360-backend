@@ -39,8 +39,16 @@ def _pagina(testo: str, *, token: str | None = None) -> HTMLResponse:
 
 @router.get("/unsubscribe", response_class=HTMLResponse)
 def unsubscribe_page(t: str = Query(default="", max_length=400)) -> HTMLResponse:
-    """La pagina di conferma. Non scrive niente: un prefetch non disiscrive."""
-    return _pagina("Vuoi smettere di ricevere comunicazioni commerciali?", token=t)
+    """La pagina di conferma. Non scrive niente: un prefetch non disiscrive.
+
+    108: la domanda dice l'AMBITO del link (questa agenzia, o tutta la rete
+    STIMA360), letto dal token firmato. Un token che non torna mostra la
+    domanda generica: la risposta resta neutra comunque.
+    """
+    esito = unsubscribe.verify_scoped(t)
+    domanda = (unsubscribe.SCOPE_QUESTIONS[esito["scope"]] if esito
+               else "Vuoi smettere di ricevere comunicazioni commerciali?")
+    return _pagina(domanda, token=t)
 
 
 @router.post("/unsubscribe", response_class=HTMLResponse)

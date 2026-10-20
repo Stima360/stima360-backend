@@ -139,6 +139,56 @@ def ensure_stima_lead_v2(ctx, *, cur=None) -> dict[str, Any]:
         journey = journey_service.provision_journey(
             ctx, journey_key=STIMA_LEAD_KEY, version=2, trigger_type=TRIGGER_STIMA_REQUEST_REGISTERED,
             name="Sequenza stima continuativa (bozze da approvare)", steps=steps,
-            send_timezone=STIMA_LEAD_TIMEZONE, cur=c)
+            send_timezone=STIMA_LEAD_TIMEZONE, sequence_policy="repeat_last", cur=c)
+        journey["steps"] = repo.list_steps(c, ctx, journey["id"])
+        return {"journey": journey, "created": True}
+
+
+# ---------------------------------------------------------------------------
+# 108 (Fase B) - LA v3: il follow-up SUL CONTATTO, 17 email in 180 giorni.
+#
+# Stessa chiave `stima_lead`, versione 3: attivarla ritira la versione attiva
+# precedente (una sola attiva per chiave) e le iscrizioni gia' aperte
+# proseguono sulla loro. Nasce in BOZZA e resta tale finche' qualcuno non la
+# attiva, esplicitamente. I template della v3 sono della Fase C: finche' non
+# esistono nel registro, questa funzione RIFIUTA di creare la journey
+# (`templates.get` solleva), quindi in Fase B non puo' nascere nessun invio.
+# ---------------------------------------------------------------------------
+FOLLOWUP_V3_VERSION = 3
+FOLLOWUP_V3_NAME = "Follow-up contatti 180 giorni"
+FOLLOWUP_V3_TEMPLATE_PREFIX = "followup_v3_m"
+#: Il calendario approvato: i giorni dalla data iniziale, uno per passo.
+FOLLOWUP_V3_DAYS: tuple[int, ...] = (1, 3, 6, 10, 14, 21, 28, 38, 49, 60, 75, 90,
+                                     105, 120, 140, 160, 180)
+
+
+def passi_followup_v3(template_version: int = FOLLOWUP_V3_VERSION) -> list[dict[str, Any]]:
+    """I 17 passi: tutti automatici, tutti misurati dal momento iniziale."""
+    return [
+        {"step_no": i, "step_key": f"M{i}", "reason_code": f"m{i}",
+         "delay_from": "trigger", "delay_seconds": giorno * _GIORNO,
+         "default_mode": "automatic", "channel": "email",
+         "communication_type": "marketing",
+         "template_key": f"{FOLLOWUP_V3_TEMPLATE_PREFIX}{i}", "template_version": template_version,
+         "send_window": dict(FINESTRA_LAVORATIVA), "stop_on": []}
+        for i, giorno in enumerate(FOLLOWUP_V3_DAYS, start=1)
+    ]
+
+
+def ensure_followup_v3(ctx, *, cur=None) -> dict[str, Any]:
+    """La v3 in bozza, per l'agenzia del chiamante. Idempotente. Mai attiva."""
+    from .journey_enums import TRIGGER_CONTACT_ELIGIBLE
+    with journey_service.cursore(cur) as (_, c):
+        c.execute("SELECT id FROM agencies WHERE id = %s FOR UPDATE", (ctx.require_agency(),))
+        existing = repo.select_journey_version(c, ctx, journey_key=STIMA_LEAD_KEY,
+                                               version=FOLLOWUP_V3_VERSION)
+        if existing is not None:
+            existing["steps"] = repo.list_steps(c, ctx, existing["id"])
+            return {"journey": existing, "created": False}
+        journey = journey_service.provision_journey(
+            ctx, journey_key=STIMA_LEAD_KEY, version=FOLLOWUP_V3_VERSION,
+            trigger_type=TRIGGER_CONTACT_ELIGIBLE, name=FOLLOWUP_V3_NAME,
+            steps=passi_followup_v3(), send_timezone=STIMA_LEAD_TIMEZONE,
+            sequence_policy="linear", cur=c)
         journey["steps"] = repo.list_steps(c, ctx, journey["id"])
         return {"journey": journey, "created": True}

@@ -40,8 +40,10 @@ from __future__ import annotations
 from typing import Any
 
 from . import repository
+from .database import consent_cursor
 from .enums import (
     ACTOR_OPERATOR,
+    ACTOR_SUBJECT,
     ACTOR_TYPES,
     DECISION_GRANTED,
     DECISION_REVOKED,
@@ -203,6 +205,53 @@ def record_optional_grant(ctx, *, granted: bool, **kwargs) -> dict[str, Any]:
         "reason": "no_grant_to_record",
         "state": None,
     }
+
+
+def register_platform_optout(ctx, *, contact_id: int, source: str, actor_type: str,
+                             actor_ref: str | None = None, consent_event_id: int | None = None,
+                             note: str | None = None, idempotency_key: str,
+                             opted_out_at=None, cur=None) -> dict[str, Any]:
+    """108 (Fase B): "basta marketing STIMA360", per TUTTE le agenzie.
+
+    NON e' un evento di consenso: non scrive niente nei `consent_events`
+    delle altre agenzie (nessuna revoca inventata per conto loro). Scrive
+    l'indirizzo - letto dal contatto NELLO SCOPE di chi chiama, mai dal
+    client - nella lista di piattaforma che la guardia legge accanto al
+    consenso. Append-only, idempotente sulla chiave.
+
+    Si registra SOLO quando la richiesta riguarda davvero tutto STIMA360: il
+    link con ambito `platform`, o un operatore che dichiara quell'ambito.
+    """
+    if source not in ("unsubscribe_link", "crm"):
+        raise ValidationError("a platform opt-out comes from the unsubscribe link or from the CRM")
+    if actor_type not in (ACTOR_SUBJECT, ACTOR_OPERATOR):
+        raise ValidationError("a platform opt-out is decided by the subject or recorded by an operator")
+    if actor_type == ACTOR_OPERATOR and not (actor_ref or "").strip():
+        raise ValidationError("an operator opt-out must carry actor_ref")
+
+    def _scrivi(c):
+        contact = repository.select_contact(c, ctx, contact_id)
+        email = contact.get("email_normalized")
+        if not email:
+            raise ValidationError(f"contact {contact_id} has no email: nothing to opt out")
+        row, created = repository.insert_platform_optout(c, {
+            "email_normalized": email,
+            "opted_out_at": opted_out_at or repository.utcnow(),
+            "source": source,
+            "source_agency_id": ctx.require_agency(),
+            "source_contact_id": contact_id,
+            "consent_event_id": consent_event_id,
+            "actor_type": actor_type,
+            "actor_ref": actor_ref,
+            "note": note,
+            "idempotency_key": idempotency_key,
+        })
+        return {"recorded": True, "created": created, "optout": row}
+
+    if cur is not None:
+        return _scrivi(cur)
+    with consent_cursor(commit=True) as (_, c):
+        return _scrivi(c)
 
 
 def state_from_projection(contact: dict[str, Any], purpose: str) -> dict[str, Any]:

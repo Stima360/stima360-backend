@@ -34,6 +34,7 @@ from operator_auth.dependencies import AuthenticatedSession, current_session
 
 from . import (
     acting_service,
+    consent_notices_service,
     aliases_service,
     audit_read_service,
     agencies_service,
@@ -54,6 +55,8 @@ from .enums import (
     TERRITORY_PAGE_MAX,
 )
 from .exceptions import (
+    ConsentNoticeConflict,
+    ConsentNoticeNotFound,
     AgencyConfigurationCorrupted,
     AgencyNotFound,
     AgencySlugConflict,
@@ -69,6 +72,9 @@ from .exceptions import (
 )
 from .operators_repository import LIST_OPERATOR_ALIASES, MEMBERSHIP_COLUMNS, OPERATOR_COLUMNS
 from .schemas import (
+    ConsentNoticeCloseRequest,
+    ConsentNoticeCreateRequest,
+    ConsentNoticeResponse,
     ActingEnterResponse,
     AuditEntryResponse,
     PlatformAdminUpdateRequest,
@@ -1290,3 +1296,66 @@ def reject_territorial_change_request(
 ):
     from property import territorial_changes
     return _eliminazione(territorial_changes.reject, context, request_id, payload.note)
+
+
+# ---------------------------------------------------------------------------
+# Fase B - le informative marketing (Super Admin)
+# ---------------------------------------------------------------------------
+
+@router.get("/consent-notices", response_model=list[ConsentNoticeResponse])
+def list_consent_notices(
+    purpose: str | None = Query(default=None, max_length=20),
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> list[ConsentNoticeResponse]:
+    return [ConsentNoticeResponse(**row) for row in consent_notices_service.list_notices(purpose=purpose)]
+
+
+@router.get("/consent-notices/{notice_id}", response_model=ConsentNoticeResponse)
+def get_consent_notice(
+    notice_id: int,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> ConsentNoticeResponse:
+    try:
+        return ConsentNoticeResponse(**consent_notices_service.get_notice(notice_id))
+    except ConsentNoticeNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/consent-notices", response_model=ConsentNoticeResponse, status_code=201)
+def create_consent_notice(
+    payload: ConsentNoticeCreateRequest,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> ConsentNoticeResponse:
+    """Una versione nuova dell'informativa: testo, finalita', validita'. Il
+    testo non si modifica mai dopo: si chiude e se ne crea un'altra."""
+    try:
+        row = consent_notices_service.create_notice(
+            context, purpose=payload.purpose, version=payload.version, context=payload.context,
+            content=payload.content, valid_from=payload.valid_from, valid_to=payload.valid_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ConsentNoticeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE) from exc
+    return ConsentNoticeResponse(**row)
+
+
+@router.post("/consent-notices/{notice_id}/close", response_model=ConsentNoticeResponse)
+def close_consent_notice(
+    notice_id: int,
+    payload: ConsentNoticeCloseRequest | None = None,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> ConsentNoticeResponse:
+    try:
+        row = consent_notices_service.close_notice(
+            context, notice_id, valid_to=payload.valid_to if payload else None)
+    except ConsentNoticeNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ConsentNoticeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PlatformAuditUnavailable as exc:
+        raise HTTPException(status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE) from exc
+    return ConsentNoticeResponse(**row)
