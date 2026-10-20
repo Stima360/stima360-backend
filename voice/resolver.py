@@ -123,6 +123,17 @@ def _match_contact(ctx, cur, d: dict[str, Any]) -> RefMatch:
         return RefMatch(_candidates(trovati, "contact"), exact=False)
     if d.get("first_name") or d.get("last_name"):
         trovati = repository.contacts_by_name(ctx, cur, first_name=d.get("first_name"), last_name=d.get("last_name"))
+        if not trovati:
+            # V8-3: piccole imprecisioni di pronuncia («Rosi» per «Rossi»):
+            # candidati da confermare, mai scelti da soli.
+            trovati = repository.contacts_by_similar_name(ctx, cur, first_name=d.get("first_name"),
+                                                          last_name=d.get("last_name"))
+        if len(trovati) > 1 and d.get("role"):
+            # V8-3: il ruolo detto («acquirente») mette avanti chi ce l'ha;
+            # se nessuno ce l'ha restano tutti: il ruolo non esclude nessuno.
+            con_ruolo = repository.contacts_with_role(ctx, cur, [int(r["id"]) for r in trovati], d["role"])
+            if con_ruolo:
+                trovati = [r for r in trovati if int(r["id"]) in con_ruolo]
         return RefMatch(_candidates(trovati, "contact"), exact=False)
     return RefMatch((), exact=False)
 

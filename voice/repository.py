@@ -23,6 +23,7 @@ Regole del modulo:
 from __future__ import annotations
 
 from contextlib import contextmanager
+from difflib import SequenceMatcher
 from typing import Any
 
 from appointments import repository as agenda_repository
@@ -33,6 +34,8 @@ from core.database import core_cursor
 from core.normalization import normalize_email, normalize_phone
 from core.scope import scoped_source
 from property import census
+
+from .dates import fold
 
 MAX_CANDIDATES = 5
 
@@ -250,3 +253,86 @@ def usable_mandate(ctx, cur, property_id: int) -> bool:
         return False
     immobile["signed_mandate"] = signed_link_mandate(cur, property_id)
     return mandate_origin(immobile) is not None and mandate_state(immobile) in SALE_MANDATE_STATES
+
+
+# ---------------------------------------------------------------------------
+# V8-3: nominativi con piccole imprecisioni di pronuncia, e il ruolo
+# ---------------------------------------------------------------------------
+
+#: Soglie fisse della somiglianza (0..1, `difflib.SequenceMatcher`): un
+#: cognome «Rosi» per «Rossi» = 0.89; «Bianco» per «Bianchi» = 0.77;
+#: «Verde» per «Verdi» = 0.80; «Galli» per «Gallo» = 0.80. Sotto 0.75 non e'
+#: la stessa persona. Un test le fissa.
+NAME_SIMILARITY = 0.75
+#: Al massimo quanti contatti visibili si confrontano in Python (il prefiltro
+#: SQL e' l'iniziale del cognome, o del nome quando si dice solo quello).
+SIMILARITY_SCAN = 200
+
+
+def name_similarity(said: str | None, stored: str | None) -> float:
+    """Somiglianza fra due nomi, senza accenti ne' maiuscole; 0 se manca uno dei due."""
+    a, b = fold(said or ""), fold(stored or "")
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def contacts_by_similar_name(ctx, cur, *, first_name: str | None = None, last_name: str | None = None,
+                             include_archived: bool = False) -> list[dict]:
+    """Contatti visibili il cui nome e cognome SOMIGLIANO a quelli detti
+    (stessa iniziale, poi somiglianza >= NAME_SIMILARITY su ogni parte
+    detta). Mai esatti: chi li usa chiede sempre la conferma."""
+    detto_nome, detto_cognome = fold(first_name or ""), fold(last_name or "")
+    if not (detto_nome or detto_cognome):
+        return []
+    if detto_cognome:
+        condizione, param = "lower(left(btrim(c.last_name), 1)) = %s", detto_cognome[:1]
+    else:
+        condizione, param = "lower(left(btrim(c.first_name), 1)) = %s", detto_nome[:1]
+    source, scope_params = scoped_source(ctx, "contacts", "c")
+    archiviati = "" if include_archived else " AND c.status <> 'archived'"
+    cur.execute(
+        f"SELECT {_CONTACT_COLUMNS} FROM {source} AND {contact_trash.live('c')}{archiviati} "
+        f"AND ({condizione}) ORDER BY c.id LIMIT %s",
+        scope_params + [param, SIMILARITY_SCAN],
+    )
+    simili = []
+    for r in cur.fetchall():
+        r = dict(r)
+        if detto_cognome and name_similarity(detto_cognome, r.get("last_name")) < NAME_SIMILARITY:
+            continue
+        if detto_nome and name_similarity(detto_nome, r.get("first_name")) < NAME_SIMILARITY:
+            continue
+        simili.append(r)
+        if len(simili) > MAX_CANDIDATES:
+            break
+    return simili
+
+
+#: Il ruolo detto -> i ruoli del CRM che lo soddisfano (contact_roles vivi,
+#: oppure il collegamento proprietario/venditore a un immobile, oppure una
+#: richiesta d'acquisto aperta). Si PREFERISCE, non si esclude.
+_ROLE_FAMILIES = {
+    "owner": ("owner", "seller"), "seller": ("owner", "seller"),
+    "buyer": ("buyer", "prospect"),
+}
+
+
+def contacts_with_role(ctx, cur, contact_ids: list[int], role: str | None) -> set[int]:
+    """Fra i contatti dati, quelli che hanno il ruolo detto (famiglia di
+    ruoli sopra). Senza ruolo o senza contatti: insieme vuoto."""
+    if not role or not contact_ids:
+        return set()
+    famiglia = _ROLE_FAMILIES.get(role, (role,))
+    cur.execute(
+        "SELECT c.id FROM contacts c WHERE c.id = ANY(%s) AND ("
+        "EXISTS (SELECT 1 FROM contact_roles r WHERE r.contact_id = c.id AND r.role = ANY(%s) "
+        "        AND (r.valid_to IS NULL OR r.valid_to >= NOW()))"
+        " OR EXISTS (SELECT 1 FROM property_contacts pc WHERE pc.contact_id = c.id AND pc.role = ANY(%s))"
+        + (" OR EXISTS (SELECT 1 FROM buy_requests b WHERE b.contact_id = c.id AND b.status IN ('draft', 'active', 'paused'))"
+           if role == "buyer" else "")
+        + ")",
+        (list(contact_ids), list(famiglia), list(famiglia)))
+    return {int(r["id"]) for r in cur.fetchall()}
