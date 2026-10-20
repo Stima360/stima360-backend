@@ -18,8 +18,9 @@
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
-  SPEECH_ERRORS, UNDO_TEXT, canReply, choicesNeeded, commandStatus, errorMessage, hasRunnableSteps,
-  intentLabel, openQuestions, referenceNotFound, resultText, stepDescription, stepStatus, stepsToConfirm,
+  SPEECH_ERRORS, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choicesNeeded, commandStatus, errorMessage,
+  hasRunnableSteps, intentLabel, openQuestions, referenceNotFound, resultText, spokenCommand, stepDescription,
+  stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
 import { createDictation, speechSupport } from '../voice/voice-speech.js';
 
@@ -47,6 +48,12 @@ function passoHtml(step) {
   }
   const annullo = step.state === 'succeeded' && step.undo && step.undo !== 'undoable' && UNDO_TEXT[step.undo]
     ? `<p class="muted voice-undo-note" data-voice-undo-note>${escapeHtml(UNDO_TEXT[step.undo])}</p>` : '';
+  // V8-4: la scheda riepilogativa dell'appuntamento e, a cose fatte, «Apri in Agenda»
+  const riepilogo = appointmentSummary(step);
+  const scheda = riepilogo.length ? `<dl class="voice-summary" data-voice-summary="${n}">${riepilogo.map(([k, v]) =>
+    `<div class="voice-summary-row"><dt>${escapeHtml(k)}</dt><dd data-voice-summary-field="${escapeHtml(k.toLowerCase())}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : '';
+  const apri = step.state === 'succeeded' && appointmentHref(step)
+    ? `<a class="btn" href="${escapeHtml(appointmentHref(step))}" data-voice-open-appointment="${n}">Apri in Agenda</a>` : '';
   return `
     <li class="voice-step" data-voice-step="${n}">
       <div class="voice-step-head">
@@ -54,6 +61,7 @@ function passoHtml(step) {
         <span data-voice-step-status>${badge(stepStatus(step))}</span>
       </div>
       <p class="voice-step-desc" data-voice-step-desc>${escapeHtml(stepDescription(step))}</p>
+      ${scheda}
       ${motivi.length ? `<ul class="voice-reasons" data-voice-reasons>${motivi.map((m) =>
         `<li>${escapeHtml(m.message)}</li>`).join('')}</ul>` : ''}
       ${scelte.map(([ref, lista]) => `
@@ -66,7 +74,7 @@ function passoHtml(step) {
       ${risultato ? `<p class="voice-step-result" data-voice-step-result>${escapeHtml(risultato)}</p>` : ''}
       ${step.state === 'failed' && step.error ? `<p class="field-error" data-voice-step-error>Motivo: ${escapeHtml(step.error)}</p>` : ''}
       ${annullo}
-      <div class="voice-step-actions">${azioni}</div>
+      <div class="voice-step-actions">${azioni}${apri}</div>
       <div class="voice-verify" data-voice-verify-panel="${n}" hidden></div>
     </li>`;
 }
@@ -84,7 +92,8 @@ function rispostaHtml(view, conMicrofono) {
     <form class="voice-reply" data-voice-reply-form novalidate>
       <label for="voice-reply-text" class="voice-label">${domande.length ? 'La tua risposta' : 'Vuoi correggere qualcosa?'}</label>
       <textarea id="voice-reply-text" class="voice-text" data-voice-reply-text rows="2" maxlength="1500"
-        placeholder="Es. «alle 18:30», «Fabio Rossi», «in via Roma 3 a Tortoreto»"></textarea>
+        placeholder="Es. «Conferma», «Annulla», «Cambia orario alle 18:30», «Cambia cliente: Fabio Rossi»"></textarea>
+      <p class="muted voice-hint" data-voice-reply-hint>Puoi dire «Conferma» per eseguire, «Annulla», oppure correggere: «Cambia orario…», «Cambia cliente…», «Cambia immobile…».</p>
       ${nonTrovato ? `<p class="muted voice-hint" data-voice-notfound-hint>Non lo trovo fra i record che puoi vedere.
         Aggiungi un dettaglio per cercarlo meglio (cognome, telefono, indirizzo) oppure chiedi di crearlo.</p>` : ''}
       <div class="voice-compose-actions">
@@ -228,20 +237,22 @@ export async function renderVoce(container, _params = [], deps = {}) {
     return scelte;
   }
 
+  function confermaEdEsegui() {
+    const passi = [];
+    for (const step of stepsToConfirm(s.view)) {
+      const scelte = scelteDi(step);
+      if (scelte === null) { mostraErrore(`Scegli un’opzione per «${intentLabel(step.intent)}».`); return; }
+      passi.push({ ordinal: step.ordinal, choices: Object.keys(scelte).length ? scelte : null });
+    }
+    azione(async () => {
+      await api.confirmSteps(id(), passi);
+      return api.executeCommand(id());
+    });
+  }
+
   function collega() {
     const conferma = area.querySelector('[data-voice-confirm]');
-    if (conferma) conferma.addEventListener('click', () => {
-      const passi = [];
-      for (const step of stepsToConfirm(s.view)) {
-        const scelte = scelteDi(step);
-        if (scelte === null) { mostraErrore(`Scegli un’opzione per «${intentLabel(step.intent)}».`); return; }
-        passi.push({ ordinal: step.ordinal, choices: Object.keys(scelte).length ? scelte : null });
-      }
-      azione(async () => {
-        await api.confirmSteps(id(), passi);
-        return api.executeCommand(id());
-      });
-    });
+    if (conferma) conferma.addEventListener('click', confermaEdEsegui);
     const esegui = area.querySelector('[data-voice-execute]');
     if (esegui) esegui.addEventListener('click', () => azione(() => api.executeCommand(id())));
     const annullaComando = area.querySelector('[data-voice-cancel]');
@@ -254,6 +265,15 @@ export async function renderVoce(container, _params = [], deps = {}) {
         const testoRisposta = String(campo.value || '').trim();
         if (!testoRisposta) { mostraErrore('Scrivi o detta la risposta.'); campo.focus(); return; }
         if (dettatura && dettatura.listening) dettatura.stop();
+        // V8-4: «Conferma» e «Annulla» detti valgono come i pulsanti; il server ricontrolla tutto.
+        const detto = spokenCommand(testoRisposta);
+        if (detto.kind === 'confirm') {
+          if (area.querySelector('[data-voice-confirm]')) { confermaEdEsegui(); return; }
+          if (area.querySelector('[data-voice-execute]')) { azione(() => api.executeCommand(id())); return; }
+          mostraErrore('Non c’è nulla da confermare: rispondi prima alla domanda qui sopra.');
+          return;
+        }
+        if (detto.kind === 'cancel') { azione(() => api.cancelCommand(id())); return; }
         const per = `${id()}\n${testoRisposta}`;          // la chiave appartiene a (comando, risposta)
         if (s.replyFor !== per) { s.replyKey = api.newCommandKey(); s.replyFor = per; }
         const chiave = s.replyKey;

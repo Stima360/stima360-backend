@@ -234,6 +234,17 @@ def assignable_agents(ctx, cur) -> list[dict]:
     return agenda_repository.agents(cur, ctx.require_agency())
 
 
+def operator_name(ctx, cur, user_id: int | None) -> str | None:
+    """V8-4: il nome di un operatore dell'agenzia (chi parla, o l'agente
+    scelto), dallo stesso elenco dell'Agenda; None se non e' dell'agenzia."""
+    if user_id is None:
+        return None
+    for a in agenda_repository.agents(cur, ctx.require_agency()):
+        if int(a["id"]) == int(user_id):
+            return a.get("name")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # V8-2: l'incarico di vendita, letto come lo legge l'Agenda
 # ---------------------------------------------------------------------------

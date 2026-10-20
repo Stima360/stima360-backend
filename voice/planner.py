@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from appointments.enums import MANDATE_REQUIRED_TYPES
+from appointments.enums import APPOINTMENT_TYPE_LABELS_IT, MANDATE_REQUIRED_TYPES
 from core.schemas import ActivityCreate, ContactCreate, TaskCreate
 from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate
 
@@ -106,6 +106,8 @@ DEFAULT_APPOINTMENT_MINUTES = 60
 DEFAULT_TASK_TIME = time(9, 0)
 
 VOICE_SOURCE = "voice"
+#: V8-4: le etichette dell'interfaccia, quelle dell'Agenda (non copiate).
+APPOINTMENT_TYPE_LABELS = APPOINTMENT_TYPE_LABELS_IT
 
 
 @dataclass(frozen=True)

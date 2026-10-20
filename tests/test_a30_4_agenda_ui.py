@@ -151,6 +151,10 @@ from tests.semplificazione_crm_1_diff import (
     IMPORT_AMMESSI_VISTE_A31_4 as A31_4_IMPORT_AMMESSI,
     VISTE_CON_DIALOG_AGENDA as _SCRM1_VISTE,
 )
+# SENTINELLA AGGIORNATA DA STIMA VOICE V8-4 (dichiarata in tests/voice_v8_diff.py): la riga
+# del collegamento «Apri in Agenda» nel modello puro della Voce. Stessa forma chiusa.
+from tests.voice_v8_diff import VISTE_CON_DIALOG_AGENDA as _V8_VISTE
+_ESENZIONI_CHIUSE = {**_SCRM1_VISTE, **_V8_VISTE}
 
 # SENTINELLA AGGIORNATA DA CRM-OPS-1B (autorizzata, dichiarata nel report CRM-OPS-1B): la scheda contatto
 # mostra l'agente assegnato e, a titolare/amministratore, offre il selettore
@@ -213,9 +217,9 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
             assert righe == list(_crm_ops_3_viste()[f]), (f.relative_to(ROOT), righe)
             continue
-        if str(f.relative_to(ROOT)) in _SCRM1_VISTE:
+        if str(f.relative_to(ROOT)) in _ESENZIONI_CHIUSE:
             righe = [r.strip() for r in testo.splitlines() if "agenda/" in r]
-            assert righe == list(_SCRM1_VISTE[str(f.relative_to(ROOT))]), (f.relative_to(ROOT), righe)
+            assert righe == list(_ESENZIONI_CHIUSE[str(f.relative_to(ROOT))]), (f.relative_to(ROOT), righe)
             continue
         assert "agenda/" not in testo, f.relative_to(ROOT)
 

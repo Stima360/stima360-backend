@@ -384,7 +384,10 @@ def _create_appointment(ctx, inp: StepInput) -> dict:
         contact_id=inp.ids.get("contact"), property_id=inp.ids.get("property"),
         location_text=p.get("location_text"), notes=p.get("notes"), client_request_id=inp.key)
     riga, _replica = agenda.create_appointment_idempotent(ctx, corpo)
-    return _dopo(lambda: {"entity": "appointment", "id": int(riga["id"]), "created": True})
+    # V8-4: con l'inizio e i collegamenti, per «Apri in Agenda» e la scheda Incarico
+    return _dopo(lambda: {"entity": "appointment", "id": int(riga["id"]), "created": True,
+                          "start_at": riga["start_at"].isoformat() if riga.get("start_at") else None,
+                          "property_id": riga.get("property_id"), "contact_id": riga.get("contact_id")})
 
 
 # ---------------------------------------------------------------------------

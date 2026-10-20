@@ -201,3 +201,76 @@ export const SPEECH_ERRORS = {
   network: 'Riconoscimento vocale non raggiungibile. Scrivi il comando.',
   error: 'Il riconoscimento vocale si è interrotto. Scrivi il comando o riprova.',
 };
+
+// ---------------------------------------------------------------------------
+// V8-4: la scheda riepilogativa dell'appuntamento, il collegamento e le
+// parole di conferma. Funzioni pure.
+// ---------------------------------------------------------------------------
+
+const ROMA_DATA = { timeZone: 'Europe/Rome', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
+const ROMA_ORA = { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' };
+const ROMA_CHIAVE = { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit' };
+
+export function formatDay(iso) {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString('it-IT', ROMA_DATA) : '';
+}
+
+export function formatHour(iso) {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('it-IT', ROMA_ORA) : '';
+}
+
+/** La chiave del giorno in ora di Roma (AAAA-MM-GG), per la vista Giorno dell'Agenda. */
+export function romeDayKey(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const parti = new Intl.DateTimeFormat('en-CA', ROMA_CHIAVE).formatToParts(d);
+  const v = (t) => (parti.find((p) => p.type === t) || {}).value || '';
+  return `${v('year')}-${v('month')}-${v('day')}`;
+}
+
+/**
+ * Le righe della scheda riepilogativa (etichetta, valore) di un passo
+ * «Nuovo appuntamento», dal `summary` del server: tipo, cliente, incarico
+ * quando serve, data, ora, agente, note. Un valore mancante e' «da indicare».
+ */
+export function appointmentSummary(step) {
+  const r = step && step.summary;
+  if (!r) return [];
+  const manca = 'da indicare';
+  const righe = [
+    ['Tipo', r.type_label || r.type || manca],
+    ['Cliente', r.contact || manca],
+  ];
+  if (r.needs_mandate || r.property) righe.push([r.needs_mandate ? 'Incarico' : 'Immobile', r.property || manca]);
+  righe.push(['Data', formatDay(r.start_at) || manca]);
+  const ora = formatHour(r.start_at);
+  righe.push(['Ora', ora ? `${ora}${formatHour(r.end_at) ? `–${formatHour(r.end_at)}` : ''}` : manca]);
+  righe.push(['Agente', r.agent || manca]);
+  if (r.notes) righe.push(['Note', r.notes]);
+  return righe;
+}
+
+/** Il collegamento all'appuntamento salvato: la vista Giorno dell'Agenda. */
+export function appointmentHref(step) {
+  const r = step && step.result;
+  if (!r || r.entity !== 'appointment' || !r.id) return '';
+  const giorno = romeDayKey(r.start_at);
+  return giorno ? `#/agenda/giorno/${giorno}` : '#/agenda';
+}
+
+/**
+ * Le parole dette (o scritte) nella risposta: «Conferma» esegue cio' che e'
+ * da confermare, «Annulla» annulla il comando, tutto il resto (anche «Cambia
+ * orario alle 16», «Cambia cliente: Luca Bianchi») e' una precisazione che
+ * aggiorna il piano. Nessuna scelta di id: il server ricontrolla sempre.
+ */
+export function spokenCommand(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/[.!]+$/, '').trim();
+  if (/^(conferma|confermo|confermato|ok conferma|s[iì],? conferma|va bene,? conferma|procedi)$/.test(t)) {
+    return { kind: 'confirm', text: '' };
+  }
+  if (/^(annulla|annullo|cancella|lascia stare|no,? annulla)$/.test(t)) return { kind: 'cancel', text: '' };
+  return { kind: 'reply', text: String(text || '').trim() };
+}

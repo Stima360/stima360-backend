@@ -1,0 +1,49 @@
+"""STIMA VOICE V8 - creazione intelligente degli appuntamenti: l'inventario dichiarato.
+
+Popolato da `git status --porcelain` reale. Inventario CHIUSO: nessun glob.
+V8-1 ruoli e sinonimi; V8-2 incarico obbligatorio a monte; V8-3 ricerca
+tollerante dei contatti; V8-4 scheda riepilogativa, conferma detta e
+collegamento all'appuntamento; V8-5 microfono nel dialog «Nuovo appuntamento».
+"""
+from __future__ import annotations
+
+FILE_NUOVI = frozenset({
+    "tests/voice_v8_diff.py",
+    "tests/test_voice_8_1_language.py",
+    "tests/test_voice_8_2_visits_postgres.py",
+    "tests/test_voice_8_3_contacts.py",
+    "tests/test_voice_8_3_contacts_postgres.py",
+    "tests/test_voice_8_4_summary.py",
+    "tests/test_voice_8_4_summary_postgres.py",
+    "tests/test_voice_8_5_agenda_mic.py",
+})
+
+FILE_MODIFICATI = frozenset({
+    "voice/operations.py",
+    "voice/planner.py",
+    "voice/policy.py",
+    "voice/provider.py",
+    "voice/repository.py",
+    "voice/resolver.py",
+    "voice/schemas.py",
+    "voice/service.py",
+    "static/os_shell/assets/app.css",
+    "static/os_shell/assets/components/agenda/agenda-dialogs.js",
+    "static/os_shell/assets/views/voce.js",
+    "static/os_shell/assets/voice/voice-model.js",
+    "tests/test_a30_4_agenda_ui.py",
+    "tests/test_p29_3g_final_fixes.py",
+    "tests/test_voice_1_corpus.py",
+    "tests/test_voice_1_perimeter.py",
+    "tests/test_voice_4_undo_postgres.py",
+    "tests/voice_corpus/corpus.py",
+})
+
+#: V8-4: il collegamento «Apri in Agenda» dell'appuntamento salvato, costruito
+#: dal modello puro della Voce (sentinella A30-4 test_04: esenzione CHIUSA, una
+#: sola riga esatta, nessun import dell'Agenda).
+VISTE_CON_DIALOG_AGENDA = {
+    "static/os_shell/assets/voice/voice-model.js": (
+        "return giorno ? `#/agenda/giorno/${giorno}` : '#/agenda';",
+    ),
+}

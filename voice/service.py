@@ -303,7 +303,26 @@ def _motivi(codici) -> list[dict]:
 
 
 _RISULTATO = ("entity", "id", "record_kind", "created", "preexisting", "origin", "property_id", "contact_id",
-              "lead_id", "reconciled")
+              "lead_id", "reconciled", "start_at")
+
+
+def _riepilogo(ctx, passo_piano: dict, vista, attore: str | None) -> dict[str, Any]:
+    """V8-4: la scheda riepilogativa di un appuntamento, con le parole del
+    CRM: tipo, cliente, incarico (quando serve), data e ora, agente, note.
+    Solo etichette che chi parla vede gia' (le stesse dei candidati)."""
+    def unico(nome):
+        lista = vista.labels.get(nome) or []
+        return lista[0]["label"] if len(lista) == 1 else None
+    payload = passo_piano.get("payload") or {}
+    tipo = payload.get("appointment_type")
+    agente = unico("agent") if "agent" in (passo_piano.get("refs") or {}) else None
+    return {
+        "type": tipo, "type_label": planner.APPOINTMENT_TYPE_LABELS.get(tipo, tipo),
+        "contact": unico("contact"), "property": unico("property"),
+        "needs_mandate": voice_repository.requires_mandate(tipo),
+        "agent": agente or attore, "start_at": passo_piano.get("start_at"), "end_at": passo_piano.get("end_at"),
+        "notes": payload.get("notes"),
+    }
 
 
 def view(ctx, command_id: int) -> dict[str, Any]:
@@ -316,6 +335,10 @@ def view(ctx, command_id: int) -> dict[str, Any]:
     viste = executor.situation(ctx, command_id)
     annullabili = {u["ordinal"]: u for u in undo.assess(ctx, command_id)}
     piano = {s["ordinal"]: s for s in comando["plan"]["steps"]}
+    attore = None
+    if any(p["intent"] == "create_appointment" for p in comando["steps"]):
+        with voice_repository.read_only() as cur:
+            attore = voice_repository.operator_name(ctx, cur, ctx.user_id)
     passi = []
     for p in comando["steps"]:
         n, v = p["ordinal"], viste[p["ordinal"]]
@@ -334,6 +357,7 @@ def view(ctx, command_id: int) -> dict[str, Any]:
             "start_at": piano[n].get("start_at"), "end_at": piano[n].get("end_at"),
             "result": {k: x for k, x in (p["result"] or {}).items() if k in _RISULTATO},
             "error": p["error_type"], "undo": annullabili[n]["status"],
+            "summary": _riepilogo(ctx, piano[n], v, attore) if p["intent"] == "create_appointment" else None,
         })
     conclusi = all(p["state"] in ("succeeded", "skipped") for p in comando["steps"])
     return {**base, "steps": passi, "clarifications": list(comando["plan"].get("clarifications") or []),
