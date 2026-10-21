@@ -13,7 +13,11 @@ Il ripristino e' `active`. PostgreSQL usa-e-getta e sessioni vere (`adm2`).
   04  non autorizzati: 403 (altro amministratore, agente), nulla cambia
   05  ripristino: agenzia e account di nuovo attivi con un NUOVO accesso; le
       sessioni di prima restano revocate
-  06  interfaccia (Chromium 390/1280): agenzia e operatore eliminati e ripristinati
+  06  interfaccia (Chromium 390/1280): agenzia e operatore eliminati e ripristinati;
+      l'agenzia eliminata esce dall'elenco operativo e si ritrova fra le «Eliminate»
+  09  ELIMINA AGENZIA: un'agenzia eliminata non riceve nuove operazioni
+      (territori, trasferimenti, riattivazioni di assegnazioni, operatori);
+      l'agenzia di sistema non si elimina
   07  ELIMINAZIONE BLINDATA - account senza agenzia: `GET /operators` li elenca
       (solo il designato), un amministratore di sola piattaforma si elimina
       dalla Rete (sessioni revocate, login negato) e si ripristina
@@ -200,24 +204,28 @@ def test_06_interfaccia_elimina_e_ripristina(ui, larghezza):
 
         stato = lambda: _q(m, "SELECT status FROM agencies WHERE id = %s", (q,))[0][0]  # noqa: E731
 
-        # agenzia attiva -> «Elimina dalla Rete»
+        # agenzia attiva -> «Elimina agenzia» (pulsante rosso)
         vai(f"/rete/agenzie/{q}")
         page.wait_for_selector("[data-elimina-agenzia]")
-        assert "Elimina dalla Rete" in page.inner_text("[data-elimina-agenzia]")
+        assert page.inner_text("[data-elimina-agenzia]") == "Elimina agenzia"
+        assert "danger" in page.get_attribute("[data-elimina-agenzia]", "class")
         page.click("[data-elimina-agenzia]")
         testo = conferma("Nessun dato viene cancellato")
         assert "restano conservati" in testo and "ripristinarla" in testo
-        page.wait_for_selector("[data-stato-agenzia='active']")
+        # torna all'elenco operativo, dove l'agenzia non c'e' piu'
+        page.wait_for_selector("#agenzie-lista table")
         assert stato() == "archived"
-        assert "Archiviata" in page.inner_text("#agenzia-sottotitolo")
-        page.wait_for_selector("#entra-agenzia[data-modo='consulta']")
+        assert "Quattro" not in page.inner_text("#agenzie-lista")
         assert _sfora(page)["scroll"] <= larghezza + 1
 
-        # si ritrova fra le archiviate
-        vai("/rete")
-        page.wait_for_selector("#filtro-stato-agenzia")
+        # si ritrova fra le eliminate
         page.select_option("#filtro-stato-agenzia", "archived")
         assert "Quattro" in page.inner_text("#agenzie-lista")
+        assert "Eliminata" in page.inner_text("#agenzie-lista")
+
+        vai(f"/rete/agenzie/{q}")
+        page.wait_for_selector("#entra-agenzia[data-modo='consulta']")
+        assert "Eliminata" in page.inner_text("#agenzia-sottotitolo")
 
         # ripristino
         vai(f"/rete/agenzie/{q}")
@@ -366,3 +374,40 @@ def test_08_scheda_account_in_chromium(ui, larghezza):
         assert not errori, errori
         browser.close()
     assert _impronta(m) == prima
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA AGENZIA - nessuna nuova operazione su un'agenzia eliminata
+# ---------------------------------------------------------------------------
+
+def test_09_agenzia_eliminata_non_riceve_nuove_operazioni(adm7e):
+    m = adm7e
+    sa, q, t = m["accedi"]("super"), m["quattro"], m["territorio_quattro"]
+    for verso in ("suspended", "archived"):
+        assert sa.patch(f"/api/platform/agencies/{q}", json={"status": verso}).status_code == 200
+    prima, proprietari = _impronta(m), _proprietari(m, q)
+    email = "nuovo.adm7e.09@x.test"
+
+    rifiuti = {
+        "assegna": sa.post(f"/api/platform/agencies/{q}/territories", json={"territory_id": t}),
+        "trasferisci": sa.post(f"/api/platform/territories/{t}/transfer", json={"agency_id": q}),
+        "riattiva": sa.patch(f"/api/platform/agencies/{q}/territories/{m['assegnazione']}",
+                             json={"status": "active"}),
+        "operatore": sa.post(f"/api/platform/agencies/{q}/operators",
+                             json={"email": email, "password": "Prova-adm7e-09!", "role": "agent"}),
+    }
+    for nome, r in rifiuti.items():
+        assert r.status_code == 409, (nome, r.text)
+        assert "eliminata" in r.text, (nome, r.text)
+    assert not _q(m, "SELECT 1 FROM operator_users WHERE email_normalized = %s", (email,))
+    assert _impronta(m) == prima and _proprietari(m, q) == proprietari
+
+    # l'agenzia di sistema non si elimina
+    sistema = _q(m, "SELECT id FROM agencies WHERE slug = 'stima360'")[0][0]
+    assert sa.patch(f"/api/platform/agencies/{sistema}", json={"status": "suspended"}).status_code == 409
+    assert _q(m, "SELECT status FROM agencies WHERE id = %s", (sistema,))[0][0] == "active"
+
+    # ripristinata, torna utilizzabile
+    assert sa.patch(f"/api/platform/agencies/{q}", json={"status": "active"}).status_code == 200
+    r = sa.post(f"/api/platform/agencies/{q}/territories", json={"territory_id": t})
+    assert r.status_code == 409 and "eliminata" not in r.text, r.text  # gia' sua, non piu' "eliminata"

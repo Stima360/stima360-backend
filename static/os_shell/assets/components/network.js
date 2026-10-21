@@ -30,7 +30,8 @@ export const PLATFORM = '/api/platform';
 export const AGENCY_STATUS_LABELS = {
   active: 'Attiva',
   suspended: 'Sospesa',
-  archived: 'Archiviata',
+  // ELIMINA AGENZIA: nell'interfaccia lo stato `archived` si chiama «Eliminata».
+  archived: 'Eliminata',
 };
 
 export const AGENCY_STATUS_TONE = { active: 'ok', suspended: 'warn', archived: 'gray' };

@@ -265,6 +265,9 @@ def test_07_rete_semplice_in_chromium(browser_server, larghezza):
         conferma("Nessun dato viene cancellato")
         page.wait_for_selector("[data-stato-agenzia='archived']", state="detached")
         assert _q(m, "SELECT status FROM agencies WHERE id = %s", (q,))[0][0] == "archived"
+        # ELIMINA AGENZIA: eliminata, si torna all'elenco; il ripristino e' nella scheda
+        page.wait_for_selector("#agenzie-lista")
+        page.goto(f"{m['url']}/os/?n={uuid.uuid4().hex[:8]}#/rete/agenzie/{q}")
         page.click("[data-stato-agenzia='active']")
         conferma("nuovo accesso")
         page.wait_for_selector("[data-stato-agenzia='suspended']")

@@ -654,6 +654,13 @@ AGENCY_ARCHIVE_NEEDS_SUSPENSION_MESSAGE = (
     "e' stata fatta."
 )
 
+# 409. ELIMINA AGENZIA: un'agenzia eliminata (`archived`) resta consultabile e
+# ripristinabile, ma non riceve nuove operazioni (territori, operatori).
+AGENCY_DELETED_NOT_USABLE_MESSAGE = (
+    "L'agenzia e' eliminata: non riceve nuove operazioni. Ripristinala prima "
+    "di assegnarle territori o operatori. Nessuna modifica e' stata fatta."
+)
+
 
 # ---------------------------------------------------------------------------
 # Fase B - le INFORMATIVE marketing (061 `consent_notices`), gestite dal Super

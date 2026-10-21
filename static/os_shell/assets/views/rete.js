@@ -78,9 +78,11 @@ const TABS = [
 ];
 
 // ADM-7: il filtro dell'elenco agenzie. Locale, sull'elenco gia' caricato.
-const FILTRO_STATO_AGENZIA = { active: 'Attive', suspended: 'Sospese', archived: 'Archiviate' };
+// ELIMINA AGENZIA: il valore vuoto e' l'elenco OPERATIVO (le eliminate, cioe'
+// `archived`, non ci sono); le eliminate si vedono da «Eliminate».
+const FILTRO_STATO_AGENZIA = { active: 'Attive', suspended: 'Sospese', archived: 'Eliminate', tutte: 'Tutte, comprese le eliminate' };
 // ADM-7: il segnale sui territori presidiati da un'agenzia non attiva.
-const AGENZIA_NON_ATTIVA = { suspended: 'Agenzia sospesa', archived: 'Agenzia archiviata' };
+const AGENZIA_NON_ATTIVA = { suspended: 'Agenzia sospesa', archived: 'Agenzia eliminata' };
 // ELIMINAZIONE BLINDATA: la scheda «Account».
 const ACCOUNT_PAGE = 50;
 const FILTRO_ACCOUNT = { senza: 'Senza agenzia attiva', tutti: 'Tutti gli account' };
@@ -153,7 +155,7 @@ export async function renderRete(container) {
     contentEl.innerHTML = `
       <div class="list-toolbar">
         <select class="input" id="filtro-stato-agenzia" aria-label="Stato dell’agenzia">
-          <option value="">Tutte le agenzie</option>
+          <option value="">Agenzie operative</option>
           ${selectOptions(FILTRO_STATO_AGENZIA, state.agenzieStato)}
         </select>
         <button type="button" class="btn primary" id="agenzia-nuova">Nuova agenzia</button>
@@ -162,10 +164,11 @@ export async function renderRete(container) {
     `;
     const listaEl = contentEl.querySelector('#agenzie-lista');
     const disegna = () => {
-      const visibili = state.agenzieStato
-        ? state.agenzie.filter((a) => a.status === state.agenzieStato)
-        : state.agenzie;
-      listaEl.innerHTML = tabellaAgenzie(visibili);
+      const filtro = state.agenzieStato;
+      let visibili = state.agenzie.filter((a) => a.status !== 'archived');
+      if (filtro === 'tutte') visibili = state.agenzie;
+      else if (filtro) visibili = state.agenzie.filter((a) => a.status === filtro);
+      listaEl.innerHTML = tabellaAgenzie(visibili, filtro === 'archived');
       bindTableRowClicks(listaEl, (id) => navigate('rete', ['agenzie', id]));
     };
     disegna();
@@ -265,7 +268,7 @@ export async function renderRete(container) {
     succ.addEventListener('click', () => { filtro.offset += ACCOUNT_PAGE; caricaAccount(); });
   }
 
-  function tabellaAgenzie(righe) {
+  function tabellaAgenzie(righe, eliminate = false) {
     return renderTable(
       [
         { label: 'Agenzia', render: (a) => `<strong>${escapeHtml(a.name)}</strong>` },
@@ -277,7 +280,7 @@ export async function renderRete(container) {
         { label: '', render: () => '<span class="muted">Apri →</span>' },
       ],
       righe,
-      { emptyMessage: 'Nessuna agenzia nella rete.', onRowClick: true },
+      { emptyMessage: eliminate ? 'Nessuna agenzia eliminata.' : 'Nessuna agenzia nella rete.', onRowClick: true },
     );
   }
 

@@ -79,7 +79,7 @@ const AGENZIA_DI_SISTEMA = 'stima360';
 const SPIEGAZIONE_STATO = {
   active: 'Attiva: gli operatori lavorano e i lead dei suoi Comuni arrivano qui.',
   suspended: 'Sospesa: nessun operatore accede. I dati restano tutti qui. I nuovi lead dei suoi Comuni continuano ad arrivare e la attendono; i follow-up automatici sono in pausa fino alla riattivazione.',
-  archived: 'Archiviata (eliminata dalla Rete): fuori dall’operativita’, senza accessi. I dati restano tutti qui, consultabili in sola lettura, e l’agenzia si puo’ ripristinare.',
+  archived: 'Eliminata: fuori dall’elenco delle agenzie operative, senza accessi e senza nuove operazioni. I dati restano tutti qui, consultabili in sola lettura, e l’agenzia si puo’ ripristinare.',
 };
 const CONFERME_STATO_AGENZIA = {
   suspended: {
@@ -88,9 +88,9 @@ const CONFERME_STATO_AGENZIA = {
     testo: (nome) => `Gli operatori di “${nome}” non potranno piu’ accedere e le loro sessioni verranno chiuse. Nessun dato viene cancellato o spostato e i nuovi lead dei suoi Comuni restano a questa agenzia. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; i promemoria degli appuntamenti, le prenotazioni online e i calendari collegati si fermano fino alla riattivazione. Potrai consultarla in sola lettura.`,
   },
   archived: {
-    titolo: 'Eliminare l’agenzia dalla Rete?',
-    bottone: 'Elimina dalla Rete',
-    testo: (nome) => `“${nome}” esce dalla Rete e i suoi operatori non potranno piu’ accedere. Nessun dato viene cancellato o spostato: immobili, contatti, lead, appuntamenti, incarichi, documenti, territori e storico restano conservati e consultabili. Potrai ripristinarla in qualunque momento. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; promemoria degli appuntamenti, prenotazioni online e calendari collegati restano fermi. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia archiviata andrebbero all’agenzia di sistema. Potrai consultarla in sola lettura.`,
+    titolo: 'Eliminare l’agenzia?',
+    bottone: 'Elimina',
+    testo: (nome) => `“${nome}” esce dall’elenco delle agenzie operative e i suoi operatori non potranno piu’ accedere. Nessun dato viene cancellato o spostato: immobili, contatti, lead, appuntamenti, incarichi, documenti, territori e storico restano conservati e consultabili. Potrai ripristinarla in qualunque momento. Le email delle valutazioni e i follow-up automatici continuano a nome di STIMA360; promemoria degli appuntamenti, prenotazioni online e calendari collegati restano fermi. Se presidia ancora dei Comuni, revoca o trasferisci prima le assegnazioni: i nuovi lead di un Comune presidiato da un’agenzia eliminata andrebbero all’agenzia di sistema. Non potra’ ricevere nuovi territori ne’ nuovi operatori. La ritrovi in Rete › Agenzie, filtro «Eliminate», e la puoi consultare in sola lettura.`,
   },
   active: {
     titolo: 'Ripristinare l’agenzia?',
@@ -193,7 +193,7 @@ export async function renderReteAgenzia(container, agencyId) {
         testo: `Entrerai in “${agenzia.name}” in SOLA LETTURA: potrai vedere `
           + 'immobili, contatti e documenti, ma nessun dato potra’ essere '
           + 'modificato. L’agenzia resta '
-          + `${agenzia.status === 'archived' ? 'archiviata' : 'sospesa'}. `
+          + `${agenzia.status === 'archived' ? 'eliminata' : 'sospesa'}. `
           + 'Ingresso e uscita restano registrati a tuo nome.',
         conferma: 'Consulta',
       } : {
@@ -308,12 +308,12 @@ export async function renderReteAgenzia(container, agencyId) {
       // archivia solo da sospesa (ADM-1): il comando fa i due passaggi, in
       // quest'ordine, ciascuno con il suo controllo e la sua riga di registro.
       return agenzia.slug === AGENZIA_DI_SISTEMA
-        ? '<span class="muted">Agenzia di sistema: non si sospende e non si elimina dalla Rete.</span>'
+        ? '<span class="muted">Agenzia di sistema: non si sospende e non si elimina.</span>'
         : `${bottone('suspended', 'Sospendi agenzia', 'danger')} `
-          + '<button type="button" class="btn danger" data-elimina-agenzia="1">Elimina dalla Rete</button>';
+          + '<button type="button" class="btn danger" data-elimina-agenzia="1">Elimina agenzia</button>';
     }
     if (agenzia.status === 'suspended') {
-      return `${bottone('active', 'Riattiva agenzia', 'primary')} ${bottone('archived', 'Elimina dalla Rete', 'danger')}`;
+      return `${bottone('active', 'Riattiva agenzia', 'primary')} ${bottone('archived', 'Elimina agenzia', 'danger')}`;
     }
     return bottone('active', 'Ripristina agenzia', 'primary');
   }
@@ -343,13 +343,16 @@ export async function renderReteAgenzia(container, agencyId) {
       await apiPatch(url, { status: 'archived' });
     } catch (error) {
       if (erroreEl) {
-        erroreEl.textContent = 'L’agenzia e’ stata sospesa ma non eliminata dalla Rete: '
+        erroreEl.textContent = 'L’agenzia e’ stata sospesa ma non eliminata: '
           + `${describeError(error, 'agenzia-aggiorna')} Puoi ripetere il comando.`;
       }
+      await ricaricaAgenzia();
+      aggiornaEntra();
+      await panoramica();
+      return;
     }
-    await ricaricaAgenzia();
-    aggiornaEntra();
-    await panoramica();
+    // ELIMINA AGENZIA: eliminata, si torna all'elenco operativo, dove non c'e' piu'.
+    navigate('rete');
   }
 
   async function cambiaStatoAgenzia(verso) {
@@ -365,6 +368,7 @@ export async function renderReteAgenzia(container, agencyId) {
     if (erroreEl) erroreEl.textContent = '';
     try {
       await apiPatch(`${PLATFORM}/agencies/${encodeURIComponent(agencyId)}`, { status: verso });
+      if (verso === 'archived') { navigate('rete'); return; }
       await ricaricaAgenzia();
       aggiornaEntra();
       await panoramica();

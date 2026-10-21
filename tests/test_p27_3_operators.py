@@ -1803,11 +1803,17 @@ def test_g10_operators_can_be_administered_in_a_suspended_or_archived_agency(
     `agency_status='active'` perche' una sessione sia utilizzabile, e il test
     E3 lo verifica sulla funzione originale.
     """
-    service["store"].agencies[AGENCY_A]["status"] = agency_status
-
+    # ELIMINA AGENZIA: in un'agenzia eliminata (`archived`) l'organico gia'
+    # presente si amministra, ma non vi entra nessuno di nuovo (409).
     created = _http_create(client)
     assert created.status_code == 201, created.text
     operator_id = created.json()["operator"]["id"]
+    service["store"].agencies[AGENCY_A]["status"] = agency_status
+    nuovo = _http_create(client, email="altra.persona@example.test")
+    if agency_status == "archived":
+        assert nuovo.status_code == 409 and "eliminata" in nuovo.text, nuovo.text
+    else:
+        assert nuovo.status_code == 201, nuovo.text
 
     assert client.get(OPERATORS_A).status_code == 200
     assert client.patch(

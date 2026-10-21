@@ -53,7 +53,9 @@ from .enums import (
     ACTION_TERRITORY_ASSIGNMENT_UPDATE,
     ACTION_TERRITORY_CREATE,
     ACTION_TERRITORY_TRANSFER,
+    AGENCY_DELETED_NOT_USABLE_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
+    AGENCY_STATUS_ARCHIVED,
     ASSIGNMENT_ACTIVE,
     ASSIGNMENT_NOT_FOUND_MESSAGE,
     ASSIGNMENT_REVOKED,
@@ -113,6 +115,15 @@ def _require_agency(cur, agency_id: int) -> dict[str, Any]:
     agency = agencies_repository.get_agency(cur, agency_id)
     if agency is None:
         raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
+    return agency
+
+
+def _require_usable_agency(cur, agency_id: int) -> dict[str, Any]:
+    """ELIMINA AGENZIA: come `_require_agency`, ma un'agenzia eliminata
+    (`archived`) non riceve un territorio nuovo. La sospesa si', come prima."""
+    agency = _require_agency(cur, agency_id)
+    if agency["status"] == AGENCY_STATUS_ARCHIVED:
+        raise PlatformConflict(AGENCY_DELETED_NOT_USABLE_MESSAGE)
     return agency
 
 
@@ -269,7 +280,7 @@ def assign_territory(
     """
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ASSIGNMENT_CREATE)
-        _require_agency(cur, agency_id)
+        _require_usable_agency(cur, agency_id)
         _require_territory(cur, territory_id)
 
         active = territories_repository.get_active_assignment(cur, territory_id)
@@ -345,7 +356,10 @@ def update_assignment(
     """
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ASSIGNMENT_UPDATE)
-        _require_agency(cur, agency_id)
+        agency = _require_agency(cur, agency_id)
+        # ELIMINA AGENZIA: sospendere o revocare si', riattivare no.
+        if agency["status"] == AGENCY_STATUS_ARCHIVED and fields.get("status") == ASSIGNMENT_ACTIVE:
+            raise PlatformConflict(AGENCY_DELETED_NOT_USABLE_MESSAGE)
 
         assignment = territories_repository.get_assignment(
             cur, assignment_id, agency_id
@@ -464,7 +478,7 @@ def transfer_territory(
     """
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_TRANSFER)
-        _require_agency(cur, agency_id)
+        _require_usable_agency(cur, agency_id)
         _require_territory(cur, territory_id)
 
         current = territories_repository.get_active_assignment(cur, territory_id)

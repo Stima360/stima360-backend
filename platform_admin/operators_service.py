@@ -60,7 +60,9 @@ from .enums import (
     ACTION_OPERATOR_UPDATE,
     ACTION_OWNER_TRANSFER,
     ACTIVE_MEMBERSHIP_ELSEWHERE_MESSAGE,
+    AGENCY_DELETED_NOT_USABLE_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
+    AGENCY_STATUS_ARCHIVED,
     AUDIT_PLATFORM_ADMIN_CHANGE_KEY,
     EMAIL_TAKEN_MESSAGE,
     LAST_SUPER_ADMIN_MESSAGE,
@@ -242,7 +244,10 @@ def create_agency_operator(
 
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OPERATOR_CREATE)
-        _require_agency(cur, agency_id)
+        # ELIMINA AGENZIA: l'organico di un'agenzia eliminata si amministra
+        # (revoche, disattivazioni), ma non vi entra nessuno di nuovo.
+        if _require_agency(cur, agency_id)["status"] == AGENCY_STATUS_ARCHIVED:
+            raise PlatformConflict(AGENCY_DELETED_NOT_USABLE_MESSAGE)
 
         existing = operators_repository.find_operator_by_normalized_email(
             cur, normalized

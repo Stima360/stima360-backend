@@ -1441,10 +1441,25 @@ def test_f1_territories_are_administrable_whatever_the_agency_status(service, st
     store.agencies[AGENCY_A]["status"] = stato
     territory = store.seed_territory()
 
-    assignment = territories_service.assign_territory(
-        service["session"], AGENCY_A,
-        territory_id=territory["id"], created_fields=["territory_id"],
-    )
+    # ELIMINA AGENZIA: un'agenzia eliminata (`archived`) non riceve territori
+    # nuovi ne' riattivazioni; le assegnazioni che ha si sospendono e revocano.
+    if stato == "archived":
+        with pytest.raises(PlatformConflict):
+            territories_service.assign_territory(
+                service["session"], AGENCY_A,
+                territory_id=territory["id"], created_fields=["territory_id"],
+            )
+        assignment = store.seed_assignment(territory["id"], AGENCY_A)
+        with pytest.raises(PlatformConflict):
+            territories_service.update_assignment(
+                service["session"], AGENCY_A, assignment["id"],
+                {"status": ASSIGNMENT_ACTIVE},
+            )
+    else:
+        assignment = territories_service.assign_territory(
+            service["session"], AGENCY_A,
+            territory_id=territory["id"], created_fields=["territory_id"],
+        )
     assert assignment["status"] == ASSIGNMENT_ACTIVE
 
     updated = territories_service.update_assignment(
