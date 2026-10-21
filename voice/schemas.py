@@ -108,19 +108,35 @@ class ContactRef(VoiceModel):
         return any((self.first_name, self.last_name, self.company_name, self.phone, self.email))
 
 
+class OwnerRef(VoiceModel):
+    """V8-0: il PROPRIETARIO di un immobile («la casa di Francesco Ruvolo»):
+    serve a trovare l'immobile o l'incarico, non e' il cliente."""
+    first_name: str | None = Field(None, max_length=100)
+    last_name: str | None = Field(None, max_length=100)
+    company_name: str | None = Field(None, max_length=200)
+
+    @model_validator(mode="after")
+    def _qualcosa(self):
+        if not any((self.first_name, self.last_name, self.company_name)):
+            raise ValueError("owner reference needs a name")
+        return self
+
+
 class PropertyRef(VoiceModel):
-    """Quale immobile: per codice, per indirizzo, per `step`."""
+    """Quale immobile: per codice, per indirizzo, per `step`, o (V8-0) per il
+    nome del proprietario."""
     step: int | None = Field(None, ge=1, le=MAX_COMMANDS)
     code: str | None = Field(None, max_length=50)
     address: str | None = Field(None, max_length=250)
     civic_number: str | None = Field(None, max_length=30)
     city: str | None = Field(None, max_length=120)
     property_type: PropertyType | None = None
+    owner: OwnerRef | None = None
 
     @model_validator(mode="after")
     def _qualcosa(self):
-        if self.step is None and not any((self.code, self.address, self.city)):
-            raise ValueError("property reference needs a code, an address or a step")
+        if self.step is None and not any((self.code, self.address, self.city, self.owner)):
+            raise ValueError("property reference needs a code, an address, an owner or a step")
         return self
 
 

@@ -101,6 +101,14 @@ def _errore(exc: Exception) -> JSONResponse:
         return _risposta(409, exc.code, str(exc))
     if isinstance(exc, voice_provider.ProviderNotConfigured):
         return _risposta(503, "VOICE_PROVIDER_NOT_CONFIGURED", "Interpretazione vocale non disponibile")
+    if isinstance(exc, voice_provider.ProviderBusy):
+        # V8-0: limite del piano del fornitore. 429 con il tempo d'attesa: il
+        # comando e la conversazione restano, si riprova con la stessa richiesta.
+        risposta = _risposta(429, "VOICE_PROVIDER_BUSY",
+                             f"Interpretazione momentaneamente satura: riprova fra {exc.retry_after} secondi",
+                             retry_after=exc.retry_after)
+        risposta.headers["Retry-After"] = str(exc.retry_after)
+        return risposta
     if isinstance(exc, voice_provider.ProviderUnavailable):
         return _risposta(503, "VOICE_PROVIDER_UNAVAILABLE",
                          "Interpretazione non disponibile: riprova con la stessa richiesta")

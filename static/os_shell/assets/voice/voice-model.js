@@ -179,6 +179,7 @@ export function errorMessage(error) {
     VOICE_PLATFORM_ADMIN_BLOCKED: 'STIMA Voice non è disponibile per l’amministrazione della piattaforma.',
     VOICE_DAILY_LIMIT: 'Hai raggiunto il limite giornaliero dei comandi vocali.',
     VOICE_RATE_LIMITED: 'Troppe richieste vocali in un minuto: attendi qualche secondo e riprova.',
+    VOICE_PROVIDER_BUSY: 'Il servizio di interpretazione è momentaneamente saturo.',
     VOICE_PROVIDER_NOT_CONFIGURED: 'L’interpretazione dei comandi non è disponibile.',
     VOICE_PROVIDER_UNAVAILABLE: 'Interpretazione non disponibile in questo momento. Riprova: il comando non verrà duplicato.',
     VOICE_MODEL_OUTPUT_INVALID: 'Non sono riuscito a interpretare il comando. Nulla è stato eseguito: prova a riformularlo.',
@@ -189,6 +190,9 @@ export function errorMessage(error) {
     VOICE_CONFIRMATION_NOT_ALLOWED: 'Questo passo non si sblocca con una conferma: servono dati diversi.',
     VOICE_TEXT_INVALID: 'Scrivi un comando (al massimo 2000 caratteri).',
   };
+  if (code === 'VOICE_PROVIDER_BUSY') {
+    return `${messaggi[code]} Riprova fra ${retryAfter(error)} secondi: il comando e la conversazione restano qui, nulla è stato eseguito.`;
+  }
   if (code && messaggi[code]) return messaggi[code];
   if (error && error.status === 401) return 'Sessione scaduta. Accedi di nuovo.';
   return (error && error.message) || 'Si è verificato un errore.';
@@ -274,4 +278,41 @@ export function spokenCommand(text) {
   }
   if (/^(annulla|annullo|cancella|lascia stare|no,? annulla)$/.test(t)) return { kind: 'cancel', text: '' };
   return { kind: 'reply', text: String(text || '').trim() };
+}
+
+// ---------------------------------------------------------------------------
+// V8-0: il fornitore saturo (429) e le scelte risolte senza il modello
+// ---------------------------------------------------------------------------
+
+/** I secondi da attendere dopo un 429 del fornitore (dal server), fra 1 e 300. */
+export function retryAfter(error) {
+  const n = Number(error && error.data && error.data.retry_after);
+  return Number.isFinite(n) && n > 0 ? Math.min(300, Math.ceil(n)) : 20;
+}
+
+const piega = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const ORDINALI = { primo: 1, prima: 1, uno: 1, secondo: 2, seconda: 2, due: 2, terzo: 3, terza: 3, tre: 3,
+  quarto: 4, quarta: 4, quattro: 4, quinto: 5, quinta: 5, cinque: 5 };
+
+/**
+ * Una risposta che sceglie fra i candidati GIA' mostrati («il secondo», «Mario
+ * Rossi di via Roma») si risolve qui, senza chiamare il modello: solo se
+ * indica UN candidato di UNA sola scelta aperta. `scelte` = [{ ordinal, ref,
+ * candidates: [{id, label}] }]. Altrimenti null (si risponde al server).
+ */
+export function choiceFromText(text, scelte) {
+  const aperte = (scelte || []).filter((s) => Array.isArray(s.candidates) && s.candidates.length > 1);
+  if (aperte.length !== 1) return null;
+  const { ordinal, ref, candidates } = aperte[0];
+  const t = piega(text).replace(/^(e |scegli |prendi |seleziona |quello |quella |il |la |l )+/, '').trim();
+  if (!t) return null;
+  const numero = /^\d+$/.test(t) ? Number(t) : ORDINALI[t.split(' ')[0]] && t.split(' ').length <= 2 ? ORDINALI[t.split(' ')[0]] : null;
+  if (numero && numero >= 1 && numero <= candidates.length) return { ordinal, ref, ...candidates[numero - 1] };
+  const parole = t.split(' ').filter((p) => p.length > 1);
+  const trovati = candidates.filter((c) => {
+    const etichetta = piega(c.label);
+    return parole.length > 0 && parole.every((p) => etichetta.includes(p));
+  });
+  return trovati.length === 1 ? { ordinal, ref, ...trovati[0] } : null;
 }

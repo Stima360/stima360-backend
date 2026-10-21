@@ -75,6 +75,7 @@ MESSAGES = {
     "appointment_purpose_missing": "Per che cosa e' l'appuntamento con l'acquirente? (visita di un immobile, proposta, telefonata...)",
     "visit_mandate_required": "Quale immobile deve visitare il cliente? Una visita si fissa solo su un incarico di vendita.",
     "visit_client_required": "Con quale cliente e' la visita?",
+    "visit_client_is_owner": "Il cliente indicato e' il proprietario dell'immobile: chi e' il cliente che lo visita?",
     "visit_no_usable_mandate": "L'immobile indicato non ha un incarico di vendita in corso o scaduto: la visita non si fissa.",
     "agent_named": "L'appuntamento e' per un altro agente: serve il permesso di assegnare.",
     dates.UNRECOGNIZED_DATE: "Non ho capito il giorno.",
@@ -214,6 +215,34 @@ _per_operatore: dict[tuple[int, int], deque] = {}
 _interpretazioni: dict[tuple[int, Any], int] = {}
 
 
+#: V8-0: dopo un 429 del fornitore il limite e' dell'ORGANIZZAZIONE, non
+#: dell'operatore: fino a quell'istante nessuno chiama il modello (risposta
+#: immediata con il tempo d'attesa restante, nessun invio inutile al fornitore).
+_fornitore_occupato_fino: list = [None]
+
+
+def _attendi_fornitore() -> None:
+    fino = _fornitore_occupato_fino[0]
+    if fino is None:
+        return
+    resto = (fino - datetime.now(ROMA)).total_seconds()
+    if resto > 0:
+        raise voice_provider.ProviderBusy(int(resto) + 1)
+    _fornitore_occupato_fino[0] = None
+
+
+def _interpreta(provider, testo: str, quando: datetime, *, context=None):
+    """L'UNICA chiamata al modello del servizio: rispetta la pausa dopo un 429
+    e la registra quando arriva."""
+    _attendi_fornitore()
+    try:
+        return voice_provider.interpret(provider, testo, quando, context=context)
+    except voice_provider.ProviderBusy as occupato:
+        with _freno_lock:
+            _fornitore_occupato_fino[0] = datetime.now(ROMA) + timedelta(seconds=occupato.retry_after)
+        raise
+
+
 def _freno_operatore(ctx, adesso: datetime) -> None:
     chiave = (int(ctx.require_agency()), int(ctx.user_id))
     with _freno_lock:
@@ -260,6 +289,7 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
     if not testo or len(testo) > voice_provider.MAX_TEXT:
         raise VoiceRefused(TEXT_INVALID, "testo vuoto o troppo lungo")
     adesso = now or datetime.now(ROMA)
+    _attendi_fornitore()                       # pausa dopo un 429: nessun comando nuovo, nessuna chiamata
     if not _gia_ricevuto(ctx, client_command_id):
         _limite_giornaliero(ctx, impostazioni, adesso)
         _freno_operatore(ctx, datetime.now(ROMA))   # solo un comando NUOVO chiama il fornitore
@@ -269,7 +299,7 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
         with ledger.executing(ctx, riga["id"]):            # una sola interpretazione per comando
             comando = ledger.get_command(ctx, riga["id"])
             if comando["plan_sha256"] is None:
-                output = voice_provider.interpret(provider, testo, comando["recorded_at"], context=context)
+                output = _interpreta(provider, testo, comando["recorded_at"], context=context)
                 piano = planner.build_plan(output, testo, comando["recorded_at"])
                 executor.prepare(ctx, riga["id"], piano)
                 registrato = ledger.get_command(ctx, riga["id"])
@@ -301,10 +331,11 @@ def interpret(ctx, text: str, *, provider, now: datetime | None = None) -> dict[
     if not testo or len(testo) > voice_provider.MAX_TEXT:
         raise VoiceRefused(TEXT_INVALID, "testo vuoto o troppo lungo")
     adesso = now or datetime.now(ROMA)
+    _attendi_fornitore()                       # prima di consumare un'interpretazione del limite
     _limite_giornaliero(ctx, impostazioni, adesso)
     _freno_operatore(ctx, datetime.now(ROMA))
     _conta_interpretazione(ctx, impostazioni, adesso)
-    output = voice_provider.interpret(provider, testo, adesso)
+    output = _interpreta(provider, testo, adesso)
     piano = planner.build_plan(output, testo, adesso)
     risolto = resolver.resolve(piano, ctx)
     decisione = policy.decide(piano, risolto.facts, impostazioni.policy)
@@ -387,16 +418,28 @@ def reply(ctx, command_id: int, client_command_id, text: str, *, provider,
     if len(testo) > voice_provider.MAX_TEXT:
         raise VoiceRefused(TEXT_INVALID, "La conversazione e' troppo lunga: inizia un nuovo comando")
     contesto = _domande(vista)
-    if _gia_ricevuto(ctx, client_command_id):           # ripetizione della stessa risposta
-        return submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
-    with ledger.executing(ctx, command_id):             # nessuna esecuzione del precedente nel frattempo
-        comando = ledger.get_command(ctx, command_id)
-        if comando["status"] not in _RISPONDIBILE or any(p["state"] not in _MAI_ESEGUITO for p in comando["steps"]):
-            raise VoiceRefused(REPLY_NOT_ALLOWED, "Questo comando ha gia' eseguito delle operazioni: "
-                                                  "per cambiarle usa «Annulla» o inizia un nuovo comando")
-        _limite_giornaliero(ctx, impostazioni, now or datetime.now(ROMA))
-        ledger.cancel(ctx, command_id)
-    return submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
+    # V8-0: il comando a cui si risponde si annulla SOLO quando il nuovo piano
+    # esiste. Se il fornitore non risponde (429, rete), la conversazione resta
+    # quella di prima, intatta, e la stessa risposta si ripete con la stessa chiave.
+    _attendi_fornitore()
+    if not _gia_ricevuto(ctx, client_command_id):
+        with ledger.executing(ctx, command_id):         # nessuna esecuzione del precedente nel frattempo
+            _rispondibile(ctx, command_id)
+            _limite_giornaliero(ctx, impostazioni, now or datetime.now(ROMA))
+    nuovo = submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
+    with ledger.executing(ctx, command_id):
+        precedente = ledger.get_command(ctx, command_id)
+        if precedente["status"] != "cancelled":
+            _rispondibile(ctx, command_id, comando=precedente)
+            ledger.cancel(ctx, command_id)
+    return nuovo
+
+
+def _rispondibile(ctx, command_id: int, *, comando=None) -> None:
+    comando = comando or ledger.get_command(ctx, command_id)
+    if comando["status"] not in _RISPONDIBILE or any(p["state"] not in _MAI_ESEGUITO for p in comando["steps"]):
+        raise VoiceRefused(REPLY_NOT_ALLOWED, "Questo comando ha gia' eseguito delle operazioni: "
+                                              "per cambiarle usa «Annulla» o inizia un nuovo comando")
 
 
 # ---------------------------------------------------------------------------

@@ -95,7 +95,8 @@ def _property_label(r: dict) -> str:
     # SEMPLIFICAZIONE-CRM-1 / V8-2: senza codice; indirizzo, comune e natura della scheda.
     luogo = ", ".join(x for x in (" ".join(y for y in (r.get("address"), r.get("civic_number")) if y), r.get("city")) if x)
     tipo = "censimento" if r.get("record_kind") == "census" else "commerciale"
-    return f"{luogo or r.get('title') or 'senza indirizzo'} ({tipo})"
+    proprietario = f" — proprietario {r['owner_name']}" if r.get("owner_name") else ""
+    return f"{luogo or r.get('title') or 'senza indirizzo'} ({tipo}){proprietario}"
 
 
 def _building_label(r: dict) -> str:
@@ -139,6 +140,11 @@ def _match_contact(ctx, cur, d: dict[str, Any]) -> RefMatch:
 
 
 def _match_property(ctx, cur, d: dict[str, Any]) -> RefMatch:
+    if d.get("owner") and not (d.get("code") or d.get("address")):
+        # V8-0: «la casa di Francesco Ruvolo»: gli immobili di quel proprietario,
+        # sempre da confermare (mai esatto: il nome non identifica).
+        trovati = repository.properties_by_owner(ctx, cur, **d["owner"])
+        return RefMatch(_candidates(trovati, "property"), exact=False)
     if d.get("code"):
         trovati = repository.properties_by_code(ctx, cur, d["code"])
         if trovati:

@@ -85,7 +85,7 @@ import { createContactPicker } from '../contact-picker.js';
 // la sola interpretazione del server (`/api/voice/interpret`): i campi si
 // precompilano, l'operatore li controlla o li corregge, e salva dal dialog.
 import { interpretText } from '../../voice/voice-api.js';
-import { SPEECH_ERRORS, formatHour, romeDayKey } from '../../voice/voice-model.js';
+import { SPEECH_ERRORS, errorMessage as voiceErrorMessage, formatHour, retryAfter, romeDayKey } from '../../voice/voice-model.js';
 import { createDictation, speechSupport } from '../../voice/voice-speech.js';
 
 function due(n) {
@@ -1224,10 +1224,17 @@ export function openCreateDialog(dialogEl, {
       try {
         applica(await interpretText(testo));
       } catch (e) {
+        if (e && e.code === 'VOICE_PROVIDER_BUSY') {
+          // V8-0: fornitore saturo: il microfono resta fermo fino all'ora indicata; i campi restano.
+          const secondi = retryAfter(e);
+          statoVoce.textContent = `${voiceErrorMessage(e)} Intanto puoi compilare i campi a mano.`;
+          bottoneVoce.disabled = true;
+          setTimeout(() => { bottoneVoce.disabled = false; }, secondi * 1000);
+          return;
+        }
         statoVoce.textContent = `Interpretazione non riuscita: ${e.message || errorMessage(e)}. Compila i campi a mano.`;
-      } finally {
-        bottoneVoce.disabled = false;
       }
+      bottoneVoce.disabled = false;
     };
     if (!dettaturaDisponibile) {
       bottoneVoce.disabled = true;

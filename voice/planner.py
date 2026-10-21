@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any
@@ -58,6 +59,10 @@ APPOINTMENT_PURPOSE_MISSING = "appointment_purpose_missing"
 #: guardia autorevole all'esecuzione.
 VISIT_MANDATE_REQUIRED = "visit_mandate_required"
 VISIT_CLIENT_REQUIRED = "visit_client_required"
+#: V8-0: il cliente indicato per la visita e' il PROPRIETARIO dell'immobile
+#: visitato («...vedere la casa di Francesco Ruvolo» con Francesco come
+#: cliente): non si salva, si chiede chi visita.
+VISIT_CLIENT_IS_OWNER = "visit_client_is_owner"
 
 #: Parole che nel trascritto (ripiegato) provano l'intento commerciale o di
 #: censimento. Deterministiche: un test le fissa.
@@ -77,6 +82,9 @@ APPOINTMENT_KEYWORDS = (
     # = rogito; «presentazione della stima» = presentazione valutazione.
     ("veder", "buyer_visit"), ("mostr", "buyer_visit"), ("visionar", "buyer_visit"),
     ("atto notarile", "notary"), ("stipul", "notary"), ("stima", "valuation_presentation"),
+    # V8-0: «appuntamento di vendita» e' la visita di un cliente su un incarico
+    # (`sale_appointment` non si crea piu': la visita immobile ne ha preso il ruolo).
+    ("appuntamento di vendita", "buyer_visit"),
     # Fase 7: l'appuntamento di acquisizione e' un `seller_meeting`, lo stesso
     # tipo che il modulo Acquisizioni usa per il suo appuntamento in Agenda
     # (acquisitions/enums.py::APPOINTMENT_TYPE). Crea solo l'appuntamento: non
@@ -89,7 +97,9 @@ APPOINTMENT_KEYWORDS = (
 SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari", "venditor", "venditric", "padron")
 #: V8-1: `buyer_visit` SOLO se l'agente parla di visitare, vedere o mostrare
 #: un immobile. «Appuntamento con Mario, acquirente» non e' una visita.
-BUYER_VISIT_EVIDENCE = ("visit", "veder", "mostr", "visionar")
+BUYER_VISIT_EVIDENCE = ("visit", "veder", "mostr", "visionar", "appuntamento di vendita")
+#: V8-0: il tipo che la voce non crea mai, e quello che lo sostituisce.
+HIDDEN_TYPE_REPLACEMENTS = {"sale_appointment": "buyer_visit"}
 #: V8-1: le parole con cui l'agente dice il RUOLO della persona -> ruolo
 #: del CRM (core.enums.CONTACT_ROLES). Deterministiche: un test le fissa.
 ROLE_KEYWORDS = (
@@ -161,7 +171,7 @@ class Plan:
 def _ref(kind: str, r: ContactRef | PropertyRef | BuildingRef | None) -> Ref | None:
     if r is None:
         return None
-    return Ref(kind, r.step, {k: v for k, v in r.model_dump().items() if k != "step" and v is not None})
+    return Ref(kind, r.step, {k: v for k, v in r.model_dump(exclude_none=True).items() if k != "step"})
 
 
 #: Id fittizio usato SOLO per far passare i validatori del CRM che esigono
@@ -236,6 +246,50 @@ def appointment_type_from(quote_folded: str) -> str:
     return DEFAULT_APPOINTMENT_TYPE
 
 
+#: V8-0: «la casa di Francesco Ruvolo», «l'appartamento del signor Rossi»: il
+#: nome dopo l'immobile e' il PROPRIETARIO. Le parole dopo «di» che non sono
+#: un nome (via, mare...) si scartano. Deterministico; un test lo fissa.
+_IMMOBILE_DI = re.compile(
+    r"\b(?:casa|appartamento|immobile|villa|villetta|attico|mansarda|bilocale|trilocale|quadrilocale|"
+    r"monolocale|abitazione|proprieta|negozio|ufficio|box|garage|terreno|rustico|casale)\s+"
+    r"(?:di|del|della|dello|dei|degli)\s+(?:(?:signora|signor|signore|sig)\s+)?"
+    r"([a-z][a-z]+(?:\s+[a-z][a-z]+)?)")
+_NON_NOMI = frozenset({"via", "viale", "piazza", "corso", "largo", "vicolo", "mare", "campagna", "montagna", "lusso",
+                       "pregio", "proprieta", "nostro", "nostra", "vostro", "vostra", "suo", "sua", "loro", "cliente",
+                       "fronte", "nuova", "nuovo", "vendita", "affitto", "questo", "questa", "quello", "quella"})
+_FINE_NOME = frozenset({"in", "a", "al", "alla", "per", "con", "che", "e", "domani", "oggi", "lunedi", "martedi",
+                        "mercoledi", "giovedi", "venerdi", "sabato", "domenica", "alle", "il", "la", "nel", "sul"})
+
+
+def owner_from(text_folded: str) -> dict[str, str] | None:
+    """V8-0: il proprietario nominato con «la casa di X Y», o None."""
+    m = _IMMOBILE_DI.search(text_folded)
+    if not m:
+        return None
+    parole = [p for p in m.group(1).split()]
+    nome = []
+    for p in parole:
+        if p in _FINE_NOME:
+            break
+        nome.append(p)
+    if not nome or nome[0] in _NON_NOMI:
+        return None
+    if len(nome) == 1:
+        return {"last_name": nome[0].capitalize()}
+    return {"first_name": nome[0].capitalize(), "last_name": nome[1].capitalize()}
+
+
+def _stessa_persona(a: dict, b: dict) -> bool:
+    """Due descrizioni di persona con lo stesso cognome e, se entrambe lo
+    dicono, lo stesso nome (senza accenti ne' maiuscole)."""
+    ca, cb = dates.fold(a.get("last_name") or ""), dates.fold(b.get("last_name") or "")
+    na, nb = dates.fold(a.get("first_name") or ""), dates.fold(b.get("first_name") or "")
+    if ca and cb:
+        return ca == cb and (not (na and nb) or na == nb)
+    # uno dei due e' detto solo per nome: stesso nome = stessa persona (si chiede)
+    return bool(na and nb and na == nb)
+
+
 def role_from(text_folded: str) -> str | None:
     """V8-1: il ruolo detto dall'agente, o None."""
     for parola, ruolo in ROLE_KEYWORDS:
@@ -255,7 +309,7 @@ def appointment_type_for(claimed: str | None, quote_folded: str, transcript_fold
     proprietario = appuntamento proprietario (`seller_meeting`); un
     acquirente = motivo da chiedere; altrimenti il tipo generico."""
     dalle_parole = appointment_type_from(quote_folded)
-    tipo = claimed or dalle_parole
+    tipo = HIDDEN_TYPE_REPLACEMENTS.get(claimed, claimed) or dalle_parole
     if tipo == "seller_meeting" and not any(p in quote_folded or p in transcript_folded
                                             for p in SELLER_MEETING_EVIDENCE):
         tipo = dalle_parole
@@ -397,10 +451,24 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
         for nome in ("location_text", "notes"):
             if getattr(c, nome):
                 s.payload[nome] = getattr(c, nome)
+        # V8-0: «la casa di Francesco Ruvolo»: Francesco e' il PROPRIETARIO.
+        # Se il modello non ha indicato l'immobile, lo si cerca per proprietario.
+        proprietario = (c.property.owner.model_dump(exclude_none=True)
+                        if c.property is not None and c.property.owner is not None else None)
+        detto = owner_from(quote_f) or owner_from(folded)
+        if proprietario is None and detto is not None and tipo in MANDATE_REQUIRED_TYPES and c.property is None:
+            proprietario = detto
+            refs["property"] = Ref("property", None, {"owner": detto})
+        if tipo in MANDATE_REQUIRED_TYPES and c.contact is not None and c.contact.step is None:
+            cliente = c.contact.model_dump(exclude_none=True)
+            if any(p and _stessa_persona(cliente, p) for p in (proprietario, detto)):
+                issues.append(Issue(VISIT_CLIENT_IS_OWNER,
+                                    f"{' '.join(x for x in (cliente.get('first_name'), cliente.get('last_name')) if x)} "
+                                    "e' il proprietario dell'immobile: chi e' il cliente che lo visita?", "contact"))
         if tipo in MANDATE_REQUIRED_TYPES:
             if c.contact is None:
                 issues.append(Issue(VISIT_CLIENT_REQUIRED, "Con quale cliente e' la visita?", "contact"))
-            if c.property is None:
+            if c.property is None and "property" not in refs:
                 chi = " ".join(x for x in ((c.contact.first_name if c.contact else None),
                                            (c.contact.last_name if c.contact else None)) if x) or "il cliente"
                 issues.append(Issue(VISIT_MANDATE_REQUIRED, f"Quale immobile deve visitare {chi}?", "property"))

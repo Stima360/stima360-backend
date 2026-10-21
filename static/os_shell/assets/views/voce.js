@@ -18,9 +18,9 @@
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
-  SPEECH_ERRORS, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choicesNeeded, commandStatus, errorMessage,
-  hasRunnableSteps, intentLabel, openQuestions, referenceNotFound, resultText, spokenCommand, stepDescription,
-  stepStatus, stepsToConfirm,
+  SPEECH_ERRORS, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
+  errorMessage, hasRunnableSteps, intentLabel, openQuestions, referenceNotFound, resultText, retryAfter, spokenCommand,
+  stepDescription, stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
 import { createDictation, speechSupport } from '../voice/voice-speech.js';
 
@@ -193,15 +193,42 @@ export async function renderVoce(container, _params = [], deps = {}) {
   const area = q('[data-voice-result]');
   const mic = q('[data-voice-mic]');
   // La chiave appartiene al TESTO: stesso testo reinviato = stessa chiave.
-  const s = { busy: false, key: null, keyText: null, view: null, storia: [], replyKey: null, replyFor: null };
+  const s = { busy: false, key: null, keyText: null, view: null, storia: [], replyKey: null, replyFor: null,
+    attesaFino: 0, timerAttesa: null };
 
   const mostraErrore = (msg) => { errore.textContent = msg || ''; };
+  // V8-0: dopo un 429 del fornitore, «Invia» e «Rispondi» restano fermi fino
+  // all'ora indicata dal server: nessun reinvio inutile. Testo, conversazione
+  // e chiavi restano: il primo invio dopo l'attesa riusa la stessa richiesta.
+  const inAttesa = () => Date.now() < s.attesaFino;
+  const bloccaInvii = (si) => {
+    invia.disabled = si;
+    for (const b of area.querySelectorAll('[data-voice-reply-send]')) b.disabled = si;
+  };
+  function attendiFornitore(secondi) {
+    s.attesaFino = Date.now() + secondi * 1000;
+    clearInterval(s.timerAttesa);
+    const tic = () => {
+      const resto = Math.ceil((s.attesaFino - Date.now()) / 1000);
+      if (resto <= 0) {
+        clearInterval(s.timerAttesa);
+        s.timerAttesa = null;
+        bloccaInvii(s.busy);
+        live.textContent = 'Puoi riprovare ora.';
+        return;
+      }
+      bloccaInvii(true);
+      live.textContent = `Riprova fra ${resto} secondi.`;
+    };
+    tic();
+    s.timerAttesa = setInterval(tic, 1000);
+  }
   const occupato = (si) => {
     s.busy = si;
-    invia.disabled = si;
     for (const b of area.querySelectorAll('button')) b.disabled = si;
     for (const t of area.querySelectorAll('textarea')) t.readOnly = si;
-    live.textContent = si ? 'Elaborazione…' : '';
+    bloccaInvii(si || inAttesa());
+    live.textContent = si ? 'Elaborazione…' : (inAttesa() ? live.textContent : '');
   };
 
   function disegna(view) {
@@ -219,6 +246,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
       if (view) disegna(view);
     } catch (e) {
       mostraErrore(errorMessage(e));
+      if (e && e.code === 'VOICE_PROVIDER_BUSY') attendiFornitore(retryAfter(e));
     } finally {
       occupato(false);
     }
@@ -274,6 +302,23 @@ export async function renderVoce(container, _params = [], deps = {}) {
           return;
         }
         if (detto.kind === 'cancel') { azione(() => api.cancelCommand(id())); return; }
+        // V8-0: una scelta fra i candidati gia' mostrati («il secondo», «Mario
+        // Rossi») si fa qui, sul pulsante giusto, senza chiamare il modello.
+        const scelta = choiceFromText(testoRisposta, (s.view.steps || [])
+          .filter((st) => st.state === 'pending')
+          .flatMap((st) => choicesNeeded(st).map(([ref, lista]) => ({ ordinal: st.ordinal, ref, candidates: lista }))));
+        if (scelta) {
+          const opzione = [...area.querySelectorAll(`[data-voice-option="${scelta.ordinal}:${scelta.ref}"]`)]
+            .find((o) => Number(o.value) === Number(scelta.id));
+          if (opzione) {
+            opzione.checked = true;
+            campo.value = '';
+            mostraErrore('');
+            live.textContent = `Ho scelto «${scelta.label}». Ora puoi confermare.`;
+            return;
+          }
+        }
+        if (inAttesa()) { mostraErrore(`Il servizio di interpretazione è saturo: riprova fra ${Math.ceil((s.attesaFino - Date.now()) / 1000)} secondi.`); return; }
         const per = `${id()}\n${testoRisposta}`;          // la chiave appartiene a (comando, risposta)
         if (s.replyFor !== per) { s.replyKey = api.newCommandKey(); s.replyFor = per; }
         const chiave = s.replyKey;
@@ -357,6 +402,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
     event.preventDefault();
     const comando = String(testo.value || '').trim();
     if (!comando) { mostraErrore('Scrivi o detta un comando.'); return; }
+    if (inAttesa()) { mostraErrore(`Il servizio di interpretazione è saturo: riprova fra ${Math.ceil((s.attesaFino - Date.now()) / 1000)} secondi.`); return; }
     if (dettatura && dettatura.listening) dettatura.stop();
     if (s.keyText !== comando) { s.key = api.newCommandKey(); s.keyText = comando; }
     azione(async () => {

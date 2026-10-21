@@ -19,10 +19,14 @@ FILE_NUOVI = frozenset({
     "tests/test_voice_8_5_interpret_postgres.py",
     "tests/test_voice_8_0_general.py",
     "tests/test_voice_8_0_provision_postgres.py",
+    # collaudo reale del 21/10: 429 del fornitore, chi visita e chi vende
+    "tests/test_voice_8_0_conversations.py",
+    "tests/test_voice_8_0_conversations_postgres.py",
 })
 
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
+    "voice/fake_provider.py",
     # V8-0: la Voce per tutte le agenzie attive (riga creata con l'agenzia)
     "platform_admin/agencies_repository.py",
     "platform_admin/agencies_service.py",

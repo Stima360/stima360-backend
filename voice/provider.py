@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -35,7 +37,7 @@ from typing import Any
 import requests
 from pydantic import ValidationError
 
-from .fake_provider import ProviderUnavailable
+from .fake_provider import ProviderBusy, ProviderUnavailable  # noqa: F401 (ProviderBusy esposto)
 from .schemas import MAX_TEXT, VoicePlanOutput, parse_plan_output, plan_json_schema
 
 log = logging.getLogger("stima360.voice.provider")
@@ -84,6 +86,10 @@ Regole obbligatorie:
 - Il motivo detto prevale sul ruolo. Un appuntamento con un venditore o proprietario senza motivo e' "seller_meeting".
   Con un acquirente senza motivo NON e' una visita: lascia appointment_type assente.
 - Un immobile o un incarico nominato per l'appuntamento ("l'appartamento in via Roma 15") va in property.
+- In una visita, contact e' chi VISITA o compra (role "buyer"); il PROPRIETARIO dell'immobile visitato
+  ("la casa di Francesco Ruvolo") va in property.owner, MAI in contact. Esempio: "appuntamento di vendita
+  Giorgio Censori, che va a vedere la casa di Francesco Ruvolo" = appointment_type "buyer_visit",
+  contact Giorgio Censori (buyer), property.owner Francesco Ruvolo. Non inventare indirizzi o incarichi.
 """
 
 
@@ -143,6 +149,11 @@ class HttpVoiceProvider:
         except requests.RequestException as exc:
             log.warning("voice provider: richiesta fallita (%s)", type(exc).__name__)
             raise ProviderUnavailable("fornitore AI non raggiungibile") from None
+        if risposta.status_code == 429:
+            # V8-0: limite del piano del fornitore. Si dice QUANDO riprovare.
+            attesa = retry_after_seconds(risposta.headers)
+            log.warning("voice provider: HTTP 429, riprovare fra %ss", attesa)
+            raise ProviderBusy(attesa)
         if risposta.status_code != 200:
             log.warning("voice provider: HTTP %s", risposta.status_code)
             raise ProviderUnavailable(f"fornitore AI: HTTP {risposta.status_code}")
@@ -155,6 +166,32 @@ class HttpVoiceProvider:
         except (ValueError, KeyError, IndexError, TypeError):
             log.warning("voice provider: risposta non leggibile")
             raise ProviderMalformed("risposta del fornitore non leggibile") from None
+
+
+#: V8-0: attesa usata se il 429 non dice quando riprovare, e il massimo accettato.
+DEFAULT_RETRY_AFTER = 20
+MAX_RETRY_AFTER = 300
+_DURATA = re.compile(r"(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?(?:([\d.]+)ms)?")
+
+
+def retry_after_seconds(headers) -> int:
+    """I secondi da attendere da un 429: `Retry-After` (secondi) e i reset di
+    Groq `x-ratelimit-reset-requests`/`-tokens` («2.5s», «1m3s», «350ms»): il
+    piu' lungo; senza, DEFAULT_RETRY_AFTER. Sempre fra 1 e MAX_RETRY_AFTER."""
+    h = {str(k).lower(): str(v).strip() for k, v in (headers or {}).items()}
+    valori = []
+    try:
+        if h.get("retry-after"):
+            valori.append(float(h["retry-after"]))
+    except ValueError:
+        pass
+    for nome in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        m = _DURATA.fullmatch(h.get(nome, ""))
+        if h.get(nome) and m and any(m.groups()):
+            ore, minuti, sec, ms = (float(x) if x else 0.0 for x in m.groups())
+            valori.append(ore * 3600 + minuti * 60 + sec + ms / 1000)
+    attesa = max(valori) if valori else DEFAULT_RETRY_AFTER
+    return int(min(MAX_RETRY_AFTER, max(1, math.ceil(attesa))))
 
 
 def from_env(env=None) -> HttpVoiceProvider:

@@ -347,3 +347,52 @@ def contacts_with_role(ctx, cur, contact_ids: list[int], role: str | None) -> se
         + ")",
         (list(contact_ids), list(famiglia), list(famiglia)))
     return {int(r["id"]) for r in cur.fetchall()}
+
+
+# ---------------------------------------------------------------------------
+# V8-0: gli immobili di un PROPRIETARIO («la casa di Francesco Ruvolo»)
+# ---------------------------------------------------------------------------
+
+_OWNER_ROLES = ("owner", "seller")
+
+
+def properties_by_owner(ctx, cur, *, first_name: str | None = None, last_name: str | None = None,
+                        company_name: str | None = None) -> list[dict]:
+    """Immobili vivi dell'agenzia il cui proprietario (o venditore) ha il nome
+    detto: uguale, o - per piccole imprecisioni - simile (stessa iniziale del
+    cognome, NAME_SIMILARITY). Come la ricerca degli incarichi dell'Agenda, il
+    proprietario si cerca nell'agenzia; l'immobile resta da confermare."""
+    detto_nome, detto_cognome, ditta = fold(first_name or ""), fold(last_name or ""), fold(company_name or "")
+    if not (detto_nome or detto_cognome or ditta):
+        return []
+    if ditta:
+        filtro, params = "lower(btrim(c.company_name)) = %s", [ditta]
+    elif detto_cognome:
+        filtro, params = "lower(left(btrim(c.last_name), 1)) = %s", [detto_cognome[:1]]
+    else:
+        filtro, params = "lower(left(btrim(c.first_name), 1)) = %s", [detto_nome[:1]]
+    cur.execute(
+        f"SELECT {_PROPERTY_COLUMNS}, c.first_name AS owner_first_name, c.last_name AS owner_last_name, "
+        "c.company_name AS owner_company_name, c.display_name AS owner_display_name "
+        "FROM properties p JOIN property_contacts pc ON pc.property_id = p.id AND pc.role = ANY(%s) "
+        "JOIN contacts c ON c.id = pc.contact_id "
+        f"WHERE p.agency_id = %s AND {_live_property()} AND c.agency_id = p.agency_id AND ({filtro}) "
+        "ORDER BY p.id LIMIT %s",
+        [list(_OWNER_ROLES), ctx.require_agency(), *params, SIMILARITY_SCAN])
+    visti, trovati = set(), []
+    for r in cur.fetchall():
+        r = dict(r)
+        if not ditta:
+            if detto_cognome and name_similarity(detto_cognome, r.get("owner_last_name")) < NAME_SIMILARITY:
+                continue
+            if detto_nome and name_similarity(detto_nome, r.get("owner_first_name")) < NAME_SIMILARITY:
+                continue
+        if r["id"] in visti:
+            continue
+        visti.add(r["id"])
+        r["owner_name"] = r.get("owner_display_name") or " ".join(
+            x for x in (r.get("owner_first_name"), r.get("owner_last_name")) if x) or r.get("owner_company_name")
+        trovati.append(r)
+        if len(trovati) > MAX_CANDIDATES:
+            break
+    return trovati

@@ -23,6 +23,15 @@ class ProviderUnavailable(RuntimeError):
     """Il fornitore non risponde: il comando resta senza effetti."""
 
 
+class ProviderBusy(ProviderUnavailable):
+    """Il fornitore risponde 429 (limite del piano raggiunto): si riprova fra
+    `retry_after` secondi. Il comando e la conversazione restano intatti."""
+
+    def __init__(self, retry_after: int, message: str = "fornitore AI: limite raggiunto"):
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
+
+
 class VoiceProvider(Protocol):
     def transcribe(self, audio: bytes, *, mime_type: str, language: str = "it") -> str: ...
 
@@ -46,6 +55,8 @@ class FakeVoiceProvider:
         self.contexts: list[list[str]] = []
         self.fail_next = False
         self.malformed_next = False
+        #: V8-0: la prossima interpretazione risponde come un 429 con questo Retry-After.
+        self.busy_next: int | None = None
 
     def register(self, transcript: str, output: dict[str, Any], *, audio_label: str | None = None) -> None:
         self.outputs[transcript] = output
@@ -57,6 +68,9 @@ class FakeVoiceProvider:
         if self.fail_next:
             self.fail_next = False
             raise ProviderUnavailable("fake provider: unavailable")
+        if self.busy_next is not None and kind == "interpret":
+            attesa, self.busy_next = self.busy_next, None
+            raise ProviderBusy(attesa)
 
     def transcribe(self, audio: bytes, *, mime_type: str, language: str = "it") -> str:
         chiave = audio.decode("utf-8", errors="ignore") if audio in self._labels() else audio_key(audio)

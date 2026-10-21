@@ -76,6 +76,7 @@ def _voice_operator_brake(request, monkeypatch):
     from voice import service as voice_service
     voice_service._per_operatore.clear()
     voice_service._interpretazioni.clear()
+    voice_service._fornitore_occupato_fino[0] = None       # la pausa dopo un 429 del fornitore
     if nome != "test_voice_8_0_general":
         monkeypatch.setattr(voice_service, "OPERATOR_PER_MINUTE", 10 ** 6)
     yield
