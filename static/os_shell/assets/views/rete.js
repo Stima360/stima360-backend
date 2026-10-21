@@ -54,6 +54,7 @@ import {
 } from '../components/network.js';
 import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TERRITORI C2
 import { renderRegistro } from './rete-registro.js'; // ADM-7: il registro delle operazioni (ADM-5A)
+import { renderInformative } from './rete-informative.js'; // Fase B: le informative privacy (solo Super Admin)
 // ELIMINAZIONE BLINDATA: i comandi sull'account sono quelli della scheda Operatori.
 import { comandiAccount, nomeAccount } from './rete-agenzia.js';
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
@@ -72,6 +73,8 @@ const TABS = [
   { key: 'modifiche', label: 'Modifiche territoriali' },
   // ADM-7: il registro delle operazioni amministrative, in sola lettura (ADM-5A).
   { key: 'registro', label: 'Registro' },
+  // Fase B: le informative privacy citate dai consensi (solo Super Admin).
+  { key: 'informative', label: 'Informative privacy' },
 ];
 
 // ADM-7: il filtro dell'elenco agenzie. Locale, sull'elenco gia' caricato.
@@ -130,6 +133,7 @@ export async function renderRete(container) {
     if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
     if (key === 'modifiche') return renderModificheTerritoriali(contentEl);
     if (key === 'registro') return renderRegistro(contentEl);
+    if (key === 'informative') return renderInformative(contentEl, hostEl);
     if (key === 'account') return caricaAccount();
     return caricaTerritori();
   }

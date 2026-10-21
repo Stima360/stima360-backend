@@ -1516,3 +1516,21 @@ a.census-unit-main { text-decoration: none; }
 /* STIMA Voice V8-5: il microfono nel dialog «Nuovo appuntamento» */
 .agenda-voice .action-bar { align-items: center; flex-wrap: wrap; }
 .agenda-voice [data-voice-transcript] { flex: 1 1 12em; font-style: italic; }
+
+/* Fase B: il testo integrale di una informativa privacy (Rete › Informative privacy).
+   Va a capo e non allarga mai la pagina, nemmeno su smartphone. */
+.informativa-testo {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 60vh;
+  overflow: auto;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  background: #f7f9fc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 0;
+}
+[data-informativa-dettaglio] code { overflow-wrap: anywhere; }

@@ -37,6 +37,9 @@ const AZIONI = {
   'platform.acting.exit': 'Uscita da agenzia',
   'platform.super_admin.required': 'Operazione negata (non designato)',
   'platform.admission': 'Accesso alla piattaforma',
+  // Fase B: le informative privacy.
+  'platform.consent_notice.create': 'Informativa pubblicata',
+  'platform.consent_notice.close': 'Informativa chiusa',
 };
 
 const ESITI = { success: 'Riuscita', denied: 'Negata', error: 'Errore' };
@@ -48,6 +51,7 @@ const OGGETTI = {
   territory: 'Territorio',
   territory_assignment: 'Assegnazione',
   territory_alias: 'Alias',
+  consent_notice: 'Informativa',
 };
 
 const STATI = {

@@ -535,6 +535,13 @@ def test_d3_no_page_outside_the_network_was_touched():
         "static/os_shell/assets/sellers/seller-model.js",
         "static/os_shell/assets/sellers/seller-toggle.js",
         "static/os_shell/assets/views/venditori.js",
+        # SENTINELLA AGGIORNATA DA FASE B (INFORMATIVE PRIVACY) - la scheda
+        # «Informative privacy» della Rete, solo Super Admin: una vista NUOVA
+        # che parla solo con `/api/platform/consent-notices`; `rete.js` la
+        # monta, `rete-registro.js` etichetta le sue due operazioni di audit e
+        # `app.css` guadagna una regola in coda. Tutti e tre erano gia' ammessi.
+        # Nessun contratto P27 e nessuna vista del CRM e' toccata.
+        "static/os_shell/assets/views/rete-informative.js",
     }
     toccati = {riga[3:].strip() for riga in modificati}
     assert toccati <= ammessi, sorted(toccati - ammessi)
