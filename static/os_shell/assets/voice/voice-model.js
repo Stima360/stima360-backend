@@ -178,6 +178,7 @@ export function errorMessage(error) {
     VOICE_PILOT_USER_REQUIRED: 'STIMA Voice è attivo solo per gli operatori della prova pilota.',
     VOICE_PLATFORM_ADMIN_BLOCKED: 'STIMA Voice non è disponibile per l’amministrazione della piattaforma.',
     VOICE_DAILY_LIMIT: 'Hai raggiunto il limite giornaliero dei comandi vocali.',
+    VOICE_RATE_LIMITED: 'Troppe richieste vocali in un minuto: attendi qualche secondo e riprova.',
     VOICE_PROVIDER_NOT_CONFIGURED: 'L’interpretazione dei comandi non è disponibile.',
     VOICE_PROVIDER_UNAVAILABLE: 'Interpretazione non disponibile in questo momento. Riprova: il comando non verrà duplicato.',
     VOICE_MODEL_OUTPUT_INVALID: 'Non sono riuscito a interpretare il comando. Nulla è stato eseguito: prova a riformularlo.',

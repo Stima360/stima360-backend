@@ -411,6 +411,16 @@ def _modes() -> list[dict]:
 def cases() -> list[dict]:
     r = random.Random(2026)
     tutti = _clear(r) + _multi(r) + _ambiguous(r) + _blocked(r) + _mistakes(r) + _modes()
+    # STIMA VOICE V8-0: un appuntamento si conferma SEMPRE prima del salvataggio
+    # (policy.ALWAYS_CONFIRM_INTENTS), anche in modalita' `auto`. Dove il corpus
+    # si aspettava `auto` per un appuntamento, ora si aspetta la domanda di
+    # conferma `mode_review`, e nient'altro. Regola scritta qui, una volta.
+    for caso in tutti:
+        attese = caso["expect"].get("decisions") or []
+        for i, comando in enumerate(caso["output"]["commands"]):
+            if comando["intent"] == "create_appointment" and i < len(attese) and attese[i] == "auto":
+                attese[i] = "ask"
+                caso["expect"].setdefault("reasons", {})[i + 1] = ["mode_review"]
     ids = [c["id"] for c in tutti]
     assert len(ids) == len(set(ids)), "id duplicati nel corpus"
     return tutti

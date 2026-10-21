@@ -58,3 +58,24 @@ except ImportError:
     sys.modules["psycopg2"] = psycopg2
     sys.modules["psycopg2.extras"] = extras
     sys.modules["psycopg2.sql"] = sql
+
+
+# STIMA VOICE V8-0: il freno per operatore (6 interpretazioni al minuto, in memoria)
+# conta il tempo reale; le suite Voice inviano molti comandi in pochi secondi con
+# lo stesso operatore. Lo si allenta SOLO per quelle suite e lo si azzera a ogni
+# test; la suite che prova il freno (`test_voice_8_0_general`) lo lascia com'e'.
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _voice_operator_brake(request, monkeypatch):
+    nome = request.module.__name__.rsplit(".", 1)[-1]
+    if not nome.startswith("test_voice_"):
+        yield
+        return
+    from voice import service as voice_service
+    voice_service._per_operatore.clear()
+    voice_service._interpretazioni.clear()
+    if nome != "test_voice_8_0_general":
+        monkeypatch.setattr(voice_service, "OPERATOR_PER_MINUTE", 10 ** 6)
+    yield

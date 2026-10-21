@@ -17,10 +17,17 @@ FILE_NUOVI = frozenset({
     "tests/test_voice_8_4_summary_postgres.py",
     "tests/test_voice_8_5_agenda_mic.py",
     "tests/test_voice_8_5_interpret_postgres.py",
+    "tests/test_voice_8_0_general.py",
+    "tests/test_voice_8_0_provision_postgres.py",
 })
 
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
+    # V8-0: la Voce per tutte le agenzie attive (riga creata con l'agenzia)
+    "platform_admin/agencies_repository.py",
+    "platform_admin/agencies_service.py",
+    "tests/conftest.py",
+    "tests/test_p27_2_agencies.py",
     "voice/router.py",
     "scripts/voice_7_live_cert.py",
     "voice/planner.py",

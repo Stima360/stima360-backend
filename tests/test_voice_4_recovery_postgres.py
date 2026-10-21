@@ -141,6 +141,9 @@ def test_x5_keyed_intents_resume_without_duplicates(db, monkeypatch, intento, mo
                         "when": {"date_text": "giovedì", "time_text": "alle 17"}, "contact": {"phone": "333 1111111"}},
     }
     cid = comando(db, "agent_a1", comandi[intento], transcript=comandi[intento]["quote"] + " (censisci)")
+    if intento == "appointment":
+        # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: un appuntamento si conferma sempre prima del salvataggio.
+        conferma_tutto(db, "agent_a1", cid)
     _crash_dopo(monkeypatch, importlib.import_module(modulo), nome)
     with pytest.raises(Crash):
         esegui(db, "agent_a1", cid)

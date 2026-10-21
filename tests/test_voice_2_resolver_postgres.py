@@ -569,7 +569,9 @@ def test_30_example_appointment(db):
     p, r, d = _decidi(db, "agent_a1", t2, {"commands": [
         {"intent": "create_appointment", "quote": t2, "when": {"date_text": "domani", "time_text": "alle 15"},
          "contact": {"first_name": "Mario", "last_name": "Rossi", "phone": "333 1111111"}}]})
-    assert d.of(1).decision == "auto" and r.resolved(1, "contact") == db["ids"]["mario"]
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: contatto identificato dal telefono, ma
+    # l'appuntamento si conferma sempre prima del salvataggio.
+    assert d.of(1).reasons == ("mode_review",) and r.resolved(1, "contact") == db["ids"]["mario"]
     p, r, d = _decidi(db, "agent_a2", t, {"commands": [
         {"intent": "create_appointment", "quote": t, "when": {"date_text": "domani", "time_text": "alle 15"},
          "contact": {"first_name": "Mario", "last_name": "Rossi"}}]})

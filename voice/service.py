@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from collections import deque
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -52,6 +54,8 @@ ROMA = ZoneInfo("Europe/Rome")
 
 GLOBALLY_DISABLED = "VOICE_GLOBALLY_DISABLED"
 DAILY_LIMIT = "VOICE_DAILY_LIMIT"
+#: V8-0: troppe richieste dello stesso operatore in un minuto.
+RATE_LIMITED = "VOICE_RATE_LIMITED"
 TEXT_INVALID = "VOICE_TEXT_INVALID"
 #: Fase 7 - conversazione: una risposta si da' solo a un comando che non ha
 #: ancora eseguito nulla; il trascritto (contesto) deve esistere ancora.
@@ -188,6 +192,50 @@ def _gia_ricevuto(ctx, chiave) -> bool:
         return cur.fetchone() is not None
 
 
+# ---------------------------------------------------------------------------
+# V8-0: freno contro l'uso eccessivo, in memoria del processo
+# ---------------------------------------------------------------------------
+#
+# Ogni interpretazione e' una chiamata al fornitore AI, i cui limiti valgono
+# per l'intera organizzazione (richieste e token al minuto e al giorno). Due
+# freni, oltre al limite giornaliero per agenzia del registro:
+#   * per operatore: al massimo OPERATOR_PER_MINUTE interpretazioni in 60
+#     secondi (comando, risposta e dettatura del dialog insieme);
+#   * le dettature del dialog Agenda (`interpret`) non creano un comando nel
+#     registro: si contano qui, per agenzia e giorno di Roma, nello stesso
+#     limite `max_commands_per_day`.
+# In memoria: si azzerano al riavvio e valgono per processo. Un freno, non una
+# contabilita'; la contabilita' resta il registro (098).
+
+OPERATOR_PER_MINUTE = 6
+_FINESTRA = timedelta(seconds=60)
+_freno_lock = threading.Lock()
+_per_operatore: dict[tuple[int, int], deque] = {}
+_interpretazioni: dict[tuple[int, Any], int] = {}
+
+
+def _freno_operatore(ctx, adesso: datetime) -> None:
+    chiave = (int(ctx.require_agency()), int(ctx.user_id))
+    with _freno_lock:
+        coda = _per_operatore.setdefault(chiave, deque())
+        while coda and adesso - coda[0] >= _FINESTRA:
+            coda.popleft()
+        if len(coda) >= OPERATOR_PER_MINUTE:
+            raise VoiceRefused(RATE_LIMITED, "Troppe richieste vocali in un minuto: attendi qualche secondo")
+        coda.append(adesso)
+
+
+def _conta_interpretazione(ctx, impostazioni, adesso: datetime) -> None:
+    giorno = adesso.astimezone(ROMA).date()
+    chiave = (int(ctx.require_agency()), giorno)
+    with _freno_lock:
+        for k in [k for k in _interpretazioni if k[1] != giorno]:
+            del _interpretazioni[k]
+        if _interpretazioni.get(chiave, 0) >= impostazioni.max_commands_per_day:
+            raise VoiceRefused(DAILY_LIMIT, "Limite giornaliero dei comandi vocali raggiunto")
+        _interpretazioni[chiave] = _interpretazioni.get(chiave, 0) + 1
+
+
 def _limite_giornaliero(ctx, impostazioni, adesso: datetime) -> None:
     giorno = adesso.astimezone(ROMA).date()
     inizio = datetime.combine(giorno, time(0, 0), tzinfo=ROMA)
@@ -214,6 +262,7 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
     adesso = now or datetime.now(ROMA)
     if not _gia_ricevuto(ctx, client_command_id):
         _limite_giornaliero(ctx, impostazioni, adesso)
+        _freno_operatore(ctx, datetime.now(ROMA))   # solo un comando NUOVO chiama il fornitore
     riga, _ = ledger.open_command(ctx, client_command_id, input_kind="text",
                                   request_sha256=ledger.request_fingerprint("text", testo), recorded_at=adesso)
     if riga["plan_sha256"] is None:
@@ -253,6 +302,8 @@ def interpret(ctx, text: str, *, provider, now: datetime | None = None) -> dict[
         raise VoiceRefused(TEXT_INVALID, "testo vuoto o troppo lungo")
     adesso = now or datetime.now(ROMA)
     _limite_giornaliero(ctx, impostazioni, adesso)
+    _freno_operatore(ctx, datetime.now(ROMA))
+    _conta_interpretazione(ctx, impostazioni, adesso)
     output = voice_provider.interpret(provider, testo, adesso)
     piano = planner.build_plan(output, testo, adesso)
     risolto = resolver.resolve(piano, ctx)

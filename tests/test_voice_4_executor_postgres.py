@@ -386,7 +386,9 @@ def test_c3_never_in_the_past_at_execution_time(db):
                                    "when": {"date_text": "dopodomani", "time_text": "alle 10"},
                                    "contact": {"phone": "333 2222222"}},
                   transcript="dopodomani alle 10 telefonata con Fabio 333 2222222")
-    assert passi(db, "agent_a2", cid)[1]["decision"] == "auto"
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: un appuntamento si conferma sempre prima del salvataggio.
+    assert passi(db, "agent_a2", cid)[1]["reasons"] == ["mode_review"]
+    conferma_tutto(db, "agent_a2", cid)
     report = esegui(db, "agent_a2", cid, clock=datetime.fromisoformat("2026-10-12T10:30:00+02:00"))
     assert esito(report, 1)["state"] == "failed" and esito(report, 1)["error"] == "VOICE_APPOINTMENT_IN_PAST"
     assert conta(db) == prima
@@ -401,6 +403,8 @@ def test_c4_appointment_replay_after_crash_is_not_its_own_conflict(db, monkeypat
                                    "when": {"date_text": "lunedì", "time_text": "alle 9"},
                                    "contact": {"phone": "333 2222222"}},
                   transcript="lunedi alle 9 telefonata con Fabio 333 2222222")
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: un appuntamento si conferma sempre prima del salvataggio.
+    conferma_tutto(db, "agent_a2", cid)
     originale = agenda.create_appointment_idempotent
 
     class Crash(BaseException):
@@ -457,6 +461,9 @@ def test_r2_ten_executions_of_each_intent_write_once(db, intento):
                                "contact": {"phone": "333 1111111"}}, "appointments")
     cmd, tabella = comandi[intento]
     cid = comando(db, "agent_a1", cmd, transcript=f"{cmd['quote']} (censisci)")
+    if intento == "appointment":
+        # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: un appuntamento si conferma sempre prima del salvataggio.
+        conferma_tutto(db, "agent_a1", cid)
     prima = conta(db)[tabella]
     for _ in range(10):
         esegui(db, "agent_a1", cid)

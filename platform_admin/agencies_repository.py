@@ -180,3 +180,26 @@ def update_agency(cur, agency_id: int, fields: dict[str, Any]) -> dict[str, Any]
         params + [agency_id],
     )
     return _row(cur.fetchone())
+
+
+#: STIMA VOICE V8-0: la modalita' con cui nasce la Voce di un'agenzia attiva.
+VOICE_PROVISION_MODE = "review"
+
+
+def provision_voice_settings(cur, agency_id: int) -> bool:
+    """STIMA VOICE V8-0: la riga della Voce per un'agenzia che diventa ATTIVA
+    (creata attiva o riattivata), accesa e in revisione, sul cursore della
+    transazione del service.
+
+    Fail-closed resta la regola della Voce: un'agenzia SENZA riga ha la Voce
+    spenta. Qui non si sovrascrive MAI una riga esistente: un'agenzia spenta
+    di proposito resta spenta. Senza la tabella (098 non applicata) non si fa
+    nulla. Restituisce True se la riga e' stata creata."""
+    cur.execute("SELECT to_regclass('public.voice_agency_settings') IS NOT NULL AS presente")
+    riga = cur.fetchone()
+    presente = riga["presente"] if hasattr(riga, "keys") else riga[0]
+    if not presente:
+        return False
+    cur.execute("INSERT INTO voice_agency_settings (agency_id, enabled, mode) VALUES (%s, TRUE, %s) "
+                "ON CONFLICT (agency_id) DO NOTHING RETURNING agency_id", (agency_id, VOICE_PROVISION_MODE))
+    return cur.fetchone() is not None

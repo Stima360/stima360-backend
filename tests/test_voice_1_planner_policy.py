@@ -199,7 +199,12 @@ def test_13b_a_contact_found_by_name_needs_confirmation_for_every_write(comando)
     d = decide(p, _facts(refs={(1, k): v for k, v in nomi.items()}))
     assert d.of(1).decision == "ask" and policy.CONTACT_CONFIRM in d.of(1).reasons
     affidabili = {(1, k): RefFacts(1, exact=True) for k in p.step(1).refs}
-    assert decide(p, _facts(refs=affidabili)).of(1).decision == "auto"
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: un appuntamento chiede SEMPRE la
+    # conferma (policy.ALWAYS_CONFIRM_INTENTS); le altre scritture partono da sole.
+    if comando["intent"] in policy.ALWAYS_CONFIRM_INTENTS:
+        assert decide(p, _facts(refs=affidabili)).of(1).reasons == (policy.MODE_REVIEW,)
+    else:
+        assert decide(p, _facts(refs=affidabili)).of(1).decision == "auto"
 
 
 def test_14_duplicates_visible_hidden_and_the_d1_switch():

@@ -72,6 +72,8 @@ NOTE_TARGET_NOT_EXACT = "note_target_not_exact"
 #: Gli intenti che in modalita' `assisted` partono per primi (ordine di
 #: attivazione progressiva della roadmap, Fase 7c).
 DEFAULT_ASSISTED_INTENTS = frozenset({"add_note", "add_task"})
+#: STIMA VOICE V8-0: gli intenti che non partono mai da soli, in nessuna modalita'.
+ALWAYS_CONFIRM_INTENTS = frozenset({"create_appointment"})
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,9 @@ def decide_step(step: Step, facts: Facts, settings: Settings) -> StepDecision:
     if domande:
         return StepDecision(step.ordinal, step.intent, "ask", tuple(dict.fromkeys(domande)))
 
-    if settings.mode == "review":
+    # STIMA VOICE V8-0: un appuntamento si conferma SEMPRE prima del
+    # salvataggio, qualunque sia la modalita' dell'agenzia.
+    if settings.mode == "review" or step.intent in ALWAYS_CONFIRM_INTENTS:
         return StepDecision(step.ordinal, step.intent, "ask", (MODE_REVIEW,))
     if settings.mode == "assisted" and step.intent not in settings.auto_intents:
         return StepDecision(step.ordinal, step.intent, "ask", (MODE_ASSISTED,))

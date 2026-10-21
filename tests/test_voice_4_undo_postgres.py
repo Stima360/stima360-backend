@@ -133,7 +133,8 @@ def test_u4_building_and_units(db):
 def test_u5_appointment_is_cancelled_as_mistake(db):
     cid, r = _eseguito(db, "agent_a1", {"intent": "create_appointment", "quote": "lunedi alle 12 telefonata con Mario",
                                         "when": {"date_text": "lunedì", "time_text": "alle 12"},
-                                        "contact": {"phone": "333 1111111"}})
+                                        "contact": {"phone": "333 1111111"}},
+                       conferma=True)   # SENTINELLA AGGIORNATA DA STIMA VOICE V8-0: l'appuntamento si conferma sempre
     assert _annulla(db, "agent_a1", cid, 1)["outcome"] == "undone"
     assert tuple(q(db, "SELECT status, cancelled_kind FROM appointments WHERE id = %s",
              (esito(r, 1)["result"]["id"],))[0]) == ("cancelled", "mistake")

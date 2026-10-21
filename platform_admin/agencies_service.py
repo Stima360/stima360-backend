@@ -149,6 +149,11 @@ def create_agency(
             # vincolo e il valore in conflitto.
             raise AgencySlugConflict(AGENCY_SLUG_CONFLICT_MESSAGE) from exc
 
+        # STIMA VOICE V8-0: un'agenzia che nasce attiva ha la Voce, in
+        # revisione, nella stessa transazione (fail-closed per le altre).
+        if row["status"] == AGENCY_STATUS_ACTIVE:
+            agencies_repository.provision_voice_settings(cur, row["id"])
+
         audit_then_commit(
             conn,
             actor,
@@ -219,6 +224,10 @@ def update_agency(
         if status_changes:
             session_repository.revoke_agency_member_sessions(cur, agency_id)
             session_repository.clear_acting_for_agency(cur, agency_id)
+            # STIMA VOICE V8-0: un'agenzia che torna attiva e non ha ancora la
+            # riga della Voce la riceve; una riga esistente non si tocca.
+            if row["status"] == AGENCY_STATUS_ACTIVE:
+                agencies_repository.provision_voice_settings(cur, agency_id)
 
         audit_then_commit(
             conn,

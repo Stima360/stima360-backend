@@ -549,6 +549,12 @@ def service(monkeypatch):
     monkeypatch.setattr(repo, "slug_exists", _slug_exists)
     monkeypatch.setattr(repo, "create_agency", _create)
     monkeypatch.setattr(repo, "update_agency", _update)
+    # STIMA VOICE V8-0: la riga della Voce di un'agenzia attiva, scritta dal
+    # repository VERO nella stessa transazione; qui, senza database, si registra
+    # solo che e' stata chiesta (provata su PostgreSQL in test_voice_8_0_provision_postgres).
+    state["voice_provisioned"] = []
+    monkeypatch.setattr(repo, "provision_voice_settings",
+                        lambda cur, agency_id: state["voice_provisioned"].append(agency_id) or True)
 
     def _record(**kwargs):
         """Il writer sostituito, con UNA distinzione che conta.
@@ -608,6 +614,21 @@ def test_b1_update_orders_write_audit_commit(service):
     service["conn"].events.clear()
     agencies_service.update_agency(_ctx(), 1, {"name": "Rinominata"})
     assert service["order"] == ["open", "read", "write", "audit", "commit"]
+
+
+def test_b1_voice_v8_0_an_active_agency_gets_voice_in_the_same_transaction(service):
+    """STIMA VOICE V8-0 (dichiarato in tests/voice_v8_diff.py): un'agenzia creata
+    ATTIVA, o riattivata, riceve la riga della Voce prima del commit; una creata
+    sospesa no, una sospesa no, e l'audit non cambia."""
+    _create(service)
+    assert service["voice_provisioned"] == [1]
+    assert service["order"] == ["open", "write", "audit", "commit"]
+    _create(service, slug="agenzia-b", status="suspended")
+    assert service["voice_provisioned"] == [1]
+    agencies_service.update_agency(_ctx(), 1, {"status": "suspended"})
+    assert service["voice_provisioned"] == [1]
+    agencies_service.update_agency(_ctx(), 2, {"status": "active"})
+    assert service["voice_provisioned"] == [1, 2]
 
 
 def test_b2_create_does_not_commit_when_the_audit_fails(service):
