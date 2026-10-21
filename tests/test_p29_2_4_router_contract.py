@@ -107,7 +107,10 @@ def tracciato(monkeypatch):
         eventi.append(("claim", provider, limit, ctx.agency_id, ctx.origin))
         return stato["reclamati"]
 
-    def finto_gate(ctx, contact_id):
+    # SENTINELLA AGGIORNATA DA C1/C2: il gate chiede il consenso del CANALE
+    # del messaggio (parola chiave obbligatoria nella guardia vera).
+    def finto_gate(ctx, contact_id, *, channel):
+        assert channel in ("email", "whatsapp"), channel
         eventi.append(("gate", contact_id))
         if stato["consenso"] is None:
             raise AssertionError("gate interrogato senza una decisione preparata")

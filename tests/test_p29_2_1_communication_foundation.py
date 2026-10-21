@@ -910,4 +910,6 @@ def test_n6_il_consent_domain_non_e_stato_toccato():
     for tabella in ("consent_events", "consent_notices"):
         assert tabella not in eseguibile
     guardia = (ROOT / "consent" / "guard.py").read_text(encoding="utf-8")
-    assert "def can_send_marketing(ctx, contact_id: int) -> MarketingSendDecision:" in guardia
+    # SENTINELLA AGGIORNATA DA C1/C2: la guardia ha il canale obbligatorio.
+    assert ("def can_send_marketing(ctx, contact_id: int, *, channel: str) -> MarketingSendDecision:"
+            in guardia)

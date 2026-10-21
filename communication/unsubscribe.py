@@ -48,6 +48,7 @@ from typing import Any
 
 from consent import service as consent_service
 from consent.enums import (
+    CHANNEL_EMAIL,
     ACTOR_SUBJECT,
     PURPOSE_MARKETING,
     SOURCE_UNSUBSCRIBE_LINK,
@@ -198,10 +199,13 @@ def process(token: str | None) -> bool:
     agency_id, contact_id, quando = esito["agency_id"], esito["contact_id"], esito["issued_at"]
     ctx = SystemAgencyContext(agency_id=agency_id, origin=ORIGIN)
     try:
+        # 109: il link arriva in una EMAIL e disiscrive dal canale email:
+        # non decide niente su SMS, WhatsApp o telefonate.
         revoca = consent_service.record_revocation(
             ctx,
             contact_id=contact_id,
             purpose=PURPOSE_MARKETING,
+            channel=CHANNEL_EMAIL,
             source=SOURCE_UNSUBSCRIBE_LINK,
             actor_type=ACTOR_SUBJECT,
             evidence_type=EVIDENCE_TYPE,
@@ -214,7 +218,7 @@ def process(token: str | None) -> bool:
             # l'indirizzo entra nella lista di piattaforma. Nessun evento di
             # consenso viene scritto per conto di altre agenzie.
             consent_service.register_platform_optout(
-                ctx, contact_id=contact_id, source=SOURCE_UNSUBSCRIBE_LINK,
+                ctx, contact_id=contact_id, channel=CHANNEL_EMAIL, source=SOURCE_UNSUBSCRIBE_LINK,
                 actor_type=ACTOR_SUBJECT,
                 consent_event_id=(revoca.get("event") or {}).get("id"),
                 idempotency_key=f"optout:{idempotency_key(agency_id, contact_id, quando)}",

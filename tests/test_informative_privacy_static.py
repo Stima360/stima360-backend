@@ -117,7 +117,8 @@ def test_b3_la_vista_manda_solo_i_campi_della_richiesta():
     corpo = re.search(r"const corpo = \{([\s\S]*?)\};", testo)
     assert corpo, "il corpo della POST non e' un oggetto letterale"
     chiavi = set(re.findall(r"^\s*(\w+):", corpo.group(1), flags=re.M))
-    assert chiavi == {"purpose", "version", "context", "content", "valid_from", "valid_to"}, chiavi
+    # SENTINELLA AGGIORNATA DA C1/C2: i canali che il testo copre.
+    assert chiavi == {"purpose", "version", "context", "content", "valid_from", "valid_to", "channels"}, chiavi
     for vietato in ("content_hash", "created_by", "content_available", "actor", "user_id"):
         assert f"{vietato}:" not in corpo.group(1), vietato
 

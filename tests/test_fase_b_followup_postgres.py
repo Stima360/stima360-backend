@@ -86,6 +86,11 @@ def fb(mondo, monkeypatch):
                     "ALTER TABLE communication_email_optouts DISABLE TRIGGER trg_comm_optouts_append_only",
                     "DELETE FROM communication_email_optouts",
                     "ALTER TABLE communication_email_optouts ENABLE TRIGGER trg_comm_optouts_append_only",
+                    # C1/C2 (109): la lista per (canale, indirizzo) e la proiezione per canale.
+                    "ALTER TABLE communication_optouts DISABLE TRIGGER trg_comm_optouts2_append_only",
+                    "DELETE FROM communication_optouts",
+                    "ALTER TABLE communication_optouts ENABLE TRIGGER trg_comm_optouts2_append_only",
+                    "DELETE FROM contact_channel_consents",
                     "ALTER TABLE consent_events DISABLE TRIGGER ALL", "DELETE FROM consent_events",
                     "ALTER TABLE consent_events ENABLE TRIGGER ALL",
                     "DELETE FROM consent_notices", "DELETE FROM seller_revival_suppressions",
@@ -115,8 +120,17 @@ def _sistema(agenzia=1):
 
 
 def _contatto(m, email, *, agenzia=1, nome=None, consenso=None, quando=None):
-    """Un contatto con email; `consenso`: None (mai dato), 'legacy' (TRUE
-    senza eventi), 'granted' (evento pubblico), 'revoked'."""
+    """Un contatto con email; `consenso`:
+        None        mai dato
+        'legacy'    il vecchio flag TRUE senza eventi: da C2 NON autorizza
+        'pre_canale' la spunta del funnel pubblico senza canale: NON autorizza
+        'granted'   concessione documentata sul canale EMAIL (funnel pubblico)
+        'revoked'   concessione e poi revoca sul canale email
+
+    SENTINELLA AGGIORNATA DA C1/C2: 'granted' e 'revoked' scrivono eventi con
+    canale. I test che prima usavano 'legacy' come "contatto con consenso"
+    usano 'granted': il flag storico non e' piu' un'autorizzazione.
+    """
     nome = nome or f"C {uuid.uuid4().hex[:6]}"
     cid = _q(m, "INSERT INTO contacts (agency_id, display_name, first_name, email, email_normalized, status) "
                 "VALUES (%s, %s, %s, %s, %s, 'active') RETURNING id",
@@ -124,24 +138,30 @@ def _contatto(m, email, *, agenzia=1, nome=None, consenso=None, quando=None):
     quando = quando or (ORA - 10 * GIORNO)
     if consenso == "legacy":
         _q(m, "UPDATE contacts SET marketing_consent = TRUE, marketing_consent_at = %s WHERE id = %s", (quando, cid))
-    elif consenso in ("granted", "revoked"):
+    elif consenso == "pre_canale":
         from consent import service as cs
         cs.record_grant(_sistema(agenzia), contact_id=cid, purpose="marketing", source="public_stima",
-                        actor_type="subject", decided_at=quando, idempotency_key=f"t:{cid}:g")
+                        actor_type="subject", decided_at=quando, idempotency_key=f"t:{cid}:pre")
+    elif consenso in ("granted", "revoked"):
+        from consent import service as cs
+        cs.record_grant(_sistema(agenzia), contact_id=cid, purpose="marketing", channel="email",
+                        source="public_stima", actor_type="subject", decided_at=quando,
+                        idempotency_key=f"t:{cid}:g")
         if consenso == "revoked":
-            cs.record_revocation(_sistema(agenzia), contact_id=cid, purpose="marketing", source="unsubscribe_link",
-                                 actor_type="subject", decided_at=quando + GIORNO, idempotency_key=f"t:{cid}:r")
+            cs.record_revocation(_sistema(agenzia), contact_id=cid, purpose="marketing", channel="email",
+                                 source="unsubscribe_link", actor_type="subject", decided_at=quando + GIORNO,
+                                 idempotency_key=f"t:{cid}:r")
     return cid
 
 
-def _informativa(m, versione=None, da=None, fino=None):
+def _informativa(m, versione=None, da=None, fino=None, canali=("email", "sms", "whatsapp", "phone")):
     versione = versione or f"v-{uuid.uuid4().hex[:8]}"
     if fino is None:
         _q(m, "UPDATE consent_notices SET valid_to = NOW() WHERE purpose = 'marketing' AND valid_to IS NULL")
     return _q(m, "INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, "
-                 "context, valid_from, valid_to, created_by) VALUES ('marketing', %s, 'Informativa marketing di prova', "
-                 "repeat('a', 64), TRUE, 'test', %s, %s, 'test') RETURNING id",
-              (versione, da or ORA - 365 * GIORNO, fino))[0][0]
+                 "context, valid_from, valid_to, created_by, channels) VALUES ('marketing', %s, "
+                 "'Informativa marketing di prova', repeat('a', 64), TRUE, 'test', %s, %s, 'test', %s) RETURNING id",
+              (versione, da or ORA - 365 * GIORNO, fino, list(canali)))[0][0]
 
 
 def _template_finti(m, monkeypatch):
@@ -184,9 +204,9 @@ def _spedisci(m, enrollment_id, quando):
           "WHERE enrollment_id = %s AND status = 'queued'", (quando, enrollment_id))
 
 
-def _guardia(m, agenzia, cid):
+def _guardia(m, agenzia, cid, canale="email"):
     from consent.guard import can_send_marketing
-    return can_send_marketing(_sistema(agenzia), cid)
+    return can_send_marketing(_sistema(agenzia), cid, channel=canale)
 
 
 # ---------------------------------------------------------------------------
@@ -219,17 +239,23 @@ def test_a2_la_v2_resta_repeat_last_e_la_v3_nasce_linear_in_bozza(fb, monkeypatc
 
 
 def test_a3_gli_optout_sono_append_only(fb):
+    """SENTINELLA AGGIORNATA DA C1/C2: dalla 109 gli opt-out vivono in
+    `communication_optouts` (canale, indirizzo); la tabella 108 e' chiusa in
+    scrittura. Le stesse garanzie, sulla tabella nuova."""
     import psycopg2
     m = fb
-    _q(m, "INSERT INTO communication_email_optouts (email_normalized, opted_out_at, source, actor_type, idempotency_key) "
-          "VALUES ('x@y.it', NOW(), 'unsubscribe_link', 'subject', 'k1')")
+    _q(m, "INSERT INTO communication_optouts (channel, address_normalized, opted_out_at, source, actor_type, idempotency_key) "
+          "VALUES ('email', 'x@y.it', NOW(), 'unsubscribe_link', 'subject', 'k1')")
     with pytest.raises(psycopg2.Error):
-        _q(m, "INSERT INTO communication_email_optouts (email_normalized, opted_out_at, source, actor_type, idempotency_key) "
-              "VALUES ('x@y.it', NOW(), 'crm', 'operator', 'k2')")  # operatore senza actor_ref
-    for sql in ("UPDATE communication_email_optouts SET note = 'x' WHERE idempotency_key = 'k1'",
-                "DELETE FROM communication_email_optouts WHERE idempotency_key = 'k1'"):
+        _q(m, "INSERT INTO communication_optouts (channel, address_normalized, opted_out_at, source, actor_type, idempotency_key) "
+              "VALUES ('email', 'x@y.it', NOW(), 'crm', 'operator', 'k2')")  # operatore senza actor_ref
+    for sql in ("UPDATE communication_optouts SET note = 'x' WHERE idempotency_key = 'k1'",
+                "DELETE FROM communication_optouts WHERE idempotency_key = 'k1'"):
         with pytest.raises(psycopg2.Error):
             _q(m, sql)
+    with pytest.raises(psycopg2.Error):  # la tabella 108 non accetta piu' righe
+        _q(m, "INSERT INTO communication_email_optouts (email_normalized, opted_out_at, source, actor_type, idempotency_key) "
+              "VALUES ('x@y.it', NOW(), 'unsubscribe_link', 'subject', 'k3')")
 
 
 def test_a4_la_down_della_108_si_esegue_e_riporta_lo_schema_a_097(fb):
@@ -240,8 +266,12 @@ def test_a4_la_down_della_108_si_esegue_e_riporta_lo_schema_a_097(fb):
     from psycopg2.extras import DictCursor
     from pathlib import Path
     m = fb
-    giu = (Path(__file__).resolve().parents[1] / "migrations" / "108_followup_contact_journey_down.sql").read_text()
-    corpo = giu.replace("BEGIN;", "", 1).rsplit("COMMIT;", 1)[0]
+    cartella = Path(__file__).resolve().parents[1] / "migrations"
+    # SENTINELLA AGGIORNATA DA C1/C2: le down si eseguono in ordine inverso,
+    # prima la 109 e poi la 108.
+    corpo = "".join(
+        (cartella / nome).read_text().replace("BEGIN;", "", 1).rsplit("COMMIT;", 1)[0]
+        for nome in ("109_consent_channels_down.sql", "108_followup_contact_journey_down.sql"))
     conn = psycopg2.connect(m["dsn"], cursor_factory=DictCursor)
     try:
         with conn.cursor() as cur:
@@ -274,36 +304,36 @@ def test_b1_niente_consenso_senza_prova_informativa_o_identita(fb):
     buono = dict(decided_at=quando, evidence_type="paper_form", evidence_ref="PROT-2026/0042")
     # senza informativa valida
     with pytest.raises(ValidationError):
-        s.register_grant(_ctx(m), cid, notice_id=999, **buono)
+        s.register_grant(_ctx(m), cid, channels=["email"], notice_id=999, **buono)
     informativa = _informativa(m)
     # prova = email del contatto, o troppo corta, o modalita' non ammessa
     with pytest.raises(ValidationError):
-        s.register_grant(_ctx(m), cid, notice_id=informativa, decided_at=quando,
+        s.register_grant(_ctx(m), cid, channels=["email"], notice_id=informativa, decided_at=quando,
                          evidence_type="paper_form", evidence_ref="anna@example.it")
     with pytest.raises(ValidationError):
-        s.register_grant(_ctx(m), cid, notice_id=informativa, decided_at=quando,
+        s.register_grant(_ctx(m), cid, channels=["email"], notice_id=informativa, decided_at=quando,
                          evidence_type="phone_call", evidence_ref="PROT-2026/0042")
     # informativa non ancora valida alla data di raccolta
     futura = _informativa(m, da=datetime.now(timezone.utc) + 30 * GIORNO,
                           fino=datetime.now(timezone.utc) + 60 * GIORNO)
     with pytest.raises(ValidationError):
-        s.register_grant(_ctx(m), cid, notice_id=futura, **buono)
+        s.register_grant(_ctx(m), cid, channels=["email"], notice_id=futura, **buono)
     # il canale Basic (nessuna persona) non registra
     basic = OperatorContext(user_id=None, agency_id=1, role="agency_owner", is_platform_admin=False,
                             session_id=None, auth_channel="legacy_basic")
     with pytest.raises(PermissionDenied):
-        s.register_grant(basic, cid, notice_id=informativa, **buono)
+        s.register_grant(basic, cid, channels=["email"], notice_id=informativa, **buono)
     # un'altra agenzia non vede il contatto
     with pytest.raises(NotFoundError):
-        s.register_grant(_ctx(m, "owner_b"), cid, notice_id=informativa, **buono)
+        s.register_grant(_ctx(m, "owner_b"), cid, channels=["email"], notice_id=informativa, **buono)
     assert not _guardia(m, 1, cid).allowed
     assert _q(m, "SELECT count(*) FROM consent_events WHERE contact_id = %s", (cid,))[0][0] == 0
 
     # un agente vede solo i contatti che gli sono assegnati (scope CORE): questo no
     with pytest.raises(NotFoundError):
-        s.register_grant(_ctx(m, "agent_a"), cid, notice_id=informativa, **buono)
+        s.register_grant(_ctx(m, "agent_a"), cid, channels=["email"], notice_id=informativa, **buono)
     # il grant buono, dall'admin dell'agenzia
-    esito = s.register_grant(_ctx(m, "admin_a"), cid, notice_id=informativa, note="modulo in archivio B", **buono)
+    esito = s.register_grant(_ctx(m, "admin_a"), cid, channels=["email"], notice_id=informativa, note="modulo in archivio B", **buono)
     assert esito["created"] and esito["notice"]["version"].startswith("v-")
     ev = dict(_q(m, "SELECT * FROM consent_events WHERE id = %s", (esito["event"]["id"],))[0]) if False else \
         [dict(zip(("source", "actor_type", "actor_ref", "evidence_type", "evidence_ref", "notice_id", "decided_at"), r))
@@ -316,13 +346,14 @@ def test_b1_niente_consenso_senza_prova_informativa_o_identita(fb):
     decisione = _guardia(m, 1, cid)
     assert decisione.allowed and decisione.reason == "allow_explicit_grant" and decisione.source == "crm"
     # idempotente: stessa raccolta, stesso evento
-    assert s.register_grant(_ctx(m, "admin_a"), cid, notice_id=informativa, **buono)["created"] is False
+    assert s.register_grant(_ctx(m, "admin_a"), cid, channels=["email"], notice_id=informativa, **buono)["created"] is False
     stato = s.marketing_state(_ctx(m), cid)
-    assert stato["allowed"] and stato["last_event"]["evidence_type"] == "paper_form" and stato["can_record"]
+    assert stato["allowed"] and stato["channels"]["email"]["last_event"]["evidence_type"] == "paper_form"
+    assert stato["can_record"] and not stato["channels"]["sms"]["allowed"], "solo il canale spuntato"
     # contatto nel cestino: niente
     _q(m, "UPDATE contacts SET deleted_at = NOW(), deleted_reason = 'other' WHERE id = %s", (cid,))
     with pytest.raises(ConflictError):
-        s.register_grant(_ctx(m), cid, notice_id=informativa, **buono)
+        s.register_grant(_ctx(m), cid, channels=["email"], notice_id=informativa, **buono)
 
 
 def test_b2_revoca_locale_e_globale_senza_falsificare_le_altre_agenzie(fb):
@@ -334,18 +365,19 @@ def test_b2_revoca_locale_e_globale_senza_falsificare_le_altre_agenzie(fb):
     assert _guardia(m, 1, a1).allowed and _guardia(m, 2, a2).allowed
     adesso = datetime.now(timezone.utc)
     with pytest.raises(ValidationError):
-        s.register_refusal(_ctx(m), a1, decided_at=adesso, scope="agency", note="no")
+        s.register_refusal(_ctx(m), a1, channels=["email"], decided_at=adesso, scope="agency", note="no")
     # LOCALE: solo questa agenzia
-    esito = s.register_refusal(_ctx(m), a1, decided_at=adesso - GIORNO, scope="agency",
+    esito = s.register_refusal(_ctx(m), a1, channels=["email"], decided_at=adesso - GIORNO, scope="agency",
                                note="Lo ha detto allo sportello, non vuole piu' email")
     assert esito["created"] and esito["platform_optout"] is None
     assert not _guardia(m, 1, a1).allowed and _guardia(m, 1, a1).reason == "deny_revoked"
     assert _guardia(m, 2, a2).allowed, "la revoca locale non tocca l'altra agenzia"
-    assert _q(m, "SELECT count(*) FROM communication_email_optouts")[0][0] == 0
+    assert _q(m, "SELECT count(*) FROM communication_optouts")[0][0] == 0
     # GLOBALE: tutto STIMA360, dichiarato dall'operatore dell'agenzia 2
-    esito = s.register_refusal(_ctx(m, "owner_b"), a2, decided_at=adesso - timedelta(hours=1), scope="platform",
+    esito = s.register_refusal(_ctx(m, "owner_b"), a2, channels=["email"], decided_at=adesso - timedelta(hours=1), scope="platform",
                                note="Ha scritto: basta email da STIMA360, da chiunque")
-    assert esito["platform_optout"]["email_normalized"] == "luca@example.it"
+    assert esito["platform_optout"]["address_normalized"] == "luca@example.it"
+    assert esito["platform_optout"]["channel"] == "email"
     assert esito["platform_optout"]["actor_ref"] == f"operator_user:{m['ids']['owner_b']}"
     assert not _guardia(m, 2, a2).allowed
     # l'agenzia 1 non ha nessun evento nuovo, ma non puo' piu' scrivere a quell'indirizzo
@@ -353,19 +385,19 @@ def test_b2_revoca_locale_e_globale_senza_falsificare_le_altre_agenzie(fb):
     d1 = _guardia(m, 1, a1)
     assert not d1.allowed and d1.reason == "deny_revoked"  # la revoca locale resta la ragione
     # un terzo contatto, in agenzia 1, stesso indirizzo, concesso: negato dall'opt-out
-    a3 = _contatto(m, "luca@example.it", agenzia=1, consenso="legacy")
+    a3 = _contatto(m, "luca@example.it", agenzia=1, consenso="granted")
     d3 = _guardia(m, 1, a3)
     assert not d3.allowed and d3.reason == "deny_platform_optout"
     # un nuovo consenso documentato DOPO l'opt-out torna a valere, per quell'agenzia
     informativa = _informativa(m)
     with pytest.raises(ConflictError):
-        s.register_grant(_ctx(m), a3, decided_at=adesso - 2 * GIORNO, evidence_type="digital_form",
+        s.register_grant(_ctx(m), a3, channels=["email"], decided_at=adesso - 2 * GIORNO, evidence_type="digital_form",
                          evidence_ref="FORM-77", notice_id=informativa)
-    s.register_grant(_ctx(m), a3, decided_at=adesso - timedelta(minutes=10), evidence_type="digital_form",
+    s.register_grant(_ctx(m), a3, channels=["email"], decided_at=adesso - timedelta(minutes=10), evidence_type="digital_form",
                      evidence_ref="FORM-77", notice_id=informativa)
     assert _guardia(m, 1, a3).allowed
     assert not _guardia(m, 2, a2).allowed, "l'altra agenzia resta ferma: il suo consenso non e' nuovo"
-    assert s.marketing_state(_ctx(m, "owner_b"), a2)["platform_optout_at"] is not None
+    assert s.marketing_state(_ctx(m, "owner_b"), a2)["channels"]["email"]["platform_optout_at"] is not None
 
 
 def test_b3_le_informative_le_pubblica_solo_il_super_admin(fb, monkeypatch):
@@ -379,16 +411,17 @@ def test_b3_le_informative_le_pubblica_solo_il_super_admin(fb, monkeypatch):
     v1 = f"v-{uuid.uuid4().hex[:8]}"
     with pytest.raises(SuperAdminDenied):
         ns.create_notice(_ctx(m, "owner_a"), purpose="marketing", version=v1, context="crm",
-                         content="Testo dell'informativa marketing", valid_from=adesso, valid_to=None)
+                         content="Testo dell'informativa marketing", valid_from=adesso, valid_to=None, channels=["email"])
     riga = ns.create_notice(_ctx(m, "platform_none"), purpose="marketing", version=v1, context="crm",
-                            content="Testo dell'informativa marketing", valid_from=adesso - GIORNO, valid_to=None)
+                            content="Testo dell'informativa marketing", valid_from=adesso - GIORNO, valid_to=None,
+                            channels=["email", "sms"])
     assert riga["content_hash"] and riga["created_by"].startswith("operator:")
     with pytest.raises(ConsentNoticeConflict):   # stessa versione
         ns.create_notice(_ctx(m, "platform_none"), purpose="marketing", version=v1, context="crm",
-                         content="Altro testo", valid_from=adesso, valid_to=None)
+                         content="Altro testo", valid_from=adesso, valid_to=None, channels=["email"])
     with pytest.raises(ConsentNoticeConflict):   # un'altra corrente mentre questa e' aperta
         ns.create_notice(_ctx(m, "platform_none"), purpose="marketing", version=v1 + "b", context="crm",
-                         content="Altro testo ancora", valid_from=adesso, valid_to=None)
+                         content="Altro testo ancora", valid_from=adesso, valid_to=None, channels=["email"])
     from consent import operator_service as s
     assert [n["id"] for n in s.list_notices()][:1] == [riga["id"]]
     chiusa = ns.close_notice(_ctx(m, "platform_none"), riga["id"])
@@ -407,11 +440,11 @@ def test_c1_il_link_di_piattaforma_registra_l_optout_quello_di_agenzia_no(fb):
     a2 = _contatto(m, "gina@example.it", agenzia=2, consenso="granted")
     assert u.process(u.issue(1, a1)) is True
     assert not _guardia(m, 1, a1).allowed and _guardia(m, 2, a2).allowed
-    assert _q(m, "SELECT count(*) FROM communication_email_optouts")[0][0] == 0
+    assert _q(m, "SELECT count(*) FROM communication_optouts")[0][0] == 0
     token = u.issue(2, a2, scope=u.SCOPE_PLATFORM)
     assert u.process(token) is True and u.process(token) is True  # idempotente
-    righe = _q(m, "SELECT source, actor_type, source_agency_id, source_contact_id FROM communication_email_optouts")
-    assert [tuple(r) for r in righe] == [("unsubscribe_link", "subject", 2, a2)]
+    righe = _q(m, "SELECT channel, source, actor_type, source_agency_id, source_contact_id FROM communication_optouts")
+    assert [tuple(r) for r in righe] == [("email", "unsubscribe_link", "subject", 2, a2)]
     assert not _guardia(m, 2, a2).allowed
     a3 = _contatto(m, "gina@example.it", agenzia=1, consenso="granted")
     assert _guardia(m, 1, a3).reason == "deny_platform_optout"
@@ -445,16 +478,20 @@ def test_d2_attivare_la_v3_ritira_la_v2_e_iscrive_solo_gli_eleggibili(fb, monkey
     assert _q(m, "SELECT status FROM communication_journeys WHERE id = %s", (v2["id"],))[0][0] == "retired"
 
     ok_esplicito = _contatto(m, "a@example.it", consenso="granted", quando=ORA - 2 * GIORNO)
-    ok_legacy = _contatto(m, "b@example.it", consenso="legacy", quando=ORA - 400 * GIORNO)
+    # SENTINELLA AGGIORNATA DA C1/C2: lo "storico" che entra e' un consenso
+    # email DOCUMENTATO vecchio; il vecchio flag senza eventi resta fuori.
+    ok_legacy = _contatto(m, "b@example.it", consenso="granted", quando=ORA - 400 * GIORNO)
+    solo_flag = _contatto(m, "flag@example.it", consenso="legacy", quando=ORA - 400 * GIORNO)
+    spunta = _contatto(m, "spunta@example.it", consenso="pre_canale", quando=ORA - 3 * GIORNO)
     mai = _contatto(m, "c@example.it")
     revocato = _contatto(m, "d@example.it", consenso="revoked")
     doppio = _contatto(m, "A@example.it", consenso="granted", quando=ORA - 30 * GIORNO)   # stessa email di ok_esplicito
     senza_email = _q(m, "INSERT INTO contacts (agency_id, display_name, first_name, status) VALUES (1, 'X Y', 'X', 'active') RETURNING id")[0][0]
-    archiviato = _contatto(m, "e@example.it", consenso="legacy")
+    archiviato = _contatto(m, "e@example.it", consenso="granted")
     _q(m, "UPDATE contacts SET status = 'archived', archived_at = NOW() WHERE id = %s", (archiviato,))
-    in_pausa = _contatto(m, "f@example.it", consenso="legacy")
+    in_pausa = _contatto(m, "f@example.it", consenso="granted")
     journey_service.pause_automations(_ctx(m), in_pausa, reason="non ora")
-    in_revival = _contatto(m, "g@example.it", consenso="legacy")
+    in_revival = _contatto(m, "g@example.it", consenso="granted")
     _q(m, "INSERT INTO seller_revival_suppressions (contact_id, created_at, expires_at) VALUES (%s, NOW(), NOW() + interval '30 days')", (in_revival,))
     altrove = _contatto(m, "h@example.it", agenzia=2, consenso="granted")  # agenzia 2: non tocca l'agenzia 1
 
@@ -468,7 +505,7 @@ def test_d2_attivare_la_v3_ritira_la_v2_e_iscrive_solo_gli_eleggibili(fb, monkey
     assert iscritti[ok_esplicito]["email_normalized_snapshot"] == "a@example.it"
     assert iscritti[ok_esplicito]["next_step_no"] == 2, "il giorno 1 e' gia' passato: si parte dal giorno 3"
     assert iscritti[ok_legacy]["next_step_no"] == 1
-    for c in (mai, revocato, doppio, senza_email, archiviato, in_pausa, in_revival, altrove):
+    for c in (mai, revocato, doppio, senza_email, archiviato, in_pausa, in_revival, altrove, solo_flag, spunta):
         assert c not in iscritti
     # un secondo giro non raddoppia niente
     assert _tick(m)["enrolled_active"] == 0 and len(_iscrizioni(m)) == 2
@@ -478,10 +515,10 @@ def test_d3_una_email_una_sequenza_in_tutta_la_piattaforma_e_tetto_giornaliero(f
     m = fb
     _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a")
     _v3_attiva(m, monkeypatch, agenzia=2, chi="owner_b")
-    _contatto(m, "comune@example.it", agenzia=1, consenso="legacy")
-    _contatto(m, "comune@example.it", agenzia=2, consenso="legacy")
+    _contatto(m, "comune@example.it", agenzia=1, consenso="granted")
+    _contatto(m, "comune@example.it", agenzia=2, consenso="granted")
     for i in range(24):
-        _contatto(m, f"lotto{i}@example.it", agenzia=1, consenso="legacy")
+        _contatto(m, f"lotto{i}@example.it", agenzia=1, consenso="granted")
     c1 = _tick(m, 1)
     assert c1["enrolled_active"] == 20, c1
     c2 = _tick(m, 2)
@@ -501,7 +538,7 @@ def test_e1_diciassette_email_nei_giorni_approvati_poi_completata_senza_ripartir
     from communication.journey_catalog import FOLLOWUP_V3_DAYS
     m = fb
     _v3_attiva(m, monkeypatch)
-    cid = _contatto(m, "cal@example.it", consenso="legacy")
+    cid = _contatto(m, "cal@example.it", consenso="granted")
     inviati = []
     for giorno in range(0, 185):
         adesso = ORA + giorno * GIORNO
@@ -545,7 +582,7 @@ def _appuntamento(m, cid, *, inizio, tipo="seller_meeting", stato="scheduled"):
 
 def _iscrivi(m, monkeypatch, email, now=ORA):
     _v3_attiva(m, monkeypatch)
-    cid = _contatto(m, email, consenso="legacy")
+    cid = _contatto(m, email, consenso="granted")
     _tick(m, now=now)
     return cid, _iscrizioni(m, contact_id=cid)[0]
 
@@ -652,9 +689,9 @@ def test_g1_optout_indirizzo_cambiato_e_contatto_archiviato_fermano(fb, monkeypa
     from communication import unsubscribe as u
     m = fb
     _v3_attiva(m, monkeypatch)
-    opt = _contatto(m, "opt@example.it", consenso="legacy")
-    cambia = _contatto(m, "cambia@example.it", consenso="legacy")
-    arch = _contatto(m, "arch@example.it", consenso="legacy")
+    opt = _contatto(m, "opt@example.it", consenso="granted")
+    cambia = _contatto(m, "cambia@example.it", consenso="granted")
+    arch = _contatto(m, "arch@example.it", consenso="granted")
     _tick(m)
     _tick(m, now=ORA + GIORNO)   # M1 in coda per tutti
     per = {e["contact_id"]: e for e in _iscrizioni(m)}
@@ -665,7 +702,8 @@ def test_g1_optout_indirizzo_cambiato_e_contatto_archiviato_fermano(fb, monkeypa
     _tick(m, now=ORA + GIORNO + timedelta(hours=1))
     per = {e["contact_id"]: e for e in _iscrizioni(m)}
     assert per[opt]["status"] == "stopped" and per[opt]["stop_reason"] in ("consent_revoked", "platform_optout")
-    assert _q(m, "SELECT count(*) FROM communication_email_optouts WHERE email_normalized = 'opt@example.it'")[0][0] == 1
+    assert _q(m, "SELECT count(*) FROM communication_optouts WHERE channel = 'email' "
+                 "AND address_normalized = 'opt@example.it'")[0][0] == 1
     assert per[cambia]["status"] == "stopped" and per[cambia]["stop_reason"] == "duplicate_email"
     assert per[arch]["status"] == "stopped" and per[arch]["stop_reason"] == "contact_inactive"
     for e in per.values():
@@ -696,8 +734,8 @@ def test_h1_due_agenzie_in_parallelo_stessa_email_una_sola_iscrizione(fb, monkey
     _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a")
     _v3_attiva(m, monkeypatch, agenzia=2, chi="owner_b")
     for i in range(6):
-        _contatto(m, f"gara{i}@example.it", agenzia=1, consenso="legacy")
-        _contatto(m, f"gara{i}@example.it", agenzia=2, consenso="legacy")
+        _contatto(m, f"gara{i}@example.it", agenzia=1, consenso="granted")
+        _contatto(m, f"gara{i}@example.it", agenzia=2, consenso="granted")
     esiti = _in_parallelo([lambda: _tick(m, 1), lambda: _tick(m, 2)])
     assert sum(c["enrolled_active"] for c in esiti) + 0 == 6, esiti
     assert sum(c["errors"] for c in esiti) == 0
@@ -719,7 +757,7 @@ def test_i1_un_ciclo_completato_in_A_vieta_per_sempre_una_seconda_sequenza_in_B(
     m = fb
     _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a")
     _v3_attiva(m, monkeypatch, agenzia=2, chi="owner_b")
-    a = _contatto(m, "fatto@example.it", agenzia=1, consenso="legacy")
+    a = _contatto(m, "fatto@example.it", agenzia=1, consenso="granted")
     assert _tick(m, 1)["enrolled_active"] == 1
     _completa(m, _iscrizioni(m, contact_id=a)[0]["id"])
     # molto dopo, con una concessione NUOVA ed esplicita, in B: niente
@@ -744,8 +782,8 @@ def test_i2_completamento_in_A_e_tick_di_B_in_parallelo_mai_una_seconda_sequenza
     _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a")
     _v3_attiva(m, monkeypatch, agenzia=2, chi="owner_b")
     for i in range(6):
-        _contatto(m, f"corsa{i}@example.it", agenzia=1, consenso="legacy")
-        _contatto(m, f"corsa{i}@example.it", agenzia=2, consenso="legacy")
+        _contatto(m, f"corsa{i}@example.it", agenzia=1, consenso="granted")
+        _contatto(m, f"corsa{i}@example.it", agenzia=2, consenso="granted")
     assert _tick(m, 1)["enrolled_active"] == 6
     aperte = [e["id"] for e in _iscrizioni(m, agency_id=1)]
 
@@ -784,9 +822,9 @@ def test_i3_dopo_una_disiscrizione_globale_B_non_riprende_su_un_consenso_vecchio
     # datato PRIMA della disiscrizione: rifiutato; DOPO: accettato
     from consent.exceptions import ConflictError
     with pytest.raises(ConflictError):
-        s.register_grant(_ctx(m, "owner_a"), a, decided_at=adesso - 5 * GIORNO, evidence_type="paper_form",
+        s.register_grant(_ctx(m, "owner_a"), a, channels=["email"], decided_at=adesso - 5 * GIORNO, evidence_type="paper_form",
                          evidence_ref="PROT-2026/0099", notice_id=informativa)
-    s.register_grant(_ctx(m, "owner_a"), a, decided_at=adesso + timedelta(minutes=1), evidence_type="paper_form",
+    s.register_grant(_ctx(m, "owner_a"), a, channels=["email"], decided_at=adesso + timedelta(minutes=1), evidence_type="paper_form",
                      evidence_ref="PROT-2026/0099", notice_id=informativa)
     assert _guardia(m, 1, a).allowed
     dopo = adesso + timedelta(minutes=2)
@@ -798,8 +836,8 @@ def test_i3_dopo_una_disiscrizione_globale_B_non_riprende_su_un_consenso_vecchio
         c = _tick(m, 2, now=dopo + giorno * GIORNO)
         assert c["enrolled_active"] == 0 and c["errors"] == 0, c
     assert [e["status"] for e in _iscrizioni(m, contact_id=b)] == ["stopped"]
-    # un terzo contatto in B, stesso indirizzo, consenso vecchio senza eventi (legacy): negato
-    b2 = _contatto(m, "due@example.it", agenzia=2, consenso="legacy", quando=ORA - 40 * GIORNO)
+    # un terzo contatto in B, stesso indirizzo, consenso email vecchio (prima dell'opt-out): negato
+    b2 = _contatto(m, "due@example.it", agenzia=2, consenso="granted", quando=ORA - 40 * GIORNO)
     d2 = _guardia(m, 2, b2)
     assert not d2.allowed and d2.reason == "deny_platform_optout"
     assert _tick(m, 2, now=dopo + 2 * GIORNO)["enrolled_active"] == 0
@@ -828,7 +866,7 @@ def test_i4_nuovo_consenso_in_A_e_tick_di_B_in_parallelo(fb, monkeypatch):
 
     def concedi():
         for a, _ in coppie:
-            s.register_grant(_ctx(m, "owner_a"), a, decided_at=adesso + timedelta(minutes=1),
+            s.register_grant(_ctx(m, "owner_a"), a, channels=["email"], decided_at=adesso + timedelta(minutes=1),
                              evidence_type="digital_form", evidence_ref=f"FORM-{a}", notice_id=informativa)
         return "ok"
 

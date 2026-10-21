@@ -45,11 +45,15 @@ from .enums import (
     ACTOR_OPERATOR,
     ACTOR_SUBJECT,
     ACTOR_TYPES,
+    CHANNELS,
     DECISION_GRANTED,
     DECISION_REVOKED,
     PROJECTION_COLUMNS,
+    OPTOUT_SOURCES,
     PURPOSES,
+    PURPOSE_MARKETING,
     REVOKING_ACTOR_TYPES,
+    SOURCE_PUBLIC_STIMA,
     STATUS_GRANTED,
     STATUS_NEVER_GIVEN,
     STATUS_REVOKED,
@@ -68,6 +72,7 @@ def _validated(
     actor_ref: str | None,
     evidence_type: str | None,
     evidence_ref: str | None,
+    channel: str | None = None,
 ) -> None:
     """Rifiuta gli argomenti fuori dagli insiemi chiusi, PRIMA di scrivere.
 
@@ -98,6 +103,18 @@ def _validated(
         raise ValidationError("an operator event must carry actor_ref")
     if (evidence_type is None) != (evidence_ref is None):
         raise ValidationError("evidence_type and evidence_ref go together or not at all")
+    # 109: il canale. Obbligatorio per il marketing, con la sola eccezione
+    # della concessione dal funnel pubblico (pre-canale, non autorizza niente).
+    # Lo stesso vincolo vive nel database (trg_consent_events_channel_required).
+    if channel is not None and channel not in CHANNELS:
+        raise ValidationError(f"channel must be one of {sorted(CHANNELS)}")
+    if channel is not None and purpose != PURPOSE_MARKETING:
+        raise ValidationError("only a marketing consent names a channel")
+    if (purpose == PURPOSE_MARKETING and channel is None
+            and not (source == SOURCE_PUBLIC_STIMA and decision == DECISION_GRANTED)):
+        raise ValidationError(
+            "a marketing consent must name its channel (email, sms, whatsapp, phone): "
+            "a consent for 'all channels' does not exist")
 
 
 def _record(
@@ -115,6 +132,7 @@ def _record(
     evidence_ref: str | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    channel: str | None = None,
     cur=None,
 ) -> dict[str, Any]:
     _validated(
@@ -125,10 +143,12 @@ def _record(
         actor_ref=actor_ref,
         evidence_type=evidence_type,
         evidence_ref=evidence_ref,
+        channel=channel,
     )
     decisione = {
         "contact_id": contact_id,
         "purpose": purpose,
+        "channel": channel,
         "decision": decision,
         "decided_at": decided_at or repository.utcnow(),
         "source": source,
@@ -207,23 +227,27 @@ def record_optional_grant(ctx, *, granted: bool, **kwargs) -> dict[str, Any]:
     }
 
 
-def register_platform_optout(ctx, *, contact_id: int, source: str, actor_type: str,
+def register_platform_optout(ctx, *, contact_id: int, channel: str, source: str, actor_type: str,
                              actor_ref: str | None = None, consent_event_id: int | None = None,
                              note: str | None = None, idempotency_key: str,
                              opted_out_at=None, cur=None) -> dict[str, Any]:
-    """108 (Fase B): "basta marketing STIMA360", per TUTTE le agenzie.
+    """108/109: "basta marketing STIMA360" su UN canale, per TUTTE le agenzie.
 
     NON e' un evento di consenso: non scrive niente nei `consent_events`
     delle altre agenzie (nessuna revoca inventata per conto loro). Scrive
-    l'indirizzo - letto dal contatto NELLO SCOPE di chi chiama, mai dal
-    client - nella lista di piattaforma che la guardia legge accanto al
-    consenso. Append-only, idempotente sulla chiave.
+    l'INDIRIZZO del canale - l'email normalizzata per `email`, il numero
+    normalizzato per `sms`, `whatsapp`, `phone` - letto dal contatto NELLO
+    SCOPO di chi chiama, mai dal client, nella lista di piattaforma che la
+    guardia legge accanto al consenso. Append-only, idempotente sulla chiave.
 
     Si registra SOLO quando la richiesta riguarda davvero tutto STIMA360: il
-    link con ambito `platform`, o un operatore che dichiara quell'ambito.
+    link con ambito `platform`, un operatore che dichiara quell'ambito, uno
+    STOP ricevuto sul canale.
     """
-    if source not in ("unsubscribe_link", "crm"):
-        raise ValidationError("a platform opt-out comes from the unsubscribe link or from the CRM")
+    if channel not in CHANNELS:
+        raise ValidationError(f"channel must be one of {sorted(CHANNELS)}")
+    if source not in OPTOUT_SOURCES:
+        raise ValidationError(f"a platform opt-out comes from one of {sorted(OPTOUT_SOURCES)}")
     if actor_type not in (ACTOR_SUBJECT, ACTOR_OPERATOR):
         raise ValidationError("a platform opt-out is decided by the subject or recorded by an operator")
     if actor_type == ACTOR_OPERATOR and not (actor_ref or "").strip():
@@ -231,11 +255,13 @@ def register_platform_optout(ctx, *, contact_id: int, source: str, actor_type: s
 
     def _scrivi(c):
         contact = repository.select_contact(c, ctx, contact_id)
-        email = contact.get("email_normalized")
-        if not email:
-            raise ValidationError(f"contact {contact_id} has no email: nothing to opt out")
+        indirizzo = repository.contact_address(contact, channel)
+        if not indirizzo:
+            raise ValidationError(
+                f"contact {contact_id} has no address for channel {channel!r}: nothing to opt out")
         row, created = repository.insert_platform_optout(c, {
-            "email_normalized": email,
+            "channel": channel,
+            "address_normalized": indirizzo,
             "opted_out_at": opted_out_at or repository.utcnow(),
             "source": source,
             "source_agency_id": ctx.require_agency(),
@@ -252,6 +278,24 @@ def register_platform_optout(ctx, *, contact_id: int, source: str, actor_type: s
         return _scrivi(cur)
     with consent_cursor(commit=True) as (_, c):
         return _scrivi(c)
+
+
+def channel_states(cur, ctx, contact_id: int) -> dict[str, dict[str, Any]]:
+    """109: lo stato per canale, per la scheda. Un canale senza riga e'
+    `never_given`: nessuna autorizzazione presunta, nemmeno dal vecchio flag."""
+    from .enums import CHANNEL_ORDER
+    righe = repository.channel_rows(cur, ctx, contact_id)
+    stati = {}
+    for canale in CHANNEL_ORDER:
+        r = righe.get(canale)
+        if r is None:
+            stati[canale] = {"status": STATUS_NEVER_GIVEN, "granted_at": None, "revoked_at": None,
+                             "source": None, "notice_id": None, "event_id": None}
+        else:
+            stati[canale] = {"status": r["status"], "granted_at": r["granted_at"],
+                             "revoked_at": r["revoked_at"], "source": r["source"],
+                             "notice_id": r["notice_id"], "event_id": r["event_id"]}
+    return stati
 
 
 def state_from_projection(contact: dict[str, Any], purpose: str) -> dict[str, Any]:

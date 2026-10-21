@@ -562,6 +562,7 @@ def bridge_public_stima(
     system_ctx: SystemAgencyContext,
     marketing_granted: bool = False,
     marketing_decided_at=None,
+    marketing_channels=(),
 ) -> dict[str, Any]:
     """Atomically reconcile one public stima with its dedicated CORE lead.
 
@@ -742,6 +743,9 @@ def bridge_public_stima(
         # nemmeno il lead: un errore che diventasse un successo silenzioso
         # lascerebbe una persona che ha detto si' e un CRM che non lo sa.
         # ------------------------------------------------------------------
+        # 109: la spunta SENZA canali e' conservata come pre-canale (prova,
+        # nessuna autorizzazione). Quando il sito dichiara i canali che il suo
+        # testo copre, si scrive un evento per canale, e quello autorizza.
         consent_service.record_optional_grant(
             ctx,
             granted=bool(marketing_granted),
@@ -755,6 +759,22 @@ def bridge_public_stima(
             idempotency_key=f"public_stima:{stima_id}:marketing",
             cur=cur,
         )
+        for canale in sorted(set(marketing_channels or ())):
+            if not marketing_granted:
+                break
+            consent_service.record_grant(
+                ctx,
+                contact_id=contact["id"],
+                purpose=CONSENT_PURPOSE_MARKETING,
+                channel=canale,
+                source=CONSENT_SOURCE_PUBLIC_STIMA,
+                actor_type=CONSENT_ACTOR_SUBJECT,
+                decided_at=marketing_decided_at,
+                evidence_type="stima",
+                evidence_ref=str(stima_id),
+                idempotency_key=f"public_stima:{stima_id}:marketing:{canale}",
+                cur=cur,
+            )
 
         prepared_lead = _stamp(ctx, {**lead_data, "contact_id": contact["id"]})
         cur.execute(

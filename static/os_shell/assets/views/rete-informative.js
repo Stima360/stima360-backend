@@ -26,6 +26,8 @@ import { renderTable, bindTableRowClicks, renderBadge, formatDateTime } from '..
 import { PLATFORM, confirmAction, describeError, errorBox, escapeHtml, labelOf, selectOptions } from '../components/network.js';
 
 const FINALITA = { marketing: 'Marketing', privacy_terms: 'Termini privacy' };
+// 109: i canali che il TESTO copre. Nessuno preselezionato: li dichiara il Super Admin.
+const CANALI = { email: 'Email', sms: 'SMS', whatsapp: 'WhatsApp', phone: 'Telefonate commerciali' };
 const STATO = { corrente: 'Corrente', programmata: 'Programmata', chiusa: 'Chiusa' };
 const TONO_STATO = { corrente: 'ok', programmata: 'warn', chiusa: 'gray' };
 
@@ -116,6 +118,7 @@ export async function renderInformative(container, hostEl) {
         [
           { label: 'Versione', render: (n) => `<strong>${escapeHtml(n.version)}</strong><div class="muted">${escapeHtml(n.context)}</div>` },
           { label: 'Finalita’', render: (n) => escapeHtml(labelOf(FINALITA, n.purpose)) },
+          { label: 'Canali', render: (n) => ((n.channels || []).length ? escapeHtml(n.channels.map((c) => labelOf(CANALI, c)).join(', ')) : '<span class="muted">—</span>') },
           { label: 'Valida dal', render: (n) => escapeHtml(formatDateTime(n.valid_from)) },
           { label: 'Fino al', render: (n) => (n.valid_to ? escapeHtml(formatDateTime(n.valid_to)) : '<span class="muted">—</span>') },
           { label: 'Stato', render: (n) => renderBadge(labelOf(STATO, statoDi(n)), TONO_STATO[statoDi(n)]) },
@@ -154,6 +157,7 @@ export async function renderInformative(container, hostEl) {
         <h3>Versione ${escapeHtml(n.version)} — ${escapeHtml(labelOf(FINALITA, n.purpose))} ${renderBadge(labelOf(STATO, statoDi(n)), TONO_STATO[statoDi(n)])}</h3>
         <div class="detail-grid">
           <div class="detail-item"><label>Contesto</label>${escapeHtml(n.context)}</div>
+          <div class="detail-item"><label>Canali coperti</label>${(n.channels || []).length ? escapeHtml(n.channels.map((c) => labelOf(CANALI, c)).join(', ')) : 'nessuno'}</div>
           <div class="detail-item"><label>Validita’</label>dal ${escapeHtml(formatDateTime(n.valid_from))}${n.valid_to ? ` al ${escapeHtml(formatDateTime(n.valid_to))}` : ', senza scadenza'}</div>
           <div class="detail-item"><label>Impronta del testo</label><code>${escapeHtml(n.content_hash)}</code></div>
           <div class="detail-item"><label>Pubblicata da</label>${escapeHtml(n.created_by)} il ${escapeHtml(formatDateTime(n.created_at))}</div>
@@ -209,6 +213,10 @@ export async function renderInformative(container, hostEl) {
             <input class="input" id="inf-context" name="context" maxlength="200" required>
           </div>
         </div>
+        <fieldset class="form-field" data-informativa-canali>
+          <legend>Canali descritti dal testo (almeno uno per il marketing)</legend>
+          ${Object.entries(CANALI).map(([k, v]) => `<label><input type="checkbox" name="channels" value="${k}"> ${escapeHtml(v)}</label>`).join(' ')}
+        </fieldset>
         <div class="form-field">
           <label for="inf-content">Testo integrale dell’informativa</label>
           <textarea class="input" id="inf-content" name="content" rows="14" minlength="20" maxlength="200000" required></textarea>
@@ -243,9 +251,14 @@ export async function renderInformative(container, hostEl) {
         content: String(dati.get('content') || ''),
         valid_from: isoConFuso(String(dati.get('valid_from') || '')),
         valid_to: isoConFuso(String(dati.get('valid_to') || '')),
+        channels: dati.getAll('channels').map((v) => String(v)),
       };
       if (!corpo.content.trim() || corpo.content.trim().length < 20) {
         errore.textContent = 'Il testo dell’informativa e’ troppo corto: va inserito per intero.';
+        return;
+      }
+      if (corpo.purpose === 'marketing' && !corpo.channels.length) {
+        errore.textContent = 'Indica i canali che il testo descrive: un consenso potra’ citare questa versione solo per quei canali.';
         return;
       }
       if (!corpo.valid_from) {

@@ -33,6 +33,41 @@ PURPOSE_MARKETING = "marketing"
 PURPOSES = frozenset({PURPOSE_PRIVACY_TERMS, PURPOSE_MARKETING})
 
 # ---------------------------------------------------------------------------
+# I CANALI (109, C1)
+#
+# Quattro, e nessun quinto. Un consenso marketing e' PER CANALE: concedere
+# l'email non concede niente altro, revocare WhatsApp non tocca l'email.
+# `CHANNEL_ORDER` e' l'ordine in cui la scheda li mostra. Rispecchia il CHECK
+# `consent_events_channel_chk` della 109; un test confronta i due insiemi.
+#
+# Le righe storiche di `consent_events` hanno `channel IS NULL` ("pre-canale"):
+# sono conservate per intero e NON autorizzano nessun canale. Un evento
+# marketing nuovo senza canale e' rifiutato dal database, con l'unica
+# eccezione della concessione dal funnel pubblico (`public_stima`, `granted`),
+# che resta una prova della spunta e, da sola, non autorizza niente.
+# ---------------------------------------------------------------------------
+CHANNEL_EMAIL = "email"
+CHANNEL_SMS = "sms"
+CHANNEL_WHATSAPP = "whatsapp"
+CHANNEL_PHONE = "phone"
+CHANNEL_ORDER = (CHANNEL_EMAIL, CHANNEL_SMS, CHANNEL_WHATSAPP, CHANNEL_PHONE)
+CHANNELS = frozenset(CHANNEL_ORDER)
+
+#: I canali il cui indirizzo e' il NUMERO del contatto (`phone_normalized`);
+#: per `email` e' `email_normalized`. L'opt-out di piattaforma (109) e' per
+#: (canale, indirizzo), quindi la stessa persona puo' dire "basta WhatsApp"
+#: senza dire "basta email".
+PHONE_CHANNELS = frozenset({CHANNEL_SMS, CHANNEL_WHATSAPP, CHANNEL_PHONE})
+
+#: Le provenienze ammesse per un opt-out di piattaforma (CHECK della 109).
+OPTOUT_SOURCE_UNSUBSCRIBE_LINK = "unsubscribe_link"
+OPTOUT_SOURCE_CRM = "crm"
+OPTOUT_SOURCE_WHATSAPP_STOP = "whatsapp_stop"
+OPTOUT_SOURCE_SMS_STOP = "sms_stop"
+OPTOUT_SOURCES = frozenset({OPTOUT_SOURCE_UNSUBSCRIBE_LINK, OPTOUT_SOURCE_CRM,
+                            OPTOUT_SOURCE_WHATSAPP_STOP, OPTOUT_SOURCE_SMS_STOP})
+
+# ---------------------------------------------------------------------------
 # LE DECISIONI
 #
 # Due, e nessuna terza. In particolare non esiste un valore per "non ha
@@ -142,7 +177,14 @@ REASON_DENY_NEVER_GIVEN = "deny_never_given"
 REASON_DENY_INCONSISTENT_STATE = "deny_inconsistent_state"
 #: 108 (Fase B): l'indirizzo ha chiesto di non ricevere piu' marketing
 #: STIMA360 da NESSUNA agenzia, dopo l'ultima concessione di questa.
+#: 109: per (canale, indirizzo).
 REASON_DENY_PLATFORM_OPTOUT = "deny_platform_optout"
+
+# 109 (C2): i motivi sono gli stessi, ma riferiti al CANALE chiesto.
+# `allow_legacy_grant` NON viene piu' prodotto: un flag storico senza un
+# evento sul canale e' `deny_never_given` con `legacy=True` nella decisione
+# (si vede che c'era una spunta, non si manda niente). Il valore resta
+# nell'insieme perche' e' gia' nei log e nelle righe soppresse di prima.
 
 SEND_DECISION_REASONS = frozenset({
     REASON_DENY_PLATFORM_OPTOUT,

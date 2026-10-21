@@ -167,33 +167,42 @@ def _contatto(**extra):
 
 
 def test_d1_un_optout_dopo_la_concessione_nega_uno_prima_no():
+    """SENTINELLA AGGIORNATA DA C1/C2: la decisione e' per canale (evento e
+    riga del canale) e il vecchio flag senza eventi non autorizza piu'."""
     from consent import guard
     evento = {"id": 1, "decision": "granted", "decided_at": ORA - timedelta(days=10),
               "source": "public_stima", "notice_id": None}
-    assert guard._decidi(_contatto(), evento).allowed
-    dopo = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=1)), evento)
+    riga = {"id": 1, "status": "granted", "granted_at": ORA - timedelta(days=10), "revoked_at": None}
+    assert guard._decidi(_contatto(), evento, riga, "email").allowed
+    dopo = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=1)), evento, riga, "email")
     assert not dopo.allowed and dopo.reason == "deny_platform_optout"
-    prima = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=30)), evento)
+    prima = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=30)), evento, riga, "email")
     assert prima.allowed and prima.reason == "allow_explicit_grant"
-    # legacy: stessa regola, misurata sulla proiezione
-    legacy = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=1)), None)
-    assert not legacy.allowed and legacy.reason == "deny_platform_optout" and legacy.legacy
-    assert guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=30)), None).allowed
+    # legacy: il vecchio flag senza eventi sul canale NON autorizza, opt-out o no
+    legacy = guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=1)), None, None, "email")
+    assert not legacy.allowed and legacy.reason == "deny_never_given" and legacy.legacy
+    assert not guard._decidi(_contatto(platform_optout_at=ORA - timedelta(days=30)), None, None, "email").allowed
     # una revoca resta una revoca, a prescindere dall'opt-out
     revoca = {"id": 2, "decision": "revoked", "decided_at": ORA, "source": "crm", "notice_id": None}
+    riga_rev = {"id": 1, "status": "revoked", "granted_at": ORA - timedelta(days=10), "revoked_at": ORA}
     esito = guard._decidi(_contatto(marketing_consent=False, marketing_revoked_at=ORA,
-                                    platform_optout_at=ORA - timedelta(days=30)), revoca)
+                                    platform_optout_at=ORA - timedelta(days=30)), revoca, riga_rev, "email")
     assert not esito.allowed and esito.reason == "deny_revoked"
 
 
 def test_d2_la_statement_decisionale_porta_l_optout_nella_stessa_query():
+    """SENTINELLA AGGIORNATA DA C1/C2: una statement con evento del canale,
+    proiezione per canale e opt-out per (canale, indirizzo)."""
     from consent import repository
     sql = repository._sql_decisionale("consent_events ce WHERE ce.agency_id = %s", "c.agency_id = %s",
-                                      "c.id = %s", con_optout=True)
-    assert sql.count("LEFT JOIN LATERAL") == 2 and "communication_email_optouts" in sql
+                                      "c.id = %s", channel="whatsapp", con_schema=True)
+    assert sql.count("LEFT JOIN LATERAL") == 3 and "communication_optouts" in sql
+    assert "contact_channel_consents" in sql and "c.phone_normalized" in sql
     assert "platform_optout_at" in sql and "FOR UPDATE" not in sql.upper()
-    senza = repository._sql_decisionale("x ce WHERE 1=1", "1=1", "c.id = %s", con_optout=False)
-    assert "communication_email_optouts" not in senza and "NULL::timestamptz AS platform_optout_at" in senza
+    email = repository._sql_decisionale("x ce WHERE 1=1", "1=1", "c.id = %s", channel="email", con_schema=True)
+    assert "c.email_normalized" in email and "c.phone_normalized" not in email
+    senza = repository._sql_decisionale("x ce WHERE 1=1", "1=1", "c.id = %s", channel="email", con_schema=False)
+    assert "communication_optouts" not in senza and "NULL::timestamptz AS platform_optout_at" in senza
 
 
 # ---------------------------------------------------------------------------
@@ -298,12 +307,15 @@ def test_f2_le_rotte_pubbliche_restano_due_e_la_pagina_dice_l_ambito(monkeypatch
 # ---------------------------------------------------------------------------
 
 def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
+    # SENTINELLA AGGIORNATA DA C1/C2: la 108 non e' piu' l'ultima, la segue
+    # la 109 (consensi per canale); la 108 resta valida e intatta.
     sys.path.insert(0, str(ROOT / "scripts"))
     import p26_migrate as runner
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    ultima = tutte[-1]
-    assert ultima.version == "108_followup_contact_journey" and ultima.down_available
+    ultima = next(m for m in tutte if m.version == "108_followup_contact_journey")
+    assert tutte[-1].version == "109_consent_channels" and tutte[-2] is ultima
+    assert ultima.down_available
     assert runner.validate_migration(ultima) == []
     su = (ROOT / "migrations" / "108_followup_contact_journey.sql").read_text(encoding="utf-8")
     giu = (ROOT / "migrations" / "108_followup_contact_journey_down.sql").read_text(encoding="utf-8")
@@ -318,7 +330,7 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     import subprocess as sp
     cambiate = sp.run(["git", "--no-optional-locks", "diff", "--name-only", "HEAD", "--", "migrations/"],
                       cwd=ROOT, capture_output=True, text=True).stdout.split()
-    assert all(c.startswith("migrations/108_") for c in cambiate), cambiate
+    assert all(c.startswith(("migrations/108_", "migrations/109_")) for c in cambiate), cambiate
 
 
 # ---------------------------------------------------------------------------
@@ -334,11 +346,13 @@ def test_h1_la_lettura_trasversale_sta_solo_nel_repository_e_la_platea_non_decid
     regole = _codice(pacchetto / "followup_rules.py")
     for vietato in ("can_send_marketing", "marketing_consent", "invia_mail", "providers", "smtplib"):
         assert vietato not in platea and vietato not in regole, vietato
-    assert "marketing_prefilter_sql" in platea
-    # il prefiltro vive nel pacchetto del consenso e nomina SOLO la proiezione
-    from consent.audience import marketing_granted_at_sql, marketing_prefilter_sql
-    assert marketing_prefilter_sql("c") == "(c.marketing_consent IS TRUE AND c.marketing_revoked_at IS NULL)"
-    assert marketing_granted_at_sql("c") == "c.marketing_consent_at"
+    # SENTINELLA AGGIORNATA DA C1/C2: il prefiltro e' PER CANALE e vive nel
+    # pacchetto del consenso; la platea non nomina piu' la colonna storica.
+    assert "channel_prefilter_sql" in platea and "marketing_prefilter_sql" not in platea
+    from consent.audience import channel_granted_at_sql, channel_prefilter_sql
+    assert "contact_channel_consents" in channel_prefilter_sql("c", "email")
+    assert "'email'" in channel_prefilter_sql("c", "email") and "marketing_consent" not in channel_prefilter_sql("c", "email")
+    assert "cc.granted_at" in channel_granted_at_sql("c", "email")
 
 
 def test_h2_la_scheda_contatto_manda_solo_i_campi_del_consenso():

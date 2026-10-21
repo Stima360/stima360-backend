@@ -48,6 +48,9 @@ from . import repository
 from . import service as consent_service
 from .database import consent_cursor
 from .enums import (
+    CHANNELS,
+    CHANNEL_ORDER,
+    OPTOUT_SOURCE_CRM,
     ACTOR_OPERATOR, DECISION_GRANTED, DECISION_REVOKED, PURPOSE_MARKETING, SOURCE_CRM,
 )
 from .exceptions import ConflictError, NotFoundError, ValidationError
@@ -137,7 +140,7 @@ def _informativa_valida(cur, notice_id, decided_at: datetime) -> dict[str, Any]:
     if not isinstance(notice_id, int) or isinstance(notice_id, bool) or notice_id <= 0:
         raise ValidationError("notice_id is required: a consent cites the privacy notice presented")
     cur.execute(
-        """SELECT id, purpose, version, context, valid_from, valid_to, content_available
+        """SELECT id, purpose, version, context, valid_from, valid_to, content_available, channels
              FROM consent_notices WHERE id = %s""", [notice_id])
     riga = cur.fetchone()
     riga = dict(riga) if riga is not None else None
@@ -151,6 +154,17 @@ def _informativa_valida(cur, notice_id, decided_at: datetime) -> dict[str, Any]:
     return riga
 
 
+def _canali(valori) -> list[str]:
+    """109: i canali dichiarati, espliciti e senza duplicati. Nessun default,
+    nessun "tutti": l'operatore li nomina uno per uno."""
+    if not isinstance(valori, (list, tuple, set, frozenset)) or not valori:
+        raise ValidationError(f"channels must name at least one of {list(CHANNEL_ORDER)}")
+    fuori = [c for c in valori if c not in CHANNELS]
+    if fuori:
+        raise ValidationError(f"unknown channels {fuori}: allowed {list(CHANNEL_ORDER)}")
+    return [c for c in CHANNEL_ORDER if c in set(valori)]
+
+
 def _impronta(*parti: str) -> str:
     return hashlib.sha256("|".join(parti).encode("utf-8")).hexdigest()[:16]
 
@@ -160,7 +174,7 @@ def list_notices(*, at: datetime | None = None) -> list[dict[str, Any]]:
     quando = at or datetime.now(timezone.utc)
     with consent_cursor() as (_, cur):
         cur.execute(
-            """SELECT id, purpose, version, context, valid_from, valid_to, content_hash, content
+            """SELECT id, purpose, version, context, valid_from, valid_to, content_hash, content, channels
                  FROM consent_notices
                 WHERE purpose = %s AND content_available
                   AND valid_from <= %s AND (valid_to IS NULL OR valid_to >= %s)
@@ -169,11 +183,19 @@ def list_notices(*, at: datetime | None = None) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
-def register_grant(ctx, contact_id: int, *, decided_at: datetime, evidence_type: str,
+def register_grant(ctx, contact_id: int, *, channels, decided_at: datetime, evidence_type: str,
                    evidence_ref: str, notice_id: int, note: str | None = None) -> dict[str, Any]:
-    """Un consenso marketing raccolto dall'operatore, con la prova. Append-only."""
+    """Un consenso marketing raccolto dall'operatore, PER CANALE, con la prova.
+
+    109: `channels` e' l'elenco esplicito dei canali autorizzati (almeno uno,
+    nessun default): un evento per canale, stessa prova, stessa data, stessa
+    informativa, che deve COPRIRE ogni canale citato. Un canale non coperto
+    dal testo presentato non puo' essere stato autorizzato con quel testo.
+    Append-only.
+    """
     attore = _operatore(ctx)
     quando = _istante(decided_at, "decided_at")
+    canali = _canali(channels)
     if evidence_type not in GRANT_EVIDENCE_TYPES:
         raise ValidationError(f"evidence_type must be one of {list(GRANT_EVIDENCE_TYPES)}")
     nota = _nota(note)
@@ -181,38 +203,53 @@ def register_grant(ctx, contact_id: int, *, decided_at: datetime, evidence_type:
         contact = _contatto_registrabile(cur, ctx, contact_id)
         ref = _riferimento_prova(evidence_ref, contact)
         informativa = _informativa_valida(cur, notice_id, quando)
-        ultimo = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING)
-        if ultimo is not None and ultimo["decision"] == DECISION_REVOKED and quando <= ultimo["decided_at"]:
-            raise ConflictError(
-                "a consent after a revocation must be a new manifestation, dated after the revocation")
-        optout = repository.latest_platform_optout(cur, contact.get("email_normalized"))
-        if optout is not None and quando <= optout["opted_out_at"]:
-            raise ConflictError(
-                "this address opted out of all STIMA360 marketing after that date: "
-                "a new consent must be dated after the opt-out")
-        esito = consent_service.record_grant(
-            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, source=SOURCE_CRM,
-            actor_type=ACTOR_OPERATOR, actor_ref=attore, notice_id=informativa["id"],
-            decided_at=quando, evidence_type=evidence_type, evidence_ref=ref, note=nota,
-            idempotency_key=f"crm:grant:{ctx.require_agency()}:{contact_id}:"
-                            f"{int(quando.timestamp())}:{_impronta(evidence_type, ref)}",
-            cur=cur)
-        return {"recorded": True, "created": esito["created"], "event": esito["event"],
+        coperti = set(informativa.get("channels") or ())
+        scoperti = [c for c in canali if c not in coperti]
+        if scoperti:
+            raise ValidationError(
+                f"privacy notice {informativa['version']!r} does not cover channels {scoperti}: "
+                "a consent can only be recorded for the channels the presented text describes")
+        for canale in canali:
+            ultimo = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING, canale)
+            if ultimo is not None and ultimo["decision"] == DECISION_REVOKED and quando <= ultimo["decided_at"]:
+                raise ConflictError(
+                    f"a consent on {canale!r} after a revocation must be a new manifestation, "
+                    "dated after the revocation")
+            optout = repository.latest_platform_optout(cur, canale, repository.contact_address(contact, canale))
+            if optout is not None and quando <= optout["opted_out_at"]:
+                raise ConflictError(
+                    f"this address opted out of all STIMA360 {canale} marketing after that date: "
+                    "a new consent must be dated after the opt-out")
+        eventi = []
+        for canale in canali:
+            esito = consent_service.record_grant(
+                ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, channel=canale, source=SOURCE_CRM,
+                actor_type=ACTOR_OPERATOR, actor_ref=attore, notice_id=informativa["id"],
+                decided_at=quando, evidence_type=evidence_type, evidence_ref=ref, note=nota,
+                idempotency_key=f"crm:grant:{ctx.require_agency()}:{contact_id}:{canale}:"
+                                f"{int(quando.timestamp())}:{_impronta(evidence_type, ref)}",
+                cur=cur)
+            eventi.append({"channel": canale, "created": esito["created"], "event": esito["event"]})
+        return {"recorded": True, "created": any(e["created"] for e in eventi),
+                "channels": canali, "events": eventi, "event": eventi[0]["event"],
                 "notice": {"id": informativa["id"], "version": informativa["version"]}}
 
 
-def register_refusal(ctx, contact_id: int, *, decided_at: datetime, scope: str,
+def register_refusal(ctx, contact_id: int, *, channels, decided_at: datetime, scope: str,
                      note: str, evidence_type: str | None = None,
                      evidence_ref: str | None = None) -> dict[str, Any]:
-    """Un rifiuto o una revoca espressi al personale. Blocca subito gli invii.
+    """Un rifiuto o una revoca espressi al personale, PER CANALE. Blocca subito.
 
-    `scope=agency` scrive la revoca di questa agenzia (il caso normale);
-    `scope=platform` in piu' registra l'indirizzo nella lista di piattaforma,
-    SOLO perche' l'operatore lo ha dichiarato. Nessun evento di consenso di
-    altre agenzie viene toccato.
+    109: `channels` e' esplicito (uno, alcuni, o tutti e quattro nominati);
+    un evento di revoca per canale. `scope=agency` scrive la revoca di questa
+    agenzia; `scope=platform` in piu' registra l'INDIRIZZO di ogni canale
+    nella lista di piattaforma, SOLO perche' l'operatore lo ha dichiarato; un
+    canale senza indirizzo sul contatto riceve la revoca ma nessun opt-out
+    (non c'e' niente da bloccare altrove) e lo si dice nel risultato.
     """
     attore = _operatore(ctx)
     quando = _istante(decided_at, "decided_at")
+    canali = _canali(channels)
     if scope not in REVOCATION_SCOPES:
         raise ValidationError(f"scope must be one of {list(REVOCATION_SCOPES)}")
     nota = _nota(note, minimo=NOTE_MIN_REVOCATION)
@@ -223,45 +260,79 @@ def register_refusal(ctx, contact_id: int, *, decided_at: datetime, scope: str,
     with consent_cursor(commit=True) as (_, cur):
         contact = _contatto_registrabile(cur, ctx, contact_id)
         ref = _riferimento_prova(evidence_ref, contact) if evidence_ref is not None else None
-        chiave = (f"crm:revoke:{ctx.require_agency()}:{contact_id}:{int(quando.timestamp())}:"
-                  f"{_impronta(scope, nota or '')}")
-        esito = consent_service.record_revocation(
-            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, source=SOURCE_CRM,
-            actor_type=ACTOR_OPERATOR, actor_ref=attore, decided_at=quando,
-            evidence_type=evidence_type, evidence_ref=ref, note=nota,
-            idempotency_key=chiave, cur=cur)
-        optout = None
-        if scope == SCOPE_PLATFORM:
-            optout = consent_service.register_platform_optout(
-                ctx, contact_id=contact_id, source=SOURCE_CRM, actor_type=ACTOR_OPERATOR,
-                actor_ref=attore, consent_event_id=esito["event"]["id"], note=nota,
-                opted_out_at=quando, idempotency_key=f"optout:{chiave}", cur=cur)
-        return {"recorded": True, "created": esito["created"], "event": esito["event"],
-                "scope": scope, "platform_optout": (optout or {}).get("optout")}
+        eventi, optouts, senza_indirizzo = [], [], []
+        for canale in canali:
+            chiave = (f"crm:revoke:{ctx.require_agency()}:{contact_id}:{canale}:{int(quando.timestamp())}:"
+                      f"{_impronta(scope, nota or '')}")
+            esito = consent_service.record_revocation(
+                ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, channel=canale, source=SOURCE_CRM,
+                actor_type=ACTOR_OPERATOR, actor_ref=attore, decided_at=quando,
+                evidence_type=evidence_type, evidence_ref=ref, note=nota,
+                idempotency_key=chiave, cur=cur)
+            eventi.append({"channel": canale, "created": esito["created"], "event": esito["event"]})
+            if scope == SCOPE_PLATFORM:
+                if not repository.contact_address(contact, canale):
+                    senza_indirizzo.append(canale)
+                    continue
+                optout = consent_service.register_platform_optout(
+                    ctx, contact_id=contact_id, channel=canale, source=OPTOUT_SOURCE_CRM,
+                    actor_type=ACTOR_OPERATOR, actor_ref=attore, consent_event_id=esito["event"]["id"],
+                    note=nota, opted_out_at=quando, idempotency_key=f"optout:{chiave}", cur=cur)
+                optouts.append({"channel": canale, "optout": optout.get("optout")})
+        return {"recorded": True, "created": any(e["created"] for e in eventi),
+                "channels": canali, "events": eventi, "event": eventi[0]["event"], "scope": scope,
+                "platform_optouts": optouts, "platform_optout": (optouts[0]["optout"] if optouts else None),
+                "channels_without_address": senza_indirizzo}
 
 
 def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
-    """Lo stato del consenso marketing, come lo vede la guardia, per la scheda."""
-    decisione = can_send_marketing(ctx, contact_id)
+    """Lo stato del consenso marketing PER CANALE, come lo vede la guardia.
+
+    `channels[c]` porta la decisione della guardia sul canale (`allowed`,
+    `reason`), lo stato proiettato, l'ultimo evento del canale e l'opt-out
+    di piattaforma sull'indirizzo del canale. `legacy` dice se il vecchio
+    flag era TRUE senza un consenso per canale: una spunta storica, che NON
+    autorizza niente. `allowed` in cima e' "almeno un canale consentito".
+    """
     with consent_cursor() as (_, cur):
         contact = repository.select_contact(cur, ctx, contact_id)
-        ultimo = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING)
-        optout = repository.latest_platform_optout(cur, contact.get("email_normalized"))
+        stati = consent_service.channel_states(cur, ctx, contact_id)
+        ultimi = {c: repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING, c) for c in CHANNEL_ORDER}
+        optouts = {c: repository.latest_platform_optout(cur, c, repository.contact_address(contact, c))
+                   for c in CHANNEL_ORDER}
+        storico = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING)
+    canali = {}
+    for c in CHANNEL_ORDER:
+        decisione = can_send_marketing(ctx, contact_id, channel=c)
+        ultimo, optout = ultimi[c], optouts[c]
+        canali[c] = {
+            "allowed": decisione.allowed, "reason": decisione.reason, "state": decisione.state,
+            "legacy": decisione.legacy, "source": decisione.source, "decided_at": decisione.decided_at,
+            "projection": stati[c],
+            "last_event": None if ultimo is None else {
+                "id": ultimo["id"], "decision": ultimo["decision"], "decided_at": ultimo["decided_at"],
+                "source": ultimo["source"], "actor_type": ultimo.get("actor_type"),
+                "evidence_type": ultimo.get("evidence_type"), "notice_id": ultimo.get("notice_id"),
+                "recorded_at": ultimo.get("created_at")},
+            "platform_optout_at": None if optout is None else optout["opted_out_at"],
+        }
+    legacy = (contact.get("marketing_consent") is True
+              and not any(s["status"] == "granted" for s in stati.values()))
     return {
-        "allowed": decisione.allowed, "reason": decisione.reason, "state": decisione.state,
-        "legacy": decisione.legacy, "source": decisione.source,
-        "decided_at": decisione.decided_at,
-        "last_event": None if ultimo is None else {
-            "id": ultimo["id"], "decision": ultimo["decision"], "decided_at": ultimo["decided_at"],
-            "source": ultimo["source"], "actor_type": ultimo.get("actor_type"),
-            "evidence_type": ultimo.get("evidence_type"), "notice_id": ultimo.get("notice_id"),
-            "recorded_at": ultimo.get("created_at")},
-        "platform_optout_at": None if optout is None else optout["opted_out_at"],
+        "allowed": any(v["allowed"] for v in canali.values()),
+        "channels": canali,
+        "channel_order": list(CHANNEL_ORDER),
+        "legacy": legacy,
+        "legacy_flag": contact.get("marketing_consent"),
+        "legacy_granted_at": contact.get("marketing_consent_at"),
+        "pre_channel_event": None if storico is None or storico.get("channel") is not None else {
+            "id": storico["id"], "decision": storico["decision"], "decided_at": storico["decided_at"],
+            "source": storico["source"]},
         "can_record": getattr(ctx, "user_id", None) is not None
                       and contact.get("deleted_at") is None and contact.get("status") != "archived",
     }
 
 
-__all__ = ["register_grant", "register_refusal", "marketing_state", "list_notices",
+__all__ = ["register_grant", "register_refusal", "marketing_state", "list_notices", "CHANNEL_ORDER",
            "GRANT_EVIDENCE_TYPES", "REVOCATION_EVIDENCE_TYPES", "REVOCATION_SCOPES",
            "NotFoundError"]

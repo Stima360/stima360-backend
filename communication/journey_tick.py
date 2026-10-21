@@ -197,8 +197,33 @@ NOMI_DI_STOP = {
 }
 
 
+def _canali_dei_passi(passi) -> list[str]:
+    """109: i canali su cui una journey manda, dai suoi passi attivi. Senza
+    passi non c'e' niente da mandare: si chiede comunque l'email, che e'
+    negata se non concessa (nessuna decisione positiva senza un canale)."""
+    canali = sorted({p["channel"] for p in passi if p.get("channel")})
+    return canali or ["email"]
+
+
+def _consenso_negato(ctx, contact_ids, canali) -> dict[int, Any]:
+    """109: per ogni contatto la PRIMA decisione negata fra i canali, o
+    `None` se il contatto non e' nello scope (anche quello ferma). Una query
+    della guardia per canale (bulk), mai una per contatto."""
+    ids = sorted({int(c) for c in contact_ids})
+    negate: dict[int, Any] = {}
+    for canale in canali:
+        decisioni = can_send_marketing_bulk(ctx, ids, channel=canale)
+        for cid in ids:
+            if cid in negate:
+                continue
+            decisione = decisioni.get(cid)
+            if decisione is None or not decisione.allowed:
+                negate[cid] = decisione
+    return negate
+
+
 def _fence_e_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: int | None,
-                  stima_snapshot: int | None, contact_wide: bool = False):
+                  stima_snapshot: int | None, contact_wide: bool = False, channels=("email",)):
     """Prende il fence e risponde: c'e' uno stop ADESSO? `(ragione, evento)`.
 
     L'ordine conta ed e' il contratto della fase:
@@ -231,9 +256,12 @@ def _fence_e_stop(cur, ctx, *, contact_id: int, lead_id: int | None, stima_id: i
         tipi_evento=EVENTI_DI_STOP, nomi=NOMI_DI_STOP)
     ragioni = {ragione} if ragione else set()
 
-    decisione = can_send_marketing_bulk(ctx, [contact_id]).get(contact_id)
-    if decisione is not None and not decisione.allowed:
-        ragioni.add(CONSENT_STOP_BY_GUARD_REASON.get(decisione.reason, STOP_CONSENT_NOT_GRANTED))
+    # 109: per canale, quelli dei passi della journey.
+    negate = _consenso_negato(ctx, [contact_id], list(channels))
+    if contact_id in negate:
+        decisione = negate[contact_id]
+        ragioni.add(CONSENT_STOP_BY_GUARD_REASON.get(decisione.reason if decisione is not None else "",
+                                                    STOP_CONSENT_NOT_GRANTED))
 
     vincente = choose_stop_reason(ragioni)
     if vincente is None:
@@ -265,7 +293,15 @@ def _ragioni_di_stop(cur, ctx, righe: list[dict[str, Any]]):
     inattivi = repo.facts_contacts_not_active(cur, ctx, contatti)
     tutti_i_tipi = tuple(t for tipi in EVENTI_DI_STOP.values() for t in tipi)
     eventi = repo.stop_events(cur, ctx, vive, tutti_i_tipi)
-    consenso = can_send_marketing_bulk(ctx, contatti)
+    # 109: il consenso e' per canale: quelli dei passi della journey di ogni riga.
+    passi = _passi_per_journey(cur, ctx, [r["journey_id"] for r in righe])
+    per_canali: dict[tuple[str, ...], list[int]] = {}
+    for r in righe:
+        per_canali.setdefault(tuple(_canali_dei_passi(passi[r["journey_id"]])), []).append(r["contact_id"])
+    consenso = {}
+    for canali, ids in per_canali.items():
+        for cid, decisione in _consenso_negato(ctx, ids, list(canali)).items():
+            consenso[(canali, cid)] = decisione
 
     ragioni: dict[int, set[str]] = {}
     for r in righe:
@@ -278,9 +314,11 @@ def _ragioni_di_stop(cur, ctx, righe: list[dict[str, Any]]):
             trovate.add("lead_closed")
         if r["contact_id"] in inattivi:
             trovate.add("contact_inactive")
-        decisione = consenso.get(r["contact_id"])
-        if decisione is not None and not decisione.allowed:
-            trovate.add(CONSENT_STOP_BY_GUARD_REASON.get(decisione.reason, "consent_not_granted"))
+        chiave = (tuple(_canali_dei_passi(passi[r["journey_id"]])), r["contact_id"])
+        if chiave in consenso:
+            decisione = consenso[chiave]
+            trovate.add(CONSENT_STOP_BY_GUARD_REASON.get(
+                decisione.reason if decisione is not None else "", "consent_not_granted"))
         ragioni[r["id"]] = trovate
     return ragioni, eventi
 
@@ -301,14 +339,17 @@ def _fase_stop(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
     if not righe:
         return
     ragioni, eventi = _ragioni_di_stop(cur, ctx, righe)
+    passi = _passi_per_journey(cur, ctx, [r["journey_id"] for r in righe])
     for r in righe:
         if repo.is_contact_enrollment(r):
-            _stop_o_pausa_contatto(ctx, cur, r, adesso, conteggi)
+            _stop_o_pausa_contatto(ctx, cur, r, adesso, conteggi,
+                                   canali=_canali_dei_passi(passi[r["journey_id"]]))
             continue
         vincente = choose_stop_reason(ragioni[r["id"]])
         if repo.is_request_enrollment(r):
             vincente, _ = _fence_e_stop(cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
-                stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"], contact_wide=True)
+                stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"], contact_wide=True,
+                channels=_canali_dei_passi(passi[r["journey_id"]]))
         if vincente is None:
             continue
         try:
@@ -447,14 +488,14 @@ def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
         candidati = audience.candidates(cur, ctx, now=adesso, limit=residuo)
         if not candidati:
             continue
-        consensi = can_send_marketing_bulk(ctx, [c["contact_id"] for c in candidati])
+        negate = _consenso_negato(ctx, [c["contact_id"] for c in candidati], _canali_dei_passi(passi))
         for candidato in candidati:
             try:
                 with _Savepoint(cur, f"enrc_{candidato['contact_id']}"):
                     repo.fence(cur, ctx, contact_id=candidato["contact_id"], lead_id=None, stima_id=None)
-                    decisione = consensi.get(candidato["contact_id"])
                     ragione = None
-                    if decisione is None or not decisione.allowed:
+                    if candidato["contact_id"] in negate:
+                        decisione = negate[candidato["contact_id"]]
                         ragione = CONSENT_STOP_BY_GUARD_REASON.get(
                             decisione.reason if decisione is not None else "", STOP_CONSENT_NOT_GRANTED)
                     inizio = audience.momento_iniziale(candidato["granted_at"], adesso)
@@ -490,7 +531,7 @@ def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
                             candidato["contact_id"], journey["id"], exc_info=True)
 
 
-def _ragione_di_stop_contatto(cur, ctx, r: dict[str, Any]) -> str | None:
+def _ragione_di_stop_contatto(cur, ctx, r: dict[str, Any], canali=("email",)) -> str | None:
     """Le ragioni che FERMANO una iscrizione sul contatto, con la priorita'
     della journey sul contatto. Consenso (opt-out di piattaforma compreso),
     indirizzo, persona: nient'altro ferma."""
@@ -505,20 +546,23 @@ def _ragione_di_stop_contatto(cur, ctx, r: dict[str, Any]) -> str | None:
         # L'indirizzo e' cambiato: la sequenza era per QUELLO. Si ferma, e
         # il nuovo indirizzo entrera' dalla platea con le sue regole.
         ragioni.add(STOP_DUPLICATE_EMAIL)
-    decisione = can_send_marketing_bulk(ctx, [r["contact_id"]]).get(r["contact_id"])
-    if decisione is None or not decisione.allowed:
+    # 109: per canale (quelli dei passi); un contatto fuori scope non ha decisione: stop.
+    negate = _consenso_negato(ctx, [r["contact_id"]], list(canali))
+    if r["contact_id"] in negate:
+        decisione = negate[r["contact_id"]]
         ragioni.add(CONSENT_STOP_BY_GUARD_REASON.get(decisione.reason if decisione is not None else "",
                                                     STOP_CONSENT_NOT_GRANTED))
     return choose_stop_reason(ragioni, CONTACT_STOP_PRIORITY)
 
 
-def _stop_o_pausa_contatto(ctx, cur, r: dict[str, Any], adesso, conteggi: dict[str, int]) -> None:
+def _stop_o_pausa_contatto(ctx, cur, r: dict[str, Any], adesso, conteggi: dict[str, int],
+                           canali=("email",)) -> None:
     """Fase B: stop, pausa, ripresa o completamento di una iscrizione sul
     contatto, dai FATTI di adesso (vedi `followup_rules`)."""
     try:
         with _Savepoint(cur, f"stopc_{r['id']}"):
             repo.fence(cur, ctx, contact_id=r["contact_id"], lead_id=None, stima_id=None)
-            ragione = _ragione_di_stop_contatto(cur, ctx, r)
+            ragione = _ragione_di_stop_contatto(cur, ctx, r, canali=canali)
             if ragione is not None:
                 repo.stop_enrollment(cur, ctx, r["id"], reason=ragione, actor_user_id=None)
                 repo.cancel_queued_journey_messages(cur, ctx, r["id"], reason=f"stopped:{ragione}",
@@ -609,7 +653,8 @@ def _fase_enroll(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> Non
                     ragione, evento = _fence_e_stop(
                         cur, ctx, contact_id=candidato["contact_id"],
                         lead_id=candidato["lead_id"], stima_id=candidato["stima_id"],
-                        stima_snapshot=candidato["stima_id"], contact_wide=registered)
+                        stima_snapshot=candidato["stima_id"], contact_wide=registered,
+                        channels=_canali_dei_passi(passi))
                     if ragione is None:
                         stato = ENR_ACTIVE
                         quando = _quando(candidato["sent_at"], primo, journey["send_timezone"])
@@ -757,7 +802,8 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                 # spedire prima che il giro successivo lo cancelli.
                 if repo.is_contact_enrollment(r):
                     repo.fence(cur, ctx, contact_id=r["contact_id"], lead_id=None, stima_id=None)
-                    ragione, evento = _ragione_di_stop_contatto(cur, ctx, r), None
+                    ragione, evento = _ragione_di_stop_contatto(
+                        cur, ctx, r, canali=_canali_dei_passi(passi[r["journey_id"]])), None
                     passo_corrente = next(s for s in passi[r["journey_id"]] if s["step_no"] == r["next_step_no"])
                     if ragione is None and followup_rules.oltre_orizzonte_passo(passo_corrente):
                         # il giorno di calendario del passo e' oltre i 180: finita
@@ -778,7 +824,8 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                     ragione, evento = _fence_e_stop(
                         cur, ctx, contact_id=r["contact_id"], lead_id=r["lead_id"],
                         stima_id=r["stima_id"], stima_snapshot=r["stima_id_snapshot"],
-                        contact_wide=repo.is_request_enrollment(r))
+                        contact_wide=repo.is_request_enrollment(r),
+                        channels=_canali_dei_passi(passi[r["journey_id"]]))
                 if ragione is not None:
                     repo.stop_enrollment(cur, ctx, r["id"], reason=ragione,
                                          actor_user_id=None, stop_event_id=evento)
@@ -926,7 +973,8 @@ def send_current(ctx, enrollment_id: int, *, now: datetime | None = None,
         # nostro, la mail parte e lo stop aspetta il commit.
         ragione, evento = _fence_e_stop(
             c, ctx, contact_id=riga["contact_id"], lead_id=riga["lead_id"],
-            stima_id=riga["stima_id"], stima_snapshot=riga["stima_id_snapshot"])
+            stima_id=riga["stima_id"], stima_snapshot=riga["stima_id_snapshot"],
+            channels=[passo["channel"]] if passo.get("channel") else ["email"])
         if ragione is not None:
             fermata = repo.stop_enrollment(c, ctx, enrollment_id, reason=ragione,
                                            actor_user_id=None, stop_event_id=evento)

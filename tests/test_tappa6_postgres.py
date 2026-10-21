@@ -88,7 +88,9 @@ def world(completo, monkeypatch):
         name=uuid.uuid4().hex[:10]
         ct=q("INSERT INTO contacts(agency_id,first_name,display_name,email,email_normalized) VALUES(1,'Anna',%s,%s,%s) RETURNING id",(name,name+'@example.invalid',name+'@example.invalid'))[0]['id']
         if consent:
-            q("INSERT INTO consent_events(agency_id,contact_id,purpose,decision,decided_at,source,actor_type) VALUES(1,%s,'marketing','granted',NOW(),'crm','subject')",(ct,))
+            # SENTINELLA AGGIORNATA DA C1/C2: il consenso di prova e' sul canale email.
+            from tests.test_p29_3c_orchestrator_postgres import SQL_CONCEDI
+            q(SQL_CONCEDI,{'a':1,'c':ct})
             q("UPDATE contacts SET marketing_consent=TRUE,marketing_consent_at=NOW(),marketing_consent_source='crm' WHERE id=%s",(ct,))
         return ct
     def request(contact_id=None,age=2,baseline=False,pdf_status=None):
@@ -216,7 +218,8 @@ def _stop(w,p,kind):
     elif kind=='closed':q("UPDATE leads SET status='closed' WHERE id=%s",(p['lead'],))
     elif kind=='inactive':q("UPDATE contacts SET status='inactive' WHERE id=%s",(p['contact'],))
     elif kind=='revoked':
-        q("INSERT INTO consent_events(agency_id,contact_id,purpose,decision,decided_at,source,actor_type) VALUES(1,%s,'marketing','revoked',NOW(),'crm','subject')",(p['contact'],))
+        from tests.test_p29_3c_orchestrator_postgres import SQL_REVOCA  # C1/C2: canale email
+        w['q'](SQL_REVOCA,{'a':1,'c':p['contact']})
         q("UPDATE contacts SET marketing_consent=FALSE,marketing_revoked_at=NOW() WHERE id=%s",(p['contact'],))
     elif kind=='appointment':_appointment(w,p)
 

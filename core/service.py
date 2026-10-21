@@ -155,6 +155,7 @@ def bridge_public_stima(
     marketing_consent,
     marketing_consent_at,
     system_ctx,
+    marketing_channels=(),
 ):
     """Shape one public estimation into CORE contact and lead data.
 
@@ -226,6 +227,8 @@ def bridge_public_stima(
         # diventare "non concesso", non "concesso in modo strano".
         marketing_granted=bool(marketing_consent),
         marketing_decided_at=marketing_consent_at,
+        # 109: i canali che il testo del sito copre, se il sito li dichiara.
+        marketing_channels=tuple(marketing_channels or ()),
     )
 
 

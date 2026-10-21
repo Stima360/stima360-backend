@@ -175,10 +175,12 @@ def contact_consent_grant(
 ):
     """Registra un consenso raccolto con una prova e un'informativa valida."""
     esito = _tradotto_consenso(lambda: consent_operator.register_grant(
-        ctx, contact_id, decided_at=payload.decided_at, evidence_type=payload.evidence_type,
-        evidence_ref=payload.evidence_ref, notice_id=payload.notice_id, note=payload.note))
+        ctx, contact_id, channels=payload.channels, decided_at=payload.decided_at,
+        evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref,
+        notice_id=payload.notice_id, note=payload.note))
     return {"recorded": True, "created": esito["created"], "event_id": esito["event"]["id"],
-            "notice": esito["notice"]}
+            "channels": esito["channels"],
+            "event_ids": [e["event"]["id"] for e in esito["events"]], "notice": esito["notice"]}
 
 
 @router.post("/contacts/{contact_id}/consent/refusal", status_code=201)
@@ -189,11 +191,14 @@ def contact_consent_refusal(
 ):
     """Registra un rifiuto o una revoca espressi al personale. Blocca subito."""
     esito = _tradotto_consenso(lambda: consent_operator.register_refusal(
-        ctx, contact_id, decided_at=payload.decided_at, scope=payload.scope, note=payload.note,
-        evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref))
+        ctx, contact_id, channels=payload.channels, decided_at=payload.decided_at, scope=payload.scope,
+        note=payload.note, evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref))
     return {"recorded": True, "created": esito["created"], "event_id": esito["event"]["id"],
-            "scope": esito["scope"],
-            "platform_optout_id": (esito.get("platform_optout") or {}).get("id")}
+            "channels": esito["channels"],
+            "event_ids": [e["event"]["id"] for e in esito["events"]], "scope": esito["scope"],
+            "platform_optout_id": (esito.get("platform_optout") or {}).get("id"),
+            "platform_optout_ids": [(o["optout"] or {}).get("id") for o in esito["platform_optouts"]],
+            "channels_without_address": esito["channels_without_address"]}
 
 
 @router.post("/journeys/tick")

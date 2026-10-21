@@ -178,6 +178,14 @@ class BridgeCursor:
             self.rowcount = 1
             return
 
+        # SENTINELLA AGGIORNATA DA C1/C2 (109): la spunta del funnel e' una
+        # concessione PRE-CANALE e il percorso di scrittura guarda prima se il
+        # contatto ha consensi per canale. Il ponte non ne scrive mai.
+        if sql.startswith("select * from contact_channel_consents where contact_id = %s and agency_id = %s"):
+            self.rows = []
+            self.rowcount = 0
+            return
+
         raise AssertionError(f"unexpected bridge SQL: {sql}")
 
     def fetchone(self):

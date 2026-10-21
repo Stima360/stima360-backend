@@ -113,12 +113,35 @@ function renderCardJourney(journey) {
 // lo rifiuta il server, qui si chiede tutto quello che serve.
 const ETICHETTE_CONSENSO = {
   allow_explicit_grant: 'concesso',
-  allow_legacy_grant: 'concesso (storico)',
   deny_revoked: 'revocato',
   deny_never_given: 'mai dato',
   deny_inconsistent_state: 'stato incoerente: verificare',
   deny_platform_optout: 'disiscritto da tutto STIMA360',
 };
+
+// 109 (C1/C2): il consenso e' PER CANALE. Nessuna casella preselezionata:
+// l'operatore spunta ogni canale che la persona ha autorizzato davvero.
+const CANALI = { email: 'Email', sms: 'SMS', whatsapp: 'WhatsApp', phone: 'Telefonate commerciali' };
+const ORDINE_CANALI = ['email', 'sms', 'whatsapp', 'phone'];
+
+function caselleCanali(nome, disponibili) {
+  return `<fieldset class="consent-channels" data-${nome}-channels>
+    <legend>Canali</legend>
+    ${ORDINE_CANALI.map((c) => {
+      const ammesso = !disponibili || disponibili.includes(c);
+      return `<label><input type="checkbox" name="channels" value="${c}" ${ammesso ? '' : 'disabled'}> ${escapeHtml(CANALI[c])}</label>`;
+    }).join('')}
+  </fieldset>`;
+}
+
+function rigaCanale(canale, stato) {
+  const etichetta = ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—';
+  const quando = stato.decided_at
+    ? ` <span class="muted">dal ${escapeHtml(formatDateTime(stato.decided_at))}</span>` : '';
+  const optout = stato.platform_optout_at
+    ? ` <span class="muted" data-platform-optout="${canale}">— disiscritto da tutto STIMA360 il ${escapeHtml(formatDateTime(stato.platform_optout_at))}</span>` : '';
+  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : 'red')}${quando}${optout}</li>`;
+}
 
 function renderConsenso(consenso, informative) {
   if (!consenso || consenso.available === false) {
@@ -126,15 +149,13 @@ function renderConsenso(consenso, informative) {
       <p class="muted">Consenso marketing non disponibile su questo ambiente.</p>
     </div>`;
   }
-  const etichetta = ETICHETTE_CONSENSO[consenso.reason] || consenso.reason || '—';
-  const stato = renderBadge(etichetta, consenso.allowed ? 'green' : 'red');
-  const quando = consenso.decided_at
-    ? ` <span class="muted">dal ${escapeHtml(formatDateTime(consenso.decided_at))}</span>` : '';
-  const fonte = consenso.source ? ` <span class="muted">— fonte: ${escapeHtml(consenso.source)}</span>` : '';
-  const optout = consenso.platform_optout_at
-    ? `<p class="muted" data-platform-optout>Disiscrizione da tutto STIMA360 il ${escapeHtml(formatDateTime(consenso.platform_optout_at))}: nessuna agenzia invia marketing a questo indirizzo.</p>` : '';
+  const canali = consenso.channels || {};
+  const righe = ORDINE_CANALI.filter((c) => canali[c]).map((c) => rigaCanale(c, canali[c])).join('');
+  const storico = consenso.legacy
+    ? '<p class="muted" data-consent-legacy>Esiste un consenso storico senza canale: non autorizza nessun invio finche\u0027 non viene documentato per canale.</p>' : '';
+  const coperti = (informative || []).flatMap((n) => n.channels || []);
   const opzioniInformative = (informative || []).map((n) =>
-    `<option value="${Number(n.id)}">${escapeHtml(n.version)} — ${escapeHtml(n.context)}</option>`).join('');
+    `<option value="${Number(n.id)}">${escapeHtml(n.version)} — ${escapeHtml(n.context)}${(n.channels || []).length ? ` (${escapeHtml((n.channels || []).map((c) => CANALI[c] || c).join(', '))})` : ''}</option>`).join('');
   const senzaInformative = !(informative || []).length
     ? '<p class="error-box" data-no-notice>Nessuna informativa marketing valida: il consenso non si puo\u0027 registrare finche\u0027 il Super Admin non ne pubblica una.</p>' : '';
   const form = consenso.can_record ? `<details class="panel" data-consent-grant>
@@ -143,6 +164,7 @@ function renderConsenso(consenso, informative) {
       <p class="muted">Solo un consenso raccolto davvero, con una prova che si puo\u0027 ritrovare.
         Un indirizzo in rubrica o una telefonata non sono una prova.</p>
       ${senzaInformative}
+      ${caselleCanali('grant', coperti)}
       <label>Data e ora della raccolta <input type="datetime-local" name="decided_at" required></label>
       <label>Modalita\u0027
         <select name="evidence_type">
@@ -164,7 +186,8 @@ function renderConsenso(consenso, informative) {
   <details class="panel" data-consent-refusal>
     <summary>Registra rifiuto o revoca espressi al personale</summary>
     <form data-consent-refusal-form>
-      <p class="muted">Blocca subito gli invii di marketing. L\u0027ambito lo dichiari tu: questa agenzia, oppure tutto STIMA360.</p>
+      <p class="muted">Blocca subito gli invii di marketing sui canali che spunti. L\u0027ambito lo dichiari tu: questa agenzia, oppure tutto STIMA360.</p>
+      ${caselleCanali('refusal', null)}
       <label>Data e ora <input type="datetime-local" name="decided_at" required></label>
       <label>Ambito
         <select name="scope">
@@ -178,8 +201,9 @@ function renderConsenso(consenso, informative) {
     </form>
   </details>` : '';
   return `<div class="panel" data-consent-panel>
-    <div><strong>Consenso marketing:</strong> ${stato}${quando}${fonte}</div>
-    ${optout}
+    <div><strong>Consenso marketing per canale</strong></div>
+    <ul class="consent-channel-list">${righe}</ul>
+    ${storico}
     ${form}
   </div>`;
 }
@@ -347,13 +371,21 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
       const errore = modulo.querySelector(grant ? '[data-consent-error]' : '[data-refusal-error]');
       errore.hidden = true;
       const dati = new FormData(modulo);
+      const canaliScelti = dati.getAll('channels').map((v) => v.toString());
+      if (!canaliScelti.length) {
+        errore.hidden = false;
+        errore.textContent = 'Spunta almeno un canale: un consenso o una revoca valgono solo per i canali indicati.';
+        return;
+      }
       const corpo = grant ? {
+        channels: canaliScelti,
         decided_at: isoConFuso((dati.get('decided_at') || '').toString()),
         evidence_type: (dati.get('evidence_type') || '').toString(),
         evidence_ref: (dati.get('evidence_ref') || '').toString(),
         notice_id: Number(dati.get('notice_id') || 0),
         note: (dati.get('note') || '').toString() || null,
       } : {
+        channels: canaliScelti,
         decided_at: isoConFuso((dati.get('decided_at') || '').toString()),
         scope: (dati.get('scope') || 'agency').toString(),
         note: (dati.get('note') || '').toString(),

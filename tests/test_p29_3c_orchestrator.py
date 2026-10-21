@@ -359,7 +359,10 @@ def test_23_la_decisione_sul_consenso_resta_UNA_SOLA():
     funzioni = {n.name: n for n in albero.body if isinstance(n, ast.FunctionDef)}
     # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: `_optout_di_piattaforma_dopo`
     # e' un predicato puro letto da `_decidi` (108), non una seconda decisione.
-    assert set(funzioni) == {"_coerente_con_evento", "_optout_di_piattaforma_dopo",
+    # SENTINELLA AGGIORNATA DA C1/C2: `_canale` valida l'argomento e
+    # `_coerente_con_riga` confronta evento e proiezione PER CANALE: predicati
+    # puri letti da `_decidi`, non decisioni.
+    assert set(funzioni) == {"_canale", "_coerente_con_riga", "_optout_di_piattaforma_dopo",
                              "can_send_marketing", "can_send_marketing_bulk", "_decidi"}
     for nome in ("can_send_marketing", "can_send_marketing_bulk"):
         chiamate = {ast.unparse(n.func) for n in ast.walk(funzioni[nome])

@@ -22,6 +22,20 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from consent.guard import can_send_marketing
+
+
+def consenso_sui_canali(ctx, contact_id: int, channels):
+    """109: la decisione della guardia su PIU' canali: la prima negata vince,
+    altrimenti quella (consentita) dell'ultimo canale. Nessun canale = nessun
+    invio possibile, quindi nessuna decisione positiva: si chiede l'email,
+    che e' negata se non concessa."""
+    canali = list(channels) or ["email"]
+    decisione = None
+    for canale in canali:
+        decisione = can_send_marketing(ctx, contact_id, channel=canale)
+        if not decisione.allowed:
+            return decisione
+    return decisione
 from core.exceptions import PermissionDenied
 
 from .exceptions import ConflictError, NotFoundError, ValidationError
@@ -219,7 +233,8 @@ def enroll_from_trigger(ctx, *, journey_id: int, contact_id: int, trigger_messag
         if repo.select_open_enrollment(c, ctx, contact_id) is not None:
             raise ConflictError("this contact already has an open journey")
 
-        decisione = can_send_marketing(ctx, contact_id)
+        # 109: la journey manda sui canali dei suoi passi: serve il consenso su OGNUNO.
+        decisione = consenso_sui_canali(ctx, contact_id, sorted({s["channel"] for s in steps}))
         if decisione.allowed:
             status, stop_reason = ENR_ACTIVE, None
             step_no, quando, kind = _prima_azione(journey, steps, trigger["sent_at"])

@@ -1147,6 +1147,10 @@ class ConsentNoticeCreateRequest(PlatformModel):
     content: str = Field(min_length=20, max_length=200000)
     valid_from: datetime
     valid_to: datetime | None = None
+    #: 109: i canali che il testo copre (email, sms, whatsapp, phone). Nessun
+    #: default: il Super Admin li dichiara, il servizio ne pretende almeno uno
+    #: per il marketing.
+    channels: list[str] = Field(default_factory=list, max_length=4)
 
     @field_validator("version", "context")
     @classmethod
@@ -1194,3 +1198,4 @@ class ConsentNoticeResponse(BaseModel):
     valid_to: datetime | None
     created_at: datetime
     created_by: str
+    channels: list[str] = []

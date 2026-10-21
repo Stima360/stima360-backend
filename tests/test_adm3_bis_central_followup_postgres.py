@@ -222,9 +222,9 @@ def test_05_consenso_revocato_nessun_invio(mondo, modulo, spia):
     modulo["tick"].tick(mondo["ctx"]())  # compone M1, non spedisce
     m1 = _passi(mondo, a)[0]
     assert m1["status"] == "queued"
-    mondo["sql"]("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, "
-                 "source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),'crm','subject')",
-                 (a, c["contact"]))
+    # SENTINELLA AGGIORNATA DA C1/C2: la revoca e' sul canale email.
+    from tests.test_p29_3c_orchestrator_postgres import SQL_REVOCA
+    mondo["sql"](SQL_REVOCA, {"a": a, "c": c["contact"]})
     mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE WHERE id = %s", (c["contact"],))
 
     _centrale()

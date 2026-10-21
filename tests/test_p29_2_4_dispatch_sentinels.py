@@ -105,6 +105,11 @@ def test_S3_e_il_tipo_a_decidere_se_il_gate_si_applica():
     gate = inspect.getsource(dispatcher._consenso_nega)
     corpo = re.sub(r'"{3}[\s\S]*?"{3}', "", gate)
     assert 'message["communication_type"] != TYPE_MARKETING' in corpo
+    # SENTINELLA AGGIORNATA DA C1/C2: il canale non decide SE il gate si
+    # applica; viene solo passato alla guardia, che decide per canale. Tolta
+    # quell'unica occorrenza, il canale non deve comparire.
+    assert corpo.count('channel=message["channel"]') == 1
+    corpo = corpo.replace('channel=message["channel"]', "")
     for irrilevante in ("channel", "reason_code", "template_key", "mode"):
         assert irrilevante not in corpo, (
             f"il gate guarda {irrilevante!r}: solo communication_type decide"
@@ -239,7 +244,11 @@ def test_G4_un_contatto_sparito_sopprime_invece_di_mandare():
 
 def test_P1_il_provider_di_questa_fase_non_ha_rete():
     for nome, corpo in sorgenti().items():
-        for rete in ("requests", "smtplib", "httpx", "urllib", "http.client",
+        # SENTINELLA AGGIORNATA DA C1/C2: `requests` si cerca come PAROLA. La
+        # tabella `buy_requests` (le richieste d'acquisto, una base di un
+        # messaggio di servizio) non e' la libreria di rete.
+        assert not re.search(r"(?<![\w.])requests\b", corpo), f"{nome} nomina requests"
+        for rete in ("smtplib", "httpx", "urllib", "http.client",
                      "socket", "aiohttp"):
             assert rete not in corpo, f"{nome} nomina {rete}"
 

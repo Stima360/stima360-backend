@@ -1,6 +1,6 @@
 """P29-1.5 - la guardia centrale del consenso marketing.
 
-`can_send_marketing(ctx, contact_id)` risponde a una domanda sola: questo
+`can_send_marketing(ctx, contact_id, channel="email")` risponde a una domanda sola: questo
 contatto possiede ORA un consenso marketing valido? Non decide se sia
 opportuno scrivergli, non guarda il lead, non guarda i canali.
 
@@ -100,12 +100,13 @@ class Stato:
         return riga
 
     def evento(self, *, contact_id, decision, decided_at, agency_id=AGENZIA,
-               source=SOURCE_PUBLIC_STIMA, notice_id=None, purpose=PURPOSE_MARKETING):
+               source=SOURCE_PUBLIC_STIMA, notice_id=None, purpose=PURPOSE_MARKETING, channel="email"):
         riga = {
             "id": self.next_event_id,
             "agency_id": agency_id,
             "contact_id": contact_id,
             "purpose": purpose,
+            "channel": channel,
             "decision": decision,
             "decided_at": decided_at,
             "source": source,
@@ -142,8 +143,13 @@ class FakeCursor:
         if "from contacts c" not in sql or "left join lateral" not in sql:
             raise AssertionError(f"SQL inatteso nella guardia: {sql}")
 
-        # params: [agency_evento, purpose, contact_id, agency_contatto, (agente)]
-        agency_evento, purpose, contact_id, agency_contatto = params[0], params[1], params[2], params[3]
+        # SENTINELLA AGGIORNATA DA C1/C2 (109): la query decisionale chiede un
+        # CANALE. params: [agency_evento, purpose, canale (evento), canale
+        # (proiezione), canale (opt-out), contact_id, agency_contatto, (agente)]
+        agency_evento, purpose, canale = params[0], params[1], params[2]
+        assert params[3] == canale and params[4] == canale, "un solo canale per statement"
+        contact_id, agency_contatto = params[5], params[6]
+        params = [None, None] + list(params[5:])
 
         contatti = [
             c for c in self.stato.contacts
@@ -161,9 +167,20 @@ class FakeCursor:
             if e["agency_id"] == agency_evento
             and e["contact_id"] == contatto["id"]
             and e["purpose"] == purpose
+            and e["channel"] == canale
         ]
         eventi.sort(key=lambda e: (e["decided_at"], e["id"]), reverse=True)
         evento = eventi[0] if eventi else None
+        # La proiezione PER CANALE che il percorso di scrittura tiene allineata
+        # all'evento: qui la si ricava dalle colonne di proiezione del contatto
+        # quando sul canale esiste almeno un evento (e solo allora), cosi' i
+        # casi "incoerente" restano esprimibili come prima.
+        riga_canale = None
+        if eventi:
+            if contatto.get("marketing_consent") is True:
+                riga_canale = ("granted", contatto.get("marketing_consent_at"), contatto.get("marketing_revoked_at"))
+            elif contatto.get("marketing_revoked_at") is not None:
+                riga_canale = ("revoked", contatto.get("marketing_consent_at"), contatto.get("marketing_revoked_at"))
 
         riga = dict(contatto)
         riga.update({
@@ -172,6 +189,12 @@ class FakeCursor:
             "consent_event_decided_at": evento["decided_at"] if evento else None,
             "consent_event_source": evento["source"] if evento else None,
             "consent_event_notice_id": evento["notice_id"] if evento else None,
+            "channel_row_id": 1 if riga_canale else None,
+            "channel_status": riga_canale[0] if riga_canale else None,
+            "channel_granted_at": riga_canale[1] if riga_canale else None,
+            "channel_revoked_at": riga_canale[2] if riga_canale else None,
+            "platform_optout_id": None,
+            "platform_optout_at": None,
         })
         self.rows = [riga]
 
@@ -220,7 +243,7 @@ def test_e1_grant_esplicito_autorizza(db, ctx):
                           marketing_consent_source=SOURCE_PUBLIC_STIMA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is True
     assert esito.reason == REASON_ALLOW_EXPLICIT_GRANT
@@ -235,7 +258,7 @@ def test_e2_revoca_esplicita_nega(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked",
                     decided_at=ORA + timedelta(hours=1))
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is False
     assert esito.reason == REASON_DENY_REVOKED
@@ -249,7 +272,7 @@ def test_e3_grant_poi_revoca_nega_nonostante_il_grant_precedente(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked",
                     decided_at=ORA + timedelta(hours=2))
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.reason == REASON_DENY_REVOKED
     assert esito.allowed is False
@@ -263,7 +286,7 @@ def test_e4_regrant_dopo_revoca_autorizza(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA + timedelta(hours=2))
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA + timedelta(hours=5))
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is True
     assert esito.reason == REASON_ALLOW_EXPLICIT_GRANT
@@ -280,7 +303,7 @@ def test_o1_l_evento_corrente_e_quello_con_decided_at_maggiore(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA + timedelta(hours=3))
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)  # id maggiore, data minore
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.reason == REASON_DENY_REVOKED, (
         "l'evento con id piu' alto e' piu' VECCHIO: non deve vincere"
@@ -292,7 +315,7 @@ def test_o2_a_parita_di_istante_vince_l_id_piu_alto(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.reason == REASON_ALLOW_EXPLICIT_GRANT
 
@@ -300,7 +323,7 @@ def test_o2_a_parita_di_istante_vince_l_id_piu_alto(db, ctx):
 def test_o3_la_query_usa_l_ordine_del_dominio(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     query = db.sql[0][0]
     assert "order by ce.decided_at desc, ce.id desc" in query
@@ -313,10 +336,10 @@ def test_o4_un_evento_in_ritardo_non_fa_arretrare_la_decisione(db, ctx):
     c = db.stato.contatto(marketing_consent=False, marketing_consent_at=ORA,
                           marketing_revoked_at=ORA + timedelta(hours=4))
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA + timedelta(hours=4))
-    prima = can_send_marketing(ctx, c["id"])
+    prima = can_send_marketing(ctx, c["id"], channel="email")
 
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA - timedelta(days=1))
-    dopo = can_send_marketing(ctx, c["id"])
+    dopo = can_send_marketing(ctx, c["id"], channel="email")
 
     assert prima.reason == dopo.reason == REASON_DENY_REVOKED
 
@@ -327,7 +350,7 @@ def test_o5_gli_eventi_di_un_altro_purpose_non_contano(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked",
                     decided_at=ORA + timedelta(hours=9), purpose="privacy_terms")
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is True, "una revoca di privacy_terms non tocca il marketing"
 
@@ -335,38 +358,45 @@ def test_o5_gli_eventi_di_un_altro_purpose_non_contano(db, ctx):
 # ===========================================================================
 # L - legacy: nessun evento
 # ===========================================================================
-def test_l1_legacy_true_senza_eventi_autorizza(db, ctx):
-    """I 12 contatti del censimento P29-1.0: concessi prima del registro."""
+def test_l1_legacy_true_senza_eventi_NON_autorizza(db, ctx):
+    """I 12 contatti del censimento P29-1.0: concessi prima del registro.
+
+    SENTINELLA AGGIORNATA DA C1/C2 (decisione del committente): il vecchio
+    flag senza un consenso sul canale NON autorizza nessun invio. La guardia
+    lo dice (`legacy=True`) e nega con `deny_never_given`."""
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=None)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
-    assert esito.allowed is True
-    assert esito.reason == REASON_ALLOW_LEGACY_GRANT
+    assert esito.allowed is False
+    assert esito.reason == REASON_DENY_NEVER_GIVEN
     assert esito.legacy is True
-    assert esito.state == STATUS_GRANTED
+    assert esito.state == STATUS_NEVER_GIVEN
     assert esito.event_id is None
     # C8: la guardia non inventa una source sintetica "legacy".
     assert esito.source is None
+    assert REASON_ALLOW_LEGACY_GRANT in SEND_DECISION_REASONS, "il valore storico resta leggibile nei log"
 
 
-def test_l1b_legacy_true_con_source_reale_restituisce_quella_source(db, ctx):
-    """C8: se la proiezione porta una source vera, la guardia la riporta tale e quale."""
+def test_l1b_legacy_true_con_source_reale_resta_non_autorizzato(db, ctx):
+    """SENTINELLA AGGIORNATA DA C1/C2: anche con una provenienza vera sulla
+    proiezione, senza un evento sul canale non c'e' autorizzazione; la
+    decisione non riporta una provenienza che non appartiene al canale."""
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=None,
                           marketing_consent_source=SOURCE_PUBLIC_STIMA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
-    assert esito.allowed is True
-    assert esito.reason == REASON_ALLOW_LEGACY_GRANT
+    assert esito.allowed is False
+    assert esito.reason == REASON_DENY_NEVER_GIVEN
     assert esito.legacy is True
     assert esito.event_id is None
-    assert esito.source == SOURCE_PUBLIC_STIMA
+    assert esito.source is None
 
 
 def test_l2_legacy_false_senza_eventi_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=False)
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.allowed is False
     assert esito.reason == REASON_DENY_NEVER_GIVEN
     assert esito.state == STATUS_NEVER_GIVEN
@@ -374,7 +404,7 @@ def test_l2_legacy_false_senza_eventi_nega(db, ctx):
 
 def test_l3_legacy_null_senza_eventi_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=None)
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.allowed is False
     assert esito.reason == REASON_DENY_NEVER_GIVEN
 
@@ -385,7 +415,7 @@ def test_l4_il_contatto_legacy_non_viene_reinterpretato(db, ctx):
                           marketing_consent_source=None)
     prima = copy.deepcopy(c)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     assert db.stato.contacts[0] == prima, "il contatto legacy e' rimasto identico"
     assert db.stato.events == [], "nessun evento fabbricato"
@@ -398,7 +428,7 @@ def test_x1_evento_granted_con_proiezione_non_concessa_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=False, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is False
     assert esito.reason == REASON_DENY_INCONSISTENT_STATE
@@ -408,7 +438,7 @@ def test_x2_evento_revoked_con_proiezione_concessa_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA + timedelta(hours=1))
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is False
     assert esito.reason == REASON_DENY_INCONSISTENT_STATE
@@ -419,7 +449,7 @@ def test_x3_grant_con_revoked_at_ancora_valorizzato_nega(db, ctx):
                           marketing_revoked_at=ORA - timedelta(days=1))
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.reason == REASON_DENY_INCONSISTENT_STATE
 
 
@@ -427,7 +457,7 @@ def test_x4_grant_senza_istante_di_concessione_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=None)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.reason == REASON_DENY_INCONSISTENT_STATE
 
 
@@ -436,7 +466,7 @@ def test_x5_revoca_senza_istante_di_revoca_nega(db, ctx):
                           marketing_revoked_at=None)
     db.stato.evento(contact_id=c["id"], decision="revoked", decided_at=ORA + timedelta(hours=1))
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.reason == REASON_DENY_INCONSISTENT_STATE
 
 
@@ -444,10 +474,12 @@ def test_x6_legacy_concesso_e_revocato_insieme_nega(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA,
                           marketing_revoked_at=ORA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
+    # SENTINELLA AGGIORNATA DA C1/C2: senza eventi sul canale la proiezione
+    # storica non viene nemmeno interpretata: non autorizza, incoerente o no.
     assert esito.allowed is False
-    assert esito.reason == REASON_DENY_INCONSISTENT_STATE
+    assert esito.reason == REASON_DENY_NEVER_GIVEN
     assert esito.legacy is True
 
 
@@ -456,7 +488,7 @@ def test_x7_la_guardia_non_ripara_lo_stato_incoerente(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
     prima = copy.deepcopy(db.stato.contacts)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     assert db.stato.contacts == prima, "la correzione e' una decisione di una persona"
 
@@ -469,7 +501,7 @@ def test_n1_notice_id_nullo_non_blocca_un_grant_valido(db, ctx):
                           marketing_consent_notice_id=None)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA, notice_id=None)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.allowed is True
 
 
@@ -479,7 +511,7 @@ def test_n2_source_public_stima_autorizza_normalmente(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA,
                     source=SOURCE_PUBLIC_STIMA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.allowed is True
     assert esito.source == SOURCE_PUBLIC_STIMA
 
@@ -490,14 +522,14 @@ def test_n3_source_assente_sulla_proiezione_non_blocca(db, ctx):
                           marketing_consent_source=None)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    assert can_send_marketing(ctx, c["id"]).allowed is True
+    assert can_send_marketing(ctx, c["id"], channel="email").allowed is True
 
 
 def test_n4_privacy_terms_non_e_un_requisito(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    assert can_send_marketing(ctx, c["id"]).allowed is True
+    assert can_send_marketing(ctx, c["id"], channel="email").allowed is True
     sorgente = (ROOT / "consent" / "guard.py").read_text(encoding="utf-8")
     assert "privacy_terms_accepted" not in sorgente
 
@@ -509,7 +541,7 @@ def test_t1_il_tenant_corretto_ottiene_la_decisione(db, ctx):
     c = db.stato.contatto(agency_id=AGENZIA, marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA, agency_id=AGENZIA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
     assert esito.allowed is True and esito.agency_id == AGENZIA
 
 
@@ -520,18 +552,18 @@ def test_t2_cross_tenant_non_puo_leggere_ne_autorizzare(db):
                     agency_id=ALTRA_AGENZIA)
 
     with pytest.raises(NotFoundError):
-        can_send_marketing(Ctx(agency_id=AGENZIA), c["id"])
+        can_send_marketing(Ctx(agency_id=AGENZIA), c["id"], channel="email")
 
 
 def test_t3_il_contatto_inesistente_segue_lo_stesso_pattern(db, ctx):
     with pytest.raises(NotFoundError):
-        can_send_marketing(ctx, 999)
+        can_send_marketing(ctx, 999, channel="email")
 
 
 def test_t4_ogni_statement_porta_il_predicato_di_agenzia(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     assert db.sql
     for sql, _ in db.sql:
@@ -544,21 +576,25 @@ def test_t5_un_evento_di_un_altra_agenzia_non_e_visibile(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked",
                     decided_at=ORA + timedelta(days=1), agency_id=ALTRA_AGENZIA)
 
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
-    assert esito.reason == REASON_ALLOW_LEGACY_GRANT, (
+    # SENTINELLA AGGIORNATA DA C1/C2: senza eventi propri il contatto e'
+    # `deny_never_given`; se l'evento dell'altra agenzia entrasse sarebbe
+    # `deny_revoked`.
+    assert esito.reason == REASON_DENY_NEVER_GIVEN, (
         "l'evento dell'altra agenzia non deve entrare nella decisione"
     )
 
 
 def test_t6_un_agente_eredita_il_restringimento_di_core(db):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
+    db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
     c["assigned_agent_id"] = 99
 
     with pytest.raises(NotFoundError):
-        can_send_marketing(Ctx(role="agent", user_id=10), c["id"])
+        can_send_marketing(Ctx(role="agent", user_id=10), c["id"], channel="email")
 
-    assert can_send_marketing(Ctx(role="agent", user_id=99), c["id"]).allowed is True
+    assert can_send_marketing(Ctx(role="agent", user_id=99), c["id"], channel="email").allowed is True
 
 
 # ===========================================================================
@@ -568,7 +604,7 @@ def test_r1_la_guardia_non_scrive_nulla(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     for sql, _ in db.sql:
         assert sql.startswith("select"), f"istruzione non di lettura: {sql}"
@@ -579,7 +615,7 @@ def test_r2_la_guardia_non_prende_lock(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     for sql, _ in db.sql:
         assert "for update" not in sql, "decidere non deve serializzare gli invii"
@@ -588,14 +624,14 @@ def test_r2_la_guardia_non_prende_lock(db, ctx):
 
 def test_r3_la_guardia_non_genera_consent_event(db, ctx):
     c = db.stato.contatto(marketing_consent=None)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
     assert db.stato.events == []
 
 
 def test_r4_la_guardia_non_modifica_contacts(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     prima = copy.deepcopy(db.stato.contacts)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
     assert db.stato.contacts == prima
 
 
@@ -603,7 +639,7 @@ def test_r5_chiamate_ripetute_non_scrivono_e_non_cambiano_risposta(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    esiti = [can_send_marketing(ctx, c["id"]) for _ in range(3)]
+    esiti = [can_send_marketing(ctx, c["id"], channel="email") for _ in range(3)]
 
     assert {e.reason for e in esiti} == {REASON_ALLOW_EXPLICIT_GRANT}
     assert db.stato.events == db.stato.events  # nessuna crescita
@@ -615,7 +651,7 @@ def test_r6_NO_CACHE_una_revoca_fra_due_chiamate_ha_effetto_subito(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    prima = can_send_marketing(ctx, c["id"])
+    prima = can_send_marketing(ctx, c["id"], channel="email")
     assert prima.allowed is True
 
     # La revoca arriva fra le due chiamate, come accadrebbe dal vivo.
@@ -624,7 +660,7 @@ def test_r6_NO_CACHE_una_revoca_fra_due_chiamate_ha_effetto_subito(db, ctx):
     db.stato.evento(contact_id=c["id"], decision="revoked",
                     decided_at=ORA + timedelta(minutes=1))
 
-    dopo = can_send_marketing(ctx, c["id"])
+    dopo = can_send_marketing(ctx, c["id"], channel="email")
 
     assert dopo.allowed is False
     assert dopo.reason == REASON_DENY_REVOKED
@@ -634,9 +670,9 @@ def test_r7_ogni_chiamata_rilegge_davvero_il_database(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
     assert len(db.sql) == 1
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     assert len(db.sql) == 2, "la seconda chiamata non ha riletto il database"
     assert db.cursori_aperti == 2
@@ -653,7 +689,7 @@ def test_r8_UNA_SOLA_QUERY_DECISIONALE(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
 
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     assert len(db.sql) == 1, f"statement emessi: {len(db.sql)}"
     assert db.cursori_aperti == 1
@@ -667,7 +703,7 @@ def test_r8b_la_query_singola_porta_ENTRAMBI_i_predicati_di_agenzia(db, ctx):
     """Una query sola, due autorita' sulla tenancy: nessuna delle due si perde."""
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     query = db.sql[0][0]
     assert query.count("agency_id = %s") == 2, (
@@ -680,7 +716,7 @@ def test_r8b_la_query_singola_porta_ENTRAMBI_i_predicati_di_agenzia(db, ctx):
 def test_r8c_la_query_singola_non_prende_lock_e_non_scrive(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
     db.stato.evento(contact_id=c["id"], decision="granted", decided_at=ORA)
-    can_send_marketing(ctx, c["id"])
+    can_send_marketing(ctx, c["id"], channel="email")
 
     query = db.sql[0][0]
     assert query.startswith("select")
@@ -727,7 +763,7 @@ def test_c1_esiste_una_sola_implementazione_della_decisione():
 
 def test_c2_la_decisione_e_tipizzata_e_congelata(db, ctx):
     c = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert isinstance(esito, MarketingSendDecision)
     with pytest.raises(Exception):
@@ -743,7 +779,7 @@ def test_c2b_la_decisione_NON_E_USABILE_come_booleano(db, ctx):
     test e non un invio non autorizzato in produzione.
     """
     c = db.stato.contatto(marketing_consent=False)
-    esito = can_send_marketing(ctx, c["id"])
+    esito = can_send_marketing(ctx, c["id"], channel="email")
 
     assert esito.allowed is False
     with pytest.raises(TypeError, match=r"\.allowed"):
@@ -758,10 +794,11 @@ def test_c2b_la_decisione_NON_E_USABILE_come_booleano(db, ctx):
 def test_c2c_allowed_continua_a_funzionare_normalmente(db, ctx):
     """C7 non deve rendere scomodo l'uso corretto: `.allowed` e' un bool puro."""
     concesso = db.stato.contatto(marketing_consent=True, marketing_consent_at=ORA)
+    db.stato.evento(contact_id=concesso["id"], decision="granted", decided_at=ORA)
     negato = db.stato.contatto(marketing_consent=False)
 
-    si = can_send_marketing(ctx, concesso["id"])
-    no = can_send_marketing(ctx, negato["id"])
+    si = can_send_marketing(ctx, concesso["id"], channel="email")
+    no = can_send_marketing(ctx, negato["id"], channel="email")
 
     assert si.allowed is True and no.allowed is False
     assert bool(si.allowed) is True and bool(no.allowed) is False
@@ -804,30 +841,28 @@ def test_c5_ogni_motivo_restituito_appartiene_all_insieme(db, ctx):
     ]
     for valori in casi:
         c = db.stato.contatto(**valori)
-        esito = can_send_marketing(ctx, c["id"])
+        esito = can_send_marketing(ctx, c["id"], channel="email")
         assert esito.reason in SEND_DECISION_REASONS
         assert esito.allowed == (esito.reason in ALLOWING_REASONS)
 
 
-def test_c6_la_guardia_non_ha_un_parametro_di_canale():
-    """Un consenso solo per Email e WhatsApp: la differenza non e'
-    rappresentabile, quindi non e' dimenticabile."""
+def test_c6_la_guardia_pretende_il_canale():
+    """SENTINELLA AGGIORNATA DA C1/C2 (decisione del committente): quattro
+    consensi indipendenti - email, sms, whatsapp, phone. La guardia ha un
+    `channel` OBBLIGATORIO, per nome, senza default: una chiamata che non
+    dice il canale non e' un'autorizzazione "generale", e' un errore."""
     import inspect
 
+    from consent.enums import CHANNELS
+    from consent.scope import ProgrammingError
+
     firma = inspect.signature(can_send_marketing)
-    assert list(firma.parameters) == ["ctx", "contact_id"]
-
-    # Si guarda il CODICE, non i commenti: il docstring della guardia nomina
-    # `channel` proprio per spiegare perche' non esiste, ed e' giusto che lo
-    # faccia.
-    import ast
-
-    albero = ast.parse((ROOT / "consent" / "guard.py").read_text(encoding="utf-8"))
-    nomi = {n.id for n in ast.walk(albero) if isinstance(n, ast.Name)}
-    nomi |= {n.arg for n in ast.walk(albero) if isinstance(n, ast.arg)}
-    nomi |= {n.attr for n in ast.walk(albero) if isinstance(n, ast.Attribute)}
-    for parola in ("channel", "canale", "email_only", "whatsapp_only", "is_email", "is_whatsapp"):
-        assert parola not in nomi, f"la guardia distingue i canali: {parola}"
+    assert list(firma.parameters) == ["ctx", "contact_id", "channel"]
+    canale = firma.parameters["channel"]
+    assert canale.kind is inspect.Parameter.KEYWORD_ONLY and canale.default is inspect.Parameter.empty
+    assert CHANNELS == {"email", "sms", "whatsapp", "phone"}
+    with pytest.raises(ProgrammingError):
+        can_send_marketing(Ctx(), 1, channel="tutti")
 
 
 def test_c7_nessun_sender_marketing_decide_leggendo_la_colonna():
@@ -844,6 +879,10 @@ def test_c7_nessun_sender_marketing_decide_leggendo_la_colonna():
         # categoria E - il dominio e la sua guardia
         "consent/enums.py", "consent/guard.py", "consent/repository.py",
         "consent/service.py", "consent/__init__.py",
+        # SENTINELLA AGGIORNATA DA C1/C2: la scheda del consenso MOSTRA il
+        # vecchio flag come "spunta storica senza canale" e non autorizza
+        # niente con esso (la decisione e' della guardia, per canale).
+        "consent/operator_service.py",
         # categoria E - CORE: la guardia che vieta la scrittura e il bridge
         "core/repository.py", "core/service.py", "core/schemas.py",
         # categoria E - il flusso pubblico: main.py INOLTRA il valore del form

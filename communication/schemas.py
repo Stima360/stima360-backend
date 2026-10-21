@@ -94,6 +94,9 @@ class ConsentGrantRequest(BaseModel):
     contatto e' nel path e l'attore e' la sessione.
     """
     decided_at: datetime
+    #: 109: i canali autorizzati, nominati uno per uno. Nessun default e
+    #: nessun "tutti": un consenso senza canale non esiste.
+    channels: list[str] = Field(min_length=1, max_length=4)
     evidence_type: str = Field(min_length=1, max_length=40)
     evidence_ref: str = Field(min_length=1, max_length=100)
     notice_id: int = Field(gt=0)
@@ -109,6 +112,8 @@ class ConsentRefusalRequest(BaseModel):
     o `platform` (tutto STIMA360). `note` racconta come e' stato espresso.
     """
     decided_at: datetime
+    #: 109: i canali revocati, nominati uno per uno (anche tutti e quattro).
+    channels: list[str] = Field(min_length=1, max_length=4)
     scope: str = "agency"
     note: str = Field(min_length=1, max_length=2000)
     evidence_type: str | None = Field(default=None, max_length=40)

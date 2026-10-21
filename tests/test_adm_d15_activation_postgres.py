@@ -249,8 +249,9 @@ def test_04_adm3_bis_continua_con_d15_dopo_l_eliminazione_dalla_rete(comunicazio
 
     contatto = _q(m, "INSERT INTO contacts (agency_id, first_name, display_name, email, email_normalized) "
                      "VALUES (%s, 'Lia', 'Lia D15', 'lia.d15@x.it', 'lia.d15@x.it') RETURNING id", (q,))[0][0]
-    _q(m, "INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, source, "
-          "actor_type) VALUES (%s, %s, 'marketing', 'granted', NOW(), 'crm', 'subject')", (q, contatto))
+    # SENTINELLA AGGIORNATA DA C1/C2: il consenso di prova e' sul canale email.
+    from tests.test_p29_3c_orchestrator_postgres import SQL_CONCEDI
+    _q(m, SQL_CONCEDI, {"a": q, "c": contatto})
     _q(m, "UPDATE contacts SET marketing_consent = TRUE, marketing_consent_at = NOW(), "
           "marketing_consent_source = 'crm' WHERE id = %s", (contatto,))
     lead = _q(m, "INSERT INTO leads (agency_id, contact_id) VALUES (%s, %s) RETURNING id",

@@ -485,7 +485,9 @@ def test_n5_nessun_sender_esistente_e_stato_toccato():
 
 def test_n6_il_dominio_consenso_e_intatto():
     guardia = (ROOT / "consent" / "guard.py").read_text(encoding="utf-8")
-    assert "def can_send_marketing(ctx, contact_id: int) -> MarketingSendDecision:" in guardia
+    # SENTINELLA AGGIORNATA DA C1/C2: la guardia ha il canale obbligatorio.
+    assert ("def can_send_marketing(ctx, contact_id: int, *, channel: str) -> MarketingSendDecision:"
+            in guardia)
 
 
 def test_n7_nessuna_migration_nuova():

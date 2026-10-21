@@ -78,9 +78,15 @@ CREATE TABLE schema_migrations (version TEXT PRIMARY KEY,
 """
 
 #: Le migration REALI che la 071 presuppone.
+# SENTINELLA AGGIORNATA DA C1/C2: la 109 entra nella catena (la guardia
+# decide per canale; senza le sue tabelle nega tutto). Consensi di prova sul
+# canale EMAIL, con le stesse istruzioni del test dell'orchestratore.
 CATENA = ("061_p29_consent_notices", "062_p29_consent_events",
           "063_p29_contacts_consent_projection", "064_p29_communication_foundation",
-          "065_p29_service_lifecycle_parent", "067_lmc1b_owner_login_reason", VERSIONE)
+          "065_p29_service_lifecycle_parent", "067_lmc1b_owner_login_reason", VERSIONE,
+          "109_consent_channels")
+
+from tests.test_p29_3c_orchestrator_postgres import SQL_CONCEDI, SQL_REVOCA  # noqa: E402
 
 
 def _dsn_per(nome: str) -> str:
@@ -182,9 +188,7 @@ def mondo(db):
                         (agency, f"c{stato['n']}", f"c{stato['n']}@x.it", f"c{stato['n']}@x.it"))
             ct = cur.fetchone()[0]
             if consenso:
-                cur.execute("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, "
-                            "source, actor_type) VALUES (%s,%s,'marketing','granted',NOW(),'crm','subject')",
-                            (agency, ct))
+                cur.execute(SQL_CONCEDI, {"a": agency, "c": ct})
                 cur.execute("UPDATE contacts SET marketing_consent = TRUE, marketing_consent_at = NOW(), "
                             "marketing_consent_source = 'crm' WHERE id = %s", (ct,))
             cur.execute("INSERT INTO stime (agency_id, comune) VALUES (%s,'Alba') RETURNING id", (agency,))
@@ -515,8 +519,7 @@ def test_17_le_tre_ragioni_del_consenso_sono_distinte(mondo, modulo):
     j = _journey_attiva(modulo, ctx)
     # revocato
     c = mondo["contatto"](mondo["a"])
-    mondo["sql"]("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, source, actor_type) "
-                 "VALUES (%s,%s,'marketing','revoked',NOW(),'crm','subject')", (mondo["a"], c["contact"]))
+    mondo["sql"](SQL_REVOCA, {"a": mondo["a"], "c": c["contact"]})
     mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE, marketing_revoked_at = NOW() WHERE id=%s", (c["contact"],))
     e = modulo["journeys"].enroll_from_trigger(ctx, journey_id=j["id"], contact_id=c["contact"],
                                               trigger_message_id=c["trigger"])["enrollment"]

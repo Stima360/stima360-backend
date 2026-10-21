@@ -127,7 +127,7 @@ def mondo(monkeypatch):
     monkeypatch.setattr(dispatcher, "communication_cursor", cursore)
     monkeypatch.setattr(dispatcher.integrations, "dopo_invio", lambda cur, msg: None)
     monkeypatch.setattr(dispatcher, "can_send_marketing",
-                        lambda ctx, contact_id: m.consenso)
+                        lambda ctx, contact_id, *, channel: m.consenso)  # C1/C2: per canale
     monkeypatch.setattr(revalidation, "communication_cursor", cursore)
     monkeypatch.setattr(repository, "appointment_for_revalidation",
                         m.appointment_for_revalidation)

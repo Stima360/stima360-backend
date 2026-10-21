@@ -134,7 +134,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: 108_followup_contact_journey
     # (journey sul contatto, pausa di sistema, opt-out di piattaforma; additiva
     # con backfill della sola `sequence_policy`), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 109))
+    # SENTINELLA AGGIORNATA DA C1/C2: 109_consent_channels (consensi marketing
+    # per canale, opt-out per indirizzo; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 110))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

@@ -9099,6 +9099,12 @@ def test_103d_i_limiti_del_controllo_statico_sono_dichiarati_e_veri():
         "consent_events",
         "communication_messages",
         "communication_attempts",
+        # SENTINELLA AGGIORNATA DA C1/C2: la 109 COPIA una volta, nel corpo
+        # della migration e non in un trigger, gli opt-out della 108 nella
+        # lista di piattaforma per (canale, indirizzo). Non e' una tabella di
+        # tenant (nessun `agency_id`: vale per tutte le agenzie) e la scrive
+        # in chiaro `consent/repository.py::insert_platform_optout`.
+        "communication_optouts",
     }
     trigger_che_scrivono = []
     for percorso in sorted((ROOT / "migrations").glob("*.sql")):

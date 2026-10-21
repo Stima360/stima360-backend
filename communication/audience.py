@@ -36,7 +36,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from consent.audience import marketing_granted_at_sql, marketing_prefilter_sql
+from consent.audience import (channel_granted_at_sql, channel_optout_after_grant_sql,
+                              channel_prefilter_sql)
 
 from . import journey_repository as repo
 from .followup_rules import email_valida
@@ -44,6 +45,9 @@ from .followup_rules import email_valida
 #: Quanti contatti STORICI una journey ammette al giorno, per agenzia
 #: (decisione del proprietario: ammissione graduale, mai invii di massa).
 TETTO_GIORNALIERO = 20
+#: 109: la journey sul contatto manda EMAIL: la platea e' chi ha concesso
+#: QUEL canale. Il vecchio flag di consenso del contatto non entra nel prefiltro.
+CANALE = "email"
 #: Un consenso piu' recente di cosi' e' "futuro": il calendario parte dalla
 #: data del consenso. Piu' vecchio e' "storico": parte dall'ammissione.
 FINESTRA_CONSENSO_RECENTE = timedelta(days=7)
@@ -62,12 +66,12 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
         return []
     agenzia = ctx.require_agency()
     cur.execute(
-        f"""SELECT c.id AS contact_id, c.email_normalized, {marketing_granted_at_sql('c')} AS granted_at
+        f"""SELECT c.id AS contact_id, c.email_normalized, {channel_granted_at_sql('c', CANALE)} AS granted_at
               FROM contacts c
              WHERE c.agency_id = %s
                AND c.status = 'active' AND c.deleted_at IS NULL AND c.archived_at IS NULL
                AND c.email_normalized IS NOT NULL
-               AND {marketing_prefilter_sql('c')}
+               AND {channel_prefilter_sql('c', CANALE)}
                AND NOT EXISTS (SELECT 1 FROM communication_enrollments e
                                 WHERE e.agency_id = c.agency_id AND e.contact_id = c.id
                                   AND e.status IN ('active', 'paused'))
@@ -76,15 +80,13 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
                                   AND e.email_normalized_snapshot IS NOT NULL
                                   AND (e.status = 'completed'
                                        OR (e.status = 'stopped'
-                                           AND e.stopped_at >= COALESCE({marketing_granted_at_sql('c')}, e.stopped_at))))
+                                           AND e.stopped_at >= COALESCE({channel_granted_at_sql('c', CANALE)}, e.stopped_at))))
                AND NOT EXISTS (SELECT 1 FROM communication_automation_controls k
                                 WHERE k.agency_id = c.agency_id AND k.contact_id = c.id AND k.paused)
-               AND NOT EXISTS (SELECT 1 FROM communication_email_optouts o
-                                WHERE o.email_normalized = c.email_normalized
-                                  AND o.opted_out_at >= COALESCE({marketing_granted_at_sql('c')}, o.opted_out_at))
+               AND NOT {channel_optout_after_grant_sql('c', CANALE)}
                AND NOT EXISTS (SELECT 1 FROM seller_revival_suppressions s
                                 WHERE s.contact_id = c.id AND s.expires_at > %s)
-             ORDER BY {marketing_granted_at_sql('c')} DESC NULLS LAST, c.id
+             ORDER BY {channel_granted_at_sql('c', CANALE)} DESC NULLS LAST, c.id
              LIMIT %s""",
         (agenzia, now, LETTURA))
     righe = [dict(r) for r in cur.fetchall()]

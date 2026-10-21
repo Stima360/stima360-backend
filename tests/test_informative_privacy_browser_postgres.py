@@ -86,6 +86,9 @@ def test_01_la_scheda_informative_in_chromium(informative, larghezza):
         page.fill("[data-informativa-form] [name='version']", versione)
         page.fill("[data-informativa-form] [name='context']", "modulo cartaceo in agenzia")
         page.fill("[data-informativa-form] [name='content']", TESTO)
+        # SENTINELLA AGGIORNATA DA C1/C2: i canali che il testo descrive.
+        for canale in ("email", "sms", "whatsapp", "phone"):
+            page.check(f"[data-informativa-form] [name='channels'][value='{canale}']")
         page.click("[data-informativa-form] button[type='submit']")
         page.wait_for_selector(f"#informative-lista tr:has-text('{versione}')")
         assert page.query_selector("[data-informativa-form]") is None
@@ -105,6 +108,9 @@ def test_01_la_scheda_informative_in_chromium(informative, larghezza):
         page.fill("[data-informativa-form] [name='version']", versione + "-bis")
         page.fill("[data-informativa-form] [name='context']", "sito")
         page.fill("[data-informativa-form] [name='content']", TESTO)
+        # SENTINELLA AGGIORNATA DA C1/C2: i canali che il testo descrive.
+        for canale in ("email", "sms", "whatsapp", "phone"):
+            page.check(f"[data-informativa-form] [name='channels'][value='{canale}']")
         page.click("[data-informativa-form] button[type='submit']")
         page.wait_for_selector("[data-informativa-errore]:not(:empty)")
         errore = page.inner_text("[data-informativa-errore]")
@@ -169,7 +175,8 @@ def test_02_le_api_dicono_di_no_a_chi_non_e_il_super_admin_designato(informative
     m = informative
     versione = f"{m['prefisso']}-api"
     corpo = {"purpose": "marketing", "version": versione, "context": "crm", "content": TESTO,
-             "valid_from": "2026-10-20T10:00:00+02:00", "valid_to": None}
+             "valid_from": "2026-10-20T10:00:00+02:00", "valid_to": None,
+             "channels": ["email", "sms", "whatsapp", "phone"]}
     for chi, atteso in (("altro", 403), ("agente", 403)):
         client = m["accedi"](chi)
         assert client.get("/api/platform/consent-notices").status_code == atteso, chi

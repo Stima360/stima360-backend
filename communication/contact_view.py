@@ -31,6 +31,7 @@ from typing import Any
 
 from . import journey_repository as journey_repo
 from . import email_metadata
+from . import followup_rules
 from . import journey_service
 from . import service as comm_service
 from . import unsubscribe
@@ -287,12 +288,27 @@ def send_manual(ctx, contact_id: int, *, subject: str, body: str,
             raise ValidationError(
                 "this contact has no email address: there is nowhere to send it")
 
+        relazione = None
         if communication_type == TYPE_MARKETING:
-            decisione = can_send_marketing(ctx, contact_id)
+            decisione = can_send_marketing(ctx, contact_id, channel="email")
             if not decisione.allowed:
                 raise ValidationError(
                     f"marketing consent is not granted for this contact ({decisione.reason}): "
                     "the message was not queued")
+        else:
+            # C2 (req. 9): `service` NON e' una scorciatoia attorno al consenso.
+            # Un messaggio di servizio esegue una richiesta dell'interessato:
+            # qui deve esistere quella richiesta - una stima, un appuntamento,
+            # un incarico, una proposta - fra questo contatto e questa agenzia.
+            # Senza, la comunicazione e' commerciale e passa dal canale marketing.
+            # Il Cestino resta la prima risposta (409), come prima di C2.
+            from .repository import refuse_if_contact_in_trash
+            refuse_if_contact_in_trash(c, contact_id)
+            relazione = followup_rules.service_relationship(c, ctx.require_agency(), contact_id)
+            if relazione is None:
+                raise ValidationError(
+                    "no service relationship with this contact (no request, appointment, mandate "
+                    "or proposal): a message without one is marketing and needs consent")
 
         corpo = testo
         disiscrizione = None
@@ -310,8 +326,10 @@ def send_manual(ctx, contact_id: int, *, subject: str, body: str,
             subject_snapshot=oggetto, destination_snapshot=destinazione,
             idempotency_key=f"manual:{utente}:{contact_id}:{_impronta(oggetto, testo)}",
             # FASE A: un operatore scrive testo semplice, con i suoi a capo.
-            metadata=email_metadata.metadata_testo(
+            # C2: un messaggio di servizio porta nel ledger la richiesta che esegue.
+            metadata={**email_metadata.metadata_testo(
                 communication_type=communication_type, unsubscribe_url=disiscrizione),
+                **({"service_basis": relazione} if relazione is not None else {})},
             cur=c)
 
 

@@ -170,6 +170,57 @@ def pause_state(cur, agency_id: int, contact_id: int, now: datetime) -> tuple[st
     return max(future, key=lambda c: c[1])
 
 
+def service_relationship(cur, agency_id: int, contact_id: int) -> str | None:
+    """C2 (req. 9): la RICHIESTA DELL'INTERESSATO che un messaggio di servizio
+    esegue, o None. Le stesse tabelle che `pause_state` legge, piu' la stima:
+    una stima richiesta, un appuntamento (anche passato), un incarico o una
+    relazione sull'immobile, una vendita, una richiesta d'acquisto. Il
+    riferimento restituito finisce nel ledger del messaggio.
+
+    Un contatto con cui l'agenzia non ha nessuno di questi fatti non ha
+    chiesto niente: scrivergli e' marketing e passa dal consenso.
+    """
+    verifiche = [
+        # la stima mandata a QUESTO contatto (la mail di servizio con il PDF):
+        # la prova piu' diretta che l'ha chiesta lui
+        ("stima_inviata", """SELECT m.stima_id AS ref FROM communication_messages m
+                              WHERE m.agency_id = %s AND m.contact_id = %s AND m.stima_id IS NOT NULL
+                                AND m.communication_type = 'service' AND m.reason_code = 'stima_pdf'
+                              ORDER BY m.id DESC LIMIT 1""", "communication_messages"),
+        ("stima", """SELECT s.id AS ref FROM stime s
+                       JOIN leads l ON l.contact_id = %s AND l.agency_id = %s
+                       JOIN lead_stime ls ON ls.lead_id = l.id AND ls.stima_id = s.id
+                      ORDER BY s.id DESC LIMIT 1""", "lead_stime"),
+        ("appointment", """SELECT a.id AS ref FROM appointments a
+                             LEFT JOIN leads l ON l.id = a.lead_id AND l.agency_id = a.agency_id
+                            WHERE a.agency_id = %s AND (a.contact_id = %s OR l.contact_id = %s)
+                            ORDER BY a.id DESC LIMIT 1""", "appointments"),
+        ("acquisition", """SELECT a.id AS ref FROM acquisitions a
+                            WHERE a.agency_id = %s AND a.owner_contact_id = %s
+                            ORDER BY a.id DESC LIMIT 1""", "acquisitions"),
+        ("property", """SELECT p.id AS ref FROM property_contacts pc JOIN properties p ON p.id = pc.property_id
+                         WHERE p.agency_id = %s AND pc.contact_id = %s
+                         ORDER BY p.id DESC LIMIT 1""", "property_contacts"),
+        ("buy_request", """SELECT b.id AS ref FROM buy_requests b
+                            WHERE b.agency_id = %s AND b.contact_id = %s
+                            ORDER BY b.id DESC LIMIT 1""", "buy_requests"),
+    ]
+    parametri = {
+        "stima_inviata": (agency_id, contact_id),
+        "stima": (contact_id, agency_id), "appointment": (agency_id, contact_id, contact_id),
+        "acquisition": (agency_id, contact_id), "property": (agency_id, contact_id),
+        "buy_request": (agency_id, contact_id),
+    }
+    for nome, sql, tabella in verifiche:
+        if not _tabella(cur, tabella):
+            continue
+        cur.execute(sql, parametri[nome])
+        riga = cur.fetchone()
+        if riga is not None:
+            return f"{'stima' if nome == 'stima_inviata' else nome}:{riga['ref']}"
+    return None
+
+
 def _relazione(candidati, now, *, ref, status, commercial_status, finita_il) -> None:
     if status == "lost":
         candidati.append((PAUSED_BY_COMMERCIAL, finita_il + DOPO_RELAZIONE_FINITA, f"{ref}:lost"))

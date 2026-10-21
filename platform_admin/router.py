@@ -1331,7 +1331,8 @@ def create_consent_notice(
     try:
         row = consent_notices_service.create_notice(
             context, purpose=payload.purpose, version=payload.version, context=payload.context,
-            content=payload.content, valid_from=payload.valid_from, valid_to=payload.valid_to)
+            content=payload.content, valid_from=payload.valid_from, valid_to=payload.valid_to,
+            channels=payload.channels)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ConsentNoticeConflict as exc:

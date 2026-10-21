@@ -9,11 +9,17 @@ risposto", "ha un appuntamento", "ha un'email", "ha un numero WhatsApp".
 Quelle sono decisioni del motore di comunicazione, e tenerle fuori di qui e' il
 motivo per cui questa funzione puo' restare corta, deterministica e leggibile.
 
-UN SOLO CONSENSO PER DUE CANALI
+UN CONSENSO PER CANALE (109, C2)
 
-Email e WhatsApp condividono lo stesso consenso, quindi la guardia non ha un
-parametro `channel` e non deve averlo: se un giorno servisse distinguere, la
-differenza dovrebbe nascere nel modello del consenso, non in un ramo qui.
+La domanda ha un CANALE: email, sms, whatsapp o phone. Non esiste un consenso
+"per tutti i canali" e non esiste una chiamata senza canale: `channel` e'
+obbligatorio, per nome, e un valore fuori dall'insieme e' un errore di
+programmazione, non un rifiuto. La guardia legge la proiezione PER CANALE
+(`contact_channel_consents`) e l'ultimo evento DI QUEL CANALE; il vecchio
+flag `contacts.marketing_consent` non entra nella decisione: e' un
+riassunto per chi legge la scheda, e un flag storico senza un evento sul
+canale e' `deny_never_given` con `legacy=True` - si vede che c'era una
+spunta, non si manda niente. Nessuna autorizzazione presunta.
 
 LE PROPRIETA', E COME SONO OTTENUTE
 
@@ -48,12 +54,11 @@ from typing import Any
 from . import repository
 from .enums import (
     ALLOWING_REASONS,
+    CHANNELS,
     DECISION_GRANTED,
-    DECISION_REVOKED,
     PROJECTION_COLUMNS,
     PURPOSE_MARKETING,
     REASON_ALLOW_EXPLICIT_GRANT,
-    REASON_ALLOW_LEGACY_GRANT,
     REASON_DENY_INCONSISTENT_STATE,
     REASON_DENY_NEVER_GIVEN,
     REASON_DENY_PLATFORM_OPTOUT,
@@ -62,7 +67,7 @@ from .enums import (
     STATUS_NEVER_GIVEN,
     STATUS_REVOKED,
 )
-from .service import state_from_projection
+from .scope import ProgrammingError
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,8 @@ class MarketingSendDecision:
     event_id: int | None = None
     decided_at: Any = None
     source: str | None = None
+    #: 109: il canale su cui la decisione e' stata presa.
+    channel: str | None = None
 
     def __post_init__(self) -> None:
         # `allowed` e `reason` non possono raccontare due storie diverse.
@@ -114,15 +121,19 @@ class MarketingSendDecision:
         )
 
 
-def _optout_di_piattaforma_dopo(contact: dict[str, Any], granted_at) -> bool:
-    """108: l'indirizzo ha detto "basta STIMA360" DOPO questa concessione?
+def _canale(channel) -> str:
+    """Il canale chiesto, o un errore di programmazione: mai un default."""
+    if channel not in CHANNELS:
+        raise ProgrammingError(
+            f"can_send_marketing needs a channel in {sorted(CHANNELS)}, got {channel!r}")
+    return channel
 
-    `platform_optout_at` arriva nella stessa riga del contatto (una statement,
-    uno snapshot). Un opt-out piu' vecchio della concessione non la blocca: una
+
+def _optout_di_piattaforma_dopo(contact: dict[str, Any], granted_at) -> bool:
+    """109: l'indirizzo DEL CANALE ha detto "basta STIMA360" DOPO questa
+    concessione? Un opt-out piu' vecchio della concessione non la blocca: una
     nuova manifestazione documentata vince su un vecchio rifiuto, mentre un
     rifiuto successivo vince su qualunque concessione, di qualunque agenzia.
-    Un contatto letto senza quella colonna (test, o schema senza 108) non ha
-    opt-out: la decisione resta quella di sempre.
     """
     optout_at = contact.get("platform_optout_at")
     if optout_at is None:
@@ -132,88 +143,65 @@ def _optout_di_piattaforma_dopo(contact: dict[str, Any], granted_at) -> bool:
     return optout_at >= granted_at
 
 
-def _coerente_con_evento(contact: dict[str, Any], event: dict[str, Any], columns) -> bool:
-    """La proiezione rappresenta davvero l'ultimo evento?
-
-    Si controlla il minimo che il percorso di scrittura garantisce sempre, e
-    non un di piu' che renderebbe fragile la guardia:
-
-      * `notice_id` NON e' richiesto - il funnel pubblico non ha una notice
-        certificata e i grant validi non devono essere bloccati per quello;
-      * `source` NON e' richiesta - il modello legacy non la garantiva;
-      * `marketing_consent_at` non deve COINCIDERE con l'evento, deve esserci:
-        confrontare due timestamp al microsecondo trasformerebbe un dettaglio
-        di precisione in un rifiuto.
-    """
-    flag = contact.get(columns["flag"])
-    granted_at = contact.get(columns["granted_at"])
-    revoked_at = contact.get(columns["revoked_at"])
-
+def _coerente_con_riga(riga: dict[str, Any] | None, event: dict[str, Any]) -> bool:
+    """La proiezione per canale rappresenta davvero l'ultimo evento del canale?"""
+    if riga is None:
+        return False
     if event["decision"] == DECISION_GRANTED:
-        return flag is True and revoked_at is None and granted_at is not None
-    if event["decision"] == DECISION_REVOKED:
-        return flag is not True and revoked_at is not None
-    # Una terza decisione non e' rappresentabile nel database (CHECK della 062).
-    # Se arriva qui, qualcosa di piu' grande e' rotto: fail closed.
-    return False
+        return riga["status"] == STATUS_GRANTED and riga["granted_at"] is not None and riga["revoked_at"] is None
+    return riga["status"] == STATUS_REVOKED and riga["revoked_at"] is not None
 
 
-def can_send_marketing(ctx, contact_id: int) -> MarketingSendDecision:
-    """Questo contatto possiede ORA un consenso marketing valido?
+def can_send_marketing(ctx, contact_id: int, *, channel: str) -> MarketingSendDecision:
+    """Questo contatto possiede ORA un consenso marketing valido SU QUESTO CANALE?
 
     L'unica funzione pubblica di questo modulo, e l'unica implementazione della
-    decisione: non esistono varianti, scorciatoie o versioni "veloci". Da P29
-    in avanti ogni invio marketing - email o WhatsApp - la interroga
-    IMMEDIATAMENTE PRIMA del dispatch, mai all'inizio di una sequenza e mai su
-    un valore conservato.
+    decisione: non esistono varianti, scorciatoie o versioni "veloci". Ogni
+    invio marketing la interroga IMMEDIATAMENTE PRIMA del dispatch, con il
+    canale del messaggio, mai all'inizio di una sequenza e mai su un valore
+    conservato.
 
     Solleva `NotFoundError` per un contatto che non esiste O che appartiene a
-    un'altra agenzia: e' lo stesso comportamento del resto del dominio, ed e'
-    quello che impedisce di scoprire l'esistenza dei contatti altrui chiedendo
-    il loro consenso.
+    un'altra agenzia.
     """
-    contact, event = repository.read_send_decision_inputs(
-        ctx, contact_id, PURPOSE_MARKETING
+    canale = _canale(channel)
+    contact, event, riga = repository.read_send_decision_inputs(
+        ctx, contact_id, PURPOSE_MARKETING, channel=canale
     )
-    return _decidi(contact, event)
+    return _decidi(contact, event, riga, canale)
 
 
-def can_send_marketing_bulk(ctx, contact_ids):
+def can_send_marketing_bulk(ctx, contact_ids, *, channel: str):
     """La stessa domanda, per piu' contatti: `{contact_id: MarketingSendDecision}`.
 
-    P29-3C. NON e' una seconda implementazione e non e' una versione
-    "veloce": legge gli stessi due ingressi con la stessa query (una riga per
-    contatto invece di una sola) e li passa a `_decidi`, che e' la funzione
-    che decide - l'unica, la stessa che usa `can_send_marketing`. Una
-    sentinella confronta le due strade su ogni stato e pretende che diano la
-    stessa risposta.
-
-    Esiste perche' il tick delle journey valuta il consenso su tutte le
-    iscrizioni aperte di un'agenzia, e una chiamata per iscrizione sarebbe una
-    query per riga. Il GATE DI INVIO non passa di qui e non cambia: resta
-    `can_send_marketing`, interrogata dal dispatcher immediatamente prima di
-    spedire.
-
-    Un contatto fuori dallo scope non compare nel risultato, invece di
-    sollevare: chi chiama sta iterando righe che gia' vede.
+    NON e' una seconda implementazione: legge gli stessi ingressi con la
+    stessa query (una riga per contatto) e li passa a `_decidi`. Un contatto
+    fuori dallo scope non compare nel risultato.
     """
+    canale = _canale(channel)
     ingressi = repository.read_send_decision_inputs_bulk(
-        ctx, contact_ids, PURPOSE_MARKETING
+        ctx, contact_ids, PURPOSE_MARKETING, channel=canale
     )
-    return {cid: _decidi(contact, event)
-            for cid, (contact, event) in ingressi.items()}
+    return {cid: _decidi(contact, event, riga, canale)
+            for cid, (contact, event, riga) in ingressi.items()}
 
 
-def _decidi(contact, event) -> MarketingSendDecision:
-    """LA DECISIONE. Pura: due righe gia' lette, nessun accesso al database.
+def _decidi(contact, event, riga, channel: str) -> MarketingSendDecision:
+    """LA DECISIONE. Pura: righe gia' lette, nessun accesso al database.
 
-    Separata dalla lettura per un motivo solo - poterla applicare a ingressi
-    letti uno per uno o tutti insieme SENZA duplicarla. Il contenuto e'
-    quello di sempre, spostato e non riscritto.
+        schema 109 assente                 -> deny_inconsistent_state
+        nessun evento sul canale           -> deny_never_given
+                                              (legacy=True se il vecchio flag e' TRUE:
+                                              una spunta storica, nessuna autorizzazione)
+        evento e proiezione in disaccordo  -> deny_inconsistent_state
+        ultimo evento: revoca              -> deny_revoked
+        ultimo evento: concessione, ma opt-out di piattaforma sul (canale,
+        indirizzo) non precedente          -> deny_platform_optout
+        ultimo evento: concessione         -> allow_explicit_grant
     """
     columns = PROJECTION_COLUMNS[PURPOSE_MARKETING]
-    proiezione = state_from_projection(contact, PURPOSE_MARKETING)
     agency_id = contact.get("agency_id")
+    spunta_storica = contact.get(columns["flag"]) is True
 
     def decisione(allowed, reason, *, state, legacy):
         return MarketingSendDecision(
@@ -224,79 +212,23 @@ def _decidi(contact, event) -> MarketingSendDecision:
             agency_id=agency_id,
             legacy=legacy,
             event_id=event["id"] if event else None,
-            decided_at=event["decided_at"] if event else proiezione["granted_at"],
-            # La provenienza REALE, o niente.
-            #
-            # `state_from_projection` sostituisce "legacy" quando un contatto
-            # risulta concesso senza source: e' comodo per la scheda contatto,
-            # ma qui sarebbe una provenienza inventata su una decisione di
-            # autorizzazione. Il segnale che non esiste un evento autoritativo
-            # e' gia' `legacy=True`, e basta: se la colonna e' NULL, `source`
-            # e' None.
-            source=(event["source"] if event else contact.get(columns["source"])),
+            decided_at=event["decided_at"] if event else None,
+            source=event["source"] if event else None,
+            channel=channel,
         )
 
-    # ------------------------------------------------------------------
-    # CON EVENTI: l'evento piu' recente e' l'autorita'.
-    #
-    # "Piu' recente" e' quello che il dominio ha gia' deciso - `decided_at`
-    # decrescente, `id` come spareggio - e non MAX(id): un evento deciso prima
-    # ma arrivato dopo non deve far arretrare lo stato, ed e' la ragione per
-    # cui il percorso di scrittura rilegge l'ultimo evento invece di proiettare
-    # quello appena inserito.
-    # ------------------------------------------------------------------
-    if event is not None:
-        if not _coerente_con_evento(contact, event, columns):
-            return decisione(
-                False, REASON_DENY_INCONSISTENT_STATE,
-                state=proiezione["status"], legacy=False,
-            )
-        if event["decision"] == DECISION_GRANTED:
-            if _optout_di_piattaforma_dopo(contact, event["decided_at"]):
-                return decisione(
-                    False, REASON_DENY_PLATFORM_OPTOUT,
-                    state=STATUS_GRANTED, legacy=False,
-                )
-            return decisione(
-                True, REASON_ALLOW_EXPLICIT_GRANT,
-                state=STATUS_GRANTED, legacy=False,
-            )
-        return decisione(
-            False, REASON_DENY_REVOKED, state=STATUS_REVOKED, legacy=False,
-        )
-
-    # ------------------------------------------------------------------
-    # SENZA EVENTI: vale la proiezione legacy, letta con la derivazione che il
-    # dominio usa gia' (`state_from_projection`). Nessuna reinterpretazione,
-    # nessun evento fabbricato: cio' che c'e' scritto, letto come e' sempre
-    # stato letto.
-    #
-    # `granted` senza provenienza e' esattamente il caso dei 12 contatti del
-    # censimento P29-1.0: acconsentirono prima che esistesse il registro, e
-    # bloccarli sarebbe stato inventare una revoca che nessuno ha chiesto.
-    # ------------------------------------------------------------------
-    if proiezione["status"] == STATUS_GRANTED:
-        # Concesso e revocato insieme: impossibile per il CHECK della 063, ma
-        # se il database lo mostrasse la guardia non e' il posto in cui
-        # indovinare quale dei due e' vero.
-        if contact.get(columns["revoked_at"]) is not None:
-            return decisione(
-                False, REASON_DENY_INCONSISTENT_STATE,
-                state=proiezione["status"], legacy=True,
-            )
-        if _optout_di_piattaforma_dopo(contact, contact.get(columns["granted_at"])):
-            return decisione(
-                False, REASON_DENY_PLATFORM_OPTOUT, state=STATUS_GRANTED, legacy=True,
-            )
-        return decisione(
-            True, REASON_ALLOW_LEGACY_GRANT, state=STATUS_GRANTED, legacy=True,
-        )
-
-    if proiezione["status"] == STATUS_REVOKED:
-        return decisione(
-            False, REASON_DENY_REVOKED, state=STATUS_REVOKED, legacy=True,
-        )
-
-    return decisione(
-        False, REASON_DENY_NEVER_GIVEN, state=STATUS_NEVER_GIVEN, legacy=True,
-    )
+    if contact.get("consent_schema_ready") is False:
+        return decisione(False, REASON_DENY_INCONSISTENT_STATE, state=STATUS_NEVER_GIVEN, legacy=False)
+    if event is None:
+        if riga is not None:
+            # Una riga per canale senza un evento che la spieghi: non si indovina.
+            return decisione(False, REASON_DENY_INCONSISTENT_STATE, state=riga["status"], legacy=False)
+        return decisione(False, REASON_DENY_NEVER_GIVEN, state=STATUS_NEVER_GIVEN, legacy=spunta_storica)
+    if not _coerente_con_riga(riga, event):
+        return decisione(False, REASON_DENY_INCONSISTENT_STATE,
+                         state=riga["status"] if riga else STATUS_NEVER_GIVEN, legacy=False)
+    if event["decision"] == DECISION_GRANTED:
+        if _optout_di_piattaforma_dopo(contact, event["decided_at"]):
+            return decisione(False, REASON_DENY_PLATFORM_OPTOUT, state=STATUS_GRANTED, legacy=False)
+        return decisione(True, REASON_ALLOW_EXPLICIT_GRANT, state=STATUS_GRANTED, legacy=False)
+    return decisione(False, REASON_DENY_REVOKED, state=STATUS_REVOKED, legacy=False)

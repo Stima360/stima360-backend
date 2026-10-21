@@ -103,10 +103,39 @@ CREATE TABLE schema_migrations (version TEXT PRIMARY KEY,
 
 #: Le migration REALI. La 070 c'e' perche' gli stop autorevoli vivono nelle
 #: sue due tabelle: provarli su tabelle finte proverebbe la finzione.
+# SENTINELLA AGGIORNATA DA C1/C2 (CONSENSI PER CANALE): la 109 entra nella
+# catena, perche' la guardia decide sulla proiezione per canale e, senza le
+# sue tabelle, rifiuta ogni invio (fail closed). La 108 non c'e': la parte
+# della 109 che la riguarda e' condizionale e qui non si esegue.
 CATENA = ("061_p29_consent_notices", "062_p29_consent_events",
           "063_p29_contacts_consent_projection", "064_p29_communication_foundation",
           "065_p29_service_lifecycle_parent", "067_lmc1b_owner_login_reason",
-          "070_lmc15_acquisition_bridge", VERSIONE)
+          "070_lmc15_acquisition_bridge", VERSIONE, "109_consent_channels")
+
+# SENTINELLA AGGIORNATA DA C1/C2: il consenso di prova e' sul CANALE EMAIL.
+# Evento con canale, riga della proiezione per canale, riassunto su
+# `contacts`: lo stesso stato che `consent/repository.record_decision`
+# scrive. Un evento senza canale la 109 lo rifiuterebbe (salvo il funnel
+# pubblico), e il vecchio flag da solo non autorizza piu' niente.
+SQL_CONCEDI = (
+    "WITH ev AS (INSERT INTO consent_events (agency_id, contact_id, purpose, channel, decision, "
+    "decided_at, source, actor_type) VALUES (%(a)s,%(c)s,'marketing','email','granted',NOW(),'crm','subject') "
+    "RETURNING id, decided_at) "
+    "INSERT INTO contact_channel_consents (agency_id, contact_id, channel, status, granted_at, source, event_id) "
+    "SELECT %(a)s, %(c)s, 'email', 'granted', ev.decided_at, 'crm', ev.id FROM ev "
+    "ON CONFLICT (contact_id, channel) DO UPDATE SET status = 'granted', granted_at = EXCLUDED.granted_at, "
+    "revoked_at = NULL, event_id = EXCLUDED.event_id")
+SQL_REVOCA = (
+    "WITH ev AS (INSERT INTO consent_events (agency_id, contact_id, purpose, channel, decision, "
+    "decided_at, source, actor_type) VALUES (%(a)s,%(c)s,'marketing','email','revoked',NOW(),'crm','subject') "
+    "RETURNING id, decided_at) "
+    "INSERT INTO contact_channel_consents (agency_id, contact_id, channel, status, revoked_at, source, event_id) "
+    "SELECT %(a)s, %(c)s, 'email', 'revoked', ev.decided_at, 'crm', ev.id FROM ev "
+    "ON CONFLICT (contact_id, channel) DO UPDATE SET status = 'revoked', revoked_at = EXCLUDED.revoked_at, "
+    "event_id = EXCLUDED.event_id")
+#: Concesso per evento, ma la proiezione per canale dice il contrario.
+SQL_INCOERENTE = ("UPDATE contact_channel_consents SET status = 'revoked', revoked_at = NOW() "
+                  "WHERE contact_id = %(c)s AND channel = 'email'")
 
 TABELLE_DA_PULIRE = (
     "communication_enrollments", "communication_automation_controls",
@@ -298,10 +327,7 @@ def mondo(db):
                 (agency, f"Nome{n}", f"c{n}", f"c{n}@x.it", f"c{n}@x.it", assegnato, stato_contatto))
             ct = cur.fetchone()[0]
             if consenso:
-                cur.execute(
-                    "INSERT INTO consent_events (agency_id, contact_id, purpose, decision, "
-                    "decided_at, source, actor_type) "
-                    "VALUES (%s,%s,'marketing','granted',NOW(),'crm','subject')", (agency, ct))
+                cur.execute(SQL_CONCEDI, {"a": agency, "c": ct})
                 cur.execute("UPDATE contacts SET marketing_consent = TRUE, "
                             "marketing_consent_at = NOW(), marketing_consent_source = 'crm' "
                             "WHERE id = %s", (ct,))
@@ -439,15 +465,11 @@ def test_04_le_tre_ragioni_del_consenso_sono_distinte(mondo, modulo):
     mai = mondo["contatto"](consenso=False)
     revocato = mondo["contatto"]()
     incoerente = mondo["contatto"]()
-    mondo["sql"](
-        "INSERT INTO consent_events (agency_id, contact_id, purpose, decision, decided_at, "
-        "source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),'crm','subject')",
-        (mondo["a"], revocato["contact"]))
+    mondo["sql"](SQL_REVOCA, {"a": mondo["a"], "c": revocato["contact"]})
     mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE, marketing_revoked_at = NOW() "
                  "WHERE id = %s", (revocato["contact"],))
-    # Concesso per evento, ma la proiezione dice il contrario: incoerente.
-    mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE WHERE id = %s",
-                 (incoerente["contact"],))
+    # Concesso per evento, ma la proiezione per canale dice il contrario: incoerente.
+    mondo["sql"](SQL_INCOERENTE, {"c": incoerente["contact"]})
 
     modulo["tick"].tick(ctx)
     per_contatto = {e["contact_id"]: e for e in iscrizioni(mondo)}
@@ -873,9 +895,7 @@ def test_24_ogni_fatto_autorevole_ferma_l_iscrizione(mondo, modulo, fatto, attes
     elif fatto == "contatto_archiviato":
         mondo["sql"]("UPDATE contacts SET status = 'archived' WHERE id = %s", (c["contact"],))
     else:
-        mondo["sql"]("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, "
-                     "decided_at, source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),"
-                     "'crm','subject')", (mondo["a"], c["contact"]))
+        mondo["sql"](SQL_REVOCA, {"a": mondo["a"], "c": c["contact"]})
         mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE, marketing_revoked_at = NOW() "
                      "WHERE id = %s", (c["contact"],))
 
@@ -1520,19 +1540,16 @@ def test_56_la_lettura_in_blocco_del_consenso_da_le_STESSE_risposte(mondo, modul
     mai = mondo["contatto"](consenso=False)
     revocato = mondo["contatto"]()
     incoerente = mondo["contatto"]()
-    mondo["sql"]("INSERT INTO consent_events (agency_id, contact_id, purpose, decision, "
-                 "decided_at, source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),"
-                 "'crm','subject')", (mondo["a"], revocato["contact"]))
+    mondo["sql"](SQL_REVOCA, {"a": mondo["a"], "c": revocato["contact"]})
     mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE, marketing_revoked_at = NOW() "
                  "WHERE id = %s", (revocato["contact"],))
-    mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE WHERE id = %s",
-                 (incoerente["contact"],))
+    mondo["sql"](SQL_INCOERENTE, {"c": incoerente["contact"]})
 
     identificativi = [c["contact"] for c in (concesso, mai, revocato, incoerente)]
-    in_blocco = can_send_marketing_bulk(ctx, identificativi)
+    in_blocco = can_send_marketing_bulk(ctx, identificativi, channel="email")
     assert set(in_blocco) == set(identificativi)
     for cid in identificativi:
-        una = can_send_marketing(ctx, cid)
+        una = can_send_marketing(ctx, cid, channel="email")
         molte = in_blocco[cid]
         assert (una.allowed, una.reason, una.state) == (molte.allowed, molte.reason, molte.state)
     assert {d.reason for d in in_blocco.values()} == {
@@ -1546,7 +1563,7 @@ def test_57_la_lettura_in_blocco_non_esce_dallo_scope(mondo, modulo):
     ctx = mondo["ctx"]()
     mio = mondo["contatto"](mondo["a"])
     altrui = mondo["contatto"](mondo["b"])
-    esito = can_send_marketing_bulk(ctx, [mio["contact"], altrui["contact"]])
+    esito = can_send_marketing_bulk(ctx, [mio["contact"], altrui["contact"]], channel="email")
     assert set(esito) == {mio["contact"]}
 
 
@@ -1555,7 +1572,7 @@ def test_58_un_agente_in_blocco_vede_solo_i_propri_contatti(mondo, modulo):
     mio = mondo["contatto"](assegnato=mondo["agente"]["id"])
     altrui = mondo["contatto"]()
     agente = Ctx(mondo["a"], user_id=mondo["agente"]["id"], role="agent")
-    esito = can_send_marketing_bulk(agente, [mio["contact"], altrui["contact"]])
+    esito = can_send_marketing_bulk(agente, [mio["contact"], altrui["contact"]], channel="email")
     assert set(esito) == {mio["contact"]}
 
 
@@ -1578,15 +1595,11 @@ def _stop_pre_enrollment(mondo, c, fatto):
     elif fatto == "contact_inactive":
         mondo["sql"]("UPDATE contacts SET status = 'inactive' WHERE id = %s", (c["contact"],))
     elif fatto == "consent_revoked":
-        mondo["sql"](
-            "INSERT INTO consent_events (agency_id, contact_id, purpose, decision, "
-            "decided_at, source, actor_type) VALUES (%s,%s,'marketing','revoked',NOW(),"
-            "'crm','subject')", (c["agency"], c["contact"]))
+        mondo["sql"](SQL_REVOCA, {"a": c["agency"], "c": c["contact"]})
         mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE, marketing_revoked_at = NOW() "
                      "WHERE id = %s", (c["contact"],))
     elif fatto == "consent_inconsistent":
-        mondo["sql"]("UPDATE contacts SET marketing_consent = FALSE WHERE id = %s",
-                     (c["contact"],))
+        mondo["sql"](SQL_INCOERENTE, {"c": c["contact"]})
     else:
         raise AssertionError(f"fatto di prova sconosciuto: {fatto}")
 
@@ -1638,7 +1651,7 @@ def _scrittore_reale(mondo, modulo, c, fatto):
             lock_stima=True)
     elif fatto == "consent_revoked":
         consenso_service.record_revocation(
-            ctx, contact_id=c["contact"], purpose="marketing", source="crm",
+            ctx, contact_id=c["contact"], purpose="marketing", channel="email", source="crm",
             actor_type="operator", actor_ref=str(mondo["admin"]["id"]),
             idempotency_key=f"revoca:{c['contact']}")
     elif fatto in ("lead_closed", "contact_inactive"):
@@ -1841,11 +1854,10 @@ def test_66_le_query_degli_stop_non_crescono_con_l_universo_ne_a_sei_per_riga(
 
     def conta(sql):
         fresche = [q for q in sql if "with prio(reason, rank)" in q]
-        # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: su uno schema SENZA la 108
-        # (questo database si ferma alla 071) la lettura decisionale prova
-        # prima la statement con l'opt-out di piattaforma, che PostgreSQL
-        # rifiuta, e ripiega su quella di sempre: si conta la statement che
-        # decide. Con la 108 applicata la statement e' una sola.
+        # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B, poi da C1/C2: con la 109
+        # nella catena la lettura decisionale e' UNA statement (evento del
+        # canale, proiezione per canale, opt-out per indirizzo). Nessuna
+        # statement rifiutata da escludere: l'elenco resta vuoto.
         rifiutate = [q for q in sql if "communication_email_optouts" in q]
         consenso = [q for q in sql if "consent_events" in q and "insert" not in q and q not in rifiutate]
         # La lettura del consenso nomina anch'essa `contacts ... = ANY(...)`:

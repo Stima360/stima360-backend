@@ -240,6 +240,14 @@ class FakeCursor:
                 self.rows = []
             return
 
+        # SENTINELLA AGGIORNATA DA C1/C2 (109): la spunta del funnel e' una
+        # concessione PRE-CANALE; prima di riassumerla su `contacts` il
+        # percorso di scrittura guarda se il contatto ha gia' consensi per
+        # canale. Il funnel non ne scrive mai: in questo falso non ce ne sono.
+        if sql.startswith("select * from contact_channel_consents where contact_id = %s and agency_id = %s"):
+            self.rows = []
+            return
+
         raise AssertionError(f"SQL inatteso: {sql}")
 
     def _lead(self, lead_id):

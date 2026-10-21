@@ -89,6 +89,8 @@ class FakeState:
         self.contacts = {}
         self.events = []
         self.next_event_id = 1
+        # C1/C2 (109): la proiezione per canale, (contact_id, channel) -> riga.
+        self.channel_rows = {}
 
     def add_contact(self, contact_id, agency_id, assigned_agent_id=None, **overrides):
         row = {
@@ -148,7 +150,24 @@ class FakeCursor:
             return self._select_events(sql, params)
         if sql.startswith("update contacts c set"):
             return self._update_contact(query, params)
+        if sql.startswith("insert into contact_channel_consents"):
+            return self._upsert_channel(params)
+        if sql.startswith("select * from contact_channel_consents where contact_id = %s and agency_id = %s"):
+            self.rows = [r for (cid, _), r in self.state.channel_rows.items()
+                         if cid == params[0] and r["agency_id"] == params[1]]
+            return None
         raise AssertionError(f"unexpected consent SQL: {sql}")
+
+    def _upsert_channel(self, params):
+        """ON CONFLICT (contact_id, channel) DO UPDATE, come in 109: la data
+        della concessione revocata resta."""
+        chiave = (params["contact_id"], params["channel"])
+        vecchia = self.state.channel_rows.get(chiave)
+        riga = {**params, "id": chiave}
+        if vecchia is not None and params["status"] != "granted":
+            riga["granted_at"] = vecchia["granted_at"]
+        self.state.channel_rows[chiave] = riga
+        self.rows = [riga]
 
     def fetchone(self):
         return copy.deepcopy(self.rows[0]) if self.rows else None
@@ -190,6 +209,7 @@ class FakeCursor:
             "agency_id": params["agency_id"],
             "contact_id": params["contact_id"],
             "purpose": params["purpose"],
+            "channel": params.get("channel"),
             "decision": params["decision"],
             "decided_at": params["decided_at"],
             "source": params["source"],
@@ -219,11 +239,13 @@ class FakeCursor:
         agency_id, contact_id = params[0], params[1]
         rest = list(params[2:])
         purpose = rest.pop(0) if "ce.purpose = %s" in sql else None
+        channel = rest.pop(0) if "ce.channel = %s" in sql else None
         found = [
             e for e in self.state.events
             if e["agency_id"] == agency_id
             and e["contact_id"] == contact_id
             and (purpose is None or e["purpose"] == purpose)
+            and (channel is None or e.get("channel") == channel)
         ]
         found.sort(key=lambda e: (e["decided_at"], e["id"]), reverse=True)
         if "limit %s" in sql and rest:
@@ -305,12 +327,22 @@ def ctx():
     return Ctx(agency_id=1, role="agency_owner", user_id=10)
 
 
+# SENTINELLA AGGIORNATA DA C1/C2: un evento marketing nomina il canale. Gli
+# helper scrivono sul canale EMAIL; la proiezione su `contacts` e' il
+# riassunto dei canali, e i casi M1-M9 restano gli stessi su quel canale.
+def _canale(purpose, kwargs):
+    if purpose == PURPOSE_MARKETING and "channel" not in kwargs:
+        return {"channel": "email"}
+    return {}
+
+
 def grant(ctx, contact_id=1, purpose=PURPOSE_MARKETING, **kwargs):
     payload = {
         "contact_id": contact_id,
         "purpose": purpose,
         "source": SOURCE_PUBLIC_STIMA,
         "actor_type": "subject",
+        **_canale(purpose, kwargs),
     }
     payload.update(kwargs)
     return service.record_grant(ctx, **payload)
@@ -322,6 +354,7 @@ def revoke(ctx, contact_id=1, purpose=PURPOSE_MARKETING, **kwargs):
         "purpose": purpose,
         "source": SOURCE_UNSUBSCRIBE_LINK,
         "actor_type": "subject",
+        **_canale(purpose, kwargs),
     }
     payload.update(kwargs)
     return service.record_revocation(ctx, **payload)
@@ -702,7 +735,10 @@ def test_m7_se_la_proiezione_fallisce_non_resta_l_evento(db, ctx, monkeypatch):
     def esplode(*args, **kwargs):
         raise RuntimeError("proiezione fallita")
 
+    # SENTINELLA AGGIORNATA DA C1/C2: un evento con canale proietta per canale
+    # e poi riassume su `contacts`: fallisce l'una o l'altra, non resta niente.
     monkeypatch.setattr(repository, "project", esplode)
+    monkeypatch.setattr(repository, "project_derived", esplode)
 
     with pytest.raises(RuntimeError):
         grant(ctx)

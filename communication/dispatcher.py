@@ -130,7 +130,8 @@ def _consenso_nega(ctx, message: dict[str, Any]) -> str | None:
     if message["communication_type"] != TYPE_MARKETING:
         return None
     try:
-        decisione = can_send_marketing(ctx, message["contact_id"])
+        # 109: il consenso e' PER CANALE: si chiede quello del messaggio.
+        decisione = can_send_marketing(ctx, message["contact_id"], channel=message["channel"])
     except ConsentNotFoundError:
         return REASON_CONTATTO_ASSENTE
     return None if decisione.allowed else decisione.reason
@@ -395,7 +396,8 @@ def _dispatch_request_journey(ctx, message, token, provider, *, now=None):
         else:
             reason,event=journey_tick._fence_e_stop(cur,ctx,contact_id=enrollment['contact_id'],
                 lead_id=enrollment['lead_id'],stima_id=enrollment['stima_id'],
-                stima_snapshot=enrollment['stima_id_snapshot'],contact_wide=True)
+                stima_snapshot=enrollment['stima_id_snapshot'],contact_wide=True,
+                channels=[message["channel"]])
             if reason:
                 repo.stop_enrollment(cur,ctx,enrollment['id'],reason=reason,actor_user_id=None,stop_event_id=event)
                 repo.cancel_queued_journey_messages(cur,ctx,enrollment['id'],reason=f"stopped:{reason}",actor_user_id=None)

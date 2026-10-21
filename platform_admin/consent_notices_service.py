@@ -30,10 +30,16 @@ from .transaction import audit_then_commit
 
 COLONNE = ("id", "purpose", "version", "context", "content", "content_hash", "content_available",
            "valid_from", "valid_to", "created_at", "created_by")
+# 109: i canali che il testo copre. Una riga letta senza la colonna (schema
+# senza 109) copre '{}' e non autorizza nessun canale.
+CANALI_INFORMATIVA = ("email", "sms", "whatsapp", "phone")
 
 
 def _riga(row) -> dict[str, Any]:
-    return {k: row[k] for k in COLONNE}
+    riga = {k: row[k] for k in COLONNE}
+    chiavi = row.keys() if hasattr(row, "keys") else ()
+    riga["channels"] = list(row["channels"] or []) if "channels" in chiavi else []
+    return riga
 
 
 def list_notices(*, purpose: str | None = None) -> list[dict[str, Any]]:
@@ -56,11 +62,25 @@ def get_notice(notice_id: int) -> dict[str, Any]:
 
 
 def create_notice(actor: OperatorContext, *, purpose: str, version: str, context: str,
-                  content: str, valid_from: datetime, valid_to: datetime | None) -> dict[str, Any]:
+                  content: str, valid_from: datetime, valid_to: datetime | None,
+                  channels=None) -> dict[str, Any]:
     """Una versione nuova. Solleva `ConsentNoticeConflict` se (finalita',
-    versione) esiste gia'."""
+    versione) esiste gia'.
+
+    109: `channels` e' l'elenco dei canali che il TESTO descrive. Per il
+    marketing ne serve almeno uno, dichiarato dal Super Admin e mai dedotto;
+    un consenso su un canale potra' citare solo una versione che lo copre.
+    `privacy_terms` non ha canali."""
     if purpose not in CONSENT_NOTICE_PURPOSES:
         raise ValueError(f"purpose fuori da {CONSENT_NOTICE_PURPOSES}")
+    canali = [c for c in CANALI_INFORMATIVA if c in set(channels or ())]
+    fuori = [c for c in (channels or ()) if c not in CANALI_INFORMATIVA]
+    if fuori:
+        raise ValueError(f"canali sconosciuti {fuori}: ammessi {list(CANALI_INFORMATIVA)}")
+    if purpose == "marketing" and not canali:
+        raise ValueError("una informativa marketing deve dichiarare almeno un canale che il testo copre")
+    if purpose != "marketing" and canali:
+        raise ValueError("solo una informativa marketing dichiara canali")
     if valid_to is not None and valid_to < valid_from:
         raise ValueError("valid_to precede valid_from")
     impronta = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -83,15 +103,15 @@ def create_notice(actor: OperatorContext, *, purpose: str, version: str, context
         cur.execute(
             """INSERT INTO consent_notices
                    (purpose, version, content, content_hash, content_available, context,
-                    valid_from, valid_to, created_by)
-               VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s) RETURNING *""",
-            [purpose, version, content, impronta, context, valid_from, valid_to, actor_label(actor)])
+                    valid_from, valid_to, created_by, channels)
+               VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s) RETURNING *""",
+            [purpose, version, content, impronta, context, valid_from, valid_to, actor_label(actor), canali])
         row = _riga(cur.fetchone())
         audit_then_commit(
             conn, actor, action=ACTION_CONSENT_NOTICE_CREATE,
             target_type=TARGET_TYPE_CONSENT_NOTICE, target_id=row["id"], target_agency_id=None,
             metadata={"purpose": purpose, "version": version, "content_hash": impronta,
-                      "valid_from": valid_from.isoformat(),
+                      "channels": canali, "valid_from": valid_from.isoformat(),
                       "valid_to": valid_to.isoformat() if valid_to else None})
         return row
 

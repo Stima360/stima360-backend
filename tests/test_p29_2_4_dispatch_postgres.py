@@ -55,6 +55,9 @@ CREATE TABLE contacts (
     assigned_agent_id BIGINT, status VARCHAR(20) NOT NULL DEFAULT 'active',
     archived_at TIMESTAMPTZ,
     marketing_consent BOOLEAN, marketing_consent_at TIMESTAMPTZ,
+    -- SENTINELLA AGGIORNATA DA C1/C2: la guardia per canale confronta
+    -- l'indirizzo del canale (email o numero) con gli opt-out di piattaforma.
+    email_normalized VARCHAR(320), phone_normalized VARCHAR(50),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT contacts_agency_scope_unq UNIQUE (agency_id, id));
@@ -87,8 +90,10 @@ CREATE UNIQUE INDEX idx_seller_timeline_events_idempotency_key
 #: lo pretende, perche' l'evento `email_stima_inviata` non puo' nascere con
 #: un payload senza il documento di cui parla.
 PDF_DI_PROVA = {"pdf_url": "https://example.it/stima.pdf"}
+# SENTINELLA AGGIORNATA DA C1/C2: con la 109 (consenso per canale).
 VERSIONI = ("061_p29_consent_notices", "062_p29_consent_events",
-            "063_p29_contacts_consent_projection", "064_p29_communication_foundation")
+            "063_p29_contacts_consent_projection", "064_p29_communication_foundation",
+            "109_consent_channels")
 
 
 class Operatore:
@@ -182,7 +187,8 @@ def mondo(db, monkeypatch):
                      ("communication_attempts", "trg_communication_attempts_guard"),
                      ("communication_attempts", "trg_communication_attempts_no_truncate"),
                      ("consent_events", "trg_consent_events_append_only"),
-                     ("consent_events", "trg_consent_events_no_truncate")):
+                     ("consent_events", "trg_consent_events_no_truncate"),
+                     ("consent_events", "trg_consent_events_channel_required")):
             cur.execute(f"ALTER TABLE {t} ENABLE ALWAYS TRIGGER {g}")
         cur.execute("DELETE FROM contacts")
         cur.execute("DELETE FROM agencies")
@@ -252,7 +258,7 @@ def concedi(mondo, contact_id, *, agency=None):
     ctx = dispatcher.contesto_di_sistema(mondo["op1"])
     with mondo["cur"]() as cur:
         consent_service.record_grant(
-            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, source=SOURCE_CRM,
+            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, channel="email", source=SOURCE_CRM,
             actor_type=ACTOR_SUBJECT, cur=cur)
     mondo["conn"].commit()
 
@@ -265,7 +271,7 @@ def revoca(mondo, contact_id):
     ctx = dispatcher.contesto_di_sistema(mondo["op1"])
     with mondo["cur"]() as cur:
         consent_service.record_revocation(
-            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING,
+            ctx, contact_id=contact_id, purpose=PURPOSE_MARKETING, channel="email",
             source=SOURCE_UNSUBSCRIBE_LINK, actor_type=ACTOR_SUBJECT, cur=cur)
     mondo["conn"].commit()
 
