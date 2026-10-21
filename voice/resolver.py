@@ -144,6 +144,10 @@ def _match_property(ctx, cur, d: dict[str, Any]) -> RefMatch:
         # V8-0: «la casa di Francesco Ruvolo»: gli immobili di quel proprietario,
         # sempre da confermare (mai esatto: il nome non identifica).
         trovati = repository.properties_by_owner(ctx, cur, **d["owner"])
+        nome, cognome = d["owner"].get("first_name"), d["owner"].get("last_name")
+        if not trovati and nome and cognome:
+            # «Ruvolo Francesco»: detti in ordine inverso
+            trovati = repository.properties_by_owner(ctx, cur, first_name=cognome, last_name=nome)
         return RefMatch(_candidates(trovati, "property"), exact=False)
     if d.get("code"):
         trovati = repository.properties_by_code(ctx, cur, d["code"])

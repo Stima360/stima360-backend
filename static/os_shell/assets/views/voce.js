@@ -181,7 +181,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
   const supporto = speechSupport(win);
   const conMicrofono = stato.speechInput && supporto.supported;
   const avviso = conMicrofono
-    ? 'Tocca «Parla», detta il comando e ricontrollalo prima di inviarlo.'
+    ? 'Tocca «Parla» e detta con calma, anche con pause; poi «Termina dettatura», ricontrolla e «Invia».'
     : 'Scrivi il comando. Sul telefono puoi usare anche il microfono della tastiera.';
   container.innerHTML = paginaHtml(conMicrofono, avviso);
 
@@ -237,18 +237,36 @@ export async function renderVoce(container, _params = [], deps = {}) {
     collega();
   }
 
-  async function azione(fn) {
+  // Collaudo reale del 21/10: una risposta del server che non arriva al browser
+  // (connessione chiusa, p.es. mentre Render sostituisce l'istanza dopo un
+  // deploy) NON vuol dire che il comando non sia stato registrato. Invio e
+  // risposta hanno una chiave: si ripetono UNA volta, da soli, con la stessa
+  // chiave (il server restituisce lo stesso comando, nessun doppione). Dopo una
+  // conferma o un'esecuzione si rilegge lo stato vero del comando.
+  const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function azione(fn, { ripeti = false, rileggi = false } = {}) {
     if (s.busy) return;                       // doppio tocco: una sola richiesta
     mostraErrore('');
     occupato(true);
+    let ripreso = false;
     try {
-      const view = await fn();
+      let view;
+      try {
+        view = await fn();
+      } catch (e) {
+        if (!(e && e.network) || !(ripeti || (rileggi && id()))) throw e;
+        live.textContent = 'La risposta non è arrivata: riprendo il comando…';
+        await pausa(1200);
+        view = ripeti ? await fn() : await api.getCommand(id());
+        ripreso = true;
+      }
       if (view) disegna(view);
     } catch (e) {
       mostraErrore(errorMessage(e));
       if (e && e.code === 'VOICE_PROVIDER_BUSY') attendiFornitore(retryAfter(e));
     } finally {
       occupato(false);
+      if (ripreso) live.textContent = 'Comando ripreso: la risposta del server si era persa, nessun doppione creato.';
     }
   }
 
@@ -275,14 +293,14 @@ export async function renderVoce(container, _params = [], deps = {}) {
     azione(async () => {
       await api.confirmSteps(id(), passi);
       return api.executeCommand(id());
-    });
+    }, { rileggi: true });
   }
 
   function collega() {
     const conferma = area.querySelector('[data-voice-confirm]');
     if (conferma) conferma.addEventListener('click', confermaEdEsegui);
     const esegui = area.querySelector('[data-voice-execute]');
-    if (esegui) esegui.addEventListener('click', () => azione(() => api.executeCommand(id())));
+    if (esegui) esegui.addEventListener('click', () => azione(() => api.executeCommand(id()), { rileggi: true }));
     const annullaComando = area.querySelector('[data-voice-cancel]');
     if (annullaComando) annullaComando.addEventListener('click', () => azione(() => api.cancelCommand(id())));
     const risposta = area.querySelector('[data-voice-reply-form]');
@@ -290,9 +308,14 @@ export async function renderVoce(container, _params = [], deps = {}) {
       const campo = area.querySelector('[data-voice-reply-text]');
       risposta.addEventListener('submit', (event) => {
         event.preventDefault();
+        if (dettatura && dettatura.listening) {
+          // Una dettatura aperta non si invia: prima la si termina e si ricontrolla il testo.
+          dettatura.stop();
+          mostraErrore('Dettatura terminata: controlla il testo e tocca di nuovo «Rispondi».');
+          return;
+        }
         const testoRisposta = String(campo.value || '').trim();
         if (!testoRisposta) { mostraErrore('Scrivi o detta la risposta.'); campo.focus(); return; }
-        if (dettatura && dettatura.listening) dettatura.stop();
         // V8-4: «Conferma» e «Annulla» detti valgono come i pulsanti; il server ricontrolla tutto.
         const detto = spokenCommand(testoRisposta);
         if (detto.kind === 'confirm') {
@@ -327,7 +350,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
           s.storia.push(testoRisposta);
           s.replyKey = null; s.replyFor = null;
           return view;
-        });
+        }, { ripeti: true });
       });
       const nuovoContatto = area.querySelector('[data-voice-new-contact]');
       if (nuovoContatto) nuovoContatto.addEventListener('click', () => {
@@ -400,16 +423,21 @@ export async function renderVoce(container, _params = [], deps = {}) {
 
   q('[data-voice-form]').addEventListener('submit', (event) => {
     event.preventDefault();
+    if (dettatura && dettatura.listening) {
+      // Una dettatura aperta non si invia: prima la si termina e si ricontrolla il testo.
+      dettatura.stop();
+      mostraErrore('Dettatura terminata: controlla il testo e tocca di nuovo «Invia».');
+      return;
+    }
     const comando = String(testo.value || '').trim();
     if (!comando) { mostraErrore('Scrivi o detta un comando.'); return; }
     if (inAttesa()) { mostraErrore(`Il servizio di interpretazione è saturo: riprova fra ${Math.ceil((s.attesaFino - Date.now()) / 1000)} secondi.`); return; }
-    if (dettatura && dettatura.listening) dettatura.stop();
     if (s.keyText !== comando) { s.key = api.newCommandKey(); s.keyText = comando; }
     azione(async () => {
       const view = await api.submitCommand(s.key, comando);
       s.storia = [comando];
       return view;
-    });
+    }, { ripeti: true });
   });
 
   // Una sola dettatura per pagina: scrive nel campo da cui e' partita (il
@@ -419,9 +447,9 @@ export async function renderVoce(container, _params = [], deps = {}) {
   let pulsante = mic;
   function avviaDettatura(campo, bottone) {
     mostraErrore('');
-    if (dettatura.listening) { dettatura.stop(); return; }
+    if (dettatura.listening) { dettatura.stop(); return; }   // «Termina dettatura»
     bersaglio = campo; pulsante = bottone;
-    dettatura.start();
+    dettatura.start(campo.value);                              // il testo gia' scritto resta in testa
   }
   if (mic) {
     dettatura = createDictation({
@@ -431,10 +459,18 @@ export async function renderVoce(container, _params = [], deps = {}) {
         const ascolta = st === 'listening';
         if (!pulsante) return;
         pulsante.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
-        pulsante.setAttribute('aria-label', ascolta ? 'Ferma la dettatura' : 'Parla: avvia la dettatura');
-        pulsante.textContent = ascolta ? '■ Ferma' : '🎤 Parla';
+        pulsante.setAttribute('aria-label', ascolta ? 'Termina la dettatura' : 'Parla: avvia la dettatura');
+        pulsante.textContent = ascolta ? '■ Termina dettatura' : '🎤 Parla';
         pulsante.classList.toggle('listening', ascolta);
-        live.textContent = ascolta ? 'In ascolto… parla ora, poi tocca «Ferma».' : '';
+        if (ascolta) live.textContent = 'In ascolto… puoi fare pause. Quando hai finito tocca «Termina dettatura».';
+      },
+      onEnd: (t, motivo) => {
+        if (bersaglio && bersaglio.isConnected !== false && t) bersaglio.value = t;
+        const tasto = bersaglio === testo ? '«Invia»' : '«Rispondi»';
+        live.textContent = {
+          user: `Dettatura terminata: controlla il testo e tocca ${tasto}.`,
+          limit: `Dettatura chiusa dopo un lungo silenzio: il testo è nel campo, controllalo e tocca ${tasto}.`,
+        }[motivo] || '';
       },
       onError: (codice) => mostraErrore(SPEECH_ERRORS[codice] || SPEECH_ERRORS.error),
     });

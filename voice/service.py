@@ -352,13 +352,16 @@ def interpret(ctx, text: str, *, provider, now: datetime | None = None) -> dict[
         def unico(nome):
             lista = candidati(nome)
             return lista[0] if len(lista) == 1 else None
-        motivi = _motivi(d.reasons)
+        motivi = _con_orario(_motivi(d.reasons), {k: (x.isoformat() if hasattr(x, "isoformat") else x)
+                                                   for k, x in s.payload.items()}, adesso)
         tipo = s.payload.get("appointment_type")
         passi.append({
             "appointment_type": tipo, "type_label": planner.APPOINTMENT_TYPE_LABELS.get(tipo, tipo),
             "needs_mandate": voice_repository.requires_mandate(tipo),
             "start_at": s.start_at.isoformat() if s.start_at else None,
             "end_at": s.end_at.isoformat() if s.end_at else None,
+            "heard_start_at": s.payload["heard_start_at"].isoformat() if s.payload.get("heard_start_at") else None,
+            "heard_end_at": s.payload["heard_end_at"].isoformat() if s.payload.get("heard_end_at") else None,
             "duration_minutes": s.payload.get("duration_minutes"),
             "notes": s.payload.get("notes"), "location_text": s.payload.get("location_text"),
             "contact": unico("contact"), "contact_candidates": candidati("contact"),
@@ -454,6 +457,36 @@ _RISULTATO = ("entity", "id", "record_kind", "created", "preexisting", "origin",
               "lead_id", "reconciled", "start_at")
 
 
+_MESI = ("gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre",
+         "ottobre", "novembre", "dicembre")
+
+
+def messaggio_orario_passato(sentito_iso: str | None, registrato: datetime | None) -> str:
+    """Collaudo 21/10: «Le 10:30 di oggi sono già passate. Vuoi scegliere un
+    altro orario?» (con il giorno e l'ora DETTI); senza, il messaggio generico."""
+    if not sentito_iso:
+        return MESSAGES[dates.PAST]
+    sentito = datetime.fromisoformat(str(sentito_iso)).astimezone(ROMA)
+    oggi = (registrato or datetime.now(ROMA)).astimezone(ROMA).date()
+    if sentito.date() == oggi:
+        giorno = "di oggi"
+    elif sentito.date() == oggi - timedelta(days=1):
+        giorno = "di ieri"
+    else:
+        giorno = f"del {sentito.day} {_MESI[sentito.month - 1]}"
+    ora = f"{sentito.hour}:{sentito.minute:02d}"
+    if sentito.hour == 1:
+        return f"L'{ora} {giorno} è già passata. Vuoi scegliere un altro orario?"
+    return f"Le {ora} {giorno} sono già passate. Vuoi scegliere un altro orario?"
+
+
+def _con_orario(motivi: list[dict], payload: dict, registrato) -> list[dict]:
+    for m in motivi:
+        if m["code"] == dates.PAST:
+            m["message"] = messaggio_orario_passato(payload.get("heard_start_at"), registrato)
+    return motivi
+
+
 def _riepilogo(ctx, passo_piano: dict, vista, attore: str | None) -> dict[str, Any]:
     """V8-4: la scheda riepilogativa di un appuntamento, con le parole del
     CRM: tipo, cliente, incarico (quando serve), data e ora, agente, note.
@@ -468,7 +501,11 @@ def _riepilogo(ctx, passo_piano: dict, vista, attore: str | None) -> dict[str, A
         "type": tipo, "type_label": planner.APPOINTMENT_TYPE_LABELS.get(tipo, tipo),
         "contact": unico("contact"), "property": unico("property"),
         "needs_mandate": voice_repository.requires_mandate(tipo),
-        "agent": agente or attore, "start_at": passo_piano.get("start_at"), "end_at": passo_piano.get("end_at"),
+        "agent": agente or attore,
+        # l'orario DETTO anche quando e' gia' passato (non eseguibile: lo dice la domanda)
+        "start_at": passo_piano.get("start_at") or payload.get("heard_start_at"),
+        "end_at": passo_piano.get("end_at") or payload.get("heard_end_at"),
+        "time_in_past": not passo_piano.get("start_at") and bool(payload.get("heard_start_at")),
         "notes": payload.get("notes"),
     }
 
@@ -500,7 +537,8 @@ def view(ctx, command_id: int) -> dict[str, Any]:
         passi.append({
             "ordinal": n, "intent": p["intent"], "quote": piano[n]["quote"], "state": p["state"],
             "decision": v.decision if p["state"] in ("pending", "failed") else p["decision"],
-            "needs": attesa, "reasons": _motivi(v.reasons if p["state"] in ("pending", "failed") else p["reasons"]),
+            "needs": attesa, "reasons": _con_orario(_motivi(v.reasons if p["state"] in ("pending", "failed") else p["reasons"]),
+                                                    piano[n].get("payload") or {}, comando["recorded_at"]),
             "candidates": scelte, "duplicates": v.duplicate_labels, "hidden_duplicate": v.hidden,
             "start_at": piano[n].get("start_at"), "end_at": piano[n].get("end_at"),
             "result": {k: x for k, x in (p["result"] or {}).items() if k in _RISULTATO},

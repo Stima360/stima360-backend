@@ -69,17 +69,18 @@ def test_u2_same_answer_after_an_error_reuses_the_key(staged):  # noqa: F811
     scena = r"""
       await renderVoce(host, [], { win }); await wait();
       Q('[data-voice-text]').value = 'Domani appuntamento con Fabio'; Q('[data-voice-form]').dispatch('submit'); await wait();
-      Q('[data-voice-reply-text]').value = 'alle 18:30'; Q('[data-voice-reply-form]').dispatch('submit'); await wait();
+      Q('[data-voice-reply-text]').value = 'alle 18:30'; Q('[data-voice-reply-form]').dispatch('submit'); await wait(1500);   // + la ripresa automatica
       const errore = Q('[data-voice-error]').textContent;
       Q('[data-voice-reply-form]').dispatch('submit'); await wait();
       report({ errore });
     """
     out = _ui(staged, scena, route("GET", "/api/voice/status", SOLO_TESTO)
-              + route("POST", "/api/voice/commands/7/reply", {"throw": True}, ok(NUOVO))
+              + route("POST", "/api/voice/commands/7/reply", {"throw": True}, {"throw": True}, ok(NUOVO))
               + route("POST", "/api/voice/commands", ok(chiarimento(DOMANDA))))
+    # SENTINELLA AGGIORNATA DAL COLLAUDO REALE DEL 21/10 (dettatura a controllo manuale, recupero del comando)
     chiavi = [c["body"]["client_command_id"] for c in out["calls"] if c["url"].endswith("/reply")]
-    assert len(chiavi) == 2 and chiavi[0] == chiavi[1]
-    assert out["errore"]
+    assert len(chiavi) == 3 and chiavi[0] == chiavi[1] == chiavi[2]       # ripresa automatica + reinvio: stessa chiave
+    assert "non si crea un doppione" in out["errore"]
 
 
 @node
@@ -132,7 +133,7 @@ def test_u5_the_answer_can_be_dictated_with_the_same_recognizer(staged):  # noqa
       const prima = FakeRec.made.length;
       Q('[data-voice-reply-mic]').dispatch('click');
       FakeRec.made[FakeRec.made.length - 1].say('alle diciotto e trenta');
-      FakeRec.made[FakeRec.made.length - 1].stop();
+      Q('[data-voice-reply-mic]').dispatch('click');     // «Termina dettatura» (collaudo 21/10)
       report({ prima, creati: FakeRec.made.length, risposta: Q('[data-voice-reply-text]').value,
                comando: Q('[data-voice-text]').value, inviate: chiamate().filter((c) => c.url.endsWith('/reply')).length });
     """

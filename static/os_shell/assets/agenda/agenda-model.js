@@ -598,7 +598,12 @@ export function errorMessage(error) {
   }
   if (stato === 404) return MESSAGGI_STATO[404];
   if ([403, 409, 422].includes(stato)) return dettaglio || MESSAGGI_STATO[stato];
-  if (!stato) return dettaglio || 'Impossibile contattare il server. Verifica la connessione.';
+  // Collaudo 21/10: solo un errore di RETE (status 0 o `network`) parla di
+  // connessione; un errore dell'interfaccia (nessuno status) si dice per quel che e'.
+  if (!stato && (error.status === 0 || error.network)) {
+    return dettaglio || 'Impossibile contattare il server. Verifica la connessione.';
+  }
+  if (!stato) return `Errore imprevisto nell’interfaccia${error.message ? `: ${error.message}` : ''}. Ricarica la pagina e riprova.`;
   return dettaglio && stato < 500 ? dettaglio : `Errore del server (${stato}). Riprova.`;
 }
 

@@ -190,6 +190,10 @@ export function errorMessage(error) {
     VOICE_CONFIRMATION_NOT_ALLOWED: 'Questo passo non si sblocca con una conferma: servono dati diversi.',
     VOICE_TEXT_INVALID: 'Scrivi un comando (al massimo 2000 caratteri).',
   };
+  if (error && error.network) {
+    return 'La risposta del server non è arrivata al browser (connessione interrotta). Il comando può essere già '
+      + 'stato registrato: tocca di nuovo il pulsante, la richiesta è la stessa e non si crea un doppione.';
+  }
   if (code === 'VOICE_PROVIDER_BUSY') {
     return `${messaggi[code]} Riprova fra ${retryAfter(error)} secondi: il comando e la conversazione restano qui, nulla è stato eseguito.`;
   }
@@ -251,7 +255,9 @@ export function appointmentSummary(step) {
   if (r.needs_mandate || r.property) righe.push([r.needs_mandate ? 'Incarico' : 'Immobile', r.property || manca]);
   righe.push(['Data', formatDay(r.start_at) || manca]);
   const ora = formatHour(r.start_at);
-  righe.push(['Ora', ora ? `${ora}${formatHour(r.end_at) ? `–${formatHour(r.end_at)}` : ''}` : manca]);
+  // collaudo 21/10: l'orario detto resta a schermo anche se e' gia' passato
+  const passata = r.time_in_past ? ' (già passata)' : '';
+  righe.push(['Ora', ora ? `${ora}${formatHour(r.end_at) ? `–${formatHour(r.end_at)}` : ''}${passata}` : manca]);
   righe.push(['Agente', r.agent || manca]);
   if (r.notes) righe.push(['Note', r.notes]);
   return righe;

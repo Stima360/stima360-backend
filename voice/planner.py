@@ -105,6 +105,8 @@ HIDDEN_TYPE_REPLACEMENTS = {"sale_appointment": "buyer_visit"}
 ROLE_KEYWORDS = (
     ("venditor", "seller"), ("venditric", "seller"), ("proprietari", "owner"), ("padron", "owner"),
     ("acquirent", "buyer"), ("comprator", "buyer"), ("compratric", "buyer"),
+    # collaudo 21/10: «Giorgio Censori compra ...» (non «compravendita»: lo spazio conta)
+    (" compra ", "buyer"), (" acquista ", "buyer"),
     ("cerca casa", "buyer"), ("cercano casa", "buyer"),
 )
 SELLER_ROLES = ("owner", "seller")
@@ -261,11 +263,21 @@ _FINE_NOME = frozenset({"in", "a", "al", "alla", "per", "con", "che", "e", "doma
                         "mercoledi", "giovedi", "venerdi", "sabato", "domenica", "alle", "il", "la", "nel", "sul"})
 
 
+#: Collaudo 21/10: «incarico Ruvolo Francesco», «l'incarico di Rossi»: il nome
+#: dopo «incarico» e' del proprietario (l'ordine nome/cognome non e' certo).
+_INCARICO_DI = re.compile(r"\bincaric[oa]\s+(?:(?:di|del|della)\s+)?(?:(?:signora|signor|signore|sig)\s+)?"
+                          r"([a-z][a-z]+(?:\s+[a-z][a-z]+)?)")
+_NON_NOMI_INCARICO = frozenset({"di", "in", "esclusiva", "esclusivo", "vendita", "scaduto", "attivo", "nuovo",
+                                "firmato", "per", "su", "a", "con", "che", "e"})
+
+
 def owner_from(text_folded: str) -> dict[str, str] | None:
-    """V8-0: il proprietario nominato con «la casa di X Y», o None."""
+    """V8-0: il proprietario nominato con «la casa di X Y» o «incarico X Y», o None."""
     m = _IMMOBILE_DI.search(text_folded)
     if not m:
-        return None
+        m = _INCARICO_DI.search(text_folded)
+        if not m or m.group(1).split()[0] in _NON_NOMI_INCARICO:
+            return None
     parole = [p for p in m.group(1).split()]
     nome = []
     for p in parole:
@@ -448,6 +460,12 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
         if quando.start is not None:
             s.payload["start_at"] = quando.start
             s.payload["end_at"] = s.end_at
+        elif dates.PAST in quando.reasons and quando.day is not None and quando.at is not None:
+            # Collaudo 21/10: l'orario DETTO resta (per mostrarlo e chiederne un
+            # altro), ma non e' un inizio: senza `start_at` il passo non si esegue.
+            sentito = datetime.combine(quando.day, quando.at).replace(tzinfo=dates.ROMA)
+            s.payload["heard_start_at"] = sentito
+            s.payload["heard_end_at"] = sentito + timedelta(minutes=minuti)
         for nome in ("location_text", "notes"):
             if getattr(c, nome):
                 s.payload[nome] = getattr(c, nome)

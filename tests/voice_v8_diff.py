@@ -22,6 +22,8 @@ FILE_NUOVI = frozenset({
     # collaudo reale del 21/10: 429 del fornitore, chi visita e chi vende
     "tests/test_voice_8_0_conversations.py",
     "tests/test_voice_8_0_conversations_postgres.py",
+    "tests/test_voice_8_0_browser_postgres.py",
+    "tests/test_voice_8_0_dictation_dates.py",
 })
 
 FILE_MODIFICATI = frozenset({
@@ -46,6 +48,10 @@ FILE_MODIFICATI = frozenset({
     "static/os_shell/assets/components/contact-picker.js",
     "static/os_shell/assets/views/agenda/agenda-page.js",
     "static/os_shell/assets/voice/voice-api.js",
+    # collaudo 21/10: risposta non arrivata (rete) distinta dagli errori dell'interfaccia; dettatura manuale
+    "static/os_shell/assets/core/api-client.js",
+    "static/os_shell/assets/agenda/agenda-model.js",
+    "static/os_shell/assets/voice/voice-speech.js",
     "static/os_shell/assets/views/voce.js",
     "static/os_shell/assets/voice/voice-model.js",
     "tests/test_a30_4_agenda_ui.py",

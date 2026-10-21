@@ -106,3 +106,28 @@ def test_04_output_corretto(api, db):  # noqa: F811
     riga = q(db, "SELECT appointment_type, contact_id, property_id, source FROM appointments WHERE id = %s",
              (_passo(fatto)["result"]["id"],))[0]
     assert list(riga) == ["buyer_visit", db["ids"]["giorgio"], db["ids"]["roma10"], "crm_manual"]
+
+
+def test_05_orario_passato_e_proprietario_detto_al_contrario(api, db):  # noqa: F811
+    """Collaudo 21/10: «oggi alle 10:30 Giorgio Censori compra incarico Ruvolo Francesco»
+    alle 12: scheda con giorno e ora DETTI, domanda sull'orario, incarico di Ruvolo
+    trovato anche con nome e cognome invertiti; nulla salvato."""
+    from datetime import datetime
+    from voice import service
+    from voice.dates import ROMA
+    frase = "Crea un appuntamento di vendita oggi alle 10:30 Giorgio Censori compra incarico Ruvolo Francesco"
+    comandi = [{"intent": "create_appointment", "quote": frase, "appointment_type": "sale_appointment",
+                "when": {"date_text": "oggi", "time_text": "alle 10:30"},
+                "contact": {"first_name": "Giorgio", "last_name": "Censori"}}]
+    prima = q(db, "SELECT count(*) FROM appointments")[0][0]
+    alle_dodici = datetime(2026, 10, 21, 12, 0, tzinfo=ROMA)
+    api.finto.register(frase, {"commands": comandi, "clarifications": []})
+    vista = service.submit(ctx(db, "agent_a1"), uuid.uuid4(), frase, provider=api.finto, now=alle_dodici)
+    p = vista["steps"][0]
+    s = p["summary"]
+    assert s["type"] == "buyer_visit" and s["contact"] == "Giorgio Censori" and "Francesco Ruvolo" in s["property"]
+    assert datetime.fromisoformat(s["start_at"]) == datetime(2026, 10, 21, 10, 30, tzinfo=ROMA) and s["time_in_past"] is True
+    messaggi = [m["message"] for m in p["reasons"]]
+    assert "Le 10:30 di oggi sono già passate. Vuoi scegliere un altro orario?" in messaggi
+    assert p["needs"] == "needs_answer"
+    assert q(db, "SELECT count(*) FROM appointments")[0][0] == prima

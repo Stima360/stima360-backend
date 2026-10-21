@@ -119,7 +119,7 @@ def test_03_dettatura_precompila_e_si_salva_dal_dialog(staged):  # noqa: F811
       f('[data-voice-dictate]').dispatch('click'); await wait();
       const ascolto = f('[data-voice-dictation-status]').visibleText();
       FakeRec.made[0].say('Mario Rossi vuole vedere casa in via Roma 1 il primo ottobre alle 16');
-      FakeRec.made[0].stop(); await wait();
+      f('[data-voice-dictate]').dispatch('click'); await wait();   // «Termina dettatura»
       const campi = { tipo: f('[data-field="type"]').value, data: f('[data-field="date"]').value,
         inizio: f('[data-field="start"]').value, fine: f('[data-field="end"]').value, agente: f('[data-field="agent"]').value,
         cliente: f('.contact-picker-selected').visibleText(), incarico: f('[data-property-selected]').visibleText(),
@@ -155,7 +155,7 @@ def test_04_una_domanda_resta_a_schermo_e_non_salva(staged):  # noqa: F811
     scena = r"""
       await apriNuovo();
       f('[data-voice-dictate]').dispatch('click'); await wait();
-      FakeRec.made[0].say('Visita con Mario Rossi il primo ottobre alle 16'); FakeRec.made[0].stop(); await wait();
+      FakeRec.made[0].say('Visita con Mario Rossi il primo ottobre alle 16'); f('[data-voice-dictate]').dispatch('click'); await wait();   // «Termina dettatura»
       report({ stato: f('[data-voice-dictation-status]').visibleText(), tipo: f('[data-field="type"]').value,
                incarico: f('[data-property-selected]').hidden, cliente: f('.contact-picker-selected').visibleText(),
                modificabile: !f('[data-field="start"]').disabled });
@@ -171,7 +171,7 @@ def test_05_microfono_negato_dal_browser(staged):  # noqa: F811
     scena = r"""
       await apriNuovo();
       f('[data-voice-dictate]').dispatch('click'); await wait();
-      FakeRec.made[0].onerror({ error: 'not-allowed' }); FakeRec.made[0].stop(); await wait();
+      FakeRec.made[0].onerror({ error: 'not-allowed' }); f('[data-voice-dictate]').dispatch('click'); await wait();   // «Termina dettatura»
       report({ stato: f('[data-voice-dictation-status]').visibleText(), bottone: f('[data-voice-dictate]').textContent });
     """
     out = _run(staged, scena, _route("GET", "/api/voice/status", ACCESA) + _rotte())
@@ -184,10 +184,35 @@ def test_06_omonimi_nessuna_scelta_automatica(staged):  # noqa: F811
     scena = r"""
       await apriNuovo();
       f('[data-voice-dictate]').dispatch('click'); await wait();
-      FakeRec.made[0].say('Sopralluogo con Mario Rossi il primo ottobre alle 16'); FakeRec.made[0].stop(); await wait();
+      FakeRec.made[0].say('Sopralluogo con Mario Rossi il primo ottobre alle 16'); f('[data-voice-dictate]').dispatch('click'); await wait();   // «Termina dettatura»
       report({ stato: f('[data-voice-dictation-status]').visibleText(), tipo: f('[data-field="type"]').value,
                cliente: f('.contact-picker-selected').hidden });
     """
     out = _run(staged, scena, _route("GET", "/api/voice/status", ACCESA) + _route("POST", "/api/voice/interpret", OMONIMI) + _rotte())
     assert out["tipo"] == "inspection" and out["cliente"] is True
     assert "Più contatti possibili" in out["stato"] and "scegli il cliente" in out["stato"]
+
+
+PASSATO = {"status": 200, "body": {"steps": [{
+    "appointment_type": "buyer_visit", "type_label": "Visita immobile", "needs_mandate": True,
+    "start_at": None, "end_at": None, "heard_start_at": "2026-09-26T10:30:00+02:00", "heard_end_at": "2026-09-26T11:30:00+02:00",
+    "duration_minutes": 60, "notes": None, "location_text": None,
+    "contact": {"id": 41, "label": "Mario Rossi"}, "contact_candidates": [{"id": 41, "label": "Mario Rossi"}],
+    "property": None, "property_candidates": [], "agent": None, "actor": "Anna Agente", "decision": "ask",
+    "questions": ["Le 10:30 di oggi sono già passate. Vuoi scegliere un altro orario?"], "blocked": []}], "clarifications": []}}
+
+
+@node
+def test_07_orario_passato_si_mostra_e_si_chiede(staged):  # noqa: F811
+    """Collaudo 21/10: l'orario detto resta nei campi (data e ora) e la domanda chiede di cambiarlo."""
+    scena = r"""
+      await apriNuovo();
+      f('[data-voice-dictate]').dispatch('click'); await wait();
+      FakeRec.made[0].say('Visita con Mario Rossi oggi alle 10 e 30'); f('[data-voice-dictate]').dispatch('click'); await wait();
+      report({ data: f('[data-field="date"]').value, inizio: f('[data-field="start"]').value, fine: f('[data-field="end"]').value,
+               stato: f('[data-voice-dictation-status]').visibleText() });
+    """
+    out = _run(staged, scena, _route("GET", "/api/voice/status", ACCESA) + _route("POST", "/api/voice/interpret", PASSATO) + _rotte())
+    assert (out["data"], out["inizio"], out["fine"]) == ("2026-09-26", "10:30", "11:30")
+    assert "Le 10:30 di oggi sono già passate. Vuoi scegliere un altro orario?" in out["stato"]
+    assert not any(c["m"] == "POST" and c["url"] == "/api/appointments" for c in out["calls"])

@@ -1179,14 +1179,17 @@ export function openCreateDialog(dialogEl, {
         tipo.value = passo.appointment_type;
         dopoTipo();
       }
-      if (passo.start_at) {
-        const giorno = romeDayKey(passo.start_at);
+      // collaudo 21/10: anche un orario gia' passato si mostra (la domanda chiede di cambiarlo)
+      const inizioDetto = passo.start_at || passo.heard_start_at;
+      const fineDetta = passo.start_at ? passo.end_at : passo.heard_end_at;
+      if (inizioDetto) {
+        const giorno = romeDayKey(inizioDetto);
         if (giorno) campoData.value = giorno;
-        const inizio = formatHour(passo.start_at);
+        const inizio = formatHour(inizioDetto);
         if (inizio) {
           campoInizio.value = inizio;
           if (lockDuration) fineDopo(durataFissa);
-          else if (passo.end_at && formatHour(passo.end_at)) { campoFine.value = formatHour(passo.end_at); durataScelta = true; }
+          else if (fineDetta && formatHour(fineDetta)) { campoFine.value = formatHour(fineDetta); durataScelta = true; }
           else fineDopo(durataBase());
           mostraDurata();
         }
@@ -1240,26 +1243,33 @@ export function openCreateDialog(dialogEl, {
       bottoneVoce.disabled = true;
       statoVoce.textContent = MSG_VOCE_NON_SUPPORTATA;
     } else {
-      let ultimoTesto = '';
+      // Collaudo 21/10: dettatura a controllo manuale. Le pause non la chiudono;
+      // il testo si interpreta SOLO quando l'agente tocca «Termina dettatura».
       let erroreMicrofono = false;
       const dettatura = createDictation({
         win,
-        onText: (t, finale) => { ultimoTesto = t; trascritto.textContent = t; if (finale && t) interpreta(t); },
+        onText: (t) => { trascritto.textContent = t; },
         onState: (st) => {
           const ascolta = st === 'listening';
           bottoneVoce.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
-          bottoneVoce.textContent = ascolta ? '■ Ferma' : '🎤 Parla';
+          bottoneVoce.setAttribute('aria-label', ascolta ? 'Termina la dettatura' : 'Parla: detta l’appuntamento');
+          bottoneVoce.textContent = ascolta ? '■ Termina dettatura' : '🎤 Parla';
           bottoneVoce.classList.toggle('listening', ascolta);
-          if (ascolta) statoVoce.textContent = 'In ascolto… parla ora, poi tocca «Ferma».';
-          else if (!ultimoTesto && !erroreMicrofono) statoVoce.textContent = 'Non ho sentito nulla. Riprova o compila i campi a mano.';
+          if (ascolta) statoVoce.textContent = 'In ascolto… puoi fare pause. Quando hai finito tocca «Termina dettatura».';
+        },
+        onEnd: (t, motivo) => {
+          if (erroreMicrofono || motivo === 'aborted') return;
+          if (!t) { statoVoce.textContent = 'Non ho sentito nulla. Riprova o compila i campi a mano.'; return; }
+          if (motivo === 'user') { interpreta(t); return; }
+          trascritto.textContent = t;
+          statoVoce.textContent = 'Dettatura chiusa dopo un lungo silenzio: tocca «Parla» per continuare o compila i campi.';
         },
         onError: (codice) => { erroreMicrofono = true; statoVoce.textContent = SPEECH_ERRORS[codice] || SPEECH_ERRORS.error; },
       });
       bottoneVoce.addEventListener('click', () => {
         if (dettatura.listening) { dettatura.stop(); return; }
-        ultimoTesto = '';
         erroreMicrofono = false;
-        dettatura.start();
+        dettatura.start(trascritto.textContent || '');
       });
       dialogEl.addEventListener('close', () => dettatura.abort());
     }

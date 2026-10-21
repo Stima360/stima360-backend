@@ -21,10 +21,22 @@ async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
 
   let response;
+  const inizio = Date.now();
   try {
     response = await fetch(path, { ...options, headers, credentials: 'include' });
   } catch (networkError) {
-    throw new Error('Impossibile contattare il server. Verifica la connessione.');
+    // Solo qui: fetch() fallisce quando la risposta non arriva al browser
+    // (rete, connessione chiusa dal server o dal proxy, pagina in uscita). Non
+    // vuol dire che il server non abbia eseguito la richiesta. `network` lo dice
+    // a chi chiama; la traccia in console serve a capire cosa e' successo.
+    const error = new Error('Impossibile contattare il server. Verifica la connessione.');
+    error.network = true;
+    error.cause = networkError;
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('STIMA360: risposta non arrivata', options.method || 'GET', path,
+        `${Date.now() - inizio} ms`, networkError && networkError.message);
+    }
+    throw error;
   }
 
   if (response.status === 401) {

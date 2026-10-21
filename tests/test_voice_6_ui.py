@@ -182,32 +182,36 @@ def test_m1_model_never_calls_partial_completed_and_undo_follows_the_server():
 
 @node
 def test_m2_dictation_starts_only_on_demand_and_maps_errors():
+    # SENTINELLA AGGIORNATA DAL COLLAUDO REALE DEL 21/10 (dettatura a controllo manuale, recupero del comando)
     out = _node(f"""
       const s = await import('{(ASSETS / 'voice' / 'voice-speech.js').as_posix()}');
       const made = [];
       class R {{ constructor() {{ made.push(this); }} start() {{}} stop() {{ this.onend(); }} abort() {{ this.aborted = true; }} }}
-      const errori = [], testi = [], stati = [];
+      const errori = [], testi = [], stati = [], fine = [];
       const d = s.createDictation({{ win: {{ SpeechRecognition: R }}, onError: (e) => errori.push(e),
-        onText: (t, f) => testi.push([t, f]), onState: (x) => stati.push(x) }});
+        onText: (t, f) => testi.push([t, f]), onState: (x) => stati.push(x), onEnd: (t, m) => fine.push([t, m]) }});
       const primaDelTocco = made.length;
       d.start();
       const r = made[0];
       const a = [{{ transcript: 'domani alle ' }}]; a.isFinal = true;
       const b = [{{ transcript: '15' }}]; b.isFinal = false;
       r.onresult({{ resultIndex: 0, results: [a, b] }});
-      for (const e of ['not-allowed', 'service-not-allowed', 'audio-capture', 'no-speech', 'network', 'aborted', 'boh'])
-        r.onerror({{ error: e }});
+      const mappati = [];
+      for (const e of ['not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'boh']) {{
+        const d2 = s.createDictation({{ win: {{ SpeechRecognition: R }}, onError: (x) => mappati.push(x) }});
+        d2.start(); made[made.length - 1].onerror({{ error: e }}); made[made.length - 1].onend();
+      }}
       d.stop();
       console.log(JSON.stringify({{
-        primaDelTocco, config: [r.lang, r.continuous, r.interimResults], testi, errori, stati,
+        primaDelTocco, config: [r.lang, r.continuous, r.interimResults], testi, errori, stati, fine, mappati,
         senza: s.speechSupport({{}}), con: s.speechSupport({{ webkitSpeechRecognition: R }}).supported,
       }}));
     """)
     assert out["primaDelTocco"] == 0
-    assert out["config"] == ["it-IT", False, True]
+    assert out["config"] == ["it-IT", True, True]                     # continua: le pause non la chiudono
     assert out["testi"] == [["domani alle 15", False]]
-    assert out["errori"] == ["permission_denied", "permission_denied", "no_microphone", "no_speech", "network", "error"]
-    assert out["stati"] == ["listening", "idle"]
+    assert out["mappati"] == ["permission_denied", "permission_denied", "no_microphone", "network", "error"]
+    assert out["stati"] == ["listening", "idle"] and out["fine"] == [["domani alle 15", "user"]]
     assert out["senza"] == {"supported": False, "ctor": None} and out["con"] is True
 
 
@@ -327,7 +331,7 @@ def test_s1_double_tap_sends_once_and_retry_reuses_the_key(staged):  # noqa: F81
     scena = r"""
       await renderVoce(host, [], { win }); await wait();
       Q('[data-voice-text]').value = 'Domani alle 15 appuntamento con Fabio';
-      Q('[data-voice-form]').dispatch('submit'); Q('[data-voice-form]').dispatch('submit'); await wait();
+      Q('[data-voice-form]').dispatch('submit'); Q('[data-voice-form]').dispatch('submit'); await wait(1500);   // + la ripresa automatica
       const dopoDoppio = chiamate().filter((c) => c.m === 'POST').length;
       const errore = Q('[data-voice-error]').textContent;
       Q('[data-voice-form]').dispatch('submit'); await wait();              // stesso testo: stessa chiave
@@ -335,13 +339,16 @@ def test_s1_double_tap_sends_once_and_retry_reuses_the_key(staged):  # noqa: F81
       Q('[data-voice-form]').dispatch('submit'); await wait();              // testo corretto: chiave nuova
       report({ dopoDoppio, errore });
     """
+    # SENTINELLA AGGIORNATA DAL COLLAUDO REALE DEL 21/10 (dettatura a controllo manuale, recupero del comando)
+    # risposta non arrivata: UNA ripresa automatica con la stessa chiave; se manca ancora, il
+    # messaggio dice che il comando puo' essere gia' registrato e che non si crea un doppione
     out = _ui(staged, scena, route("GET", "/api/voice/status", ACCESA)
-              + route("POST", "/api/voice/commands", {"throw": True}, ok(A_PIANO)))
+              + route("POST", "/api/voice/commands", {"throw": True}, {"throw": True}, ok(A_PIANO)))
     post = [c for c in out["calls"] if c["m"] == "POST"]
-    assert out["dopoDoppio"] == 1
-    assert "connessione" in out["errore"]
+    assert out["dopoDoppio"] == 2                                           # doppio tocco + una ripresa
+    assert "connessione interrotta" in out["errore"] and "non si crea un doppione" in out["errore"]
     chiavi = [p["body"]["client_command_id"] for p in post]
-    assert len(chiavi) == 3 and chiavi[0] == chiavi[1] and chiavi[2] != chiavi[1]
+    assert len(chiavi) == 4 and chiavi[0] == chiavi[1] == chiavi[2] and chiavi[3] != chiavi[2]
     assert all(a30_5.UUID4.match(k) for k in chiavi)
 
 

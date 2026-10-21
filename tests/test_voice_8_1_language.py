@@ -143,6 +143,8 @@ def test_07_parole_chiave_e_ruoli_fissati():
     assert planner.ROLE_KEYWORDS == (
         ("venditor", "seller"), ("venditric", "seller"), ("proprietari", "owner"), ("padron", "owner"),
         ("acquirent", "buyer"), ("comprator", "buyer"), ("compratric", "buyer"),
+        # SENTINELLA AGGIORNATA DAL COLLAUDO REALE DEL 21/10: «Giorgio Censori compra ...»
+        (" compra ", "buyer"), (" acquista ", "buyer"),
         ("cerca casa", "buyer"), ("cercano casa", "buyer"))
     assert planner.SELLER_ROLES == ("owner", "seller") and planner.BUYER_ROLES == ("buyer",)
     # SENTINELLA AGGIORNATA DAL COLLAUDO REALE (21/10): «appuntamento di vendita» e' una visita.
