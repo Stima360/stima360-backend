@@ -619,3 +619,106 @@ def execution_order(plan: Plan) -> list[int]:
             if d >= s.ordinal:
                 raise ValueError("dependency cycle")
     return [s.ordinal for s in plan.steps]
+
+
+# ---------------------------------------------------------------------------
+# Collaudo 3 (21/10): le risposte che si capiscono SENZA il modello
+# ---------------------------------------------------------------------------
+#
+# Log di Render delle 18:40: «voice provider: HTTP 429, riprovare fra 260s».
+# Ogni risposta («domani», «10 e 30») richiamava il modello sull'intera
+# conversazione. Quando STIMA ha chiesto il giorno o l'ora e la risposta e'
+# SOLO un giorno, un orario o la parte del giorno, la si applica qui all'output
+# del modello gia' ricevuto (conservato nel registro) e il piano si ricostruisce
+# con lo stesso planner: stesse regole, stesse domande, stesse conferme.
+# Qualunque altra risposta (nomi, correzioni, frasi) torna al modello.
+
+WHEN_DATE_QUESTIONS = frozenset({dates.UNRECOGNIZED_DATE, dates.AMBIGUOUS_WEEK})
+WHEN_TIME_QUESTIONS = frozenset({dates.UNRECOGNIZED_TIME, dates.AMBIGUOUS_HOUR})
+WHEN_ANY_QUESTIONS = frozenset({dates.PAST, dates.NONEXISTENT_LOCAL, dates.DOUBLE_LOCAL})
+WHEN_QUESTIONS = WHEN_DATE_QUESTIONS | WHEN_TIME_QUESTIONS | WHEN_ANY_QUESTIONS
+
+#: Le parole che aprono una risposta senza aggiungere nulla («facciamo domani»,
+#: «allora alle 10», «cambia orario: alle 18:30»).
+_APERTURA = re.compile(
+    r"^(?:(?:si|ok|okay|allora|facciamo|facciamolo|mettiamo|metti|mettilo|mettila|fissa|fissalo|fissala|"
+    r"spostalo|spostala|sposta|direi|va bene|meglio|no|invece|cambia|cambiamo|modifica|la|l|il|lo|ora|orario|"
+    r"data|giorno|a|ad|in|per|con)\s+)+")
+_CHIUSURA = re.compile(r"\s+(?:grazie|per favore|perfavore|invece)$")
+_FASCE = {"mattina": "di mattina", "mattino": "di mattina", "pomeriggio": "del pomeriggio", "sera": "di sera",
+          "notte": "di notte"}
+_ORA_DOPO = re.compile(r"^(?P<giorno>.+?)\s+(?P<ora>(?:alle|all|ore|alle ore|verso le|per le|intorno alle)\s+.+)$")
+#: Le domande del modello sulla data o sull'ora (da togliere se la risposta le scioglie).
+_DOMANDA_QUANDO = re.compile(r"\b(quando|giorno|data|ora|orario|che ore|mattina|pomeriggio)\b")
+
+
+def _pulisci_risposta(text: str) -> str:
+    t = dates.fold(text)
+    t = re.sub(r"[^a-z0-9:./ ]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(" .")
+    t = _APERTURA.sub("", t)
+    return _CHIUSURA.sub("", t).strip()
+
+
+def _e_un_orario(t: str) -> bool:
+    return dates.resolve_time(t).reason != dates.UNRECOGNIZED_TIME
+
+
+def _e_un_giorno(t: str, now: datetime) -> bool:
+    r = dates.resolve_date(t, now)
+    return r.day is not None or r.reason == dates.AMBIGUOUS_WEEK
+
+
+def when_from_reply(text: str, asked: set[str] | frozenset[str], now: datetime,
+                    time_text: str | None = None) -> dict[str, str] | None:
+    """La risposta come {date_text?, time_text?}, o None se non e' SOLO un
+    giorno e/o un orario. «10» e' un giorno o un'ora: si decide solo se STIMA
+    ha chiesto una delle due cose; altrimenti None (al modello)."""
+    t = _pulisci_risposta(text)
+    if not t:
+        return None
+    solo_fascia = re.fullmatch(r"(?:di |del |della |nel |nella )?(mattina|mattino|pomeriggio|sera|notte)", t)
+    if solo_fascia:
+        fascia = _FASCE[solo_fascia.group(1)]
+        if dates.AMBIGUOUS_HOUR in asked and time_text:
+            return {"time_text": f"{time_text} {fascia}"}
+        return None
+    orario, giorno = _e_un_orario(t), _e_un_giorno(t, now)
+    if orario and giorno:
+        chiesto_giorno, chiesta_ora = bool(asked & WHEN_DATE_QUESTIONS), bool(asked & WHEN_TIME_QUESTIONS)
+        if chiesta_ora and not chiesto_giorno:
+            return {"time_text": t}
+        if chiesto_giorno and not chiesta_ora:
+            return {"date_text": t}
+        return None
+    if orario:
+        return {"time_text": t}
+    if giorno:
+        return {"date_text": t}
+    m = _ORA_DOPO.match(t)
+    if m and _e_un_giorno(m.group("giorno"), now) and _e_un_orario(m.group("ora")):
+        return {"date_text": m.group("giorno"), "time_text": m.group("ora")}
+    return None
+
+
+def apply_local_reply(output: VoicePlanOutput, issues_by_ordinal: dict[int, set[str]], text: str,
+                      now: datetime) -> VoicePlanOutput | None:
+    """L'output del modello con il giorno e/o l'ora della risposta applicati
+    all'UNICO appuntamento a cui si riferisce (quello con la domanda sul
+    quando, o l'unico appuntamento del comando). None = serve il modello."""
+    appuntamenti = [i for i, c in enumerate(output.commands, start=1) if c.intent == "create_appointment"]
+    con_domanda = [i for i in appuntamenti if issues_by_ordinal.get(i, set()) & WHEN_QUESTIONS]
+    bersagli = con_domanda or appuntamenti
+    if len(bersagli) != 1:
+        return None
+    n = bersagli[0]
+    comando = output.commands[n - 1]
+    nuovo = when_from_reply(text, issues_by_ordinal.get(n, set()), now, comando.when.time_text)
+    if nuovo is None:
+        return None
+    quando = comando.when.model_copy(update=nuovo)
+    comandi = list(output.commands)
+    comandi[n - 1] = comando.model_copy(update={"when": quando})
+    # le domande del modello sul quando sono sciolte; le altre restano
+    restano = [d for d in output.clarifications if not _DOMANDA_QUANDO.search(dates.fold(d))]
+    return output.model_copy(update={"commands": comandi, "clarifications": restano})

@@ -112,7 +112,9 @@ ROTTE = [("get", "/api/voice/status"), ("post", "/api/voice/commands"), ("get", 
          ("post", "/api/voice/commands/1/steps/1/undo"), ("get", "/api/voice/commands/1/steps/1/reconcile"),
          ("post", "/api/voice/commands/1/steps/1/reconcile"), ("post", "/api/voice/commands/1/reply"),
          # SENTINELLA AGGIORNATA DA STIMA VOICE V8-5: la sola interpretazione per il dialog dell'Agenda
-         ("post", "/api/voice/interpret")]
+         ("post", "/api/voice/interpret"),
+         # SENTINELLA AGGIORNATA DAL COLLAUDO 3: il comando in corso, per riprenderlo (sola lettura)
+         ("get", "/api/voice/commands/current")]
 
 
 def test_a1_every_route_requires_a_session_when_mounted_like_main(db, fornitore, monkeypatch):  # noqa: F811

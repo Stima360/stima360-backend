@@ -20,7 +20,10 @@ def test_01_somiglianza(detto, registrato, almeno):
 
 
 def test_02_soglie_fisse_e_non_la_stessa_persona():
-    assert repository.NAME_SIMILARITY == 0.75 and repository.SIMILARITY_SCAN == 200
+    # SENTINELLA AGGIORNATA DAL COLLAUDO 3: si confrontano fino a 2000 contatti visibili (dai piu'
+    # recenti), con il prefiltro sulle iniziali di nome, cognome e nome completo
+    assert repository.NAME_SIMILARITY == 0.75 and repository.SIMILARITY_SCAN == 2000
+    assert repository.SKELETON_SIMILARITY == 0.78
     assert repository.name_similarity("Rossi", "Bianchi") < repository.NAME_SIMILARITY
     assert repository.name_similarity("", "Rossi") == 0.0 and repository.name_similarity(None, None) == 0.0
     assert repository.name_similarity("Zxqv", "Rossi") < repository.NAME_SIMILARITY

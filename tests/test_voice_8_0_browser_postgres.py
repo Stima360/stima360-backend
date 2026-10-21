@@ -97,10 +97,20 @@ def server(db, monkeypatch):
         filo.join(timeout=10)
 
 
+def chiudi_aperti(db, chi="agent_a1"):  # noqa: F811
+    """Collaudo 3: la pagina riprende il comando in corso; ogni scenario parte
+    senza comandi aperti di chi parla (lasciati dagli scenari precedenti)."""
+    from voice import ledger
+    for (cid,) in q(db, "SELECT id FROM voice_commands WHERE actor_user_id = %s AND status = ANY(%s)",
+                    (db["ids"][chi], ["planned", "awaiting_answers", "partial"])):
+        ledger.cancel(ctx(db, chi), cid)
+
+
 @pytest.fixture
 def pagina(server):
     from playwright.sync_api import sync_playwright
     import os
+    chiudi_aperti(server)
     with sync_playwright() as p:
         # il Chromium preinstallato dell'ambiente, se il client Playwright ne cerca un'altra versione
         locale = "/opt/pw-browsers/chromium"

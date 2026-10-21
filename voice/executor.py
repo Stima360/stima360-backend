@@ -185,6 +185,9 @@ class View:
     #: Solo dati che chi parla vede gia' (resolver). Fuori dall'impronta.
     labels: dict[str, list[dict]] = field(default_factory=dict)
     duplicate_labels: list[dict] = field(default_factory=list)
+    #: Collaudo 3: il proprietario detto, trovato fra i contatti ma senza
+    #: immobili (resolver.owner_hints). Fuori dall'impronta.
+    owner_labels: list[dict] = field(default_factory=list)
 
     @property
     def confirmable(self) -> bool:
@@ -324,6 +327,7 @@ def _evaluate(ctx, plan: Plan, impostazioni, *, stati: dict[int, dict], frozen: 
         v.duplicates = [c.id for c in resolution.duplicates.get(s.ordinal, ())] if s.intent == "create_contact" else []
         v.duplicate_labels = [{"id": c.id, "label": c.label} for c in resolution.duplicates.get(s.ordinal, ())]
         v.hidden = s.ordinal in facts.duplicate_hidden
+        v.owner_labels = [{"id": c.id, "label": c.label} for c in resolution.owner_hints.get(s.ordinal, ())]
         v.digest = _digest(plan.fingerprint, v)
     return viste
 

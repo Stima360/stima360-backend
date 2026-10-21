@@ -28,11 +28,17 @@ FILE_NUOVI = frozenset({
     "tests/test_voice_8_0_iphone.py",
     "tests/test_voice_8_0_iphone_postgres.py",
     "tests/test_voice_8_0_iphone_browser_postgres.py",
+    # collaudo 3 del 21/10: ripresa della conversazione, cognomi storpiati, chiarimenti senza il modello
+    "tests/test_voice_8_0_collaudo3.py",
+    "tests/test_voice_8_0_collaudo3_postgres.py",
+    "tests/test_voice_8_0_collaudo3_browser_postgres.py",
 })
 
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
     "voice/dates.py",
+    # collaudo 3: il proprietario detto trovato fra i contatti (solo un'informazione per la domanda)
+    "voice/executor.py",
     "voice/fake_provider.py",
     # V8-0: la Voce per tutte le agenzie attive (riga creata con l'agenzia)
     "platform_admin/agencies_repository.py",

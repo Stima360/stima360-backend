@@ -148,7 +148,8 @@ def submit_command(body: CommandIn, ctx: OperatorContext = Depends(require_opera
         except Exception as spento:  # noqa: BLE001
             return _errore(spento)
         return _errore(exc)
-    return _x(service.submit, ctx, body.client_command_id, body.text, provider=fornitore)
+    # collaudo 3: un comando nuovo sostituisce quelli lasciati a meta' (mai eseguiti)
+    return _x(service.submit, ctx, body.client_command_id, body.text, provider=fornitore, supersede=True)
 
 
 @router.post("/interpret")
@@ -181,6 +182,13 @@ def reply_command(command_id: int, body: ReplyIn, ctx: OperatorContext = Depends
             return _errore(spento)
         return _errore(exc)
     return _x(service.reply, ctx, command_id, body.client_command_id, body.text, provider=fornitore)
+
+
+@router.get("/commands/current")
+def current_command(ctx: OperatorContext = Depends(require_operator)):
+    """Collaudo 3: il comando in corso di chi chiede, per riprenderlo rientrando
+    nella pagina. Sola lettura: nessuna interpretazione."""
+    return _x(service.current, ctx)
 
 
 @router.get("/commands/{command_id}")

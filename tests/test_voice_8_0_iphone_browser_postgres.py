@@ -31,7 +31,7 @@ import pytest
 
 from tests.test_voice_2_resolver_postgres import DSN, ctx, db  # noqa: F401
 from tests.test_voice_4_executor_postgres import _voce_accesa, q  # noqa: F401
-from tests.test_voice_8_0_browser_postgres import server  # noqa: F401
+from tests.test_voice_8_0_browser_postgres import chiudi_aperti, server  # noqa: F401
 from tests.test_voice_8_0_conversations_postgres import _persone  # noqa: F401
 from tests.test_voice_8_2_visits_postgres import _incarichi  # noqa: F401
 
@@ -69,6 +69,7 @@ DETTATO = "Ehi Crea un appuntamento rivendita Domani alle ore 10:30 Compratore G
 @pytest.fixture
 def iphone(server):  # noqa: F811
     from playwright.sync_api import sync_playwright
+    chiudi_aperti(server)
     with sync_playwright() as p:
         locale = "/opt/pw-browsers/chromium"
         browser = p.chromium.launch(**({"executable_path": locale} if os.path.exists(locale) else {}))

@@ -39,6 +39,7 @@ import os
 import threading
 from collections import deque
 from datetime import datetime, time, timedelta
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -48,6 +49,8 @@ from . import dates, executor, ledger, planner, reconcile, undo
 from . import provider as voice_provider
 from . import repository as voice_repository
 from .executor import VoiceRefused
+from .ledger import CommandBusy
+from .schemas import parse_plan_output
 
 log = logging.getLogger("stima360.voice")
 ROMA = ZoneInfo("Europe/Rome")
@@ -277,31 +280,53 @@ def _limite_giornaliero(ctx, impostazioni, adesso: datetime) -> None:
         raise VoiceRefused(DAILY_LIMIT, "Limite giornaliero dei comandi vocali raggiunto")
 
 
+#: Collaudo 3: l'output del modello di ogni comando, congelato nel registro
+#: (`frozen`, immutabile; nessuna colonna nuova): una risposta che si capisce
+#: senza il modello lo riusa (`planner.apply_local_reply`).
+MODEL_OUTPUT_KEY = "model_output"
+#: Collaudo 3: gli stati di un comando ancora «in corso» per chi lo ha dettato.
+IN_CORSO = ("planned", "awaiting_answers", "executing", "partial")
+#: ...e quelli che un comando nuovo chiude, se non hanno mai eseguito nulla.
+_SOSTITUIBILE = ("received", "planned", "awaiting_answers")
+
+
 def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None = None,
-           context: list[str] | None = None) -> dict[str, Any]:
+           context: list[str] | None = None, output=None, supersede: bool = False) -> dict[str, Any]:
     """Testo dettato -> comando nel registro -> piano. Idempotente sulla
     chiave del client: la stessa chiave con lo stesso testo restituisce lo
     stesso comando senza richiamare il modello; con un testo diverso e' un
     conflitto. Un errore del fornitore lascia il comando senza piano e
-    senza effetti: si ripete con la stessa chiave."""
+    senza effetti: si ripete con la stessa chiave.
+
+    Collaudo 3: `output` gia' pronto (una risposta capita senza il modello):
+    nessuna chiamata, nessuna attesa dopo un 429, nessun freno per minuto;
+    restano abilitazione, limite giornaliero, idempotenza e tutto il resto.
+    `supersede` (un comando NUOVO dalla pagina): quando il suo piano esiste,
+    i comandi precedenti dello stesso operatore mai eseguiti si annullano,
+    cosi' resta una sola conversazione viva."""
     impostazioni = guard(ctx)
     testo = (text or "").strip()
     if not testo or len(testo) > voice_provider.MAX_TEXT:
         raise VoiceRefused(TEXT_INVALID, "testo vuoto o troppo lungo")
     adesso = now or datetime.now(ROMA)
-    _attendi_fornitore()                       # pausa dopo un 429: nessun comando nuovo, nessuna chiamata
+    if output is None:
+        _attendi_fornitore()                   # pausa dopo un 429: nessun comando nuovo, nessuna chiamata
     if not _gia_ricevuto(ctx, client_command_id):
         _limite_giornaliero(ctx, impostazioni, adesso)
-        _freno_operatore(ctx, datetime.now(ROMA))   # solo un comando NUOVO chiama il fornitore
+        if output is None:
+            _freno_operatore(ctx, datetime.now(ROMA))   # solo un comando NUOVO chiama il fornitore
     riga, _ = ledger.open_command(ctx, client_command_id, input_kind="text",
                                   request_sha256=ledger.request_fingerprint("text", testo), recorded_at=adesso)
     if riga["plan_sha256"] is None:
         with ledger.executing(ctx, riga["id"]):            # una sola interpretazione per comando
             comando = ledger.get_command(ctx, riga["id"])
             if comando["plan_sha256"] is None:
-                output = _interpreta(provider, testo, comando["recorded_at"], context=context)
+                if output is None:
+                    output = _interpreta(provider, testo, comando["recorded_at"], context=context)
                 piano = planner.build_plan(output, testo, comando["recorded_at"])
                 executor.prepare(ctx, riga["id"], piano)
+                ledger.freeze(ctx, riga["id"], MODEL_OUTPUT_KEY,
+                              lambda: output.model_dump(mode="json", exclude_none=True))
                 registrato = ledger.get_command(ctx, riga["id"])
                 if registrato["steps"] and all(p["decision"] == "auto" for p in registrato["steps"]):
                     automatico = True
@@ -311,7 +336,44 @@ def submit(ctx, client_command_id, text: str, *, provider, now: datetime | None 
                 automatico = False
         if automatico:
             executor.execute(ctx, riga["id"])
+    if supersede:
+        _chiudi_precedenti(ctx, riga["id"])
     return view(ctx, riga["id"])
+
+
+def _chiudi_precedenti(ctx, tenere: int) -> None:
+    """Collaudo 3: un comando nuovo sostituisce quelli dello stesso operatore
+    ancora aperti e MAI eseguiti (nessun passo partito): niente conversazioni
+    sovrapposte. Uno in esecuzione in questo momento (lock) resta com'e'."""
+    with voice_repository.read_only() as cur:
+        cur.execute("SELECT id FROM voice_commands WHERE agency_id = %s AND actor_user_id = %s AND id <> %s "
+                    "AND status = ANY(%s) ORDER BY id", (ctx.require_agency(), ctx.user_id, tenere, list(_SOSTITUIBILE)))
+        aperti = [int(r["id"]) for r in cur.fetchall()]
+    for cid in aperti:
+        try:
+            with ledger.executing(ctx, cid):
+                c = ledger.get_command(ctx, cid)
+                if c["status"] in _SOSTITUIBILE and all(p["state"] in _MAI_ESEGUITO for p in c["steps"]):
+                    ledger.cancel(ctx, cid)
+        except CommandBusy:
+            continue
+
+
+def current(ctx) -> dict[str, Any]:
+    """Collaudo 3: il comando IN CORSO di chi chiede (l'ultimo non concluso,
+    con un piano), per ritrovarlo rientrando nella pagina: la vista dal
+    registro e le parole della conversazione. Sola lettura: nessuna
+    interpretazione, nessuna chiamata al modello."""
+    guard(ctx)
+    with voice_repository.read_only() as cur:
+        cur.execute("SELECT id, transcript FROM voice_commands WHERE agency_id = %s AND actor_user_id = %s "
+                    "AND status = ANY(%s) AND plan IS NOT NULL ORDER BY id DESC LIMIT 1",
+                    (ctx.require_agency(), ctx.user_id, list(IN_CORSO)))
+        riga = cur.fetchone()
+    if riga is None:
+        return {"command": None, "conversation": []}
+    conversazione = (riga["transcript"] or "").split(f"\n{REPLY_PREFIX}") if riga["transcript"] else []
+    return {"command": view(ctx, int(riga["id"])), "conversation": [x.strip() for x in conversazione if x.strip()]}
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +416,8 @@ def interpret(ctx, text: str, *, provider, now: datetime | None = None) -> dict[
             return lista[0] if len(lista) == 1 else None
         motivi = _con_orario(_motivi(d.reasons), {k: (x.isoformat() if hasattr(x, "isoformat") else x)
                                                    for k, x in s.payload.items()}, adesso)
+        motivi = _con_proprietario(motivi, SimpleNamespace(owner_labels=[
+            {"id": c.id, "label": c.label} for c in risolto.owner_hints.get(s.ordinal, ())]))
         tipo = s.payload.get("appointment_type")
         passi.append({
             "appointment_type": tipo, "type_label": planner.APPOINTMENT_TYPE_LABELS.get(tipo, tipo),
@@ -421,21 +485,41 @@ def reply(ctx, command_id: int, client_command_id, text: str, *, provider,
     if len(testo) > voice_provider.MAX_TEXT:
         raise VoiceRefused(TEXT_INVALID, "La conversazione e' troppo lunga: inizia un nuovo comando")
     contesto = _domande(vista)
+    # Collaudo 3: un giorno o un orario chiesto da STIMA si capisce qui, senza
+    # il modello (nemmeno durante la pausa dopo un 429).
+    locale = _risposta_locale(comando, risposta, now or datetime.now(ROMA))
     # V8-0: il comando a cui si risponde si annulla SOLO quando il nuovo piano
     # esiste. Se il fornitore non risponde (429, rete), la conversazione resta
     # quella di prima, intatta, e la stessa risposta si ripete con la stessa chiave.
-    _attendi_fornitore()
+    if locale is None:
+        _attendi_fornitore()
     if not _gia_ricevuto(ctx, client_command_id):
         with ledger.executing(ctx, command_id):         # nessuna esecuzione del precedente nel frattempo
             _rispondibile(ctx, command_id)
             _limite_giornaliero(ctx, impostazioni, now or datetime.now(ROMA))
-    nuovo = submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto)
+    nuovo = submit(ctx, client_command_id, testo, provider=provider, now=now, context=contesto, output=locale)
     with ledger.executing(ctx, command_id):
         precedente = ledger.get_command(ctx, command_id)
         if precedente["status"] != "cancelled":
             _rispondibile(ctx, command_id, comando=precedente)
             ledger.cancel(ctx, command_id)
     return nuovo
+
+
+def _risposta_locale(comando: dict, risposta: str, adesso: datetime):
+    """L'output del modello del comando con la risposta applicata, o None
+    (risposta da far capire al modello, o output non conservato)."""
+    grezzo = (comando.get("frozen") or {}).get(MODEL_OUTPUT_KEY)
+    if not grezzo or not comando.get("plan"):
+        return None
+    try:
+        output = parse_plan_output(grezzo)
+    except Exception:  # noqa: BLE001 - un output non piu' valido: si chiede al modello
+        return None
+    domande = {int(s["ordinal"]): set(s.get("issues") or []) for s in comando["plan"]["steps"]}
+    for p in comando.get("steps") or []:
+        domande.setdefault(int(p["ordinal"]), set()).update(p.get("reasons") or [])
+    return planner.apply_local_reply(output, domande, risposta, adesso)
 
 
 def _rispondibile(ctx, command_id: int, *, comando=None) -> None:
@@ -484,6 +568,21 @@ def _con_orario(motivi: list[dict], payload: dict, registrato) -> list[dict]:
     for m in motivi:
         if m["code"] == dates.PAST:
             m["message"] = messaggio_orario_passato(payload.get("heard_start_at"), registrato)
+    return motivi
+
+
+def _con_proprietario(motivi: list[dict], vista) -> list[dict]:
+    """Collaudo 3: «venditore Francesco Rivo» senza immobili trovati per quel
+    nome. Se il nome corrisponde a contatti visibili, la domanda lo dice
+    (candidati, non scelte: l'immobile resta da indicare)."""
+    nomi = [x["label"] for x in getattr(vista, "owner_labels", None) or []]
+    if not nomi:
+        return motivi
+    for m in motivi:
+        if m["code"] == "reference_not_found":
+            chi = nomi[0] if len(nomi) == 1 else ", ".join(nomi[:-1]) + " o " + nomi[-1]
+            m["message"] = (f"Tra i contatti ho trovato {chi}, ma nessun immobile con incarico collegato a "
+                            "questo nome: quale immobile deve visitare il cliente?")
     return motivi
 
 
@@ -537,8 +636,9 @@ def view(ctx, command_id: int) -> dict[str, Any]:
         passi.append({
             "ordinal": n, "intent": p["intent"], "quote": piano[n]["quote"], "state": p["state"],
             "decision": v.decision if p["state"] in ("pending", "failed") else p["decision"],
-            "needs": attesa, "reasons": _con_orario(_motivi(v.reasons if p["state"] in ("pending", "failed") else p["reasons"]),
-                                                    piano[n].get("payload") or {}, comando["recorded_at"]),
+            "needs": attesa, "reasons": _con_proprietario(_con_orario(
+                _motivi(v.reasons if p["state"] in ("pending", "failed") else p["reasons"]),
+                piano[n].get("payload") or {}, comando["recorded_at"]), v),
             "candidates": scelte, "duplicates": v.duplicate_labels, "hidden_duplicate": v.hidden,
             "start_at": piano[n].get("start_at"), "end_at": piano[n].get("end_at"),
             "result": {k: x for k, x in (p["result"] or {}).items() if k in _RISULTATO},

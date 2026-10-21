@@ -321,16 +321,37 @@ const ORDINALI = { primo: 1, prima: 1, uno: 1, secondo: 2, seconda: 2, due: 2, t
  */
 export function choiceFromText(text, scelte) {
   const aperte = (scelte || []).filter((s) => Array.isArray(s.candidates) && s.candidates.length > 1);
-  if (aperte.length !== 1) return null;
-  const { ordinal, ref, candidates } = aperte[0];
+  if (!aperte.length) return null;
   const t = piega(text).replace(/^(e |scegli |prendi |seleziona |quello |quella |il |la |l )+/, '').trim();
   if (!t) return null;
-  const numero = /^\d+$/.test(t) ? Number(t) : ORDINALI[t.split(' ')[0]] && t.split(' ').length <= 2 ? ORDINALI[t.split(' ')[0]] : null;
-  if (numero && numero >= 1 && numero <= candidates.length) return { ordinal, ref, ...candidates[numero - 1] };
+  if (aperte.length === 1) {
+    const { ordinal, ref, candidates } = aperte[0];
+    const numero = /^\d+$/.test(t) ? Number(t) : ORDINALI[t.split(' ')[0]] && t.split(' ').length <= 2 ? ORDINALI[t.split(' ')[0]] : null;
+    if (numero && numero >= 1 && numero <= candidates.length) return { ordinal, ref, ...candidates[numero - 1] };
+  }
+  // collaudo 3: per nome, anche con piu' scelte aperte (contatto e incarico),
+  // purche' le parole indichino UN solo candidato fra tutti
   const parole = t.split(' ').filter((p) => p.length > 1);
-  const trovati = candidates.filter((c) => {
-    const etichetta = piega(c.label);
-    return parole.length > 0 && parole.every((p) => etichetta.includes(p));
-  });
-  return trovati.length === 1 ? { ordinal, ref, ...trovati[0] } : null;
+  const trovati = aperte.flatMap(({ ordinal, ref, candidates }) => candidates
+    .filter((c) => parole.length > 0 && parole.every((p) => piega(c.label).includes(p)))
+    .map((c) => ({ ordinal, ref, ...c })));
+  return trovati.length === 1 ? trovati[0] : null;
+}
+
+const SI = /^(si|esatto|giusto|corretto|e lui|e lei|proprio lui|proprio lei|lui|lei|quello|quella|va bene|ok)$/;
+
+/**
+ * Collaudo 3: la risposta che riconosce il candidato UNICO gia' proposto
+ * («Francesco Ruvolo?» -> «sì», «Ruvolo») si capisce qui, senza il modello.
+ * Non conferma nulla: la conferma resta il pulsante «Conferma ed esegui».
+ * `proposti` = [{ ordinal, ref, id, label }]. Altrimenti null.
+ */
+export function proposedFromText(text, proposti) {
+  const lista = proposti || [];
+  const t = piega(text).replace(/^(si |sì )(?=\S)/, '').replace(/^(e |il |la |l )+/, '').trim();
+  if (!t || !lista.length) return null;
+  if (SI.test(piega(text)) || SI.test(t)) return lista.length === 1 ? lista[0] : null;
+  const parole = t.split(' ').filter((p) => p.length > 1);
+  const trovati = lista.filter((c) => parole.length > 0 && parole.every((p) => piega(c.label).includes(p)));
+  return trovati.length === 1 ? trovati[0] : null;
 }

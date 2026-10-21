@@ -19,7 +19,8 @@ import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
   SPEECH_ERRORS, SPEECH_IPHONE, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
-  errorMessage, hasRunnableSteps, intentLabel, openQuestions, referenceNotFound, resultText, retryAfter, spokenCommand,
+  errorMessage, hasRunnableSteps, intentLabel, openQuestions, proposedFromText, proposedTargets, referenceNotFound,
+  resultText, retryAfter, spokenCommand,
   stepDescription, stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
 import { createDictation, isAppleMobile, speechSupport } from '../voice/voice-speech.js';
@@ -344,6 +345,19 @@ export async function renderVoce(container, _params = [], deps = {}) {
             return;
           }
         }
+        // Collaudo 3: «sì» / «Ruvolo» per il candidato unico gia' proposto: nessuna
+        // nuova interpretazione; la conferma resta il pulsante.
+        const proposto = proposedFromText(testoRisposta, (s.view.steps || [])
+          .filter((st) => st.state === 'pending')
+          .flatMap((st) => proposedTargets(st).map((t) => ({ ordinal: st.ordinal, ...t }))));
+        if (proposto) {
+          campo.value = '';
+          mostraErrore('');
+          live.textContent = area.querySelector('[data-voice-confirm]')
+            ? `Sì, «${proposto.label}». Tocca «Conferma ed esegui» per salvare.`
+            : `Sì, «${proposto.label}». Rispondi alle altre domande qui sopra.`;
+          return;
+        }
         if (inAttesa()) { mostraErrore(`Il servizio di interpretazione è saturo: riprova fra ${Math.ceil((s.attesaFino - Date.now()) / 1000)} secondi.`); return; }
         const per = `${id()}\n${testoRisposta}`;          // la chiave appartiene a (comando, risposta)
         if (s.replyFor !== per) { s.replyKey = api.newCommandKey(); s.replyFor = per; }
@@ -364,12 +378,28 @@ export async function renderVoce(container, _params = [], deps = {}) {
       if (micRisposta && dettatura) micRisposta.addEventListener('click', () => avviaDettatura(campo, micRisposta));
     }
     const nuovo = area.querySelector('[data-voice-new]');
-    if (nuovo) nuovo.addEventListener('click', () => {
+    if (nuovo) nuovo.addEventListener('click', async () => {
       if (s.busy) return;
+      // Collaudo 3: un comando ancora aperto e mai eseguito si annulla davvero,
+      // cosi' non riappare rientrando nella pagina (una sola conversazione viva).
+      const aperto = s.view && ['planned', 'awaiting_answers'].includes(s.view.status)
+        && (s.view.steps || []).every((st) => st.state === 'pending' || st.state === 'skipped');
+      if (aperto) {
+        occupato(true);
+        try {
+          await api.cancelCommand(id());
+        } catch (e) {
+          mostraErrore(errorMessage(e));
+          return;
+        } finally {
+          occupato(false);
+        }
+      }
       area.innerHTML = '';
       s.view = null; s.key = null; s.keyText = null; s.storia = []; s.replyKey = null; s.replyFor = null;
       testo.value = '';
       mostraErrore('');
+      live.textContent = '';
       testo.focus();
     });
     for (const b of area.querySelectorAll('[data-voice-undo]')) {
@@ -423,6 +453,23 @@ export async function renderVoce(container, _params = [], deps = {}) {
       occupato(false);
     }
   }
+
+  // Collaudo 3: rientrando nella pagina si ritrova il comando in corso, con la
+  // conversazione e le domande aperte, dal registro del server. Nessuna nuova
+  // interpretazione: e' una sola lettura (GET), il modello non viene chiamato.
+  async function riprendi() {
+    let corrente;
+    try {
+      corrente = await (deps.current || api.currentCommand)();
+    } catch (_e) {
+      return;                                    // la pagina resta utilizzabile per un comando nuovo
+    }
+    if (!corrente || !corrente.command || s.view || s.busy) return;
+    s.storia = Array.isArray(corrente.conversation) ? corrente.conversation.slice() : [];
+    disegna(corrente.command);
+    live.textContent = 'Ho ripreso il comando in corso: rispondi alle domande o conferma.';
+  }
+  const ripresa = riprendi();
 
   q('[data-voice-form]').addEventListener('submit', (event) => {
     event.preventDefault();
@@ -496,4 +543,5 @@ export async function renderVoce(container, _params = [], deps = {}) {
       document.addEventListener('visibilitychange', () => { if (document.hidden) interrompi(); });
     }
   }
+  await ripresa;
 }

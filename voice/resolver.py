@@ -77,6 +77,11 @@ class Resolution:
     matches: dict[tuple[int, str], RefMatch] = field(default_factory=dict)
     #: create_contact / create_building / create_unit: i doppioni visibili.
     duplicates: dict[int, tuple[Candidate, ...]] = field(default_factory=dict)
+    #: Collaudo 3: visita con il proprietario detto («venditore Francesco Rivo»)
+    #: ma nessun suo immobile trovato: i CONTATTI visibili con quel nome, per
+    #: dire all'agente chi e' stato riconosciuto. Solo un'informazione: non
+    #: sceglie l'immobile, non entra nella decisione.
+    owner_hints: dict[int, tuple[Candidate, ...]] = field(default_factory=dict)
 
     def resolved(self, ordinal: int, ref: str) -> int | None:
         m = self.matches.get((ordinal, ref))
@@ -131,13 +136,11 @@ def _match_contact(ctx, cur, d: dict[str, Any]) -> RefMatch:
             trovati = repository.contacts_by_name(ctx, cur, first_name=n, last_name=c)
             if trovati:
                 break
-        for n, c in ordini if not trovati else ():
-            # V8-3: piccole imprecisioni di pronuncia («Rosi» per «Rossi») e
-            # nomi detti a meta' («Ruvo» per «Ruvolo»): candidati da confermare,
-            # mai scelti da soli.
-            trovati = repository.contacts_by_similar_name(ctx, cur, first_name=n, last_name=c)
-            if trovati:
-                break
+        if not trovati:
+            # V8-3 / collaudo 3: imprecisioni di pronuncia («Rosi», «Rivo»), nomi
+            # detti a meta' («Ruvo»), in qualunque ordine e anche sul nome completo
+            # del contatto: candidati da confermare, mai scelti da soli.
+            trovati = repository.contacts_by_similar_name(ctx, cur, first_name=nome, last_name=cognome)
         if len(trovati) > 1 and d.get("role"):
             # V8-3: il ruolo detto («acquirente») mette avanti chi ce l'ha;
             # se nessuno ce l'ha restano tutti: il ruolo non esclude nessuno.
@@ -152,11 +155,8 @@ def _match_property(ctx, cur, d: dict[str, Any]) -> RefMatch:
     if d.get("owner") and not (d.get("code") or d.get("address")):
         # V8-0: «la casa di Francesco Ruvolo»: gli immobili di quel proprietario,
         # sempre da confermare (mai esatto: il nome non identifica).
+        # (nome e cognome in qualunque ordine: «Ruvolo Francesco»)
         trovati = repository.properties_by_owner(ctx, cur, **d["owner"])
-        nome, cognome = d["owner"].get("first_name"), d["owner"].get("last_name")
-        if not trovati and nome and cognome:
-            # «Ruvolo Francesco»: detti in ordine inverso
-            trovati = repository.properties_by_owner(ctx, cur, first_name=cognome, last_name=nome)
         return RefMatch(_candidates(trovati, "property"), exact=False)
     if d.get("code"):
         trovati = repository.properties_by_code(ctx, cur, d["code"])
@@ -263,6 +263,7 @@ def resolve(plan: Plan, ctx) -> Resolution:
     similar_building: set[int] = set()
     similar_unit: set[int] = set()
     visit_no_mandate: set[int] = set()
+    owner_hints: dict[int, tuple[Candidate, ...]] = {}
     cache: dict = {}
     puo_assegnare = bool(ctx.may_assign_records)
 
@@ -276,6 +277,12 @@ def resolve(plan: Plan, ctx) -> Resolution:
                 if ref.kind == "agent" and not puo_assegnare:
                     continue  # la politica blocca: nessuna lettura dei colleghi
                 m = _match(ctx, cur, ref, cache)
+                proprietario = ref.description.get("owner") if ref.kind == "property" else None
+                if visita and nome == "property" and proprietario and not m.candidates:
+                    simili = repository.contacts_by_similar_name(ctx, cur, first_name=proprietario.get("first_name"),
+                                                                 last_name=proprietario.get("last_name"))
+                    if simili:
+                        owner_hints[step.ordinal] = _candidates(simili[:repository.MAX_CANDIDATES], "contact")
                 if visita and nome == "property" and m.candidates:
                     # V8-2: «l'appartamento in via Roma» per una VISITA e' un
                     # incarico: restano solo gli immobili con un incarico
@@ -316,4 +323,4 @@ def resolve(plan: Plan, ctx) -> Resolution:
     facts = Facts(refs=refs, duplicate_visible=duplicate_visible, duplicate_hidden=frozenset(duplicate_hidden),
                   similar_building=frozenset(similar_building), similar_unit=frozenset(similar_unit),
                   visit_no_mandate=frozenset(visit_no_mandate), actor_may_assign=puo_assegnare)
-    return Resolution(facts=facts, matches=matches, duplicates=duplicates)
+    return Resolution(facts=facts, matches=matches, duplicates=duplicates, owner_hints=owner_hints)

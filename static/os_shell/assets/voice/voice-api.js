@@ -53,6 +53,8 @@ const percorso = (id, resto = '') => `${BASE}/commands/${Number(id)}${resto}`;
 
 export const submitCommand = (key, text, post = apiPost) => post(`${BASE}/commands`, { client_command_id: key, text });
 export const getCommand = (id, get = apiGet) => get(percorso(id));
+/** Collaudo 3: il comando in corso dell'operatore ({command, conversation}), dal registro, senza interpretare. */
+export const currentCommand = (get = apiGet) => get(`${BASE}/commands/current`);
 /** Fase 7: risposta o correzione a un comando non ancora eseguito (nuova chiave). */
 export const replyCommand = (id, key, text, post = apiPost) =>
   post(percorso(id, '/reply'), { client_command_id: key, text });

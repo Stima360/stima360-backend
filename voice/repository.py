@@ -22,6 +22,7 @@ Regole del modulo:
 """
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from typing import Any
@@ -276,8 +277,10 @@ def usable_mandate(ctx, cur, property_id: int) -> bool:
 #: la stessa persona. Un test le fissa.
 NAME_SIMILARITY = 0.75
 #: Al massimo quanti contatti visibili si confrontano in Python (il prefiltro
-#: SQL e' l'iniziale del cognome, o del nome quando si dice solo quello).
-SIMILARITY_SCAN = 200
+#: SQL e' l'iniziale di una delle parole dette, su nome, cognome o nome
+#: completo; dai piu' recenti). Collaudo 3: 200 in ordine di id poteva
+#: escludere i contatti nuovi di un'agenzia grande.
+SIMILARITY_SCAN = 2000
 #: Collaudo iPhone del 21/10: un nome detto a meta' («Ruvo» per «Ruvolo»,
 #: «Cens» per «Censori»): almeno PREFIX_MIN_LETTERS lettere che aprono il nome
 #: registrato valgono PREFIX_SIMILARITY. Resta un CANDIDATO da confermare.
@@ -298,36 +301,126 @@ def name_similarity(said: str | None, stored: str | None) -> float:
     return simile
 
 
+# ---------------------------------------------------------------------------
+# Collaudo 3 (21/10): cognomi pronunciati o trascritti male, in generale
+# ---------------------------------------------------------------------------
+#
+# Perche' «Francesco Ruvo» / «Francesco Rivo» non trovava Francesco Ruvolo:
+#   * si confrontavano SOLO `first_name` e `last_name`, mentre nel CRM un
+#     contatto persona puo' avere solo il nome completo (`display_name`): e'
+#     il nome che mostrano Contatti e Agenda (`COALESCE(display_name, ...)`);
+#   * «Rivo» contro «Ruvolo» vale 0.60 (sotto 0.75): una vocale sbagliata in
+#     un cognome detto a meta' non bastava.
+# La regola, generale (nessun alias): le parole dette e quelle registrate si
+# confrontano a coppie, in qualunque ordine (nome e cognome invertiti), su
+# ogni forma del nome del contatto; una parola e' simile se lo e' per
+# `name_similarity` oppure se ha le stesse consonanti, o le prime («Rivo» ->
+# r-v, «Ruvolo» -> r-v-l): le vocali sono la parte che il riconoscimento
+# sbaglia di piu'. Il risultato e' sempre un CANDIDATO da confermare, letto
+# con il predicato del CRM (chi non si vede non compare).
+
+_PAROLE = re.compile(r"[a-z]+")
+_VOCALI = frozenset("aeiouy")
+#: Stesse consonanti (o le prime): «Rivo» per «Ruvolo», «Rosi» per «Rossi».
+SKELETON_SIMILARITY = 0.78
+
+
+def name_tokens(*parti: str | None) -> list[str]:
+    """Le parole di un nome, senza accenti ne' maiuscole; via le iniziali puntate."""
+    return [t for p in parti for t in _PAROLE.findall(fold(p or "")) if len(t) >= 2]
+
+
+def _scheletro(parola: str) -> str:
+    """L'iniziale e poi le sole consonanti, senza doppie: «ruvolo» -> «rvl»."""
+    uscita = parola[:1]
+    for ch in parola[1:]:
+        if ch not in _VOCALI and ch != uscita[-1]:
+            uscita += ch
+    return uscita
+
+
+def token_similarity(said: str, stored: str) -> float:
+    """Somiglianza fra una parola detta e una registrata (gia' ripiegate)."""
+    simile = name_similarity(said, stored)
+    if len(said) >= PREFIX_MIN_LETTERS:
+        a, b = _scheletro(said), _scheletro(stored)
+        if len(a) >= 2 and b.startswith(a):
+            simile = max(simile, SKELETON_SIMILARITY)
+    return simile
+
+
+def _abbina(dette: list[str], registrate: list[str]) -> tuple[float, float] | None:
+    """Ogni parola detta con una registrata diversa (la coppia piu' simile per
+    prima). (copertura, media) o None. Copertura 1 = ogni parola detta
+    trovata; meno di 1 solo se il registrato ha meno parole (es. solo il
+    cognome) e sono state trovate tutte."""
+    coppie = sorted(((token_similarity(a, b), i, j) for i, a in enumerate(dette) for j, b in enumerate(registrate)),
+                    reverse=True)
+    prese_a, prese_b, punti = set(), set(), []
+    for simile, i, j in coppie:
+        if simile < NAME_SIMILARITY or i in prese_a or j in prese_b:
+            continue
+        prese_a.add(i)
+        prese_b.add(j)
+        punti.append(simile)
+    if not punti or len(punti) < min(len(dette), len(registrate)):
+        return None
+    return len(punti) / len(dette), sum(punti) / len(punti)
+
+
+def person_match(dette: list[str], *forme: list[str]) -> tuple[float, float] | None:
+    """La migliore fra le forme del nome registrato (nome + cognome, nome completo...)."""
+    risultati = [r for f in forme if f for r in [_abbina(dette, f)] if r is not None]
+    return max(risultati) if risultati else None
+
+
+def _solo_i_completi(punteggi: list) -> list:
+    """Se qualcuno corrisponde a TUTTE le parole dette, quelli parziali (es. un
+    contatto con il solo nome «Francesco» per «Francesco Ruvo») non si propongono."""
+    if any(p[0][0] >= 1.0 for p in punteggi):
+        return [p for p in punteggi if p[0][0] >= 1.0]
+    return punteggi
+
+
+def _prefiltro_iniziali(alias: str, dette: list[str]) -> tuple[str, list]:
+    """SQL: il contatto ha almeno una parola (nome, cognome o nome completo)
+    che comincia con l'iniziale di una parola detta."""
+    iniziali = sorted({t[0] for t in dette})
+    return (f"(lower(left(btrim({alias}.first_name), 1)) = ANY(%s) "
+            f"OR lower(left(btrim({alias}.last_name), 1)) = ANY(%s) "
+            f"OR lower({alias}.display_name) ~ %s)",
+            [iniziali, iniziali, f"(^|[^a-z])[{''.join(iniziali)}]"])
+
+
+def _forme_contatto(r: dict, prefisso: str = "") -> list[list[str]]:
+    return [name_tokens(r.get(f"{prefisso}first_name"), r.get(f"{prefisso}last_name")),
+            name_tokens(r.get(f"{prefisso}display_name"))]
+
+
 def contacts_by_similar_name(ctx, cur, *, first_name: str | None = None, last_name: str | None = None,
                              include_archived: bool = False) -> list[dict]:
-    """Contatti visibili il cui nome e cognome SOMIGLIANO a quelli detti
-    (stessa iniziale, poi somiglianza >= NAME_SIMILARITY su ogni parte
-    detta). Mai esatti: chi li usa chiede sempre la conferma."""
-    detto_nome, detto_cognome = fold(first_name or ""), fold(last_name or "")
-    if not (detto_nome or detto_cognome):
+    """Contatti visibili il cui nome SOMIGLIA a quello detto (vedi sopra), i
+    piu' somiglianti per primi. Mai esatti: chi li usa chiede sempre la conferma."""
+    dette = name_tokens(first_name, last_name)
+    if not dette:
         return []
-    if detto_cognome:
-        condizione, param = "lower(left(btrim(c.last_name), 1)) = %s", detto_cognome[:1]
-    else:
-        condizione, param = "lower(left(btrim(c.first_name), 1)) = %s", detto_nome[:1]
+    condizione, params = _prefiltro_iniziali("c", dette)
     source, scope_params = scoped_source(ctx, "contacts", "c")
     archiviati = "" if include_archived else " AND c.status <> 'archived'"
     cur.execute(
         f"SELECT {_CONTACT_COLUMNS} FROM {source} AND {contact_trash.live('c')}{archiviati} "
-        f"AND ({condizione}) ORDER BY c.id LIMIT %s",
-        scope_params + [param, SIMILARITY_SCAN],
+        f"AND {condizione} ORDER BY c.id DESC LIMIT %s",
+        scope_params + params + [SIMILARITY_SCAN],
     )
-    simili = []
+    punteggi = []
     for r in cur.fetchall():
         r = dict(r)
-        if detto_cognome and name_similarity(detto_cognome, r.get("last_name")) < NAME_SIMILARITY:
-            continue
-        if detto_nome and name_similarity(detto_nome, r.get("first_name")) < NAME_SIMILARITY:
-            continue
-        simili.append(r)
-        if len(simili) > MAX_CANDIDATES:
-            break
-    return simili
+        punto = person_match(dette, *_forme_contatto(r))
+        if punto is not None:
+            punteggi.append((punto, -int(r["id"]), r))
+    punteggi = _solo_i_completi(punteggi)
+    punteggi.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [r for _, _, r in punteggi[:MAX_CANDIDATES + 1]]
 
 
 #: Il ruolo detto -> i ruoli del CRM che lo soddisfano (contact_roles vivi,
@@ -370,37 +463,30 @@ def properties_by_owner(ctx, cur, *, first_name: str | None = None, last_name: s
     detto: uguale, o - per piccole imprecisioni - simile (stessa iniziale del
     cognome, NAME_SIMILARITY). Come la ricerca degli incarichi dell'Agenda, il
     proprietario si cerca nell'agenzia; l'immobile resta da confermare."""
-    detto_nome, detto_cognome, ditta = fold(first_name or ""), fold(last_name or ""), fold(company_name or "")
-    if not (detto_nome or detto_cognome or ditta):
+    dette, ditta = name_tokens(first_name, last_name), fold(company_name or "")
+    if not (dette or ditta):
         return []
     if ditta:
         filtro, params = "lower(btrim(c.company_name)) = %s", [ditta]
-    elif detto_cognome:
-        filtro, params = "lower(left(btrim(c.last_name), 1)) = %s", [detto_cognome[:1]]
     else:
-        filtro, params = "lower(left(btrim(c.first_name), 1)) = %s", [detto_nome[:1]]
+        filtro, params = _prefiltro_iniziali("c", dette)
     cur.execute(
         f"SELECT {_PROPERTY_COLUMNS}, c.first_name AS owner_first_name, c.last_name AS owner_last_name, "
         "c.company_name AS owner_company_name, c.display_name AS owner_display_name "
         "FROM properties p JOIN property_contacts pc ON pc.property_id = p.id AND pc.role = ANY(%s) "
         "JOIN contacts c ON c.id = pc.contact_id "
-        f"WHERE p.agency_id = %s AND {_live_property()} AND c.agency_id = p.agency_id AND ({filtro}) "
-        "ORDER BY p.id LIMIT %s",
+        f"WHERE p.agency_id = %s AND {_live_property()} AND c.agency_id = p.agency_id AND {filtro} "
+        "ORDER BY p.id DESC LIMIT %s",
         [list(_OWNER_ROLES), ctx.require_agency(), *params, SIMILARITY_SCAN])
-    visti, trovati = set(), []
+    migliori: dict[int, tuple] = {}
     for r in cur.fetchall():
         r = dict(r)
-        if not ditta:
-            if detto_cognome and name_similarity(detto_cognome, r.get("owner_last_name")) < NAME_SIMILARITY:
-                continue
-            if detto_nome and name_similarity(detto_nome, r.get("owner_first_name")) < NAME_SIMILARITY:
-                continue
-        if r["id"] in visti:
+        punto = (1.0, 1.0) if ditta else person_match(dette, *_forme_contatto(r, "owner_"))
+        if punto is None:
             continue
-        visti.add(r["id"])
         r["owner_name"] = r.get("owner_display_name") or " ".join(
             x for x in (r.get("owner_first_name"), r.get("owner_last_name")) if x) or r.get("owner_company_name")
-        trovati.append(r)
-        if len(trovati) > MAX_CANDIDATES:
-            break
-    return trovati
+        if r["id"] not in migliori or punto > migliori[r["id"]][0]:
+            migliori[r["id"]] = (punto, r)
+    ordinati = sorted(_solo_i_completi(list(migliori.values())), key=lambda x: (x[0], x[1]["id"]), reverse=True)
+    return [r for _, r in ordinati[:MAX_CANDIDATES + 1]]
