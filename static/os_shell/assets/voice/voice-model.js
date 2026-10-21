@@ -211,6 +211,18 @@ export const SPEECH_ERRORS = {
   error: 'Il riconoscimento vocale si è interrotto. Scrivi il comando o riprova.',
 };
 
+// Collaudo iPhone del 21/10: su iPhone (Safari e Chrome usano WebKit) l'ascolto
+// si chiude a ogni pausa e una nuova sessione puo' far chiedere di nuovo il
+// permesso del microfono. E' una regola di iOS: qui la si spiega e si indica
+// l'alternativa affidabile, senza promettere di aggirarla.
+export const SPEECH_IPHONE = {
+  hint: 'Su iPhone l’ascolto si ferma a ogni pausa: tocca «Continua a dettare» per aggiungere il resto.',
+  paused: 'Pausa: il testo è salvo. Tocca «Continua a dettare» per aggiungere, oppure controlla il testo.',
+  permission: 'Se l’iPhone chiede ogni volta il permesso del microfono, è una regola di iOS che STIMA360 non può cambiare. '
+    + 'In Safari puoi consentirlo per questo sito (menu «aA» → «Impostazioni sito web» → Microfono → «Consenti»); '
+    + 'in alternativa tocca il campo di testo e usa il microfono della tastiera.',
+};
+
 // ---------------------------------------------------------------------------
 // V8-4: la scheda riepilogativa dell'appuntamento, il collegamento e le
 // parole di conferma. Funzioni pure.

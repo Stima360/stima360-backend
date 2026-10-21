@@ -216,3 +216,34 @@ def test_07_orario_passato_si_mostra_e_si_chiede(staged):  # noqa: F811
     assert (out["data"], out["inizio"], out["fine"]) == ("2026-09-26", "10:30", "11:30")
     assert "Le 10:30 di oggi sono già passate. Vuoi scegliere un altro orario?" in out["stato"]
     assert not any(c["m"] == "POST" and c["url"] == "/api/appointments" for c in out["calls"])
+
+
+IPHONE = "Object.defineProperty(window, 'navigator', { value: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)' }, configurable: true });\n"
+
+
+@node
+def test_08_iphone_pausa_continua_e_usa_il_testo(staged):  # noqa: F811
+    """Collaudo iPhone 21/10: alla pausa l'ascolto NON si riapre da solo; «Continua a dettare»
+    lo riapre dal tocco, il testo resta senza doppioni; si interpreta solo con «Usa questo testo»."""
+    scena = r"""
+      await apriNuovo();
+      f('[data-voice-dictate]').dispatch('click'); await wait();
+      FakeRec.made[0].say('Visita con Mario Rossi'); FakeRec.made[0].onend(); await wait();   // iOS chiude alla pausa
+      const inPausa = { rec: FakeRec.made.length, testo: f('[data-voice-dictate]').textContent, usa: f('[data-voice-use]').hidden,
+                        stato: f('[data-voice-dictation-status]').visibleText(), trascritto: f('[data-voice-transcript]').textContent,
+                        interpretate: calls.filter((c) => c.url === '/api/voice/interpret').length };
+      f('[data-voice-dictate]').dispatch('click'); await wait();                                  // «Continua a dettare»
+      const riaperta = { rec: FakeRec.made.length, usa: f('[data-voice-use]').hidden };
+      FakeRec.made[1].say('Rossi il primo ottobre alle 16'); FakeRec.made[1].onend(); await wait();
+      f('[data-voice-use]').dispatch('click'); await wait();
+      const corpo = JSON.parse(calls.find((c) => c.url === '/api/voice/interpret').options.body);
+      report({ inPausa, riaperta, inviato: corpo.text, data: f('[data-field="date"]').value, inizio: f('[data-field="start"]').value,
+               bottone: f('[data-voice-dictate]').textContent });
+    """
+    out = _run(staged, IPHONE + scena, _route("GET", "/api/voice/status", ACCESA) + _route("POST", "/api/voice/interpret", CAPITO) + _rotte())
+    p = out["inPausa"]
+    assert p["rec"] == 1 and "Continua a dettare" in p["testo"] and p["usa"] is False and p["interpretate"] == 0
+    assert "Pausa: il testo è salvo" in p["stato"] and "regola di iOS" in p["stato"] and p["trascritto"] == "Visita con Mario Rossi"
+    assert out["riaperta"] == {"rec": 2, "usa": True}
+    assert out["inviato"] == "Visita con Mario Rossi il primo ottobre alle 16"
+    assert (out["data"], out["inizio"]) == ("2026-10-01", "16:00") and "Parla" in out["bottone"]

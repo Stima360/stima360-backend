@@ -18,11 +18,11 @@
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
-  SPEECH_ERRORS, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
+  SPEECH_ERRORS, SPEECH_IPHONE, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
   errorMessage, hasRunnableSteps, intentLabel, openQuestions, referenceNotFound, resultText, retryAfter, spokenCommand,
   stepDescription, stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
-import { createDictation, speechSupport } from '../voice/voice-speech.js';
+import { createDictation, isAppleMobile, speechSupport } from '../voice/voice-speech.js';
 
 const RIF = { contact: 'il contatto', property: 'l’immobile', building: 'la palazzina', agent: 'l’agente' };
 const AGGIORNA = ['planned', 'awaiting_answers', 'executing', 'partial'];
@@ -150,7 +150,7 @@ export function commandHtml(view, opzioni = {}) {
     </section>`;
 }
 
-function paginaHtml(conMicrofono, avviso) {
+function paginaHtml(conMicrofono, avviso, iphone = false) {
   return `
     <section class="voice-page" data-voice-page>
       <form class="card voice-compose" data-voice-form novalidate>
@@ -163,6 +163,7 @@ function paginaHtml(conMicrofono, avviso) {
           <button type="submit" class="btn primary voice-big" data-voice-send>Invia</button>
         </div>
         <p class="muted voice-hint" data-voice-hint>${escapeHtml(avviso)}</p>
+        ${conMicrofono && iphone ? `<p class="muted voice-hint" data-voice-iphone>${escapeHtml(SPEECH_IPHONE.permission)}</p>` : ''}
         <div class="voice-live muted" data-voice-live role="status" aria-live="polite"></div>
         <div class="field-error" data-voice-error role="alert"></div>
       </form>
@@ -180,10 +181,12 @@ export async function renderVoce(container, _params = [], deps = {}) {
   }
   const supporto = speechSupport(win);
   const conMicrofono = stato.speechInput && supporto.supported;
-  const avviso = conMicrofono
-    ? 'Tocca «Parla» e detta con calma, anche con pause; poi «Termina dettatura», ricontrolla e «Invia».'
-    : 'Scrivi il comando. Sul telefono puoi usare anche il microfono della tastiera.';
-  container.innerHTML = paginaHtml(conMicrofono, avviso);
+  const iphone = isAppleMobile(win);
+  const avviso = !conMicrofono
+    ? 'Scrivi il comando. Sul telefono puoi usare anche il microfono della tastiera.'
+    : (iphone ? `Tocca «Parla» e detta. ${SPEECH_IPHONE.hint} Poi ricontrolla il testo e tocca «Invia».`
+      : 'Tocca «Parla» e detta con calma, anche con pause; poi «Termina dettatura», ricontrolla e «Invia».');
+  container.innerHTML = paginaHtml(conMicrofono, avviso, iphone);
 
   const q = (sel) => container.querySelector(sel);
   const testo = q('[data-voice-text]');
@@ -461,6 +464,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
         pulsante.setAttribute('aria-pressed', ascolta ? 'true' : 'false');
         pulsante.setAttribute('aria-label', ascolta ? 'Termina la dettatura' : 'Parla: avvia la dettatura');
         pulsante.textContent = ascolta ? '■ Termina dettatura' : '🎤 Parla';
+        pulsante.dataset.paused = 'false';
         pulsante.classList.toggle('listening', ascolta);
         if (ascolta) live.textContent = 'In ascolto… puoi fare pause. Quando hai finito tocca «Termina dettatura».';
       },
@@ -470,7 +474,14 @@ export async function renderVoce(container, _params = [], deps = {}) {
         live.textContent = {
           user: `Dettatura terminata: controlla il testo e tocca ${tasto}.`,
           limit: `Dettatura chiusa dopo un lungo silenzio: il testo è nel campo, controllalo e tocca ${tasto}.`,
+          paused: `${SPEECH_IPHONE.paused} Quando hai finito tocca ${tasto}.`,
         }[motivo] || '';
+        // iPhone: la pausa ha chiuso l'ascolto; lo stesso pulsante lo riapre, con il testo in testa
+        if (motivo === 'paused' && pulsante) {
+          pulsante.textContent = '🎤 Continua a dettare';
+          pulsante.setAttribute('aria-label', 'Continua a dettare');
+          pulsante.dataset.paused = 'true';
+        }
       },
       onError: (codice) => mostraErrore(SPEECH_ERRORS[codice] || SPEECH_ERRORS.error),
     });

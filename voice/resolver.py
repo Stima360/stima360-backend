@@ -123,12 +123,21 @@ def _match_contact(ctx, cur, d: dict[str, Any]) -> RefMatch:
         trovati = repository.contacts_by_name(ctx, cur, company_name=d["company_name"])
         return RefMatch(_candidates(trovati, "contact"), exact=False)
     if d.get("first_name") or d.get("last_name"):
-        trovati = repository.contacts_by_name(ctx, cur, first_name=d.get("first_name"), last_name=d.get("last_name"))
-        if not trovati:
-            # V8-3: piccole imprecisioni di pronuncia («Rosi» per «Rossi»):
-            # candidati da confermare, mai scelti da soli.
-            trovati = repository.contacts_by_similar_name(ctx, cur, first_name=d.get("first_name"),
-                                                          last_name=d.get("last_name"))
+        nome, cognome = d.get("first_name"), d.get("last_name")
+        # Collaudo iPhone: «Censori Giorgio», nome e cognome detti in ordine inverso
+        ordini = [(nome, cognome)] + ([(cognome, nome)] if nome and cognome else [])
+        trovati = []
+        for n, c in ordini:
+            trovati = repository.contacts_by_name(ctx, cur, first_name=n, last_name=c)
+            if trovati:
+                break
+        for n, c in ordini if not trovati else ():
+            # V8-3: piccole imprecisioni di pronuncia («Rosi» per «Rossi») e
+            # nomi detti a meta' («Ruvo» per «Ruvolo»): candidati da confermare,
+            # mai scelti da soli.
+            trovati = repository.contacts_by_similar_name(ctx, cur, first_name=n, last_name=c)
+            if trovati:
+                break
         if len(trovati) > 1 and d.get("role"):
             # V8-3: il ruolo detto («acquirente») mette avanti chi ce l'ha;
             # se nessuno ce l'ha restano tutti: il ruolo non esclude nessuno.

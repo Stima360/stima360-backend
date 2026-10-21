@@ -278,6 +278,11 @@ NAME_SIMILARITY = 0.75
 #: Al massimo quanti contatti visibili si confrontano in Python (il prefiltro
 #: SQL e' l'iniziale del cognome, o del nome quando si dice solo quello).
 SIMILARITY_SCAN = 200
+#: Collaudo iPhone del 21/10: un nome detto a meta' («Ruvo» per «Ruvolo»,
+#: «Cens» per «Censori»): almeno PREFIX_MIN_LETTERS lettere che aprono il nome
+#: registrato valgono PREFIX_SIMILARITY. Resta un CANDIDATO da confermare.
+PREFIX_MIN_LETTERS = 3
+PREFIX_SIMILARITY = 0.85
 
 
 def name_similarity(said: str | None, stored: str | None) -> float:
@@ -287,7 +292,10 @@ def name_similarity(said: str | None, stored: str | None) -> float:
         return 0.0
     if a == b:
         return 1.0
-    return SequenceMatcher(None, a, b).ratio()
+    simile = SequenceMatcher(None, a, b).ratio()
+    if len(a) >= PREFIX_MIN_LETTERS and b.startswith(a):
+        simile = max(simile, PREFIX_SIMILARITY)
+    return simile
 
 
 def contacts_by_similar_name(ctx, cur, *, first_name: str | None = None, last_name: str | None = None,

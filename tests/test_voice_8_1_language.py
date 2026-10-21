@@ -148,7 +148,9 @@ def test_07_parole_chiave_e_ruoli_fissati():
         ("cerca casa", "buyer"), ("cercano casa", "buyer"))
     assert planner.SELLER_ROLES == ("owner", "seller") and planner.BUYER_ROLES == ("buyer",)
     # SENTINELLA AGGIORNATA DAL COLLAUDO REALE (21/10): «appuntamento di vendita» e' una visita.
-    assert planner.BUYER_VISIT_EVIDENCE == ("visit", "veder", "mostr", "visionar", "appuntamento di vendita")
+    # SENTINELLA AGGIORNATA DAL COLLAUDO IPHONE (21/10): «di vendita» trascritto «rivendita».
+    assert planner.BUYER_VISIT_EVIDENCE == ("visit", "veder", "mostr", "visionar", "appuntamento di vendita",
+                                            "appuntamento rivendita", "appuntamento vendita")
     assert planner.SELLER_MEETING_EVIDENCE == ("acquisizion", "proprietari", "venditor", "venditric", "padron")
     assert dict(planner.APPOINTMENT_KEYWORDS)["compromesso"] == "preliminary_contract"
     assert dict(planner.APPOINTMENT_KEYWORDS)["atto notarile"] == "notary"

@@ -24,10 +24,15 @@ FILE_NUOVI = frozenset({
     "tests/test_voice_8_0_conversations_postgres.py",
     "tests/test_voice_8_0_browser_postgres.py",
     "tests/test_voice_8_0_dictation_dates.py",
+    # collaudo iPhone del 21/10: trascrizione, nomi a meta', ruoli, impaginazione
+    "tests/test_voice_8_0_iphone.py",
+    "tests/test_voice_8_0_iphone_postgres.py",
+    "tests/test_voice_8_0_iphone_browser_postgres.py",
 })
 
 FILE_MODIFICATI = frozenset({
     "voice/operations.py",
+    "voice/dates.py",
     "voice/fake_provider.py",
     # V8-0: la Voce per tutte le agenzie attive (riga creata con l'agenzia)
     "platform_admin/agencies_repository.py",

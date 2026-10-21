@@ -35,6 +35,77 @@ const ERRORI = {
  * Una dettatura. `onText(testo, finale)` a ogni risultato, `onState('listening'|'idle')`,
  * `onError(codice)` con i codici di SPEECH_ERRORS (voice-model.js).
  */
+// ---------------------------------------------------------------------------
+// Collaudo iPhone del 21/10: come si uniscono i pezzi riconosciuti.
+//
+// Chrome da computer apre ogni risultato con uno spazio; WebKit (Safari e
+// Chrome su iPhone) no: concatenare senza spazio dava «EhiCrea». Su iPhone,
+// inoltre, un risultato puo' RIPETERE i precedenti (trascrizione cumulativa) e
+// una sessione nuova puo' riconsegnare l'ultima parola della precedente:
+// «RuvoRuvo». Le regole, pure e provate dai test:
+//   * i pezzi si uniscono SEMPRE con uno spazio;
+//   * un pezzo che comincia con tutto il testo gia' detto lo SOSTITUISCE
+//     (cumulativo); un pezzo gia' contenuto alla fine del testo si scarta;
+//   * se la fine del testo e l'inizio del pezzo coincidono (parole intere, senza
+//     maiuscole ne' accenti), la parte comune si scrive una volta sola;
+//   * parole incollate da un motore che non mette spazi («rivenditaDomani»)
+//     si separano al passaggio minuscola -> Maiuscola.
+// ---------------------------------------------------------------------------
+
+const piegaParola = (p) => String(p || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/[^a-z0-9:]+/g, '');
+
+/** «rivenditaDomani» -> «rivendita Domani»; «10:30Compratore» -> «10:30 Compratore». */
+export function separaIncollate(testo) {
+  return String(testo || '')
+    .replace(/([a-zà-ÿ0-9])([A-ZÀ-Þ])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Unisce il testo gia' riconosciuto e un pezzo nuovo, senza incollare e senza ripetere. */
+export function unisciPezzi(gia, pezzo) {
+  const a = separaIncollate(gia);
+  const b = separaIncollate(pezzo);
+  if (!a) return b;
+  if (!b) return a;
+  const pa = a.split(' ');
+  const pb = b.split(' ');
+  const fa = pa.map(piegaParola);
+  const fb = pb.map(piegaParola);
+  // cumulativo: il pezzo ripete tutto il testo gia' detto e aggiunge
+  if (fb.length >= fa.length && fa.every((p, i) => p === fb[i])) return b;
+  // gia' detto: il pezzo e' la coda del testo
+  if (fb.length <= fa.length && fb.every((p, i) => p === fa[fa.length - fb.length + i])) return a;
+  // sovrapposizione: la fine del testo e' l'inizio del pezzo
+  for (let k = Math.min(fa.length, fb.length); k >= 1; k -= 1) {
+    let uguali = true;
+    for (let i = 0; i < k; i += 1) if (fa[fa.length - k + i] !== fb[i]) { uguali = false; break; }
+    if (uguali) return [...pa, ...pb.slice(k)].join(' ');
+  }
+  return `${a} ${b}`;
+}
+
+/** Il testo di una sessione dai risultati del browser, in ordine, senza ripetizioni. */
+export function testoDeiRisultati(results) {
+  let finale = '';
+  let provvisorio = '';
+  for (let i = 0; i < (results ? results.length : 0); i += 1) {
+    const r = results[i];
+    const t = r && r[0] ? r[0].transcript : '';
+    if (r && r.isFinal) finale = unisciPezzi(finale, t); else provvisorio = unisciPezzi(provvisorio, t);
+  }
+  return { finale, provvisorio, testo: unisciPezzi(finale, provvisorio) };
+}
+
+/** iPhone e iPad (anche iPadOS che si presenta come Mac): Safari e Chrome usano WebKit. */
+export function isAppleMobile(win = globalThis.window) {
+  const nav = win && win.navigator;
+  if (!nav) return false;
+  const ua = String(nav.userAgent || '');
+  return /iPhone|iPad|iPod/.test(ua) || (nav.platform === 'MacIntel' && Number(nav.maxTouchPoints) > 1);
+}
+
 /**
  * STIMA VOICE - la dettatura a CONTROLLO MANUALE (collaudo reale del 21/10).
  *
@@ -55,6 +126,11 @@ const ERRORI = {
 export function createDictation({
   win = globalThis.window, lang = 'it-IT', onText, onState, onError, onEnd,
   maxSilentRestarts = 6, maxRestarts = 60, maxMs = 5 * 60 * 1000,
+  // Collaudo iPhone: su iOS ogni nuova sessione di riconoscimento puo' chiedere di
+  // nuovo il permesso del microfono (limite di WebKit, non aggirabile). Li' NON si
+  // riapre da soli: alla pausa la dettatura si ferma con il testo, e l'agente
+  // sceglie se continuare (`onEnd(testo, 'paused')`).
+  autoRestart = !isAppleMobile(win),
 } = {}) {
   const { ctor } = speechSupport(win);
   let rec = null;
@@ -69,7 +145,7 @@ export function createDictation({
   let timer = null;
 
   const stato = (s) => { if (typeof onState === 'function') onState(s); };
-  const unisci = (...parti) => parti.map((x) => String(x || '').trim()).filter(Boolean).join(' ');
+  const unisci = (...parti) => parti.reduce((acc, x) => unisciPezzi(acc, x), '');
   const testo = () => unisci(base, detto, sessione);
 
   function chiudi(motivo) {
@@ -91,14 +167,8 @@ export function createDictation({
     sessione = '';
     rec.onresult = (event) => {
       if (rec !== questa) return;
-      let finale = '';
-      let provvisorio = '';
-      for (let i = 0; i < event.results.length; i += 1) {
-        const risultato = event.results[i];
-        const t = risultato[0] ? risultato[0].transcript : '';
-        if (risultato.isFinal) finale += t; else provvisorio += t;
-      }
-      sessione = unisci(finale, provvisorio);
+      const { provvisorio, testo: diSessione } = testoDeiRisultati(event.results);
+      sessione = diSessione;
       if (sessione) silenzi = 0;
       if (typeof onText === 'function') onText(testo(), provvisorio === '');
     };
@@ -122,6 +192,10 @@ export function createDictation({
       detto = unisci(detto, sessione);         // il testo della sessione chiusa resta
       sessione = '';
       const scaduto = Date.now() - inizio >= maxMs;
+      if (attivo && !chiusura && !autoRestart) {
+        chiudi('paused');                       // iPhone: nessuna riapertura automatica
+        return;
+      }
       if (attivo && !chiusura && !scaduto && riavvii < maxRestarts) {
         riavvii += 1;
         try {

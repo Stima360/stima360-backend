@@ -198,7 +198,8 @@ def resolve_time(text: str | None) -> TimeResolution:
     if text is None:
         return TimeResolution(None, UNRECOGNIZED_TIME)
     t = fold(text)
-    t = re.sub(r"^(alle|all|a|le|per le|verso le|ore|intorno alle)\s+", "", t)
+    # collaudo iPhone 21/10: anche «alle ore 10:30», «verso le ore 11»
+    t = re.sub(r"^(?:(?:alle|all|a|le|per le|verso le|intorno alle)\s+)?(?:ore\s+)?", "", t)
     if t in ("mezzogiorno", "a mezzogiorno"):
         return TimeResolution(time(12, 0))
     if t in ("mezzanotte", "a mezzanotte"):

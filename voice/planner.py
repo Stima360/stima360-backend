@@ -85,6 +85,7 @@ APPOINTMENT_KEYWORDS = (
     # V8-0: «appuntamento di vendita» e' la visita di un cliente su un incarico
     # (`sale_appointment` non si crea piu': la visita immobile ne ha preso il ruolo).
     ("appuntamento di vendita", "buyer_visit"),
+    ("appuntamento rivendita", "buyer_visit"), ("appuntamento vendita", "buyer_visit"),
     # Fase 7: l'appuntamento di acquisizione e' un `seller_meeting`, lo stesso
     # tipo che il modulo Acquisizioni usa per il suo appuntamento in Agenda
     # (acquisitions/enums.py::APPOINTMENT_TYPE). Crea solo l'appuntamento: non
@@ -97,7 +98,9 @@ APPOINTMENT_KEYWORDS = (
 SELLER_MEETING_EVIDENCE = ("acquisizion", "proprietari", "venditor", "venditric", "padron")
 #: V8-1: `buyer_visit` SOLO se l'agente parla di visitare, vedere o mostrare
 #: un immobile. «Appuntamento con Mario, acquirente» non e' una visita.
-BUYER_VISIT_EVIDENCE = ("visit", "veder", "mostr", "visionar", "appuntamento di vendita")
+BUYER_VISIT_EVIDENCE = ("visit", "veder", "mostr", "visionar", "appuntamento di vendita",
+                        # collaudo iPhone 21/10: «di vendita» trascritto «rivendita»
+                        "appuntamento rivendita", "appuntamento vendita")
 #: V8-0: il tipo che la voce non crea mai, e quello che lo sostituisce.
 HIDDEN_TYPE_REPLACEMENTS = {"sale_appointment": "buyer_visit"}
 #: V8-1: le parole con cui l'agente dice il RUOLO della persona -> ruolo
@@ -291,6 +294,40 @@ def owner_from(text_folded: str) -> dict[str, str] | None:
     return {"first_name": nome[0].capitalize(), "last_name": nome[1].capitalize()}
 
 
+#: Collaudo iPhone 21/10: «compratore Giorgio Censori venditore Francesco
+#: Ruvolo»: la parola del ruolo DAVANTI al nome dice il ruolo di QUELLA persona
+#: (non di chiunque sia nominato). Deterministico; un test lo fissa.
+_RUOLO_DAVANTI = re.compile(
+    r"\b(compratore|compratrice|acquirente|venditore|venditrice|proprietario|proprietaria)\s+"
+    r"(?:(?:e|:|,)\s+)?(?:(?:il|la)\s+)?(?:(?:signora|signor|signore|sig)\s+)?"
+    r"([a-z][a-z]+(?:\s+[a-z][a-z]+)?)")
+_RUOLO_DELLA_PAROLA = {"compratore": "buyer", "compratrice": "buyer", "acquirente": "buyer",
+                       "venditore": "seller", "venditrice": "seller",
+                       "proprietario": "seller", "proprietaria": "seller"}
+_NON_NOMI_RUOLO = _FINE_NOME | _NON_NOMI | frozenset(
+    {"di", "del", "dell", "della", "dello", "dei", "degli", "ed", "immobile", "casa", "appartamento"}
+) | frozenset(_RUOLO_DELLA_PAROLA)
+
+
+def persons_with_role(text_folded: str) -> dict[str, dict[str, str]]:
+    """Le persone nominate subito DOPO la parola del loro ruolo: {"buyer": {...},
+    "seller": {...}}; la prima per ruolo. Nome e cognome come detti (l'ordine
+    non e' certo: la ricerca prova anche quello inverso)."""
+    trovate: dict[str, dict[str, str]] = {}
+    for m in _RUOLO_DAVANTI.finditer(text_folded):
+        ruolo = _RUOLO_DELLA_PAROLA[m.group(1)]
+        nome = []
+        for p in m.group(2).split():
+            if p in _NON_NOMI_RUOLO:
+                break
+            nome.append(p)
+        if not nome or ruolo in trovate:
+            continue
+        trovate[ruolo] = ({"last_name": nome[0].capitalize()} if len(nome) == 1
+                          else {"first_name": nome[0].capitalize(), "last_name": nome[1].capitalize()})
+    return trovate
+
+
 def _stessa_persona(a: dict, b: dict) -> bool:
     """Due descrizioni di persona con lo stesso cognome e, se entrambe lo
     dicono, lo stesso nome (senza accenti ne' maiuscole)."""
@@ -300,6 +337,14 @@ def _stessa_persona(a: dict, b: dict) -> bool:
         return ca == cb and (not (na and nb) or na == nb)
     # uno dei due e' detto solo per nome: stesso nome = stessa persona (si chiede)
     return bool(na and nb and na == nb)
+
+
+def _combacia(a: dict | None, b: dict | None) -> bool:
+    """`_stessa_persona`, anche con nome e cognome detti in ordine inverso."""
+    if not a or not b:
+        return False
+    inverso = {"first_name": a.get("last_name"), "last_name": a.get("first_name")}
+    return _stessa_persona(a, b) or bool(a.get("first_name") and _stessa_persona(inverso, b))
 
 
 def role_from(text_folded: str) -> str | None:
@@ -443,10 +488,30 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
 
     elif c.intent == "create_appointment":
         quote_f = dates.fold(c.quote)
+        # Collaudo iPhone: «compratore X ... venditore Y»: il ruolo accanto al nome.
+        con_ruolo = persons_with_role(quote_f) or persons_with_role(folded)
+        acquirente, venditore = con_ruolo.get("buyer"), con_ruolo.get("seller")
+        contatto = c.contact
+        cliente = contatto.model_dump(exclude_none=True) if contatto is not None and contatto.step is None else None
+        if acquirente and (contatto is None or (cliente and venditore and _combacia(cliente, venditore)
+                                                and not _combacia(cliente, acquirente))):
+            # il modello ha omesso il cliente o ha preso il venditore: il cliente
+            # e' l'acquirente DETTO (resta da confermare nella ricerca)
+            contatto = ContactRef(**acquirente, role="buyer")
+            cliente = contatto.model_dump(exclude_none=True)
         # V8-1: il ruolo lo dicono le parole dell'agente; il modello puo'
         # solo confermarlo o proporlo (non basta a fissare un tipo).
-        ruolo = role_from(quote_f) or role_from(folded) or (c.contact.role if c.contact is not None else None)
+        if cliente and acquirente and _combacia(cliente, acquirente):
+            ruolo = "buyer"
+        elif cliente and venditore and _combacia(cliente, venditore):
+            ruolo = "seller"
+        else:
+            ruolo = role_from(quote_f) or role_from(folded) or (contatto.role if contatto is not None else None)
         tipo, motivo_esplicito = appointment_type_for(c.appointment_type, quote_f, folded, ruolo)
+        if acquirente and venditore and tipo in (DEFAULT_APPOINTMENT_TYPE, "seller_meeting", "buyer_visit"):
+            # compratore e venditore nello stesso appuntamento, senza un altro
+            # motivo (proposta, rogito...): l'acquirente visita l'immobile del venditore
+            tipo, motivo_esplicito = "buyer_visit", True
         if not motivo_esplicito:
             issues.append(Issue(APPOINTMENT_PURPOSE_MISSING,
                                 "Per che cosa e' l'appuntamento con l'acquirente? (visita di un immobile, proposta, telefonata...)",
@@ -473,25 +538,24 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
         # Se il modello non ha indicato l'immobile, lo si cerca per proprietario.
         proprietario = (c.property.owner.model_dump(exclude_none=True)
                         if c.property is not None and c.property.owner is not None else None)
-        detto = owner_from(quote_f) or owner_from(folded)
+        detto = owner_from(quote_f) or owner_from(folded) or venditore
         if proprietario is None and detto is not None and tipo in MANDATE_REQUIRED_TYPES and c.property is None:
             proprietario = detto
             refs["property"] = Ref("property", None, {"owner": detto})
-        if tipo in MANDATE_REQUIRED_TYPES and c.contact is not None and c.contact.step is None:
-            cliente = c.contact.model_dump(exclude_none=True)
+        if tipo in MANDATE_REQUIRED_TYPES and cliente:
             if any(p and _stessa_persona(cliente, p) for p in (proprietario, detto)):
                 issues.append(Issue(VISIT_CLIENT_IS_OWNER,
                                     f"{' '.join(x for x in (cliente.get('first_name'), cliente.get('last_name')) if x)} "
                                     "e' il proprietario dell'immobile: chi e' il cliente che lo visita?", "contact"))
         if tipo in MANDATE_REQUIRED_TYPES:
-            if c.contact is None:
+            if contatto is None:
                 issues.append(Issue(VISIT_CLIENT_REQUIRED, "Con quale cliente e' la visita?", "contact"))
             if c.property is None and "property" not in refs:
-                chi = " ".join(x for x in ((c.contact.first_name if c.contact else None),
-                                           (c.contact.last_name if c.contact else None)) if x) or "il cliente"
+                chi = " ".join(x for x in ((contatto.first_name if contatto else None),
+                                           (contatto.last_name if contatto else None)) if x) or "il cliente"
                 issues.append(Issue(VISIT_MANDATE_REQUIRED, f"Quale immobile deve visitare {chi}?", "property"))
-        if c.contact is not None:
-            rif = _ref("contact", c.contact)
+        if contatto is not None:
+            rif = _ref("contact", contatto)
             if ruolo and rif is not None and rif.step is None:
                 rif = Ref(rif.kind, rif.step, {**rif.description, "role": ruolo})
             refs["contact"] = rif

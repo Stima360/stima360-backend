@@ -85,7 +85,7 @@ import { createContactPicker } from '../contact-picker.js';
 // la sola interpretazione del server (`/api/voice/interpret`): i campi si
 // precompilano, l'operatore li controlla o li corregge, e salva dal dialog.
 import { interpretText } from '../../voice/voice-api.js';
-import { SPEECH_ERRORS, errorMessage as voiceErrorMessage, formatHour, retryAfter, romeDayKey } from '../../voice/voice-model.js';
+import { SPEECH_ERRORS, SPEECH_IPHONE, errorMessage as voiceErrorMessage, formatHour, retryAfter, romeDayKey } from '../../voice/voice-model.js';
 import { createDictation, speechSupport } from '../../voice/voice-speech.js';
 
 function due(n) {
@@ -799,6 +799,7 @@ const BLOCCO_VOCE = `
     <div class="form-field agenda-voice" data-voice-block>
       <div class="action-bar">
         <button type="button" class="btn voice-mic" data-voice-dictate aria-pressed="false" aria-label="Parla: detta l’appuntamento">🎤 Parla</button>
+        <button type="button" class="btn primary" data-voice-use hidden>Usa questo testo</button>
         <small class="muted" data-voice-transcript></small>
       </div>
       <p class="muted" data-voice-dictation-status role="status" aria-live="polite">Detta l’appuntamento («Giovedì alle 16 Mario Rossi deve visitare l’appartamento in via Roma 15»): i campi si compilano e li controlli prima di salvare.</p>
@@ -1170,6 +1171,7 @@ export function openCreateDialog(dialogEl, {
     const bottoneVoce = form.querySelector('[data-voice-dictate]');
     const statoVoce = form.querySelector('[data-voice-dictation-status]');
     const trascritto = form.querySelector('[data-voice-transcript]');
+    const usaTesto = form.querySelector('[data-voice-use]');
     const dettaturaDisponibile = speechSupport(win).supported;
     const applica = (esito) => {
       const passo = ((esito && esito.steps) || [])[0];
@@ -1255,6 +1257,7 @@ export function openCreateDialog(dialogEl, {
           bottoneVoce.setAttribute('aria-label', ascolta ? 'Termina la dettatura' : 'Parla: detta l’appuntamento');
           bottoneVoce.textContent = ascolta ? '■ Termina dettatura' : '🎤 Parla';
           bottoneVoce.classList.toggle('listening', ascolta);
+          if (usaTesto) usaTesto.hidden = true;
           if (ascolta) statoVoce.textContent = 'In ascolto… puoi fare pause. Quando hai finito tocca «Termina dettatura».';
         },
         onEnd: (t, motivo) => {
@@ -1262,6 +1265,14 @@ export function openCreateDialog(dialogEl, {
           if (!t) { statoVoce.textContent = 'Non ho sentito nulla. Riprova o compila i campi a mano.'; return; }
           if (motivo === 'user') { interpreta(t); return; }
           trascritto.textContent = t;
+          if (motivo === 'paused') {
+            // iPhone: la pausa ha chiuso l'ascolto. Si continua o si usa il testo: decide l'agente.
+            bottoneVoce.textContent = '🎤 Continua a dettare';
+            bottoneVoce.setAttribute('aria-label', 'Continua a dettare');
+            if (usaTesto) usaTesto.hidden = false;
+            statoVoce.textContent = `${SPEECH_IPHONE.paused} Quando è completo tocca «Usa questo testo». ${SPEECH_IPHONE.permission}`;
+            return;
+          }
           statoVoce.textContent = 'Dettatura chiusa dopo un lungo silenzio: tocca «Parla» per continuare o compila i campi.';
         },
         onError: (codice) => { erroreMicrofono = true; statoVoce.textContent = SPEECH_ERRORS[codice] || SPEECH_ERRORS.error; },
@@ -1271,6 +1282,14 @@ export function openCreateDialog(dialogEl, {
         erroreMicrofono = false;
         dettatura.start(trascritto.textContent || '');
       });
+      if (usaTesto) {
+        usaTesto.addEventListener('click', () => {
+          usaTesto.hidden = true;
+          bottoneVoce.textContent = '🎤 Parla';
+          bottoneVoce.setAttribute('aria-label', 'Parla: detta l’appuntamento');
+          if (trascritto.textContent) interpreta(trascritto.textContent);
+        });
+      }
       dialogEl.addEventListener('close', () => dettatura.abort());
     }
   }

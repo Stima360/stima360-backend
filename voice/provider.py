@@ -90,6 +90,9 @@ Regole obbligatorie:
   ("la casa di Francesco Ruvolo") va in property.owner, MAI in contact. Esempio: "appuntamento di vendita
   Giorgio Censori, che va a vedere la casa di Francesco Ruvolo" = appointment_type "buyer_visit",
   contact Giorgio Censori (buyer), property.owner Francesco Ruvolo. Non inventare indirizzi o incarichi.
+- Con un compratore E un venditore nello stesso appuntamento ("compratore Giorgio Censori venditore Francesco
+  Ruvolo") e' una visita: contact = il compratore (buyer), property.owner = il venditore. Scrivi i nomi come
+  li hai letti, senza completarli o correggerli.
 """
 
 
