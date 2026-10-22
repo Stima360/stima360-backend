@@ -760,3 +760,48 @@ for (const configuration of ['preview', 'release']) {
     assert.deepEqual(result.rejected, [true, true, true, true, true, true]);
   });
 }
+
+// C3: casella email facoltativa, legata all'informativa marketing corrente.
+const informativa = { available: true, id: 42, version: 'v1', channels: ['email', 'sms'], url: '/api/public/communication/consent/informativa' };
+const conInformativa = (body = informativa) => (_, url) => url.pathname === '/api/public/communication/consent/informativa.json' ? { data: body } : undefined;
+
+test('email consent box stays hidden and sends no consent without a current email notice', async (t) => {
+  for (const body of [{ available: false }, { ...informativa, channels: ['sms'] }, { ...informativa, id: 'x' }]) {
+    const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: conInformativa(body) });
+    assert.equal(await page.locator('#consensoEmailBox').isVisible(), false);
+    await submitPersonal(page);
+    await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
+    const save = requests.find((request) => new URL(request.url()).pathname === '/api/salva_stima');
+    const payload = JSON.parse(save.postData());
+    assert.equal(payload.consenso_email, false);
+    assert.equal('informativa_marketing_id' in payload, false);
+    assert.equal('consenso_marketing' in payload, false);
+  }
+});
+
+test('email consent box is optional, never preselected and email-only', async (t) => {
+  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: conInformativa() });
+  await page.locator('#consensoEmailBox').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#consensoEmail').isChecked(), false);
+  assert.equal(await page.locator('#consensoEmail').getAttribute('required'), null);
+  const testo = await page.locator('#consensoEmailBox').textContent();
+  assert.ok(testo.includes('email') && !/whatsapp|sms/i.test(testo));
+  assert.equal(new URL(await page.locator('#consensoEmailInformativa').getAttribute('href')).pathname, informativa.url);
+  await submitPersonal(page);
+  await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
+  const payload = JSON.parse(requests.find((request) => new URL(request.url()).pathname === '/api/salva_stima').postData());
+  assert.equal(payload.consenso_email, false);
+  assert.equal('informativa_marketing_id' in payload, false);
+});
+
+test('email consent box sends the notice id only when the person ticks it', async (t) => {
+  const { page, requests } = await openPage(t, 'dati_personali.html', { id: 'STclient-generated' }, { api: conInformativa() });
+  await page.locator('#consensoEmailBox').waitFor({ state: 'visible' });
+  await page.locator('#consensoEmail').check();
+  await submitPersonal(page);
+  await page.waitForFunction(() => document.getElementById('testo-stima').textContent.includes('Valore totale'));
+  const payload = JSON.parse(requests.find((request) => new URL(request.url()).pathname === '/api/salva_stima').postData());
+  assert.equal(payload.consenso_email, true);
+  assert.equal(payload.informativa_marketing_id, 42);
+  assert.equal('consenso_marketing' in payload, false);
+});

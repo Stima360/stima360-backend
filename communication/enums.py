@@ -142,11 +142,16 @@ REASON_OWNER_LOGIN_LINK = "owner_login_link"
 #: A32-1 (migration 079): il promemoria automatico di un appuntamento. UN solo
 #: motivo per tutti gli offset: l'offset vive in `template_key`/`metadata`.
 REASON_APPOINTMENT_REMINDER = "appointment_reminder"
+#: C3 (migration 110): l'email di SERVIZIO che porta il link di conferma del
+#: double opt-in. Risponde a una richiesta esplicita dell'interessato (la
+#: casella o la pagina del consenso) e non e' marketing.
+REASON_CONSENT_CONFIRMATION = "consent_confirmation"
 REASON_CODES = frozenset({
     REASON_STIMA_PDF, REASON_OPERATOR_MANUAL, REASON_OPERATOR_REPLY,
     REASON_M1, REASON_M2, REASON_M3, REASON_M4, REASON_M5,
     REASON_OWNER_LOGIN_LINK,
     REASON_APPOINTMENT_REMINDER,
+    REASON_CONSENT_CONFIRMATION,
 } | {f"m{i}" for i in range(6, 21)})  # 108: fino a m20 (il calendario a 180 giorni ne usa 17)
 
 # --------------------------------------------------------------------------

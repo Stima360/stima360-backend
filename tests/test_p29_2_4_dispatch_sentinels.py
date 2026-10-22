@@ -133,9 +133,12 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
     # (uguaglianza CHIUSA, invariata nella forma): il planner dei
     # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
+    # SENTINELLA AGGIORNATA DA C3: ne aggiunge un settimo, `public_consent`
+    # (uguaglianza CHIUSA): la pagina del consenso aperta dal link personale;
+    # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder")
+        "public_booking", "appointment_reminder", "public_consent")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
@@ -398,6 +401,10 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         "/api/communication/contacts/{contact_id}/automation/resume",
         "/api/communication/contacts/{contact_id}/consent",
         "/api/communication/contacts/{contact_id}/consent/grant",
+        # SENTINELLA AGGIORNATA DA C3: il link personale del consenso, sullo
+        # STESSO router e dietro la stessa ammissione di livello mount.
+        "/api/communication/contacts/{contact_id}/consent/link",
+        "/api/communication/contacts/{contact_id}/consent/link/disable",
         "/api/communication/contacts/{contact_id}/consent/refusal",
         "/api/communication/contacts/{contact_id}/journey",
         "/api/communication/contacts/{contact_id}/messages",
@@ -417,6 +424,12 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         # stesso prefisso e dietro la stessa ammissione di livello mount,
         # con la soglia del dispatch (`require_dispatch_context`).
         "/api/communication/reminders/tick",
+        # SENTINELLA AGGIORNATA DA C3: la pagina pubblica del consenso (token
+        # opaco del link, non una sessione), sul router pubblico.
+        "/api/public/communication/consent/confirm/{token}",
+        "/api/public/communication/consent/informativa",
+        "/api/public/communication/consent/informativa.json",
+        "/api/public/communication/consent/{token}",
         "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.

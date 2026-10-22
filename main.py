@@ -68,6 +68,7 @@ from next_best_action.router import router as next_best_action_router
 from communication import service as communication_service
 from communication.router import router as communication_router
 from communication.public_router import router as communication_public_router
+from communication import consent_page as communication_consent_page
 from appointment_reminders.router import router as appointment_reminders_router
 # STIMA Voice Fase 7: il router dei comandi vocali (spento finche' non e' acceso ogni livello).
 from voice.router import router as voice_router
@@ -1087,6 +1088,19 @@ def _save_quick_submission(raw, receipt):
     ), accepts=lambda r: bool(r.get("property_id")))
 
     # Existing event keys remain deterministic on the original stima.
+    # C3: la casella email FACOLTATIVA del sito. Crea solo una richiesta in
+    # attesa di conferma (double opt-in) e accoda l'email di conferma: nessun
+    # consenso e' attivo finche' la persona non clicca. Senza casella, o con
+    # il solo `consenso_marketing` del sito vecchio, il passo non si applica.
+    receipt.step("consent_email", lambda: communication_consent_page.request_from_public_stima(
+        bridge_ctx,
+        raw=raw,
+        stima_id=new_id,
+        contact_id=(bridge_result or {}).get("contact_id"),
+    ), accepts=lambda r: isinstance(r, dict) and r.get("status") in {
+        "queued", "already_requested", "already_pending", "already_granted"},
+                 not_applicable=lambda r: isinstance(r, dict) and r.get("status") in {
+        "not_requested", "notice_missing", "notice_invalid", "no_email", "not_configured", "limited"})
     receipt.step("event_requested", lambda: seller_intelligence_service.record_event(
         event_type="stima_richiesta",
         event_source="stima360_it",

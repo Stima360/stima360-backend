@@ -83,7 +83,11 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     "journey_catalog.py", "contact_view.py",
                     # ADM-3: il giro centrale per le agenzie sospese, chiamato
                     # solo dal cron. Il nucleo non lo importa.
-                    "central_continuity.py")
+                    "central_continuity.py",
+                    # SENTINELLA AGGIORNATA DA C3: la pagina pubblica del
+                    # consenso (link, QR, HTML, email di conferma). Il nucleo
+                    # non la importa.
+                    "consent_page.py")
 
 
 def sorgenti() -> dict[str, str]:

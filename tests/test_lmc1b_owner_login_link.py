@@ -307,9 +307,12 @@ def test_c2_l_insieme_degli_origin_resta_chiuso():
     # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
     # (uguaglianza CHIUSA, invariata nella forma): il planner dei
     # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
+    # SENTINELLA AGGIORNATA DA C3: ne aggiunge un settimo, `public_consent`
+    # (uguaglianza CHIUSA): la pagina del consenso aperta dal link personale;
+    # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder")
+        "public_booking", "appointment_reminder", "public_consent")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):

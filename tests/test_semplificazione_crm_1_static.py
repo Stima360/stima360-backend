@@ -47,9 +47,11 @@ def test_01_la_107_e_valida_additiva_e_l_ultima():
     # (journey sul contatto, opt-out di piattaforma); la 107 resta quella qui
     # descritta, penultima, e si continua a verificarla com'e'.
     # SENTINELLA AGGIORNATA DA C1/C2: poi la 109 (consensi per canale).
-    assert tutte[-1].version == "109_consent_channels"
-    assert tutte[-2].version == "108_followup_contact_journey"
-    ultima = tutte[-3]
+    # SENTINELLA AGGIORNATA DA C3: poi la 110 (raccolta digitale del consenso).
+    assert tutte[-1].version == "110_consent_capture"
+    assert tutte[-2].version == "109_consent_channels"
+    assert tutte[-3].version == "108_followup_contact_journey"
+    ultima = tutte[-4]
     assert ultima.version == "107_visita_immobile_incarico"
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []

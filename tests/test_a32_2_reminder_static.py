@@ -119,7 +119,9 @@ def test_s06_l_origin_e_esattamente_appointment_reminder():
     from operator_auth import context
     assert planner.REMINDER_ORIGIN == "appointment_reminder"
     assert "appointment_reminder" in context.SYSTEM_CONTEXT_ORIGINS
-    assert context.SYSTEM_CONTEXT_ORIGINS[-1] == "appointment_reminder"
+    # SENTINELLA AGGIORNATA DA C3: dopo `appointment_reminder` viene
+    # `public_consent` (pagina del consenso); il promemoria resta unico.
+    assert context.SYSTEM_CONTEXT_ORIGINS[-2:] == ("appointment_reminder", "public_consent")
     assert context.SYSTEM_CONTEXT_ORIGINS.count("appointment_reminder") == 1
     assert "appointment_reminders" not in context.SYSTEM_CONTEXT_ORIGINS
     codice = _codice("appointment_reminders/planner.py")

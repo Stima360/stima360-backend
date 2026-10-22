@@ -281,6 +281,8 @@
       border: 1px solid #e2e8f0;
     }
     
+    .privacy[hidden] { display: none; }
+
     .privacy input[type="checkbox"] {
       width: 22px;
       height: 22px;
@@ -469,11 +471,12 @@
         </label>
       </div>
         
-      <div class="privacy">
-        <input type="checkbox" id="marketing" name="marketing" />
-        <label for="marketing">
-          Acconsento a ricevere analisi di mercato e aggiornamenti da <strong>Stima360</strong> tramite email e WhatsApp.
-          <br><span style="font-size:0.85em; opacity:0.8; font-weight: 500;">(Facoltativo e revocabile in qualsiasi momento)</span>
+      <div class="privacy" id="consensoEmailBox" hidden>
+        <input type="checkbox" id="consensoEmail" name="consenso_email" />
+        <label for="consensoEmail">
+          Desidero ricevere via <strong>email</strong> analisi di mercato e aggiornamenti da <strong>Stima360</strong>.
+          Riceverò un'email per confermare: senza conferma non riceverò comunicazioni promozionali.
+          <br><span style="font-size:0.85em; opacity:0.8; font-weight: 500;">(Facoltativo e revocabile in qualsiasi momento &middot; <a id="consensoEmailInformativa" href="#" target="_blank" rel="noopener">Informativa</a>)</span>
         </label>
       </div>
 
@@ -743,7 +746,7 @@
         document.getElementById(field).value = record.payload[field] || '';
       }
       document.getElementById('privacy').checked = true;
-      document.getElementById('marketing').checked = record.payload.consenso_marketing === true;
+      document.getElementById('consensoEmail').checked = record.payload.consenso_email === true;
       document.getElementById('fascia-stima').style.display = 'block';
       document.getElementById('testo-stima').textContent = 'Verifico la ricevuta della richiesta...';
       personalButton.style.display = 'none';
@@ -764,6 +767,30 @@
     }
   })();
   
+  // C3: casella email facoltativa, mai preselezionata. Compare solo se
+  // un'informativa marketing corrente copre l'email; altrimenti nessun consenso.
+  let informativaMarketingId = null;
+  (async () => {
+    try {
+      const res = await fetch(Stima360Preview.apiUrl('/api/public/communication/consent/informativa.json'), { cache: 'no-store' });
+      if (!res.ok) return;
+      const body = await res.json();
+      if (body?.available !== true || !Number.isSafeInteger(body.id) || body.id <= 0
+          || !Array.isArray(body.channels) || !body.channels.includes('email')) return;
+      informativaMarketingId = body.id;
+      if (typeof body.url === 'string' && body.url.startsWith('/api/')) {
+        document.getElementById('consensoEmailInformativa').href = Stima360Preview.apiUrl(body.url);
+      }
+      document.getElementById('consensoEmailBox').hidden = false;
+    } catch { /* Senza informativa la casella resta nascosta. */ }
+  })();
+
+  function consensoEmailPayload() {
+    const box = document.getElementById('consensoEmailBox');
+    const scelto = !box.hidden && informativaMarketingId !== null && document.getElementById('consensoEmail').checked;
+    return scelto ? { consenso_email: true, informativa_marketing_id: informativaMarketingId } : { consenso_email: false };
+  }
+
   function isValidEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
   }
@@ -802,7 +829,7 @@
       cognome: document.getElementById('cognome').value.trim(),
       email: document.getElementById('email').value.trim(), 
       telefono: document.getElementById('telefono').value.trim(),
-      consenso_marketing: document.getElementById("marketing").checked,
+      ...consensoEmailPayload(),
       vistaMareYN: dati.vistaMareYN || "",
       vistaMareDettaglio: dati.vistaMareDettaglio || "",
       barrieraTipo: dati.barrieraTipo || "",

@@ -136,7 +136,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # con backfill della sola `sequence_policy`), con la sua down.
     # SENTINELLA AGGIORNATA DA C1/C2: 109_consent_channels (consensi marketing
     # per canale, opt-out per indirizzo; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 110))
+    # SENTINELLA AGGIORNATA DA C3: 110_consent_capture (link personali, invii
+    # della pagina, double opt-in; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 111))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
@@ -307,9 +309,12 @@ def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
     # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
     # (uguaglianza CHIUSA, invariata nella forma): il planner dei
     # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
+    # SENTINELLA AGGIORNATA DA C3: ne aggiunge un settimo, `public_consent`
+    # (uguaglianza CHIUSA): la pagina del consenso aperta dal link personale;
+    # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder")
+        "public_booking", "appointment_reminder", "public_consent")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):
@@ -323,7 +328,16 @@ def test_13_la_rotta_pubblica_non_e_dietro_l_autenticazione_operatore():
     from communication.public_router import router
     assert {(m, r.path) for r in router.routes for m in r.methods if m != "HEAD"} == {
         ("GET", "/api/public/communication/unsubscribe"),
-        ("POST", "/api/public/communication/unsubscribe")}
+        ("POST", "/api/public/communication/unsubscribe"),
+        # SENTINELLA AGGIORNATA DA C3: la pagina del consenso dal link
+        # personale (token opaco, solo SHA-256 nel database) e la conferma
+        # double opt-in. Le GET mostrano soltanto; scrivono solo le POST.
+        ("GET", "/api/public/communication/consent/informativa"),
+        ("GET", "/api/public/communication/consent/informativa.json"),
+        ("GET", "/api/public/communication/consent/confirm/{token}"),
+        ("POST", "/api/public/communication/consent/confirm/{token}"),
+        ("GET", "/api/public/communication/consent/{token}"),
+        ("POST", "/api/public/communication/consent/{token}")}
 
 
 # ---------------------------------------------------------------------------

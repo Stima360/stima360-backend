@@ -47,6 +47,8 @@ from operator_auth.enums import AGENCY_ROLES
 from . import repository
 from . import service as consent_service
 from .database import consent_cursor
+from psycopg2.errors import UndefinedTable
+
 from .enums import (
     CHANNELS,
     CHANNEL_ORDER,
@@ -318,6 +320,15 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
         }
     legacy = (contact.get("marketing_consent") is True
               and not any(s["status"] == "granted" for s in stati.values()))
+    # C3: il link personale aperto e i canali in attesa (email da confermare,
+    # telefono dichiarato e non verificato). Senza la 110 la scheda funziona
+    # lo stesso: la raccolta digitale risulta non disponibile.
+    try:
+        from . import capture
+        raccolta = capture.capture_state(ctx, contact_id)
+        raccolta["available"] = True
+    except UndefinedTable:
+        raccolta = {"available": False}
     return {
         "allowed": any(v["allowed"] for v in canali.values()),
         "channels": canali,
@@ -330,6 +341,7 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
             "source": storico["source"]},
         "can_record": getattr(ctx, "user_id", None) is not None
                       and contact.get("deleted_at") is None and contact.get("status") != "archived",
+        "capture": raccolta,
     }
 
 

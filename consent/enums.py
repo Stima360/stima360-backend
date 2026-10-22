@@ -149,6 +149,9 @@ SOURCE_UNSUBSCRIBE_LINK = "unsubscribe_link"
 SOURCE_WHATSAPP_OPTOUT = "whatsapp_optout"
 SOURCE_IMPORT = "import"
 SOURCE_LEGACY = "legacy"
+#: C3 (110): la pagina personale del consenso, aperta dal link o dal QR che
+#: l'operatore ha generato per QUEL contatto.
+SOURCE_CONSENT_PAGE = "consent_page"
 
 WRITABLE_SOURCES = frozenset({
     SOURCE_PUBLIC_STIMA,
@@ -156,6 +159,7 @@ WRITABLE_SOURCES = frozenset({
     SOURCE_UNSUBSCRIBE_LINK,
     SOURCE_WHATSAPP_OPTOUT,
     SOURCE_IMPORT,
+    SOURCE_CONSENT_PAGE,
 })
 
 # ---------------------------------------------------------------------------

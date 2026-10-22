@@ -22,3 +22,7 @@ sqlglot==30.18.0
 # requests e AuthorizedSession).
 google-auth==2.58.1
 google-auth-oauthlib==1.4.1
+
+# C3: il QR code del link personale del consenso, generato come SVG lato
+# server (puro Python, nessuna dipendenza nativa).
+segno==1.6.6

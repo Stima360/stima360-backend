@@ -291,7 +291,16 @@ def test_f2_le_rotte_pubbliche_restano_due_e_la_pagina_dice_l_ambito(monkeypatch
     monkeypatch.setenv(u.SECRET_ENV, "s" * 40)
     assert {(m, r.path) for r in public_router.router.routes for m in r.methods if m != "HEAD"} == {
         ("GET", "/api/public/communication/unsubscribe"),
-        ("POST", "/api/public/communication/unsubscribe")}
+        ("POST", "/api/public/communication/unsubscribe"),
+        # SENTINELLA AGGIORNATA DA C3: la pagina del consenso dal link
+        # personale (token opaco, solo SHA-256 nel database) e la conferma
+        # double opt-in. Le GET mostrano soltanto; scrivono solo le POST.
+        ("GET", "/api/public/communication/consent/informativa"),
+        ("GET", "/api/public/communication/consent/informativa.json"),
+        ("GET", "/api/public/communication/consent/confirm/{token}"),
+        ("POST", "/api/public/communication/consent/confirm/{token}"),
+        ("GET", "/api/public/communication/consent/{token}"),
+        ("POST", "/api/public/communication/consent/{token}")}
     app = FastAPI()
     app.include_router(public_router.router)
     client = TestClient(app)
@@ -314,7 +323,9 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
     ultima = next(m for m in tutte if m.version == "108_followup_contact_journey")
-    assert tutte[-1].version == "109_consent_channels" and tutte[-2] is ultima
+    # SENTINELLA AGGIORNATA DA C3: e poi la 110 (raccolta digitale del consenso).
+    assert tutte[-1].version == "110_consent_capture" and tutte[-2].version == "109_consent_channels"
+    assert tutte[-3] is ultima
     assert ultima.down_available
     assert runner.validate_migration(ultima) == []
     su = (ROOT / "migrations" / "108_followup_contact_journey.sql").read_text(encoding="utf-8")
@@ -330,7 +341,7 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     import subprocess as sp
     cambiate = sp.run(["git", "--no-optional-locks", "diff", "--name-only", "HEAD", "--", "migrations/"],
                       cwd=ROOT, capture_output=True, text=True).stdout.split()
-    assert all(c.startswith(("migrations/108_", "migrations/109_")) for c in cambiate), cambiate
+    assert all(c.startswith(("migrations/108_", "migrations/109_", "migrations/110_")) for c in cambiate), cambiate
 
 
 # ---------------------------------------------------------------------------

@@ -134,13 +134,50 @@ function caselleCanali(nome, disponibili) {
   </fieldset>`;
 }
 
-function rigaCanale(canale, stato) {
+function rigaCanale(canale, stato, raccolta) {
   const etichetta = ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—';
   const quando = stato.decided_at
     ? ` <span class="muted">dal ${escapeHtml(formatDateTime(stato.decided_at))}</span>` : '';
   const optout = stato.platform_optout_at
     ? ` <span class="muted" data-platform-optout="${canale}">— disiscritto da tutto STIMA360 il ${escapeHtml(formatDateTime(stato.platform_optout_at))}</span>` : '';
-  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : 'red')}${quando}${optout}</li>`;
+  // C3: cio' che il cliente ha chiesto dalla pagina e che NON e' ancora attivo.
+  const attesa = raccolta && raccolta.pending_confirmation
+    ? ` <span class="muted" data-consent-pending="${canale}">— in attesa della conferma del cliente fino al ${escapeHtml(formatDateTime(raccolta.pending_confirmation.expires_at))}</span>` : '';
+  const dichiarato = raccolta && raccolta.declared_unverified
+    ? ` <span class="muted" data-consent-declared="${canale}">— scelto dal cliente, non attivo finche\u0027 il numero non sara\u0027 verificato</span>` : '';
+  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : 'red')}${quando}${optout}${attesa}${dichiarato}</li>`;
+}
+
+// C3: la raccolta DIGITALE. L'operatore genera un link personale (30 giorni)
+// con il suo QR; il cliente legge l'informativa e sceglie da solo i canali.
+// Il link e il QR compaiono SOLO alla generazione: il server ne conserva
+// l'impronta, non il link. Nessun invio parte da qui.
+function renderRaccolta(consenso) {
+  const raccolta = consenso.capture;
+  if (!raccolta || raccolta.available === false || !consenso.can_record) return '';
+  const link = raccolta.link;
+  const aperto = Boolean(link && link.collecting);
+  const stato = aperto
+    ? `Link attivo: raccoglie consensi fino al ${escapeHtml(formatDateTime(link.expires_at))}.`
+    : 'Nessun link attivo.';
+  return `<div class="panel" data-consent-capture data-link-open="${aperto ? '1' : '0'}">
+    <div><strong>Raccolta digitale del consenso</strong></div>
+    <p class="muted">Il cliente apre il link o inquadra il QR, legge l\u0027informativa e sceglie da solo i canali.
+      L\u0027email diventa attiva solo dopo la sua conferma; SMS, WhatsApp e telefonate restano non attivi finche\u0027 il numero non sara\u0027 verificato.</p>
+    <p class="muted" data-consent-link-status>${stato}</p>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" data-consent-link-generate>${aperto ? 'Genera nuovo link consenso' : 'Genera link consenso'}</button>
+      ${aperto ? '<button type="button" class="btn" data-consent-link-disable>Disattiva link</button>' : ''}
+    </div>
+    <div data-consent-link-output hidden>
+      <p class="muted">Il link e il QR si vedono solo adesso. Consegnali al cliente di persona o in una conversazione avviata da lui: non inviarli in massa.</p>
+      <label>Link personale <input type="text" class="input" readonly data-consent-link-url></label>
+      <div class="actions"><button type="button" class="btn" data-consent-link-copy>Copia link</button></div>
+      <img data-consent-link-qr alt="QR code del link consenso" width="220" height="220">
+      <p class="muted" data-consent-link-expiry></p>
+    </div>
+    <p class="error-box" data-consent-link-error hidden></p>
+  </div>`;
 }
 
 function renderConsenso(consenso, informative) {
@@ -150,7 +187,8 @@ function renderConsenso(consenso, informative) {
     </div>`;
   }
   const canali = consenso.channels || {};
-  const righe = ORDINE_CANALI.filter((c) => canali[c]).map((c) => rigaCanale(c, canali[c])).join('');
+  const raccolta = (consenso.capture && consenso.capture.channels) || {};
+  const righe = ORDINE_CANALI.filter((c) => canali[c]).map((c) => rigaCanale(c, canali[c], raccolta[c])).join('');
   const storico = consenso.legacy
     ? '<p class="muted" data-consent-legacy>Esiste un consenso storico senza canale: non autorizza nessun invio finche\u0027 non viene documentato per canale.</p>' : '';
   const coperti = (informative || []).flatMap((n) => n.channels || []);
@@ -204,6 +242,7 @@ function renderConsenso(consenso, informative) {
     <div><strong>Consenso marketing per canale</strong></div>
     <ul class="consent-channel-list">${righe}</ul>
     ${storico}
+    ${renderRaccolta(consenso)}
     ${form}
   </div>`;
 }
@@ -328,6 +367,63 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
     'automation-pause': () => `/api/communication/contacts/${contactId}/automation/pause`,
     'automation-resume': () => `/api/communication/contacts/${contactId}/automation/resume`,
   };
+
+  // C3: genera / copia / disattiva il link personale del consenso.
+  mount.addEventListener('click', async (evento) => {
+    const genera = evento.target.closest('button[data-consent-link-generate]');
+    const disattiva = evento.target.closest('button[data-consent-link-disable]');
+    const copia = evento.target.closest('button[data-consent-link-copy]');
+    if (!genera && !disattiva && !copia) return;
+    const box = mount.querySelector('[data-consent-capture]');
+    const errore = box.querySelector('[data-consent-link-error]');
+    errore.hidden = true;
+    if (copia) {
+      const campo = box.querySelector('[data-consent-link-url]');
+      campo.select();
+      try {
+        await navigator.clipboard.writeText(campo.value);
+        copia.textContent = 'Copiato';
+      } catch {
+        copia.textContent = 'Seleziona e copia il link';
+      }
+      return;
+    }
+    if (genera && box.dataset.linkOpen === '1'
+        && !window.confirm('Il link precedente non raccogliera\u0027 piu\u0027 consensi (le revoche restano possibili). Generare un nuovo link?')) return;
+    if (disattiva && !window.confirm('Il link non raccogliera\u0027 piu\u0027 consensi; le revoche restano possibili. Disattivarlo?')) return;
+    const bottone = genera || disattiva;
+    bottone.disabled = true;
+    try {
+      if (disattiva) {
+        await apiPost(`/api/communication/contacts/${contactId}/consent/link/disable`, {});
+        await ridisegna();
+        return;
+      }
+      const esito = await apiPost(`/api/communication/contacts/${contactId}/consent/link`, {});
+      const scadenza = `Raccoglie consensi fino al ${formatDateTime(esito.expires_at)}.`;
+      box.querySelector('[data-consent-link-url]').value = String(esito.url || '');
+      const qr = String(esito.qr_svg_data_uri || '');
+      if (qr.startsWith('data:image/svg+xml')) box.querySelector('[data-consent-link-qr]').src = qr;
+      box.querySelector('[data-consent-link-expiry]').textContent = scadenza;
+      box.querySelector('[data-consent-link-status]').textContent = `Link attivo: ${scadenza.charAt(0).toLowerCase()}${scadenza.slice(1)}`;
+      box.dataset.linkOpen = '1';
+      genera.textContent = 'Genera nuovo link consenso';
+      if (!box.querySelector('[data-consent-link-disable]')) {
+        const spegni = document.createElement('button');
+        spegni.type = 'button';
+        spegni.className = 'btn';
+        spegni.dataset.consentLinkDisable = '';
+        spegni.textContent = 'Disattiva link';
+        genera.parentElement.appendChild(spegni);
+      }
+      box.querySelector('[data-consent-link-output]').hidden = false;
+      bottone.disabled = false;
+    } catch (guasto) {
+      bottone.disabled = false;
+      errore.hidden = false;
+      errore.textContent = guasto.message || 'Operazione non riuscita.';
+    }
+  });
 
   mount.addEventListener('click', async (evento) => {
     const bottone = evento.target.closest('button[data-action]');

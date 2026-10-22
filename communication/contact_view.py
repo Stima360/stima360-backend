@@ -57,6 +57,7 @@ ETICHETTE_MOTIVO = {
     "owner_login_link": "Accesso proprietario",
     "m6": "M6", "m7": "M7", "m8": "M8", "m9": "M9", "m10": "M10",
     "appointment_reminder": "Promemoria appuntamento",
+    "consent_confirmation": "Conferma consenso email",
     # 108 (Fase B): il calendario a 180 giorni usa fino a m17, il CHECK arriva a m20.
     **{f"m{i}": f"M{i}" for i in range(11, 21)},
 }

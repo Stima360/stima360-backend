@@ -27,6 +27,7 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import legacy_basic_agency_context
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
+from . import consent_page
 from . import contact_view
 from . import dispatcher
 from . import service as dispatcher_service
@@ -199,6 +200,29 @@ def contact_consent_refusal(
             "platform_optout_id": (esito.get("platform_optout") or {}).get("id"),
             "platform_optout_ids": [(o["optout"] or {}).get("id") for o in esito["platform_optouts"]],
             "channels_without_address": esito["channels_without_address"]}
+
+
+@router.post("/contacts/{contact_id}/consent/link", status_code=201)
+def contact_consent_link(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """C3: un link personale nuovo (30 giorni) e il suo QR. Il token compare
+    solo in questa risposta; il link precedente, se aperto, serve da adesso
+    solo a revocare. Nessun messaggio parte da qui: il link lo consegna
+    l'operatore, di persona o in una conversazione gia' aperta."""
+    return _tradotto(lambda: _tradotto_consenso(lambda: consent_page.generate_link(ctx, contact_id)))
+
+
+@router.post("/contacts/{contact_id}/consent/link/disable")
+def contact_consent_link_disable(
+    contact_id: int,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """C3: il link aperto non raccoglie piu' consensi (le revoche restano)."""
+    from consent import capture
+    riga = _tradotto_consenso(lambda: capture.disable_link(ctx, contact_id))
+    return {"disabled": riga is not None}
 
 
 @router.post("/journeys/tick")

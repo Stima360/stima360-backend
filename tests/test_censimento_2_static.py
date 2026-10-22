@@ -43,18 +43,21 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: poi la sola 108 (journey sul
     # contatto, pausa di sistema, opt-out di piattaforma; additiva)
     # SENTINELLA AGGIORNATA DA C1/C2: poi la sola 109 (consensi marketing per
-    # canale, opt-out per indirizzo; additiva, nessun backfill), ora l'ultima
-    assert tutte[-1].version == "109_consent_channels"
-    assert tutte[-2].version == "108_followup_contact_journey"
-    assert tutte[-3].version == "107_visita_immobile_incarico"
-    assert tutte[-4].version == "106_sale_appointments"
-    assert tutte[-5].version == "105_adm_d15_no_delete_admin_entities"
-    assert tutte[-6].version == "104_agenzie_c2_territorial_change_requests"
-    assert tutte[-7].version == "103_zona_3_property_position_verification"
-    assert tutte[-8].version == "102_territorio_4_position_verification"
-    assert tutte[-9].version == "101_eliminazione_edificio_1"
-    m100 = tutte[-10]
-    assert m100.version == VERSIONE and tutte[-11].version == "099_voice_undo"
+    # canale, opt-out per indirizzo; additiva, nessun backfill)
+    # SENTINELLA AGGIORNATA DA C3: poi la sola 110 (link personali, invii della
+    # pagina di consenso, double opt-in; additiva, nessun backfill), ora l'ultima
+    assert tutte[-1].version == "110_consent_capture"
+    assert tutte[-2].version == "109_consent_channels"
+    assert tutte[-3].version == "108_followup_contact_journey"
+    assert tutte[-4].version == "107_visita_immobile_incarico"
+    assert tutte[-5].version == "106_sale_appointments"
+    assert tutte[-6].version == "105_adm_d15_no_delete_admin_entities"
+    assert tutte[-7].version == "104_agenzie_c2_territorial_change_requests"
+    assert tutte[-8].version == "103_zona_3_property_position_verification"
+    assert tutte[-9].version == "102_territorio_4_position_verification"
+    assert tutte[-10].version == "101_eliminazione_edificio_1"
+    m100 = tutte[-11]
+    assert m100.version == VERSIONE and tutte[-12].version == "099_voice_undo"
     assert m100.down_available and not m100.non_transactional
     assert runner.validate_migration(m100) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)

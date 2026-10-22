@@ -83,6 +83,19 @@ PUBLIC_BY_DESIGN = {
     # dal token e mai dal client.
     ("GET", "/api/public/communication/unsubscribe"),
     ("POST", "/api/public/communication/unsubscribe"),
+    # SENTINELLA AGGIORNATA DA C3: la raccolta digitale del consenso.
+    # Autenticata dal token opaco del link personale o della conferma email
+    # (nel database SOLO lo SHA-256), non da una sessione: chi la apre e' il
+    # cliente. Scrive solo la POST, attraverso
+    # `SystemAgencyContext(origin="public_consent")`, con l'agenzia presa dal
+    # link e mai dal client; nessun altro dato del contatto. L'informativa e'
+    # testo pubblico senza dati personali (serve alla casella del sito).
+    ("GET", "/api/public/communication/consent/informativa"),
+    ("GET", "/api/public/communication/consent/informativa.json"),
+    ("GET", "/api/public/communication/consent/confirm/{token}"),
+    ("POST", "/api/public/communication/consent/confirm/{token}"),
+    ("GET", "/api/public/communication/consent/{token}"),
+    ("POST", "/api/public/communication/consent/{token}"),
     # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
     # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
     # una sessione: chi apre il link non e' un operatore. Le tre rotte

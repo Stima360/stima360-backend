@@ -590,9 +590,12 @@ def test_system_context_origin_set_is_closed_and_declared():
     # SENTINELLA AGGIORNATA DA A32-2: ne aggiunge un sesto, `appointment_reminder`
     # (uguaglianza CHIUSA, invariata nella forma): il planner dei
     # promemoria degli appuntamenti, con l'agenzia della sessione del cron.
+    # SENTINELLA AGGIORNATA DA C3: ne aggiunge un settimo, `public_consent`
+    # (uguaglianza CHIUSA): la pagina del consenso aperta dal link personale;
+    # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder")
+        "public_booking", "appointment_reminder", "public_consent")
 
 
 def test_system_context_rejects_an_unapproved_origin():
