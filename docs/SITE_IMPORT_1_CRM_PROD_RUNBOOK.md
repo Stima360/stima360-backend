@@ -165,6 +165,14 @@ nulla importato.
 
 Cosa **non** fa il cron: non scrive sul sito, non manda email/WhatsApp, non
 accoda messaggi, non attiva sequenze o follow-up commerciali, non rigenera PDF.
+
+Eccezione C3.1, SOLO con `SITE_CONSENT_DOUBLE_OPT_IN=on` (assente = spento):
+per una stima con la casella marketing spuntata il passo `consent` accoda
+l'email di SERVIZIO di conferma del double opt-in (nessun consenso finche' la
+persona non conferma; WhatsApp mai autorizzato). Serve un'informativa
+marketing che copra l'email, valida E gia' registrata nel CRM all'istante
+della spunta. Le stime importate a interruttore spento non la ricevono mai.
+L'email parte solo con il cron di dispatch.
 Gli altri cron del CRM (`run_communication_dispatch_cron.py`,
 `run_followup_p18d_cron.py`, ...) **non** vanno pianificati sul CRM PROD finche'
 testi e consensi non sono approvati.

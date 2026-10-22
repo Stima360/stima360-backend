@@ -14,6 +14,7 @@ LE PAGINE
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from html import escape
 from typing import Any
@@ -148,6 +149,40 @@ def request_from_public_stima(ctx, *, raw: dict[str, Any], stima_id: int,
     return capture.request_from_public_stima(
         ctx, contact_id=contact_id, stima_id=stima_id, notice_id=notice_id,
         on_email_pending=enqueue_confirmation)
+
+
+#: C3.1 - l'interruttore del double opt-in per la casella del sito pubblicato.
+#: SPENTO salvo il valore esplicito "on": l'import porta nel CRM richieste di
+#: persone reali, e la prima email non deve partire per distrazione.
+SITE_DOUBLE_OPT_IN_ENV = "SITE_CONSENT_DOUBLE_OPT_IN"
+
+
+def site_double_opt_in_enabled() -> bool:
+    return (os.getenv(SITE_DOUBLE_OPT_IN_ENV) or "").strip().lower() == "on"
+
+
+def request_from_site_checkbox(ctx, *, stima_id: int, contact_id: int | None,
+                               consenso_marketing, consenso_marketing_at: datetime | None) -> dict[str, Any]:
+    """C3.1 - la casella del sito pubblicato («email e WhatsApp»), cosi' come
+    il sito la manda oggi: `consenso_marketing` e l'istante registrato dal
+    server del sito. Prepara SOLO la conferma via email (double opt-in);
+    WhatsApp non e' toccato: resta nella spunta senza canale del bridge, prova
+    e nessuna autorizzazione. L'informativa la sceglie il server per data
+    (`capture.notice_at`): mai un id dal client, mai una versione registrata
+    dopo la decisione."""
+    if not site_double_opt_in_enabled():
+        return {"status": "disabled"}
+    if consenso_marketing is not True or not contact_id:
+        return {"status": "not_requested"}
+    if consenso_marketing_at is None:
+        return {"status": "no_decision_time"}
+    try:
+        _base()
+    except Exception:  # noqa: BLE001 - senza URL pubblico la conferma non avrebbe un link
+        return {"status": "not_configured"}
+    return capture.request_from_public_stima(
+        ctx, contact_id=contact_id, stima_id=stima_id, notice_id=None,
+        decided_at=consenso_marketing_at, on_email_pending=enqueue_confirmation)
 
 
 # ---------------------------------------------------------------------------

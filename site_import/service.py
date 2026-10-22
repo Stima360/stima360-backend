@@ -51,7 +51,9 @@ SKIP_COLUMNS = {
 #: Dati personali che non servono alla scheda immobile.
 PII = {"nome", "cognome", "email", "telefono"}
 
-STIMA_STEPS = ("bridge", "property", "event", "followup", "pdf")
+#: C3.1: `consent` dopo il bridge - la conferma email della casella marketing
+#: del sito; ogni suo esito e' indipendente dagli altri passi.
+STIMA_STEPS = ("bridge", "consent", "property", "event", "followup", "pdf")
 DETAIL_STEPS = ("property", "agenda")
 #: Esiti di passo che non si ritentano.
 FINAL = {"done", "blocked", "skipped", "missing", "unverified", "invalid", "not_applicable"}
@@ -412,6 +414,25 @@ class Importer:
 
         ponte = self._passo(conn, ledger, riga["id"], steps, "bridge", bridge)
         collegato = ponte.get("state") == "done"
+
+        def consenso():
+            # C3.1: la casella «email e WhatsApp» del sito. Con l'interruttore
+            # spento (default) non succede niente; acceso, prepara SOLO la
+            # conferma via email. Un esito "non applicabile" e' finale: una
+            # stima importata a interruttore spento non riceve email dopo.
+            from communication import consent_page
+            if not collegato:
+                return {"state": "not_applicable", "reason": "no_contact_lead"}
+            esito = consent_page.request_from_site_checkbox(
+                ctx, stima_id=stima_id, contact_id=ponte["contact_id"],
+                consenso_marketing=sito.get("consenso_marketing"),
+                consenso_marketing_at=_utc(sito.get("consenso_marketing_at")))
+            stato = esito.get("status")
+            if stato in ("queued", "already_requested", "already_pending", "already_granted"):
+                return {"state": "done", "status": stato, "submission_id": esito.get("submission_id")}
+            return {"state": "not_applicable", "status": stato}
+
+        self._passo(conn, ledger, riga["id"], steps, "consent", consenso)
 
         def immobile():
             if not collegato:

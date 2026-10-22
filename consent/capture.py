@@ -151,6 +151,25 @@ def current_notice(cur, now: datetime) -> dict[str, Any] | None:
     return dict(riga) if riga is not None else None
 
 
+def notice_at(cur, when: datetime) -> dict[str, Any] | None:
+    """L'informativa marketing valida in `when` E GIA' REGISTRATA in `when`.
+
+    C3.1: per una scelta fatta altrove (la casella del sito) l'informativa si
+    associa solo se esisteva nel CRM in quel momento: `created_at` e'
+    immutabile (061), quindi una versione registrata o retrodatata dopo non
+    viene mai attribuita a una decisione precedente.
+    """
+    cur.execute(
+        """SELECT id, version, context, content, content_hash, channels, valid_from, valid_to
+             FROM consent_notices
+            WHERE purpose = %s AND content_available AND created_at <= %s
+              AND valid_from <= %s AND (valid_to IS NULL OR valid_to >= %s)
+            ORDER BY valid_from DESC, id DESC LIMIT 1""",
+        [PURPOSE_MARKETING, when, when, when])
+    riga = cur.fetchone()
+    return dict(riga) if riga is not None else None
+
+
 def _consuma(cur, bucket: str, limite: tuple[int, int], now: datetime) -> bool:
     """Un colpo nel contatore a finestra fissa. True se ancora entro il limite."""
     massimo, secondi = limite
@@ -527,21 +546,32 @@ def confirm_email(raw_token: str | None, *, ip: str | None, user_agent: str | No
 
 def request_from_public_stima(ctx, *, contact_id: int, stima_id: int, notice_id,
                               on_email_pending: Callable[..., int | None],
-                              now: datetime | None = None) -> dict[str, Any]:
+                              now: datetime | None = None,
+                              decided_at: datetime | None = None) -> dict[str, Any]:
     """La casella email spuntata sul sito: una richiesta IN ATTESA di
-    conferma, idempotente per stima. Non concede niente da sola."""
+    conferma, idempotente per stima. Non concede niente da sola.
+
+    C3.1: con `decided_at` (la casella del sito pubblicato, che non manda un
+    id di informativa) l'informativa e' quella di `notice_at(decided_at)`,
+    scelta dal server; `notice_id` deve essere None."""
     quando = _ora(now)
-    if not isinstance(notice_id, int) or isinstance(notice_id, bool) or notice_id <= 0:
+    if decided_at is None and (not isinstance(notice_id, int) or isinstance(notice_id, bool)
+                               or notice_id <= 0):
         return {"status": "notice_missing"}
     with consent_cursor(commit=True) as (_, cur):
         cur.execute("SELECT id FROM consent_submissions WHERE idempotency_key = %s",
                     [f"public_stima:{stima_id}:email"])
         if cur.fetchone() is not None:
             return {"status": "already_requested"}
-        informativa = current_notice(cur, quando)
-        if (informativa is None or informativa["id"] != notice_id
-                or CHANNEL_EMAIL not in (informativa.get("channels") or ())):
-            return {"status": "notice_invalid"}
+        if decided_at is not None:
+            informativa = notice_at(cur, decided_at)
+            if informativa is None or CHANNEL_EMAIL not in (informativa.get("channels") or ()):
+                return {"status": "notice_missing"}
+        else:
+            informativa = current_notice(cur, quando)
+            if (informativa is None or informativa["id"] != notice_id
+                    or CHANNEL_EMAIL not in (informativa.get("channels") or ())):
+                return {"status": "notice_invalid"}
         contact = repository.lock_contact(cur, ctx, contact_id)
         if not _registrabile(contact) or not contact.get("email_normalized"):
             return {"status": "no_email"}
@@ -578,5 +608,5 @@ def request_from_public_stima(ctx, *, contact_id: int, stima_id: int, notice_id,
 __all__ = [
     "LINK_TTL", "CONFIRM_TTL", "create_link", "disable_link", "capture_state", "resolve_link",
     "page_state", "submit", "confirm_email", "request_from_public_stima", "current_notice",
-    "mask_email", "mask_phone", "ValidationError",
+    "notice_at", "mask_email", "mask_phone", "ValidationError",
 ]

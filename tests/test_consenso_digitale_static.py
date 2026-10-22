@@ -130,3 +130,39 @@ def test_la_scheda_contatto_non_usa_innerhtml_per_link_e_qr():
     assert "innerHTML" not in gestore and "insertAdjacentHTML" not in gestore
     assert ".textContent = scadenza" in gestore
     assert "qr.startsWith('data:image/svg+xml')" in gestore
+
+
+# ---------------------------------------------------------------------------
+# C3.1 - la casella del sito pubblicato nell'import
+# ---------------------------------------------------------------------------
+
+def test_c31_l_interruttore_del_sito_e_spento_salvo_on_esplicito(monkeypatch):
+    from communication import consent_page
+    assert consent_page.SITE_DOUBLE_OPT_IN_ENV == "SITE_CONSENT_DOUBLE_OPT_IN"
+    monkeypatch.delenv(consent_page.SITE_DOUBLE_OPT_IN_ENV, raising=False)
+    assert not consent_page.site_double_opt_in_enabled()
+    for valore in ("", "off", "0", "false", "yes", "ON?", "1"):
+        monkeypatch.setenv(consent_page.SITE_DOUBLE_OPT_IN_ENV, valore)
+        assert not consent_page.site_double_opt_in_enabled(), valore
+    monkeypatch.setenv(consent_page.SITE_DOUBLE_OPT_IN_ENV, " On ")
+    assert consent_page.site_double_opt_in_enabled()
+    monkeypatch.delenv(consent_page.SITE_DOUBLE_OPT_IN_ENV, raising=False)
+    esito = consent_page.request_from_site_checkbox(None, stima_id=1, contact_id=1, consenso_marketing=True,
+                                                    consenso_marketing_at=None)
+    assert esito == {"status": "disabled"}
+
+
+def test_c31_il_passo_consenso_segue_il_bridge_e_non_legge_id_dal_client():
+    from site_import import service
+    assert service.STIMA_STEPS == ("bridge", "consent", "property", "event", "followup", "pdf")
+    corpo = _testo("communication/consent_page.py")
+    funzione = corpo[corpo.index("def request_from_site_checkbox"):]
+    funzione = funzione[:funzione.index("\n\n\n")]
+    assert "notice_id=None" in funzione and "decided_at=consenso_marketing_at" in funzione
+    assert "informativa_marketing_id" not in funzione and "whatsapp" not in funzione.split('"""')[2].lower()
+
+
+def test_c31_l_informativa_si_attribuisce_solo_se_gia_registrata():
+    sorgente = _testo("consent/capture.py")
+    funzione = sorgente[sorgente.index("def notice_at"):sorgente.index("def _consuma")]
+    assert "created_at <= %s" in funzione and "valid_from <= %s" in funzione
