@@ -31,6 +31,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+from acquisitions import service as acquisitions_service
+from acquisitions.schemas import AcquisitionAppointment, AcquisitionCreate, AcquisitionPatch, MandateBody
 from appointments import repository as agenda_repository
 from appointments import service as agenda
 from appointments.schemas import AppointmentCreateBody
@@ -43,12 +45,13 @@ from core.schemas import ActivityCreate, ContactCreate, TaskCreate
 from core.scope import scoped_source
 from crm import sellers
 from crm.schemas import SellerActivate
-from property import census, interactions
+from property import census, composition, interactions
 from property import service as property_service
 from property.catalog import validate_location
 from property.lifecycle import may_manage
-from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate, PropertyContactCreate
+from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate, PropertyContactCreate, PropertyUpdate
 
+from . import mandate_rules
 from . import repository as voice_repository
 from . import resolver
 
@@ -60,6 +63,8 @@ APPOINTMENT_IN_PAST = "VOICE_APPOINTMENT_IN_PAST"
 RECORD_KIND_MISSING = "VOICE_RECORD_KIND_MISSING"
 REFERENCE_MISSING = "VOICE_REFERENCE_MISSING"
 UNSUPPORTED = "VOICE_UNSUPPORTED_INTENT"
+#: V9: la situazione dell'incarico non e' piu' quella confermata.
+MANDATE_STATE_CHANGED = "VOICE_MANDATE_STATE_CHANGED"
 
 OWNER_ROLES = ("owner", "seller")
 VOICE_SOURCE = "voice"
@@ -99,6 +104,8 @@ class StepInput:
     accepted_hidden: bool = False
     #: activate_seller: lo stato della coppia PRIMA della prima scrittura.
     seller_before: dict[str, Any] = field(default_factory=dict)
+    #: V9: i motivi della conferma (fra questi, l'operazione sull'incarico confermata).
+    confirmed_reasons: tuple[str, ...] = ()
 
 
 def is_atomic(intent: str, ref_names) -> bool:
@@ -423,6 +430,96 @@ def _task_with_cursor(ctx, cur, inp: StepInput) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# V9: incarichi e acquisizioni - SOLO i servizi originali del CRM
+# ---------------------------------------------------------------------------
+
+def _valuta(ctx, inp: StepInput):
+    """La situazione rilevata ADESSO e le regole: deve uscirne la stessa
+    operazione confermata, altrimenti nulla si scrive. I servizi delle
+    Acquisizioni e degli Immobili ricontrollano poi tutto a modo loro."""
+    pid = _id(inp, "property")
+    with voice_repository.read_only() as cur:
+        situazione = voice_repository.mandate_situation(ctx, cur, pid, inp.payload.get("owner_said"))
+    if situazione is None:
+        raise StepRefused(REFERENCE_MISSING, "immobile non trovato")
+    valutazione = mandate_rules.evaluate(inp.intent, inp.payload, situazione)
+    if valutazione.blocks or valutazione.asks:
+        raise StepRefused((valutazione.blocks or valutazione.asks)[0], "dati o stato dell'incarico non adatti")
+    if valutazione.mode is not None and valutazione.mode not in inp.confirmed_reasons:
+        raise StepRefused(MANDATE_STATE_CHANGED, "la situazione e' cambiata dopo la conferma: ricontrolla")
+    return pid, situazione, valutazione
+
+
+def _mandate_prepare(ctx, inp: StepInput) -> dict:
+    pid, situazione, v = _valuta(ctx, inp)
+    acq = situazione["acquisition"]
+    if v.mode == mandate_rules.WILL_GENERATE:
+        # L'UNICO modo di generare un incarico: lo stesso di «Genera incarico»
+        corpo = MandateBody(version=acq["version"], mandate_type=inp.payload["mandate_type"],
+                            mandate_start=inp.payload["mandate_start"], mandate_end=inp.payload.get("mandate_end"),
+                            agreed_price=v.values["agreed_price"])
+        acquisitions_service.generate_mandate(ctx, acq["id"], corpo)
+        return _dopo(lambda: {"entity": "mandate", "id": pid, "property_id": pid, "acquisition_id": acq["id"],
+                              "created": True, "mode": v.mode})
+    acquisitions_service.patch_acquisition(ctx, acq["id"], AcquisitionPatch(
+        version=acq["version"], asking_price=v.values["asking_price"]))
+    return _dopo(lambda: {"entity": "acquisition", "id": acq["id"], "property_id": pid, "acquisition_id": acq["id"],
+                          "created": False, "mode": v.mode, "price": str(v.values["asking_price"])})
+
+
+def _mandate_price(ctx, inp: StepInput) -> dict:
+    pid, situazione, v = _valuta(ctx, inp)
+    prezzo = v.values["price"]
+    if prezzo is None:
+        raise StepRefused(REFERENCE_MISSING, "prezzo mancante")
+    precedente = str(v.values["previous"]) if v.values.get("previous") is not None else None
+    if v.mode == mandate_rules.WILL_SET_PROPERTY_PRICE:
+        # la stessa PATCH della scheda Immobile: storico prezzi con motivo e autore
+        corpo = PropertyUpdate(asking_price=prezzo, change_reason="STIMA Voice: prezzo dell'incarico",
+                               changed_by=f"operator:{int(ctx.user_id)}")
+        composition.update_property_guarded(ctx, pid, corpo, lambda: property_service.update_property(ctx, pid, corpo))
+        return _dopo(lambda: {"entity": "property", "id": pid, "property_id": pid, "mode": v.mode,
+                              "price": str(prezzo), "previous_price": precedente})
+    acq = situazione["acquisition"]
+    acquisitions_service.patch_acquisition(ctx, acq["id"], AcquisitionPatch(
+        version=acq["version"], **{v.values["column"]: prezzo}))
+    return _dopo(lambda: {"entity": "acquisition", "id": acq["id"], "property_id": pid, "acquisition_id": acq["id"],
+                          "mode": v.mode, "price": str(prezzo), "previous_price": precedente})
+
+
+def _mandate_info(ctx, inp: StepInput) -> dict:
+    """Sola lettura: il passo registra la domanda; la risposta e' la scheda."""
+    pid = _id(inp, "property")
+    return {"entity": "mandate_info", "id": pid, "property_id": pid, "created": False}
+
+
+def _acquisition_start(ctx, inp: StepInput) -> dict:
+    pid = _id(inp, "property")
+    with voice_repository.read_only() as cur:
+        situazione = voice_repository.mandate_situation(ctx, cur, pid, inp.payload.get("owner_said"))
+    acq = (situazione or {}).get("acquisition")
+    if acq and inp.key and str(acq.get("appointment_request_id") or "") == inp.key:
+        # ripresa dopo un'interruzione: questa richiesta l'ha gia' creata
+        return {"entity": "acquisition", "id": acq["id"], "property_id": pid, "acquisition_id": acq["id"],
+                "created": False, "replica": True, "start_at": acq["appointment_start"].isoformat()
+                if acq.get("appointment_start") else None}
+    pid, situazione, v = _valuta(ctx, inp)
+    p = inp.payload
+    inizio = datetime.fromisoformat(p["start_at"])
+    if inp.now is not None and inizio <= inp.now:
+        raise StepRefused(APPOINTMENT_IN_PAST, "il momento indicato e' gia' passato")
+    corpo = AcquisitionCreate(
+        property_id=pid, owner_contact_id=v.values["owner_contact_id"], asking_price=v.values["asking_price"],
+        appointment=AcquisitionAppointment(start_at=p["start_at"], end_at=p.get("end_at"),
+                                           assigned_user_id=int(ctx.user_id), client_request_id=inp.key))
+    dettaglio, replica = acquisitions_service.create_acquisition(ctx, corpo)
+    return _dopo(lambda: {"entity": "acquisition", "id": int(dettaglio["id"]), "property_id": pid,
+                          "acquisition_id": int(dettaglio["id"]), "created": not replica, "replica": bool(replica),
+                          "mode": v.mode, "appointment_id": dettaglio.get("appointment_id"),
+                          "start_at": p["start_at"]})
+
+
+# ---------------------------------------------------------------------------
 
 _SERVIZI = {
     "create_contact": _create_contact,
@@ -431,6 +528,10 @@ _SERVIZI = {
     "link_owner": _link_owner,
     "activate_seller": _activate_seller,
     "create_appointment": _create_appointment,
+    "mandate_prepare": _mandate_prepare,
+    "mandate_price": _mandate_price,
+    "mandate_info": _mandate_info,
+    "acquisition_start": _acquisition_start,
 }
 
 

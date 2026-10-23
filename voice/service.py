@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from collections import deque
 from datetime import datetime, time, timedelta
@@ -45,12 +46,12 @@ from zoneinfo import ZoneInfo
 
 import psycopg2
 
-from . import dates, executor, ledger, planner, reconcile, undo
+from . import dates, executor, ledger, mandate_rules, planner, reconcile, undo
 from . import provider as voice_provider
 from . import repository as voice_repository
 from .executor import VoiceRefused
 from .ledger import CommandBusy
-from .schemas import parse_plan_output
+from .schemas import PropertyRef, parse_plan_output
 
 log = logging.getLogger("stima360.voice")
 ROMA = ZoneInfo("Europe/Rome")
@@ -114,6 +115,45 @@ MESSAGES = {
     executor.PROPERTY_NOT_MANAGEABLE: "L'immobile non e' gestito da te.",
     executor.MUNICIPALITY_NOT_SUPPORTED: "Il comune indicato non e' fra quelli gestiti dal CRM: indica un comune valido.",
     executor.REFERENCE_CHANGED: "I dati sono cambiati dopo la conferma: ripeti il comando.",
+    # V9: incarichi e acquisizioni. L'operazione si dice per esteso: e' cio' che si conferma.
+    mandate_rules.WILL_GENERATE: ("Confermando generi un INCARICO EFFETTIVO nel CRM, come con «Genera incarico»: "
+                                  "l'acquisizione diventa «Acquisita» e l'immobile va in incarico. "
+                                  "STIMA non registra alcuna firma del proprietario."),
+    mandate_rules.WILL_UPDATE_ACQUISITION: ("Confermando aggiorni il prezzo richiesto dell'acquisizione. "
+                                            "L'incarico si potra' generare dopo il sopralluogo."),
+    mandate_rules.WILL_SET_PROPERTY_PRICE: "Confermando cambi il prezzo richiesto dell'immobile, con lo storico prezzi.",
+    mandate_rules.WILL_SET_ACQUISITION_PRICE: "Confermando cambi il prezzo richiesto registrato sull'acquisizione.",
+    mandate_rules.WILL_SET_VALUATION: "Confermando cambi la valutazione registrata sull'acquisizione.",
+    mandate_rules.WILL_START_ACQUISITION: ("Confermando crei l'acquisizione con il suo appuntamento in Agenda "
+                                           "(«Appuntamento fissato»). Il sopralluogo risultera' svolto solo quando "
+                                           "completerai l'appuntamento; l'incarico si genera dopo."),
+    mandate_rules.ALREADY_EXISTS: "Questo immobile ha gia' un incarico: nessun doppione. Aprilo dalla scheda.",
+    mandate_rules.PROPERTY_CENSUS: "L'immobile e' una scheda di censimento: prima va preso in carico dalla scheda Immobile.",
+    mandate_rules.PROPERTY_CLOSED: "L'immobile e' venduto o archiviato: nessun incarico nuovo.",
+    mandate_rules.ACQUISITION_OTHER_AGENT: "L'acquisizione di questo immobile e' seguita da un collega: la puo' gestire solo lui o il titolare.",
+    mandate_rules.ACQUISITION_NOT_READY: "L'incarico si potra' generare dopo il sopralluogo, completando l'appuntamento di acquisizione.",
+    mandate_rules.NO_OPEN_ACQUISITION: "Per questo immobile non c'e' un'acquisizione aperta.",
+    mandate_rules.NOTHING_TO_PRICE: "Questo immobile non ha ne' un incarico ne' un'acquisizione aperta: il prezzo si cambia dalla scheda Immobile.",
+    mandate_rules.PRICE_UNCHANGED: "Il prezzo e' gia' questo: nessuna modifica.",
+    mandate_rules.NOT_MANAGEABLE: "Il prezzo di questo immobile lo cambia l'agente a cui e' assegnato, o il titolare.",
+    mandate_rules.OWNER_NOT_LINKED: ("La persona indicata non risulta proprietaria di questo immobile: collega il "
+                                     "proprietario dalla scheda Immobile, poi riprova."),
+    mandate_rules.ACQUISITION_ALREADY_OPEN: "Per questo immobile c'e' gia' un'acquisizione aperta: aprila dalla sezione Acquisizioni.",
+    mandate_rules.ACQUISITION_OWNER_MISSING: "L'immobile non ha un proprietario collegato: collegalo dalla scheda Immobile.",
+    mandate_rules.ACQUISITION_OWNER_AMBIGUOUS: "L'immobile ha piu' proprietari: dimmi il nome di quello di riferimento.",
+    mandate_rules.NO_ACQUISITION: ("Per questo immobile non c'e' ancora un'acquisizione: l'incarico nasce "
+                                   "dall'acquisizione, dopo il sopralluogo. Vuoi iniziare il percorso? Dimmi giorno "
+                                   "e ora dell'appuntamento di acquisizione."),
+    mandate_rules.TYPE_MISSING: "Che tipo di incarico e'? (es. vendita in esclusiva)",
+    mandate_rules.START_MISSING: "Da quando decorre l'incarico?",
+    mandate_rules.PRICE_MISSING: "Qual e' il prezzo richiesto?",
+    mandate_rules.PRICE_KIND_UNCLEAR: ("Quale prezzo vuoi cambiare: quello richiesto dell'immobile, quello registrato "
+                                       "sull'acquisizione o la valutazione?"),
+    mandate_rules.PROPERTY_CHOICE: "Ci sono piu' immobili possibili: quale? Rispondi con il numero o l'indirizzo.",
+    planner.MANDATE_PRICE_UNCLEAR: "Non ho capito il prezzo: dimmelo in cifre (es. 185 mila euro).",
+    planner.MANDATE_DATE_UNCLEAR: "Non ho capito la data dell'incarico.",
+    planner.MANDATE_DATES_INVALID: "La scadenza non puo' precedere l'inizio.",
+    planner.MANDATE_CHANGE_ALONE: "Un incarico o un'acquisizione si conferma da solo: dillo in un comando a parte.",
 }
 PARTIAL_NOTICE = ("Tutti i passi sono conclusi, ma lo stato complessivo resta «parziale» perche' almeno "
                   "un passo e' stato chiuso con una riconciliazione (limite noto).")
@@ -487,7 +527,7 @@ def reply(ctx, command_id: int, client_command_id, text: str, *, provider,
     contesto = _domande(vista)
     # Collaudo 3: un giorno o un orario chiesto da STIMA si capisce qui, senza
     # il modello (nemmeno durante la pausa dopo un 429).
-    locale = _risposta_locale(comando, risposta, now or datetime.now(ROMA))
+    locale = _risposta_locale(ctx, comando, vista, risposta, now or datetime.now(ROMA))
     # V8-0: il comando a cui si risponde si annulla SOLO quando il nuovo piano
     # esiste. Se il fornitore non risponde (429, rete), la conversazione resta
     # quella di prima, intatta, e la stessa risposta si ripete con la stessa chiave.
@@ -506,7 +546,41 @@ def reply(ctx, command_id: int, client_command_id, text: str, *, provider,
     return nuovo
 
 
-def _risposta_locale(comando: dict, risposta: str, adesso: datetime):
+_ORDINALI = {"primo": 1, "prima": 1, "uno": 1, "secondo": 2, "seconda": 2, "due": 2, "terzo": 3, "terza": 3,
+             "tre": 3, "quarto": 4, "quarta": 4, "quattro": 4, "quinto": 5, "quinta": 5, "cinque": 5}
+
+
+def _scelta_immobile(ctx, output, vista: dict, risposta: str):
+    """V9: «quale immobile?» -> «il secondo», «2», «quello di via Sanzio»: si
+    sceglie fra i candidati GIA' mostrati e si restringe per codice
+    (letto qui, nell'agenzia), senza il modello. None se non e' univoca."""
+    passi = [p for p in vista.get("steps") or []
+             if any(r["code"] == mandate_rules.PROPERTY_CHOICE for r in p.get("reasons") or [])]
+    if len(passi) != 1 or len(output.commands) != 1:
+        return None
+    candidati = (passi[0].get("candidates") or {}).get("property") or []
+    t = dates.fold(risposta).strip(" .")
+    t = re.sub(r"^(?:e |il |la |l |quello |quella |di |del |in )+", "", t).strip()
+    if not t or not candidati:
+        return None
+    numero = int(t) if t.isdigit() else _ORDINALI.get(t.split()[0]) if len(t.split()) <= 2 else None
+    if numero:
+        scelti = [candidati[numero - 1]] if 1 <= numero <= len(candidati) else []
+    else:
+        parole = [p for p in re.sub(r"[^a-z0-9 ]+", " ", t).split() if len(p) > 1 and p not in ("di", "in", "via")]
+        scelti = [c for c in candidati if parole and all(p in dates.fold(c["label"]) for p in parole)]
+    if len(scelti) != 1:
+        return None
+    with voice_repository.read_only() as cur:
+        codice = voice_repository.property_code(ctx, cur, int(scelti[0]["id"]))
+    if not codice:
+        return None
+    c = output.commands[0]
+    rif = PropertyRef(code=codice, owner=c.property.owner if c.property is not None else None)
+    return output.model_copy(update={"commands": [c.model_copy(update={"property": rif})]})
+
+
+def _risposta_locale(ctx, comando: dict, vista: dict, risposta: str, adesso: datetime):
     """L'output del modello del comando con la risposta applicata, o None
     (risposta da far capire al modello, o output non conservato)."""
     grezzo = (comando.get("frozen") or {}).get(MODEL_OUTPUT_KEY)
@@ -519,7 +593,11 @@ def _risposta_locale(comando: dict, risposta: str, adesso: datetime):
     domande = {int(s["ordinal"]): set(s.get("issues") or []) for s in comando["plan"]["steps"]}
     for p in comando.get("steps") or []:
         domande.setdefault(int(p["ordinal"]), set()).update(p.get("reasons") or [])
-    return planner.apply_local_reply(output, domande, risposta, adesso)
+    for p in vista.get("steps") or []:                  # V9: le domande di adesso (situazione reale)
+        domande.setdefault(int(p["ordinal"]), set()).update(r["code"] for r in p.get("reasons") or [])
+    return (planner.apply_local_reply(output, domande, risposta, adesso)
+            or planner.apply_local_mandate_reply(output, domande, risposta, adesso)
+            or _scelta_immobile(ctx, output, vista, risposta))
 
 
 def _rispondibile(ctx, command_id: int, *, comando=None) -> None:
@@ -538,7 +616,9 @@ def _motivi(codici) -> list[dict]:
 
 
 _RISULTATO = ("entity", "id", "record_kind", "created", "preexisting", "origin", "property_id", "contact_id",
-              "lead_id", "reconciled", "start_at")
+              "lead_id", "reconciled", "start_at",
+              # V9
+              "acquisition_id", "appointment_id", "mode", "price", "previous_price", "replica")
 
 
 _MESI = ("gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre",
@@ -584,6 +664,72 @@ def _con_proprietario(motivi: list[dict], vista) -> list[dict]:
             m["message"] = (f"Tra i contatti ho trovato {chi}, ma nessun immobile con incarico collegato a "
                             "questo nome: quale immobile deve visitare il cliente?")
     return motivi
+
+
+def _con_immobile(motivi: list[dict], vista) -> list[dict]:
+    """V9: per un incarico, l'immobile trovato per il proprietario si conferma
+    con le sue parole: «Ho trovato Via Sanzio 14... Vuoi utilizzare questo immobile?»."""
+    info = getattr(vista, "mandate", None)
+    for m in motivi:
+        if info and m["code"] == "reference_fuzzy":
+            m["message"] = f"Ho trovato {info['label']}. Vuoi utilizzare questo immobile?"
+    return motivi
+
+
+def _testo_prezzo(valore) -> str | None:
+    return None if valore is None else str(valore)
+
+
+def _scheda_incarico(passo_piano: dict, vista) -> dict[str, Any]:
+    """V9: la scheda di un passo sugli incarichi, dalla situazione REALE
+    dell'immobile (rilevata a ogni vista, con i permessi di chi chiede):
+    proprietario, immobile, prezzi, tipo, date, stato effettivo, cosa manca,
+    l'operazione che la conferma esegue e i collegamenti alle schede."""
+    payload = passo_piano.get("payload") or {}
+    base = {"kind": "mandate", "purpose": payload.get("purpose"), "property": None, "owner": None,
+            "state": None, "missing": [], "operation": None, "links": {}}
+    info = getattr(vista, "mandate", None)
+    if not info:
+        return base
+    sit, ev = info["situation"], info["evaluation"]
+    immobile, acq = sit["property"], sit.get("acquisition")
+    esiste = mandate_rules.has_mandate(sit)
+    nomi = {o["contact_id"]: o["name"] for o in sit.get("owners") or []}
+    chi = (nomi.get(acq["owner_contact_id"]) if acq and acq.get("visible") else None) \
+        or nomi.get(sit.get("owner_choice")) or ", ".join(n for n in nomi.values() if n) or None
+    if "agreed_price" in ev.values:
+        proposto, etichetta = ev.values["agreed_price"], "Prezzo concordato (incarico)"
+    elif "column" in ev.values:
+        proposto = ev.values.get("price")
+        etichetta = "Nuovo prezzo richiesto (acquisizione)" if ev.values["column"] == "asking_price" else "Nuova valutazione"
+    elif "price" in ev.values:
+        proposto, etichetta = ev.values["price"], "Nuovo prezzo richiesto (immobile)"
+    else:
+        proposto, etichetta = ev.values.get("asking_price"), "Prezzo richiesto (acquisizione)"
+    collegamenti = {"property": f"#/immobili/{immobile['id']}"}
+    if immobile.get("acquisition_id"):
+        collegamenti["mandate"] = f"#/incarichi/{immobile['id']}"
+    if acq and acq.get("visible"):
+        collegamenti["acquisition"] = f"#/acquisizioni/{acq['id']}"
+    return {**base,
+            "property": info["label"], "owner": chi,
+            "mandate_exists": esiste,
+            "mandate_type": immobile.get("mandate_type") if esiste else payload.get("mandate_type"),
+            "mandate_start": str(immobile["mandate_start"]) if esiste and immobile.get("mandate_start")
+            else payload.get("mandate_start"),
+            "mandate_end": str(immobile["mandate_end"]) if esiste and immobile.get("mandate_end")
+            else payload.get("mandate_end"),
+            "property_price": _testo_prezzo(immobile.get("asking_price")),
+            "acquisition_price": _testo_prezzo(acq.get("asking_price")) if acq and acq.get("visible") else None,
+            "valuation": _testo_prezzo(acq.get("valuation_price")) if acq and acq.get("visible") else None,
+            "proposed_price": _testo_prezzo(proposto), "proposed_price_label": etichetta,
+            "price_from_acquisition": bool(ev.values.get("price_from_acquisition")),
+            "appointment_start": acq["appointment_start"].isoformat()
+            if acq and acq.get("visible") and acq.get("appointment_start") else None,
+            "state": mandate_rules.effective_state(sit),
+            "missing": list(ev.missing),
+            "operation": MESSAGES.get(ev.mode) if ev.mode else None, "mode": ev.mode,
+            "links": collegamenti}
 
 
 def _riepilogo(ctx, passo_piano: dict, vista, attore: str | None) -> dict[str, Any]:
@@ -636,14 +782,15 @@ def view(ctx, command_id: int) -> dict[str, Any]:
         passi.append({
             "ordinal": n, "intent": p["intent"], "quote": piano[n]["quote"], "state": p["state"],
             "decision": v.decision if p["state"] in ("pending", "failed") else p["decision"],
-            "needs": attesa, "reasons": _con_proprietario(_con_orario(
+            "needs": attesa, "reasons": _con_immobile(_con_proprietario(_con_orario(
                 _motivi(v.reasons if p["state"] in ("pending", "failed") else p["reasons"]),
-                piano[n].get("payload") or {}, comando["recorded_at"]), v),
+                piano[n].get("payload") or {}, comando["recorded_at"]), v), v),
             "candidates": scelte, "duplicates": v.duplicate_labels, "hidden_duplicate": v.hidden,
             "start_at": piano[n].get("start_at"), "end_at": piano[n].get("end_at"),
             "result": {k: x for k, x in (p["result"] or {}).items() if k in _RISULTATO},
             "error": p["error_type"], "undo": annullabili[n]["status"],
-            "summary": _riepilogo(ctx, piano[n], v, attore) if p["intent"] == "create_appointment" else None,
+            "summary": (_riepilogo(ctx, piano[n], v, attore) if p["intent"] == "create_appointment"
+                        else _scheda_incarico(piano[n], v) if p["intent"] in mandate_rules.INTENTS else None),
         })
     conclusi = all(p["state"] in ("succeeded", "skipped") for p in comando["steps"])
     return {**base, "steps": passi, "clarifications": list(comando["plan"].get("clarifications") or []),

@@ -35,7 +35,17 @@ from property.schemas import BUILDING_TYPES
 INTENTS = (
     "add_note", "add_task", "create_contact", "create_unit", "create_building",
     "link_owner", "activate_seller", "create_appointment", "unsupported",
+    # V9: gli incarichi (migration 111). Si appoggiano ai servizi delle
+    # Acquisizioni e degli Immobili: nessun registro proprio.
+    "mandate_prepare", "mandate_price", "mandate_info", "acquisition_start",
 )
+#: V9: quale prezzo modificare. `property` = prezzo richiesto dell'immobile
+#: (quello dell'incarico in corso, con lo storico prezzi); `acquisition` =
+#: prezzo richiesto registrato sull'acquisizione aperta; `valuation` =
+#: valutazione dell'acquisizione aperta. Solo se il vocale lo dice.
+MANDATE_PRICE_KINDS = ("property", "acquisition", "valuation")
+#: V9: cosa si chiede su un incarico, senza scrivere nulla.
+MANDATE_INFO_PURPOSES = ("missing", "open")
 
 RECORD_KINDS = ("crm", "census")
 
@@ -56,6 +66,8 @@ Priority = Literal[tuple(_sorted(PRIORITIES))]  # type: ignore[valid-type]
 ContactRole = Literal[tuple(_sorted(CONTACT_ROLES))]  # type: ignore[valid-type]
 InteractionType = Literal[tuple(INTERACTION_TYPES)]  # type: ignore[valid-type]
 RecordKind = Literal[tuple(RECORD_KINDS)]  # type: ignore[valid-type]
+MandatePriceKind = Literal[MANDATE_PRICE_KINDS]  # type: ignore[valid-type]
+MandateInfoPurpose = Literal[MANDATE_INFO_PURPOSES]  # type: ignore[valid-type]
 
 
 class VoiceModel(BaseModel):
@@ -289,6 +301,54 @@ class CreateAppointmentCommand(_Command):
     notes: str | None = Field(None, max_length=5000)
 
 
+# ---------------------------------------------------------------------------
+# V9: incarichi. Il proprietario e l'immobile si DESCRIVONO (nomi, indirizzo):
+# l'immobile si cerca solo fra quelli realmente collegati a quel proprietario,
+# mai collegandoli. Prezzi e date restano le PAROLE dette: li interpreta il
+# planner, il modello non calcola nulla.
+# ---------------------------------------------------------------------------
+
+class _MandateTarget(_Command):
+    owner: ContactRef | None = None
+    property: PropertyRef | None = None
+
+    @model_validator(mode="after")
+    def _di_chi(self):
+        if self.owner is None and self.property is None:
+            raise ValueError("a mandate command needs the owner or the property")
+        return self
+
+
+class MandatePrepareCommand(_MandateTarget):
+    """«Crea / prepara un incarico di vendita per l'appartamento di X, prezzo Y»."""
+    intent: Literal["mandate_prepare"]
+    #: Il tipo d'incarico come detto («vendita», «vendita in esclusiva»): nel CRM e' testo libero.
+    mandate_type: str | None = Field(None, max_length=80)
+    price_text: str | None = Field(None, max_length=80)
+    start_text: str | None = Field(None, max_length=80)
+    end_text: str | None = Field(None, max_length=80)
+
+
+class MandatePriceCommand(_MandateTarget):
+    """«Modifica il prezzo richiesto dell'incarico di via Roma 15 a 175 mila»."""
+    intent: Literal["mandate_price"]
+    price_text: str = Field(..., min_length=1, max_length=80)
+    price_kind: MandatePriceKind | None = None
+
+
+class MandateInfoCommand(_MandateTarget):
+    """«Quali dati mancano per l'incarico di X?», «Portami alla scheda dell'incarico di X»."""
+    intent: Literal["mandate_info"]
+    purpose: MandateInfoPurpose = "missing"
+
+
+class AcquisitionStartCommand(_MandateTarget):
+    """«Inizia l'acquisizione dell'immobile di X: appuntamento domani alle 10»."""
+    intent: Literal["acquisition_start"]
+    when: WhenRef
+    price_text: str | None = Field(None, max_length=80)
+
+
 class UnsupportedCommand(_Command):
     """Una richiesta fuori elenco (incarichi, acquisizioni, modifiche,
     cancellazioni, riassegnazioni...). Si blocca, si spiega, non si inventa."""
@@ -301,6 +361,7 @@ Command = Annotated[
         AddNoteCommand, AddTaskCommand, CreateContactCommand, CreateUnitCommand,
         CreateBuildingCommand, LinkOwnerCommand, ActivateSellerCommand,
         CreateAppointmentCommand, UnsupportedCommand,
+        MandatePrepareCommand, MandatePriceCommand, MandateInfoCommand, AcquisitionStartCommand,
     ],
     Field(discriminator="intent"),
 ]

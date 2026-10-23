@@ -34,6 +34,9 @@ FILE_FASE_2 = {"repository.py", "resolver.py"}
 FILE_FASE_3 = {"ledger.py", "settings.py"}
 FILE_FASE_4 = {"executor.py", "operations.py", "reconcile.py", "undo.py"}
 FILE_FASE_5 = {"provider.py", "service.py", "router.py"}
+#: SENTINELLA AGGIORNATA DA STIMA VOICE V9 (incarichi, autorizzazione del 23/10): le regole pure
+#: degli incarichi (nessun database), dichiarate in tests/voice_v9_diff.py.
+FILE_V9 = {"mandate_rules.py"}
 #: Le uniche tabelle su cui STIMA Voice scrive SQL.
 TABELLE_VOICE = {"voice_commands", "voice_command_steps", "voice_command_events", "voice_step_undos"}
 #: Chi scrive SQL, e dove.
@@ -57,20 +60,31 @@ AMMESSI = {
                       "core.contact_trash", "core.property_trash", "property.census", "appointments.repository",
                       # SENTINELLA AGGIORNATA DA STIMA VOICE V8-2: l'incarico di vendita si legge con le
                       # stesse funzioni dell'Agenda (definizione canonica e stati), mai con una regola propria
-                      "appointments.enums", "core.property_mandate"},
+                      "appointments.enums", "core.property_mandate",
+                      # SENTINELLA AGGIORNATA DA STIMA VOICE V9: chi puo' gestire l'immobile, la stessa regola
+                      # del CRM (property.lifecycle.may_manage), mai una copia
+                      "property.lifecycle"},
     "settings.py": {"core.database"},
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V9: le regole degli incarichi leggono solo i cataloghi
+    # delle Acquisizioni e la definizione canonica d'incarico (moduli puri, nessuna scrittura)
+    "mandate_rules.py": {"acquisitions.enums", "core.property_mandate"},
     "ledger.py": {"core.database", "psycopg2"},
     "reconcile.py": {"core.database", "core.normalization", "psycopg2.extras"},
     "operations.py": {"appointments.repository", "appointments.service", "appointments.schemas", "core.database",
                       "core.repository", "core.service", "core.exceptions", "core.normalization", "core.schemas",
                       "core.scope", "crm.sellers", "crm.schemas", "property.census", "property.interactions",
-                      "property.service", "property.lifecycle", "property.schemas", "property.catalog"},
+                      "property.service", "property.lifecycle", "property.schemas", "property.catalog",
+                      # SENTINELLA AGGIORNATA DA STIMA VOICE V9: gli incarichi SOLO con i servizi originali
+                      # (generate_mandate, patch_acquisition, create_acquisition) e la PATCH dell'immobile
+                      "acquisitions.service", "acquisitions.schemas", "property.composition"},
     "undo.py": {"appointments.service", "appointments.schemas", "core.service", "core.database", "core.schemas",
                 "crm.sellers", "crm.schemas", "property.building_lifecycle", "property.census", "property.service",
                 "property.schemas", "psycopg2"},
 }
+# SENTINELLA AGGIORNATA DA STIMA VOICE V9: `acquisitions` non e' piu' vietato ovunque; resta
+# ammesso SOLO dove AMMESSI lo dichiara (operations.py, mandate_rules.py).
 VIETATI_OVUNQUE = ("requests", "httpx", "openai", "anthropic", "boto3", "fastapi", "main", "database",
-                   "acquisitions", "operator_auth.dependencies")
+                   "operator_auth.dependencies")
 #: Le sole eccezioni, per file: la rete solo nel fornitore, FastAPI e la
 #: sessione solo nel router.
 ECCEZIONI = {"provider.py": {"requests"}, "router.py": {"fastapi", "operator_auth.dependencies"}}
@@ -92,7 +106,8 @@ def _ammesso(nome: str, ammessi: set[str]) -> bool:
 
 
 def test_01_only_declared_files_exist():
-    assert {p.name for p in VOICE.glob("*.py")} == FILE_FASE_1 | FILE_FASE_2 | FILE_FASE_3 | FILE_FASE_4 | FILE_FASE_5
+    assert {p.name for p in VOICE.glob("*.py")} == (FILE_FASE_1 | FILE_FASE_2 | FILE_FASE_3 | FILE_FASE_4
+                                                     | FILE_FASE_5 | FILE_V9)
 
 
 def test_02_each_file_imports_only_what_it_is_allowed_to():
@@ -154,6 +169,9 @@ def test_04_main_and_crm_modules_untouched():
     # dialog «Nuovo appuntamento» e l'interfaccia della Voce. Nessun altro file del CRM.
     from tests.voice_v8_diff import FILE_MODIFICATI as MOD_V8, FILE_NUOVI as NUOVI_V8
     dichiarati += tuple(MOD_V8) + tuple(NUOVI_V8)
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V9 (tests/voice_v9_diff.py): la migration 111 e l'interfaccia
+    from tests.voice_v9_diff import FILE_MODIFICATI as MOD_V9, FILE_NUOVI as NUOVI_V9
+    dichiarati += tuple(MOD_V9) + tuple(NUOVI_V9)
     righe = [r for r in esito.stdout.splitlines() if r[3:] not in dichiarati]
     assert righe == [], esito.stdout
 

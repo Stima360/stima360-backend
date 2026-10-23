@@ -20,6 +20,7 @@ domande o blocchi. Un codice stabile ciascuno, cosi' i test li contano.
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
 import json
 import re
@@ -33,13 +34,20 @@ from appointments.enums import APPOINTMENT_TYPE_LABELS_IT, MANDATE_REQUIRED_TYPE
 from core.schemas import ActivityCreate, ContactCreate, TaskCreate
 from property.schemas import BuildingCreate, CensusUnitCreate, InteractionCreate
 
-from . import dates
+from . import dates, mandate_rules
 from .schemas import (
-    MAX_COMMANDS, BuildingRef, Command, ContactRef, PropertyRef, VoicePlanOutput,
+    MAX_COMMANDS, AcquisitionStartCommand, BuildingRef, Command, ContactRef, PropertyRef, VoicePlanOutput,
 )
 
 # Codici delle issue (stabili).
 UNSUPPORTED = "unsupported_intent"
+#: V9: incarichi. Un prezzo o una data detti ma non chiari si chiedono; una
+#: scrittura sull'incarico o sull'acquisizione si conferma DA SOLA (mai
+#: dentro un comando con altri passi).
+MANDATE_PRICE_UNCLEAR = "mandate_price_unclear"
+MANDATE_DATE_UNCLEAR = "mandate_date_unclear"
+MANDATE_DATES_INVALID = "mandate_dates_invalid"
+MANDATE_CHANGE_ALONE = "mandate_change_alone"
 CONTACT_IDENTITY_WEAK = "contact_identity_weak"          # solo un nome: niente cognome/telefono/email
 RECORD_KIND_UNKNOWN = "record_kind_unknown"              # nessuna evidenza commerciale ne' di censimento
 RECORD_KIND_UNVERIFIED = "record_kind_unverified"        # il modello lo dice, il trascritto no
@@ -393,6 +401,11 @@ def build_plan(output: VoicePlanOutput, transcript: str, recorded_at: datetime) 
     for ordinal, comando in enumerate(output.commands, start=1):
         steps.append(_step(ordinal, comando, folded, recorded_at, ordinal in seller_targets))
     _unita_inventate(steps)
+    if len(steps) > 1:
+        for st in steps:
+            if st.intent in mandate_rules.WRITE_INTENTS:
+                st.issues += (Issue(MANDATE_CHANGE_ALONE, "Un incarico o un'acquisizione si conferma da solo: "
+                                    "dillo in un comando a parte"),)
     if len(output.commands) > MAX_COMMANDS:  # difensivo: lo schema lo vieta gia'
         for s in steps[MAX_COMMANDS:]:
             s.issues += (Issue(TOO_MANY_COMMANDS, "Troppi comandi in un solo vocale"),)
@@ -565,6 +578,11 @@ def _step(ordinal: int, c: Command, folded: str, now: datetime, seller_requires:
             refs["agent"] = Ref("agent", None, {"name": c.agent_name})
             issues.append(Issue(AGENT_NAMED, f"Appuntamento da affidare a {c.agent_name}: serve il permesso di assegnare", "agent_name"))
 
+    elif c.intent in mandate_rules.INTENTS:
+        _passo_incarico(s, c, refs, issues, now)
+        if _proprietario_detto(c):
+            s.payload["owner_said"] = _proprietario_detto(c)
+
     s.refs = {k: v for k, v in refs.items() if v is not None}
     s.depends_on = tuple(sorted({r.step for r in s.refs.values() if r.step is not None}))
     s.issues = tuple(issues)
@@ -643,7 +661,9 @@ WHEN_QUESTIONS = WHEN_DATE_QUESTIONS | WHEN_TIME_QUESTIONS | WHEN_ANY_QUESTIONS
 _APERTURA = re.compile(
     r"^(?:(?:si|ok|okay|allora|facciamo|facciamolo|mettiamo|metti|mettilo|mettila|fissa|fissalo|fissala|"
     r"spostalo|spostala|sposta|direi|va bene|meglio|no|invece|cambia|cambiamo|modifica|la|l|il|lo|ora|orario|"
-    r"data|giorno|a|ad|in|per|con)\s+)+")
+    r"data|giorno|a|ad|in|per|con|"
+    # V9: «decorre da oggi», «a partire dal primo novembre»
+    r"da|dal|dalla|decorre|decorrenza|parte|partire|inizia|inizio)\s+)+")
 _CHIUSURA = re.compile(r"\s+(?:grazie|per favore|perfavore|invece)$")
 _FASCE = {"mattina": "di mattina", "mattino": "di mattina", "pomeriggio": "del pomeriggio", "sera": "di sera",
           "notte": "di notte"}
@@ -706,7 +726,8 @@ def apply_local_reply(output: VoicePlanOutput, issues_by_ordinal: dict[int, set[
     """L'output del modello con il giorno e/o l'ora della risposta applicati
     all'UNICO appuntamento a cui si riferisce (quello con la domanda sul
     quando, o l'unico appuntamento del comando). None = serve il modello."""
-    appuntamenti = [i for i, c in enumerate(output.commands, start=1) if c.intent == "create_appointment"]
+    appuntamenti = [i for i, c in enumerate(output.commands, start=1)
+                    if c.intent in ("create_appointment", "acquisition_start")]
     con_domanda = [i for i in appuntamenti if issues_by_ordinal.get(i, set()) & WHEN_QUESTIONS]
     bersagli = con_domanda or appuntamenti
     if len(bersagli) != 1:
@@ -722,3 +743,161 @@ def apply_local_reply(output: VoicePlanOutput, issues_by_ordinal: dict[int, set[
     # le domande del modello sul quando sono sciolte; le altre restano
     restano = [d for d in output.clarifications if not _DOMANDA_QUANDO.search(dates.fold(d))]
     return output.model_copy(update={"commands": comandi, "clarifications": restano})
+
+
+# ---------------------------------------------------------------------------
+# V9: incarichi
+# ---------------------------------------------------------------------------
+
+#: Le parole che dicono QUALE prezzo («il prezzo dell'acquisizione», «la
+#: valutazione», «il prezzo richiesto dell'immobile»). Senza, si chiede.
+_PREZZO_DI = (("valutazion", "valuation"), ("acquisizion", "acquisition"), ("immobil", "property"))
+_APRI = ("portami", "apri", "aprimi", "mostrami", "fammi vedere", "scheda")
+
+
+def _proprietario_detto(c) -> dict | None:
+    if c.owner is not None:
+        detto = {k: v for k, v in c.owner.model_dump(exclude_none=True).items()
+                 if k in ("first_name", "last_name", "company_name")}
+        if detto:
+            return detto
+    if c.property is not None and c.property.owner is not None:
+        return c.property.owner.model_dump(exclude_none=True)
+    return None
+
+
+def _immobile_incarico(c) -> Ref:
+    """Il riferimento all'immobile di un incarico: indirizzo e/o proprietario.
+    `mandate` dice al risolutore di cercare SOLO fra gli immobili realmente
+    collegati a quel proprietario (property_contacts), mai per somiglianza
+    di un immobile qualunque."""
+    d: dict[str, Any] = {"mandate": c.intent}
+    if c.property is not None:
+        d.update({k: v for k, v in c.property.model_dump(exclude_none=True).items() if k not in ("step", "owner")})
+    proprietario = _proprietario_detto(c)
+    if proprietario:
+        d["owner"] = proprietario
+    return Ref("property", None, d)
+
+
+def mandate_type_from(c) -> str | None:
+    """Il tipo d'incarico come detto: dal modello o, se manca, dalle parole
+    («incarico di vendita», «in esclusiva»). Mai inventato."""
+    tipo = (getattr(c, "mandate_type", None) or "").strip()
+    if not tipo:
+        q = dates.fold(c.quote)
+        parti = []
+        if re.search(r"\bincaric[oa] (?:di )?vendita\b", q):
+            parti.append("vendita")
+        if "esclusiva" in q:
+            parti.append("in esclusiva")
+        tipo = " ".join(parti)
+    return tipo[:1].upper() + tipo[1:] if tipo else None
+
+
+def _durata(text: str, inizio) -> object | None:
+    """«6 mesi», «un anno», «12 mesi»: la scadenza dalla data d'inizio."""
+    m = re.fullmatch(r"(?:per |di |durata )?(\w+) (mes[ei]|ann[oi])", dates.fold(text).strip())
+    if not m or inizio is None:
+        return None
+    n = dates.NUMBER_WORDS.get(m.group(1)) if not m.group(1).isdigit() else int(m.group(1))
+    if not n:
+        return None
+    mesi = n * (12 if m.group(2).startswith("ann") else 1)
+    anno, mese = divmod(inizio.month - 1 + mesi, 12)
+    anno, mese = inizio.year + anno, mese + 1
+    return inizio.replace(year=anno, month=mese, day=min(inizio.day, calendar.monthrange(anno, mese)[1]))
+
+
+def _e_una_durata(text: str) -> bool:
+    return bool(re.fullmatch(r"(?:per |di |durata )?\w+ (?:mes[ei]|ann[oi])", dates.fold(text).strip()))
+
+
+def _passo_incarico(s: Step, c, refs: dict, issues: list, now: datetime) -> None:
+    refs["property"] = _immobile_incarico(c)
+    if c.intent == "mandate_info":
+        q = dates.fold(c.quote)
+        s.payload = {"purpose": "open" if c.purpose == "open" or any(p in q for p in _APRI) else "missing"}
+        return
+    prezzo_detto = getattr(c, "price_text", None)
+    prezzo = mandate_rules.price_from_text(prezzo_detto)
+    if prezzo_detto and prezzo is None:
+        issues.append(Issue(MANDATE_PRICE_UNCLEAR, "Non ho capito il prezzo: dimmelo in cifre (es. 185 mila euro)", "price"))
+    if c.intent == "mandate_price":
+        tipo = c.price_kind
+        if tipo is None:
+            q = dates.fold(c.quote)
+            tipo = next((k for parola, k in _PREZZO_DI if parola in q), None)
+        s.payload = {"price": str(prezzo) if prezzo is not None else None, "price_kind": tipo}
+        return
+    if c.intent == "acquisition_start":
+        minuti = 60
+        quando = dates.resolve_when(c.when.date_text, c.when.time_text, now, require_time=True)
+        issues.extend(Issue(r, _messaggio_data(r), "when") for r in quando.reasons)
+        s.start_at = quando.start
+        s.end_at = quando.start + timedelta(minutes=minuti) if quando.start else None
+        s.payload = {"asking_price": str(prezzo) if prezzo is not None else None, "duration_minutes": minuti}
+        if quando.start is not None:
+            s.payload["start_at"] = quando.start
+            s.payload["end_at"] = s.end_at
+        return
+    # mandate_prepare
+    inizio = fine = None
+    if c.start_text:
+        giorno = dates.resolve_date(c.start_text, now)
+        inizio = giorno.day
+        if inizio is None:
+            issues.append(Issue(MANDATE_DATE_UNCLEAR, "Non ho capito da quando decorre l'incarico", "start"))
+    if c.end_text:
+        fine = _durata(c.end_text, inizio) or dates.resolve_date(c.end_text, now).day
+        # una durata («6 mesi») aspetta la data d'inizio: si calcola quando c'e'
+        if fine is None and not (inizio is None and _e_una_durata(c.end_text)):
+            issues.append(Issue(MANDATE_DATE_UNCLEAR, "Non ho capito la scadenza dell'incarico", "end"))
+    if inizio is not None and fine is not None and fine < inizio:
+        issues.append(Issue(MANDATE_DATES_INVALID, "La scadenza non puo' precedere l'inizio", "end"))
+    s.payload = {"mandate_type": mandate_type_from(c), "agreed_price": str(prezzo) if prezzo is not None else None,
+                 "mandate_start": inizio.isoformat() if inizio else None,
+                 "mandate_end": fine.isoformat() if fine else None}
+
+
+def apply_local_mandate_reply(output: VoicePlanOutput, issues_by_ordinal: dict[int, set[str]], text: str,
+                              now: datetime) -> VoicePlanOutput | None:
+    """V9: le risposte semplici alle domande di un incarico, senza il modello:
+    un prezzo («185 mila»), la data d'inizio («oggi», «1 novembre»), il tipo
+    («vendita in esclusiva»), quale prezzo («quello dell'acquisizione») e,
+    se manca l'acquisizione, il giorno e l'ora per iniziarla («domani alle 10»).
+    None = la risposta va capita dal modello."""
+    if len(output.commands) != 1 or output.commands[0].intent not in ("mandate_prepare", "mandate_price"):
+        return None
+    c = output.commands[0]
+    chiesto = issues_by_ordinal.get(1, set())
+    t = _pulisci_risposta(text)
+    if not t:
+        return None
+    aggiorna: dict[str, Any] = {}
+    if chiesto & {mandate_rules.PRICE_MISSING, MANDATE_PRICE_UNCLEAR} and mandate_rules.price_from_text(t):
+        aggiorna["price_text"] = t
+    elif c.intent == "mandate_price" and mandate_rules.PRICE_KIND_UNCLEAR in chiesto:
+        tipo = next((k for parola, k in _PREZZO_DI if parola in t), None)
+        if tipo is None:
+            return None
+        aggiorna["price_kind"] = tipo
+    elif c.intent == "mandate_prepare" and mandate_rules.NO_ACQUISITION in chiesto:
+        quando = when_from_reply(text, {dates.UNRECOGNIZED_DATE, dates.UNRECOGNIZED_TIME}, now)
+        if not quando or not quando.get("date_text"):
+            return None
+        nuovo = AcquisitionStartCommand(intent="acquisition_start", quote=c.quote, owner=c.owner, property=c.property,
+                                        when={"date_text": quando["date_text"], "time_text": quando.get("time_text")},
+                                        price_text=c.price_text)
+        return output.model_copy(update={"commands": [nuovo]})
+    elif chiesto & {mandate_rules.START_MISSING, MANDATE_DATE_UNCLEAR} and _e_un_giorno(t, now):
+        aggiorna["start_text"] = t
+    elif (mandate_rules.TYPE_MISSING in chiesto and not re.search(r"\d", t) and len(t.split()) <= 6
+          and not _e_un_giorno(t, now)):
+        tipo = re.sub(r"^(?:e |un |l |incarico |di |tipo )+", "", t).strip()
+        if not tipo:
+            return None
+        aggiorna["mandate_type"] = tipo
+    else:
+        return None
+    return output.model_copy(update={"commands": [c.model_copy(update=aggiorna)]})

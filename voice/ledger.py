@@ -63,6 +63,13 @@ STEP_CLASSES = {
     "add_task": "at_most_once",           # vedi step_class: su un contatto e' atomico (D-C)
     "link_owner": "at_most_once",
     "unsupported": "at_most_once",        # mai eseguito: sempre bloccato
+    # V9 (111): generate_mandate e patch_acquisition non hanno una chiave ma
+    # rifiutano il doppione (incarico gia' generato, versione cambiata);
+    # create_acquisition riusa la chiave dell'appuntamento dell'Agenda.
+    "mandate_prepare": "at_most_once",
+    "mandate_price": "at_most_once",
+    "mandate_info": "at_most_once",       # sola lettura
+    "acquisition_start": "replayable",
 }
 
 

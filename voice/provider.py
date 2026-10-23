@@ -93,6 +93,14 @@ Regole obbligatorie:
 - Con un compratore E un venditore nello stesso appuntamento ("compratore Giorgio Censori venditore Francesco
   Ruvolo") e' una visita: contact = il compratore (buyer), property.owner = il venditore. Scrivi i nomi come
   li hai letti, senza completarli o correggerli.
+- Incarichi: "crea/prepara/genera un incarico (di vendita) per ..." = mandate_prepare; "modifica/cambia il prezzo
+  ... dell'incarico/dell'immobile/dell'acquisizione" = mandate_price; "quali dati mancano per l'incarico di ..." =
+  mandate_info con purpose "missing"; "portami/apri la scheda dell'incarico di ..." = mandate_info con purpose
+  "open"; "inizia l'acquisizione / fissa l'appuntamento di acquisizione per l'immobile di ..." =
+  acquisition_start. Il proprietario va in owner, l'immobile (indirizzo) in property. Prezzi e date con le PAROLE
+  dette in price_text, start_text, end_text ("185 mila euro", "oggi", "6 mesi"). mandate_type solo se detto
+  ("vendita", "vendita in esclusiva"). price_kind solo se il testo dice quale prezzo (dell'immobile, dell'acquisizione,
+  valutazione). Mai dedurre una firma o un sopralluogo.
 """
 
 

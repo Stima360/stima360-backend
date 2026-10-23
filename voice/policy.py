@@ -23,19 +23,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from . import dates
+from . import dates, mandate_rules
 from .planner import (
     AGENT_NAMED, BUILDING_LOCATION_MISSING, CONTACT_IDENTITY_WEAK, INVALID_PAYLOAD,
     RECORD_KIND_CONFLICT, RECORD_KIND_UNKNOWN, RECORD_KIND_UNVERIFIED, TASK_WITHOUT_CONTACT, APPOINTMENT_PURPOSE_MISSING,
     VISIT_CLIENT_REQUIRED, VISIT_MANDATE_REQUIRED, VISIT_CLIENT_IS_OWNER,
     TOO_MANY_COMMANDS, UNITS_INVENTED, UNSUPPORTED, Plan, Step,
+    MANDATE_CHANGE_ALONE, MANDATE_DATE_UNCLEAR, MANDATE_DATES_INVALID, MANDATE_PRICE_UNCLEAR,
 )
 
 Decision = Literal["auto", "ask", "blocked"]
 Mode = Literal["review", "assisted", "auto"]
 
 #: Issue del pianificatore che bloccano: non c'e' domanda che le sciolga.
-BLOCKING_ISSUES = frozenset({UNSUPPORTED, UNITS_INVENTED, INVALID_PAYLOAD, TOO_MANY_COMMANDS})
+BLOCKING_ISSUES = frozenset({UNSUPPORTED, UNITS_INVENTED, INVALID_PAYLOAD, TOO_MANY_COMMANDS, MANDATE_CHANGE_ALONE})
 #: Issue del pianificatore che chiedono.
 ASKING_ISSUES = frozenset({
     CONTACT_IDENTITY_WEAK, RECORD_KIND_UNKNOWN, RECORD_KIND_UNVERIFIED, RECORD_KIND_CONFLICT,
@@ -43,6 +44,7 @@ ASKING_ISSUES = frozenset({
     VISIT_CLIENT_REQUIRED, VISIT_MANDATE_REQUIRED, VISIT_CLIENT_IS_OWNER,
     dates.UNRECOGNIZED_DATE, dates.UNRECOGNIZED_TIME, dates.AMBIGUOUS_HOUR, dates.AMBIGUOUS_WEEK,
     dates.NONEXISTENT_LOCAL, dates.DOUBLE_LOCAL, dates.PAST,
+    MANDATE_PRICE_UNCLEAR, MANDATE_DATE_UNCLEAR, MANDATE_DATES_INVALID,
 })
 
 # Motivi aggiunti dalla politica (stabili).
@@ -73,7 +75,7 @@ NOTE_TARGET_NOT_EXACT = "note_target_not_exact"
 #: attivazione progressiva della roadmap, Fase 7c).
 DEFAULT_ASSISTED_INTENTS = frozenset({"add_note", "add_task"})
 #: STIMA VOICE V8-0: gli intenti che non partono mai da soli, in nessuna modalita'.
-ALWAYS_CONFIRM_INTENTS = frozenset({"create_appointment"})
+ALWAYS_CONFIRM_INTENTS = frozenset({"create_appointment"}) | mandate_rules.WRITE_INTENTS
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,12 @@ class Facts:
     agenda_conflict: frozenset[int] = frozenset()
     #: V8-2: visite il cui immobile e' stato trovato ma senza un incarico utilizzabile.
     visit_no_mandate: frozenset[int] = frozenset()
+    #: V9: per ogni passo sugli incarichi, la valutazione delle regole
+    #: (voice.mandate_rules) sulla situazione REALE dell'immobile: blocchi,
+    #: domande e l'unica operazione che una conferma puo' sbloccare.
+    mandate_blocks: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    mandate_asks: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    mandate_mode: dict[int, str] = field(default_factory=dict)
     actor_may_assign: bool = False
 
 
@@ -167,13 +175,22 @@ def decide_step(step: Step, facts: Facts, settings: Settings) -> StepDecision:
         blocchi.append(AGENT_CANNOT_ASSIGN)
     if step.intent == "create_appointment" and step.ordinal in facts.visit_no_mandate:
         blocchi.append(VISIT_NO_MANDATE)
+    blocchi += list(facts.mandate_blocks.get(step.ordinal, ()))
     if blocchi:
         return StepDecision(step.ordinal, step.intent, "blocked", tuple(blocchi))
 
     domande = sorted({i.code for i in step.issues if i.code in ASKING_ISSUES})
     if step.intent == "create_appointment" and "agent" in step.refs and facts.actor_may_assign:
         domande = [d for d in domande if d != AGENT_NAMED]  # puo' assegnare: resta solo da risolvere il nome
-    domande += _ref_reasons(step, facts)
+    riferimenti = _ref_reasons(step, facts)
+    if step.intent in mandate_rules.INTENTS:
+        # V9: piu' immobili possibili si sciolgono con una RISPOSTA (quale dei
+        # due?), mai con la sola conferma: l'operazione dipende dall'immobile.
+        riferimenti = [r for r in riferimenti if r != REF_AMBIGUOUS]
+        domande += list(facts.mandate_asks.get(step.ordinal, ()))
+        if step.intent in mandate_rules.READ_INTENTS:
+            riferimenti = [r for r in riferimenti if r not in (REF_FUZZY, CONTACT_CONFIRM)]
+    domande += riferimenti
     if step.intent == "create_contact":
         if facts.duplicate_visible.get(step.ordinal, 0) > 0:
             domande.append(DUPLICATE_VISIBLE)
@@ -185,8 +202,17 @@ def decide_step(step: Step, facts: Facts, settings: Settings) -> StepDecision:
         domande.append(CADASTRAL_DUPLICATE)
     if step.intent == "create_unit" and step.ordinal in facts.similar_unit:
         domande.append(SIMILAR_UNIT)
-    if step.intent == "create_appointment" and step.ordinal in facts.agenda_conflict:
+    if step.intent in ("create_appointment", "acquisition_start") and step.ordinal in facts.agenda_conflict:
         domande.append(AGENDA_CONFLICT)
+    if step.intent in mandate_rules.READ_INTENTS and not domande:
+        return StepDecision(step.ordinal, step.intent, "auto", ())      # V9: sola lettura
+    if step.intent in mandate_rules.WRITE_INTENTS:
+        modo = facts.mandate_mode.get(step.ordinal)
+        if modo is None and not (set(domande) & (set(mandate_rules.ASKS) | ASKING_ISSUES | {REF_NOT_FOUND})):
+            domande.append(mandate_rules.PROPERTY_CHOICE)               # difensivo: mai confermabile senza operazione
+        if modo is not None:
+            # l'operazione esatta fa parte di cio' che si conferma (e dell'impronta)
+            domande.append(modo)
     if domande:
         return StepDecision(step.ordinal, step.intent, "ask", tuple(dict.fromkeys(domande)))
 

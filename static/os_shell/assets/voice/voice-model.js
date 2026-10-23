@@ -19,7 +19,15 @@ export const INTENT_LABELS = {
   add_note: 'Nota',
   add_task: 'Promemoria',
   unsupported: 'Richiesta non prevista',
+  // V9: incarichi e acquisizioni
+  mandate_prepare: 'Incarico',
+  mandate_price: 'Prezzo',
+  mandate_info: 'Situazione dell’incarico',
+  acquisition_start: 'Nuova acquisizione',
 };
+
+/** V9: gli intenti sugli incarichi (scheda propria, scelta dell'immobile a parole). */
+export const MANDATE_INTENTS = ['mandate_prepare', 'mandate_price', 'mandate_info', 'acquisition_start'];
 
 export const COMMAND_STATUS = {
   received: { label: 'In elaborazione', tone: 'gray' },
@@ -159,6 +167,12 @@ export function resultText(step) {
   const r = step.result || {};
   if (step.state !== 'succeeded') return '';
   if (step.intent === 'link_owner' && r.created === false) return 'Era già collegato: nessuna modifica.';
+  if (step.intent === 'mandate_prepare') {
+    return r.mode === 'mandate_will_generate' ? 'Incarico generato.' : 'Prezzo richiesto dell’acquisizione aggiornato.';
+  }
+  if (step.intent === 'mandate_price') return `Prezzo aggiornato${r.price ? `: ${formatEuro(r.price)}` : ''}.`;
+  if (step.intent === 'acquisition_start') return 'Acquisizione creata con il suo appuntamento in Agenda.';
+  if (step.intent === 'mandate_info') return '';
   if (step.intent === 'activate_seller') {
     return { created: '«Vende» attivato.', reopened: '«Vende» riattivato.', reused: '«Vende» era già attivo.' }[r.origin]
       || '«Vende» attivo.';
@@ -258,7 +272,7 @@ export function romeDayKey(iso) {
  */
 export function appointmentSummary(step) {
   const r = step && step.summary;
-  if (!r) return [];
+  if (!r || r.kind === 'mandate') return [];
   const manca = 'da indicare';
   const righe = [
     ['Tipo', r.type_label || r.type || manca],
@@ -273,6 +287,65 @@ export function appointmentSummary(step) {
   righe.push(['Agente', r.agent || manca]);
   if (r.notes) righe.push(['Note', r.notes]);
   return righe;
+}
+
+// ---------------------------------------------------------------------------
+// V9: la scheda dell'incarico. Funzioni pure.
+// ---------------------------------------------------------------------------
+
+/** «185000.00» -> «185.000 €»; vuoto -> ''. */
+export function formatEuro(valore) {
+  if (valore === null || valore === undefined || valore === '') return '';
+  const n = Number(valore);
+  if (!Number.isFinite(n)) return '';
+  return `${n.toLocaleString('it-IT', { maximumFractionDigits: 2 })} €`;
+}
+
+/** «2026-10-23» -> «23/10/2026». */
+export function formatDateIt(valore) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(valore || ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
+
+/** Le righe della scheda: proprietario, immobile, prezzi distinti, tipo, date, stato, mancanze. */
+export function mandateSummary(step) {
+  const r = step && step.summary;
+  if (!r || r.kind !== 'mandate' || !r.property) return [];
+  const manca = 'da indicare';
+  const righe = [['Proprietario', r.owner || manca], ['Immobile', r.property]];
+  if (r.proposed_price) {
+    righe.push([r.proposed_price_label || 'Prezzo', `${formatEuro(r.proposed_price)}${r.price_from_acquisition ? ' (dall’acquisizione)' : ''}`]);
+  }
+  if (r.property_price) righe.push(['Prezzo richiesto (immobile)', formatEuro(r.property_price)]);
+  if (r.acquisition_price && step.intent !== 'mandate_prepare') righe.push(['Prezzo richiesto (acquisizione)', formatEuro(r.acquisition_price)]);
+  if (r.valuation) righe.push(['Valutazione', formatEuro(r.valuation)]);
+  if (step.intent !== 'acquisition_start') {
+    righe.push(['Tipologia', r.mandate_type || manca]);
+    righe.push(['Decorrenza', formatDateIt(r.mandate_start) || manca]);
+    if (r.mandate_end || r.mandate_exists) righe.push(['Scadenza', formatDateIt(r.mandate_end) || 'non indicata']);
+  }
+  if (r.appointment_start) righe.push(['Appuntamento di acquisizione', `${formatDay(r.appointment_start)} ${formatHour(r.appointment_start)}`.trim()]);
+  righe.push(['Stato effettivo', r.state || manca]);
+  righe.push(['Dati mancanti', (r.missing || []).length ? r.missing.join('; ') : 'nessuno']);
+  return righe;
+}
+
+/** I collegamenti della scheda, nell'ordine in cui servono. */
+export function mandateLinks(step) {
+  const l = (step && step.summary && step.summary.links) || {};
+  return [['mandate', 'Apri incarico'], ['acquisition', 'Apri acquisizione'], ['property', 'Apri immobile']]
+    .filter(([k]) => l[k]).map(([k, label]) => ({ key: k, label, href: l[k] }));
+}
+
+/** «Portami alla scheda dell'incarico»: dove andare, se la lettura e' riuscita. */
+export function mandateDestination(view) {
+  for (const step of (view && view.steps) || []) {
+    if (step.intent === 'mandate_info' && step.state === 'succeeded' && step.summary && step.summary.purpose === 'open') {
+      const l = step.summary.links || {};
+      return l.mandate || l.acquisition || l.property || '';
+    }
+  }
+  return '';
 }
 
 /** Il collegamento all'appuntamento salvato: la vista Giorno dell'Agenda. */

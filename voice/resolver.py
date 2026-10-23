@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import repository
+from . import mandate_rules, repository
 from .planner import Plan, Ref, Step
 from .policy import Facts, RefFacts
 
@@ -82,6 +82,9 @@ class Resolution:
     #: dire all'agente chi e' stato riconosciuto. Solo un'informazione: non
     #: sceglie l'immobile, non entra nella decisione.
     owner_hints: dict[int, tuple[Candidate, ...]] = field(default_factory=dict)
+    #: V9: la situazione reale dell'immobile di un passo sugli incarichi e la
+    #: valutazione delle regole, per la scheda (solo dati che chi parla vede).
+    mandates: dict[int, dict] = field(default_factory=dict)
 
     def resolved(self, ordinal: int, ref: str) -> int | None:
         m = self.matches.get((ordinal, ref))
@@ -264,6 +267,10 @@ def resolve(plan: Plan, ctx) -> Resolution:
     similar_unit: set[int] = set()
     visit_no_mandate: set[int] = set()
     owner_hints: dict[int, tuple[Candidate, ...]] = {}
+    mandate_blocks: dict[int, tuple[str, ...]] = {}
+    mandate_asks: dict[int, tuple[str, ...]] = {}
+    mandate_mode: dict[int, str] = {}
+    mandates: dict[int, dict] = {}
     cache: dict = {}
     puo_assegnare = bool(ctx.may_assign_records)
 
@@ -276,6 +283,11 @@ def resolve(plan: Plan, ctx) -> Resolution:
                     continue  # creato in questo vocale
                 if ref.kind == "agent" and not puo_assegnare:
                     continue  # la politica blocca: nessuna lettura dei colleghi
+                if ref.kind == "property" and ref.description.get("mandate"):
+                    m = _match_mandate(ctx, cur, step, ref, mandate_blocks, mandate_asks, mandate_mode, mandates)
+                    matches[(step.ordinal, nome)] = m
+                    refs[(step.ordinal, nome)] = RefFacts(len(m.candidates), exact=m.exact)
+                    continue
                 m = _match(ctx, cur, ref, cache)
                 proprietario = ref.description.get("owner") if ref.kind == "property" else None
                 if visita and nome == "property" and proprietario and not m.candidates:
@@ -322,5 +334,33 @@ def resolve(plan: Plan, ctx) -> Resolution:
 
     facts = Facts(refs=refs, duplicate_visible=duplicate_visible, duplicate_hidden=frozenset(duplicate_hidden),
                   similar_building=frozenset(similar_building), similar_unit=frozenset(similar_unit),
-                  visit_no_mandate=frozenset(visit_no_mandate), actor_may_assign=puo_assegnare)
-    return Resolution(facts=facts, matches=matches, duplicates=duplicates, owner_hints=owner_hints)
+                  visit_no_mandate=frozenset(visit_no_mandate), actor_may_assign=puo_assegnare,
+                  mandate_blocks=mandate_blocks, mandate_asks=mandate_asks, mandate_mode=mandate_mode)
+    return Resolution(facts=facts, matches=matches, duplicates=duplicates, owner_hints=owner_hints,
+                      mandates=mandates)
+
+
+def _match_mandate(ctx, cur, step: Step, ref: Ref, blocchi, domande, modi, schede) -> RefMatch:
+    """V9: l'immobile di un passo sugli incarichi, fra quelli realmente
+    collegati al proprietario detto, e - se e' uno solo - la sua situazione
+    reale valutata con le regole del CRM (voice.mandate_rules)."""
+    righe, non_collegato = repository.mandate_candidates(ctx, cur, ref.description)
+    m = RefMatch(_candidates(righe, "property"), exact=False)
+    n = step.ordinal
+    if non_collegato:
+        blocchi[n] = (mandate_rules.OWNER_NOT_LINKED,)
+        return m
+    if len(m.candidates) > 1:
+        domande[n] = (mandate_rules.PROPERTY_CHOICE,)
+        return m
+    if len(m.candidates) == 1:
+        situazione = repository.mandate_situation(ctx, cur, m.candidates[0].id, ref.description.get("owner"))
+        valutazione = mandate_rules.evaluate(step.intent, step.payload, situazione)
+        if valutazione.blocks:
+            blocchi[n] = tuple(valutazione.blocks)
+        if valutazione.asks:
+            domande[n] = tuple(valutazione.asks)
+        if valutazione.mode:
+            modi[n] = valutazione.mode
+        schede[n] = {"situation": situazione, "evaluation": valutazione, "label": m.candidates[0].label}
+    return m

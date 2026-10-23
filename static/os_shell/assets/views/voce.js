@@ -18,8 +18,8 @@
 import { escapeHtml, renderBadge } from '../components/st-table.js';
 import * as api from '../voice/voice-api.js';
 import {
-  SPEECH_ERRORS, SPEECH_IPHONE, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
-  errorMessage, hasRunnableSteps, intentLabel, openQuestions, proposedFromText, proposedTargets, referenceNotFound,
+  MANDATE_INTENTS, SPEECH_ERRORS, SPEECH_IPHONE, UNDO_TEXT, appointmentHref, appointmentSummary, canReply, choiceFromText, choicesNeeded, commandStatus,
+  errorMessage, hasRunnableSteps, intentLabel, mandateDestination, mandateLinks, mandateSummary, openQuestions, proposedFromText, proposedTargets, referenceNotFound,
   resultText, retryAfter, spokenCommand,
   stepDescription, stepStatus, stepsToConfirm,
 } from '../voice/voice-model.js';
@@ -33,7 +33,10 @@ function badge(s) { return renderBadge(s.label, s.tone); }
 function passoHtml(step) {
   const n = Number(step.ordinal);
   const motivi = (step.state === 'pending' || step.state === 'failed') ? (step.reasons || []) : [];
-  const scelte = step.state === 'pending' ? choicesNeeded(step) : [];
+  // V9: per un incarico l'immobile si sceglie a parole («il secondo», «via Sanzio»): l'operazione dipende da quale
+  const incarico = MANDATE_INTENTS.includes(step.intent);
+  const scelte = step.state === 'pending' && !incarico ? choicesNeeded(step) : [];
+  const elenco = step.state === 'pending' && incarico ? choicesNeeded(step) : [];
   const doppioni = step.state === 'pending' && step.duplicates && step.duplicates.length
     ? `<p class="voice-dupes" data-voice-dupes>Possibili doppioni: ${step.duplicates.map((d) => escapeHtml(d.label)).join(', ')}</p>`
     : (step.state === 'pending' && step.hidden_duplicate
@@ -50,11 +53,13 @@ function passoHtml(step) {
   const annullo = step.state === 'succeeded' && step.undo && step.undo !== 'undoable' && UNDO_TEXT[step.undo]
     ? `<p class="muted voice-undo-note" data-voice-undo-note>${escapeHtml(UNDO_TEXT[step.undo])}</p>` : '';
   // V8-4: la scheda riepilogativa dell'appuntamento e, a cose fatte, «Apri in Agenda»
-  const riepilogo = appointmentSummary(step);
+  const riepilogo = incarico ? mandateSummary(step) : appointmentSummary(step);
   const scheda = riepilogo.length ? `<dl class="voice-summary" data-voice-summary="${n}">${riepilogo.map(([k, v]) =>
     `<div class="voice-summary-row"><dt>${escapeHtml(k)}</dt><dd data-voice-summary-field="${escapeHtml(k.toLowerCase())}">${escapeHtml(v)}</dd></div>`).join('')}</dl>` : '';
   const apri = step.state === 'succeeded' && appointmentHref(step)
-    ? `<a class="btn" href="${escapeHtml(appointmentHref(step))}" data-voice-open-appointment="${n}">Apri in Agenda</a>` : '';
+    ? `<a class="btn" href="${escapeHtml(appointmentHref(step))}" data-voice-open-appointment="${n}">Apri in Agenda</a>`
+    : (incarico ? mandateLinks(step).map((l) => `<a class="btn${l.key === 'mandate' ? ' primary' : ''}" href="${escapeHtml(l.href)}"
+        data-voice-open-${escapeHtml(l.key)}="${n}">${escapeHtml(l.label)}</a>`).join('') : '');
   return `
     <li class="voice-step" data-voice-step="${n}">
       <div class="voice-step-head">
@@ -71,6 +76,8 @@ function passoHtml(step) {
           ${lista.map((c) => `<label class="voice-option"><input type="radio" name="voice-${n}-${escapeHtml(ref)}"
             value="${Number(c.id)}" data-voice-option="${n}:${escapeHtml(ref)}"> ${escapeHtml(c.label)}</label>`).join('')}
         </fieldset>`).join('')}
+      ${elenco.map(([, lista]) => `<ol class="voice-reasons" data-voice-mandate-candidates="${n}">${lista.map((c) =>
+        `<li>${escapeHtml(c.label)}</li>`).join('')}</ol>`).join('')}
       ${doppioni}
       ${risultato ? `<p class="voice-step-result" data-voice-step-result>${escapeHtml(risultato)}</p>` : ''}
       ${step.state === 'failed' && step.error ? `<p class="field-error" data-voice-step-error>Motivo: ${escapeHtml(step.error)}</p>` : ''}
@@ -275,6 +282,12 @@ export async function renderVoce(container, _params = [], deps = {}) {
   }
 
   const id = () => s.view && s.view.command_id;
+  // V9: «Portami alla scheda dell'incarico di …»: letta la situazione, si apre la scheda
+  // (solo dopo un comando appena dettato, mai alla ripresa della pagina)
+  function portami() {
+    const dove = mandateDestination(s.view);
+    if (dove && win && win.location) win.location.hash = dove;
+  }
 
   function scelteDi(step) {
     const scelte = {};
@@ -332,7 +345,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
         // V8-0: una scelta fra i candidati gia' mostrati («il secondo», «Mario
         // Rossi») si fa qui, sul pulsante giusto, senza chiamare il modello.
         const scelta = choiceFromText(testoRisposta, (s.view.steps || [])
-          .filter((st) => st.state === 'pending')
+          .filter((st) => st.state === 'pending' && !MANDATE_INTENTS.includes(st.intent))
           .flatMap((st) => choicesNeeded(st).map(([ref, lista]) => ({ ordinal: st.ordinal, ref, candidates: lista }))));
         if (scelta) {
           const opzione = [...area.querySelectorAll(`[data-voice-option="${scelta.ordinal}:${scelta.ref}"]`)]
@@ -367,7 +380,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
           s.storia.push(testoRisposta);
           s.replyKey = null; s.replyFor = null;
           return view;
-        }, { ripeti: true });
+        }, { ripeti: true }).then(portami);
       });
       const nuovoContatto = area.querySelector('[data-voice-new-contact]');
       if (nuovoContatto) nuovoContatto.addEventListener('click', () => {
@@ -487,7 +500,7 @@ export async function renderVoce(container, _params = [], deps = {}) {
       const view = await api.submitCommand(s.key, comando);
       s.storia = [comando];
       return view;
-    }, { ripeti: true });
+    }, { ripeti: true }).then(portami);
   });
 
   // Una sola dettatura per pagina: scrive nel campo da cui e' partita (il

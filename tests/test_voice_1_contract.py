@@ -24,8 +24,11 @@ def _cmd(**kw):
 
 
 def test_01_intents_v1_are_exactly_these():
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V9: i quattro intenti degli incarichi (migration 111), in coda;
+    # gli otto intenti operativi e `unsupported` restano identici e nello stesso ordine
     assert INTENTS == ("add_note", "add_task", "create_contact", "create_unit", "create_building",
-                       "link_owner", "activate_seller", "create_appointment", "unsupported")
+                       "link_owner", "activate_seller", "create_appointment", "unsupported",
+                       "mandate_prepare", "mandate_price", "mandate_info", "acquisition_start")
 
 
 def _enum_of(schema, model, campo):

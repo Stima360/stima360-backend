@@ -38,7 +38,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable
 
-from . import ledger, operations, policy, resolver
+from . import ledger, mandate_rules, operations, policy, resolver
 from . import settings as voice_settings
 from .planner import Issue, Plan, Ref, Step, fingerprint
 
@@ -70,6 +70,9 @@ CONFIRMABLE = frozenset({
     policy.DUPLICATE_VISIBLE, policy.DUPLICATE_HIDDEN, policy.SIMILAR_BUILDING, policy.SIMILAR_UNIT,
     policy.MODE_REVIEW, policy.MODE_ASSISTED, policy.DEPENDS_ON_QUESTION,
     OWNER_LINK_CONFIRMATION, COMPOSITE, PLAN_HAS_BLOCKED,
+    # V9: l'operazione sull'incarico detta per esteso («genera un incarico
+    # effettivo», «aggiorna il prezzo»...): e' proprio cio' che si conferma
+    *mandate_rules.MODES,
 })
 MAX_STEPS = 12
 DONE = ("succeeded", "skipped")
@@ -188,6 +191,10 @@ class View:
     #: Collaudo 3: il proprietario detto, trovato fra i contatti ma senza
     #: immobili (resolver.owner_hints). Fuori dall'impronta.
     owner_labels: list[dict] = field(default_factory=list)
+    #: V9: la situazione reale e la valutazione di un passo sugli incarichi
+    #: (resolver.mandates), per la scheda. Fuori dall'impronta: l'operazione
+    #: confermata e' gia' fra i motivi.
+    mandate: dict | None = None
 
     @property
     def confirmable(self) -> bool:
@@ -259,6 +266,12 @@ def _digest(plan_sha: str, v: View) -> str:
     dati = {"plan": plan_sha, "ordinal": v.ordinal, "decision": v.decision, "reasons": sorted(v.reasons),
             "candidates": {k: sorted(x) for k, x in sorted(v.candidates.items())},
             "duplicates": sorted(v.duplicates), "hidden": v.hidden}
+    if v.mandate:
+        # V9: si conferma un'operazione CON i suoi valori (prezzo proposto, versione
+        # dell'acquisizione): se cambiano dopo la conferma, serve una conferma nuova.
+        valutazione, situazione = v.mandate["evaluation"], v.mandate["situation"]
+        dati["mandate"] = {"mode": valutazione.mode, "values": {k: str(x) for k, x in valutazione.values.items()},
+                           "acquisition": [(situazione.get("acquisition") or {}).get(c) for c in ("id", "version")]}
     return hashlib.sha256(json.dumps(dati, sort_keys=True).encode()).hexdigest()
 
 
@@ -276,7 +289,7 @@ def _evaluate(ctx, plan: Plan, impostazioni, *, stati: dict[int, dict], frozen: 
         if proprio is not None:          # la stessa richiesta gia' scritta: replica, non doppione
             simili_b.discard(s.ordinal)
             simili_u.discard(s.ordinal)
-        if s.intent == "create_appointment" and s.start_at and s.end_at:
+        if s.intent in ("create_appointment", "acquisition_start") and s.start_at and s.end_at:
             agente = resolution.resolved(s.ordinal, "agent") if "agent" in s.refs else ctx.user_id
             if agente is not None and operations.agenda_busy(ctx, agente, s.start_at, s.end_at,
                                                              exclude_id=(proprio or {}).get("id")):
@@ -328,6 +341,7 @@ def _evaluate(ctx, plan: Plan, impostazioni, *, stati: dict[int, dict], frozen: 
         v.duplicate_labels = [{"id": c.id, "label": c.label} for c in resolution.duplicates.get(s.ordinal, ())]
         v.hidden = s.ordinal in facts.duplicate_hidden
         v.owner_labels = [{"id": c.id, "label": c.label} for c in resolution.owner_hints.get(s.ordinal, ())]
+        v.mandate = resolution.mandates.get(s.ordinal)
         v.digest = _digest(plan.fingerprint, v)
     return viste
 
@@ -519,7 +533,8 @@ def execute(ctx, command_id: int, *, clock: Callable[[], datetime] | None = None
                 confirm_similar=bool(conferma) and bool(set(conferma.get("reasons") or ())
                                                        & {policy.SIMILAR_BUILDING, policy.SIMILAR_UNIT}),
                 accepted_duplicates=frozenset((conferma or {}).get("duplicates") or ()),
-                accepted_hidden=bool((conferma or {}).get("hidden")), seller_before=prima)
+                accepted_hidden=bool((conferma or {}).get("hidden")), seller_before=prima,
+                confirmed_reasons=tuple((conferma or {}).get("reasons") or ()))
             confermato = riga["decision"] == "ask"
             try:
                 if operations.is_atomic(s.intent, s.refs):

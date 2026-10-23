@@ -48,7 +48,9 @@ def test_02_un_appuntamento_si_conferma_sempre():
     nota = _piano({"intent": "add_note", "quote": "Nota per Mario Rossi: richiamare", "text": "richiamare",
                    "contact": {"first_name": "Mario", "last_name": "Rossi", "phone": "333 1111111"}})
     assert decide(nota, fatti, Settings(mode="auto")).of(1).decision == "auto"
-    assert policy.ALWAYS_CONFIRM_INTENTS == frozenset({"create_appointment"})
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V9: anche ogni scrittura su incarichi e acquisizioni
+    assert policy.ALWAYS_CONFIRM_INTENTS == frozenset({"create_appointment", "mandate_prepare", "mandate_price",
+                                                       "acquisition_start"})
 
 
 def test_03_un_agenzia_nasce_in_revisione():

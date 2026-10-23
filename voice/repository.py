@@ -35,6 +35,7 @@ from core.database import core_cursor
 from core.normalization import normalize_email, normalize_phone
 from core.scope import scoped_source
 from property import census
+from property.lifecycle import may_manage
 
 from .dates import fold
 
@@ -490,3 +491,90 @@ def properties_by_owner(ctx, cur, *, first_name: str | None = None, last_name: s
             migliori[r["id"]] = (punto, r)
     ordinati = sorted(_solo_i_completi(list(migliori.values())), key=lambda x: (x[0], x[1]["id"]), reverse=True)
     return [r for _, r in ordinati[:MAX_CANDIDATES + 1]]
+
+
+# ---------------------------------------------------------------------------
+# V9: gli incarichi. Solo letture; le scritture restano dei servizi del CRM
+# (acquisitions.service, property.service) chiamati da voice/operations.py.
+# ---------------------------------------------------------------------------
+
+def mandate_candidates(ctx, cur, d: dict) -> tuple[list[dict], bool]:
+    """Gli immobili di un comando sugli incarichi e se il proprietario detto
+    NON risulta collegato all'indirizzo detto. Il proprietario si cerca SOLO
+    fra i collegamenti reali (`property_contacts` owner/seller) con il
+    riconoscimento tollerante dei nomi: un nome simile propone un candidato
+    da confermare, non collega mai nulla."""
+    proprietario = d.get("owner") or None
+    righe: list[dict] | None = None
+    if d.get("code"):
+        righe = properties_by_code(ctx, cur, d["code"])
+    elif d.get("address"):
+        filtri = {"civic_number": d.get("civic_number"), "city": d.get("city"), "property_type": d.get("property_type")}
+        righe = (properties_by_address(ctx, cur, address=d["address"], exact=True, **filtri)
+                 or properties_by_address(ctx, cur, address=d["address"], exact=False, **filtri))
+    if not proprietario:
+        return righe or [], False
+    suoi = properties_by_owner(ctx, cur, **proprietario)
+    if righe is None:
+        return suoi, False
+    per_id = {r["id"]: r for r in suoi}
+    comuni = [{**r, "owner_name": per_id[r["id"]].get("owner_name")} for r in righe if r["id"] in per_id]
+    return comuni, bool(righe) and not comuni
+
+
+def mandate_situation(ctx, cur, property_id: int, owner_said: dict | None = None) -> dict | None:
+    """La situazione REALE di un immobile per gli incarichi, con i permessi di
+    chi chiede: l'immobile (incarico, prezzo, stato), l'acquisizione aperta
+    (visibile o no a chi chiede: un agente segue solo le proprie), i
+    proprietari collegati e chi fra loro e' quello detto. None = non esiste
+    nell'agenzia."""
+    cur.execute("SELECT p.id, p.title, p.code, p.address, p.civic_number, p.city, p.property_type, p.record_kind, "
+                "p.commercial_status, p.archived_at, p.asking_price, p.assigned_agent_id, p.acquisition_id, "
+                "p.mandate_type, p.mandate_start, p.mandate_end FROM properties p "
+                f"WHERE p.id = %s AND p.agency_id = %s AND {property_trash.live('p')}",
+                (property_id, ctx.require_agency()))
+    riga = cur.fetchone()
+    if riga is None:
+        return None
+    immobile = dict(riga)
+    immobile["signed_mandate"] = signed_link_mandate(cur, property_id)
+    cur.execute("SELECT a.id, a.status, a.version, a.asking_price, a.valuation_price, a.assigned_agent_id, "
+                "a.owner_contact_id, ap.start_at AS appointment_start, ap.source_record_id AS appointment_request_id "
+                "FROM acquisitions a "
+                "LEFT JOIN appointments ap ON ap.id = a.appointment_id "
+                "WHERE a.agency_id = %s AND a.property_id = %s AND a.status NOT IN ('acquired', 'lost') "
+                "ORDER BY a.id DESC LIMIT 1", (ctx.require_agency(), property_id))
+    aperta = cur.fetchone()
+    acquisizione = None
+    if aperta is not None:
+        acquisizione = dict(aperta)
+        acquisizione["visible"] = bool(ctx.sees_all_agency_records
+                                       or acquisizione["assigned_agent_id"] == ctx.user_id)
+    cur.execute("SELECT DISTINCT c.id AS contact_id, c.display_name, c.first_name, c.last_name, c.company_name "
+                "FROM property_contacts pc JOIN contacts c ON c.id = pc.contact_id AND c.agency_id = %s "
+                f"WHERE pc.property_id = %s AND pc.role = ANY(%s) AND {contact_trash.live('c')} ORDER BY c.id",
+                (ctx.require_agency(), property_id, list(_OWNER_ROLES)))
+    proprietari = []
+    for r in cur.fetchall():
+        r = dict(r)
+        r["name"] = r.get("display_name") or " ".join(
+            x for x in (r.get("first_name"), r.get("last_name")) if x) or r.get("company_name")
+        proprietari.append(r)
+    scelto = None
+    if len(proprietari) == 1:
+        scelto = proprietari[0]["contact_id"]
+    elif proprietari and owner_said:
+        dette = name_tokens(owner_said.get("first_name"), owner_said.get("last_name"), owner_said.get("company_name"))
+        punteggi = [(person_match(dette, *_forme_contatto(r)), r["contact_id"]) for r in proprietari]
+        completi = [cid for punto, cid in punteggi if punto is not None and punto[0] >= 1.0]
+        if len(completi) == 1:
+            scelto = completi[0]
+    return {"property": immobile, "acquisition": acquisizione, "owners": proprietari, "owner_choice": scelto,
+            "manageable": may_manage(ctx, immobile)}
+
+
+def property_code(ctx, cur, property_id: int) -> str | None:
+    """Il codice (stabile) di un immobile dell'agenzia, per restringere una scelta gia' fatta."""
+    cur.execute("SELECT code FROM properties WHERE id = %s AND agency_id = %s", (property_id, ctx.require_agency()))
+    riga = cur.fetchone()
+    return (riga["code"] or None) if riga is not None else None
