@@ -159,8 +159,10 @@ def test_04_main_and_crm_modules_untouched():
 
 
 def test_05_only_the_voice_migrations_and_no_route():
+    # SENTINELLA AGGIORNATA DA STIMA VOICE V9: la 111 allarga SOLO l'elenco degli intenti del registro
     assert sorted(p.name for p in (ROOT / "migrations").glob("*voice*")) == [
-        "098_voice_commands.sql", "098_voice_commands_down.sql", "099_voice_undo.sql", "099_voice_undo_down.sql"]
+        "098_voice_commands.sql", "098_voice_commands_down.sql", "099_voice_undo.sql", "099_voice_undo_down.sql",
+        "111_voice_mandate_intents.sql", "111_voice_mandate_intents_down.sql"]
     testo = (ROOT / "main.py").read_text(encoding="utf-8")
     # SENTINELLA AGGIORNATA DA STIMA VOICE FASE 7: il router e' montato UNA volta, come gli altri
     # domini (mount `require_authenticated_operator`, scope da `require_operator` su ogni rotta), e
