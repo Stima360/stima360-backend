@@ -277,6 +277,13 @@ def consent_page(stato: dict[str, Any]) -> str:
     elif stato["notice"] is None:
         parti.append("<p class=\"avviso\">In questo momento non è possibile raccogliere nuovi consensi. "
                      "Puoi comunque revocare quelli già dati.</p>")
+    if raccoglie and stato.get("site_choice"):
+        # C3.2: ricordare la scelta fatta sul sito evita di farla sembrare
+        # persa; resta da confermare qui, e nessuna casella e' preselezionata.
+        parti.append("<p class=\"muted\" data-scelta-sito>Il "
+                     f"{escape(_data(stato['site_choice']['decided_at']))} sul sito stima360.it hai chiesto di "
+                     "ricevere analisi di mercato e aggiornamenti via email e WhatsApp. Per attivarli scegli qui "
+                     "i canali e conferma.</p>")
     if stato["notice"] is not None:
         n = stato["notice"]
         parti.append(f"<h2>Informativa privacy — versione {escape(n['version'])}</h2>"

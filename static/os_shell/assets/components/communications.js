@@ -134,8 +134,18 @@ function caselleCanali(nome, disponibili) {
   </fieldset>`;
 }
 
-function rigaCanale(canale, stato, raccolta) {
-  const etichetta = ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—';
+function rigaCanale(canale, stato, raccolta, sito) {
+  // C3.2: la spunta del sito su un canale che non ha ancora un consenso: si
+  // vede come scelta registrata, distinta da un consenso che autorizza invii.
+  // Una scelta digitale piu' recente (email da confermare, numero da
+  // verificare) prevale sulla spunta del sito.
+  const inAttesa = Boolean(raccolta && raccolta.pending_confirmation) && !stato.allowed;
+  const daVerificare = Boolean(raccolta && raccolta.declared_unverified) && !stato.allowed;
+  const daSito = Boolean(sito) && !stato.allowed && stato.reason === 'deny_never_given' && !inAttesa && !daVerificare;
+  let etichetta = ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—';
+  if (inAttesa) etichetta = 'in attesa di conferma';
+  else if (daVerificare) etichetta = 'scelto · numero da verificare';
+  else if (daSito) etichetta = 'scelto sul sito · da confermare';
   const quando = stato.decided_at
     ? ` <span class="muted">dal ${escapeHtml(formatDateTime(stato.decided_at))}</span>` : '';
   const optout = stato.platform_optout_at
@@ -145,7 +155,41 @@ function rigaCanale(canale, stato, raccolta) {
     ? ` <span class="muted" data-consent-pending="${canale}">— in attesa della conferma del cliente fino al ${escapeHtml(formatDateTime(raccolta.pending_confirmation.expires_at))}</span>` : '';
   const dichiarato = raccolta && raccolta.declared_unverified
     ? ` <span class="muted" data-consent-declared="${canale}">— scelto dal cliente, non attivo finche\u0027 il numero non sara\u0027 verificato</span>` : '';
-  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : 'red')}${quando}${optout}${attesa}${dichiarato}</li>`;
+  const notaSito = daSito
+    ? ` <span class="muted" data-site-choice="${canale}">— spuntato su stima360.it il ${escapeHtml(formatDateTime(sito.decided_at))}${sito.stima_id ? ` (richiesta di valutazione n. ${escapeHtml(String(sito.stima_id))})` : ''}: non autorizza invii finche\u0027 il cliente non conferma</span>` : '';
+  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : (daSito || inAttesa || daVerificare ? 'warn' : 'red'))}${quando}${optout}${attesa}${dichiarato}${notaSito}</li>`;
+}
+
+// C3.2: cio' che il CRM ha ricevuto dal sito stima360.it. Due cose diverse
+// dette in modo diverso: la Privacy (il modulo non parte senza la spunta, ma
+// il sito non ne manda la prova: NON documentata) e la spunta marketing
+// (registrata: data, richiesta, fonte; senza canale ne' testo: NON autorizza).
+function renderSito(consenso) {
+  const sito = consenso.site_record;
+  if (!sito || !sito.from_site) return '';
+  const scelte = (sito.marketing_choices || []).filter((s) => s.decision === 'granted');
+  const canaliCasella = (sito.checkbox_channels || []).map((c) => CANALI[c] || c).join(' + ');
+  const righe = scelte.map((s) => `<li data-site-marketing-choice="${Number(s.event_id)}">
+      <strong>Scelta registrata dal sito</strong> — casella marketing (${escapeHtml(canaliCasella)}) spuntata il ${escapeHtml(formatDateTime(s.decided_at))}
+      ${s.stima_id ? ` · richiesta di valutazione n. ${escapeHtml(String(s.stima_id))}` : ''}
+      · registrata nel CRM il ${escapeHtml(formatDateTime(s.recorded_at))}
+    </li>`).join('');
+  const marketing = scelte.length
+    ? `<ul class="consent-site-list">${righe}</ul>
+      <p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione.
+        Non conservati dal sito: il testo e la versione dell\u0027informativa mostrati.
+        Per questo la scelta non e\u0027 un consenso autorizzato per gli invii: il cliente puo\u0027 confermarla con il link o il QR qui sotto.</p>`
+    : (consenso.legacy
+      // Il vecchio flag senza evento: una spunta c'e', ma senza data della
+      // richiesta ne' riferimento; la si mostra per quello che e'.
+      ? `<p class="muted" data-site-legacy-flag><strong>Spunta marketing storica</strong> presente nel CRM${consenso.legacy_granted_at ? ` (dal ${escapeHtml(formatDateTime(consenso.legacy_granted_at))})` : ''}, senza riferimento alla richiesta ne\u0027 canale: non autorizza invii. Il cliente puo\u0027 confermarla con il link o il QR qui sotto.</p>`
+      : '<p class="muted" data-site-no-marketing>Nessuna scelta marketing ricevuta dal sito per questo contatto.</p>');
+  return `<div class="panel" data-site-record>
+    <div><strong>Dal sito stima360.it</strong></div>
+    <p class="muted" data-site-privacy><strong>Privacy e Termini:</strong> il modulo del sito non si invia senza la spunta,
+      ma il sito non trasmette al CRM la prova dell\u0027accettazione: <strong>non documentata nel CRM</strong>.</p>
+    ${marketing}
+  </div>`;
 }
 
 // C3: la raccolta DIGITALE. L'operatore genera un link personale (30 giorni)
@@ -160,10 +204,16 @@ function renderRaccolta(consenso) {
   const stato = aperto
     ? `Link attivo: raccoglie consensi fino al ${escapeHtml(formatDateTime(link.expires_at))}.`
     : 'Nessun link attivo.';
+  // C3.2: senza informativa marketing corrente la pagina permette solo di
+  // revocare. Lo si dice qui, prima di consegnare il QR al cliente.
+  const senzaInformativa = raccolta.notice === null
+    ? '<p class="error-box" data-capture-no-notice>Nessuna informativa marketing corrente: il cliente potra\u0027 solo revocare. Pubblicala in Super Admin › Rete › Informative privacy; il link gia\u0027 generato funzionera\u0027 subito dopo.</p>'
+    : '';
   return `<div class="panel" data-consent-capture data-link-open="${aperto ? '1' : '0'}">
     <div><strong>Raccolta digitale del consenso</strong></div>
     <p class="muted">Il cliente apre il link o inquadra il QR, legge l\u0027informativa e sceglie da solo i canali.
       L\u0027email diventa attiva solo dopo la sua conferma; SMS, WhatsApp e telefonate restano non attivi finche\u0027 il numero non sara\u0027 verificato.</p>
+    ${senzaInformativa}
     <p class="muted" data-consent-link-status>${stato}</p>
     <div class="actions">
       <button type="button" class="btn btn-primary" data-consent-link-generate>${aperto ? 'Genera nuovo link consenso' : 'Genera link consenso'}</button>
@@ -188,8 +238,14 @@ function renderConsenso(consenso, informative) {
   }
   const canali = consenso.channels || {};
   const raccolta = (consenso.capture && consenso.capture.channels) || {};
-  const righe = ORDINE_CANALI.filter((c) => canali[c]).map((c) => rigaCanale(c, canali[c], raccolta[c])).join('');
-  const storico = consenso.legacy
+  const sitoRec = consenso.site_record || {};
+  const scelteSito = (sitoRec.marketing_choices || []).filter((s) => s.decision === 'granted');
+  const ultimaSito = scelteSito.length ? scelteSito[scelteSito.length - 1] : null;
+  const canaliSito = new Set(sitoRec.checkbox_channels || []);
+  const righe = ORDINE_CANALI.filter((c) => canali[c])
+    .map((c) => rigaCanale(c, canali[c], raccolta[c], canaliSito.has(c) ? ultimaSito : null)).join('');
+  // Con una scelta del sito lo storico lo racconta il blocco «Dal sito».
+  const storico = consenso.legacy && !scelteSito.length && !sitoRec.from_site
     ? '<p class="muted" data-consent-legacy>Esiste un consenso storico senza canale: non autorizza nessun invio finche\u0027 non viene documentato per canale.</p>' : '';
   const coperti = (informative || []).flatMap((n) => n.channels || []);
   const opzioniInformative = (informative || []).map((n) =>
@@ -242,6 +298,7 @@ function renderConsenso(consenso, informative) {
     <div><strong>Consenso marketing per canale</strong></div>
     <ul class="consent-channel-list">${righe}</ul>
     ${storico}
+    ${renderSito(consenso)}
     ${renderRaccolta(consenso)}
     ${form}
   </div>`;

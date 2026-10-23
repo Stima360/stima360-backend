@@ -240,6 +240,36 @@ def _registrabile(contact: dict[str, Any]) -> bool:
 # il link personale (CRM)
 # ---------------------------------------------------------------------------
 
+#: C3.2 - i canali che il testo della casella marketing del sito pubblicato
+#: nomina («... tramite email e WhatsApp»). Servono SOLO a mostrare la scelta
+#: registrata dal sito: non autorizzano nulla.
+SITE_CHECKBOX_CHANNELS = ("email", "whatsapp")
+
+
+def site_choices(cur, ctx, contact_id: int) -> list[dict[str, Any]]:
+    """C3.2 - le spunte marketing arrivate dal sito (stima360.it) per questo
+    contatto: gli eventi SENZA canale che il bridge pubblico scrive (fonte
+    `public_stima`, prova `stima:<id>`). Prova conservata, nessuna
+    autorizzazione: la guardia li ignora. Tutte, non solo l'ultima: un
+    consenso per canale registrato dopo non deve far sparire lo storico."""
+    cur.execute(
+        """SELECT id, decision, decided_at, created_at, evidence_type, evidence_ref, notice_id
+             FROM consent_events
+            WHERE agency_id = %s AND contact_id = %s AND purpose = %s AND channel IS NULL
+              AND source = 'public_stima'
+            ORDER BY decided_at, id""",
+        [ctx.require_agency(), contact_id, PURPOSE_MARKETING])
+    scelte = []
+    for r in cur.fetchall():
+        rif = r["evidence_ref"] if r["evidence_type"] == "stima" else None
+        scelte.append({
+            "event_id": r["id"], "decision": r["decision"], "decided_at": r["decided_at"],
+            "recorded_at": r["created_at"], "evidence_type": r["evidence_type"],
+            "stima_id": int(rif) if rif and str(rif).isdigit() else None, "notice_id": r["notice_id"],
+        })
+    return scelte
+
+
 def _link_aperto(cur, ctx, contact_id: int) -> dict[str, Any] | None:
     cur.execute(
         """SELECT * FROM consent_links
@@ -300,7 +330,13 @@ def capture_state(ctx, contact_id: int, *, now: datetime | None = None) -> dict[
         contact = repository.select_contact(cur, ctx, contact_id)
         link = _link_aperto(cur, ctx, contact_id)
         panorama = channel_overview(cur, ctx, contact, quando)
+        informativa = current_notice(cur, quando)
     return {
+        # C3.2: senza un'informativa marketing corrente il link si apre ma
+        # permette solo di revocare; la scheda lo dice PRIMA di generarlo.
+        "notice": None if informativa is None else {
+            "id": informativa["id"], "version": informativa["version"],
+            "channels": list(informativa.get("channels") or [])},
         "link": None if link is None else {
             "id": link["id"], "created_at": link["created_at"], "expires_at": link["expires_at"],
             "created_by_user_id": link["created_by_user_id"],
@@ -352,6 +388,7 @@ def page_state(risolto: dict[str, Any], *, now: datetime | None = None,
             return None
         informativa = current_notice(cur, quando)
         panorama = channel_overview(cur, ctx, contact, quando)
+        dal_sito = [s for s in site_choices(cur, ctx, contact["id"]) if s["decision"] == "granted"]
         cur.execute("SELECT name FROM agencies WHERE id = %s", [link["agency_id"]])
         agenzia = cur.fetchone()
     coperti = set((informativa or {}).get("channels") or ())
@@ -364,6 +401,9 @@ def page_state(risolto: dict[str, Any], *, now: datetime | None = None,
         "email_masked": mask_email(contact.get("email_normalized")),
         "phone_masked": mask_phone(contact.get("phone_normalized")),
         "link_expires_at": link["expires_at"],
+        # C3.2: la spunta piu' recente fatta sul sito, solo per ricordarla alla
+        # persona; nessuna casella viene preselezionata.
+        "site_choice": None if not dal_sito else {"decided_at": dal_sito[-1]["decided_at"]},
     }
 
 
@@ -608,5 +648,5 @@ def request_from_public_stima(ctx, *, contact_id: int, stima_id: int, notice_id,
 __all__ = [
     "LINK_TTL", "CONFIRM_TTL", "create_link", "disable_link", "capture_state", "resolve_link",
     "page_state", "submit", "confirm_email", "request_from_public_stima", "current_notice",
-    "notice_at", "mask_email", "mask_phone", "ValidationError",
+    "notice_at", "site_choices", "SITE_CHECKBOX_CHANNELS", "mask_email", "mask_phone", "ValidationError",
 ]

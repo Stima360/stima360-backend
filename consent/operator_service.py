@@ -303,6 +303,8 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
         optouts = {c: repository.latest_platform_optout(cur, c, repository.contact_address(contact, c))
                    for c in CHANNEL_ORDER}
         storico = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING)
+        from . import capture
+        scelte_sito = capture.site_choices(cur, ctx, contact_id)
     canali = {}
     for c in CHANNEL_ORDER:
         decisione = can_send_marketing(ctx, contact_id, channel=c)
@@ -342,7 +344,22 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
         "can_record": getattr(ctx, "user_id", None) is not None
                       and contact.get("deleted_at") is None and contact.get("status") != "archived",
         "capture": raccolta,
+        # C3.2: cio' che il CRM sa dal sito stima360.it, separato dai consensi
+        # autorizzati. La casella Privacy il sito non la trasmette: non e'
+        # documentata, e lo si dice. La spunta marketing e' una prova (data,
+        # stima, fonte) senza canale ne' testo: non autorizza invii.
+        "site_record": {
+            "from_site": contact.get("source") == "public_stima" or bool(scelte_sito),
+            "privacy_transmitted": False,
+            "marketing_choices": scelte_sito,
+            "checkbox_channels": list(_canali_casella_sito()),
+        },
     }
+
+
+def _canali_casella_sito() -> tuple[str, ...]:
+    from .capture import SITE_CHECKBOX_CHANNELS
+    return SITE_CHECKBOX_CHANNELS
 
 
 __all__ = ["register_grant", "register_refusal", "marketing_state", "list_notices", "CHANNEL_ORDER",
