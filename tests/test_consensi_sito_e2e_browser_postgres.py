@@ -24,7 +24,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -67,7 +67,7 @@ def e2e(mondo, operatori, monkeypatch):
                 "ALTER TABLE consent_links ENABLE TRIGGER trg_consent_links_guard",
                 "DELETE FROM consent_page_rate_limits",
                 "UPDATE consent_notices SET valid_to = GREATEST(valid_from, NOW() - interval '1 second') "
-                "WHERE purpose = 'marketing' AND (valid_to IS NULL OR valid_to >= NOW())"):
+                "WHERE purpose = 'marketing' AND valid_to IS NULL"):
         q(sql)
     monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
     monkeypatch.setenv("CONSENT_CAPTURE_IP_PEPPER", "p" * 32)
@@ -109,7 +109,7 @@ mountCommunications(document.getElementById('mount'), {int(contact_id)});
         srv.should_exit = True
         filo.join(timeout=10)
         q("UPDATE consent_notices SET valid_to = GREATEST(valid_from, NOW() - interval '1 second') "
-          "WHERE purpose = 'marketing' AND (valid_to IS NULL OR valid_to >= NOW())")
+          "WHERE purpose = 'marketing' AND valid_to IS NULL")
 
 
 def _guardia(cid, canale):
@@ -198,7 +198,8 @@ def test_A_serena_fanini_storico_del_sito_e_conferma_digitale(e2e):
             or "non e' un consenso autorizzato" in crm.inner_text("[data-site-proofs]")
         for c in ("email", "whatsapp"):
             riga = crm.inner_text(f"[data-consent-channel='{c}']")
-            assert "Scelto sul sito · da confermare" in riga and "sul sito il 03/10/2026" in riga, riga
+            assert "Consenso raccolto dal sito – prova incompleta" in riga, riga
+            assert "manca: l'informativa del sito valida alla data della spunta" in riga, riga
         for c in ("sms", "phone"):
             assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
         assert crm.query_selector("[data-consent-legacy]") is None
@@ -368,4 +369,46 @@ def test_A2_vecchio_flag_senza_evento_mostrato_senza_contraddizioni(e2e):
             assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
             assert not _guardia(cid, c).allowed
         _foto(crm, "A5_flag_storico_senza_evento")
+        browser.close()
+
+
+def test_A3_serena_con_informativa_del_sito_gia_registrata_concesso_dal_sito(e2e):
+    """C3.4: la stessa richiesta dal sito, ma con l'informativa DEL SITO
+    registrata nel CRM prima della spunta: Email e WhatsApp risultano
+    «Concesso dal sito», senza double opt-in; SMS e Telefonate «Mai dato»."""
+    from playwright.sync_api import sync_playwright
+    m = e2e
+    spunta = datetime(2026, 6, 15, 11, 15, tzinfo=timezone.utc)   # nel passato: l'informativa di prova non resta corrente
+    m["q_crm"]("INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, context, "
+               "valid_from, valid_to, created_at, created_by, channels) VALUES ('marketing', %s, "
+               "'Acconsento a ricevere analisi di mercato e aggiornamenti da Stima360 tramite email e WhatsApp.', "
+               "repeat('e', 64), TRUE, 'Sito www.stima360.it - casella marketing del modulo di valutazione', "
+               "%s, %s, %s, 'test', ARRAY['email','whatsapp'])",
+               (f"sito-{uuid.uuid4().hex[:6]}", spunta - timedelta(days=10), spunta + timedelta(days=10),
+                spunta - timedelta(days=10)))
+    s = m["stima"](minuti_fa=60, nome="Serena", cognome="Fanini", email="serena.bis@example.invalid",
+                   telefono="3479998877", consenso_marketing=True, consenso_marketing_at=spunta)
+    m["archivio"].pdf[s] = PDF
+    m["giro"]()
+    passi = m["ledger"]()[s][1]
+    assert passi["consent"] == {"state": "done", "status": "recognized", "channels": ["email", "whatsapp"]}
+    cid = passi["bridge"]["contact_id"]
+    assert _guardia(cid, "email").allowed and _guardia(cid, "whatsapp").allowed
+    assert not _guardia(cid, "sms").allowed and not _guardia(cid, "phone").allowed
+    assert m["q_crm"]("SELECT count(*) FROM consent_submissions WHERE contact_id = %s", (cid,))[0][0] == 0
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        crm = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        _apri(crm, f"{m['url']}/scheda/{cid}", "[data-site-record]")
+        for c in ("email", "whatsapp"):
+            riga = crm.inner_text(f"[data-consent-channel='{c}']")
+            assert "Concesso dal sito" in riga and "dal 15/06/2026" in riga, riga
+        for c in ("sms", "phone"):
+            assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
+        assert "consenso riconosciuto, spuntato il 15/06/2026" in crm.inner_text("[data-site-summary]")
+        crm.click("[data-site-details] summary")
+        crm.wait_for_selector("[data-site-proof-check]", state="visible")
+        prove = crm.inner_text("[data-site-proof-check]")
+        assert "informativa del sito ✓" in prove and "manca" not in prove, prove
+        _foto(crm, "A6_serena_concesso_dal_sito")
         browser.close()

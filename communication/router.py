@@ -164,8 +164,12 @@ def contact_consent(
     contact_id: int,
     ctx: OperatorContext = Depends(legacy_basic_agency_context),
 ):
-    """Lo stato del consenso marketing come lo vede la guardia."""
-    return _tradotto_consenso(lambda: consent_operator.marketing_state(ctx, contact_id))
+    """Lo stato del consenso marketing come lo vede la guardia. C3.4: prima
+    il riconoscimento (idempotente) dei consensi del sito con prove complete."""
+    def leggi():
+        consent_operator.recognize_site_consents(ctx, contact_id)
+        return consent_operator.marketing_state(ctx, contact_id)
+    return _tradotto_consenso(leggi)
 
 
 @router.post("/contacts/{contact_id}/consent/grant", status_code=201)

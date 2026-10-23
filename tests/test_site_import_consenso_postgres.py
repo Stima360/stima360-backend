@@ -65,17 +65,20 @@ def ci(mondo, monkeypatch):
     return m
 
 
-def _informativa(m, *, registrata, valida_da=None, valida_fino=None, canali=("email", "whatsapp")):
-    """Il testo della casella del sito registrato nel CRM, con l'istante VERO
-    di registrazione (`created_at`, immutabile)."""
+def _informativa(m, *, registrata, valida_da=None, valida_fino=None, canali=("email", "whatsapp"),
+                 contesto="Link personale / QR dal CRM"):
+    """Un'informativa marketing registrata nel CRM con l'istante VERO di
+    registrazione (`created_at`, immutabile). Per default NON e' quella del
+    sito (contesto del QR): i test 01-07 provano il double opt-in C3.1; per
+    il riconoscimento C3.4 si usa `_informativa_sito`."""
     import uuid
     versione = f"sito-{uuid.uuid4().hex[:8]}"
     return m["q_crm"](
         "INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, context, "
         "valid_from, valid_to, created_at, created_by, channels) VALUES ('marketing', %s, "
         "'Acconsento a ricevere analisi di mercato e aggiornamenti da Stima360 tramite email e WhatsApp.', "
-        "repeat('c', 64), TRUE, 'sito stima360.it - casella marketing', %s, %s, %s, 'test', %s) RETURNING id",
-        (versione, valida_da or registrata, valida_fino or (valida_da or registrata) + timedelta(days=1),
+        "repeat('c', 64), TRUE, %s, %s, %s, %s, 'test', %s) RETURNING id",
+        (versione, contesto, valida_da or registrata, valida_fino or (valida_da or registrata) + timedelta(days=1),
          registrata, list(canali)))[0][0]
 
 
@@ -278,3 +281,58 @@ def test_07_un_errore_del_consenso_non_ferma_l_import(ci, monkeypatch):
     assert _passo(m, s)["status"] == "queued"
     assert m["ledger"]()[s][0] == "imported"
     assert conta(m, "lead_stime", "stima_id = %s", (s,)) == 1
+
+
+def _informativa_sito(m, *, registrata, canali=("email", "whatsapp")):
+    """C3.4: il testo della casella del sito, registrato come informativa DEL
+    SITO (il contesto nomina stima360.it) con l'istante vero di registrazione."""
+    return _informativa(m, registrata=registrata, canali=canali, valida_fino=registrata + timedelta(days=3),
+                        contesto="Sito www.stima360.it - casella marketing del modulo di valutazione")
+
+
+def test_08_c34_nuovo_contatto_con_informativa_del_sito_concesso_senza_double_opt_in(ci):
+    m = ci
+    m["acceso"]()   # anche con il double opt-in acceso, se le prove bastano non serve
+    informativa = _informativa_sito(m, registrata=_giorno(24) - timedelta(days=2))
+    s = _stima(m, decisa=_giorno(24) - timedelta(minutes=30), email="riconosciuto@example.invalid")
+    m["archivio"].pdf[s] = PDF
+    m["giro"]()
+    _import_completo(m, s)
+    assert _passo(m, s) == {"state": "done", "status": "recognized", "channels": ["email", "whatsapp"]}
+    cid = _contatto(m, s)
+    ev = m["q_crm"]("SELECT channel, decision, source, evidence_type, evidence_ref, notice_id, decided_at "
+                    "FROM consent_events WHERE contact_id = %s ORDER BY id", (cid,))
+    assert [tuple(r[:2]) for r in ev] == [(None, "granted"), ("email", "granted"), ("whatsapp", "granted")]
+    for r in ev[1:]:
+        assert tuple(r[2:]) == ("public_stima", "stima", str(s), informativa, _giorno(24) - timedelta(minutes=30))
+    assert _guardia(m, s, "email").allowed and _guardia(m, s, "whatsapp").allowed
+    assert not _guardia(m, s, "sms").allowed and not _guardia(m, s, "phone").allowed
+    assert conta(m, "consent_submissions") == 0, "nessun double opt-in: il consenso e' gia' valido"
+    assert conta(m, "communication_messages", "reason_code = 'consent_confirmation'") == 0
+
+
+def test_09_c34_riconciliazione_a_ogni_giro_e_nessuna_retrodatazione(ci):
+    m = ci
+    # 1) spunta importata SENZA informativa: prova incompleta
+    s = _stima(m, decisa=_giorno(27) - timedelta(minutes=30), email="riconcilia@example.invalid")
+    m["archivio"].pdf[s] = PDF
+    m["giro"]()
+    assert _passo(m, s)["status"] == "disabled"
+    cid = _contatto(m, s)
+    assert not _guardia(m, s, "email").allowed
+    # 2) informativa del sito registrata DOPO la spunta, retrodatata: al giro seguente niente cambia
+    _informativa(m, registrata=_giorno(27), valida_da=_giorno(27) - timedelta(days=3),
+                 valida_fino=_giorno(27) + timedelta(days=1),
+                 contesto="Sito www.stima360.it - casella marketing del modulo di valutazione")
+    esito = m["giro"]()
+    assert esito["site_consents_recognized"] == 0 and not _guardia(m, s, "email").allowed
+    # 3) una spunta NUOVA, successiva alla registrazione dell'informativa: riconosciuta dal giro
+    t = _stima(m, decisa=_giorno(27) + timedelta(hours=2), email="riconcilia@example.invalid")
+    m["archivio"].pdf[t] = PDF
+    esito = m["giro"]()
+    assert _passo(m, t)["status"] == "recognized" and _contatto(m, t) == cid
+    assert _guardia(m, s, "email").allowed and _guardia(m, s, "whatsapp").allowed
+    # il riconoscimento cita la spunta nuova (t), non quella vecchia (s)
+    ref = m["q_crm"]("SELECT DISTINCT evidence_ref FROM consent_events WHERE contact_id = %s AND channel IS NOT NULL",
+                     (cid,))
+    assert [r[0] for r in ref] == [str(t)]

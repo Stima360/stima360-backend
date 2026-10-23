@@ -303,8 +303,11 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
         optouts = {c: repository.latest_platform_optout(cur, c, repository.contact_address(contact, c))
                    for c in CHANNEL_ORDER}
         storico = repository.latest_event(cur, ctx, contact_id, PURPOSE_MARKETING)
-        from . import capture
+        from . import capture, site_recognition
         scelte_sito = capture.site_choices(cur, ctx, contact_id)
+        # C3.4: spunta per spunta, cosa prova e cosa manca; cosa e' stato
+        # riconosciuto come «concesso dal sito».
+        riconoscimento = site_recognition.assess(cur, ctx, contact_id)
     canali = {}
     for c in CHANNEL_ORDER:
         decisione = can_send_marketing(ctx, contact_id, channel=c)
@@ -353,8 +356,17 @@ def marketing_state(ctx, contact_id: int) -> dict[str, Any]:
             "privacy_transmitted": False,
             "marketing_choices": scelte_sito,
             "checkbox_channels": list(_canali_casella_sito()),
+            "recognition": riconoscimento,
         },
     }
+
+
+def recognize_site_consents(ctx, contact_id: int) -> dict[str, Any]:
+    """C3.4: registra i consensi del sito con prove complete (idempotente).
+    Si chiama prima di leggere lo stato, cosi' la scheda e' sempre aggiornata
+    senza un passo in piu' per l'operatore."""
+    from . import site_recognition
+    return site_recognition.recognize(ctx, contact_id)
 
 
 def _canali_casella_sito() -> tuple[str, ...]:
@@ -362,6 +374,7 @@ def _canali_casella_sito() -> tuple[str, ...]:
     return SITE_CHECKBOX_CHANNELS
 
 
-__all__ = ["register_grant", "register_refusal", "marketing_state", "list_notices", "CHANNEL_ORDER",
+__all__ = ["register_grant", "register_refusal", "marketing_state", "recognize_site_consents", "list_notices",
+           "CHANNEL_ORDER",
            "GRANT_EVIDENCE_TYPES", "REVOCATION_EVIDENCE_TYPES", "REVOCATION_SCOPES",
            "NotFoundError"]

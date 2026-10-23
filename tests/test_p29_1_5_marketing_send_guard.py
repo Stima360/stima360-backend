@@ -896,6 +896,12 @@ def test_c7_nessun_sender_marketing_decide_leggendo_la_colonna():
         # sito) e non autorizza nulla. Non invia niente: nessuna email,
         # nessun WhatsApp, nessuna sequenza.
         "site_import/service.py",
+        # SENTINELLA AGGIORNATA DA C3.4: il riconoscimento dei consensi del
+        # sito legge il vecchio flag SOLO per dire alla scheda «prova
+        # incompleta» quando c'e' il flag senza l'evento della spunta. Non
+        # autorizza nulla con esso: concede per canale solo con l'evento, la
+        # data, la richiesta e l'informativa del sito gia' registrata.
+        "consent/site_recognition.py",
     }
 
     trovati = set()

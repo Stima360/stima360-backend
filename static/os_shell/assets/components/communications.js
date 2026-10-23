@@ -161,10 +161,16 @@ function caselleCanali(nome, disponibili) {
 // Lo stato breve di un canale. Una scelta digitale piu' recente (email da
 // confermare, numero da verificare) prevale sulla spunta del sito; un
 // consenso o una revoca registrati prevalgono su tutto.
-function statoCanale(canale, stato, raccolta, sito) {
+function statoCanale(canale, stato, raccolta, sito, ricon) {
   const inAttesa = Boolean(raccolta && raccolta.pending_confirmation) && !stato.allowed;
   const daVerificare = Boolean(raccolta && raccolta.declared_unverified) && !stato.allowed;
   const daSito = Boolean(sito) && !stato.allowed && stato.reason === 'deny_never_given' && !inAttesa && !daVerificare;
+  const ultimo = stato.last_event || {};
+  // C3.4: un consenso per canale che cita la richiesta del sito come prova.
+  if (stato.allowed && ultimo.source === 'public_stima' && ultimo.evidence_type === 'stima') {
+    return { etichetta: 'Concesso dal sito', tono: 'ok', attr: `data-site-recognized="${canale}"`,
+      nota: stato.decided_at ? `dal ${formatDate(stato.decided_at)}` : '' };
+  }
   if (inAttesa) {
     return { etichetta: 'Da confermare', tono: 'warn', attr: `data-consent-pending="${canale}"`,
       nota: `conferma entro il ${formatDate(raccolta.pending_confirmation.expires_at)}` };
@@ -174,7 +180,14 @@ function statoCanale(canale, stato, raccolta, sito) {
       nota: "scelto dal cliente, non attivo finché il numero non è verificato" };
   }
   if (daSito) {
-    return { etichetta: 'Scelto sul sito · da confermare', tono: 'warn', attr: `data-site-choice="${canale}"`,
+    // C3.4: la spunta c'e' ma le prove non bastano: si dice cosa manca.
+    const manca = ricon && ricon.missing && ricon.missing.length ? ricon.missing.join('; ')
+      : (ricon && ricon.status === 'not_covered' ? ricon.label : '');
+    if (manca) {
+      return { etichetta: "Consenso raccolto dal sito – prova incompleta", tono: 'warn',
+        attr: `data-site-choice="${canale}" data-site-incomplete="${canale}"`, nota: `manca: ${manca}` };
+    }
+    return { etichetta: "Scelto sul sito · da confermare", tono: 'warn', attr: `data-site-choice="${canale}"`,
       nota: `sul sito il ${formatDate(sito.decided_at)}` };
   }
   let nota = '';
@@ -184,8 +197,8 @@ function statoCanale(canale, stato, raccolta, sito) {
     tono: stato.allowed ? 'ok' : (TONI_CONSENSO[stato.reason] || 'gray'), attr: '', nota };
 }
 
-function rigaCanale(canale, stato, raccolta, sito) {
-  const s = statoCanale(canale, stato, raccolta, sito);
+function rigaCanale(canale, stato, raccolta, sito, ricon) {
+  const s = statoCanale(canale, stato, raccolta, sito, ricon);
   const nota = s.nota ? `<small class="muted">${escapeHtml(s.nota)}</small>` : '';
   return `<li class="comm-row" data-consent-channel="${canale}">`
     + `<span class="comm-ico">${ICONE[canale]}</span>`
@@ -205,20 +218,30 @@ function renderOrigine(consenso) {
   const legacy = Boolean(consenso.legacy) && !scelte.length;
   if (!sito.from_site && !legacy) return '';
   const canaliCasella = (sito.checkbox_channels || []).map((c) => CANALI[c] || c).join(' + ');
+  const ricon = (sito.recognition && sito.recognition.ticks) || [];
+  const riconosciuta = ricon.some((t) => Object.values(t.channels || {}).some((c) => c.status === 'recognized'));
   const rigaSito = ultima
-    ? `Sito stima360.it: scelta registrata il ${formatDate(ultima.decided_at)}`
+    ? `Sito stima360.it: ${riconosciuta ? 'consenso riconosciuto, spuntato' : 'scelta registrata'} il ${formatDate(ultima.decided_at)}`
     : legacy
       ? `Spunta marketing storica${consenso.legacy_granted_at ? ` del ${formatDate(consenso.legacy_granted_at)}` : ''}`
       : 'Sito stima360.it: nessuna scelta marketing ricevuta';
-  const storico = scelte.map((s) => `<li data-site-marketing-choice="${Number(s.event_id)}">
-      <strong>Scelta registrata dal sito</strong> — casella marketing (${escapeHtml(canaliCasella)}) spuntata il ${escapeHtml(formatDateTime(s.decided_at))}${s.stima_id ? ` · richiesta di valutazione n. ${escapeHtml(String(s.stima_id))}` : ''} · registrata nel CRM il ${escapeHtml(formatDateTime(s.recorded_at))}
-    </li>`).join('');
+  const valutazioni = new Map(ricon.map((t) => [t.event_id, t]));
+  const storico = scelte.map((s) => {
+    const t = valutazioni.get(s.event_id);
+    const prove = t ? ` <div class="muted" data-site-proof-check>Prove: spunta ✓ · data ${t.missing.includes('decided_at') ? '✗' : '✓'} · richiesta di valutazione ${t.missing.includes('stima') ? '✗' : '✓'} · informativa del sito ${t.notice ? `✓ (versione ${escapeHtml(t.notice.version)}${t.proof ? ` · prova: ${escapeHtml(t.proof.label)}${t.proof.evidence_label ? ` (${escapeHtml(t.proof.evidence_label)} ${escapeHtml(t.proof.window[0] === t.proof.window[1] ? t.proof.window[0] : `${t.proof.window[0]} - ${t.proof.window[1]}`)})` : ''}` : ''})` : '✗'}${t.missing_labels.length ? ` — manca: ${escapeHtml(t.missing_labels.join('; '))}` : ''}</div>
+      <div class="muted">${Object.entries(t.channels).map(([c, v]) => `${escapeHtml(CANALI[c] || c)}: ${escapeHtml(v.label)}`).join(' · ')}</div>` : '';
+    return `<li data-site-marketing-choice="${Number(s.event_id)}">
+      <strong>Scelta registrata dal sito</strong> — casella marketing (${escapeHtml(canaliCasella)}) spuntata il ${escapeHtml(formatDateTime(s.decided_at))}${s.stima_id ? ` · richiesta di valutazione n. ${escapeHtml(String(s.stima_id))}` : ''} · registrata nel CRM il ${escapeHtml(formatDateTime(s.recorded_at))}${prove}
+    </li>`;
+  }).join('');
   const prove = scelte.length
-    ? `<p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione.
-        Non conservati dal sito: il testo e la versione dell'informativa mostrati.
-        Per questo non e' un consenso autorizzato per gli invii: il cliente lo conferma dal link o dal QR.</p>`
+    ? (riconosciuta
+      ? `<p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione e l'informativa del sito registrata nel CRM e valida a quella data. Per i canali coperti il consenso e' riconosciuto senza conferma.</p>`
+      : `<p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione.
+        Non conservati dal sito: il testo e la versione dell'informativa mostrati; serve un'informativa del sito registrata nel CRM e valida alla data della spunta.
+        Finche' manca, non e' un consenso autorizzato per gli invii: il cliente lo conferma dal link o dal QR.</p>`)
     : legacy
-      ? `<p class="muted" data-site-legacy-flag><strong>Spunta marketing storica</strong> presente nel CRM${consenso.legacy_granted_at ? ` (dal ${escapeHtml(formatDateTime(consenso.legacy_granted_at))})` : ''}, senza riferimento alla richiesta ne' canale: non autorizza invii. Il cliente puo' confermarla dal link o dal QR.</p>`
+      ? `<p class="muted" data-site-legacy-flag><strong>Spunta marketing storica</strong> presente nel CRM${consenso.legacy_granted_at ? ` (dal ${escapeHtml(formatDateTime(consenso.legacy_granted_at))})` : ''}, senza riferimento alla richiesta ne' canale: prova incompleta, non autorizza invii. Manca: ${escapeHtml(((sito.recognition || {}).legacy_missing_labels || []).join('; '))}. Il cliente puo' confermarla dal link o dal QR.</p>`
       : '<p class="muted" data-site-no-marketing>Nessuna scelta marketing ricevuta dal sito per questo contatto.</p>';
   return `<div class="card comm-consent" data-site-record>
     <div class="comm-head"><strong>Origine del consenso</strong></div>
@@ -290,8 +313,13 @@ function renderConsenso(consenso, informative) {
   const scelteSito = (sitoRec.marketing_choices || []).filter((s) => s.decision === 'granted');
   const ultimaSito = scelteSito.length ? scelteSito[scelteSito.length - 1] : null;
   const canaliSito = new Set(sitoRec.checkbox_channels || []);
+  // C3.4: la valutazione delle prove dell'ultima spunta, per canale.
+  const ultimaValutazione = ultimaSito
+    ? ((sitoRec.recognition && sitoRec.recognition.ticks) || []).find((t) => t.event_id === ultimaSito.event_id) : null;
+  const riconDi = (c) => (ultimaValutazione && ultimaValutazione.channels[c]
+    ? { ...ultimaValutazione.channels[c], missing: ultimaValutazione.missing_labels } : null);
   const righe = ORDINE_CANALI.filter((c) => canali[c])
-    .map((c) => rigaCanale(c, canali[c], raccolta[c], canaliSito.has(c) ? ultimaSito : null)).join('');
+    .map((c) => rigaCanale(c, canali[c], raccolta[c], canaliSito.has(c) ? ultimaSito : null, riconDi(c))).join('');
   const coperti = (informative || []).flatMap((n) => n.channels || []);
   const opzioniInformative = (informative || []).map((n) =>
     `<option value="${Number(n.id)}">${escapeHtml(n.version)} — ${escapeHtml(n.context)}${(n.channels || []).length ? ` (${escapeHtml((n.channels || []).map((c) => CANALI[c] || c).join(', '))})` : ''}</option>`).join('');

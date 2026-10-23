@@ -166,7 +166,8 @@ class Importer:
         self.config, self.source, self.archive = config, source, archive
         self.connect = connect or get_connection
         self.now = now or (lambda: datetime.now(timezone.utc))
-        self.counts = {"stime_imported": 0, "dettagliate_imported": 0, "partial": 0, "orphan": 0,
+        self.counts = {"site_consents_recognized": 0,
+                       "stime_imported": 0, "dettagliate_imported": 0, "partial": 0, "orphan": 0,
                        "conflict": 0, "failed": 0, "skipped_already": 0, "pdf_ready": 0,
                        "pdf_missing": 0, "agenda_requests": 0, "pending_after_batch": 0}
 
@@ -248,6 +249,8 @@ class Importer:
                                 self.counts["failed"] += 1
                                 self._fallito(conn, ledger, table, source_id, exc)
                         restanti -= len(ids)
+                    if not dry_run:
+                        self._riconosci_consensi_sito(conn)
                     return {"status": "completed", **self.counts}
                 finally:
                     conn.close()
@@ -257,6 +260,25 @@ class Importer:
                 lock_conn.commit()
         finally:
             lock_conn.close()
+
+    def _riconosci_consensi_sito(self, conn) -> None:
+        """C3.4: a ogni giro, i consensi del sito che ORA hanno prove complete
+        (per esempio l'informativa del sito registrata nel frattempo per le
+        spunte successive). Idempotente, limitato, un contatto alla volta."""
+        from consent import site_recognition
+        from operator_auth.context import SystemAgencyContext
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            pendenti = site_recognition.pending_contacts(cur)
+        conn.rollback()
+        for agenzia, contatto in pendenti:
+            try:
+                esito = site_recognition.recognize(
+                    SystemAgencyContext(agency_id=agenzia, origin="public_stima"), contatto)
+                self.counts["site_consents_recognized"] += len(esito["granted"])
+            except Exception as exc:  # noqa: BLE001 - un contatto non ferma il giro
+                log.warning("site_consent_recognition_failed contact_id=%s error_type=%s",
+                            contatto, type(exc).__name__)
 
     def _baseline_dependencies(self, conn, ledger):
         """Authorize only missing historical parents of post-baseline details."""
@@ -421,8 +443,16 @@ class Importer:
             # conferma via email. Un esito "non applicabile" e' finale: una
             # stima importata a interruttore spento non riceve email dopo.
             from communication import consent_page
+            from consent import site_recognition
             if not collegato:
                 return {"state": "not_applicable", "reason": "no_contact_lead"}
+            # C3.4: prima il riconoscimento con le prove (informativa del sito
+            # gia' registrata alla data della spunta): niente double opt-in
+            # per chi ha gia' dato un consenso valido.
+            riconosciuti = site_recognition.recognize(ctx, ponte["contact_id"])["granted"]
+            if riconosciuti:
+                return {"state": "done", "status": "recognized",
+                        "channels": sorted(r["channel"] for r in riconosciuti)}
             esito = consent_page.request_from_site_checkbox(
                 ctx, stima_id=stima_id, contact_id=ponte["contact_id"],
                 consenso_marketing=sito.get("consenso_marketing"),
