@@ -26,7 +26,7 @@
 // bianca.
 
 import { apiGet, apiPost } from '../core/api-client.js';
-import { escapeHtml, formatDateTime, renderBadge } from './st-table.js';
+import { escapeHtml, formatDate, formatDateTime, renderBadge } from './st-table.js';
 
 const TONI_STATO = {
   queued: 'blue', sending: 'blue', sent: 'green', failed: 'red',
@@ -111,18 +111,42 @@ function renderCardJourney(journey) {
 // cartaceo o digitale, con un riferimento alla prova e l'informativa
 // presentata). Nessun consenso si registra senza prova e senza informativa:
 // lo rifiuta il server, qui si chiede tutto quello che serve.
+//
+// SEMPLIFICAZIONE (C3.3): in cima quattro righe, una per canale, con uno
+// stato breve. L'origine della scelta in un riepilogo compatto, con lo
+// storico completo dentro «Mostra dettagli». La raccolta digitale con i
+// soli comandi: QR/link, consenso manuale, revoca. Le regole di
+// autorizzazione restano quelle del server: qui cambia solo la lettura.
 const ETICHETTE_CONSENSO = {
-  allow_explicit_grant: 'concesso',
-  deny_revoked: 'revocato',
-  deny_never_given: 'mai dato',
-  deny_inconsistent_state: 'stato incoerente: verificare',
-  deny_platform_optout: 'disiscritto da tutto STIMA360',
+  allow_explicit_grant: 'Concesso',
+  deny_revoked: 'Revocato',
+  deny_never_given: 'Mai dato',
+  deny_inconsistent_state: 'Stato incoerente',
+  deny_platform_optout: 'Disiscritto',
+};
+const TONI_CONSENSO = {
+  allow_explicit_grant: 'ok', deny_revoked: 'danger', deny_never_given: 'gray',
+  deny_inconsistent_state: 'warn', deny_platform_optout: 'danger',
 };
 
 // 109 (C1/C2): il consenso e' PER CANALE. Nessuna casella preselezionata:
 // l'operatore spunta ogni canale che la persona ha autorizzato davvero.
-const CANALI = { email: 'Email', sms: 'SMS', whatsapp: 'WhatsApp', phone: 'Telefonate commerciali' };
+const CANALI = { email: 'Email', sms: 'SMS', whatsapp: 'WhatsApp', phone: 'Telefonate' };
 const ORDINE_CANALI = ['email', 'sms', 'whatsapp', 'phone'];
+
+// Icone a tratto, inline: nessuna dipendenza esterna, nessun testo dentro.
+const SVG = (corpo, classe = '') => `<svg class="${classe}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${corpo}</svg>`;
+const ICONE = {
+  email: SVG('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'),
+  sms: SVG('<path d="M4 5h16v11H9l-5 4z"/>'),
+  whatsapp: SVG('<path d="M4.5 19.5l1.2-3.6A8 8 0 1 1 8.6 18.4z"/><path d="M9.3 9.2c.2 2.3 2.2 4.3 4.5 4.5l1.1-1.1 1.9.8c0 1.1-.9 1.9-2 1.9-3.3 0-6.2-2.9-6.2-6.2 0-1.1.8-2 1.9-2l.8 1.9z"/>', 'comm-ico-wa'),
+  phone: SVG('<path d="M5 4h3.5l1.7 4.3-2.1 1.5a11.5 11.5 0 0 0 6.1 6.1l1.5-2.1L20 15.5V19a2 2 0 0 1-2 2A15 15 0 0 1 3 6a2 2 0 0 1 2-2z"/>'),
+  sito: SVG('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  doc: SVG('<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M9.5 12h5M9.5 16h5"/>'),
+  qr: SVG('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2M14 19h2M19 19h2v2"/>'),
+  penna: SVG('<path d="M4 20h4l10.5-10.5a2 2 0 0 0-4-4L4 16z"/><path d="M13 7l4 4"/>'),
+  avviso: SVG('<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5h.01"/>'),
+};
 
 function caselleCanali(nome, disponibili) {
   return `<fieldset class="consent-channels" data-${nome}-channels>
@@ -134,61 +158,80 @@ function caselleCanali(nome, disponibili) {
   </fieldset>`;
 }
 
-function rigaCanale(canale, stato, raccolta, sito) {
-  // C3.2: la spunta del sito su un canale che non ha ancora un consenso: si
-  // vede come scelta registrata, distinta da un consenso che autorizza invii.
-  // Una scelta digitale piu' recente (email da confermare, numero da
-  // verificare) prevale sulla spunta del sito.
+// Lo stato breve di un canale. Una scelta digitale piu' recente (email da
+// confermare, numero da verificare) prevale sulla spunta del sito; un
+// consenso o una revoca registrati prevalgono su tutto.
+function statoCanale(canale, stato, raccolta, sito) {
   const inAttesa = Boolean(raccolta && raccolta.pending_confirmation) && !stato.allowed;
   const daVerificare = Boolean(raccolta && raccolta.declared_unverified) && !stato.allowed;
   const daSito = Boolean(sito) && !stato.allowed && stato.reason === 'deny_never_given' && !inAttesa && !daVerificare;
-  let etichetta = ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—';
-  if (inAttesa) etichetta = 'in attesa di conferma';
-  else if (daVerificare) etichetta = 'scelto · numero da verificare';
-  else if (daSito) etichetta = 'scelto sul sito · da confermare';
-  const quando = stato.decided_at
-    ? ` <span class="muted">dal ${escapeHtml(formatDateTime(stato.decided_at))}</span>` : '';
-  const optout = stato.platform_optout_at
-    ? ` <span class="muted" data-platform-optout="${canale}">— disiscritto da tutto STIMA360 il ${escapeHtml(formatDateTime(stato.platform_optout_at))}</span>` : '';
-  // C3: cio' che il cliente ha chiesto dalla pagina e che NON e' ancora attivo.
-  const attesa = raccolta && raccolta.pending_confirmation
-    ? ` <span class="muted" data-consent-pending="${canale}">— in attesa della conferma del cliente fino al ${escapeHtml(formatDateTime(raccolta.pending_confirmation.expires_at))}</span>` : '';
-  const dichiarato = raccolta && raccolta.declared_unverified
-    ? ` <span class="muted" data-consent-declared="${canale}">— scelto dal cliente, non attivo finche\u0027 il numero non sara\u0027 verificato</span>` : '';
-  const notaSito = daSito
-    ? ` <span class="muted" data-site-choice="${canale}">— spuntato su stima360.it il ${escapeHtml(formatDateTime(sito.decided_at))}${sito.stima_id ? ` (richiesta di valutazione n. ${escapeHtml(String(sito.stima_id))})` : ''}: non autorizza invii finche\u0027 il cliente non conferma</span>` : '';
-  return `<li data-consent-channel="${canale}"><strong>${escapeHtml(CANALI[canale])}:</strong> ${renderBadge(etichetta, stato.allowed ? 'green' : (daSito || inAttesa || daVerificare ? 'warn' : 'red'))}${quando}${optout}${attesa}${dichiarato}${notaSito}</li>`;
+  if (inAttesa) {
+    return { etichetta: 'Da confermare', tono: 'warn', attr: `data-consent-pending="${canale}"`,
+      nota: `conferma entro il ${formatDate(raccolta.pending_confirmation.expires_at)}` };
+  }
+  if (daVerificare) {
+    return { etichetta: 'Numero da verificare', tono: 'warn', attr: `data-consent-declared="${canale}"`,
+      nota: "scelto dal cliente, non attivo finché il numero non è verificato" };
+  }
+  if (daSito) {
+    return { etichetta: 'Scelto sul sito · da confermare', tono: 'warn', attr: `data-site-choice="${canale}"`,
+      nota: `sul sito il ${formatDate(sito.decided_at)}` };
+  }
+  let nota = '';
+  if (stato.platform_optout_at) nota = `disiscritto da tutto STIMA360 il ${formatDate(stato.platform_optout_at)}`;
+  else if ((stato.allowed || stato.reason === 'deny_revoked') && stato.decided_at) nota = `dal ${formatDate(stato.decided_at)}`;
+  return { etichetta: ETICHETTE_CONSENSO[stato.reason] || stato.reason || '—',
+    tono: stato.allowed ? 'ok' : (TONI_CONSENSO[stato.reason] || 'gray'), attr: '', nota };
+}
+
+function rigaCanale(canale, stato, raccolta, sito) {
+  const s = statoCanale(canale, stato, raccolta, sito);
+  const nota = s.nota ? `<small class="muted">${escapeHtml(s.nota)}</small>` : '';
+  return `<li class="comm-row" data-consent-channel="${canale}">`
+    + `<span class="comm-ico">${ICONE[canale]}</span>`
+    + `<span class="comm-name">${escapeHtml(CANALI[canale])}${nota}</span>`
+    + `<span class="comm-badge" ${s.attr}>${renderBadge(s.etichetta, s.tono)}</span></li>`;
 }
 
 // C3.2: cio' che il CRM ha ricevuto dal sito stima360.it. Due cose diverse
 // dette in modo diverso: la Privacy (il modulo non parte senza la spunta, ma
 // il sito non ne manda la prova: NON documentata) e la spunta marketing
 // (registrata: data, richiesta, fonte; senza canale ne' testo: NON autorizza).
-function renderSito(consenso) {
-  const sito = consenso.site_record;
-  if (!sito || !sito.from_site) return '';
+// In vista: due righe e «Mostra dettagli». Nei dettagli: tutto lo storico.
+function renderOrigine(consenso) {
+  const sito = consenso.site_record || {};
   const scelte = (sito.marketing_choices || []).filter((s) => s.decision === 'granted');
+  const ultima = scelte.length ? scelte[scelte.length - 1] : null;
+  const legacy = Boolean(consenso.legacy) && !scelte.length;
+  if (!sito.from_site && !legacy) return '';
   const canaliCasella = (sito.checkbox_channels || []).map((c) => CANALI[c] || c).join(' + ');
-  const righe = scelte.map((s) => `<li data-site-marketing-choice="${Number(s.event_id)}">
-      <strong>Scelta registrata dal sito</strong> — casella marketing (${escapeHtml(canaliCasella)}) spuntata il ${escapeHtml(formatDateTime(s.decided_at))}
-      ${s.stima_id ? ` · richiesta di valutazione n. ${escapeHtml(String(s.stima_id))}` : ''}
-      · registrata nel CRM il ${escapeHtml(formatDateTime(s.recorded_at))}
+  const rigaSito = ultima
+    ? `Sito stima360.it: scelta registrata il ${formatDate(ultima.decided_at)}`
+    : legacy
+      ? `Spunta marketing storica${consenso.legacy_granted_at ? ` del ${formatDate(consenso.legacy_granted_at)}` : ''}`
+      : 'Sito stima360.it: nessuna scelta marketing ricevuta';
+  const storico = scelte.map((s) => `<li data-site-marketing-choice="${Number(s.event_id)}">
+      <strong>Scelta registrata dal sito</strong> — casella marketing (${escapeHtml(canaliCasella)}) spuntata il ${escapeHtml(formatDateTime(s.decided_at))}${s.stima_id ? ` · richiesta di valutazione n. ${escapeHtml(String(s.stima_id))}` : ''} · registrata nel CRM il ${escapeHtml(formatDateTime(s.recorded_at))}
     </li>`).join('');
-  const marketing = scelte.length
-    ? `<ul class="consent-site-list">${righe}</ul>
-      <p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione.
-        Non conservati dal sito: il testo e la versione dell\u0027informativa mostrati.
-        Per questo la scelta non e\u0027 un consenso autorizzato per gli invii: il cliente puo\u0027 confermarla con il link o il QR qui sotto.</p>`
-    : (consenso.legacy
-      // Il vecchio flag senza evento: una spunta c'e', ma senza data della
-      // richiesta ne' riferimento; la si mostra per quello che e'.
-      ? `<p class="muted" data-site-legacy-flag><strong>Spunta marketing storica</strong> presente nel CRM${consenso.legacy_granted_at ? ` (dal ${escapeHtml(formatDateTime(consenso.legacy_granted_at))})` : ''}, senza riferimento alla richiesta ne\u0027 canale: non autorizza invii. Il cliente puo\u0027 confermarla con il link o il QR qui sotto.</p>`
-      : '<p class="muted" data-site-no-marketing>Nessuna scelta marketing ricevuta dal sito per questo contatto.</p>');
-  return `<div class="panel" data-site-record>
-    <div><strong>Dal sito stima360.it</strong></div>
-    <p class="muted" data-site-privacy><strong>Privacy e Termini:</strong> il modulo del sito non si invia senza la spunta,
-      ma il sito non trasmette al CRM la prova dell\u0027accettazione: <strong>non documentata nel CRM</strong>.</p>
-    ${marketing}
+  const prove = scelte.length
+    ? `<p class="muted" data-site-proofs>Prove conservate: la spunta, la data registrata dal server del sito, la richiesta di valutazione.
+        Non conservati dal sito: il testo e la versione dell'informativa mostrati.
+        Per questo non e' un consenso autorizzato per gli invii: il cliente lo conferma dal link o dal QR.</p>`
+    : legacy
+      ? `<p class="muted" data-site-legacy-flag><strong>Spunta marketing storica</strong> presente nel CRM${consenso.legacy_granted_at ? ` (dal ${escapeHtml(formatDateTime(consenso.legacy_granted_at))})` : ''}, senza riferimento alla richiesta ne' canale: non autorizza invii. Il cliente puo' confermarla dal link o dal QR.</p>`
+      : '<p class="muted" data-site-no-marketing>Nessuna scelta marketing ricevuta dal sito per questo contatto.</p>';
+  return `<div class="card comm-consent" data-site-record>
+    <div class="comm-head"><strong>Origine del consenso</strong></div>
+    <div class="comm-row comm-row-plain" data-site-summary><span class="comm-ico">${ICONE.sito}</span><span>${escapeHtml(rigaSito)}</span></div>
+    <div class="comm-row comm-row-plain" data-site-privacy><span class="comm-ico">${ICONE.doc}</span><span>Privacy del sito: non documentata nel CRM</span></div>
+    <details class="comm-details" data-site-details>
+      <summary>Mostra dettagli</summary>
+      <div class="comm-details-body">
+        ${storico ? `<ul>${storico}</ul>` : ''}
+        ${prove}
+        <p class="muted">Privacy e Termini: il modulo del sito non si invia senza la spunta, ma il sito non trasmette al CRM la prova dell'accettazione.</p>
+      </div>
+    </details>
   </div>`;
 }
 
@@ -196,35 +239,40 @@ function renderSito(consenso) {
 // con il suo QR; il cliente legge l'informativa e sceglie da solo i canali.
 // Il link e il QR compaiono SOLO alla generazione: il server ne conserva
 // l'impronta, non il link. Nessun invio parte da qui.
+// In vista: tre comandi. Il riquadro con QR e link si apre su «Mostra QR».
 function renderRaccolta(consenso) {
   const raccolta = consenso.capture;
   if (!raccolta || raccolta.available === false || !consenso.can_record) return '';
   const link = raccolta.link;
   const aperto = Boolean(link && link.collecting);
-  const stato = aperto
-    ? `Link attivo: raccoglie consensi fino al ${escapeHtml(formatDateTime(link.expires_at))}.`
-    : 'Nessun link attivo.';
   // C3.2: senza informativa marketing corrente la pagina permette solo di
-  // revocare. Lo si dice qui, prima di consegnare il QR al cliente.
+  // revocare. Un solo avviso, breve, prima di consegnare il QR.
   const senzaInformativa = raccolta.notice === null
-    ? '<p class="error-box" data-capture-no-notice>Nessuna informativa marketing corrente: il cliente potra\u0027 solo revocare. Pubblicala in Super Admin › Rete › Informative privacy; il link gia\u0027 generato funzionera\u0027 subito dopo.</p>'
+    ? `<p class="error-box comm-avviso" data-capture-no-notice>${ICONE.avviso}<span>Manca un'informativa Marketing corrente. Pubblicala in Super Admin › Rete › Informative privacy.</span></p>`
     : '';
-  return `<div class="panel" data-consent-capture data-link-open="${aperto ? '1' : '0'}">
-    <div><strong>Raccolta digitale del consenso</strong></div>
-    <p class="muted">Il cliente apre il link o inquadra il QR, legge l\u0027informativa e sceglie da solo i canali.
-      L\u0027email diventa attiva solo dopo la sua conferma; SMS, WhatsApp e telefonate restano non attivi finche\u0027 il numero non sara\u0027 verificato.</p>
+  const etichettaQr = aperto ? 'Mostra QR' : 'Genera link consenso';
+  return `<div class="card comm-consent" data-consent-capture data-link-open="${aperto ? '1' : '0'}" data-link-id="${aperto ? Number(link.id) : ''}">
+    <div class="comm-head"><strong>Raccolta digitale</strong></div>
+    <p class="muted">Il cliente può confermare i canali dal link o dal QR.</p>
     ${senzaInformativa}
-    <p class="muted" data-consent-link-status>${stato}</p>
-    <div class="actions">
-      <button type="button" class="btn btn-primary" data-consent-link-generate>${aperto ? 'Genera nuovo link consenso' : 'Genera link consenso'}</button>
-      ${aperto ? '<button type="button" class="btn" data-consent-link-disable>Disattiva link</button>' : ''}
+    <div class="comm-actions">
+      <button type="button" class="btn primary" data-consent-link-generate>${ICONE.qr}<span data-consent-link-label>${etichettaQr}</span></button>
+      <button type="button" class="btn" data-consent-manual-open>${ICONE.penna}<span>Registra consenso manuale</span></button>
     </div>
-    <div data-consent-link-output hidden>
-      <p class="muted">Il link e il QR si vedono solo adesso. Consegnali al cliente di persona o in una conversazione avviata da lui: non inviarli in massa.</p>
-      <label>Link personale <input type="text" class="input" readonly data-consent-link-url></label>
-      <div class="actions"><button type="button" class="btn" data-consent-link-copy>Copia link</button></div>
-      <img data-consent-link-qr alt="QR code del link consenso" width="220" height="220">
-      <p class="muted" data-consent-link-expiry></p>
+    <button type="button" class="comm-link" data-consent-refusal-open>Revoca o rifiuto</button>
+    <div class="comm-qr" data-consent-link-output hidden>
+      <img data-consent-link-qr alt="QR code del link consenso" width="200" height="200">
+      <div class="comm-qr-info">
+        <label>Link personale <input type="text" class="input" readonly data-consent-link-url></label>
+        <p class="muted" data-consent-link-expiry></p>
+        <p class="muted">Consegnalo al cliente di persona o in una conversazione avviata da lui.</p>
+        <div class="comm-actions">
+          <button type="button" class="btn" data-consent-link-copy>Copia link</button>
+          <button type="button" class="btn" data-consent-link-new>Genera nuovo link</button>
+          <button type="button" class="btn danger" data-consent-link-disable>Disattiva link</button>
+          <button type="button" class="btn ghost" data-consent-link-close>Chiudi</button>
+        </div>
+      </div>
     </div>
     <p class="error-box" data-consent-link-error hidden></p>
   </div>`;
@@ -232,7 +280,7 @@ function renderRaccolta(consenso) {
 
 function renderConsenso(consenso, informative) {
   if (!consenso || consenso.available === false) {
-    return `<div class="panel" data-consent-panel>
+    return `<div class="card" data-consent-panel>
       <p class="muted">Consenso marketing non disponibile su questo ambiente.</p>
     </div>`;
   }
@@ -244,43 +292,37 @@ function renderConsenso(consenso, informative) {
   const canaliSito = new Set(sitoRec.checkbox_channels || []);
   const righe = ORDINE_CANALI.filter((c) => canali[c])
     .map((c) => rigaCanale(c, canali[c], raccolta[c], canaliSito.has(c) ? ultimaSito : null)).join('');
-  // Con una scelta del sito lo storico lo racconta il blocco «Dal sito».
-  const storico = consenso.legacy && !scelteSito.length && !sitoRec.from_site
-    ? '<p class="muted" data-consent-legacy>Esiste un consenso storico senza canale: non autorizza nessun invio finche\u0027 non viene documentato per canale.</p>' : '';
   const coperti = (informative || []).flatMap((n) => n.channels || []);
   const opzioniInformative = (informative || []).map((n) =>
     `<option value="${Number(n.id)}">${escapeHtml(n.version)} — ${escapeHtml(n.context)}${(n.channels || []).length ? ` (${escapeHtml((n.channels || []).map((c) => CANALI[c] || c).join(', '))})` : ''}</option>`).join('');
-  const senzaInformative = !(informative || []).length
-    ? '<p class="error-box" data-no-notice>Nessuna informativa marketing valida: il consenso non si puo\u0027 registrare finche\u0027 il Super Admin non ne pubblica una.</p>' : '';
-  const form = consenso.can_record ? `<details class="panel" data-consent-grant>
-    <summary>Registra consenso marketing</summary>
+  const sceltaInformativa = (informative || []).length
+    ? `<label>Informativa presentata <select name="notice_id" required>${opzioniInformative}</select></label>`
+    : '<p class="muted">Nessuna informativa Marketing corrente: il consenso manuale non si può registrare.</p>';
+  const form = consenso.can_record ? `<details class="card comm-consent" data-consent-grant>
+    <summary>Registra consenso marketing di persona</summary>
     <form data-consent-grant-form>
-      <p class="muted">Solo un consenso raccolto davvero, con una prova che si puo\u0027 ritrovare.
-        Un indirizzo in rubrica o una telefonata non sono una prova.</p>
-      ${senzaInformative}
+      <p class="muted">Solo un consenso raccolto davvero, con una prova che si può ritrovare.</p>
       ${caselleCanali('grant', coperti)}
       <label>Data e ora della raccolta <input type="datetime-local" name="decided_at" required></label>
-      <label>Modalita\u0027
+      <label>Modalità
         <select name="evidence_type">
           <option value="paper_form">Modulo cartaceo</option>
           <option value="digital_form">Modulo digitale</option>
-          <option value="other_documented">Altra modalita\u0027 documentata</option>
+          <option value="other_documented">Altra modalità documentata</option>
         </select>
       </label>
       <label>Riferimento alla prova (protocollo, archivio, documento)
         <input type="text" name="evidence_ref" minlength="6" maxlength="100" required></label>
-      <label>Informativa presentata
-        <select name="notice_id" required>${opzioniInformative}</select>
-      </label>
+      ${sceltaInformativa}
       <label>Note <textarea name="note" rows="2" maxlength="2000"></textarea></label>
-      <div class="actions"><button type="submit" class="btn btn-primary" ${(informative || []).length ? '' : 'disabled'}>Registra consenso</button></div>
+      <div class="actions"><button type="submit" class="btn primary" ${(informative || []).length ? '' : 'disabled'}>Registra consenso</button></div>
       <p class="error-box" data-consent-error hidden></p>
     </form>
   </details>
-  <details class="panel" data-consent-refusal>
-    <summary>Registra rifiuto o revoca espressi al personale</summary>
+  <details class="card comm-consent" data-consent-refusal>
+    <summary>Rifiuto o revoca espressi al personale</summary>
     <form data-consent-refusal-form>
-      <p class="muted">Blocca subito gli invii di marketing sui canali che spunti. L\u0027ambito lo dichiari tu: questa agenzia, oppure tutto STIMA360.</p>
+      <p class="muted">Blocca subito gli invii di marketing sui canali che spunti.</p>
       ${caselleCanali('refusal', null)}
       <label>Data e ora <input type="datetime-local" name="decided_at" required></label>
       <label>Ambito
@@ -289,19 +331,18 @@ function renderConsenso(consenso, informative) {
           <option value="platform">Tutto STIMA360 (ogni agenzia)</option>
         </select>
       </label>
-      <label>Come e\u0027 stato espresso <textarea name="note" rows="2" minlength="10" maxlength="2000" required></textarea></label>
-      <div class="actions"><button type="submit" class="btn btn-danger">Registra revoca</button></div>
+      <label>Come è stato espresso <textarea name="note" rows="2" minlength="10" maxlength="2000" required></textarea></label>
+      <div class="actions"><button type="submit" class="btn danger">Registra revoca</button></div>
       <p class="error-box" data-refusal-error hidden></p>
     </form>
   </details>` : '';
-  return `<div class="panel" data-consent-panel>
-    <div><strong>Consenso marketing per canale</strong></div>
-    <ul class="consent-channel-list">${righe}</ul>
-    ${storico}
-    ${renderSito(consenso)}
-    ${renderRaccolta(consenso)}
-    ${form}
-  </div>`;
+  return `<div class="card comm-consent" data-consent-panel>
+    <div class="comm-head"><strong>Consenso marketing</strong></div>
+    <ul class="comm-rows">${righe}</ul>
+  </div>
+  ${renderOrigine(consenso)}
+  ${renderRaccolta(consenso)}
+  ${form}`;
 }
 
 function isoConFuso(valore) {
@@ -397,6 +438,9 @@ export async function loadCommunications(contactId) {
   };
 }
 
+// I link personali generati in questa pagina, per contatto (solo in memoria).
+const LINK_GENERATI = new Map();
+
 export function mountCommunications(mount, contactId, { readOnly = false } = {}) {
   if (!mount) return;
 
@@ -426,14 +470,54 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
   };
 
   // C3: genera / copia / disattiva il link personale del consenso.
+  //
+  // «Mostra QR»: il server conserva SOLO l'impronta del link, quindi il QR si
+  // puo' rivedere solo se e' stato generato in questa pagina della Shell
+  // (memoria del modulo, per contatto: niente storage del browser, come per
+  // ogni altro segreto). Altrimenti si rigenera, con conferma: il link
+  // precedente smette di raccogliere consensi, le revoche restano.
+  function linkInSessione() {
+    return LINK_GENERATI.get(contactId) || null;
+  }
+  function ricordaLink(dati) {
+    LINK_GENERATI.set(contactId, dati);
+  }
+  function mostraLink(box, dati) {
+    const scadenza = `Raccoglie consensi fino al ${formatDateTime(dati.expires_at)}.`;
+    box.querySelector('[data-consent-link-url]').value = String(dati.url || '');
+    const qr = String(dati.qr || '');
+    if (qr.startsWith('data:image/svg+xml')) box.querySelector('[data-consent-link-qr]').src = qr;
+    box.querySelector('[data-consent-link-expiry]').textContent = scadenza;
+    box.querySelector('[data-consent-link-label]').textContent = 'Mostra QR';
+    box.dataset.linkOpen = '1';
+    box.dataset.linkId = String(dati.id || '');
+    box.querySelector('[data-consent-link-output]').hidden = false;
+  }
   mount.addEventListener('click', async (evento) => {
     const genera = evento.target.closest('button[data-consent-link-generate]');
+    const nuovo = evento.target.closest('button[data-consent-link-new]');
     const disattiva = evento.target.closest('button[data-consent-link-disable]');
     const copia = evento.target.closest('button[data-consent-link-copy]');
-    if (!genera && !disattiva && !copia) return;
+    const chiudi = evento.target.closest('button[data-consent-link-close]');
+    const manuale = evento.target.closest('button[data-consent-manual-open]');
+    const rifiuto = evento.target.closest('button[data-consent-refusal-open]');
+    if (!genera && !nuovo && !disattiva && !copia && !chiudi && !manuale && !rifiuto) return;
+    if (manuale || rifiuto) {
+      const modulo = mount.querySelector(manuale ? '[data-consent-grant]' : '[data-consent-refusal]');
+      if (!modulo) return;
+      modulo.open = true;
+      modulo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const primo = modulo.querySelector('input[type="checkbox"]');
+      if (primo) primo.focus();
+      return;
+    }
     const box = mount.querySelector('[data-consent-capture]');
     const errore = box.querySelector('[data-consent-link-error]');
     errore.hidden = true;
+    if (chiudi) {
+      box.querySelector('[data-consent-link-output]').hidden = true;
+      return;
+    }
     if (copia) {
       const campo = box.querySelector('[data-consent-link-url]');
       campo.select();
@@ -445,10 +529,17 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
       }
       return;
     }
-    if (genera && box.dataset.linkOpen === '1'
-        && !window.confirm('Il link precedente non raccogliera\u0027 piu\u0027 consensi (le revoche restano possibili). Generare un nuovo link?')) return;
-    if (disattiva && !window.confirm('Il link non raccogliera\u0027 piu\u0027 consensi; le revoche restano possibili. Disattivarlo?')) return;
-    const bottone = genera || disattiva;
+    if (genera && box.dataset.linkOpen === '1') {
+      const ricordato = linkInSessione();
+      if (ricordato && String(ricordato.id) === box.dataset.linkId) {
+        mostraLink(box, ricordato);
+        return;
+      }
+      if (!window.confirm("Il QR di questo link non è più visualizzabile: il CRM ne conserva solo l'impronta. Generare un nuovo link? Il precedente non raccoglierà più consensi (le revoche restano possibili).")) return;
+    }
+    if (nuovo && !window.confirm("Il link precedente non raccoglierà più consensi (le revoche restano possibili). Generare un nuovo link?")) return;
+    if (disattiva && !window.confirm("Il link non raccoglierà più consensi; le revoche restano possibili. Disattivarlo?")) return;
+    const bottone = genera || nuovo || disattiva;
     bottone.disabled = true;
     try {
       if (disattiva) {
@@ -457,23 +548,9 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
         return;
       }
       const esito = await apiPost(`/api/communication/contacts/${contactId}/consent/link`, {});
-      const scadenza = `Raccoglie consensi fino al ${formatDateTime(esito.expires_at)}.`;
-      box.querySelector('[data-consent-link-url]').value = String(esito.url || '');
-      const qr = String(esito.qr_svg_data_uri || '');
-      if (qr.startsWith('data:image/svg+xml')) box.querySelector('[data-consent-link-qr]').src = qr;
-      box.querySelector('[data-consent-link-expiry]').textContent = scadenza;
-      box.querySelector('[data-consent-link-status]').textContent = `Link attivo: ${scadenza.charAt(0).toLowerCase()}${scadenza.slice(1)}`;
-      box.dataset.linkOpen = '1';
-      genera.textContent = 'Genera nuovo link consenso';
-      if (!box.querySelector('[data-consent-link-disable]')) {
-        const spegni = document.createElement('button');
-        spegni.type = 'button';
-        spegni.className = 'btn';
-        spegni.dataset.consentLinkDisable = '';
-        spegni.textContent = 'Disattiva link';
-        genera.parentElement.appendChild(spegni);
-      }
-      box.querySelector('[data-consent-link-output]').hidden = false;
+      const dati = { id: esito.link_id, url: esito.url, qr: esito.qr_svg_data_uri, expires_at: esito.expires_at };
+      ricordaLink(dati);
+      mostraLink(box, dati);
       bottone.disabled = false;
     } catch (guasto) {
       bottone.disabled = false;

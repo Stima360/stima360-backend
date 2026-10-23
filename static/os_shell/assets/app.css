@@ -1537,3 +1537,43 @@ a.census-unit-main { text-decoration: none; }
   margin: 0;
 }
 [data-informativa-dettaglio] code { overflow-wrap: anywhere; }
+
+/* Comunicazioni — consensi marketing nella scheda contatto (C3.3): quattro
+   righe con stato breve, origine compatta con dettagli a scomparsa,
+   raccolta digitale con i soli comandi. Mobile-first (390 px). */
+.comm-consent { margin-bottom: 14px; }
+.comm-consent summary { font-weight: 600; }
+.comm-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 16px; }
+.comm-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); background: rgba(255, 255, 255, .6); }
+.comm-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border); }
+.comm-row:first-child { border-top: 0; }
+.comm-row-plain { border: 0; padding: 6px 0; }
+.comm-ico { flex: 0 0 24px; width: 24px; height: 24px; display: inline-flex; color: var(--primary); }
+.comm-ico svg, .comm-avviso svg, .comm-actions .btn svg { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.comm-ico svg { width: 22px; height: 22px; }
+.comm-ico .comm-ico-wa { color: #25d366; }
+.comm-name { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; font-weight: 600; }
+.comm-name small { font-weight: 400; font-size: 12px; }
+.comm-badge { margin-left: auto; text-align: right; }
+.comm-badge .badge { margin: 0; white-space: nowrap; }
+.comm-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.comm-actions .btn svg { width: 18px; height: 18px; flex: 0 0 18px; }
+.comm-link { background: none; border: 0; padding: 10px 0 0; color: var(--primary); font: inherit; font-weight: 600; cursor: pointer; }
+.comm-details > summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; color: var(--primary); font-weight: 600; cursor: pointer; padding-top: 8px; }
+.comm-details > summary::-webkit-details-marker { display: none; }
+.comm-details > summary::after { content: "\203A"; font-size: 18px; line-height: 1; }
+.comm-details[open] > summary::after { content: "\2304"; }
+.comm-details-body { margin-top: 10px; font-size: 14px; }
+.comm-details-body ul { margin: 0 0 8px; padding-left: 18px; }
+.comm-avviso { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; margin: 10px 0 0; }
+.comm-avviso svg { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 1px; }
+.comm-qr { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: rgba(255, 255, 255, .7); }
+.comm-qr img { width: 200px; height: 200px; max-width: 100%; background: #fff; border-radius: 8px; }
+.comm-qr-info { flex: 1 1 220px; min-width: 0; }
+.comm-qr-info .input { width: 100%; }
+@media (max-width: 480px) {
+  .comm-row { flex-wrap: wrap; }
+  .comm-row-plain { flex-wrap: nowrap; }
+  .comm-badge { margin-left: 36px; }
+  .comm-actions .btn { flex: 1 1 100%; }
+}

@@ -130,8 +130,8 @@ def test_01_la_scheda_contatto_genera_link_e_qr(server, larghezza):
         # i quattro consensi separati, tutti non attivi
         for c in CANALI:
             assert page.is_visible(f"[data-consent-channel='{c}']"), c
-        assert page.inner_text("[data-consent-link-generate]") == "Genera link consenso"
-        assert page.query_selector("[data-consent-link-disable]") is None
+        assert page.inner_text("[data-consent-link-generate]").strip() == "Genera link consenso"
+        assert page.is_hidden("[data-consent-link-disable]")
         assert page.is_hidden("[data-consent-link-output]")
         assert _sfora(page)["scroll"] <= larghezza + 1, _sfora(page)
 
@@ -143,19 +143,26 @@ def test_01_la_scheda_contatto_genera_link_e_qr(server, larghezza):
         assert qr.startswith("data:image/svg+xml")
         page.wait_for_function("() => document.querySelector('[data-consent-link-qr]').naturalWidth > 0")
         assert "Raccoglie consensi fino al" in page.inner_text("[data-consent-link-expiry]")
-        assert page.inner_text("[data-consent-link-generate]") == "Genera nuovo link consenso"
+        assert page.inner_text("[data-consent-link-generate]").strip() == "Mostra QR"
         _foto(page, f"scheda-{larghezza}")
         assert _link_aperti(m, cid) == 1
         assert _q(m, "SELECT count(*) FROM consent_events WHERE contact_id = %s", (cid,))[0][0] == 0
         assert _q(m, "SELECT count(*) FROM communication_messages WHERE contact_id = %s", (cid,))[0][0] == 0
         assert _sfora(page)["scroll"] <= larghezza + 1, _sfora(page)
 
-        # sostituzione: annullata non cambia niente, confermata cambia il link
+        # «Mostra QR» chiude e riapre il riquadro senza rigenerare (il link e' di questa sessione)
+        page.click("[data-consent-link-close]")
+        assert page.is_hidden("[data-consent-link-output]")
         page.click("[data-consent-link-generate]")
-        assert dialoghi and "non raccogliera" in dialoghi[-1]
+        page.wait_for_selector("[data-consent-link-output]:not([hidden])")
+        assert not dialoghi and page.input_value("[data-consent-link-url]") == url
+        assert _link_aperti(m, cid) == 1
+        # sostituzione: annullata non cambia niente, confermata cambia il link
+        page.click("[data-consent-link-new]")
+        assert dialoghi and "non raccoglier" in dialoghi[-1]
         assert page.input_value("[data-consent-link-url]") == url
         risposta["accetta"] = True
-        page.click("[data-consent-link-generate]")
+        page.click("[data-consent-link-new]")
         page.wait_for_function("(u) => document.querySelector('[data-consent-link-url]').value !== u", arg=url)
         assert _link_aperti(m, cid) == 1
         assert _q(m, "SELECT count(*) FROM consent_links WHERE contact_id = %s", (cid,))[0][0] == 2
@@ -163,7 +170,7 @@ def test_01_la_scheda_contatto_genera_link_e_qr(server, larghezza):
         # disattivazione con conferma: la scheda torna a «Genera link consenso»
         page.click("[data-consent-link-disable]")
         page.wait_for_function(
-            "() => document.querySelector('[data-consent-link-generate]')?.textContent === 'Genera link consenso'")
+            "() => document.querySelector('[data-consent-link-generate]')?.textContent.trim() === 'Genera link consenso'")
         assert _link_aperti(m, cid) == 0
         assert not errori, errori
         browser.close()

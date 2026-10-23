@@ -9,12 +9,12 @@ router pubblico e il componente vero della scheda contatto; Chromium a 390 px
   A  Serena Fanini: richiesta dal sito con la casella marketing spuntata,
      importata. La scheda mostra lo storico del sito (Privacy non
      documentata, scelta marketing con data e richiesta, Email e WhatsApp
-     «scelto sul sito · da confermare»), avvisa che manca l'informativa; il
+     «Scelto sul sito · da confermare»), avvisa che manca l'informativa; il
      QR apre la pagina solo-revoca; il Super Admin pubblica l'informativa e
      LO STESSO link permette di scegliere, ricordando la scelta del sito.
   B  Mario Rossi: QR dalla scheda, scelta Email, «in attesa», conferma
-     (double opt-in), scheda «concesso», dispatcher SPEDISCE un marketing
-     email e SOPPRIME un WhatsApp; revoca, scheda «revocato», dispatcher
+     (double opt-in), scheda «Concesso», dispatcher SPEDISCE un marketing
+     email e SOPPRIME un WhatsApp; revoca, scheda «Revocato», dispatcher
      SOPPRIME il marketing email.
 """
 from __future__ import annotations
@@ -186,6 +186,11 @@ def test_A_serena_fanini_storico_del_sito_e_conferma_digitale(e2e):
         # --- la scheda: storico del sito fedele, distinto dai consensi autorizzati
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-site-record]")
         assert "non documentata nel CRM" in crm.inner_text("[data-site-privacy]")
+        assert "scelta registrata il 03/10/2026" in crm.inner_text("[data-site-summary]")
+        # lo storico completo sta dentro «Mostra dettagli»
+        assert not crm.is_visible("[data-site-marketing-choice]")
+        crm.click("[data-site-details] summary")
+        crm.wait_for_selector("[data-site-marketing-choice]", state="visible")
         scelta = crm.inner_text("[data-site-marketing-choice]")
         assert "Scelta registrata dal sito" in scelta and "Email + WhatsApp" in scelta
         assert "03/10/2026" in scelta and f"n. {s}" in scelta
@@ -193,11 +198,13 @@ def test_A_serena_fanini_storico_del_sito_e_conferma_digitale(e2e):
             or "non e' un consenso autorizzato" in crm.inner_text("[data-site-proofs]")
         for c in ("email", "whatsapp"):
             riga = crm.inner_text(f"[data-consent-channel='{c}']")
-            assert "scelto sul sito · da confermare" in riga and "non autorizza invii" in riga, riga
+            assert "Scelto sul sito · da confermare" in riga and "sul sito il 03/10/2026" in riga, riga
         for c in ("sms", "phone"):
-            assert "mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
+            assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
         assert crm.query_selector("[data-consent-legacy]") is None
         assert crm.is_visible("[data-capture-no-notice]"), "manca l'avviso dell'informativa"
+        assert crm.inner_text("[data-consent-link-generate]").strip() == "Genera link consenso"
+        assert crm.is_hidden("[data-consent-link-output]")
         _foto(crm, "A1_serena_scheda_storico_sito")
 
         # --- il QR senza informativa corrente: la pagina permette solo di revocare
@@ -236,9 +243,9 @@ def test_A_serena_fanini_storico_del_sito_e_conferma_digitale(e2e):
         assert not _guardia(cid, "whatsapp").allowed
 
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-site-record]")
-        assert "concesso" in crm.inner_text("[data-consent-channel='email']")
+        assert "Concesso" in crm.inner_text("[data-consent-channel='email']")
         wa = crm.inner_text("[data-consent-channel='whatsapp']")
-        assert "scelto · numero da verificare" in wa and "scelto dal cliente" in wa, wa
+        assert "Numero da verificare" in wa and "scelto dal cliente" in wa, wa
         assert crm.query_selector("[data-site-choice]") is None, "la scelta digitale prevale sulla spunta del sito"
         assert crm.query_selector("[data-capture-no-notice]") is None
         assert crm.query_selector("[data-site-marketing-choice]") is not None, "lo storico del sito resta"
@@ -283,7 +290,8 @@ def test_B_mario_rossi_qr_double_opt_in_dispatcher_e_revoca(e2e):
         assert not _guardia(cid, "email").allowed
 
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-consent-pending='email']")
-        assert "in attesa di conferma" in crm.inner_text("[data-consent-channel='email']")
+        assert "Da confermare" in crm.inner_text("[data-consent-channel='email']")
+        assert crm.inner_text("[data-consent-link-generate]").strip() == "Mostra QR"
         assert "programmato" in crm.inner_text("body") and "Conferma consenso email" in crm.inner_text("body")
         _foto(crm, "B2_mario_email_in_attesa")
 
@@ -297,9 +305,9 @@ def test_B_mario_rossi_qr_double_opt_in_dispatcher_e_revoca(e2e):
         _foto(tel, "B3_mario_email_confermata")
 
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-consent-channel='email']")
-        assert "concesso" in crm.inner_text("[data-consent-channel='email']")
+        assert "Concesso" in crm.inner_text("[data-consent-channel='email']")
         for c in ("sms", "whatsapp", "phone"):
-            assert "mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
+            assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
         _foto(crm, "B4_mario_scheda_concesso")
 
         # --- il dispatcher: email marketing SPEDITA, WhatsApp SOPPRESSO
@@ -322,7 +330,7 @@ def test_B_mario_rossi_qr_double_opt_in_dispatcher_e_revoca(e2e):
         assert _guardia(cid, "email").reason == "deny_revoked"
 
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-consent-channel='email']")
-        assert "revocato" in crm.inner_text("[data-consent-channel='email']")
+        assert "Revocato" in crm.inner_text("[data-consent-channel='email']")
         _foto(crm, "B6_mario_scheda_revocato")
 
         # --- dopo la revoca il dispatcher SOPPRIME il marketing email
@@ -349,12 +357,15 @@ def test_A2_vecchio_flag_senza_evento_mostrato_senza_contraddizioni(e2e):
         browser = p.chromium.launch()
         crm = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
         _apri(crm, f"{m['url']}/scheda/{cid}", "[data-site-record]")
+        assert "Spunta marketing storica del 04/05/2025" in crm.inner_text("[data-site-summary]")
+        crm.click("[data-site-details] summary")
+        crm.wait_for_selector("[data-site-legacy-flag]", state="visible")
         testo = crm.inner_text("[data-site-legacy-flag]")
         assert "Spunta marketing storica" in testo and "04/05/2025" in testo and "non autorizza invii" in testo
         assert crm.query_selector("[data-site-no-marketing]") is None
         assert crm.query_selector("[data-consent-legacy]") is None, "detto una volta sola"
         for c in CANALI:
-            assert "mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
+            assert "Mai dato" in crm.inner_text(f"[data-consent-channel='{c}']"), c
             assert not _guardia(cid, c).allowed
         _foto(crm, "A5_flag_storico_senza_evento")
         browser.close()
