@@ -16,6 +16,14 @@ vero di SITE-IMPORT-1, dati fittizi. Il sito non cambia: manda ancora solo
   06  due stime della stessa persona: una sola richiesta, una sola email.
   07  un errore del consenso non ferma contatto, lead, immobile, evento, PDF;
       il passo si riprende al giro dopo.
+  08  C3.4: informativa del sito valida alla spunta: «concesso dal sito».
+  09  C3.4: riconciliazione a ogni giro, nessuna retrodatazione.
+  10  C3.4 per tutti: piu' contatti del sito nello stesso giro (Serena e
+      altri), spuntati, non spuntati e senza prova; una revoca successiva
+      resta tale a ogni giro.
+  11  C3.5: testo della casella e impronta della privacy scritti dal sito con
+      la richiesta, copiati dall'import, riconosciuti solo con le informative
+      corrispondenti registrate.
 
 Opt-in: senza `P29_TEST_DSN` si salta tutto.
 """
@@ -336,3 +344,122 @@ def test_09_c34_riconciliazione_a_ogni_giro_e_nessuna_retrodatazione(ci):
     ref = m["q_crm"]("SELECT DISTINCT evidence_ref FROM consent_events WHERE contact_id = %s AND channel IS NOT NULL",
                      (cid,))
     assert [r[0] for r in ref] == [str(t)]
+
+
+def test_10_c34_ogni_contatto_del_sito_nello_stesso_giro(ci):
+    """Il riconoscimento e' automatico per OGNI richiesta del sito, non per
+    una scheda: Serena e altri contatti nello stesso giro di import."""
+    from consent import service as cs
+    from operator_auth.context import SystemAgencyContext
+    m = ci
+    registrata = _giorno(31) - timedelta(days=1)
+    informativa = _informativa_sito(m, registrata=registrata)
+    # spunta PRIMA che l'informativa del sito fosse nel CRM: resta incompleta
+    presto = _stima(m, decisa=registrata - timedelta(hours=6), email="presto@example.invalid", nome="Giulia")
+    serena = _stima(m, decisa=_giorno(31) - timedelta(hours=1), email="serena.fanini@example.invalid",
+                    nome="Serena", cognome="Fanini")
+    luca = _stima(m, decisa=_giorno(31) - timedelta(minutes=50), email="luca.bianchi@example.invalid",
+                  nome="Luca", cognome="Bianchi")
+    anna = _stima(m, spuntata=False, email="anna.verdi@example.invalid", nome="Anna", cognome="Verdi")
+    tutte = (presto, serena, luca, anna)
+    for s in tutte:
+        m["archivio"].pdf[s] = PDF
+    m["giro"]()
+    for s in tutte:
+        _import_completo(m, s)
+    for s in (serena, luca):
+        assert _passo(m, s) == {"state": "done", "status": "recognized", "channels": ["email", "whatsapp"]}, s
+        ev = m["q_crm"]("SELECT channel, notice_id, evidence_ref FROM consent_events "
+                        "WHERE contact_id = %s AND channel IS NOT NULL ORDER BY channel", (_contatto(m, s),))
+        assert [tuple(r) for r in ev] == [("email", informativa, str(s)), ("whatsapp", informativa, str(s))]
+        assert _guardia(m, s, "email").allowed and _guardia(m, s, "whatsapp").allowed
+        assert not _guardia(m, s, "sms").allowed and not _guardia(m, s, "phone").allowed
+    # non spuntata: nessuna autorizzazione, nessun evento del sito
+    assert _passo(m, anna)["state"] == "not_applicable"
+    assert conta(m, "consent_events", "contact_id = %s", (_contatto(m, anna),)) == 0
+    # senza prova: la scelta resta, gli invii sono bloccati
+    assert _passo(m, presto)["status"] == "disabled"
+    ev = m["q_crm"]("SELECT channel, decision FROM consent_events WHERE contact_id = %s", (_contatto(m, presto),))
+    assert [tuple(r) for r in ev] == [(None, "granted")]
+    for s in (anna, presto):
+        for canale in ("email", "whatsapp", "sms", "phone"):
+            assert not _guardia(m, s, canale).allowed, (s, canale)
+    # Serena revoca WhatsApp: i giri successivi non la riconcedono
+    agenzia = m["q_crm"]("SELECT agency_id FROM stime WHERE id = %s", (serena,))[0][0]
+    cs.record_revocation(SystemAgencyContext(agency_id=agenzia, origin="public_stima"),
+                         contact_id=_contatto(m, serena), purpose="marketing", channel="whatsapp",
+                         source="unsubscribe_link", actor_type="subject", decided_at=_giorno(31),
+                         idempotency_key=f"rev:{serena}:wa")
+    for _ in range(2):
+        assert m["giro"]()["site_consents_recognized"] == 0
+    assert _guardia(m, serena, "whatsapp").reason == "deny_revoked"
+    assert _guardia(m, serena, "email").allowed
+
+
+def test_11_c35_la_prova_scritta_con_la_richiesta_arriva_nel_crm(ci):
+    """C3.5: il sito (con la 112) scrive testo della casella e impronta di
+    privacy.html con la richiesta; l'import le copia e il CRM riconosce SOLO
+    con le informative corrispondenti registrate. Le stime storiche senza
+    prova restano alle regole per data: niente si ricostruisce."""
+    import hashlib
+    from pathlib import Path
+    from consent.site_evidence import site_checkbox_evidence
+    m = ci
+    q = m["q_crm"]
+    m["q_sito"]((Path(__file__).resolve().parents[1] / "migrations" /
+                 "112_stime_consenso_marketing_prova.sql").read_text(encoding="utf-8"))
+    privacy = (Path(__file__).resolve().parents[1] / "site-preview" / "c35-consenso" / "privacy.html").read_bytes()
+    impronta = hashlib.sha256(privacy).hexdigest()
+    testo = site_checkbox_evidence()["text"]
+    registrata = _giorno(29)
+    marketing = q("INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, context, "
+                  "valid_from, valid_to, created_at, created_by, channels) VALUES ('marketing', %s, %s, %s, TRUE, "
+                  "'Sito www.stima360.it - casella marketing', %s, %s, %s, 'test', ARRAY['email','whatsapp']) "
+                  "RETURNING id", (f"c35-{impronta[:8]}-{registrata:%j}", testo,
+                                   hashlib.sha256(testo.encode()).hexdigest(), registrata,
+                                   registrata + timedelta(hours=1), registrata))[0][0]
+    q("INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, context, valid_from, "
+      "valid_to, created_at, created_by) VALUES ('privacy_terms', %s, %s, %s, TRUE, 'Sito www.stima360.it - privacy', "
+      "%s, %s, %s, 'test')", (f"privacy-c35-{registrata:%j}", privacy.decode(), impronta, registrata,
+                              registrata + timedelta(hours=1), registrata))
+    # la spunta e' MOLTO dopo la validita' delle informative: conta la prova, non la data
+    decisa = _giorno(30) + timedelta(hours=5)
+    buona = _stima(m, decisa=decisa, email="prova.scritta@example.invalid", nome="Serena",
+                   consenso_marketing_testo=testo, consenso_marketing_privacy_sha256=impronta)
+    altra = _stima(m, decisa=decisa, email="privacy.ignota@example.invalid",
+                   consenso_marketing_testo=testo, consenso_marketing_privacy_sha256="a" * 64)
+    no = _stima(m, spuntata=False, email="non.spuntata.c35@example.invalid",
+                consenso_marketing_testo=testo, consenso_marketing_privacy_sha256=impronta)
+    for s in (buona, altra, no):
+        m["archivio"].pdf[s] = PDF
+    m["giro"]()
+    for s in (buona, altra, no):
+        _import_completo(m, s)
+        assert q("SELECT consenso_marketing_testo, consenso_marketing_privacy_sha256 FROM stime WHERE id = %s",
+                 (s,))[0][0] == testo, "copiata dal sito"
+    assert _passo(m, buona) == {"state": "done", "status": "recognized", "channels": ["email", "whatsapp"]}
+    ev = q("SELECT channel, notice_id, note FROM consent_events WHERE contact_id = %s AND channel IS NOT NULL "
+           "ORDER BY channel", (_contatto(m, buona),))
+    assert [(r[0], r[1]) for r in ev] == [("email", marketing), ("whatsapp", marketing)]
+    assert all(impronta in r[2] for r in ev)
+    assert _guardia(m, buona, "email").allowed and _guardia(m, buona, "whatsapp").allowed
+    assert not _guardia(m, buona, "sms").allowed and not _guardia(m, buona, "phone").allowed
+    # impronta di una privacy non registrata: prova incompleta, scelta conservata
+    assert _passo(m, altra)["status"] != "recognized"
+    assert [tuple(r) for r in q("SELECT channel, decision FROM consent_events WHERE contact_id = %s",
+                                (_contatto(m, altra),))] == [(None, "granted")]
+    for s in (altra, no):
+        for canale in ("email", "whatsapp", "sms", "phone"):
+            assert not _guardia(m, s, canale).allowed, (s, canale)
+    # una revoca successiva prevale a ogni giro di import
+    from consent import service as cs
+    from operator_auth.context import SystemAgencyContext
+    agenzia = q("SELECT agency_id FROM stime WHERE id = %s", (buona,))[0][0]
+    cs.record_revocation(SystemAgencyContext(agency_id=agenzia, origin="public_stima"),
+                         contact_id=_contatto(m, buona), purpose="marketing", channel="email",
+                         source="unsubscribe_link", actor_type="subject", decided_at=decisa + timedelta(days=1),
+                         idempotency_key=f"rev:{buona}:c35")
+    for _ in range(2):
+        assert m["giro"]()["site_consents_recognized"] == 0
+    assert _guardia(m, buona, "email").reason == "deny_revoked"
+    assert _guardia(m, buona, "whatsapp").allowed

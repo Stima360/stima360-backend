@@ -50,11 +50,14 @@ def test_01_la_107_e_valida_additiva_e_l_ultima():
     # SENTINELLA AGGIORNATA DA C3: poi la 110 (raccolta digitale del consenso).
     # SENTINELLA AGGIORNATA DA STIMA VOICE V9: poi la sola 111 (l'elenco degli intenti del registro
     # della Voce per gli incarichi; additiva, nessun dato), ora l'ultima
-    assert tutte[-1].version == "111_voice_mandate_intents"
-    assert tutte[-2].version == "110_consent_capture"
-    assert tutte[-3].version == "109_consent_channels"
-    assert tutte[-4].version == "108_followup_contact_journey"
-    ultima = tutte[-5]
+    # SENTINELLA AGGIORNATA DA C3.5: poi la sola 112 (la prova del consenso marketing
+    # scritta con la richiesta: due colonne nullable di `stime`, nessun backfill), ora l'ultima
+    assert tutte[-1].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-2].version == "111_voice_mandate_intents"
+    assert tutte[-3].version == "110_consent_capture"
+    assert tutte[-4].version == "109_consent_channels"
+    assert tutte[-5].version == "108_followup_contact_journey"
+    ultima = tutte[-6]
     assert ultima.version == "107_visita_immobile_incarico"
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []

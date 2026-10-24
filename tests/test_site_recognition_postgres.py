@@ -55,14 +55,17 @@ def _spunta_sito(m, email, *, quando=SPUNTA, telefono="393331234567"):
     return cid, stima
 
 
+TESTO_CASELLA = "Acconsento a ricevere analisi di mercato e aggiornamenti da Stima360 tramite email e WhatsApp."
+
+
 def _informativa_sito(m, *, registrata, valida_da=None, canali=("email", "whatsapp", "sms"),
-                      contesto="Sito www.stima360.it - casella marketing del modulo di valutazione"):
+                      contesto="Sito www.stima360.it - casella marketing del modulo di valutazione",
+                      testo=TESTO_CASELLA):
     versione = f"sito-{uuid.uuid4().hex[:8]}"
     return _q(m, "INSERT INTO consent_notices (purpose, version, content, content_hash, content_available, context, "
-                 "valid_from, valid_to, created_at, created_by, channels) VALUES ('marketing', %s, "
-                 "'Acconsento a ricevere analisi di mercato e aggiornamenti da Stima360 tramite email e WhatsApp.', "
+                 "valid_from, valid_to, created_at, created_by, channels) VALUES ('marketing', %s, %s, "
                  "repeat('d', 64), TRUE, %s, %s, %s, %s, 'test', %s) RETURNING id",
-              (versione, contesto, valida_da or registrata, (valida_da or registrata) + timedelta(days=1),
+              (versione, testo, contesto, valida_da or registrata, (valida_da or registrata) + timedelta(days=1),
                registrata, list(canali)))[0][0]
 
 
@@ -419,3 +422,128 @@ def test_14_una_revoca_dopo_il_riconoscimento_non_viene_mai_scavalcata(sr):
     assert _guardia(m, 1, cid, "whatsapp").allowed
     eventi = [e[:2] for e in _eventi(m, cid)]
     assert eventi == [(None, "granted"), ("email", "granted"), ("whatsapp", "granted"), ("email", "revoked")], eventi
+
+
+# ---------------------------------------------------------------------------
+# Generalizzazione: le stesse regole per OGNI contatto del sito
+# ---------------------------------------------------------------------------
+
+def _pendenti(m, limite=200):
+    from psycopg2.extras import RealDictCursor
+    from consent import site_recognition
+    with m["conn"].cursor(cursor_factory=RealDictCursor) as cur:
+        return site_recognition.pending_contacts(cur, limit=limite)
+
+
+def test_15_una_revoca_precedente_cede_a_una_nuova_spunta(sr):
+    """Revocato in passato, poi di nuovo la casella spuntata sul sito con
+    l'informativa valida: e' un consenso NUOVO, riconosciuto."""
+    from consent import service as cs
+    m = sr
+    _informativa_sito(m, registrata=_quando(22) - timedelta(hours=5))
+    cid = _contatto(m, "ritorno@example.it")
+    _q(m, "UPDATE contacts SET phone_normalized = '393339990001', source = 'public_stima' WHERE id = %s", (cid,))
+    for canale in ("email", "whatsapp"):
+        cs.record_revocation(_sistema(1), contact_id=cid, purpose="marketing", channel=canale,
+                             source="unsubscribe_link", actor_type="subject",
+                             decided_at=_quando(22) - timedelta(days=30), idempotency_key=f"rev:{cid}:{canale}:prima")
+    assert not _guardia(m, 1, cid, "email").allowed
+    stima = _q(m, "INSERT INTO stime (agency_id, comune, via, mq) VALUES (1, 'Alba', 'Via Sito', 80) RETURNING id")[0][0]
+    cs.record_grant(_sistema(1), contact_id=cid, purpose="marketing", source="public_stima", actor_type="subject",
+                    decided_at=_quando(22), evidence_type="stima", evidence_ref=str(stima),
+                    idempotency_key=f"public_stima:{stima}:marketing")
+    assert (1, cid) in _pendenti(m)
+    esito = _riconosci(m, cid)
+    assert sorted(g["channel"] for g in esito["granted"]) == ["email", "whatsapp"]
+    assert _guardia(m, 1, cid, "email").allowed and _guardia(m, 1, cid, "whatsapp").allowed
+    assert not _guardia(m, 1, cid, "sms").allowed and not _guardia(m, 1, cid, "phone").allowed
+    assert (1, cid) not in _pendenti(m)
+
+
+def test_16_una_seconda_spunta_gia_concessa_non_resta_in_coda(sr):
+    """La stessa persona torna sul sito: la seconda spunta trova i canali gia'
+    concessi («gia' concesso»), non riconcede e non resta fra i pendenti."""
+    from consent import service as cs
+    m = sr
+    _informativa_sito(m, registrata=_quando(24) - timedelta(hours=5))
+    cid, _ = _spunta_sito(m, "due.stime@example.it", quando=_quando(24), telefono="393339990002")
+    assert sorted(g["channel"] for g in _riconosci(m, cid)["granted"]) == ["email", "whatsapp"]
+    seconda = _q(m, "INSERT INTO stime (agency_id, comune, via, mq) VALUES (1, 'Alba', 'Via Due', 70) RETURNING id")[0][0]
+    cs.record_grant(_sistema(1), contact_id=cid, purpose="marketing", source="public_stima", actor_type="subject",
+                    decided_at=_quando(24) + timedelta(hours=1), evidence_type="stima", evidence_ref=str(seconda),
+                    idempotency_key=f"public_stima:{seconda}:marketing")
+    assert (1, cid) not in _pendenti(m)
+    esito = _riconosci(m, cid)
+    assert esito["granted"] == []
+    nuova = next(t for t in esito["assessment"]["ticks"] if t["stima_id"] == seconda)
+    assert {c: v["status"] for c, v in nuova["channels"].items()} == {"email": "already_granted",
+                                                                       "whatsapp": "already_granted"}
+
+
+def test_17_le_spunte_senza_prova_non_affamano_il_lotto(sr):
+    """Molte spunte senza prova (piu' del lotto) non nascondono quella
+    riconoscibile: la riconciliazione seleziona solo cio' che ORA si puo'
+    riconoscere; le altre restano incomplete, con la scelta conservata."""
+    m = sr
+    incomplete = [_spunta_sito(m, f"senza.prova.{i}@example.it", quando=datetime(2025, 11, 2 + i, 9, tzinfo=timezone.utc),
+                               telefono=f"39333999100{i}")[0] for i in range(4)]
+    _informativa_sito(m, registrata=datetime(2025, 11, 19, 9, tzinfo=timezone.utc))
+    buona, _ = _spunta_sito(m, "con.prova@example.it", quando=datetime(2025, 11, 19, 15, tzinfo=timezone.utc),
+                            telefono="393339991009")
+    assert _pendenti(m, limite=1) == [(1, buona)]
+    assert not any((1, c) in _pendenti(m) for c in incomplete)
+    assert sorted(g["channel"] for g in _riconosci(m, buona)["granted"]) == ["email", "whatsapp"]
+    assert (1, buona) not in _pendenti(m)
+    for c in incomplete:
+        assert _riconosci(m, c)["assessment"]["ticks"][0]["missing"] == ["notice"]
+        assert not _guardia(m, 1, c, "email").allowed and not _guardia(m, 1, c, "whatsapp").allowed
+        assert [e[:2] for e in _eventi(m, c)] == [(None, "granted")]
+
+
+def test_18_un_informativa_registrata_contraddetta_dalla_documentazione_non_vale(
+        sr, tmp_path, monkeypatch, prove_pulite):
+    """Nei giorni coperti dalla documentazione del sito, un'informativa
+    registrata nel CRM con un testo DIVERSO dalla casella documentata non
+    autorizza: manca un'informativa coerente. Con il testo documentato, si."""
+    m = sr
+    impronta = _impronta_copia()
+    _prove(tmp_path, monkeypatch, [
+        {"kind": "backup", "date": "2025-09-15", "sha256": impronta, "reference": "backup hosting 15/09/2025"},
+        {"kind": "backup", "date": "2025-09-16", "sha256": impronta, "reference": "backup hosting 16/09/2025"}])
+    from consent.site_evidence import site_checkbox_evidence
+    documentato = site_checkbox_evidence()["text"]
+    _informativa_sito(m, registrata=datetime(2025, 9, 15, tzinfo=timezone.utc),
+                      testo="Acconsento a ricevere offerte commerciali via SMS e telefonate.")
+    cid, _ = _spunta_sito(m, "contraddetta@example.it", quando=datetime(2025, 9, 15, 12, tzinfo=timezone.utc),
+                          telefono="393339992001")
+    esito = _riconosci(m, cid)
+    assert esito["granted"] == [] and esito["assessment"]["ticks"][0]["missing"] == ["text_mismatch"]
+    assert "testo diverso" in esito["assessment"]["ticks"][0]["missing_labels"][0]
+    assert not _guardia(m, 1, cid, "email").allowed and not _guardia(m, 1, cid, "whatsapp").allowed
+    assert [e[:2] for e in _eventi(m, cid)] == [(None, "granted")]
+    _informativa_sito(m, registrata=datetime(2025, 9, 16, 1, tzinfo=timezone.utc), testo=documentato)
+    altro, _ = _spunta_sito(m, "coerente@example.it", quando=datetime(2025, 9, 16, 12, tzinfo=timezone.utc),
+                            telefono="393339992002")
+    assert sorted(g["channel"] for g in _riconosci(m, altro)["granted"]) == ["email", "whatsapp"]
+
+
+def test_19_senza_spunta_niente_e_senza_numero_niente_whatsapp(sr):
+    """Casella non spuntata (nessun evento del sito): nessuna autorizzazione.
+    Spuntata ma senza numero: solo l'email; SMS e telefonate mai."""
+    m = sr
+    _informativa_sito(m, registrata=_quando(26) - timedelta(hours=5))
+    senza = _contatto(m, "non.spuntata@example.it")
+    _q(m, "UPDATE contacts SET source = 'public_stima' WHERE id = %s", (senza,))
+    esito = _riconosci(m, senza)
+    assert esito["granted"] == [] and esito["assessment"]["ticks"] == []
+    assert (1, senza) not in _pendenti(m)
+    cid, _ = _spunta_sito(m, "senza.numero@example.it", quando=_quando(26))
+    _q(m, "UPDATE contacts SET phone = NULL, phone_normalized = NULL WHERE id = %s", (cid,))
+    esito = _riconosci(m, cid)
+    assert [g["channel"] for g in esito["granted"]] == ["email"]
+    assert esito["assessment"]["ticks"][0]["channels"]["whatsapp"]["status"] == "no_address"
+    assert (1, cid) not in _pendenti(m)
+    for c in ("whatsapp", "sms", "phone"):
+        assert not _guardia(m, 1, cid, c).allowed, c
+        assert not _guardia(m, 1, senza, c).allowed, c
+    assert not _guardia(m, 1, senza, "email").allowed

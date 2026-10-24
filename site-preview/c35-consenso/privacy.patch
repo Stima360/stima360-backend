@@ -1,0 +1,11 @@
+--- privacy.html.originale
++++ privacy.html
+@@ -38,7 +38,7 @@
+ <li>Adempimento di obblighi legali</li>
+ <li>
+ <strong>Previo consenso esplicito</strong>, invio di comunicazioni informative
+-e promozionali sui servizi Stima360 tramite email, telefono e WhatsApp
++e promozionali sui servizi Stima360 tramite email e WhatsApp
+ </li>
+ </ul>
+ 

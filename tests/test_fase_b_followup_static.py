@@ -326,9 +326,12 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     # SENTINELLA AGGIORNATA DA C3: e poi la 110 (raccolta digitale del consenso).
     # SENTINELLA AGGIORNATA DA STIMA VOICE V9: poi la sola 111 (l'elenco degli intenti del registro
     # della Voce per gli incarichi; additiva, nessun dato), ora l'ultima
-    assert tutte[-1].version == "111_voice_mandate_intents"
-    assert tutte[-2].version == "110_consent_capture" and tutte[-3].version == "109_consent_channels"
-    assert tutte[-4] is ultima
+    # SENTINELLA AGGIORNATA DA C3.5: poi la sola 112 (la prova del consenso marketing
+    # scritta con la richiesta: due colonne nullable di `stime`, nessun backfill), ora l'ultima
+    assert tutte[-1].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-2].version == "111_voice_mandate_intents"
+    assert tutte[-3].version == "110_consent_capture" and tutte[-4].version == "109_consent_channels"
+    assert tutte[-5] is ultima
     assert ultima.down_available
     assert runner.validate_migration(ultima) == []
     su = (ROOT / "migrations" / "108_followup_contact_journey.sql").read_text(encoding="utf-8")

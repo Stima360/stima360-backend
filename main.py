@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import hashlib, hmac, logging, os, uvicorn, secrets, uuid, requests
+import hashlib, hmac, logging, os, re, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 import stime_purge
@@ -879,12 +879,83 @@ def _public_admin_mail_ready():
                 and os.getenv("SMTP_PASS") and 0 < port <= 65535)
 
 
+#: C3.5 - la prova della casella marketing che la pagina manda con la scelta.
+_PROVA_TESTO_MAX = 1000
+_PROVA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _prova_casella_marketing(raw):
+    """(testo della casella, impronta di privacy.html) come li manda la pagina,
+    SOLO se coincidono con una versione ufficiale accettata conservata sul
+    server (`site_official`); altrimenti None: i valori del browser da
+    soli non sono una prova. Mai obbligatori (il sito vecchio non li manda e la
+    stima procede)."""
+    import site_official
+    testo = raw.get("consenso_marketing_testo")
+    testo = re.sub(r"\s+", " ", testo).strip() if isinstance(testo, str) else ""
+    impronta = raw.get("informativa_privacy_sha256")
+    impronta = impronta.strip().lower() if isinstance(impronta, str) else ""
+    testo = testo if 0 < len(testo) <= _PROVA_TESTO_MAX else None
+    impronta = impronta if _PROVA_SHA256.match(impronta) else None
+    try:
+        casella = site_official.accepted_checkbox(testo)
+        privacy = site_official.accepted_privacy(impronta)
+    except Exception as exc:  # noqa: BLE001 - la stima non dipende dalla prova
+        logger.warning("public_stima_marketing_proof_unverified error_type=%s", type(exc).__name__)
+        return None, None
+    if (testo and casella is None) or (impronta and privacy is None):
+        logger.warning("public_stima_marketing_proof_not_official text=%s privacy=%s",
+                       "unofficial" if testo and casella is None else "ok_or_absent",
+                       "unofficial" if impronta and privacy is None else "ok_or_absent")
+    return (casella["text"] if casella else None, privacy["sha256"] if privacy else None)
+
+
+def _salva_prova_casella_marketing(cur, stima_id, testo, impronta):
+    """Nella stessa transazione della stima, se la 112 c'e'. Un errore qui non
+    tocca la valutazione: savepoint e la prova resta assente."""
+    if testo is None and impronta is None:
+        return
+    cur.execute("SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND table_name = 'stime' AND column_name IN "
+                "('consenso_marketing_testo', 'consenso_marketing_privacy_sha256')")
+    if cur.fetchone()[0] != 2:
+        return
+    cur.execute("SAVEPOINT prova_casella_marketing")
+    try:
+        cur.execute("UPDATE stime SET consenso_marketing_testo = %s, consenso_marketing_privacy_sha256 = %s "
+                    "WHERE id = %s", (testo, impronta, stima_id))
+        cur.execute("RELEASE SAVEPOINT prova_casella_marketing")
+    except Exception as exc:  # noqa: BLE001 - la stima non dipende dalla prova
+        cur.execute("ROLLBACK TO SAVEPOINT prova_casella_marketing")
+        logger.warning("public_stima_marketing_proof_failed stima_id=%s error_type=%s",
+                       stima_id, type(exc).__name__)
+
+
+def _riconosci_consenso_del_sito(ctx, bridge_result):
+    """C3.5: subito, la casella del sito con le sue prove (Email e WhatsApp).
+    Non solleva mai: un errore qui non cambia la risposta della valutazione;
+    la scheda del contatto e l'import riprovano da soli."""
+    contact_id = (bridge_result or {}).get("contact_id")
+    if not contact_id:
+        return {"status": "no_contact"}
+    try:
+        from consent import site_recognition
+        esito = site_recognition.recognize(ctx, int(contact_id))
+        return {"status": "done", "channels": [g["channel"] for g in esito["granted"]]}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("public_stima_site_consent_failed contact_id=%s error_type=%s",
+                       contact_id, type(exc).__name__)
+        return {"status": "error", "error_type": type(exc).__name__}
+
+
 def _save_quick_submission(raw, receipt):
     # --------------------------
     # CONSENSO MARKETING (GDPR)
     # --------------------------
     consenso_marketing = raw.get("consenso_marketing") is True
     consenso_marketing_at = receipt.row["created_at"] if consenso_marketing else None
+    # C3.5: e COSA aveva davanti (testo della casella, informativa collegata)
+    consenso_marketing_testo, consenso_marketing_privacy = _prova_casella_marketing(raw)
         
     # --- 2. Normalizza (CON VALORI DI DEFAULT PER FORM LEGGERO) ---
     data = {
@@ -995,6 +1066,7 @@ def _save_quick_submission(raw, receipt):
                 system_ctx.require_agency()
             ))
             new_id = cur.fetchone()[0]
+            _salva_prova_casella_marketing(cur, new_id, consenso_marketing_testo, consenso_marketing_privacy)
             receipt.attach_on_cursor(cur, new_id, system_ctx.require_agency())
             conn.commit()
             receipt.reload()
@@ -1101,6 +1173,10 @@ def _save_quick_submission(raw, receipt):
         "queued", "already_requested", "already_pending", "already_granted"},
                  not_applicable=lambda r: isinstance(r, dict) and r.get("status") in {
         "not_requested", "notice_missing", "notice_invalid", "no_email", "not_configured", "limited"})
+    # C3.5: la casella del sito riconosciuta subito se le prove bastano
+    # (testo e informativa registrati con la richiesta e presenti nel CRM).
+    receipt.step("consent_site", lambda: _riconosci_consenso_del_sito(bridge_ctx, bridge_result),
+                 accepts=lambda r: isinstance(r, dict))
     receipt.step("event_requested", lambda: seller_intelligence_service.record_event(
         event_type="stima_richiesta",
         event_source="stima360_it",

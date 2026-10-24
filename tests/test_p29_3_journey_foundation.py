@@ -140,7 +140,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # della pagina, double opt-in; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA STIMA VOICE V9: 111_voice_mandate_intents (l'elenco degli intenti
     # del registro della Voce per gli incarichi; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 112))
+    # SENTINELLA AGGIORNATA DA C3.5: 112_stime_consenso_marketing_prova (testo della casella e
+    # impronta della privacy scritti con la richiesta; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 113))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

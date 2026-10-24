@@ -26,6 +26,19 @@ Qui si valuta, spunta per spunta, se le prove bastano a un consenso valido:
        spunta e senza il testo provato non vale; una data non coperta da
        copie non vale, anche se "probabilmente" il sito non era cambiato.
 
+C3.5 - LA PROVA SCRITTA CON LA RICHIESTA. Dalla 112, la pagina del sito manda
+con la scelta il testo della casella e l'impronta SHA-256 di `privacy.html`, e
+il server li scrive nella riga `stime` insieme all'istante SOLO se coincidono
+con una versione ufficiale conservata sul server (`site_official`).
+Il CRM ripete lo stesso confronto. Per quelle spunte
+la prova di cio' che la persona aveva davanti e' QUELLA, e vale solo lei:
+il testo deve essere quello di un'informativa marketing del sito registrata nel
+CRM e l'impronta quella di un'informativa `privacy_terms` registrata. La data
+di registrazione nel CRM qui non conta (la riga del CRM cataloga il testo, la
+prova e' la richiesta); se il testo o l'impronta non trovano un'informativa
+registrata, la prova e' incompleta e la scheda dice quale. Le stime storiche,
+senza queste colonne, restano alle regole 4a/4b: niente si ricostruisce.
+
 Se tutto c'e', per ogni canale che la casella nomina E che l'informativa
 copre si registra un consenso per canale - «Concesso dal sito» - con la data
 della spunta, la richiesta e l'informativa come prove, senza double opt-in.
@@ -46,11 +59,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import site_official
+
 from . import repository
 from . import service as consent_service
 from .capture import SITE_CHECKBOX_CHANNELS, _registrabile, site_choices
 from .database import consent_cursor
-from .enums import ACTOR_SUBJECT, PURPOSE_MARKETING, SOURCE_PUBLIC_STIMA
+from .enums import ACTOR_SUBJECT, PURPOSE_MARKETING, PURPOSE_PRIVACY_TERMS, SOURCE_PUBLIC_STIMA
 from .site_evidence import KIND_LABELS, describe_windows, normalize_text, proven_window, site_checkbox_evidence
 
 #: Il contesto di un'informativa marketing che il Super Admin dichiara essere
@@ -70,16 +85,31 @@ MISSING_LABELS = {
     "text_proof": ("la prova documentale che il testo della casella pubblicato il {quando} fosse quello della "
                    "copia firmata (prove disponibili: {copie}; serve un backup datato di quel giorno o uno "
                    "storico delle pubblicazioni che lo copra)"),
+    "text_mismatch": ("un'informativa del sito coerente con la documentazione: quella registrata nel CRM per "
+                      "questa data ha un testo diverso da quello della casella documentato per lo stesso giorno"),
+    # C3.5: la prova scritta con la richiesta
+    "recorded_text": "il testo della casella marketing registrato con la richiesta",
+    "recorded_privacy": "l'impronta dell'informativa privacy registrata con la richiesta",
+    "recorded_text_unofficial": ("un testo della casella che coincida con una versione ufficiale del sito "
+                                 "conservata sul server"),
+    "recorded_privacy_unofficial": ("un'informativa privacy che coincida con una versione ufficiale accettata "
+                                    "conservata sul server"),
+    "recorded_text_unregistered": ("un'informativa marketing del sito registrata nel CRM con il testo della casella "
+                                   "mostrato in questa richiesta"),
+    "recorded_privacy_unregistered": ("l'informativa privacy mostrata in questa richiesta registrata nel CRM "
+                                      "(nessuna informativa privacy con la sua impronta SHA-256)"),
 }
 PROOF_LABELS = {
     "registered": "informativa registrata nel CRM prima della spunta",
     "site_capture": "testo della casella provato da una prova documentale del sito",
+    "submission_record": "testo della casella e informativa privacy registrati dal server con la richiesta",
 }
 CHANNEL_STATUS_LABELS = {
     "recognized": "concesso dal sito",
     "recognizable": "riconoscibile",
     "not_covered": "l'informativa applicabile non copre questo canale",
     "superseded": "una decisione successiva su questo canale prevale",
+    "already_granted": "gia' concesso da una decisione precedente",
     "platform_optout": "indirizzo disiscritto da tutto STIMA360",
     "no_address": "nessun indirizzo o numero registrato",
     "incomplete": "prova incompleta",
@@ -103,17 +133,26 @@ def site_notice_at(cur, when: datetime) -> tuple[dict[str, Any] | None, dict[str
             ORDER BY (created_at <= %s) DESC, valid_from DESC, id DESC""",
         [PURPOSE_MARKETING, when, when, f"%{SITE_NOTICE_CONTEXT_MARKER}%", when])
     righe = [dict(r) for r in cur.fetchall()]
+    prova = site_checkbox_evidence()
+    # Una versione registrata nel CRM prima della spunta e' la dichiarazione
+    # del titolare del testo in vigore. Se pero' la documentazione del sito
+    # (copia, backup, storico) copre quello stesso giorno con un testo
+    # DIVERSO, la dichiarazione e' contraddetta e non vale.
+    documentata = proven_window(prova, when) if prova is not None else None
+    contraddetta = False
     for riga in righe:
         if riga["created_at"] <= when:
+            if documentata is not None and normalize_text(riga["content"]) != normalize_text(prova["text"]):
+                contraddetta = True
+                continue
             return riga, {"kind": "registered", "label": PROOF_LABELS["registered"]}, None
-    prova = site_checkbox_evidence()
     if prova is None:
         return None, None, "notice"
     candidate = [r for r in righe if r["valid_from"] >= prova["proven_since"]
                  and normalize_text(r["content"]) == normalize_text(prova["text"])]
     if not candidate:
-        return None, None, "notice"
-    finestra = proven_window(prova, when)
+        return None, None, "text_mismatch" if contraddetta else "notice"
+    finestra = documentata
     if finestra is None:
         return None, None, "text_proof"
     riga = candidate[0]
@@ -123,6 +162,68 @@ def site_notice_at(cur, when: datetime) -> tuple[dict[str, Any] | None, dict[str
                   "reference": finestra["reference"],
                   "window": [finestra["from"].strftime("%Y-%m-%d"), finestra["to"].strftime("%Y-%m-%d")],
                   "sha256": prova["sha256"], "source": prova["source"], "url": prova["url"]}, None
+
+
+_COLONNE_PROVA = ("consenso_marketing_testo", "consenso_marketing_privacy_sha256")
+
+
+def _ha_colonne_prova(cur) -> bool:
+    """La 112 c'e'? Senza, nessuna stima ha la prova scritta con la richiesta."""
+    cur.execute("SELECT count(*) AS n FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND table_name = 'stime' AND column_name = ANY(%s)", [list(_COLONNE_PROVA)])
+    return int(cur.fetchone()["n"]) == len(_COLONNE_PROVA)
+
+
+def submission_record(cur, ctx, stima_id: int | None) -> dict[str, Any] | None:
+    """Il testo della casella e l'impronta di privacy.html scritti con la
+    richiesta, o None (stima storica, 112 assente): mai ricostruiti."""
+    if stima_id is None or not _ha_colonne_prova(cur):
+        return None
+    cur.execute("SELECT consenso_marketing_testo AS testo, consenso_marketing_privacy_sha256 AS privacy "
+                "FROM stime WHERE id = %s AND agency_id = %s", [stima_id, ctx.require_agency()])
+    r = cur.fetchone()
+    if not r or (r["testo"] is None and r["privacy"] is None):
+        return None
+    return {"text": r["testo"], "privacy_sha256": r["privacy"].strip() if r["privacy"] else None}
+
+
+def submission_notice(cur, record: dict[str, Any], when: datetime
+                      ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """(informativa marketing del sito, prova, cosa manca) dalla prova scritta
+    con la richiesta: il testo registrato deve essere quello di un'informativa
+    marketing del sito, l'impronta quella di un'informativa privacy, entrambe
+    registrate nel CRM."""
+    if not record.get("text"):
+        return None, None, "recorded_text"
+    if not record.get("privacy_sha256"):
+        return None, None, "recorded_privacy"
+    # anche il CRM confronta con le versioni ufficiali del server: una riga
+    # arrivata dall'import non e' una prova solo perche' c'e'
+    if site_official.accepted_checkbox(record["text"]) is None:
+        return None, None, "recorded_text_unofficial"
+    if site_official.accepted_privacy(record["privacy_sha256"]) is None:
+        return None, None, "recorded_privacy_unofficial"
+    cur.execute(
+        """SELECT id, version, context, content, channels, valid_from, valid_to, created_at
+             FROM consent_notices
+            WHERE purpose = %s AND content_available AND lower(context) LIKE %s
+            ORDER BY (valid_from <= %s AND (valid_to IS NULL OR valid_to >= %s)) DESC, created_at DESC, id DESC""",
+        [PURPOSE_MARKETING, f"%{SITE_NOTICE_CONTEXT_MARKER}%", when, when])
+    testo = normalize_text(record["text"])
+    informativa = next((dict(r) for r in cur.fetchall() if normalize_text(r["content"]) == testo), None)
+    if informativa is None:
+        return None, None, "recorded_text_unregistered"
+    # l'impronta e' dei byte di privacy.html; il testo incollato nel CRM puo'
+    # avere i ritorni a capo CRLF del modulo web: si confrontano entrambe le forme
+    cur.execute("SELECT id, version FROM consent_notices WHERE purpose = %s AND (content_hash = %s "
+                "OR encode(sha256(convert_to(replace(content, E'\\r\\n', E'\\n'), 'UTF8')), 'hex') = %s) "
+                "ORDER BY id DESC LIMIT 1", [PURPOSE_PRIVACY_TERMS, record["privacy_sha256"], record["privacy_sha256"]])
+    privacy = cur.fetchone()
+    if privacy is None:
+        return None, None, "recorded_privacy_unregistered"
+    return informativa, {"kind": "submission_record", "label": PROOF_LABELS["submission_record"],
+                         "text": record["text"], "privacy_sha256": record["privacy_sha256"],
+                         "privacy_notice": {"id": privacy["id"], "version": privacy["version"]}}, None
 
 
 def _idempotency(stima_id: int, canale: str) -> str:
@@ -156,8 +257,14 @@ def assess(cur, ctx, contact_id: int) -> dict[str, Any]:
             mancano.append("decided_at")
         if s["stima_id"] is None:
             mancano.append("stima")
-        informativa, prova, motivo = (site_notice_at(cur, s["decided_at"]) if s["decided_at"] is not None
-                                      else (None, None, "notice"))
+        registrata = submission_record(cur, ctx, s["stima_id"])
+        if s["decided_at"] is None:
+            informativa, prova, motivo = None, None, "notice"
+        elif registrata is not None:
+            # la prova scritta con la richiesta decide da sola
+            informativa, prova, motivo = submission_notice(cur, registrata, s["decided_at"])
+        else:
+            informativa, prova, motivo = site_notice_at(cur, s["decided_at"])
         if informativa is None:
             mancano.append(motivo or "notice")
         canali = {}
@@ -170,9 +277,12 @@ def assess(cur, ctx, contact_id: int) -> dict[str, Any]:
                 canali[canale] = {"status": "incomplete"}
             elif canale not in (informativa.get("channels") or ()):
                 canali[canale] = {"status": "not_covered"}
-            elif _eventi_canale_dopo(cur, ctx, contact_id, canale, s["decided_at"]) \
-                    or stati[canale]["status"] != "never_given":
+            elif _eventi_canale_dopo(cur, ctx, contact_id, canale, s["decided_at"]):
+                # solo una decisione SUCCESSIVA alla spunta prevale; una revoca
+                # precedente cede a una nuova spunta, che e' un nuovo consenso
                 canali[canale] = {"status": "superseded"}
+            elif stati[canale]["status"] == "granted":
+                canali[canale] = {"status": "already_granted"}
             elif not repository.contact_address(contact, canale):
                 canali[canale] = {"status": "no_address"}
             elif repository.latest_platform_optout(cur, canale, repository.contact_address(contact, canale)):
@@ -187,6 +297,7 @@ def assess(cur, ctx, contact_id: int) -> dict[str, Any]:
                 "id": informativa["id"], "version": informativa["version"],
                 "channels": list(informativa.get("channels") or [])},
             "proof": prova,
+            "record": registrata,
             "missing": mancano,
             "missing_labels": [_etichetta_mancante(m, s["decided_at"]) for m in mancano],
             "channels": canali,
@@ -243,6 +354,10 @@ def _nota_prova(spunta: dict[str, Any]) -> str:
     p = spunta.get("proof") or {}
     base = (f"Riconosciuto dalla casella marketing del sito: richiesta di valutazione n. {spunta['stima_id']}, "
             f"spunta del {spunta['decided_at']:%Y-%m-%d %H:%M %Z}; informativa versione {spunta['notice']['version']}")
+    if p.get("kind") == "submission_record":
+        return (f"{base}; prova: testo della casella e informativa privacy (versione "
+                f"{p['privacy_notice']['version']}, SHA-256 {p['privacy_sha256']}) registrati dal server "
+                f"con la richiesta.")
     if p.get("kind") == "site_capture":
         inizio, fine = p["window"]
         periodo = inizio if inizio == fine else f"{inizio} - {fine}"
@@ -252,22 +367,91 @@ def _nota_prova(spunta: dict[str, Any]) -> str:
 
 
 def pending_contacts(cur, *, limit: int = 200) -> list[tuple[int, int]]:
-    """(agency_id, contact_id) con una spunta del sito non ancora riconosciuta
-    sui canali della casella: per la riconciliazione a ogni giro di import."""
+    """(agency_id, contact_id) con una spunta del sito che ORA si puo'
+    riconoscere su almeno un canale della casella:
+
+        * la spunta ha una prova possibile: con la prova scritta con la
+          richiesta (C3.5), testo e impronta che trovano le loro informative;
+          senza, un'informativa del sito valida e gia' registrata alla sua
+          data, oppure una data coperta dalla documentazione del sito;
+        * su quel canale non e' gia' riconosciuta, non c'e' una decisione
+          successiva, non e' gia' concesso e c'e' un recapito.
+
+    Le spunte che non potranno mai essere riconosciute (nessuna prova,
+    superate, gia' concesse) restano fuori: non occupano il lotto a ogni giro
+    e non nascondono quelle riconoscibili. La valutazione completa resta di
+    `assess`; questa e' solo la selezione dei candidati."""
+    prova = site_checkbox_evidence()
+    finestre = [(f["from"], f["to"]) for f in (prova or {}).get("windows") or []]
+    coperta_da_documenti = " OR ".join(["ce.decided_at BETWEEN %s AND %s"] * len(finestre)) or "FALSE"
+    recapito = {"email": "c.email_normalized", "whatsapp": "c.phone_normalized"}
+    canale_aperto = []
+    parametri: list[Any] = [PURPOSE_MARKETING, SOURCE_PUBLIC_STIMA, EVIDENCE_STIMA]
+    for canale in SITE_CHECKBOX_CHANNELS:
+        canale_aperto.append(f"""(
+            COALESCE({recapito[canale]}, '') <> ''
+            AND NOT EXISTS (SELECT 1 FROM consent_events r
+                             WHERE r.agency_id = ce.agency_id AND r.contact_id = ce.contact_id
+                               AND r.idempotency_key = 'public_stima:' || ce.evidence_ref || ':marketing:' || %s)
+            AND NOT EXISTS (SELECT 1 FROM consent_events d
+                             WHERE d.agency_id = ce.agency_id AND d.contact_id = ce.contact_id
+                               AND d.purpose = %s AND d.channel = %s AND d.decided_at > ce.decided_at)
+            AND NOT EXISTS (SELECT 1 FROM contact_channel_consents g
+                             WHERE g.agency_id = ce.agency_id AND g.contact_id = ce.contact_id
+                               AND g.channel = %s AND g.status = 'granted'))""")
+        parametri += [canale, PURPOSE_MARKETING, canale, canale]
+    per_data = f"""(EXISTS (
+                        SELECT 1 FROM consent_notices n
+                         WHERE n.purpose = %s AND n.content_available AND lower(n.context) LIKE %s
+                           AND n.created_at <= ce.decided_at AND n.valid_from <= ce.decided_at
+                           AND (n.valid_to IS NULL OR n.valid_to >= ce.decided_at))
+                    OR {coperta_da_documenti})"""
+    parametri_per_data: list[Any] = [PURPOSE_MARKETING, f"%{SITE_NOTICE_CONTEXT_MARKER}%"]
+    for da, a in finestre:
+        parametri_per_data += [da, a]
+    if _ha_colonne_prova(cur):
+        # C3.5: con la prova scritta con la richiesta decide solo lei
+        stima_di = ("s.id = CASE WHEN ce.evidence_ref ~ '^[0-9]+$' THEN ce.evidence_ref::bigint END "
+                    "AND s.agency_id = ce.agency_id")
+        prova_possibile = f"""((EXISTS (
+                        SELECT 1 FROM stime s
+                          JOIN consent_notices n ON n.purpose = %s AND n.content_available
+                               AND lower(n.context) LIKE %s
+                               AND lower(btrim(regexp_replace(n.content, '\\s+', ' ', 'g')))
+                                 = lower(btrim(regexp_replace(s.consenso_marketing_testo, '\\s+', ' ', 'g')))
+                          JOIN consent_notices p ON p.purpose = %s
+                               AND (p.content_hash = s.consenso_marketing_privacy_sha256
+                                    OR encode(sha256(convert_to(replace(p.content, E'\\r\\n', E'\\n'), 'UTF8')),
+                                              'hex') = s.consenso_marketing_privacy_sha256)
+                         WHERE {stima_di}
+                           AND lower(btrim(regexp_replace(s.consenso_marketing_testo, '\\s+', ' ', 'g'))) = ANY(%s)
+                           AND s.consenso_marketing_privacy_sha256 = ANY(%s)))
+                 OR (NOT EXISTS (
+                        SELECT 1 FROM stime s
+                         WHERE {stima_di} AND (s.consenso_marketing_testo IS NOT NULL
+                                               OR s.consenso_marketing_privacy_sha256 IS NOT NULL))
+                     AND {per_data}))"""
+        parametri += [PURPOSE_MARKETING, f"%{SITE_NOTICE_CONTEXT_MARKER}%", PURPOSE_PRIVACY_TERMS,
+                      site_official.accepted_texts(), site_official.accepted_privacy_hashes(),
+                      *parametri_per_data]
+    else:
+        prova_possibile = per_data
+        parametri += parametri_per_data
+    parametri.append(limit)
     cur.execute(
-        """SELECT DISTINCT ce.agency_id, ce.contact_id
-             FROM consent_events ce
-             JOIN contacts c ON c.id = ce.contact_id
-            WHERE ce.purpose = %s AND ce.channel IS NULL AND ce.source = %s AND ce.decision = 'granted'
-              AND ce.evidence_type = %s AND c.deleted_at IS NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM consent_events r
-                   WHERE r.agency_id = ce.agency_id AND r.contact_id = ce.contact_id
-                     AND r.idempotency_key = 'public_stima:' || ce.evidence_ref || ':marketing:' || %s)
-            ORDER BY ce.agency_id, ce.contact_id LIMIT %s""",
-        [PURPOSE_MARKETING, SOURCE_PUBLIC_STIMA, EVIDENCE_STIMA, SITE_CHECKBOX_CHANNELS[0], limit])
+        f"""SELECT ce.agency_id, ce.contact_id, min(ce.decided_at) AS prima
+              FROM consent_events ce
+              JOIN contacts c ON c.id = ce.contact_id AND c.agency_id = ce.agency_id
+             WHERE ce.purpose = %s AND ce.channel IS NULL AND ce.source = %s AND ce.decision = 'granted'
+               AND ce.evidence_type = %s AND c.deleted_at IS NULL
+               AND ({" OR ".join(canale_aperto)})
+               AND {prova_possibile}
+             GROUP BY ce.agency_id, ce.contact_id
+             ORDER BY prima, ce.contact_id LIMIT %s""",
+        parametri)
     return [(int(r["agency_id"]), int(r["contact_id"])) for r in cur.fetchall()]
 
 
-__all__ = ["assess", "recognize", "pending_contacts", "site_notice_at", "SITE_NOTICE_CONTEXT_MARKER",
+__all__ = ["assess", "recognize", "pending_contacts", "site_notice_at", "submission_notice", "submission_record",
+           "SITE_NOTICE_CONTEXT_MARKER",
            "MISSING_LABELS", "CHANNEL_STATUS_LABELS", "PROOF_LABELS"]

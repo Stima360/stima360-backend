@@ -103,6 +103,9 @@ def test_no_other_migration_already_defines_these_columns():
         if path.name in {UP.name, DOWN.name}:
             continue
         text = path.read_text(encoding="utf-8")
-        assert "consenso_marketing" not in text, (
+        # SENTINELLA AGGIORNATA DA C3.5: la 112 aggiunge `consenso_marketing_testo` e
+        # `consenso_marketing_privacy_sha256` (colonne NUOVE, la prova): il controllo
+        # resta sulla DEFINIZIONE delle due colonne della 018 (la 112 le cita nel commento).
+        assert not re.search(r"ADD\s+COLUMN\s+(IF\s+NOT\s+EXISTS\s+)?consenso_marketing(_at)?\b", text, re.I), (
             f"{path.name} referenzia gia' consenso_marketing - la 018 duplicherebbe una migration esistente"
         )
