@@ -483,6 +483,13 @@ async def salva_stima(request: Request):
         ))
         new_id = cur.fetchone()[0]
         conn.commit()
+        # C3.5: prova del consenso marketing (site_consent_proof), DOPO il commit
+        # della stima e in una transazione propria: non tocca mai la valutazione.
+        try:
+            import site_consent_proof
+            site_consent_proof.record_after_commit(conn, new_id, raw)
+        except Exception as exc_prova:  # noqa: BLE001
+            logger.warning("public_stima_marketing_proof_skipped error_type=%s", type(exc_prova).__name__)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore INSERT DB: {e}")
     finally:
